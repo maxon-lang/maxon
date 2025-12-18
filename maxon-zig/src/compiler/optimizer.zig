@@ -171,6 +171,14 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
     var ptr_to_field = std.AutoHashMapUnmanaged(ir.Value, FieldPtrKey){};
     defer ptr_to_field.deinit(allocator);
 
+    // Build a map from getelemptr result to its base pointer
+    var ptr_to_array_base = std.AutoHashMapUnmanaged(ir.Value, ir.Value){};
+    defer ptr_to_array_base.deinit(allocator);
+
+    // Track which array bases have loads via getelemptr
+    var loaded_array_bases = std.AutoHashMapUnmanaged(ir.Value, void){};
+    defer loaded_array_bases.deinit(allocator);
+
     // Track which base allocas are loaded from
     var loaded_bases = std.AutoHashMapUnmanaged(ir.Value, void){};
     defer loaded_bases.deinit(allocator);
@@ -183,7 +191,7 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
     var loaded_ptrs = std.AutoHashMapUnmanaged(ir.Value, void){};
     defer loaded_ptrs.deinit(allocator);
 
-    // First pass: collect getfieldptr mappings
+    // First pass: collect getfieldptr and getelemptr mappings
     for (func.blocks.items) |block| {
         for (block.instructions.items) |inst| {
             if (inst.op == .getfieldptr) {
@@ -191,6 +199,12 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
                     const base = inst.operands[0].value;
                     const offset = inst.operands[1].immediate_i32;
                     try ptr_to_field.put(allocator, result, .{ .base = base, .offset = offset });
+                }
+            } else if (inst.op == .getelemptr) {
+                // Track getelemptr result -> base mapping
+                if (inst.result) |result| {
+                    const base = inst.operands[0].value;
+                    try ptr_to_array_base.put(allocator, result, base);
                 }
             }
         }
@@ -207,6 +221,11 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
                 if (ptr_to_field.get(ptr)) |field_key| {
                     try loaded_bases.put(allocator, field_key.base, {});
                     try loaded_fields.append(allocator, field_key);
+                }
+
+                // If this loads via a getelemptr, mark the array base as loaded
+                if (ptr_to_array_base.get(ptr)) |array_base| {
+                    try loaded_array_bases.put(allocator, array_base, {});
                 }
             }
         }
@@ -228,6 +247,8 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
             ptr_to_field_ref: *std.AutoHashMapUnmanaged(ir.Value, FieldPtrKey),
             loaded_fields_ref: *std.ArrayListUnmanaged(FieldPtrKey),
             loaded_bases_ref: *std.AutoHashMapUnmanaged(ir.Value, void),
+            ptr_to_array_base_ref: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+            loaded_array_bases_ref: *std.AutoHashMapUnmanaged(ir.Value, void),
         ) bool {
             // Direct match - keep the store
             if (loaded_ptrs_ref.contains(ptr)) return true;
@@ -245,6 +266,11 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
                 }
             }
 
+            // Check if this store is via a getelemptr to an array that's loaded from
+            if (ptr_to_array_base_ref.get(ptr)) |array_base| {
+                if (loaded_array_bases_ref.contains(array_base)) return true;
+            }
+
             return false;
         }
     }.check;
@@ -257,7 +283,7 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
         for (block.instructions.items) |inst| {
             if (inst.op == .store) {
                 const ptr = inst.operands[0].value;
-                if (!isStoreNeeded(ptr, &loaded_ptrs, &ptr_to_field, &loaded_fields, &loaded_bases)) {
+                if (!isStoreNeeded(ptr, &loaded_ptrs, &ptr_to_field, &loaded_fields, &loaded_bases, &ptr_to_array_base, &loaded_array_bases)) {
                     continue; // Skip dead store
                 }
             }

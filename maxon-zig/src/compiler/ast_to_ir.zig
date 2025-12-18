@@ -9,15 +9,29 @@ const TypedValue = struct {
     ty: ValueType,
 };
 
+/// Array storage kind
+const ArrayStorage = enum {
+    stack,
+    heap,
+};
+
+/// Array type info
+const ArrayInfo = struct {
+    element_type: ir.Type,
+    size: ?usize, // null for dynamic size
+    storage: ArrayStorage,
+};
+
 /// Extended type info for struct tracking
 const ValueType = union(enum) {
     primitive: ir.Type,
     struct_type: []const u8, // struct type name
+    array_type: ArrayInfo, // array type info
 
     fn toPrimitiveType(self: ValueType) ir.Type {
         return switch (self) {
             .primitive => |p| p,
-            .struct_type => .ptr, // structs are represented as pointers
+            .struct_type, .array_type => .ptr, // structs and arrays are represented as pointers
         };
     }
 };
@@ -83,6 +97,8 @@ pub const AstToIr = struct {
     func_map: std.StringHashMapUnmanaged(FuncInfo),
     // Map enum names to their info
     enum_map: std.StringHashMapUnmanaged(EnumInfo),
+    // Track whether current declaration is mutable (var) or immutable (let)
+    current_decl_is_mutable: bool,
 
     const VarInfo = struct {
         ptr: ir.Value,
@@ -99,6 +115,7 @@ pub const AstToIr = struct {
             .type_map = .{},
             .func_map = .{},
             .enum_map = .{},
+            .current_decl_is_mutable = false,
         };
     }
 
@@ -289,11 +306,19 @@ pub const AstToIr = struct {
 
     fn convertStatement(self: *AstToIr, stmt: ast.Statement) !void {
         switch (stmt) {
-            .let_decl, .var_decl => |decl| {
+            .let_decl => |decl| {
+                self.current_decl_is_mutable = false;
+                try self.convertVarDecl(decl);
+            },
+            .var_decl => |decl| {
+                self.current_decl_is_mutable = true;
                 try self.convertVarDecl(decl);
             },
             .@"return" => |ret| {
                 try self.convertReturn(ret);
+            },
+            .index_assign => |assign| {
+                try self.convertIndexAssign(assign);
             },
         }
     }
@@ -306,12 +331,12 @@ pub const AstToIr = struct {
         // Convert initializer first to infer type
         const init_typed = try self.convertExpression(decl.value);
 
-        // For structs, the init_typed.value is already the pointer to the allocated struct
+        // For structs and arrays, the init_typed.value is already the pointer to the allocated data
         // We store this pointer directly
         switch (init_typed.ty) {
-            .struct_type => |_| {
-                // Struct: value is already a pointer to the struct data
-                // Just record the variable pointing to this struct
+            .struct_type, .array_type => {
+                // Struct/Array: value is already a pointer to the data
+                // Just record the variable pointing to this struct/array
                 try self.var_map.put(self.allocator, decl.name, .{
                     .ptr = init_typed.value,
                     .ty = init_typed.ty,
@@ -368,10 +393,10 @@ pub const AstToIr = struct {
             .identifier => |name| {
                 if (self.var_map.getPtr(name)) |info| {
                     info.used = true;
-                    // For structs, return the pointer directly
+                    // For structs and arrays, return the pointer directly
                     // For primitives, load the value
                     switch (info.ty) {
-                        .struct_type => {
+                        .struct_type, .array_type => {
                             return .{ .value = info.ptr, .ty = info.ty };
                         },
                         .primitive => |prim_ty| {
@@ -427,6 +452,15 @@ pub const AstToIr = struct {
             },
             .field_access => |faccess| {
                 return try self.convertFieldAccess(faccess);
+            },
+            .array_literal => |arr_lit| {
+                return try self.convertArrayLiteral(arr_lit);
+            },
+            .index => |idx| {
+                return try self.convertIndex(idx);
+            },
+            .sized_array => |sized| {
+                return try self.convertSizedArray(sized);
             },
         }
     }
@@ -484,7 +518,7 @@ pub const AstToIr = struct {
         // Must be a struct type
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            .primitive => return error.UnknownType,
+            .primitive, .array_type => return error.UnknownType,
         };
 
         // Look up struct type
@@ -551,6 +585,121 @@ pub const AstToIr = struct {
             return .{ .value = result orelse 0, .ty = .{ .struct_type = struct_name } };
         }
         return .{ .value = result orelse 0, .ty = .{ .primitive = func_info.return_type } };
+    }
+
+    fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) ConvertError!TypedValue {
+        const func = self.current_func.?;
+        const elements = arr_lit.elements;
+
+        if (elements.len == 0) {
+            // Empty array - return null pointer
+            const zero = try func.emitConstI64(0);
+            return .{ .value = zero, .ty = .{ .array_type = .{
+                .element_type = .i64,
+                .size = 0,
+                .storage = .stack,
+            } } };
+        }
+
+        // Infer element type from first element
+        const first_typed = try self.convertExpression(elements[0]);
+        const elem_type = first_typed.ty.toPrimitiveType();
+
+        // All elements are 8 bytes for simplicity (i64, f64, or ptr)
+        const elem_size: i32 = 8;
+        const total_size = @as(i32, @intCast(elements.len)) * elem_size;
+
+        // Decision: stack if mutable and small (<64 bytes), otherwise stack for now
+        // Since we don't have heap allocation yet, we use stack for everything
+        const storage: ArrayStorage = .stack;
+
+        // Allocate stack space using alloca_sized
+        const arr_ptr = try func.emitAllocaSized(total_size);
+
+        // Initialize elements
+        for (elements, 0..) |elem, i| {
+            // Skip first element which we already converted
+            const typed = if (i == 0) first_typed else try self.convertExpression(elem);
+            const idx_val = try func.emitConstI64(@intCast(i));
+            const elem_ptr = try func.emitGetElemPtr(arr_ptr, idx_val, elem_size);
+            try func.emitStore(elem_ptr, typed.value);
+        }
+
+        return .{ .value = arr_ptr, .ty = .{ .array_type = .{
+            .element_type = elem_type,
+            .size = elements.len,
+            .storage = storage,
+        } } };
+    }
+
+    fn convertIndex(self: *AstToIr, idx: ast.IndexExpr) ConvertError!TypedValue {
+        const func = self.current_func.?;
+
+        // Get base array
+        const base_typed = try self.convertExpression(idx.base.*);
+        const arr_info = switch (base_typed.ty) {
+            .array_type => |a| a,
+            else => return error.UnknownType,
+        };
+
+        // Get index value
+        const idx_typed = try self.convertExpression(idx.index.*);
+
+        // Calculate element pointer (all elements are 8 bytes)
+        const elem_size: i32 = 8;
+        const elem_ptr = try func.emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
+
+        // Load the element
+        const val = try func.emitLoad(elem_ptr, arr_info.element_type);
+
+        return .{ .value = val, .ty = .{ .primitive = arr_info.element_type } };
+    }
+
+    fn convertSizedArray(self: *AstToIr, sized: ast.SizedArrayExpr) ConvertError!TypedValue {
+        const func = self.current_func.?;
+
+        // Evaluate size expression
+        const size_typed = try self.convertExpression(sized.size.*);
+
+        // Get element type
+        const elem_type = try self.lookupIrType(sized.element_type);
+
+        // Calculate total size: size * 8 (all elements are 8 bytes)
+        const eight = try func.emitConstI64(8);
+        const total_size = try func.emitMul(size_typed.value, eight, .i64);
+
+        // For now, allocate on stack (fixed size)
+        // In a real implementation, we'd use heap allocation
+        // Since alloca_sized needs an immediate, we'll use a fixed size for now
+        // This is a limitation - sized arrays should use heap in production
+        const arr_ptr = try func.emitAllocaSized(64); // Allocate 64 bytes for now
+        _ = total_size; // Would be used for heap allocation
+
+        return .{ .value = arr_ptr, .ty = .{ .array_type = .{
+            .element_type = elem_type,
+            .size = null, // Dynamic size
+            .storage = .stack,
+        } } };
+    }
+
+    fn convertIndexAssign(self: *AstToIr, assign: ast.IndexAssign) ConvertError!void {
+        const func = self.current_func.?;
+
+        // Get base array
+        const base_typed = try self.convertExpression(assign.base.*);
+
+        // Get index
+        const idx_typed = try self.convertExpression(assign.index.*);
+
+        // Get value to assign
+        const val_typed = try self.convertExpression(assign.value);
+
+        // Calculate element pointer (all elements are 8 bytes)
+        const elem_size: i32 = 8;
+        const elem_ptr = try func.emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
+
+        // Store the value
+        try func.emitStore(elem_ptr, val_typed.value);
     }
 };
 

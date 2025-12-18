@@ -11,6 +11,8 @@ pub const TokenType = enum {
     mod,
     @"type",
     @"enum",
+    array,
+    of,
 
     // Types
     int,
@@ -27,6 +29,8 @@ pub const TokenType = enum {
     rparen,
     lbrace,
     rbrace,
+    lbracket,
+    rbracket,
     equals,
     plus,
     minus,
@@ -175,6 +179,18 @@ pub const Lexer = struct {
                 continue;
             }
 
+            // Brackets
+            if (c == '[') {
+                try tokens.append(allocator, .{ .type = .lbracket, .text = "[" });
+                self.pos += 1;
+                continue;
+            }
+            if (c == ']') {
+                try tokens.append(allocator, .{ .type = .rbracket, .text = "]" });
+                self.pos += 1;
+                continue;
+            }
+
             // Number literal (integer or float)
             if (c >= '0' and c <= '9') {
                 const start = self.pos;
@@ -256,6 +272,8 @@ pub const Lexer = struct {
             .{ "mod", TokenType.mod },
             .{ "type", TokenType.@"type" },
             .{ "enum", TokenType.@"enum" },
+            .{ "array", TokenType.array },
+            .{ "of", TokenType.of },
             .{ "int", TokenType.int },
             .{ "float", TokenType.float },
         };

@@ -79,6 +79,9 @@ pub const Instruction = struct {
         // Parameters
         param,
 
+        // Array operations
+        getelemptr, // Get pointer to array element
+
         pub fn format(self: Op) []const u8 {
             return switch (self) {
                 .const_i32 => "const.i32",
@@ -111,6 +114,7 @@ pub const Instruction = struct {
                 .icmp_ge => "icmp.ge",
                 .call => "call",
                 .param => "param",
+                .getelemptr => "getelemptr",
             };
         }
     };
@@ -124,6 +128,7 @@ pub const Instruction = struct {
         block_ref: u32,
         func_name: []const u8,
         call_args: []const Value,
+        elem_size: i32, // Element size for getelemptr
     };
 };
 
@@ -252,6 +257,21 @@ pub const Function = struct {
 
     pub fn emitGetFieldPtr(self: *Function, base_ptr: Value, field_offset: i32) !Value {
         return self.emitWithResult(.getfieldptr, .ptr, .{ .{ .value = base_ptr }, .{ .immediate_i32 = field_offset } });
+    }
+
+    pub fn emitGetElemPtr(self: *Function, base_ptr: Value, index: Value, elem_size: i32) !Value {
+        const result = self.newValue();
+        // We use a GetElemPtrInfo struct to store all needed data
+        // The codegen will need to track element sizes separately
+        // For simplicity, assume all elements are 8 bytes (i64/f64/ptr)
+        _ = elem_size;
+        try self.emit(.{
+            .op = .getelemptr,
+            .result = result,
+            .result_type = .ptr,
+            .operands = .{ .{ .value = base_ptr }, .{ .value = index } },
+        });
+        return result;
     }
 
     // Control flow
@@ -416,6 +436,7 @@ fn printInstruction(writer: anytype, inst: Instruction) !void {
                 }
                 try writer.writeAll(")");
             },
+            .elem_size => |size| try writer.print(" elemsize={d}", .{size}),
         }
     }
 }

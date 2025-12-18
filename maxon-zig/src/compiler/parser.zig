@@ -235,6 +235,27 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
             return stmt;
         }
+        // Check for index assignment: expr[idx] = value
+        if (self.check(.identifier)) {
+            const start_pos = self.pos;
+            // Try to parse as expression
+            const expr = try self.parseExpression() orelse return error.ExpectedExpression;
+
+            // Check if this is an index expression followed by '='
+            if (expr == .index and self.check(.equals)) {
+                _ = self.advance(); // consume '='
+                const value = try self.parseExpression() orelse return error.ExpectedExpression;
+                _ = try self.expect(.newline);
+                return .{ .index_assign = .{
+                    .base = expr.index.base,
+                    .index = expr.index.index,
+                    .value = value,
+                } };
+            }
+
+            // Not an index assignment, restore position
+            self.pos = start_pos;
+        }
         return error.UnexpectedToken;
     }
 
@@ -324,6 +345,14 @@ pub const Parser = struct {
             const value = std.fmt.parseFloat(f64, token.text) catch return error.InvalidNumber;
             return try self.parsePostfix(.{ .float_lit = value });
         }
+        // Array literal: [expr, expr, ...]
+        if (self.check(.lbracket)) {
+            return try self.parseArrayLiteral();
+        }
+        // Sized array: array of N type
+        if (self.check(.array)) {
+            return try self.parseSizedArray();
+        }
         if (self.check(.identifier)) {
             const token = self.advance();
             // Check for struct initialization: TypeName{...}
@@ -347,16 +376,71 @@ pub const Parser = struct {
 
     fn parsePostfix(self: *Parser, base_expr: ast.Expression) ParseError!ast.Expression {
         var expr = base_expr;
-        while (self.check(.dot)) {
-            _ = self.advance(); // consume '.'
-            const field_token = try self.expect(.identifier);
-            const base_ptr = try self.createExpr(expr);
-            expr = .{ .field_access = .{
-                .base = base_ptr,
-                .field_name = field_token.text,
-            } };
+        while (true) {
+            if (self.check(.dot)) {
+                _ = self.advance(); // consume '.'
+                const field_token = try self.expect(.identifier);
+                const base_ptr = try self.createExpr(expr);
+                expr = .{ .field_access = .{
+                    .base = base_ptr,
+                    .field_name = field_token.text,
+                } };
+            } else if (self.check(.lbracket)) {
+                _ = self.advance(); // consume '['
+                const index_expr = try self.parseExpression() orelse return error.ExpectedExpression;
+                _ = try self.expect(.rbracket);
+                const base_ptr = try self.createExpr(expr);
+                expr = .{ .index = .{
+                    .base = base_ptr,
+                    .index = try self.createExpr(index_expr),
+                } };
+            } else {
+                break;
+            }
         }
         return expr;
+    }
+
+    fn parseArrayLiteral(self: *Parser) ParseError!ast.Expression {
+        _ = try self.expect(.lbracket);
+
+        var elements: std.ArrayListUnmanaged(ast.Expression) = .empty;
+        errdefer elements.deinit(self.allocator);
+
+        if (!self.check(.rbracket)) {
+            // Parse first element
+            const first = try self.parseExpression() orelse return error.ExpectedExpression;
+            try elements.append(self.allocator, first);
+
+            // Parse remaining elements
+            while (self.check(.comma)) {
+                _ = self.advance();
+                const elem = try self.parseExpression() orelse return error.ExpectedExpression;
+                try elements.append(self.allocator, elem);
+            }
+        }
+
+        _ = try self.expect(.rbracket);
+        return try self.parsePostfix(.{ .array_literal = .{
+            .elements = try elements.toOwnedSlice(self.allocator),
+        } });
+    }
+
+    fn parseSizedArray(self: *Parser) ParseError!ast.Expression {
+        _ = try self.expect(.array);
+        _ = try self.expect(.of);
+
+        // Parse size expression
+        const size_expr = try self.parseExpression() orelse return error.ExpectedExpression;
+        const size_ptr = try self.createExpr(size_expr);
+
+        // Parse element type
+        const elem_type = try self.expectTypeName();
+
+        return try self.parsePostfix(.{ .sized_array = .{
+            .size = size_ptr,
+            .element_type = elem_type,
+        } });
     }
 
     fn parseFieldInit(self: *Parser) ParseError!ast.FieldInit {

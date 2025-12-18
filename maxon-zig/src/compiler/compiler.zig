@@ -119,6 +119,11 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(expr, allocator);
             }
         },
+        .index_assign => |assign| {
+            freeExpressionArgs(assign.base.*, allocator);
+            freeExpressionArgs(assign.index.*, allocator);
+            freeExpressionArgs(assign.value, allocator);
+        },
     }
 }
 
@@ -143,6 +148,19 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         },
         .field_access => |fa| {
             freeExpressionArgs(fa.base.*, allocator);
+        },
+        .array_literal => |arr| {
+            for (arr.elements) |elem| {
+                freeExpressionArgs(elem, allocator);
+            }
+            allocator.free(arr.elements);
+        },
+        .index => |idx| {
+            freeExpressionArgs(idx.base.*, allocator);
+            freeExpressionArgs(idx.index.*, allocator);
+        },
+        .sized_array => |sized| {
+            freeExpressionArgs(sized.size.*, allocator);
         },
         else => {},
     }

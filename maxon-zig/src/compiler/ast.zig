@@ -34,10 +34,17 @@ pub const FunctionDecl = struct {
     body: []Statement,
 };
 
+pub const IndexAssign = struct {
+    base: *const Expression,
+    index: *const Expression,
+    value: Expression,
+};
+
 pub const Statement = union(enum) {
     @"return": ReturnStmt,
     let_decl: VarDecl,
     var_decl: VarDecl,
+    index_assign: IndexAssign,
 };
 
 pub const VarDecl = struct {
@@ -83,6 +90,20 @@ pub const FieldAccessExpr = struct {
     field_name: []const u8,
 };
 
+pub const ArrayLiteralExpr = struct {
+    elements: []const Expression,
+};
+
+pub const IndexExpr = struct {
+    base: *const Expression,
+    index: *const Expression,
+};
+
+pub const SizedArrayExpr = struct {
+    size: *const Expression,
+    element_type: []const u8,
+};
+
 pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
@@ -91,4 +112,7 @@ pub const Expression = union(enum) {
     call: CallExpr,
     struct_init: StructInitExpr,
     field_access: FieldAccessExpr,
+    array_literal: ArrayLiteralExpr,
+    index: IndexExpr,
+    sized_array: SizedArrayExpr,
 };

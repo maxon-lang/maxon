@@ -66,9 +66,26 @@ pub const IrCodegen = struct {
         try self.code.append(self.allocator, byte);
     }
 
+    /// Emit instruction with [rbp+offset] addressing
+    /// prefix should end with ModR/M byte for 8-bit offset (mod=01, r/m=101)
+    /// This will automatically switch to 32-bit offset encoding when needed
     fn emitWithOffset(self: *IrCodegen, prefix: []const u8, offset: i32) !void {
-        try self.emit(prefix);
-        try self.emitByte(@bitCast(@as(i8, @intCast(offset))));
+        if (offset >= -128 and offset <= 127) {
+            // Use 8-bit displacement (mod=01)
+            try self.emit(prefix);
+            try self.emitByte(@bitCast(@as(i8, @intCast(offset))));
+        } else {
+            // Use 32-bit displacement (mod=10)
+            // Change the last byte from mod=01 to mod=10
+            if (prefix.len > 0) {
+                try self.emit(prefix[0 .. prefix.len - 1]);
+                const modrm = prefix[prefix.len - 1];
+                // Change mod bits from 01 to 10: add 0x40 to the ModR/M byte
+                try self.emitByte(modrm + 0x40);
+            }
+            // Emit 32-bit displacement
+            try self.code.appendSlice(self.allocator, &@as([4]u8, @bitCast(offset)));
+        }
     }
 
     fn allocStackSlot(self: *IrCodegen) i32 {
@@ -194,6 +211,7 @@ pub const IrCodegen = struct {
             .alloca => try self.genAlloca(inst),
             .alloca_sized => try self.genAllocaSized(inst),
             .getfieldptr => try self.genGetFieldPtr(inst),
+            .getelemptr => try self.genGetElemPtr(inst),
             .store => try self.genStore(inst),
             .load => try self.genLoad(inst),
             .add, .sub, .mul, .div, .mod => try self.genIntBinaryOp(inst),
@@ -262,6 +280,54 @@ pub const IrCodegen = struct {
             try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = field_stack_offset });
             try self.value_types.put(self.allocator, inst.result.?, .ptr);
         }
+    }
+
+    fn genGetElemPtr(self: *IrCodegen, inst: ir.Instruction) !void {
+        const base_val = inst.operands[0].value;
+        const index_val = inst.operands[1].value;
+        const result = inst.result.?;
+
+        // All elements are 8 bytes
+        const elem_size: i64 = 8;
+
+        // Load base pointer to RAX
+        // First check if base is on stack (direct) or indirect
+        if (self.value_locations.get(base_val)) |base_loc| {
+            switch (base_loc) {
+                .stack => |base_offset| {
+                    // LEA rax, [rbp+base_offset] - get address of array start
+                    try self.emit(&.{ 0x48, 0x8D, 0x45 }); // lea rax, [rbp+disp8]
+                    try self.emitByte(@bitCast(@as(i8, @intCast(base_offset))));
+                },
+                else => {
+                    try self.loadValueToRax(base_val);
+                },
+            }
+        } else {
+            try self.loadValueToRax(base_val);
+        }
+
+        // Save base to RCX
+        try self.emit(&.{ 0x48, 0x89, 0xC1 }); // mov rcx, rax
+
+        // Load index to RAX
+        try self.loadValueToRax(index_val);
+
+        // Multiply index by element size (8): shl rax, 3
+        try self.emit(&.{ 0x48, 0xC1, 0xE0, 0x03 }); // shl rax, 3
+        _ = elem_size;
+
+        // Add base: add rax, rcx
+        try self.emit(&.{ 0x48, 0x01, 0xC8 }); // add rax, rcx
+
+        // Store result pointer to stack
+        const result_offset = self.allocStackSlot();
+        try self.emitWithOffset(&.{ 0x48, 0x89, 0x45 }, result_offset); // mov [rbp+off], rax
+        try self.value_locations.put(self.allocator, result, .{ .stack = result_offset });
+        try self.value_types.put(self.allocator, result, .ptr);
+
+        // Mark as indirect - the stack slot contains a pointer
+        try self.indirect_ptrs.put(self.allocator, result, {});
     }
 
     fn genStore(self: *IrCodegen, inst: ir.Instruction) !void {
