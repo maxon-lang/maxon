@@ -2,9 +2,13 @@ const std = @import("std");
 const ir = @import("ir.zig");
 const debug = @import("debug.zig");
 
+// ============================================================================
+// Public API
+// ============================================================================
+
 /// Run all optimizer passes with fixed-point iteration
 pub fn optimize(module: *ir.Module, allocator: std.mem.Allocator) !void {
-    const max_iterations = 10; // Safety limit to prevent infinite loops
+    const max_iterations = 10;
 
     for (module.functions.items) |*func| {
         debug.log("Optimizing function: {s}", .{func.name});
@@ -36,15 +40,11 @@ pub fn optimize(module: *ir.Module, allocator: std.mem.Allocator) !void {
     }
 }
 
-fn countInstructions(func: *ir.Function) usize {
-    var count: usize = 0;
-    for (func.blocks.items) |block| {
-        count += block.instructions.items.len;
-    }
-    return count;
-}
+// ============================================================================
+// Constant Folding
+// ============================================================================
 
-/// Constant folding: evaluate constant expressions at compile time
+/// Evaluate constant expressions at compile time
 fn constantFolding(func: *ir.Function, allocator: std.mem.Allocator) !void {
     var constants = std.AutoHashMapUnmanaged(ir.Value, i64){};
     defer constants.deinit(allocator);
@@ -54,23 +54,18 @@ fn constantFolding(func: *ir.Function, allocator: std.mem.Allocator) !void {
         defer new_instructions.deinit(allocator);
 
         for (block.instructions.items) |inst| {
-            const folded = try tryFold(inst, &constants, allocator);
-            if (folded) |new_inst| {
-                try new_instructions.append(allocator, new_inst);
+            if (try tryFoldConstant(inst, &constants, allocator)) |folded| {
+                try new_instructions.append(allocator, folded);
             } else {
                 try new_instructions.append(allocator, inst);
             }
         }
 
-        block.instructions.deinit(func.allocator);
-        block.instructions = .empty;
-        for (new_instructions.items) |inst| {
-            try block.instructions.append(func.allocator, inst);
-        }
+        try replaceBlockInstructions(block, &new_instructions, func.allocator);
     }
 }
 
-fn tryFold(inst: ir.Instruction, constants: *std.AutoHashMapUnmanaged(ir.Value, i64), allocator: std.mem.Allocator) !?ir.Instruction {
+fn tryFoldConstant(inst: ir.Instruction, constants: *std.AutoHashMapUnmanaged(ir.Value, i64), allocator: std.mem.Allocator) !?ir.Instruction {
     switch (inst.op) {
         .const_i64 => {
             if (inst.result) |result| {
@@ -79,45 +74,42 @@ fn tryFold(inst: ir.Instruction, constants: *std.AutoHashMapUnmanaged(ir.Value, 
             return null;
         },
         .add, .sub, .mul, .div, .mod => {
-            const lhs_val = inst.operands[0].value;
-            const rhs_val = inst.operands[1].value;
-            const lhs = constants.get(lhs_val);
-            const rhs = constants.get(rhs_val);
+            const lhs = constants.get(inst.operands[0].value) orelse return null;
+            const rhs = constants.get(inst.operands[1].value) orelse return null;
 
-            if (lhs != null and rhs != null) {
-                const result_val = switch (inst.op) {
-                    .add => lhs.? + rhs.?,
-                    .sub => lhs.? - rhs.?,
-                    .mul => lhs.? * rhs.?,
-                    .div => @divTrunc(lhs.?, rhs.?),
-                    .mod => @mod(lhs.?, rhs.?),
-                    else => unreachable,
-                };
+            const result_val = switch (inst.op) {
+                .add => lhs + rhs,
+                .sub => lhs - rhs,
+                .mul => lhs * rhs,
+                .div => @divTrunc(lhs, rhs),
+                .mod => @mod(lhs, rhs),
+                else => unreachable,
+            };
 
-                if (inst.result) |result| {
-                    try constants.put(allocator, result, result_val);
-                }
-
-                return .{
-                    .op = .const_i64,
-                    .result = inst.result,
-                    .result_type = .i64,
-                    .operands = .{ .{ .immediate_i64 = result_val }, .none },
-                };
+            if (inst.result) |result| {
+                try constants.put(allocator, result, result_val);
             }
-            return null;
+
+            return .{
+                .op = .const_i64,
+                .result = inst.result,
+                .result_type = .i64,
+                .operands = .{ .{ .immediate_i64 = result_val }, .none },
+            };
         },
         else => return null,
     }
 }
 
-/// Copy propagation: replace loads with the value that was stored
+// ============================================================================
+// Copy Propagation
+// ============================================================================
+
+/// Replace loads with the value that was stored
 fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
-    // Track what value is stored at each alloca ptr
     var ptr_to_value = std.AutoHashMapUnmanaged(ir.Value, ir.Value){};
     defer ptr_to_value.deinit(allocator);
 
-    // Track value-to-value mappings for eliminated loads
     var value_map = std.AutoHashMapUnmanaged(ir.Value, ir.Value){};
     defer value_map.deinit(allocator);
 
@@ -127,220 +119,295 @@ fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
 
         for (block.instructions.items) |inst| {
             switch (inst.op) {
-                .store => {
-                    const ptr = inst.operands[0].value;
-                    const val = inst.operands[1].value;
-                    // Apply value mapping to the stored value
-                    const mapped_val = value_map.get(val) orelse val;
-                    try ptr_to_value.put(allocator, ptr, mapped_val);
-                    // Emit store with mapped value
-                    var new_inst = inst;
-                    new_inst.operands[1] = .{ .value = mapped_val };
-                    try new_instructions.append(allocator, new_inst);
-                },
-                .load => {
-                    const ptr = inst.operands[0].value;
-                    if (ptr_to_value.get(ptr)) |stored_val| {
-                        // Replace load with a mapping to the stored value
-                        if (inst.result) |result| {
-                            try value_map.put(allocator, result, stored_val);
-                        }
-                        // Don't emit the load - we'll propagate the value
-                    } else {
-                        try new_instructions.append(allocator, inst);
-                    }
-                },
-                else => {
-                    // Rewrite operands to use propagated values
-                    var new_inst = inst;
-                    for (&new_inst.operands) |*op| {
-                        switch (op.*) {
-                            .value => |v| {
-                                if (value_map.get(v)) |propagated| {
-                                    op.* = .{ .value = propagated };
-                                }
-                            },
-                            .call_args => |args| {
-                                // Check if any arg needs propagation
-                                var needs_update = false;
-                                for (args) |arg| {
-                                    if (value_map.contains(arg)) {
-                                        needs_update = true;
-                                        break;
-                                    }
-                                }
-                                if (needs_update) {
-                                    // Allocate with func.allocator so deinit can free it
-                                    const new_args = try func.allocator.alloc(ir.Value, args.len);
-                                    for (args, 0..) |arg, i| {
-                                        new_args[i] = value_map.get(arg) orelse arg;
-                                    }
-                                    // Free old args
-                                    func.allocator.free(args);
-                                    op.* = .{ .call_args = new_args };
-                                }
-                            },
-                            else => {},
-                        }
-                    }
-                    try new_instructions.append(allocator, new_inst);
-                },
+                .store => try handleStore(inst, &ptr_to_value, &value_map, &new_instructions, allocator),
+                .load => try handleLoad(inst, &ptr_to_value, &value_map, &new_instructions, allocator),
+                else => try handleOther(inst, &value_map, &new_instructions, func.allocator, allocator),
             }
         }
 
-        block.instructions.deinit(func.allocator);
-        block.instructions = .empty;
-        for (new_instructions.items) |inst| {
-            try block.instructions.append(func.allocator, inst);
-        }
+        try replaceBlockInstructions(block, &new_instructions, func.allocator);
     }
 }
 
-/// Key for identifying equivalent field pointers
+fn handleStore(
+    inst: ir.Instruction,
+    ptr_to_value: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    value_map: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    new_instructions: *std.ArrayListUnmanaged(ir.Instruction),
+    allocator: std.mem.Allocator,
+) !void {
+    const ptr = inst.operands[0].value;
+    const val = inst.operands[1].value;
+    const mapped_val = value_map.get(val) orelse val;
+
+    try ptr_to_value.put(allocator, ptr, mapped_val);
+
+    var new_inst = inst;
+    new_inst.operands[1] = .{ .value = mapped_val };
+    try new_instructions.append(allocator, new_inst);
+}
+
+fn handleLoad(
+    inst: ir.Instruction,
+    ptr_to_value: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    value_map: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    new_instructions: *std.ArrayListUnmanaged(ir.Instruction),
+    allocator: std.mem.Allocator,
+) !void {
+    const ptr = inst.operands[0].value;
+
+    if (ptr_to_value.get(ptr)) |stored_val| {
+        if (inst.result) |result| {
+            try value_map.put(allocator, result, stored_val);
+        }
+        // Eliminate load - value will be propagated
+    } else {
+        try new_instructions.append(allocator, inst);
+    }
+}
+
+fn handleOther(
+    inst: ir.Instruction,
+    value_map: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    new_instructions: *std.ArrayListUnmanaged(ir.Instruction),
+    func_allocator: std.mem.Allocator,
+    temp_allocator: std.mem.Allocator,
+) !void {
+    var new_inst = inst;
+
+    for (&new_inst.operands) |*op| {
+        switch (op.*) {
+            .value => |v| {
+                if (value_map.get(v)) |propagated| {
+                    op.* = .{ .value = propagated };
+                }
+            },
+            .call_args => |args| {
+                if (anyArgNeedsPropagation(args, value_map)) {
+                    const new_args = try func_allocator.alloc(ir.Value, args.len);
+                    for (args, 0..) |arg, i| {
+                        new_args[i] = value_map.get(arg) orelse arg;
+                    }
+                    func_allocator.free(args);
+                    op.* = .{ .call_args = new_args };
+                }
+            },
+            else => {},
+        }
+    }
+
+    try new_instructions.append(temp_allocator, new_inst);
+}
+
+fn anyArgNeedsPropagation(args: []const ir.Value, value_map: *std.AutoHashMapUnmanaged(ir.Value, ir.Value)) bool {
+    for (args) |arg| {
+        if (value_map.contains(arg)) return true;
+    }
+    return false;
+}
+
+// ============================================================================
+// Dead Store Elimination
+// ============================================================================
+
+/// Key for identifying equivalent field pointers via offset chain from base alloca
 const FieldPtrKey = struct {
+    base: ir.Value,
+    offsets: []const i32,
+
+    fn eql(a: FieldPtrKey, b: FieldPtrKey) bool {
+        if (a.base != b.base) return false;
+        if (a.offsets.len != b.offsets.len) return false;
+        for (a.offsets, b.offsets) |ao, bo| {
+            if (ao != bo) return false;
+        }
+        return true;
+    }
+};
+
+const ImmediateFieldEntry = struct {
     base: ir.Value,
     offset: i32,
 };
 
-/// Dead store elimination: remove stores to allocas that are never loaded
+/// Context for dead store elimination analysis
+const DseContext = struct {
+    ptr_to_immediate: std.AutoHashMapUnmanaged(ir.Value, ImmediateFieldEntry),
+    ptr_to_array_base: std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    loaded_array_bases: std.AutoHashMapUnmanaged(ir.Value, void),
+    loaded_bases: std.AutoHashMapUnmanaged(ir.Value, void),
+    loaded_fields: std.ArrayListUnmanaged(FieldPtrKey),
+    loaded_ptrs: std.AutoHashMapUnmanaged(ir.Value, void),
+    allocator: std.mem.Allocator,
+
+    fn init(allocator: std.mem.Allocator) DseContext {
+        return .{
+            .ptr_to_immediate = .{},
+            .ptr_to_array_base = .{},
+            .loaded_array_bases = .{},
+            .loaded_bases = .{},
+            .loaded_fields = .{},
+            .loaded_ptrs = .{},
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(self: *DseContext) void {
+        self.ptr_to_immediate.deinit(self.allocator);
+        self.ptr_to_array_base.deinit(self.allocator);
+        self.loaded_array_bases.deinit(self.allocator);
+        self.loaded_bases.deinit(self.allocator);
+        for (self.loaded_fields.items) |field| {
+            self.allocator.free(field.offsets);
+        }
+        self.loaded_fields.deinit(self.allocator);
+        self.loaded_ptrs.deinit(self.allocator);
+    }
+
+    /// Resolve pointer to normalized field key by tracing getfieldptr chain
+    fn resolveFieldKey(self: *DseContext, ptr: ir.Value) !?FieldPtrKey {
+        var offsets: std.ArrayListUnmanaged(i32) = .empty;
+        defer offsets.deinit(self.allocator);
+
+        var current = ptr;
+        while (self.ptr_to_immediate.get(current)) |entry| {
+            try offsets.append(self.allocator, entry.offset);
+            current = entry.base;
+        }
+
+        if (offsets.items.len == 0) return null;
+
+        std.mem.reverse(i32, offsets.items);
+        const owned_offsets = try self.allocator.dupe(i32, offsets.items);
+        return .{ .base = current, .offsets = owned_offsets };
+    }
+
+    fn isStoreNeeded(self: *DseContext, ptr: ir.Value) !bool {
+        if (self.loaded_ptrs.contains(ptr)) return true;
+
+        if (try self.resolveFieldKey(ptr)) |store_key| {
+            defer self.allocator.free(store_key.offsets);
+
+            if (self.loaded_bases.contains(store_key.base)) return true;
+
+            for (self.loaded_fields.items) |load_key| {
+                if (FieldPtrKey.eql(store_key, load_key)) return true;
+            }
+        }
+
+        if (self.ptr_to_array_base.get(ptr)) |array_base| {
+            if (self.loaded_array_bases.contains(array_base)) return true;
+        }
+
+        return false;
+    }
+};
+
+/// Remove stores to allocas that are never loaded
 fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
-    // Build a map from getfieldptr result to (base, offset) key
-    var ptr_to_field = std.AutoHashMapUnmanaged(ir.Value, FieldPtrKey){};
-    defer ptr_to_field.deinit(allocator);
+    var ctx = DseContext.init(allocator);
+    defer ctx.deinit();
 
-    // Build a map from getelemptr result to its base pointer
-    var ptr_to_array_base = std.AutoHashMapUnmanaged(ir.Value, ir.Value){};
-    defer ptr_to_array_base.deinit(allocator);
+    // Pass 1: Build pointer mappings
+    try collectPointerMappings(func, &ctx);
 
-    // Track which array bases have loads via getelemptr
-    var loaded_array_bases = std.AutoHashMapUnmanaged(ir.Value, void){};
-    defer loaded_array_bases.deinit(allocator);
+    // Pass 2: Find loaded pointers
+    try collectLoadedPointers(func, &ctx);
 
-    // Track which base allocas are loaded from
-    var loaded_bases = std.AutoHashMapUnmanaged(ir.Value, void){};
-    defer loaded_bases.deinit(allocator);
+    // Pass 3: Remove dead stores
+    try removeDeadStores(func, &ctx);
+}
 
-    // Track which (base, offset) pairs are loaded from
-    var loaded_fields = std.ArrayListUnmanaged(FieldPtrKey){};
-    defer loaded_fields.deinit(allocator);
-
-    // Find all pointers that are loaded (both direct and via getfieldptr)
-    var loaded_ptrs = std.AutoHashMapUnmanaged(ir.Value, void){};
-    defer loaded_ptrs.deinit(allocator);
-
-    // First pass: collect getfieldptr and getelemptr mappings
+fn collectPointerMappings(func: *ir.Function, ctx: *DseContext) !void {
     for (func.blocks.items) |block| {
         for (block.instructions.items) |inst| {
             if (inst.op == .getfieldptr) {
                 if (inst.result) |result| {
-                    const base = inst.operands[0].value;
-                    const offset = inst.operands[1].immediate_i32;
-                    try ptr_to_field.put(allocator, result, .{ .base = base, .offset = offset });
+                    try ctx.ptr_to_immediate.put(ctx.allocator, result, .{
+                        .base = inst.operands[0].value,
+                        .offset = inst.operands[1].immediate_i32,
+                    });
                 }
             } else if (inst.op == .getelemptr) {
-                // Track getelemptr result -> base mapping
                 if (inst.result) |result| {
-                    const base = inst.operands[0].value;
-                    try ptr_to_array_base.put(allocator, result, base);
+                    try ctx.ptr_to_array_base.put(ctx.allocator, result, inst.operands[0].value);
                 }
             }
-        }
-    }
-
-    // Second pass: find all loaded pointers and their field keys
-    for (func.blocks.items) |block| {
-        for (block.instructions.items) |inst| {
-            if (inst.op == .load) {
-                const ptr = inst.operands[0].value;
-                try loaded_ptrs.put(allocator, ptr, {});
-
-                // If this loads via a field pointer, track the base+offset
-                if (ptr_to_field.get(ptr)) |field_key| {
-                    try loaded_bases.put(allocator, field_key.base, {});
-                    try loaded_fields.append(allocator, field_key);
-                }
-
-                // If this loads via a getelemptr, mark the array base as loaded
-                if (ptr_to_array_base.get(ptr)) |array_base| {
-                    try loaded_array_bases.put(allocator, array_base, {});
-                }
-            }
-        }
-    }
-
-    // Mark escaping values (set by AST-to-IR for returns and call args)
-    var esc_iter = func.escaping_values.iterator();
-    while (esc_iter.next()) |entry| {
-        const val = entry.key_ptr.*;
-        try loaded_ptrs.put(allocator, val, {});
-        try loaded_bases.put(allocator, val, {});
-    }
-
-    // Helper to check if a store should be kept
-    const isStoreNeeded = struct {
-        fn check(
-            ptr: ir.Value,
-            loaded_ptrs_ref: *std.AutoHashMapUnmanaged(ir.Value, void),
-            ptr_to_field_ref: *std.AutoHashMapUnmanaged(ir.Value, FieldPtrKey),
-            loaded_fields_ref: *std.ArrayListUnmanaged(FieldPtrKey),
-            loaded_bases_ref: *std.AutoHashMapUnmanaged(ir.Value, void),
-            ptr_to_array_base_ref: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
-            loaded_array_bases_ref: *std.AutoHashMapUnmanaged(ir.Value, void),
-        ) bool {
-            // Direct match - keep the store
-            if (loaded_ptrs_ref.contains(ptr)) return true;
-
-            // Check if this store is via a field pointer
-            if (ptr_to_field_ref.get(ptr)) |store_field| {
-                // If the base alloca is marked as loaded (e.g., passed to a call), keep all stores to it
-                if (loaded_bases_ref.contains(store_field.base)) return true;
-
-                // Check if any load uses the same base+offset
-                for (loaded_fields_ref.items) |load_field| {
-                    if (store_field.base == load_field.base and store_field.offset == load_field.offset) {
-                        return true;
-                    }
-                }
-            }
-
-            // Check if this store is via a getelemptr to an array that's loaded from
-            if (ptr_to_array_base_ref.get(ptr)) |array_base| {
-                if (loaded_array_bases_ref.contains(array_base)) return true;
-            }
-
-            return false;
-        }
-    }.check;
-
-    // Remove stores to never-loaded pointers
-    for (func.blocks.items) |*block| {
-        var new_instructions: std.ArrayListUnmanaged(ir.Instruction) = .empty;
-        defer new_instructions.deinit(allocator);
-
-        for (block.instructions.items) |inst| {
-            if (inst.op == .store) {
-                const ptr = inst.operands[0].value;
-                if (!isStoreNeeded(ptr, &loaded_ptrs, &ptr_to_field, &loaded_fields, &loaded_bases, &ptr_to_array_base, &loaded_array_bases)) {
-                    continue; // Skip dead store
-                }
-            }
-            try new_instructions.append(allocator, inst);
-        }
-
-        block.instructions.deinit(func.allocator);
-        block.instructions = .empty;
-        for (new_instructions.items) |inst| {
-            try block.instructions.append(func.allocator, inst);
         }
     }
 }
 
-/// Dead code elimination: remove instructions whose results are never used
+fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
+    for (func.blocks.items) |block| {
+        for (block.instructions.items) |inst| {
+            switch (inst.op) {
+                .param => {
+                    // Pointer parameters are externally accessible (e.g., sret)
+                    if (inst.result) |result| {
+                        if (inst.result_type == .ptr) {
+                            try ctx.loaded_bases.put(ctx.allocator, result, {});
+                        }
+                    }
+                },
+                .load => {
+                    const ptr = inst.operands[0].value;
+                    try ctx.loaded_ptrs.put(ctx.allocator, ptr, {});
+
+                    if (try ctx.resolveFieldKey(ptr)) |field_key| {
+                        try ctx.loaded_bases.put(ctx.allocator, field_key.base, {});
+                        try ctx.loaded_fields.append(ctx.allocator, field_key);
+                    }
+
+                    if (ctx.ptr_to_array_base.get(ptr)) |array_base| {
+                        try ctx.loaded_array_bases.put(ctx.allocator, array_base, {});
+                    }
+                },
+                .call => {
+                    // Pointers passed to calls may be read
+                    for (inst.operands) |op| {
+                        if (op == .call_args) {
+                            for (op.call_args) |arg| {
+                                try ctx.loaded_bases.put(ctx.allocator, arg, {});
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+}
+
+fn removeDeadStores(func: *ir.Function, ctx: *DseContext) !void {
+    for (func.blocks.items) |*block| {
+        var new_instructions: std.ArrayListUnmanaged(ir.Instruction) = .empty;
+        defer new_instructions.deinit(ctx.allocator);
+
+        for (block.instructions.items) |inst| {
+            const keep = if (inst.op == .store)
+                try ctx.isStoreNeeded(inst.operands[0].value)
+            else
+                true;
+
+            if (keep) {
+                try new_instructions.append(ctx.allocator, inst);
+            }
+        }
+
+        try replaceBlockInstructions(block, &new_instructions, func.allocator);
+    }
+}
+
+// ============================================================================
+// Dead Code Elimination
+// ============================================================================
+
+/// Remove instructions whose results are never used
 fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
     var used = std.AutoHashMapUnmanaged(ir.Value, void){};
     defer used.deinit(allocator);
 
-    // First pass: find all used values
+    // Pass 1: Find all used values
     for (func.blocks.items) |block| {
         for (block.instructions.items) |inst| {
             for (inst.operands) |op| {
@@ -357,26 +424,23 @@ fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
         }
     }
 
-    // Second pass: remove dead instructions
+    // Pass 2: Remove dead instructions
     for (func.blocks.items) |*block| {
         var new_instructions: std.ArrayListUnmanaged(ir.Instruction) = .empty;
         defer new_instructions.deinit(allocator);
 
         for (block.instructions.items) |inst| {
-            if (!isDead(inst, &used)) {
+            if (!isDeadInstruction(inst, &used)) {
                 try new_instructions.append(allocator, inst);
             }
         }
 
-        block.instructions.deinit(func.allocator);
-        block.instructions = .empty;
-        for (new_instructions.items) |inst| {
-            try block.instructions.append(func.allocator, inst);
-        }
+        try replaceBlockInstructions(block, &new_instructions, func.allocator);
     }
 }
 
-fn isDead(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Value, void)) bool {
+fn isDeadInstruction(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Value, void)) bool {
+    // Side-effecting instructions are never dead
     switch (inst.op) {
         .store, .ret, .br, .br_cond, .call => return false,
         else => {},
@@ -387,4 +451,28 @@ fn isDead(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Value, void))
     }
 
     return false;
+}
+
+// ============================================================================
+// Utilities
+// ============================================================================
+
+fn countInstructions(func: *ir.Function) usize {
+    var count: usize = 0;
+    for (func.blocks.items) |block| {
+        count += block.instructions.items.len;
+    }
+    return count;
+}
+
+fn replaceBlockInstructions(
+    block: *ir.BasicBlock,
+    new_instructions: *std.ArrayListUnmanaged(ir.Instruction),
+    func_allocator: std.mem.Allocator,
+) !void {
+    block.instructions.deinit(func_allocator);
+    block.instructions = .empty;
+    for (new_instructions.items) |inst| {
+        try block.instructions.append(func_allocator, inst);
+    }
 }

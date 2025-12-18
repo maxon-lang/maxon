@@ -382,8 +382,6 @@ pub const AstToIr = struct {
             self.sret_ptr = try ir_func.emitParam(0, .ptr);
             self.sret_size = sret_struct_size;
             param_offset = 1;
-            // Mark sret as escaping so stores to it aren't optimized away
-            try ir_func.markEscaping(self.sret_ptr.?);
         }
 
         // Register parameters (offset by 1 if using sret)
@@ -495,7 +493,6 @@ pub const AstToIr = struct {
             }
 
             const typed_val = try self.convertExpression(expr);
-            try self.func().markEscaping(typed_val.value);
 
             // Convert float to int if needed
             if (self.func().return_type == .i64 and typed_val.ty.toPrimitiveType() == .f64) {
@@ -734,7 +731,6 @@ pub const AstToIr = struct {
         for (call.args, 0..) |arg_expr, i| {
             const arg = try self.convertExpression(arg_expr);
             args[i + arg_offset] = arg.value;
-            try self.func().markEscaping(arg.value);
             try self.checkOwnershipTransfer(call.func_name, arg_expr, i);
         }
 
