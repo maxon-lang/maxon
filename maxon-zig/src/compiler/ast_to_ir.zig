@@ -4,6 +4,10 @@ const ir = @import("ir.zig");
 const debug = @import("debug.zig");
 const mutation_analysis = @import("mutation_analysis.zig");
 
+// ============================================================================
+// Type Definitions
+// ============================================================================
+
 /// Typed value - tracks IR value with its type
 const TypedValue = struct {
     value: ir.Value,
@@ -23,16 +27,16 @@ const ArrayInfo = struct {
     storage: ArrayStorage,
 };
 
-/// Extended type info for struct tracking
+/// Extended type info for variable tracking
 const ValueType = union(enum) {
     primitive: ir.Type,
-    struct_type: []const u8, // struct type name
-    array_type: ArrayInfo, // array type info
+    struct_type: []const u8,
+    array_type: ArrayInfo,
 
     fn toPrimitiveType(self: ValueType) ir.Type {
         return switch (self) {
             .primitive => |p| p,
-            .struct_type, .array_type => .ptr, // structs and arrays are represented as pointers
+            .struct_type, .array_type => .ptr,
         };
     }
 };
@@ -42,6 +46,13 @@ const FieldInfo = struct {
     name: []const u8,
     ty: ir.Type,
     offset: i32,
+};
+
+/// Struct type info
+const StructTypeInfo = struct {
+    name: []const u8,
+    fields: []const FieldInfo,
+    size: i32,
 };
 
 /// Type info - can be primitive or struct
@@ -61,17 +72,10 @@ const TypeInfo = union(enum) {
     }
 };
 
-/// Struct type info
-const StructTypeInfo = struct {
-    name: []const u8,
-    fields: []const FieldInfo,
-    size: i32,
-};
-
 /// Function signature info
 const FuncInfo = struct {
     return_type: ir.Type,
-    return_type_name: ?[]const u8, // struct type name if returning a struct
+    return_type_name: ?[]const u8,
     param_types: []const ParamType,
 };
 
@@ -87,38 +91,77 @@ const EnumInfo = struct {
 
 /// Ownership state of a variable
 const OwnershipState = enum {
-    owned, // Variable owns its value, can be used
-    moved, // Ownership transferred, cannot be used
+    owned,
+    moved,
 };
 
-/// Converts AST to IR
+/// Variable info - tracks allocation, type, and ownership
+const VarInfo = struct {
+    ptr: ir.Value,
+    ty: ValueType,
+    used: bool,
+    is_mutable: bool,
+    state: OwnershipState,
+    moved_to: ?[]const u8,
+    moved_line: usize,
+
+    fn init(ptr: ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
+        return .{
+            .ptr = ptr,
+            .ty = ty,
+            .used = false,
+            .is_mutable = is_mutable,
+            .state = .owned,
+            .moved_to = null,
+            .moved_line = 0,
+        };
+    }
+
+    fn markMoved(self: *VarInfo, func_name: []const u8, line: usize) void {
+        self.state = .moved;
+        self.moved_to = func_name;
+        self.moved_line = line;
+    }
+
+    fn resetOwnership(self: *VarInfo) void {
+        self.state = .owned;
+        self.moved_to = null;
+        self.moved_line = 0;
+    }
+};
+
+const ConvertError = error{
+    OutOfMemory,
+    UndefinedVariable,
+    FloatModNotSupported,
+    WrongArgumentCount,
+    ExpectedFloat,
+    UnknownType,
+    UnknownField,
+    UseAfterMove,
+    ImmutableAssign,
+    ImmutableMove,
+};
+
+// ============================================================================
+// AST to IR Converter
+// ============================================================================
+
 pub const AstToIr = struct {
     allocator: std.mem.Allocator,
     module: ir.Module,
     current_func: ?*ir.Function,
-    // Map variable names to their alloca values (pointers) and types
     var_map: std.StringHashMapUnmanaged(VarInfo),
-    // Map type names to type info (primitives and structs)
     type_map: std.StringHashMapUnmanaged(TypeInfo),
-    // Map function names to signatures
     func_map: std.StringHashMapUnmanaged(FuncInfo),
-    // Map enum names to their info
     enum_map: std.StringHashMapUnmanaged(EnumInfo),
-    // Track whether current declaration is mutable (var) or immutable (let)
     current_decl_is_mutable: bool,
-    // Mutation analysis for ownership tracking
     mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
-    // Current line number for error reporting
     current_line: usize,
 
-    const VarInfo = struct {
-        ptr: ir.Value,
-        ty: ValueType,
-        used: bool,
-        state: OwnershipState,
-        moved_to: ?[]const u8, // Function that took ownership
-        moved_line: usize, // Line where move occurred
-    };
+    // ------------------------------------------------------------------------
+    // Initialization / Cleanup
+    // ------------------------------------------------------------------------
 
     pub fn init(allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer) AstToIr {
         return .{
@@ -137,19 +180,21 @@ pub const AstToIr = struct {
 
     pub fn deinit(self: *AstToIr) void {
         self.var_map.deinit(self.allocator);
+
         var type_iter = self.type_map.iterator();
         while (type_iter.next()) |entry| {
-            switch (entry.value_ptr.*) {
-                .struct_type => |s| self.allocator.free(s.fields),
-                .primitive => {},
+            if (entry.value_ptr.* == .struct_type) {
+                self.allocator.free(entry.value_ptr.struct_type.fields);
             }
         }
         self.type_map.deinit(self.allocator);
+
         var func_iter = self.func_map.iterator();
         while (func_iter.next()) |entry| {
             self.allocator.free(entry.value_ptr.param_types);
         }
         self.func_map.deinit(self.allocator);
+
         var enum_iter = self.enum_map.iterator();
         while (enum_iter.next()) |entry| {
             entry.value_ptr.members.deinit(self.allocator);
@@ -157,162 +202,140 @@ pub const AstToIr = struct {
         self.enum_map.deinit(self.allocator);
     }
 
+    // ------------------------------------------------------------------------
+    // Main Entry Point
+    // ------------------------------------------------------------------------
+
     pub fn convert(self: *AstToIr, program: ast.Program) !ir.Module {
         // Register primitive types
         try self.type_map.put(self.allocator, "int", .{ .primitive = .i64 });
         try self.type_map.put(self.allocator, "float", .{ .primitive = .f64 });
 
-        // Register all type declarations
-        for (program.types) |type_decl| {
-            try self.registerType(type_decl);
-        }
+        // Register declarations
+        for (program.types) |type_decl| try self.registerType(type_decl);
+        for (program.enums) |enum_decl| try self.registerEnum(enum_decl);
+        for (program.functions) |fn_decl| try self.registerFunction(fn_decl);
 
-        // Register all enum declarations
-        for (program.enums) |enum_decl| {
-            try self.registerEnum(enum_decl);
-        }
+        // Convert functions
+        for (program.functions) |fn_decl| try self.convertFunction(fn_decl);
 
-        // Second, register all function signatures
-        for (program.functions) |func| {
-            try self.registerFunction(func);
-        }
-
-        // Then convert functions
-        for (program.functions) |func| {
-            try self.convertFunction(func);
-        }
-
-        // Transfer ownership
+        // Transfer ownership of module
         const module = self.module;
         self.module = ir.Module.init(self.allocator);
         return module;
     }
 
-    fn registerEnum(self: *AstToIr, enum_decl: ast.EnumDecl) !void {
-        var members: std.StringHashMapUnmanaged(i64) = .{};
-
-        for (enum_decl.members, 0..) |member, i| {
-            try members.put(self.allocator, member, @intCast(i));
-        }
-
-        try self.enum_map.put(self.allocator, enum_decl.name, .{
-            .members = members,
-        });
-
-        debug.astToIr("Registered enum '{s}' with {d} members", .{ enum_decl.name, enum_decl.members.len });
-    }
-
-    fn registerFunction(self: *AstToIr, func: ast.FunctionDecl) !void {
-        // Determine return type from type_map
-        var ret_type_name: ?[]const u8 = null;
-        const ret_type: ir.Type = if (func.return_type) |rt| blk: {
-            const type_info = self.type_map.get(rt) orelse return error.UnknownType;
-            if (type_info.isStruct()) ret_type_name = rt;
-            break :blk type_info.irType();
-        } else .void;
-
-        // Build parameter types
-        var param_types = try self.allocator.alloc(ParamType, func.params.len);
-        for (func.params, 0..) |param, i| {
-            const type_info = self.type_map.get(param.type_name) orelse return error.UnknownType;
-            if (type_info.isStruct()) {
-                param_types[i] = .{ .ty = .{ .struct_type = param.type_name } };
-            } else {
-                param_types[i] = .{ .ty = .{ .primitive = type_info.irType() } };
-            }
-        }
-
-        try self.func_map.put(self.allocator, func.name, .{
-            .return_type = ret_type,
-            .return_type_name = ret_type_name,
-            .param_types = param_types,
-        });
-
-        debug.astToIr("Registered function '{s}' returning {s}", .{ func.name, ret_type.format() });
-    }
-
-    fn registerType(self: *AstToIr, type_decl: ast.TypeDecl) !void {
-        var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
-        var offset: i32 = 0;
-
-        for (type_decl.fields, 0..) |field, i| {
-            const field_type = try self.lookupIrType(field.type_name);
-            fields[i] = .{
-                .name = field.name,
-                .ty = field_type,
-                .offset = offset,
-            };
-            // All types are 8 bytes for simplicity
-            offset += 8;
-        }
-
-        try self.type_map.put(self.allocator, type_decl.name, .{ .struct_type = .{
-            .name = type_decl.name,
-            .fields = fields,
-            .size = offset,
-        } });
-
-        debug.astToIr("Registered type '{s}' with size {d}", .{ type_decl.name, offset });
-    }
+    // ------------------------------------------------------------------------
+    // Type Lookup Helpers
+    // ------------------------------------------------------------------------
 
     fn lookupIrType(self: *AstToIr, name: []const u8) !ir.Type {
         const type_info = self.type_map.get(name) orelse return error.UnknownType;
         return type_info.irType();
     }
 
-    fn convertFunction(self: *AstToIr, func: ast.FunctionDecl) !void {
-        // Determine return type from type_map
-        const ret_type: ir.Type = if (func.return_type) |rt|
+    fn lookupStructInfo(self: *AstToIr, type_name: []const u8) !StructTypeInfo {
+        const type_info = self.type_map.get(type_name) orelse return error.UnknownType;
+        return switch (type_info) {
+            .struct_type => |s| s,
+            .primitive => error.UnknownType,
+        };
+    }
+
+    fn lookupField(struct_info: StructTypeInfo, field_name: []const u8) !FieldInfo {
+        for (struct_info.fields) |f| {
+            if (std.mem.eql(u8, f.name, field_name)) return f;
+        }
+        return error.UnknownField;
+    }
+
+    fn func(self: *AstToIr) *ir.Function {
+        return self.current_func.?;
+    }
+
+    // ------------------------------------------------------------------------
+    // Registration (Types, Enums, Functions)
+    // ------------------------------------------------------------------------
+
+    fn registerType(self: *AstToIr, type_decl: ast.TypeDecl) !void {
+        var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
+        var offset: i32 = 0;
+
+        for (type_decl.fields, 0..) |field, i| {
+            fields[i] = .{
+                .name = field.name,
+                .ty = try self.lookupIrType(field.type_name),
+                .offset = offset,
+            };
+            offset += 8; // All types are 8 bytes
+        }
+
+        try self.type_map.put(self.allocator, type_decl.name, .{
+            .struct_type = .{ .name = type_decl.name, .fields = fields, .size = offset },
+        });
+
+        debug.astToIr("Registered type '{s}' with size {d}", .{ type_decl.name, offset });
+    }
+
+    fn registerEnum(self: *AstToIr, enum_decl: ast.EnumDecl) !void {
+        var members: std.StringHashMapUnmanaged(i64) = .{};
+        for (enum_decl.members, 0..) |member, i| {
+            try members.put(self.allocator, member, @intCast(i));
+        }
+        try self.enum_map.put(self.allocator, enum_decl.name, .{ .members = members });
+        debug.astToIr("Registered enum '{s}' with {d} members", .{ enum_decl.name, enum_decl.members.len });
+    }
+
+    fn registerFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
+        var ret_type_name: ?[]const u8 = null;
+        const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
+            const type_info = self.type_map.get(rt) orelse return error.UnknownType;
+            if (type_info.isStruct()) ret_type_name = rt;
+            break :blk type_info.irType();
+        } else .void;
+
+        var param_types = try self.allocator.alloc(ParamType, decl.params.len);
+        for (decl.params, 0..) |param, i| {
+            const type_info = self.type_map.get(param.type_name) orelse return error.UnknownType;
+            param_types[i] = .{
+                .ty = if (type_info.isStruct())
+                    .{ .struct_type = param.type_name }
+                else
+                    .{ .primitive = type_info.irType() },
+            };
+        }
+
+        try self.func_map.put(self.allocator, decl.name, .{
+            .return_type = ret_type,
+            .return_type_name = ret_type_name,
+            .param_types = param_types,
+        });
+
+        debug.astToIr("Registered function '{s}' returning {s}", .{ decl.name, ret_type.format() });
+    }
+
+    // ------------------------------------------------------------------------
+    // Function Conversion
+    // ------------------------------------------------------------------------
+
+    fn convertFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
+        const ret_type: ir.Type = if (decl.return_type) |rt|
             try self.lookupIrType(rt)
         else
             .void;
 
-        // Create function
-        const ir_func = try self.module.addFunction(func.name, ret_type);
+        const ir_func = try self.module.addFunction(decl.name, ret_type);
         self.current_func = ir_func;
-
-        // Clear variable map
         self.var_map.clearRetainingCapacity();
-
-        // Create entry block
         _ = try ir_func.addBlock("entry");
 
-        // Handle function parameters
-        for (func.params, 0..) |param, i| {
-            const param_idx: i32 = @intCast(i);
-            const type_info = self.type_map.get(param.type_name);
-
-            if (type_info != null and type_info.?.isStruct()) {
-                // Struct parameter - emit param instruction (pointer) and register
-                const param_val = try ir_func.emitParam(param_idx, .ptr);
-                try self.var_map.put(self.allocator, param.name, .{
-                    .ptr = param_val,
-                    .ty = .{ .struct_type = type_info.?.struct_type.name },
-                    .used = false,
-                    .state = .owned,
-                    .moved_to = null,
-                    .moved_line = 0,
-                });
-            } else {
-                // Primitive parameter
-                const param_type = try self.lookupIrType(param.type_name);
-                const param_val = try ir_func.emitParam(param_idx, param_type);
-                // Allocate stack slot and store parameter
-                const ptr = try ir_func.emitAlloca(param_type);
-                try ir_func.emitStore(ptr, param_val);
-                try self.var_map.put(self.allocator, param.name, .{
-                    .ptr = ptr,
-                    .ty = .{ .primitive = param_type },
-                    .used = false,
-                    .state = .owned,
-                    .moved_to = null,
-                    .moved_line = 0,
-                });
-            }
+        // Register parameters
+        for (decl.params, 0..) |param, i| {
+            try self.registerParameter(param, @intCast(i));
         }
 
         // Convert body
-        for (func.body) |stmt| {
+        for (decl.body) |stmt| {
             try self.convertStatement(stmt);
         }
 
@@ -326,6 +349,33 @@ pub const AstToIr = struct {
         }
     }
 
+    fn registerParameter(self: *AstToIr, param: ast.ParamDecl, idx: i32) !void {
+        const type_info = self.type_map.get(param.type_name);
+
+        if (type_info != null and type_info.?.isStruct()) {
+            const param_val = try self.func().emitParam(idx, .ptr);
+            try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                param_val,
+                .{ .struct_type = type_info.?.struct_type.name },
+                true,
+            ));
+        } else {
+            const param_type = try self.lookupIrType(param.type_name);
+            const param_val = try self.func().emitParam(idx, param_type);
+            const ptr = try self.func().emitAlloca(param_type);
+            try self.func().emitStore(ptr, param_val);
+            try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                ptr,
+                .{ .primitive = param_type },
+                true,
+            ));
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Statement Conversion
+    // ------------------------------------------------------------------------
+
     fn convertStatement(self: *AstToIr, stmt: ast.Statement) !void {
         switch (stmt) {
             .let_decl => |decl| {
@@ -336,469 +386,345 @@ pub const AstToIr = struct {
                 self.current_decl_is_mutable = true;
                 try self.convertVarDecl(decl);
             },
-            .@"return" => |ret| {
-                try self.convertReturn(ret);
-            },
-            .index_assign => |idx_assign| {
-                try self.convertIndexAssign(idx_assign);
-            },
-            .assign => |assign| {
-                try self.convertAssignment(assign);
-            },
-            .call => |call| {
-                // Standalone call statement - convert and discard result
-                _ = try self.convertCall(call);
-            },
+            .@"return" => |ret| try self.convertReturn(ret),
+            .assign => |assign| try self.convertAssignment(assign),
+            .field_assign => |assign| try self.convertFieldAssign(assign),
+            .index_assign => |assign| try self.convertIndexAssign(assign),
+            .call => |call| _ = try self.convertCall(call),
         }
         self.current_line += 1;
     }
 
-    fn convertAssignment(self: *AstToIr, assign: ast.AssignStmt) ConvertError!void {
-        const func = self.current_func.?;
-
-        // Check if variable exists
-        const var_info = self.var_map.getPtr(assign.target) orelse {
-            std.debug.print("error: undefined variable '{s}'\n", .{assign.target});
-            return error.UndefinedVariable;
-        };
-
-        // Check ownership - cannot assign to moved variable
-        if (var_info.state == .moved) {
-            std.debug.print("error: cannot assign to variable '{s}' after ownership was transferred to '{s}' at line {d}\n", .{
-                assign.target,
-                var_info.moved_to orelse "unknown",
-                var_info.moved_line,
-            });
-            return error.UseAfterMove;
-        }
-
-        var_info.used = true;
-
-        // Convert the new value
-        const value_typed = try self.convertExpression(assign.value);
-
-        // Store the value based on type
-        switch (var_info.ty) {
-            .primitive => {
-                try func.emitStore(var_info.ptr, value_typed.value);
-            },
-            .struct_type, .array_type => {
-                // For compound types, update the pointer
-                var_info.ptr = value_typed.value;
-            },
-        }
-    }
-
     fn convertVarDecl(self: *AstToIr, decl: ast.VarDecl) !void {
-        const func = self.current_func.?;
-
         debug.astToIr("Converting var decl: {s}", .{decl.name});
 
-        // Convert initializer first to infer type
         const init_typed = try self.convertExpression(decl.value);
 
-        // For structs and arrays, the init_typed.value is already the pointer to the allocated data
-        // We store this pointer directly
         switch (init_typed.ty) {
             .struct_type, .array_type => {
-                // Struct/Array: value is already a pointer to the data
-                // Just record the variable pointing to this struct/array
-                try self.var_map.put(self.allocator, decl.name, .{
-                    .ptr = init_typed.value,
-                    .ty = init_typed.ty,
-                    .used = false,
-                    .state = .owned,
-                    .moved_to = null,
-                    .moved_line = 0,
-                });
+                try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+                    init_typed.value,
+                    init_typed.ty,
+                    self.current_decl_is_mutable,
+                ));
             },
             .primitive => |prim_ty| {
-                // Primitive: allocate slot and store value
-                const ptr = try func.emitAlloca(prim_ty);
-                try func.emitStore(ptr, init_typed.value);
-                try self.var_map.put(self.allocator, decl.name, .{
-                    .ptr = ptr,
-                    .ty = init_typed.ty,
-                    .used = false,
-                    .state = .owned,
-                    .moved_to = null,
-                    .moved_line = 0,
-                });
+                const ptr = try self.func().emitAlloca(prim_ty);
+                try self.func().emitStore(ptr, init_typed.value);
+                try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+                    ptr,
+                    init_typed.ty,
+                    self.current_decl_is_mutable,
+                ));
             },
         }
     }
 
     fn convertReturn(self: *AstToIr, ret: ast.ReturnStmt) !void {
-        const func = self.current_func.?;
-
         if (ret.value) |expr| {
             const typed_val = try self.convertExpression(expr);
-            const prim_ty = typed_val.ty.toPrimitiveType();
-            // Mark returned value as escaping
-            try func.markEscaping(typed_val.value);
-            // If returning an int but we have float, need to convert
-            if (func.return_type == .i64 and prim_ty == .f64) {
-                const converted = try func.emitFpToSi(typed_val.value, .i64);
-                try func.emitRet(converted);
+            try self.func().markEscaping(typed_val.value);
+
+            // Convert float to int if needed
+            if (self.func().return_type == .i64 and typed_val.ty.toPrimitiveType() == .f64) {
+                const converted = try self.func().emitFpToSi(typed_val.value, .i64);
+                try self.func().emitRet(converted);
             } else {
-                try func.emitRet(typed_val.value);
+                try self.func().emitRet(typed_val.value);
             }
         } else {
-            try func.emitRet(null);
+            try self.func().emitRet(null);
         }
     }
 
-    const ConvertError = error{ OutOfMemory, UndefinedVariable, FloatModNotSupported, WrongArgumentCount, ExpectedFloat, UnknownType, UnknownField, UseAfterMove };
+    fn convertAssignment(self: *AstToIr, assign: ast.AssignStmt) ConvertError!void {
+        const var_info = self.var_map.getPtr(assign.target) orelse {
+            std.debug.print("error: undefined variable '{s}'\n", .{assign.target});
+            return error.UndefinedVariable;
+        };
 
-    fn convertExpression(self: *AstToIr, expr: ast.Expression) ConvertError!TypedValue {
-        const func = self.current_func.?;
+        if (!var_info.is_mutable) {
+            std.debug.print("cannot assign to immutable variable '{s}'\n", .{assign.target});
+            return error.ImmutableAssign;
+        }
 
-        switch (expr) {
-            .integer => |value| {
-                const val = try func.emitConstI64(value);
-                return .{ .value = val, .ty = .{ .primitive = .i64 } };
-            },
-            .float_lit => |value| {
-                const val = try func.emitConstF64(value);
-                return .{ .value = val, .ty = .{ .primitive = .f64 } };
-            },
-            .identifier => |name| {
-                if (self.var_map.getPtr(name)) |info| {
-                    // Check ownership - cannot use a moved variable
-                    if (info.state == .moved) {
-                        std.debug.print("error: cannot use variable '{s}' after ownership was transferred to '{s}' at line {d}\n", .{
-                            name,
-                            info.moved_to orelse "unknown",
-                            info.moved_line,
-                        });
-                        return error.UseAfterMove;
-                    }
-                    info.used = true;
-                    // For structs and arrays, return the pointer directly
-                    // For primitives, load the value
-                    switch (info.ty) {
-                        .struct_type, .array_type => {
-                            return .{ .value = info.ptr, .ty = info.ty };
-                        },
-                        .primitive => |prim_ty| {
-                            const val = try func.emitLoad(info.ptr, prim_ty);
-                            return .{ .value = val, .ty = info.ty };
-                        },
-                    }
-                } else {
-                    return error.UndefinedVariable;
-                }
-            },
-            .binary => |bin| {
-                const left = try self.convertExpression(bin.left.*);
-                const right = try self.convertExpression(bin.right.*);
+        var_info.used = true;
+        const value_typed = try self.convertExpression(assign.value);
 
-                const left_prim = left.ty.toPrimitiveType();
-                const right_prim = right.ty.toPrimitiveType();
-
-                // Determine result type - if either operand is float, use float
-                const result_ty: ir.Type = if (left_prim == .f64 or right_prim == .f64) .f64 else .i64;
-
-                // Convert operands if needed
-                const left_val = if (result_ty == .f64 and left_prim == .i64)
-                    try func.emitSiToFp(left.value, .f64)
-                else
-                    left.value;
-                const right_val = if (result_ty == .f64 and right_prim == .i64)
-                    try func.emitSiToFp(right.value, .f64)
-                else
-                    right.value;
-
-                const result = if (result_ty == .f64) switch (bin.op) {
-                    .add => try func.emitFAdd(left_val, right_val),
-                    .sub => try func.emitFSub(left_val, right_val),
-                    .mul => try func.emitFMul(left_val, right_val),
-                    .div => try func.emitFDiv(left_val, right_val),
-                    .mod => return error.FloatModNotSupported,
-                } else switch (bin.op) {
-                    .add => try func.emitAdd(left_val, right_val, .i64),
-                    .sub => try func.emitSub(left_val, right_val, .i64),
-                    .mul => try func.emitMul(left_val, right_val, .i64),
-                    .div => try func.emitDiv(left_val, right_val, .i64),
-                    .mod => try func.emitMod(left_val, right_val, .i64),
-                };
-
-                return .{ .value = result, .ty = .{ .primitive = result_ty } };
-            },
-            .call => |call| {
-                return try self.convertCall(call);
-            },
-            .struct_init => |sinit| {
-                return try self.convertStructInit(sinit);
-            },
-            .field_access => |faccess| {
-                return try self.convertFieldAccess(faccess);
-            },
-            .array_literal => |arr_lit| {
-                return try self.convertArrayLiteral(arr_lit);
-            },
-            .index => |idx| {
-                return try self.convertIndex(idx);
-            },
-            .sized_array => |sized| {
-                return try self.convertSizedArray(sized);
+        switch (var_info.ty) {
+            .primitive => try self.func().emitStore(var_info.ptr, value_typed.value),
+            .struct_type, .array_type => {
+                var_info.ptr = value_typed.value;
+                var_info.ty = value_typed.ty;
             },
         }
+
+        var_info.resetOwnership();
+    }
+
+    fn convertFieldAssign(self: *AstToIr, assign: ast.FieldAssign) ConvertError!void {
+        const base = try self.convertExpression(assign.base.*);
+        const type_name = switch (base.ty) {
+            .struct_type => |name| name,
+            else => return error.UnknownType,
+        };
+
+        const struct_info = try self.lookupStructInfo(type_name);
+        const field_info = try lookupField(struct_info, assign.field_name);
+        const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
+        const val_typed = try self.convertExpression(assign.value);
+        try self.func().emitStore(field_ptr, val_typed.value);
+    }
+
+    fn convertIndexAssign(self: *AstToIr, assign: ast.IndexAssign) ConvertError!void {
+        const base_typed = try self.convertExpression(assign.base.*);
+        const idx_typed = try self.convertExpression(assign.index.*);
+        const val_typed = try self.convertExpression(assign.value);
+
+        const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
+        try self.func().emitStore(elem_ptr, val_typed.value);
+    }
+
+    // ------------------------------------------------------------------------
+    // Expression Conversion
+    // ------------------------------------------------------------------------
+
+    fn convertExpression(self: *AstToIr, expr: ast.Expression) ConvertError!TypedValue {
+        return switch (expr) {
+            .integer => |v| .{ .value = try self.func().emitConstI64(v), .ty = .{ .primitive = .i64 } },
+            .float_lit => |v| .{ .value = try self.func().emitConstF64(v), .ty = .{ .primitive = .f64 } },
+            .identifier => |name| self.convertIdentifier(name),
+            .binary => |bin| self.convertBinary(bin),
+            .call => |call| self.convertCall(call),
+            .struct_init => |sinit| self.convertStructInit(sinit),
+            .field_access => |fa| self.convertFieldAccess(fa),
+            .array_literal => |arr| self.convertArrayLiteral(arr),
+            .index => |idx| self.convertIndex(idx),
+            .sized_array => |sized| self.convertSizedArray(sized),
+        };
+    }
+
+    fn convertIdentifier(self: *AstToIr, name: []const u8) ConvertError!TypedValue {
+        const info = self.var_map.getPtr(name) orelse return error.UndefinedVariable;
+
+        if (info.state == .moved) {
+            std.debug.print("variable '{s}' was moved\n", .{name});
+            return error.UseAfterMove;
+        }
+
+        info.used = true;
+
+        return switch (info.ty) {
+            .struct_type, .array_type => .{ .value = info.ptr, .ty = info.ty },
+            .primitive => |prim_ty| .{
+                .value = try self.func().emitLoad(info.ptr, prim_ty),
+                .ty = info.ty,
+            },
+        };
+    }
+
+    fn convertBinary(self: *AstToIr, bin: ast.BinaryExpr) ConvertError!TypedValue {
+        const left = try self.convertExpression(bin.left.*);
+        const right = try self.convertExpression(bin.right.*);
+
+        const left_prim = left.ty.toPrimitiveType();
+        const right_prim = right.ty.toPrimitiveType();
+        const result_ty: ir.Type = if (left_prim == .f64 or right_prim == .f64) .f64 else .i64;
+
+        // Promote operands if needed
+        const left_val = if (result_ty == .f64 and left_prim == .i64)
+            try self.func().emitSiToFp(left.value, .f64)
+        else
+            left.value;
+        const right_val = if (result_ty == .f64 and right_prim == .i64)
+            try self.func().emitSiToFp(right.value, .f64)
+        else
+            right.value;
+
+        const result = if (result_ty == .f64)
+            try self.emitFloatOp(bin.op, left_val, right_val)
+        else
+            try self.emitIntOp(bin.op, left_val, right_val);
+
+        return .{ .value = result, .ty = .{ .primitive = result_ty } };
+    }
+
+    fn emitFloatOp(self: *AstToIr, op: ast.BinaryOp, left: ir.Value, right: ir.Value) ConvertError!ir.Value {
+        return switch (op) {
+            .add => self.func().emitFAdd(left, right),
+            .sub => self.func().emitFSub(left, right),
+            .mul => self.func().emitFMul(left, right),
+            .div => self.func().emitFDiv(left, right),
+            .mod => error.FloatModNotSupported,
+        };
+    }
+
+    fn emitIntOp(self: *AstToIr, op: ast.BinaryOp, left: ir.Value, right: ir.Value) ConvertError!ir.Value {
+        return switch (op) {
+            .add => self.func().emitAdd(left, right, .i64),
+            .sub => self.func().emitSub(left, right, .i64),
+            .mul => self.func().emitMul(left, right, .i64),
+            .div => self.func().emitDiv(left, right, .i64),
+            .mod => self.func().emitMod(left, right, .i64),
+        };
     }
 
     fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
-        const func = self.current_func.?;
+        const struct_info = try self.lookupStructInfo(sinit.type_name);
+        const struct_ptr = try self.func().emitAllocaSized(struct_info.size);
 
-        // Look up struct type
-        const type_info = self.type_map.get(sinit.type_name) orelse {
-            return error.UnknownType;
-        };
-        const struct_info = switch (type_info) {
-            .struct_type => |s| s,
-            .primitive => return error.UnknownType,
-        };
-
-        // Allocate space for the struct
-        const struct_ptr = try func.emitAllocaSized(struct_info.size);
-
-        // Initialize each field
         for (sinit.fields) |field_init| {
-            // Find field info
-            const field_info = for (struct_info.fields) |f| {
-                if (std.mem.eql(u8, f.name, field_init.name)) break f;
-            } else return error.UnknownField;
-
-            // Get pointer to field
-            const field_ptr = try func.emitGetFieldPtr(struct_ptr, field_info.offset);
-
-            // Convert and store field value
+            const field_info = try lookupField(struct_info, field_init.name);
+            const field_ptr = try self.func().emitGetFieldPtr(struct_ptr, field_info.offset);
             const field_val = try self.convertExpression(field_init.value.*);
-            try func.emitStore(field_ptr, field_val.value);
+            try self.func().emitStore(field_ptr, field_val.value);
         }
 
         return .{ .value = struct_ptr, .ty = .{ .struct_type = sinit.type_name } };
     }
 
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
-        const func = self.current_func.?;
-
-        // Check if base is an identifier that's an enum type (e.g., Colors.Green)
+        // Check for enum access (e.g., Colors.Green)
         if (faccess.base.* == .identifier) {
-            const base_name = faccess.base.identifier;
-            if (self.enum_map.get(base_name)) |enum_info| {
-                // Look up the member value
+            if (self.enum_map.get(faccess.base.identifier)) |enum_info| {
                 const member_value = enum_info.members.get(faccess.field_name) orelse return error.UnknownField;
-                const val = try func.emitConstI64(member_value);
-                return .{ .value = val, .ty = .{ .primitive = .i64 } };
+                return .{ .value = try self.func().emitConstI64(member_value), .ty = .{ .primitive = .i64 } };
             }
         }
 
-        // Get the base struct pointer
         const base = try self.convertExpression(faccess.base.*);
-
-        // Must be a struct type
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type => return error.UnknownType,
+            else => return error.UnknownType,
         };
 
-        // Look up struct type
-        const type_info = self.type_map.get(type_name) orelse return error.UnknownType;
-        const struct_info = switch (type_info) {
-            .struct_type => |s| s,
-            .primitive => return error.UnknownType,
-        };
-
-        // Find field info
-        const field_info = for (struct_info.fields) |f| {
-            if (std.mem.eql(u8, f.name, faccess.field_name)) break f;
-        } else return error.UnknownField;
-
-        // Get pointer to field
-        const field_ptr = try func.emitGetFieldPtr(base.value, field_info.offset);
-
-        // Load the field value
-        const val = try func.emitLoad(field_ptr, field_info.ty);
+        const struct_info = try self.lookupStructInfo(type_name);
+        const field_info = try lookupField(struct_info, faccess.field_name);
+        const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
+        const val = try self.func().emitLoad(field_ptr, field_info.ty);
 
         return .{ .value = val, .ty = .{ .primitive = field_info.ty } };
     }
 
     fn convertCall(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-        const ir_func = self.current_func.?;
-
-        // Handle built-in functions
+        // Handle built-in: trunc
         if (std.mem.eql(u8, call.func_name, "trunc")) {
-            // trunc(float) -> int
-            if (call.args.len != 1) {
-                return error.WrongArgumentCount;
-            }
-            const arg = try self.convertExpression(call.args[0]);
-            if (arg.ty.toPrimitiveType() != .f64) {
-                return error.ExpectedFloat;
-            }
-            const result = try ir_func.emitFpToSi(arg.value, .i64);
-            return .{ .value = result, .ty = .{ .primitive = .i64 } };
+            return self.convertTrunc(call);
         }
 
-        // Look up user function signature
         const func_info = self.func_map.get(call.func_name) orelse {
-            // Unknown function - fall back to i64 return
-            const result = try ir_func.emitCall(call.func_name, &.{}, .i64);
+            const result = try self.func().emitCall(call.func_name, &.{}, .i64);
             return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
         };
 
-        // Allocate args using the function's allocator since they're stored in the IR instruction
-        const args = try ir_func.allocator.alloc(ir.Value, call.args.len);
+        const args = try self.func().allocator.alloc(ir.Value, call.args.len);
 
         for (call.args, 0..) |arg_expr, i| {
             const arg = try self.convertExpression(arg_expr);
-            // For structs, we pass the pointer directly
             args[i] = arg.value;
-            // Mark arguments as escaping (callee may read them)
-            try ir_func.markEscaping(arg.value);
-
-            // Check for ownership transfer: if callee mutates this parameter,
-            // and the argument is a simple variable, transfer ownership
-            if (self.mutation_analyzer) |analyzer| {
-                if (analyzer.doesMutateParam(call.func_name, i)) {
-                    // This function mutates this parameter - transfer ownership
-                    if (arg_expr == .identifier) {
-                        const var_name = arg_expr.identifier;
-                        if (self.var_map.getPtr(var_name)) |var_info| {
-                            var_info.state = .moved;
-                            var_info.moved_to = call.func_name;
-                            var_info.moved_line = self.current_line;
-                        }
-                    }
-                }
-            }
+            try self.func().markEscaping(arg.value);
+            try self.checkOwnershipTransfer(call.func_name, arg_expr, i);
         }
 
-        // Emit call with arguments
-        const result = try ir_func.emitCall(call.func_name, args, func_info.return_type);
+        const result = try self.func().emitCall(call.func_name, args, func_info.return_type);
 
-        // Return with correct type - struct or primitive
         if (func_info.return_type_name) |struct_name| {
             return .{ .value = result orelse 0, .ty = .{ .struct_type = struct_name } };
         }
         return .{ .value = result orelse 0, .ty = .{ .primitive = func_info.return_type } };
     }
 
+    fn convertTrunc(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        if (call.args.len != 1) return error.WrongArgumentCount;
+        const arg = try self.convertExpression(call.args[0]);
+        if (arg.ty.toPrimitiveType() != .f64) return error.ExpectedFloat;
+        const result = try self.func().emitFpToSi(arg.value, .i64);
+        return .{ .value = result, .ty = .{ .primitive = .i64 } };
+    }
+
+    fn checkOwnershipTransfer(self: *AstToIr, func_name: []const u8, arg_expr: ast.Expression, param_idx: usize) ConvertError!void {
+        const analyzer = self.mutation_analyzer orelse return;
+        if (!analyzer.doesMutateParam(func_name, param_idx)) return;
+
+        if (arg_expr != .identifier) return;
+        const var_name = arg_expr.identifier;
+        const var_info = self.var_map.getPtr(var_name) orelse return;
+
+        if (!var_info.is_mutable) {
+            std.debug.print("cannot move immutable variable '{s}'\n", .{var_name});
+            return error.ImmutableMove;
+        }
+
+        var_info.markMoved(func_name, self.current_line);
+    }
+
+    // ------------------------------------------------------------------------
+    // Array Expression Conversion
+    // ------------------------------------------------------------------------
+
     fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) ConvertError!TypedValue {
-        const func = self.current_func.?;
         const elements = arr_lit.elements;
 
         if (elements.len == 0) {
-            // Empty array - return null pointer
-            const zero = try func.emitConstI64(0);
-            return .{ .value = zero, .ty = .{ .array_type = .{
-                .element_type = .i64,
-                .size = 0,
-                .storage = .stack,
-            } } };
+            return .{
+                .value = try self.func().emitConstI64(0),
+                .ty = .{ .array_type = .{ .element_type = .i64, .size = 0, .storage = .stack } },
+            };
         }
 
-        // Infer element type from first element
         const first_typed = try self.convertExpression(elements[0]);
         const elem_type = first_typed.ty.toPrimitiveType();
+        const total_size = @as(i32, @intCast(elements.len)) * 8;
+        const arr_ptr = try self.func().emitAllocaSized(total_size);
 
-        // All elements are 8 bytes for simplicity (i64, f64, or ptr)
-        const elem_size: i32 = 8;
-        const total_size = @as(i32, @intCast(elements.len)) * elem_size;
-
-        // Decision: stack if mutable and small (<64 bytes), otherwise stack for now
-        // Since we don't have heap allocation yet, we use stack for everything
-        const storage: ArrayStorage = .stack;
-
-        // Allocate stack space using alloca_sized
-        const arr_ptr = try func.emitAllocaSized(total_size);
-
-        // Initialize elements
         for (elements, 0..) |elem, i| {
-            // Skip first element which we already converted
             const typed = if (i == 0) first_typed else try self.convertExpression(elem);
-            const idx_val = try func.emitConstI64(@intCast(i));
-            const elem_ptr = try func.emitGetElemPtr(arr_ptr, idx_val, elem_size);
-            try func.emitStore(elem_ptr, typed.value);
+            const idx_val = try self.func().emitConstI64(@intCast(i));
+            const elem_ptr = try self.func().emitGetElemPtr(arr_ptr, idx_val, 8);
+            try self.func().emitStore(elem_ptr, typed.value);
         }
 
-        return .{ .value = arr_ptr, .ty = .{ .array_type = .{
-            .element_type = elem_type,
-            .size = elements.len,
-            .storage = storage,
-        } } };
+        return .{
+            .value = arr_ptr,
+            .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .stack } },
+        };
     }
 
     fn convertIndex(self: *AstToIr, idx: ast.IndexExpr) ConvertError!TypedValue {
-        const func = self.current_func.?;
-
-        // Get base array
         const base_typed = try self.convertExpression(idx.base.*);
         const arr_info = switch (base_typed.ty) {
             .array_type => |a| a,
             else => return error.UnknownType,
         };
 
-        // Get index value
         const idx_typed = try self.convertExpression(idx.index.*);
-
-        // Calculate element pointer (all elements are 8 bytes)
-        const elem_size: i32 = 8;
-        const elem_ptr = try func.emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
-
-        // Load the element
-        const val = try func.emitLoad(elem_ptr, arr_info.element_type);
+        const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
+        const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
 
         return .{ .value = val, .ty = .{ .primitive = arr_info.element_type } };
     }
 
     fn convertSizedArray(self: *AstToIr, sized: ast.SizedArrayExpr) ConvertError!TypedValue {
-        const func = self.current_func.?;
-
-        // Evaluate size expression
         const size_typed = try self.convertExpression(sized.size.*);
-
-        // Get element type
         const elem_type = try self.lookupIrType(sized.element_type);
 
-        // Calculate total size: size * 8 (all elements are 8 bytes)
-        const eight = try func.emitConstI64(8);
-        const total_size = try func.emitMul(size_typed.value, eight, .i64);
+        // Calculate total size (unused for now - would be used for heap allocation)
+        const eight = try self.func().emitConstI64(8);
+        _ = try self.func().emitMul(size_typed.value, eight, .i64);
 
-        // For now, allocate on stack (fixed size)
-        // In a real implementation, we'd use heap allocation
-        // Since alloca_sized needs an immediate, we'll use a fixed size for now
-        // This is a limitation - sized arrays should use heap in production
-        const arr_ptr = try func.emitAllocaSized(64); // Allocate 64 bytes for now
-        _ = total_size; // Would be used for heap allocation
+        // Fixed stack allocation for now
+        const arr_ptr = try self.func().emitAllocaSized(64);
 
-        return .{ .value = arr_ptr, .ty = .{ .array_type = .{
-            .element_type = elem_type,
-            .size = null, // Dynamic size
-            .storage = .stack,
-        } } };
-    }
-
-    fn convertIndexAssign(self: *AstToIr, assign: ast.IndexAssign) ConvertError!void {
-        const func = self.current_func.?;
-
-        // Get base array
-        const base_typed = try self.convertExpression(assign.base.*);
-
-        // Get index
-        const idx_typed = try self.convertExpression(assign.index.*);
-
-        // Get value to assign
-        const val_typed = try self.convertExpression(assign.value);
-
-        // Calculate element pointer (all elements are 8 bytes)
-        const elem_size: i32 = 8;
-        const elem_ptr = try func.emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
-
-        // Store the value
-        try func.emitStore(elem_ptr, val_typed.value);
+        return .{
+            .value = arr_ptr,
+            .ty = .{ .array_type = .{ .element_type = elem_type, .size = null, .storage = .stack } },
+        };
     }
 };
+
+// ============================================================================
+// Public API
+// ============================================================================
 
 pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer) !ir.Module {
     var converter = AstToIr.init(allocator, mutation_analyzer);

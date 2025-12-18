@@ -79,8 +79,9 @@ pub fn generateFragments(
 
     var fragments_written: usize = 0;
 
-    // Write each test case as a fragment
+    // Write each test case as a fragment (skip draft specs)
     for (specs) |spec| {
+        if (spec.status == .draft) continue;
         for (spec.tests) |test_case| {
             try writeFragment(allocator, fragments_dir, test_case);
             fragments_written += 1;

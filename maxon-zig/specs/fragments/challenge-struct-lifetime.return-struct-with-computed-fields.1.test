@@ -1,0 +1,45 @@
+// Test: challenge-struct-lifetime.return-struct-with-computed-fields.1
+type Result
+    var sum int
+    var product int
+end 'Result'
+
+function compute(a int, b int) returns Result
+    return Result{sum: a + b, product: a * b}
+end 'compute'
+
+function main() returns int
+    var r = compute(3, 4)
+    return r.sum + r.product
+end 'main'
+---
+ExitCode: 19
+---
+function compute() -> ptr {
+entry:
+    %0 = param i64 0
+    %2 = param i64 1
+    %4 = alloca.sized ptr 16
+    %5 = getfieldptr ptr %4 0
+    %8 = add i64 %0 %2
+    store %5 %8
+    %9 = getfieldptr ptr %4 8
+    %12 = mul i64 %0 %2
+    store %9 %12
+    ret %4
+}
+
+function main() -> i64 {
+entry:
+    %0 = const.i64 i64 3
+    %1 = const.i64 i64 4
+    %2 = call ptr @compute(%0, %1)
+    %3 = getfieldptr ptr %2 0
+    %4 = load i64 %3
+    %5 = getfieldptr ptr %2 8
+    %6 = load i64 %5
+    %7 = add i64 %4 %6
+    ret %7
+}
+
+---

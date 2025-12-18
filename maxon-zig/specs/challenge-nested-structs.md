@@ -1,0 +1,114 @@
+---
+feature: challenge-nested-structs
+status: draft
+keywords: struct, nested, type-size, memory
+category: semantics
+---
+
+# Developer Notes
+
+Tests for Challenge 2 from DEVELOPMENT_CHALLENGES.md: Type Size Computation Ordering.
+
+Struct sizes must be computed after all field types are fully defined. This is critical for nested structs and recursive type references.
+
+# Documentation
+
+## Nested Structs
+
+Structs can contain other structs as fields. The compiler must correctly compute sizes and offsets for nested struct access.
+
+## Tests
+
+<!-- test: nested-struct-simple -->
+```maxon
+type Inner
+    var x int
+    var y int
+end 'Inner'
+
+type Outer
+    var inner Inner
+    var z int
+end 'Outer'
+
+function main() returns int
+    var inner = Inner{x: 10, y: 20}
+    var outer = Outer{inner: inner, z: 30}
+    return outer.inner.x + outer.inner.y + outer.z
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: nested-struct-returned -->
+```maxon
+type Inner
+    var value int
+end 'Inner'
+
+type Outer
+    var inner Inner
+end 'Outer'
+
+function makeOuter() returns Outer
+    var i = Inner{value: 42}
+    return Outer{inner: i}
+end 'makeOuter'
+
+function main() returns int
+    var o = makeOuter()
+    return o.inner.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: deeply-nested-struct -->
+```maxon
+type Level1
+    var value int
+end 'Level1'
+
+type Level2
+    var inner Level1
+end 'Level2'
+
+type Level3
+    var inner Level2
+end 'Level3'
+
+function main() returns int
+    var l1 = Level1{value: 42}
+    var l2 = Level2{inner: l1}
+    var l3 = Level3{inner: l2}
+    return l3.inner.inner.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: struct-with-multiple-nested-fields -->
+```maxon
+type Point
+    var x int
+    var y int
+end 'Point'
+
+type Line
+    var start Point
+    var finish Point
+end 'Line'
+
+function main() returns int
+    var p1 = Point{x: 1, y: 2}
+    var p2 = Point{x: 10, y: 20}
+    var line = Line{start: p1, finish: p2}
+    return line.start.x + line.start.y + line.finish.x + line.finish.y
+end 'main'
+```
+```exitcode
+33
+```

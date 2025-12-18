@@ -45,12 +45,19 @@ pub const AssignStmt = struct {
     value: Expression,
 };
 
+pub const FieldAssign = struct {
+    base: *const Expression,
+    field_name: []const u8,
+    value: Expression,
+};
+
 pub const Statement = union(enum) {
     @"return": ReturnStmt,
     let_decl: VarDecl,
     var_decl: VarDecl,
     index_assign: IndexAssign,
     assign: AssignStmt,
+    field_assign: FieldAssign,
     call: CallExpr,
 };
 

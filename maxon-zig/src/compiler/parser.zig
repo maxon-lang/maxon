@@ -265,6 +265,15 @@ pub const Parser = struct {
                     } };
                 }
 
+                // Check if this is a field access (obj.field = value)
+                if (expr == .field_access) {
+                    return .{ .field_assign = .{
+                        .base = expr.field_access.base,
+                        .field_name = expr.field_access.field_name,
+                        .value = value,
+                    } };
+                }
+
                 // Other expressions on LHS not supported
                 return error.UnexpectedToken;
             }

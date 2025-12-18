@@ -81,6 +81,10 @@ pub const MutationAnalyzer = struct {
                 // Standalone call statements don't directly mutate parameters
                 // (mutations happen inside the called function)
             },
+            .field_assign => |assign| {
+                // Field assignment - check if base is a parameter (e.g., d.value = 100)
+                self.checkExpressionForParamMutation(assign.base.*, param_indices, mutated);
+            },
         }
     }
 

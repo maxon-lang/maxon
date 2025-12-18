@@ -1,0 +1,48 @@
+// Test: challenge-struct-ownership.move-then-reassign-ok.1
+type Data
+    var value int
+end 'Data'
+
+function consume(d Data) returns int
+    d.value = 100
+    return d.value
+end 'consume'
+
+function main() returns int
+    var d = Data{value: 10}
+    var first = consume(d)
+    d = Data{value: 20}
+    var second = consume(d)
+    return first + second
+end 'main'
+---
+ExitCode: 200
+---
+function consume() -> i64 {
+entry:
+    %0 = param ptr 0
+    %1 = getfieldptr ptr %0 0
+    %2 = const.i64 i64 100
+    store %1 %2
+    %3 = getfieldptr ptr %0 0
+    %4 = load i64 %3
+    ret %4
+}
+
+function main() -> i64 {
+entry:
+    %0 = alloca.sized ptr 8
+    %1 = getfieldptr ptr %0 0
+    %2 = const.i64 i64 10
+    store %1 %2
+    %3 = call i64 @consume(%0)
+    %5 = alloca.sized ptr 8
+    %6 = getfieldptr ptr %5 0
+    %7 = const.i64 i64 20
+    store %6 %7
+    %8 = call i64 @consume(%5)
+    %12 = add i64 %3 %8
+    ret %12
+}
+
+---

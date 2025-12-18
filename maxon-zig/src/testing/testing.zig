@@ -11,12 +11,12 @@ pub const SpecFile = struct {
     pub const Status = enum {
         stable,
         experimental,
-        deprecated,
+        draft,
 
         pub fn fromString(s: []const u8) ?Status {
             if (std.mem.eql(u8, s, "stable")) return .stable;
             if (std.mem.eql(u8, s, "experimental")) return .experimental;
-            if (std.mem.eql(u8, s, "deprecated")) return .deprecated;
+            if (std.mem.eql(u8, s, "draft")) return .draft;
             return null;
         }
     };

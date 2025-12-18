@@ -1,0 +1,43 @@
+// Test: challenge-struct-lifetime.pass-struct-to-function-and-return.1
+type Counter
+    var value int
+end 'Counter'
+
+function increment(c Counter) returns Counter
+    return Counter{value: c.value + 1}
+end 'increment'
+
+function main() returns int
+    var c1 = Counter{value: 10}
+    var c2 = increment(c1)
+    return c2.value
+end 'main'
+---
+ExitCode: 11
+---
+function increment() -> ptr {
+entry:
+    %0 = param ptr 0
+    %1 = alloca.sized ptr 8
+    %2 = getfieldptr ptr %1 0
+    %3 = getfieldptr ptr %0 0
+    %4 = load i64 %3
+    %5 = const.i64 i64 1
+    %6 = add i64 %4 %5
+    store %2 %6
+    ret %1
+}
+
+function main() -> i64 {
+entry:
+    %0 = alloca.sized ptr 8
+    %1 = getfieldptr ptr %0 0
+    %2 = const.i64 i64 10
+    store %1 %2
+    %3 = call ptr @increment(%0)
+    %4 = getfieldptr ptr %3 0
+    %5 = load i64 %4
+    ret %5
+}
+
+---

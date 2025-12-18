@@ -1,0 +1,72 @@
+// Test: challenge-struct-lifetime.multiple-struct-returns.1
+type Value
+    var n int
+end 'Value'
+
+function step1() returns Value
+    return Value{n: 1}
+end 'step1'
+
+function step2(v Value) returns Value
+    return Value{n: v.n + 10}
+end 'step2'
+
+function step3(v Value) returns Value
+    return Value{n: v.n + 100}
+end 'step3'
+
+function main() returns int
+    var v1 = step1()
+    var v2 = step2(v1)
+    var v3 = step3(v2)
+    return v3.n
+end 'main'
+---
+ExitCode: 111
+---
+function step1() -> ptr {
+entry:
+    %0 = alloca.sized ptr 8
+    %1 = getfieldptr ptr %0 0
+    %2 = const.i64 i64 1
+    store %1 %2
+    ret %0
+}
+
+function step2() -> ptr {
+entry:
+    %0 = param ptr 0
+    %1 = alloca.sized ptr 8
+    %2 = getfieldptr ptr %1 0
+    %3 = getfieldptr ptr %0 0
+    %4 = load i64 %3
+    %5 = const.i64 i64 10
+    %6 = add i64 %4 %5
+    store %2 %6
+    ret %1
+}
+
+function step3() -> ptr {
+entry:
+    %0 = param ptr 0
+    %1 = alloca.sized ptr 8
+    %2 = getfieldptr ptr %1 0
+    %3 = getfieldptr ptr %0 0
+    %4 = load i64 %3
+    %5 = const.i64 i64 100
+    %6 = add i64 %4 %5
+    store %2 %6
+    ret %1
+}
+
+function main() -> i64 {
+entry:
+    %0 = call ptr @step1()
+    %1 = call ptr @step2(%0)
+    %2 = call ptr @step3(%1)
+    %3 = getfieldptr ptr %2 0
+    %4 = load i64 %3
+    ret %4
+}
+
+---

@@ -1,0 +1,22 @@
+// Test: challenge-struct-ownership.use-after-move-error.1
+type Data
+    var value int
+end 'Data'
+
+function takeOwnership(d Data) returns int
+    d.value = 100
+    return d.value
+end 'takeOwnership'
+
+function main() returns int
+    var d = Data{value: 42}
+    var result = takeOwnership(d)
+    return d.value + result
+end 'main'
+---
+MaxoncStderr: ```
+variable 'd' was moved
+```
+---
+// IR: N/A (compiler error test)
+---

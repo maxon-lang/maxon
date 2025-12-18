@@ -199,6 +199,10 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
             }
             allocator.free(call.args);
         },
+        .field_assign => |assign| {
+            freeExpressionArgs(assign.base.*, allocator);
+            freeExpressionArgs(assign.value, allocator);
+        },
     }
 }
 

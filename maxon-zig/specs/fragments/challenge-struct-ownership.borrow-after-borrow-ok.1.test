@@ -1,0 +1,42 @@
+// Test: challenge-struct-ownership.borrow-after-borrow-ok.1
+type Data
+    var value int
+end 'Data'
+
+function readOnly(d Data) returns int
+    return d.value
+end 'readOnly'
+
+function main() returns int
+    var d = Data{value: 10}
+    var a = readOnly(d)
+    var b = readOnly(d)
+    var c = readOnly(d)
+    return a + b + c
+end 'main'
+---
+ExitCode: 30
+---
+function readOnly() -> i64 {
+entry:
+    %0 = param ptr 0
+    %1 = getfieldptr ptr %0 0
+    %2 = load i64 %1
+    ret %2
+}
+
+function main() -> i64 {
+entry:
+    %0 = alloca.sized ptr 8
+    %1 = getfieldptr ptr %0 0
+    %2 = const.i64 i64 10
+    store %1 %2
+    %3 = call i64 @readOnly(%0)
+    %5 = call i64 @readOnly(%0)
+    %7 = call i64 @readOnly(%0)
+    %11 = add i64 %3 %5
+    %13 = add i64 %11 %7
+    ret %13
+}
+
+---
