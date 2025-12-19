@@ -405,12 +405,12 @@ pub const Function = struct {
     }
 
     // Conversions
-    pub fn emitFpToSi(self: *Function, value: Value, dest_type: Type) !Value {
-        return self.emitUnaryOp(.fptosi, value, dest_type);
+    pub fn emitFpToSi(self: *Function, value: Value) !Value {
+        return self.emitUnaryOp(.fptosi, value, .i64);
     }
 
-    pub fn emitSiToFp(self: *Function, value: Value, dest_type: Type) !Value {
-        return self.emitUnaryOp(.sitofp, value, dest_type);
+    pub fn emitSiToFp(self: *Function, value: Value) !Value {
+        return self.emitUnaryOp(.sitofp, value, .f64);
     }
 
     pub fn emitFabs(self: *Function, value: Value) !Value {

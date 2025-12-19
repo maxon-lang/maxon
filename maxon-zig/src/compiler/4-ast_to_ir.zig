@@ -167,13 +167,14 @@ const ConvertError = error{
     UndefinedVariable,
     FloatModNotSupported,
     WrongArgumentCount,
-    ExpectedFloat,
     UnknownType,
     UnknownField,
     UseAfterMove,
     ImmutableAssign,
     ImmutableMove,
     SemanticError,
+    NotABuiltin,
+    TypeMismatch,
 };
 
 // ============================================================================
@@ -628,7 +629,7 @@ pub const AstToIr = struct {
 
             // Convert float to int if needed
             if (self.func().return_type == .i64 and typed_val.ty.toPrimitiveType() == .f64) {
-                const converted = try self.func().emitFpToSi(typed_val.value, .i64);
+                const converted = try self.func().emitFpToSi(typed_val.value);
                 try self.func().emitRet(converted);
             } else {
                 try self.func().emitRet(typed_val.value);
@@ -758,11 +759,11 @@ pub const AstToIr = struct {
 
         // Promote operands if needed
         const left_val = if (result_ty == .f64 and left_prim == .i64)
-            try self.func().emitSiToFp(left.value, .f64)
+            try self.func().emitSiToFp(left.value)
         else
             left.value;
         const right_val = if (result_ty == .f64 and right_prim == .i64)
-            try self.func().emitSiToFp(right.value, .f64)
+            try self.func().emitSiToFp(right.value)
         else
             right.value;
 
@@ -896,14 +897,12 @@ pub const AstToIr = struct {
     }
 
     fn convertCall(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-        // Handle built-in: trunc
-        if (std.mem.eql(u8, call.func_name, "trunc")) {
-            return self.convertTrunc(call);
-        }
-
-        // Handle built-in: abs (returns f64)
-        if (std.mem.eql(u8, call.func_name, "abs")) {
-            return self.convertAbs(call);
+        // Handle built-in functions
+        if (self.convertBuiltin(call)) |result| {
+            return result;
+        } else |builtin_err| switch (builtin_err) {
+            error.NotABuiltin => {},
+            else => return builtin_err,
         }
 
         const func_info = self.func_map.get(call.func_name) orelse {
@@ -947,32 +946,43 @@ pub const AstToIr = struct {
         return .{ .value = result orelse 0, .ty = .{ .primitive = func_info.return_type } };
     }
 
-    fn convertTrunc(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-        if (call.args.len != 1) {
-            self.reportError(.E011, "trunc() expects exactly 1 argument");
-            return error.WrongArgumentCount;
-        }
-        const arg = try self.convertExpression(call.args[0]);
-        if (arg.ty.toPrimitiveType() != .f64) {
-            self.reportError(.E011, "trunc() expects a float argument");
-            return error.ExpectedFloat;
-        }
-        const result = try self.func().emitFpToSi(arg.value, .i64);
-        return .{ .value = result, .ty = .{ .primitive = .i64 } };
-    }
+    // ------------------------------------------------------------------------
+    // Built-in Functions
+    // ------------------------------------------------------------------------
 
-    fn convertAbs(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    const EmitFn = *const fn (*ir.Function, ir.Value) anyerror!ir.Value;
+
+    const Builtin = struct {
+        name: []const u8,
+        emit: EmitFn,
+        arg_type: ir.Type,
+        ret_type: ir.Type,
+    };
+
+    const builtins = [_]Builtin{
+        .{ .name = "trunc", .emit = ir.Function.emitFpToSi, .arg_type = .f64, .ret_type = .i64 },
+        .{ .name = "abs", .emit = ir.Function.emitFabs, .arg_type = .f64, .ret_type = .f64 },
+    };
+
+    fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        const builtin = for (builtins) |b| {
+            if (std.mem.eql(u8, call.func_name, b.name)) break b;
+        } else return error.NotABuiltin;
+
         if (call.args.len != 1) {
-            self.reportError(.E011, "abs() expects exactly 1 argument");
+            self.reportError(.E011, "builtin expects exactly 1 argument");
             return error.WrongArgumentCount;
         }
+
         const arg = try self.convertExpression(call.args[0]);
-        if (arg.ty.toPrimitiveType() != .f64) {
-            self.reportError(.E011, "abs() expects a float argument");
-            return error.ExpectedFloat;
+        if (arg.ty.toPrimitiveType() != builtin.arg_type) {
+            self.reportError(.E011, "builtin argument type mismatch");
+            return error.TypeMismatch;
         }
-        const result = try self.func().emitFabs(arg.value);
-        return .{ .value = result, .ty = .{ .primitive = .f64 } };
+
+        const result = builtin.emit(self.func(), arg.value) catch return error.OutOfMemory;
+
+        return .{ .value = result, .ty = .{ .primitive = builtin.ret_type } };
     }
 
     fn checkOwnershipTransfer(self: *AstToIr, func_name: []const u8, arg_expr: ast.Expression, param_idx: usize) ConvertError!void {
