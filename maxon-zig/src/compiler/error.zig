@@ -31,6 +31,23 @@ pub const ErrorCode = enum {
             .E012 => "E012",
         };
     }
+
+    pub fn message(self: ErrorCode) []const u8 {
+        return switch (self) {
+            .E001 => "invalid token",
+            .E002 => "unexpected token",
+            .E003 => "expected expression",
+            .E004 => "expected newline",
+            .E005 => "undefined variable",
+            .E006 => "unknown type",
+            .E007 => "unknown field",
+            .E008 => "use after move",
+            .E009 => "cannot assign to immutable variable",
+            .E010 => "cannot move from immutable variable",
+            .E011 => "wrong argument count",
+            .E012 => "break/continue outside loop",
+        };
+    }
 };
 
 /// Source location in the original source file

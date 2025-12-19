@@ -53,9 +53,7 @@ pub const Parser = struct {
             self.allocator.destroy(ptr);
         }
         self.expr_ptrs.deinit(self.allocator);
-        for (self.ifstmt_ptrs.items) |ptr| {
-            self.allocator.destroy(ptr);
-        }
+        // Note: ifstmt_ptrs are freed by freeProgram in 0-compiler.zig
         self.ifstmt_ptrs.deinit(self.allocator);
     }
 
@@ -86,7 +84,7 @@ pub const Parser = struct {
                     @tagName(token.type),
                 });
                 debug.parser("  Expected: 'type', 'enum', or 'function' declaration\n", .{});
-                self.reportError(.E002, "unexpected token, expected 'type', 'enum', or 'function' declaration");
+                self.reportError(.E002);
                 return error.UnexpectedToken;
             }
             self.skipNewlines();
@@ -111,11 +109,11 @@ pub const Parser = struct {
         return .{ .type = .eof, .text = "", .line = 1, .column = 1 };
     }
 
-    fn reportError(self: *Parser, code: err.ErrorCode, message: []const u8) void {
+    fn reportError(self: *Parser, code: err.ErrorCode) void {
         const tok = self.current();
         self.last_error = .{
             .code = code,
-            .message = message,
+            .message = code.message(),
             .location = .{
                 .file = self.source_file,
                 .line = tok.line,
@@ -145,7 +143,7 @@ pub const Parser = struct {
             // Parse field: let/var name type
             const is_mutable = self.check(.@"var");
             if (!is_mutable and !self.check(.let)) {
-                self.reportError(.E002, "expected 'let' or 'var' in field declaration");
+                self.reportError(.E002);
                 return error.UnexpectedToken;
             }
             _ = self.advance(); // consume let/var
@@ -168,7 +166,7 @@ pub const Parser = struct {
 
         // Require newline after end (or EOF)
         if (!self.isAtEnd() and !self.check(.newline)) {
-            self.reportError(.E004, "expected newline after 'end'");
+            self.reportError(.E004);
             return error.ExpectedNewline;
         }
 
@@ -188,7 +186,7 @@ pub const Parser = struct {
         if (self.check(.identifier)) {
             return self.advance().text;
         }
-        self.reportError(.E002, "expected type name");
+        self.reportError(.E002);
         return error.UnexpectedToken;
     }
 
@@ -203,7 +201,7 @@ pub const Parser = struct {
             if (self.check(.integer)) {
                 const size_token = self.advance();
                 size = std.fmt.parseInt(i64, size_token.text, 10) catch {
-                    self.reportError(.E001, "invalid integer literal in array type");
+                    self.reportError(.E001);
                     return error.InvalidNumber;
                 };
             }
@@ -283,7 +281,7 @@ pub const Parser = struct {
 
         // Require newline after end (or EOF)
         if (!self.isAtEnd() and !self.check(.newline)) {
-            self.reportError(.E004, "expected newline after 'end'");
+            self.reportError(.E004);
             return error.ExpectedNewline;
         }
 
@@ -332,7 +330,7 @@ pub const Parser = struct {
             const start_pos = self.pos;
             // Try to parse as expression
             const expr = try self.parseExpression() orelse {
-                self.reportError(.E003, "expected expression");
+                self.reportError(.E003);
                 return error.ExpectedExpression;
             };
 
@@ -340,7 +338,7 @@ pub const Parser = struct {
             if (self.check(.equals)) {
                 _ = self.advance(); // consume '='
                 const value = try self.parseExpression() orelse {
-                    self.reportError(.E003, "expected expression after '='");
+                    self.reportError(.E003);
                     return error.ExpectedExpression;
                 };
                 _ = try self.expect(.newline);
@@ -372,7 +370,7 @@ pub const Parser = struct {
                 }
 
                 // Other expressions on LHS not supported
-                self.reportError(.E002, "invalid assignment target");
+                self.reportError(.E002);
                 return error.UnexpectedToken;
             }
 
@@ -385,7 +383,7 @@ pub const Parser = struct {
             // Not an assignment or call, restore position
             self.pos = start_pos;
         }
-        self.reportError(.E002, "expected statement");
+        self.reportError(.E002);
         return error.UnexpectedToken;
     }
 
@@ -401,7 +399,7 @@ pub const Parser = struct {
                 return .{ .let_decl = .{ .name = name_token.text, .value = expr } };
             }
         }
-        self.reportError(.E003, "expected expression in variable declaration");
+        self.reportError(.E003);
         return error.ExpectedExpression;
     }
 
@@ -421,7 +419,7 @@ pub const Parser = struct {
 
         // Parse condition
         const condition = try self.parseExpression() orelse {
-            self.reportError(.E003, "expected condition expression");
+            self.reportError(.E003);
             return error.ExpectedExpression;
         };
 
@@ -496,7 +494,7 @@ pub const Parser = struct {
         // Require newline after end (or allow EOF) - only if we didn't parse else-if
         if (else_if == null) {
             if (!self.isAtEnd() and !self.check(.newline)) {
-                self.reportError(.E004, "expected newline after 'end'");
+                self.reportError(.E004);
                 return error.ExpectedNewline;
             }
             if (self.check(.newline)) {
@@ -519,7 +517,7 @@ pub const Parser = struct {
 
         // Parse condition
         const condition = try self.parseExpression() orelse {
-            self.reportError(.E003, "expected condition expression");
+            self.reportError(.E003);
             return error.ExpectedExpression;
         };
 
@@ -548,7 +546,7 @@ pub const Parser = struct {
 
         // Require newline after end (or allow EOF)
         if (!self.isAtEnd() and !self.check(.newline)) {
-            self.reportError(.E004, "expected newline after 'end'");
+            self.reportError(.E004);
             return error.ExpectedNewline;
         }
         if (self.check(.newline)) {
@@ -572,7 +570,7 @@ pub const Parser = struct {
         if (self.matchComparison()) |op| {
             _ = self.advance();
             const right = try self.parseAdditive() orelse {
-                self.reportError(.E003, "expected expression after comparison operator");
+                self.reportError(.E003);
                 return error.ExpectedExpression;
             };
             left = try self.makeCompare(left, op, right);
@@ -604,7 +602,7 @@ pub const Parser = struct {
         while (self.matchAdditive()) |op| {
             _ = self.advance();
             const right = try self.parseMultiplicative() orelse {
-                self.reportError(.E003, "expected expression after operator");
+                self.reportError(.E003);
                 return error.ExpectedExpression;
             };
             left = try self.makeBinary(left, op, right);
@@ -618,7 +616,7 @@ pub const Parser = struct {
         while (self.matchMultiplicative()) |op| {
             _ = self.advance();
             const right = try self.parsePrimary() orelse {
-                self.reportError(.E003, "expected expression after operator");
+                self.reportError(.E003);
                 return error.ExpectedExpression;
             };
             left = try self.makeBinary(left, op, right);
@@ -658,7 +656,7 @@ pub const Parser = struct {
         if (self.check(.integer)) {
             const token = self.advance();
             const value = std.fmt.parseInt(i64, token.text, 10) catch {
-                self.reportError(.E001, "invalid integer literal");
+                self.reportError(.E001);
                 return error.InvalidNumber;
             };
             return try self.parsePostfix(.{ .integer = value });
@@ -666,7 +664,7 @@ pub const Parser = struct {
         if (self.check(.float_literal)) {
             const token = self.advance();
             const value = std.fmt.parseFloat(f64, token.text) catch {
-                self.reportError(.E001, "invalid float literal");
+                self.reportError(.E001);
                 return error.InvalidNumber;
             };
             return try self.parsePostfix(.{ .float_lit = value });
@@ -702,7 +700,7 @@ pub const Parser = struct {
         if (self.check(.lparen)) {
             _ = self.advance(); // consume '('
             const expr = try self.parseExpression() orelse {
-                self.reportError(.E003, "expected expression after '('");
+                self.reportError(.E003);
                 return error.ExpectedExpression;
             };
             _ = try self.expect(.rparen);
@@ -725,7 +723,7 @@ pub const Parser = struct {
             } else if (self.check(.lbracket)) {
                 _ = self.advance(); // consume '['
                 const index_expr = try self.parseExpression() orelse {
-                    self.reportError(.E003, "expected expression in index");
+                    self.reportError(.E003);
                     return error.ExpectedExpression;
                 };
                 _ = try self.expect(.rbracket);
@@ -750,7 +748,7 @@ pub const Parser = struct {
         if (!self.check(.rbracket)) {
             // Parse first element
             const first = try self.parseExpression() orelse {
-                self.reportError(.E003, "expected expression in array literal");
+                self.reportError(.E003);
                 return error.ExpectedExpression;
             };
             try elements.append(self.allocator, first);
@@ -759,7 +757,7 @@ pub const Parser = struct {
             while (self.check(.comma)) {
                 _ = self.advance();
                 const elem = try self.parseExpression() orelse {
-                    self.reportError(.E003, "expected expression in array literal");
+                    self.reportError(.E003);
                     return error.ExpectedExpression;
                 };
                 try elements.append(self.allocator, elem);
@@ -778,7 +776,7 @@ pub const Parser = struct {
 
         // Parse size expression
         const size_expr = try self.parseExpression() orelse {
-            self.reportError(.E003, "expected size expression in sized array");
+            self.reportError(.E003);
             return error.ExpectedExpression;
         };
         const size_ptr = try self.createExpr(size_expr);
@@ -796,7 +794,7 @@ pub const Parser = struct {
         const name = try self.expect(.identifier);
         _ = try self.expect(.colon);
         const value = try self.parseExpression() orelse {
-            self.reportError(.E003, "expected expression in field initializer");
+            self.reportError(.E003);
             return error.ExpectedExpression;
         };
         return .{
@@ -835,7 +833,7 @@ pub const Parser = struct {
         // Parse argument list
         if (!self.check(.rparen)) {
             const first_arg = try self.parseExpression() orelse {
-                self.reportError(.E003, "expected expression in function call");
+                self.reportError(.E003);
                 return error.ExpectedExpression;
             };
             try args.append(self.allocator, first_arg);
@@ -843,7 +841,7 @@ pub const Parser = struct {
             while (self.check(.comma)) {
                 _ = self.advance(); // consume ','
                 const arg = try self.parseExpression() orelse {
-                    self.reportError(.E003, "expected expression in function call");
+                    self.reportError(.E003);
                     return error.ExpectedExpression;
                 };
                 try args.append(self.allocator, arg);
@@ -868,7 +866,7 @@ pub const Parser = struct {
             expected_name,
             got_name,
         });
-        self.reportError(.E002, "unexpected token");
+        self.reportError(.E002);
         return error.UnexpectedToken;
     }
 
@@ -927,7 +925,7 @@ pub const Parser = struct {
 
         // Require newline after end (or EOF)
         if (!self.isAtEnd() and !self.check(.newline)) {
-            self.reportError(.E004, "expected newline after 'end'");
+            self.reportError(.E004);
             return error.ExpectedNewline;
         }
 

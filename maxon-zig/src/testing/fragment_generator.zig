@@ -13,8 +13,22 @@ pub fn needsRegeneration(specs_dir: []const u8, fragments_dir: []const u8) bool 
     const oldest_fragment_mtime = getOldestMtime(fragments_dir, ".test") catch return true;
 
     // Regenerate if any spec is newer than the oldest fragment
-    return newest_spec_mtime > oldest_fragment_mtime;
+    if (newest_spec_mtime > oldest_fragment_mtime) return true;
+
+    // Also regenerate if the compiler binary is newer than the oldest fragment
+    const compiler_mtime = getCompilerMtime() catch return true;
+    return compiler_mtime > oldest_fragment_mtime;
 }
+
+fn getCompilerMtime() !i128 {
+    const exe_path = std.fs.selfExePath(&self_exe_buf) catch return error.NoFilesFound;
+    const file = std.fs.openFileAbsolute(exe_path, .{}) catch return error.NoFilesFound;
+    defer file.close();
+    const stat = file.stat() catch return error.NoFilesFound;
+    return stat.mtime;
+}
+
+var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
 
 fn getNewestMtime(dir_path: []const u8, extension: []const u8) !i128 {
     var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
@@ -203,7 +217,7 @@ pub fn regenerateIfNeeded(
         return false;
     }
 
-    std.debug.print("Specs changed, regenerating fragments...\n", .{});
+    std.debug.print("Specs or compiler changed, regenerating fragments...\n", .{});
     var timer = std.time.Timer.start() catch unreachable;
     const result = try generateFragments(allocator, specs_dir, fragments_dir);
     const elapsed_ns = timer.read();

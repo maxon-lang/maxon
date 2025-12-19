@@ -225,10 +225,10 @@ pub const AstToIr = struct {
         };
     }
 
-    fn reportError(self: *AstToIr, code: err.ErrorCode, message: []const u8) void {
+    fn reportError(self: *AstToIr, code: err.ErrorCode) void {
         self.last_error = .{
             .code = code,
-            .message = message,
+            .message = code.message(),
             .location = .{
                 .file = self.source_file,
                 .line = @intCast(self.current_line),
@@ -578,7 +578,7 @@ pub const AstToIr = struct {
 
         // Sized arrays cannot be immutable (they have no initial contents)
         if (!self.current_decl_is_mutable and decl.value == .sized_array) {
-            self.reportError(.E011, "sized array must be mutable");
+            self.reportError(.E011);
             return error.SemanticError;
         }
 
@@ -651,13 +651,13 @@ pub const AstToIr = struct {
     fn convertAssignment(self: *AstToIr, assign: ast.AssignStmt) ConvertError!void {
         const var_info = self.var_map.getPtr(assign.target) orelse {
             debug.astToIr("error: undefined variable '{s}'\n", .{assign.target});
-            self.reportError(.E005, "undefined variable");
+            self.reportError(.E005);
             return error.UndefinedVariable;
         };
 
         if (!var_info.is_mutable) {
             debug.astToIr("cannot assign to immutable variable '{s}'\n", .{assign.target});
-            self.reportError(.E009, "cannot assign to immutable variable");
+            self.reportError(.E009);
             return error.ImmutableAssign;
         }
 
@@ -680,7 +680,7 @@ pub const AstToIr = struct {
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
             else => {
-                self.reportError(.E006, "expected struct type for field access");
+                self.reportError(.E006);
                 return error.UnknownType;
             },
         };
@@ -698,7 +698,7 @@ pub const AstToIr = struct {
             const var_name = assign.base.identifier;
             if (self.var_map.get(var_name)) |var_info| {
                 if (!var_info.is_mutable) {
-                    self.reportError(.E009, "cannot assign to immutable array element");
+                    self.reportError(.E009);
                     return error.ImmutableAssign;
                 }
             }
@@ -862,7 +862,7 @@ pub const AstToIr = struct {
         if (self.loop_end_block) |end_block| {
             try self.func().emitBr(end_block);
         } else {
-            self.reportError(.E012, "break statement outside of loop");
+            self.reportError(.E012);
             return error.SemanticError;
         }
     }
@@ -871,7 +871,7 @@ pub const AstToIr = struct {
         if (self.loop_cond_block) |cond_block| {
             try self.func().emitBr(cond_block);
         } else {
-            self.reportError(.E012, "continue statement outside of loop");
+            self.reportError(.E012);
             return error.SemanticError;
         }
     }
@@ -899,13 +899,13 @@ pub const AstToIr = struct {
 
     fn convertIdentifier(self: *AstToIr, name: []const u8) ConvertError!TypedValue {
         const info = self.var_map.getPtr(name) orelse {
-            self.reportError(.E005, "undefined variable");
+            self.reportError(.E005);
             return error.UndefinedVariable;
         };
 
         if (info.state == .moved) {
             debug.astToIr("variable '{s}' was moved\n", .{name});
-            self.reportError(.E008, "use of moved variable");
+            self.reportError(.E008);
             return error.UseAfterMove;
         }
 
@@ -1055,7 +1055,7 @@ pub const AstToIr = struct {
                 // Must be mutable to be moved
                 if (!var_info.is_mutable) {
                     debug.astToIr("cannot move immutable variable '{s}' into struct\n", .{var_name});
-                    self.reportError(.E010, "cannot move immutable variable");
+                    self.reportError(.E010);
                     return error.ImmutableMove;
                 }
                 var_info.markMoved(target_type, self.current_line);
@@ -1072,7 +1072,7 @@ pub const AstToIr = struct {
             if (self.type_map.get(faccess.base.identifier)) |type_info| {
                 if (type_info == .enum_type) {
                     const member_value = type_info.enum_type.members.get(faccess.field_name) orelse {
-                        self.reportError(.E007, "unknown enum member");
+                        self.reportError(.E007);
                         return error.UnknownField;
                     };
                     return .{
@@ -1088,7 +1088,7 @@ pub const AstToIr = struct {
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
             else => {
-                self.reportError(.E006, "expected struct type for field access");
+                self.reportError(.E006);
                 return error.UnknownType;
             },
         };
@@ -1187,13 +1187,13 @@ pub const AstToIr = struct {
         } else return error.NotABuiltin;
 
         if (call.args.len != 1) {
-            self.reportError(.E011, "builtin expects exactly 1 argument");
+            self.reportError(.E011);
             return error.WrongArgumentCount;
         }
 
         const arg = try self.convertExpression(call.args[0]);
         if (arg.ty.toPrimitiveType() != builtin.arg_type) {
-            self.reportError(.E011, "builtin argument type mismatch");
+            self.reportError(.E011);
             return error.TypeMismatch;
         }
 
@@ -1212,7 +1212,7 @@ pub const AstToIr = struct {
 
         if (!var_info.is_mutable) {
             debug.astToIr("cannot move immutable variable '{s}'\n", .{var_name});
-            self.reportError(.E010, "cannot move immutable variable");
+            self.reportError(.E010);
             return error.ImmutableMove;
         }
 
@@ -1260,7 +1260,7 @@ pub const AstToIr = struct {
         const arr_info = switch (base_typed.ty) {
             .array_type => |a| a,
             else => {
-                self.reportError(.E006, "expected array type for index access");
+                self.reportError(.E006);
                 return error.UnknownType;
             },
         };

@@ -191,5 +191,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs\fragments\ownership.struct-array-field-moved-into-type.1.test:3:1: use of moved variable
+error E008: specs\fragments\ownership.struct-array-field-moved-into-type.1.test:3:1: use after move
 ```

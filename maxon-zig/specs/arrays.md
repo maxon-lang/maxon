@@ -320,7 +320,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E009: specs\fragments\arrays.error.let-array-element-assign.1.test:2:1: cannot assign to immutable array element
+error E009: specs\fragments\arrays.error.let-array-element-assign.1.test:2:1: cannot assign to immutable variable
 ```
 
 <!-- test: error.let-sized-array-invalid -->
@@ -333,5 +333,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E011: specs\fragments\arrays.error.let-sized-array-invalid.1.test:1:1: sized array must be mutable
+error E011: specs\fragments\arrays.error.let-sized-array-invalid.1.test:1:1: wrong argument count
 ```

@@ -218,11 +218,7 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
             freeExpressionArgs(assign.value, allocator);
         },
         .if_stmt => |if_s| {
-            freeExpressionArgs(if_s.condition, allocator);
-            for (if_s.body) |body_stmt| {
-                freeStatementArgs(body_stmt, allocator);
-            }
-            allocator.free(if_s.body);
+            freeIfStmt(if_s, allocator);
         },
         .while_stmt => |while_s| {
             freeExpressionArgs(while_s.condition, allocator);
@@ -232,6 +228,28 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
             allocator.free(while_s.body);
         },
         .break_stmt, .continue_stmt => {},
+    }
+}
+
+fn freeIfStmt(if_s: ast.IfStmt, allocator: std.mem.Allocator) void {
+    freeExpressionArgs(if_s.condition, allocator);
+    for (if_s.body) |body_stmt| {
+        freeStatementArgs(body_stmt, allocator);
+    }
+    allocator.free(if_s.body);
+
+    // Free else body if present
+    if (if_s.else_body) |else_body| {
+        for (else_body) |else_stmt| {
+            freeStatementArgs(else_stmt, allocator);
+        }
+        allocator.free(else_body);
+    }
+
+    // Recursively free else-if chain
+    if (if_s.else_if) |else_if| {
+        freeIfStmt(else_if.*, allocator);
+        allocator.destroy(else_if);
     }
 }
 
