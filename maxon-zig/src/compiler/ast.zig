@@ -70,6 +70,15 @@ pub const IfStmt = struct {
     else_if: ?*const IfStmt, // For else-if chain (recursive)
 };
 
+pub const WhileStmt = struct {
+    condition: Expression,
+    body: []Statement,
+    label: []const u8,
+};
+
+pub const BreakStmt = struct {};
+pub const ContinueStmt = struct {};
+
 pub const Statement = union(enum) {
     @"return": ReturnStmt,
     let_decl: VarDecl,
@@ -79,6 +88,9 @@ pub const Statement = union(enum) {
     field_assign: FieldAssign,
     call: CallExpr,
     if_stmt: IfStmt,
+    while_stmt: WhileStmt,
+    break_stmt: BreakStmt,
+    continue_stmt: ContinueStmt,
 };
 
 pub const VarDecl = struct {
@@ -156,6 +168,7 @@ pub const SizedArrayExpr = struct {
 pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
+    bool_lit: bool,
     identifier: []const u8,
     binary: BinaryExpr,
     compare: CompareExpr,

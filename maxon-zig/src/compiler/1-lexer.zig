@@ -15,6 +15,11 @@ pub const TokenType = enum {
     of,
     @"if",
     @"else",
+    @"while",
+    @"break",
+    @"continue",
+    @"true",
+    @"false",
 
     // Types
     int,
@@ -376,6 +381,11 @@ pub const Lexer = struct {
             .{ "of", TokenType.of },
             .{ "if", TokenType.@"if" },
             .{ "else", TokenType.@"else" },
+            .{ "while", TokenType.@"while" },
+            .{ "break", TokenType.@"break" },
+            .{ "continue", TokenType.@"continue" },
+            .{ "true", TokenType.@"true" },
+            .{ "false", TokenType.@"false" },
             .{ "int", TokenType.int },
             .{ "float", TokenType.float },
         };

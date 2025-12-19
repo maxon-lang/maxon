@@ -13,6 +13,7 @@ pub const ErrorCode = enum {
     E009, // Immutable assignment
     E010, // Immutable move
     E011, // Wrong argument count
+    E012, // Control flow error (break/continue outside loop)
 
     pub fn format(self: ErrorCode) []const u8 {
         return switch (self) {
@@ -27,6 +28,7 @@ pub const ErrorCode = enum {
             .E009 => "E009",
             .E010 => "E010",
             .E011 => "E011",
+            .E012 => "E012",
         };
     }
 };

@@ -1,0 +1,34 @@
+// Test: while-loops.while-loops.zero-iterations.1
+function main() returns int
+    var x = 10
+    while x < 5 'loop'
+        x = x + 1
+    end 'loop'
+    return x
+end 'main'
+---
+ExitCode: 10
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 10
+    %x = alloca ptr
+    store %x %tmp_const
+    br @block1
+whilecond:
+    %tmp_load = load i64 %x
+    %tmp_const.1 = const.i64 i64 5
+    %tmp_icmp = icmp.lt i64 %tmp_load %tmp_const.1
+    %tmp_const.1 = br.cond %tmp_icmp @block2
+whilebody:
+    %tmp_load.1 = load i64 %x
+    %tmp_const.2 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.1 %tmp_const.2
+    store %x %tmp_add
+    br @block1
+whilecont:
+    %tmp_load.2 = load i64 %x
+    ret %tmp_load.2
+}
+
+---

@@ -91,6 +91,15 @@ pub const MutationAnalyzer = struct {
                     self.checkStatementForMutation(body_stmt, param_indices, mutated);
                 }
             },
+            .while_stmt => |while_s| {
+                // Check mutations inside while loop body
+                for (while_s.body) |body_stmt| {
+                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                }
+            },
+            .break_stmt, .continue_stmt => {
+                // Control flow statements don't mutate parameters
+            },
         }
     }
 
@@ -120,7 +129,7 @@ pub const MutationAnalyzer = struct {
             },
             // integer, float_lit, binary, compare, call, struct_init, array_literal, sized_array:
             // These cannot be mutation targets (only identifier, field_access, index can)
-            .integer, .float_lit, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},
+            .integer, .float_lit, .bool_lit, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},
         }
     }
 

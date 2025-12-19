@@ -314,6 +314,19 @@ pub const Parser = struct {
         if (self.check(.@"if")) {
             return try self.parseIfStatement();
         }
+        if (self.check(.@"while")) {
+            return try self.parseWhileStatement();
+        }
+        if (self.check(.@"break")) {
+            _ = self.advance();
+            _ = try self.expect(.newline);
+            return .{ .break_stmt = .{} };
+        }
+        if (self.check(.@"continue")) {
+            _ = self.advance();
+            _ = try self.expect(.newline);
+            return .{ .continue_stmt = .{} };
+        }
         // Check for assignment, index assignment, or call statement: identifier...
         if (self.check(.identifier)) {
             const start_pos = self.pos;
@@ -501,6 +514,54 @@ pub const Parser = struct {
         };
     }
 
+    fn parseWhileStatement(self: *Parser) ParseError!ast.Statement {
+        _ = try self.expect(.@"while");
+
+        // Parse condition
+        const condition = try self.parseExpression() orelse {
+            self.reportError(.E003, "expected condition expression");
+            return error.ExpectedExpression;
+        };
+
+        // Parse label 'name'
+        const label = try self.expect(.string);
+
+        // Require newline after 'while condition 'label''
+        _ = try self.expect(.newline);
+
+        // Parse body statements
+        var statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
+        errdefer statements.deinit(self.allocator);
+
+        while (!self.check(.end) and !self.isAtEnd()) {
+            // Skip blank lines
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
+            try statements.append(self.allocator, try self.parseStatement());
+        }
+
+        // Parse end 'label'
+        _ = try self.expect(.end);
+        _ = try self.expect(.string); // closing label
+
+        // Require newline after end (or allow EOF)
+        if (!self.isAtEnd() and !self.check(.newline)) {
+            self.reportError(.E004, "expected newline after 'end'");
+            return error.ExpectedNewline;
+        }
+        if (self.check(.newline)) {
+            _ = self.advance();
+        }
+
+        return .{ .while_stmt = .{
+            .condition = condition,
+            .body = try statements.toOwnedSlice(self.allocator),
+            .label = label.text,
+        } };
+    }
+
     fn parseExpression(self: *Parser) ParseError!?ast.Expression {
         return try self.parseComparison();
     }
@@ -609,6 +670,14 @@ pub const Parser = struct {
                 return error.InvalidNumber;
             };
             return try self.parsePostfix(.{ .float_lit = value });
+        }
+        if (self.check(.@"true")) {
+            _ = self.advance();
+            return try self.parsePostfix(.{ .bool_lit = true });
+        }
+        if (self.check(.@"false")) {
+            _ = self.advance();
+            return try self.parsePostfix(.{ .bool_lit = false });
         }
         // Array literal: [expr, expr, ...]
         if (self.check(.lbracket)) {

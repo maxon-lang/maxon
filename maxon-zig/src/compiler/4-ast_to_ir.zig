@@ -197,6 +197,9 @@ pub const AstToIr = struct {
     // Error tracking
     source_file: ?[]const u8,
     last_error: ?err.CompileError,
+    // Loop context for break/continue
+    loop_end_block: ?u32 = null,
+    loop_cond_block: ?u32 = null,
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -217,6 +220,8 @@ pub const AstToIr = struct {
             .sret_size = 0,
             .source_file = null,
             .last_error = null,
+            .loop_end_block = null,
+            .loop_cond_block = null,
         };
     }
 
@@ -561,6 +566,9 @@ pub const AstToIr = struct {
             .index_assign => |assign| try self.convertIndexAssign(assign),
             .call => |call| _ = try self.convertCall(call),
             .if_stmt => |if_s| try self.convertIfStmt(if_s),
+            .while_stmt => |while_s| try self.convertWhileStmt(while_s),
+            .break_stmt => try self.convertBreakStmt(),
+            .continue_stmt => try self.convertContinueStmt(),
         }
         self.current_line += 1;
     }
@@ -783,6 +791,91 @@ pub const AstToIr = struct {
         try self.func().blocks.append(self.allocator, end_block);
     }
 
+    fn convertWhileStmt(self: *AstToIr, while_stmt: ast.WhileStmt) ConvertError!void {
+        // Create condition block - this will be the current block after creation
+        const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("whilecond");
+
+        // Emit unconditional branch from previous block to condition block
+        try self.func().blocks.items[cond_block_idx - 1].instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = cond_block_idx }, .none },
+            .result = undefined,
+        });
+
+        // Convert condition expression in condition block
+        const cond_typed = try self.convertExpression(while_stmt.condition);
+
+        // Create body block
+        const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("whilebody");
+
+        // Save loop context
+        const saved_end_block = self.loop_end_block;
+        const saved_cond_block = self.loop_cond_block;
+        self.loop_cond_block = cond_block_idx;
+        // We use a sentinel value for loop_end_block that we'll patch later
+        // Use max u32 as sentinel to indicate "needs patching"
+        self.loop_end_block = 0xFFFFFFFF;
+
+        // Convert body statements (body block is current)
+        for (while_stmt.body) |stmt| {
+            try self.convertStatement(stmt);
+        }
+
+        // Emit unconditional branch back to condition block (if not already terminated)
+        if (self.func().currentBlock()) |block| {
+            const len = block.instructions.items.len;
+            if (len == 0 or (block.instructions.items[len - 1].op != .ret and block.instructions.items[len - 1].op != .br and block.instructions.items[len - 1].op != .br_cond)) {
+                try self.func().emitBr(cond_block_idx);
+            }
+        }
+
+        // Now create continuation block - this is its final index
+        const cont_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("whilecont");
+
+        // Now emit the conditional branch in the condition block with the correct cont_block_idx
+        try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = cond_typed.value }, .{ .block_ref = body_block_idx } },
+            .result = cont_block_idx,
+        });
+
+        // Patch any break statements that used the sentinel value
+        for (self.func().blocks.items[body_block_idx..cont_block_idx]) |*block| {
+            for (block.instructions.items) |*instr| {
+                if (instr.op == .br) {
+                    if (instr.operands[0] == .block_ref and instr.operands[0].block_ref == 0xFFFFFFFF) {
+                        instr.operands[0] = .{ .block_ref = cont_block_idx };
+                    }
+                }
+            }
+        }
+
+        // Restore loop context
+        self.loop_end_block = saved_end_block;
+        self.loop_cond_block = saved_cond_block;
+    }
+
+    fn convertBreakStmt(self: *AstToIr) ConvertError!void {
+        if (self.loop_end_block) |end_block| {
+            try self.func().emitBr(end_block);
+        } else {
+            self.reportError(.E012, "break statement outside of loop");
+            return error.SemanticError;
+        }
+    }
+
+    fn convertContinueStmt(self: *AstToIr) ConvertError!void {
+        if (self.loop_cond_block) |cond_block| {
+            try self.func().emitBr(cond_block);
+        } else {
+            self.reportError(.E012, "continue statement outside of loop");
+            return error.SemanticError;
+        }
+    }
+
     // ------------------------------------------------------------------------
     // Expression Conversion
     // ------------------------------------------------------------------------
@@ -791,6 +884,7 @@ pub const AstToIr = struct {
         return switch (expr) {
             .integer => |v| .{ .value = try self.func().emitConstI64(v), .ty = .{ .primitive = .i64 } },
             .float_lit => |v| .{ .value = try self.func().emitConstF64(v), .ty = .{ .primitive = .f64 } },
+            .bool_lit => |v| .{ .value = try self.func().emitConstI64(if (v) 1 else 0), .ty = .{ .primitive = .i64 } },
             .identifier => |name| self.convertIdentifier(name),
             .binary => |bin| self.convertBinary(bin),
             .compare => |cmp| self.convertCompare(cmp),

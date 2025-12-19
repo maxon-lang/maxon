@@ -224,6 +224,14 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
             }
             allocator.free(if_s.body);
         },
+        .while_stmt => |while_s| {
+            freeExpressionArgs(while_s.condition, allocator);
+            for (while_s.body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(while_s.body);
+        },
+        .break_stmt, .continue_stmt => {},
     }
 }
 
@@ -265,7 +273,7 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         .sized_array => |sized| {
             freeExpressionArgs(sized.size.*, allocator);
         },
-        // integer, float_lit, identifier: no nested allocations to free
-        .integer, .float_lit, .identifier => {},
+        // integer, float_lit, bool_lit, identifier: no nested allocations to free
+        .integer, .float_lit, .bool_lit, .identifier => {},
     }
 }
