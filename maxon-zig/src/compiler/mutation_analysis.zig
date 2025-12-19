@@ -112,7 +112,9 @@ pub const MutationAnalyzer = struct {
                 // Index access mutation also mutates the base array
                 self.checkExpressionForParamMutation(idx.base.*, param_indices, mutated);
             },
-            else => {},
+            // integer, float_lit, binary, call, struct_init, array_literal, sized_array:
+            // These cannot be mutation targets (only identifier, field_access, index can)
+            .integer, .float_lit, .binary, .call, .struct_init, .array_literal, .sized_array => {},
         }
     }
 

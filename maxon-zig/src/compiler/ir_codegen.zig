@@ -225,7 +225,6 @@ pub const IrCodegen = struct {
             .param => try self.genParam(inst),
             .call => try self.genCall(inst),
             .memcpy => try self.genMemcpy(inst),
-            .call_external => try self.genCallExternal(inst),
             .heap_alloc => try self.genHeapAlloc(inst),
             .heap_free => try self.genHeapFree(inst),
             else => debug.codegen("  Skipping unhandled instruction", .{}),
@@ -566,21 +565,6 @@ pub const IrCodegen = struct {
 
         if (inst.result) |result| {
             debug.codegen("  call result: %{d} of type {s}", .{ result, ret_type.format() });
-            try self.storeReturnValue(result, ret_type);
-        }
-    }
-
-    fn genCallExternal(self: *IrCodegen, inst: ir.Instruction) !void {
-        const ext_func = inst.operands[0].external_func;
-        const args = inst.operands[1].call_args;
-        const ret_type = inst.result_type;
-
-        debug.codegen("  Calling external {s}!{s} with {d} args", .{ ext_func.dll, ext_func.name, args.len });
-
-        try self.loadArgs(args, false);
-        try self.emitExternalCall(ext_func.dll, ext_func.name);
-
-        if (inst.result) |result| {
             try self.storeReturnValue(result, ret_type);
         }
     }

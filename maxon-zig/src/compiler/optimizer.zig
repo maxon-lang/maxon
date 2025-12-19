@@ -279,7 +279,9 @@ fn handleOther(
                     op.* = .{ .call_args = new_args };
                 }
             },
-            else => {},
+            // none, immediate_*, block_ref, func_name, elem_size:
+            // These don't contain ir.Value references, so no propagation needed
+            .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size => {},
         }
     }
 
@@ -488,6 +490,7 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                         try ctx.loaded_bases.put(ctx.allocator, base, {});
                     }
                 },
+                // Other instructions don't affect pointer liveness analysis
                 else => {},
             }
         }
@@ -559,7 +562,9 @@ fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
                             try used.put(allocator, arg, {});
                         }
                     },
-                    else => {},
+                    // none, immediate_*, block_ref, func_name, elem_size:
+                    // These don't reference ir.Value, so nothing to mark as used
+                    .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size => {},
                 }
             }
         }
@@ -583,7 +588,8 @@ fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
 fn isDeadInstruction(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Value, void)) bool {
     // Side-effecting instructions are never dead
     switch (inst.op) {
-        .store, .ret, .br, .br_cond, .call => return false,
+        .store, .ret, .br, .br_cond, .call, .memcpy, .heap_alloc, .heap_free => return false,
+        // Pure instructions: can be eliminated if result is unused
         else => {},
     }
 

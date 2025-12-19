@@ -86,9 +86,6 @@ pub const Instruction = struct {
         // Memory operations
         memcpy, // Copy memory: dest, src, size
 
-        // External function calls (Windows API, etc.)
-        call_external, // Call external DLL function
-
         // Heap allocation
         heap_alloc, // Allocate heap memory, returns ptr
         heap_free, // Free heap memory
@@ -128,16 +125,10 @@ pub const Instruction = struct {
                 .param => "param",
                 .getelemptr => "getelemptr",
                 .memcpy => "memcpy",
-                .call_external => "call.external",
                 .heap_alloc => "heap.alloc",
                 .heap_free => "heap.free",
             };
         }
-    };
-
-    pub const ExternalFunc = struct {
-        dll: []const u8, // e.g., "kernel32.dll"
-        name: []const u8, // e.g., "HeapAlloc"
     };
 
     pub const Operand = union(enum) {
@@ -150,7 +141,6 @@ pub const Instruction = struct {
         func_name: []const u8,
         call_args: []const Value,
         elem_size: i32, // Element size for getelemptr
-        external_func: ExternalFunc, // External DLL function
     };
 };
 
@@ -369,24 +359,6 @@ pub const Function = struct {
         });
     }
 
-    // External function calls
-    pub fn emitCallExternal(self: *Function, dll: []const u8, func: []const u8, args: []const Value, ret_type: Type) !?Value {
-        if (ret_type == .void) {
-            try self.emit(.{
-                .op = .call_external,
-                .operands = .{
-                    .{ .external_func = .{ .dll = dll, .name = func } },
-                    .{ .call_args = args },
-                },
-            });
-            return null;
-        }
-        return try self.emitWithResult(.call_external, ret_type, .{
-            .{ .external_func = .{ .dll = dll, .name = func } },
-            .{ .call_args = args },
-        });
-    }
-
     // Heap allocation
     pub fn emitHeapAlloc(self: *Function, size: Value) !Value {
         return self.emitWithResult(.heap_alloc, .ptr, .{ .{ .value = size }, .none });
@@ -493,7 +465,6 @@ fn printInstruction(writer: anytype, inst: Instruction) !void {
                 try writer.writeAll(")");
             },
             .elem_size => |size| try writer.print(" elemsize={d}", .{size}),
-            .external_func => |ext| try writer.print(" @{s}!{s}", .{ ext.dll, ext.name }),
         }
     }
 }

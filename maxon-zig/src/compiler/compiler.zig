@@ -263,6 +263,7 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         .sized_array => |sized| {
             freeExpressionArgs(sized.size.*, allocator);
         },
-        else => {},
+        // integer, float_lit, identifier: no nested allocations to free
+        .integer, .float_lit, .identifier => {},
     }
 }
