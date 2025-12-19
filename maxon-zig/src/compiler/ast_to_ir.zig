@@ -759,9 +759,10 @@ pub const AstToIr = struct {
         const field_info = try lookupField(struct_info, faccess.field_name);
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
 
-        // If the field is a struct, return the pointer with struct type info
+        // If the field is a struct, load the struct pointer from the field
         if (field_info.struct_type_name) |nested_struct_name| {
-            return .{ .value = field_ptr, .ty = .{ .struct_type = nested_struct_name } };
+            const nested_ptr = try self.func().emitLoad(field_ptr, .ptr);
+            return .{ .value = nested_ptr, .ty = .{ .struct_type = nested_struct_name } };
         }
 
         // For primitive fields, load the value

@@ -1,0 +1,36 @@
+// Test: challenge-nested-structs.deeply-nested-struct.1
+type Level1
+    var value int
+end 'Level1'
+
+type Level2
+    var inner Level1
+end 'Level2'
+
+type Level3
+    var inner Level2
+end 'Level3'
+
+function main() returns int
+    var l1 = Level1{value: 42}
+    var l2 = Level2{inner: l1}
+    var l3 = Level3{inner: l2}
+    return l3.inner.inner.value
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %3 = alloca.sized ptr 8
+    %5 = alloca.sized ptr 8
+    %6 = getfieldptr ptr %5 0
+    store %6 %3
+    %7 = getfieldptr ptr %5 0
+    %8 = getfieldptr ptr %7 0
+    %9 = getfieldptr ptr %8 0
+    %10 = load i64 %9
+    ret %10
+}
+
+---

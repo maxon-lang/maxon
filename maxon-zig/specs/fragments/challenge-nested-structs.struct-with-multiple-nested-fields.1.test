@@ -1,0 +1,48 @@
+// Test: challenge-nested-structs.struct-with-multiple-nested-fields.1
+type Point
+    var x int
+    var y int
+end 'Point'
+
+type Line
+    var start Point
+    var finish Point
+end 'Line'
+
+function main() returns int
+    var p1 = Point{x: 1, y: 2}
+    var p2 = Point{x: 10, y: 20}
+    var line = Line{start: p1, finish: p2}
+    return line.start.x + line.start.y + line.finish.x + line.finish.y
+end 'main'
+---
+ExitCode: 33
+---
+function main() -> i64 {
+entry:
+    %0 = alloca.sized ptr 16
+    %5 = alloca.sized ptr 16
+    %10 = alloca.sized ptr 16
+    %11 = getfieldptr ptr %10 0
+    store %11 %0
+    %12 = getfieldptr ptr %10 8
+    store %12 %5
+    %13 = getfieldptr ptr %10 0
+    %14 = getfieldptr ptr %13 0
+    %15 = load i64 %14
+    %16 = getfieldptr ptr %10 0
+    %17 = getfieldptr ptr %16 8
+    %18 = load i64 %17
+    %19 = add i64 %15 %18
+    %20 = getfieldptr ptr %10 8
+    %21 = getfieldptr ptr %20 0
+    %22 = load i64 %21
+    %23 = add i64 %19 %22
+    %24 = getfieldptr ptr %10 8
+    %25 = getfieldptr ptr %24 8
+    %26 = load i64 %25
+    %27 = add i64 %23 %26
+    ret %27
+}
+
+---

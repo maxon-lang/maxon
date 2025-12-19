@@ -105,23 +105,104 @@ fn tryFoldConstant(inst: ir.Instruction, constants: *std.AutoHashMapUnmanaged(ir
 // Copy Propagation
 // ============================================================================
 
+/// Context for copy propagation with normalized field key tracking
+const CopyPropContext = struct {
+    ptr_to_immediate: std.AutoHashMapUnmanaged(ir.Value, ImmediateFieldEntry),
+    field_to_value: std.ArrayListUnmanaged(FieldValueEntry),
+    value_map: std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    allocator: std.mem.Allocator,
+
+    const FieldValueEntry = struct {
+        key: FieldPtrKey,
+        value: ir.Value,
+    };
+
+    fn init(allocator: std.mem.Allocator) CopyPropContext {
+        return .{
+            .ptr_to_immediate = .{},
+            .field_to_value = .{},
+            .value_map = .{},
+            .allocator = allocator,
+        };
+    }
+
+    fn deinit(self: *CopyPropContext) void {
+        self.ptr_to_immediate.deinit(self.allocator);
+        for (self.field_to_value.items) |entry| {
+            self.allocator.free(entry.key.offsets);
+        }
+        self.field_to_value.deinit(self.allocator);
+        self.value_map.deinit(self.allocator);
+    }
+
+    fn resolveFieldKey(self: *CopyPropContext, ptr: ir.Value) !?FieldPtrKey {
+        var offsets: std.ArrayListUnmanaged(i32) = .empty;
+        defer offsets.deinit(self.allocator);
+
+        var current = ptr;
+        while (self.ptr_to_immediate.get(current)) |entry| {
+            try offsets.append(self.allocator, entry.offset);
+            current = entry.base;
+        }
+
+        if (offsets.items.len == 0) return null;
+
+        std.mem.reverse(i32, offsets.items);
+        const owned_offsets = try self.allocator.dupe(i32, offsets.items);
+        return .{ .base = current, .offsets = owned_offsets };
+    }
+
+    fn lookupFieldValue(self: *CopyPropContext, key: FieldPtrKey) ?ir.Value {
+        for (self.field_to_value.items) |entry| {
+            if (FieldPtrKey.eql(key, entry.key)) {
+                return entry.value;
+            }
+        }
+        return null;
+    }
+
+    fn storeFieldValue(self: *CopyPropContext, key: FieldPtrKey, value: ir.Value) !void {
+        // Update existing entry or add new one
+        for (self.field_to_value.items) |*entry| {
+            if (FieldPtrKey.eql(key, entry.key)) {
+                entry.value = value;
+                self.allocator.free(key.offsets);
+                return;
+            }
+        }
+        try self.field_to_value.append(self.allocator, .{ .key = key, .value = value });
+    }
+};
+
 /// Replace loads with the value that was stored
 fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
-    var ptr_to_value = std.AutoHashMapUnmanaged(ir.Value, ir.Value){};
-    defer ptr_to_value.deinit(allocator);
+    var ctx = CopyPropContext.init(allocator);
+    defer ctx.deinit();
 
-    var value_map = std.AutoHashMapUnmanaged(ir.Value, ir.Value){};
-    defer value_map.deinit(allocator);
+    // First pass: collect getfieldptr mappings
+    for (func.blocks.items) |block| {
+        for (block.instructions.items) |inst| {
+            if (inst.op == .getfieldptr) {
+                if (inst.result) |result| {
+                    try ctx.ptr_to_immediate.put(allocator, result, .{
+                        .base = inst.operands[0].value,
+                        .offset = inst.operands[1].immediate_i32,
+                    });
+                }
+            }
+        }
+    }
 
+    // Second pass: propagate copies
     for (func.blocks.items) |*block| {
         var new_instructions: std.ArrayListUnmanaged(ir.Instruction) = .empty;
         defer new_instructions.deinit(allocator);
 
         for (block.instructions.items) |inst| {
             switch (inst.op) {
-                .store => try handleStore(inst, &ptr_to_value, &value_map, &new_instructions, allocator),
-                .load => try handleLoad(inst, &ptr_to_value, &value_map, &new_instructions, allocator),
-                else => try handleOther(inst, &value_map, &new_instructions, func.allocator, allocator),
+                .store => try handleStore(inst, &ctx, &new_instructions, allocator),
+                .load => try handleLoad(inst, &ctx, &new_instructions, allocator),
+                else => try handleOther(inst, &ctx.value_map, &new_instructions, func.allocator, allocator),
             }
         }
 
@@ -131,16 +212,18 @@ fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
 
 fn handleStore(
     inst: ir.Instruction,
-    ptr_to_value: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
-    value_map: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    ctx: *CopyPropContext,
     new_instructions: *std.ArrayListUnmanaged(ir.Instruction),
     allocator: std.mem.Allocator,
 ) !void {
     const ptr = inst.operands[0].value;
     const val = inst.operands[1].value;
-    const mapped_val = value_map.get(val) orelse val;
+    const mapped_val = ctx.value_map.get(val) orelse val;
 
-    try ptr_to_value.put(allocator, ptr, mapped_val);
+    // Store using normalized field key if possible
+    if (try ctx.resolveFieldKey(ptr)) |key| {
+        try ctx.storeFieldValue(key, mapped_val);
+    }
 
     var new_inst = inst;
     new_inst.operands[1] = .{ .value = mapped_val };
@@ -149,21 +232,25 @@ fn handleStore(
 
 fn handleLoad(
     inst: ir.Instruction,
-    ptr_to_value: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
-    value_map: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    ctx: *CopyPropContext,
     new_instructions: *std.ArrayListUnmanaged(ir.Instruction),
     allocator: std.mem.Allocator,
 ) !void {
     const ptr = inst.operands[0].value;
 
-    if (ptr_to_value.get(ptr)) |stored_val| {
-        if (inst.result) |result| {
-            try value_map.put(allocator, result, stored_val);
+    // Try to find stored value using normalized field key
+    if (try ctx.resolveFieldKey(ptr)) |key| {
+        defer allocator.free(key.offsets);
+        if (ctx.lookupFieldValue(key)) |stored_val| {
+            if (inst.result) |result| {
+                try ctx.value_map.put(allocator, result, stored_val);
+            }
+            // Eliminate load - value will be propagated
+            return;
         }
-        // Eliminate load - value will be propagated
-    } else {
-        try new_instructions.append(allocator, inst);
     }
+
+    try new_instructions.append(allocator, inst);
 }
 
 fn handleOther(
@@ -230,11 +317,17 @@ const ImmediateFieldEntry = struct {
     offset: i32,
 };
 
+/// Unified pointer derivation - tracks how a pointer was derived from a base
+const PtrDerivation = union(enum) {
+    /// Static field access (getfieldptr) - can be precisely tracked
+    field: ImmediateFieldEntry,
+    /// Dynamic element access (getelemptr) - conservatively tracks base only
+    element: ir.Value,
+};
+
 /// Context for dead store elimination analysis
 const DseContext = struct {
-    ptr_to_immediate: std.AutoHashMapUnmanaged(ir.Value, ImmediateFieldEntry),
-    ptr_to_array_base: std.AutoHashMapUnmanaged(ir.Value, ir.Value),
-    loaded_array_bases: std.AutoHashMapUnmanaged(ir.Value, void),
+    ptr_derivation: std.AutoHashMapUnmanaged(ir.Value, PtrDerivation),
     loaded_bases: std.AutoHashMapUnmanaged(ir.Value, void),
     loaded_fields: std.ArrayListUnmanaged(FieldPtrKey),
     loaded_ptrs: std.AutoHashMapUnmanaged(ir.Value, void),
@@ -242,9 +335,7 @@ const DseContext = struct {
 
     fn init(allocator: std.mem.Allocator) DseContext {
         return .{
-            .ptr_to_immediate = .{},
-            .ptr_to_array_base = .{},
-            .loaded_array_bases = .{},
+            .ptr_derivation = .{},
             .loaded_bases = .{},
             .loaded_fields = .{},
             .loaded_ptrs = .{},
@@ -253,9 +344,7 @@ const DseContext = struct {
     }
 
     fn deinit(self: *DseContext) void {
-        self.ptr_to_immediate.deinit(self.allocator);
-        self.ptr_to_array_base.deinit(self.allocator);
-        self.loaded_array_bases.deinit(self.allocator);
+        self.ptr_derivation.deinit(self.allocator);
         self.loaded_bases.deinit(self.allocator);
         for (self.loaded_fields.items) |field| {
             self.allocator.free(field.offsets);
@@ -264,15 +353,32 @@ const DseContext = struct {
         self.loaded_ptrs.deinit(self.allocator);
     }
 
+    /// Resolve pointer to ultimate base by following derivation chain
+    fn resolveToBase(self: *DseContext, ptr: ir.Value) ir.Value {
+        var current = ptr;
+        while (self.ptr_derivation.get(current)) |deriv| {
+            current = switch (deriv) {
+                .field => |f| f.base,
+                .element => |base| base,
+            };
+        }
+        return current;
+    }
+
     /// Resolve pointer to normalized field key by tracing getfieldptr chain
     fn resolveFieldKey(self: *DseContext, ptr: ir.Value) !?FieldPtrKey {
         var offsets: std.ArrayListUnmanaged(i32) = .empty;
         defer offsets.deinit(self.allocator);
 
         var current = ptr;
-        while (self.ptr_to_immediate.get(current)) |entry| {
-            try offsets.append(self.allocator, entry.offset);
-            current = entry.base;
+        while (self.ptr_derivation.get(current)) |deriv| {
+            switch (deriv) {
+                .field => |entry| {
+                    try offsets.append(self.allocator, entry.offset);
+                    current = entry.base;
+                },
+                .element => return null, // Can't precisely track through dynamic index
+            }
         }
 
         if (offsets.items.len == 0) return null;
@@ -285,20 +391,16 @@ const DseContext = struct {
     fn isStoreNeeded(self: *DseContext, ptr: ir.Value) !bool {
         if (self.loaded_ptrs.contains(ptr)) return true;
 
+        // Check if base is external/loaded (works for both field and element pointers)
+        const base = self.resolveToBase(ptr);
+        if (self.loaded_bases.contains(base)) return true;
+
+        // For field pointers, also check precise field tracking
         if (try self.resolveFieldKey(ptr)) |store_key| {
             defer self.allocator.free(store_key.offsets);
-
-            if (self.loaded_bases.contains(store_key.base)) return true;
-
             for (self.loaded_fields.items) |load_key| {
                 if (FieldPtrKey.eql(store_key, load_key)) return true;
             }
-        }
-
-        if (self.ptr_to_array_base.get(ptr)) |array_base| {
-            if (self.loaded_array_bases.contains(array_base)) return true;
-            // Also check if array base is passed to a call (marked in loaded_bases)
-            if (self.loaded_bases.contains(array_base)) return true;
         }
 
         return false;
@@ -323,16 +425,17 @@ fn deadStoreElimination(func: *ir.Function, allocator: std.mem.Allocator) !void 
 fn collectPointerMappings(func: *ir.Function, ctx: *DseContext) !void {
     for (func.blocks.items) |block| {
         for (block.instructions.items) |inst| {
-            if (inst.op == .getfieldptr) {
-                if (inst.result) |result| {
-                    try ctx.ptr_to_immediate.put(ctx.allocator, result, .{
+            if (inst.result) |result| {
+                const derivation: ?PtrDerivation = switch (inst.op) {
+                    .getfieldptr => .{ .field = .{
                         .base = inst.operands[0].value,
                         .offset = inst.operands[1].immediate_i32,
-                    });
-                }
-            } else if (inst.op == .getelemptr) {
-                if (inst.result) |result| {
-                    try ctx.ptr_to_array_base.put(ctx.allocator, result, inst.operands[0].value);
+                    } },
+                    .getelemptr => .{ .element = inst.operands[0].value },
+                    else => null,
+                };
+                if (derivation) |d| {
+                    try ctx.ptr_derivation.put(ctx.allocator, result, d);
                 }
             }
         }
@@ -340,6 +443,7 @@ fn collectPointerMappings(func: *ir.Function, ctx: *DseContext) !void {
 }
 
 fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
+    // First pass: identify external bases (params, ret values)
     for (func.blocks.items) |block| {
         for (block.instructions.items) |inst| {
             switch (inst.op) {
@@ -355,13 +459,13 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                     const ptr = inst.operands[0].value;
                     try ctx.loaded_ptrs.put(ctx.allocator, ptr, {});
 
-                    if (try ctx.resolveFieldKey(ptr)) |field_key| {
-                        try ctx.loaded_bases.put(ctx.allocator, field_key.base, {});
-                        try ctx.loaded_fields.append(ctx.allocator, field_key);
-                    }
+                    // Mark base as loaded (works for both field and element pointers)
+                    const base = ctx.resolveToBase(ptr);
+                    try ctx.loaded_bases.put(ctx.allocator, base, {});
 
-                    if (ctx.ptr_to_array_base.get(ptr)) |array_base| {
-                        try ctx.loaded_array_bases.put(ctx.allocator, array_base, {});
+                    // For field pointers, also track precise field access
+                    if (try ctx.resolveFieldKey(ptr)) |field_key| {
+                        try ctx.loaded_fields.append(ctx.allocator, field_key);
                     }
                 },
                 .call => {
@@ -376,17 +480,40 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                 },
                 .ret => {
                     // Pointers returned from functions may be read by caller
-                    // Mark the returned value as loaded so stores to it are preserved
                     if (inst.operands[0] == .value) {
                         const ret_val = inst.operands[0].value;
+                        // Mark both the returned value and its ultimate base as loaded
                         try ctx.loaded_bases.put(ctx.allocator, ret_val, {});
-                        // Also check if it's derived from an array base
-                        if (ctx.ptr_to_array_base.get(ret_val)) |array_base| {
-                            try ctx.loaded_array_bases.put(ctx.allocator, array_base, {});
-                        }
+                        const base = ctx.resolveToBase(ret_val);
+                        try ctx.loaded_bases.put(ctx.allocator, base, {});
                     }
                 },
                 else => {},
+            }
+        }
+    }
+
+    // Second pass: if a pointer is stored to an external location, mark it as external too
+    // This handles nested struct pointers stored to sret buffers
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (func.blocks.items) |block| {
+            for (block.instructions.items) |inst| {
+                if (inst.op == .store) {
+                    const dest_ptr = inst.operands[0].value;
+                    const stored_val = inst.operands[1].value;
+
+                    // Check if destination is derived from an external base
+                    const dest_base = ctx.resolveToBase(dest_ptr);
+                    if (ctx.loaded_bases.contains(dest_base)) {
+                        // The destination is external, so the stored pointer is also accessible
+                        if (!ctx.loaded_bases.contains(stored_val)) {
+                            try ctx.loaded_bases.put(ctx.allocator, stored_val, {});
+                            changed = true;
+                        }
+                    }
+                }
             }
         }
     }

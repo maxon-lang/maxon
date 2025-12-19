@@ -1,0 +1,41 @@
+// Test: challenge-nested-structs.nested-struct-returned.1
+type Inner
+    var value int
+end 'Inner'
+
+type Outer
+    var inner Inner
+end 'Outer'
+
+function makeOuter() returns Outer
+    var i = Inner{value: 42}
+    return Outer{inner: i}
+end 'makeOuter'
+
+function main() returns int
+    var o = makeOuter()
+    return o.inner.value
+end 'main'
+---
+ExitCode: 42
+---
+function makeOuter() -> ptr {
+entry:
+    %0 = param ptr 0
+    %1 = alloca.sized ptr 8
+    %4 = getfieldptr ptr %0 0
+    store %4 %1
+    ret %0
+}
+
+function main() -> i64 {
+entry:
+    %0 = alloca.sized ptr 8
+    %1 = call ptr @makeOuter(%0)
+    %2 = getfieldptr ptr %0 0
+    %3 = getfieldptr ptr %2 0
+    %4 = load i64 %3
+    ret %4
+}
+
+---

@@ -1,6 +1,6 @@
 ---
 feature: challenge-nested-structs
-status: draft
+status: stable
 keywords: struct, nested, type-size, memory
 category: semantics
 ---
