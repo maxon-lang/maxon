@@ -1,7 +1,10 @@
 // Test: abs.abs.zero.1
 function main() returns int
     var x = abs(0.0)
-    return trunc(x)
+    if x == 0.0 'check'
+        return 0
+    end 'check'
+    return 1
 end 'main'
 ---
 ExitCode: 0
@@ -13,8 +16,15 @@ entry:
     %x = alloca ptr
     store %x %tmp_fabs
     %tmp_load = load f64 %x
-    %tmp_fptosi = fptosi i64 %tmp_load
-    ret %tmp_fptosi
+    %tmp_fconst.1 = const.f64 f64 0
+    %tmp_fcmp = fcmp.eq i64 %tmp_load %tmp_fconst.1
+    %x = br.cond %tmp_fcmp @block1
+then:
+    %tmp_const = const.i64 i64 0
+    ret %tmp_const
+end:
+    %tmp_const.1 = const.i64 i64 1
+    ret %tmp_const.1
 }
 
 ---

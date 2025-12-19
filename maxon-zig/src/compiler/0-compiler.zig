@@ -217,6 +217,13 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
             freeExpressionArgs(assign.base.*, allocator);
             freeExpressionArgs(assign.value, allocator);
         },
+        .if_stmt => |if_s| {
+            freeExpressionArgs(if_s.condition, allocator);
+            for (if_s.body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(if_s.body);
+        },
     }
 }
 
@@ -231,6 +238,10 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         .binary => |bin| {
             freeExpressionArgs(bin.left.*, allocator);
             freeExpressionArgs(bin.right.*, allocator);
+        },
+        .compare => |cmp| {
+            freeExpressionArgs(cmp.left.*, allocator);
+            freeExpressionArgs(cmp.right.*, allocator);
         },
         .struct_init => |sinit| {
             for (sinit.fields) |field| {

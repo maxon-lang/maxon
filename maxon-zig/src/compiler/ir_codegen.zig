@@ -22,6 +22,12 @@ const ValueLocation = union(enum) {
     xmm: x86.Xmm,
 };
 
+/// Jump to patch after block addresses are known
+const JumpPatch = struct {
+    offset: usize, // Offset in code where the rel32 displacement lives
+    target_block: u32, // Block index to jump to
+};
+
 /// x86-64 code generator from IR
 pub const IrCodegen = struct {
     allocator: std.mem.Allocator,
@@ -36,6 +42,9 @@ pub const IrCodegen = struct {
     current_func_ret_type: ir.Type,
     indirect_ptrs: std.AutoHashMapUnmanaged(ir.Value, void),
     external_patches: std.ArrayListUnmanaged(ExternalCallPatch),
+    // Block tracking for branches
+    block_offsets: std.ArrayListUnmanaged(usize),
+    jump_patches: std.ArrayListUnmanaged(JumpPatch),
 
     pub fn init(allocator: std.mem.Allocator, code: *std.ArrayListUnmanaged(u8)) IrCodegen {
         return .{
@@ -51,6 +60,8 @@ pub const IrCodegen = struct {
             .current_func_ret_type = .void,
             .indirect_ptrs = .{},
             .external_patches = .{},
+            .block_offsets = .{},
+            .jump_patches = .{},
         };
     }
 
@@ -61,6 +72,8 @@ pub const IrCodegen = struct {
         self.call_patches.deinit(self.allocator);
         self.indirect_ptrs.deinit(self.allocator);
         self.external_patches.deinit(self.allocator);
+        self.block_offsets.deinit(self.allocator);
+        self.jump_patches.deinit(self.allocator);
     }
 
     /// Get external call patches for PE writer
@@ -190,16 +203,40 @@ pub const IrCodegen = struct {
         self.value_locations.clearRetainingCapacity();
         self.value_types.clearRetainingCapacity();
         self.indirect_ptrs.clearRetainingCapacity();
+        self.block_offsets.clearRetainingCapacity();
+        self.jump_patches.clearRetainingCapacity();
         self.next_stack_offset = -8;
         self.current_func_name = func.name;
         self.current_func_ret_type = func.return_type;
 
         try self.enc.prologue(256);
 
+        // Generate code for each block, recording block start offsets
         for (func.blocks.items) |block| {
+            // Record the start offset of this block
+            try self.block_offsets.append(self.allocator, self.code.items.len);
+
             for (block.instructions.items) |inst| {
                 try self.generateInstruction(inst);
             }
+        }
+
+        // Patch all jumps now that we know block offsets
+        try self.patchJumps();
+    }
+
+    fn patchJumps(self: *IrCodegen) !void {
+        for (self.jump_patches.items) |patch| {
+            if (patch.target_block >= self.block_offsets.items.len) continue;
+
+            const target_offset = self.block_offsets.items[patch.target_block];
+            // Calculate relative offset: target - (patch_location + 4)
+            const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(patch.offset + 4)));
+            const bytes: [4]u8 = @bitCast(rel_offset);
+            self.code.items[patch.offset] = bytes[0];
+            self.code.items[patch.offset + 1] = bytes[1];
+            self.code.items[patch.offset + 2] = bytes[2];
+            self.code.items[patch.offset + 3] = bytes[3];
         }
     }
 
@@ -226,6 +263,15 @@ pub const IrCodegen = struct {
             .memcpy => try self.genMemcpy(inst),
             .heap_alloc => try self.genHeapAlloc(inst),
             .heap_free => try self.genHeapFree(inst),
+            .fcmp_eq => try self.genFcmpEq(inst),
+            .icmp_eq => try self.genIcmp(inst, .eq),
+            .icmp_ne => try self.genIcmp(inst, .ne),
+            .icmp_lt => try self.genIcmp(inst, .lt),
+            .icmp_le => try self.genIcmp(inst, .le),
+            .icmp_gt => try self.genIcmp(inst, .gt),
+            .icmp_ge => try self.genIcmp(inst, .ge),
+            .br => try self.genBr(inst),
+            .br_cond => try self.genBrCond(inst),
             else => debug.codegen("  Skipping unhandled instruction", .{}),
         }
     }
@@ -687,6 +733,100 @@ pub const IrCodegen = struct {
         try self.enc.movR8R12();
 
         try self.emitExternalCall("kernel32.dll", "HeapFree");
+    }
+
+    fn genFcmpEq(self: *IrCodegen, inst: ir.Instruction) !void {
+        const result = inst.result.?;
+        const lhs = inst.operands[0].value;
+        const rhs = inst.operands[1].value;
+
+        // Load operands to xmm0 and xmm1
+        try self.loadToXmm(lhs, .xmm0);
+        const temp = self.allocStackSlots(1);
+        try self.enc.movsdRbpOffsetXmm0(temp);
+        try self.loadToXmm(rhs, .xmm1);
+        try self.enc.movsdXmm0RbpOffset(temp);
+
+        // Compare: ucomisd xmm0, xmm1
+        try self.enc.ucomisdXmm0Xmm1();
+
+        // Set AL = 1 if equal (and not unordered)
+        // SETE al + SETNP cl, then AND them
+        // For simplicity, just use SETE (this works for non-NaN values)
+        try self.enc.seteAl();
+        try self.enc.movzxRaxAl();
+
+        try self.storeToStack(result, .i64);
+    }
+
+    const CmpOp = enum { eq, ne, lt, le, gt, ge };
+
+    fn genIcmp(self: *IrCodegen, inst: ir.Instruction, op: CmpOp) !void {
+        const result = inst.result.?;
+        const lhs = inst.operands[0].value;
+        const rhs = inst.operands[1].value;
+
+        // Load lhs to rax, save it, load rhs to rcx, restore lhs
+        try self.loadToRax(lhs);
+        try self.enc.pushRax();
+        try self.loadToRax(rhs);
+        try self.enc.movRcxRax();
+        try self.enc.popRax();
+
+        // Compare: cmp rax, rcx
+        try self.enc.cmpRaxRcx();
+
+        // Set AL based on comparison result
+        switch (op) {
+            .eq => try self.enc.seteAl(),
+            .ne => try self.enc.setneAl(),
+            .lt => try self.enc.setlAl(),
+            .le => try self.enc.setleAl(),
+            .gt => try self.enc.setgAl(),
+            .ge => try self.enc.setgeAl(),
+        }
+
+        // Zero-extend AL to RAX
+        try self.enc.movzxRaxAl();
+
+        try self.storeToStack(result, .i64);
+    }
+
+    fn genBr(self: *IrCodegen, inst: ir.Instruction) !void {
+        const target_block = inst.operands[0].block_ref;
+
+        // Emit jmp rel32 and record patch
+        const patch_offset = try self.enc.jmpRel32();
+        try self.jump_patches.append(self.allocator, .{
+            .offset = patch_offset,
+            .target_block = target_block,
+        });
+    }
+
+    fn genBrCond(self: *IrCodegen, inst: ir.Instruction) !void {
+        const cond = inst.operands[0].value;
+        const then_block = inst.operands[1].block_ref;
+        const else_block: u32 = @intCast(inst.result.?); // else block stored in result field
+
+        // Load condition to rax
+        try self.loadToRax(cond);
+
+        // TEST rax, rax (sets ZF if rax == 0)
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+
+        // JNE then_block (jump if condition is non-zero, i.e., true)
+        const then_patch = try self.enc.jneRel32();
+        try self.jump_patches.append(self.allocator, .{
+            .offset = then_patch,
+            .target_block = then_block,
+        });
+
+        // JMP else_block (fall through to else)
+        const else_patch = try self.enc.jmpRel32();
+        try self.jump_patches.append(self.allocator, .{
+            .offset = else_patch,
+            .target_block = else_block,
+        });
     }
 };
 

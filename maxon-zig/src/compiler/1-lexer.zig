@@ -13,6 +13,8 @@ pub const TokenType = enum {
     @"enum",
     array,
     of,
+    @"if",
+    @"else",
 
     // Types
     int,
@@ -32,6 +34,12 @@ pub const TokenType = enum {
     lbracket,
     rbracket,
     equals,
+    equals_equals, // ==
+    not_equals, // !=
+    less_than, // <
+    less_equals, // <=
+    greater_than, // >
+    greater_equals, // >=
     plus,
     minus,
     star,
@@ -118,9 +126,52 @@ pub const Lexer = struct {
                 continue;
             }
             if (c == '=') {
-                try tokens.append(allocator, .{ .type = .equals, .text = "=", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
+                // Check for ==
+                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                    try tokens.append(allocator, .{ .type = .equals_equals, .text = "==", .line = self.line, .column = self.column });
+                    self.pos += 2;
+                    self.column += 2;
+                } else {
+                    try tokens.append(allocator, .{ .type = .equals, .text = "=", .line = self.line, .column = self.column });
+                    self.pos += 1;
+                    self.column += 1;
+                }
+                continue;
+            }
+            if (c == '!') {
+                // Check for !=
+                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                    try tokens.append(allocator, .{ .type = .not_equals, .text = "!=", .line = self.line, .column = self.column });
+                    self.pos += 2;
+                    self.column += 2;
+                    continue;
+                }
+                // Single ! not supported yet
+            }
+            if (c == '<') {
+                // Check for <=
+                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                    try tokens.append(allocator, .{ .type = .less_equals, .text = "<=", .line = self.line, .column = self.column });
+                    self.pos += 2;
+                    self.column += 2;
+                } else {
+                    try tokens.append(allocator, .{ .type = .less_than, .text = "<", .line = self.line, .column = self.column });
+                    self.pos += 1;
+                    self.column += 1;
+                }
+                continue;
+            }
+            if (c == '>') {
+                // Check for >=
+                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                    try tokens.append(allocator, .{ .type = .greater_equals, .text = ">=", .line = self.line, .column = self.column });
+                    self.pos += 2;
+                    self.column += 2;
+                } else {
+                    try tokens.append(allocator, .{ .type = .greater_than, .text = ">", .line = self.line, .column = self.column });
+                    self.pos += 1;
+                    self.column += 1;
+                }
                 continue;
             }
             if (c == '+') {
@@ -323,6 +374,8 @@ pub const Lexer = struct {
             .{ "enum", TokenType.@"enum" },
             .{ "array", TokenType.array },
             .{ "of", TokenType.of },
+            .{ "if", TokenType.@"if" },
+            .{ "else", TokenType.@"else" },
             .{ "int", TokenType.int },
             .{ "float", TokenType.float },
         };

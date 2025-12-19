@@ -339,4 +339,81 @@ pub const Encoder = struct {
         try self.popRbp();
         try self.ret();
     }
+
+    // -------------------------------------------------------------------------
+    // Comparison
+    // -------------------------------------------------------------------------
+
+    /// UCOMISD xmm0, xmm1 - compare floating point values, set flags
+    pub fn ucomisdXmm0Xmm1(self: *Encoder) !void {
+        try self.emit(&.{ 0x66, 0x0F, 0x2E, 0xC1 });
+    }
+
+    /// CMP rax, rcx - compare integers, set flags
+    pub fn cmpRaxRcx(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0x39, 0xC8 });
+    }
+
+    // -------------------------------------------------------------------------
+    // Conditional jumps
+    // -------------------------------------------------------------------------
+
+    /// JE rel32 - jump if equal (ZF=1), returns offset of displacement for patching
+    pub fn jeRel32(self: *Encoder) !usize {
+        try self.emit(&.{ 0x0F, 0x84 });
+        const offset = self.code.items.len;
+        try self.emit(&.{ 0x00, 0x00, 0x00, 0x00 });
+        return offset;
+    }
+
+    /// JNE rel32 - jump if not equal (ZF=0), returns offset for patching
+    pub fn jneRel32(self: *Encoder) !usize {
+        try self.emit(&.{ 0x0F, 0x85 });
+        const offset = self.code.items.len;
+        try self.emit(&.{ 0x00, 0x00, 0x00, 0x00 });
+        return offset;
+    }
+
+    /// JMP rel32 - unconditional jump, returns offset for patching
+    pub fn jmpRel32(self: *Encoder) !usize {
+        try self.emitByte(0xE9);
+        const offset = self.code.items.len;
+        try self.emit(&.{ 0x00, 0x00, 0x00, 0x00 });
+        return offset;
+    }
+
+    /// SETE al - set byte if equal (ZF=1)
+    pub fn seteAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x94, 0xC0 });
+    }
+
+    /// SETNE al - set byte if not equal (ZF=0)
+    pub fn setneAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x95, 0xC0 });
+    }
+
+    /// SETL al - set byte if less (SF!=OF)
+    pub fn setlAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x9C, 0xC0 });
+    }
+
+    /// SETLE al - set byte if less or equal (ZF=1 or SF!=OF)
+    pub fn setleAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x9E, 0xC0 });
+    }
+
+    /// SETG al - set byte if greater (ZF=0 and SF=OF)
+    pub fn setgAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x9F, 0xC0 });
+    }
+
+    /// SETGE al - set byte if greater or equal (SF=OF)
+    pub fn setgeAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x9D, 0xC0 });
+    }
+
+    /// MOVZX rax, al - zero-extend al to rax
+    pub fn movzxRaxAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0x0F, 0xB6, 0xC0 });
+    }
 };

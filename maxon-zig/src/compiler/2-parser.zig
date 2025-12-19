@@ -18,6 +18,7 @@ pub const Parser = struct {
     pos: usize,
     allocator: std.mem.Allocator,
     expr_ptrs: std.ArrayListUnmanaged(*ast.Expression),
+    ifstmt_ptrs: std.ArrayListUnmanaged(*ast.IfStmt),
     /// Source file path for error messages
     source_file: ?[]const u8,
     /// Last error with location info
@@ -29,6 +30,7 @@ pub const Parser = struct {
             .pos = 0,
             .allocator = allocator,
             .expr_ptrs = .empty,
+            .ifstmt_ptrs = .empty,
             .source_file = null,
             .last_error = null,
         };
@@ -40,6 +42,7 @@ pub const Parser = struct {
             .pos = 0,
             .allocator = allocator,
             .expr_ptrs = .empty,
+            .ifstmt_ptrs = .empty,
             .source_file = source_file,
             .last_error = null,
         };
@@ -50,6 +53,10 @@ pub const Parser = struct {
             self.allocator.destroy(ptr);
         }
         self.expr_ptrs.deinit(self.allocator);
+        for (self.ifstmt_ptrs.items) |ptr| {
+            self.allocator.destroy(ptr);
+        }
+        self.ifstmt_ptrs.deinit(self.allocator);
     }
 
     pub fn parse(self: *Parser) ParseError!ast.Program {
@@ -288,7 +295,7 @@ pub const Parser = struct {
         };
     }
 
-    fn parseStatement(self: *Parser) !ast.Statement {
+    fn parseStatement(self: *Parser) ParseError!ast.Statement {
         if (self.check(.@"return")) {
             const stmt = try self.parseReturn();
             _ = try self.expect(.newline);
@@ -303,6 +310,9 @@ pub const Parser = struct {
             const stmt = try self.parseVarDecl(true);
             _ = try self.expect(.newline);
             return stmt;
+        }
+        if (self.check(.@"if")) {
+            return try self.parseIfStatement();
         }
         // Check for assignment, index assignment, or call statement: identifier...
         if (self.check(.identifier)) {
@@ -388,8 +398,143 @@ pub const Parser = struct {
         return .{ .@"return" = .{ .value = expr } };
     }
 
+    fn parseIfStatement(self: *Parser) ParseError!ast.Statement {
+        const if_stmt = try self.parseIfStmtInternal();
+        return .{ .if_stmt = if_stmt };
+    }
+
+    fn parseIfStmtInternal(self: *Parser) ParseError!ast.IfStmt {
+        _ = try self.expect(.@"if");
+
+        // Parse condition
+        const condition = try self.parseExpression() orelse {
+            self.reportError(.E003, "expected condition expression");
+            return error.ExpectedExpression;
+        };
+
+        // Parse label 'name'
+        const label = try self.expect(.string);
+
+        // Require newline after 'if condition 'label''
+        _ = try self.expect(.newline);
+
+        // Parse body statements
+        var statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
+        errdefer statements.deinit(self.allocator);
+
+        while (!self.check(.end) and !self.isAtEnd()) {
+            // Skip blank lines
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
+            try statements.append(self.allocator, try self.parseStatement());
+        }
+
+        // Parse end 'label'
+        _ = try self.expect(.end);
+        _ = try self.expect(.string); // closing label
+
+        // Check for else clause: end 'label' else ...
+        var else_body: ?[]ast.Statement = null;
+        var else_label: ?[]const u8 = null;
+        var else_if: ?*const ast.IfStmt = null;
+
+        if (self.check(.@"else")) {
+            _ = self.advance(); // consume 'else'
+
+            // Check for else-if: else if ...
+            if (self.check(.@"if")) {
+                // Parse the else-if as a recursive IfStmt
+                const else_if_stmt = try self.parseIfStmtInternal();
+                const ptr = try self.allocator.create(ast.IfStmt);
+                ptr.* = else_if_stmt;
+                try self.ifstmt_ptrs.append(self.allocator, ptr);
+                else_if = ptr;
+            } else {
+                // Parse else block: else 'else_label' ... end 'else_label'
+                const else_label_tok = try self.expect(.string);
+                else_label = else_label_tok.text;
+
+                // Require newline after 'else 'label''
+                _ = try self.expect(.newline);
+
+                // Parse else body statements
+                var else_statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
+                errdefer else_statements.deinit(self.allocator);
+
+                while (!self.check(.end) and !self.isAtEnd()) {
+                    // Skip blank lines
+                    if (self.check(.newline)) {
+                        _ = self.advance();
+                        continue;
+                    }
+                    try else_statements.append(self.allocator, try self.parseStatement());
+                }
+
+                // Parse end 'else_label'
+                _ = try self.expect(.end);
+                _ = try self.expect(.string); // closing else label
+
+                else_body = try else_statements.toOwnedSlice(self.allocator);
+            }
+        }
+
+        // Require newline after end (or allow EOF) - only if we didn't parse else-if
+        if (else_if == null) {
+            if (!self.isAtEnd() and !self.check(.newline)) {
+                self.reportError(.E004, "expected newline after 'end'");
+                return error.ExpectedNewline;
+            }
+            if (self.check(.newline)) {
+                _ = self.advance();
+            }
+        }
+
+        return .{
+            .condition = condition,
+            .body = try statements.toOwnedSlice(self.allocator),
+            .label = label.text,
+            .else_body = else_body,
+            .else_label = else_label,
+            .else_if = else_if,
+        };
+    }
+
     fn parseExpression(self: *Parser) ParseError!?ast.Expression {
-        return try self.parseAdditive();
+        return try self.parseComparison();
+    }
+
+    fn parseComparison(self: *Parser) ParseError!?ast.Expression {
+        var left = try self.parseAdditive() orelse return null;
+
+        if (self.matchComparison()) |op| {
+            _ = self.advance();
+            const right = try self.parseAdditive() orelse {
+                self.reportError(.E003, "expected expression after comparison operator");
+                return error.ExpectedExpression;
+            };
+            left = try self.makeCompare(left, op, right);
+        }
+        return left;
+    }
+
+    fn matchComparison(self: *Parser) ?ast.CompareOp {
+        if (self.check(.equals_equals)) return .eq;
+        if (self.check(.not_equals)) return .ne;
+        if (self.check(.less_than)) return .lt;
+        if (self.check(.less_equals)) return .le;
+        if (self.check(.greater_than)) return .gt;
+        if (self.check(.greater_equals)) return .ge;
+        return null;
+    }
+
+    fn makeCompare(self: *Parser, left: ast.Expression, op: ast.CompareOp, right: ast.Expression) !ast.Expression {
+        return .{ .compare = .{
+            .left = try self.createExpr(left),
+            .op = op,
+            .right = try self.createExpr(right),
+        } };
     }
 
     fn parseAdditive(self: *Parser) ParseError!?ast.Expression {

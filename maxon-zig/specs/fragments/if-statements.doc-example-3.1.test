@@ -1,0 +1,43 @@
+// Test: if-statements.doc-example-3.1
+function main() returns int
+    var x = 2
+    if x == 1 'case1'
+        return 1
+    end 'case1' else if x == 2 'case2'
+        return 2
+    end 'case2' else 'default'
+        return 0
+    end 'default'
+end 'main'
+---
+ExitCode: 2
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 2
+    %x = alloca ptr
+    store %x %tmp_const
+    %tmp_load = load i64 %x
+    %tmp_const.1 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.1
+    %tmp_load = br.cond %tmp_icmp @block1
+then:
+    %tmp_const.2 = const.i64 i64 1
+    ret %tmp_const.2
+else:
+    %tmp_load.1 = load i64 %x
+    %tmp_const.3 = const.i64 i64 2
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.1 %tmp_const.3
+    %tmp_icmp = br.cond %tmp_icmp.1 @block3
+then:
+    %tmp_const.4 = const.i64 i64 2
+    ret %tmp_const.4
+else:
+    %tmp_const.5 = const.i64 i64 0
+    ret %tmp_const.5
+end:
+    br @block3
+end:
+}
+
+---

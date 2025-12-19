@@ -67,13 +67,21 @@ pub const Instruction = struct {
         br,
         br_cond,
 
-        // Comparison
+        // Integer comparison
         icmp_eq,
         icmp_ne,
         icmp_lt,
         icmp_le,
         icmp_gt,
         icmp_ge,
+
+        // Float comparison
+        fcmp_eq,
+        fcmp_ne,
+        fcmp_lt,
+        fcmp_le,
+        fcmp_gt,
+        fcmp_ge,
 
         // Function call
         call,
@@ -123,6 +131,12 @@ pub const Instruction = struct {
                 .icmp_le => "icmp.le",
                 .icmp_gt => "icmp.gt",
                 .icmp_ge => "icmp.ge",
+                .fcmp_eq => "fcmp.eq",
+                .fcmp_ne => "fcmp.ne",
+                .fcmp_lt => "fcmp.lt",
+                .fcmp_le => "fcmp.le",
+                .fcmp_gt => "fcmp.gt",
+                .fcmp_ge => "fcmp.ge",
                 .call => "call",
                 .param => "param",
                 .getelemptr => "getelemptr",
@@ -278,7 +292,8 @@ pub const Function = struct {
             .fabs => "tmp_fabs",
             .ret => "tmp_ret",
             .br, .br_cond => "tmp_br",
-            .icmp_eq, .icmp_ne, .icmp_lt, .icmp_le, .icmp_gt, .icmp_ge => "tmp_cmp",
+            .icmp_eq, .icmp_ne, .icmp_lt, .icmp_le, .icmp_gt, .icmp_ge => "tmp_icmp",
+            .fcmp_eq, .fcmp_ne, .fcmp_lt, .fcmp_le, .fcmp_gt, .fcmp_ge => "tmp_fcmp",
             .call => "tmp_call",
             .param => "tmp_param",
             .getelemptr => "tmp_elemptr",
@@ -363,6 +378,18 @@ pub const Function = struct {
     // Control flow
     pub fn emitRet(self: *Function, value: ?Value) !void {
         try self.emit(.{ .op = .ret, .operands = .{ if (value) |v| .{ .value = v } else .none, .none } });
+    }
+
+    pub fn emitBr(self: *Function, block_idx: u32) !void {
+        try self.emit(.{ .op = .br, .operands = .{ .{ .block_ref = block_idx }, .none } });
+    }
+
+    pub fn emitBrCond(self: *Function, cond: Value, then_block: u32, else_block: u32) !void {
+        try self.emit(.{
+            .op = .br_cond,
+            .operands = .{ .{ .value = cond }, .{ .block_ref = then_block } },
+            .result = else_block, // Use result field for else block
+        });
     }
 
     // Function calls

@@ -61,6 +61,15 @@ pub const FieldAssign = struct {
     value: Expression,
 };
 
+pub const IfStmt = struct {
+    condition: Expression,
+    body: []Statement,
+    label: []const u8,
+    else_body: ?[]Statement, // For else clause
+    else_label: ?[]const u8, // Label for else block
+    else_if: ?*const IfStmt, // For else-if chain (recursive)
+};
+
 pub const Statement = union(enum) {
     @"return": ReturnStmt,
     let_decl: VarDecl,
@@ -69,6 +78,7 @@ pub const Statement = union(enum) {
     assign: AssignStmt,
     field_assign: FieldAssign,
     call: CallExpr,
+    if_stmt: IfStmt,
 };
 
 pub const VarDecl = struct {
@@ -88,9 +98,24 @@ pub const BinaryOp = enum {
     mod,
 };
 
+pub const CompareOp = enum {
+    eq,
+    ne,
+    lt,
+    le,
+    gt,
+    ge,
+};
+
 pub const BinaryExpr = struct {
     left: *const Expression,
     op: BinaryOp,
+    right: *const Expression,
+};
+
+pub const CompareExpr = struct {
+    left: *const Expression,
+    op: CompareOp,
     right: *const Expression,
 };
 
@@ -133,6 +158,7 @@ pub const Expression = union(enum) {
     float_lit: f64,
     identifier: []const u8,
     binary: BinaryExpr,
+    compare: CompareExpr,
     call: CallExpr,
     struct_init: StructInitExpr,
     field_access: FieldAccessExpr,

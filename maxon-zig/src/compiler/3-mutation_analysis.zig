@@ -85,6 +85,12 @@ pub const MutationAnalyzer = struct {
                 // Field assignment - check if base is a parameter (e.g., d.value = 100)
                 self.checkExpressionForParamMutation(assign.base.*, param_indices, mutated);
             },
+            .if_stmt => |if_s| {
+                // Check mutations inside if statement body
+                for (if_s.body) |body_stmt| {
+                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                }
+            },
         }
     }
 
@@ -112,9 +118,9 @@ pub const MutationAnalyzer = struct {
                 // Index access mutation also mutates the base array
                 self.checkExpressionForParamMutation(idx.base.*, param_indices, mutated);
             },
-            // integer, float_lit, binary, call, struct_init, array_literal, sized_array:
+            // integer, float_lit, binary, compare, call, struct_init, array_literal, sized_array:
             // These cannot be mutation targets (only identifier, field_access, index can)
-            .integer, .float_lit, .binary, .call, .struct_init, .array_literal, .sized_array => {},
+            .integer, .float_lit, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},
         }
     }
 

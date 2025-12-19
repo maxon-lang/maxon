@@ -85,7 +85,10 @@ end 'main'
 ```maxon
 function main() returns int
     var x = abs(0.0)
-    return trunc(x)
+    if x == 0.0 'check'
+        return 0
+    end 'check'
+    return 1
 end 'main'
 ```
 ```exitcode

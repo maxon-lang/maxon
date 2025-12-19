@@ -560,6 +560,7 @@ pub const AstToIr = struct {
             .field_assign => |assign| try self.convertFieldAssign(assign),
             .index_assign => |assign| try self.convertIndexAssign(assign),
             .call => |call| _ = try self.convertCall(call),
+            .if_stmt => |if_s| try self.convertIfStmt(if_s),
         }
         self.current_line += 1;
     }
@@ -703,6 +704,85 @@ pub const AstToIr = struct {
         try self.func().emitStore(elem_ptr, val_typed.value);
     }
 
+    fn convertIfStmt(self: *AstToIr, if_stmt: ast.IfStmt) ConvertError!void {
+        // Convert condition
+        const cond_typed = try self.convertExpression(if_stmt.condition);
+
+        // Determine what blocks we need
+        const has_else = if_stmt.else_body != null or if_stmt.else_if != null;
+
+        // Create then block
+        const then_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("then");
+
+        // Create else block (if needed) or end block
+        var else_block_idx: u32 = undefined;
+        if (has_else) {
+            else_block_idx = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("else");
+        }
+
+        // Create end block
+        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("end");
+
+        // Emit conditional branch in the previous block
+        const branch_target_if_false = if (has_else) else_block_idx else end_block_idx;
+        const entry_block = &self.func().blocks.items[then_block_idx - 1];
+        try entry_block.instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = cond_typed.value }, .{ .block_ref = then_block_idx } },
+            .result = branch_target_if_false,
+        });
+
+        // Save end block, remove it temporarily
+        const end_block = self.func().blocks.pop().?;
+
+        // If we have else, save it too
+        var else_block: ?ir.BasicBlock = null;
+        if (has_else) {
+            else_block = self.func().blocks.pop().?;
+        }
+
+        // Now current block is "then" block - convert body statements
+        for (if_stmt.body) |stmt| {
+            try self.convertStatement(stmt);
+        }
+
+        // Add unconditional branch to end block (if not already terminated)
+        if (self.func().currentBlock()) |block| {
+            if (block.instructions.items.len == 0 or block.instructions.items[block.instructions.items.len - 1].op != .ret) {
+                try self.func().emitBr(end_block_idx);
+            }
+        }
+
+        // Restore and generate else block if needed
+        if (has_else) {
+            try self.func().blocks.append(self.allocator, else_block.?);
+
+            // Check for else-if chain
+            if (if_stmt.else_if) |else_if| {
+                // Recursively convert the else-if
+                try self.convertIfStmt(else_if.*);
+            } else if (if_stmt.else_body) |else_body| {
+                // Convert else body statements
+                for (else_body) |stmt| {
+                    try self.convertStatement(stmt);
+                }
+            }
+
+            // Add unconditional branch to end block (if not already terminated)
+            if (self.func().currentBlock()) |block| {
+                if (block.instructions.items.len == 0 or block.instructions.items[block.instructions.items.len - 1].op != .ret) {
+                    try self.func().emitBr(end_block_idx);
+                }
+            }
+        }
+
+        // Restore end block
+        try self.func().blocks.append(self.allocator, end_block);
+    }
+
     // ------------------------------------------------------------------------
     // Expression Conversion
     // ------------------------------------------------------------------------
@@ -713,6 +793,7 @@ pub const AstToIr = struct {
             .float_lit => |v| .{ .value = try self.func().emitConstF64(v), .ty = .{ .primitive = .f64 } },
             .identifier => |name| self.convertIdentifier(name),
             .binary => |bin| self.convertBinary(bin),
+            .compare => |cmp| self.convertCompare(cmp),
             .call => |call| self.convertCall(call),
             .struct_init => |sinit| self.convertStructInit(sinit),
             .field_access => |fa| self.convertFieldAccess(fa),
@@ -793,6 +874,50 @@ pub const AstToIr = struct {
             .div => self.func().emitBinaryOp(.div, left, right, .i64),
             .mod => self.func().emitBinaryOp(.mod, left, right, .i64),
         };
+    }
+
+    fn convertCompare(self: *AstToIr, cmp: ast.CompareExpr) ConvertError!TypedValue {
+        const left = try self.convertExpression(cmp.left.*);
+        const right = try self.convertExpression(cmp.right.*);
+
+        const left_prim = left.ty.toPrimitiveType();
+        const right_prim = right.ty.toPrimitiveType();
+
+        // If either operand is float, use float comparison
+        if (left_prim == .f64 or right_prim == .f64) {
+            // Promote int to float if needed
+            const left_val = if (left_prim == .i64)
+                try self.func().emitUnaryOp(.sitofp, left.value, .f64)
+            else
+                left.value;
+            const right_val = if (right_prim == .i64)
+                try self.func().emitUnaryOp(.sitofp, right.value, .f64)
+            else
+                right.value;
+
+            const op: ir.Instruction.Op = switch (cmp.op) {
+                .eq => .fcmp_eq,
+                .ne => .fcmp_ne,
+                .lt => .fcmp_lt,
+                .le => .fcmp_le,
+                .gt => .fcmp_gt,
+                .ge => .fcmp_ge,
+            };
+            const result = try self.func().emitBinaryOp(op, left_val, right_val, .i64);
+            return .{ .value = result, .ty = .{ .primitive = .i64 } };
+        }
+
+        // Integer comparison
+        const op: ir.Instruction.Op = switch (cmp.op) {
+            .eq => .icmp_eq,
+            .ne => .icmp_ne,
+            .lt => .icmp_lt,
+            .le => .icmp_le,
+            .gt => .icmp_gt,
+            .ge => .icmp_ge,
+        };
+        const result = try self.func().emitBinaryOp(op, left.value, right.value, .i64);
+        return .{ .value = result, .ty = .{ .primitive = .i64 } };
     }
 
     fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
