@@ -26,50 +26,50 @@ ExitCode: 111
 ---
 function step1() -> ptr {
 entry:
-    %0 = param ptr 0
-    %1 = getfieldptr ptr %0 0
-    %2 = const.i64 i64 1
-    store %1 %2
-    ret %0
+    %tmp_param = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_const = const.i64 i64 1
+    store %tmp_fieldptr %tmp_const
+    ret %tmp_param
 }
 
 function step2() -> ptr {
 entry:
-    %0 = param ptr 0
-    %1 = param ptr 1
-    %2 = getfieldptr ptr %0 0
-    %3 = getfieldptr ptr %1 0
-    %4 = load i64 %3
-    %5 = const.i64 i64 10
-    %6 = add i64 %4 %5
-    store %2 %6
-    ret %0
+    %tmp_param = param ptr 0
+    %v = param ptr 1
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_fieldptr.1 = getfieldptr ptr %v 0
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %tmp_const = const.i64 i64 10
+    %tmp_add = add i64 %tmp_load %tmp_const
+    store %tmp_fieldptr %tmp_add
+    ret %tmp_param
 }
 
 function step3() -> ptr {
 entry:
-    %0 = param ptr 0
-    %1 = param ptr 1
-    %2 = getfieldptr ptr %0 0
-    %3 = getfieldptr ptr %1 0
-    %4 = load i64 %3
-    %5 = const.i64 i64 100
-    %6 = add i64 %4 %5
-    store %2 %6
-    ret %0
+    %tmp_param = param ptr 0
+    %v = param ptr 1
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_fieldptr.1 = getfieldptr ptr %v 0
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %tmp_const = const.i64 i64 100
+    %tmp_add = add i64 %tmp_load %tmp_const
+    store %tmp_fieldptr %tmp_add
+    ret %tmp_param
 }
 
 function main() -> i64 {
 entry:
-    %0 = alloca.sized ptr 8
-    %1 = call ptr @step1(%0)
-    %2 = alloca.sized ptr 8
-    %3 = call ptr @step2(%2, %0)
-    %4 = alloca.sized ptr 8
-    %5 = call ptr @step3(%4, %2)
-    %6 = getfieldptr ptr %4 0
-    %7 = load i64 %6
-    ret %7
+    %v1 = alloca.sized ptr 8
+    %tmp_call = call ptr @step1(%v1)
+    %v2 = alloca.sized ptr 8
+    %tmp_call.1 = call ptr @step2(%v2, %v1)
+    %v3 = alloca.sized ptr 8
+    %tmp_call.2 = call ptr @step3(%v3, %v2)
+    %tmp_fieldptr = getfieldptr ptr %v3 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
 }
 
 ---

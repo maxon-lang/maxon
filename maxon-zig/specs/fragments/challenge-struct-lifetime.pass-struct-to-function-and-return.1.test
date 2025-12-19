@@ -17,28 +17,28 @@ ExitCode: 11
 ---
 function increment() -> ptr {
 entry:
-    %0 = param ptr 0
-    %1 = param ptr 1
-    %2 = getfieldptr ptr %0 0
-    %3 = getfieldptr ptr %1 0
-    %4 = load i64 %3
-    %5 = const.i64 i64 1
-    %6 = add i64 %4 %5
-    store %2 %6
-    ret %0
+    %tmp_param = param ptr 0
+    %c = param ptr 1
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_fieldptr.1 = getfieldptr ptr %c 0
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %tmp_const = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load %tmp_const
+    store %tmp_fieldptr %tmp_add
+    ret %tmp_param
 }
 
 function main() -> i64 {
 entry:
-    %0 = alloca.sized ptr 8
-    %1 = getfieldptr ptr %0 0
-    %2 = const.i64 i64 10
-    store %1 %2
-    %3 = alloca.sized ptr 8
-    %4 = call ptr @increment(%3, %0)
-    %5 = getfieldptr ptr %3 0
-    %6 = load i64 %5
-    ret %6
+    %c1 = alloca.sized ptr 8
+    %tmp_fieldptr = getfieldptr ptr %c1 0
+    %tmp_const = const.i64 i64 10
+    store %tmp_fieldptr %tmp_const
+    %c2 = alloca.sized ptr 8
+    %tmp_call = call ptr @increment(%c2, %c1)
+    %tmp_fieldptr.1 = getfieldptr ptr %c2 0
+    %tmp_load = load i64 %tmp_fieldptr.1
+    ret %tmp_load
 }
 
 ---

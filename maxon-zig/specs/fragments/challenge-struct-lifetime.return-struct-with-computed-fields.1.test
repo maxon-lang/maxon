@@ -17,30 +17,38 @@ ExitCode: 19
 ---
 function compute() -> ptr {
 entry:
-    %0 = param ptr 0
-    %1 = param i64 1
-    %3 = param i64 2
-    %5 = getfieldptr ptr %0 0
-    %8 = add i64 %1 %3
-    store %5 %8
-    %9 = getfieldptr ptr %0 8
-    %12 = mul i64 %1 %3
-    store %9 %12
-    ret %0
+    %tmp_param = param ptr 0
+    %a = param i64 1
+    %a.1 = alloca ptr
+    store %a.1 %a
+    %b = param i64 2
+    %b.1 = alloca ptr
+    store %b.1 %b
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_load = load i64 %a.1
+    %tmp_load.1 = load i64 %b.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    store %tmp_fieldptr %tmp_add
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
+    %tmp_load.2 = load i64 %a.1
+    %tmp_load.3 = load i64 %b.1
+    %tmp_mul = mul i64 %tmp_load.2 %tmp_load.3
+    store %tmp_fieldptr.1 %tmp_mul
+    ret %tmp_param
 }
 
 function main() -> i64 {
 entry:
-    %0 = alloca.sized ptr 16
-    %1 = const.i64 i64 3
-    %2 = const.i64 i64 4
-    %3 = call ptr @compute(%0, %1, %2)
-    %4 = getfieldptr ptr %0 0
-    %5 = load i64 %4
-    %6 = getfieldptr ptr %0 8
-    %7 = load i64 %6
-    %8 = add i64 %5 %7
-    ret %8
+    %r = alloca.sized ptr 16
+    %tmp_const = const.i64 i64 3
+    %tmp_const.1 = const.i64 i64 4
+    %tmp_call = call ptr @compute(%r, %tmp_const, %tmp_const.1)
+    %tmp_fieldptr = getfieldptr ptr %r 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_fieldptr.1 = getfieldptr ptr %r 8
+    %tmp_load.1 = load i64 %tmp_fieldptr.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    ret %tmp_add
 }
 
 ---

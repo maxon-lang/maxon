@@ -20,29 +20,33 @@ ExitCode: 200
 ---
 function consume() -> i64 {
 entry:
-    %0 = param ptr 0
-    %1 = getfieldptr ptr %0 0
-    %2 = const.i64 i64 100
-    store %1 %2
-    %3 = getfieldptr ptr %0 0
-    %4 = load i64 %3
-    ret %4
+    %d = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %d 0
+    %tmp_const = const.i64 i64 100
+    store %tmp_fieldptr %tmp_const
+    ret %tmp_const
 }
 
 function main() -> i64 {
 entry:
-    %0 = alloca.sized ptr 8
-    %1 = getfieldptr ptr %0 0
-    %2 = const.i64 i64 10
-    store %1 %2
-    %3 = call i64 @consume(%0)
-    %5 = alloca.sized ptr 8
-    %6 = getfieldptr ptr %5 0
-    %7 = const.i64 i64 20
-    store %6 %7
-    %8 = call i64 @consume(%5)
-    %12 = add i64 %3 %8
-    ret %12
+    %d = alloca.sized ptr 8
+    %tmp_fieldptr = getfieldptr ptr %d 0
+    %tmp_const = const.i64 i64 10
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call i64 @consume(%d)
+    %first = alloca ptr
+    store %first %tmp_call
+    %tmp_alloca.2 = alloca.sized ptr 8
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 0
+    %tmp_const.1 = const.i64 i64 20
+    store %tmp_fieldptr.1 %tmp_const.1
+    %tmp_call.1 = call i64 @consume(%tmp_alloca.2)
+    %second = alloca ptr
+    store %second %tmp_call.1
+    %tmp_load = load i64 %first
+    %tmp_load.1 = load i64 %second
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    ret %tmp_add
 }
 
 ---

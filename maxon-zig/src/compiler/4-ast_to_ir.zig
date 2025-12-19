@@ -451,6 +451,7 @@ pub const AstToIr = struct {
         switch (value_type) {
             .struct_type => |struct_name| {
                 const param_val = try self.func().emitParam(idx, .ptr);
+                try self.func().setValueName(param_val, param.name);
                 try self.var_map.put(self.allocator, param.name, VarInfo.init(
                     param_val,
                     .{ .struct_type = struct_name },
@@ -460,6 +461,7 @@ pub const AstToIr = struct {
             .array_type => |arr_info| {
                 // Array parameters are passed as pointers
                 const param_val = try self.func().emitParam(idx, .ptr);
+                try self.func().setValueName(param_val, param.name);
                 try self.var_map.put(self.allocator, param.name, VarInfo.init(
                     param_val,
                     .{ .array_type = arr_info },
@@ -468,7 +470,9 @@ pub const AstToIr = struct {
             },
             .primitive => |prim_type| {
                 const param_val = try self.func().emitParam(idx, prim_type);
+                try self.func().setValueName(param_val, param.name);
                 const ptr = try self.func().emitAlloca(prim_type);
+                try self.func().setValueName(ptr, param.name);
                 try self.func().emitStore(ptr, param_val);
                 try self.var_map.put(self.allocator, param.name, VarInfo.init(
                     ptr,
@@ -515,6 +519,7 @@ pub const AstToIr = struct {
 
         switch (init_typed.ty) {
             .struct_type, .array_type => {
+                try self.func().setValueName(init_typed.value, decl.name);
                 try self.var_map.put(self.allocator, decl.name, VarInfo.init(
                     init_typed.value,
                     init_typed.ty,
@@ -523,6 +528,7 @@ pub const AstToIr = struct {
             },
             .primitive => |prim_ty| {
                 const ptr = try self.func().emitAlloca(prim_ty);
+                try self.func().setValueName(ptr, decl.name);
                 try self.func().emitStore(ptr, init_typed.value);
                 try self.var_map.put(self.allocator, decl.name, VarInfo.init(
                     ptr,

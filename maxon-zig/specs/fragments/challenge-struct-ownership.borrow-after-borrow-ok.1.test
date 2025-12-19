@@ -19,24 +19,33 @@ ExitCode: 30
 ---
 function readOnly() -> i64 {
 entry:
-    %0 = param ptr 0
-    %1 = getfieldptr ptr %0 0
-    %2 = load i64 %1
-    ret %2
+    %d = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %d 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
 }
 
 function main() -> i64 {
 entry:
-    %0 = alloca.sized ptr 8
-    %1 = getfieldptr ptr %0 0
-    %2 = const.i64 i64 10
-    store %1 %2
-    %3 = call i64 @readOnly(%0)
-    %5 = call i64 @readOnly(%0)
-    %7 = call i64 @readOnly(%0)
-    %11 = add i64 %3 %5
-    %13 = add i64 %11 %7
-    ret %13
+    %d = alloca.sized ptr 8
+    %tmp_fieldptr = getfieldptr ptr %d 0
+    %tmp_const = const.i64 i64 10
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call i64 @readOnly(%d)
+    %a = alloca ptr
+    store %a %tmp_call
+    %tmp_call.1 = call i64 @readOnly(%d)
+    %b = alloca ptr
+    store %b %tmp_call.1
+    %tmp_call.2 = call i64 @readOnly(%d)
+    %c = alloca ptr
+    store %c %tmp_call.2
+    %tmp_load = load i64 %a
+    %tmp_load.1 = load i64 %b
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    %tmp_load.2 = load i64 %c
+    %tmp_add.1 = add i64 %tmp_add %tmp_load.2
+    ret %tmp_add.1
 }
 
 ---

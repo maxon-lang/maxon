@@ -13,25 +13,28 @@ ExitCode: 42
 ---
 function make_array() -> i64 {
 entry:
-    %0 = param i64 0
-    %3 = const.i64 i64 8
-    %4 = mul i64 %0 %3
-    %5 = heap.alloc ptr %4
-    %6 = const.i64 i64 0
-    %7 = const.i64 i64 42
-    %8 = getelemptr ptr %5 %6
-    store %8 %7
-    %9 = const.i64 i64 0
-    %10 = getelemptr ptr %5 %9
-    %11 = load i64 %10
-    ret %11
+    %size = param i64 0
+    %size.1 = alloca ptr
+    store %size.1 %size
+    %tmp_load = load i64 %size.1
+    %tmp_const = const.i64 i64 8
+    %tmp_mul = mul i64 %tmp_load %tmp_const
+    %arr = heap.alloc ptr %tmp_mul
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_const.2 = const.i64 i64 42
+    %8 = getelemptr ptr %arr %tmp_const.1
+    store %8 %tmp_const.2
+    %tmp_const.3 = const.i64 i64 0
+    %10 = getelemptr ptr %arr %tmp_const.3
+    %tmp_load.1 = load i64 %10
+    ret %tmp_load.1
 }
 
 function main() -> i64 {
 entry:
-    %0 = const.i64 i64 5
-    %1 = call i64 @make_array(%0)
-    ret %1
+    %tmp_const = const.i64 i64 5
+    %tmp_call = call i64 @make_array(%tmp_const)
+    ret %tmp_call
 }
 
 ---
