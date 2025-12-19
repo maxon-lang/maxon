@@ -629,7 +629,7 @@ pub const AstToIr = struct {
 
             // Convert float to int if needed
             if (self.func().return_type == .i64 and typed_val.ty.toPrimitiveType() == .f64) {
-                const converted = try self.func().emitFpToSi(typed_val.value);
+                const converted = try self.func().emitUnaryOp(.fptosi, typed_val.value, .i64);
                 try self.func().emitRet(converted);
             } else {
                 try self.func().emitRet(typed_val.value);
@@ -759,11 +759,11 @@ pub const AstToIr = struct {
 
         // Promote operands if needed
         const left_val = if (result_ty == .f64 and left_prim == .i64)
-            try self.func().emitSiToFp(left.value)
+            try self.func().emitUnaryOp(.sitofp, left.value, .f64)
         else
             left.value;
         const right_val = if (result_ty == .f64 and right_prim == .i64)
-            try self.func().emitSiToFp(right.value)
+            try self.func().emitUnaryOp(.sitofp, right.value, .f64)
         else
             right.value;
 
@@ -777,21 +777,21 @@ pub const AstToIr = struct {
 
     fn emitFloatOp(self: *AstToIr, op: ast.BinaryOp, left: ir.Value, right: ir.Value) ConvertError!ir.Value {
         return switch (op) {
-            .add => self.func().emitFAdd(left, right),
-            .sub => self.func().emitFSub(left, right),
-            .mul => self.func().emitFMul(left, right),
-            .div => self.func().emitFDiv(left, right),
+            .add => self.func().emitBinaryOp(.fadd, left, right, .f64),
+            .sub => self.func().emitBinaryOp(.fsub, left, right, .f64),
+            .mul => self.func().emitBinaryOp(.fmul, left, right, .f64),
+            .div => self.func().emitBinaryOp(.fdiv, left, right, .f64),
             .mod => error.FloatModNotSupported,
         };
     }
 
     fn emitIntOp(self: *AstToIr, op: ast.BinaryOp, left: ir.Value, right: ir.Value) ConvertError!ir.Value {
         return switch (op) {
-            .add => self.func().emitAdd(left, right, .i64),
-            .sub => self.func().emitSub(left, right, .i64),
-            .mul => self.func().emitMul(left, right, .i64),
-            .div => self.func().emitDiv(left, right, .i64),
-            .mod => self.func().emitMod(left, right, .i64),
+            .add => self.func().emitBinaryOp(.add, left, right, .i64),
+            .sub => self.func().emitBinaryOp(.sub, left, right, .i64),
+            .mul => self.func().emitBinaryOp(.mul, left, right, .i64),
+            .div => self.func().emitBinaryOp(.div, left, right, .i64),
+            .mod => self.func().emitBinaryOp(.mod, left, right, .i64),
         };
     }
 
@@ -950,18 +950,16 @@ pub const AstToIr = struct {
     // Built-in Functions
     // ------------------------------------------------------------------------
 
-    const EmitFn = *const fn (*ir.Function, ir.Value) anyerror!ir.Value;
-
     const Builtin = struct {
         name: []const u8,
-        emit: EmitFn,
+        op: ir.Instruction.Op,
         arg_type: ir.Type,
         ret_type: ir.Type,
     };
 
     const builtins = [_]Builtin{
-        .{ .name = "trunc", .emit = ir.Function.emitFpToSi, .arg_type = .f64, .ret_type = .i64 },
-        .{ .name = "abs", .emit = ir.Function.emitFabs, .arg_type = .f64, .ret_type = .f64 },
+        .{ .name = "trunc", .op = .fptosi, .arg_type = .f64, .ret_type = .i64 },
+        .{ .name = "abs", .op = .fabs, .arg_type = .f64, .ret_type = .f64 },
     };
 
     fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -980,7 +978,7 @@ pub const AstToIr = struct {
             return error.TypeMismatch;
         }
 
-        const result = builtin.emit(self.func(), arg.value) catch return error.OutOfMemory;
+        const result = self.func().emitUnaryOp(builtin.op, arg.value, builtin.ret_type) catch return error.OutOfMemory;
 
         return .{ .value = result, .ty = .{ .primitive = builtin.ret_type } };
     }
@@ -1079,7 +1077,7 @@ pub const AstToIr = struct {
 
         // Calculate total size: size * 8 (all elements are 8 bytes)
         const eight = try self.func().emitConstI64(8);
-        const total_size = try self.func().emitMul(size_typed.value, eight, .i64);
+        const total_size = try self.func().emitBinaryOp(.mul, size_typed.value, eight, .i64);
 
         // Heap allocation for variable-sized arrays
         const arr_ptr = try self.func().emitHeapAlloc(total_size);

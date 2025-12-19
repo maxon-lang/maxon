@@ -303,11 +303,11 @@ pub const Function = struct {
         return result;
     }
 
-    fn emitBinaryOp(self: *Function, op: Instruction.Op, lhs: Value, rhs: Value, ty: Type) !Value {
+    pub fn emitBinaryOp(self: *Function, op: Instruction.Op, lhs: Value, rhs: Value, ty: Type) !Value {
         return self.emitWithResult(op, ty, .{ .{ .value = lhs }, .{ .value = rhs } });
     }
 
-    fn emitUnaryOp(self: *Function, op: Instruction.Op, src: Value, ty: Type) !Value {
+    pub fn emitUnaryOp(self: *Function, op: Instruction.Op, src: Value, ty: Type) !Value {
         return self.emitWithResult(op, ty, .{ .{ .value = src }, .none });
     }
 
@@ -348,7 +348,6 @@ pub const Function = struct {
 
     pub fn emitGetElemPtr(self: *Function, base_ptr: Value, index: Value, elem_size: i32) !Value {
         const result = self.newValue();
-        // We use a GetElemPtrInfo struct to store all needed data
         // The codegen will need to track element sizes separately
         // For simplicity, assume all elements are 8 bytes (i64/f64/ptr)
         _ = elem_size;
@@ -364,57 +363,6 @@ pub const Function = struct {
     // Control flow
     pub fn emitRet(self: *Function, value: ?Value) !void {
         try self.emit(.{ .op = .ret, .operands = .{ if (value) |v| .{ .value = v } else .none, .none } });
-    }
-
-    // Integer arithmetic
-    pub fn emitAdd(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
-        return self.emitBinaryOp(.add, lhs, rhs, ty);
-    }
-
-    pub fn emitSub(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
-        return self.emitBinaryOp(.sub, lhs, rhs, ty);
-    }
-
-    pub fn emitMul(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
-        return self.emitBinaryOp(.mul, lhs, rhs, ty);
-    }
-
-    pub fn emitDiv(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
-        return self.emitBinaryOp(.div, lhs, rhs, ty);
-    }
-
-    pub fn emitMod(self: *Function, lhs: Value, rhs: Value, ty: Type) !Value {
-        return self.emitBinaryOp(.mod, lhs, rhs, ty);
-    }
-
-    // Float arithmetic
-    pub fn emitFAdd(self: *Function, lhs: Value, rhs: Value) !Value {
-        return self.emitBinaryOp(.fadd, lhs, rhs, .f64);
-    }
-
-    pub fn emitFSub(self: *Function, lhs: Value, rhs: Value) !Value {
-        return self.emitBinaryOp(.fsub, lhs, rhs, .f64);
-    }
-
-    pub fn emitFMul(self: *Function, lhs: Value, rhs: Value) !Value {
-        return self.emitBinaryOp(.fmul, lhs, rhs, .f64);
-    }
-
-    pub fn emitFDiv(self: *Function, lhs: Value, rhs: Value) !Value {
-        return self.emitBinaryOp(.fdiv, lhs, rhs, .f64);
-    }
-
-    // Conversions
-    pub fn emitFpToSi(self: *Function, value: Value) !Value {
-        return self.emitUnaryOp(.fptosi, value, .i64);
-    }
-
-    pub fn emitSiToFp(self: *Function, value: Value) !Value {
-        return self.emitUnaryOp(.sitofp, value, .f64);
-    }
-
-    pub fn emitFabs(self: *Function, value: Value) !Value {
-        return self.emitUnaryOp(.fabs, value, .f64);
     }
 
     // Function calls
