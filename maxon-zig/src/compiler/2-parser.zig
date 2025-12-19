@@ -144,11 +144,11 @@ pub const Parser = struct {
             _ = self.advance(); // consume let/var
 
             const field_name = try self.expect(.identifier);
-            const field_type = try self.expectTypeName();
+            const field_type = try self.parseTypeExpr();
 
             try fields.append(self.allocator, .{
                 .name = field_name.text,
-                .type_name = field_type,
+                .type_expr = field_type,
                 .is_mutable = is_mutable,
             });
 

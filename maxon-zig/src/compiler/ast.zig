@@ -18,7 +18,7 @@ pub const TypeDecl = struct {
 
 pub const FieldDecl = struct {
     name: []const u8,
-    type_name: []const u8,
+    type_expr: TypeExpr,
     is_mutable: bool,
 };
 

@@ -310,15 +310,30 @@ pub const AstToIr = struct {
         var offset: i32 = 0;
 
         for (type_decl.fields, 0..) |field, i| {
-            const field_type_info = self.type_map.get(field.type_name) orelse return error.UnknownType;
-            const value_type: ValueType = switch (field_type_info) {
-                .struct_type => .{ .struct_type = field.type_name },
-                .primitive => |p| .{ .primitive = p },
-                .enum_type => .{ .enum_type = field.type_name },
+            const value_type: ValueType = switch (field.type_expr) {
+                .simple => |type_name| blk: {
+                    const field_type_info = self.type_map.get(type_name) orelse return error.UnknownType;
+                    break :blk switch (field_type_info) {
+                        .struct_type => .{ .struct_type = type_name },
+                        .primitive => |p| .{ .primitive = p },
+                        .enum_type => .{ .enum_type = type_name },
+                    };
+                },
+                .array => |arr| .{ .array_type = .{
+                    .element_type = try self.lookupIrType(arr.element_type),
+                    .size = if (arr.size) |s| @intCast(s) else null,
+                    .storage = .stack,
+                } },
             };
-            const field_size: i32 = switch (field_type_info) {
-                .struct_type => |s| s.size,
-                .primitive, .enum_type => 8,
+            const field_size: i32 = switch (value_type) {
+                .struct_type => |name| blk: {
+                    const info = self.type_map.get(name) orelse return error.UnknownType;
+                    break :blk switch (info) {
+                        .struct_type => |s| s.size,
+                        else => 8,
+                    };
+                },
+                .primitive, .enum_type, .array_type => 8, // arrays stored as pointers
             };
             fields[i] = .{
                 .name = field.name,
@@ -793,12 +808,40 @@ pub const AstToIr = struct {
             const field_ptr = try self.func().emitGetFieldPtr(dest_ptr, field_info.offset);
             const field_val = try self.convertExpression(field_init.value.*);
 
+            // Track ownership transfer for array/struct fields
+            try self.trackFieldOwnershipTransfer(field_init.value.*, sinit.type_name);
+
             if (field_info.isStruct()) {
                 // Struct fields are embedded inline - copy the data
                 try self.func().emitMemcpy(field_ptr, field_val.value, field_info.size);
             } else {
                 try self.func().emitStore(field_ptr, field_val.value);
             }
+        }
+    }
+
+    /// Track ownership when a variable is moved into a struct field
+    fn trackFieldOwnershipTransfer(self: *AstToIr, expr: ast.Expression, target_type: []const u8) ConvertError!void {
+        // Only track identifier expressions (variable references)
+        if (expr != .identifier) return;
+
+        const var_name = expr.identifier;
+        const var_info = self.var_map.getPtr(var_name) orelse return;
+
+        // Check if this is an array or struct - these types are moved, not copied
+        switch (var_info.ty) {
+            .array_type, .struct_type => {
+                // Must be mutable to be moved
+                if (!var_info.is_mutable) {
+                    debug.astToIr("cannot move immutable variable '{s}' into struct\n", .{var_name});
+                    self.reportError(.E010, "cannot move immutable variable");
+                    return error.ImmutableMove;
+                }
+                var_info.markMoved(target_type, self.current_line);
+            },
+            .primitive, .enum_type => {
+                // Primitives are copied, not moved
+            },
         }
     }
 
@@ -839,7 +882,15 @@ pub const AstToIr = struct {
                 .value = try self.func().emitLoad(field_ptr, prim),
                 .ty = .{ .primitive = prim },
             },
-            .array_type, .enum_type => unreachable,
+            .array_type => |arr| .{
+                // Array field stores a pointer - load it
+                .value = try self.func().emitLoad(field_ptr, .ptr),
+                .ty = .{ .array_type = arr },
+            },
+            .enum_type => |name| .{
+                .value = try self.func().emitLoad(field_ptr, .i64),
+                .ty = .{ .enum_type = name },
+            },
         };
     }
 
