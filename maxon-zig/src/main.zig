@@ -1,5 +1,5 @@
 const std = @import("std");
-const compiler = @import("compiler/compiler.zig");
+const compiler = @import("compiler/0-compiler.zig");
 const test_runner = @import("testing/test_runner.zig");
 const testing = @import("testing/testing.zig");
 

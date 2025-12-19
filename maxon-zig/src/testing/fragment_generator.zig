@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = @import("testing.zig");
 const spec_parser = @import("spec_parser.zig");
-const compiler = @import("../compiler/compiler.zig");
+const compiler = @import("../compiler/0-compiler.zig");
 
 /// Check if fragments need regeneration based on file modification times
 pub fn needsRegeneration(specs_dir: []const u8, fragments_dir: []const u8) bool {

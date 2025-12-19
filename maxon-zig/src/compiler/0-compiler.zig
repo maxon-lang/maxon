@@ -1,12 +1,13 @@
 const std = @import("std");
-const Lexer = @import("lexer.zig").Lexer;
-const Parser = @import("parser.zig").Parser;
+const Lexer = @import("1-lexer.zig").Lexer;
+const Parser = @import("2-parser.zig").Parser;
 const ast = @import("ast.zig");
-const ast_to_ir = @import("ast_to_ir.zig");
-const mutation_analysis = @import("mutation_analysis.zig");
-const optimizer = @import("optimizer.zig");
+const ast_to_ir = @import("4-ast_to_ir.zig");
+const ir = @import("ir.zig");
+const mutation_analysis = @import("3-mutation_analysis.zig");
+const optimizer = @import("5-optimizer.zig");
 const ir_codegen = @import("ir_codegen.zig");
-const pe = @import("pe.zig");
+const pe = @import("7-pe.zig");
 pub const debug = @import("debug.zig");
 pub const compile_error = @import("error.zig");
 
@@ -23,60 +24,78 @@ pub const CompileResult = struct {
     error_info: ?compile_error.CompileError,
 };
 
-/// Compile source and return the IR as a string (for fragment generation)
-pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8 {
-    // Lex
+/// Options for the compilation pipeline
+const PipelineOptions = struct {
+    source_file: ?[]const u8 = null,
+    result: ?*CompileResult = null,
+};
+
+/// Intermediate result from frontend compilation (lexing, parsing, analysis, IR generation)
+const FrontendResult = struct {
+    ir_module: ir.Module,
+    allocator: std.mem.Allocator,
+
+    fn deinit(self: *FrontendResult) void {
+        self.ir_module.deinit();
+    }
+};
+
+/// Run the frontend pipeline: lex -> parse -> analyze -> IR -> optimize
+fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: PipelineOptions) !FrontendResult {
+    // 1 - Lex
     var lexer = Lexer.init(source);
     const tokens = lexer.tokenize(allocator) catch {
         return error.LexerError;
     };
     defer allocator.free(tokens);
 
-    // Parse
-    var parser = Parser.init(tokens, allocator);
+    // 2 - Parse
+    var parser = if (options.source_file) |sf|
+        Parser.initWithFile(tokens, allocator, sf)
+    else
+        Parser.init(tokens, allocator);
     defer parser.deinit();
+
     const program = parser.parse() catch {
+        if (options.result) |result| {
+            result.error_info = parser.last_error;
+        }
         return error.ParserError;
     };
-    defer {
-        for (program.types) |type_decl| {
-            allocator.free(type_decl.fields);
-        }
-        allocator.free(program.types);
-        for (program.enums) |enum_decl| {
-            allocator.free(enum_decl.members);
-        }
-        allocator.free(program.enums);
-        for (program.functions) |func| {
-            for (func.body) |stmt| {
-                freeStatementArgs(stmt, allocator);
-            }
-            allocator.free(func.body);
-            allocator.free(func.params);
-        }
-        allocator.free(program.functions);
-    }
+    defer freeProgram(program, allocator);
 
-    // Run mutation analysis for ownership tracking
+    // 3 - Mutation analysis
     var mutation_analyzer = mutation_analysis.MutationAnalyzer.init(allocator);
     defer mutation_analyzer.deinit();
     mutation_analyzer.analyze(program) catch {
         return error.IrError;
     };
 
-    // Convert AST to IR with ownership checking
-    var ir_module = ast_to_ir.convert(program, allocator, &mutation_analyzer) catch {
+    // 4 - AST to IR
+    var ir_error: ?compile_error.CompileError = null;
+    var ir_module = ast_to_ir.convertWithFile(program, allocator, &mutation_analyzer, options.source_file, &ir_error) catch |e| {
+        debug.astToIr("AST to IR error: {}\n", .{e});
+        if (options.result) |result| {
+            result.error_info = ir_error;
+        }
         return error.IrError;
     };
-    defer ir_module.deinit();
 
-    // Optimize IR
+    // 5 - Optimize
     optimizer.optimize(&ir_module, allocator) catch {
+        ir_module.deinit();
         return error.IrError;
     };
 
-    // Return IR as string
-    return ir_module.printToString(allocator) catch {
+    return .{ .ir_module = ir_module, .allocator = allocator };
+}
+
+/// Compile source and return the IR as a string (for fragment generation)
+pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8 {
+    var frontend = try runFrontend(source, allocator, .{});
+    defer frontend.deinit();
+
+    return frontend.ir_module.printToString(allocator) catch {
         return error.WriteError;
     };
 }
@@ -91,69 +110,32 @@ pub fn compileWithFile(source: []const u8, output_path: []const u8, source_file:
 }
 
 fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]const u8, allocator: std.mem.Allocator, result: *CompileResult) !void {
-    // Lex
-    var lexer = Lexer.init(source);
-    const tokens = lexer.tokenize(allocator) catch {
-        return error.LexerError;
-    };
-    defer allocator.free(tokens);
-
-    // Parse
-    var parser = if (source_file) |sf|
-        Parser.initWithFile(tokens, allocator, sf)
-    else
-        Parser.init(tokens, allocator);
-    defer parser.deinit();
-    const program = parser.parse() catch {
-        result.error_info = parser.last_error;
-        return error.ParserError;
-    };
-    defer {
-        // Free type declarations
-        for (program.types) |type_decl| {
-            allocator.free(type_decl.fields);
-        }
-        allocator.free(program.types);
-
-        // Free enum declarations
-        for (program.enums) |enum_decl| {
-            allocator.free(enum_decl.members);
-        }
-        allocator.free(program.enums);
-
-        // Free functions
-        for (program.functions) |func| {
-            for (func.body) |stmt| {
-                freeStatementArgs(stmt, allocator);
-            }
-            allocator.free(func.body);
-            allocator.free(func.params);
-        }
-        allocator.free(program.functions);
-    }
-
-    // Run mutation analysis for ownership tracking
-    var mutation_analyzer = mutation_analysis.MutationAnalyzer.init(allocator);
-    defer mutation_analyzer.deinit();
-    mutation_analyzer.analyze(program) catch {
-        return error.IrError;
-    };
-
-    // Convert AST to IR with ownership checking
-    var ir_error: ?compile_error.CompileError = null;
-    var ir_module = ast_to_ir.convertWithFile(program, allocator, &mutation_analyzer, source_file, &ir_error) catch |e| {
-        debug.astToIr("AST to IR error: {}\n", .{e});
-        result.error_info = ir_error;
-        return error.IrError;
-    };
-    defer ir_module.deinit();
-
-    // Optimize IR
-    optimizer.optimize(&ir_module, allocator) catch {
-        return error.IrError;
-    };
+    // Run frontend pipeline
+    var frontend = try runFrontend(source, allocator, .{
+        .source_file = source_file,
+        .result = result,
+    });
+    defer frontend.deinit();
 
     // Emit IR to file
+    try writeIrFile(frontend.ir_module, output_path, allocator);
+
+    // 6 -Generate x86-64 code
+    debug.log("Generating x86-64 code from IR", .{});
+    const codegen_result = ir_codegen.generate(frontend.ir_module, allocator) catch |err| {
+        debug.log("IR codegen error: {}", .{err});
+        return error.CodegenError;
+    };
+    defer allocator.free(codegen_result.code);
+    defer allocator.free(codegen_result.external_patches);
+
+    // 7 - Write PE executable
+    pe.writePE(output_path, codegen_result.code, codegen_result.external_patches) catch {
+        return error.WriteError;
+    };
+}
+
+fn writeIrFile(ir_module: ir.Module, output_path: []const u8, allocator: std.mem.Allocator) !void {
     const ir_path = blk: {
         if (std.mem.endsWith(u8, output_path, ".exe")) {
             const base = output_path[0 .. output_path.len - 4];
@@ -180,23 +162,33 @@ fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]
     ir_file.writeAll(ir_text) catch {
         return error.WriteError;
     };
-
-    // Generate code from IR
-    debug.log("Generating x86-64 code from IR", .{});
-    const codegen_result = ir_codegen.generate(ir_module, allocator) catch |err| {
-        debug.log("IR codegen error: {}", .{err});
-        return error.CodegenError;
-    };
-    defer allocator.free(codegen_result.code);
-    defer allocator.free(codegen_result.external_patches);
-
-    // Write PE executable
-    pe.writePE(output_path, codegen_result.code, codegen_result.external_patches) catch {
-        return error.WriteError;
-    };
 }
 
-/// Free call argument slices in an AST statement
+// ============================================================================
+// AST Memory Management
+// ============================================================================
+
+fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
+    for (program.types) |type_decl| {
+        allocator.free(type_decl.fields);
+    }
+    allocator.free(program.types);
+
+    for (program.enums) |enum_decl| {
+        allocator.free(enum_decl.members);
+    }
+    allocator.free(program.enums);
+
+    for (program.functions) |func| {
+        for (func.body) |stmt| {
+            freeStatementArgs(stmt, allocator);
+        }
+        allocator.free(func.body);
+        allocator.free(func.params);
+    }
+    allocator.free(program.functions);
+}
+
 fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
     switch (stmt) {
         .let_decl, .var_decl => |decl| {
@@ -228,7 +220,6 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
     }
 }
 
-/// Free dynamically allocated slices in an AST expression
 fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
     switch (expr) {
         .call => |call| {

@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ir = @import("ir.zig");
 const debug = @import("debug.zig");
-const mutation_analysis = @import("mutation_analysis.zig");
+const mutation_analysis = @import("3-mutation_analysis.zig");
 const err = @import("error.zig");
 
 // ============================================================================
