@@ -14,6 +14,7 @@ const IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE: u16 = 0x8000;
 const IMAGE_SCN_CNT_CODE: u32 = 0x00000020;
 const IMAGE_SCN_MEM_EXECUTE: u32 = 0x20000000;
 const IMAGE_SCN_MEM_READ: u32 = 0x40000000;
+const IMAGE_SCN_MEM_WRITE: u32 = 0x80000000;
 const IMAGE_SCN_CNT_INITIALIZED_DATA: u32 = 0x00000040;
 
 const SECTION_ALIGNMENT: u32 = 0x1000;
@@ -262,7 +263,7 @@ pub fn writePE(path: []const u8, code: []const u8, external_patches: []const ir_
     writeU32(&buf, &pos, 0);
     writeU16(&buf, &pos, 0);
     writeU16(&buf, &pos, 0);
-    writeU32(&buf, &pos, IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ);
+    writeU32(&buf, &pos, IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE);
 
     writeBytes(&buf, &pos, ".idata\x00\x00");
     writeU32(&buf, &pos, idata_virtual_size);

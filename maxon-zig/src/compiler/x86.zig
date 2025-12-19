@@ -117,6 +117,11 @@ pub const Encoder = struct {
         try self.emit(&.{ 0x48, 0x89, 0xC1 });
     }
 
+    pub fn movRcxImm32(self: *Encoder, imm: i32) !void {
+        try self.emit(&.{ 0x48, 0xC7, 0xC1 }); // mov rcx, imm32 (sign-extended)
+        try self.emitI32(imm);
+    }
+
     pub fn movRdxRax(self: *Encoder) !void {
         try self.emit(&.{ 0x48, 0x89, 0xC2 });
     }

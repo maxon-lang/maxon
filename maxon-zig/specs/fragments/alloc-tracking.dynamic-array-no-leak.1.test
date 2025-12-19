@@ -1,0 +1,41 @@
+// Test: alloc-tracking.dynamic-array-no-leak.1
+function main() returns int
+    let size = 10
+    var arr = array of size int
+    arr[0] = 42
+    return arr[0]
+end 'main'
+---
+ExitCode: 42
+TrackAllocs: true
+Stdout: ```
+ALLOC #1: 80 bytes
+FREE #1: 80 bytes
+
+=== ALLOC STATS ===
+Allocated: 80 bytes
+Freed:     80 bytes
+Leaked:    0 bytes
+```
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 10
+    %size = alloca ptr
+    store %size %tmp_const
+    %tmp_load = load i64 %size
+    %tmp_const.1 = const.i64 i64 8
+    %tmp_mul = mul i64 %tmp_load %tmp_const.1
+    %arr = heap.alloc ptr %tmp_mul
+    %tmp_const.2 = const.i64 i64 0
+    %tmp_const.3 = const.i64 i64 42
+    %8 = getelemptr ptr %arr %tmp_const.2
+    store %8 %tmp_const.3
+    %tmp_const.4 = const.i64 i64 0
+    %10 = getelemptr ptr %arr %tmp_const.4
+    %tmp_load.1 = load i64 %10
+    heap.free %arr
+    ret %tmp_load.1
+}
+
+---

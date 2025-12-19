@@ -56,6 +56,7 @@ pub const TestExpectation = union(enum) {
 pub const SuccessExpectation = struct {
     exit_code: u8,
     stdout: ?[]const u8, // Optional expected stdout
+    track_allocs: bool = false, // Enable allocation tracking
 };
 
 /// Result of running a test

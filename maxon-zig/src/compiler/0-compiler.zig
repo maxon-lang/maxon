@@ -24,10 +24,16 @@ pub const CompileResult = struct {
     error_info: ?compile_error.CompileError,
 };
 
+/// Public compile options exposed to CLI
+pub const CompileOptions = struct {
+    track_allocs: bool = false,
+};
+
 /// Options for the compilation pipeline
 const PipelineOptions = struct {
     source_file: ?[]const u8 = null,
     result: ?*CompileResult = null,
+    track_allocs: bool = false,
 };
 
 /// Intermediate result from frontend compilation (lexing, parsing, analysis, IR generation)
@@ -102,14 +108,18 @@ pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8
 
 pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.Allocator) !void {
     var result: CompileResult = .{ .error_info = null };
-    return compileWithInfo(source, output_path, null, allocator, &result);
+    return compileWithInfo(source, output_path, null, .{}, allocator, &result);
 }
 
 pub fn compileWithFile(source: []const u8, output_path: []const u8, source_file: []const u8, allocator: std.mem.Allocator, result: *CompileResult) !void {
-    return compileWithInfo(source, output_path, source_file, allocator, result);
+    return compileWithInfo(source, output_path, source_file, .{}, allocator, result);
 }
 
-fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]const u8, allocator: std.mem.Allocator, result: *CompileResult) !void {
+pub fn compileWithOptions(source: []const u8, output_path: []const u8, source_file: []const u8, options: CompileOptions, allocator: std.mem.Allocator, result: *CompileResult) !void {
+    return compileWithInfo(source, output_path, source_file, .{ .track_allocs = options.track_allocs }, allocator, result);
+}
+
+fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]const u8, pipeline_opts: PipelineOptions, allocator: std.mem.Allocator, result: *CompileResult) !void {
     // Run frontend pipeline
     var frontend = try runFrontend(source, allocator, .{
         .source_file = source_file,
@@ -120,9 +130,11 @@ fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]
     // Emit IR to file
     try writeIrFile(frontend.ir_module, output_path, allocator);
 
-    // 6 -Generate x86-64 code
+    // 6 - Generate x86-64 code
     debug.log("Generating x86-64 code from IR", .{});
-    const codegen_result = ir_codegen.generate(frontend.ir_module, allocator) catch |err| {
+    const codegen_result = ir_codegen.generate(frontend.ir_module, allocator, .{
+        .track_allocs = pipeline_opts.track_allocs,
+    }) catch |err| {
         debug.log("IR codegen error: {}", .{err});
         return error.CodegenError;
     };

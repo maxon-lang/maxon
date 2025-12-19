@@ -125,6 +125,20 @@ fn extractTestsFromSection(
 
         pos = marker_end + 3;
 
+        // Check for optional TrackAllocs marker before the code block
+        var track_allocs = false;
+        if (std.mem.indexOfPos(u8, section, pos, "<!-- TrackAllocs:")) |track_start| {
+            // Only if it's before the code block
+            if (std.mem.indexOfPos(u8, section, pos, "```maxon")) |code_start| {
+                if (track_start < code_start) {
+                    if (std.mem.indexOfPos(u8, section, track_start, "-->")) |track_end| {
+                        const track_content = section[track_start + 17 .. track_end];
+                        track_allocs = std.mem.indexOf(u8, track_content, "true") != null;
+                    }
+                }
+            }
+        }
+
         // Find the ```maxon block
         const code_block = try findCodeBlock(section, pos, "maxon") orelse {
             allocator.free(full_name);
@@ -143,10 +157,19 @@ fn extractTestsFromSection(
         };
         pos = expected.end_pos;
 
+        // Apply track_allocs to success expectations
+        var final_expectation = expected.expectation;
+        if (track_allocs) {
+            switch (final_expectation) {
+                .success => |*s| s.track_allocs = true,
+                .compiler_error => {},
+            }
+        }
+
         try test_cases.append(allocator, testing.TestCase{
             .name = full_name,
             .source = source,
-            .expected = expected.expectation,
+            .expected = final_expectation,
         });
     }
 }

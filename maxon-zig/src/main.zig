@@ -37,6 +37,7 @@ fn printUsage() void {
     std.debug.print("\nCompile Options:\n", .{});
     std.debug.print("  --no-debug              Disable debug output\n", .{});
     std.debug.print("  --debug                 Enable debug output (default)\n", .{});
+    std.debug.print("  --track-allocs          Enable runtime allocation tracking\n", .{});
     std.debug.print("\nTest Options:\n", .{});
     std.debug.print("  --filter <pattern>      Run only tests matching pattern\n", .{});
     std.debug.print("  --verbose               Show detailed output\n", .{});
@@ -44,6 +45,7 @@ fn printUsage() void {
 
 fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     var source_path: ?[:0]u8 = null;
+    var track_allocs = false;
 
     // Parse arguments
     for (args[2..]) |arg| {
@@ -51,6 +53,8 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
             compiler.debug.enabled = false;
         } else if (std.mem.eql(u8, arg, "--debug")) {
             compiler.debug.enabled = true;
+        } else if (std.mem.eql(u8, arg, "--track-allocs")) {
+            track_allocs = true;
         } else if (arg[0] != '-') {
             source_path = arg;
         }
@@ -95,7 +99,7 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
 
     // Compile with error info
     var result: compiler.CompileResult = .{ .error_info = null };
-    compiler.compileWithFile(source, output_path, src_path, allocator, &result) catch |err| {
+    compiler.compileWithOptions(source, output_path, src_path, .{ .track_allocs = track_allocs }, allocator, &result) catch |err| {
         // Display structured error if available
         if (result.error_info) |error_info| {
             error_info.printToStderr();

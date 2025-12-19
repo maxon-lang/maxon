@@ -158,10 +158,20 @@ fn writeFragment(
             const exit_line = try std.fmt.allocPrint(allocator, "ExitCode: {d}\n", .{s.exit_code});
             defer allocator.free(exit_line);
             try content.appendSlice(allocator, exit_line);
+            if (s.track_allocs) {
+                try content.appendSlice(allocator, "TrackAllocs: true\n");
+            }
             if (s.stdout) |stdout| {
-                const stdout_line = try std.fmt.allocPrint(allocator, "Stdout: {s}\n", .{stdout});
-                defer allocator.free(stdout_line);
-                try content.appendSlice(allocator, stdout_line);
+                // Use multiline format with ``` block if stdout contains newlines
+                if (std.mem.indexOf(u8, stdout, "\n") != null) {
+                    try content.appendSlice(allocator, "Stdout: ```\n");
+                    try content.appendSlice(allocator, stdout);
+                    try content.appendSlice(allocator, "\n```\n");
+                } else {
+                    const stdout_line = try std.fmt.allocPrint(allocator, "Stdout: {s}\n", .{stdout});
+                    defer allocator.free(stdout_line);
+                    try content.appendSlice(allocator, stdout_line);
+                }
             }
         },
         .compiler_error => |err| {

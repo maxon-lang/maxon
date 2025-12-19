@@ -204,6 +204,7 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8) !testing.Te
     // Success test
     var exit_code: u8 = 0;
     var stdout: ?[]const u8 = null;
+    var track_allocs: bool = false;
 
     var lines = std.mem.splitScalar(u8, metadata, '\n');
     while (lines.next()) |line| {
@@ -214,13 +215,36 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8) !testing.Te
             exit_code = std.fmt.parseInt(u8, value, 10) catch return error.InvalidExitCode;
         } else if (std.mem.startsWith(u8, trimmed, "Stdout:")) {
             const value = std.mem.trim(u8, trimmed[7..], " \t");
-            stdout = try allocator.dupe(u8, value);
+            // Check for multiline block format: Stdout: ```
+            if (std.mem.eql(u8, value, "```")) {
+                // Collect lines until closing ```
+                var content_builder: std.ArrayListUnmanaged(u8) = .empty;
+                errdefer content_builder.deinit(allocator);
+
+                while (lines.next()) |content_line| {
+                    const content_trimmed = std.mem.trimRight(u8, content_line, "\r");
+                    if (std.mem.eql(u8, content_trimmed, "```")) {
+                        break;
+                    }
+                    if (content_builder.items.len > 0) {
+                        try content_builder.append(allocator, '\n');
+                    }
+                    try content_builder.appendSlice(allocator, content_trimmed);
+                }
+                stdout = try content_builder.toOwnedSlice(allocator);
+            } else {
+                stdout = try allocator.dupe(u8, value);
+            }
+        } else if (std.mem.startsWith(u8, trimmed, "TrackAllocs:")) {
+            const value = std.mem.trim(u8, trimmed[12..], " \t");
+            track_allocs = std.mem.eql(u8, value, "true");
         }
     }
 
     return .{ .success = .{
         .exit_code = exit_code,
         .stdout = stdout,
+        .track_allocs = track_allocs,
     } };
 }
 
@@ -254,7 +278,11 @@ fn runTest(
     defer allocator.free(exe_path);
 
     // Run the compiler directly on the fragment file (lexer stops at ---)
-    const compile_result = runCompiler(allocator, exe_path, fragment.file_path) catch {
+    const track_allocs = switch (fragment.expected) {
+        .success => |s| s.track_allocs,
+        .compiler_error => false,
+    };
+    const compile_result = runCompiler(allocator, exe_path, fragment.file_path, track_allocs) catch {
         return .{ .name = fragment.name, .status = .failed, .message = "Failed to run compiler" };
     };
     defer {
@@ -346,10 +374,15 @@ fn getCompilerPath(allocator: std.mem.Allocator) ![]const u8 {
     return error.CompilerNotFound;
 }
 
-fn runCompiler(allocator: std.mem.Allocator, exe_path: []const u8, source_path: []const u8) !ProcessResult {
+fn runCompiler(allocator: std.mem.Allocator, exe_path: []const u8, source_path: []const u8, track_allocs: bool) !ProcessResult {
+    const argv = if (track_allocs)
+        &[_][]const u8{ exe_path, "compile", source_path, "--no-debug", "--track-allocs" }
+    else
+        &[_][]const u8{ exe_path, "compile", source_path, "--no-debug" };
+
     const result = try std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &[_][]const u8{ exe_path, "compile", source_path, "--no-debug" },
+        .argv = argv,
     });
 
     return ProcessResult{

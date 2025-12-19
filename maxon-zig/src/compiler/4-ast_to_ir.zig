@@ -618,18 +618,23 @@ pub const AstToIr = struct {
     }
 
     fn convertReturn(self: *AstToIr, ret: ast.ReturnStmt) !void {
+        // Evaluate return expression first (before cleanup)
+        var ret_value: ?ir.Value = null;
+
         if (ret.value) |expr| {
             // If using sret and returning a struct literal, write directly to sret buffer
             if (self.sret_ptr) |sret| {
                 if (expr == .struct_init) {
                     // Initialize struct directly into sret buffer (no intermediate copy)
                     try self.initStructInto(expr.struct_init, sret);
+                    try self.freeHeapAllocations();
                     try self.func().emitRet(sret);
                     return;
                 }
                 // Returning an existing struct variable - copy to sret buffer
                 const typed_val = try self.convertExpression(expr);
                 try self.func().emitMemcpy(sret, typed_val.value, self.sret_size);
+                try self.freeHeapAllocations();
                 try self.func().emitRet(sret);
                 return;
             }
@@ -638,13 +643,32 @@ pub const AstToIr = struct {
 
             // Convert float to int if needed
             if (self.func().return_type == .i64 and typed_val.ty.toPrimitiveType() == .f64) {
-                const converted = try self.func().emitUnaryOp(.fptosi, typed_val.value, .i64);
-                try self.func().emitRet(converted);
+                ret_value = try self.func().emitUnaryOp(.fptosi, typed_val.value, .i64);
             } else {
-                try self.func().emitRet(typed_val.value);
+                ret_value = typed_val.value;
             }
-        } else {
-            try self.func().emitRet(null);
+        }
+
+        // Free heap allocations before return
+        try self.freeHeapAllocations();
+
+        try self.func().emitRet(ret_value);
+    }
+
+    /// Free all heap-allocated variables in current scope
+    fn freeHeapAllocations(self: *AstToIr) !void {
+        var iter = self.var_map.iterator();
+        while (iter.next()) |entry| {
+            const var_info = entry.value_ptr.*;
+            switch (var_info.ty) {
+                .array_type => |arr_info| {
+                    if (arr_info.storage == .heap and var_info.state != .moved) {
+                        // Free heap-allocated array
+                        try self.func().emitHeapFree(var_info.ptr);
+                    }
+                },
+                else => {},
+            }
         }
     }
 
