@@ -22,8 +22,21 @@ ExitCode: 42
 ---
 function main() -> i64 {
 entry:
+    %l1 = alloca.sized ptr 8
+    %tmp_fieldptr = getfieldptr ptr %l1 0
     %tmp_const = const.i64 i64 42
-    ret %tmp_const
+    store %tmp_fieldptr %tmp_const
+    %l2 = alloca.sized ptr 8
+    %tmp_fieldptr.1 = getfieldptr ptr %l2 0
+    %tmp_fieldptr.4 = memcpy %tmp_fieldptr.1 %l1
+    %l3 = alloca.sized ptr 8
+    %tmp_fieldptr.2 = getfieldptr ptr %l3 0
+    %tmp_fieldptr.4 = memcpy %tmp_fieldptr.2 %l2
+    %tmp_fieldptr.3 = getfieldptr ptr %l3 0
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.3 0
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.4 0
+    %tmp_load = load i64 %tmp_fieldptr.5
+    ret %tmp_load
 }
 
 ---

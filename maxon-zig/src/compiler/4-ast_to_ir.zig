@@ -34,22 +34,41 @@ const ValueType = union(enum) {
     primitive: ir.Type,
     struct_type: []const u8,
     array_type: ArrayInfo,
+    enum_type: []const u8,
 
     fn toPrimitiveType(self: ValueType) ir.Type {
         return switch (self) {
-            .primitive => |p| p,
+            .primitive, .enum_type => .i64,
             .struct_type, .array_type => .ptr,
         };
+    }
+
+    fn isStruct(self: ValueType) bool {
+        return self == .struct_type;
     }
 };
 
 /// Struct field info
 const FieldInfo = struct {
     name: []const u8,
-    ty: ir.Type,
     offset: i32,
-    /// If the field is a struct type, this holds the struct name
-    struct_type_name: ?[]const u8 = null,
+    size: i32,
+    value_type: ValueType,
+
+    fn irType(self: FieldInfo) ir.Type {
+        return self.value_type.toPrimitiveType();
+    }
+
+    fn isStruct(self: FieldInfo) bool {
+        return self.value_type.isStruct();
+    }
+
+    fn structName(self: FieldInfo) ?[]const u8 {
+        return switch (self.value_type) {
+            .struct_type => |name| name,
+            else => null,
+        };
+    }
 };
 
 /// Struct type info
@@ -59,20 +78,32 @@ const StructTypeInfo = struct {
     size: i32,
 };
 
-/// Type info - can be primitive or struct
+/// Enum type info - maps member names to their integer values
+const EnumTypeInfo = struct {
+    name: []const u8,
+    members: std.StringHashMapUnmanaged(i64),
+};
+
+/// Type info - primitives, structs, or enums
 const TypeInfo = union(enum) {
     primitive: ir.Type,
     struct_type: StructTypeInfo,
+    enum_type: EnumTypeInfo,
 
     fn irType(self: TypeInfo) ir.Type {
         return switch (self) {
             .primitive => |t| t,
             .struct_type => .ptr,
+            .enum_type => .i64,
         };
     }
 
     fn isStruct(self: TypeInfo) bool {
         return self == .struct_type;
+    }
+
+    fn isEnum(self: TypeInfo) bool {
+        return self == .enum_type;
     }
 };
 
@@ -87,11 +118,6 @@ const FuncInfo = struct {
 /// Parameter type info
 const ParamType = struct {
     ty: ValueType,
-};
-
-/// Enum info - maps member names to their integer values
-const EnumInfo = struct {
-    members: std.StringHashMapUnmanaged(i64),
 };
 
 /// Ownership state of a variable
@@ -160,7 +186,6 @@ pub const AstToIr = struct {
     var_map: std.StringHashMapUnmanaged(VarInfo),
     type_map: std.StringHashMapUnmanaged(TypeInfo),
     func_map: std.StringHashMapUnmanaged(FuncInfo),
-    enum_map: std.StringHashMapUnmanaged(EnumInfo),
     current_decl_is_mutable: bool,
     mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
     current_line: usize,
@@ -183,7 +208,6 @@ pub const AstToIr = struct {
             .var_map = .{},
             .type_map = .{},
             .func_map = .{},
-            .enum_map = .{},
             .current_decl_is_mutable = false,
             .mutation_analyzer = mutation_analyzer,
             .current_line = 1,
@@ -211,8 +235,10 @@ pub const AstToIr = struct {
 
         var type_iter = self.type_map.iterator();
         while (type_iter.next()) |entry| {
-            if (entry.value_ptr.* == .struct_type) {
-                self.allocator.free(entry.value_ptr.struct_type.fields);
+            switch (entry.value_ptr.*) {
+                .struct_type => |s| self.allocator.free(s.fields),
+                .enum_type => |*e| e.members.deinit(self.allocator),
+                .primitive => {},
             }
         }
         self.type_map.deinit(self.allocator);
@@ -222,12 +248,6 @@ pub const AstToIr = struct {
             self.allocator.free(entry.value_ptr.param_types);
         }
         self.func_map.deinit(self.allocator);
-
-        var enum_iter = self.enum_map.iterator();
-        while (enum_iter.next()) |entry| {
-            entry.value_ptr.members.deinit(self.allocator);
-        }
-        self.enum_map.deinit(self.allocator);
     }
 
     // ------------------------------------------------------------------------
@@ -266,7 +286,7 @@ pub const AstToIr = struct {
         const type_info = self.type_map.get(type_name) orelse return error.UnknownType;
         return switch (type_info) {
             .struct_type => |s| s,
-            .primitive => error.UnknownType,
+            .primitive, .enum_type => error.UnknownType,
         };
     }
 
@@ -291,20 +311,20 @@ pub const AstToIr = struct {
 
         for (type_decl.fields, 0..) |field, i| {
             const field_type_info = self.type_map.get(field.type_name) orelse return error.UnknownType;
-            const struct_type_name: ?[]const u8 = switch (field_type_info) {
-                .struct_type => field.type_name,
-                .primitive => null,
+            const value_type: ValueType = switch (field_type_info) {
+                .struct_type => .{ .struct_type = field.type_name },
+                .primitive => |p| .{ .primitive = p },
+                .enum_type => .{ .enum_type = field.type_name },
+            };
+            const field_size: i32 = switch (field_type_info) {
+                .struct_type => |s| s.size,
+                .primitive, .enum_type => 8,
             };
             fields[i] = .{
                 .name = field.name,
-                .ty = field_type_info.irType(),
                 .offset = offset,
-                .struct_type_name = struct_type_name,
-            };
-            // Use actual size for nested structs, 8 bytes for primitives
-            const field_size: i32 = switch (field_type_info) {
-                .struct_type => |s| s.size,
-                .primitive => 8,
+                .size = field_size,
+                .value_type = value_type,
             };
             offset += field_size;
         }
@@ -321,7 +341,9 @@ pub const AstToIr = struct {
         for (enum_decl.members, 0..) |member, i| {
             try members.put(self.allocator, member, @intCast(i));
         }
-        try self.enum_map.put(self.allocator, enum_decl.name, .{ .members = members });
+        try self.type_map.put(self.allocator, enum_decl.name, .{
+            .enum_type = .{ .name = enum_decl.name, .members = members },
+        });
         debug.astToIr("Registered enum '{s}' with {d} members", .{ enum_decl.name, enum_decl.members.len });
     }
 
@@ -486,6 +508,19 @@ pub const AstToIr = struct {
                     true,
                 ));
             },
+            .enum_type => |enum_name| {
+                // Enums are passed as i64 values
+                const param_val = try self.func().emitParam(idx, .i64);
+                try self.func().setValueName(param_val, param.name);
+                const ptr = try self.func().emitAlloca(.i64);
+                try self.func().setValueName(ptr, param.name);
+                try self.func().emitStore(ptr, param_val);
+                try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                    ptr,
+                    .{ .enum_type = enum_name },
+                    true,
+                ));
+            },
         }
     }
 
@@ -534,6 +569,17 @@ pub const AstToIr = struct {
             },
             .primitive => |prim_ty| {
                 const ptr = try self.func().emitAlloca(prim_ty);
+                try self.func().setValueName(ptr, decl.name);
+                try self.func().emitStore(ptr, init_typed.value);
+                try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+                    ptr,
+                    init_typed.ty,
+                    self.current_decl_is_mutable,
+                ));
+            },
+            .enum_type => {
+                // Enums are stored like primitives (i64)
+                const ptr = try self.func().emitAlloca(.i64);
                 try self.func().setValueName(ptr, decl.name);
                 try self.func().emitStore(ptr, init_typed.value);
                 try self.var_map.put(self.allocator, decl.name, VarInfo.init(
@@ -593,7 +639,7 @@ pub const AstToIr = struct {
         const value_typed = try self.convertExpression(assign.value);
 
         switch (var_info.ty) {
-            .primitive => try self.func().emitStore(var_info.ptr, value_typed.value),
+            .primitive, .enum_type => try self.func().emitStore(var_info.ptr, value_typed.value),
             .struct_type, .array_type => {
                 var_info.ptr = value_typed.value;
                 var_info.ty = value_typed.ty;
@@ -679,6 +725,10 @@ pub const AstToIr = struct {
                 .value = try self.func().emitLoad(info.ptr, prim_ty),
                 .ty = info.ty,
             },
+            .enum_type => .{
+                .value = try self.func().emitLoad(info.ptr, .i64),
+                .ty = info.ty,
+            },
         };
     }
 
@@ -743,10 +793,9 @@ pub const AstToIr = struct {
             const field_ptr = try self.func().emitGetFieldPtr(dest_ptr, field_info.offset);
             const field_val = try self.convertExpression(field_init.value.*);
 
-            // For nested struct fields, use memcpy to copy the struct data
-            if (field_info.struct_type_name) |nested_struct_name| {
-                const nested_struct_info = try self.lookupStructInfo(nested_struct_name);
-                try self.func().emitMemcpy(field_ptr, field_val.value, nested_struct_info.size);
+            if (field_info.isStruct()) {
+                // Struct fields are embedded inline - copy the data
+                try self.func().emitMemcpy(field_ptr, field_val.value, field_info.size);
             } else {
                 try self.func().emitStore(field_ptr, field_val.value);
             }
@@ -754,17 +803,23 @@ pub const AstToIr = struct {
     }
 
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
-        // Check for enum access (e.g., Colors.Green)
+        // Check for enum member access (e.g., Colors.Green)
         if (faccess.base.* == .identifier) {
-            if (self.enum_map.get(faccess.base.identifier)) |enum_info| {
-                const member_value = enum_info.members.get(faccess.field_name) orelse {
-                    self.reportError(.E007, "unknown enum member");
-                    return error.UnknownField;
-                };
-                return .{ .value = try self.func().emitConstI64(member_value), .ty = .{ .primitive = .i64 } };
+            if (self.type_map.get(faccess.base.identifier)) |type_info| {
+                if (type_info == .enum_type) {
+                    const member_value = type_info.enum_type.members.get(faccess.field_name) orelse {
+                        self.reportError(.E007, "unknown enum member");
+                        return error.UnknownField;
+                    };
+                    return .{
+                        .value = try self.func().emitConstI64(member_value),
+                        .ty = .{ .enum_type = faccess.base.identifier },
+                    };
+                }
             }
         }
 
+        // Struct field access
         const base = try self.convertExpression(faccess.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
@@ -778,15 +833,14 @@ pub const AstToIr = struct {
         const field_info = try lookupField(struct_info, faccess.field_name);
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
 
-        // If the field is a nested struct, the struct data is embedded inline
-        // Return the field pointer directly (it points to the embedded struct)
-        if (field_info.struct_type_name) |nested_struct_name| {
-            return .{ .value = field_ptr, .ty = .{ .struct_type = nested_struct_name } };
-        }
-
-        // For primitive fields, load the value
-        const val = try self.func().emitLoad(field_ptr, field_info.ty);
-        return .{ .value = val, .ty = .{ .primitive = field_info.ty } };
+        return switch (field_info.value_type) {
+            .struct_type => |name| .{ .value = field_ptr, .ty = .{ .struct_type = name } },
+            .primitive => |prim| .{
+                .value = try self.func().emitLoad(field_ptr, prim),
+                .ty = .{ .primitive = prim },
+            },
+            .array_type, .enum_type => unreachable,
+        };
     }
 
     fn convertCall(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
