@@ -60,6 +60,7 @@ pub const Instruction = struct {
         // Conversions
         fptosi, // float to signed int
         sitofp, // signed int to float
+        fabs, // float absolute value
 
         // Control flow
         ret,
@@ -112,6 +113,7 @@ pub const Instruction = struct {
                 .fdiv => "fdiv",
                 .fptosi => "fptosi",
                 .sitofp => "sitofp",
+                .fabs => "fabs",
                 .ret => "ret",
                 .br => "br",
                 .br_cond => "br.cond",
@@ -273,6 +275,7 @@ pub const Function = struct {
             .fdiv => "tmp_fdiv",
             .fptosi => "tmp_fptosi",
             .sitofp => "tmp_sitofp",
+            .fabs => "tmp_fabs",
             .ret => "tmp_ret",
             .br, .br_cond => "tmp_br",
             .icmp_eq, .icmp_ne, .icmp_lt, .icmp_le, .icmp_gt, .icmp_ge => "tmp_cmp",
@@ -408,6 +411,10 @@ pub const Function = struct {
 
     pub fn emitSiToFp(self: *Function, value: Value, dest_type: Type) !Value {
         return self.emitUnaryOp(.sitofp, value, dest_type);
+    }
+
+    pub fn emitFabs(self: *Function, value: Value) !Value {
+        return self.emitUnaryOp(.fabs, value, .f64);
     }
 
     // Function calls

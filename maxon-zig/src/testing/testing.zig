@@ -85,7 +85,7 @@ pub const TestSummary = struct {
     skipped: usize,
     results: []TestResult,
 
-    pub fn printSummaryDebug(self: TestSummary) void {
+    pub fn printSummaryDebug(self: TestSummary, elapsed_ms: f64) void {
         std.debug.print("\n", .{});
         std.debug.print("Tests: {} passed", .{self.passed});
         if (self.failed > 0) {
@@ -94,7 +94,7 @@ pub const TestSummary = struct {
         if (self.skipped > 0) {
             std.debug.print(", {} skipped", .{self.skipped});
         }
-        std.debug.print(" (total: {})\n", .{self.total});
+        std.debug.print(" (total: {}) in {d:.0}ms\n", .{ self.total, elapsed_ms });
     }
 };
 

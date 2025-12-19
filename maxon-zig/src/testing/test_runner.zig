@@ -110,8 +110,6 @@ pub fn runAllTests(
                 passed += 1;
                 if (options.verbose) {
                     std.debug.print("PASS: {s}\n", .{fragment.name});
-                } else {
-                    std.debug.print(".", .{});
                 }
             },
             .failed => {

@@ -126,14 +126,17 @@ fn runTest(args: [][:0]u8, allocator: std.mem.Allocator) void {
     }
 
     // Run tests
+    var timer = std.time.Timer.start() catch unreachable;
     const summary = test_runner.runAllTests(allocator, options) catch |err| {
         std.debug.print("Error running tests: {}\n", .{err});
         std.process.exit(1);
     };
+    const elapsed_ns = timer.read();
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
     defer allocator.free(summary.results);
 
     // Print summary
-    summary.printSummaryDebug();
+    summary.printSummaryDebug(elapsed_ms);
 
     // Exit with error if any tests failed
     if (summary.failed > 0) {

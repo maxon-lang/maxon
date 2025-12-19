@@ -277,6 +277,22 @@ pub const Encoder = struct {
         try self.emit(&.{ 0xF2, 0x48, 0x0F, 0x2A, 0xC0 });
     }
 
+    /// Absolute value of xmm0 (clear sign bit)
+    /// ANDPD xmm0, [rip+const] where const = 0x7FFFFFFFFFFFFFFF
+    pub fn fabsXmm0(self: *Encoder) !void {
+        // Load mask 0x7FFFFFFFFFFFFFFF into rax
+        try self.emit(&.{ 0x48, 0xB8 }); // mov rax, imm64
+        try self.emit(&.{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F }); // 0x7FFFFFFFFFFFFFFF
+        // Push rax to stack
+        try self.emitByte(0x50); // push rax
+        // MOVQ xmm1, [rsp] - load mask into xmm1
+        try self.emit(&.{ 0xF3, 0x0F, 0x7E, 0x0C, 0x24 }); // movq xmm1, [rsp]
+        // ANDPD xmm0, xmm1
+        try self.emit(&.{ 0x66, 0x0F, 0x54, 0xC1 }); // andpd xmm0, xmm1
+        // Pop (restore stack)
+        try self.emitByte(0x58); // pop rax
+    }
+
     // -------------------------------------------------------------------------
     // Calls
     // -------------------------------------------------------------------------

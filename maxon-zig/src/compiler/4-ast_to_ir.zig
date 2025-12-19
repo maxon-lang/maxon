@@ -38,7 +38,8 @@ const ValueType = union(enum) {
 
     fn toPrimitiveType(self: ValueType) ir.Type {
         return switch (self) {
-            .primitive, .enum_type => .i64,
+            .primitive => |p| p,
+            .enum_type => .i64,
             .struct_type, .array_type => .ptr,
         };
     }
@@ -900,6 +901,11 @@ pub const AstToIr = struct {
             return self.convertTrunc(call);
         }
 
+        // Handle built-in: abs (returns f64)
+        if (std.mem.eql(u8, call.func_name, "abs")) {
+            return self.convertAbs(call);
+        }
+
         const func_info = self.func_map.get(call.func_name) orelse {
             const result = try self.func().emitCall(call.func_name, &.{}, .i64);
             return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
@@ -953,6 +959,20 @@ pub const AstToIr = struct {
         }
         const result = try self.func().emitFpToSi(arg.value, .i64);
         return .{ .value = result, .ty = .{ .primitive = .i64 } };
+    }
+
+    fn convertAbs(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        if (call.args.len != 1) {
+            self.reportError(.E011, "abs() expects exactly 1 argument");
+            return error.WrongArgumentCount;
+        }
+        const arg = try self.convertExpression(call.args[0]);
+        if (arg.ty.toPrimitiveType() != .f64) {
+            self.reportError(.E011, "abs() expects a float argument");
+            return error.ExpectedFloat;
+        }
+        const result = try self.func().emitFabs(arg.value);
+        return .{ .value = result, .ty = .{ .primitive = .f64 } };
     }
 
     fn checkOwnershipTransfer(self: *AstToIr, func_name: []const u8, arg_expr: ast.Expression, param_idx: usize) ConvertError!void {

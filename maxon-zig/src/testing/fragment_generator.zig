@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = @import("testing.zig");
 const spec_parser = @import("spec_parser.zig");
 const compiler = @import("../compiler/0-compiler.zig");
+const debug = compiler.debug;
 
 /// Check if fragments need regeneration based on file modification times
 pub fn needsRegeneration(specs_dir: []const u8, fragments_dir: []const u8) bool {
@@ -64,6 +65,11 @@ pub fn generateFragments(
     specs_dir: []const u8,
     fragments_dir: []const u8,
 ) !testing.GenerationResult {
+    // Suppress compiler debug output during fragment generation
+    const was_enabled = debug.enabled;
+    debug.enabled = false;
+    defer debug.enabled = was_enabled;
+
     // Parse all specs
     const specs = try spec_parser.parseAllSpecs(allocator, specs_dir);
     defer {
@@ -198,8 +204,11 @@ pub fn regenerateIfNeeded(
     }
 
     std.debug.print("Specs changed, regenerating fragments...\n", .{});
+    var timer = std.time.Timer.start() catch unreachable;
     const result = try generateFragments(allocator, specs_dir, fragments_dir);
-    std.debug.print("Generated {d} fragments from {d} specs\n", .{ result.fragments_written, result.specs_processed });
+    const elapsed_ns = timer.read();
+    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
+    std.debug.print("Generated {d} fragments from {d} specs in {d:.0}ms\n", .{ result.fragments_written, result.specs_processed, elapsed_ms });
 
     return true;
 }

@@ -219,6 +219,7 @@ pub const IrCodegen = struct {
             .fadd, .fsub, .fmul, .fdiv => try self.genFloatBinaryOp(inst),
             .fptosi => try self.genFpToSi(inst),
             .sitofp => try self.genSiToFp(inst),
+            .fabs => try self.genFabs(inst),
             .ret => try self.genRet(inst),
             .param => try self.genParam(inst),
             .call => try self.genCall(inst),
@@ -349,7 +350,7 @@ pub const IrCodegen = struct {
         const ptr = inst.operands[0].value;
         const val = inst.operands[1].value;
         const offset = try self.getStackOffset(ptr);
-        const val_type = self.value_types.get(val) orelse .i64;
+        const val_type = self.value_types.get(val) orelse return error.ValueTypeNotFound;
 
         if (self.isIndirect(ptr)) {
             try self.enc.movRcxRbpOffset(offset);
@@ -504,10 +505,18 @@ pub const IrCodegen = struct {
         try self.storeToStack(inst.result.?, .f64);
     }
 
+    fn genFabs(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Load value to xmm0
+        try self.loadToXmm(inst.operands[0].value, .xmm0);
+        // Clear sign bit: AND with 0x7FFFFFFFFFFFFFFF
+        try self.enc.fabsXmm0();
+        try self.storeToStack(inst.result.?, .f64);
+    }
+
     fn genRet(self: *IrCodegen, inst: ir.Instruction) !void {
         if (inst.operands[0] != .none) {
             const ret_val = inst.operands[0].value;
-            const ret_type = self.value_types.get(ret_val) orelse .i64;
+            const ret_type = self.value_types.get(ret_val) orelse return error.ValueTypeNotFound;
 
             debug.codegen("  ret: val=%{d}, type={s}, func={s}", .{ ret_val, ret_type.format(), self.current_func_name });
 
@@ -587,7 +596,7 @@ pub const IrCodegen = struct {
         for (args, 0..) |arg, i| {
             if (i >= 4) return error.TooManyArguments;
 
-            const arg_type = self.value_types.get(arg) orelse .i64;
+            const arg_type = self.value_types.get(arg) orelse return error.ValueTypeNotFound;
 
             if (arg_type == .f64) {
                 try self.loadToXmm(arg, if (i == 0) .xmm0 else .xmm1);
