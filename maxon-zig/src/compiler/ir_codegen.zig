@@ -507,7 +507,7 @@ pub const IrCodegen = struct {
     }
 
     /// Generate __track_alloc - tracks an allocation
-    /// Input: RCX = ptr, RDX = size
+    /// Input: RCX = ptr, RDX = size, R8 = tag ptr, R9 = tag len
     fn generateTrackAlloc(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__track_alloc", self.code.items.len);
 
@@ -520,8 +520,10 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
         try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
 
-        // Save size (RDX) to R13
-        try self.enc.emit(&.{ 0x49, 0x89, 0xD5 }); // mov r13, rdx
+        // Save size (RDX) to R13, tag ptr (R8) to R12, tag len (R9) to stack
+        try self.enc.emit(&.{ 0x49, 0x89, 0xD5 }); // mov r13, rdx (size)
+        try self.enc.emit(&.{ 0x4D, 0x89, 0xC4 }); // mov r12, r8 (tag ptr)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x4D, 0xD0 }); // mov [rbp-48], r9 (tag len)
 
         // Increment alloc ID and save to R14
         try self.emitLoadTrackingField(.next_alloc_id);
@@ -551,8 +553,14 @@ pub const IrCodegen = struct {
         // Print size from R13
         try self.printNumberFromR13();
 
-        // Print " bytes\n"
-        try self.printStaticString(" bytes\n");
+        // Print " bytes ("
+        try self.printStaticString(" bytes (");
+
+        // Print tag from R12 with length from stack
+        try self.printTagFromR12();
+
+        // Print ")\n"
+        try self.printStaticString(")\n");
 
         // Epilogue
         try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
@@ -565,7 +573,7 @@ pub const IrCodegen = struct {
     }
 
     /// Generate __track_free - tracks a free
-    /// Input: RCX = ptr, RDX = size
+    /// Input: RCX = ptr, RDX = size, R8 = tag ptr, R9 = tag len
     fn generateTrackFree(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__track_free", self.code.items.len);
 
@@ -578,8 +586,10 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
         try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
 
-        // Save size (RDX) to R13
-        try self.enc.emit(&.{ 0x49, 0x89, 0xD5 }); // mov r13, rdx
+        // Save size (RDX) to R13, tag ptr (R8) to R12, tag len (R9) to stack
+        try self.enc.emit(&.{ 0x49, 0x89, 0xD5 }); // mov r13, rdx (size)
+        try self.enc.emit(&.{ 0x4D, 0x89, 0xC4 }); // mov r12, r8 (tag ptr)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x4D, 0xD0 }); // mov [rbp-48], r9 (tag len)
 
         // Add size to total_freed
         try self.emitLoadTrackingField(.total_freed);
@@ -597,8 +607,14 @@ pub const IrCodegen = struct {
         // Print size from R13
         try self.printNumberFromR13();
 
-        // Print " bytes\n"
-        try self.printStaticString(" bytes\n");
+        // Print " bytes ("
+        try self.printStaticString(" bytes (");
+
+        // Print tag from R12 with length from stack
+        try self.printTagFromR12();
+
+        // Print ")\n"
+        try self.printStaticString(")\n");
 
         // Epilogue
         try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
@@ -823,6 +839,28 @@ pub const IrCodegen = struct {
         // WriteFile
         try self.enc.emit(&.{ 0x48, 0x89, 0xFA }); // mov rdx, rdi (buffer)
         try self.enc.emit(&.{ 0x4C, 0x89, 0xF9 }); // mov rcx, r15 (handle)
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax (length)
+        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40
+        try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rsp+32], 0
+        const write_patch = try self.enc.callIndirectRip();
+        try self.external_patches.append(self.allocator, .{
+            .offset = write_patch,
+            .dll = "kernel32.dll",
+            .func_name = "WriteFile",
+        });
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
+    }
+
+    /// Helper to print tag string from R12 (ptr) with length from [rbp-48]
+    /// Assumes R15 = stdout handle
+    fn printTagFromR12(self: *IrCodegen) !void {
+        // Load tag length from stack
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xD0 }); // mov rax, [rbp-48] (tag len)
+
+        // WriteFile(hFile=R15, lpBuffer=R12, nBytes=rax, lpWritten=NULL, lpOverlapped=NULL)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xF9 }); // mov rcx, r15 (handle)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xE2 }); // mov rdx, r12 (buffer = tag ptr)
         try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax (length)
         try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
         try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40
@@ -1365,10 +1403,33 @@ pub const IrCodegen = struct {
 
         try self.emitExternalCall("kernel32.dll", "HeapAlloc");
 
-        // If tracking enabled, call __track_alloc(ptr=RCX, size=RDX)
+        // If tracking enabled, call __track_alloc(ptr=RCX, size=RDX, tag_ptr=R8, tag_len=R9)
         if (self.track_allocs) {
             // Save ptr to R13 across the tracking call
             try self.enc.emit(&.{ 0x49, 0x89, 0xC5 }); // mov r13, rax
+
+            // Embed tag string "dynamic array" after a jump
+            const tag = "dynamic array";
+            const jmp_offset = try self.enc.jmpRel32();
+            const tag_pos = self.code.items.len;
+            try self.code.appendSlice(self.allocator, tag);
+            const after_tag = self.code.items.len;
+            // Patch jump
+            const rel: i32 = @intCast(after_tag - jmp_offset - 4);
+            self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(rel & 0xFF)));
+            self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((rel >> 8) & 0xFF)));
+            self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((rel >> 16) & 0xFF)));
+            self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((rel >> 24) & 0xFF)));
+
+            // LEA R8, [RIP - offset_to_tag]
+            const rip_offset: i32 = -@as(i32, @intCast(after_tag - tag_pos + 7));
+            try self.enc.emit(&.{ 0x4C, 0x8D, 0x05 }); // lea r8, [rip+disp32]
+            try self.enc.emitI32(rip_offset);
+
+            // mov r9, tag_len
+            try self.enc.emit(&.{ 0x49, 0xC7, 0xC1 }); // mov r9, imm32
+            try self.enc.emitI32(@intCast(tag.len));
+
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE9 }); // mov rcx, r13 (ptr)
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE2 }); // mov rdx, r12 (size)
             try self.enc.allocShadowSpace();
@@ -1407,7 +1468,29 @@ pub const IrCodegen = struct {
             // Save size to R14
             try self.enc.emit(&.{ 0x49, 0x89, 0xC6 }); // mov r14, rax (size)
 
-            // Call __track_free(ptr=RCX, size=RDX)
+            // Embed tag string "dynamic array" after a jump
+            const tag = "dynamic array";
+            const jmp_offset = try self.enc.jmpRel32();
+            const tag_pos = self.code.items.len;
+            try self.code.appendSlice(self.allocator, tag);
+            const after_tag = self.code.items.len;
+            // Patch jump
+            const rel: i32 = @intCast(after_tag - jmp_offset - 4);
+            self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(rel & 0xFF)));
+            self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((rel >> 8) & 0xFF)));
+            self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((rel >> 16) & 0xFF)));
+            self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((rel >> 24) & 0xFF)));
+
+            // LEA R8, [RIP - offset_to_tag]
+            const rip_offset: i32 = -@as(i32, @intCast(after_tag - tag_pos + 7));
+            try self.enc.emit(&.{ 0x4C, 0x8D, 0x05 }); // lea r8, [rip+disp32]
+            try self.enc.emitI32(rip_offset);
+
+            // mov r9, tag_len
+            try self.enc.emit(&.{ 0x49, 0xC7, 0xC1 }); // mov r9, imm32
+            try self.enc.emitI32(@intCast(tag.len));
+
+            // Call __track_free(ptr=RCX, size=RDX, tag_ptr=R8, tag_len=R9)
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE1 }); // mov rcx, r12 (ptr)
             try self.enc.emit(&.{ 0x4C, 0x89, 0xF2 }); // mov rdx, r14 (size)
             try self.enc.allocShadowSpace();

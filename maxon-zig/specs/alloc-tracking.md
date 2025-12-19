@@ -42,12 +42,12 @@ maxon compile --track-allocs myprogram.maxon
 
 Each allocation prints:
 ```text
-ALLOC #1: 80 bytes
+ALLOC #1: 80 bytes (dynamic array)
 ```
 
 Each free prints:
 ```text
-FREE #1: 80 bytes
+FREE #1: 80 bytes (dynamic array)
 ```
 
 At exit, a summary is printed:
@@ -74,8 +74,8 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 80 bytes
-FREE #1: 80 bytes
+ALLOC #1: 80 bytes (dynamic array)
+FREE #1: 80 bytes (dynamic array)
 
 === ALLOC STATS ===
 Allocated: 80 bytes
