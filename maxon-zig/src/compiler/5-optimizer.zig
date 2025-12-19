@@ -480,6 +480,13 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                         }
                     }
                 },
+                .memcpy => {
+                    // memcpy reads from source pointer - mark it as loaded
+                    const src_ptr = inst.operands[1].value;
+                    try ctx.loaded_ptrs.put(ctx.allocator, src_ptr, {});
+                    const src_base = ctx.resolveToBase(src_ptr);
+                    try ctx.loaded_bases.put(ctx.allocator, src_base, {});
+                },
                 .ret => {
                     // Pointers returned from functions may be read by caller
                     if (inst.operands[0] == .value) {

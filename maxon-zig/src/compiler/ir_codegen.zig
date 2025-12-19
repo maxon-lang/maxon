@@ -128,9 +128,7 @@ pub const IrCodegen = struct {
             },
             .register => |reg| switch (target) {
                 .rax => {
-                    if (reg == .rcx) try self.enc.movRaxRcx()
-                    else if (reg == .rdx) try self.enc.movRaxRdx()
-                    else if (reg != .rax) return error.UnsupportedRegister;
+                    if (reg == .rcx) try self.enc.movRaxRcx() else if (reg == .rdx) try self.enc.movRaxRdx() else if (reg != .rax) return error.UnsupportedRegister;
                 },
                 .xmm => return error.CannotLoadRegToXmm,
             },
@@ -355,19 +353,27 @@ pub const IrCodegen = struct {
 
         if (self.isIndirect(ptr)) {
             try self.enc.movRcxRbpOffset(offset);
-            if (val_type == .f64) {
-                try self.loadToXmm(val, .xmm0);
+        }
+
+        if (val_type == .f64) {
+            try self.loadToXmm(val, .xmm0);
+            if (self.isIndirect(ptr)) {
                 try self.enc.movsdMemRcxXmm0();
             } else {
-                try self.loadToRax(val);
-                try self.enc.movMemRax(.rcx);
+                try self.enc.movsdRbpOffsetXmm0(offset);
             }
         } else {
-            if (val_type == .f64) {
-                try self.loadToXmm(val, .xmm0);
-                try self.enc.movsdRbpOffsetXmm0(offset);
+            // If value is a ptr type that's NOT indirect, we need its address (lea)
+            // not its contents (mov)
+            if (val_type == .ptr and !self.isIndirect(val)) {
+                const val_offset = try self.getStackOffset(val);
+                try self.enc.leaRaxRbpOffset(val_offset);
             } else {
                 try self.loadToRax(val);
+            }
+            if (self.isIndirect(ptr)) {
+                try self.enc.movMemRax(.rcx);
+            } else {
                 try self.enc.movRbpOffsetRax(offset);
             }
         }
@@ -422,6 +428,13 @@ pub const IrCodegen = struct {
                 try self.enc.movsdXmm0MemRcx();
             } else {
                 try self.enc.movRaxMem(.rcx);
+            }
+            // When loading a pointer from an indirect source, mark result as indirect
+            // because the loaded value is itself a pointer that points elsewhere
+            if (ty == .ptr) {
+                try self.storeToStack(result, ty);
+                try self.markIndirect(result);
+                return;
             }
         } else {
             if (ty == .f64) {

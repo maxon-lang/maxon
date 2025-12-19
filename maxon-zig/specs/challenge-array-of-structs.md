@@ -1,6 +1,6 @@
 ---
 feature: challenge-array-of-structs
-status: draft
+status: stable
 keywords: array, struct, elements, memory
 category: semantics
 ---

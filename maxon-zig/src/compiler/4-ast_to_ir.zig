@@ -26,6 +26,7 @@ const ArrayInfo = struct {
     element_type: ir.Type,
     size: ?usize, // null for dynamic size
     storage: ArrayStorage,
+    element_struct_type: ?[]const u8 = null, // struct name if elements are structs
 };
 
 /// Extended type info for variable tracking
@@ -300,7 +301,12 @@ pub const AstToIr = struct {
                 .offset = offset,
                 .struct_type_name = struct_type_name,
             };
-            offset += 8; // All types are 8 bytes
+            // Use actual size for nested structs, 8 bytes for primitives
+            const field_size: i32 = switch (field_type_info) {
+                .struct_type => |s| s.size,
+                .primitive => 8,
+            };
+            offset += field_size;
         }
 
         try self.type_map.put(self.allocator, type_decl.name, .{
@@ -736,7 +742,14 @@ pub const AstToIr = struct {
             const field_info = try lookupField(struct_info, field_init.name);
             const field_ptr = try self.func().emitGetFieldPtr(dest_ptr, field_info.offset);
             const field_val = try self.convertExpression(field_init.value.*);
-            try self.func().emitStore(field_ptr, field_val.value);
+
+            // For nested struct fields, use memcpy to copy the struct data
+            if (field_info.struct_type_name) |nested_struct_name| {
+                const nested_struct_info = try self.lookupStructInfo(nested_struct_name);
+                try self.func().emitMemcpy(field_ptr, field_val.value, nested_struct_info.size);
+            } else {
+                try self.func().emitStore(field_ptr, field_val.value);
+            }
         }
     }
 
@@ -765,10 +778,10 @@ pub const AstToIr = struct {
         const field_info = try lookupField(struct_info, faccess.field_name);
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
 
-        // If the field is a struct, load the struct pointer from the field
+        // If the field is a nested struct, the struct data is embedded inline
+        // Return the field pointer directly (it points to the embedded struct)
         if (field_info.struct_type_name) |nested_struct_name| {
-            const nested_ptr = try self.func().emitLoad(field_ptr, .ptr);
-            return .{ .value = nested_ptr, .ty = .{ .struct_type = nested_struct_name } };
+            return .{ .value = field_ptr, .ty = .{ .struct_type = nested_struct_name } };
         }
 
         // For primitive fields, load the value
@@ -870,6 +883,10 @@ pub const AstToIr = struct {
 
         const first_typed = try self.convertExpression(elements[0]);
         const elem_type = first_typed.ty.toPrimitiveType();
+        const elem_struct_type: ?[]const u8 = switch (first_typed.ty) {
+            .struct_type => |name| name,
+            else => null,
+        };
         const total_size = @as(i32, @intCast(elements.len)) * 8;
         const arr_ptr = try self.func().emitAllocaSized(total_size);
 
@@ -882,7 +899,7 @@ pub const AstToIr = struct {
 
         return .{
             .value = arr_ptr,
-            .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .stack } },
+            .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .stack, .element_struct_type = elem_struct_type } },
         };
     }
 
@@ -899,6 +916,11 @@ pub const AstToIr = struct {
         const idx_typed = try self.convertExpression(idx.index.*);
         const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
         const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
+
+        // If the array element is a struct, return struct type
+        if (arr_info.element_struct_type) |struct_name| {
+            return .{ .value = val, .ty = .{ .struct_type = struct_name } };
+        }
 
         return .{ .value = val, .ty = .{ .primitive = arr_info.element_type } };
     }
