@@ -1,0 +1,72 @@
+// Test: alloc-tracking.multiple-arrays.1
+function main() returns int
+    let size1 = 5
+    let size2 = 10
+    var arr1 = array of size1 int
+    var arr2 = array of size2 int
+    arr1[0] = 1
+    arr2[0] = 2
+    return arr1[0] + arr2[0]
+end 'main'
+---
+ExitCode: 3
+TrackAllocs: true
+Stdout: ```
+ALLOC #1: 40 bytes (dynamic array)
+ALLOC #2: 80 bytes (dynamic array)
+FREE #1: 40 bytes (dynamic array)
+FREE #2: 80 bytes (dynamic array)
+
+=== ALLOC STATS ===
+Allocated: 120 bytes
+Freed:     120 bytes
+Leaked:    0 bytes
+```
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 5
+    %size1 = alloca ptr
+    store %size1 %tmp_const
+    %tmp_const.1 = const.i64 i64 10
+    %size2 = alloca ptr
+    store %size2 %tmp_const.1
+    %tmp_load = load i64 %size1
+    %tmp_const.2 = const.i64 i64 8
+    %tmp_mul = mul i64 %tmp_load %tmp_const.2
+    %tmp_heap = heap.alloc ptr %tmp_mul
+    %arr1 = alloca ptr
+    store %arr1 %tmp_heap
+    %tmp_load.1 = load i64 %size2
+    %tmp_const.3 = const.i64 i64 8
+    %tmp_mul.1 = mul i64 %tmp_load.1 %tmp_const.3
+    %tmp_heap.1 = heap.alloc ptr %tmp_mul.1
+    %arr2 = alloca ptr
+    store %arr2 %tmp_heap.1
+    %tmp_load.2 = load ptr %arr1
+    %tmp_const.4 = const.i64 i64 0
+    %tmp_const.5 = const.i64 i64 1
+    %17 = getelemptr ptr %tmp_load.2 %tmp_const.4
+    store %17 %tmp_const.5
+    %tmp_load.3 = load ptr %arr2
+    %tmp_const.6 = const.i64 i64 0
+    %tmp_const.7 = const.i64 i64 2
+    %21 = getelemptr ptr %tmp_load.3 %tmp_const.6
+    store %21 %tmp_const.7
+    %tmp_load.4 = load ptr %arr1
+    %tmp_const.8 = const.i64 i64 0
+    %24 = getelemptr ptr %tmp_load.4 %tmp_const.8
+    %tmp_load.5 = load i64 %24
+    %tmp_load.6 = load ptr %arr2
+    %tmp_const.9 = const.i64 i64 0
+    %28 = getelemptr ptr %tmp_load.6 %tmp_const.9
+    %tmp_load.7 = load i64 %28
+    %tmp_add = add i64 %tmp_load.5 %tmp_load.7
+    %tmp_load.8 = load ptr %arr1
+    heap.free %tmp_load.8
+    %tmp_load.9 = load ptr %arr2
+    heap.free %tmp_load.9
+    ret %tmp_add
+}
+
+---

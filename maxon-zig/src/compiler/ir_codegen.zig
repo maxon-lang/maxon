@@ -33,6 +33,8 @@ const TrackingDataField = enum(usize) {
     next_alloc_id = 0, // i64: next allocation ID (starts at 0, incremented before use)
     total_allocated = 8, // i64: total bytes allocated
     total_freed = 16, // i64: total bytes freed
+    table_count = 24, // i64: number of entries in tracking table
+    table_base = 32, // start of tracking table (256 entries * 24 bytes each)
 };
 
 /// Patch for RIP-relative access to tracking data
@@ -298,6 +300,18 @@ pub const IrCodegen = struct {
         });
     }
 
+    /// Emit: lea rax, [rip+disp32] - load address of tracking data field to RAX
+    fn emitLeaTrackingField(self: *IrCodegen, field: TrackingDataField) !void {
+        // lea rax, [rip+disp32]
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x05 }); // REX.W lea rax, [rip+disp32]
+        const patch_offset = self.code.items.len;
+        try self.enc.emitI32(0); // placeholder displacement
+        try self.tracking_data_patches.append(self.allocator, .{
+            .code_offset = patch_offset,
+            .field = field,
+        });
+    }
+
     /// Emit: add [rip+disp32], reg - add register to tracking data field
     fn emitAddToTrackingField(self: *IrCodegen, field: TrackingDataField, reg: x86.Gpr) !void {
         // For simplicity, use: load to temp, add, store back
@@ -380,6 +394,9 @@ pub const IrCodegen = struct {
 
         // __track_free - tracks a free
         try self.generateTrackFree();
+
+        // __track_realloc - tracks a reallocation
+        try self.generateTrackRealloc();
     }
 
     /// Generate __enable_alloc_tracking function
@@ -395,6 +412,10 @@ pub const IrCodegen = struct {
     }
 
     /// Generate __print_alloc_summary function - prints alloc stats
+    /// Stack layout:
+    ///   [rbp-56] = total_allocated
+    ///   [rbp-64] = total_freed
+    ///   [rbp-72] = leaked (allocated - freed)
     fn generatePrintAllocSummary(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__print_alloc_summary", self.code.items.len);
 
@@ -412,35 +433,34 @@ pub const IrCodegen = struct {
         try self.emitExternalCall("kernel32.dll", "GetStdHandle");
         try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (stdout handle)
 
-        // Load tracking values into callee-saved registers:
-        // R12 = total_allocated, R13 = total_freed
+        // Load tracking values to stack
         try self.emitLoadTrackingField(.total_allocated);
-        try self.enc.emit(&.{ 0x49, 0x89, 0xC4 }); // mov r12, rax
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC8 }); // mov [rbp-56], rax
         try self.emitLoadTrackingField(.total_freed);
-        try self.enc.emit(&.{ 0x49, 0x89, 0xC5 }); // mov r13, rax
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC0 }); // mov [rbp-64], rax
 
-        // Calculate leaked = allocated - freed, store in R14
-        try self.enc.emit(&.{ 0x4D, 0x89, 0xE6 }); // mov r14, r12 (copy allocated)
-        try self.enc.emit(&.{ 0x4D, 0x29, 0xEE }); // sub r14, r13 (subtract freed)
+        // Calculate leaked = allocated - freed, store in [rbp-72]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xC8 }); // mov rcx, [rbp-56] (allocated)
+        try self.enc.emit(&.{ 0x48, 0x2B, 0x4D, 0xC0 }); // sub rcx, [rbp-64] (freed)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xB8 }); // mov [rbp-72], rcx (leaked)
 
         // Print "\n=== ALLOC STATS ===\nAllocated: "
         try self.printStaticString("\n=== ALLOC STATS ===\nAllocated: ");
 
-        // Print total_allocated (R12)
-        try self.enc.emit(&.{ 0x4C, 0x89, 0xE0 }); // mov rax, r12
-        try self.printNumberFromRax();
+        // Print total_allocated from stack
+        try self.printNumberFromStack(-56);
 
         // Print " bytes\nFreed:     "
         try self.printStaticString(" bytes\nFreed:     ");
 
-        // Print total_freed (R13)
-        try self.printNumberFromR13();
+        // Print total_freed from stack
+        try self.printNumberFromStack(-64);
 
         // Print " bytes\nLeaked:    "
         try self.printStaticString(" bytes\nLeaked:    ");
 
-        // Print leaked (R14)
-        try self.printNumberFromR14();
+        // Print leaked from stack
+        try self.printNumberFromStack(-72);
 
         // Print " bytes\n"
         try self.printStaticString(" bytes\n");
@@ -508,6 +528,11 @@ pub const IrCodegen = struct {
 
     /// Generate __track_alloc - tracks an allocation
     /// Input: RCX = ptr, RDX = size, R8 = tag ptr, R9 = tag len
+    /// Stack layout:
+    ///   [rbp-48] = tag_len (for printTagFromR12)
+    ///   [rbp-56] = ptr
+    ///   [rbp-64] = size
+    ///   [rbp-72] = alloc_id
     fn generateTrackAlloc(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__track_alloc", self.code.items.len);
 
@@ -520,21 +545,52 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
         try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
 
-        // Save size (RDX) to R13, tag ptr (R8) to R12, tag len (R9) to stack
-        try self.enc.emit(&.{ 0x49, 0x89, 0xD5 }); // mov r13, rdx (size)
+        // Save inputs to stack
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xC8 }); // mov [rbp-56], rcx (ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xC0 }); // mov [rbp-64], rdx (size)
         try self.enc.emit(&.{ 0x4D, 0x89, 0xC4 }); // mov r12, r8 (tag ptr)
         try self.enc.emit(&.{ 0x4C, 0x89, 0x4D, 0xD0 }); // mov [rbp-48], r9 (tag len)
 
-        // Increment alloc ID and save to R14
+        // Increment alloc ID and save to stack
         try self.emitLoadTrackingField(.next_alloc_id);
         try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
         try self.emitStoreTrackingField(.next_alloc_id);
-        try self.enc.emit(&.{ 0x49, 0x89, 0xC6 }); // mov r14, rax (alloc ID)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB8 }); // mov [rbp-72], rax (alloc ID)
 
         // Add size to total_allocated
         try self.emitLoadTrackingField(.total_allocated);
-        try self.enc.emit(&.{ 0x4C, 0x01, 0xE8 }); // add rax, r13
+        try self.enc.emit(&.{ 0x48, 0x03, 0x45, 0xC0 }); // add rax, [rbp-64] (size)
         try self.emitStoreTrackingField(.total_allocated);
+
+        // Store entry in tracking table: {ptr, size, id} at table_base + count*24
+        // Get current table count
+        try self.emitLoadTrackingField(.table_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0xC1 }); // mov rcx, rax (count)
+
+        // Calculate offset = count * 24
+        try self.enc.emit(&.{ 0x48, 0x6B, 0xC9, 0x18 }); // imul rcx, rcx, 24
+
+        // Load table base address to RAX
+        try self.emitLeaTrackingField(.table_base);
+        // RAX = table_base, RCX = offset
+        try self.enc.emit(&.{ 0x48, 0x01, 0xC8 }); // add rax, rcx (RAX = entry address)
+
+        // Store ptr at [rax+0]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xC8 }); // mov rcx, [rbp-56] (ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x08 }); // mov [rax], rcx
+
+        // Store size at [rax+8]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xC0 }); // mov rcx, [rbp-64] (size)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x48, 0x08 }); // mov [rax+8], rcx
+
+        // Store id at [rax+16]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xB8 }); // mov rcx, [rbp-72] (alloc ID)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x48, 0x10 }); // mov [rax+16], rcx
+
+        // Increment table count
+        try self.emitLoadTrackingField(.table_count);
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
+        try self.emitStoreTrackingField(.table_count);
 
         // Get stdout handle
         try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
@@ -544,14 +600,14 @@ pub const IrCodegen = struct {
         // Print "ALLOC #"
         try self.printStaticString("ALLOC #");
 
-        // Print alloc ID from R14
-        try self.printNumberFromR14();
+        // Print alloc ID from stack
+        try self.printNumberFromStack(-72);
 
         // Print ": "
         try self.printStaticString(": ");
 
-        // Print size from R13
-        try self.printNumberFromR13();
+        // Print size from stack
+        try self.printNumberFromStack(-64);
 
         // Print " bytes ("
         try self.printStaticString(" bytes (");
@@ -574,6 +630,11 @@ pub const IrCodegen = struct {
 
     /// Generate __track_free - tracks a free
     /// Input: RCX = ptr, RDX = size, R8 = tag ptr, R9 = tag len
+    /// Stack layout:
+    ///   [rbp-48] = tag_len (for printTagFromR12)
+    ///   [rbp-56] = ptr
+    ///   [rbp-64] = size
+    ///   [rbp-72] = alloc_id (saved for printing)
     fn generateTrackFree(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__track_free", self.code.items.len);
 
@@ -586,26 +647,52 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
         try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
 
-        // Save size (RDX) to R13, tag ptr (R8) to R12, tag len (R9) to stack
-        try self.enc.emit(&.{ 0x49, 0x89, 0xD5 }); // mov r13, rdx (size)
+        // Save inputs to stack and registers
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xC8 }); // mov [rbp-56], rcx (ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xC0 }); // mov [rbp-64], rdx (size)
         try self.enc.emit(&.{ 0x4D, 0x89, 0xC4 }); // mov r12, r8 (tag ptr)
         try self.enc.emit(&.{ 0x4C, 0x89, 0x4D, 0xD0 }); // mov [rbp-48], r9 (tag len)
 
         // Add size to total_freed
         try self.emitLoadTrackingField(.total_freed);
-        try self.enc.emit(&.{ 0x4C, 0x01, 0xE8 }); // add rax, r13
+        try self.enc.emit(&.{ 0x48, 0x03, 0x45, 0xC0 }); // add rax, [rbp-64] (size)
         try self.emitStoreTrackingField(.total_freed);
+
+        // Look up ptr in tracking table using helper
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xC8 }); // mov rax, [rbp-56] (ptr)
+        try self.emitTableLookup();
+        // R14 = alloc ID, RDX = entry address (or 0 if not found)
+
+        // Clear entry ptr to prevent reuse (if found)
+        try self.enc.emit(&.{ 0x48, 0x85, 0xD2 }); // test rdx, rdx
+        const skip_clear = try self.enc.jeRel32();
+        try self.enc.emit(&.{ 0x48, 0xC7, 0x02, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rdx], 0
+        const after_clear = self.code.items.len;
+        const skip_rel: i32 = @intCast(@as(i64, @intCast(after_clear)) - @as(i64, @intCast(skip_clear)) - 4);
+        self.code.items[skip_clear] = @bitCast(@as(i8, @intCast(skip_rel & 0xFF)));
+        self.code.items[skip_clear + 1] = @bitCast(@as(i8, @intCast((skip_rel >> 8) & 0xFF)));
+        self.code.items[skip_clear + 2] = @bitCast(@as(i8, @intCast((skip_rel >> 16) & 0xFF)));
+        self.code.items[skip_clear + 3] = @bitCast(@as(i8, @intCast((skip_rel >> 24) & 0xFF)));
+
+        // Save alloc_id to stack for printing
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x75, 0xB8 }); // mov [rbp-72], r14
 
         // Get stdout handle
         try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
         try self.emitExternalCall("kernel32.dll", "GetStdHandle");
         try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (stdout handle)
 
-        // Print "FREE #1: " (for now, hardcode ID 1 since we don't track per-allocation)
-        try self.printStaticString("FREE #1: ");
+        // Print "FREE #"
+        try self.printStaticString("FREE #");
 
-        // Print size from R13
-        try self.printNumberFromR13();
+        // Print alloc ID from stack
+        try self.printNumberFromStack(-72);
+
+        // Print ": "
+        try self.printStaticString(": ");
+
+        // Print size from stack
+        try self.printNumberFromStack(-64);
 
         // Print " bytes ("
         try self.printStaticString(" bytes (");
@@ -618,6 +705,115 @@ pub const IrCodegen = struct {
 
         // Epilogue
         try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
+        try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
+        try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __track_realloc - tracks a reallocation
+    /// Input: RCX = old_ptr, RDX = old_size, R8 = new_ptr, R9 = new_size
+    ///        [rsp+40] = tag_ptr, [rsp+48] = tag_len (after shadow space)
+    /// Stack layout:
+    ///   [rbp-48] = tag_len (for printTagFromR12)
+    ///   [rbp-56] = old_ptr
+    ///   [rbp-64] = old_size
+    ///   [rbp-72] = new_ptr
+    ///   [rbp-80] = new_size  <- KEY FIX: save new_size to stack
+    ///   [rbp-88] = tag_ptr
+    ///   [rbp-96] = tag_len (original)
+    ///   [rbp-104] = stdout_handle
+    ///   [rbp-112] = alloc_id (R14 value saved for later)
+    fn generateTrackRealloc(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__track_realloc", self.code.items.len);
+
+        // Prologue - save callee-saved registers
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
+        try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
+        try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x60 }); // sub rsp, 96
+
+        // Save all inputs to stack immediately
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xC8 }); // mov [rbp-56], rcx (old_ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xC0 }); // mov [rbp-64], rdx (old_size)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x45, 0xB8 }); // mov [rbp-72], r8 (new_ptr)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x4D, 0xB0 }); // mov [rbp-80], r9 (new_size) <- THE FIX
+        // Copy tag_ptr from [rbp+48] to [rbp-88]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0x30 }); // mov rax, [rbp+48]
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xA8 }); // mov [rbp-88], rax
+        // Copy tag_len from [rbp+56] to [rbp-96]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0x38 }); // mov rax, [rbp+56]
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xA0 }); // mov [rbp-96], rax
+
+        // Look up old_ptr in tracking table using helper
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xC8 }); // mov rax, [rbp-56] (old_ptr)
+        try self.emitTableLookup();
+        // R14 = alloc ID, RDX = entry address (or 0 if not found)
+
+        // Save alloc_id to stack for later printing
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x75, 0x90 }); // mov [rbp-112], r14
+
+        // Update the table entry with new_ptr and new_size (keep same ID)
+        // RDX = entry address from lookup
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xB8 }); // mov rax, [rbp-72] (new_ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x02 }); // mov [rdx], rax (new_ptr)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xB0 }); // mov rax, [rbp-80] (new_size)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x42, 0x08 }); // mov [rdx+8], rax (new_size)
+
+        // Update allocation stats:
+        // - Add new_size to total_allocated
+        // - Add old_size to total_freed
+        try self.emitLoadTrackingField(.total_allocated);
+        try self.enc.emit(&.{ 0x48, 0x03, 0x45, 0xB0 }); // add rax, [rbp-80] (new_size)
+        try self.emitStoreTrackingField(.total_allocated);
+
+        try self.emitLoadTrackingField(.total_freed);
+        try self.enc.emit(&.{ 0x48, 0x03, 0x45, 0xC0 }); // add rax, [rbp-64] (old_size)
+        try self.emitStoreTrackingField(.total_freed);
+
+        // Get stdout handle and save to stack
+        try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
+        try self.emitExternalCall("kernel32.dll", "GetStdHandle");
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0x98 }); // mov [rbp-104], rax (stdout)
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax
+
+        // Print "REALLOC #"
+        try self.printStaticString("REALLOC #");
+
+        // Print alloc ID from stack
+        try self.printNumberFromStack(-112);
+
+        // Print ": "
+        try self.printStaticString(": ");
+
+        // Print old_size from stack
+        try self.printNumberFromStack(-64);
+
+        // Print " -> "
+        try self.printStaticString(" -> ");
+
+        // Print new_size from stack (THE FIX - no more second table search!)
+        try self.printNumberFromStack(-80);
+
+        // Print " bytes ("
+        try self.printStaticString(" bytes (");
+
+        // Print tag - load tag_ptr to R12 and tag_len to [rbp-48] for printTagFromR12
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x65, 0xA8 }); // mov r12, [rbp-88] (tag_ptr)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xA0 }); // mov rax, [rbp-96] (tag_len)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xD0 }); // mov [rbp-48], rax (for printTagFromR12)
+        try self.printTagFromR12();
+
+        // Print ")\n"
+        try self.printStaticString(")\n");
+
+        // Epilogue
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x60 }); // add rsp, 96
         try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
         try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
         try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
@@ -670,188 +866,6 @@ pub const IrCodegen = struct {
         try self.enc.popRax();
     }
 
-    /// Helper to print number in R13 - assumes R15 = stdout handle
-    /// Uses stack buffer for conversion, preserves R12-R15
-    fn printNumberFromR13(self: *IrCodegen) !void {
-        // We'll convert the number in R13 to decimal on the stack
-        // Stack layout: [rbp-48] is our 24-byte buffer (more than enough for i64)
-
-        // mov rax, r13 (number to convert)
-        try self.enc.emit(&.{ 0x4C, 0x89, 0xE8 }); // mov rax, r13
-
-        // lea rdi, [rbp-24] (end of buffer - we write backwards)
-        try self.enc.emit(&.{ 0x48, 0x8D, 0x7D, 0xE8 }); // lea rdi, [rbp-24]
-
-        // Store null terminator (not needed for WriteFile, but safe)
-        try self.enc.emit(&.{ 0xC6, 0x07, 0x00 }); // mov byte [rdi], 0
-
-        // mov rcx, 10 (divisor)
-        try self.enc.emit(&.{ 0x48, 0xC7, 0xC1, 0x0A, 0x00, 0x00, 0x00 }); // mov rcx, 10
-
-        // mov rsi, rdi (save end position)
-        try self.enc.emit(&.{ 0x48, 0x89, 0xFE }); // mov rsi, rdi
-
-        // Convert loop
-        const loop_start = self.code.items.len;
-
-        // dec rdi
-        try self.enc.emit(&.{ 0x48, 0xFF, 0xCF }); // dec rdi
-
-        // xor rdx, rdx; div rcx => rax = quotient, rdx = remainder
-        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx
-        try self.enc.emit(&.{ 0x48, 0xF7, 0xF1 }); // div rcx
-
-        // add dl, '0'; mov [rdi], dl
-        try self.enc.emit(&.{ 0x80, 0xC2, 0x30 }); // add dl, '0'
-        try self.enc.emit(&.{ 0x88, 0x17 }); // mov [rdi], dl
-
-        // test rax, rax; jnz loop
-        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
-        const jnz_offset = self.code.items.len;
-        try self.enc.emit(&.{ 0x75, 0x00 }); // jnz rel8 (placeholder)
-        // Patch the jump
-        const jump_back: i8 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(self.code.items.len)));
-        self.code.items[jnz_offset + 1] = @bitCast(jump_back);
-
-        // Now rdi points to start of number string, rsi points to end
-        // Length = rsi - rdi
-        // mov rcx, rsi; sub rcx, rdi => rcx = length
-        try self.enc.emit(&.{ 0x48, 0x89, 0xF1 }); // mov rcx, rsi
-        try self.enc.emit(&.{ 0x48, 0x29, 0xF9 }); // sub rcx, rdi
-        // Save length to rax
-        try self.enc.emit(&.{ 0x48, 0x89, 0xC8 }); // mov rax, rcx
-
-        // WriteFile(hFile=R15, lpBuffer=rdi, nBytes=rax, lpWritten=NULL, lpOverlapped=NULL)
-        try self.enc.emit(&.{ 0x48, 0x89, 0xFA }); // mov rdx, rdi (buffer)
-        try self.enc.emit(&.{ 0x4C, 0x89, 0xF9 }); // mov rcx, r15 (handle)
-        try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax (length)
-        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40
-        try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rsp+32], 0
-        const write_patch = try self.enc.callIndirectRip();
-        try self.external_patches.append(self.allocator, .{
-            .offset = write_patch,
-            .dll = "kernel32.dll",
-            .func_name = "WriteFile",
-        });
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
-    }
-
-    /// Helper to print number in R14 - assumes R15 = stdout handle
-    fn printNumberFromR14(self: *IrCodegen) !void {
-        // mov rax, r14 (number to convert)
-        try self.enc.emit(&.{ 0x4C, 0x89, 0xF0 }); // mov rax, r14
-
-        // lea rdi, [rbp-24] (end of buffer - we write backwards)
-        try self.enc.emit(&.{ 0x48, 0x8D, 0x7D, 0xE8 }); // lea rdi, [rbp-24]
-
-        // Store null terminator
-        try self.enc.emit(&.{ 0xC6, 0x07, 0x00 }); // mov byte [rdi], 0
-
-        // mov rcx, 10 (divisor)
-        try self.enc.emit(&.{ 0x48, 0xC7, 0xC1, 0x0A, 0x00, 0x00, 0x00 }); // mov rcx, 10
-
-        // mov rsi, rdi (save end position)
-        try self.enc.emit(&.{ 0x48, 0x89, 0xFE }); // mov rsi, rdi
-
-        // Convert loop
-        const loop_start = self.code.items.len;
-
-        // dec rdi
-        try self.enc.emit(&.{ 0x48, 0xFF, 0xCF }); // dec rdi
-
-        // xor rdx, rdx; div rcx => rax = quotient, rdx = remainder
-        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx
-        try self.enc.emit(&.{ 0x48, 0xF7, 0xF1 }); // div rcx
-
-        // add dl, '0'; mov [rdi], dl
-        try self.enc.emit(&.{ 0x80, 0xC2, 0x30 }); // add dl, '0'
-        try self.enc.emit(&.{ 0x88, 0x17 }); // mov [rdi], dl
-
-        // test rax, rax; jnz loop
-        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
-        const jnz_offset = self.code.items.len;
-        try self.enc.emit(&.{ 0x75, 0x00 }); // jnz rel8 (placeholder)
-        const jump_back: i8 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(self.code.items.len)));
-        self.code.items[jnz_offset + 1] = @bitCast(jump_back);
-
-        // Now rdi points to start of number string, rsi points to end
-        try self.enc.emit(&.{ 0x48, 0x89, 0xF1 }); // mov rcx, rsi
-        try self.enc.emit(&.{ 0x48, 0x29, 0xF9 }); // sub rcx, rdi
-        try self.enc.emit(&.{ 0x48, 0x89, 0xC8 }); // mov rax, rcx
-
-        // WriteFile
-        try self.enc.emit(&.{ 0x48, 0x89, 0xFA }); // mov rdx, rdi (buffer)
-        try self.enc.emit(&.{ 0x4C, 0x89, 0xF9 }); // mov rcx, r15 (handle)
-        try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax (length)
-        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40
-        try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rsp+32], 0
-        const write_patch = try self.enc.callIndirectRip();
-        try self.external_patches.append(self.allocator, .{
-            .offset = write_patch,
-            .dll = "kernel32.dll",
-            .func_name = "WriteFile",
-        });
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
-    }
-
-    /// Helper to print number in RAX - assumes R15 = stdout handle
-    fn printNumberFromRax(self: *IrCodegen) !void {
-        // lea rdi, [rbp-24] (end of buffer - we write backwards)
-        try self.enc.emit(&.{ 0x48, 0x8D, 0x7D, 0xE8 }); // lea rdi, [rbp-24]
-
-        // Store null terminator
-        try self.enc.emit(&.{ 0xC6, 0x07, 0x00 }); // mov byte [rdi], 0
-
-        // mov rcx, 10 (divisor)
-        try self.enc.emit(&.{ 0x48, 0xC7, 0xC1, 0x0A, 0x00, 0x00, 0x00 }); // mov rcx, 10
-
-        // mov rsi, rdi (save end position)
-        try self.enc.emit(&.{ 0x48, 0x89, 0xFE }); // mov rsi, rdi
-
-        // Convert loop
-        const loop_start = self.code.items.len;
-
-        // dec rdi
-        try self.enc.emit(&.{ 0x48, 0xFF, 0xCF }); // dec rdi
-
-        // xor rdx, rdx; div rcx => rax = quotient, rdx = remainder
-        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx
-        try self.enc.emit(&.{ 0x48, 0xF7, 0xF1 }); // div rcx
-
-        // add dl, '0'; mov [rdi], dl
-        try self.enc.emit(&.{ 0x80, 0xC2, 0x30 }); // add dl, '0'
-        try self.enc.emit(&.{ 0x88, 0x17 }); // mov [rdi], dl
-
-        // test rax, rax; jnz loop
-        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
-        const jnz_offset = self.code.items.len;
-        try self.enc.emit(&.{ 0x75, 0x00 }); // jnz rel8 (placeholder)
-        const jump_back: i8 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(self.code.items.len)));
-        self.code.items[jnz_offset + 1] = @bitCast(jump_back);
-
-        // Now rdi points to start of number string, rsi points to end
-        try self.enc.emit(&.{ 0x48, 0x89, 0xF1 }); // mov rcx, rsi
-        try self.enc.emit(&.{ 0x48, 0x29, 0xF9 }); // sub rcx, rdi
-        try self.enc.emit(&.{ 0x48, 0x89, 0xC8 }); // mov rax, rcx
-
-        // WriteFile
-        try self.enc.emit(&.{ 0x48, 0x89, 0xFA }); // mov rdx, rdi (buffer)
-        try self.enc.emit(&.{ 0x4C, 0x89, 0xF9 }); // mov rcx, r15 (handle)
-        try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax (length)
-        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40
-        try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rsp+32], 0
-        const write_patch = try self.enc.callIndirectRip();
-        try self.external_patches.append(self.allocator, .{
-            .offset = write_patch,
-            .dll = "kernel32.dll",
-            .func_name = "WriteFile",
-        });
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
-    }
-
     /// Helper to print tag string from R12 (ptr) with length from [rbp-48]
     /// Assumes R15 = stdout handle
     fn printTagFromR12(self: *IrCodegen) !void {
@@ -872,6 +886,158 @@ pub const IrCodegen = struct {
             .func_name = "WriteFile",
         });
         try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
+    }
+
+    /// Emit WriteFile call with buffer in RDX and length in R8
+    /// Assumes R15 = stdout handle
+    fn emitWriteFileCall(self: *IrCodegen) !void {
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xF9 }); // mov rcx, r15 (handle)
+        // RDX already has buffer, R8 already has length
+        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40
+        try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rsp+32], 0
+        const write_patch = try self.enc.callIndirectRip();
+        try self.external_patches.append(self.allocator, .{
+            .offset = write_patch,
+            .dll = "kernel32.dll",
+            .func_name = "WriteFile",
+        });
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
+    }
+
+    /// Helper to print number from a stack offset - assumes R15 = stdout handle
+    /// Uses [rbp-40] as conversion buffer. Converts number at [rbp+stack_offset] to decimal and prints.
+    fn printNumberFromStack(self: *IrCodegen, stack_offset: i8) !void {
+        // Load number from stack to RAX
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, @bitCast(stack_offset) }); // mov rax, [rbp+offset]
+
+        // lea rdi, [rbp-40] (end of buffer - we write backwards)
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x7D, 0xD8 }); // lea rdi, [rbp-40]
+
+        // Store null terminator
+        try self.enc.emit(&.{ 0xC6, 0x07, 0x00 }); // mov byte [rdi], 0
+
+        // mov rcx, 10 (divisor)
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC1, 0x0A, 0x00, 0x00, 0x00 }); // mov rcx, 10
+
+        // mov rsi, rdi (save end position)
+        try self.enc.emit(&.{ 0x48, 0x89, 0xFE }); // mov rsi, rdi
+
+        // Convert loop
+        const loop_start = self.code.items.len;
+
+        // dec rdi
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xCF }); // dec rdi
+
+        // xor rdx, rdx; div rcx => rax = quotient, rdx = remainder
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx
+        try self.enc.emit(&.{ 0x48, 0xF7, 0xF1 }); // div rcx
+
+        // add dl, '0'; mov [rdi], dl
+        try self.enc.emit(&.{ 0x80, 0xC2, 0x30 }); // add dl, '0'
+        try self.enc.emit(&.{ 0x88, 0x17 }); // mov [rdi], dl
+
+        // test rax, rax; jnz loop
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+        const jnz_offset = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jnz rel8 (placeholder)
+        const jump_back: i8 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(self.code.items.len)));
+        self.code.items[jnz_offset + 1] = @bitCast(jump_back);
+
+        // Now rdi points to start of number string, rsi points to end
+        // Length = rsi - rdi
+        try self.enc.emit(&.{ 0x48, 0x89, 0xF0 }); // mov rax, rsi
+        try self.enc.emit(&.{ 0x48, 0x29, 0xF8 }); // sub rax, rdi (rax = length)
+
+        // Set up WriteFile: RDX = buffer (rdi), R8 = length (rax)
+        try self.enc.emit(&.{ 0x48, 0x89, 0xFA }); // mov rdx, rdi (buffer)
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax (length)
+        try self.emitWriteFileCall();
+    }
+
+    /// Emit table lookup for a pointer - searches tracking table for ptr in RAX
+    /// Output: R14 = allocation ID (0 if not found), RDX = entry address (0 if not found)
+    fn emitTableLookup(self: *IrCodegen) !void {
+        // Save search ptr to R8
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax
+
+        // Default R14 = 0 (not found)
+        try self.enc.emit(&.{ 0x4D, 0x31, 0xF6 }); // xor r14, r14
+
+        // Load table count to RCX
+        try self.emitLoadTrackingField(.table_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0xC1 }); // mov rcx, rax (count)
+
+        // Load table base to RDX
+        try self.emitLeaTrackingField(.table_base);
+        try self.enc.emit(&.{ 0x48, 0x89, 0xC2 }); // mov rdx, rax (table base)
+
+        // Restore search ptr to RAX
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xC0 }); // mov rax, r8
+
+        // Loop: search for ptr in table
+        const loop_start = self.code.items.len;
+
+        // Check if count == 0
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC9 }); // test rcx, rcx
+        const exit_jmp = try self.enc.jeRel32(); // je to exit
+
+        // Compare [rdx+0] (entry ptr) with rax (search ptr)
+        try self.enc.emit(&.{ 0x48, 0x3B, 0x02 }); // cmp rax, [rdx]
+        const not_found_jmp = try self.enc.jneRel32(); // jne to next iteration
+
+        // Found! Load ID from [rdx+16] into R14
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x72, 0x10 }); // mov r14, [rdx+16]
+        const found_jmp = try self.enc.jmpRel32(); // jmp to after_loop
+
+        // Not found - advance to next entry
+        const next_iter = self.code.items.len;
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC2, 0x18 }); // add rdx, 24 (next entry)
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC9 }); // dec rcx
+
+        // Jump back to loop start
+        const back_offset: i32 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(self.code.items.len)) - 5);
+        try self.enc.emit(&.{0xE9}); // jmp rel32
+        try self.enc.emitI32(back_offset);
+
+        // Not found exit - clear RDX to indicate not found
+        const not_found_exit = self.code.items.len;
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx
+        const skip_found = try self.enc.jmpRel32();
+
+        // Found exit - RDX already has entry address
+        const found_exit = self.code.items.len;
+
+        // After loop (for skip_found jump)
+        const after_loop = self.code.items.len;
+
+        // Patch exit_jmp -> not_found_exit
+        const exit_rel: i32 = @intCast(@as(i64, @intCast(not_found_exit)) - @as(i64, @intCast(exit_jmp)) - 4);
+        self.code.items[exit_jmp] = @bitCast(@as(i8, @intCast(exit_rel & 0xFF)));
+        self.code.items[exit_jmp + 1] = @bitCast(@as(i8, @intCast((exit_rel >> 8) & 0xFF)));
+        self.code.items[exit_jmp + 2] = @bitCast(@as(i8, @intCast((exit_rel >> 16) & 0xFF)));
+        self.code.items[exit_jmp + 3] = @bitCast(@as(i8, @intCast((exit_rel >> 24) & 0xFF)));
+
+        // Patch not_found_jmp -> next_iter
+        const not_found_rel: i32 = @intCast(@as(i64, @intCast(next_iter)) - @as(i64, @intCast(not_found_jmp)) - 4);
+        self.code.items[not_found_jmp] = @bitCast(@as(i8, @intCast(not_found_rel & 0xFF)));
+        self.code.items[not_found_jmp + 1] = @bitCast(@as(i8, @intCast((not_found_rel >> 8) & 0xFF)));
+        self.code.items[not_found_jmp + 2] = @bitCast(@as(i8, @intCast((not_found_rel >> 16) & 0xFF)));
+        self.code.items[not_found_jmp + 3] = @bitCast(@as(i8, @intCast((not_found_rel >> 24) & 0xFF)));
+
+        // Patch found_jmp -> found_exit
+        const found_rel: i32 = @intCast(@as(i64, @intCast(found_exit)) - @as(i64, @intCast(found_jmp)) - 4);
+        self.code.items[found_jmp] = @bitCast(@as(i8, @intCast(found_rel & 0xFF)));
+        self.code.items[found_jmp + 1] = @bitCast(@as(i8, @intCast((found_rel >> 8) & 0xFF)));
+        self.code.items[found_jmp + 2] = @bitCast(@as(i8, @intCast((found_rel >> 16) & 0xFF)));
+        self.code.items[found_jmp + 3] = @bitCast(@as(i8, @intCast((found_rel >> 24) & 0xFF)));
+
+        // Patch skip_found -> after_loop
+        const skip_rel: i32 = @intCast(@as(i64, @intCast(after_loop)) - @as(i64, @intCast(skip_found)) - 4);
+        self.code.items[skip_found] = @bitCast(@as(i8, @intCast(skip_rel & 0xFF)));
+        self.code.items[skip_found + 1] = @bitCast(@as(i8, @intCast((skip_rel >> 8) & 0xFF)));
+        self.code.items[skip_found + 2] = @bitCast(@as(i8, @intCast((skip_rel >> 16) & 0xFF)));
+        self.code.items[skip_found + 3] = @bitCast(@as(i8, @intCast((skip_rel >> 24) & 0xFF)));
     }
 
     fn patchCalls(self: *IrCodegen) !void {
@@ -898,7 +1064,7 @@ pub const IrCodegen = struct {
         self.current_func_name = func.name;
         self.current_func_ret_type = func.return_type;
 
-        try self.enc.prologue(256);
+        try self.enc.prologue(512);
 
         // Generate code for each block, recording block start offsets
         for (func.blocks.items) |block| {
@@ -952,6 +1118,7 @@ pub const IrCodegen = struct {
             .memcpy => try self.genMemcpy(inst),
             .heap_alloc => try self.genHeapAlloc(inst),
             .heap_free => try self.genHeapFree(inst),
+            .heap_realloc => try self.genHeapRealloc(inst),
             .fcmp_eq => try self.genFcmpEq(inst),
             .icmp_eq => try self.genIcmp(inst, .eq),
             .icmp_ne => try self.genIcmp(inst, .ne),
@@ -980,6 +1147,7 @@ pub const IrCodegen = struct {
     fn genAlloca(self: *IrCodegen, inst: ir.Instruction) !void {
         const offset = self.allocStackSlots(1);
         try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = offset });
+        try self.value_types.put(self.allocator, inst.result.?, inst.result_type);
     }
 
     fn genAllocaSized(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -1165,13 +1333,6 @@ pub const IrCodegen = struct {
             } else {
                 try self.enc.movRaxMem(.rcx);
             }
-            // When loading a pointer from an indirect source, mark result as indirect
-            // because the loaded value is itself a pointer that points elsewhere
-            if (ty == .ptr) {
-                try self.storeToStack(result, ty);
-                try self.markIndirect(result);
-                return;
-            }
         } else {
             if (ty == .f64) {
                 try self.enc.movsdXmm0RbpOffset(offset);
@@ -1180,6 +1341,11 @@ pub const IrCodegen = struct {
             }
         }
         try self.storeToStack(result, ty);
+        // When loading a pointer, mark result as indirect because the loaded value
+        // is itself a pointer that points elsewhere (e.g., heap memory)
+        if (ty == .ptr) {
+            try self.markIndirect(result);
+        }
     }
 
     fn genIntBinaryOp(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -1394,6 +1560,24 @@ pub const IrCodegen = struct {
         try self.loadToRax(size_val);
         try self.enc.movR12Rax();
 
+        // Check for zero-size allocation - skip allocation and return null
+        // test r12, r12
+        try self.enc.emit(&.{ 0x4D, 0x85, 0xE4 });
+        // jnz do_alloc (jump if size != 0)
+        const zero_check_jnz = try self.enc.jneRel32();
+
+        // Size is 0 - set result to null and skip allocation
+        try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax (null pointer)
+        const skip_alloc_jmp = try self.enc.jmpRel32(); // jump to after allocation
+
+        // Patch the jnz to jump here (start of actual allocation)
+        const do_alloc_pos = self.code.items.len;
+        const zero_check_rel: i32 = @intCast(do_alloc_pos - zero_check_jnz - 4);
+        self.code.items[zero_check_jnz] = @truncate(@as(u32, @bitCast(zero_check_rel)));
+        self.code.items[zero_check_jnz + 1] = @truncate(@as(u32, @bitCast(zero_check_rel)) >> 8);
+        self.code.items[zero_check_jnz + 2] = @truncate(@as(u32, @bitCast(zero_check_rel)) >> 16);
+        self.code.items[zero_check_jnz + 3] = @truncate(@as(u32, @bitCast(zero_check_rel)) >> 24);
+
         try self.emitExternalCall("kernel32.dll", "GetProcessHeap");
 
         // HeapAlloc(hHeap=RAX, dwFlags=0, dwBytes=size)
@@ -1440,6 +1624,14 @@ pub const IrCodegen = struct {
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE8 }); // mov rax, r13
         }
 
+        // Patch the skip_alloc_jmp to jump here (after allocation, before store)
+        const after_alloc_pos = self.code.items.len;
+        const skip_alloc_rel: i32 = @intCast(after_alloc_pos - skip_alloc_jmp - 4);
+        self.code.items[skip_alloc_jmp] = @truncate(@as(u32, @bitCast(skip_alloc_rel)));
+        self.code.items[skip_alloc_jmp + 1] = @truncate(@as(u32, @bitCast(skip_alloc_rel)) >> 8);
+        self.code.items[skip_alloc_jmp + 2] = @truncate(@as(u32, @bitCast(skip_alloc_rel)) >> 16);
+        self.code.items[skip_alloc_jmp + 3] = @truncate(@as(u32, @bitCast(skip_alloc_rel)) >> 24);
+
         try self.storeToStack(inst.result.?, .ptr);
         try self.markIndirect(inst.result.?);
     }
@@ -1451,6 +1643,22 @@ pub const IrCodegen = struct {
         // Save ptr to R12
         try self.loadToRax(ptr_val);
         try self.enc.movR12Rax();
+
+        // Check for null pointer - skip free if null (zero-size allocation)
+        // test r12, r12
+        try self.enc.emit(&.{ 0x4D, 0x85, 0xE4 });
+        // jnz do_free (jump if ptr != null)
+        const null_check_jnz = try self.enc.jneRel32();
+        // Ptr is null - skip to end
+        const skip_free_jmp = try self.enc.jmpRel32();
+
+        // Patch the jnz to jump here (start of actual free)
+        const do_free_pos = self.code.items.len;
+        const null_check_rel: i32 = @intCast(do_free_pos - null_check_jnz - 4);
+        self.code.items[null_check_jnz] = @truncate(@as(u32, @bitCast(null_check_rel)));
+        self.code.items[null_check_jnz + 1] = @truncate(@as(u32, @bitCast(null_check_rel)) >> 8);
+        self.code.items[null_check_jnz + 2] = @truncate(@as(u32, @bitCast(null_check_rel)) >> 16);
+        self.code.items[null_check_jnz + 3] = @truncate(@as(u32, @bitCast(null_check_rel)) >> 24);
 
         // If tracking enabled, get size via HeapSize and call __track_free
         if (self.track_allocs) {
@@ -1507,6 +1715,214 @@ pub const IrCodegen = struct {
         try self.enc.movR8R12();
 
         try self.emitExternalCall("kernel32.dll", "HeapFree");
+
+        // Patch skip_free_jmp to jump here (after free)
+        const after_free_pos = self.code.items.len;
+        const skip_free_rel: i32 = @intCast(after_free_pos - skip_free_jmp - 4);
+        self.code.items[skip_free_jmp] = @truncate(@as(u32, @bitCast(skip_free_rel)));
+        self.code.items[skip_free_jmp + 1] = @truncate(@as(u32, @bitCast(skip_free_rel)) >> 8);
+        self.code.items[skip_free_jmp + 2] = @truncate(@as(u32, @bitCast(skip_free_rel)) >> 16);
+        self.code.items[skip_free_jmp + 3] = @truncate(@as(u32, @bitCast(skip_free_rel)) >> 24);
+    }
+
+    fn genHeapRealloc(self: *IrCodegen, inst: ir.Instruction) !void {
+        const old_ptr = inst.operands[0].value;
+        const new_size = inst.operands[1].value;
+        debug.codegen("  HeapRealloc: old_ptr=%{d}, new_size=%{d}", .{ old_ptr, new_size });
+
+        // Save old_ptr to R12, new_size to R13 (callee-saved)
+        try self.loadToRax(old_ptr);
+        try self.enc.movR12Rax();
+        try self.loadToRax(new_size);
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC5 }); // mov r13, rax (new_size)
+
+        // Check if old_ptr is NULL - if so, use HeapAlloc instead
+        // test r12, r12
+        try self.enc.emit(&.{ 0x4D, 0x85, 0xE4 });
+        // jnz do_realloc (jump if old_ptr != NULL)
+        const null_check_jnz = try self.enc.jneRel32();
+
+        // === NULL PATH: old_ptr is NULL - call HeapAlloc(hHeap, 0, new_size) ===
+        try self.emitExternalCall("kernel32.dll", "GetProcessHeap");
+        try self.enc.movRcxRax(); // hHeap
+        try self.enc.xorRdxRdx(); // dwFlags = 0
+        try self.enc.emit(&.{ 0x4D, 0x89, 0xE8 }); // mov r8, r13 (dwBytes = new_size)
+        try self.emitExternalCall("kernel32.dll", "HeapAlloc");
+        // RAX = new_ptr, R13 = new_size
+
+        // If tracking enabled, call __track_alloc for this new allocation
+        if (self.track_allocs) {
+            // Save ptr to R12 across the tracking call
+            try self.enc.movR12Rax();
+
+            // Embed tag string "dynamic array" after a jump
+            const tag = "dynamic array";
+            const jmp_offset = try self.enc.jmpRel32();
+            const tag_pos = self.code.items.len;
+            try self.code.appendSlice(self.allocator, tag);
+            const after_tag = self.code.items.len;
+            // Patch jump
+            const jmp_rel: i32 = @intCast(after_tag - jmp_offset - 4);
+            self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(jmp_rel & 0xFF)));
+            self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((jmp_rel >> 8) & 0xFF)));
+            self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((jmp_rel >> 16) & 0xFF)));
+            self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((jmp_rel >> 24) & 0xFF)));
+
+            // LEA R8, [RIP - offset_to_tag]
+            const rip_offset: i32 = -@as(i32, @intCast(after_tag - tag_pos + 7));
+            try self.enc.emit(&.{ 0x4C, 0x8D, 0x05 }); // lea r8, [rip+disp32]
+            try self.enc.emitI32(rip_offset);
+
+            // mov r9, tag_len
+            try self.enc.emit(&.{ 0x49, 0xC7, 0xC1 }); // mov r9, imm32
+            try self.enc.emitI32(@intCast(tag.len));
+
+            try self.enc.emit(&.{ 0x4C, 0x89, 0xE1 }); // mov rcx, r12 (ptr)
+            try self.enc.emit(&.{ 0x4C, 0x89, 0xEA }); // mov rdx, r13 (size)
+            try self.enc.allocShadowSpace();
+            const track_patch = try self.enc.callRel32();
+            try self.call_patches.append(self.allocator, .{ .offset = track_patch, .target_func = "__track_alloc" });
+            try self.enc.freeShadowSpace();
+            // Restore ptr from R12 to RAX
+            try self.enc.emit(&.{ 0x4C, 0x89, 0xE0 }); // mov rax, r12
+        }
+
+        // Result is in RAX, jump to end
+        const skip_realloc_jmp = try self.enc.jmpRel32();
+
+        // Patch the jnz to jump here (start of realloc path)
+        const do_realloc_pos = self.code.items.len;
+        const null_check_rel: i32 = @intCast(do_realloc_pos - null_check_jnz - 4);
+        self.code.items[null_check_jnz] = @truncate(@as(u32, @bitCast(null_check_rel)));
+        self.code.items[null_check_jnz + 1] = @truncate(@as(u32, @bitCast(null_check_rel)) >> 8);
+        self.code.items[null_check_jnz + 2] = @truncate(@as(u32, @bitCast(null_check_rel)) >> 16);
+        self.code.items[null_check_jnz + 3] = @truncate(@as(u32, @bitCast(null_check_rel)) >> 24);
+
+        // === REALLOC PATH: old_ptr is not NULL ===
+        // If tracking, get old_size first (before realloc invalidates old_ptr)
+        if (self.track_allocs) {
+            // Get heap handle
+            try self.emitExternalCall("kernel32.dll", "GetProcessHeap");
+            try self.enc.emit(&.{ 0x49, 0x89, 0xC6 }); // mov r14, rax (save heap handle)
+
+            // HeapSize to get old size
+            try self.enc.emit(&.{ 0x4C, 0x89, 0xF1 }); // mov rcx, r14 (heap)
+            try self.enc.xorRdxRdx(); // flags = 0
+            try self.enc.movR8R12(); // ptr
+            try self.emitExternalCall("kernel32.dll", "HeapSize");
+            // RAX now has old size, save to R15
+            try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (old size)
+
+            // Now do the actual realloc - restore heap handle
+            try self.enc.emit(&.{ 0x4C, 0x89, 0xF1 }); // mov rcx, r14 (hHeap)
+        } else {
+            // Get process heap
+            try self.emitExternalCall("kernel32.dll", "GetProcessHeap");
+            try self.enc.movRcxRax(); // hHeap
+        }
+
+        // HeapReAlloc(hHeap=RCX, dwFlags=0, lpMem=R12, dwBytes=R13)
+        try self.enc.xorRdxRdx(); // dwFlags = 0
+        try self.enc.movR8R12(); // lpMem (old pointer)
+        try self.enc.emit(&.{ 0x4D, 0x89, 0xE9 }); // mov r9, r13 (dwBytes = new size)
+
+        try self.emitExternalCall("kernel32.dll", "HeapReAlloc");
+        // RAX = new_ptr. Save to R14 (reuse, heap handle no longer needed)
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC6 }); // mov r14, rax (new_ptr)
+
+        // If tracking, call __track_realloc(old_ptr, old_size, new_ptr, new_size, tag_ptr, tag_len)
+        // R12 = old_ptr, R15 = old_size, R14 = new_ptr, R13 = new_size
+        if (self.track_allocs) {
+            // Embed tag string "dynamic array" after a jump
+            const tag = "dynamic array";
+            const jmp_offset = try self.enc.jmpRel32();
+            const tag_pos = self.code.items.len;
+            try self.code.appendSlice(self.allocator, tag);
+            const after_tag = self.code.items.len;
+            // Patch jump
+            const rel: i32 = @intCast(after_tag - jmp_offset - 4);
+            self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(rel & 0xFF)));
+            self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((rel >> 8) & 0xFF)));
+            self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((rel >> 16) & 0xFF)));
+            self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((rel >> 24) & 0xFF)));
+
+            // Set up args: RCX=old_ptr, RDX=old_size, R8=new_ptr, R9=new_size
+            try self.enc.emit(&.{ 0x4C, 0x89, 0xE1 }); // mov rcx, r12 (old_ptr)
+            try self.enc.emit(&.{ 0x4C, 0x89, 0xFA }); // mov rdx, r15 (old_size)
+            try self.enc.emit(&.{ 0x4D, 0x89, 0xF0 }); // mov r8, r14 (new_ptr)
+            try self.enc.emit(&.{ 0x4D, 0x89, 0xE9 }); // mov r9, r13 (new_size)
+
+            // Stack args: tag_ptr at [rsp+32], tag_len at [rsp+40]
+            try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x38 }); // sub rsp, 56 (shadow + 2 args)
+
+            // LEA RAX, [RIP + disp32] for tag_ptr
+            // RIP will point after the LEA instruction (7 bytes: 3 opcode + 4 disp)
+            // We need to compute offset from that RIP to tag_pos
+            const lea_pos = self.code.items.len;
+            const rip_after_lea = lea_pos + 7;
+            const rip_offset: i32 = @intCast(@as(i64, @intCast(tag_pos)) - @as(i64, @intCast(rip_after_lea)));
+            try self.enc.emit(&.{ 0x48, 0x8D, 0x05 }); // lea rax, [rip+disp32]
+            try self.enc.emitI32(rip_offset);
+            try self.enc.emit(&.{ 0x48, 0x89, 0x44, 0x24, 0x20 }); // mov [rsp+32], rax (tag_ptr)
+
+            // mov [rsp+40], tag_len
+            try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x28 }); // mov qword [rsp+40], imm32
+            try self.enc.emitI32(@intCast(tag.len));
+
+            const track_patch = try self.enc.callRel32();
+            try self.call_patches.append(self.allocator, .{ .offset = track_patch, .target_func = "__track_realloc" });
+            try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x38 }); // add rsp, 56
+
+            // Restore new_ptr from R14 to RAX
+            try self.enc.emit(&.{ 0x4C, 0x89, 0xF0 }); // mov rax, r14
+        } else {
+            // Restore new_ptr from R14 to RAX
+            try self.enc.emit(&.{ 0x4C, 0x89, 0xF0 }); // mov rax, r14
+        }
+
+        // Patch the skip_realloc_jmp to jump here (both paths converge)
+        const end_pos = self.code.items.len;
+        const skip_rel: i32 = @intCast(end_pos - skip_realloc_jmp - 4);
+        self.code.items[skip_realloc_jmp] = @truncate(@as(u32, @bitCast(skip_rel)));
+        self.code.items[skip_realloc_jmp + 1] = @truncate(@as(u32, @bitCast(skip_rel)) >> 8);
+        self.code.items[skip_realloc_jmp + 2] = @truncate(@as(u32, @bitCast(skip_rel)) >> 16);
+        self.code.items[skip_realloc_jmp + 3] = @truncate(@as(u32, @bitCast(skip_rel)) >> 24);
+
+        // Result is in RAX
+        try self.storeToStack(inst.result.?, .ptr);
+        try self.markIndirect(inst.result.?);
+    }
+
+    fn emitTrackFreeCall(self: *IrCodegen) !void {
+        // Track free: ptr in R12, size in R15
+        // Embed tag string after a jump
+        const tag = "dynamic array";
+        const jmp_offset = try self.enc.jmpRel32();
+        const tag_pos = self.code.items.len;
+        try self.code.appendSlice(self.allocator, tag);
+        const after_tag = self.code.items.len;
+        // Patch jump
+        const rel: i32 = @intCast(after_tag - jmp_offset - 4);
+        self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(rel & 0xFF)));
+        self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((rel >> 8) & 0xFF)));
+        self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((rel >> 16) & 0xFF)));
+        self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((rel >> 24) & 0xFF)));
+
+        // LEA R8, [RIP - offset_to_tag]
+        const rip_offset: i32 = -@as(i32, @intCast(after_tag - tag_pos + 7));
+        try self.enc.emit(&.{ 0x4C, 0x8D, 0x05 }); // lea r8, [rip+disp32]
+        try self.enc.emitI32(rip_offset);
+
+        // mov r9, tag_len
+        try self.enc.emit(&.{ 0x49, 0xC7, 0xC1 }); // mov r9, imm32
+        try self.enc.emitI32(@intCast(tag.len));
+
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xE1 }); // mov rcx, r12 (ptr)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xFA }); // mov rdx, r15 (size)
+        try self.enc.allocShadowSpace();
+        const patch_offset = try self.enc.callRel32();
+        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = "__track_free" });
+        try self.enc.freeShadowSpace();
     }
 
     fn genFcmpEq(self: *IrCodegen, inst: ir.Instruction) !void {

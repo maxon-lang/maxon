@@ -1,26 +1,29 @@
-// Test: alloc-tracking.dynamic-array-no-leak.1
+// Test: alloc-tracking.array-early-return-true.1
 function main() returns int
-    let size = 10
+    let size = 5
     var arr = array of size int
     arr[0] = 42
-    return arr[0]
+    if true 'check'
+        return arr[0]
+    end 'check'
+    return 0
 end 'main'
 ---
 ExitCode: 42
 TrackAllocs: true
 Stdout: ```
-ALLOC #1: 80 bytes (dynamic array)
-FREE #1: 80 bytes (dynamic array)
+ALLOC #1: 40 bytes (dynamic array)
+FREE #1: 40 bytes (dynamic array)
 
 === ALLOC STATS ===
-Allocated: 80 bytes
-Freed:     80 bytes
+Allocated: 40 bytes
+Freed:     40 bytes
 Leaked:    0 bytes
 ```
 ---
 function main() -> i64 {
 entry:
-    %tmp_const = const.i64 i64 10
+    %tmp_const = const.i64 i64 5
     %size = alloca ptr
     store %size %tmp_const
     %tmp_load = load i64 %size
@@ -34,13 +37,21 @@ entry:
     %tmp_const.3 = const.i64 i64 42
     %10 = getelemptr ptr %tmp_load.1 %tmp_const.2
     store %10 %tmp_const.3
+    %tmp_const.4 = const.i64 i64 1
+    %tmp_load = br.cond %tmp_const.4 @block1
+then:
     %tmp_load.2 = load ptr %arr
-    %tmp_const.4 = const.i64 i64 0
-    %13 = getelemptr ptr %tmp_load.2 %tmp_const.4
-    %tmp_load.3 = load i64 %13
+    %tmp_const.5 = const.i64 i64 0
+    %14 = getelemptr ptr %tmp_load.2 %tmp_const.5
+    %tmp_load.3 = load i64 %14
     %tmp_load.4 = load ptr %arr
     heap.free %tmp_load.4
     ret %tmp_load.3
+end:
+    %tmp_const.6 = const.i64 i64 0
+    %tmp_load.5 = load ptr %arr
+    heap.free %tmp_load.5
+    ret %tmp_const.6
 }
 
 ---

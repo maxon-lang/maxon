@@ -98,6 +98,7 @@ pub const Instruction = struct {
         // Heap allocation
         heap_alloc, // Allocate heap memory, returns ptr
         heap_free, // Free heap memory
+        heap_realloc, // Reallocate heap memory: old_ptr, new_size -> new_ptr
 
         pub fn format(self: Op) []const u8 {
             return switch (self) {
@@ -143,6 +144,7 @@ pub const Instruction = struct {
                 .memcpy => "memcpy",
                 .heap_alloc => "heap.alloc",
                 .heap_free => "heap.free",
+                .heap_realloc => "heap.realloc",
             };
         }
     };
@@ -300,6 +302,7 @@ pub const Function = struct {
             .memcpy => "tmp_memcpy",
             .heap_alloc => "tmp_heap",
             .heap_free => "tmp_free",
+            .heap_realloc => "tmp_realloc",
         };
     }
 
@@ -342,10 +345,12 @@ pub const Function = struct {
     }
 
     pub fn emitAllocaSized(self: *Function, size_bytes: i32) !Value {
+        if (size_bytes <= 0) return error.ZeroSizeAllocation;
         return self.emitWithResult(.alloca_sized, .ptr, .{ .{ .immediate_i32 = size_bytes }, .none });
     }
 
     pub fn emitAllocaDynamic(self: *Function, size_value: Value) !Value {
+        // Note: for dynamic sizes, zero-check must happen at runtime
         return self.emitWithResult(.alloca_dynamic, .ptr, .{ .{ .value = size_value }, .none });
     }
 
@@ -423,6 +428,10 @@ pub const Function = struct {
 
     pub fn emitHeapFree(self: *Function, ptr: Value) !void {
         try self.emit(.{ .op = .heap_free, .operands = .{ .{ .value = ptr }, .none } });
+    }
+
+    pub fn emitHeapRealloc(self: *Function, old_ptr: Value, new_size: Value) !Value {
+        return self.emitWithResult(.heap_realloc, .ptr, .{ .{ .value = old_ptr }, .{ .value = new_size } });
     }
 };
 

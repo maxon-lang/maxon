@@ -81,6 +81,10 @@ pub const MutationAnalyzer = struct {
                 // Standalone call statements don't directly mutate parameters
                 // (mutations happen inside the called function)
             },
+            .method_call => |mcall| {
+                // Method calls like arr.push(x) mutate the base array
+                self.checkExpressionForParamMutation(mcall.base.*, param_indices, mutated);
+            },
             .field_assign => |assign| {
                 // Field assignment - check if base is a parameter (e.g., d.value = 100)
                 self.checkExpressionForParamMutation(assign.base.*, param_indices, mutated);
@@ -126,6 +130,10 @@ pub const MutationAnalyzer = struct {
             .index => |idx| {
                 // Index access mutation also mutates the base array
                 self.checkExpressionForParamMutation(idx.base.*, param_indices, mutated);
+            },
+            .method_call => |mcall| {
+                // Method call like arr.push(x) mutates the base
+                self.checkExpressionForParamMutation(mcall.base.*, param_indices, mutated);
             },
             // integer, float_lit, binary, compare, call, struct_init, array_literal, sized_array:
             // These cannot be mutation targets (only identifier, field_access, index can)

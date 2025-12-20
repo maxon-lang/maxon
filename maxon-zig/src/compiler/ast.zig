@@ -87,6 +87,7 @@ pub const Statement = union(enum) {
     assign: AssignStmt,
     field_assign: FieldAssign,
     call: CallExpr,
+    method_call: MethodCallExpr,
     if_stmt: IfStmt,
     while_stmt: WhileStmt,
     break_stmt: BreakStmt,
@@ -165,6 +166,12 @@ pub const SizedArrayExpr = struct {
     element_type: []const u8,
 };
 
+pub const MethodCallExpr = struct {
+    base: *const Expression,
+    method_name: []const u8,
+    args: []const Expression,
+};
+
 pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
@@ -178,4 +185,5 @@ pub const Expression = union(enum) {
     array_literal: ArrayLiteralExpr,
     index: IndexExpr,
     sized_array: SizedArrayExpr,
+    method_call: MethodCallExpr,
 };

@@ -380,6 +380,12 @@ pub const Parser = struct {
                 return .{ .call = expr.call };
             }
 
+            // Check if this is a method call (standalone method call like arr.push(x))
+            if (expr == .method_call) {
+                _ = try self.expect(.newline);
+                return .{ .method_call = expr.method_call };
+            }
+
             // Not an assignment or call, restore position
             self.pos = start_pos;
         }
@@ -715,11 +721,41 @@ pub const Parser = struct {
             if (self.check(.dot)) {
                 _ = self.advance(); // consume '.'
                 const field_token = try self.expect(.identifier);
-                const base_ptr = try self.createExpr(expr);
-                expr = .{ .field_access = .{
-                    .base = base_ptr,
-                    .field_name = field_token.text,
-                } };
+                // Check if this is a method call: .identifier(args)
+                if (self.check(.lparen)) {
+                    _ = self.advance(); // consume '('
+                    var args: std.ArrayListUnmanaged(ast.Expression) = .empty;
+                    errdefer args.deinit(self.allocator);
+
+                    if (!self.check(.rparen)) {
+                        const first_arg = try self.parseExpression() orelse {
+                            self.reportError(.E003);
+                            return error.ExpectedExpression;
+                        };
+                        try args.append(self.allocator, first_arg);
+                        while (self.check(.comma)) {
+                            _ = self.advance();
+                            const arg = try self.parseExpression() orelse {
+                                self.reportError(.E003);
+                                return error.ExpectedExpression;
+                            };
+                            try args.append(self.allocator, arg);
+                        }
+                    }
+                    _ = try self.expect(.rparen);
+                    const base_ptr = try self.createExpr(expr);
+                    expr = .{ .method_call = .{
+                        .base = base_ptr,
+                        .method_name = field_token.text,
+                        .args = try args.toOwnedSlice(self.allocator),
+                    } };
+                } else {
+                    const base_ptr = try self.createExpr(expr);
+                    expr = .{ .field_access = .{
+                        .base = base_ptr,
+                        .field_name = field_token.text,
+                    } };
+                }
             } else if (self.check(.lbracket)) {
                 _ = self.advance(); // consume '['
                 const index_expr = try self.parseExpression() orelse {

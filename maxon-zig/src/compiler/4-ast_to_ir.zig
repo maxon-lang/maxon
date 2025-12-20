@@ -136,6 +136,8 @@ const VarInfo = struct {
     state: OwnershipState,
     moved_to: ?[]const u8,
     moved_line: usize,
+    /// If true, ptr is a slot containing a pointer that must be loaded
+    uses_slot: bool,
 
     fn init(ptr: ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
         return .{
@@ -146,6 +148,20 @@ const VarInfo = struct {
             .state = .owned,
             .moved_to = null,
             .moved_line = 0,
+            .uses_slot = false,
+        };
+    }
+
+    fn initWithSlot(ptr: ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
+        return .{
+            .ptr = ptr,
+            .ty = ty,
+            .used = false,
+            .is_mutable = is_mutable,
+            .state = .owned,
+            .moved_to = null,
+            .moved_line = 0,
+            .uses_slot = true,
         };
     }
 
@@ -175,6 +191,7 @@ const ConvertError = error{
     SemanticError,
     NotABuiltin,
     TypeMismatch,
+    ZeroSizeAllocation,
 };
 
 // ============================================================================
@@ -200,6 +217,8 @@ pub const AstToIr = struct {
     // Loop context for break/continue
     loop_end_block: ?u32 = null,
     loop_cond_block: ?u32 = null,
+    // Current function name (for mutation analysis lookup)
+    current_func_name: ?[]const u8 = null,
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -222,6 +241,7 @@ pub const AstToIr = struct {
             .last_error = null,
             .loop_end_block = null,
             .loop_cond_block = null,
+            .current_func_name = null,
         };
     }
 
@@ -382,11 +402,13 @@ pub const AstToIr = struct {
                 .array => |arr| {
                     // Array return types are returned as pointers
                     const elem_type = try self.lookupIrType(arr.element_type);
-                    ret_value_type = .{ .array_type = .{
-                        .element_type = elem_type,
-                        .size = if (arr.size) |s| @intCast(s) else null,
-                        .storage = .heap, // Returned arrays are heap-allocated
-                    } };
+                    ret_value_type = .{
+                        .array_type = .{
+                            .element_type = elem_type,
+                            .size = if (arr.size) |s| @intCast(s) else null,
+                            .storage = .heap, // Returned arrays are heap-allocated
+                        },
+                    };
                     break :blk .ptr;
                 },
             }
@@ -460,6 +482,7 @@ pub const AstToIr = struct {
 
         const ir_func = try self.module.addFunction(decl.name, ret_type);
         self.current_func = ir_func;
+        self.current_func_name = decl.name;
         self.var_map.clearRetainingCapacity();
         _ = try ir_func.addBlock("entry");
 
@@ -509,39 +532,49 @@ pub const AstToIr = struct {
                 ));
             },
             .array_type => |arr_info| {
-                // Array parameters are passed as pointers
+                // Array parameters are passed as pointers - store in a stack slot
+                // so that convertIdentifier can uniformly load from stack
                 const param_val = try self.func().emitParam(idx, .ptr);
-                try self.func().setValueName(param_val, param.name);
-                try self.var_map.put(self.allocator, param.name, VarInfo.init(
-                    param_val,
-                    .{ .array_type = arr_info },
+                const slot_ptr = try self.func().emitAlloca(.ptr);
+                try self.func().setValueName(slot_ptr, param.name);
+                try self.func().emitStore(slot_ptr, param_val);
+
+                // Check if this function mutates a dynamic array parameter - if so,
+                // ownership is transferred and this function must free the heap array.
+                // Fixed-size arrays (size != null) are stack-allocated and never freed.
+                var modified_arr_info = arr_info;
+                if (arr_info.size == null) { // Dynamic arrays can be heap-allocated
+                    if (self.mutation_analyzer) |analyzer| {
+                        if (self.current_func_name) |func_name| {
+                            // idx is the IR param index; for mutation we need the source param index
+                            // Account for sret offset if present
+                            const source_param_idx: usize = if (self.sret_ptr != null)
+                                @intCast(idx - 1)
+                            else
+                                @intCast(idx);
+                            if (analyzer.doesMutateParam(func_name, source_param_idx)) {
+                                // Function mutates this array, so it takes ownership of heap memory
+                                modified_arr_info.storage = .heap;
+                            }
+                        }
+                    }
+                }
+
+                // Params always use a slot (uses_slot = true via initWithSlot)
+                try self.var_map.put(self.allocator, param.name, VarInfo.initWithSlot(
+                    slot_ptr,
+                    .{ .array_type = modified_arr_info },
                     true,
                 ));
             },
-            .primitive => |prim_type| {
-                const param_val = try self.func().emitParam(idx, prim_type);
+            .primitive, .enum_type => {
+                const ir_type = value_type.toPrimitiveType();
+                const param_val = try self.func().emitParam(idx, ir_type);
                 try self.func().setValueName(param_val, param.name);
-                const ptr = try self.func().emitAlloca(prim_type);
+                const ptr = try self.func().emitAlloca(ir_type);
                 try self.func().setValueName(ptr, param.name);
                 try self.func().emitStore(ptr, param_val);
-                try self.var_map.put(self.allocator, param.name, VarInfo.init(
-                    ptr,
-                    .{ .primitive = prim_type },
-                    true,
-                ));
-            },
-            .enum_type => |enum_name| {
-                // Enums are passed as i64 values
-                const param_val = try self.func().emitParam(idx, .i64);
-                try self.func().setValueName(param_val, param.name);
-                const ptr = try self.func().emitAlloca(.i64);
-                try self.func().setValueName(ptr, param.name);
-                try self.func().emitStore(ptr, param_val);
-                try self.var_map.put(self.allocator, param.name, VarInfo.init(
-                    ptr,
-                    .{ .enum_type = enum_name },
-                    true,
-                ));
+                try self.var_map.put(self.allocator, param.name, VarInfo.init(ptr, value_type, true));
             },
         }
     }
@@ -563,8 +596,12 @@ pub const AstToIr = struct {
             .@"return" => |ret| try self.convertReturn(ret),
             .assign => |assign| try self.convertAssignment(assign),
             .field_assign => |assign| try self.convertFieldAssign(assign),
-            .index_assign => |assign| try self.convertIndexAssign(assign),
+            .index_assign => |assign| {
+                debug.astToIr("Converting index_assign", .{});
+                try self.convertIndexAssign(assign);
+            },
             .call => |call| _ = try self.convertCall(call),
+            .method_call => |mcall| try self.convertMethodCall(mcall),
             .if_stmt => |if_s| try self.convertIfStmt(if_s),
             .while_stmt => |while_s| try self.convertWhileStmt(while_s),
             .break_stmt => try self.convertBreakStmt(),
@@ -585,13 +622,35 @@ pub const AstToIr = struct {
         const init_typed = try self.convertExpression(decl.value);
 
         switch (init_typed.ty) {
-            .struct_type, .array_type => {
+            .struct_type => {
                 try self.func().setValueName(init_typed.value, decl.name);
                 try self.var_map.put(self.allocator, decl.name, VarInfo.init(
                     init_typed.value,
                     init_typed.ty,
                     self.current_decl_is_mutable,
                 ));
+            },
+            .array_type => |arr_info| {
+                if (arr_info.storage == .heap) {
+                    // Heap arrays use a stack slot to hold the pointer
+                    // This allows push to update the pointer and cleanup to free the correct memory
+                    const slot_ptr = try self.func().emitAlloca(.ptr);
+                    try self.func().setValueName(slot_ptr, decl.name);
+                    try self.func().emitStore(slot_ptr, init_typed.value);
+                    try self.var_map.put(self.allocator, decl.name, VarInfo.initWithSlot(
+                        slot_ptr,
+                        init_typed.ty,
+                        self.current_decl_is_mutable,
+                    ));
+                } else {
+                    // Stack-allocated (fixed-size) arrays - the alloca.sized result IS the array
+                    try self.func().setValueName(init_typed.value, decl.name);
+                    try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+                        init_typed.value,
+                        init_typed.ty,
+                        self.current_decl_is_mutable,
+                    ));
+                }
             },
             .primitive => |prim_ty| {
                 const ptr = try self.func().emitAlloca(prim_ty);
@@ -663,8 +722,30 @@ pub const AstToIr = struct {
             switch (var_info.ty) {
                 .array_type => |arr_info| {
                     if (arr_info.storage == .heap and var_info.state != .moved) {
-                        // Free heap-allocated array
-                        try self.func().emitHeapFree(var_info.ptr);
+                        // Load the heap pointer from the stack slot before freeing
+                        const heap_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                        try self.func().emitHeapFree(heap_ptr);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    /// Free heap-allocated variables that were declared in the current loop scope
+    fn freeLoopScopedHeapVars(self: *AstToIr, pre_loop_vars: *std.StringHashMapUnmanaged(void)) !void {
+        var iter = self.var_map.iterator();
+        while (iter.next()) |entry| {
+            // Only free variables declared inside the loop
+            if (pre_loop_vars.contains(entry.key_ptr.*)) continue;
+
+            const var_info = entry.value_ptr.*;
+            switch (var_info.ty) {
+                .array_type => |arr_info| {
+                    if (arr_info.storage == .heap and var_info.state != .moved) {
+                        // Load the heap pointer from the stack slot before freeing
+                        const heap_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                        try self.func().emitHeapFree(heap_ptr);
                     }
                 },
                 else => {},
@@ -842,10 +923,21 @@ pub const AstToIr = struct {
         // Use max u32 as sentinel to indicate "needs patching"
         self.loop_end_block = 0xFFFFFFFF;
 
+        // Save variable names before entering loop body (for scoped cleanup)
+        var pre_loop_vars = std.StringHashMapUnmanaged(void){};
+        defer pre_loop_vars.deinit(self.allocator);
+        var iter = self.var_map.keyIterator();
+        while (iter.next()) |key| {
+            try pre_loop_vars.put(self.allocator, key.*, {});
+        }
+
         // Convert body statements (body block is current)
         for (while_stmt.body) |stmt| {
             try self.convertStatement(stmt);
         }
+
+        // Free heap-allocated loop-scoped variables before branching back
+        try self.freeLoopScopedHeapVars(&pre_loop_vars);
 
         // Emit unconditional branch back to condition block (if not already terminated)
         if (self.func().currentBlock()) |block| {
@@ -853,6 +945,19 @@ pub const AstToIr = struct {
             if (len == 0 or (block.instructions.items[len - 1].op != .ret and block.instructions.items[len - 1].op != .br and block.instructions.items[len - 1].op != .br_cond)) {
                 try self.func().emitBr(cond_block_idx);
             }
+        }
+
+        // Remove loop-scoped variables from var_map
+        var to_remove = std.ArrayListUnmanaged([]const u8){};
+        defer to_remove.deinit(self.allocator);
+        var var_iter = self.var_map.keyIterator();
+        while (var_iter.next()) |key| {
+            if (!pre_loop_vars.contains(key.*)) {
+                try to_remove.append(self.allocator, key.*);
+            }
+        }
+        for (to_remove.items) |key| {
+            _ = self.var_map.remove(key);
         }
 
         // Now create continuation block - this is its final index
@@ -918,6 +1023,7 @@ pub const AstToIr = struct {
             .array_literal => |arr| self.convertArrayLiteral(arr),
             .index => |idx| self.convertIndex(idx),
             .sized_array => |sized| self.convertSizedArray(sized),
+            .method_call => |mcall| self.convertMethodCallExpr(mcall),
         };
     }
 
@@ -936,7 +1042,16 @@ pub const AstToIr = struct {
         info.used = true;
 
         return switch (info.ty) {
-            .struct_type, .array_type => .{ .value = info.ptr, .ty = info.ty },
+            .struct_type => .{ .value = info.ptr, .ty = info.ty },
+            .array_type => if (info.uses_slot) .{
+                // Variable uses a slot - load the array pointer from it
+                .value = try self.func().emitLoad(info.ptr, .ptr),
+                .ty = info.ty,
+            } else .{
+                // Stack arrays: the ptr IS the array, no load needed
+                .value = info.ptr,
+                .ty = info.ty,
+            },
             .primitive => |prim_ty| .{
                 .value = try self.func().emitLoad(info.ptr, prim_ty),
                 .ty = info.ty,
@@ -1329,6 +1444,164 @@ pub const AstToIr = struct {
             .value = arr_ptr,
             .ty = .{ .array_type = .{ .element_type = elem_type, .size = null, .storage = .heap } },
         };
+    }
+
+    fn convertMethodCall(self: *AstToIr, mcall: ast.MethodCallExpr) ConvertError!void {
+        // Get the base expression (the array)
+        const base_name = switch (mcall.base.*) {
+            .identifier => |name| name,
+            else => {
+                debug.astToIr("error: method call on non-identifier base", .{});
+                return error.SemanticError;
+            },
+        };
+
+        // Look up the array variable and mark as used
+        const var_entry = self.var_map.getPtr(base_name) orelse {
+            debug.astToIr("error: undefined variable '{s}'", .{base_name});
+            self.reportError(.E004);
+            return error.SemanticError;
+        };
+        var_entry.used = true;
+        const var_info = var_entry.*;
+
+        // Check that it's an array
+        const arr_info = switch (var_info.ty) {
+            .array_type => |info| info,
+            else => {
+                debug.astToIr("error: method call on non-array", .{});
+                return error.SemanticError;
+            },
+        };
+
+        // Handle different methods
+        if (std.mem.eql(u8, mcall.method_name, "push")) {
+            try self.convertArrayPush(base_name, var_info, arr_info, mcall.args);
+        } else if (std.mem.eql(u8, mcall.method_name, "count")) {
+            // count() as statement - result is discarded
+            _ = try self.convertArrayCount(base_name, arr_info);
+        } else {
+            debug.astToIr("error: unknown method '{s}'", .{mcall.method_name});
+            return error.SemanticError;
+        }
+    }
+
+    fn convertArrayPush(self: *AstToIr, arr_name: []const u8, var_info: VarInfo, _: ArrayInfo, args: []const ast.Expression) ConvertError!void {
+        if (args.len != 1) {
+            debug.astToIr("error: push expects exactly 1 argument", .{});
+            return error.SemanticError;
+        }
+
+        // Get the current array pointer - load from slot if needed
+        const old_ptr = if (var_info.uses_slot)
+            try self.func().emitLoad(var_info.ptr, .ptr)
+        else
+            var_info.ptr;
+
+        // We need to track the current size somewhere
+        // For now, assume we have a size variable named arr_name + "_size"
+        // This is a temporary solution - proper implementation would store size with array
+        const size_var_name = try std.fmt.allocPrint(self.allocator, "{s}_size", .{arr_name});
+        defer self.allocator.free(size_var_name);
+
+        const size_var_entry = self.var_map.getPtr(size_var_name) orelse {
+            debug.astToIr("error: push requires size tracking variable '{s}_size'", .{arr_name});
+            return error.SemanticError;
+        };
+        size_var_entry.used = true;
+        const size_var_info = size_var_entry.*;
+
+        // Load current size
+        const old_size = try self.func().emitLoad(size_var_info.ptr, .i64);
+
+        // Calculate new size = old_size + 1
+        const one = try self.func().emitConstI64(1);
+        const new_size = try self.func().emitBinaryOp(.add, old_size, one, .i64);
+
+        // Calculate new byte size = new_size * 8
+        const eight = try self.func().emitConstI64(8);
+        const new_byte_size = try self.func().emitBinaryOp(.mul, new_size, eight, .i64);
+
+        // Reallocate: new_ptr = HeapReAlloc(old_ptr, new_byte_size)
+        // Note: For zero-size arrays, old_ptr may be null - this won't work correctly.
+        // Zero-size arrays should not be pushed to with this implementation.
+        const new_ptr = try self.func().emitHeapRealloc(old_ptr, new_byte_size);
+
+        // Store the new pointer back to the slot so cleanup uses the correct pointer
+        if (var_info.uses_slot) {
+            try self.func().emitStore(var_info.ptr, new_ptr);
+        }
+
+        // Calculate element pointer: new_ptr + old_size * 8 (old_size is the index)
+        const elem_ptr = try self.func().emitGetElemPtr(new_ptr, old_size, 8);
+
+        // Convert and store the new value
+        const value_typed = try self.convertExpression(args[0]);
+        try self.func().emitStore(elem_ptr, value_typed.value);
+
+        // Update size: store new_size to size variable
+        try self.func().emitStore(size_var_info.ptr, new_size);
+    }
+
+    fn convertMethodCallExpr(self: *AstToIr, mcall: ast.MethodCallExpr) ConvertError!TypedValue {
+        // Get the base expression (the array)
+        const base_name = switch (mcall.base.*) {
+            .identifier => |name| name,
+            else => {
+                debug.astToIr("error: method call on non-identifier base", .{});
+                return error.SemanticError;
+            },
+        };
+
+        // Look up the array variable and mark as used
+        const var_entry = self.var_map.getPtr(base_name) orelse {
+            debug.astToIr("error: undefined variable '{s}'", .{base_name});
+            self.reportError(.E004);
+            return error.SemanticError;
+        };
+        var_entry.used = true;
+        const var_info = var_entry.*;
+
+        // Check that it's an array
+        const arr_info = switch (var_info.ty) {
+            .array_type => |info| info,
+            else => {
+                debug.astToIr("error: method call on non-array", .{});
+                return error.SemanticError;
+            },
+        };
+
+        // Handle different methods
+        if (std.mem.eql(u8, mcall.method_name, "count")) {
+            return self.convertArrayCount(base_name, arr_info);
+        } else if (std.mem.eql(u8, mcall.method_name, "push")) {
+            debug.astToIr("error: push() cannot be used in expressions", .{});
+            return error.SemanticError;
+        } else {
+            debug.astToIr("error: unknown method '{s}'", .{mcall.method_name});
+            return error.SemanticError;
+        }
+    }
+
+    fn convertArrayCount(self: *AstToIr, arr_name: []const u8, arr_info: ArrayInfo) ConvertError!TypedValue {
+        // For fixed-size arrays: return compile-time constant
+        if (arr_info.size) |size| {
+            const val = try self.func().emitConstI64(@intCast(size));
+            return .{ .value = val, .ty = .{ .primitive = .i64 } };
+        }
+
+        // For dynamic arrays: load from companion size variable
+        const size_var_name = try std.fmt.allocPrint(self.allocator, "{s}_size", .{arr_name});
+        defer self.allocator.free(size_var_name);
+
+        const size_var_entry = self.var_map.getPtr(size_var_name) orelse {
+            debug.astToIr("error: count() requires size tracking variable '{s}_size'", .{arr_name});
+            return error.SemanticError;
+        };
+        size_var_entry.used = true;
+
+        const size_val = try self.func().emitLoad(size_var_entry.ptr, .i64);
+        return .{ .value = size_val, .ty = .{ .primitive = .i64 } };
     }
 };
 

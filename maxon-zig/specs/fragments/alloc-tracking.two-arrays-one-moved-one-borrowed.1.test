@@ -1,0 +1,110 @@
+// Test: alloc-tracking.two-arrays-one-moved-one-borrowed.1
+function readIt(arr array of int) returns int
+    return arr[0]
+end 'readIt'
+
+function writeIt(arr array of int) returns int
+    arr[0] = 99
+    return arr[0]
+end 'writeIt'
+
+function main() returns int
+    let size = 5
+    var arr1 = array of size int
+    var arr2 = array of size int
+    arr1[0] = 10
+    arr2[0] = 20
+    let borrowed = readIt(arr1)
+    let moved = writeIt(arr2)
+    return borrowed + moved
+end 'main'
+---
+ExitCode: 109
+TrackAllocs: true
+Stdout: ```
+ALLOC #1: 40 bytes (dynamic array)
+ALLOC #2: 40 bytes (dynamic array)
+FREE #2: 40 bytes (dynamic array)
+FREE #1: 40 bytes (dynamic array)
+
+=== ALLOC STATS ===
+Allocated: 80 bytes
+Freed:     80 bytes
+Leaked:    0 bytes
+```
+---
+function readIt() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %arr = alloca ptr
+    store %arr %tmp_param
+    %tmp_load = load ptr %arr
+    %tmp_const = const.i64 i64 0
+    %4 = getelemptr ptr %tmp_load %tmp_const
+    %tmp_load.1 = load i64 %4
+    ret %tmp_load.1
+}
+
+function writeIt() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %arr = alloca ptr
+    store %arr %tmp_param
+    %tmp_load = load ptr %arr
+    %tmp_const = const.i64 i64 0
+    %tmp_const.1 = const.i64 i64 99
+    %5 = getelemptr ptr %tmp_load %tmp_const
+    store %5 %tmp_const.1
+    %tmp_load.1 = load ptr %arr
+    %tmp_const.2 = const.i64 i64 0
+    %8 = getelemptr ptr %tmp_load.1 %tmp_const.2
+    %tmp_load.2 = load i64 %8
+    %tmp_load.3 = load ptr %arr
+    heap.free %tmp_load.3
+    ret %tmp_load.2
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 5
+    %size = alloca ptr
+    store %size %tmp_const
+    %tmp_load = load i64 %size
+    %tmp_const.1 = const.i64 i64 8
+    %tmp_mul = mul i64 %tmp_load %tmp_const.1
+    %tmp_heap = heap.alloc ptr %tmp_mul
+    %arr1 = alloca ptr
+    store %arr1 %tmp_heap
+    %tmp_load.1 = load i64 %size
+    %tmp_const.2 = const.i64 i64 8
+    %tmp_mul.1 = mul i64 %tmp_load.1 %tmp_const.2
+    %tmp_heap.1 = heap.alloc ptr %tmp_mul.1
+    %arr2 = alloca ptr
+    store %arr2 %tmp_heap.1
+    %tmp_load.2 = load ptr %arr1
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_const.4 = const.i64 i64 10
+    %15 = getelemptr ptr %tmp_load.2 %tmp_const.3
+    store %15 %tmp_const.4
+    %tmp_load.3 = load ptr %arr2
+    %tmp_const.5 = const.i64 i64 0
+    %tmp_const.6 = const.i64 i64 20
+    %19 = getelemptr ptr %tmp_load.3 %tmp_const.5
+    store %19 %tmp_const.6
+    %tmp_load.4 = load ptr %arr1
+    %tmp_call = call i64 @readIt(%tmp_load.4)
+    %borrowed = alloca ptr
+    store %borrowed %tmp_call
+    %tmp_load.5 = load ptr %arr2
+    %tmp_call.1 = call i64 @writeIt(%tmp_load.5)
+    %moved = alloca ptr
+    store %moved %tmp_call.1
+    %tmp_load.6 = load i64 %borrowed
+    %tmp_load.7 = load i64 %moved
+    %tmp_add = add i64 %tmp_load.6 %tmp_load.7
+    %tmp_load.8 = load ptr %arr1
+    heap.free %tmp_load.8
+    ret %tmp_add
+}
+
+---

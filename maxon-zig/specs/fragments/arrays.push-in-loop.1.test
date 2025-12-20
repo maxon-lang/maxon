@@ -1,0 +1,75 @@
+// Test: arrays.push-in-loop.1
+function main() returns int
+    var arr_size = 0
+    var arr = array of arr_size int
+    var i = 0
+    while i < 3 'loop'
+        arr.push(i * 10)
+        i = i + 1
+    end 'loop'
+    return arr[0] + arr[1] + arr[2]
+end 'main'
+---
+ExitCode: 30
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %arr_size = alloca ptr
+    store %arr_size %tmp_const
+    %tmp_load = load i64 %arr_size
+    %tmp_const.1 = const.i64 i64 8
+    %tmp_mul = mul i64 %tmp_load %tmp_const.1
+    %tmp_heap = heap.alloc ptr %tmp_mul
+    %arr = alloca ptr
+    store %arr %tmp_heap
+    %tmp_const.2 = const.i64 i64 0
+    %i = alloca ptr
+    store %i %tmp_const.2
+    br @block1
+whilecond:
+    %tmp_load.1 = load i64 %i
+    %tmp_const.3 = const.i64 i64 3
+    %tmp_icmp = icmp.lt i64 %tmp_load.1 %tmp_const.3
+    %tmp_const.1 = br.cond %tmp_icmp @block2
+whilebody:
+    %tmp_load.2 = load ptr %arr
+    %tmp_load.3 = load i64 %arr_size
+    %tmp_const.4 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.3 %tmp_const.4
+    %tmp_const.5 = const.i64 i64 8
+    %tmp_mul.1 = mul i64 %tmp_add %tmp_const.5
+    %tmp_realloc = heap.realloc ptr %tmp_load.2 %tmp_mul.1
+    store %arr %tmp_realloc
+    %19 = getelemptr ptr %tmp_realloc %tmp_load.3
+    %tmp_load.4 = load i64 %i
+    %tmp_const.6 = const.i64 i64 10
+    %tmp_mul.2 = mul i64 %tmp_load.4 %tmp_const.6
+    store %19 %tmp_mul.2
+    store %arr_size %tmp_add
+    %tmp_load.5 = load i64 %i
+    %tmp_const.7 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.5 %tmp_const.7
+    store %i %tmp_add.1
+    br @block1
+whilecont:
+    %tmp_load.6 = load ptr %arr
+    %tmp_const.8 = const.i64 i64 0
+    %28 = getelemptr ptr %tmp_load.6 %tmp_const.8
+    %tmp_load.7 = load i64 %28
+    %tmp_load.8 = load ptr %arr
+    %tmp_const.9 = const.i64 i64 1
+    %32 = getelemptr ptr %tmp_load.8 %tmp_const.9
+    %tmp_load.9 = load i64 %32
+    %tmp_add.2 = add i64 %tmp_load.7 %tmp_load.9
+    %tmp_load.10 = load ptr %arr
+    %tmp_const.10 = const.i64 i64 2
+    %37 = getelemptr ptr %tmp_load.10 %tmp_const.10
+    %tmp_load.11 = load i64 %37
+    %tmp_add.3 = add i64 %tmp_add.2 %tmp_load.11
+    %tmp_load.12 = load ptr %arr
+    heap.free %tmp_load.12
+    ret %tmp_add.3
+}
+
+---

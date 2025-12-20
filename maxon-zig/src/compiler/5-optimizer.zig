@@ -535,10 +535,15 @@ fn removeDeadStores(func: *ir.Function, ctx: *DseContext) !void {
         defer new_instructions.deinit(ctx.allocator);
 
         for (block.instructions.items) |inst| {
-            const keep = if (inst.op == .store)
-                try ctx.isStoreNeeded(inst.operands[0].value)
-            else
-                true;
+            const keep = if (inst.op == .store) blk: {
+                const ptr = inst.operands[0].value;
+                // Always keep stores to array elements (getelemptr) - they may be accessed
+                // through different load paths that the optimizer can't track
+                if (ctx.ptr_derivation.get(ptr)) |derivation| {
+                    if (derivation == .element) break :blk true;
+                }
+                break :blk try ctx.isStoreNeeded(ptr);
+            } else true;
 
             if (keep) {
                 try new_instructions.append(ctx.allocator, inst);

@@ -291,11 +291,16 @@ fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_
 
         var end_pos = block_end + 3;
 
-        // Check for optional stdout block
+        // Check for optional stdout block - must be immediately after exitcode (within 20 chars)
         var stdout: ?[]const u8 = null;
         if (findCodeBlock(content, end_pos, "stdout") catch null) |stdout_block| {
-            stdout = try allocator.dupe(u8, stdout_block.content);
-            end_pos = stdout_block.end;
+            // Only accept if the stdout block starts close to where we are
+            // (within 20 chars of whitespace after the exitcode block)
+            const stdout_marker = std.mem.indexOfPos(u8, content, end_pos, "```stdout");
+            if (stdout_marker != null and stdout_marker.? - end_pos <= 20) {
+                stdout = try allocator.dupe(u8, stdout_block.content);
+                end_pos = stdout_block.end;
+            }
         }
 
         return ExpectedOutput{

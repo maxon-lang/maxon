@@ -37,4 +37,20 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run spec fragment tests");
     test_step.dependOn(&test_cmd.step);
+
+    // Coverage step - runs tests with OpenCppCoverage to generate HTML report
+    const coverage_cmd = b.addSystemCommand(&.{
+        "OpenCppCoverage",
+        "--sources",
+        "src",
+        "--export_type",
+        "html:coverage-report",
+        "--",
+    });
+    coverage_cmd.addArtifactArg(exe);
+    coverage_cmd.addArgs(&.{"test"});
+    coverage_cmd.step.dependOn(b.getInstallStep());
+
+    const coverage_step = b.step("coverage", "Run tests with code coverage (requires OpenCppCoverage)");
+    coverage_step.dependOn(&coverage_cmd.step);
 }

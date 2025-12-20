@@ -1,0 +1,96 @@
+// Test: alloc-tracking.array-borrow-multiple-times.1
+function getElement(arr array of int, idx int) returns int
+    return arr[idx]
+end 'getElement'
+
+function main() returns int
+    let size = 5
+    var arr = array of size int
+    arr[0] = 10
+    arr[1] = 20
+    arr[2] = 30
+    let a = getElement(arr, 0)
+    let b = getElement(arr, 1)
+    let c = getElement(arr, 2)
+    return a + b + c
+end 'main'
+---
+ExitCode: 60
+TrackAllocs: true
+Stdout: ```
+ALLOC #1: 40 bytes (dynamic array)
+FREE #1: 40 bytes (dynamic array)
+
+=== ALLOC STATS ===
+Allocated: 40 bytes
+Freed:     40 bytes
+Leaked:    0 bytes
+```
+---
+function getElement() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %arr = alloca ptr
+    store %arr %tmp_param
+    %idx = param i64 1
+    %idx.1 = alloca ptr
+    store %idx.1 %idx
+    %tmp_load = load ptr %arr
+    %tmp_load.1 = load i64 %idx.1
+    %6 = getelemptr ptr %tmp_load %tmp_load.1
+    %tmp_load.2 = load i64 %6
+    ret %tmp_load.2
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 5
+    %size = alloca ptr
+    store %size %tmp_const
+    %tmp_load = load i64 %size
+    %tmp_const.1 = const.i64 i64 8
+    %tmp_mul = mul i64 %tmp_load %tmp_const.1
+    %tmp_heap = heap.alloc ptr %tmp_mul
+    %arr = alloca ptr
+    store %arr %tmp_heap
+    %tmp_load.1 = load ptr %arr
+    %tmp_const.2 = const.i64 i64 0
+    %tmp_const.3 = const.i64 i64 10
+    %10 = getelemptr ptr %tmp_load.1 %tmp_const.2
+    store %10 %tmp_const.3
+    %tmp_load.2 = load ptr %arr
+    %tmp_const.4 = const.i64 i64 1
+    %tmp_const.5 = const.i64 i64 20
+    %14 = getelemptr ptr %tmp_load.2 %tmp_const.4
+    store %14 %tmp_const.5
+    %tmp_load.3 = load ptr %arr
+    %tmp_const.6 = const.i64 i64 2
+    %tmp_const.7 = const.i64 i64 30
+    %18 = getelemptr ptr %tmp_load.3 %tmp_const.6
+    store %18 %tmp_const.7
+    %tmp_load.4 = load ptr %arr
+    %tmp_const.8 = const.i64 i64 0
+    %tmp_call = call i64 @getElement(%tmp_load.4, %tmp_const.8)
+    %a = alloca ptr
+    store %a %tmp_call
+    %tmp_load.5 = load ptr %arr
+    %tmp_const.9 = const.i64 i64 1
+    %tmp_call.1 = call i64 @getElement(%tmp_load.5, %tmp_const.9)
+    %b = alloca ptr
+    store %b %tmp_call.1
+    %tmp_load.6 = load ptr %arr
+    %tmp_const.10 = const.i64 i64 2
+    %tmp_call.2 = call i64 @getElement(%tmp_load.6, %tmp_const.10)
+    %c = alloca ptr
+    store %c %tmp_call.2
+    %tmp_load.7 = load i64 %a
+    %tmp_load.8 = load i64 %b
+    %tmp_add = add i64 %tmp_load.7 %tmp_load.8
+    %tmp_load.9 = load i64 %c
+    %tmp_add.1 = add i64 %tmp_add %tmp_load.9
+    %tmp_load.10 = load ptr %arr
+    heap.free %tmp_load.10
+    ret %tmp_add.1
+}
+
+---
