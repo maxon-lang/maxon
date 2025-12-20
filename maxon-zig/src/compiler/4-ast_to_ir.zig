@@ -527,6 +527,16 @@ pub const AstToIr = struct {
             try self.convertStatement(stmt);
         }
 
+        // For void functions, add implicit return if the body doesn't end with a return
+        if (ret_type == .void) {
+            const block = self.func().currentBlock() orelse return;
+            const needs_implicit_ret = block.instructions.items.len == 0 or
+                block.instructions.items[block.instructions.items.len - 1].op != .ret;
+            if (needs_implicit_ret) {
+                try self.func().emitRet(null);
+            }
+        }
+
         // Check for unused variables
         var iter = self.var_map.iterator();
         while (iter.next()) |entry| {
@@ -954,6 +964,19 @@ pub const AstToIr = struct {
         // Convert body statements (body block is current)
         for (while_stmt.body) |stmt| {
             try self.convertStatement(stmt);
+        }
+
+        // Check for variables moved inside loop body - they would be invalid on next iteration
+        var pre_iter = pre_loop_vars.keyIterator();
+        while (pre_iter.next()) |key| {
+            if (self.var_map.getPtr(key.*)) |var_info| {
+                if (var_info.state == .moved) {
+                    // Variable was moved in loop body - next iteration would use moved value
+                    debug.astToIr("variable '{s}' was moved in loop body\n", .{key.*});
+                    self.reportError(.E008);
+                    return error.UseAfterMove;
+                }
+            }
         }
 
         // Free heap-allocated loop-scoped variables before branching back

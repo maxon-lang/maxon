@@ -193,3 +193,99 @@ end 'main'
 ```maxoncstderr
 error E008: specs\fragments\ownership.struct-array-field-moved-into-type.1.test:3:1: use after move
 ```
+
+## Memory Safety Tests
+
+These tests verify that the borrow checker prevents use-after-free and double-free issues.
+
+### Use-After-Free Prevention
+
+<!-- test: error.use-after-conditional-move -->
+Moving a variable in an if branch makes it unavailable after the if statement.
+```maxon
+function consume(x int)
+    x = x + 1
+end 'consume'
+
+function main() returns int
+    var a = 42
+    if true 'cond'
+        consume(a)
+    end 'cond'
+    return a
+end 'main'
+```
+```maxoncstderr
+error E008: specs\fragments\ownership.error.use-after-conditional-move.1.test:5:1: use after move
+```
+
+<!-- test: error.use-after-move-in-loop -->
+Using a moved variable on the next loop iteration is an error.
+```maxon
+function consume(x int)
+    x = x + 1
+end 'consume'
+
+function main() returns int
+    var a = 42
+    var i = 0
+    while i < 3 'loop'
+        consume(a)
+        i = i + 1
+    end 'loop'
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E008: specs\fragments\ownership.error.use-after-move-in-loop.1.test:6:1: use after move
+```
+
+<!-- test: reassign-after-move-primitive -->
+Reassignment after move restores ownership for primitives.
+```maxon
+function consume(x int)
+    x = x + 1
+end 'consume'
+
+function main() returns int
+    var a = 10
+    consume(a)
+    a = 20
+    return a
+end 'main'
+```
+```exitcode
+20
+```
+
+### Double-Free Prevention
+
+<!-- test: moved-array-not-double-freed -->
+<!-- TrackAllocs: true -->
+Moved arrays are not freed by the original owner, preventing double-free.
+The caller allocates, the callee (mutateFirst) takes ownership and frees.
+```maxon
+function mutateFirst(arr array of int) returns int
+    arr[0] = 100
+    return arr[0]
+end 'mutateFirst'
+
+function main() returns int
+    let size = 3
+    var arr = array of size int
+    arr[0] = 42
+    return mutateFirst(arr)
+end 'main'
+```
+```exitcode
+100
+```
+```stdout
+ALLOC #1: 24 bytes (dynamic array)
+FREE #1: 24 bytes (dynamic array)
+
+=== ALLOC STATS ===
+Allocated: 24 bytes
+Freed:     24 bytes
+Leaked:    0 bytes
+```
