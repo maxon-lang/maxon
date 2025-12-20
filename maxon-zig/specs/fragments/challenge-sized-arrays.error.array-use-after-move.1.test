@@ -1,18 +1,26 @@
 // Test: challenge-sized-arrays.error.array-use-after-move.1
 function mutate(arr array of 3 int) returns int
     arr[0] = 100
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'mutate'
 
 function main() returns int
     var arr = array of 3 int
     arr[0] = 42
     var result = mutate(arr)
-    return arr[0] + result
+    if let val = arr[0] 'get'
+        return val + result
+    end 'get' else 'nil'
+        return result
+    end 'nil'
 end 'main'
 ---
 MaxoncStderr: ```
-error E008: specs\fragments\challenge-sized-arrays.error.array-use-after-move.1.test:6:1: use after move
+error E008: specs\fragments\challenge-sized-arrays.error.array-use-after-move.1.test:8:1: use after move
 ```
 ---
 // IR: N/A (compiler error test)

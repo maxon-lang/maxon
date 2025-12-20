@@ -175,7 +175,11 @@ Works with:
 ```maxon
 function main() returns int
     var arr = [10, 20, 30]
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -186,7 +190,11 @@ end 'main'
 ```maxon
 function main() returns int
     var arr = [10, 20, 30]
-    return arr[1]
+    if let val = arr[1] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -197,7 +205,11 @@ end 'main'
 ```maxon
 function main() returns int
     var arr = [10, 20, 30]
-    return arr[2]
+    if let val = arr[2] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -208,7 +220,11 @@ end 'main'
 ```maxon
 function main() returns int
     var arr = [5, 10, 15, 20, 25]
-    return arr[4]
+    if let val = arr[4] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -220,7 +236,11 @@ end 'main'
 function main() returns int
     var arr = [10, 20, 30]
     arr[0] = 100
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -232,7 +252,11 @@ end 'main'
 function main() returns int
     var arr = [1, 2, 3]
     arr[1] = 42
-    return arr[1]
+    if let val = arr[1] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -244,7 +268,11 @@ end 'main'
 function main() returns int
     var arr = [1, 2, 3, 4, 5]
     arr[4] = 99
-    return arr[4]
+    if let val = arr[4] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -255,7 +283,14 @@ end 'main'
 ```maxon
 function main() returns int
     var arr = [5, 10, 15, 20, 25]
-    return arr[2] + arr[4]
+    var result = 0
+    if let a = arr[2] 'get1'
+        result = a
+    end 'get1'
+    if let b = arr[4] 'get2'
+        result = result + b
+    end 'get2'
+    return result
 end 'main'
 ```
 ```exitcode
@@ -267,7 +302,11 @@ end 'main'
 function main() returns int
     var arr = [10, 20, 30]
     arr[0] = 100
-    return arr[1]
+    if let val = arr[1] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -281,7 +320,17 @@ function main() returns int
     arr[0] = 1
     arr[1] = 2
     arr[2] = 3
-    return arr[0] + arr[1] + arr[2]
+    var sum = 0
+    if let a = arr[0] 'g1'
+        sum = sum + a
+    end 'g1'
+    if let b = arr[1] 'g2'
+        sum = sum + b
+    end 'g2'
+    if let c = arr[2] 'g3'
+        sum = sum + c
+    end 'g3'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -292,7 +341,11 @@ end 'main'
 ```maxon
 function main() returns int
     let arr = [10, 20, 30]
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -303,7 +356,11 @@ end 'main'
 ```maxon
 function main() returns int
     let arr = [10, 20, 30]
-    return arr[1]
+    if let val = arr[1] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -314,7 +371,11 @@ end 'main'
 ```maxon
 function main() returns int
     let arr = [10, 20, 30]
-    return arr[2]
+    if let val = arr[2] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -325,7 +386,14 @@ end 'main'
 ```maxon
 function main() returns int
     let arr = [5, 10, 15, 20]
-    return arr[0] + arr[3]
+    var sum = 0
+    if let a = arr[0] 'g1'
+        sum = sum + a
+    end 'g1'
+    if let b = arr[3] 'g2'
+        sum = sum + b
+    end 'g2'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -337,7 +405,11 @@ end 'main'
 function main() returns int
     var arr = array of 5 int
     arr[0] = 42
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -351,7 +423,11 @@ function main() returns int
     arr[0] = 10
     arr[1] = 20
     arr[2] = 30
-    return arr[1]
+    if let val = arr[1] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -366,7 +442,20 @@ function main() returns int
     arr[1] = 2
     arr[2] = 3
     arr[3] = 4
-    return arr[0] + arr[1] + arr[2] + arr[3]
+    var sum = 0
+    if let a = arr[0] 'g1'
+        sum = sum + a
+    end 'g1'
+    if let b = arr[1] 'g2'
+        sum = sum + b
+    end 'g2'
+    if let c = arr[2] 'g3'
+        sum = sum + c
+    end 'g3'
+    if let d = arr[3] 'g4'
+        sum = sum + d
+    end 'g4'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -383,7 +472,11 @@ function main() returns int
     var arr_size = 0
     var arr = array of arr_size int
     arr.push(42)
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -400,7 +493,17 @@ function main() returns int
     arr.push(10)
     arr.push(20)
     arr.push(30)
-    return arr[0] + arr[1] + arr[2]
+    var sum = 0
+    if let a = arr[0] 'g1'
+        sum = sum + a
+    end 'g1'
+    if let b = arr[1] 'g2'
+        sum = sum + b
+    end 'g2'
+    if let c = arr[2] 'g3'
+        sum = sum + c
+    end 'g3'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -417,7 +520,17 @@ function main() returns int
     arr[0] = 5
     arr[1] = 10
     arr.push(15)
-    return arr[0] + arr[1] + arr[2]
+    var sum = 0
+    if let a = arr[0] 'g1'
+        sum = sum + a
+    end 'g1'
+    if let b = arr[1] 'g2'
+        sum = sum + b
+    end 'g2'
+    if let c = arr[2] 'g3'
+        sum = sum + c
+    end 'g3'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -453,7 +566,17 @@ function main() returns int
         arr.push(i * 10)
         i = i + 1
     end 'loop'
-    return arr[0] + arr[1] + arr[2]
+    var sum = 0
+    if let a = arr[0] 'g1'
+        sum = sum + a
+    end 'g1'
+    if let b = arr[1] 'g2'
+        sum = sum + b
+    end 'g2'
+    if let c = arr[2] 'g3'
+        sum = sum + c
+    end 'g3'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -469,7 +592,11 @@ function main() returns int
     var arr_size = 0
     var arr = array of arr_size int
     arr.push(42)
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -496,7 +623,17 @@ function main() returns int
     arr[0] = 5
     arr[1] = 10
     arr.push(15)
-    return arr[0] + arr[1] + arr[2]
+    var sum = 0
+    if let a = arr[0] 'g1'
+        sum = sum + a
+    end 'g1'
+    if let b = arr[1] 'g2'
+        sum = sum + b
+    end 'g2'
+    if let c = arr[2] 'g3'
+        sum = sum + c
+    end 'g3'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -607,7 +744,11 @@ Immutable arrays cannot have their elements modified.
 function main() returns int
     let arr = [1, 2, 3]
     arr[0] = 42
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```maxoncstderr

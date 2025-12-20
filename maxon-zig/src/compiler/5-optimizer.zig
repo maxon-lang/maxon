@@ -175,12 +175,15 @@ const CopyPropContext = struct {
 };
 
 /// Replace loads with the value that was stored
+/// NOTE: This operates block-locally to avoid incorrect propagation across
+/// basic blocks that may not have proper dominance relationships.
 fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
-    var ctx = CopyPropContext.init(allocator);
-    defer ctx.deinit();
+    // Process each block independently to avoid cross-block propagation issues
+    for (func.blocks.items) |*block| {
+        var ctx = CopyPropContext.init(allocator);
+        defer ctx.deinit();
 
-    // First pass: collect getfieldptr mappings
-    for (func.blocks.items) |block| {
+        // Collect getfieldptr mappings within this block only
         for (block.instructions.items) |inst| {
             if (inst.op == .getfieldptr) {
                 if (inst.result) |result| {
@@ -191,10 +194,8 @@ fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
                 }
             }
         }
-    }
 
-    // Second pass: propagate copies
-    for (func.blocks.items) |*block| {
+        // Propagate copies within this block
         var new_instructions: std.ArrayListUnmanaged(ir.Instruction) = .empty;
         defer new_instructions.deinit(allocator);
 

@@ -29,23 +29,35 @@ const ArrayInfo = struct {
     element_struct_type: ?[]const u8 = null, // struct name if elements are structs
 };
 
+/// Optional type info
+const OptionalInfo = struct {
+    wrapped: ir.Type, // The underlying type (i64, f64, ptr)
+    wrapped_struct_type: ?[]const u8 = null, // struct name if wrapped is a struct
+};
+
 /// Extended type info for variable tracking
 const ValueType = union(enum) {
     primitive: ir.Type,
     struct_type: []const u8,
     array_type: ArrayInfo,
     enum_type: []const u8,
+    optional_type: OptionalInfo,
 
     fn toPrimitiveType(self: ValueType) ir.Type {
         return switch (self) {
             .primitive => |p| p,
             .enum_type => .i64,
             .struct_type, .array_type => .ptr,
+            .optional_type => .ptr, // Optionals are pointers to 16-byte structures
         };
     }
 
     fn isStruct(self: ValueType) bool {
         return self == .struct_type;
+    }
+
+    fn isOptional(self: ValueType) bool {
+        return self == .optional_type;
     }
 };
 
@@ -370,6 +382,12 @@ pub const AstToIr = struct {
                     .size = if (arr.size) |s| @intCast(s) else null,
                     .storage = .stack,
                 } },
+                .optional => |wrapped| blk: {
+                    const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
+                    break :blk .{ .optional_type = .{
+                        .wrapped = wrapped_value_type.toPrimitiveType(),
+                    } };
+                },
             };
             const field_size: i32 = switch (value_type) {
                 .struct_type => |name| blk: {
@@ -380,6 +398,7 @@ pub const AstToIr = struct {
                     };
                 },
                 .primitive, .enum_type, .array_type => 8, // arrays stored as pointers
+                .optional_type => 8, // optionals stored as pointers to 16-byte structures
             };
             fields[i] = .{
                 .name = field.name,
@@ -430,6 +449,16 @@ pub const AstToIr = struct {
                     };
                     break :blk .ptr;
                 },
+                .optional => |wrapped| {
+                    // Optional return types are returned as pointers
+                    const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
+                    ret_value_type = .{
+                        .optional_type = .{
+                            .wrapped = wrapped_value_type.toPrimitiveType(),
+                        },
+                    };
+                    break :blk .ptr;
+                },
             }
         } else .void;
 
@@ -467,6 +496,12 @@ pub const AstToIr = struct {
                     .storage = .stack,
                 } };
             },
+            .optional => |wrapped| {
+                const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
+                return .{ .optional_type = .{
+                    .wrapped = wrapped_value_type.toPrimitiveType(),
+                } };
+            },
         }
     }
 
@@ -489,6 +524,7 @@ pub const AstToIr = struct {
                     }
                 },
                 .array => {}, // Arrays returned as pointers, no sret needed
+                .optional => {}, // Optionals returned as pointers, no sret needed
             }
         }
 
@@ -496,6 +532,7 @@ pub const AstToIr = struct {
             switch (rt) {
                 .simple => |type_name| break :blk try self.lookupIrType(type_name),
                 .array => break :blk .ptr,
+                .optional => break :blk .ptr,
             }
         } else .void;
 
@@ -606,6 +643,18 @@ pub const AstToIr = struct {
                 try self.func().emitStore(ptr, param_val);
                 try self.var_map.put(self.allocator, param.name, VarInfo.init(ptr, value_type, true));
             },
+            .optional_type => |opt_info| {
+                // Optional parameters are passed as pointers - store in a stack slot
+                const param_val = try self.func().emitParam(idx, .ptr);
+                const slot_ptr = try self.func().emitAlloca(.ptr);
+                try self.func().setValueName(slot_ptr, param.name);
+                try self.func().emitStore(slot_ptr, param_val);
+                try self.var_map.put(self.allocator, param.name, VarInfo.initWithSlot(
+                    slot_ptr,
+                    .{ .optional_type = opt_info },
+                    true,
+                ));
+            },
         }
     }
 
@@ -636,6 +685,7 @@ pub const AstToIr = struct {
             .while_stmt => |while_s| try self.convertWhileStmt(while_s),
             .break_stmt => try self.convertBreakStmt(),
             .continue_stmt => try self.convertContinueStmt(),
+            .else_unwrap_decl => |unwrap| try self.convertElseUnwrapDecl(unwrap),
         }
         self.current_line += 1;
     }
@@ -699,6 +749,17 @@ pub const AstToIr = struct {
                 try self.func().emitStore(ptr, init_typed.value);
                 try self.var_map.put(self.allocator, decl.name, VarInfo.init(
                     ptr,
+                    init_typed.ty,
+                    self.current_decl_is_mutable,
+                ));
+            },
+            .optional_type => {
+                // Optionals use a slot to hold the pointer to the 16-byte structure
+                const slot_ptr = try self.func().emitAlloca(.ptr);
+                try self.func().setValueName(slot_ptr, decl.name);
+                try self.func().emitStore(slot_ptr, init_typed.value);
+                try self.var_map.put(self.allocator, decl.name, VarInfo.initWithSlot(
+                    slot_ptr,
                     init_typed.ty,
                     self.current_decl_is_mutable,
                 ));
@@ -805,6 +866,11 @@ pub const AstToIr = struct {
                 var_info.ptr = value_typed.value;
                 var_info.ty = value_typed.ty;
             },
+            .optional_type => {
+                // Store the optional pointer in the slot
+                try self.func().emitStore(var_info.ptr, value_typed.value);
+                var_info.ty = value_typed.ty;
+            },
         }
 
         var_info.resetOwnership();
@@ -848,33 +914,42 @@ pub const AstToIr = struct {
     }
 
     fn convertIfStmt(self: *AstToIr, if_stmt: ast.IfStmt) ConvertError!void {
-        // Convert condition
+        // Convert condition expression
         const cond_typed = try self.convertExpression(if_stmt.condition);
+
+        // For if-let, we need to check the optional's tag
+        const is_if_let = if_stmt.binding_name != null;
+        const condition_value = if (is_if_let) blk: {
+            // Load tag from optional (offset 0) and compare with 1
+            const tag = try self.func().emitLoad(cond_typed.value, .i64);
+            const one = try self.func().emitConstI64(1);
+            break :blk try self.func().emitBinaryOp(.icmp_eq, tag, one, .i64);
+        } else cond_typed.value;
 
         // Determine what blocks we need
         const has_else = if_stmt.else_body != null or if_stmt.else_if != null;
 
         // Create then block
         const then_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("then");
+        _ = try self.func().addBlock(if (is_if_let) "if_let_then" else "then");
 
-        // Create else block (if needed) or end block
+        // Create else block (if needed)
         var else_block_idx: u32 = undefined;
-        if (has_else) {
+        if (has_else or is_if_let) {
             else_block_idx = @intCast(self.func().blocks.items.len);
-            _ = try self.func().addBlock("else");
+            _ = try self.func().addBlock(if (is_if_let) "if_let_else" else "else");
         }
 
         // Create end block
         const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("end");
+        _ = try self.func().addBlock(if (is_if_let) "if_let_end" else "end");
 
         // Emit conditional branch in the previous block
-        const branch_target_if_false = if (has_else) else_block_idx else end_block_idx;
+        const branch_target_if_false = if (has_else or is_if_let) else_block_idx else end_block_idx;
         const entry_block = &self.func().blocks.items[then_block_idx - 1];
         try entry_block.instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = cond_typed.value }, .{ .block_ref = then_block_idx } },
+            .operands = .{ .{ .value = condition_value }, .{ .block_ref = then_block_idx } },
             .result = branch_target_if_false,
         });
 
@@ -883,13 +958,48 @@ pub const AstToIr = struct {
 
         // If we have else, save it too
         var else_block: ?ir.BasicBlock = null;
-        if (has_else) {
+        if (has_else or is_if_let) {
             else_block = self.func().blocks.pop().?;
         }
 
-        // Now current block is "then" block - convert body statements
+        // Now current block is "then" block
+        // For if-let, bind the unwrapped value before executing body
+        if (if_stmt.binding_name) |binding_name| {
+            const opt_info = switch (cond_typed.ty) {
+                .optional_type => |info| info,
+                else => OptionalInfo{ .wrapped = .i64 },
+            };
+            const wrapped_type = opt_info.wrapped;
+            const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
+            const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
+
+            const binding_ptr = try self.func().emitAlloca(wrapped_type);
+            try self.func().setValueName(binding_ptr, binding_name);
+            try self.func().emitStore(binding_ptr, unwrapped_value);
+
+            if (opt_info.wrapped_struct_type) |struct_name| {
+                try self.var_map.put(self.allocator, binding_name, VarInfo.initWithSlot(
+                    binding_ptr,
+                    .{ .struct_type = struct_name },
+                    true,
+                ));
+            } else {
+                try self.var_map.put(self.allocator, binding_name, VarInfo.init(
+                    binding_ptr,
+                    .{ .primitive = wrapped_type },
+                    true,
+                ));
+            }
+        }
+
+        // Convert then body statements
         for (if_stmt.body) |stmt| {
             try self.convertStatement(stmt);
+        }
+
+        // Remove binding from var_map after then body
+        if (if_stmt.binding_name) |binding_name| {
+            _ = self.var_map.remove(binding_name);
         }
 
         // Add unconditional branch to end block (if not already terminated)
@@ -900,15 +1010,13 @@ pub const AstToIr = struct {
         }
 
         // Restore and generate else block if needed
-        if (has_else) {
+        if (has_else or is_if_let) {
             try self.func().blocks.append(self.allocator, else_block.?);
 
-            // Check for else-if chain
+            // Check for else-if chain (not allowed for if-let)
             if (if_stmt.else_if) |else_if| {
-                // Recursively convert the else-if
                 try self.convertIfStmt(else_if.*);
             } else if (if_stmt.else_body) |else_body| {
-                // Convert else body statements
                 for (else_body) |stmt| {
                     try self.convertStatement(stmt);
                 }
@@ -1048,6 +1156,92 @@ pub const AstToIr = struct {
         }
     }
 
+    fn convertElseUnwrapDecl(self: *AstToIr, unwrap: ast.ElseUnwrapDecl) ConvertError!void {
+        // Convert the optional expression
+        const opt_typed = try self.convertExpression(unwrap.optional_expr.*);
+
+        // Load the tag from the optional (offset 0)
+        const tag = try self.func().emitLoad(opt_typed.value, .i64);
+
+        // Compare tag with 1 (has value)
+        const one = try self.func().emitConstI64(1);
+        const has_value = try self.func().emitBinaryOp(.icmp_eq, tag, one, .i64);
+
+        // Get the wrapped type info
+        const opt_info = switch (opt_typed.ty) {
+            .optional_type => |info| info,
+            else => OptionalInfo{ .wrapped = .i64 },
+        };
+        const wrapped_type = opt_info.wrapped;
+
+        // Create a stack slot for the variable being declared
+        const var_ptr = try self.func().emitAlloca(wrapped_type);
+        try self.func().setValueName(var_ptr, unwrap.var_name);
+
+        // Add to var_map so the default body can assign to it
+        if (opt_info.wrapped_struct_type) |struct_name| {
+            // Struct binding: use initWithSlot because var_ptr contains a pointer to the struct
+            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.initWithSlot(
+                var_ptr,
+                .{ .struct_type = struct_name },
+                true, // mutable
+            ));
+        } else {
+            // Primitive binding: use init (no slot indirection needed)
+            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(
+                var_ptr,
+                .{ .primitive = wrapped_type },
+                true, // mutable
+            ));
+        }
+
+        // Create blocks
+        const some_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("else_unwrap_some");
+
+        const nil_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("else_unwrap_nil");
+
+        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("else_unwrap_end");
+
+        // Emit conditional branch
+        const entry_block = &self.func().blocks.items[some_block_idx - 1];
+        try entry_block.instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = has_value }, .{ .block_ref = some_block_idx } },
+            .result = nil_block_idx,
+        });
+
+        // Save end and nil blocks
+        const end_block = self.func().blocks.pop().?;
+        const nil_block = self.func().blocks.pop().?;
+
+        // In "some" block: unwrap and store value
+        const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
+        const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
+        try self.func().emitStore(var_ptr, unwrapped_value);
+        try self.func().emitBr(end_block_idx);
+
+        // Restore nil block
+        try self.func().blocks.append(self.allocator, nil_block);
+
+        // Execute default body (which should assign to var_name)
+        for (unwrap.default_body) |stmt| {
+            try self.convertStatement(stmt);
+        }
+
+        // Branch to end
+        if (self.func().currentBlock()) |block| {
+            if (block.instructions.items.len == 0 or block.instructions.items[block.instructions.items.len - 1].op != .ret) {
+                try self.func().emitBr(end_block_idx);
+            }
+        }
+
+        // Restore end block
+        try self.func().blocks.append(self.allocator, end_block);
+    }
+
     // ------------------------------------------------------------------------
     // Expression Conversion
     // ------------------------------------------------------------------------
@@ -1057,6 +1251,7 @@ pub const AstToIr = struct {
             .integer => |v| .{ .value = try self.func().emitConstI64(v), .ty = .{ .primitive = .i64 } },
             .float_lit => |v| .{ .value = try self.func().emitConstF64(v), .ty = .{ .primitive = .f64 } },
             .bool_lit => |v| .{ .value = try self.func().emitConstI64(if (v) 1 else 0), .ty = .{ .primitive = .i64 } },
+            .nil_lit => self.createNilOptional(.i64),
             .identifier => |name| self.convertIdentifier(name),
             .binary => |bin| self.convertBinary(bin),
             .compare => |cmp| self.convertCompare(cmp),
@@ -1067,6 +1262,36 @@ pub const AstToIr = struct {
             .index => |idx| self.convertIndex(idx),
             .sized_array => |sized| self.convertSizedArray(sized),
             .method_call => |mcall| self.convertMethodCallExpr(mcall),
+        };
+    }
+
+    /// Create a "some" optional from a value
+    fn createSomeOptional(self: *AstToIr, value: ir.Value, wrapped_type: ir.Type) ConvertError!TypedValue {
+        // Allocate 16 bytes: [tag: i64][value: i64]
+        const opt_ptr = try self.func().emitAllocaSized(16);
+
+        // Store tag = 1 (has value)
+        const one = try self.func().emitConstI64(1);
+        try self.func().emitStore(opt_ptr, one);
+
+        // Store value at offset 8
+        const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, 8);
+        try self.func().emitStore(value_ptr, value);
+
+        return .{
+            .value = opt_ptr,
+            .ty = .{ .optional_type = .{ .wrapped = wrapped_type } },
+        };
+    }
+
+    /// Create a nil optional with a specific wrapped type
+    fn createNilOptional(self: *AstToIr, wrapped_type: ir.Type) ConvertError!TypedValue {
+        const opt_ptr = try self.func().emitAllocaSized(16);
+        const zero = try self.func().emitConstI64(0);
+        try self.func().emitStore(opt_ptr, zero); // tag = 0 (nil)
+        return .{
+            .value = opt_ptr,
+            .ty = .{ .optional_type = .{ .wrapped = wrapped_type } },
         };
     }
 
@@ -1085,7 +1310,15 @@ pub const AstToIr = struct {
         info.used = true;
 
         return switch (info.ty) {
-            .struct_type => .{ .value = info.ptr, .ty = info.ty },
+            .struct_type => if (info.uses_slot) .{
+                // Variable uses a slot - load the struct pointer from it
+                .value = try self.func().emitLoad(info.ptr, .ptr),
+                .ty = info.ty,
+            } else .{
+                // Stack-allocated struct: the ptr IS the struct, no load needed
+                .value = info.ptr,
+                .ty = info.ty,
+            },
             .array_type => if (info.uses_slot) .{
                 // Variable uses a slot - load the array pointer from it
                 .value = try self.func().emitLoad(info.ptr, .ptr),
@@ -1101,6 +1334,15 @@ pub const AstToIr = struct {
             },
             .enum_type => .{
                 .value = try self.func().emitLoad(info.ptr, .i64),
+                .ty = info.ty,
+            },
+            .optional_type => if (info.uses_slot) .{
+                // Variable uses a slot - load the optional pointer from it
+                .value = try self.func().emitLoad(info.ptr, .ptr),
+                .ty = info.ty,
+            } else .{
+                // Direct optional ptr
+                .value = info.ptr,
                 .ty = info.ty,
             },
         };
@@ -1245,6 +1487,15 @@ pub const AstToIr = struct {
             .primitive, .enum_type => {
                 // Primitives are copied, not moved
             },
+            .optional_type => {
+                // Optionals contain a pointer, treat as moved like arrays
+                if (!var_info.is_mutable) {
+                    debug.astToIr("cannot move immutable variable '{s}' into struct\n", .{var_name});
+                    self.reportError(.E010);
+                    return error.ImmutableMove;
+                }
+                var_info.markMoved(target_type, self.current_line);
+            },
         }
     }
 
@@ -1293,6 +1544,11 @@ pub const AstToIr = struct {
             .enum_type => |name| .{
                 .value = try self.func().emitLoad(field_ptr, .i64),
                 .ty = .{ .enum_type = name },
+            },
+            .optional_type => |opt| .{
+                // Optional field stores a pointer - load it
+                .value = try self.func().emitLoad(field_ptr, .ptr),
+                .ty = .{ .optional_type = opt },
             },
         };
     }
@@ -1448,15 +1704,103 @@ pub const AstToIr = struct {
         };
 
         const idx_typed = try self.convertExpression(idx.index.*);
+
+        // Get the array size for bounds checking
+        const arr_size: ir.Value = if (arr_info.size) |size|
+            try self.func().emitConstI64(@intCast(size))
+        else blk: {
+            // Dynamic array - need to get the size from companion variable
+            // First, find the array name from the base expression
+            const arr_name = switch (idx.base.*) {
+                .identifier => |name| name,
+                else => {
+                    // For non-identifier bases, we can't do bounds checking with dynamic size
+                    // Fall back to direct access (unsafe)
+                    const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
+                    const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
+                    return self.createSomeOptional(val, arr_info.element_type);
+                },
+            };
+            const size_var_name = try std.fmt.allocPrint(self.allocator, "{s}_size", .{arr_name});
+            defer self.allocator.free(size_var_name);
+
+            const size_var_entry = self.var_map.getPtr(size_var_name) orelse {
+                // No size variable - can't do bounds checking, fall back to direct access
+                const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
+                const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
+                return self.createSomeOptional(val, arr_info.element_type);
+            };
+            size_var_entry.used = true;
+            break :blk try self.func().emitLoad(size_var_entry.ptr, .i64);
+        };
+
+        // Allocate the result optional (16 bytes)
+        const opt_ptr = try self.func().emitAllocaSized(16);
+
+        // Bounds check: index < size AND index >= 0
+        // Since we use i64, negative check is: index >= 0
+        const zero = try self.func().emitConstI64(0);
+        const is_non_negative = try self.func().emitBinaryOp(.icmp_ge, idx_typed.value, zero, .i64);
+        const is_less_than_size = try self.func().emitBinaryOp(.icmp_lt, idx_typed.value, arr_size, .i64);
+
+        // Combine both conditions with AND
+        // Since we don't have a direct AND instruction, use multiplication (both are 0 or 1)
+        const in_bounds = try self.func().emitBinaryOp(.mul, is_non_negative, is_less_than_size, .i64);
+
+        // Create blocks for branching
+        const in_bounds_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("index_in_bounds");
+
+        const out_of_bounds_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("index_out_of_bounds");
+
+        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("index_merge");
+
+        // Emit conditional branch in previous block
+        const entry_block = &self.func().blocks.items[in_bounds_block_idx - 1];
+        try entry_block.instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx } },
+            .result = out_of_bounds_block_idx,
+        });
+
+        // Save merge and out_of_bounds blocks
+        const merge_block = self.func().blocks.pop().?;
+        const out_of_bounds_block = self.func().blocks.pop().?;
+
+        // In-bounds block: create some(element)
+        const one_val = try self.func().emitConstI64(1);
+        try self.func().emitStore(opt_ptr, one_val); // tag = 1
+
         const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
         const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
 
-        // If the array element is a struct, return struct type
-        if (arr_info.element_struct_type) |struct_name| {
-            return .{ .value = val, .ty = .{ .struct_type = struct_name } };
-        }
+        const value_slot = try self.func().emitGetFieldPtr(opt_ptr, 8);
+        try self.func().emitStore(value_slot, val);
 
-        return .{ .value = val, .ty = .{ .primitive = arr_info.element_type } };
+        try self.func().emitBr(merge_block_idx);
+
+        // Restore out-of-bounds block
+        try self.func().blocks.append(self.allocator, out_of_bounds_block);
+
+        // Out-of-bounds block: create nil
+        const zero_val = try self.func().emitConstI64(0);
+        try self.func().emitStore(opt_ptr, zero_val); // tag = 0
+
+        try self.func().emitBr(merge_block_idx);
+
+        // Restore merge block
+        try self.func().blocks.append(self.allocator, merge_block);
+
+        // Return the optional
+        return .{
+            .value = opt_ptr,
+            .ty = .{ .optional_type = .{
+                .wrapped = arr_info.element_type,
+                .wrapped_struct_type = arr_info.element_struct_type,
+            } },
+        };
     }
 
     fn convertSizedArray(self: *AstToIr, sized: ast.SizedArrayExpr) ConvertError!TypedValue {

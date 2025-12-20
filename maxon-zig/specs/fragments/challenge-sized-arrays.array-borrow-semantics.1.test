@@ -1,13 +1,21 @@
 // Test: challenge-sized-arrays.array-borrow-semantics.1
 function readFirst(arr array of 3 int) returns int
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'readFirst'
 
 function main() returns int
     var arr = array of 3 int
     arr[0] = 42
     var result = readFirst(arr)
-    return arr[0] + result
+    var val = 0
+    if let v = arr[0] 'get'
+        val = v
+    end 'get'
+    return val + result
 end 'main'
 ---
 ExitCode: 84
@@ -19,9 +27,41 @@ entry:
     store %arr %tmp_param
     %tmp_load = load ptr %arr
     %tmp_const = const.i64 i64 0
-    %4 = getelemptr ptr %tmp_load %tmp_const
-    %tmp_load.1 = load i64 %4
-    ret %tmp_load.1
+    %tmp_const.1 = const.i64 i64 3
+    %tmp_alloca.1 = alloca.sized ptr 16
+    %tmp_const.2 = const.i64 i64 0
+    %tmp_icmp = icmp.ge i64 %tmp_const %tmp_const.2
+    %tmp_icmp.1 = icmp.lt i64 %tmp_const %tmp_const.1
+    %tmp_mul = mul i64 %tmp_icmp %tmp_icmp.1
+    %tmp_load = br.cond %tmp_mul @block1
+index_in_bounds:
+    %tmp_const.3 = const.i64 i64 1
+    store %tmp_alloca.1 %tmp_const.3
+    %11 = getelemptr ptr %tmp_load %tmp_const
+    %tmp_load.1 = load i64 %11
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
+    store %tmp_fieldptr %tmp_load.1
+    br @block3
+index_out_of_bounds:
+    %tmp_const.4 = const.i64 i64 0
+    store %tmp_alloca.1 %tmp_const.4
+    br @block3
+index_merge:
+    %tmp_load.2 = load i64 %tmp_alloca.1
+    %tmp_const.5 = const.i64 i64 1
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.2 %tmp_const.5
+    %tmp_alloca.1 = br.cond %tmp_icmp.2 @block4
+if_let_then:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 8
+    %tmp_load.3 = load i64 %tmp_fieldptr.1
+    %val = alloca ptr
+    store %val %tmp_load.3
+    %tmp_load.4 = load i64 %val
+    ret %tmp_load.4
+if_let_else:
+    %tmp_const.6 = const.i64 i64 0
+    ret %tmp_const.6
+if_let_end:
 }
 
 function main() -> i64 {
@@ -35,10 +75,47 @@ entry:
     %result = alloca ptr
     store %result %tmp_call
     %tmp_const.2 = const.i64 i64 0
-    %7 = getelemptr ptr %arr %tmp_const.2
-    %tmp_load = load i64 %7
-    %tmp_load.1 = load i64 %result
-    %tmp_add = add i64 %tmp_load %tmp_load.1
+    %val = alloca ptr
+    store %val %tmp_const.2
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_const.4 = const.i64 i64 3
+    %tmp_alloca.3 = alloca.sized ptr 16
+    %tmp_const.5 = const.i64 i64 0
+    %tmp_icmp = icmp.ge i64 %tmp_const.3 %tmp_const.5
+    %tmp_icmp.1 = icmp.lt i64 %tmp_const.3 %tmp_const.4
+    %tmp_mul = mul i64 %tmp_icmp %tmp_icmp.1
+    %tmp_const.1 = br.cond %tmp_mul @block1
+index_in_bounds:
+    %tmp_const.6 = const.i64 i64 1
+    store %tmp_alloca.3 %tmp_const.6
+    %16 = getelemptr ptr %arr %tmp_const.3
+    %tmp_load = load i64 %16
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.3 8
+    store %tmp_fieldptr %tmp_load
+    br @block3
+index_out_of_bounds:
+    %tmp_const.7 = const.i64 i64 0
+    store %tmp_alloca.3 %tmp_const.7
+    br @block3
+index_merge:
+    %tmp_load.1 = load i64 %tmp_alloca.3
+    %tmp_const.8 = const.i64 i64 1
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.1 %tmp_const.8
+    %result = br.cond %tmp_icmp.2 @block4
+if_let_then:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.3 8
+    %tmp_load.2 = load i64 %tmp_fieldptr.1
+    %v = alloca ptr
+    store %v %tmp_load.2
+    %tmp_load.3 = load i64 %v
+    store %val %tmp_load.3
+    br @block6
+if_let_else:
+    br @block6
+if_let_end:
+    %tmp_load.4 = load i64 %val
+    %tmp_load.5 = load i64 %result
+    %tmp_add = add i64 %tmp_load.4 %tmp_load.5
     ret %tmp_add
 }
 

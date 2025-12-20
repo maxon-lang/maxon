@@ -90,9 +90,17 @@ pub const MutationAnalyzer = struct {
                 self.checkExpressionForParamMutation(assign.base.*, param_indices, mutated);
             },
             .if_stmt => |if_s| {
-                // Check mutations inside if statement body
+                // Check mutations inside if/if-let body
                 for (if_s.body) |body_stmt| {
                     self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                }
+                if (if_s.else_body) |else_body| {
+                    for (else_body) |body_stmt| {
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                    }
+                }
+                if (if_s.else_if) |else_if| {
+                    self.checkStatementForMutation(.{ .if_stmt = else_if.* }, param_indices, mutated);
                 }
             },
             .while_stmt => |while_s| {
@@ -103,6 +111,12 @@ pub const MutationAnalyzer = struct {
             },
             .break_stmt, .continue_stmt => {
                 // Control flow statements don't mutate parameters
+            },
+            .else_unwrap_decl => |unwrap| {
+                // Check mutations inside else-unwrap default body
+                for (unwrap.default_body) |body_stmt| {
+                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                }
             },
         }
     }
@@ -135,9 +149,9 @@ pub const MutationAnalyzer = struct {
                 // Method call like arr.push(x) mutates the base
                 self.checkExpressionForParamMutation(mcall.base.*, param_indices, mutated);
             },
-            // integer, float_lit, binary, compare, call, struct_init, array_literal, sized_array:
+            // integer, float_lit, nil_lit, binary, compare, call, struct_init, array_literal, sized_array:
             // These cannot be mutation targets (only identifier, field_access, index can)
-            .integer, .float_lit, .bool_lit, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},
+            .integer, .float_lit, .bool_lit, .nil_lit, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},
         }
     }
 

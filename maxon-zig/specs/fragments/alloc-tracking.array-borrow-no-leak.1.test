@@ -1,6 +1,10 @@
 // Test: alloc-tracking.array-borrow-no-leak.1
 function readFirst(arr array of int) returns int
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'readFirst'
 
 function main() returns int
@@ -8,7 +12,11 @@ function main() returns int
     var arr = array of size int
     arr[0] = 42
     let result = readFirst(arr)
-    return arr[0] + result
+    var sum = 0
+    if let val = arr[0] 'get'
+        sum = val
+    end 'get'
+    return sum + result
 end 'main'
 ---
 ExitCode: 84
@@ -32,7 +40,26 @@ entry:
     %tmp_const = const.i64 i64 0
     %4 = getelemptr ptr %tmp_load %tmp_const
     %tmp_load.1 = load i64 %4
-    ret %tmp_load.1
+    %tmp_alloca.1 = alloca.sized ptr 16
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_alloca.1 %tmp_const.1
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
+    store %tmp_fieldptr %tmp_load.1
+    %tmp_load.2 = load i64 %tmp_alloca.1
+    %tmp_const.2 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.2 %tmp_const.2
+    %tmp_load = br.cond %tmp_icmp @block1
+if_let_then:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 8
+    %tmp_load.3 = load i64 %tmp_fieldptr.1
+    %val = alloca ptr
+    store %val %tmp_load.3
+    %tmp_load.4 = load i64 %val
+    ret %tmp_load.4
+if_let_else:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+if_let_end:
 }
 
 function main() -> i64 {
@@ -55,14 +82,38 @@ entry:
     %tmp_call = call i64 @readFirst(%tmp_load.2)
     %result = alloca ptr
     store %result %tmp_call
-    %tmp_load.3 = load ptr %arr
     %tmp_const.4 = const.i64 i64 0
-    %16 = getelemptr ptr %tmp_load.3 %tmp_const.4
-    %tmp_load.4 = load i64 %16
-    %tmp_load.5 = load i64 %result
-    %tmp_add = add i64 %tmp_load.4 %tmp_load.5
-    %tmp_load.6 = load ptr %arr
-    heap.free %tmp_load.6
+    %sum = alloca ptr
+    store %sum %tmp_const.4
+    %tmp_load.3 = load ptr %arr
+    %tmp_const.5 = const.i64 i64 0
+    %18 = getelemptr ptr %tmp_load.3 %tmp_const.5
+    %tmp_load.4 = load i64 %18
+    %tmp_alloca.4 = alloca.sized ptr 16
+    %tmp_const.6 = const.i64 i64 1
+    store %tmp_alloca.4 %tmp_const.6
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.4 8
+    store %tmp_fieldptr %tmp_load.4
+    %tmp_load.5 = load i64 %tmp_alloca.4
+    %tmp_const.7 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.5 %tmp_const.7
+    %tmp_load = br.cond %tmp_icmp @block1
+if_let_then:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.4 8
+    %tmp_load.6 = load i64 %tmp_fieldptr.1
+    %val = alloca ptr
+    store %val %tmp_load.6
+    %tmp_load.7 = load i64 %val
+    store %sum %tmp_load.7
+    br @block3
+if_let_else:
+    br @block3
+if_let_end:
+    %tmp_load.8 = load i64 %sum
+    %tmp_load.9 = load i64 %result
+    %tmp_add = add i64 %tmp_load.8 %tmp_load.9
+    %tmp_load.10 = load ptr %arr
+    heap.free %tmp_load.10
     ret %tmp_add
 }
 

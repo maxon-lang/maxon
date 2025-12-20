@@ -5,7 +5,17 @@ function main() returns int
     arr[0] = 10
     arr[1] = 20
     arr[2] = 30
-    return arr[0] + arr[1] + arr[2]
+    var sum = 0
+    if let a = arr[0] 'g0'
+        sum = sum + a
+    end 'g0'
+    if let b = arr[1] 'g1'
+        sum = sum + b
+    end 'g1'
+    if let c = arr[2] 'g2'
+        sum = sum + c
+    end 'g2'
+    return sum
 end 'main'
 ---
 ExitCode: 60
@@ -36,23 +46,91 @@ entry:
     %tmp_const.7 = const.i64 i64 30
     %18 = getelemptr ptr %tmp_load.3 %tmp_const.6
     store %18 %tmp_const.7
-    %tmp_load.4 = load ptr %arr
     %tmp_const.8 = const.i64 i64 0
-    %21 = getelemptr ptr %tmp_load.4 %tmp_const.8
-    %tmp_load.5 = load i64 %21
-    %tmp_load.6 = load ptr %arr
-    %tmp_const.9 = const.i64 i64 1
-    %25 = getelemptr ptr %tmp_load.6 %tmp_const.9
-    %tmp_load.7 = load i64 %25
-    %tmp_add = add i64 %tmp_load.5 %tmp_load.7
-    %tmp_load.8 = load ptr %arr
-    %tmp_const.10 = const.i64 i64 2
-    %30 = getelemptr ptr %tmp_load.8 %tmp_const.10
-    %tmp_load.9 = load i64 %30
-    %tmp_add.1 = add i64 %tmp_add %tmp_load.9
+    %sum = alloca ptr
+    store %sum %tmp_const.8
+    %tmp_load.4 = load ptr %arr
+    %tmp_const.9 = const.i64 i64 0
+    %23 = getelemptr ptr %tmp_load.4 %tmp_const.9
+    %tmp_load.5 = load i64 %23
+    %tmp_alloca.3 = alloca.sized ptr 16
+    %tmp_const.10 = const.i64 i64 1
+    store %tmp_alloca.3 %tmp_const.10
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.3 8
+    store %tmp_fieldptr %tmp_load.5
+    %tmp_load.6 = load i64 %tmp_alloca.3
+    %tmp_const.11 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.6 %tmp_const.11
+    %tmp_load = br.cond %tmp_icmp @block1
+if_let_then:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.3 8
+    %tmp_load.7 = load i64 %tmp_fieldptr.1
+    %a = alloca ptr
+    store %a %tmp_load.7
+    %tmp_load.8 = load i64 %sum
+    %tmp_load.9 = load i64 %a
+    %tmp_add = add i64 %tmp_load.8 %tmp_load.9
+    store %sum %tmp_add
+    br @block3
+if_let_else:
+    br @block3
+if_let_end:
     %tmp_load.10 = load ptr %arr
-    heap.free %tmp_load.10
-    ret %tmp_add.1
+    %tmp_const.12 = const.i64 i64 1
+    %39 = getelemptr ptr %tmp_load.10 %tmp_const.12
+    %tmp_load.11 = load i64 %39
+    %tmp_alloca.5 = alloca.sized ptr 16
+    %tmp_const.13 = const.i64 i64 1
+    store %tmp_alloca.5 %tmp_const.13
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.5 8
+    store %tmp_fieldptr.2 %tmp_load.11
+    %tmp_load.12 = load i64 %tmp_alloca.5
+    %tmp_const.14 = const.i64 i64 1
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.12 %tmp_const.14
+    %tmp_heap = br.cond %tmp_icmp.1 @block4
+if_let_then:
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.5 8
+    %tmp_load.13 = load i64 %tmp_fieldptr.3
+    %b = alloca ptr
+    store %b %tmp_load.13
+    %tmp_load.14 = load i64 %sum
+    %tmp_load.15 = load i64 %b
+    %tmp_add.1 = add i64 %tmp_load.14 %tmp_load.15
+    store %sum %tmp_add.1
+    br @block6
+if_let_else:
+    br @block6
+if_let_end:
+    %tmp_load.16 = load ptr %arr
+    %tmp_const.15 = const.i64 i64 2
+    %55 = getelemptr ptr %tmp_load.16 %tmp_const.15
+    %tmp_load.17 = load i64 %55
+    %tmp_alloca.7 = alloca.sized ptr 16
+    %tmp_const.16 = const.i64 i64 1
+    store %tmp_alloca.7 %tmp_const.16
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.7 8
+    store %tmp_fieldptr.4 %tmp_load.17
+    %tmp_load.18 = load i64 %tmp_alloca.7
+    %tmp_const.17 = const.i64 i64 1
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.18 %tmp_const.17
+    %tmp_const.2 = br.cond %tmp_icmp.2 @block7
+if_let_then:
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.7 8
+    %tmp_load.19 = load i64 %tmp_fieldptr.5
+    %c = alloca ptr
+    store %c %tmp_load.19
+    %tmp_load.20 = load i64 %sum
+    %tmp_load.21 = load i64 %c
+    %tmp_add.2 = add i64 %tmp_load.20 %tmp_load.21
+    store %sum %tmp_add.2
+    br @block9
+if_let_else:
+    br @block9
+if_let_end:
+    %tmp_load.22 = load i64 %sum
+    %tmp_load.23 = load ptr %arr
+    heap.free %tmp_load.23
+    ret %tmp_load.22
 }
 
 ---

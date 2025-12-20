@@ -1,7 +1,14 @@
 // Test: arrays.let-array-multiple-access.1
 function main() returns int
     let arr = [5, 10, 15, 20]
-    return arr[0] + arr[3]
+    var sum = 0
+    if let a = arr[0] 'g1'
+        sum = sum + a
+    end 'g1'
+    if let b = arr[3] 'g2'
+        sum = sum + b
+    end 'g2'
+    return sum
 end 'main'
 ---
 ExitCode: 25
@@ -26,13 +33,86 @@ entry:
     %12 = getelemptr ptr %arr %tmp_const.7
     store %12 %tmp_const.6
     %tmp_const.8 = const.i64 i64 0
-    %14 = getelemptr ptr %arr %tmp_const.8
-    %tmp_load = load i64 %14
-    %tmp_const.9 = const.i64 i64 3
-    %17 = getelemptr ptr %arr %tmp_const.9
-    %tmp_load.1 = load i64 %17
-    %tmp_add = add i64 %tmp_load %tmp_load.1
-    ret %tmp_add
+    %sum = alloca ptr
+    store %sum %tmp_const.8
+    %tmp_const.9 = const.i64 i64 0
+    %tmp_const.10 = const.i64 i64 4
+    %tmp_alloca.2 = alloca.sized ptr 16
+    %tmp_const.11 = const.i64 i64 0
+    %tmp_icmp = icmp.ge i64 %tmp_const.9 %tmp_const.11
+    %tmp_icmp.1 = icmp.lt i64 %tmp_const.9 %tmp_const.10
+    %tmp_mul = mul i64 %tmp_icmp %tmp_icmp.1
+    %tmp_const.1 = br.cond %tmp_mul @block1
+index_in_bounds:
+    %tmp_const.12 = const.i64 i64 1
+    store %tmp_alloca.2 %tmp_const.12
+    %23 = getelemptr ptr %arr %tmp_const.9
+    %tmp_load = load i64 %23
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
+    store %tmp_fieldptr %tmp_load
+    br @block3
+index_out_of_bounds:
+    %tmp_const.13 = const.i64 i64 0
+    store %tmp_alloca.2 %tmp_const.13
+    br @block3
+index_merge:
+    %tmp_load.1 = load i64 %tmp_alloca.2
+    %tmp_const.14 = const.i64 i64 1
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.1 %tmp_const.14
+    %tmp_const.3 = br.cond %tmp_icmp.2 @block4
+if_let_then:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 8
+    %tmp_load.2 = load i64 %tmp_fieldptr.1
+    %a = alloca ptr
+    store %a %tmp_load.2
+    %tmp_load.3 = load i64 %sum
+    %tmp_load.4 = load i64 %a
+    %tmp_add = add i64 %tmp_load.3 %tmp_load.4
+    store %sum %tmp_add
+    br @block6
+if_let_else:
+    br @block6
+if_let_end:
+    %tmp_const.15 = const.i64 i64 3
+    %tmp_const.16 = const.i64 i64 4
+    %tmp_alloca.4 = alloca.sized ptr 16
+    %tmp_const.17 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.ge i64 %tmp_const.15 %tmp_const.17
+    %tmp_icmp.4 = icmp.lt i64 %tmp_const.15 %tmp_const.16
+    %tmp_mul.1 = mul i64 %tmp_icmp.3 %tmp_icmp.4
+    %tmp_const.5 = br.cond %tmp_mul.1 @block7
+index_in_bounds:
+    %tmp_const.18 = const.i64 i64 1
+    store %tmp_alloca.4 %tmp_const.18
+    %44 = getelemptr ptr %arr %tmp_const.15
+    %tmp_load.5 = load i64 %44
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.4 8
+    store %tmp_fieldptr.2 %tmp_load.5
+    br @block9
+index_out_of_bounds:
+    %tmp_const.19 = const.i64 i64 0
+    store %tmp_alloca.4 %tmp_const.19
+    br @block9
+index_merge:
+    %tmp_load.6 = load i64 %tmp_alloca.4
+    %tmp_const.20 = const.i64 i64 1
+    %tmp_icmp.5 = icmp.eq i64 %tmp_load.6 %tmp_const.20
+    %tmp_const.7 = br.cond %tmp_icmp.5 @block10
+if_let_then:
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.4 8
+    %tmp_load.7 = load i64 %tmp_fieldptr.3
+    %b = alloca ptr
+    store %b %tmp_load.7
+    %tmp_load.8 = load i64 %sum
+    %tmp_load.9 = load i64 %b
+    %tmp_add.1 = add i64 %tmp_load.8 %tmp_load.9
+    store %sum %tmp_add.1
+    br @block12
+if_let_else:
+    br @block12
+if_let_end:
+    %tmp_load.10 = load i64 %sum
+    ret %tmp_load.10
 }
 
 ---

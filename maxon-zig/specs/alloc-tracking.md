@@ -67,7 +67,11 @@ function main() returns int
     let size = 10
     var arr = array of size int
     arr[0] = 42
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -111,7 +115,14 @@ function main() returns int
     var arr2 = array of size2 int
     arr1[0] = 1
     arr2[0] = 2
-    return arr1[0] + arr2[0]
+    var sum = 0
+    if let a = arr1[0] 'g1'
+        sum = sum + a
+    end 'g1'
+    if let b = arr2[0] 'g2'
+        sum = sum + b
+    end 'g2'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -137,7 +148,11 @@ function main() returns int
     var arr = array of size int
     arr[0] = 42
     if true 'check'
-        return arr[0]
+        if let val = arr[0] 'get'
+            return val
+        end 'get' else 'nil'
+            return 0
+        end 'nil'
     end 'check'
     return 0
 end 'main'
@@ -165,7 +180,11 @@ function main() returns int
     if false 'check'
         return 0
     end 'check'
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -185,7 +204,11 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 ```maxon
 function sum_first(arr array of int) returns int
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'sum_first'
 
 function main() returns int
@@ -216,7 +239,11 @@ function main() returns int
     let b = 5
     var arr = array of (a * b) int
     arr[0] = 77
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -236,7 +263,11 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 ```maxon
 function readFirst(arr array of int) returns int
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'readFirst'
 
 function main() returns int
@@ -244,7 +275,11 @@ function main() returns int
     var arr = array of size int
     arr[0] = 42
     let result = readFirst(arr)
-    return arr[0] + result
+    var sum = 0
+    if let val = arr[0] 'get'
+        sum = val
+    end 'get'
+    return sum + result
 end 'main'
 ```
 ```exitcode
@@ -264,7 +299,11 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 ```maxon
 function getElement(arr array of int, idx int) returns int
-    return arr[idx]
+    if let val = arr[idx] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'getElement'
 
 function main() returns int
@@ -302,7 +341,9 @@ function main() returns int
         let size = 5
         var arr = array of size int
         arr[0] = i
-        sum = sum + arr[0]
+        if let val = arr[0] 'get'
+            sum = sum + val
+        end 'get'
         i = i + 1
     end 'loop'
     return sum
@@ -330,7 +371,11 @@ Leaked:    0 bytes
 ```maxon
 function mutateFirst(arr array of int) returns int
     arr[0] = 100
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'mutateFirst'
 
 function main() returns int
@@ -357,12 +402,24 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 ```maxon
 function addTen(arr array of int) returns int
-    arr[0] = arr[0] + 10
-    return arr[0]
+    var val = 0
+    if let v = arr[0] 'get'
+        val = v
+    end 'get'
+    arr[0] = val + 10
+    if let v2 = arr[0] 'get2'
+        return v2
+    end 'get2' else 'nil'
+        return 0
+    end 'nil'
 end 'addTen'
 
 function doubleAddTen(arr array of int) returns int
-    arr[0] = arr[0] * 2
+    var val = 0
+    if let v = arr[0] 'get'
+        val = v
+    end 'get'
+    arr[0] = val * 2
     return addTen(arr)
 end 'doubleAddTen'
 
@@ -390,12 +447,20 @@ Leaked:    0 bytes
 <!-- TrackAllocs: true -->
 ```maxon
 function readIt(arr array of int) returns int
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'readIt'
 
 function writeIt(arr array of int) returns int
     arr[0] = 99
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'writeIt'
 
 function main() returns int

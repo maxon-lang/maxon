@@ -1064,7 +1064,9 @@ pub const IrCodegen = struct {
         self.current_func_name = func.name;
         self.current_func_ret_type = func.return_type;
 
-        try self.enc.prologue(512);
+        // Emit prologue with placeholder stack size (will be patched after)
+        const func_start = self.code.items.len;
+        try self.enc.prologue(0);
 
         // Generate code for each block, recording block start offsets
         for (func.blocks.items) |block| {
@@ -1078,6 +1080,20 @@ pub const IrCodegen = struct {
 
         // Patch all jumps now that we know block offsets
         try self.patchJumps();
+
+        // Calculate actual stack size and patch the prologue
+        // next_stack_offset is negative, representing bytes below rbp
+        // Add 8 for alignment and round up to 16-byte boundary (Windows x64 ABI)
+        const stack_used: i32 = -self.next_stack_offset;
+        const stack_size: i32 = (stack_used + 15) & ~@as(i32, 15); // Round up to 16
+        // Prologue layout: push rbp (1) + mov rbp,rsp (3) + sub rsp,imm32 (3+4)
+        // The imm32 is at offset 7 from function start
+        const stack_size_offset = func_start + 7;
+        const bytes: [4]u8 = @bitCast(stack_size);
+        self.code.items[stack_size_offset] = bytes[0];
+        self.code.items[stack_size_offset + 1] = bytes[1];
+        self.code.items[stack_size_offset + 2] = bytes[2];
+        self.code.items[stack_size_offset + 3] = bytes[3];
     }
 
     fn patchJumps(self: *IrCodegen) !void {

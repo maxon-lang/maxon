@@ -24,7 +24,11 @@ Sized arrays allocate space for a fixed number of elements.
 function main() returns int
     var arr = array of 3 int
     arr[1] = 42
-    return arr[1]
+    if let val = arr[1] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -40,7 +44,23 @@ function main() returns int
     arr[2] = 3
     arr[3] = 4
     arr[4] = 5
-    return arr[0] + arr[1] + arr[2] + arr[3] + arr[4]
+    var sum = 0
+    if let a = arr[0] 'g0'
+        sum = sum + a
+    end 'g0'
+    if let b = arr[1] 'g1'
+        sum = sum + b
+    end 'g1'
+    if let c = arr[2] 'g2'
+        sum = sum + c
+    end 'g2'
+    if let d = arr[3] 'g3'
+        sum = sum + d
+    end 'g3'
+    if let e = arr[4] 'g4'
+        sum = sum + e
+    end 'g4'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -55,7 +75,17 @@ function main() returns int
     arr[0] = 10
     arr[1] = 20
     arr[2] = 30
-    return arr[0] + arr[1] + arr[2]
+    var sum = 0
+    if let a = arr[0] 'g0'
+        sum = sum + a
+    end 'g0'
+    if let b = arr[1] 'g1'
+        sum = sum + b
+    end 'g1'
+    if let c = arr[2] 'g2'
+        sum = sum + c
+    end 'g2'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -67,7 +97,11 @@ end 'main'
 function make_array(size int) returns int
     var arr = array of size int
     arr[0] = 42
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'make_array'
 
 function main() returns int
@@ -86,7 +120,11 @@ function main() returns int
     var size = base * multiplier
     var arr = array of size int
     arr[5] = 99
-    return arr[5]
+    if let val = arr[5] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -111,14 +149,22 @@ Passing an array to a function that only reads it borrows the array.
 
 ```maxon
 function readFirst(arr array of 3 int) returns int
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'readFirst'
 
 function main() returns int
     var arr = array of 3 int
     arr[0] = 42
     var result = readFirst(arr)
-    return arr[0] + result
+    var val = 0
+    if let v = arr[0] 'get'
+        val = v
+    end 'get'
+    return val + result
 end 'main'
 ```
 ```exitcode
@@ -131,7 +177,11 @@ Passing an array to a function that modifies it moves the array.
 ```maxon
 function mutate(arr array of 3 int) returns int
     arr[0] = 100
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'mutate'
 
 function main() returns int
@@ -150,18 +200,26 @@ Using an array after it has been moved should be a compile-time error.
 ```maxon
 function mutate(arr array of 3 int) returns int
     arr[0] = 100
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'mutate'
 
 function main() returns int
     var arr = array of 3 int
     arr[0] = 42
     var result = mutate(arr)
-    return arr[0] + result
+    if let val = arr[0] 'get'
+        return val + result
+    end 'get' else 'nil'
+        return result
+    end 'nil'
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs\fragments\challenge-sized-arrays.error.array-use-after-move.1.test:6:1: use after move
+error E008: specs\fragments\challenge-sized-arrays.error.array-use-after-move.1.test:8:1: use after move
 ```
 
 <!-- test: array-multiple-borrows -->
@@ -169,7 +227,11 @@ Multiple borrows of the same array should be allowed.
 
 ```maxon
 function readFirst(arr array of 3 int) returns int
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'readFirst'
 
 function main() returns int
@@ -191,7 +253,11 @@ Immutable array cannot be passed to function that mutates it.
 ```maxon
 function mutate(arr array of 3 int) returns int
     arr[0] = 100
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'mutate'
 
 function main() returns int
@@ -200,7 +266,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E010: specs\fragments\challenge-sized-arrays.error.let-array-cannot-move.1.test:4:1: cannot move from immutable variable
+error E010: specs\fragments\challenge-sized-arrays.error.let-array-cannot-move.1.test:6:1: cannot move from immutable variable
 ```
 
 <!-- test: array-move-then-reassign -->
@@ -209,7 +275,11 @@ After moving an array, reassigning it should allow using it again.
 ```maxon
 function consume(arr array of 3 int) returns int
     arr[0] = 100
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'consume'
 
 function main() returns int

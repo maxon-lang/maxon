@@ -192,6 +192,7 @@ pub const Parser = struct {
 
     fn parseTypeExpr(self: *Parser) !ast.TypeExpr {
         // Check for array type: array of [size] element_type
+        var base_type: ast.TypeExpr = undefined;
         if (self.check(.array)) {
             _ = self.advance(); // consume 'array'
             _ = try self.expect(.of);
@@ -209,15 +210,27 @@ pub const Parser = struct {
             // Parse element type
             const elem_type = try self.expectTypeName();
 
-            return .{ .array = .{
+            base_type = .{ .array = .{
                 .size = size,
                 .element_type = elem_type,
             } };
+        } else {
+            // Simple type name
+            const type_name = try self.expectTypeName();
+            base_type = .{ .simple = type_name };
         }
 
-        // Simple type name
-        const type_name = try self.expectTypeName();
-        return .{ .simple = type_name };
+        // Check for optional: T or nil
+        if (self.check(.@"or")) {
+            _ = self.advance(); // consume 'or'
+            _ = try self.expect(.nil);
+
+            const wrapped = try self.allocator.create(ast.TypeExpr);
+            wrapped.* = base_type;
+            return .{ .optional = wrapped };
+        }
+
+        return base_type;
     }
 
     fn parseFunction(self: *Parser) !ast.FunctionDecl {
@@ -301,12 +314,18 @@ pub const Parser = struct {
         }
         if (self.check(.let)) {
             const stmt = try self.parseVarDecl(false);
-            _ = try self.expect(.newline);
+            // else-unwrap handles its own newlines
+            if (stmt != .else_unwrap_decl) {
+                _ = try self.expect(.newline);
+            }
             return stmt;
         }
         if (self.check(.@"var")) {
             const stmt = try self.parseVarDecl(true);
-            _ = try self.expect(.newline);
+            // else-unwrap handles its own newlines
+            if (stmt != .else_unwrap_decl) {
+                _ = try self.expect(.newline);
+            }
             return stmt;
         }
         if (self.check(.@"if")) {
@@ -399,6 +418,50 @@ pub const Parser = struct {
         _ = try self.expect(.equals);
         const value = try self.parseExpression();
         if (value) |expr| {
+            // Check for else-unwrap: var x = opt else 'label' ... end 'label'
+            if (self.check(.@"else")) {
+                _ = self.advance(); // consume 'else'
+
+                // Parse label
+                const label = try self.expect(.string);
+
+                // Require newline
+                _ = try self.expect(.newline);
+
+                // Parse default body
+                var default_statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
+                errdefer default_statements.deinit(self.allocator);
+
+                while (!self.check(.end) and !self.isAtEnd()) {
+                    if (self.check(.newline)) {
+                        _ = self.advance();
+                        continue;
+                    }
+                    try default_statements.append(self.allocator, try self.parseStatement());
+                }
+
+                // Parse end 'label'
+                _ = try self.expect(.end);
+                _ = try self.expect(.string);
+
+                // Require newline after end (or allow EOF)
+                if (!self.isAtEnd() and !self.check(.newline)) {
+                    self.reportError(.E004);
+                    return error.ExpectedNewline;
+                }
+                if (self.check(.newline)) {
+                    _ = self.advance();
+                }
+
+                const expr_ptr = try self.createExpr(expr);
+                return .{ .else_unwrap_decl = .{
+                    .var_name = name_token.text,
+                    .optional_expr = expr_ptr,
+                    .default_body = try default_statements.toOwnedSlice(self.allocator),
+                    .label = label.text,
+                } };
+            }
+
             if (is_var) {
                 return .{ .var_decl = .{ .name = name_token.text, .value = expr } };
             } else {
@@ -415,32 +478,16 @@ pub const Parser = struct {
         return .{ .@"return" = .{ .value = expr } };
     }
 
-    fn parseIfStatement(self: *Parser) ParseError!ast.Statement {
-        const if_stmt = try self.parseIfStmtInternal();
-        return .{ .if_stmt = if_stmt };
-    }
+    // -------------------------------------------------------------------------
+    // Block parsing helpers
+    // -------------------------------------------------------------------------
 
-    fn parseIfStmtInternal(self: *Parser) ParseError!ast.IfStmt {
-        _ = try self.expect(.@"if");
-
-        // Parse condition
-        const condition = try self.parseExpression() orelse {
-            self.reportError(.E003);
-            return error.ExpectedExpression;
-        };
-
-        // Parse label 'name'
-        const label = try self.expect(.string);
-
-        // Require newline after 'if condition 'label''
-        _ = try self.expect(.newline);
-
-        // Parse body statements
+    /// Parse statements until 'end' keyword, skipping blank lines
+    fn parseBlockBody(self: *Parser) ParseError![]ast.Statement {
         var statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
         errdefer statements.deinit(self.allocator);
 
         while (!self.check(.end) and !self.isAtEnd()) {
-            // Skip blank lines
             if (self.check(.newline)) {
                 _ = self.advance();
                 continue;
@@ -448,109 +495,18 @@ pub const Parser = struct {
             try statements.append(self.allocator, try self.parseStatement());
         }
 
-        // Parse end 'label'
-        _ = try self.expect(.end);
-        _ = try self.expect(.string); // closing label
-
-        // Check for else clause: end 'label' else ...
-        var else_body: ?[]ast.Statement = null;
-        var else_label: ?[]const u8 = null;
-        var else_if: ?*const ast.IfStmt = null;
-
-        if (self.check(.@"else")) {
-            _ = self.advance(); // consume 'else'
-
-            // Check for else-if: else if ...
-            if (self.check(.@"if")) {
-                // Parse the else-if as a recursive IfStmt
-                const else_if_stmt = try self.parseIfStmtInternal();
-                const ptr = try self.allocator.create(ast.IfStmt);
-                ptr.* = else_if_stmt;
-                try self.ifstmt_ptrs.append(self.allocator, ptr);
-                else_if = ptr;
-            } else {
-                // Parse else block: else 'else_label' ... end 'else_label'
-                const else_label_tok = try self.expect(.string);
-                else_label = else_label_tok.text;
-
-                // Require newline after 'else 'label''
-                _ = try self.expect(.newline);
-
-                // Parse else body statements
-                var else_statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
-                errdefer else_statements.deinit(self.allocator);
-
-                while (!self.check(.end) and !self.isAtEnd()) {
-                    // Skip blank lines
-                    if (self.check(.newline)) {
-                        _ = self.advance();
-                        continue;
-                    }
-                    try else_statements.append(self.allocator, try self.parseStatement());
-                }
-
-                // Parse end 'else_label'
-                _ = try self.expect(.end);
-                _ = try self.expect(.string); // closing else label
-
-                else_body = try else_statements.toOwnedSlice(self.allocator);
-            }
-        }
-
-        // Require newline after end (or allow EOF) - only if we didn't parse else-if
-        if (else_if == null) {
-            if (!self.isAtEnd() and !self.check(.newline)) {
-                self.reportError(.E004);
-                return error.ExpectedNewline;
-            }
-            if (self.check(.newline)) {
-                _ = self.advance();
-            }
-        }
-
-        return .{
-            .condition = condition,
-            .body = try statements.toOwnedSlice(self.allocator),
-            .label = label.text,
-            .else_body = else_body,
-            .else_label = else_label,
-            .else_if = else_if,
-        };
+        return statements.toOwnedSlice(self.allocator);
     }
 
-    fn parseWhileStatement(self: *Parser) ParseError!ast.Statement {
-        _ = try self.expect(.@"while");
-
-        // Parse condition
-        const condition = try self.parseExpression() orelse {
-            self.reportError(.E003);
-            return error.ExpectedExpression;
-        };
-
-        // Parse label 'name'
-        const label = try self.expect(.string);
-
-        // Require newline after 'while condition 'label''
-        _ = try self.expect(.newline);
-
-        // Parse body statements
-        var statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
-        errdefer statements.deinit(self.allocator);
-
-        while (!self.check(.end) and !self.isAtEnd()) {
-            // Skip blank lines
-            if (self.check(.newline)) {
-                _ = self.advance();
-                continue;
-            }
-            try statements.append(self.allocator, try self.parseStatement());
-        }
-
-        // Parse end 'label'
+    /// Parse 'end 'label'' and consume trailing newline (or EOF)
+    fn parseEndAndNewline(self: *Parser) ParseError!void {
         _ = try self.expect(.end);
-        _ = try self.expect(.string); // closing label
+        _ = try self.expect(.string);
+        try self.expectTrailingNewline();
+    }
 
-        // Require newline after end (or allow EOF)
+    /// Require newline after a block end (or allow EOF)
+    fn expectTrailingNewline(self: *Parser) ParseError!void {
         if (!self.isAtEnd() and !self.check(.newline)) {
             self.reportError(.E004);
             return error.ExpectedNewline;
@@ -558,10 +514,135 @@ pub const Parser = struct {
         if (self.check(.newline)) {
             _ = self.advance();
         }
+    }
+
+    /// Result of parsing an else clause
+    const ElseClause = struct {
+        body: ?[]ast.Statement,
+        label: ?[]const u8,
+        else_if: ?*const ast.IfStmt,
+    };
+
+    /// Parse optional else clause: 'else 'label' ... end 'label'' or 'else if ...'
+    fn parseElseClause(self: *Parser, allow_else_if: bool) ParseError!ElseClause {
+        if (!self.check(.@"else")) {
+            return .{ .body = null, .label = null, .else_if = null };
+        }
+
+        _ = self.advance(); // consume 'else'
+
+        // Check for else-if chain
+        if (allow_else_if and self.check(.@"if")) {
+            _ = self.advance(); // consume 'if'
+            const else_if_stmt = try self.parseIfConditionAndBody();
+            const ptr = try self.allocator.create(ast.IfStmt);
+            ptr.* = else_if_stmt;
+            try self.ifstmt_ptrs.append(self.allocator, ptr);
+            return .{ .body = null, .label = null, .else_if = ptr };
+        }
+
+        // Parse else block: else 'label' ... end 'label'
+        const else_label_tok = try self.expect(.string);
+        _ = try self.expect(.newline);
+        const else_body = try self.parseBlockBody();
+        _ = try self.expect(.end);
+        _ = try self.expect(.string);
+
+        return .{ .body = else_body, .label = else_label_tok.text, .else_if = null };
+    }
+
+    // -------------------------------------------------------------------------
+    // Control flow statements
+    // -------------------------------------------------------------------------
+
+    fn parseIfStatement(self: *Parser) ParseError!ast.Statement {
+        _ = try self.expect(.@"if");
+
+        // Check for if-let: if let name = expr 'label'
+        if (self.check(.let)) {
+            _ = self.advance();
+            const name_token = try self.expect(.identifier);
+            _ = try self.expect(.equals);
+
+            const condition = try self.parseExpression() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+
+            const label = try self.expect(.string);
+            _ = try self.expect(.newline);
+
+            const body = try self.parseBlockBody();
+            _ = try self.expect(.end);
+            _ = try self.expect(.string);
+
+            const else_clause = try self.parseElseClause(false);
+            try self.expectTrailingNewline();
+
+            return .{ .if_stmt = .{
+                .condition = condition,
+                .body = body,
+                .label = label.text,
+                .else_body = else_clause.body,
+                .else_label = else_clause.label,
+                .else_if = null,
+                .binding_name = name_token.text,
+            } };
+        }
+
+        // Regular if statement (if already consumed)
+        return .{ .if_stmt = try self.parseIfConditionAndBody() };
+    }
+
+    /// Parse if statement after 'if' has been consumed. Used by parseIfStatement
+    /// and parseElseClause for else-if chains.
+    fn parseIfConditionAndBody(self: *Parser) ParseError!ast.IfStmt {
+        const condition = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+
+        const label = try self.expect(.string);
+        _ = try self.expect(.newline);
+
+        const body = try self.parseBlockBody();
+        _ = try self.expect(.end);
+        _ = try self.expect(.string);
+
+        const else_clause = try self.parseElseClause(true);
+
+        // Only expect trailing newline if we didn't chain to else-if
+        if (else_clause.else_if == null) {
+            try self.expectTrailingNewline();
+        }
+
+        return .{
+            .condition = condition,
+            .body = body,
+            .label = label.text,
+            .else_body = else_clause.body,
+            .else_label = else_clause.label,
+            .else_if = else_clause.else_if,
+        };
+    }
+
+    fn parseWhileStatement(self: *Parser) ParseError!ast.Statement {
+        _ = try self.expect(.@"while");
+
+        const condition = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+
+        const label = try self.expect(.string);
+        _ = try self.expect(.newline);
+
+        const body = try self.parseBlockBody();
+        try self.parseEndAndNewline();
 
         return .{ .while_stmt = .{
             .condition = condition,
-            .body = try statements.toOwnedSlice(self.allocator),
+            .body = body,
             .label = label.text,
         } };
     }
@@ -682,6 +763,11 @@ pub const Parser = struct {
         if (self.check(.@"false")) {
             _ = self.advance();
             return try self.parsePostfix(.{ .bool_lit = false });
+        }
+        // Nil literal
+        if (self.check(.nil)) {
+            _ = self.advance();
+            return try self.parsePostfix(.nil_lit);
         }
         // Array literal: [expr, expr, ...]
         if (self.check(.lbracket)) {
@@ -909,6 +995,14 @@ pub const Parser = struct {
     fn check(self: *Parser, token_type: TokenType) bool {
         if (self.isAtEnd()) return false;
         return self.tokens[self.pos].type == token_type;
+    }
+
+    fn peek(self: *Parser, offset: usize) ?Token {
+        const target = self.pos + offset;
+        if (target < self.tokens.len) {
+            return self.tokens[target];
+        }
+        return null;
     }
 
     fn advance(self: *Parser) Token {

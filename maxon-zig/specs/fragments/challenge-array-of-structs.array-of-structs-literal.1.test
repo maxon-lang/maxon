@@ -8,7 +8,14 @@ function main() returns int
     var p1 = Point{x: 1, y: 2}
     var p2 = Point{x: 3, y: 4}
     var points = [p1, p2]
-    return points[0].x + points[1].y
+    var sum = 0
+    if let pt0 = points[0] 'g0'
+        sum = sum + pt0.x
+    end 'g0'
+    if let pt1 = points[1] 'g1'
+        sum = sum + pt1.y
+    end 'g1'
+    return sum
 end 'main'
 ---
 ExitCode: 5
@@ -37,17 +44,90 @@ entry:
     %14 = getelemptr ptr %points %tmp_const.5
     store %14 %p2
     %tmp_const.6 = const.i64 i64 0
-    %16 = getelemptr ptr %points %tmp_const.6
-    %tmp_load = load ptr %16
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_load 0
-    %tmp_load.1 = load i64 %tmp_fieldptr.4
-    %tmp_const.7 = const.i64 i64 1
-    %21 = getelemptr ptr %points %tmp_const.7
-    %tmp_load.2 = load ptr %21
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_load.2 8
-    %tmp_load.3 = load i64 %tmp_fieldptr.5
-    %tmp_add = add i64 %tmp_load.1 %tmp_load.3
-    ret %tmp_add
+    %sum = alloca ptr
+    store %sum %tmp_const.6
+    %tmp_const.7 = const.i64 i64 0
+    %tmp_const.8 = const.i64 i64 2
+    %tmp_alloca.4 = alloca.sized ptr 16
+    %tmp_const.9 = const.i64 i64 0
+    %tmp_icmp = icmp.ge i64 %tmp_const.7 %tmp_const.9
+    %tmp_icmp.1 = icmp.lt i64 %tmp_const.7 %tmp_const.8
+    %tmp_mul = mul i64 %tmp_icmp %tmp_icmp.1
+    %tmp_const = br.cond %tmp_mul @block1
+index_in_bounds:
+    %tmp_const.10 = const.i64 i64 1
+    store %tmp_alloca.4 %tmp_const.10
+    %25 = getelemptr ptr %points %tmp_const.7
+    %tmp_load = load ptr %25
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.4 8
+    store %tmp_fieldptr.4 %tmp_load
+    br @block3
+index_out_of_bounds:
+    %tmp_const.11 = const.i64 i64 0
+    store %tmp_alloca.4 %tmp_const.11
+    br @block3
+index_merge:
+    %tmp_load.1 = load i64 %tmp_alloca.4
+    %tmp_const.12 = const.i64 i64 1
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.1 %tmp_const.12
+    %p2 = br.cond %tmp_icmp.2 @block4
+if_let_then:
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.4 8
+    %tmp_load.2 = load ptr %tmp_fieldptr.5
+    %pt0 = alloca ptr
+    store %pt0 %tmp_load.2
+    %tmp_load.3 = load i64 %sum
+    %tmp_load.4 = load ptr %pt0
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_load.4 0
+    %tmp_load.5 = load i64 %tmp_fieldptr.6
+    %tmp_add = add i64 %tmp_load.3 %tmp_load.5
+    store %sum %tmp_add
+    br @block6
+if_let_else:
+    br @block6
+if_let_end:
+    %tmp_const.13 = const.i64 i64 1
+    %tmp_const.14 = const.i64 i64 2
+    %tmp_alloca.6 = alloca.sized ptr 16
+    %tmp_const.15 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.ge i64 %tmp_const.13 %tmp_const.15
+    %tmp_icmp.4 = icmp.lt i64 %tmp_const.13 %tmp_const.14
+    %tmp_mul.1 = mul i64 %tmp_icmp.3 %tmp_icmp.4
+    %tmp_fieldptr.3 = br.cond %tmp_mul.1 @block7
+index_in_bounds:
+    %tmp_const.16 = const.i64 i64 1
+    store %tmp_alloca.6 %tmp_const.16
+    %48 = getelemptr ptr %points %tmp_const.13
+    %tmp_load.6 = load ptr %48
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_alloca.6 8
+    store %tmp_fieldptr.7 %tmp_load.6
+    br @block9
+index_out_of_bounds:
+    %tmp_const.17 = const.i64 i64 0
+    store %tmp_alloca.6 %tmp_const.17
+    br @block9
+index_merge:
+    %tmp_load.7 = load i64 %tmp_alloca.6
+    %tmp_const.18 = const.i64 i64 1
+    %tmp_icmp.5 = icmp.eq i64 %tmp_load.7 %tmp_const.18
+    %tmp_const.4 = br.cond %tmp_icmp.5 @block10
+if_let_then:
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.6 8
+    %tmp_load.8 = load ptr %tmp_fieldptr.8
+    %pt1 = alloca ptr
+    store %pt1 %tmp_load.8
+    %tmp_load.9 = load i64 %sum
+    %tmp_load.10 = load ptr %pt1
+    %tmp_fieldptr.9 = getfieldptr ptr %tmp_load.10 8
+    %tmp_load.11 = load i64 %tmp_fieldptr.9
+    %tmp_add.1 = add i64 %tmp_load.9 %tmp_load.11
+    store %sum %tmp_add.1
+    br @block12
+if_let_else:
+    br @block12
+if_let_end:
+    %tmp_load.12 = load i64 %sum
+    ret %tmp_load.12
 }
 
 ---

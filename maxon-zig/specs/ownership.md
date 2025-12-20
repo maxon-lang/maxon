@@ -267,7 +267,11 @@ The caller allocates, the callee (mutateFirst) takes ownership and frees.
 ```maxon
 function mutateFirst(arr array of int) returns int
     arr[0] = 100
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'mutateFirst'
 
 function main() returns int

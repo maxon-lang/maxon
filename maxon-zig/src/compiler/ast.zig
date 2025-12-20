@@ -30,6 +30,7 @@ pub const ArrayTypeExpr = struct {
 pub const TypeExpr = union(enum) {
     simple: []const u8, // int, float, MyStruct
     array: ArrayTypeExpr, // array of int, array of 3 int
+    optional: *const TypeExpr, // T or nil
 };
 
 pub const ParamDecl = struct {
@@ -68,6 +69,9 @@ pub const IfStmt = struct {
     else_body: ?[]Statement, // For else clause
     else_label: ?[]const u8, // Label for else block
     else_if: ?*const IfStmt, // For else-if chain (recursive)
+
+    // If-let binding (optional): if let name = expr 'label'
+    binding_name: ?[]const u8 = null,
 };
 
 pub const WhileStmt = struct {
@@ -78,6 +82,13 @@ pub const WhileStmt = struct {
 
 pub const BreakStmt = struct {};
 pub const ContinueStmt = struct {};
+
+pub const ElseUnwrapDecl = struct {
+    var_name: []const u8,
+    optional_expr: *const Expression,
+    default_body: []Statement,
+    label: []const u8,
+};
 
 pub const Statement = union(enum) {
     @"return": ReturnStmt,
@@ -92,6 +103,7 @@ pub const Statement = union(enum) {
     while_stmt: WhileStmt,
     break_stmt: BreakStmt,
     continue_stmt: ContinueStmt,
+    else_unwrap_decl: ElseUnwrapDecl,
 };
 
 pub const VarDecl = struct {
@@ -176,6 +188,7 @@ pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
     bool_lit: bool,
+    nil_lit,
     identifier: []const u8,
     binary: BinaryExpr,
     compare: CompareExpr,

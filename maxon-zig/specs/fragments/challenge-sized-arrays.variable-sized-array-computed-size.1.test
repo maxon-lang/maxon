@@ -5,7 +5,11 @@ function main() returns int
     var size = base * multiplier
     var arr = array of size int
     arr[5] = 99
-    return arr[5]
+    if let val = arr[5] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ---
 ExitCode: 99
@@ -38,9 +42,30 @@ entry:
     %tmp_const.5 = const.i64 i64 5
     %19 = getelemptr ptr %tmp_load.4 %tmp_const.5
     %tmp_load.5 = load i64 %19
-    %tmp_load.6 = load ptr %arr
-    heap.free %tmp_load.6
-    ret %tmp_load.5
+    %tmp_alloca.4 = alloca.sized ptr 16
+    %tmp_const.6 = const.i64 i64 1
+    store %tmp_alloca.4 %tmp_const.6
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.4 8
+    store %tmp_fieldptr %tmp_load.5
+    %tmp_load.6 = load i64 %tmp_alloca.4
+    %tmp_const.7 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.6 %tmp_const.7
+    %tmp_const.1 = br.cond %tmp_icmp @block1
+if_let_then:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.4 8
+    %tmp_load.7 = load i64 %tmp_fieldptr.1
+    %val = alloca ptr
+    store %val %tmp_load.7
+    %tmp_load.8 = load i64 %val
+    %tmp_load.9 = load ptr %arr
+    heap.free %tmp_load.9
+    ret %tmp_load.8
+if_let_else:
+    %tmp_const.8 = const.i64 i64 0
+    %tmp_load.10 = load ptr %arr
+    heap.free %tmp_load.10
+    ret %tmp_const.8
+if_let_end:
 }
 
 ---

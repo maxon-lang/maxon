@@ -247,6 +247,13 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
             allocator.free(while_s.body);
         },
         .break_stmt, .continue_stmt => {},
+        .else_unwrap_decl => |unwrap| {
+            freeExpressionArgs(unwrap.optional_expr.*, allocator);
+            for (unwrap.default_body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(unwrap.default_body);
+        },
     }
 }
 
@@ -317,7 +324,7 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
             }
             allocator.free(mcall.args);
         },
-        // integer, float_lit, bool_lit, identifier: no nested allocations to free
-        .integer, .float_lit, .bool_lit, .identifier => {},
+        // integer, float_lit, bool_lit, nil_lit, identifier: no nested allocations to free
+        .integer, .float_lit, .bool_lit, .nil_lit, .identifier => {},
     }
 }

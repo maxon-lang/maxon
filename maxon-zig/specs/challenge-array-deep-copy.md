@@ -28,7 +28,11 @@ end 'Container'
 function main() returns int
     var arr = [10, 20, 30]
     var c = Container{data: arr}
-    return c.data[0]
+    if let val = c.data[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -45,7 +49,11 @@ function main() returns int
     var arr = [10, 20, 30]
     var c = Container{data: arr}
     arr[0] = 999
-    return c.data[0]
+    if let val = c.data[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -62,7 +70,11 @@ function main() returns int
     var arr = [10, 20, 30]
     var c = Container{data: arr}
     c.data[0] = 999
-    return arr[0]
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -82,7 +94,11 @@ end 'makeContainer'
 
 function main() returns int
     var c = makeContainer()
-    return c.data[0]
+    if let val = c.data[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode
@@ -102,7 +118,23 @@ end 'makeContainer'
 
 function main() returns int
     var c = makeContainer()
-    return c.data[0] + c.data[1] + c.data[2] + c.data[3] + c.data[4]
+    var sum = 0
+    if let v0 = c.data[0] 'g0'
+        sum = sum + v0
+    end 'g0'
+    if let v1 = c.data[1] 'g1'
+        sum = sum + v1
+    end 'g1'
+    if let v2 = c.data[2] 'g2'
+        sum = sum + v2
+    end 'g2'
+    if let v3 = c.data[3] 'g3'
+        sum = sum + v3
+    end 'g3'
+    if let v4 = c.data[4] 'g4'
+        sum = sum + v4
+    end 'g4'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -116,7 +148,14 @@ type Container
 end 'Container'
 
 function processContainer(c Container) returns int
-    return c.data[0] + c.data[1]
+    var sum = 0
+    if let v0 = c.data[0] 'g0'
+        sum = sum + v0
+    end 'g0'
+    if let v1 = c.data[1] 'g1'
+        sum = sum + v1
+    end 'g1'
+    return sum
 end 'processContainer'
 
 function makeAndProcess() returns int

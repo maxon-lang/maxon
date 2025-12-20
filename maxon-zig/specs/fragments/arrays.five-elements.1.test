@@ -1,7 +1,11 @@
 // Test: arrays.five-elements.1
 function main() returns int
     var arr = [5, 10, 15, 20, 25]
-    return arr[4]
+    if let val = arr[4] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ---
 ExitCode: 25
@@ -30,9 +34,41 @@ entry:
     %15 = getelemptr ptr %arr %tmp_const.9
     store %15 %tmp_const.8
     %tmp_const.10 = const.i64 i64 4
-    %17 = getelemptr ptr %arr %tmp_const.10
-    %tmp_load = load i64 %17
-    ret %tmp_load
+    %tmp_const.11 = const.i64 i64 5
+    %tmp_alloca.1 = alloca.sized ptr 16
+    %tmp_const.12 = const.i64 i64 0
+    %tmp_icmp = icmp.ge i64 %tmp_const.10 %tmp_const.12
+    %tmp_icmp.1 = icmp.lt i64 %tmp_const.10 %tmp_const.11
+    %tmp_mul = mul i64 %tmp_icmp %tmp_icmp.1
+    %tmp_const.1 = br.cond %tmp_mul @block1
+index_in_bounds:
+    %tmp_const.13 = const.i64 i64 1
+    store %tmp_alloca.1 %tmp_const.13
+    %24 = getelemptr ptr %arr %tmp_const.10
+    %tmp_load = load i64 %24
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
+    store %tmp_fieldptr %tmp_load
+    br @block3
+index_out_of_bounds:
+    %tmp_const.14 = const.i64 i64 0
+    store %tmp_alloca.1 %tmp_const.14
+    br @block3
+index_merge:
+    %tmp_load.1 = load i64 %tmp_alloca.1
+    %tmp_const.15 = const.i64 i64 1
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.1 %tmp_const.15
+    %tmp_const.3 = br.cond %tmp_icmp.2 @block4
+if_let_then:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 8
+    %tmp_load.2 = load i64 %tmp_fieldptr.1
+    %val = alloca ptr
+    store %val %tmp_load.2
+    %tmp_load.3 = load i64 %val
+    ret %tmp_load.3
+if_let_else:
+    %tmp_const.16 = const.i64 i64 0
+    ret %tmp_const.16
+if_let_end:
 }
 
 ---

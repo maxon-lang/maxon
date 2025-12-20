@@ -30,7 +30,14 @@ function main() returns int
     var p1 = Point{x: 1, y: 2}
     var p2 = Point{x: 3, y: 4}
     var points = [p1, p2]
-    return points[0].x + points[1].y
+    var sum = 0
+    if let pt0 = points[0] 'g0'
+        sum = sum + pt0.x
+    end 'g0'
+    if let pt1 = points[1] 'g1'
+        sum = sum + pt1.y
+    end 'g1'
+    return sum
 end 'main'
 ```
 ```exitcode
@@ -47,7 +54,11 @@ end 'Pair'
 function main() returns int
     var p = Pair{first: 10, second: 20}
     var arr = [p]
-    return arr[0].first + arr[0].second
+    if let elem = arr[0] 'get'
+        return elem.first + elem.second
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
 end 'main'
 ```
 ```exitcode

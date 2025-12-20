@@ -20,6 +20,8 @@ pub const TokenType = enum {
     @"continue",
     @"true",
     @"false",
+    @"or",
+    nil,
 
     // Types
     int,
@@ -386,6 +388,8 @@ pub const Lexer = struct {
             .{ "continue", TokenType.@"continue" },
             .{ "true", TokenType.@"true" },
             .{ "false", TokenType.@"false" },
+            .{ "or", TokenType.@"or" },
+            .{ "nil", TokenType.nil },
             .{ "int", TokenType.int },
             .{ "float", TokenType.float },
         };
