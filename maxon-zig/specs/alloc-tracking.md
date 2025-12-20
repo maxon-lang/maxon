@@ -514,3 +514,36 @@ Freed:     0 bytes
 Leaked:    0 bytes
 ```
 
+<!-- test: heap-array-reassign -->
+<!-- TrackAllocs: true -->
+Reassigning a heap array frees the old memory and allocates new memory.
+
+```maxon
+function main() returns int
+    let size = 5
+    var arr = array of size int
+    arr[0] = 10
+    arr = array of size int
+    arr[0] = 20
+    if let val = arr[0] 'get'
+        return val
+    end 'get' else 'nil'
+        return 0
+    end 'nil'
+end 'main'
+```
+```exitcode
+20
+```
+```stdout
+ALLOC #1: 40 bytes (dynamic array)
+FREE #1: 40 bytes (dynamic array)
+ALLOC #2: 40 bytes (dynamic array)
+FREE #2: 40 bytes (dynamic array)
+
+=== ALLOC STATS ===
+Allocated: 80 bytes
+Freed:     80 bytes
+Leaked:    0 bytes
+```
+

@@ -151,7 +151,7 @@ const VarInfo = struct {
     /// If true, ptr is a slot containing a pointer that must be loaded
     uses_slot: bool,
 
-    fn init(ptr: ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
+    fn init(ptr: ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
         return .{
             .ptr = ptr,
             .ty = ty,
@@ -160,20 +160,7 @@ const VarInfo = struct {
             .state = .owned,
             .moved_to = null,
             .moved_line = 0,
-            .uses_slot = false,
-        };
-    }
-
-    fn initWithSlot(ptr: ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
-        return .{
-            .ptr = ptr,
-            .ty = ty,
-            .used = false,
-            .is_mutable = is_mutable,
-            .state = .owned,
-            .moved_to = null,
-            .moved_line = 0,
-            .uses_slot = true,
+            .uses_slot = uses_slot,
         };
     }
 
@@ -596,41 +583,41 @@ pub const AstToIr = struct {
                     param_val,
                     .{ .struct_type = struct_name },
                     true,
+                    false,
                 ));
             },
-            .array_type => |arr_info| {
-                // Array parameters are passed as pointers - store in a stack slot
-                // so that convertIdentifier can uniformly load from stack
+            .array_type, .optional_type => {
+                // Reference types are passed as pointers - store in a stack slot
                 const param_val = try self.func().emitParam(idx, .ptr);
                 const slot_ptr = try self.func().emitAlloca(.ptr);
                 try self.func().setValueName(slot_ptr, param.name);
                 try self.func().emitStore(slot_ptr, param_val);
 
-                // Check if this function mutates a dynamic array parameter - if so,
-                // ownership is transferred and this function must free the heap array.
-                // Fixed-size arrays (size != null) are stack-allocated and never freed.
-                var modified_arr_info = arr_info;
-                if (arr_info.size == null) { // Dynamic arrays can be heap-allocated
-                    if (self.mutation_analyzer) |analyzer| {
-                        if (self.current_func_name) |func_name| {
-                            // idx is the IR param index; for mutation we need the source param index
-                            // Account for sret offset if present
-                            const source_param_idx: usize = if (self.sret_ptr != null)
-                                @intCast(idx - 1)
-                            else
-                                @intCast(idx);
-                            if (analyzer.doesMutateParam(func_name, source_param_idx)) {
-                                // Function mutates this array, so it takes ownership of heap memory
-                                modified_arr_info.storage = .heap;
+                // For dynamic arrays, check if mutation transfers ownership
+                var final_type = value_type;
+                if (value_type == .array_type) {
+                    const arr_info = value_type.array_type;
+                    if (arr_info.size == null) {
+                        if (self.mutation_analyzer) |analyzer| {
+                            if (self.current_func_name) |func_name| {
+                                const source_param_idx: usize = if (self.sret_ptr != null)
+                                    @intCast(idx - 1)
+                                else
+                                    @intCast(idx);
+                                if (analyzer.doesMutateParam(func_name, source_param_idx)) {
+                                    var modified = arr_info;
+                                    modified.storage = .heap;
+                                    final_type = .{ .array_type = modified };
+                                }
                             }
                         }
                     }
                 }
 
-                // Params always use a slot (uses_slot = true via initWithSlot)
-                try self.var_map.put(self.allocator, param.name, VarInfo.initWithSlot(
+                try self.var_map.put(self.allocator, param.name, VarInfo.init(
                     slot_ptr,
-                    .{ .array_type = modified_arr_info },
+                    final_type,
+                    true,
                     true,
                 ));
             },
@@ -641,18 +628,11 @@ pub const AstToIr = struct {
                 const ptr = try self.func().emitAlloca(ir_type);
                 try self.func().setValueName(ptr, param.name);
                 try self.func().emitStore(ptr, param_val);
-                try self.var_map.put(self.allocator, param.name, VarInfo.init(ptr, value_type, true));
-            },
-            .optional_type => |opt_info| {
-                // Optional parameters are passed as pointers - store in a stack slot
-                const param_val = try self.func().emitParam(idx, .ptr);
-                const slot_ptr = try self.func().emitAlloca(.ptr);
-                try self.func().setValueName(slot_ptr, param.name);
-                try self.func().emitStore(slot_ptr, param_val);
-                try self.var_map.put(self.allocator, param.name, VarInfo.initWithSlot(
-                    slot_ptr,
-                    .{ .optional_type = opt_info },
+                try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                    ptr,
+                    value_type,
                     true,
+                    false,
                 ));
             },
         }
@@ -701,70 +681,30 @@ pub const AstToIr = struct {
 
         const init_typed = try self.convertExpression(decl.value);
 
-        switch (init_typed.ty) {
-            .struct_type => {
-                try self.func().setValueName(init_typed.value, decl.name);
-                try self.var_map.put(self.allocator, decl.name, VarInfo.init(
-                    init_typed.value,
-                    init_typed.ty,
-                    self.current_decl_is_mutable,
-                ));
-            },
-            .array_type => |arr_info| {
-                if (arr_info.storage == .heap) {
-                    // Heap arrays use a stack slot to hold the pointer
-                    // This allows push to update the pointer and cleanup to free the correct memory
-                    const slot_ptr = try self.func().emitAlloca(.ptr);
-                    try self.func().setValueName(slot_ptr, decl.name);
-                    try self.func().emitStore(slot_ptr, init_typed.value);
-                    try self.var_map.put(self.allocator, decl.name, VarInfo.initWithSlot(
-                        slot_ptr,
-                        init_typed.ty,
-                        self.current_decl_is_mutable,
-                    ));
-                } else {
-                    // Stack-allocated (fixed-size) arrays - the alloca.sized result IS the array
-                    try self.func().setValueName(init_typed.value, decl.name);
-                    try self.var_map.put(self.allocator, decl.name, VarInfo.init(
-                        init_typed.value,
-                        init_typed.ty,
-                        self.current_decl_is_mutable,
-                    ));
-                }
-            },
-            .primitive => |prim_ty| {
-                const ptr = try self.func().emitAlloca(prim_ty);
-                try self.func().setValueName(ptr, decl.name);
-                try self.func().emitStore(ptr, init_typed.value);
-                try self.var_map.put(self.allocator, decl.name, VarInfo.init(
-                    ptr,
-                    init_typed.ty,
-                    self.current_decl_is_mutable,
-                ));
-            },
-            .enum_type => {
-                // Enums are stored like primitives (i64)
-                const ptr = try self.func().emitAlloca(.i64);
-                try self.func().setValueName(ptr, decl.name);
-                try self.func().emitStore(ptr, init_typed.value);
-                try self.var_map.put(self.allocator, decl.name, VarInfo.init(
-                    ptr,
-                    init_typed.ty,
-                    self.current_decl_is_mutable,
-                ));
-            },
-            .optional_type => {
-                // Optionals use a slot to hold the pointer to the 16-byte structure
-                const slot_ptr = try self.func().emitAlloca(.ptr);
-                try self.func().setValueName(slot_ptr, decl.name);
-                try self.func().emitStore(slot_ptr, init_typed.value);
-                try self.var_map.put(self.allocator, decl.name, VarInfo.initWithSlot(
-                    slot_ptr,
-                    init_typed.ty,
-                    self.current_decl_is_mutable,
-                ));
-            },
-        }
+        // Heap arrays and optionals use a slot to hold the pointer
+        const uses_slot = (init_typed.ty == .array_type and init_typed.ty.array_type.storage == .heap) or
+            init_typed.ty == .optional_type;
+
+        // Primitives/enums need alloca for the value; slot types need alloca for the pointer
+        const needs_alloca = init_typed.ty == .primitive or init_typed.ty == .enum_type or uses_slot;
+
+        const ptr = if (needs_alloca) blk: {
+            const alloca_type = if (uses_slot) .ptr else init_typed.ty.toPrimitiveType();
+            const p = try self.func().emitAlloca(alloca_type);
+            try self.func().setValueName(p, decl.name);
+            try self.func().emitStore(p, init_typed.value);
+            break :blk p;
+        } else blk: {
+            try self.func().setValueName(init_typed.value, decl.name);
+            break :blk init_typed.value;
+        };
+
+        try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+            ptr,
+            init_typed.ty,
+            self.current_decl_is_mutable,
+            uses_slot,
+        ));
     }
 
     fn convertReturn(self: *AstToIr, ret: ast.ReturnStmt) !void {
@@ -805,43 +745,30 @@ pub const AstToIr = struct {
         try self.func().emitRet(ret_value);
     }
 
-    /// Free all heap-allocated variables in current scope
-    fn freeHeapAllocations(self: *AstToIr) !void {
+    /// Free heap-allocated variables, optionally filtering to only loop-scoped vars
+    fn freeHeapVars(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(void)) !void {
         var iter = self.var_map.iterator();
         while (iter.next()) |entry| {
+            if (exclude_vars) |excluded| {
+                if (excluded.contains(entry.key_ptr.*)) continue;
+            }
             const var_info = entry.value_ptr.*;
-            switch (var_info.ty) {
-                .array_type => |arr_info| {
-                    if (arr_info.storage == .heap and var_info.state != .moved) {
-                        // Load the heap pointer from the stack slot before freeing
-                        const heap_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                        try self.func().emitHeapFree(heap_ptr);
-                    }
-                },
-                else => {},
+            if (var_info.ty == .array_type) {
+                const arr_info = var_info.ty.array_type;
+                if (arr_info.storage == .heap and var_info.state != .moved) {
+                    const heap_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                    try self.func().emitHeapFree(heap_ptr);
+                }
             }
         }
     }
 
-    /// Free heap-allocated variables that were declared in the current loop scope
-    fn freeLoopScopedHeapVars(self: *AstToIr, pre_loop_vars: *std.StringHashMapUnmanaged(void)) !void {
-        var iter = self.var_map.iterator();
-        while (iter.next()) |entry| {
-            // Only free variables declared inside the loop
-            if (pre_loop_vars.contains(entry.key_ptr.*)) continue;
+    fn freeHeapAllocations(self: *AstToIr) !void {
+        try self.freeHeapVars(null);
+    }
 
-            const var_info = entry.value_ptr.*;
-            switch (var_info.ty) {
-                .array_type => |arr_info| {
-                    if (arr_info.storage == .heap and var_info.state != .moved) {
-                        // Load the heap pointer from the stack slot before freeing
-                        const heap_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                        try self.func().emitHeapFree(heap_ptr);
-                    }
-                },
-                else => {},
-            }
-        }
+    fn freeLoopScopedHeapVars(self: *AstToIr, pre_loop_vars: *std.StringHashMapUnmanaged(void)) !void {
+        try self.freeHeapVars(pre_loop_vars);
     }
 
     fn convertAssignment(self: *AstToIr, assign: ast.AssignStmt) ConvertError!void {
@@ -858,19 +785,26 @@ pub const AstToIr = struct {
         }
 
         var_info.used = true;
+
+        // For heap arrays, free old memory before evaluating RHS (to get correct alloc order)
+        if (var_info.ty == .array_type) {
+            const arr_info = var_info.ty.array_type;
+            if (arr_info.storage == .heap and var_info.state != .moved) {
+                const old_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                try self.func().emitHeapFree(old_ptr);
+            }
+        }
+
         const value_typed = try self.convertExpression(assign.value);
 
-        switch (var_info.ty) {
-            .primitive, .enum_type => try self.func().emitStore(var_info.ptr, value_typed.value),
-            .struct_type, .array_type => {
-                var_info.ptr = value_typed.value;
-                var_info.ty = value_typed.ty;
-            },
-            .optional_type => {
-                // Store the optional pointer in the slot
-                try self.func().emitStore(var_info.ptr, value_typed.value);
-                var_info.ty = value_typed.ty;
-            },
+        const is_reference = var_info.ty == .struct_type or var_info.ty == .array_type or var_info.ty == .optional_type;
+        if (is_reference and !var_info.uses_slot) {
+            var_info.ptr = value_typed.value;
+        } else {
+            try self.func().emitStore(var_info.ptr, value_typed.value);
+        }
+        if (is_reference) {
+            var_info.ty = value_typed.ty;
         }
 
         var_info.resetOwnership();
@@ -978,16 +912,13 @@ pub const AstToIr = struct {
             try self.func().emitStore(binding_ptr, unwrapped_value);
 
             if (opt_info.wrapped_struct_type) |struct_name| {
-                try self.var_map.put(self.allocator, binding_name, VarInfo.initWithSlot(
-                    binding_ptr,
-                    .{ .struct_type = struct_name },
-                    true,
-                ));
+                try self.var_map.put(self.allocator, binding_name, VarInfo.init(binding_ptr, .{ .struct_type = struct_name }, true, true));
             } else {
                 try self.var_map.put(self.allocator, binding_name, VarInfo.init(
                     binding_ptr,
                     .{ .primitive = wrapped_type },
                     true,
+                    false,
                 ));
             }
         }
@@ -1180,19 +1111,16 @@ pub const AstToIr = struct {
 
         // Add to var_map so the default body can assign to it
         if (opt_info.wrapped_struct_type) |struct_name| {
-            // Struct binding: use initWithSlot because var_ptr contains a pointer to the struct
-            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.initWithSlot(
+            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(
                 var_ptr,
                 .{ .struct_type = struct_name },
                 true, // mutable
+                true,
             ));
         } else {
             // Primitive binding: use init (no slot indirection needed)
-            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(
-                var_ptr,
-                .{ .primitive = wrapped_type },
-                true, // mutable
-            ));
+            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(var_ptr, .{ .primitive = wrapped_type }, true, // mutable
+                false));
         }
 
         // Create blocks
@@ -1309,43 +1237,13 @@ pub const AstToIr = struct {
 
         info.used = true;
 
-        return switch (info.ty) {
-            .struct_type => if (info.uses_slot) .{
-                // Variable uses a slot - load the struct pointer from it
-                .value = try self.func().emitLoad(info.ptr, .ptr),
-                .ty = info.ty,
-            } else .{
-                // Stack-allocated struct: the ptr IS the struct, no load needed
-                .value = info.ptr,
-                .ty = info.ty,
-            },
-            .array_type => if (info.uses_slot) .{
-                // Variable uses a slot - load the array pointer from it
-                .value = try self.func().emitLoad(info.ptr, .ptr),
-                .ty = info.ty,
-            } else .{
-                // Stack arrays: the ptr IS the array, no load needed
-                .value = info.ptr,
-                .ty = info.ty,
-            },
-            .primitive => |prim_ty| .{
-                .value = try self.func().emitLoad(info.ptr, prim_ty),
-                .ty = info.ty,
-            },
-            .enum_type => .{
-                .value = try self.func().emitLoad(info.ptr, .i64),
-                .ty = info.ty,
-            },
-            .optional_type => if (info.uses_slot) .{
-                // Variable uses a slot - load the optional pointer from it
-                .value = try self.func().emitLoad(info.ptr, .ptr),
-                .ty = info.ty,
-            } else .{
-                // Direct optional ptr
-                .value = info.ptr,
-                .ty = info.ty,
-            },
-        };
+        // Reference types may use a slot indirection; value types always load
+        const value = if (info.ty == .struct_type or info.ty == .array_type or info.ty == .optional_type)
+            if (info.uses_slot) try self.func().emitLoad(info.ptr, .ptr) else info.ptr
+        else
+            try self.func().emitLoad(info.ptr, info.ty.toPrimitiveType());
+
+        return .{ .value = value, .ty = info.ty };
     }
 
     fn convertBinary(self: *AstToIr, bin: ast.BinaryExpr) ConvertError!TypedValue {
@@ -1467,36 +1365,21 @@ pub const AstToIr = struct {
 
     /// Track ownership when a variable is moved into a struct field
     fn trackFieldOwnershipTransfer(self: *AstToIr, expr: ast.Expression, target_type: []const u8) ConvertError!void {
-        // Only track identifier expressions (variable references)
         if (expr != .identifier) return;
 
         const var_name = expr.identifier;
         const var_info = self.var_map.getPtr(var_name) orelse return;
 
-        // Check if this is an array or struct - these types are moved, not copied
-        switch (var_info.ty) {
-            .array_type, .struct_type => {
-                // Must be mutable to be moved
-                if (!var_info.is_mutable) {
-                    debug.astToIr("cannot move immutable variable '{s}' into struct\n", .{var_name});
-                    self.reportError(.E010);
-                    return error.ImmutableMove;
-                }
-                var_info.markMoved(target_type, self.current_line);
-            },
-            .primitive, .enum_type => {
-                // Primitives are copied, not moved
-            },
-            .optional_type => {
-                // Optionals contain a pointer, treat as moved like arrays
-                if (!var_info.is_mutable) {
-                    debug.astToIr("cannot move immutable variable '{s}' into struct\n", .{var_name});
-                    self.reportError(.E010);
-                    return error.ImmutableMove;
-                }
-                var_info.markMoved(target_type, self.current_line);
-            },
+        // Reference types are moved, not copied
+        const is_reference = var_info.ty == .array_type or var_info.ty == .struct_type or var_info.ty == .optional_type;
+        if (!is_reference) return;
+
+        if (!var_info.is_mutable) {
+            debug.astToIr("cannot move immutable variable '{s}' into struct\n", .{var_name});
+            self.reportError(.E010);
+            return error.ImmutableMove;
         }
+        var_info.markMoved(target_type, self.current_line);
     }
 
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
@@ -1530,27 +1413,13 @@ pub const AstToIr = struct {
         const field_info = try lookupField(struct_info, faccess.field_name);
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
 
-        return switch (field_info.value_type) {
-            .struct_type => |name| .{ .value = field_ptr, .ty = .{ .struct_type = name } },
-            .primitive => |prim| .{
-                .value = try self.func().emitLoad(field_ptr, prim),
-                .ty = .{ .primitive = prim },
-            },
-            .array_type => |arr| .{
-                // Array field stores a pointer - load it
-                .value = try self.func().emitLoad(field_ptr, .ptr),
-                .ty = .{ .array_type = arr },
-            },
-            .enum_type => |name| .{
-                .value = try self.func().emitLoad(field_ptr, .i64),
-                .ty = .{ .enum_type = name },
-            },
-            .optional_type => |opt| .{
-                // Optional field stores a pointer - load it
-                .value = try self.func().emitLoad(field_ptr, .ptr),
-                .ty = .{ .optional_type = opt },
-            },
-        };
+        // Struct fields are embedded (return ptr directly); others are loaded
+        const value = if (field_info.value_type == .struct_type)
+            field_ptr
+        else
+            try self.func().emitLoad(field_ptr, field_info.value_type.toPrimitiveType());
+
+        return .{ .value = value, .ty = field_info.value_type };
     }
 
     fn convertCall(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
