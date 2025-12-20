@@ -14,6 +14,8 @@ pub const ErrorCode = enum {
     E010, // Immutable move
     E011, // Wrong argument count
     E012, // Control flow error (break/continue outside loop)
+    E013, // Sized array requires var
+    E014, // Unused variable
 
     pub fn format(self: ErrorCode) []const u8 {
         return switch (self) {
@@ -29,6 +31,8 @@ pub const ErrorCode = enum {
             .E010 => "E010",
             .E011 => "E011",
             .E012 => "E012",
+            .E013 => "E013",
+            .E014 => "E014",
         };
     }
 
@@ -46,6 +50,8 @@ pub const ErrorCode = enum {
             .E010 => "cannot move from immutable variable",
             .E011 => "wrong argument count",
             .E012 => "break/continue outside loop",
+            .E013 => "sized arrays require 'var' declaration",
+            .E014 => "unused variable",
         };
     }
 };

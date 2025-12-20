@@ -192,6 +192,7 @@ const ConvertError = error{
     NotABuiltin,
     TypeMismatch,
     ZeroSizeAllocation,
+    UnusedVariable,
 };
 
 // ============================================================================
@@ -253,6 +254,24 @@ pub const AstToIr = struct {
                 .file = self.source_file,
                 .line = @intCast(self.current_line),
                 .column = 1, // Column not tracked in AST
+            },
+        };
+    }
+
+    fn reportErrorWithDetails(self: *AstToIr, code: err.ErrorCode, details: []const u8) void {
+        // Format: "base message: 'details'"
+        const base_msg = code.message();
+        const formatted = std.fmt.allocPrint(self.allocator, "{s}: '{s}'", .{ base_msg, details }) catch {
+            self.reportError(code);
+            return;
+        };
+        self.last_error = .{
+            .code = code,
+            .message = formatted,
+            .location = .{
+                .file = self.source_file,
+                .line = @intCast(self.current_line),
+                .column = 1,
             },
         };
     }
@@ -513,6 +532,7 @@ pub const AstToIr = struct {
         while (iter.next()) |entry| {
             if (!entry.value_ptr.used) {
                 debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
+                self.reportErrorWithDetails(.E014, entry.key_ptr.*);
                 return error.UnusedVariable;
             }
         }
@@ -615,7 +635,7 @@ pub const AstToIr = struct {
 
         // Sized arrays cannot be immutable (they have no initial contents)
         if (!self.current_decl_is_mutable and decl.value == .sized_array) {
-            self.reportError(.E011);
+            self.reportError(.E013);
             return error.SemanticError;
         }
 
@@ -1615,13 +1635,13 @@ pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_anal
     return try converter.convert(program);
 }
 
-pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) !ir.Module {
+pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) ConvertError!ir.Module {
     var converter = AstToIr.init(allocator, mutation_analyzer);
     converter.source_file = source_file;
     defer converter.deinit();
-    const result = converter.convert(program) catch {
+    const result = converter.convert(program) catch |e| {
         out_error.* = converter.last_error;
-        return error.OutOfMemory; // Return the underlying error
+        return e;
     };
     return result;
 }

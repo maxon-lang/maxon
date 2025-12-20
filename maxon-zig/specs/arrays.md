@@ -624,5 +624,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E011: specs\fragments\arrays.error.let-sized-array-invalid.1.test:1:1: wrong argument count
+error E013: specs\fragments\arrays.error.let-sized-array-invalid.1.test:1:1: sized arrays require 'var' declaration
 ```
