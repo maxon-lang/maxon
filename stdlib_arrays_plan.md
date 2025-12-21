@@ -246,10 +246,6 @@ pub fn compileWithStdlib(user_source: []const u8, stdlib_dir: []const u8, ...) !
 3. Method name syntax: `function Collection.count()` means this implements the interface method
 4. At compile time, verify all interface methods are implemented
 
-**Minimal interface support**:
-- Just validate method signatures match
-- No dynamic dispatch yet (all calls are static)
-
 ### Phase 12: Internal/Opaque Types
 
 **Goal**: `_managedArray` - compiler-known internal type.

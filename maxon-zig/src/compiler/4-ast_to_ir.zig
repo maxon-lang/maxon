@@ -705,7 +705,7 @@ pub const AstToIr = struct {
             }
         } else .void;
 
-        const ir_func = try self.module.addFunction(mangled_name, ret_type);
+        const ir_func = try self.module.addFunctionWithExport(mangled_name, ret_type, method.is_export);
         self.current_func = ir_func;
         self.current_func_name = mangled_name;
         self.var_map.clearRetainingCapacity();
@@ -811,7 +811,7 @@ pub const AstToIr = struct {
             }
         } else .void;
 
-        const ir_func = try self.module.addFunction(decl.name, ret_type);
+        const ir_func = try self.module.addFunctionWithExport(decl.name, ret_type, decl.is_export);
         self.current_func = ir_func;
         self.current_func_name = decl.name;
         self.var_map.clearRetainingCapacity();

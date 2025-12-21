@@ -183,6 +183,7 @@ pub const BasicBlock = struct {
 pub const Function = struct {
     name: []const u8,
     return_type: Type,
+    is_exported: bool,
     blocks: std.ArrayListUnmanaged(BasicBlock),
     next_value: Value,
     allocator: std.mem.Allocator,
@@ -192,9 +193,14 @@ pub const Function = struct {
     allocated_names: std.ArrayListUnmanaged([]const u8), // Track strings we allocated
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, return_type: Type) Function {
+        return initWithExport(allocator, name, return_type, false);
+    }
+
+    pub fn initWithExport(allocator: std.mem.Allocator, name: []const u8, return_type: Type, is_exported: bool) Function {
         return .{
             .name = name,
             .return_type = return_type,
+            .is_exported = is_exported,
             .blocks = .empty,
             .next_value = 0,
             .allocator = allocator,
@@ -469,7 +475,11 @@ pub const Module = struct {
     }
 
     pub fn addFunction(self: *Module, name: []const u8, return_type: Type) !*Function {
-        try self.functions.append(self.allocator, Function.init(self.allocator, name, return_type));
+        return self.addFunctionWithExport(name, return_type, false);
+    }
+
+    pub fn addFunctionWithExport(self: *Module, name: []const u8, return_type: Type, is_exported: bool) !*Function {
+        try self.functions.append(self.allocator, Function.initWithExport(self.allocator, name, return_type, is_exported));
         return &self.functions.items[self.functions.items.len - 1];
     }
 
@@ -514,8 +524,20 @@ pub const Module = struct {
     /// Merge another module's functions into this module.
     /// Functions from the other module are moved (not copied).
     /// Duplicate function names are skipped (first definition wins).
+    /// If exports_only is true, only exported functions are included.
     pub fn merge(self: *Module, other: *Module) !void {
+        return self.mergeWithOptions(other, .{});
+    }
+
+    pub const MergeOptions = struct {
+        exports_only: bool = false,
+    };
+
+    pub fn mergeWithOptions(self: *Module, other: *Module, options: MergeOptions) !void {
         for (other.functions.items) |func| {
+            // Skip non-exported functions if exports_only is set
+            if (options.exports_only and !func.is_exported) continue;
+
             // Skip if we already have a function with this name
             var exists = false;
             for (self.functions.items) |existing| {

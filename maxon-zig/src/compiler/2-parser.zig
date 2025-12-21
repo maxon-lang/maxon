@@ -84,9 +84,8 @@ pub const Parser = struct {
                     } else if (next.type == .interface) {
                         try interfaces.append(self.allocator, try self.parseInterfaceDecl());
                     } else if (next.type == .function) {
-                        // For now, treat export function as regular function
                         _ = self.advance(); // skip 'export'
-                        try functions.append(self.allocator, try self.parseFunction());
+                        try functions.append(self.allocator, try self.parseFunctionWithExport(true));
                     } else {
                         self.reportError(.E002);
                         return error.UnexpectedToken;
@@ -452,7 +451,7 @@ pub const Parser = struct {
         return base_type;
     }
 
-    fn parseFunction(self: *Parser) !ast.FunctionDecl {
+    fn parseFunctionWithExport(self: *Parser, is_export: bool) !ast.FunctionDecl {
         _ = try self.expect(.function);
         const name_token = try self.expect(.identifier);
         _ = try self.expect(.lparen);
@@ -464,10 +463,15 @@ pub const Parser = struct {
 
         return .{
             .name = name_token.text,
+            .is_export = is_export,
             .params = params,
             .return_type = return_type,
             .body = body,
         };
+    }
+
+    fn parseFunction(self: *Parser) !ast.FunctionDecl {
+        return self.parseFunctionWithExport(false);
     }
 
     fn parseStatement(self: *Parser) ParseError!ast.Statement {

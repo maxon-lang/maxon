@@ -76,6 +76,7 @@ pub const ParamDecl = struct {
 
 pub const FunctionDecl = struct {
     name: []const u8,
+    is_export: bool,
     params: []const ParamDecl,
     return_type: ?TypeExpr, // null for void
     body: []Statement,

@@ -1,0 +1,26 @@
+// Test: export-keyword.export-function-basic.1
+export function helper() returns int
+    return 21
+end 'helper'
+
+function main() returns int
+    return helper() + helper()
+end 'main'
+---
+ExitCode: 42
+---
+function helper() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 21
+    ret %tmp_const
+}
+
+function main() -> i64 {
+entry:
+    %tmp_call = call i64 @helper()
+    %tmp_call.1 = call i64 @helper()
+    %tmp_add = add i64 %tmp_call %tmp_call.1
+    ret %tmp_add
+}
+
+---
