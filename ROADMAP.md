@@ -106,7 +106,7 @@ Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-
 - [ ] `.count()` - string length
 - [ ] `.charAt(index)` - character at index (returns `character or nil`)
 - [ ] `.slice(start, end)` - substring
-- [ ] `.bytes()` - convert to `array of byte`
+- [ ] `.bytes()` - convert to `Array of byte`
 - [ ] Files: `4-ast_to_ir.zig`, runtime library
 
 #### 4.2 String Interpolation
@@ -128,16 +128,15 @@ Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-
 
 #### 5.1 Managed Arrays (Array of T)
 - [ ] Parse `Array of T` type syntax (uppercase for stdlib types)
-- [ ] Parse `Array of T{}` empty initialization expression
-- [ ] Internal `_ManagedArray` struct (24 bytes: data_ptr, length, capacity)
+- [ ] Parse `Array of T` empty initialization expression
+- [ ] Internal `__ManagedArray` struct (24 bytes: data_ptr, length, capacity)
 - [ ] Compiler builtins: `__managed_array_len`, `__managed_array_capacity`, `__managed_array_set_length`
 - [ ] Compiler builtins: `__managed_array_grow`, `__managed_array_set_at`
 - [ ] Compiler builtins: `__managed_array_shift_left`, `__managed_array_shift_right`
 - [ ] `memmove` IR instruction for overlapping memory operations
 - [ ] stdlib `Array` type uses builtins for push/pop/insert/remove
-- [ ] Files: `ast.zig`, `2-parser.zig`, `4-ast_to_ir.zig`, `ir.zig`, `ir_codegen.zig`, `stdlib/collections/array.maxon`
 
-**Note:** Static arrays (`array of N T`, literals `[1, 2, 3]`) and bounds-checked indexing are implemented.
+**Note:** Static arrays (`Array of N T`, literals `[1, 2, 3]`) and bounds-checked indexing are implemented.
 
 #### 5.2 Map Type
 - [ ] Parse `map from K to V` type syntax

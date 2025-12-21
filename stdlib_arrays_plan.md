@@ -248,12 +248,12 @@ pub fn compileWithStdlib(user_source: []const u8, stdlib_dir: []const u8, ...) !
 
 ### Phase 12: Internal/Opaque Types
 
-**Goal**: `_managedArray` - compiler-known internal type.
+**Goal**: `__ManagedArray` - compiler-known internal type.
 
 **Files**: `2-parser.zig`, `4-ast_to_ir.zig`
 
 1. Types starting with `_` are internal
-2. `_managedArray` is specially recognized by compiler
+2. `__ManagedArray` is specially recognized by compiler
 3. Maps to the 24-byte managed array struct
 
 ### Phase 13: Wire Up Array Type

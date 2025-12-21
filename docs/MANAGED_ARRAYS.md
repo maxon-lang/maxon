@@ -6,7 +6,7 @@ This document describes the internal implementation of Maxon's managed array sys
 
 All Maxon arrays use the unified `array<T>` struct type from the standard library. Arrays use a hybrid storage strategy based on capacity:
 
-1. **Stack-allocated** (capacity = 0): Fixed-size arrays declared with `let arr = array of N T` or `let arr = [1, 2, 3]`
+1. **Stack-allocated** (capacity = 0): Fixed-size arrays declared with `let arr = Array of N T` or `let arr = [1, 2, 3]`
 2. **Heap-allocated** (capacity > 0): Dynamic arrays declared with `var` that can grow via `push()`
 
 The compiler tracks array allocations and automatically releases heap-allocated buffers at scope exit.
@@ -18,10 +18,10 @@ All array variables have type `array<T>` regardless of how they're declared:
 | Declaration | Type | Storage |
 |-------------|------|----------|
 | `let arr = [1, 2, 3]` | `array<int>` | Stack buffer, capacity = 0 |
-| `let arr = array of 5 int` | `array<int>` | Stack buffer, capacity = 0 |
+| `let arr = Array of 5 int` | `array<int>` | Stack buffer, capacity = 0 |
 | `var arr = [1, 2, 3]` | `array<int>` | Stack buffer initially, heap on growth |
-| `var arr = array of 5 int` | `array<int>` | Stack buffer, capacity = 0 |
-| `var arr = array of int` | `array<int>` | Empty, capacity = 0, heap on push() |
+| `var arr = Array of 5 int` | `array<int>` | Stack buffer, capacity = 0 |
+| `var arr = Array of int` | `array<int>` | Empty, capacity = 0, heap on push() |
 
 This unified type system means all arrays support the same methods (`.count()`, `.push()`, etc.) though mutating methods like `.push()` require a `var` declaration.
 
@@ -38,7 +38,7 @@ The capacity field determines array ownership:
 
 ### Empty Arrays
 
-Empty mutable arrays (`var arr = array of int`) start with:
+Empty mutable arrays (`var arr = Array of int`) start with:
 - `_buffer`: null or uninitialized pointer
 - `_len`: 0
 - `_capacity`: 0 (no heap allocation yet)
@@ -50,7 +50,7 @@ When `push()` is called, a heap buffer is allocated via `_managed_array_alloc` a
 Arrays declared with `let` or fixed-size `var` arrays store their buffer on the stack:
 
 ```
-__ManagedArrayData<T> (stack mode):
+___ManagedArrayData<T> (stack mode):
 +--------+--------+--------+
 | buffer | length | cap=0  |
 | (ptr)  | (i64)  | (i64)  |
@@ -74,7 +74,7 @@ Heap allocation:
 ^          ^          ^
 offset 0   offset 4   offset 8 (data pointer returned by _managed_array_alloc)
 
-__ManagedArrayData<T> (heap mode):
+___ManagedArrayData<T> (heap mode):
 +--------+--------+--------+
 | buffer | length | cap    |
 | (ptr)  | (i64)  | (i64)  |
@@ -91,7 +91,7 @@ The full `array<T>` stdlib struct includes an iteration index for for-loop suppo
 array<T> struct (stdlib/array.maxon):
 +-------------------+----------+
 | managed           | iterIndex |
-| (__ManagedArrayData| (i64)     |
+| (___ManagedArrayData| (i64)     |
 | embedded struct)  |           |
 +-------------------+----------+
 
@@ -177,7 +177,7 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
 
 #### Type Accessors
 
-- `getManagedArrayDataType()` - Returns `__ManagedArrayData<T>` type type
+- `getManagedArrayDataType()` - Returns `___ManagedArrayData<T>` type type
 - `getArrayStructType()` - Returns `array<T>` type type (with iterIndex)
 - `getElementMIRType()` - Returns MIR type for the element
 - `getElementSize()` - Returns element size in bytes
@@ -198,7 +198,7 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
 #### Allocation
 
 - `allocateBuffer(numElements, tag)` - Allocate heap buffer for N elements
-- `allocateManagedStruct(name)` - Stack-allocate `__ManagedArrayData`
+- `allocateManagedStruct(name)` - Stack-allocate `___ManagedArrayData`
 - `allocateArrayStruct(name)` - Stack-allocate `array<T>` (with iterIndex)
 
 #### Struct Population
@@ -330,7 +330,7 @@ Both array and string allocations are now fully tracked with reference counting.
 ### The Problem
 
 ```maxon
-function createParser(tokens array of Token) returns Parser
+function createParser(tokens Array of Token) returns Parser
     let result = Parser{tokens: tokens, pos: 0}  // BUG without deep copy!
     return result
 end 'createParser'
@@ -394,13 +394,13 @@ Both code paths (`generateStructLiteral` and return statement handling) must imp
 
 ## Struct Field Arrays
 
-When a struct has an `array of T` field, special handling is required:
+When a struct has an `Array of T` field, special handling is required:
 
 ### Declaration
 
 ```maxon
 type Config
-    var sources array of string
+    var sources Array of string
 end 'Config'
 ```
 
