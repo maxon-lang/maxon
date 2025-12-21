@@ -41,6 +41,7 @@ const PipelineOptions = struct {
     source_file: ?[]const u8 = null,
     result: ?*CompileResult = null,
     track_allocs: bool = false,
+    external_funcs: ?[]const ast_to_ir.ExternalFuncSignature = null,
 };
 
 /// Intermediate result from frontend compilation (lexing, parsing, analysis, IR generation)
@@ -86,7 +87,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
 
     // 4 - AST to IR
     var ir_error: ?compile_error.CompileError = null;
-    var ir_module = ast_to_ir.convertWithFile(program, allocator, &mutation_analyzer, options.source_file, &ir_error) catch |e| {
+    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, &ir_error) catch |e| {
         debug.astToIr("AST to IR error: {}\n", .{e});
         if (options.result) |result| {
             result.error_info = ir_error;
@@ -105,10 +106,32 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
 
 /// Compile source and return the IR as a string (for fragment generation)
 pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8 {
-    var frontend = try runFrontend(source, allocator, .{});
-    defer frontend.deinit();
+    // Load stdlib to get function signatures
+    const stdlib_path = try findStdlibPath(allocator);
+    defer allocator.free(stdlib_path);
 
-    return frontend.ir_module.printToString(allocator) catch {
+    const exp_module = try loadStdlibModule(stdlib_path, "math/exp", allocator);
+    defer allocator.free(exp_module.path);
+    defer allocator.free(exp_module.content);
+
+    // Compile stdlib first
+    var stdlib_frontend = try runFrontend(exp_module.content, allocator, .{
+        .source_file = exp_module.path,
+    });
+    defer stdlib_frontend.deinit();
+
+    // Extract function signatures from stdlib
+    const external_funcs = try ast_to_ir.extractFunctionSignatures(&stdlib_frontend.ir_module, allocator);
+    defer allocator.free(external_funcs);
+
+    // Compile user source with external signatures
+    var user_frontend = try runFrontend(source, allocator, .{
+        .external_funcs = external_funcs,
+    });
+    defer user_frontend.deinit();
+
+    // Return only the user module's IR (not merged with stdlib)
+    return user_frontend.ir_module.printToString(allocator) catch {
         return error.WriteError;
     };
 }
@@ -177,16 +200,33 @@ pub fn compileMultiple(
     });
     defer merged.deinit();
 
+    // Extract function signatures from the first module for subsequent compilations
+    var all_signatures = try ast_to_ir.extractFunctionSignatures(&merged.ir_module, allocator);
+    defer allocator.free(all_signatures);
+
     // Compile and merge remaining sources
     for (sources[1..]) |source| {
         var frontend = try runFrontend(source.content, allocator, .{
             .source_file = source.path,
             .result = result,
+            .external_funcs = all_signatures,
         });
         errdefer frontend.deinit();
 
         // Merge into the combined module
         try merged.ir_module.merge(&frontend.ir_module);
+
+        // Update signatures with new functions from this module
+        const new_sigs = try ast_to_ir.extractFunctionSignatures(&frontend.ir_module, allocator);
+        defer allocator.free(new_sigs);
+
+        // Extend all_signatures with new functions
+        const combined = try allocator.alloc(ast_to_ir.ExternalFuncSignature, all_signatures.len + new_sigs.len);
+        @memcpy(combined[0..all_signatures.len], all_signatures);
+        @memcpy(combined[all_signatures.len..], new_sigs);
+        allocator.free(all_signatures);
+        all_signatures = combined;
+
         frontend.ir_module.deinit();
     }
 
@@ -210,28 +250,6 @@ pub fn compileMultiple(
     };
 }
 
-/// Compile user source with stdlib.
-/// Stdlib is compiled first, then user code, then merged.
-pub fn compileWithStdlib(
-    user_source: Source,
-    stdlib_sources: []const Source,
-    output_path: []const u8,
-    options: CompileOptions,
-    allocator: std.mem.Allocator,
-    result: *CompileResult,
-) !void {
-    // Build sources list: stdlib first, then user code
-    var all_sources = try allocator.alloc(Source, stdlib_sources.len + 1);
-    defer allocator.free(all_sources);
-
-    for (stdlib_sources, 0..) |src, i| {
-        all_sources[i] = src;
-    }
-    all_sources[stdlib_sources.len] = user_source;
-
-    return compileMultiple(all_sources, output_path, options, allocator, result);
-}
-
 /// Find stdlib directory relative to the executable.
 /// Returns the path to stdlib/ or error if not found.
 pub fn findStdlibPath(allocator: std.mem.Allocator) ![]const u8 {
@@ -242,20 +260,27 @@ pub fn findStdlibPath(allocator: std.mem.Allocator) ![]const u8 {
     // Get directory containing executable
     const exe_dir = std.fs.path.dirname(exe_path) orelse return error.StdlibNotFound;
 
-    // Try: exe_dir/../stdlib (for development layout)
-    const dev_path = try std.fs.path.join(allocator, &.{ exe_dir, "..", "stdlib" });
-    defer allocator.free(dev_path);
+    // Try paths in order of preference
+    const paths_to_try = [_][]const []const u8{
+        // Development layout: exe is at maxon-zig/zig-out/bin/, stdlib at maxon/stdlib
+        &.{ exe_dir, "..", "..", "..", "stdlib" },
+        // Alternative dev layout: exe is at zig-out/bin/, stdlib at ../stdlib
+        &.{ exe_dir, "..", "..", "stdlib" },
+        // Alternative dev layout: exe is at bin/, stdlib at ../stdlib
+        &.{ exe_dir, "..", "stdlib" },
+        // Installed layout: stdlib next to executable
+        &.{ exe_dir, "stdlib" },
+    };
 
-    if (std.fs.cwd().statFile(dev_path)) |_| {
-        return try allocator.dupe(u8, dev_path);
-    } else |_| {}
-
-    // Try: exe_dir/stdlib (for installed layout)
-    const install_path = try std.fs.path.join(allocator, &.{ exe_dir, "stdlib" });
-    if (std.fs.cwd().statFile(install_path)) |_| {
-        return install_path;
-    } else |_| {
-        allocator.free(install_path);
+    for (paths_to_try) |path_parts| {
+        const path = std.fs.path.join(allocator, path_parts) catch continue;
+        // Check if directory exists by trying to open it
+        var dir = std.fs.cwd().openDir(path, .{}) catch {
+            allocator.free(path);
+            continue;
+        };
+        dir.close();
+        return path;
     }
 
     return error.StdlibNotFound;
@@ -477,6 +502,9 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(arg, allocator);
             }
             allocator.free(mcall.args);
+        },
+        .unary => |un| {
+            freeExpressionArgs(un.operand.*, allocator);
         },
         // integer, float_lit, bool_lit, nil_lit, self_expr, identifier: no nested allocations to free
         .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier => {},

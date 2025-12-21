@@ -151,9 +151,9 @@ pub const MutationAnalyzer = struct {
             },
             // self_expr - treat like identifier but self cannot be mutated as a whole
             .self_expr => {},
-            // integer, float_lit, nil_lit, binary, compare, call, struct_init, array_literal, sized_array:
+            // integer, float_lit, nil_lit, unary, binary, compare, call, struct_init, array_literal, sized_array:
             // These cannot be mutation targets (only identifier, field_access, index can)
-            .integer, .float_lit, .bool_lit, .nil_lit, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},
+            .integer, .float_lit, .bool_lit, .nil_lit, .unary, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},
         }
     }
 

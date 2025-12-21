@@ -417,6 +417,26 @@ pub const Encoder = struct {
         try self.emit(&.{ 0x0F, 0x9D, 0xC0 });
     }
 
+    /// SETA al - set byte if above (CF=0 and ZF=0) - for unsigned/float comparison
+    pub fn setaAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x97, 0xC0 });
+    }
+
+    /// SETAE al - set byte if above or equal (CF=0) - for unsigned/float comparison
+    pub fn setaeAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x93, 0xC0 });
+    }
+
+    /// SETB al - set byte if below (CF=1) - for unsigned/float comparison
+    pub fn setbAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x92, 0xC0 });
+    }
+
+    /// SETBE al - set byte if below or equal (CF=1 or ZF=1) - for unsigned/float comparison
+    pub fn setbeAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x0F, 0x96, 0xC0 });
+    }
+
     /// MOVZX rax, al - zero-extend al to rax
     pub fn movzxRaxAl(self: *Encoder) !void {
         try self.emit(&.{ 0x48, 0x0F, 0xB6, 0xC0 });

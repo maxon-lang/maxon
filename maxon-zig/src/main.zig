@@ -99,8 +99,29 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
 
     // Compile with error info
     var result: compiler.CompileResult = .{ .error_info = null };
-    compiler.compileWithOptions(source, output_path, src_path, .{ .track_allocs = track_allocs }, allocator, &result) catch |err| {
-        // Display structured error if available
+
+    // Load stdlib
+    const stdlib_path = compiler.findStdlibPath(allocator) catch {
+        std.debug.print("Error: stdlib not found\n", .{});
+        std.process.exit(1);
+    };
+    defer allocator.free(stdlib_path);
+
+    const exp_module = compiler.loadStdlibModule(stdlib_path, "math/exp", allocator) catch {
+        std.debug.print("Error: stdlib module math/exp not found\n", .{});
+        std.process.exit(1);
+    };
+    defer allocator.free(exp_module.path);
+    defer allocator.free(exp_module.content);
+
+    // Compile with stdlib: stdlib first, then user code
+    compiler.compileMultiple(
+        &.{ exp_module, .{ .path = src_path, .content = source } },
+        output_path,
+        .{ .track_allocs = track_allocs },
+        allocator,
+        &result,
+    ) catch |err| {
         if (result.error_info) |error_info| {
             error_info.printToStderr();
         } else {

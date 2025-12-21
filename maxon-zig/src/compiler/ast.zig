@@ -169,6 +169,16 @@ pub const CompareOp = enum {
     ge,
 };
 
+pub const UnaryOp = enum {
+    negate, // -x
+    not, // not x (for future use)
+};
+
+pub const UnaryExpr = struct {
+    op: UnaryOp,
+    operand: *const Expression,
+};
+
 pub const BinaryExpr = struct {
     left: *const Expression,
     op: BinaryOp,
@@ -228,6 +238,7 @@ pub const Expression = union(enum) {
     nil_lit,
     self_expr, // reference to current instance in methods
     identifier: []const u8,
+    unary: UnaryExpr,
     binary: BinaryExpr,
     compare: CompareExpr,
     call: CallExpr,

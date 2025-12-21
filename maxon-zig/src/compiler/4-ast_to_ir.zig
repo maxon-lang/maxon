@@ -128,6 +128,12 @@ const FuncInfo = struct {
     param_types: []const ParamType,
 };
 
+/// External function signature - for cross-module compilation
+pub const ExternalFuncSignature = struct {
+    name: []const u8,
+    return_type: ir.Type,
+};
+
 /// Parameter type info
 const ParamType = struct {
     ty: ValueType,
@@ -1514,6 +1520,7 @@ pub const AstToIr = struct {
             .nil_lit => self.createNilOptional(.i64),
             .self_expr => self.convertSelfExpr(),
             .identifier => |name| self.convertIdentifierOrField(name),
+            .unary => |un| self.convertUnary(un),
             .binary => |bin| self.convertBinary(bin),
             .compare => |cmp| self.convertCompare(cmp),
             .call => |call| self.convertCall(call),
@@ -1636,6 +1643,28 @@ pub const AstToIr = struct {
             try self.func().emitLoad(info.ptr, info.ty.toPrimitiveType());
 
         return .{ .value = value, .ty = info.ty };
+    }
+
+    fn convertUnary(self: *AstToIr, un: ast.UnaryExpr) ConvertError!TypedValue {
+        const operand = try self.convertExpression(un.operand.*);
+        const is_float = operand.ty.toPrimitiveType() == .f64;
+
+        switch (un.op) {
+            .negate => {
+                // Negate: 0 - x
+                const zero = if (is_float) try self.func().emitConstF64(0.0) else try self.func().emitConstI64(0);
+                const op: ir.Instruction.Op = if (is_float) .fsub else .sub;
+                const ty: ir.Type = if (is_float) .f64 else .i64;
+                const result = try self.func().emitBinaryOp(op, zero, operand.value, ty);
+                return .{ .value = result, .ty = .{ .primitive = ty } };
+            },
+            .not => {
+                // Logical not: x == 0
+                const zero = try self.func().emitConstI64(0);
+                const result = try self.func().emitBinaryOp(.icmp_eq, operand.value, zero, .i64);
+                return .{ .value = result, .ty = .{ .primitive = .i64 } };
+            },
+        }
     }
 
     fn convertBinary(self: *AstToIr, bin: ast.BinaryExpr) ConvertError!TypedValue {
@@ -1824,7 +1853,14 @@ pub const AstToIr = struct {
         }
 
         const func_info = self.func_map.get(call.func_name) orelse {
-            const result = try self.func().emitCall(call.func_name, &.{}, .i64);
+            // Unknown function (e.g., from stdlib) - still pass the arguments
+            const args = try self.func().allocator.alloc(ir.Value, call.args.len);
+            for (call.args, 0..) |arg_expr, i| {
+                const arg = try self.convertExpression(arg_expr);
+                args[i] = arg.value;
+            }
+            // Assume i64 return type - this will be resolved at link time
+            const result = try self.func().emitCall(call.func_name, args, .i64);
             return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
         };
 
@@ -2330,12 +2366,53 @@ pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_anal
 }
 
 pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) ConvertError!ir.Module {
+    return convertWithExternals(program, allocator, mutation_analyzer, source_file, null, out_error);
+}
+
+/// Convert AST to IR with external function signatures from other modules
+pub fn convertWithExternals(
+    program: ast.Program,
+    allocator: std.mem.Allocator,
+    mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
+    source_file: ?[]const u8,
+    external_funcs: ?[]const ExternalFuncSignature,
+    out_error: *?err.CompileError,
+) ConvertError!ir.Module {
     var converter = AstToIr.init(allocator, mutation_analyzer);
     converter.source_file = source_file;
     defer converter.deinit();
+
+    // Register external function signatures before conversion
+    if (external_funcs) |funcs| {
+        for (funcs) |ext_func| {
+            try converter.func_map.put(allocator, ext_func.name, .{
+                .return_type = ext_func.return_type,
+                .return_type_name = null,
+                .return_value_type = null,
+                .param_types = &.{},
+            });
+            debug.astToIr("Registered external function '{s}' returning {s}", .{ ext_func.name, ext_func.return_type.format() });
+        }
+    }
+
     const result = converter.convert(program) catch |e| {
         out_error.* = converter.last_error;
         return e;
     };
     return result;
+}
+
+/// Extract function signatures from an IR module (for cross-module compilation)
+pub fn extractFunctionSignatures(module: *const ir.Module, allocator: std.mem.Allocator) ![]ExternalFuncSignature {
+    var signatures = std.ArrayListUnmanaged(ExternalFuncSignature){};
+    errdefer signatures.deinit(allocator);
+
+    for (module.functions.items) |func| {
+        try signatures.append(allocator, .{
+            .name = func.name,
+            .return_type = func.return_type,
+        });
+    }
+
+    return signatures.toOwnedSlice(allocator);
 }

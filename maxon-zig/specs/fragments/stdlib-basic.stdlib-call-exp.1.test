@@ -1,0 +1,30 @@
+// Test: stdlib-basic.stdlib-call-exp.1
+function main() returns int
+    var result = exp(0.0)
+    if result == 1.0 'check'
+        return 42
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %tmp_fconst = const.f64 f64 0
+    %tmp_call = call f64 @exp(%tmp_fconst)
+    %result = alloca ptr
+    store %result %tmp_call
+    %tmp_load = load f64 %result
+    %tmp_fconst.1 = const.f64 f64 1
+    %tmp_fcmp = fcmp.eq i64 %tmp_load %tmp_fconst.1
+    %result = br.cond %tmp_fcmp @block1
+then:
+    %tmp_const = const.i64 i64 42
+    ret %tmp_const
+end:
+    %tmp_const.1 = const.i64 i64 0
+    ret %tmp_const.1
+}
+
+---

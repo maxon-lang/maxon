@@ -866,17 +866,33 @@ pub const Parser = struct {
     }
 
     fn parseMultiplicative(self: *Parser) ParseError!?ast.Expression {
-        var left = try self.parsePrimary() orelse return null;
+        var left = try self.parseUnary() orelse return null;
 
         while (self.matchMultiplicative()) |op| {
             _ = self.advance();
-            const right = try self.parsePrimary() orelse {
+            const right = try self.parseUnary() orelse {
                 self.reportError(.E003);
                 return error.ExpectedExpression;
             };
             left = try self.makeBinary(left, op, right);
         }
         return left;
+    }
+
+    fn parseUnary(self: *Parser) ParseError!?ast.Expression {
+        // Check for unary minus
+        if (self.check(.minus)) {
+            _ = self.advance();
+            const operand = try self.parseUnary() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            return .{ .unary = .{
+                .op = .negate,
+                .operand = try self.createExpr(operand),
+            } };
+        }
+        return self.parsePrimary();
     }
 
     fn matchAdditive(self: *Parser) ?ast.BinaryOp {

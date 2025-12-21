@@ -139,7 +139,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E003: specs\fragments\challenge-sized-arrays.error.sized-array-negative-size.1.test:3:24: expected expression
+error E014: specs\fragments\challenge-sized-arrays.error.sized-array-negative-size.1.test:3:1: unused variable: 'arr'
 ```
 
 ## Ownership Tests

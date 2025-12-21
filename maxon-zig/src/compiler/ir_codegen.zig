@@ -71,6 +71,10 @@ pub const IrCodegen = struct {
     tracking_data_offset: ?usize = null,
     // Patches for RIP-relative tracking data access
     tracking_data_patches: std.ArrayListUnmanaged(TrackingDataPatch),
+    // Function return types from the module
+    func_return_types: std.StringHashMapUnmanaged(ir.Type),
+    // Track the type of value stored at each alloca location
+    stored_types: std.AutoHashMapUnmanaged(ir.Value, ir.Type),
 
     pub fn init(allocator: std.mem.Allocator, code: *std.ArrayListUnmanaged(u8), options: CodegenOptions) IrCodegen {
         return .{
@@ -90,6 +94,8 @@ pub const IrCodegen = struct {
             .jump_patches = .{},
             .track_allocs = options.track_allocs,
             .tracking_data_patches = .{},
+            .func_return_types = .{},
+            .stored_types = .{},
         };
     }
 
@@ -103,6 +109,8 @@ pub const IrCodegen = struct {
         self.block_offsets.deinit(self.allocator);
         self.jump_patches.deinit(self.allocator);
         self.tracking_data_patches.deinit(self.allocator);
+        self.func_return_types.deinit(self.allocator);
+        self.stored_types.deinit(self.allocator);
     }
 
     /// Get external call patches for PE writer
@@ -196,6 +204,11 @@ pub const IrCodegen = struct {
     // ------------------------------------------------------------------------
 
     pub fn generateModule(self: *IrCodegen, module: ir.Module) !void {
+        // Collect function return types for cross-function calls
+        for (module.functions.items) |*func| {
+            try self.func_return_types.put(self.allocator, func.name, func.return_type);
+        }
+
         // Generate _start wrapper if tracking is enabled
         if (self.track_allocs) {
             try self.generateStartWrapper();
@@ -1060,6 +1073,7 @@ pub const IrCodegen = struct {
         self.indirect_ptrs.clearRetainingCapacity();
         self.block_offsets.clearRetainingCapacity();
         self.jump_patches.clearRetainingCapacity();
+        self.stored_types.clearRetainingCapacity();
         self.next_stack_offset = -8;
         self.current_func_name = func.name;
         self.current_func_ret_type = func.return_type;
@@ -1135,7 +1149,12 @@ pub const IrCodegen = struct {
             .heap_alloc => try self.genHeapAlloc(inst),
             .heap_free => try self.genHeapFree(inst),
             .heap_realloc => try self.genHeapRealloc(inst),
-            .fcmp_eq => try self.genFcmpEq(inst),
+            .fcmp_eq => try self.genFcmp(inst, .eq),
+            .fcmp_ne => try self.genFcmp(inst, .ne),
+            .fcmp_lt => try self.genFcmp(inst, .lt),
+            .fcmp_le => try self.genFcmp(inst, .le),
+            .fcmp_gt => try self.genFcmp(inst, .gt),
+            .fcmp_ge => try self.genFcmp(inst, .ge),
             .icmp_eq => try self.genIcmp(inst, .eq),
             .icmp_ne => try self.genIcmp(inst, .ne),
             .icmp_lt => try self.genIcmp(inst, .lt),
@@ -1271,6 +1290,9 @@ pub const IrCodegen = struct {
         const offset = try self.getStackOffset(ptr);
         const val_type = self.value_types.get(val) orelse return error.ValueTypeNotFound;
 
+        // Track what type was stored at this location for later loads
+        try self.stored_types.put(self.allocator, ptr, val_type);
+
         if (self.isIndirect(ptr)) {
             try self.enc.movRcxRbpOffset(offset);
         }
@@ -1340,7 +1362,8 @@ pub const IrCodegen = struct {
         const result = inst.result.?;
         const ptr = inst.operands[0].value;
         const offset = try self.getStackOffset(ptr);
-        const ty = inst.result_type;
+        // Prefer the type that was actually stored at this location, otherwise use IR type
+        const ty = self.stored_types.get(ptr) orelse inst.result_type;
 
         if (self.isIndirect(ptr)) {
             try self.enc.movRcxRbpOffset(offset);
@@ -1493,7 +1516,8 @@ pub const IrCodegen = struct {
     fn genCall(self: *IrCodegen, inst: ir.Instruction) !void {
         const func_name = inst.operands[0].func_name;
         const args = inst.operands[1].call_args;
-        const ret_type = inst.result_type;
+        // Use the actual function's return type from the module if available
+        const ret_type = self.func_return_types.get(func_name) orelse inst.result_type;
 
         debug.codegen("  Calling {s} with {d} args", .{ func_name, args.len });
 
@@ -1941,7 +1965,9 @@ pub const IrCodegen = struct {
         try self.enc.freeShadowSpace();
     }
 
-    fn genFcmpEq(self: *IrCodegen, inst: ir.Instruction) !void {
+    const CmpOp = enum { eq, ne, lt, le, gt, ge };
+
+    fn genFcmp(self: *IrCodegen, inst: ir.Instruction, op: CmpOp) !void {
         const result = inst.result.?;
         const lhs = inst.operands[0].value;
         const rhs = inst.operands[1].value;
@@ -1956,16 +1982,23 @@ pub const IrCodegen = struct {
         // Compare: ucomisd xmm0, xmm1
         try self.enc.ucomisdXmm0Xmm1();
 
-        // Set AL = 1 if equal (and not unordered)
-        // SETE al + SETNP cl, then AND them
-        // For simplicity, just use SETE (this works for non-NaN values)
-        try self.enc.seteAl();
-        try self.enc.movzxRaxAl();
+        // Set AL based on comparison result
+        // ucomisd sets CF and ZF for unsigned comparison semantics:
+        // - CF=0, ZF=0: xmm0 > xmm1 (above)
+        // - CF=0, ZF=1: xmm0 == xmm1 (equal)
+        // - CF=1, ZF=0: xmm0 < xmm1 (below)
+        switch (op) {
+            .eq => try self.enc.seteAl(), // ZF=1
+            .ne => try self.enc.setneAl(), // ZF=0
+            .lt => try self.enc.setbAl(), // CF=1 (below)
+            .le => try self.enc.setbeAl(), // CF=1 or ZF=1 (below or equal)
+            .gt => try self.enc.setaAl(), // CF=0 and ZF=0 (above)
+            .ge => try self.enc.setaeAl(), // CF=0 (above or equal)
+        }
 
+        try self.enc.movzxRaxAl();
         try self.storeToStack(result, .i64);
     }
-
-    const CmpOp = enum { eq, ne, lt, le, gt, ge };
 
     fn genIcmp(self: *IrCodegen, inst: ir.Instruction, op: CmpOp) !void {
         const result = inst.result.?;
