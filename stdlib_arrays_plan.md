@@ -8,12 +8,6 @@ Enable the compiler to compile the stdlib `Array` type from `stdlib/collections/
 - Method calls on custom types (`arr.push(42)`)
 - Stdlib-only builtin restriction
 
-## Current State (Complete)
-- `Array of T` parsing, `Array of T` initialization
-- 24-byte `_ManagedArray` struct (data_ptr, length, capacity)
-- 7 builtins: `__managed_array_len/capacity/set_length/grow/set_at/shift_left/shift_right`
-- Bounds-checked indexing, `memmove` IR instruction
-
 ---
 
 ## Phase 1: Type Declarations with Methods

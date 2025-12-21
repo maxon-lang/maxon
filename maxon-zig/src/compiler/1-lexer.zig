@@ -22,6 +22,16 @@ pub const TokenType = enum {
     @"false",
     @"or",
     nil,
+    // Type system keywords
+    uses,
+    is,
+    with,
+    static,
+    @"export",
+    self,
+    Self,
+    interface,
+    extends,
 
     // Types
     int,
@@ -392,6 +402,16 @@ pub const Lexer = struct {
             .{ "nil", TokenType.nil },
             .{ "int", TokenType.int },
             .{ "float", TokenType.float },
+            // Type system keywords
+            .{ "uses", TokenType.uses },
+            .{ "is", TokenType.is },
+            .{ "with", TokenType.with },
+            .{ "static", TokenType.static },
+            .{ "export", TokenType.@"export" },
+            .{ "self", TokenType.self },
+            .{ "Self", TokenType.Self },
+            .{ "interface", TokenType.interface },
+            .{ "extends", TokenType.extends },
         };
         inline for (keywords) |kw| {
             if (std.mem.eql(u8, text, kw[0])) {

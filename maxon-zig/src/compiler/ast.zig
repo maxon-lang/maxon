@@ -11,9 +11,28 @@ pub const EnumDecl = struct {
     members: []const []const u8,
 };
 
+pub const InterfaceConformance = struct {
+    interface_name: []const u8,
+    type_args: []const []const u8,
+};
+
+pub const MethodDecl = struct {
+    name: []const u8,
+    qualified_name: ?[]const u8, // "Collection.count" for interface methods
+    is_static: bool,
+    is_export: bool,
+    params: []const ParamDecl,
+    return_type: ?TypeExpr, // null for void
+    body: []Statement,
+};
+
 pub const TypeDecl = struct {
     name: []const u8,
+    is_export: bool,
+    generic_params: []const []const u8, // ["Element"] for `uses Element`
+    conformances: []const InterfaceConformance,
     fields: []FieldDecl,
+    methods: []MethodDecl,
 };
 
 pub const FieldDecl = struct {
