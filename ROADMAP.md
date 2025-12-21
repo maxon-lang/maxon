@@ -3,24 +3,15 @@
 ## Goal
 Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-selfhosted/`.
 
-## Current State Summary
-
-**Maxon-zig has:**
-- Variables (`let`/`var`), primitives (`int`, `float`, `bool`)
-- Structs, enums, arrays (basic)
-- Functions with ownership/borrow checking
-- If/else, while loops, break/continue
-- Arithmetic, comparison operators
-- x86-64 codegen, PE writer
-
-**Self-hosted compiler needs (missing in maxon-zig):**
+## Self-hosted compiler needs (missing in maxon-zig):**
 - Strings (literals, interpolation, methods)
-- Optional types (`T or nil`, if-let binding)
 - Maps (`map from K to V`)
 - Match expressions
 - For-in loops
-- Bitwise operators (`>>`, `&`, `|`)
+- Logical operators (`and`, `or`, `not`)
+- Bitwise operators (`>>`, `&`, `|`, `<<`)
 - Character type
+- Byte type
 - Static functions on types
 - Export/import system
 - Standard library (print, file I/O, etc.)
@@ -34,7 +25,7 @@ Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-
 
 #### 1.1 String Type
 - [ ] Add `string` as a built-in type in AST and IR
-- [ ] String literals in lexer/parser
+- [ ] String literals in lexer/parser (double-quoted)
 - [ ] String comparison (`==`, `!=`)
 - [ ] String concatenation (`+`)
 - [ ] Runtime representation (ptr + length, heap-allocated)
@@ -42,7 +33,7 @@ Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-
 
 #### 1.2 Character Type
 - [ ] Add `character` type (grapheme cluster support can be deferred)
-- [ ] Character literals (`'A'`, `'\n'`, etc.)
+- [ ] Character literals (`'A'`, `'\n'`, etc.) - Note: currently single quotes are used for labels
 - [ ] Character comparison
 - [ ] Files: Same as strings
 
@@ -53,9 +44,16 @@ Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-
 
 #### 1.4 Bitwise Operators
 - [ ] `>>` (right shift), `<<` (left shift)
-- [ ] `&` (bitwise AND), `|` (bitwise OR)
+- [ ] `&` (bitwise AND), `|` (bitwise OR), `^` (XOR)
+- [ ] `~` (bitwise NOT)
 - [ ] `as` type cast operator (e.g., `x as byte`)
 - [ ] Files: `1-lexer.zig`, `2-parser.zig`, `4-ast_to_ir.zig`, `ir.zig`, `ir_codegen.zig`
+
+#### 1.5 Logical Operators
+- [ ] `and` (logical AND with short-circuit)
+- [ ] `or` (logical OR with short-circuit)
+- [ ] `not` (logical NOT)
+- [ ] Files: `1-lexer.zig`, `2-parser.zig`, `4-ast_to_ir.zig`
 
 ---
 
@@ -77,23 +75,27 @@ Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-
 
 ---
 
-### Phase 3: Optional Types
+### Phase 3: Optional Types ✅ COMPLETE
 **Goal:** Add nil-safety and optional type handling.
 
-#### 3.1 Optional Type Syntax
-- [ ] Parse `T or nil` type expressions
-- [ ] Internal representation (tagged union or nullable pointer)
-- [ ] Files: `2-parser.zig`, `ast.zig`, `4-ast_to_ir.zig`
+#### 3.1 Optional Type Syntax ✅
+- [x] Parse `T or nil` type expressions
+- [x] Internal representation (tagged union: 16-byte structure with tag + value)
+- [x] Files: `2-parser.zig`, `ast.zig`, `4-ast_to_ir.zig`
 
-#### 3.2 If-Let Binding
-- [ ] Parse `if let name = expr 'label' ... end 'label' else 'label2' ... end 'label2'`
-- [ ] Unwrap optional into binding
-- [ ] Files: `2-parser.zig`, `4-ast_to_ir.zig`
+#### 3.2 If-Let Binding ✅
+- [x] Parse `if let name = expr 'label' ... end 'label' else 'label2' ... end 'label2'`
+- [x] Unwrap optional into binding
+- [x] Files: `2-parser.zig`, `4-ast_to_ir.zig`
 
-#### 3.3 Nil Literal
-- [ ] Add `nil` keyword and literal
-- [ ] Type checking: `nil` only valid for optional types
-- [ ] Files: `1-lexer.zig`, `2-parser.zig`, `4-ast_to_ir.zig`
+#### 3.3 Nil Literal ✅
+- [x] Add `nil` keyword and literal
+- [x] Type checking: `nil` only valid for optional types
+- [x] Files: `1-lexer.zig`, `2-parser.zig`, `4-ast_to_ir.zig`
+
+#### 3.4 Additional Features ✅
+- [x] Else-unwrap declarations (`var x = expr else 'label' ... end 'label'`)
+- [x] Array indexing returns optionals for bounds-safe access
 
 ---
 
@@ -122,20 +124,33 @@ Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-
 ---
 
 ### Phase 5: Collections
-**Goal:** Map type for symbol tables.
+**Goal:** Map type for symbol tables, managed arrays for dynamic collections.
 
-#### 5.1 Map Type
+#### 5.1 Managed Arrays (Array of T)
+- [ ] Parse `Array of T` type syntax (uppercase for stdlib types)
+- [ ] Parse `Array of T{}` empty initialization expression
+- [ ] Internal `_ManagedArray` struct (24 bytes: data_ptr, length, capacity)
+- [ ] Compiler builtins: `__managed_array_len`, `__managed_array_capacity`, `__managed_array_set_length`
+- [ ] Compiler builtins: `__managed_array_grow`, `__managed_array_set_at`
+- [ ] Compiler builtins: `__managed_array_shift_left`, `__managed_array_shift_right`
+- [ ] `memmove` IR instruction for overlapping memory operations
+- [ ] stdlib `Array` type uses builtins for push/pop/insert/remove
+- [ ] Files: `ast.zig`, `2-parser.zig`, `4-ast_to_ir.zig`, `ir.zig`, `ir_codegen.zig`, `stdlib/collections/array.maxon`
+
+**Note:** Static arrays (`array of N T`, literals `[1, 2, 3]`) and bounds-checked indexing are implemented.
+
+#### 5.2 Map Type
 - [ ] Parse `map from K to V` type syntax
 - [ ] Runtime representation (hash table)
 - [ ] Files: `2-parser.zig`, `ast.zig`, `4-ast_to_ir.zig`
 
-#### 5.2 Map Operations
+#### 5.3 Map Operations
 - [ ] `.insert(key, value)` - add entry
 - [ ] `.get(key)` - retrieve (returns `V or nil`)
 - [ ] `.contains(key)` - check key existence
 - [ ] Files: `4-ast_to_ir.zig`, runtime library
 
-#### 5.3 Array Extensions
+#### 5.4 Array Extensions
 - [ ] `.append(array)` - append another array
 - [ ] `.slice(start, end)` - array slicing
 - [ ] `.prefix(n)` - first n elements
@@ -199,54 +214,3 @@ Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-
 
 ---
 
-## Estimated Order of Implementation
-
-1. **Phase 1** (Strings, characters, bytes, bitwise) - Foundation
-2. **Phase 3.3** (Nil literal) - Quick win
-3. **Phase 2.1** (For-in loops) - Common pattern
-4. **Phase 2.2** (Match) - Used everywhere
-5. **Phase 3** (Optionals complete) - Required for safe APIs
-6. **Phase 4** (String methods) - Lexer needs these
-7. **Phase 5** (Maps) - Semantic analyzer needs these
-8. **Phase 6** (Static functions, export) - Code organization
-9. **Phase 7** (Modules) - Multi-file
-10. **Phase 8** (Stdlib) - Runtime functionality
-
----
-
-## Critical Files to Modify
-
-| File | Changes |
-|------|---------|
-| `src/compiler/1-lexer.zig` | New tokens (string interpolation, `match`, `for`, `as`, bitwise ops) |
-| `src/compiler/2-parser.zig` | Parse all new syntax |
-| `src/compiler/ast.zig` | New AST nodes for match, for-in, optionals, static functions |
-| `src/compiler/4-ast_to_ir.zig` | Semantic analysis & IR gen for all new features |
-| `src/compiler/ir.zig` | New IR instructions if needed |
-| `src/compiler/ir_codegen.zig` | x86-64 codegen for new IR |
-| `src/compiler/main.zig` | Multi-file compilation support |
-
----
-
-## Implementation Approach
-
-**Runtime Strategy: Inline Codegen**
-- All string, map, and I/O operations will be implemented as x86-64 code generation
-- No external runtime library dependency
-- Self-contained executables
-- More complex but fully self-hosted
-
----
-
-## Success Criteria
-
-The implementation is complete when:
-1. `./bin/maxon-zig compile maxon-bin-selfhosted/main.maxon` succeeds
-2. The generated executable can compile a simple Maxon program
-3. All existing tests continue to pass
-
----
-
-## Next Steps
-
-Ready to begin implementation with **Phase 1: Core Type System Extensions** starting with strings.
