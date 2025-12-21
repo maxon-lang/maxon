@@ -1,6 +1,6 @@
 ---
 feature: alloc-tracking
-status: experimental
+status: stable
 keywords: [memory, allocation, tracking, debug, heap]
 category: debugging
 ---

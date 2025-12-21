@@ -1,6 +1,6 @@
 ---
 feature: interfaces
-status: experimental
+status: stable
 keywords: [interface, extends, method, signature, contract]
 category: type-system
 ---

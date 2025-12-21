@@ -1,6 +1,6 @@
 ---
 feature: self-keyword
-status: experimental
+status: stable
 keywords: [self, Self, method, type, instance]
 category: type-system
 ---
