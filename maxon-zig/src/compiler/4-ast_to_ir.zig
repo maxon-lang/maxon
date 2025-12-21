@@ -313,6 +313,9 @@ pub const AstToIr = struct {
         // Register declarations
         for (program.types) |type_decl| try self.registerType(type_decl);
         for (program.enums) |enum_decl| try self.registerEnum(enum_decl);
+        // Interfaces are parsed but not yet used for IR generation
+        // (conformance checking is a separate phase)
+        _ = program.interfaces;
         for (program.functions) |fn_decl| try self.registerFunction(fn_decl);
 
         // Register methods from types

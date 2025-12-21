@@ -3,7 +3,24 @@ const std = @import("std");
 pub const Program = struct {
     types: []TypeDecl,
     enums: []EnumDecl,
+    interfaces: []InterfaceDecl,
     functions: []FunctionDecl,
+};
+
+pub const InterfaceMethod = struct {
+    name: []const u8,
+    params: []const ParamDecl,
+    return_type: ?TypeExpr, // null for void
+    has_default_impl: bool,
+    default_body: ?[]Statement,
+};
+
+pub const InterfaceDecl = struct {
+    name: []const u8,
+    is_export: bool,
+    generic_params: []const []const u8, // ["Element"] for `uses Element`
+    extends: []const []const u8, // ["Collection", "Iterable"] for `extends Collection, Iterable`
+    methods: []InterfaceMethod,
 };
 
 pub const EnumDecl = struct {

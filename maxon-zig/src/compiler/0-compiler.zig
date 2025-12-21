@@ -191,6 +191,22 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
     }
     allocator.free(program.enums);
 
+    for (program.interfaces) |iface| {
+        for (iface.methods) |method| {
+            allocator.free(method.params);
+            if (method.default_body) |body| {
+                for (body) |stmt| {
+                    freeStatementArgs(stmt, allocator);
+                }
+                allocator.free(body);
+            }
+        }
+        allocator.free(iface.methods);
+        allocator.free(iface.generic_params);
+        allocator.free(iface.extends);
+    }
+    allocator.free(program.interfaces);
+
     for (program.functions) |func| {
         for (func.body) |stmt| {
             freeStatementArgs(stmt, allocator);

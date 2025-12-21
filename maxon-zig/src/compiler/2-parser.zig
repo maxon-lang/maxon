@@ -62,6 +62,8 @@ pub const Parser = struct {
         errdefer types.deinit(self.allocator);
         var enums: std.ArrayListUnmanaged(ast.EnumDecl) = .empty;
         errdefer enums.deinit(self.allocator);
+        var interfaces: std.ArrayListUnmanaged(ast.InterfaceDecl) = .empty;
+        errdefer interfaces.deinit(self.allocator);
         var functions: std.ArrayListUnmanaged(ast.FunctionDecl) = .empty;
         errdefer functions.deinit(self.allocator);
 
@@ -72,11 +74,15 @@ pub const Parser = struct {
             // Check for type declaration (with optional 'export' prefix)
             if (self.check(.type)) {
                 try types.append(self.allocator, try self.parseTypeDecl());
+            } else if (self.check(.interface)) {
+                try interfaces.append(self.allocator, try self.parseInterfaceDecl());
             } else if (self.check(.@"export")) {
-                // Peek ahead to see if this is 'export type' or 'export function'
+                // Peek ahead to see if this is 'export type', 'export interface', or 'export function'
                 if (self.peek(1)) |next| {
                     if (next.type == .type) {
                         try types.append(self.allocator, try self.parseTypeDecl());
+                    } else if (next.type == .interface) {
+                        try interfaces.append(self.allocator, try self.parseInterfaceDecl());
                     } else if (next.type == .function) {
                         // For now, treat export function as regular function
                         _ = self.advance(); // skip 'export'
@@ -101,7 +107,7 @@ pub const Parser = struct {
                     token.text,
                     @tagName(token.type),
                 });
-                debug.parser("  Expected: 'type', 'enum', or 'function' declaration\n", .{});
+                debug.parser("  Expected: 'type', 'enum', 'interface', or 'function' declaration\n", .{});
                 self.reportError(.E002);
                 return error.UnexpectedToken;
             }
@@ -111,6 +117,7 @@ pub const Parser = struct {
         return .{
             .types = try types.toOwnedSlice(self.allocator),
             .enums = try enums.toOwnedSlice(self.allocator),
+            .interfaces = try interfaces.toOwnedSlice(self.allocator),
             .functions = try functions.toOwnedSlice(self.allocator),
         };
     }
@@ -141,31 +148,17 @@ pub const Parser = struct {
     }
 
     fn parseTypeDecl(self: *Parser) !ast.TypeDecl {
-        // Check for optional 'export' before 'type'
-        var is_export = false;
-        if (self.check(.@"export")) {
-            is_export = true;
-            _ = self.advance();
-        }
+        const is_export = self.check(.@"export");
+        if (is_export) _ = self.advance();
 
         _ = try self.expect(.type);
         const name_token = try self.expect(.identifier);
 
         // Parse optional generic params: uses TypeParam, ...
-        var generic_params: std.ArrayListUnmanaged([]const u8) = .empty;
-        errdefer generic_params.deinit(self.allocator);
-
-        if (self.check(.uses)) {
+        const generic_params = if (self.check(.uses)) blk: {
             _ = self.advance();
-            const first_param = try self.expect(.identifier);
-            try generic_params.append(self.allocator, first_param.text);
-
-            while (self.check(.comma)) {
-                _ = self.advance();
-                const param = try self.expect(.identifier);
-                try generic_params.append(self.allocator, param.text);
-            }
-        }
+            break :blk try self.parseIdentifierList();
+        } else &[_][]const u8{};
 
         // Parse optional interface conformances: is InterfaceName with TypeArg, ...
         var conformances: std.ArrayListUnmanaged(ast.InterfaceConformance) = .empty;
@@ -181,7 +174,6 @@ pub const Parser = struct {
             }
         }
 
-        // Require newline after type header
         _ = try self.expect(.newline);
 
         // Parse fields and methods
@@ -191,7 +183,6 @@ pub const Parser = struct {
         errdefer methods.deinit(self.allocator);
 
         while (!self.check(.end) and !self.isAtEnd()) {
-            // Skip blank lines
             if (self.check(.newline)) {
                 _ = self.advance();
                 continue;
@@ -209,7 +200,7 @@ pub const Parser = struct {
                 self.reportError(.E002);
                 return error.UnexpectedToken;
             }
-            _ = self.advance(); // consume let/var
+            _ = self.advance();
 
             const field_name = try self.expect(.identifier);
             const field_type = try self.parseTypeExpr();
@@ -223,20 +214,14 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
         }
 
-        // Parse end 'label'
         _ = try self.expect(.end);
-        _ = try self.expect(.string); // label
-
-        // Require newline after end (or EOF)
-        if (!self.isAtEnd() and !self.check(.newline)) {
-            self.reportError(.E004);
-            return error.ExpectedNewline;
-        }
+        _ = try self.expect(.string);
+        try self.expectEndNewline();
 
         return .{
             .name = name_token.text,
             .is_export = is_export,
-            .generic_params = try generic_params.toOwnedSlice(self.allocator),
+            .generic_params = generic_params,
             .conformances = try conformances.toOwnedSlice(self.allocator),
             .fields = try fields.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),
@@ -282,18 +267,11 @@ pub const Parser = struct {
     }
 
     fn parseMethodDecl(self: *Parser) !ast.MethodDecl {
-        var method_is_export = false;
-        var is_static = false;
-
         // Parse optional modifiers
-        if (self.check(.@"export")) {
-            method_is_export = true;
-            _ = self.advance();
-        }
-        if (self.check(.static)) {
-            is_static = true;
-            _ = self.advance();
-        }
+        const method_is_export = self.check(.@"export");
+        if (method_is_export) _ = self.advance();
+        const is_static = self.check(.static);
+        if (is_static) _ = self.advance();
 
         _ = try self.expect(.function);
 
@@ -305,27 +283,64 @@ pub const Parser = struct {
         if (self.check(.dot)) {
             _ = self.advance();
             const second_name = try self.expect(.identifier);
-            // Store "Interface.method" as qualified_name, use "method" as name
             qualified_name = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ first_name.text, second_name.text });
             name = second_name.text;
         }
 
         _ = try self.expect(.lparen);
+        const params = try self.parseParamList();
+        const return_type = try self.parseOptionalReturnType();
+        _ = try self.expect(.newline);
+        const body = try self.parseBodyUntilEnd();
+        try self.expectEndNewline();
+        if (self.check(.newline)) _ = self.advance();
 
-        // Parse parameter list
+        return .{
+            .name = name,
+            .qualified_name = qualified_name,
+            .is_static = is_static,
+            .is_export = method_is_export,
+            .params = params,
+            .return_type = return_type,
+            .body = body,
+        };
+    }
+
+    // ============================================
+    // Common parsing helpers
+    // ============================================
+
+    /// Parse a comma-separated list of identifier names (for `uses T, U` or `extends A, B`)
+    fn parseIdentifierList(self: *Parser) ![]const []const u8 {
+        var items: std.ArrayListUnmanaged([]const u8) = .empty;
+        errdefer items.deinit(self.allocator);
+
+        const first = try self.expect(.identifier);
+        try items.append(self.allocator, first.text);
+
+        while (self.check(.comma)) {
+            _ = self.advance();
+            const item = try self.expect(.identifier);
+            try items.append(self.allocator, item.text);
+        }
+
+        return items.toOwnedSlice(self.allocator);
+    }
+
+    /// Parse parameter list: (name type, name type, ...)
+    /// Expects lparen already consumed, consumes up to and including rparen
+    fn parseParamList(self: *Parser) ![]const ast.ParamDecl {
         var params: std.ArrayListUnmanaged(ast.ParamDecl) = .empty;
         errdefer params.deinit(self.allocator);
 
         if (!self.check(.rparen)) {
-            // Parse first parameter
-            const first_param_name = try self.expect(.identifier);
+            const first_name = try self.expect(.identifier);
             const first_type = try self.parseTypeExpr();
             try params.append(self.allocator, .{
-                .name = first_param_name.text,
+                .name = first_name.text,
                 .type_expr = first_type,
             });
 
-            // Parse remaining parameters
             while (self.check(.comma)) {
                 _ = self.advance();
                 const param_name = try self.expect(.identifier);
@@ -338,23 +353,24 @@ pub const Parser = struct {
         }
 
         _ = try self.expect(.rparen);
+        return params.toOwnedSlice(self.allocator);
+    }
 
-        // Parse optional return type
-        var return_type: ?ast.TypeExpr = null;
+    /// Parse optional return type: returns Type
+    fn parseOptionalReturnType(self: *Parser) !?ast.TypeExpr {
         if (self.check(.returns)) {
             _ = self.advance();
-            return_type = try self.parseTypeExpr();
+            return try self.parseTypeExpr();
         }
+        return null;
+    }
 
-        // Require newline after method signature
-        _ = try self.expect(.newline);
-
-        // Parse body
+    /// Parse statements until `end` keyword, then consume `end 'label'`
+    fn parseBodyUntilEnd(self: *Parser) ![]ast.Statement {
         var statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
         errdefer statements.deinit(self.allocator);
 
         while (!self.check(.end) and !self.isAtEnd()) {
-            // Skip blank lines
             if (self.check(.newline)) {
                 _ = self.advance();
                 continue;
@@ -362,28 +378,18 @@ pub const Parser = struct {
             try statements.append(self.allocator, try self.parseStatement());
         }
 
-        // Parse end 'label'
         _ = try self.expect(.end);
         _ = try self.expect(.string); // label
 
-        // Require newline after end (or EOF/next method)
+        return statements.toOwnedSlice(self.allocator);
+    }
+
+    /// Expect newline after end (or EOF)
+    fn expectEndNewline(self: *Parser) !void {
         if (!self.isAtEnd() and !self.check(.newline)) {
             self.reportError(.E004);
             return error.ExpectedNewline;
         }
-        if (self.check(.newline)) {
-            _ = self.advance();
-        }
-
-        return .{
-            .name = name,
-            .qualified_name = qualified_name,
-            .is_static = is_static,
-            .is_export = method_is_export,
-            .params = try params.toOwnedSlice(self.allocator),
-            .return_type = return_type,
-            .body = try statements.toOwnedSlice(self.allocator),
-        };
     }
 
     fn expectTypeName(self: *Parser) ![]const u8 {
@@ -450,72 +456,17 @@ pub const Parser = struct {
         _ = try self.expect(.function);
         const name_token = try self.expect(.identifier);
         _ = try self.expect(.lparen);
-
-        // Parse parameter list
-        var params: std.ArrayListUnmanaged(ast.ParamDecl) = .empty;
-        errdefer params.deinit(self.allocator);
-
-        if (!self.check(.rparen)) {
-            // Parse first parameter
-            const first_name = try self.expect(.identifier);
-            const first_type = try self.parseTypeExpr();
-            try params.append(self.allocator, .{
-                .name = first_name.text,
-                .type_expr = first_type,
-            });
-
-            // Parse remaining parameters
-            while (self.check(.comma)) {
-                _ = self.advance();
-                const param_name = try self.expect(.identifier);
-                const param_type = try self.parseTypeExpr();
-                try params.append(self.allocator, .{
-                    .name = param_name.text,
-                    .type_expr = param_type,
-                });
-            }
-        }
-
-        _ = try self.expect(.rparen);
-
-        // Parse optional return type
-        var return_type: ?ast.TypeExpr = null;
-        if (self.check(.returns)) {
-            _ = self.advance();
-            return_type = try self.parseTypeExpr();
-        }
-
-        // Require newline after function signature
+        const params = try self.parseParamList();
+        const return_type = try self.parseOptionalReturnType();
         _ = try self.expect(.newline);
-
-        // Parse body
-        var statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
-        errdefer statements.deinit(self.allocator);
-
-        while (!self.check(.end) and !self.isAtEnd()) {
-            // Skip blank lines
-            if (self.check(.newline)) {
-                _ = self.advance();
-                continue;
-            }
-            try statements.append(self.allocator, try self.parseStatement());
-        }
-
-        // Parse end 'label'
-        _ = try self.expect(.end);
-        _ = try self.expect(.string); // label
-
-        // Require newline after end (or EOF)
-        if (!self.isAtEnd() and !self.check(.newline)) {
-            self.reportError(.E004);
-            return error.ExpectedNewline;
-        }
+        const body = try self.parseBodyUntilEnd();
+        try self.expectEndNewline();
 
         return .{
             .name = name_token.text,
-            .params = try params.toOwnedSlice(self.allocator),
+            .params = params,
             .return_type = return_type,
-            .body = try statements.toOwnedSlice(self.allocator),
+            .body = body,
         };
     }
 
@@ -1280,6 +1231,80 @@ pub const Parser = struct {
         return .{
             .name = name_token.text,
             .members = try members.toOwnedSlice(self.allocator),
+        };
+    }
+
+    fn parseInterfaceDecl(self: *Parser) ParseError!ast.InterfaceDecl {
+        // Check for optional 'export' before 'interface'
+        const is_export = self.check(.@"export");
+        if (is_export) _ = self.advance();
+
+        _ = try self.expect(.interface);
+        const name_token = try self.expect(.identifier);
+
+        // Parse optional generic params: uses TypeParam, ...
+        const generic_params = if (self.check(.uses)) blk: {
+            _ = self.advance();
+            break :blk try self.parseIdentifierList();
+        } else &[_][]const u8{};
+
+        // Parse optional extends: extends Interface1, Interface2, ...
+        const extends_list = if (self.check(.extends)) blk: {
+            _ = self.advance();
+            break :blk try self.parseIdentifierList();
+        } else &[_][]const u8{};
+
+        _ = try self.expect(.newline);
+
+        // Parse interface methods
+        var methods: std.ArrayListUnmanaged(ast.InterfaceMethod) = .empty;
+        errdefer methods.deinit(self.allocator);
+
+        while (!self.check(.end) and !self.isAtEnd()) {
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
+            try methods.append(self.allocator, try self.parseInterfaceMethod());
+        }
+
+        _ = try self.expect(.end);
+        _ = try self.expect(.string);
+        try self.expectEndNewline();
+
+        return .{
+            .name = name_token.text,
+            .is_export = is_export,
+            .generic_params = generic_params,
+            .extends = extends_list,
+            .methods = try methods.toOwnedSlice(self.allocator),
+        };
+    }
+
+    fn parseInterfaceMethod(self: *Parser) ParseError!ast.InterfaceMethod {
+        _ = try self.expect(.function);
+        const name_token = try self.expect(.identifier);
+        _ = try self.expect(.lparen);
+        const params = try self.parseParamList();
+        const return_type = try self.parseOptionalReturnType();
+        _ = try self.expect(.newline);
+
+        // Check if this has a default implementation (body before end/function)
+        self.skipNewlines();
+        const has_default_impl = !self.check(.end) and !self.check(.function);
+        const default_body: ?[]ast.Statement = if (has_default_impl) blk: {
+            const body = try self.parseBodyUntilEnd();
+            try self.expectEndNewline();
+            if (self.check(.newline)) _ = self.advance();
+            break :blk body;
+        } else null;
+
+        return .{
+            .name = name_token.text,
+            .params = params,
+            .return_type = return_type,
+            .has_default_impl = has_default_impl,
+            .default_body = default_body,
         };
     }
 };

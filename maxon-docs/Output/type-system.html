@@ -26,7 +26,9 @@
                     <li><a href="#enums">Enums</a></li>
                     <li><a href="#init-from-literal">Init From Literal</a></li>
                     <li><a href="#interfaces">Interfaces</a></li>
+                    <li><a href="#self-keyword">Self Keyword</a></li>
                     <li><a href="#structs">Structs</a></li>
+                    <li><a href="#type-methods">Type Methods</a></li>
                 </ul>
             </div>
             <div class="spec-section" id="arrays">
@@ -629,6 +631,39 @@ end 'main'
 <fieldset class="expected-output"><legend>Expected Output</legend><pre>630
 Exit Code: 0</pre></fieldset>
             </div>
+            <div class="spec-section" id="self-keyword">
+                <h2>Self Keyword</h2>
+<h3>The <code>self</code> Keyword</h3>
+<p>Inside instance methods, <code>self</code> refers to the current instance:</p>
+<pre><code class="language-text">type Counter
+    var count int
+
+    function increment()
+        self.count = self.count + 1
+    end 'increment'
+end 'Counter'
+</code></pre>
+<p>Field access can omit <code>self.</code> when unambiguous:</p>
+<pre><code class="language-text">type Counter
+    var count int
+
+    function increment()
+        count = count + 1
+    end 'increment'
+end 'Counter'
+</code></pre>
+<h3>The <code>Self</code> Type</h3>
+<p><code>Self</code> refers to the enclosing type, useful for method signatures:</p>
+<pre><code class="language-text">type Point
+    var x int
+    var y int
+
+    function origin() returns Self
+        return Point{x: 0, y: 0}
+    end 'origin'
+end 'Point'
+</code></pre>
+            </div>
             <div class="spec-section" id="structs">
                 <h2>Structs</h2>
 <p>Types define custom data types with named fields.</p>
@@ -664,6 +699,58 @@ p.x = 30   // OK: type is mutable, field is var
 <pre><code class="language-maxon">var c = Config{version: 1, count: 0}
 c.count = 5     // OK: field is var
 // c.version = 2   // ERROR: field is let
+</code></pre>
+            </div>
+            <div class="spec-section" id="type-methods">
+                <h2>Type Methods</h2>
+<p>Types can contain methods - functions that operate on type instances.</p>
+<h3>Instance Methods</h3>
+<p>Instance methods automatically receive <code>self</code> as the current instance:</p>
+<pre><code class="language-text">type Counter
+    var count int
+
+    function increment()
+        count = count + 1
+    end 'increment'
+
+    function get() returns int
+        return count
+    end 'get'
+end 'Counter'
+</code></pre>
+<p>Call methods using dot notation:</p>
+<pre><code class="language-text">var c = Counter{count: 0}
+c.increment()
+var value = c.get()
+</code></pre>
+<h3>Static Methods</h3>
+<p>Static methods don't have access to <code>self</code>:</p>
+<pre><code class="language-text">type Math
+    static function square(x int) returns int
+        return x * x
+    end 'square'
+end 'Math'
+
+var result = Math.square(5)  // 25
+</code></pre>
+<h3>Export Modifier</h3>
+<p>Use <code>export</code> to make methods visible outside the module:</p>
+<pre><code class="language-text">type PublicAPI
+    export function doSomething() returns int
+        return 42
+    end 'doSomething'
+end 'PublicAPI'
+</code></pre>
+<h3>Field Access in Methods</h3>
+<p>Methods can access fields directly without <code>self.</code> prefix:</p>
+<pre><code class="language-text">type Point
+    var x int
+    var y int
+
+    function magnitude() returns int
+        return x * x + y * y
+    end 'magnitude'
+end 'Point'
 </code></pre>
             </div>
         </main>
