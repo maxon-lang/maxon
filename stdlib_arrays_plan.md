@@ -184,65 +184,89 @@ After registering a type:
 
 ---
 
-## Files to Modify
+### Phase 8: Multi-file Compilation Infrastructure
 
-| File | Changes |
-|------|---------|
-| `1-lexer.zig` | Add keywords: uses, is, with, static, export, self, Self, interface, extends |
-| `ast.zig` | Add MethodDecl, InterfaceDecl, InterfaceConformance, extend TypeDecl |
-| `2-parser.zig` | parseTypeDecl with methods, parseInterfaceDecl, self/Self handling |
-| `4-ast_to_ir.zig` | Method tables, self handling, monomorphization, stdlib restriction |
+**Goal**: Compile stdlib before user code, merge IR modules.
 
----
+**Files**: `0-compiler.zig`
 
-## Implementation Order
+1. Add `compileMultiple(sources: []Source, ...)` function
+2. Each source produces an IR module
+3. Merge IR modules before codegen
+4. Stdlib path resolution (find `stdlib/` relative to executable)
 
-1. **Phase 1+2**: Type methods with self/Self (test with non-generic types)
-2. **Phase 4**: Method call resolution (test basic methods)
-3. **Phase 5**: Monomorphization (test generic Array)
-4. **Phase 3**: Interface parsing
-5. **Phase 6**: Stdlib-only builtins
-6. **Phase 7**: Interface conformance checking
+**Key changes**:
+```zig
+pub fn compileWithStdlib(user_source: []const u8, stdlib_dir: []const u8, ...) !void {
+    // 1. Compile stdlib/collections/array.maxon
+    const stdlib_ir = try runFrontend(stdlib_source, ...);
 
----
+    // 2. Compile user code
+    const user_ir = try runFrontend(user_source, ...);
 
-## Test Cases
+    // 3. Merge IR modules
+    const merged = try mergeModules(stdlib_ir, user_ir);
 
-### Phase 1-2: Basic Type with Methods
-```maxon
-type Counter
-    var count int
-    function increment()
-        count = count + 1
-    end 'increment'
-    function get() returns int
-        return count
-    end 'get'
-end 'Counter'
-
-function main() returns int
-    var c = Counter{count: 0}
-    c.increment()
-    return c.get()
-end 'main'
-// expects: 1
+    // 4. Codegen
+    ...
+}
 ```
 
-### Phase 5: Generic Array
-```maxon
-function main() returns int
-    var arr = Array of int
-    arr.push(42)
-    return arr.count()
-end 'main'
-// expects: 1
-```
+### Phase 9: Export Keyword
 
-### Phase 6: Stdlib Restriction
-```maxon
-// User code should fail:
-function main() returns int
-    var arr = Array of int
-    return __managed_array_len(arr.managed)  // ERROR: stdlib-only builtin
-end 'main'
-```
+**Goal**: Only exported symbols visible outside the module.
+
+**Files**: `2-parser.zig`, `ast.zig`, `4-ast_to_ir.zig`
+
+1. Parse `export` keyword on types and functions
+2. Add `is_exported: bool` to `TypeDecl`, `FunctionDecl`
+3. During IR generation, mark exported symbols
+4. When linking, only resolve to exported symbols from other modules
+
+
+### Phase 10: Static Functions
+
+**Goal**: `static function init(...)` - no implicit self.
+
+**Files**: `2-parser.zig`, `ast.zig`, `4-ast_to_ir.zig`
+
+1. Parse `static` keyword before `function` in type body
+2. Add `is_static: bool` to `MethodDecl`
+3. Static methods don't get implicit `self` parameter
+4. Call syntax: `TypeName.method()` or within type just `method()`
+
+### Phase 11: Interfaces (Basic)
+
+**Goal**: `is Collection with Element` - type conforms to interface.
+
+**Files**: `2-parser.zig`, `ast.zig`, `4-ast_to_ir.zig`
+
+1. Parse interface declarations: `interface Collection uses Element`
+2. Parse conformance: `type Array ... is Collection with Element`
+3. Method name syntax: `function Collection.count()` means this implements the interface method
+4. At compile time, verify all interface methods are implemented
+
+**Minimal interface support**:
+- Just validate method signatures match
+- No dynamic dispatch yet (all calls are static)
+
+### Phase 12: Internal/Opaque Types
+
+**Goal**: `_managedArray` - compiler-known internal type.
+
+**Files**: `2-parser.zig`, `4-ast_to_ir.zig`
+
+1. Types starting with `_` are internal
+2. `_managedArray` is specially recognized by compiler
+3. Maps to the 24-byte managed array struct
+
+### Phase 13: Wire Up Array Type
+
+**Goal**: `Array of T` uses stdlib Array type.
+
+**Files**: `4-ast_to_ir.zig`
+
+1. When seeing `Array of T`, look up `Array` in type_map (from stdlib)
+2. Instantiate generic with concrete type T
+3. Method calls resolve to stdlib methods
+4. Methods call `__managed_array_*` builtins

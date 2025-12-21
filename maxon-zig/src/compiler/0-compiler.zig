@@ -17,6 +17,13 @@ pub const CompileError = error{
     IrError,
     CodegenError,
     WriteError,
+    StdlibNotFound,
+};
+
+/// Represents a source file with its path and content
+pub const Source = struct {
+    path: []const u8,
+    content: []const u8,
 };
 
 /// Result of compilation with optional error info
@@ -144,6 +151,137 @@ fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]
     // 7 - Write PE executable
     pe.writePE(output_path, codegen_result.code, codegen_result.external_patches) catch {
         return error.WriteError;
+    };
+}
+
+// ============================================================================
+// Multi-file Compilation
+// ============================================================================
+
+/// Compile multiple source files into a single executable.
+/// Sources are compiled in order and their IR is merged.
+/// Later sources can reference functions/types from earlier sources.
+pub fn compileMultiple(
+    sources: []const Source,
+    output_path: []const u8,
+    options: CompileOptions,
+    allocator: std.mem.Allocator,
+    result: *CompileResult,
+) !void {
+    if (sources.len == 0) return;
+
+    // Compile first source
+    var merged = try runFrontend(sources[0].content, allocator, .{
+        .source_file = sources[0].path,
+        .result = result,
+    });
+    defer merged.deinit();
+
+    // Compile and merge remaining sources
+    for (sources[1..]) |source| {
+        var frontend = try runFrontend(source.content, allocator, .{
+            .source_file = source.path,
+            .result = result,
+        });
+        errdefer frontend.deinit();
+
+        // Merge into the combined module
+        try merged.ir_module.merge(&frontend.ir_module);
+        frontend.ir_module.deinit();
+    }
+
+    // Emit IR to file
+    try writeIrFile(merged.ir_module, output_path, allocator);
+
+    // Generate x86-64 code
+    debug.log("Generating x86-64 code from merged IR", .{});
+    const codegen_result = ir_codegen.generate(merged.ir_module, allocator, .{
+        .track_allocs = options.track_allocs,
+    }) catch |err| {
+        debug.log("IR codegen error: {}", .{err});
+        return error.CodegenError;
+    };
+    defer allocator.free(codegen_result.code);
+    defer allocator.free(codegen_result.external_patches);
+
+    // Write PE executable
+    pe.writePE(output_path, codegen_result.code, codegen_result.external_patches) catch {
+        return error.WriteError;
+    };
+}
+
+/// Compile user source with stdlib.
+/// Stdlib is compiled first, then user code, then merged.
+pub fn compileWithStdlib(
+    user_source: Source,
+    stdlib_sources: []const Source,
+    output_path: []const u8,
+    options: CompileOptions,
+    allocator: std.mem.Allocator,
+    result: *CompileResult,
+) !void {
+    // Build sources list: stdlib first, then user code
+    var all_sources = try allocator.alloc(Source, stdlib_sources.len + 1);
+    defer allocator.free(all_sources);
+
+    for (stdlib_sources, 0..) |src, i| {
+        all_sources[i] = src;
+    }
+    all_sources[stdlib_sources.len] = user_source;
+
+    return compileMultiple(all_sources, output_path, options, allocator, result);
+}
+
+/// Find stdlib directory relative to the executable.
+/// Returns the path to stdlib/ or error if not found.
+pub fn findStdlibPath(allocator: std.mem.Allocator) ![]const u8 {
+    // Get path to this executable
+    var exe_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe_path = std.fs.selfExePath(&exe_path_buf) catch return error.StdlibNotFound;
+
+    // Get directory containing executable
+    const exe_dir = std.fs.path.dirname(exe_path) orelse return error.StdlibNotFound;
+
+    // Try: exe_dir/../stdlib (for development layout)
+    const dev_path = try std.fs.path.join(allocator, &.{ exe_dir, "..", "stdlib" });
+    defer allocator.free(dev_path);
+
+    if (std.fs.cwd().statFile(dev_path)) |_| {
+        return try allocator.dupe(u8, dev_path);
+    } else |_| {}
+
+    // Try: exe_dir/stdlib (for installed layout)
+    const install_path = try std.fs.path.join(allocator, &.{ exe_dir, "stdlib" });
+    if (std.fs.cwd().statFile(install_path)) |_| {
+        return install_path;
+    } else |_| {
+        allocator.free(install_path);
+    }
+
+    return error.StdlibNotFound;
+}
+
+/// Load a stdlib module by name (e.g., "collections/array").
+/// Returns the source content or error if not found.
+pub fn loadStdlibModule(
+    stdlib_path: []const u8,
+    module_name: []const u8,
+    allocator: std.mem.Allocator,
+) !Source {
+    // Build full path: stdlib_path/module_name.maxon
+    const file_path = try std.fs.path.join(allocator, &.{ stdlib_path, module_name });
+    defer allocator.free(file_path);
+
+    const full_path = try std.fmt.allocPrint(allocator, "{s}.maxon", .{file_path});
+
+    const content = std.fs.cwd().readFileAlloc(allocator, full_path, 1024 * 1024) catch {
+        allocator.free(full_path);
+        return error.StdlibNotFound;
+    };
+
+    return Source{
+        .path = full_path,
+        .content = content,
     };
 }
 

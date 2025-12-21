@@ -439,11 +439,14 @@ pub const Function = struct {
 pub const Module = struct {
     functions: std.ArrayListUnmanaged(Function),
     allocator: std.mem.Allocator,
+    // Allocated strings that must be freed when module is deinitialized
+    allocated_strings: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Module {
         return .{
             .functions = .empty,
             .allocator = allocator,
+            .allocated_strings = .empty,
         };
     }
 
@@ -452,6 +455,17 @@ pub const Module = struct {
             func.deinit();
         }
         self.functions.deinit(self.allocator);
+
+        // Free allocated strings (e.g., mangled method names)
+        for (self.allocated_strings.items) |s| {
+            self.allocator.free(s);
+        }
+        self.allocated_strings.deinit(self.allocator);
+    }
+
+    /// Track an allocated string for cleanup when module is deinitialized
+    pub fn trackString(self: *Module, s: []const u8) !void {
+        try self.allocated_strings.append(self.allocator, s);
     }
 
     pub fn addFunction(self: *Module, name: []const u8, return_type: Type) !*Function {
@@ -495,6 +509,33 @@ pub const Module = struct {
         errdefer list.deinit(allocator);
         try self.print(list.writer(allocator));
         return list.toOwnedSlice(allocator);
+    }
+
+    /// Merge another module's functions into this module.
+    /// Functions from the other module are moved (not copied).
+    /// Duplicate function names are skipped (first definition wins).
+    pub fn merge(self: *Module, other: *Module) !void {
+        for (other.functions.items) |func| {
+            // Skip if we already have a function with this name
+            var exists = false;
+            for (self.functions.items) |existing| {
+                if (std.mem.eql(u8, existing.name, func.name)) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                try self.functions.append(self.allocator, func);
+            }
+        }
+        // Clear other's functions list without freeing items (they were moved)
+        other.functions.items.len = 0;
+
+        // Move allocated strings from other module to this one
+        for (other.allocated_strings.items) |s| {
+            try self.allocated_strings.append(self.allocator, s);
+        }
+        other.allocated_strings.items.len = 0;
     }
 };
 

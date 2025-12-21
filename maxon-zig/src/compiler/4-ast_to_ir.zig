@@ -601,8 +601,9 @@ pub const AstToIr = struct {
         self.current_type_name = type_name;
         defer self.current_type_name = saved_type;
 
-        // Generate mangled name
+        // Generate mangled name and track in module for cleanup
         const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
+        try self.module.trackString(mangled_name);
 
         // Determine return type
         var ret_type_name: ?[]const u8 = null;
@@ -671,8 +672,9 @@ pub const AstToIr = struct {
         self.current_type_name = type_name;
         defer self.current_type_name = saved_type;
 
-        // Generate mangled name
+        // Generate mangled name and track in module for cleanup
         const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
+        try self.module.trackString(mangled_name);
 
         // Determine return type (same as registerMethod)
         var uses_sret = false;
@@ -2099,7 +2101,9 @@ pub const AstToIr = struct {
         // Check if this is a struct type with methods
         if (base_typed.ty == .struct_type) {
             const type_name = base_typed.ty.struct_type;
+            // Generate mangled name and track in module for cleanup (used in IR)
             const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, mcall.method_name });
+            try self.module.trackString(mangled_name);
 
             // Check if method exists
             if (self.func_map.get(mangled_name)) |func_info| {
@@ -2221,7 +2225,9 @@ pub const AstToIr = struct {
         // Check if this is a struct type with methods
         if (base_typed.ty == .struct_type) {
             const type_name = base_typed.ty.struct_type;
+            // Generate mangled name and track in module for cleanup (used in IR)
             const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, mcall.method_name });
+            try self.module.trackString(mangled_name);
 
             // Check if method exists
             if (self.func_map.get(mangled_name)) |func_info| {
