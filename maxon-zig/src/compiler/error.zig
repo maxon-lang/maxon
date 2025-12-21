@@ -2,57 +2,51 @@ const std = @import("std");
 
 /// Error codes for the Maxon compiler
 pub const ErrorCode = enum {
-    E001, // Lexer error (invalid token)
-    E002, // Parser error (unexpected token)
-    E003, // Parser error (expected expression)
-    E004, // Parser error (expected newline)
-    E005, // Undefined variable
-    E006, // Unknown type
-    E007, // Unknown field
-    E008, // Use after move
-    E009, // Immutable assignment
-    E010, // Immutable move
-    E011, // Wrong argument count
-    E012, // Control flow error (break/continue outside loop)
-    E013, // Sized array requires var
-    E014, // Unused variable
+    E001,
+    E002,
+    E003,
+    E004,
+    E005,
+    E006,
+    E007,
+    E008,
+    E009,
+    E010,
+    E011,
+    E012,
+    E013,
+    E014,
+    E015,
+
+    const Info = struct {
+        code: []const u8,
+        message: []const u8,
+    };
+
+    const table = [_]Info{
+        .{ .code = "E001", .message = "invalid token" },
+        .{ .code = "E002", .message = "unexpected token" },
+        .{ .code = "E003", .message = "expected expression" },
+        .{ .code = "E004", .message = "expected newline" },
+        .{ .code = "E005", .message = "undefined variable" },
+        .{ .code = "E006", .message = "unknown type" },
+        .{ .code = "E007", .message = "unknown field" },
+        .{ .code = "E008", .message = "use after move" },
+        .{ .code = "E009", .message = "cannot assign to immutable variable" },
+        .{ .code = "E010", .message = "cannot move from immutable variable" },
+        .{ .code = "E011", .message = "wrong argument count" },
+        .{ .code = "E012", .message = "break/continue outside loop" },
+        .{ .code = "E013", .message = "sized arrays require 'var' declaration" },
+        .{ .code = "E014", .message = "unused variable" },
+        .{ .code = "E015", .message = "missing interface method" },
+    };
 
     pub fn format(self: ErrorCode) []const u8 {
-        return switch (self) {
-            .E001 => "E001",
-            .E002 => "E002",
-            .E003 => "E003",
-            .E004 => "E004",
-            .E005 => "E005",
-            .E006 => "E006",
-            .E007 => "E007",
-            .E008 => "E008",
-            .E009 => "E009",
-            .E010 => "E010",
-            .E011 => "E011",
-            .E012 => "E012",
-            .E013 => "E013",
-            .E014 => "E014",
-        };
+        return table[@intFromEnum(self)].code;
     }
 
     pub fn message(self: ErrorCode) []const u8 {
-        return switch (self) {
-            .E001 => "invalid token",
-            .E002 => "unexpected token",
-            .E003 => "expected expression",
-            .E004 => "expected newline",
-            .E005 => "undefined variable",
-            .E006 => "unknown type",
-            .E007 => "unknown field",
-            .E008 => "use after move",
-            .E009 => "cannot assign to immutable variable",
-            .E010 => "cannot move from immutable variable",
-            .E011 => "wrong argument count",
-            .E012 => "break/continue outside loop",
-            .E013 => "sized arrays require 'var' declaration",
-            .E014 => "unused variable",
-        };
+        return table[@intFromEnum(self)].message;
     }
 };
 

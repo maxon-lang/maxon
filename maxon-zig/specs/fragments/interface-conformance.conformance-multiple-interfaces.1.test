@@ -1,0 +1,62 @@
+// Test: interface-conformance.conformance-multiple-interfaces.1
+interface Readable
+    function read() returns int
+end 'Readable'
+
+interface Writable
+    function write(value int)
+end 'Writable'
+
+type Buffer is Readable, Writable
+    var data int
+
+    function read() returns int
+        return data
+    end 'read'
+
+    function write(value int)
+        data = value
+    end 'write'
+end 'Buffer'
+
+function main() returns int
+    var buf = Buffer{data: 0}
+    buf.write(42)
+    return buf.read()
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %buf = alloca.sized ptr 8
+    %tmp_fieldptr = getfieldptr ptr %buf 0
+    %tmp_const = const.i64 i64 0
+    store %tmp_fieldptr %tmp_const
+    %tmp_const.1 = const.i64 i64 42
+    call @Buffer$write(%buf, %tmp_const.1)
+    %tmp_call = call i64 @Buffer$read(%buf)
+    ret %tmp_call
+}
+
+function Buffer$read() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+function Buffer$write() -> void {
+entry:
+    %self = param ptr 0
+    %value = param i64 1
+    %value.1 = alloca ptr
+    store %value.1 %value
+    %tmp_load = load i64 %value.1
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    store %tmp_fieldptr %tmp_load
+    ret
+}
+
+---

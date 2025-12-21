@@ -198,6 +198,12 @@ const ConvertError = error{
 // AST to IR Converter
 // ============================================================================
 
+/// Interface info - stores method signatures for conformance checking
+const InterfaceInfo = struct {
+    name: []const u8,
+    methods: []const ast.InterfaceMethod,
+};
+
 pub const AstToIr = struct {
     allocator: std.mem.Allocator,
     module: ir.Module,
@@ -205,6 +211,7 @@ pub const AstToIr = struct {
     var_map: std.StringHashMapUnmanaged(VarInfo),
     type_map: std.StringHashMapUnmanaged(TypeInfo),
     func_map: std.StringHashMapUnmanaged(FuncInfo),
+    interface_map: std.StringHashMapUnmanaged(InterfaceInfo),
     current_decl_is_mutable: bool,
     mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
     current_line: usize,
@@ -236,6 +243,7 @@ pub const AstToIr = struct {
             .var_map = .{},
             .type_map = .{},
             .func_map = .{},
+            .interface_map = .{},
             .current_decl_is_mutable = false,
             .mutation_analyzer = mutation_analyzer,
             .current_line = 1,
@@ -299,6 +307,9 @@ pub const AstToIr = struct {
             self.allocator.free(entry.value_ptr.param_types);
         }
         self.func_map.deinit(self.allocator);
+
+        // Interface map doesn't own its data (references AST nodes)
+        self.interface_map.deinit(self.allocator);
     }
 
     // ------------------------------------------------------------------------
@@ -310,12 +321,12 @@ pub const AstToIr = struct {
         try self.type_map.put(self.allocator, "int", .{ .primitive = .i64 });
         try self.type_map.put(self.allocator, "float", .{ .primitive = .f64 });
 
+        // Register interfaces first (needed for conformance checking)
+        for (program.interfaces) |iface| try self.registerInterface(iface);
+
         // Register declarations
         for (program.types) |type_decl| try self.registerType(type_decl);
         for (program.enums) |enum_decl| try self.registerEnum(enum_decl);
-        // Interfaces are parsed but not yet used for IR generation
-        // (conformance checking is a separate phase)
-        _ = program.interfaces;
         for (program.functions) |fn_decl| try self.registerFunction(fn_decl);
 
         // Register methods from types
@@ -323,6 +334,11 @@ pub const AstToIr = struct {
             for (type_decl.methods) |method| {
                 try self.registerMethod(type_decl.name, method);
             }
+        }
+
+        // Check interface conformance for all types
+        for (program.types) |type_decl| {
+            try self.checkInterfaceConformance(type_decl);
         }
 
         // Convert functions
@@ -435,6 +451,61 @@ pub const AstToIr = struct {
             .enum_type = .{ .name = enum_decl.name, .members = members },
         });
         debug.astToIr("Registered enum '{s}' with {d} members", .{ enum_decl.name, enum_decl.members.len });
+    }
+
+    fn registerInterface(self: *AstToIr, iface: ast.InterfaceDecl) !void {
+        try self.interface_map.put(self.allocator, iface.name, .{
+            .name = iface.name,
+            .methods = iface.methods,
+        });
+        debug.astToIr("Registered interface '{s}' with {d} methods", .{ iface.name, iface.methods.len });
+    }
+
+    fn checkInterfaceConformance(self: *AstToIr, type_decl: ast.TypeDecl) !void {
+        for (type_decl.conformances) |conformance| {
+            const iface = self.interface_map.get(conformance.interface_name) orelse {
+                // Unknown interface - report error
+                self.reportErrorWithDetails(.E006, conformance.interface_name);
+                return error.UnknownType;
+            };
+
+            // Check that all required interface methods are implemented
+            for (iface.methods) |iface_method| {
+                // Skip methods with default implementations (they're optional to override)
+                if (iface_method.has_default_impl) continue;
+
+                // Look for matching method in type
+                var found = false;
+                for (type_decl.methods) |type_method| {
+                    if (std.mem.eql(u8, type_method.name, iface_method.name)) {
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found) {
+                    // Missing required method - report detailed error
+                    const msg = std.fmt.allocPrint(self.allocator, "type '{s}' does not implement interface '{s}': missing method '{s}'", .{
+                        type_decl.name,
+                        conformance.interface_name,
+                        iface_method.name,
+                    }) catch {
+                        self.reportError(.E015);
+                        return error.SemanticError;
+                    };
+                    self.last_error = .{
+                        .code = .E015,
+                        .message = msg,
+                        .location = .{
+                            .file = self.source_file,
+                            .line = 1, // Type declaration line not tracked
+                            .column = 1,
+                        },
+                    };
+                    return error.SemanticError;
+                }
+            }
+        }
     }
 
     fn registerFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {

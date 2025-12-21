@@ -1,0 +1,49 @@
+// Test: interface-conformance.conformance-extra-methods-ok.1
+interface Simple
+    function getValue() returns int
+end 'Simple'
+
+type Extended is Simple
+    var value int
+
+    function getValue() returns int
+        return value
+    end 'getValue'
+
+    function extraMethod() returns int
+        return 100
+    end 'extraMethod'
+end 'Extended'
+
+function main() returns int
+    var e = Extended{value: 42}
+    return e.getValue()
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %e = alloca.sized ptr 8
+    %tmp_fieldptr = getfieldptr ptr %e 0
+    %tmp_const = const.i64 i64 42
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call i64 @Extended$getValue(%e)
+    ret %tmp_call
+}
+
+function Extended$getValue() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+function Extended$extraMethod() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 100
+    ret %tmp_const
+}
+
+---
