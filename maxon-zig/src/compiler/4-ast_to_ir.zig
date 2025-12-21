@@ -2254,44 +2254,80 @@ pub const AstToIr = struct {
         try self.func().emitStore(size_var_info.ptr, new_size);
     }
 
+    /// Emit a method call (static or instance)
+    /// self_value is null for static methods, otherwise it's the instance pointer
+    fn emitMethodCall(self: *AstToIr, type_name: []const u8, method_name: []const u8, arg_exprs: []const ast.Expression, self_value: ?ir.Value) ConvertError!TypedValue {
+        const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method_name });
+        try self.module.trackString(mangled_name);
+
+        const func_info = self.func_map.get(mangled_name) orelse {
+            debug.astToIr("error: unknown method '{s}' on type '{s}'", .{ method_name, type_name });
+            return error.SemanticError;
+        };
+
+        // Determine argument layout
+        const returns_struct = func_info.return_type_name != null;
+        const has_self = self_value != null;
+        const sret_offset: usize = if (returns_struct) 1 else 0;
+        const self_offset: usize = if (has_self) 1 else 0;
+        const num_args = arg_exprs.len + sret_offset + self_offset;
+
+        const args = try self.allocator.alloc(ir.Value, num_args);
+        var arg_idx: usize = 0;
+
+        // Sret buffer as first arg if returning struct
+        var sret_buffer: ?ir.Value = null;
+        if (returns_struct) {
+            const struct_info = try self.lookupStructInfo(func_info.return_type_name.?);
+            sret_buffer = try self.func().emitAllocaSized(struct_info.size);
+            args[arg_idx] = sret_buffer.?;
+            arg_idx += 1;
+        }
+
+        // Self pointer for instance methods
+        if (self_value) |sv| {
+            args[arg_idx] = sv;
+            arg_idx += 1;
+        }
+
+        // Explicit arguments
+        for (arg_exprs) |arg_expr| {
+            const arg = try self.convertExpression(arg_expr);
+            args[arg_idx] = arg.value;
+            arg_idx += 1;
+        }
+
+        const result = try self.func().emitCall(mangled_name, args, func_info.return_type);
+
+        // Return appropriate value
+        if (sret_buffer) |buf| {
+            return .{ .value = buf, .ty = .{ .struct_type = func_info.return_type_name.? } };
+        }
+        const ret_ty: ValueType = if (func_info.return_value_type) |vt|
+            vt
+        else if (func_info.return_type_name) |name|
+            .{ .struct_type = name }
+        else
+            .{ .primitive = func_info.return_type };
+
+        return .{ .value = result orelse try self.func().emitConstI64(0), .ty = ret_ty };
+    }
+
     fn convertMethodCallExpr(self: *AstToIr, mcall: ast.MethodCallExpr) ConvertError!TypedValue {
-        // Convert base and get its type
+        // Check if base is a type name (static method call: TypeName.method())
+        if (mcall.base.* == .identifier) {
+            const base_name = mcall.base.identifier;
+            if (self.type_map.contains(base_name)) {
+                return self.emitMethodCall(base_name, mcall.method_name, mcall.args, null);
+            }
+        }
+
+        // Convert base and get its type (instance method call)
         const base_typed = try self.convertExpression(mcall.base.*);
 
         // Check if this is a struct type with methods
         if (base_typed.ty == .struct_type) {
-            const type_name = base_typed.ty.struct_type;
-            // Generate mangled name and track in module for cleanup (used in IR)
-            const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, mcall.method_name });
-            try self.module.trackString(mangled_name);
-
-            // Check if method exists
-            if (self.func_map.get(mangled_name)) |func_info| {
-                // Build args: self + explicit args
-                const num_args = mcall.args.len + 1;
-                const args = try self.allocator.alloc(ir.Value, num_args);
-                args[0] = base_typed.value;
-
-                for (mcall.args, 0..) |arg_expr, i| {
-                    const arg = try self.convertExpression(arg_expr);
-                    args[i + 1] = arg.value;
-                }
-
-                const result = try self.func().emitCall(mangled_name, args, func_info.return_type);
-
-                // Determine return value type
-                const ret_ty: ValueType = if (func_info.return_value_type) |vt|
-                    vt
-                else if (func_info.return_type_name) |name|
-                    .{ .struct_type = name }
-                else
-                    .{ .primitive = func_info.return_type };
-
-                return .{
-                    .value = result orelse try self.func().emitConstI64(0), // Void methods return dummy
-                    .ty = ret_ty,
-                };
-            }
+            return self.emitMethodCall(base_typed.ty.struct_type, mcall.method_name, mcall.args, base_typed.value);
         }
 
         // Fall back to array methods

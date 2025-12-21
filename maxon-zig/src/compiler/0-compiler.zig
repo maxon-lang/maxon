@@ -346,6 +346,16 @@ fn writeIrFile(ir_module: ir.Module, output_path: []const u8, allocator: std.mem
 fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
     for (program.types) |type_decl| {
         allocator.free(type_decl.fields);
+        // Free methods and their contents
+        for (type_decl.methods) |method| {
+            allocator.free(method.params);
+            for (method.body) |stmt| {
+                freeStatementArgs(stmt, allocator);
+            }
+            allocator.free(method.body);
+        }
+        allocator.free(type_decl.methods);
+        allocator.free(type_decl.conformances);
     }
     allocator.free(program.types);
 
