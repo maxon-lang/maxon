@@ -208,6 +208,7 @@ pub const Expression = union(enum) {
     float_lit: f64,
     bool_lit: bool,
     nil_lit,
+    self_expr, // reference to current instance in methods
     identifier: []const u8,
     binary: BinaryExpr,
     compare: CompareExpr,

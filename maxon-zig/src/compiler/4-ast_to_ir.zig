@@ -219,6 +219,10 @@ pub const AstToIr = struct {
     loop_cond_block: ?u32 = null,
     // Current function name (for mutation analysis lookup)
     current_func_name: ?[]const u8 = null,
+    // Method context: current type name when converting methods
+    current_type_name: ?[]const u8 = null,
+    // Self pointer value when inside a method
+    self_ptr: ?ir.Value = null,
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -242,6 +246,8 @@ pub const AstToIr = struct {
             .loop_end_block = null,
             .loop_cond_block = null,
             .current_func_name = null,
+            .current_type_name = null,
+            .self_ptr = null,
         };
     }
 
@@ -309,8 +315,22 @@ pub const AstToIr = struct {
         for (program.enums) |enum_decl| try self.registerEnum(enum_decl);
         for (program.functions) |fn_decl| try self.registerFunction(fn_decl);
 
+        // Register methods from types
+        for (program.types) |type_decl| {
+            for (type_decl.methods) |method| {
+                try self.registerMethod(type_decl.name, method);
+            }
+        }
+
         // Convert functions
         for (program.functions) |fn_decl| try self.convertFunction(fn_decl);
+
+        // Convert methods from types
+        for (program.types) |type_decl| {
+            for (type_decl.methods) |method| {
+                try self.convertMethod(type_decl.name, method);
+            }
+        }
 
         // Transfer ownership of module
         const module = self.module;
@@ -490,6 +510,198 @@ pub const AstToIr = struct {
                 } };
             },
         }
+    }
+
+    /// Resolve type name, handling 'Self' substitution
+    fn resolveTypeName(self: *AstToIr, type_name: []const u8) []const u8 {
+        if (std.mem.eql(u8, type_name, "Self")) {
+            return self.current_type_name orelse type_name;
+        }
+        return type_name;
+    }
+
+    /// Register a method as a function with mangled name: TypeName$methodName
+    fn registerMethod(self: *AstToIr, type_name: []const u8, method: ast.MethodDecl) !void {
+        // Save current type context for Self resolution
+        const saved_type = self.current_type_name;
+        self.current_type_name = type_name;
+        defer self.current_type_name = saved_type;
+
+        // Generate mangled name
+        const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
+
+        // Determine return type
+        var ret_type_name: ?[]const u8 = null;
+        var ret_value_type: ?ValueType = null;
+        const ret_type: ir.Type = if (method.return_type) |rt| blk: {
+            switch (rt) {
+                .simple => |name| {
+                    const resolved = self.resolveTypeName(name);
+                    const type_info = self.type_map.get(resolved) orelse return error.UnknownType;
+                    if (type_info.isStruct()) ret_type_name = resolved;
+                    break :blk type_info.irType();
+                },
+                .array => |arr| {
+                    const elem_type = try self.lookupIrType(arr.element_type);
+                    ret_value_type = .{
+                        .array_type = .{
+                            .element_type = elem_type,
+                            .size = if (arr.size) |s| @intCast(s) else null,
+                            .storage = .heap,
+                        },
+                    };
+                    break :blk .ptr;
+                },
+                .optional => |wrapped| {
+                    const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
+                    ret_value_type = .{
+                        .optional_type = .{
+                            .wrapped = wrapped_value_type.toPrimitiveType(),
+                        },
+                    };
+                    break :blk .ptr;
+                },
+            }
+        } else .void;
+
+        // Count params: +1 for implicit self if not static
+        const extra_params: usize = if (method.is_static) 0 else 1;
+        var param_types = try self.allocator.alloc(ParamType, method.params.len + extra_params);
+
+        // First param is self (pointer to type instance) for instance methods
+        if (!method.is_static) {
+            param_types[0] = .{ .ty = .{ .struct_type = type_name } };
+        }
+
+        // Register explicit params
+        for (method.params, 0..) |param, i| {
+            param_types[i + extra_params] = .{
+                .ty = try self.typeExprToValueType(param.type_expr),
+            };
+        }
+
+        try self.func_map.put(self.allocator, mangled_name, .{
+            .return_type = ret_type,
+            .return_type_name = ret_type_name,
+            .return_value_type = ret_value_type,
+            .param_types = param_types,
+        });
+
+        debug.astToIr("Registered method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, ret_type.format() });
+    }
+
+    /// Convert a method to IR
+    fn convertMethod(self: *AstToIr, type_name: []const u8, method: ast.MethodDecl) !void {
+        // Save current type context
+        const saved_type = self.current_type_name;
+        self.current_type_name = type_name;
+        defer self.current_type_name = saved_type;
+
+        // Generate mangled name
+        const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
+
+        // Determine return type (same as registerMethod)
+        var uses_sret = false;
+        var sret_struct_size: i32 = 0;
+        if (method.return_type) |rt| {
+            switch (rt) {
+                .simple => |name| {
+                    const resolved = self.resolveTypeName(name);
+                    if (self.type_map.get(resolved)) |type_info| {
+                        if (type_info == .struct_type) {
+                            uses_sret = true;
+                            sret_struct_size = type_info.struct_type.size;
+                        }
+                    }
+                },
+                .array, .optional => {},
+            }
+        }
+
+        const ret_type: ir.Type = if (method.return_type) |rt| blk: {
+            switch (rt) {
+                .simple => |name| {
+                    const resolved = self.resolveTypeName(name);
+                    break :blk try self.lookupIrType(resolved);
+                },
+                .array => break :blk .ptr,
+                .optional => break :blk .ptr,
+            }
+        } else .void;
+
+        const ir_func = try self.module.addFunction(mangled_name, ret_type);
+        self.current_func = ir_func;
+        self.current_func_name = mangled_name;
+        self.var_map.clearRetainingCapacity();
+        _ = try ir_func.addBlock("entry");
+
+        // Reset sret state
+        self.sret_ptr = null;
+        self.sret_size = 0;
+        self.self_ptr = null;
+
+        // Parameter offset for sret
+        var param_offset: i32 = 0;
+        if (uses_sret) {
+            self.sret_ptr = try ir_func.emitParam(0, .ptr);
+            self.sret_size = sret_struct_size;
+            param_offset = 1;
+        }
+
+        // Register implicit self parameter for instance methods
+        if (!method.is_static) {
+            const self_val = try ir_func.emitParam(param_offset, .ptr);
+            try ir_func.setValueName(self_val, "self");
+            self.self_ptr = self_val;
+
+            // Register self as a variable for explicit self.field access
+            try self.var_map.put(self.allocator, "self", VarInfo.init(
+                self_val,
+                .{ .struct_type = type_name },
+                false, // self is immutable
+                false,
+            ));
+
+            param_offset += 1;
+        }
+
+        // Register explicit parameters
+        for (method.params, 0..) |param, i| {
+            try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
+        }
+
+        // Convert body
+        for (method.body) |stmt| {
+            try self.convertStatement(stmt);
+        }
+
+        // For void methods, add implicit return
+        if (ret_type == .void) {
+            const block = self.func().currentBlock() orelse return;
+            const needs_implicit_ret = block.instructions.items.len == 0 or
+                block.instructions.items[block.instructions.items.len - 1].op != .ret;
+            if (needs_implicit_ret) {
+                try self.func().emitRet(null);
+            }
+        }
+
+        // Skip unused variable check for 'self' - it's always implicitly used
+        if (self.var_map.getPtr("self")) |self_info| {
+            self_info.used = true;
+        }
+
+        // Check for unused variables
+        var iter = self.var_map.iterator();
+        while (iter.next()) |entry| {
+            if (!entry.value_ptr.used) {
+                debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
+                self.reportErrorWithDetails(.E014, entry.key_ptr.*);
+                return error.UnusedVariable;
+            }
+        }
+
+        // Clear method context
+        self.self_ptr = null;
     }
 
     // ------------------------------------------------------------------------
@@ -772,42 +984,86 @@ pub const AstToIr = struct {
     }
 
     fn convertAssignment(self: *AstToIr, assign: ast.AssignStmt) ConvertError!void {
-        const var_info = self.var_map.getPtr(assign.target) orelse {
-            debug.astToIr("error: undefined variable '{s}'\n", .{assign.target});
-            self.reportError(.E005);
-            return error.UndefinedVariable;
-        };
+        // First try as a regular variable
+        if (self.var_map.getPtr(assign.target)) |var_info| {
+            if (!var_info.is_mutable) {
+                debug.astToIr("cannot assign to immutable variable '{s}'\n", .{assign.target});
+                self.reportError(.E009);
+                return error.ImmutableAssign;
+            }
 
-        if (!var_info.is_mutable) {
-            debug.astToIr("cannot assign to immutable variable '{s}'\n", .{assign.target});
-            self.reportError(.E009);
-            return error.ImmutableAssign;
+            var_info.used = true;
+
+            // For heap arrays, free old memory before evaluating RHS (to get correct alloc order)
+            if (var_info.ty == .array_type) {
+                const arr_info = var_info.ty.array_type;
+                if (arr_info.storage == .heap and var_info.state != .moved) {
+                    const old_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                    try self.func().emitHeapFree(old_ptr);
+                }
+            }
+
+            const value_typed = try self.convertExpression(assign.value);
+
+            const is_reference = var_info.ty == .struct_type or var_info.ty == .array_type or var_info.ty == .optional_type;
+            if (is_reference and !var_info.uses_slot) {
+                var_info.ptr = value_typed.value;
+            } else {
+                try self.func().emitStore(var_info.ptr, value_typed.value);
+            }
+            if (is_reference) {
+                var_info.ty = value_typed.ty;
+            }
+
+            var_info.resetOwnership();
+            return;
         }
 
-        var_info.used = true;
+        // If inside a method, check if target is a field (implicit self)
+        if (self.self_ptr != null and self.current_type_name != null) {
+            const type_name = self.current_type_name.?;
+            if (self.type_map.get(type_name)) |type_info| {
+                if (type_info == .struct_type) {
+                    const struct_info = type_info.struct_type;
+                    for (struct_info.fields) |field| {
+                        if (std.mem.eql(u8, field.name, assign.target)) {
+                            // Check if field is mutable
+                            if (!self.isFieldMutable(type_name, assign.target)) {
+                                debug.astToIr("cannot assign to immutable field '{s}'\n", .{assign.target});
+                                self.reportError(.E009);
+                                return error.ImmutableAssign;
+                            }
 
-        // For heap arrays, free old memory before evaluating RHS (to get correct alloc order)
-        if (var_info.ty == .array_type) {
-            const arr_info = var_info.ty.array_type;
-            if (arr_info.storage == .heap and var_info.state != .moved) {
-                const old_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                try self.func().emitHeapFree(old_ptr);
+                            // Mark self as used
+                            if (self.var_map.getPtr("self")) |info| {
+                                info.used = true;
+                            }
+
+                            const value_typed = try self.convertExpression(assign.value);
+                            const self_val = self.self_ptr.?;
+                            const field_ptr = try self.func().emitGetFieldPtr(self_val, field.offset);
+                            try self.func().emitStore(field_ptr, value_typed.value);
+                            return;
+                        }
+                    }
+                }
             }
         }
 
-        const value_typed = try self.convertExpression(assign.value);
+        // Variable not found
+        debug.astToIr("error: undefined variable '{s}'\n", .{assign.target});
+        self.reportError(.E005);
+        return error.UndefinedVariable;
+    }
 
-        const is_reference = var_info.ty == .struct_type or var_info.ty == .array_type or var_info.ty == .optional_type;
-        if (is_reference and !var_info.uses_slot) {
-            var_info.ptr = value_typed.value;
-        } else {
-            try self.func().emitStore(var_info.ptr, value_typed.value);
-        }
-        if (is_reference) {
-            var_info.ty = value_typed.ty;
-        }
-
-        var_info.resetOwnership();
+    /// Check if a field is mutable in a type declaration
+    fn isFieldMutable(self: *AstToIr, type_name: []const u8, field_name: []const u8) bool {
+        _ = self;
+        _ = type_name;
+        _ = field_name;
+        // For now, assume all fields are mutable (var fields)
+        // TODO: Track field mutability in FieldInfo
+        return true;
     }
 
     fn convertFieldAssign(self: *AstToIr, assign: ast.FieldAssign) ConvertError!void {
@@ -1180,7 +1436,8 @@ pub const AstToIr = struct {
             .float_lit => |v| .{ .value = try self.func().emitConstF64(v), .ty = .{ .primitive = .f64 } },
             .bool_lit => |v| .{ .value = try self.func().emitConstI64(if (v) 1 else 0), .ty = .{ .primitive = .i64 } },
             .nil_lit => self.createNilOptional(.i64),
-            .identifier => |name| self.convertIdentifier(name),
+            .self_expr => self.convertSelfExpr(),
+            .identifier => |name| self.convertIdentifierOrField(name),
             .binary => |bin| self.convertBinary(bin),
             .compare => |cmp| self.convertCompare(cmp),
             .call => |call| self.convertCall(call),
@@ -1191,6 +1448,65 @@ pub const AstToIr = struct {
             .sized_array => |sized| self.convertSizedArray(sized),
             .method_call => |mcall| self.convertMethodCallExpr(mcall),
         };
+    }
+
+    /// Convert 'self' expression - reference to current instance
+    fn convertSelfExpr(self: *AstToIr) ConvertError!TypedValue {
+        const self_val = self.self_ptr orelse {
+            self.reportError(.E005);
+            return error.UndefinedVariable;
+        };
+        const type_name = self.current_type_name orelse {
+            self.reportError(.E005);
+            return error.UndefinedVariable;
+        };
+        // Mark self as used
+        if (self.var_map.getPtr("self")) |info| {
+            info.used = true;
+        }
+        return .{ .value = self_val, .ty = .{ .struct_type = type_name } };
+    }
+
+    /// Convert identifier, with implicit self field resolution for methods
+    fn convertIdentifierOrField(self: *AstToIr, name: []const u8) ConvertError!TypedValue {
+        // First try to find it as a regular variable
+        if (self.var_map.contains(name)) {
+            return self.convertIdentifier(name);
+        }
+
+        // If inside a method, check if it's a field of the current type (implicit self)
+        if (self.self_ptr != null and self.current_type_name != null) {
+            const type_name = self.current_type_name.?;
+            if (self.type_map.get(type_name)) |type_info| {
+                if (type_info == .struct_type) {
+                    const struct_info = type_info.struct_type;
+                    // Check if name matches a field
+                    for (struct_info.fields) |field| {
+                        if (std.mem.eql(u8, field.name, name)) {
+                            // It's a field - access via self
+                            const self_val = self.self_ptr.?;
+                            const field_ptr = try self.func().emitGetFieldPtr(self_val, field.offset);
+
+                            // Mark self as used
+                            if (self.var_map.getPtr("self")) |info| {
+                                info.used = true;
+                            }
+
+                            // Struct fields are embedded; others need to be loaded
+                            const value = if (field.value_type == .struct_type)
+                                field_ptr
+                            else
+                                try self.func().emitLoad(field_ptr, field.value_type.toPrimitiveType());
+
+                            return .{ .value = value, .ty = field.value_type };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fall back to original identifier behavior (will produce error for undefined)
+        return self.convertIdentifier(name);
     }
 
     /// Create a "some" optional from a value
@@ -1703,7 +2019,32 @@ pub const AstToIr = struct {
     }
 
     fn convertMethodCall(self: *AstToIr, mcall: ast.MethodCallExpr) ConvertError!void {
-        // Get the base expression (the array)
+        // Convert base and get its type
+        const base_typed = try self.convertExpression(mcall.base.*);
+
+        // Check if this is a struct type with methods
+        if (base_typed.ty == .struct_type) {
+            const type_name = base_typed.ty.struct_type;
+            const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, mcall.method_name });
+
+            // Check if method exists
+            if (self.func_map.get(mangled_name)) |func_info| {
+                // Build args: self + explicit args
+                const num_args = mcall.args.len + 1;
+                const args = try self.allocator.alloc(ir.Value, num_args);
+                args[0] = base_typed.value;
+
+                for (mcall.args, 0..) |arg_expr, i| {
+                    const arg = try self.convertExpression(arg_expr);
+                    args[i + 1] = arg.value;
+                }
+
+                _ = try self.func().emitCall(mangled_name, args, func_info.return_type);
+                return;
+            }
+        }
+
+        // Fall back to array methods
         const base_name = switch (mcall.base.*) {
             .identifier => |name| name,
             else => {
@@ -1800,7 +2141,44 @@ pub const AstToIr = struct {
     }
 
     fn convertMethodCallExpr(self: *AstToIr, mcall: ast.MethodCallExpr) ConvertError!TypedValue {
-        // Get the base expression (the array)
+        // Convert base and get its type
+        const base_typed = try self.convertExpression(mcall.base.*);
+
+        // Check if this is a struct type with methods
+        if (base_typed.ty == .struct_type) {
+            const type_name = base_typed.ty.struct_type;
+            const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, mcall.method_name });
+
+            // Check if method exists
+            if (self.func_map.get(mangled_name)) |func_info| {
+                // Build args: self + explicit args
+                const num_args = mcall.args.len + 1;
+                const args = try self.allocator.alloc(ir.Value, num_args);
+                args[0] = base_typed.value;
+
+                for (mcall.args, 0..) |arg_expr, i| {
+                    const arg = try self.convertExpression(arg_expr);
+                    args[i + 1] = arg.value;
+                }
+
+                const result = try self.func().emitCall(mangled_name, args, func_info.return_type);
+
+                // Determine return value type
+                const ret_ty: ValueType = if (func_info.return_value_type) |vt|
+                    vt
+                else if (func_info.return_type_name) |name|
+                    .{ .struct_type = name }
+                else
+                    .{ .primitive = func_info.return_type };
+
+                return .{
+                    .value = result orelse try self.func().emitConstI64(0), // Void methods return dummy
+                    .ty = ret_ty,
+                };
+            }
+        }
+
+        // Fall back to array methods
         const base_name = switch (mcall.base.*) {
             .identifier => |name| name,
             else => {

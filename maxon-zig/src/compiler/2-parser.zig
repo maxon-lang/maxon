@@ -393,6 +393,9 @@ pub const Parser = struct {
         if (self.check(.float)) {
             return self.advance().text;
         }
+        if (self.check(.Self)) {
+            return self.advance().text;
+        }
         if (self.check(.identifier)) {
             return self.advance().text;
         }
@@ -554,8 +557,8 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
             return .{ .continue_stmt = .{} };
         }
-        // Check for assignment, index assignment, or call statement: identifier...
-        if (self.check(.identifier)) {
+        // Check for assignment, index assignment, or call statement: identifier or self...
+        if (self.check(.identifier) or self.check(.self)) {
             const start_pos = self.pos;
             // Try to parse as expression
             const expr = try self.parseExpression() orelse {
@@ -978,6 +981,11 @@ pub const Parser = struct {
         if (self.check(.nil)) {
             _ = self.advance();
             return try self.parsePostfix(.nil_lit);
+        }
+        // Self expression (instance reference in methods)
+        if (self.check(.self)) {
+            _ = self.advance();
+            return try self.parsePostfix(.self_expr);
         }
         // Array literal: [expr, expr, ...]
         if (self.check(.lbracket)) {

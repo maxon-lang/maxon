@@ -1,0 +1,63 @@
+// Test: self-keyword.self-with-params.1
+type Accumulator
+    var total int
+
+    function add(value int)
+        self.total = self.total + value
+    end 'add'
+
+    function getTotal() returns int
+        return self.total
+    end 'getTotal'
+end 'Accumulator'
+
+function main() returns int
+    var acc = Accumulator{total: 0}
+    acc.add(10)
+    acc.add(20)
+    acc.add(12)
+    return acc.getTotal()
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %acc = alloca.sized ptr 8
+    %tmp_fieldptr = getfieldptr ptr %acc 0
+    %tmp_const = const.i64 i64 0
+    store %tmp_fieldptr %tmp_const
+    %tmp_const.1 = const.i64 i64 10
+    call @Accumulator$add(%acc, %tmp_const.1)
+    %tmp_const.2 = const.i64 i64 20
+    call @Accumulator$add(%acc, %tmp_const.2)
+    %tmp_const.3 = const.i64 i64 12
+    call @Accumulator$add(%acc, %tmp_const.3)
+    %tmp_call = call i64 @Accumulator$getTotal(%acc)
+    ret %tmp_call
+}
+
+function Accumulator$add() -> void {
+entry:
+    %self = param ptr 0
+    %value = param i64 1
+    %value.1 = alloca ptr
+    store %value.1 %value
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %tmp_load.1 = load i64 %value.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    store %tmp_fieldptr %tmp_add
+    ret
+}
+
+function Accumulator$getTotal() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+---

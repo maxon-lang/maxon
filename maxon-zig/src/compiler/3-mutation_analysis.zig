@@ -149,6 +149,8 @@ pub const MutationAnalyzer = struct {
                 // Method call like arr.push(x) mutates the base
                 self.checkExpressionForParamMutation(mcall.base.*, param_indices, mutated);
             },
+            // self_expr - treat like identifier but self cannot be mutated as a whole
+            .self_expr => {},
             // integer, float_lit, nil_lit, binary, compare, call, struct_init, array_literal, sized_array:
             // These cannot be mutation targets (only identifier, field_access, index can)
             .integer, .float_lit, .bool_lit, .nil_lit, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},

@@ -324,7 +324,7 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
             }
             allocator.free(mcall.args);
         },
-        // integer, float_lit, bool_lit, nil_lit, identifier: no nested allocations to free
-        .integer, .float_lit, .bool_lit, .nil_lit, .identifier => {},
+        // integer, float_lit, bool_lit, nil_lit, self_expr, identifier: no nested allocations to free
+        .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier => {},
     }
 }
