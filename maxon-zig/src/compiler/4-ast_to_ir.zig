@@ -561,8 +561,9 @@ pub const AstToIr = struct {
 
         for (type_decl.fields, 0..) |field, i| {
             const value_type: ValueType = switch (field.type_expr) {
-                .simple => |type_name| blk: {
-                    const resolved = self.resolveTypeName(type_name);
+                .simple, .generic => blk: {
+                    const base_name = typeExprBaseTypeName(field.type_expr).?;
+                    const resolved = self.resolveTypeName(base_name);
                     const field_type_info = self.type_map.get(resolved) orelse {
                         std.debug.print("[AST->IR] registerType field '{s}': unknown type '{s}'\n", .{ field.name, resolved });
                         return error.UnknownType;
@@ -578,19 +579,6 @@ pub const AstToIr = struct {
                     .size = if (arr.size) |s| @intCast(s) else null,
                     .storage = .stack,
                 } },
-                .generic => |gen| blk: {
-                    // Generic types like Array of int are struct types
-                    const resolved = self.resolveTypeName(gen.base_type);
-                    const field_type_info = self.type_map.get(resolved) orelse {
-                        std.debug.print("[AST->IR] registerType field '{s}': unknown generic type '{s}'\n", .{ field.name, resolved });
-                        return error.UnknownType;
-                    };
-                    break :blk switch (field_type_info) {
-                        .struct_type => .{ .struct_type = resolved },
-                        .primitive => |p| .{ .primitive = p },
-                        .enum_type => .{ .enum_type = resolved },
-                    };
-                },
                 .optional => |wrapped| blk: {
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
                     break :blk .{ .optional_type = .{
@@ -764,12 +752,13 @@ pub const AstToIr = struct {
         var ret_value_type: ?ValueType = null;
         const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
             switch (rt) {
-                .simple => |type_name| {
-                    const type_info = self.type_map.get(type_name) orelse {
-                        std.debug.print("[AST->IR] registerFunction '{s}': unknown return type '{s}'\n", .{ decl.name, type_name });
+                .simple, .generic => {
+                    const base_name = typeExprBaseTypeName(rt).?;
+                    const type_info = self.type_map.get(base_name) orelse {
+                        std.debug.print("[AST->IR] registerFunction '{s}': unknown return type '{s}'\n", .{ decl.name, base_name });
                         return error.UnknownType;
                     };
-                    if (type_info.isStruct()) ret_type_name = type_name;
+                    if (type_info.isStruct()) ret_type_name = base_name;
                     break :blk type_info.irType();
                 },
                 .array => |arr| {
@@ -783,15 +772,6 @@ pub const AstToIr = struct {
                         },
                     };
                     break :blk .ptr;
-                },
-                .generic => |gen| {
-                    // Generic types like Array of int are struct types
-                    const type_info = self.type_map.get(gen.base_type) orelse {
-                        std.debug.print("[AST->IR] registerFunction '{s}': unknown generic return type '{s}'\n", .{ decl.name, gen.base_type });
-                        return error.UnknownType;
-                    };
-                    if (type_info.isStruct()) ret_type_name = gen.base_type;
-                    break :blk type_info.irType();
                 },
                 .optional => |wrapped| {
                     // Optional return types are returned as pointers
@@ -823,12 +803,22 @@ pub const AstToIr = struct {
         debug.astToIr("Registered function '{s}' returning {s}", .{ decl.name, ret_type.format() });
     }
 
+    /// Extract base type name from simple or generic type expressions
+    fn typeExprBaseTypeName(type_expr: ast.TypeExpr) ?[]const u8 {
+        return switch (type_expr) {
+            .simple => |name| name,
+            .generic => |gen| gen.base_type,
+            .array, .optional => null,
+        };
+    }
+
     fn typeExprToValueType(self: *AstToIr, type_expr: ast.TypeExpr) !ValueType {
         switch (type_expr) {
-            .simple => |type_name| {
-                const resolved = self.resolveTypeName(type_name);
+            .simple, .generic => {
+                const base_name = typeExprBaseTypeName(type_expr).?;
+                const resolved = self.resolveTypeName(base_name);
                 const type_info = self.type_map.get(resolved) orelse {
-                    std.debug.print("[AST->IR] typeExprToValueType: unknown type '{s}' (resolved from '{s}')\n", .{ resolved, type_name });
+                    std.debug.print("[AST->IR] typeExprToValueType: unknown type '{s}' (resolved from '{s}')\n", .{ resolved, base_name });
                     return error.UnknownType;
                 };
                 return if (type_info.isStruct())
@@ -844,18 +834,6 @@ pub const AstToIr = struct {
                     .size = if (arr.size) |s| @intCast(s) else null,
                     .storage = .stack,
                 } };
-            },
-            .generic => |gen| {
-                // Generic types like Array of int are struct types
-                const resolved = self.resolveTypeName(gen.base_type);
-                const type_info = self.type_map.get(resolved) orelse {
-                    std.debug.print("[AST->IR] typeExprToValueType: unknown generic type '{s}' (resolved from '{s}')\n", .{ resolved, gen.base_type });
-                    return error.UnknownType;
-                };
-                return if (type_info.isStruct())
-                    .{ .struct_type = resolved }
-                else
-                    .{ .primitive = type_info.irType() };
             },
             .optional => |wrapped| {
                 const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
@@ -1020,10 +998,11 @@ pub const AstToIr = struct {
         var ret_value_type: ?ValueType = null;
         const ret_type: ir.Type = if (method.return_type) |rt| blk: {
             switch (rt) {
-                .simple => |name| {
-                    const resolved = self.resolveTypeName(name);
+                .simple, .generic => {
+                    const base_name = typeExprBaseTypeName(rt).?;
+                    const resolved = self.resolveTypeName(base_name);
                     const type_info = self.type_map.get(resolved) orelse {
-                        std.debug.print("[AST->IR] Unknown return type: {s} (resolved from {s})\n", .{ resolved, name });
+                        std.debug.print("[AST->IR] Unknown return type: {s} (resolved from {s})\n", .{ resolved, base_name });
                         return error.UnknownType;
                     };
                     if (type_info.isStruct()) ret_type_name = resolved;
@@ -1039,15 +1018,6 @@ pub const AstToIr = struct {
                         },
                     };
                     break :blk .ptr;
-                },
-                .generic => |gen| {
-                    const resolved = self.resolveTypeName(gen.base_type);
-                    const type_info = self.type_map.get(resolved) orelse {
-                        std.debug.print("[AST->IR] Unknown generic return type: {s}\n", .{resolved});
-                        return error.UnknownType;
-                    };
-                    if (type_info.isStruct()) ret_type_name = resolved;
-                    break :blk type_info.irType();
                 },
                 .optional => |wrapped| {
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
@@ -1103,17 +1073,10 @@ pub const AstToIr = struct {
         var sret_struct_size: i32 = 0;
         if (method.return_type) |rt| {
             switch (rt) {
-                .simple => |name| {
-                    const resolved = self.resolveTypeName(name);
+                .simple, .generic => {
+                    const base_name = typeExprBaseTypeName(rt).?;
+                    const resolved = self.resolveTypeName(base_name);
                     if (self.type_map.get(resolved)) |type_info| {
-                        if (type_info == .struct_type) {
-                            uses_sret = true;
-                            sret_struct_size = type_info.struct_type.size;
-                        }
-                    }
-                },
-                .generic => |gen| {
-                    if (self.type_map.get(gen.base_type)) |type_info| {
                         if (type_info == .struct_type) {
                             uses_sret = true;
                             sret_struct_size = type_info.struct_type.size;
@@ -1131,13 +1094,12 @@ pub const AstToIr = struct {
 
         const ret_type: ir.Type = if (method.return_type) |rt| blk: {
             switch (rt) {
-                .simple => |name| {
-                    const resolved = self.resolveTypeName(name);
+                .simple, .generic => {
+                    const base_name = typeExprBaseTypeName(rt).?;
+                    const resolved = self.resolveTypeName(base_name);
                     break :blk try self.lookupIrType(resolved);
                 },
-                .generic => |gen| break :blk try self.lookupIrType(gen.base_type),
-                .array => break :blk .ptr,
-                .optional => break :blk .ptr,
+                .array, .optional => break :blk .ptr,
             }
         } else .void;
 
@@ -1226,16 +1188,9 @@ pub const AstToIr = struct {
         var sret_struct_size: i32 = 0;
         if (decl.return_type) |rt| {
             switch (rt) {
-                .simple => |type_name| {
-                    if (self.type_map.get(type_name)) |type_info| {
-                        if (type_info == .struct_type) {
-                            uses_sret = true;
-                            sret_struct_size = type_info.struct_type.size;
-                        }
-                    }
-                },
-                .generic => |gen| {
-                    if (self.type_map.get(gen.base_type)) |type_info| {
+                .simple, .generic => {
+                    const base_name = typeExprBaseTypeName(rt).?;
+                    if (self.type_map.get(base_name)) |type_info| {
                         if (type_info == .struct_type) {
                             uses_sret = true;
                             sret_struct_size = type_info.struct_type.size;
@@ -1253,10 +1208,11 @@ pub const AstToIr = struct {
 
         const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
             switch (rt) {
-                .simple => |type_name| break :blk try self.lookupIrType(type_name),
-                .generic => |gen| break :blk try self.lookupIrType(gen.base_type),
-                .array => break :blk .ptr,
-                .optional => break :blk .ptr,
+                .simple, .generic => {
+                    const base_name = typeExprBaseTypeName(rt).?;
+                    break :blk try self.lookupIrType(base_name);
+                },
+                .array, .optional => break :blk .ptr,
             }
         } else .void;
 
@@ -3460,100 +3416,8 @@ pub const AstToIr = struct {
             return;
         }
 
-        // Fall back to array methods
-        const base_name = switch (mcall.base.*) {
-            .identifier => |name| name,
-            else => {
-                debug.astToIr("error: method call on non-identifier base", .{});
-                return error.SemanticError;
-            },
-        };
-
-        // Look up the array variable and mark as used
-        const var_entry = self.var_map.getPtr(base_name) orelse {
-            debug.astToIr("error: undefined variable '{s}'", .{base_name});
-            self.reportError(.E004);
-            return error.SemanticError;
-        };
-        var_entry.used = true;
-        const var_info = var_entry.*;
-
-        // Check that it's an array
-        const arr_info = switch (var_info.ty) {
-            .array_type => |info| info,
-            else => {
-                debug.astToIr("error: method call on non-array", .{});
-                return error.SemanticError;
-            },
-        };
-
-        // Handle different methods
-        if (std.mem.eql(u8, mcall.method_name, "push")) {
-            try self.convertArrayPush(base_name, var_info, arr_info, mcall.args);
-        } else if (std.mem.eql(u8, mcall.method_name, "count")) {
-            // count() as statement - result is discarded
-            _ = try self.convertArrayCount(base_name, arr_info);
-        } else {
-            debug.astToIr("error: unknown method '{s}'", .{mcall.method_name});
-            return error.SemanticError;
-        }
-    }
-
-    fn convertArrayPush(self: *AstToIr, arr_name: []const u8, var_info: VarInfo, _: ArrayInfo, args: []const ast.Expression) ConvertError!void {
-        if (args.len != 1) {
-            debug.astToIr("error: push expects exactly 1 argument", .{});
-            return error.SemanticError;
-        }
-
-        // Get the current array pointer - load from slot if needed
-        const old_ptr = if (var_info.uses_slot)
-            try self.func().emitLoad(var_info.ptr, .ptr)
-        else
-            var_info.ptr;
-
-        // We need to track the current size somewhere
-        // For now, assume we have a size variable named arr_name + "_size"
-        // This is a temporary solution - proper implementation would store size with array
-        const size_var_name = try std.fmt.allocPrint(self.allocator, "{s}_size", .{arr_name});
-        defer self.allocator.free(size_var_name);
-
-        const size_var_entry = self.var_map.getPtr(size_var_name) orelse {
-            debug.astToIr("error: push requires size tracking variable '{s}_size'", .{arr_name});
-            return error.SemanticError;
-        };
-        size_var_entry.used = true;
-        const size_var_info = size_var_entry.*;
-
-        // Load current size
-        const old_size = try self.func().emitLoad(size_var_info.ptr, .i64);
-
-        // Calculate new size = old_size + 1
-        const one = try self.func().emitConstI64(1);
-        const new_size = try self.func().emitBinaryOp(.add, old_size, one, .i64);
-
-        // Calculate new byte size = new_size * 8
-        const eight = try self.func().emitConstI64(8);
-        const new_byte_size = try self.func().emitBinaryOp(.mul, new_size, eight, .i64);
-
-        // Reallocate: new_ptr = HeapReAlloc(old_ptr, new_byte_size)
-        // Note: For zero-size arrays, old_ptr may be null - this won't work correctly.
-        // Zero-size arrays should not be pushed to with this implementation.
-        const new_ptr = try self.func().emitHeapRealloc(old_ptr, new_byte_size);
-
-        // Store the new pointer back to the slot so cleanup uses the correct pointer
-        if (var_info.uses_slot) {
-            try self.func().emitStore(var_info.ptr, new_ptr);
-        }
-
-        // Calculate element pointer: new_ptr + old_size * 8 (old_size is the index)
-        const elem_ptr = try self.func().emitGetElemPtr(new_ptr, old_size, 8);
-
-        // Convert and store the new value
-        const value_typed = try self.convertExpression(args[0]);
-        try self.func().emitStore(elem_ptr, value_typed.value);
-
-        // Update size: store new_size to size variable
-        try self.func().emitStore(size_var_info.ptr, new_size);
+        debug.astToIr("error: method call on non-struct type", .{});
+        return error.SemanticError;
     }
 
     /// Emit a method call (static or instance)
@@ -3662,64 +3526,8 @@ pub const AstToIr = struct {
             return self.emitMethodCall(base_typed.ty.struct_type, mcall.method_name, mcall.args, base_typed.value);
         }
 
-        // Fall back to array methods
-        const base_name = switch (mcall.base.*) {
-            .identifier => |name| name,
-            else => {
-                debug.astToIr("error: method call on non-identifier base", .{});
-                return error.SemanticError;
-            },
-        };
-
-        // Look up the array variable and mark as used
-        const var_entry = self.var_map.getPtr(base_name) orelse {
-            debug.astToIr("error: undefined variable '{s}'", .{base_name});
-            self.reportError(.E004);
-            return error.SemanticError;
-        };
-        var_entry.used = true;
-        const var_info = var_entry.*;
-
-        // Check that it's an array
-        const arr_info = switch (var_info.ty) {
-            .array_type => |info| info,
-            else => {
-                debug.astToIr("error: method call on non-array", .{});
-                return error.SemanticError;
-            },
-        };
-
-        // Handle different methods
-        if (std.mem.eql(u8, mcall.method_name, "count")) {
-            return self.convertArrayCount(base_name, arr_info);
-        } else if (std.mem.eql(u8, mcall.method_name, "push")) {
-            debug.astToIr("error: push() cannot be used in expressions", .{});
-            return error.SemanticError;
-        } else {
-            debug.astToIr("error: unknown method '{s}'", .{mcall.method_name});
-            return error.SemanticError;
-        }
-    }
-
-    fn convertArrayCount(self: *AstToIr, arr_name: []const u8, arr_info: ArrayInfo) ConvertError!TypedValue {
-        // For fixed-size arrays: return compile-time constant
-        if (arr_info.size) |size| {
-            const val = try self.func().emitConstI64(@intCast(size));
-            return .{ .value = val, .ty = .{ .primitive = .i64 } };
-        }
-
-        // For dynamic arrays: load from companion size variable
-        const size_var_name = try std.fmt.allocPrint(self.allocator, "{s}_size", .{arr_name});
-        defer self.allocator.free(size_var_name);
-
-        const size_var_entry = self.var_map.getPtr(size_var_name) orelse {
-            debug.astToIr("error: count() requires size tracking variable '{s}_size'", .{arr_name});
-            return error.SemanticError;
-        };
-        size_var_entry.used = true;
-
-        const size_val = try self.func().emitLoad(size_var_entry.ptr, .i64);
-        return .{ .value = size_val, .ty = .{ .primitive = .i64 } };
+        debug.astToIr("error: method call on non-struct type", .{});
+        return error.SemanticError;
     }
 };
 
