@@ -17,6 +17,8 @@ pub const ErrorCode = enum {
     E013,
     E014,
     E015,
+    E016,
+    E017,
 
     const Info = struct {
         code: []const u8,
@@ -39,6 +41,8 @@ pub const ErrorCode = enum {
         .{ .code = "E013", .message = "sized arrays require 'var' declaration" },
         .{ .code = "E014", .message = "unused variable" },
         .{ .code = "E015", .message = "missing interface method" },
+        .{ .code = "E016", .message = "stdlib-only intrinsic called from user code" },
+        .{ .code = "E017", .message = "nil coalescing requires optional type" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

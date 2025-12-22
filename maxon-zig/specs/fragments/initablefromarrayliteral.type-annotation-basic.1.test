@@ -1,0 +1,80 @@
+// Test: initablefromarrayliteral.type-annotation-basic.1
+interface InitableFromArrayLiteral uses Element
+    static function init(managed __ManagedArray) returns Self
+end 'InitableFromArrayLiteral'
+
+type IntArray is InitableFromArrayLiteral with int
+    var managed __ManagedArray
+    var extra int
+    
+    static function init(managed __ManagedArray) returns Self
+        return Self{managed: managed, extra: 42}
+    end 'init'
+    
+    function getExtra() returns int
+        return extra
+    end 'getExtra'
+end 'IntArray'
+
+function main() returns int
+    var arr IntArray = [10, 20, 30]
+    return arr.getExtra()
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 24
+    %tmp_const = const.i64 i64 3
+    %tmp_const.1 = const.i64 i64 24
+    %tmp_heap = heap.alloc ptr %tmp_const.1
+    %tmp_const.2 = const.i64 i64 10
+    %tmp_const.3 = const.i64 i64 0
+    %6 = getelemptr ptr %tmp_heap %tmp_const.3
+    store %6 %tmp_const.2
+    %tmp_const.4 = const.i64 i64 20
+    %tmp_const.5 = const.i64 i64 1
+    %9 = getelemptr ptr %tmp_heap %tmp_const.5
+    store %9 %tmp_const.4
+    %tmp_const.6 = const.i64 i64 30
+    %tmp_const.7 = const.i64 i64 2
+    %12 = getelemptr ptr %tmp_heap %tmp_const.7
+    store %12 %tmp_const.6
+    %tmp_const.8 = const.i64 i64 0
+    %14 = getelemptr ptr %tmp_alloca %tmp_const.8
+    store %14 %tmp_heap
+    %tmp_const.9 = const.i64 i64 1
+    %16 = getelemptr ptr %tmp_alloca %tmp_const.9
+    store %16 %tmp_const
+    %tmp_const.10 = const.i64 i64 2
+    %18 = getelemptr ptr %tmp_alloca %tmp_const.10
+    store %18 %tmp_const
+    %arr = alloca.sized ptr 32
+    %tmp_call = call ptr @IntArray$init(%arr, %tmp_alloca)
+    %tmp_call.1 = call i64 @IntArray$getExtra(%arr)
+    ret %tmp_call.1
+}
+
+function IntArray$init() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %managed = param ptr 1
+    %32 = memset %tmp_param 0
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %24 = memcpy %tmp_fieldptr %managed
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 24
+    %tmp_const = const.i64 i64 42
+    store %tmp_fieldptr.1 %tmp_const
+    ret %tmp_param
+}
+
+function IntArray$getExtra() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 24
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+---

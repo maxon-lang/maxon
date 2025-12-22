@@ -94,6 +94,7 @@ pub const Instruction = struct {
 
         // Memory operations
         memcpy, // Copy memory: dest, src, size
+        memset, // Set memory: dest, value, size (value is typically 0)
 
         // Heap allocation
         heap_alloc, // Allocate heap memory, returns ptr
@@ -142,6 +143,7 @@ pub const Instruction = struct {
                 .param => "param",
                 .getelemptr => "getelemptr",
                 .memcpy => "memcpy",
+                .memset => "memset",
                 .heap_alloc => "heap.alloc",
                 .heap_free => "heap.free",
                 .heap_realloc => "heap.realloc",
@@ -306,6 +308,7 @@ pub const Function = struct {
             .param => "tmp_param",
             .getelemptr => "tmp_elemptr",
             .memcpy => "tmp_memcpy",
+            .memset => "tmp_memset",
             .heap_alloc => "tmp_heap",
             .heap_free => "tmp_free",
             .heap_realloc => "tmp_realloc",
@@ -422,6 +425,16 @@ pub const Function = struct {
         try self.emit(.{
             .op = .memcpy,
             .operands = .{ .{ .value = dest }, .{ .value = src } },
+            .result_type = .void,
+            .result = @intCast(size), // Store size in result field
+        });
+    }
+
+    // Memory set (typically used to zero memory)
+    pub fn emitMemset(self: *Function, dest: Value, byte_value: u8, size: i32) !void {
+        try self.emit(.{
+            .op = .memset,
+            .operands = .{ .{ .value = dest }, .{ .immediate_i32 = @intCast(byte_value) } },
             .result_type = .void,
             .result = @intCast(size), // Store size in result field
         });

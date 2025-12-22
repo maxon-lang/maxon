@@ -601,7 +601,7 @@ fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
 fn isDeadInstruction(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Value, void)) bool {
     // Side-effecting instructions are never dead
     switch (inst.op) {
-        .store, .ret, .br, .br_cond, .call, .memcpy, .heap_alloc, .heap_free => return false,
+        .store, .ret, .br, .br_cond, .call, .memcpy, .memset, .heap_alloc, .heap_free => return false,
         // Pure instructions: can be eliminated if result is unused
         else => {},
     }

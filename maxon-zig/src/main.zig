@@ -107,16 +107,30 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     };
     defer allocator.free(stdlib_path);
 
-    const exp_module = compiler.loadStdlibModule(stdlib_path, "math/exp", allocator) catch {
-        std.debug.print("Error: stdlib module math/exp not found\n", .{});
+    // Load all stdlib modules
+    const stdlib_modules = compiler.loadAllStdlibModules(stdlib_path, allocator) catch {
+        std.debug.print("Error: failed to load stdlib modules\n", .{});
         std.process.exit(1);
     };
-    defer allocator.free(exp_module.path);
-    defer allocator.free(exp_module.content);
+    defer compiler.freeStdlibModules(stdlib_modules, allocator);
+
+    // Build sources array: stdlib first, then user code
+    var sources: std.ArrayListUnmanaged(compiler.Source) = .empty;
+    defer sources.deinit(allocator);
+    for (stdlib_modules) |mod| {
+        sources.append(allocator, mod) catch {
+            std.debug.print("Error: out of memory\n", .{});
+            std.process.exit(1);
+        };
+    }
+    sources.append(allocator, .{ .path = src_path, .content = source }) catch {
+        std.debug.print("Error: out of memory\n", .{});
+        std.process.exit(1);
+    };
 
     // Compile with stdlib: stdlib first, then user code
     compiler.compileMultiple(
-        &.{ exp_module, .{ .path = src_path, .content = source } },
+        sources.items,
         output_path,
         .{ .track_allocs = track_allocs },
         allocator,

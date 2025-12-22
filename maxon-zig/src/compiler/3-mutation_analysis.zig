@@ -109,6 +109,12 @@ pub const MutationAnalyzer = struct {
                     self.checkStatementForMutation(body_stmt, param_indices, mutated);
                 }
             },
+            .for_stmt => |for_s| {
+                // Check mutations inside for loop body
+                for (for_s.body) |body_stmt| {
+                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                }
+            },
             .break_stmt, .continue_stmt => {
                 // Control flow statements don't mutate parameters
             },
@@ -151,6 +157,11 @@ pub const MutationAnalyzer = struct {
             },
             // self_expr - treat like identifier but self cannot be mutated as a whole
             .self_expr => {},
+            // nil_coalesce - check both optional and default
+            .nil_coalesce => |nc| {
+                self.checkExpressionForParamMutation(nc.optional.*, param_indices, mutated);
+                self.checkExpressionForParamMutation(nc.default.*, param_indices, mutated);
+            },
             // integer, float_lit, nil_lit, unary, binary, compare, call, struct_init, array_literal, sized_array:
             // These cannot be mutation targets (only identifier, field_access, index can)
             .integer, .float_lit, .bool_lit, .nil_lit, .unary, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},

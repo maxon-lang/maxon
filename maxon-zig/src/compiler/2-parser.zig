@@ -236,15 +236,15 @@ pub const Parser = struct {
         // Parse optional: with TypeArg, TypeArg2, ...
         if (self.check(.with)) {
             _ = self.advance();
-            const first_arg = try self.expect(.identifier);
-            try type_args.append(self.allocator, first_arg.text);
+            const first_arg = try self.expectTypeName();
+            try type_args.append(self.allocator, first_arg);
 
             // Additional type args separated by commas (stop at newline or next keyword)
             while (self.check(.comma)) {
                 // Peek to check if this comma separates type args or conformances
                 if (self.peek(1)) |next| {
-                    // If next is an identifier, check if after that is 'with' (new conformance)
-                    if (next.type == .identifier) {
+                    // If next is an identifier or type keyword, check if after that is 'with' (new conformance)
+                    if (next.type == .identifier or self.isTypeKeyword(next.type)) {
                         if (self.peek(2)) |after_ident| {
                             if (after_ident.type == .with or after_ident.type == .newline) {
                                 // This comma separates conformances, not type args
@@ -254,8 +254,8 @@ pub const Parser = struct {
                     }
                 }
                 _ = self.advance(); // consume comma
-                const arg = try self.expect(.identifier);
-                try type_args.append(self.allocator, arg.text);
+                const arg = try self.expectTypeName();
+                try type_args.append(self.allocator, arg);
             }
         }
 
@@ -263,6 +263,12 @@ pub const Parser = struct {
             .interface_name = interface_name.text,
             .type_args = try type_args.toOwnedSlice(self.allocator),
         };
+    }
+
+    /// Check if token type is a primitive type keyword
+    fn isTypeKeyword(self: *Parser, tt: TokenType) bool {
+        _ = self;
+        return tt == .int or tt == .float;
     }
 
     fn parseMethodDecl(self: *Parser) !ast.MethodDecl {
@@ -433,9 +439,42 @@ pub const Parser = struct {
                 .element_type = elem_type,
             } };
         } else {
-            // Simple type name
+            // Simple type name or generic type (e.g., Array of int)
             const type_name = try self.expectTypeName();
-            base_type = .{ .simple = type_name };
+
+            // Check for generic type instantiation: TypeName of arg1 [arg2 ...]
+            if (self.check(.of)) {
+                _ = self.advance(); // consume 'of'
+
+                // Parse type arguments
+                var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
+                errdefer type_args.deinit(self.allocator);
+
+                // First type argument is required
+                try type_args.append(self.allocator, try self.expectTypeName());
+
+                // Additional type arguments are optional (for types like Map of string int)
+                while (self.check(.identifier)) {
+                    // Only consume if it looks like a type name (starts with lowercase or is a known type)
+                    const next = self.peek(0);
+                    if (next == null) break;
+                    // Check if this could be a type name (heuristic: not 'or', 'and', etc.)
+                    if (std.mem.eql(u8, next.?.text, "or") or
+                        std.mem.eql(u8, next.?.text, "and") or
+                        std.mem.eql(u8, next.?.text, "nil"))
+                    {
+                        break;
+                    }
+                    try type_args.append(self.allocator, try self.expectTypeName());
+                }
+
+                base_type = .{ .generic = .{
+                    .base_type = type_name,
+                    .type_args = try type_args.toOwnedSlice(self.allocator),
+                } };
+            } else {
+                base_type = .{ .simple = type_name };
+            }
         }
 
         // Check for optional: T or nil
@@ -501,6 +540,9 @@ pub const Parser = struct {
         }
         if (self.check(.@"while")) {
             return try self.parseWhileStatement();
+        }
+        if (self.check(.@"for")) {
+            return try self.parseForStatement();
         }
         if (self.check(.@"break")) {
             _ = self.advance();
@@ -583,6 +625,39 @@ pub const Parser = struct {
     fn parseVarDecl(self: *Parser, is_var: bool) !ast.Statement {
         _ = self.advance(); // consume let/var
         const name_token = try self.expect(.identifier);
+
+        // Check for optional type annotation: var name Type = value
+        // Or default-initialized typed variable: var name Type (creates empty/default value)
+        var type_annotation: ?ast.TypeExpr = null;
+        if (!self.check(.equals)) {
+            // Parse type annotation
+            type_annotation = try self.parseTypeExpr();
+        }
+
+        // If we have a type annotation and no equals sign, this is a default-initialized declaration
+        if (type_annotation != null and !self.check(.equals)) {
+            // Create a default struct initialization expression (empty fields)
+            const type_name = switch (type_annotation.?) {
+                .simple => |name| name,
+                .generic => |gen| gen.base_type,
+                else => "unknown",
+            };
+            const type_args: []const []const u8 = switch (type_annotation.?) {
+                .generic => |gen| gen.type_args,
+                else => &.{},
+            };
+            const default_init: ast.Expression = .{ .struct_init = .{
+                .type_name = type_name,
+                .type_args = type_args,
+                .fields = &.{},
+            } };
+            if (is_var) {
+                return .{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } };
+            } else {
+                return .{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } };
+            }
+        }
+
         _ = try self.expect(.equals);
         const value = try self.parseExpression();
         if (value) |expr| {
@@ -631,9 +706,9 @@ pub const Parser = struct {
             }
 
             if (is_var) {
-                return .{ .var_decl = .{ .name = name_token.text, .value = expr } };
+                return .{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } };
             } else {
-                return .{ .let_decl = .{ .name = name_token.text, .value = expr } };
+                return .{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } };
             }
         }
         self.reportError(.E003);
@@ -815,8 +890,69 @@ pub const Parser = struct {
         } };
     }
 
+    fn parseForStatement(self: *Parser) ParseError!ast.Statement {
+        _ = try self.expect(.@"for");
+
+        // Expect loop variable name
+        const var_name = try self.expect(.identifier);
+
+        // Expect 'in' keyword
+        _ = try self.expect(.in);
+
+        // Parse iterable expression
+        const iterable = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+
+        // Expect label
+        const label = try self.expect(.string);
+        _ = try self.expect(.newline);
+
+        // Parse body
+        const body = try self.parseBlockBody();
+        try self.parseEndAndNewline();
+
+        return .{ .for_stmt = .{
+            .var_name = var_name.text,
+            .iterable = iterable,
+            .body = body,
+            .label = label.text,
+        } };
+    }
+
     fn parseExpression(self: *Parser) ParseError!?ast.Expression {
-        return try self.parseComparison();
+        return try self.parseNilCoalesce();
+    }
+
+    fn parseNilCoalesce(self: *Parser) ParseError!?ast.Expression {
+        var left = try self.parseComparison() orelse return null;
+
+        // Check for 'or' keyword (nil coalescing)
+        if (self.check(.@"or")) {
+            // Make sure 'or' is not followed by 'nil' (that's a type annotation, not expression)
+            const next = self.peek(1);
+            if (next != null and next.?.type == .nil) {
+                // This is "T or nil" type annotation, not nil coalescing
+                return left;
+            }
+
+            _ = self.advance();
+            const default_expr = try self.parseComparison() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+
+            // Create heap-allocated copies of both expressions
+            const opt_ptr = try self.createExpr(left);
+            const def_ptr = try self.createExpr(default_expr);
+
+            left = .{ .nil_coalesce = .{
+                .optional = opt_ptr,
+                .default = def_ptr,
+            } };
+        }
+        return left;
     }
 
     fn parseComparison(self: *Parser) ParseError!?ast.Expression {
@@ -940,11 +1076,11 @@ pub const Parser = struct {
             };
             return try self.parsePostfix(.{ .float_lit = value });
         }
-        if (self.check(.@"true")) {
+        if (self.check(.true)) {
             _ = self.advance();
             return try self.parsePostfix(.{ .bool_lit = true });
         }
-        if (self.check(.@"false")) {
+        if (self.check(.false)) {
             _ = self.advance();
             return try self.parsePostfix(.{ .bool_lit = false });
         }
@@ -966,11 +1102,61 @@ pub const Parser = struct {
         if (self.check(.array)) {
             return try self.parseSizedArray();
         }
+        // Check for Self keyword (for Self{...} struct initialization in methods)
+        if (self.check(.Self)) {
+            const token = self.advance();
+            if (self.check(.lbrace)) {
+                return try self.parseStructInit(token.text, &.{});
+            }
+            return try self.parsePostfix(.{ .identifier = token.text });
+        }
         if (self.check(.identifier)) {
             const token = self.advance();
+
+            // Check for generic type instantiation: TypeName of T{...}
+            if (self.check(.of)) {
+                _ = self.advance(); // consume 'of'
+
+                // Parse type arguments
+                var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
+                errdefer type_args.deinit(self.allocator);
+
+                // First type argument is required
+                try type_args.append(self.allocator, try self.expectTypeName());
+
+                // Additional type arguments (for types like Map of string int)
+                while (self.check(.identifier)) {
+                    const next = self.peek(0);
+                    if (next == null) break;
+                    // Stop if next token is a keyword or could be part of expression
+                    if (std.mem.eql(u8, next.?.text, "or") or
+                        std.mem.eql(u8, next.?.text, "and") or
+                        std.mem.eql(u8, next.?.text, "nil"))
+                    {
+                        break;
+                    }
+                    // Only continue if followed by identifier (another type arg)
+                    // or lbrace (struct init)
+                    const peek1 = self.peek(1);
+                    if (peek1 != null and peek1.?.type != .identifier and peek1.?.type != .lbrace) {
+                        break;
+                    }
+                    try type_args.append(self.allocator, try self.expectTypeName());
+                }
+
+                // Must be followed by struct init
+                if (self.check(.lbrace)) {
+                    return try self.parseStructInit(token.text, try type_args.toOwnedSlice(self.allocator));
+                }
+
+                // Otherwise this is just a generic type used as expression (error case)
+                self.reportError(.E002);
+                return error.UnexpectedToken;
+            }
+
             // Check for struct initialization: TypeName{...}
             if (self.check(.lbrace)) {
-                return try self.parseStructInit(token.text);
+                return try self.parseStructInit(token.text, &.{});
             }
             // Check for function call
             if (self.check(.lparen)) {
@@ -1114,7 +1300,7 @@ pub const Parser = struct {
         };
     }
 
-    fn parseStructInit(self: *Parser, type_name: []const u8) ParseError!ast.Expression {
+    fn parseStructInit(self: *Parser, type_name: []const u8, type_args: []const []const u8) ParseError!ast.Expression {
         _ = try self.expect(.lbrace);
 
         var fields: std.ArrayListUnmanaged(ast.FieldInit) = .empty;
@@ -1132,6 +1318,7 @@ pub const Parser = struct {
         _ = try self.expect(.rbrace);
         return try self.parsePostfix(.{ .struct_init = .{
             .type_name = type_name,
+            .type_args = type_args,
             .fields = try fields.toOwnedSlice(self.allocator),
         } });
     }
@@ -1302,6 +1489,10 @@ pub const Parser = struct {
     }
 
     fn parseInterfaceMethod(self: *Parser) ParseError!ast.InterfaceMethod {
+        // Check for optional 'static' before 'function'
+        const is_static = self.check(.static);
+        if (is_static) _ = self.advance();
+
         _ = try self.expect(.function);
         const name_token = try self.expect(.identifier);
         _ = try self.expect(.lparen);
@@ -1311,7 +1502,7 @@ pub const Parser = struct {
 
         // Check if this has a default implementation (body before end/function)
         self.skipNewlines();
-        const has_default_impl = !self.check(.end) and !self.check(.function);
+        const has_default_impl = !self.check(.end) and !self.check(.function) and !self.check(.static);
         const default_body: ?[]ast.Statement = if (has_default_impl) blk: {
             const body = try self.parseBodyUntilEnd();
             try self.expectEndNewline();
@@ -1321,6 +1512,7 @@ pub const Parser = struct {
 
         return .{
             .name = name_token.text,
+            .is_static = is_static,
             .params = params,
             .return_type = return_type,
             .has_default_impl = has_default_impl,

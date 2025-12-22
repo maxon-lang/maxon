@@ -9,6 +9,7 @@ pub const Program = struct {
 
 pub const InterfaceMethod = struct {
     name: []const u8,
+    is_static: bool,
     params: []const ParamDecl,
     return_type: ?TypeExpr, // null for void
     has_default_impl: bool,
@@ -63,9 +64,15 @@ pub const ArrayTypeExpr = struct {
     element_type: []const u8,
 };
 
+pub const GenericTypeExpr = struct {
+    base_type: []const u8, // Array, Map, etc.
+    type_args: []const []const u8, // [int], [string, int], etc.
+};
+
 pub const TypeExpr = union(enum) {
     simple: []const u8, // int, float, MyStruct
     array: ArrayTypeExpr, // array of int, array of 3 int
+    generic: GenericTypeExpr, // Array of int, Map of string int
     optional: *const TypeExpr, // T or nil
 };
 
@@ -117,6 +124,13 @@ pub const WhileStmt = struct {
     label: []const u8,
 };
 
+pub const ForStmt = struct {
+    var_name: []const u8, // loop variable name
+    iterable: Expression, // expression to iterate over
+    body: []Statement,
+    label: []const u8,
+};
+
 pub const BreakStmt = struct {};
 pub const ContinueStmt = struct {};
 
@@ -138,6 +152,7 @@ pub const Statement = union(enum) {
     method_call: MethodCallExpr,
     if_stmt: IfStmt,
     while_stmt: WhileStmt,
+    for_stmt: ForStmt,
     break_stmt: BreakStmt,
     continue_stmt: ContinueStmt,
     else_unwrap_decl: ElseUnwrapDecl,
@@ -145,6 +160,7 @@ pub const Statement = union(enum) {
 
 pub const VarDecl = struct {
     name: []const u8,
+    type_annotation: ?TypeExpr, // Optional explicit type
     value: Expression,
 };
 
@@ -203,6 +219,7 @@ pub const FieldInit = struct {
 
 pub const StructInitExpr = struct {
     type_name: []const u8,
+    type_args: []const []const u8, // ["int"] for `Container of int{...}`
     fields: []const FieldInit,
 };
 
@@ -231,6 +248,11 @@ pub const MethodCallExpr = struct {
     args: []const Expression,
 };
 
+pub const NilCoalesceExpr = struct {
+    optional: *const Expression,
+    default: *const Expression,
+};
+
 pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
@@ -248,4 +270,5 @@ pub const Expression = union(enum) {
     index: IndexExpr,
     sized_array: SizedArrayExpr,
     method_call: MethodCallExpr,
+    nil_coalesce: NilCoalesceExpr,
 };

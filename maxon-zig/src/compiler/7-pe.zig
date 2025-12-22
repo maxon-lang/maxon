@@ -162,122 +162,124 @@ pub fn writePE(path: []const u8, code: []const u8, external_patches: []const ir_
         current_iat_offset += 8; // Null terminator
     }
 
-    // Build buffer (use dynamic allocation for large imports)
-    const max_size: usize = 16384;
-    var buf: [max_size]u8 = undefined;
+    // Calculate total file size and allocate buffer dynamically
+    const total_file_size: usize = idata_file_offset + idata_raw_size;
+    const buf = try allocator.alloc(u8, total_file_size);
+    defer allocator.free(buf);
+    @memset(buf, 0);
     var pos: usize = 0;
 
     // --- DOS Header ---
-    writeU16(&buf, &pos, DOS_SIGNATURE);
-    writeU16(&buf, &pos, 0x90);
-    writeU16(&buf, &pos, 0x03);
-    writeU16(&buf, &pos, 0x00);
-    writeU16(&buf, &pos, 0x04);
-    writeU16(&buf, &pos, 0x00);
-    writeU16(&buf, &pos, 0xFFFF);
-    writeU16(&buf, &pos, 0x00);
-    writeU16(&buf, &pos, 0xB8);
-    writeU16(&buf, &pos, 0x00);
-    writeU16(&buf, &pos, 0x00);
-    writeU16(&buf, &pos, 0x00);
-    writeU16(&buf, &pos, 0x40);
-    writeU16(&buf, &pos, 0x00);
-    writeZeros(&buf, &pos, 8);
-    writeU16(&buf, &pos, 0x00);
-    writeU16(&buf, &pos, 0x00);
-    writeZeros(&buf, &pos, 20);
-    writeU32(&buf, &pos, pe_header_offset);
+    writeU16(buf, &pos, DOS_SIGNATURE);
+    writeU16(buf, &pos, 0x90);
+    writeU16(buf, &pos, 0x03);
+    writeU16(buf, &pos, 0x00);
+    writeU16(buf, &pos, 0x04);
+    writeU16(buf, &pos, 0x00);
+    writeU16(buf, &pos, 0xFFFF);
+    writeU16(buf, &pos, 0x00);
+    writeU16(buf, &pos, 0xB8);
+    writeU16(buf, &pos, 0x00);
+    writeU16(buf, &pos, 0x00);
+    writeU16(buf, &pos, 0x00);
+    writeU16(buf, &pos, 0x40);
+    writeU16(buf, &pos, 0x00);
+    writeZeros(buf, &pos, 8);
+    writeU16(buf, &pos, 0x00);
+    writeU16(buf, &pos, 0x00);
+    writeZeros(buf, &pos, 20);
+    writeU32(buf, &pos, pe_header_offset);
 
     // --- PE Signature ---
-    writeU32(&buf, &pos, PE_SIGNATURE);
+    writeU32(buf, &pos, PE_SIGNATURE);
 
     // --- COFF Header ---
-    writeU16(&buf, &pos, IMAGE_FILE_MACHINE_AMD64);
-    writeU16(&buf, &pos, num_sections);
-    writeU32(&buf, &pos, 0);
-    writeU32(&buf, &pos, 0);
-    writeU32(&buf, &pos, 0);
-    writeU16(&buf, &pos, optional_header_size);
-    writeU16(&buf, &pos, IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE);
+    writeU16(buf, &pos, IMAGE_FILE_MACHINE_AMD64);
+    writeU16(buf, &pos, num_sections);
+    writeU32(buf, &pos, 0);
+    writeU32(buf, &pos, 0);
+    writeU32(buf, &pos, 0);
+    writeU16(buf, &pos, optional_header_size);
+    writeU16(buf, &pos, IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE);
 
     // --- Optional Header ---
-    writeU16(&buf, &pos, 0x20B);
+    writeU16(buf, &pos, 0x20B);
     buf[pos] = 14;
     pos += 1;
     buf[pos] = 0;
     pos += 1;
-    writeU32(&buf, &pos, text_raw_size);
-    writeU32(&buf, &pos, idata_raw_size);
-    writeU32(&buf, &pos, 0);
-    writeU32(&buf, &pos, text_rva);
-    writeU32(&buf, &pos, text_rva);
-    writeU64(&buf, &pos, IMAGE_BASE);
-    writeU32(&buf, &pos, SECTION_ALIGNMENT);
-    writeU32(&buf, &pos, FILE_ALIGNMENT);
-    writeU16(&buf, &pos, 6);
-    writeU16(&buf, &pos, 0);
-    writeU16(&buf, &pos, 0);
-    writeU16(&buf, &pos, 0);
-    writeU16(&buf, &pos, 6);
-    writeU16(&buf, &pos, 0);
-    writeU32(&buf, &pos, 0);
-    writeU32(&buf, &pos, image_size);
-    writeU32(&buf, &pos, headers_aligned);
-    writeU32(&buf, &pos, 0);
-    writeU16(&buf, &pos, IMAGE_SUBSYSTEM_CONSOLE);
-    writeU16(&buf, &pos, IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE | IMAGE_DLLCHARACTERISTICS_NX_COMPAT | IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE);
-    writeU64(&buf, &pos, 0x100000);
-    writeU64(&buf, &pos, 0x1000);
-    writeU64(&buf, &pos, 0x100000);
-    writeU64(&buf, &pos, 0x1000);
-    writeU32(&buf, &pos, 0);
-    writeU32(&buf, &pos, 16);
+    writeU32(buf, &pos, text_raw_size);
+    writeU32(buf, &pos, idata_raw_size);
+    writeU32(buf, &pos, 0);
+    writeU32(buf, &pos, text_rva);
+    writeU32(buf, &pos, text_rva);
+    writeU64(buf, &pos, IMAGE_BASE);
+    writeU32(buf, &pos, SECTION_ALIGNMENT);
+    writeU32(buf, &pos, FILE_ALIGNMENT);
+    writeU16(buf, &pos, 6);
+    writeU16(buf, &pos, 0);
+    writeU16(buf, &pos, 0);
+    writeU16(buf, &pos, 0);
+    writeU16(buf, &pos, 6);
+    writeU16(buf, &pos, 0);
+    writeU32(buf, &pos, 0);
+    writeU32(buf, &pos, image_size);
+    writeU32(buf, &pos, headers_aligned);
+    writeU32(buf, &pos, 0);
+    writeU16(buf, &pos, IMAGE_SUBSYSTEM_CONSOLE);
+    writeU16(buf, &pos, IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE | IMAGE_DLLCHARACTERISTICS_NX_COMPAT | IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE);
+    writeU64(buf, &pos, 0x100000);
+    writeU64(buf, &pos, 0x1000);
+    writeU64(buf, &pos, 0x100000);
+    writeU64(buf, &pos, 0x1000);
+    writeU32(buf, &pos, 0);
+    writeU32(buf, &pos, 16);
 
     // Data directories
-    writeU64(&buf, &pos, 0); // Export
-    writeU32(&buf, &pos, idata_rva); // Import Table RVA
-    writeU32(&buf, &pos, idt_size); // Import Table Size
-    writeU64(&buf, &pos, 0); // Resource
-    writeU64(&buf, &pos, 0); // Exception
-    writeU64(&buf, &pos, 0); // Certificate
-    writeU64(&buf, &pos, 0); // Base Relocation
-    writeU64(&buf, &pos, 0); // Debug
-    writeU64(&buf, &pos, 0); // Architecture
-    writeU64(&buf, &pos, 0); // Global Ptr
-    writeU64(&buf, &pos, 0); // TLS
-    writeU64(&buf, &pos, 0); // Load Config
-    writeU64(&buf, &pos, 0); // Bound Import
-    writeU32(&buf, &pos, idata_rva + iat_offset); // IAT RVA
-    writeU32(&buf, &pos, iat_size); // IAT Size
-    writeU64(&buf, &pos, 0); // Delay Import
-    writeU64(&buf, &pos, 0); // CLR
-    writeU64(&buf, &pos, 0); // Reserved
+    writeU64(buf, &pos, 0); // Export
+    writeU32(buf, &pos, idata_rva); // Import Table RVA
+    writeU32(buf, &pos, idt_size); // Import Table Size
+    writeU64(buf, &pos, 0); // Resource
+    writeU64(buf, &pos, 0); // Exception
+    writeU64(buf, &pos, 0); // Certificate
+    writeU64(buf, &pos, 0); // Base Relocation
+    writeU64(buf, &pos, 0); // Debug
+    writeU64(buf, &pos, 0); // Architecture
+    writeU64(buf, &pos, 0); // Global Ptr
+    writeU64(buf, &pos, 0); // TLS
+    writeU64(buf, &pos, 0); // Load Config
+    writeU64(buf, &pos, 0); // Bound Import
+    writeU32(buf, &pos, idata_rva + iat_offset); // IAT RVA
+    writeU32(buf, &pos, iat_size); // IAT Size
+    writeU64(buf, &pos, 0); // Delay Import
+    writeU64(buf, &pos, 0); // CLR
+    writeU64(buf, &pos, 0); // Reserved
 
     // --- Section Headers ---
-    writeBytes(&buf, &pos, ".text\x00\x00\x00");
-    writeU32(&buf, &pos, text_virtual_size);
-    writeU32(&buf, &pos, text_rva);
-    writeU32(&buf, &pos, text_raw_size);
-    writeU32(&buf, &pos, text_file_offset);
-    writeU32(&buf, &pos, 0);
-    writeU32(&buf, &pos, 0);
-    writeU16(&buf, &pos, 0);
-    writeU16(&buf, &pos, 0);
-    writeU32(&buf, &pos, IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE);
+    writeBytes(buf, &pos, ".text\x00\x00\x00");
+    writeU32(buf, &pos, text_virtual_size);
+    writeU32(buf, &pos, text_rva);
+    writeU32(buf, &pos, text_raw_size);
+    writeU32(buf, &pos, text_file_offset);
+    writeU32(buf, &pos, 0);
+    writeU32(buf, &pos, 0);
+    writeU16(buf, &pos, 0);
+    writeU16(buf, &pos, 0);
+    writeU32(buf, &pos, IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE);
 
-    writeBytes(&buf, &pos, ".idata\x00\x00");
-    writeU32(&buf, &pos, idata_virtual_size);
-    writeU32(&buf, &pos, idata_rva);
-    writeU32(&buf, &pos, idata_raw_size);
-    writeU32(&buf, &pos, idata_file_offset);
-    writeU32(&buf, &pos, 0);
-    writeU32(&buf, &pos, 0);
-    writeU16(&buf, &pos, 0);
-    writeU16(&buf, &pos, 0);
-    writeU32(&buf, &pos, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ);
+    writeBytes(buf, &pos, ".idata\x00\x00");
+    writeU32(buf, &pos, idata_virtual_size);
+    writeU32(buf, &pos, idata_rva);
+    writeU32(buf, &pos, idata_raw_size);
+    writeU32(buf, &pos, idata_file_offset);
+    writeU32(buf, &pos, 0);
+    writeU32(buf, &pos, 0);
+    writeU16(buf, &pos, 0);
+    writeU16(buf, &pos, 0);
+    writeU32(buf, &pos, IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ);
 
     // Pad to .text section
-    writeZeros(&buf, &pos, text_file_offset - pos);
+    writeZeros(buf, &pos, text_file_offset - pos);
 
     // --- .text section ---
     // Copy code, patching call [rip+disp] instructions
@@ -310,48 +312,48 @@ pub fn writePE(path: []const u8, code: []const u8, external_patches: []const ir_
     pos += code.len;
 
     // Pad .text section
-    writeZeros(&buf, &pos, text_raw_size - @as(u32, @intCast(code.len)));
+    writeZeros(buf, &pos, text_raw_size - @as(u32, @intCast(code.len)));
 
     // --- .idata section ---
     // Import Directory Table (IDT)
     var iat_pos: u32 = iat_offset;
     var int_pos: u32 = int_offset;
     for (dlls.items, 0..) |dll, dll_idx| {
-        writeU32(&buf, &pos, idata_rva + int_pos); // OriginalFirstThunk (INT)
-        writeU32(&buf, &pos, 0); // TimeDateStamp
-        writeU32(&buf, &pos, 0); // ForwarderChain
-        writeU32(&buf, &pos, idata_rva + dll_name_offsets[dll_idx]); // Name RVA
-        writeU32(&buf, &pos, idata_rva + iat_pos); // FirstThunk (IAT)
+        writeU32(buf, &pos, idata_rva + int_pos); // OriginalFirstThunk (INT)
+        writeU32(buf, &pos, 0); // TimeDateStamp
+        writeU32(buf, &pos, 0); // ForwarderChain
+        writeU32(buf, &pos, idata_rva + dll_name_offsets[dll_idx]); // Name RVA
+        writeU32(buf, &pos, idata_rva + iat_pos); // FirstThunk (IAT)
 
         iat_pos += @as(u32, @intCast(dll.functions.items.len + 1)) * 8;
         int_pos += @as(u32, @intCast(dll.functions.items.len + 1)) * 8;
     }
     // Null terminator IDT entry
-    writeZeros(&buf, &pos, 20);
+    writeZeros(buf, &pos, 20);
 
     // IAT entries
     func_idx = 0;
     for (dlls.items) |dll| {
         for (dll.functions.items) |_| {
-            writeU64(&buf, &pos, idata_rva + func_hint_offsets[func_idx]);
+            writeU64(buf, &pos, idata_rva + func_hint_offsets[func_idx]);
             func_idx += 1;
         }
-        writeU64(&buf, &pos, 0); // Null terminator
+        writeU64(buf, &pos, 0); // Null terminator
     }
 
     // INT entries (same as IAT before loading)
     func_idx = 0;
     for (dlls.items) |dll| {
         for (dll.functions.items) |_| {
-            writeU64(&buf, &pos, idata_rva + func_hint_offsets[func_idx]);
+            writeU64(buf, &pos, idata_rva + func_hint_offsets[func_idx]);
             func_idx += 1;
         }
-        writeU64(&buf, &pos, 0); // Null terminator
+        writeU64(buf, &pos, 0); // Null terminator
     }
 
     // String table
     for (dlls.items) |dll| {
-        writeBytes(&buf, &pos, dll.name);
+        writeBytes(buf, &pos, dll.name);
         buf[pos] = 0;
         pos += 1;
 
@@ -361,8 +363,8 @@ pub fn writePE(path: []const u8, code: []const u8, external_patches: []const ir_
                 buf[pos] = 0;
                 pos += 1;
             }
-            writeU16(&buf, &pos, 0); // Hint
-            writeBytes(&buf, &pos, func.name);
+            writeU16(buf, &pos, 0); // Hint
+            writeBytes(buf, &pos, func.name);
             buf[pos] = 0;
             pos += 1;
         }
@@ -371,7 +373,7 @@ pub fn writePE(path: []const u8, code: []const u8, external_patches: []const ir_
     // Pad .idata section
     const idata_written: u32 = @intCast(pos - (text_file_offset + text_raw_size));
     if (idata_written < idata_raw_size) {
-        writeZeros(&buf, &pos, idata_raw_size - idata_written);
+        writeZeros(buf, &pos, idata_raw_size - idata_written);
     }
 
     // Write to file

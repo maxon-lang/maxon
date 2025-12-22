@@ -42,15 +42,23 @@ const PipelineOptions = struct {
     result: ?*CompileResult = null,
     track_allocs: bool = false,
     external_funcs: ?[]const ast_to_ir.ExternalFuncSignature = null,
+    external_types: ?[]const ast_to_ir.ExternalTypeInfo = null,
 };
 
 /// Intermediate result from frontend compilation (lexing, parsing, analysis, IR generation)
 const FrontendResult = struct {
     ir_module: ir.Module,
+    func_signatures: ?[]const ast_to_ir.ExternalFuncSignature,
     allocator: std.mem.Allocator,
 
     fn deinit(self: *FrontendResult) void {
         self.ir_module.deinit();
+        if (self.func_signatures) |sigs| {
+            for (sigs) |sig| {
+                self.allocator.free(sig.name);
+            }
+            self.allocator.free(sigs);
+        }
     }
 };
 
@@ -76,6 +84,11 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
         }
         return error.ParserError;
     };
+
+    // Extract function signatures from AST before freeing
+    // (needed for cross-module compilation with full type info)
+    const func_signatures = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch null;
+
     defer freeProgram(program, allocator);
 
     // 3 - Mutation analysis
@@ -87,7 +100,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
 
     // 4 - AST to IR
     var ir_error: ?compile_error.CompileError = null;
-    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, &ir_error) catch |e| {
+    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, &ir_error) catch |e| {
         debug.astToIr("AST to IR error: {}\n", .{e});
         if (options.result) |result| {
             result.error_info = ir_error;
@@ -101,7 +114,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
         return error.IrError;
     };
 
-    return .{ .ir_module = ir_module, .allocator = allocator };
+    return .{ .ir_module = ir_module, .func_signatures = func_signatures, .allocator = allocator };
 }
 
 /// Compile source and return the IR as a string (for fragment generation)
@@ -120,9 +133,8 @@ pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8
     });
     defer stdlib_frontend.deinit();
 
-    // Extract function signatures from stdlib
-    const external_funcs = try ast_to_ir.extractFunctionSignatures(&stdlib_frontend.ir_module, allocator);
-    defer allocator.free(external_funcs);
+    // Use function signatures extracted from AST (preserves full type info)
+    const external_funcs = stdlib_frontend.func_signatures orelse return error.NoSignatures;
 
     // Compile user source with external signatures
     var user_frontend = try runFrontend(source, allocator, .{
@@ -193,49 +205,87 @@ pub fn compileMultiple(
 ) !void {
     if (sources.len == 0) return;
 
-    // Compile first source
-    var merged = try runFrontend(sources[0].content, allocator, .{
-        .source_file = sources[0].path,
-        .result = result,
-    });
-    defer merged.deinit();
+    // Use an arena allocator for Phase 1 ASTs to prevent Phase 2 from overwriting them
+    // (Phase 2 parsing might reuse the same memory addresses otherwise)
+    var phase1_arena = std.heap.ArenaAllocator.init(allocator);
+    defer phase1_arena.deinit();
+    const phase1_allocator = phase1_arena.allocator();
 
-    // Extract function signatures from the first module for subsequent compilations
-    var all_signatures = try ast_to_ir.extractFunctionSignatures(&merged.ir_module, allocator);
-    defer allocator.free(all_signatures);
+    // Phase 1: Parse all sources and collect type info AND function signatures
+    // We must keep ASTs alive because ExternalTypeInfo.type_decl points into them
+    var all_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
+    defer {
+        for (all_types.items) |t| {
+            allocator.free(t.fields);
+        }
+        all_types.deinit(allocator);
+    }
 
-    // Compile and merge remaining sources
-    for (sources[1..]) |source| {
+    var all_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
+    defer {
+        for (all_funcs.items) |sig| {
+            allocator.free(sig.name);
+        }
+        all_funcs.deinit(allocator);
+    }
+
+    for (sources) |source| {
+        // Lex and parse using phase1_allocator (but don't compile yet)
+        var lexer = Lexer.init(source.content);
+        const tokens = lexer.tokenize(phase1_allocator) catch continue;
+        // Don't free tokens - arena will clean up
+
+        var parser = Parser.initWithFile(tokens, phase1_allocator, source.path);
+        // Don't deinit parser - arena will clean up
+
+        const program = parser.parse() catch continue;
+        // Program is kept alive by arena until the end
+
+        // Extract type info from parsed AST
+        const type_info = ast_to_ir.extractTypeInfo(program, allocator) catch continue;
+        for (type_info) |t| {
+            try all_types.append(allocator, t);
+        }
+        allocator.free(type_info); // Free the slice but keep the items
+
+        // Extract function signatures from parsed AST
+        const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
+        for (func_sigs) |sig| {
+            try all_funcs.append(allocator, sig);
+        }
+        allocator.free(func_sigs); // Free the slice but keep the items
+    }
+
+    // Phase 2: Compile and merge all sources with collected type info and function signatures
+    var merged: ?FrontendResult = null;
+    defer if (merged) |*m| m.deinit();
+
+    for (sources) |source| {
         var frontend = try runFrontend(source.content, allocator, .{
             .source_file = source.path,
             .result = result,
-            .external_funcs = all_signatures,
+            .external_funcs = all_funcs.items,
+            .external_types = all_types.items,
         });
-        errdefer frontend.deinit();
 
-        // Merge into the combined module
-        try merged.ir_module.merge(&frontend.ir_module);
-
-        // Update signatures with new functions from this module
-        const new_sigs = try ast_to_ir.extractFunctionSignatures(&frontend.ir_module, allocator);
-        defer allocator.free(new_sigs);
-
-        // Extend all_signatures with new functions
-        const combined = try allocator.alloc(ast_to_ir.ExternalFuncSignature, all_signatures.len + new_sigs.len);
-        @memcpy(combined[0..all_signatures.len], all_signatures);
-        @memcpy(combined[all_signatures.len..], new_sigs);
-        allocator.free(all_signatures);
-        all_signatures = combined;
-
-        frontend.ir_module.deinit();
+        if (merged) |*m| {
+            // Merge into the combined module
+            try m.ir_module.merge(&frontend.ir_module);
+            // Clean up the frontend we're merging from (not keeping it)
+            frontend.deinit();
+        } else {
+            merged = frontend;
+        }
     }
 
+    const final_module = &merged.?.ir_module;
+
     // Emit IR to file
-    try writeIrFile(merged.ir_module, output_path, allocator);
+    try writeIrFile(final_module.*, output_path, allocator);
 
     // Generate x86-64 code
     debug.log("Generating x86-64 code from merged IR", .{});
-    const codegen_result = ir_codegen.generate(merged.ir_module, allocator, .{
+    const codegen_result = ir_codegen.generate(final_module.*, allocator, .{
         .track_allocs = options.track_allocs,
     }) catch |err| {
         debug.log("IR codegen error: {}", .{err});
@@ -310,6 +360,77 @@ pub fn loadStdlibModule(
     };
 }
 
+/// Load all stdlib modules by recursively scanning the stdlib directory.
+/// Returns a list of Source structs for all .maxon files found.
+pub fn loadAllStdlibModules(
+    stdlib_path: []const u8,
+    allocator: std.mem.Allocator,
+) ![]Source {
+    var sources: std.ArrayListUnmanaged(Source) = .empty;
+    errdefer {
+        for (sources.items) |src| {
+            allocator.free(src.path);
+            allocator.free(src.content);
+        }
+        sources.deinit(allocator);
+    }
+
+    // Recursively walk stdlib directory
+    try collectStdlibFiles(stdlib_path, stdlib_path, &sources, allocator);
+
+    return sources.toOwnedSlice(allocator);
+}
+
+fn collectStdlibFiles(
+    base_path: []const u8,
+    current_path: []const u8,
+    sources: *std.ArrayListUnmanaged(Source),
+    allocator: std.mem.Allocator,
+) !void {
+    var dir = std.fs.cwd().openDir(current_path, .{ .iterate = true }) catch {
+        return; // Skip directories that can't be opened
+    };
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        const full_entry_path = try std.fs.path.join(allocator, &.{ current_path, entry.name });
+        defer allocator.free(full_entry_path);
+
+        if (entry.kind == .directory) {
+            // Recursively process subdirectories
+            try collectStdlibFiles(base_path, full_entry_path, sources, allocator);
+        } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".maxon")) {
+            // Skip interfaces.maxon - it uses closures and default implementations
+            // that aren't yet supported in maxon-zig
+            if (std.mem.endsWith(u8, full_entry_path, "interfaces.maxon")) {
+                continue;
+            }
+
+            // Load this .maxon file
+            const content = std.fs.cwd().readFileAlloc(allocator, full_entry_path, 1024 * 1024) catch {
+                continue; // Skip files that can't be read
+            };
+
+            const path_copy = try allocator.dupe(u8, full_entry_path);
+
+            try sources.append(allocator, .{
+                .path = path_copy,
+                .content = content,
+            });
+        }
+    }
+}
+
+/// Free all sources returned by loadAllStdlibModules
+pub fn freeStdlibModules(sources: []Source, allocator: std.mem.Allocator) void {
+    for (sources) |src| {
+        allocator.free(src.path);
+        allocator.free(src.content);
+    }
+    allocator.free(sources);
+}
+
 fn writeIrFile(ir_module: ir.Module, output_path: []const u8, allocator: std.mem.Allocator) !void {
     const ir_path = blk: {
         if (std.mem.endsWith(u8, output_path, ".exe")) {
@@ -353,9 +474,18 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
                 freeStatementArgs(stmt, allocator);
             }
             allocator.free(method.body);
+            if (method.qualified_name) |qn| {
+                allocator.free(qn);
+            }
+            freeTypeExpr(method.return_type, allocator);
         }
         allocator.free(type_decl.methods);
+        // Free conformances and their type_args
+        for (type_decl.conformances) |conformance| {
+            allocator.free(conformance.type_args);
+        }
         allocator.free(type_decl.conformances);
+        allocator.free(type_decl.generic_params);
     }
     allocator.free(program.types);
 
@@ -367,6 +497,7 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
     for (program.interfaces) |iface| {
         for (iface.methods) |method| {
             allocator.free(method.params);
+            freeTypeExpr(method.return_type, allocator);
             if (method.default_body) |body| {
                 for (body) |stmt| {
                     freeStatementArgs(stmt, allocator);
@@ -386,6 +517,7 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
         }
         allocator.free(func.body);
         allocator.free(func.params);
+        freeTypeExpr(func.return_type, allocator);
     }
     allocator.free(program.functions);
 }
@@ -434,6 +566,13 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
                 freeStatementArgs(body_stmt, allocator);
             }
             allocator.free(while_s.body);
+        },
+        .for_stmt => |for_s| {
+            freeExpressionArgs(for_s.iterable, allocator);
+            for (for_s.body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(for_s.body);
         },
         .break_stmt, .continue_stmt => {},
         .else_unwrap_decl => |unwrap| {
@@ -516,7 +655,21 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         .unary => |un| {
             freeExpressionArgs(un.operand.*, allocator);
         },
+        .nil_coalesce => {
+            // Skip - pointers are managed by parser's expr_ptrs
+        },
         // integer, float_lit, bool_lit, nil_lit, self_expr, identifier: no nested allocations to free
         .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier => {},
+    }
+}
+
+fn freeTypeExpr(type_expr: ?ast.TypeExpr, allocator: std.mem.Allocator) void {
+    const te = type_expr orelse return;
+    switch (te) {
+        .optional => |inner| {
+            freeTypeExpr(inner.*, allocator);
+            allocator.destroy(@constCast(inner));
+        },
+        .simple, .generic, .array => {},
     }
 }

@@ -1146,6 +1146,7 @@ pub const IrCodegen = struct {
             .param => try self.genParam(inst),
             .call => try self.genCall(inst),
             .memcpy => try self.genMemcpy(inst),
+            .memset => try self.genMemset(inst),
             .heap_alloc => try self.genHeapAlloc(inst),
             .heap_free => try self.genHeapFree(inst),
             .heap_realloc => try self.genHeapRealloc(inst),
@@ -1194,8 +1195,17 @@ pub const IrCodegen = struct {
         const base_offset = self.allocStackSlots(num_slots);
         // Adjust to point to the actual struct start (lowest stack address)
         const struct_offset = base_offset - (num_slots - 1) * 8;
-        try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = struct_offset });
+
+        // Allocate another slot to store the ADDRESS of the allocated space
+        // This is necessary because when we use this value, we want the address, not the contents
+        const ptr_slot = self.allocStackSlots(1);
+        try self.enc.leaRaxRbpOffset(struct_offset);
+        try self.enc.movRbpOffsetRax(ptr_slot);
+
+        try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = ptr_slot });
         try self.value_types.put(self.allocator, inst.result.?, .ptr);
+        // Mark as indirect because the slot contains a pointer that needs to be dereferenced
+        try self.markIndirect(inst.result.?);
     }
 
     fn genAllocaDynamic(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -1358,6 +1368,40 @@ pub const IrCodegen = struct {
         }
     }
 
+    fn genMemset(self: *IrCodegen, inst: ir.Instruction) !void {
+        const dest_val = inst.operands[0].value;
+        const byte_val: u8 = @intCast(inst.operands[1].immediate_i32);
+        const size: i32 = @intCast(inst.result.?);
+
+        // Load dest pointer to rdi
+        const dest_offset = try self.getStackOffset(dest_val);
+        if (self.isIndirect(dest_val)) {
+            try self.enc.emitWithRbpOffset(&.{ 0x48, 0x8B, 0x7D }, dest_offset); // mov rdi, [rbp+off]
+        } else {
+            try self.enc.emitWithRbpOffset(&.{ 0x48, 0x8D, 0x7D }, dest_offset); // lea rdi, [rbp+off]
+        }
+
+        // For byte_val = 0, use xor rax, rax; otherwise mov rax, val*0x0101010101010101
+        if (byte_val == 0) {
+            try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax
+        } else {
+            // Fill rax with the byte value repeated
+            const fill_val: u64 = @as(u64, byte_val) * 0x0101010101010101;
+            try self.enc.emit(&.{ 0x48, 0xB8 }); // mov rax, imm64
+            try self.enc.emit(&@as([8]u8, @bitCast(fill_val)));
+        }
+
+        // Store 8 bytes at a time
+        var stored: i32 = 0;
+        while (stored < size) : (stored += 8) {
+            if (stored == 0) {
+                try self.enc.movMemRax(.rdi);
+            } else {
+                try self.enc.emit(&.{ 0x48, 0x89, 0x47, @intCast(stored) }); // mov [rdi+off], rax
+            }
+        }
+    }
+
     fn genLoad(self: *IrCodegen, inst: ir.Instruction) !void {
         const result = inst.result.?;
         const ptr = inst.operands[0].value;
@@ -1389,6 +1433,7 @@ pub const IrCodegen = struct {
 
     fn genIntBinaryOp(self: *IrCodegen, inst: ir.Instruction) !void {
         const result = inst.result.?;
+        const result_type = inst.result_type;
 
         // Load lhs -> rax, rhs -> rcx
         try self.loadToRax(inst.operands[0].value);
@@ -1409,7 +1454,17 @@ pub const IrCodegen = struct {
             else => unreachable,
         }
 
-        try self.storeToStack(result, .i64);
+        try self.storeToStack(result, result_type);
+        // If the result is a pointer (e.g., from pointer arithmetic), inherit indirectness from operand
+        // A direct stack pointer + offset = direct stack pointer
+        // An indirect heap pointer + offset = indirect heap pointer
+        if (result_type == .ptr) {
+            // Check if either operand is marked indirect (the pointer operand)
+            const lhs = inst.operands[0].value;
+            if (self.isIndirect(lhs)) {
+                try self.markIndirect(result);
+            }
+        }
     }
 
     fn genFloatBinaryOp(self: *IrCodegen, inst: ir.Instruction) !void {

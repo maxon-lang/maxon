@@ -132,6 +132,25 @@ const FuncInfo = struct {
 pub const ExternalFuncSignature = struct {
     name: []const u8,
     return_type: ir.Type,
+    return_type_name: ?[]const u8 = null, // struct type name if returning a struct
+    return_value_type: ?ValueType = null, // Full return type info (for optionals, etc.)
+};
+
+/// External type info - for cross-module compilation
+pub const ExternalTypeInfo = struct {
+    name: []const u8,
+    size: i32,
+    fields: []const ExternalFieldInfo,
+    /// Original type declaration for generic types (needed for monomorphization)
+    type_decl: ?*const ast.TypeDecl = null,
+};
+
+/// External field info - for cross-module compilation
+pub const ExternalFieldInfo = struct {
+    name: []const u8,
+    offset: i32,
+    size: i32,
+    type_name: []const u8, // "int", "float", "bool", "ptr", or struct name
 };
 
 /// Parameter type info
@@ -183,6 +202,74 @@ const VarInfo = struct {
     }
 };
 
+/// Helper for managing intrinsic loop blocks (cond/body/end pattern).
+/// Ensures correct block ordering and branch emission to avoid infinite loops.
+///
+/// Usage:
+/// 1. Create LoopBlocks
+/// 2. Emit condition code (cond block is current)
+/// 3. Call emitCondBranch with condition value
+/// 4. Emit body code (body block is now current)
+/// 5. Emit branch back to cond block
+/// 6. Call finish() to restore end block
+const LoopBlocks = struct {
+    cond_block_idx: u32,
+    body_block_idx: u32,
+    end_block_idx: u32,
+    end_block: ir.BasicBlock,
+    body_block: ir.BasicBlock,
+
+    /// Create loop blocks and emit entry branch to cond block.
+    /// After this, cond block is the current block.
+    fn create(self_ir: *AstToIr, cond_name: []const u8, body_name: []const u8, end_name: []const u8) !LoopBlocks {
+        // Create cond block
+        const cond_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+        _ = try self_ir.func().addBlock(cond_name);
+
+        // Emit unconditional branch from previous block to cond block
+        try self_ir.func().blocks.items[cond_block_idx - 1].instructions.append(self_ir.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = cond_block_idx }, .none },
+            .result = undefined,
+        });
+
+        // Create body and end blocks
+        const body_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+        _ = try self_ir.func().addBlock(body_name);
+        const end_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+        _ = try self_ir.func().addBlock(end_name);
+
+        // Pop end and body blocks (cond block becomes current)
+        const end_block = self_ir.func().blocks.pop().?;
+        const body_block = self_ir.func().blocks.pop().?;
+
+        return .{
+            .cond_block_idx = cond_block_idx,
+            .body_block_idx = body_block_idx,
+            .end_block_idx = end_block_idx,
+            .end_block = end_block,
+            .body_block = body_block,
+        };
+    }
+
+    /// Emit conditional branch in cond block, then restore body block as current.
+    fn emitCondBranch(self: *LoopBlocks, self_ir: *AstToIr, cond_value: ir.Value) !void {
+        try self_ir.func().blocks.items[self.cond_block_idx].instructions.append(self_ir.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = cond_value }, .{ .block_ref = self.body_block_idx } },
+            .result = self.end_block_idx,
+        });
+
+        // Restore body block as current
+        try self_ir.func().blocks.append(self_ir.allocator, self.body_block);
+    }
+
+    /// Restore end block after body code is complete.
+    fn finish(self: *LoopBlocks, self_ir: *AstToIr) !void {
+        try self_ir.func().blocks.append(self_ir.allocator, self.end_block);
+    }
+};
+
 const ConvertError = error{
     OutOfMemory,
     UndefinedVariable,
@@ -190,6 +277,7 @@ const ConvertError = error{
     WrongArgumentCount,
     UnknownType,
     UnknownField,
+    UnknownFunction,
     UseAfterMove,
     ImmutableAssign,
     ImmutableMove,
@@ -218,6 +306,7 @@ pub const AstToIr = struct {
     type_map: std.StringHashMapUnmanaged(TypeInfo),
     func_map: std.StringHashMapUnmanaged(FuncInfo),
     interface_map: std.StringHashMapUnmanaged(InterfaceInfo),
+    type_decl_map: std.StringHashMapUnmanaged(ast.TypeDecl), // Type declarations for conformance lookup
     current_decl_is_mutable: bool,
     mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
     current_line: usize,
@@ -236,6 +325,10 @@ pub const AstToIr = struct {
     current_type_name: ?[]const u8 = null,
     // Self pointer value when inside a method
     self_ptr: ?ir.Value = null,
+    // Generic type parameters (e.g., "Element" -> "int" for Array of int)
+    generic_params: std.StringHashMapUnmanaged([]const u8) = .{},
+    // Flag for allowing stdlib-only builtins (set when converting monomorphized stdlib methods)
+    in_stdlib_method: bool = false,
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -250,6 +343,7 @@ pub const AstToIr = struct {
             .type_map = .{},
             .func_map = .{},
             .interface_map = .{},
+            .type_decl_map = .{},
             .current_decl_is_mutable = false,
             .mutation_analyzer = mutation_analyzer,
             .current_line = 1,
@@ -316,6 +410,12 @@ pub const AstToIr = struct {
 
         // Interface map doesn't own its data (references AST nodes)
         self.interface_map.deinit(self.allocator);
+
+        // Type decl map doesn't own its data (references AST nodes)
+        self.type_decl_map.deinit(self.allocator);
+
+        // Generic params map doesn't own its data (references AST strings)
+        self.generic_params.deinit(self.allocator);
     }
 
     // ------------------------------------------------------------------------
@@ -326,6 +426,17 @@ pub const AstToIr = struct {
         // Register primitive types
         try self.type_map.put(self.allocator, "int", .{ .primitive = .i64 });
         try self.type_map.put(self.allocator, "float", .{ .primitive = .f64 });
+        try self.type_map.put(self.allocator, "bool", .{ .primitive = .i64 }); // bool is represented as i64
+
+        // Register __ManagedArray compiler-internal type (24 bytes: ptr + len + capacity)
+        // This is a parameterized type - element type is tracked separately in ArrayInfo
+        const managed_array_fields = try self.allocator.alloc(FieldInfo, 3);
+        managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = .ptr } };
+        managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = .i64 } };
+        managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = .i64 } };
+        try self.type_map.put(self.allocator, "__ManagedArray", .{
+            .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 24 },
+        });
 
         // Register interfaces first (needed for conformance checking)
         for (program.interfaces) |iface| try self.registerInterface(iface);
@@ -337,8 +448,16 @@ pub const AstToIr = struct {
 
         // Register methods from types
         for (program.types) |type_decl| {
+            // Set up generic params for this type
+            for (type_decl.generic_params) |param| {
+                try self.generic_params.put(self.allocator, param, "int");
+            }
             for (type_decl.methods) |method| {
                 try self.registerMethod(type_decl.name, method);
+            }
+            // Clean up generic params
+            for (type_decl.generic_params) |param| {
+                _ = self.generic_params.remove(param);
             }
         }
 
@@ -352,8 +471,16 @@ pub const AstToIr = struct {
 
         // Convert methods from types
         for (program.types) |type_decl| {
+            // Set up generic params for this type
+            for (type_decl.generic_params) |param| {
+                try self.generic_params.put(self.allocator, param, "int");
+            }
             for (type_decl.methods) |method| {
                 try self.convertMethod(type_decl.name, method);
+            }
+            // Clean up generic params
+            for (type_decl.generic_params) |param| {
+                _ = self.generic_params.remove(param);
             }
         }
 
@@ -368,15 +495,24 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     fn lookupIrType(self: *AstToIr, name: []const u8) !ir.Type {
-        const type_info = self.type_map.get(name) orelse return error.UnknownType;
+        const type_info = self.type_map.get(name) orelse {
+            std.debug.print("[AST->IR] lookupIrType: unknown type '{s}'\n", .{name});
+            return error.UnknownType;
+        };
         return type_info.irType();
     }
 
     fn lookupStructInfo(self: *AstToIr, type_name: []const u8) !StructTypeInfo {
-        const type_info = self.type_map.get(type_name) orelse return error.UnknownType;
+        const type_info = self.type_map.get(type_name) orelse {
+            std.debug.print("[AST->IR] lookupStructInfo: unknown type '{s}'\n", .{type_name});
+            return error.UnknownType;
+        };
         return switch (type_info) {
             .struct_type => |s| s,
-            .primitive, .enum_type => error.UnknownType,
+            .primitive, .enum_type => {
+                std.debug.print("[AST->IR] lookupStructInfo: '{s}' is not a struct\n", .{type_name});
+                return error.UnknownType;
+            },
         };
     }
 
@@ -396,17 +532,45 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     fn registerType(self: *AstToIr, type_decl: ast.TypeDecl) !void {
+        // Store the type declaration for conformance checking
+        try self.type_decl_map.put(self.allocator, type_decl.name, type_decl);
+
+        // Set up generic type parameters (e.g., "Element" for Array uses Element)
+        // For now, map all generic params to i64 as a default
+        for (type_decl.generic_params) |param| {
+            try self.generic_params.put(self.allocator, param, "int");
+        }
+        defer {
+            // Clean up generic params after type registration
+            for (type_decl.generic_params) |param| {
+                _ = self.generic_params.remove(param);
+            }
+        }
+
+        // Check if this type was already registered externally - we'll need to free old fields after registering new ones
+        const old_fields: ?[]const FieldInfo = if (self.type_map.get(type_decl.name)) |existing|
+            switch (existing) {
+                .struct_type => |s| s.fields,
+                else => null,
+            }
+        else
+            null;
+
         var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
         var offset: i32 = 0;
 
         for (type_decl.fields, 0..) |field, i| {
             const value_type: ValueType = switch (field.type_expr) {
                 .simple => |type_name| blk: {
-                    const field_type_info = self.type_map.get(type_name) orelse return error.UnknownType;
+                    const resolved = self.resolveTypeName(type_name);
+                    const field_type_info = self.type_map.get(resolved) orelse {
+                        std.debug.print("[AST->IR] registerType field '{s}': unknown type '{s}'\n", .{ field.name, resolved });
+                        return error.UnknownType;
+                    };
                     break :blk switch (field_type_info) {
-                        .struct_type => .{ .struct_type = type_name },
+                        .struct_type => .{ .struct_type = resolved },
                         .primitive => |p| .{ .primitive = p },
-                        .enum_type => .{ .enum_type = type_name },
+                        .enum_type => .{ .enum_type = resolved },
                     };
                 },
                 .array => |arr| .{ .array_type = .{
@@ -414,6 +578,19 @@ pub const AstToIr = struct {
                     .size = if (arr.size) |s| @intCast(s) else null,
                     .storage = .stack,
                 } },
+                .generic => |gen| blk: {
+                    // Generic types like Array of int are struct types
+                    const resolved = self.resolveTypeName(gen.base_type);
+                    const field_type_info = self.type_map.get(resolved) orelse {
+                        std.debug.print("[AST->IR] registerType field '{s}': unknown generic type '{s}'\n", .{ field.name, resolved });
+                        return error.UnknownType;
+                    };
+                    break :blk switch (field_type_info) {
+                        .struct_type => .{ .struct_type = resolved },
+                        .primitive => |p| .{ .primitive = p },
+                        .enum_type => .{ .enum_type = resolved },
+                    };
+                },
                 .optional => |wrapped| blk: {
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
                     break :blk .{ .optional_type = .{
@@ -423,7 +600,10 @@ pub const AstToIr = struct {
             };
             const field_size: i32 = switch (value_type) {
                 .struct_type => |name| blk: {
-                    const info = self.type_map.get(name) orelse return error.UnknownType;
+                    const info = self.type_map.get(name) orelse {
+                        std.debug.print("[AST->IR] registerType field size: unknown struct type '{s}'\n", .{name});
+                        return error.UnknownType;
+                    };
                     break :blk switch (info) {
                         .struct_type => |s| s.size,
                         else => 8,
@@ -445,7 +625,59 @@ pub const AstToIr = struct {
             .struct_type = .{ .name = type_decl.name, .fields = fields, .size = offset },
         });
 
+        // Now that the new entry is in the map, free the old fields if this was a re-registration
+        if (old_fields) |of| {
+            self.allocator.free(of);
+        }
+
         debug.astToIr("Registered type '{s}' with size {d}", .{ type_decl.name, offset });
+    }
+
+    /// Register an external type (from stdlib or other modules)
+    fn registerExternalType(self: *AstToIr, ext_type: ExternalTypeInfo) !void {
+        // Skip if already registered (avoid duplicate allocations)
+        if (self.type_map.contains(ext_type.name)) return;
+
+        var fields = try self.allocator.alloc(FieldInfo, ext_type.fields.len);
+
+        for (ext_type.fields, 0..) |field, i| {
+            const value_type: ValueType = blk: {
+                // Map type name to ValueType
+                if (std.mem.eql(u8, field.type_name, "int")) {
+                    break :blk .{ .primitive = .i64 };
+                } else if (std.mem.eql(u8, field.type_name, "float")) {
+                    break :blk .{ .primitive = .f64 };
+                } else if (std.mem.eql(u8, field.type_name, "bool")) {
+                    break :blk .{ .primitive = .i64 };
+                } else if (std.mem.eql(u8, field.type_name, "ptr")) {
+                    break :blk .{ .primitive = .ptr };
+                } else if (std.mem.eql(u8, field.type_name, "__ManagedArray")) {
+                    // Managed arrays are structs, but we treat them specially
+                    break :blk .{ .struct_type = field.type_name };
+                } else {
+                    // Assume it's a struct type
+                    break :blk .{ .struct_type = field.type_name };
+                }
+            };
+
+            fields[i] = .{
+                .name = field.name,
+                .offset = field.offset,
+                .size = field.size,
+                .value_type = value_type,
+            };
+        }
+
+        try self.type_map.put(self.allocator, ext_type.name, .{
+            .struct_type = .{ .name = ext_type.name, .fields = fields, .size = ext_type.size },
+        });
+
+        // Store type declaration for generic types (needed for monomorphization)
+        if (ext_type.type_decl) |type_decl| {
+            try self.type_decl_map.put(self.allocator, ext_type.name, type_decl.*);
+        }
+
+        debug.astToIr("Registered external type '{s}' with size {d}", .{ ext_type.name, ext_type.size });
     }
 
     fn registerEnum(self: *AstToIr, enum_decl: ast.EnumDecl) !void {
@@ -470,9 +702,11 @@ pub const AstToIr = struct {
     fn checkInterfaceConformance(self: *AstToIr, type_decl: ast.TypeDecl) !void {
         for (type_decl.conformances) |conformance| {
             const iface = self.interface_map.get(conformance.interface_name) orelse {
-                // Unknown interface - report error
-                self.reportErrorWithDetails(.E006, conformance.interface_name);
-                return error.UnknownType;
+                // Unknown interface - skip conformance check
+                // This allows stdlib types to declare conformance to interfaces
+                // that may not be loaded yet (e.g., Collection, InitableFromArrayLiteral)
+                debug.astToIr("Skipping unknown interface '{s}'", .{conformance.interface_name});
+                continue;
             };
 
             // Check that all required interface methods are implemented
@@ -514,13 +748,27 @@ pub const AstToIr = struct {
         }
     }
 
+    /// Check if a type conforms to a specific interface by name
+    fn typeConformsTo(self: *AstToIr, type_name: []const u8, interface_name: []const u8) bool {
+        const type_decl = self.type_decl_map.get(type_name) orelse return false;
+        for (type_decl.conformances) |conformance| {
+            if (std.mem.eql(u8, conformance.interface_name, interface_name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     fn registerFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
         var ret_type_name: ?[]const u8 = null;
         var ret_value_type: ?ValueType = null;
         const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
             switch (rt) {
                 .simple => |type_name| {
-                    const type_info = self.type_map.get(type_name) orelse return error.UnknownType;
+                    const type_info = self.type_map.get(type_name) orelse {
+                        std.debug.print("[AST->IR] registerFunction '{s}': unknown return type '{s}'\n", .{ decl.name, type_name });
+                        return error.UnknownType;
+                    };
                     if (type_info.isStruct()) ret_type_name = type_name;
                     break :blk type_info.irType();
                 },
@@ -535,6 +783,15 @@ pub const AstToIr = struct {
                         },
                     };
                     break :blk .ptr;
+                },
+                .generic => |gen| {
+                    // Generic types like Array of int are struct types
+                    const type_info = self.type_map.get(gen.base_type) orelse {
+                        std.debug.print("[AST->IR] registerFunction '{s}': unknown generic return type '{s}'\n", .{ decl.name, gen.base_type });
+                        return error.UnknownType;
+                    };
+                    if (type_info.isStruct()) ret_type_name = gen.base_type;
+                    break :blk type_info.irType();
                 },
                 .optional => |wrapped| {
                     // Optional return types are returned as pointers
@@ -569,19 +826,36 @@ pub const AstToIr = struct {
     fn typeExprToValueType(self: *AstToIr, type_expr: ast.TypeExpr) !ValueType {
         switch (type_expr) {
             .simple => |type_name| {
-                const type_info = self.type_map.get(type_name) orelse return error.UnknownType;
+                const resolved = self.resolveTypeName(type_name);
+                const type_info = self.type_map.get(resolved) orelse {
+                    std.debug.print("[AST->IR] typeExprToValueType: unknown type '{s}' (resolved from '{s}')\n", .{ resolved, type_name });
+                    return error.UnknownType;
+                };
                 return if (type_info.isStruct())
-                    .{ .struct_type = type_name }
+                    .{ .struct_type = resolved }
                 else
                     .{ .primitive = type_info.irType() };
             },
             .array => |arr| {
-                const elem_type = try self.lookupIrType(arr.element_type);
+                const resolved_elem = self.resolveTypeName(arr.element_type);
+                const elem_type = try self.lookupIrType(resolved_elem);
                 return .{ .array_type = .{
                     .element_type = elem_type,
                     .size = if (arr.size) |s| @intCast(s) else null,
                     .storage = .stack,
                 } };
+            },
+            .generic => |gen| {
+                // Generic types like Array of int are struct types
+                const resolved = self.resolveTypeName(gen.base_type);
+                const type_info = self.type_map.get(resolved) orelse {
+                    std.debug.print("[AST->IR] typeExprToValueType: unknown generic type '{s}' (resolved from '{s}')\n", .{ resolved, gen.base_type });
+                    return error.UnknownType;
+                };
+                return if (type_info.isStruct())
+                    .{ .struct_type = resolved }
+                else
+                    .{ .primitive = type_info.irType() };
             },
             .optional => |wrapped| {
                 const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
@@ -592,12 +866,142 @@ pub const AstToIr = struct {
         }
     }
 
-    /// Resolve type name, handling 'Self' substitution
+    /// Resolve type name, handling 'Self' substitution and generic type parameters
     fn resolveTypeName(self: *AstToIr, type_name: []const u8) []const u8 {
         if (std.mem.eql(u8, type_name, "Self")) {
             return self.current_type_name orelse type_name;
         }
+        // Check if this is a generic type parameter (e.g., "Element")
+        if (self.generic_params.get(type_name)) |resolved| {
+            return resolved;
+        }
         return type_name;
+    }
+
+    /// Get or create a monomorphized version of a generic type
+    /// e.g., "Container" + ["int"] -> "Container$int"
+    fn getOrCreateMonomorphizedType(self: *AstToIr, base_type: []const u8, type_args: []const []const u8) ConvertError![]const u8 {
+        // Build the monomorphized name: TypeName$Arg1$Arg2
+        var name_parts: std.ArrayListUnmanaged(u8) = .empty;
+        defer name_parts.deinit(self.allocator);
+
+        name_parts.appendSlice(self.allocator, base_type) catch return error.OutOfMemory;
+        for (type_args) |arg| {
+            name_parts.append(self.allocator, '$') catch return error.OutOfMemory;
+            name_parts.appendSlice(self.allocator, arg) catch return error.OutOfMemory;
+        }
+
+        const mono_name = self.allocator.dupe(u8, name_parts.items) catch return error.OutOfMemory;
+        try self.module.trackString(mono_name);
+
+        // Check if already registered
+        if (self.type_map.contains(mono_name)) {
+            return mono_name;
+        }
+
+        // Get the original generic type declaration
+        const type_decl = self.type_decl_map.get(base_type) orelse {
+            debug.astToIr("Unknown generic type: {s}\n", .{base_type});
+            return error.UnknownType;
+        };
+
+        // Verify we have the right number of type arguments
+        if (type_decl.generic_params.len != type_args.len) {
+            debug.astToIr("Wrong number of type args for {s}: expected {d}, got {d}\n", .{ base_type, type_decl.generic_params.len, type_args.len });
+            return error.TypeMismatch;
+        }
+
+        // Set up generic parameter mappings (needed for field type resolution AND method registration)
+        for (type_decl.generic_params, type_args) |param, arg| {
+            try self.generic_params.put(self.allocator, param, arg);
+        }
+        // Note: We clean up generic_params at the very end, after method registration
+
+        // Register the monomorphized type
+        var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
+        var offset: i32 = 0;
+
+        for (type_decl.fields, 0..) |field, i| {
+            const value_type: ValueType = try self.typeExprToValueType(field.type_expr);
+            const field_size: i32 = switch (value_type) {
+                .struct_type => |name| blk: {
+                    const info = self.type_map.get(name) orelse {
+                        debug.astToIr("Monomorphize: unknown struct type '{s}'\n", .{name});
+                        // Clean up on error
+                        for (type_decl.generic_params) |param| {
+                            _ = self.generic_params.remove(param);
+                        }
+                        return error.UnknownType;
+                    };
+                    break :blk switch (info) {
+                        .struct_type => |s| s.size,
+                        else => 8,
+                    };
+                },
+                .primitive, .enum_type, .array_type => 8,
+                .optional_type => 8,
+            };
+
+            fields[i] = .{
+                .name = field.name,
+                .offset = offset,
+                .value_type = value_type,
+                .size = field_size,
+            };
+            offset += field_size;
+        }
+
+        const struct_info = StructTypeInfo{
+            .name = mono_name,
+            .fields = fields,
+            .size = offset,
+        };
+
+        try self.type_map.put(self.allocator, mono_name, .{ .struct_type = struct_info });
+        try self.type_decl_map.put(self.allocator, mono_name, type_decl);
+
+        // Register methods for monomorphized type (generic_params still active here)
+        for (type_decl.methods) |method| {
+            try self.registerMethod(mono_name, method);
+        }
+
+        // Convert method bodies for monomorphized type (generic_params still active)
+        // Must save/restore function context since we're called during expression conversion
+        // IMPORTANT: Save the function INDEX, not the pointer! Adding new functions may cause
+        // the module's functions ArrayList to reallocate, invalidating existing pointers.
+        const saved_func_idx: ?usize = if (self.current_func) |f| blk: {
+            for (self.module.functions.items, 0..) |*fn_ptr, i| {
+                if (fn_ptr == f) break :blk i;
+            }
+            break :blk null;
+        } else null;
+        const saved_func_name = self.current_func_name;
+        const saved_sret_ptr = self.sret_ptr;
+        const saved_sret_size = self.sret_size;
+        const saved_self_ptr = self.self_ptr;
+        const saved_in_stdlib = self.in_stdlib_method;
+
+        // Allow stdlib builtins when converting methods from external types (stdlib)
+        self.in_stdlib_method = true;
+
+        for (type_decl.methods) |method| {
+            try self.convertMethod(mono_name, method);
+        }
+
+        // Restore function context - recompute pointer from saved index
+        self.in_stdlib_method = saved_in_stdlib;
+        self.current_func = if (saved_func_idx) |idx| &self.module.functions.items[idx] else null;
+        self.current_func_name = saved_func_name;
+        self.sret_ptr = saved_sret_ptr;
+        self.sret_size = saved_sret_size;
+        self.self_ptr = saved_self_ptr;
+
+        // Clean up generic params after everything is done
+        for (type_decl.generic_params) |param| {
+            _ = self.generic_params.remove(param);
+        }
+
+        return mono_name;
     }
 
     /// Register a method as a function with mangled name: TypeName$methodName
@@ -618,7 +1022,10 @@ pub const AstToIr = struct {
             switch (rt) {
                 .simple => |name| {
                     const resolved = self.resolveTypeName(name);
-                    const type_info = self.type_map.get(resolved) orelse return error.UnknownType;
+                    const type_info = self.type_map.get(resolved) orelse {
+                        std.debug.print("[AST->IR] Unknown return type: {s} (resolved from {s})\n", .{ resolved, name });
+                        return error.UnknownType;
+                    };
                     if (type_info.isStruct()) ret_type_name = resolved;
                     break :blk type_info.irType();
                 },
@@ -632,6 +1039,15 @@ pub const AstToIr = struct {
                         },
                     };
                     break :blk .ptr;
+                },
+                .generic => |gen| {
+                    const resolved = self.resolveTypeName(gen.base_type);
+                    const type_info = self.type_map.get(resolved) orelse {
+                        std.debug.print("[AST->IR] Unknown generic return type: {s}\n", .{resolved});
+                        return error.UnknownType;
+                    };
+                    if (type_info.isStruct()) ret_type_name = resolved;
+                    break :blk type_info.irType();
                 },
                 .optional => |wrapped| {
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
@@ -696,7 +1112,20 @@ pub const AstToIr = struct {
                         }
                     }
                 },
-                .array, .optional => {},
+                .generic => |gen| {
+                    if (self.type_map.get(gen.base_type)) |type_info| {
+                        if (type_info == .struct_type) {
+                            uses_sret = true;
+                            sret_struct_size = type_info.struct_type.size;
+                        }
+                    }
+                },
+                .array => {},
+                .optional => {
+                    // Optionals are 16 bytes (tag + value), use sret
+                    uses_sret = true;
+                    sret_struct_size = 16;
+                },
             }
         }
 
@@ -706,6 +1135,7 @@ pub const AstToIr = struct {
                     const resolved = self.resolveTypeName(name);
                     break :blk try self.lookupIrType(resolved);
                 },
+                .generic => |gen| break :blk try self.lookupIrType(gen.base_type),
                 .array => break :blk .ptr,
                 .optional => break :blk .ptr,
             }
@@ -804,14 +1234,27 @@ pub const AstToIr = struct {
                         }
                     }
                 },
+                .generic => |gen| {
+                    if (self.type_map.get(gen.base_type)) |type_info| {
+                        if (type_info == .struct_type) {
+                            uses_sret = true;
+                            sret_struct_size = type_info.struct_type.size;
+                        }
+                    }
+                },
                 .array => {}, // Arrays returned as pointers, no sret needed
-                .optional => {}, // Optionals returned as pointers, no sret needed
+                .optional => {
+                    // Optionals are 16 bytes (tag + value), use sret
+                    uses_sret = true;
+                    sret_struct_size = 16;
+                },
             }
         }
 
         const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
             switch (rt) {
                 .simple => |type_name| break :blk try self.lookupIrType(type_name),
+                .generic => |gen| break :blk try self.lookupIrType(gen.base_type),
                 .array => break :blk .ptr,
                 .optional => break :blk .ptr,
             }
@@ -957,6 +1400,7 @@ pub const AstToIr = struct {
             .method_call => |mcall| try self.convertMethodCall(mcall),
             .if_stmt => |if_s| try self.convertIfStmt(if_s),
             .while_stmt => |while_s| try self.convertWhileStmt(while_s),
+            .for_stmt => |for_s| try self.convertForStmt(for_s),
             .break_stmt => try self.convertBreakStmt(),
             .continue_stmt => try self.convertContinueStmt(),
             .else_unwrap_decl => |unwrap| try self.convertElseUnwrapDecl(unwrap),
@@ -971,6 +1415,24 @@ pub const AstToIr = struct {
         if (!self.current_decl_is_mutable and decl.value == .sized_array) {
             self.reportError(.E013);
             return error.SemanticError;
+        }
+
+        // Check for InitableFromArrayLiteral transformation
+        // Syntax: var arr Array of int = [1, 2, 3] (generic) or var arr IntArray = [...] (simple)
+        if (decl.type_annotation) |type_ann| {
+            const type_name: ?[]const u8 = switch (type_ann) {
+                .generic => |gen| gen.base_type,
+                .simple => |name| name,
+                .array, .optional => null,
+            };
+            if (type_name) |t_name| {
+                if (self.typeConformsTo(t_name, "InitableFromArrayLiteral")) {
+                    if (decl.value == .array_literal) {
+                        try self.convertInitableFromArrayLiteralSimple(decl, t_name);
+                        return;
+                    }
+                }
+            }
         }
 
         const init_typed = try self.convertExpression(decl.value);
@@ -1015,9 +1477,21 @@ pub const AstToIr = struct {
                     try self.func().emitRet(sret);
                     return;
                 }
-                // Returning an existing struct variable - copy to sret buffer
+                // Returning an existing struct variable or optional - copy to sret buffer
                 const typed_val = try self.convertExpression(expr);
-                try self.func().emitMemcpy(sret, typed_val.value, self.sret_size);
+
+                // If returning a non-optional value from an optional-returning function (sret_size == 16),
+                // wrap the value in a Some optional
+                if (self.sret_size == 16 and typed_val.ty != .optional_type) {
+                    // Write tag = 1 (has value) to sret
+                    const one = try self.func().emitConstI64(1);
+                    try self.func().emitStore(sret, one);
+                    // Write value at offset 8
+                    const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
+                    try self.func().emitStore(value_ptr, typed_val.value);
+                } else {
+                    try self.func().emitMemcpy(sret, typed_val.value, self.sret_size);
+                }
                 try self.freeHeapAllocations();
                 try self.func().emitRet(sret);
                 return;
@@ -1153,6 +1627,7 @@ pub const AstToIr = struct {
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
             else => {
+                std.debug.print("[AST->IR] convertFieldAssign: expected struct type for field '{s}'\n", .{assign.field_name});
                 self.reportError(.E006);
                 return error.UnknownType;
             },
@@ -1271,14 +1746,16 @@ pub const AstToIr = struct {
             _ = self.var_map.remove(binding_name);
         }
 
-        // Add unconditional branch to end block (if not already terminated)
+        // Track the block that needs a branch to end (we'll add it after restoring end block)
+        var then_exit_block_idx: ?u32 = null;
         if (self.func().currentBlock()) |block| {
             if (block.instructions.items.len == 0 or block.instructions.items[block.instructions.items.len - 1].op != .ret) {
-                try self.func().emitBr(end_block_idx);
+                then_exit_block_idx = @intCast(self.func().blocks.items.len - 1);
             }
         }
 
         // Restore and generate else block if needed
+        var else_exit_block_idx: ?u32 = null;
         if (has_else or is_if_let) {
             try self.func().blocks.append(self.allocator, else_block.?);
 
@@ -1291,16 +1768,33 @@ pub const AstToIr = struct {
                 }
             }
 
-            // Add unconditional branch to end block (if not already terminated)
+            // Track the block that needs a branch to end
             if (self.func().currentBlock()) |block| {
                 if (block.instructions.items.len == 0 or block.instructions.items[block.instructions.items.len - 1].op != .ret) {
-                    try self.func().emitBr(end_block_idx);
+                    else_exit_block_idx = @intCast(self.func().blocks.items.len - 1);
                 }
             }
         }
 
-        // Restore end block
+        // Restore end block - NOW get its actual index
+        const actual_end_block_idx: u32 = @intCast(self.func().blocks.items.len);
         try self.func().blocks.append(self.allocator, end_block);
+
+        // Now emit the deferred branches with the correct end block index
+        if (then_exit_block_idx) |idx| {
+            try self.func().blocks.items[idx].instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = actual_end_block_idx }, .none },
+                .result = undefined,
+            });
+        }
+        if (else_exit_block_idx) |idx| {
+            try self.func().blocks.items[idx].instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = actual_end_block_idx }, .none },
+                .result = undefined,
+            });
+        }
     }
 
     fn convertWhileStmt(self: *AstToIr, while_stmt: ast.WhileStmt) ConvertError!void {
@@ -1392,6 +1886,146 @@ pub const AstToIr = struct {
         });
 
         // Patch any break statements that used the sentinel value
+        for (self.func().blocks.items[body_block_idx..cont_block_idx]) |*block| {
+            for (block.instructions.items) |*instr| {
+                if (instr.op == .br) {
+                    if (instr.operands[0] == .block_ref and instr.operands[0].block_ref == 0xFFFFFFFF) {
+                        instr.operands[0] = .{ .block_ref = cont_block_idx };
+                    }
+                }
+            }
+        }
+
+        // Restore loop context
+        self.loop_end_block = saved_end_block;
+        self.loop_cond_block = saved_cond_block;
+    }
+
+    /// Convert a for-in loop by desugaring to iterator pattern:
+    /// for item in collection 'loop'
+    ///     body
+    /// end 'loop'
+    ///
+    /// Desugars to:
+    /// while true 'loop'
+    ///     var __next_result = collection.next()
+    ///     if __next_result == nil then break
+    ///     var item = unwrap(__next_result)
+    ///     body
+    /// end 'loop'
+    fn convertForStmt(self: *AstToIr, for_stmt: ast.ForStmt) ConvertError!void {
+        // Create condition block
+        const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("forcond");
+
+        // Emit unconditional branch from previous block to condition block
+        try self.func().blocks.items[cond_block_idx - 1].instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = cond_block_idx }, .none },
+            .result = undefined,
+        });
+
+        // In condition block: call .next() on the iterable
+        const iterable_typed = try self.convertExpression(for_stmt.iterable);
+
+        // Call the next() method on the iterable
+        const next_result = try self.convertMethodCallOnTyped(iterable_typed, "next", &.{});
+
+        // Load the tag from the optional result (offset 0) to check if nil
+        const tag = try self.func().emitLoad(next_result.value, .i64);
+
+        // Compare tag with 0 (nil - no more elements)
+        const zero = try self.func().emitConstI64(0);
+        const is_nil = try self.func().emitBinaryOp(.icmp_eq, tag, zero, .i64);
+
+        // Compute is_not_nil (is_nil == 0) while still in condition block
+        const is_not_nil = try self.func().emitBinaryOp(.icmp_eq, is_nil, zero, .i64);
+
+        // Create body block
+        const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("forbody");
+
+        // Save loop context
+        const saved_end_block = self.loop_end_block;
+        const saved_cond_block = self.loop_cond_block;
+        self.loop_cond_block = cond_block_idx;
+        self.loop_end_block = 0xFFFFFFFF; // sentinel for patching
+
+        // Save variable names before entering loop body
+        var pre_loop_vars = std.StringHashMapUnmanaged(void){};
+        defer pre_loop_vars.deinit(self.allocator);
+        var iter = self.var_map.keyIterator();
+        while (iter.next()) |key| {
+            try pre_loop_vars.put(self.allocator, key.*, {});
+        }
+
+        // Extract the value from the optional result (offset 8)
+        const opt_info = switch (next_result.ty) {
+            .optional_type => |info| info,
+            else => OptionalInfo{ .wrapped = .i64 },
+        };
+        const value_offset = try self.func().emitConstI64(8);
+        const value_ptr = try self.func().emitBinaryOp(.add, next_result.value, value_offset, .ptr);
+        const element_value = try self.func().emitLoad(value_ptr, opt_info.wrapped);
+
+        // Register the loop variable - allocate a slot and store the value there
+        const var_slot = try self.func().emitAlloca(opt_info.wrapped);
+        try self.func().emitStore(var_slot, element_value);
+        try self.var_map.put(self.allocator, for_stmt.var_name, VarInfo.init(var_slot, .{ .primitive = opt_info.wrapped }, false, false));
+
+        // Convert body statements
+        for (for_stmt.body) |stmt| {
+            try self.convertStatement(stmt);
+        }
+
+        // Check for variables moved inside loop body
+        var pre_iter = pre_loop_vars.keyIterator();
+        while (pre_iter.next()) |key| {
+            if (self.var_map.getPtr(key.*)) |var_info| {
+                if (var_info.state == .moved) {
+                    debug.astToIr("variable '{s}' was moved in loop body\n", .{key.*});
+                    self.reportError(.E008);
+                    return error.UseAfterMove;
+                }
+            }
+        }
+
+        // Free heap-allocated loop-scoped variables
+        try self.freeLoopScopedHeapVars(&pre_loop_vars);
+
+        // Emit unconditional branch back to condition block
+        if (self.func().currentBlock()) |block| {
+            const len = block.instructions.items.len;
+            if (len == 0 or (block.instructions.items[len - 1].op != .ret and block.instructions.items[len - 1].op != .br and block.instructions.items[len - 1].op != .br_cond)) {
+                try self.func().emitBr(cond_block_idx);
+            }
+        }
+
+        // Remove loop-scoped variables from var_map
+        var to_remove = std.ArrayListUnmanaged([]const u8){};
+        defer to_remove.deinit(self.allocator);
+        var var_iter = self.var_map.keyIterator();
+        while (var_iter.next()) |key| {
+            if (!pre_loop_vars.contains(key.*)) {
+                try to_remove.append(self.allocator, key.*);
+            }
+        }
+        for (to_remove.items) |key| {
+            _ = self.var_map.remove(key);
+        }
+
+        // Now create continuation block
+        const cont_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("forcont");
+
+        // Emit conditional branch in condition block: if is_not_nil, go to body; else fall through to cont
+        try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_not_nil }, .{ .block_ref = body_block_idx } },
+            .result = cont_block_idx,
+        });
+
+        // Patch any break statements
         for (self.func().blocks.items[body_block_idx..cont_block_idx]) |*block| {
             for (block.instructions.items) |*instr| {
                 if (instr.op == .br) {
@@ -1530,6 +2164,7 @@ pub const AstToIr = struct {
             .index => |idx| self.convertIndex(idx),
             .sized_array => |sized| self.convertSizedArray(sized),
             .method_call => |mcall| self.convertMethodCallExpr(mcall),
+            .nil_coalesce => |nc| self.convertNilCoalesce(nc),
         };
     }
 
@@ -1717,6 +2352,62 @@ pub const AstToIr = struct {
         const left = try self.convertExpression(cmp.left.*);
         const right = try self.convertExpression(cmp.right.*);
 
+        // Handle optional == nil or optional != nil comparisons
+        // An optional's tag is at offset 0: 0 means nil, 1 means has value
+        const left_is_optional = left.ty == .optional_type;
+        const right_is_optional = right.ty == .optional_type;
+
+        if (left_is_optional and right_is_optional) {
+            // Both are optional - comparing optional to nil (or nil to optional)
+            // Compare the tag field to 0
+            const opt_value = left.value;
+            const tag = try self.func().emitLoad(opt_value, .i64);
+            const zero = try self.func().emitConstI64(0);
+
+            const result = switch (cmp.op) {
+                .eq => try self.func().emitBinaryOp(.icmp_eq, tag, zero, .i64),
+                .ne => try self.func().emitBinaryOp(.icmp_ne, tag, zero, .i64),
+                else => {
+                    // < > <= >= don't make sense for optional/nil comparison
+                    self.reportError(.E003);
+                    return error.TypeMismatch;
+                },
+            };
+            return .{ .value = result, .ty = .{ .primitive = .i64 } };
+        } else if (left_is_optional) {
+            // Left is optional, right is a value - unwrap left and compare
+            // Load the value from offset 8 of the optional
+            const value_ptr = try self.func().emitGetFieldPtr(left.value, 8);
+            const left_val = try self.func().emitLoad(value_ptr, left.ty.optional_type.wrapped);
+
+            const op: ir.Instruction.Op = switch (cmp.op) {
+                .eq => .icmp_eq,
+                .ne => .icmp_ne,
+                .lt => .icmp_lt,
+                .le => .icmp_le,
+                .gt => .icmp_gt,
+                .ge => .icmp_ge,
+            };
+            const result = try self.func().emitBinaryOp(op, left_val, right.value, .i64);
+            return .{ .value = result, .ty = .{ .primitive = .i64 } };
+        } else if (right_is_optional) {
+            // Right is optional, left is a value - unwrap right and compare
+            // Load the value from offset 8 of the optional
+            const value_ptr = try self.func().emitGetFieldPtr(right.value, 8);
+            const right_val = try self.func().emitLoad(value_ptr, right.ty.optional_type.wrapped);
+
+            const op: ir.Instruction.Op = switch (cmp.op) {
+                .eq => .icmp_eq,
+                .ne => .icmp_ne,
+                .lt => .icmp_lt,
+                .le => .icmp_le,
+                .gt => .icmp_gt,
+                .ge => .icmp_ge,
+            };
+            const result = try self.func().emitBinaryOp(op, left.value, right_val, .i64);
+            return .{ .value = result, .ty = .{ .primitive = .i64 } };
+        }
+
         const left_prim = left.ty.toPrimitiveType();
         const right_prim = right.ty.toPrimitiveType();
 
@@ -1757,23 +2448,130 @@ pub const AstToIr = struct {
         return .{ .value = result, .ty = .{ .primitive = .i64 } };
     }
 
+    /// Convert nil coalescing expression: `optional or default`
+    /// Returns the unwrapped value if optional has a value, otherwise returns default
+    fn convertNilCoalesce(self: *AstToIr, nc: ast.NilCoalesceExpr) ConvertError!TypedValue {
+        // Evaluate the optional expression
+        const opt_typed = try self.convertExpression(nc.optional.*);
+
+        // Get optional type info - must be an optional type
+        const opt_info = switch (opt_typed.ty) {
+            .optional_type => |info| info,
+            else => {
+                // Left operand is not an optional type - this is an error
+                self.reportError(.E017);
+                return error.TypeMismatch;
+            },
+        };
+
+        const wrapped_type = opt_info.wrapped;
+
+        // Allocate result storage in entry block BEFORE branching
+        const result_ptr = try self.func().emitAlloca(wrapped_type);
+
+        // Load tag from optional (offset 0) and compare with 1 (has value)
+        const tag = try self.func().emitLoad(opt_typed.value, .i64);
+        const one = try self.func().emitConstI64(1);
+        const has_value = try self.func().emitBinaryOp(.icmp_eq, tag, one, .i64);
+
+        // Create blocks for branching
+        const has_value_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("coalesce_has_value");
+        const use_default_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("coalesce_default");
+        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("coalesce_merge");
+
+        // Emit conditional branch from current block
+        const entry_block = &self.func().blocks.items[has_value_block_idx - 1];
+        try entry_block.instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = has_value }, .{ .block_ref = has_value_block_idx } },
+            .result = use_default_block_idx,
+        });
+
+        // Pop merge block temporarily
+        const merge_block = self.func().blocks.pop().?;
+        // Pop default block temporarily
+        const default_block = self.func().blocks.pop().?;
+
+        // Now in has_value block: extract the unwrapped value
+        const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
+        const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
+
+        // Store unwrapped value to result
+        try self.func().emitStore(result_ptr, unwrapped_value);
+
+        // Branch to merge
+        try self.func().currentBlock().?.instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = merge_block_idx }, .none },
+            .result = null,
+        });
+
+        // Push default block back and switch to it
+        try self.func().blocks.append(self.allocator, default_block);
+
+        // Evaluate default expression here (short-circuit evaluation)
+        const default_typed = try self.convertExpression(nc.default.*);
+
+        // Store default value to result
+        try self.func().emitStore(result_ptr, default_typed.value);
+
+        // Branch to merge
+        try self.func().currentBlock().?.instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = merge_block_idx }, .none },
+            .result = null,
+        });
+
+        // Push merge block back and switch to it
+        try self.func().blocks.append(self.allocator, merge_block);
+
+        // Load result
+        const result = try self.func().emitLoad(result_ptr, wrapped_type);
+        return .{ .value = result, .ty = default_typed.ty };
+    }
+
     fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
-        const struct_info = try self.lookupStructInfo(sinit.type_name);
+        // Build monomorphized type name if there are type arguments
+        const type_name = if (sinit.type_args.len > 0) blk: {
+            // Check if monomorphized version exists, if not create it
+            const mono_name = try self.getOrCreateMonomorphizedType(sinit.type_name, sinit.type_args);
+            break :blk mono_name;
+        } else self.resolveTypeName(sinit.type_name);
+
+        const struct_info = try self.lookupStructInfo(type_name);
         const struct_ptr = try self.func().emitAllocaSized(struct_info.size);
-        try self.initStructInto(sinit, struct_ptr);
-        return .{ .value = struct_ptr, .ty = .{ .struct_type = sinit.type_name } };
+        try self.initStructIntoResolved(sinit, struct_ptr, type_name);
+        return .{ .value = struct_ptr, .ty = .{ .struct_type = type_name } };
     }
 
     /// Initialize struct fields into an existing pointer (used for sret returns)
     fn initStructInto(self: *AstToIr, sinit: ast.StructInitExpr, dest_ptr: ir.Value) ConvertError!void {
-        const struct_info = try self.lookupStructInfo(sinit.type_name);
+        // Build monomorphized type name if there are type arguments
+        const type_name = if (sinit.type_args.len > 0) blk: {
+            const mono_name = try self.getOrCreateMonomorphizedType(sinit.type_name, sinit.type_args);
+            break :blk mono_name;
+        } else self.resolveTypeName(sinit.type_name);
+        try self.initStructIntoResolved(sinit, dest_ptr, type_name);
+    }
+
+    /// Initialize struct fields into an existing pointer with resolved type name
+    fn initStructIntoResolved(self: *AstToIr, sinit: ast.StructInitExpr, dest_ptr: ir.Value, type_name: []const u8) ConvertError!void {
+        const struct_info = try self.lookupStructInfo(type_name);
+
+        // Zero the entire struct first to ensure uninitialized fields are zero
+        // This is important for types like Array that need zeroed memory
+        try self.func().emitMemset(dest_ptr, 0, struct_info.size);
+
         for (sinit.fields) |field_init| {
             const field_info = try lookupField(struct_info, field_init.name);
             const field_ptr = try self.func().emitGetFieldPtr(dest_ptr, field_info.offset);
             const field_val = try self.convertExpression(field_init.value.*);
 
             // Track ownership transfer for array/struct fields
-            try self.trackFieldOwnershipTransfer(field_init.value.*, sinit.type_name);
+            try self.trackFieldOwnershipTransfer(field_init.value.*, type_name);
 
             if (field_info.isStruct()) {
                 // Struct fields are embedded inline - copy the data
@@ -1825,6 +2623,7 @@ pub const AstToIr = struct {
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
             else => {
+                std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
                 self.reportError(.E006);
                 return error.UnknownType;
             },
@@ -1852,6 +2651,23 @@ pub const AstToIr = struct {
             else => return builtin_err,
         }
 
+        // If inside a method body, check if calling a method of the current type (implicit self)
+        // Only do this if we have an active function (not during registration)
+        if (self.self_ptr != null and self.current_type_name != null and self.current_func != null) {
+            const type_name = self.current_type_name.?;
+            // Build mangled name on stack to avoid allocation
+            var mangled_buf: [256]u8 = undefined;
+            if (std.fmt.bufPrint(&mangled_buf, "{s}${s}", .{ type_name, call.func_name })) |mangled_name| {
+                if (self.func_map.contains(mangled_name)) {
+                    // It's a method of the current type - call via self
+                    debug.astToIr("Implicit method call: {s} (self_ptr=%{d})", .{ mangled_name, self.self_ptr.? });
+                    return self.emitMethodCall(type_name, call.func_name, call.args, self.self_ptr.?);
+                }
+            } else |_| {
+                // Name too long, skip implicit method check
+            }
+        }
+
         const func_info = self.func_map.get(call.func_name) orelse {
             // Unknown function (e.g., from stdlib) - still pass the arguments
             const args = try self.func().allocator.alloc(ir.Value, call.args.len);
@@ -1864,19 +2680,30 @@ pub const AstToIr = struct {
             return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
         };
 
-        // Check if callee returns a struct (needs sret)
-        const returns_struct = func_info.return_type_name != null;
+        // Check if return type is optional (needs sret for 16-byte struct)
+        const returns_optional = if (func_info.return_value_type) |vt|
+            vt == .optional_type
+        else
+            false;
+
+        // Check if callee returns a struct or optional (needs sret)
+        const returns_struct = func_info.return_type_name != null or returns_optional;
         var sret_buffer: ?ir.Value = null;
 
         // Allocate args: +1 if using sret for hidden first parameter
         const num_args = call.args.len + @as(usize, if (returns_struct) 1 else 0);
         const args = try self.func().allocator.alloc(ir.Value, num_args);
 
-        // If returning struct, allocate buffer in caller and pass as first arg
+        // If returning struct or optional, allocate buffer in caller and pass as first arg
         if (returns_struct) {
-            const struct_name = func_info.return_type_name.?;
-            const struct_info = try self.lookupStructInfo(struct_name);
-            sret_buffer = try self.func().emitAllocaSized(struct_info.size);
+            if (returns_optional) {
+                // Optional is 16 bytes (tag + value)
+                sret_buffer = try self.func().emitAllocaSized(16);
+            } else {
+                const struct_name = func_info.return_type_name.?;
+                const struct_info = try self.lookupStructInfo(struct_name);
+                sret_buffer = try self.func().emitAllocaSized(struct_info.size);
+            }
             args[0] = sret_buffer.?;
         }
 
@@ -1892,6 +2719,10 @@ pub const AstToIr = struct {
         if (func_info.return_type_name) |struct_name| {
             // Return the sret buffer we allocated (not the call result)
             return .{ .value = sret_buffer.?, .ty = .{ .struct_type = struct_name } };
+        }
+        // If the function returns an optional with sret, return the sret buffer
+        if (returns_optional) {
+            return .{ .value = sret_buffer.?, .ty = func_info.return_value_type.? };
         }
         // If the function returns an array, use the full array type info
         if (func_info.return_value_type) |vtype| {
@@ -1916,7 +2747,28 @@ pub const AstToIr = struct {
         .{ .name = "abs", .op = .fabs, .arg_type = .f64, .ret_type = .f64 },
     };
 
+    /// Check if current source file is part of stdlib
+    /// Check if we're in stdlib code (either compiling a stdlib file or converting stdlib methods)
+    fn isStdlibFile(self: *AstToIr) bool {
+        // Allow stdlib builtins when converting monomorphized stdlib methods
+        if (self.in_stdlib_method) return true;
+
+        const path = self.source_file orelse return false;
+        // Check for /stdlib/ or \stdlib\ in path
+        return std.mem.indexOf(u8, path, "/stdlib/") != null or
+            std.mem.indexOf(u8, path, "\\stdlib\\") != null;
+    }
+
     fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        // Check for __managed_array_* intrinsics (stdlib-only)
+        if (std.mem.startsWith(u8, call.func_name, "__managed_array_")) {
+            if (!self.isStdlibFile()) {
+                self.reportErrorWithDetails(.E016, call.func_name);
+                return error.SemanticError;
+            }
+            return self.convertManagedArrayIntrinsic(call);
+        }
+
         const builtin = for (builtins) |b| {
             if (std.mem.eql(u8, call.func_name, b.name)) break b;
         } else return error.NotABuiltin;
@@ -1937,6 +2789,257 @@ pub const AstToIr = struct {
         return .{ .value = result, .ty = .{ .primitive = builtin.ret_type } };
     }
 
+    // ------------------------------------------------------------------------
+    // __ManagedArray Intrinsics (stdlib-only)
+    // ------------------------------------------------------------------------
+
+    fn convertManagedArrayIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        const name = call.func_name;
+
+        if (std.mem.eql(u8, name, "__managed_array_len")) {
+            return self.intrinsicManagedArrayLen(call);
+        } else if (std.mem.eql(u8, name, "__managed_array_capacity")) {
+            return self.intrinsicManagedArrayCapacity(call);
+        } else if (std.mem.eql(u8, name, "__managed_array_set_at")) {
+            return self.intrinsicManagedArraySetAt(call);
+        } else if (std.mem.eql(u8, name, "__managed_array_set_length")) {
+            return self.intrinsicManagedArraySetLength(call);
+        } else if (std.mem.eql(u8, name, "__managed_array_grow")) {
+            return self.intrinsicManagedArrayGrow(call);
+        } else if (std.mem.eql(u8, name, "__managed_array_shift_right")) {
+            return self.intrinsicManagedArrayShiftRight(call);
+        } else if (std.mem.eql(u8, name, "__managed_array_shift_left")) {
+            return self.intrinsicManagedArrayShiftLeft(call);
+        } else {
+            self.reportErrorWithDetails(.E016, name);
+            return error.SemanticError;
+        }
+    }
+
+    /// __managed_array_len(managed) -> int
+    /// Returns the length field of the __ManagedArray
+    fn intrinsicManagedArrayLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        if (call.args.len != 1) {
+            self.reportError(.E011);
+            return error.WrongArgumentCount;
+        }
+
+        const managed = try self.convertExpression(call.args[0]);
+        // Load _len field (offset 8 in __ManagedArray)
+        const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
+        const len = try self.func().emitLoad(len_ptr, .i64);
+
+        return .{ .value = len, .ty = .{ .primitive = .i64 } };
+    }
+
+    /// __managed_array_capacity(managed) -> int
+    /// Returns the capacity field of the __ManagedArray
+    fn intrinsicManagedArrayCapacity(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        if (call.args.len != 1) {
+            self.reportError(.E011);
+            return error.WrongArgumentCount;
+        }
+
+        const managed = try self.convertExpression(call.args[0]);
+        // Load _capacity field (offset 16 in __ManagedArray)
+        const cap_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
+        const cap = try self.func().emitLoad(cap_ptr, .i64);
+
+        return .{ .value = cap, .ty = .{ .primitive = .i64 } };
+    }
+
+    /// __managed_array_set_at(managed, index, value) -> void
+    /// Sets element at index (no bounds checking - caller must verify)
+    fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        if (call.args.len != 3) {
+            self.reportError(.E011);
+            return error.WrongArgumentCount;
+        }
+
+        const managed = try self.convertExpression(call.args[0]);
+        const index = try self.convertExpression(call.args[1]);
+        const value = try self.convertExpression(call.args[2]);
+
+        // Load buffer pointer (offset 0)
+        const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+
+        // Calculate element address: buf_ptr + index * 8
+        const elem_ptr = try self.func().emitGetElemPtr(buf_ptr, index.value, 8);
+
+        // Store value
+        try self.func().emitStore(elem_ptr, value.value);
+
+        return .{ .value = 0, .ty = .{ .primitive = .void } };
+    }
+
+    /// __managed_array_set_length(managed, new_len) -> void
+    /// Sets the length field of the __ManagedArray
+    fn intrinsicManagedArraySetLength(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        if (call.args.len != 2) {
+            self.reportError(.E011);
+            return error.WrongArgumentCount;
+        }
+
+        const managed = try self.convertExpression(call.args[0]);
+        const new_len = try self.convertExpression(call.args[1]);
+
+        // Store to _len field (offset 8)
+        const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
+        try self.func().emitStore(len_ptr, new_len.value);
+
+        return .{ .value = 0, .ty = .{ .primitive = .void } };
+    }
+
+    /// __managed_array_grow(managed, new_capacity) -> void
+    /// Reallocates buffer to new_capacity (must be > current capacity)
+    fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        if (call.args.len != 2) {
+            self.reportError(.E011);
+            return error.WrongArgumentCount;
+        }
+
+        const managed = try self.convertExpression(call.args[0]);
+        const new_capacity = try self.convertExpression(call.args[1]);
+
+        // Calculate new buffer size: new_capacity * 8
+        const eight = try self.func().emitConstI64(8);
+        const new_size = try self.func().emitBinaryOp(.mul, new_capacity.value, eight, .i64);
+
+        // Load current buffer pointer
+        const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+
+        // Realloc: new_buf = heap_realloc(buf_ptr, new_size)
+        const new_buf = try self.func().emitHeapRealloc(buf_ptr, new_size);
+
+        // Store new buffer pointer (offset 0)
+        try self.func().emitStore(managed.value, new_buf);
+
+        // Store new capacity (offset 16)
+        const cap_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
+        try self.func().emitStore(cap_ptr, new_capacity.value);
+
+        return .{ .value = 0, .ty = .{ .primitive = .void } };
+    }
+
+    /// __managed_array_shift_right(managed, start_index, count) -> void
+    /// Shifts elements from start_index right by count positions
+    /// Iterates backwards from end to start to handle overlap correctly
+    fn intrinsicManagedArrayShiftRight(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        if (call.args.len != 3) {
+            self.reportError(.E011);
+            return error.WrongArgumentCount;
+        }
+
+        const managed = try self.convertExpression(call.args[0]);
+        const start_index = try self.convertExpression(call.args[1]);
+        const count = try self.convertExpression(call.args[2]);
+
+        // Load buffer and length
+        const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+        const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
+        const len = try self.func().emitLoad(len_ptr, .i64);
+
+        const eight = try self.func().emitConstI64(8);
+        const one = try self.func().emitConstI64(1);
+
+        // Loop from i = len-1 down to start_index, moving each element right by count
+        const i_ptr = try self.func().emitAllocaSized(8);
+        const init_i = try self.func().emitBinaryOp(.sub, len, one, .i64);
+        try self.func().emitStore(i_ptr, init_i);
+
+        // Create loop blocks using helper
+        var loop = try LoopBlocks.create(self, "shift_right_cond", "shift_right_body", "shift_right_end");
+
+        // Condition: i >= start_index (cond block is current)
+        const i_val = try self.func().emitLoad(i_ptr, .i64);
+        const cond = try self.func().emitBinaryOp(.icmp_ge, i_val, start_index.value, .i64);
+
+        // Emit conditional branch and switch to body block
+        try loop.emitCondBranch(self, cond);
+
+        // Body: arr[i + count] = arr[i]; i--;
+        const i_val2 = try self.func().emitLoad(i_ptr, .i64);
+        const src_offset = try self.func().emitBinaryOp(.mul, i_val2, eight, .i64);
+        const src_ptr = try self.func().emitBinaryOp(.add, buf_ptr, src_offset, .ptr);
+        const elem_val = try self.func().emitLoad(src_ptr, .i64);
+
+        const dst_idx = try self.func().emitBinaryOp(.add, i_val2, count.value, .i64);
+        const dst_offset = try self.func().emitBinaryOp(.mul, dst_idx, eight, .i64);
+        const dst_ptr = try self.func().emitBinaryOp(.add, buf_ptr, dst_offset, .ptr);
+        try self.func().emitStore(dst_ptr, elem_val);
+
+        const new_i = try self.func().emitBinaryOp(.sub, i_val2, one, .i64);
+        try self.func().emitStore(i_ptr, new_i);
+        try self.func().emitBr(loop.cond_block_idx);
+
+        // Finish loop and restore end block
+        try loop.finish(self);
+
+        return .{ .value = 0, .ty = .{ .primitive = .void } };
+    }
+
+    /// __managed_array_shift_left(managed, start_index, count) -> void
+    /// Shifts elements from start_index+count left by count positions
+    /// Iterates forwards from start to end to handle overlap correctly
+    fn intrinsicManagedArrayShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+        if (call.args.len != 3) {
+            self.reportError(.E011);
+            return error.WrongArgumentCount;
+        }
+
+        const managed = try self.convertExpression(call.args[0]);
+        const start_index = try self.convertExpression(call.args[1]);
+        const count = try self.convertExpression(call.args[2]);
+
+        // Load buffer and length
+        const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+        const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
+        const len = try self.func().emitLoad(len_ptr, .i64);
+
+        const eight = try self.func().emitConstI64(8);
+        const one = try self.func().emitConstI64(1);
+
+        // Source start index: start_index + count
+        const src_start = try self.func().emitBinaryOp(.add, start_index.value, count.value, .i64);
+
+        // Loop from i = 0, while src_start + i < len
+        const i_ptr = try self.func().emitAllocaSized(8);
+        const zero = try self.func().emitConstI64(0);
+        try self.func().emitStore(i_ptr, zero);
+
+        // Create loop blocks using helper
+        var loop = try LoopBlocks.create(self, "shift_left_cond", "shift_left_body", "shift_left_end");
+
+        // Condition: src_start + i < len (cond block is current)
+        const i_val = try self.func().emitLoad(i_ptr, .i64);
+        const src_idx = try self.func().emitBinaryOp(.add, src_start, i_val, .i64);
+        const cond = try self.func().emitBinaryOp(.icmp_lt, src_idx, len, .i64);
+
+        // Emit conditional branch and switch to body block
+        try loop.emitCondBranch(self, cond);
+
+        // Body: arr[start_index + i] = arr[src_start + i]; i++;
+        const i_val2 = try self.func().emitLoad(i_ptr, .i64);
+        const src_idx2 = try self.func().emitBinaryOp(.add, src_start, i_val2, .i64);
+        const src_offset = try self.func().emitBinaryOp(.mul, src_idx2, eight, .i64);
+        const src_ptr = try self.func().emitBinaryOp(.add, buf_ptr, src_offset, .ptr);
+        const elem_val = try self.func().emitLoad(src_ptr, .i64);
+
+        const dst_idx = try self.func().emitBinaryOp(.add, start_index.value, i_val2, .i64);
+        const dst_offset = try self.func().emitBinaryOp(.mul, dst_idx, eight, .i64);
+        const dst_ptr = try self.func().emitBinaryOp(.add, buf_ptr, dst_offset, .ptr);
+        try self.func().emitStore(dst_ptr, elem_val);
+
+        const new_i = try self.func().emitBinaryOp(.add, i_val2, one, .i64);
+        try self.func().emitStore(i_ptr, new_i);
+        try self.func().emitBr(loop.cond_block_idx);
+
+        // Finish loop and restore end block
+        try loop.finish(self);
+
+        return .{ .value = 0, .ty = .{ .primitive = .void } };
+    }
+
     fn checkOwnershipTransfer(self: *AstToIr, func_name: []const u8, arg_expr: ast.Expression, param_idx: usize) ConvertError!void {
         const analyzer = self.mutation_analyzer orelse return;
         if (!analyzer.doesMutateParam(func_name, param_idx)) return;
@@ -1954,9 +3057,207 @@ pub const AstToIr = struct {
         var_info.markMoved(func_name, self.current_line);
     }
 
+    /// Index into a __ManagedArray: managed[i]
+    /// Returns the element as an optional (bounds-checked)
+    fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression) ConvertError!TypedValue {
+        const idx_typed = try self.convertExpression(index_expr);
+
+        // Load buffer pointer (offset 0) and length (offset 8)
+        const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
+        const len_ptr = try self.func().emitGetFieldPtr(managed_ptr, 8);
+        const len = try self.func().emitLoad(len_ptr, .i64);
+
+        // Allocate the result optional (16 bytes)
+        const opt_ptr = try self.func().emitAllocaSized(16);
+
+        // Bounds check: index >= 0 AND index < len
+        const zero = try self.func().emitConstI64(0);
+        const is_non_negative = try self.func().emitBinaryOp(.icmp_ge, idx_typed.value, zero, .i64);
+        const is_less_than_len = try self.func().emitBinaryOp(.icmp_lt, idx_typed.value, len, .i64);
+        const in_bounds = try self.func().emitBinaryOp(.mul, is_non_negative, is_less_than_len, .i64);
+
+        // Create blocks for branching
+        const in_bounds_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("managed_index_in_bounds");
+
+        const out_of_bounds_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("managed_index_out_of_bounds");
+
+        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("managed_index_merge");
+
+        // Emit conditional branch in previous block
+        const entry_block = &self.func().blocks.items[in_bounds_block_idx - 1];
+        try entry_block.instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx } },
+            .result = out_of_bounds_block_idx,
+        });
+
+        // Save merge and out_of_bounds blocks
+        const merge_block = self.func().blocks.pop().?;
+        const out_of_bounds_block = self.func().blocks.pop().?;
+
+        // In-bounds block: create some(element)
+        const one_val = try self.func().emitConstI64(1);
+        try self.func().emitStore(opt_ptr, one_val); // tag = 1
+
+        // Calculate element pointer: buf_ptr + index * 8
+        const eight = try self.func().emitConstI64(8);
+        const offset = try self.func().emitBinaryOp(.mul, idx_typed.value, eight, .i64);
+        const elem_ptr = try self.func().emitBinaryOp(.add, buf_ptr, offset, .ptr);
+        const val = try self.func().emitLoad(elem_ptr, .i64);
+
+        const value_slot = try self.func().emitGetFieldPtr(opt_ptr, 8);
+        try self.func().emitStore(value_slot, val);
+
+        try self.func().emitBr(merge_block_idx);
+
+        // Restore out-of-bounds block
+        try self.func().blocks.append(self.allocator, out_of_bounds_block);
+
+        // Out-of-bounds block: create nil
+        const zero_val = try self.func().emitConstI64(0);
+        try self.func().emitStore(opt_ptr, zero_val); // tag = 0
+
+        try self.func().emitBr(merge_block_idx);
+
+        // Restore merge block
+        try self.func().blocks.append(self.allocator, merge_block);
+
+        // Return the optional (element type is i64 for now)
+        return .{
+            .value = opt_ptr,
+            .ty = .{ .optional_type = .{
+                .wrapped = .i64,
+                .wrapped_struct_type = null,
+            } },
+        };
+    }
+
     // ------------------------------------------------------------------------
     // Array Expression Conversion
     // ------------------------------------------------------------------------
+
+    /// Convert InitableFromArrayLiteral with simple type annotation: var arr IntArray = [1, 2, 3]
+    fn convertInitableFromArrayLiteralSimple(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
+        try self.convertInitableFromArrayLiteralImpl(decl, type_name);
+    }
+
+    /// Convert InitableFromArrayLiteral: var arr Array of int = [1, 2, 3]
+    /// Creates a __ManagedArray and calls Type$init(managed)
+    fn convertInitableFromArrayLiteral(self: *AstToIr, decl: ast.VarDecl, gen: ast.GenericTypeExpr) !void {
+        try self.convertInitableFromArrayLiteralImpl(decl, gen.base_type);
+    }
+
+    /// Implementation of InitableFromArrayLiteral transformation
+    fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
+        const arr_lit = decl.value.array_literal;
+        const elements = arr_lit.elements;
+
+        debug.astToIr("InitableFromArrayLiteral: {s} with {d} elements", .{ type_name, elements.len });
+
+        // Allocate __ManagedArray on stack (24 bytes: ptr + len + capacity)
+        const managed_ptr = try self.func().emitAllocaSized(24);
+
+        if (elements.len == 0) {
+            // Empty array: buffer=null, len=0, capacity=0
+            const null_ptr = try self.func().emitConstI64(0);
+            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, null_ptr, 0);
+            try self.func().emitStore(buffer_slot, null_ptr);
+
+            const len_offset = try self.func().emitConstI64(1);
+            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
+            try self.func().emitStore(len_slot, null_ptr);
+
+            const cap_offset = try self.func().emitConstI64(2);
+            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 8);
+            try self.func().emitStore(cap_slot, null_ptr);
+        } else {
+            // Allocate buffer for elements (on heap for ownership)
+            const elem_count = try self.func().emitConstI64(@intCast(elements.len));
+            const elem_size: i64 = 8; // All elements are 8 bytes (i64, f64, or pointer)
+            const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
+            const buffer = try self.func().emitHeapAlloc(buffer_size);
+
+            // Store elements into buffer
+            for (elements, 0..) |elem, i| {
+                const typed = try self.convertExpression(elem);
+                const idx_val = try self.func().emitConstI64(@intCast(i));
+                const elem_ptr = try self.func().emitGetElemPtr(buffer, idx_val, @intCast(elem_size));
+                try self.func().emitStore(elem_ptr, typed.value);
+            }
+
+            // Store buffer pointer into __ManagedArray
+            const zero = try self.func().emitConstI64(0);
+            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, zero, 0);
+            try self.func().emitStore(buffer_slot, buffer);
+
+            // Store length
+            const len_offset = try self.func().emitConstI64(1);
+            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
+            try self.func().emitStore(len_slot, elem_count);
+
+            // Store capacity (same as length for literals)
+            const cap_offset = try self.func().emitConstI64(2);
+            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 8);
+            try self.func().emitStore(cap_slot, elem_count);
+        }
+
+        // Call Type$init(managed) - the static init method
+        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
+        try self.module.trackString(init_func_name);
+
+        // Look up the function and type info
+        const func_info = self.func_map.get(init_func_name) orelse {
+            self.reportErrorWithDetails(.E003, init_func_name);
+            return error.UnknownFunction;
+        };
+        const type_info = self.type_map.get(type_name) orelse {
+            std.debug.print("[AST->IR] InitableFromArrayLiteral: unknown type '{s}'\n", .{type_name});
+            return error.UnknownType;
+        };
+
+        // Check if return type is a struct (needs sret)
+        const uses_sret = type_info == .struct_type;
+
+        if (uses_sret) {
+            // Allocate space for returned struct
+            const struct_size = type_info.struct_type.size;
+            const result_ptr = try self.func().emitAllocaSized(struct_size);
+
+            // Build args: [sret_ptr, managed_ptr]
+            var args = try self.func().allocator.alloc(ir.Value, 2);
+            args[0] = result_ptr;
+            args[1] = managed_ptr;
+
+            // Call init with sret
+            _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+            // Store result in var_map
+            try self.func().setValueName(result_ptr, decl.name);
+            try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+                result_ptr,
+                .{ .struct_type = type_name },
+                self.current_decl_is_mutable,
+                false,
+            ));
+        } else {
+            // Non-struct return type (unlikely for InitableFromArrayLiteral)
+            var args = try self.func().allocator.alloc(ir.Value, 1);
+            args[0] = managed_ptr;
+            const result = try self.func().emitCall(init_func_name, args, func_info.return_type);
+            const result_ptr = try self.func().emitAlloca(func_info.return_type);
+            try self.func().emitStore(result_ptr, result orelse 0);
+            try self.func().setValueName(result_ptr, decl.name);
+            try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+                result_ptr,
+                .{ .primitive = func_info.return_type },
+                self.current_decl_is_mutable,
+                false,
+            ));
+        }
+    }
 
     fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) ConvertError!TypedValue {
         const elements = arr_lit.elements;
@@ -1992,9 +3293,18 @@ pub const AstToIr = struct {
 
     fn convertIndex(self: *AstToIr, idx: ast.IndexExpr) ConvertError!TypedValue {
         const base_typed = try self.convertExpression(idx.base.*);
+
+        // Handle __ManagedArray indexing (stdlib only)
+        if (base_typed.ty == .struct_type) {
+            if (std.mem.eql(u8, base_typed.ty.struct_type, "__ManagedArray")) {
+                return self.convertManagedArrayIndex(base_typed.value, idx.index.*);
+            }
+        }
+
         const arr_info = switch (base_typed.ty) {
             .array_type => |a| a,
             else => {
+                std.debug.print("[AST->IR] convertIndexExpr: expected array type\n", .{});
                 self.reportError(.E006);
                 return error.UnknownType;
             },
@@ -2131,31 +3441,23 @@ pub const AstToIr = struct {
     }
 
     fn convertMethodCall(self: *AstToIr, mcall: ast.MethodCallExpr) ConvertError!void {
+        // Check if base is a type name (static method call: TypeName.method())
+        if (mcall.base.* == .identifier) {
+            const base_name = mcall.base.identifier;
+            if (self.type_map.contains(base_name)) {
+                _ = try self.emitMethodCall(base_name, mcall.method_name, mcall.args, null);
+                return;
+            }
+        }
+
         // Convert base and get its type
         const base_typed = try self.convertExpression(mcall.base.*);
 
         // Check if this is a struct type with methods
         if (base_typed.ty == .struct_type) {
-            const type_name = base_typed.ty.struct_type;
-            // Generate mangled name and track in module for cleanup (used in IR)
-            const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, mcall.method_name });
-            try self.module.trackString(mangled_name);
-
-            // Check if method exists
-            if (self.func_map.get(mangled_name)) |func_info| {
-                // Build args: self + explicit args
-                const num_args = mcall.args.len + 1;
-                const args = try self.allocator.alloc(ir.Value, num_args);
-                args[0] = base_typed.value;
-
-                for (mcall.args, 0..) |arg_expr, i| {
-                    const arg = try self.convertExpression(arg_expr);
-                    args[i + 1] = arg.value;
-                }
-
-                _ = try self.func().emitCall(mangled_name, args, func_info.return_type);
-                return;
-            }
+            // Use emitMethodCall which handles sret correctly for struct-returning methods
+            _ = try self.emitMethodCall(base_typed.ty.struct_type, mcall.method_name, mcall.args, base_typed.value);
+            return;
         }
 
         // Fall back to array methods
@@ -2265,8 +3567,14 @@ pub const AstToIr = struct {
             return error.SemanticError;
         };
 
+        // Check if return type is optional (needs sret for 16-byte struct)
+        const returns_optional = if (func_info.return_value_type) |vt|
+            vt == .optional_type
+        else
+            false;
+
         // Determine argument layout
-        const returns_struct = func_info.return_type_name != null;
+        const returns_struct = func_info.return_type_name != null or returns_optional;
         const has_self = self_value != null;
         const sret_offset: usize = if (returns_struct) 1 else 0;
         const self_offset: usize = if (has_self) 1 else 0;
@@ -2275,11 +3583,16 @@ pub const AstToIr = struct {
         const args = try self.allocator.alloc(ir.Value, num_args);
         var arg_idx: usize = 0;
 
-        // Sret buffer as first arg if returning struct
+        // Sret buffer as first arg if returning struct or optional
         var sret_buffer: ?ir.Value = null;
         if (returns_struct) {
-            const struct_info = try self.lookupStructInfo(func_info.return_type_name.?);
-            sret_buffer = try self.func().emitAllocaSized(struct_info.size);
+            if (returns_optional) {
+                // Optional is 16 bytes (tag + value)
+                sret_buffer = try self.func().emitAllocaSized(16);
+            } else {
+                const struct_info = try self.lookupStructInfo(func_info.return_type_name.?);
+                sret_buffer = try self.func().emitAllocaSized(struct_info.size);
+            }
             args[arg_idx] = sret_buffer.?;
             arg_idx += 1;
         }
@@ -2301,6 +3614,11 @@ pub const AstToIr = struct {
 
         // Return appropriate value
         if (sret_buffer) |buf| {
+            // For optionals, return the buffer with optional type
+            if (returns_optional) {
+                return .{ .value = buf, .ty = func_info.return_value_type.? };
+            }
+            // For structs, return the buffer with struct type
             return .{ .value = buf, .ty = .{ .struct_type = func_info.return_type_name.? } };
         }
         const ret_ty: ValueType = if (func_info.return_value_type) |vt|
@@ -2311,6 +3629,20 @@ pub const AstToIr = struct {
             .{ .primitive = func_info.return_type };
 
         return .{ .value = result orelse try self.func().emitConstI64(0), .ty = ret_ty };
+    }
+
+    /// Call a method on an already-converted TypedValue (used for for-in loop desugaring)
+    fn convertMethodCallOnTyped(self: *AstToIr, base_typed: TypedValue, method_name: []const u8, arg_exprs: []const ast.Expression) ConvertError!TypedValue {
+        // Get the type name from the TypedValue
+        const type_name = switch (base_typed.ty) {
+            .struct_type => |name| name,
+            else => {
+                debug.astToIr("error: method call on non-struct type", .{});
+                return error.SemanticError;
+            },
+        };
+
+        return self.emitMethodCall(type_name, method_name, arg_exprs, base_typed.value);
     }
 
     fn convertMethodCallExpr(self: *AstToIr, mcall: ast.MethodCallExpr) ConvertError!TypedValue {
@@ -2412,19 +3744,30 @@ pub fn convertWithExternals(
     mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
     source_file: ?[]const u8,
     external_funcs: ?[]const ExternalFuncSignature,
+    external_types: ?[]const ExternalTypeInfo,
     out_error: *?err.CompileError,
 ) ConvertError!ir.Module {
     var converter = AstToIr.init(allocator, mutation_analyzer);
     converter.source_file = source_file;
     defer converter.deinit();
 
+    // Register external types before conversion
+    if (external_types) |types| {
+        for (types) |ext_type| {
+            try converter.registerExternalType(ext_type);
+        }
+    }
+
     // Register external function signatures before conversion
     if (external_funcs) |funcs| {
         for (funcs) |ext_func| {
+            // Skip if already registered (avoid duplicates from multiple source files)
+            if (converter.func_map.contains(ext_func.name)) continue;
+
             try converter.func_map.put(allocator, ext_func.name, .{
                 .return_type = ext_func.return_type,
-                .return_type_name = null,
-                .return_value_type = null,
+                .return_type_name = ext_func.return_type_name,
+                .return_value_type = ext_func.return_value_type,
                 .param_types = &.{},
             });
             debug.astToIr("Registered external function '{s}' returning {s}", .{ ext_func.name, ext_func.return_type.format() });
@@ -2451,4 +3794,180 @@ pub fn extractFunctionSignatures(module: *const ir.Module, allocator: std.mem.Al
     }
 
     return signatures.toOwnedSlice(allocator);
+}
+
+/// Extract type info from a parsed program (for cross-module compilation)
+pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalTypeInfo {
+    var types = std.ArrayListUnmanaged(ExternalTypeInfo){};
+    errdefer types.deinit(allocator);
+
+    for (program.types) |*type_decl| {
+        var fields = std.ArrayListUnmanaged(ExternalFieldInfo){};
+        errdefer fields.deinit(allocator);
+
+        // Calculate fields and offsets
+        var offset: i32 = 0;
+        for (type_decl.fields) |field| {
+            const type_name: []const u8 = switch (field.type_expr) {
+                .simple => |name| name,
+                .array => "ptr", // Arrays stored as pointers
+                .generic => |gen| gen.base_type, // Use base type for generics
+                .optional => "ptr", // Optionals stored as pointers
+            };
+
+            // Most types are 8 bytes (i64, f64, ptr)
+            // __ManagedArray is a special compiler-internal type that is 24 bytes
+            const field_size: i32 = if (std.mem.eql(u8, type_name, "__ManagedArray")) 24 else 8;
+
+            try fields.append(allocator, .{
+                .name = field.name,
+                .offset = offset,
+                .size = field_size,
+                .type_name = type_name,
+            });
+
+            offset += field_size;
+        }
+
+        // Include type declaration for generic types (needed for monomorphization)
+        const decl_ptr: ?*const ast.TypeDecl = if (type_decl.generic_params.len > 0) type_decl else null;
+
+        try types.append(allocator, .{
+            .name = type_decl.name,
+            .size = offset,
+            .fields = try fields.toOwnedSlice(allocator),
+            .type_decl = decl_ptr,
+        });
+    }
+
+    return types.toOwnedSlice(allocator);
+}
+
+/// Extract function signatures from a parsed program (for cross-module compilation)
+/// This includes methods from type declarations
+pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalFuncSignature {
+    var signatures = std.ArrayListUnmanaged(ExternalFuncSignature){};
+    errdefer signatures.deinit(allocator);
+
+    // Extract standalone functions
+    for (program.functions) |func| {
+        const return_type: ir.Type = if (func.return_type) |rt|
+            getIrTypeFromTypeExpr(rt)
+        else
+            .void;
+
+        const return_type_name: ?[]const u8 = if (func.return_type) |rt|
+            getStructNameFromTypeExpr(rt)
+        else
+            null;
+
+        const return_value_type: ?ValueType = if (func.return_type) |rt|
+            getValueTypeFromTypeExpr(rt)
+        else
+            null;
+
+        // Allocate copy of name for uniform ownership (all names are owned)
+        const name_copy = try allocator.dupe(u8, func.name);
+
+        try signatures.append(allocator, .{
+            .name = name_copy,
+            .return_type = return_type,
+            .return_type_name = return_type_name,
+            .return_value_type = return_value_type,
+        });
+    }
+
+    // Extract methods from types
+    for (program.types) |type_decl| {
+        for (type_decl.methods) |method| {
+            const mangled_name = try std.fmt.allocPrint(allocator, "{s}${s}", .{ type_decl.name, method.name });
+
+            const return_type: ir.Type = if (method.return_type) |rt|
+                getIrTypeFromTypeExpr(rt)
+            else
+                .void;
+
+            // For methods returning the containing type (like init() -> Self)
+            var return_type_name: ?[]const u8 = if (method.return_type) |rt|
+                getStructNameFromTypeExpr(rt)
+            else
+                null;
+
+            // Handle "Self" return type
+            if (return_type_name) |name| {
+                if (std.mem.eql(u8, name, "Self")) {
+                    return_type_name = type_decl.name;
+                }
+            }
+
+            const return_value_type: ?ValueType = if (method.return_type) |rt|
+                getValueTypeFromTypeExpr(rt)
+            else
+                null;
+
+            try signatures.append(allocator, .{
+                .name = mangled_name,
+                .return_type = return_type,
+                .return_type_name = return_type_name,
+                .return_value_type = return_value_type,
+            });
+        }
+    }
+
+    return signatures.toOwnedSlice(allocator);
+}
+
+/// Helper: get IR type from TypeExpr (simplified)
+fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
+    return switch (te) {
+        .simple => |name| {
+            if (std.mem.eql(u8, name, "int")) return .i64;
+            if (std.mem.eql(u8, name, "float")) return .f64;
+            if (std.mem.eql(u8, name, "bool")) return .i64;
+            if (std.mem.eql(u8, name, "string")) return .ptr;
+            if (std.mem.eql(u8, name, "character")) return .i64;
+            if (std.mem.eql(u8, name, "byte")) return .i64;
+            // Struct types return ptr
+            return .ptr;
+        },
+        .array => .ptr,
+        .generic => .ptr,
+        .optional => .ptr,
+    };
+}
+
+/// Helper: get ValueType from TypeExpr (for optional/array types)
+fn getValueTypeFromTypeExpr(te: ast.TypeExpr) ?ValueType {
+    return switch (te) {
+        .optional => |wrapped| {
+            const wrapped_ir_type = getIrTypeFromTypeExpr(wrapped.*);
+            return .{
+                .optional_type = .{
+                    .wrapped = wrapped_ir_type,
+                },
+            };
+        },
+        else => null,
+    };
+}
+
+/// Helper: get struct name from TypeExpr if it's a struct type
+fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
+    return switch (te) {
+        .simple => |name| {
+            // Known primitives don't have struct names
+            if (std.mem.eql(u8, name, "int") or
+                std.mem.eql(u8, name, "float") or
+                std.mem.eql(u8, name, "bool") or
+                std.mem.eql(u8, name, "string") or
+                std.mem.eql(u8, name, "character") or
+                std.mem.eql(u8, name, "byte"))
+            {
+                return null;
+            }
+            return name;
+        },
+        .generic => |gen| gen.base_type,
+        .array, .optional => null,
+    };
 }

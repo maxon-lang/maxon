@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// Debug logging configuration
+/// Debug logging configuration - set to false for production builds
 pub var enabled: bool = true;
 
 /// Log a debug message

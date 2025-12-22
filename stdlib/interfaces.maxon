@@ -88,33 +88,31 @@ end 'Dictionary'
 // The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.init(managed)
 export interface InitableFromStringLiteral
 	static function init(managed _ManagedString) returns Self
-	end 'InitableFromStringLiteral'
+end 'InitableFromStringLiteral'
 
-	// InitableFromCharLiteral - types that can be initialized from character literals
-	// Similar to InitableFromStringLiteral but for single-character literals like 'A' or '🎉'
-	// The compiler constructs a _ManagedString containing the character's UTF-8 bytes
-	export interface InitableFromCharLiteral
-		static function init(managed _ManagedString) returns Self
-		end 'InitableFromCharLiteral'
+// InitableFromCharLiteral - types that can be initialized from character literals
+// Similar to InitableFromStringLiteral but for single-character literals like 'A' or '🎉'
+// The compiler constructs a _ManagedString containing the character's UTF-8 bytes
+export interface InitableFromCharLiteral
+	static function init(managed _ManagedString) returns Self
+end 'InitableFromCharLiteral'
 
-		// InitableFromArrayLiteral - types that can be initialized from array literals
-		// The compiler constructs a _managedArray and passes it to init.
-		// _managedArray is a compiler-internal opaque type with layout: { ptr buffer, i32 len, i32 capacity }
-		// - capacity = 0 for constant data (no heap cleanup needed, read-only)
-		// - capacity > 0 for heap-allocated data with refcount header
-		// The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(managed)
-		// The element type is inferred from the interface's generic parameter.
-		export interface InitableFromArrayLiteral uses Element
-			static function init(managed _managedArray) returns Self
-			end 'InitableFromArrayLiteral'
+// InitableFromArrayLiteral - types that can be initialized from array literals
+// The compiler constructs a __ManagedArray and passes it to init.
+// __ManagedArray is a compiler-internal opaque type with layout: { ptr buffer, i64 len, i64 capacity }
+// - capacity = 0 for constant data (no heap cleanup needed, read-only)
+// - capacity > 0 for heap-allocated data with refcount header
+// The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(managed)
+// The element type is inferred from the interface's generic parameter.
+export interface InitableFromArrayLiteral uses Element
+	static function init(managed __ManagedArray) returns Self
+end 'InitableFromArrayLiteral'
 
-			// InitableFromMapLiteral - types that can be initialized from map literals
-			// Map literals use syntax: ["key1": value1, "key2": value2]
-			// The compiler constructs two parallel _managedArrays (keys and values) and passes them to init.
-			// Both arrays have the same length and corresponding indices represent key-value pairs.
-			// The compiler detects conformance and transforms: var x = ["a": 1, "b": 2] -> var x = map.init(keys, values)
-			export interface InitableFromMapLiteral uses Key, Value
-				static function init(keys _managedArray, values _managedArray) returns Self
-				end 'InitableFromMapLiteral'
-
-
+// InitableFromMapLiteral - types that can be initialized from map literals
+// Map literals use syntax: ["key1": value1, "key2": value2]
+// The compiler constructs two parallel __ManagedArrays (keys and values) and passes them to init.
+// Both arrays have the same length and corresponding indices represent key-value pairs.
+// The compiler detects conformance and transforms: var x = ["a": 1, "b": 2] -> var x = map.init(keys, values)
+export interface InitableFromMapLiteral uses Key, Value
+	static function init(keys __ManagedArray, values __ManagedArray) returns Self
+end 'InitableFromMapLiteral'
