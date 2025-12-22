@@ -926,7 +926,7 @@ pub const Parser = struct {
     }
 
     fn parseNilCoalesce(self: *Parser) ParseError!?ast.Expression {
-        var left = try self.parseComparison() orelse return null;
+        var left = try self.parseLogicalAnd() orelse return null;
 
         // Check for 'or' keyword (nil coalescing)
         if (self.check(.@"or")) {
@@ -950,6 +950,28 @@ pub const Parser = struct {
             left = .{ .nil_coalesce = .{
                 .optional = opt_ptr,
                 .default = def_ptr,
+            } };
+        }
+        return left;
+    }
+
+    fn parseLogicalAnd(self: *Parser) ParseError!?ast.Expression {
+        var left = try self.parseComparison() orelse return null;
+
+        while (self.check(.@"and")) {
+            _ = self.advance();
+            const right = try self.parseComparison() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+
+            const left_ptr = try self.createExpr(left);
+            const right_ptr = try self.createExpr(right);
+
+            left = .{ .logical = .{
+                .left = left_ptr,
+                .op = .@"and",
+                .right = right_ptr,
             } };
         }
         return left;

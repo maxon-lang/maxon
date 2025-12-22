@@ -204,3 +204,7 @@ Value: Vectors straight-line code. If you manually write x1 = a[0] + b[0]; x2 = 
 ## Potential optimizations
 - xor eax,eax to zero register. Done
 - use LEA for adds. Planned
+
+Phase 7: Interface conformance checking (verify types implement required methods)
+Phase 9: Export keyword enforcement (visibility rules)
+Phase 11: Interface declarations (parsing interface definitions)

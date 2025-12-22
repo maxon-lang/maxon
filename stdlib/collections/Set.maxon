@@ -21,17 +21,15 @@
 // end 'check'
 // ```
 
-// Internal set type - used by compiler for set<T> types
-// The compiler generates specialized versions for each element type
-export type set uses Element is InitableFromArrayLiteral with Element
+export type Set uses Element is InitableFromArrayLiteral with Element
 	var elements array of Element   // Element storage
-	var states array of byte        // Slot states: 0=empty, 1=occupied, 2=deleted
+	var states array of int         // Slot states: 0=empty, 1=occupied, 2=deleted
 	var count int                   // Number of occupied entries
 	var capacity int                // Total slots
 
 	// InitableFromArrayLiteral conformance - initialize set from array literal
 	// Called by the compiler for `set from [1, 2, 3]` syntax
-	static function InitableFromArrayLiteral.init(managed _ManagedArray) returns Self
+	static function InitableFromArrayLiteral.init(managed __ManagedArray) returns Self
 	// Get number of elements in the managed array
 	var numElements = __managed_array_len(managed)
 
@@ -43,7 +41,7 @@ export type set uses Element is InitableFromArrayLiteral with Element
 
 	// Allocate internal arrays
 	var elems = array of cap Element
-	var sts = array of cap byte
+	var sts = array of cap int
 
 	// Create the set type (copies array structs by value)
 	var result = Self{elements: elems, states: sts, count: 0, capacity: cap}
@@ -56,7 +54,7 @@ export type set uses Element is InitableFromArrayLiteral with Element
 	// Insert each element from the managed array
 	var i = 0
 	while i < numElements 'insert_loop'
-		var elem = __managed_array_get_at(managed, i) as Element
+		var elem = managed[i]
 		result.insert(elem)
 		i = i + 1
 	end 'insert_loop'
@@ -84,7 +82,7 @@ export function insert(element Element)
 	var probes = 0
 
 	while probes < capacity 'probe'
-		var state = states[index] as int
+		var state = states[index]
 
 		if state == 0 'empty'
 			// Empty slot - insert here or at first deleted
@@ -94,7 +92,7 @@ export function insert(element Element)
 			end 'use_deleted'
 
 			elements[insertIndex] = element
-			states[insertIndex] = 1 as byte
+			states[insertIndex] = 1
 			count = count + 1
 			return
 		end 'empty'
@@ -117,7 +115,7 @@ export function insert(element Element)
 	// But if we do, insert at first deleted slot
 	if firstDeleted >= 0 'fallback'
 		elements[firstDeleted] = element
-		states[firstDeleted] = 1 as byte
+		states[firstDeleted] = 1
 		count = count + 1
 	end 'fallback'
 end 'insert'
@@ -132,7 +130,7 @@ export function contains(element Element) returns bool
 
 	var probes = 0
 	while probes < capacity 'probe'
-		var state = states[index] as int
+		var state = states[index]
 
 		if state == 0 'empty'
 			return false
@@ -159,14 +157,14 @@ export function remove(element Element) returns bool
 
 	var probes = 0
 	while probes < capacity 'probe'
-		var state = states[index] as int
+		var state = states[index]
 
 		if state == 0 'empty'
 			return false
 		end 'empty'
 
 		if state == 1 and elements[index].equals(element) 'found'
-			states[index] = 2 as byte
+			states[index] = 2
 			count = count - 1
 			return true
 		end 'found'
@@ -199,7 +197,7 @@ function grow()
 
 	// Allocate new arrays
 	var newElements = array of newCapacity Element
-	var newStates = array of newCapacity byte
+	var newStates = array of newCapacity int
 
 	// Update type to use new arrays
 	elements = newElements
@@ -215,7 +213,7 @@ function grow()
 	// Rehash all occupied entries from old arrays
 	var i = 0
 	while i < oldCapacity 'rehash'
-		var state = oldStates[i] as int
+		var state = oldStates[i]
 		if state == 1 'occupied'
 			// Re-insert into new arrays using insert logic
 			var element = oldElements[i]
@@ -227,12 +225,12 @@ function grow()
 			end 'fix_negative'
 
 			// Find empty slot (no deleted slots in fresh array)
-			while states[index] as int != 0 'find_slot'
+			while states[index] != 0 'find_slot'
 				index = (index + 1) mod newCapacity
 			end 'find_slot'
 
 			elements[index] = element
-			states[index] = 1 as byte
+			states[index] = 1
 			count = count + 1
 		end 'occupied'
 		i = i + 1

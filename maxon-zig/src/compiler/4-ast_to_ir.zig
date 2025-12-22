@@ -2113,6 +2113,7 @@ pub const AstToIr = struct {
             .unary => |un| self.convertUnary(un),
             .binary => |bin| self.convertBinary(bin),
             .compare => |cmp| self.convertCompare(cmp),
+            .logical => |log| self.convertLogical(log),
             .call => |call| self.convertCall(call),
             .struct_init => |sinit| self.convertStructInit(sinit),
             .field_access => |fa| self.convertFieldAccess(fa),
@@ -2402,6 +2403,27 @@ pub const AstToIr = struct {
         };
         const result = try self.func().emitBinaryOp(op, left.value, right.value, .i64);
         return .{ .value = result, .ty = .{ .primitive = .i64 } };
+    }
+
+    fn convertLogical(self: *AstToIr, log: ast.LogicalExpr) ConvertError!TypedValue {
+        const left = try self.convertExpression(log.left.*);
+        const right = try self.convertExpression(log.right.*);
+
+        // Logical 'and' - both values must be non-zero (truthy)
+        // We implement this as: (left != 0) & (right != 0)
+        // Using bitwise AND to combine two boolean results
+        switch (log.op) {
+            .@"and" => {
+                // Convert left to boolean: left != 0
+                const zero = try self.func().emitConstI64(0);
+                const left_bool = try self.func().emitBinaryOp(.icmp_ne, left.value, zero, .i64);
+                // Convert right to boolean: right != 0
+                const right_bool = try self.func().emitBinaryOp(.icmp_ne, right.value, zero, .i64);
+                // AND the two boolean values using multiplication (0*x=0, 1*1=1)
+                const result = try self.func().emitBinaryOp(.mul, left_bool, right_bool, .i64);
+                return .{ .value = result, .ty = .{ .primitive = .i64 } };
+            },
+        }
     }
 
     /// Convert nil coalescing expression: `optional or default`

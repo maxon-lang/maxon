@@ -22,6 +22,7 @@ pub const TokenType = enum {
     @"continue",
     true,
     false,
+    @"and",
     @"or",
     nil,
     // Type system keywords
@@ -402,6 +403,7 @@ pub const Lexer = struct {
             .{ "continue", TokenType.@"continue" },
             .{ "true", TokenType.true },
             .{ "false", TokenType.false },
+            .{ "and", TokenType.@"and" },
             .{ "or", TokenType.@"or" },
             .{ "nil", TokenType.nil },
             .{ "int", TokenType.int },

@@ -401,12 +401,6 @@ fn collectStdlibFiles(
             // Recursively process subdirectories
             try collectStdlibFiles(base_path, full_entry_path, sources, allocator);
         } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".maxon")) {
-            // Skip interfaces.maxon - it uses closures and default implementations
-            // that aren't yet supported in maxon-zig
-            if (std.mem.endsWith(u8, full_entry_path, "interfaces.maxon")) {
-                continue;
-            }
-
             // Load this .maxon file
             const content = std.fs.cwd().readFileAlloc(allocator, full_entry_path, 1024 * 1024) catch {
                 continue; // Skip files that can't be read
@@ -622,6 +616,10 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         .compare => |cmp| {
             freeExpressionArgs(cmp.left.*, allocator);
             freeExpressionArgs(cmp.right.*, allocator);
+        },
+        .logical => |log| {
+            freeExpressionArgs(log.left.*, allocator);
+            freeExpressionArgs(log.right.*, allocator);
         },
         .struct_init => |sinit| {
             for (sinit.fields) |field| {

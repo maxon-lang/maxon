@@ -162,9 +162,9 @@ pub const MutationAnalyzer = struct {
                 self.checkExpressionForParamMutation(nc.optional.*, param_indices, mutated);
                 self.checkExpressionForParamMutation(nc.default.*, param_indices, mutated);
             },
-            // integer, float_lit, nil_lit, unary, binary, compare, call, struct_init, array_literal, sized_array:
+            // integer, float_lit, nil_lit, unary, binary, compare, logical, call, struct_init, array_literal, sized_array:
             // These cannot be mutation targets (only identifier, field_access, index can)
-            .integer, .float_lit, .bool_lit, .nil_lit, .unary, .binary, .compare, .call, .struct_init, .array_literal, .sized_array => {},
+            .integer, .float_lit, .bool_lit, .nil_lit, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .sized_array => {},
         }
     }
 

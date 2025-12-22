@@ -185,6 +185,16 @@ pub const CompareOp = enum {
     ge,
 };
 
+pub const LogicalOp = enum {
+    @"and",
+};
+
+pub const LogicalExpr = struct {
+    left: *const Expression,
+    op: LogicalOp,
+    right: *const Expression,
+};
+
 pub const UnaryOp = enum {
     negate, // -x
     not, // not x (for future use)
@@ -263,6 +273,7 @@ pub const Expression = union(enum) {
     unary: UnaryExpr,
     binary: BinaryExpr,
     compare: CompareExpr,
+    logical: LogicalExpr,
     call: CallExpr,
     struct_init: StructInitExpr,
     field_access: FieldAccessExpr,
