@@ -48,6 +48,11 @@ pub const Parser = struct {
         };
     }
 
+    /// Create a Statement with a specific line number
+    fn stmtAt(kind: ast.StatementKind, line: u32) ast.Statement {
+        return .{ .kind = kind, .line = line };
+    }
+
     pub fn deinit(self: *Parser) void {
         for (self.expr_ptrs.items) |ptr| {
             self.allocator.destroy(ptr);
@@ -443,35 +448,50 @@ pub const Parser = struct {
             const type_name = try self.expectTypeName();
 
             // Check for generic type instantiation: TypeName of arg1 [arg2 ...]
+            // or sized array type: Array of N type
             if (self.check(.of)) {
                 _ = self.advance(); // consume 'of'
 
-                // Parse type arguments
-                var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
-                errdefer type_args.deinit(self.allocator);
+                // Check for sized array type: Array of N type (where N is an integer)
+                if (std.mem.eql(u8, type_name, "Array") and self.check(.integer)) {
+                    const size_token = self.advance();
+                    const size = std.fmt.parseInt(i64, size_token.text, 10) catch {
+                        self.reportError(.E001);
+                        return error.InvalidNumber;
+                    };
+                    const elem_type = try self.expectTypeName();
+                    base_type = .{ .array = .{
+                        .size = size,
+                        .element_type = elem_type,
+                    } };
+                } else {
+                    // Parse type arguments
+                    var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
+                    errdefer type_args.deinit(self.allocator);
 
-                // First type argument is required
-                try type_args.append(self.allocator, try self.expectTypeName());
-
-                // Additional type arguments are optional (for types like Map of string int)
-                while (self.check(.identifier)) {
-                    // Only consume if it looks like a type name (starts with lowercase or is a known type)
-                    const next = self.peek(0);
-                    if (next == null) break;
-                    // Check if this could be a type name (heuristic: not 'or', 'and', etc.)
-                    if (std.mem.eql(u8, next.?.text, "or") or
-                        std.mem.eql(u8, next.?.text, "and") or
-                        std.mem.eql(u8, next.?.text, "nil"))
-                    {
-                        break;
-                    }
+                    // First type argument is required
                     try type_args.append(self.allocator, try self.expectTypeName());
-                }
 
-                base_type = .{ .generic = .{
-                    .base_type = type_name,
-                    .type_args = try type_args.toOwnedSlice(self.allocator),
-                } };
+                    // Additional type arguments are optional (for types like Map of string int)
+                    while (self.check(.identifier)) {
+                        // Only consume if it looks like a type name (starts with lowercase or is a known type)
+                        const next = self.peek(0);
+                        if (next == null) break;
+                        // Check if this could be a type name (heuristic: not 'or', 'and', etc.)
+                        if (std.mem.eql(u8, next.?.text, "or") or
+                            std.mem.eql(u8, next.?.text, "and") or
+                            std.mem.eql(u8, next.?.text, "nil"))
+                        {
+                            break;
+                        }
+                        try type_args.append(self.allocator, try self.expectTypeName());
+                    }
+
+                    base_type = .{ .generic = .{
+                        .base_type = type_name,
+                        .type_args = try type_args.toOwnedSlice(self.allocator),
+                    } };
+                }
             } else {
                 base_type = .{ .simple = type_name };
             }
@@ -514,26 +534,27 @@ pub const Parser = struct {
     }
 
     fn parseStatement(self: *Parser) ParseError!ast.Statement {
+        const start_line = self.current().line;
         if (self.check(.@"return")) {
-            const stmt = try self.parseReturn();
+            const ret_stmt = try self.parseReturn();
             _ = try self.expect(.newline);
-            return stmt;
+            return ret_stmt;
         }
         if (self.check(.let)) {
-            const stmt = try self.parseVarDecl(false);
+            const decl_stmt = try self.parseVarDecl(false);
             // else-unwrap handles its own newlines
-            if (stmt != .else_unwrap_decl) {
+            if (decl_stmt.kind != .else_unwrap_decl) {
                 _ = try self.expect(.newline);
             }
-            return stmt;
+            return decl_stmt;
         }
         if (self.check(.@"var")) {
-            const stmt = try self.parseVarDecl(true);
+            const decl_stmt = try self.parseVarDecl(true);
             // else-unwrap handles its own newlines
-            if (stmt != .else_unwrap_decl) {
+            if (decl_stmt.kind != .else_unwrap_decl) {
                 _ = try self.expect(.newline);
             }
-            return stmt;
+            return decl_stmt;
         }
         if (self.check(.@"if")) {
             return try self.parseIfStatement();
@@ -547,12 +568,12 @@ pub const Parser = struct {
         if (self.check(.@"break")) {
             _ = self.advance();
             _ = try self.expect(.newline);
-            return .{ .break_stmt = .{} };
+            return stmtAt(.{ .break_stmt = .{} }, start_line);
         }
         if (self.check(.@"continue")) {
             _ = self.advance();
             _ = try self.expect(.newline);
-            return .{ .continue_stmt = .{} };
+            return stmtAt(.{ .continue_stmt = .{} }, start_line);
         }
         // Check for assignment, index assignment, or call statement: identifier or self...
         if (self.check(.identifier) or self.check(.self)) {
@@ -574,28 +595,28 @@ pub const Parser = struct {
 
                 // Check if this is an index expression (arr[i] = value)
                 if (expr == .index) {
-                    return .{ .index_assign = .{
+                    return stmtAt(.{ .index_assign = .{
                         .base = expr.index.base,
                         .index = expr.index.index,
                         .value = value,
-                    } };
+                    } }, start_line);
                 }
 
                 // Check if this is a simple identifier (x = value)
                 if (expr == .identifier) {
-                    return .{ .assign = .{
+                    return stmtAt(.{ .assign = .{
                         .target = expr.identifier,
                         .value = value,
-                    } };
+                    } }, start_line);
                 }
 
                 // Check if this is a field access (obj.field = value)
                 if (expr == .field_access) {
-                    return .{ .field_assign = .{
+                    return stmtAt(.{ .field_assign = .{
                         .base = expr.field_access.base,
                         .field_name = expr.field_access.field_name,
                         .value = value,
-                    } };
+                    } }, start_line);
                 }
 
                 // Other expressions on LHS not supported
@@ -606,13 +627,13 @@ pub const Parser = struct {
             // Check if this is a call expression (standalone function call)
             if (expr == .call) {
                 _ = try self.expect(.newline);
-                return .{ .call = expr.call };
+                return stmtAt(.{ .call = expr.call }, start_line);
             }
 
             // Check if this is a method call (standalone method call like arr.push(x))
             if (expr == .method_call) {
                 _ = try self.expect(.newline);
-                return .{ .method_call = expr.method_call };
+                return stmtAt(.{ .method_call = expr.method_call }, start_line);
             }
 
             // Not an assignment or call, restore position
@@ -623,6 +644,7 @@ pub const Parser = struct {
     }
 
     fn parseVarDecl(self: *Parser, is_var: bool) !ast.Statement {
+        const start_line = self.current().line;
         _ = self.advance(); // consume let/var
         const name_token = try self.expect(.identifier);
 
@@ -652,9 +674,9 @@ pub const Parser = struct {
                 .fields = &.{},
             } };
             if (is_var) {
-                return .{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } };
+                return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } }, start_line);
             } else {
-                return .{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } };
+                return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } }, start_line);
             }
         }
 
@@ -697,18 +719,18 @@ pub const Parser = struct {
                 }
 
                 const expr_ptr = try self.createExpr(expr);
-                return .{ .else_unwrap_decl = .{
+                return stmtAt(.{ .else_unwrap_decl = .{
                     .var_name = name_token.text,
                     .optional_expr = expr_ptr,
                     .default_body = try default_statements.toOwnedSlice(self.allocator),
                     .label = label.text,
-                } };
+                } }, start_line);
             }
 
             if (is_var) {
-                return .{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } };
+                return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } }, start_line);
             } else {
-                return .{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } };
+                return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } }, start_line);
             }
         }
         self.reportError(.E003);
@@ -716,9 +738,10 @@ pub const Parser = struct {
     }
 
     fn parseReturn(self: *Parser) !ast.Statement {
+        const start_line = self.current().line;
         _ = try self.expect(.@"return");
         const expr = try self.parseExpression();
-        return .{ .@"return" = .{ .value = expr } };
+        return stmtAt(.{ .@"return" = .{ .value = expr } }, start_line);
     }
 
     // -------------------------------------------------------------------------
@@ -799,6 +822,7 @@ pub const Parser = struct {
     // -------------------------------------------------------------------------
 
     fn parseIfStatement(self: *Parser) ParseError!ast.Statement {
+        const start_line = self.current().line;
         _ = try self.expect(.@"if");
 
         // Check for if-let: if let name = expr 'label'
@@ -822,7 +846,7 @@ pub const Parser = struct {
             const else_clause = try self.parseElseClause(false);
             try self.expectTrailingNewline();
 
-            return .{ .if_stmt = .{
+            return stmtAt(.{ .if_stmt = .{
                 .condition = condition,
                 .body = body,
                 .label = label.text,
@@ -830,11 +854,11 @@ pub const Parser = struct {
                 .else_label = else_clause.label,
                 .else_if = null,
                 .binding_name = name_token.text,
-            } };
+            } }, start_line);
         }
 
         // Regular if statement (if already consumed)
-        return .{ .if_stmt = try self.parseIfConditionAndBody() };
+        return stmtAt(.{ .if_stmt = try self.parseIfConditionAndBody() }, start_line);
     }
 
     /// Parse if statement after 'if' has been consumed. Used by parseIfStatement
@@ -870,6 +894,7 @@ pub const Parser = struct {
     }
 
     fn parseWhileStatement(self: *Parser) ParseError!ast.Statement {
+        const start_line = self.current().line;
         _ = try self.expect(.@"while");
 
         const condition = try self.parseExpression() orelse {
@@ -883,14 +908,15 @@ pub const Parser = struct {
         const body = try self.parseBlockBody();
         try self.parseEndAndNewline();
 
-        return .{ .while_stmt = .{
+        return stmtAt(.{ .while_stmt = .{
             .condition = condition,
             .body = body,
             .label = label.text,
-        } };
+        } }, start_line);
     }
 
     fn parseForStatement(self: *Parser) ParseError!ast.Statement {
+        const start_line = self.current().line;
         _ = try self.expect(.@"for");
 
         // Expect loop variable name
@@ -913,12 +939,12 @@ pub const Parser = struct {
         const body = try self.parseBlockBody();
         try self.parseEndAndNewline();
 
-        return .{ .for_stmt = .{
+        return stmtAt(.{ .for_stmt = .{
             .var_name = var_name.text,
             .iterable = iterable,
             .body = body,
             .label = label.text,
-        } };
+        } }, start_line);
     }
 
     fn parseExpression(self: *Parser) ParseError!?ast.Expression {
@@ -1136,8 +1162,56 @@ pub const Parser = struct {
             const token = self.advance();
 
             // Check for generic type instantiation: TypeName of T{...}
+            // or sized array: Array of N type
             if (self.check(.of)) {
                 _ = self.advance(); // consume 'of'
+
+                // Check for sized array: Array of <expr> <type>
+                // Sized arrays are detected by the token after 'of':
+                // - integer literal: Array of 5 int
+                // - lparen: Array of (n+1) int
+                // - minus (negative): Array of -3 int
+                // - lowercase identifier (variable): Array of n int
+                // Generic types have a type name (int/float/bool/byte or capitalized identifier)
+                const is_sized_array = blk: {
+                    if (!std.mem.eql(u8, token.text, "Array")) break :blk false;
+                    if (self.check(.integer) or self.check(.lparen) or self.check(.minus)) break :blk true;
+                    if (self.check(.identifier)) {
+                        const next = self.peek(0);
+                        if (next) |tok| {
+                            // Lowercase identifier that's not a builtin type is a variable (size expr)
+                            // Type names are: int, float, bool, byte, string, character, or start uppercase
+                            const first_char = tok.text[0];
+                            const is_builtin_type = std.mem.eql(u8, tok.text, "int") or
+                                std.mem.eql(u8, tok.text, "float") or
+                                std.mem.eql(u8, tok.text, "bool") or
+                                std.mem.eql(u8, tok.text, "byte") or
+                                std.mem.eql(u8, tok.text, "string") or
+                                std.mem.eql(u8, tok.text, "character");
+                            const starts_uppercase = first_char >= 'A' and first_char <= 'Z';
+                            // If it's not a builtin type and doesn't start uppercase, it's a variable
+                            break :blk !is_builtin_type and !starts_uppercase;
+                        }
+                    }
+                    break :blk false;
+                };
+
+                if (is_sized_array) {
+                    // Parse size expression
+                    const size_expr = try self.parseExpression() orelse {
+                        self.reportError(.E003);
+                        return error.ExpectedExpression;
+                    };
+                    const size_ptr = try self.createExpr(size_expr);
+
+                    // Parse element type
+                    const elem_type = try self.expectTypeName();
+
+                    return try self.parsePostfix(.{ .sized_array = .{
+                        .size = size_ptr,
+                        .element_type = elem_type,
+                    } });
+                }
 
                 // Parse type arguments
                 var type_args: std.ArrayListUnmanaged([]const u8) = .empty;

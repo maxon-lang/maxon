@@ -17,5 +17,33 @@ Freed:     0 bytes
 Leaked:    0 bytes
 ```
 ---
-// IR generation failed: error.ParserError
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %size = alloca ptr
+    store %size %tmp_const
+    %tmp_load = load i64 %size
+    %tmp_const.1 = const.i64 i64 8
+    %tmp_mul = mul i64 %tmp_load %tmp_const.1
+    %tmp_heap = heap.alloc ptr %tmp_mul
+    %arr = alloca ptr
+    store %arr %tmp_heap
+    %tmp_load.1 = load i64 %size
+    %tmp_const.2 = const.i64 i64 0
+    %tmp_icmp = icmp.gt i64 %tmp_load.1 %tmp_const.2
+    %tmp_load = br.cond %tmp_icmp @block1
+then:
+    %tmp_load.2 = load ptr %arr
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_const.4 = const.i64 i64 1
+    %13 = getelemptr ptr %tmp_load.2 %tmp_const.3
+    store %13 %tmp_const.4
+    br @block2
+end:
+    %tmp_const.5 = const.i64 i64 42
+    %tmp_load.3 = load ptr %arr
+    heap.free %tmp_load.3
+    ret %tmp_const.5
+}
+
 ---

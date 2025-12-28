@@ -57,7 +57,7 @@ pub const MutationAnalyzer = struct {
         param_indices: *std.StringHashMapUnmanaged(usize),
         mutated: *MutatedParams,
     ) void {
-        switch (stmt) {
+        switch (stmt.kind) {
             .assign => |assign| {
                 // Direct assignment to a variable - check if it's a parameter
                 if (param_indices.get(assign.target)) |idx| {
@@ -100,7 +100,7 @@ pub const MutationAnalyzer = struct {
                     }
                 }
                 if (if_s.else_if) |else_if| {
-                    self.checkStatementForMutation(.{ .if_stmt = else_if.* }, param_indices, mutated);
+                    self.checkStatementForMutation(.{ .kind = .{ .if_stmt = else_if.* }, .line = stmt.line }, param_indices, mutated);
                 }
             },
             .while_stmt => |while_s| {

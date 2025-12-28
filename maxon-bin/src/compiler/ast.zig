@@ -141,7 +141,7 @@ pub const ElseUnwrapDecl = struct {
     label: []const u8,
 };
 
-pub const Statement = union(enum) {
+pub const StatementKind = union(enum) {
     @"return": ReturnStmt,
     let_decl: VarDecl,
     var_decl: VarDecl,
@@ -156,6 +156,11 @@ pub const Statement = union(enum) {
     break_stmt: BreakStmt,
     continue_stmt: ContinueStmt,
     else_unwrap_decl: ElseUnwrapDecl,
+};
+
+pub const Statement = struct {
+    kind: StatementKind,
+    line: u32,
 };
 
 pub const VarDecl = struct {

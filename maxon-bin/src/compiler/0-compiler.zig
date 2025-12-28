@@ -517,7 +517,7 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
 }
 
 fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
-    switch (stmt) {
+    switch (stmt.kind) {
         .let_decl, .var_decl => |decl| {
             freeExpressionArgs(decl.value, allocator);
         },

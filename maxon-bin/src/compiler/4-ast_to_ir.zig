@@ -1336,7 +1336,10 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     fn convertStatement(self: *AstToIr, stmt: ast.Statement) !void {
-        switch (stmt) {
+        // Track current line from AST for error reporting
+        self.current_line = stmt.line;
+
+        switch (stmt.kind) {
             .let_decl => |decl| {
                 self.current_decl_is_mutable = false;
                 try self.convertVarDecl(decl);
@@ -1361,7 +1364,6 @@ pub const AstToIr = struct {
             .continue_stmt => try self.convertContinueStmt(),
             .else_unwrap_decl => |unwrap| try self.convertElseUnwrapDecl(unwrap),
         }
-        self.current_line += 1;
     }
 
     fn convertVarDecl(self: *AstToIr, decl: ast.VarDecl) !void {

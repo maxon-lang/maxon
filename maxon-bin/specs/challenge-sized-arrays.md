@@ -139,7 +139,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E014: specs\fragments\challenge-sized-arrays.error.sized-array-negative-size.1.test:3:1: unused variable: 'arr'
+error E014: specs\fragments\challenge-sized-arrays.error.sized-array-negative-size.1.test:4:1: unused variable: 'arr'
 ```
 
 ## Ownership Tests
@@ -219,7 +219,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs\fragments\challenge-sized-arrays.error.array-use-after-move.1.test:8:1: use after move
+error E008: specs\fragments\challenge-sized-arrays.error.array-use-after-move.1.test:15:1: use after move
 ```
 
 <!-- test: array-multiple-borrows -->
@@ -266,7 +266,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E010: specs\fragments\challenge-sized-arrays.error.let-array-cannot-move.1.test:6:1: cannot move from immutable variable
+error E010: specs\fragments\challenge-sized-arrays.error.let-array-cannot-move.1.test:13:1: cannot move from immutable variable
 ```
 
 <!-- test: array-move-then-reassign -->
