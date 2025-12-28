@@ -312,7 +312,7 @@ pub fn findStdlibPath(allocator: std.mem.Allocator) ![]const u8 {
 
     // Try paths in order of preference
     const paths_to_try = [_][]const []const u8{
-        // Development layout: exe is at maxon-zig/zig-out/bin/, stdlib at maxon/stdlib
+        // Development layout: exe is at maxon-bin/zig-out/bin/, stdlib at maxon/stdlib
         &.{ exe_dir, "..", "..", "..", "stdlib" },
         // Alternative dev layout: exe is at zig-out/bin/, stdlib at ../stdlib
         &.{ exe_dir, "..", "..", "stdlib" },

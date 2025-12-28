@@ -1,4 +1,4 @@
-# Plan: Full stdlib Array Type Support in maxon-zig
+# Plan: Full stdlib Array Type Support in maxon
 
 ## Status: ✅ COMPLETE
 

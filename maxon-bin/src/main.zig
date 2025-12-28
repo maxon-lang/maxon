@@ -30,7 +30,7 @@ pub fn main() !void {
 }
 
 fn printUsage() void {
-    std.debug.print("Usage: maxon-zig <command> [args]\n\n", .{});
+    std.debug.print("Usage: maxon <command> [args]\n\n", .{});
     std.debug.print("Commands:\n", .{});
     std.debug.print("  compile <source.maxon>  Compile a source file\n", .{});
     std.debug.print("  test                    Run spec fragment tests\n", .{});
@@ -61,7 +61,7 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     }
 
     if (source_path == null) {
-        std.debug.print("Usage: maxon-zig compile <source.maxon> [--no-debug]\n", .{});
+        std.debug.print("Usage: maxon compile <source.maxon> [--no-debug]\n", .{});
         std.process.exit(1);
     }
 

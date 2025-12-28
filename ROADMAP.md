@@ -1,9 +1,9 @@
-# Maxon-Zig Compiler: Feature Roadmap for Self-Hosted Compilation
+# Maxon Compiler: Feature Roadmap for Self-Hosted Compilation
 
 ## Goal
-Enable the maxon-zig compiler to compile the self-hosted compiler in `maxon-bin-selfhosted/`.
+Enable the maxon compiler to compile the self-hosted compiler in `maxon-bin-selfhosted/`.
 
-## Self-hosted compiler needs (missing in maxon-zig):**
+## Self-hosted compiler needs (missing in maxon):**
 - Strings (literals, interpolation, methods)
 - Maps (`map from K to V`)
 - Match expressions

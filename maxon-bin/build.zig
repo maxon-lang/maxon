@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
-        .name = "maxon-zig",
+        .name = "maxon",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -14,6 +14,12 @@ pub fn build(b: *std.Build) void {
     });
 
     b.installArtifact(exe);
+
+    // Copy maxon.exe to /bin after build
+    const copy_cmd = b.addSystemCommand(&.{ "cp", "-f" });
+    copy_cmd.addArtifactArg(exe);
+    copy_cmd.addArg(b.path("../bin/maxon.exe").getPath(b));
+    b.getInstallStep().dependOn(&copy_cmd.step);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

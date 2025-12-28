@@ -229,39 +229,12 @@ end 'main'
 
 ## Workflow
 
-### C++ Compiler (maxon-bin)
+### Zig Compiler
 
-#### Adding a New Feature
+After being built the executable is copied into the /bin directory, which is in the path, so you can
+run it from any directory with "maxon".
 
-1. Create `specs/feature-name.md` with frontmatter, notes, docs, and tests
-2. Run `maxon extract-specs` to extract test fragments
-3. Run `maxon regen-fragments` to generate IR (preserves expected results)
-4. Implement the feature until tests pass
-5. Run `make docs` to generate HTML documentation
-
-#### Modifying a Feature
-
-1. Edit the spec file (update code and/or expected results)
-2. Run `make test` (auto-extracts, regenerates IR, runs tests)
-3. Update implementation if needed
-
-#### Important Commands
-
-- `maxon extract-specs` - Extract test fragments from specs (includes expected results)
-- `maxon regen-fragments` - Regenerate IR only (preserves metadata from specs)
-- `make test` - Full test cycle (extract, regen, run)
-- `make docs` - Generate HTML documentation
-- `make validate-specs` - Check for orphaned fragments
-
-### Zig Compiler (maxon-zig)
-
-The Zig compiler has its own spec system in `maxon-zig/specs/` with fragments in `maxon-zig/specs/fragments/`.
-
-#### Key Differences from C++ Compiler
-
-- **Single command**: `maxon-zig test` auto-regenerates fragments when specs change
-- **Exit code testing only**: No IR comparison during test runs (IR included for reference)
-- **Same spec format**: Uses identical Markdown spec file format
+The Zig compiler has its own spec system in `maxon-bin/specs/` with fragments in `maxon-bin/specs/fragments/`.
 
 #### Fragment Format
 
@@ -293,13 +266,13 @@ MaxoncStderr: ```
 
 ```bash
 # Run all tests (auto-regenerates if specs changed)
-./zig-out/bin/maxon-zig test
+maxon test
 
 # Run with verbose output
-./zig-out/bin/maxon-zig test --verbose
+maxon test --verbose
 
 # Run only tests matching pattern
-./zig-out/bin/maxon-zig test --filter arithmetic
+maxon test --filter arithmetic
 
 # Via build system
 zig build test
@@ -307,35 +280,6 @@ zig build test
 
 #### Adding Tests
 
-1. Create or edit `maxon-zig/specs/feature-name.md`
-2. Run `maxon-zig test` - fragments are auto-generated
+1. Create or edit `maxon-bin/specs/feature-name.md`
+2. Run `maxon test` - fragments are auto-generated
 3. Implement until tests pass
-
-## Categories
-
-Available categories for the `category` field:
-
-- `stdlib` - Standard Library
-- `math-intrinsic` - Math Intrinsics
-- `operators` - Operators
-- `control-flow` - Control Flow
-- `types` - Types
-- `type-system` - Type System
-- `diagnostics` - Diagnostics
-- `declaration` - Declarations
-- `statements` - Statements
-- `expressions` - Expressions
-- `functions` - Functions
-- `namespaces` - Namespaces
-- `organization` - Organization
-- `compilation` - Compilation
-- `optimization` - Optimization
-- `interop` - Interoperability
-- `literals` - Literals
-- `uncategorized` - Uncategorized
-
-## Status Values
-
-- `stable` - Fully implemented and tested
-- `experimental` - In development, API may change
-- `deprecated` - Will be removed in future versions

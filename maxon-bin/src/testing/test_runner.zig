@@ -359,10 +359,10 @@ fn getCompilerPath(allocator: std.mem.Allocator) ![]const u8 {
     // Try to find the compiler executable
     // First, try the build output directory
     const paths_to_try = [_][]const u8{
-        "zig-out/bin/maxon-zig.exe",
-        "zig-out/bin/maxon-zig",
-        "./maxon-zig.exe",
-        "./maxon-zig",
+        "zig-out/bin/maxon.exe",
+        "zig-out/bin/maxon",
+        "./maxon.exe",
+        "./maxon",
     };
 
     for (paths_to_try) |path| {
