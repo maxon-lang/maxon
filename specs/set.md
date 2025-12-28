@@ -7,10 +7,10 @@ category: collections
 
 ## Developer Notes
 
-The `set` type is a generic hash set collection that stores unique elements. It uses open addressing with linear probing for collision resolution.
+The `Set` type is a generic hash set collection that stores unique elements. It uses open addressing with linear probing for collision resolution.
 
 **Syntax:**
-- Creation: `set from [element1, element2, ...]`
+- Creation: `Set from [element1, element2, ...]`
 - The element type is inferred from the array literal
 
 **Implementation:**
@@ -25,19 +25,19 @@ The `set` type is a generic hash set collection that stores unique elements. It 
 - 2 = DELETED (tombstone for probing continuity)
 
 **AST:**
-- `SetFromExprAST` - represents `set from [array]` expression
-  - `setType`: the generic type name (e.g., "set")
+- `SetFromExprAST` - represents `TypeName from [array]` expression
+  - `setType`: the type name (e.g., "Set")
   - `arrayExpr`: the array literal expression
   - `inferredElementType`: element type inferred from array
 
 **Parser:**
-- `parseSetFromExpr()` in parser_expr.cpp
-- Parses `set from [expr]` syntax
+- Parses `TypeName from [expr]` syntax in parser_expr.cpp
+- Works with any type implementing `InitableFromArrayLiteral`
 
 **Semantic Analysis:**
 - Infers element type from array literal
-- Auto-imports `stdlib/collections/set.maxon` if not present
-- Instantiates generic type `set<T>` for the element type
+- Auto-imports the stdlib file defining the type if not present
+- Instantiates generic type `Set<T>` for the element type
 - Instantiates all methods with type bindings
 
 **Code Generation:**
@@ -48,7 +48,7 @@ The `set` type is a generic hash set collection that stores unique elements. It 
 
 **Memory Layout:**
 ```text
-set<T> struct:
+Set<T> struct:
   _elements: ptr to T[]     // Element storage (heap)
   _states: ptr to byte[]    // Slot states (heap)
   _count: int               // Number of occupied entries
@@ -62,9 +62,9 @@ set<T> struct:
 - `count() int` - Get number of elements
 - `capacity() int` - Get current capacity
 
-**Struct Definition (stdlib/collections/set.maxon):**
+**Struct Definition (stdlib/collections/Set.maxon):**
 ```text
-export type set uses Element is InitableFromArrayLiteral with Element
+export type Set uses Element is InitableFromArrayLiteral with Element
     var _elements array of Element
     var _states array of byte
     var _count int
@@ -75,15 +75,15 @@ export type set uses Element is InitableFromArrayLiteral with Element
 
 # Set
 
-A `set` is a collection of unique elements. It provides fast membership testing, insertion, and removal using hash-based lookup.
+A `Set` is a collection of unique elements. It provides fast membership testing, insertion, and removal using hash-based lookup.
 
 ## Creating a Set
 
-Use the `set from` syntax with an array literal:
+Use the `Set from` syntax with an array literal:
 
 ```maxon
-var s = set from [1, 2, 3]           // set<int> with elements 1, 2, 3
-var names = set from ["alice", "bob"] // set<string>
+var s = Set from [1, 2, 3]           // Set<int> with elements 1, 2, 3
+var names = Set from ["alice", "bob"] // Set<string>
 ```
 
 The element type is automatically inferred from the array values.
@@ -95,7 +95,7 @@ The element type is automatically inferred from the array values.
 Add an element to the set. If the element already exists, this is a no-op.
 
 ```maxon
-var s = set from [1, 2]
+var s = Set from [1, 2]
 s.insert(3)    // Set now contains {1, 2, 3}
 s.insert(2)    // No change - 2 already exists
 ```
@@ -105,7 +105,7 @@ s.insert(2)    // No change - 2 already exists
 Check if an element exists in the set. Returns `true` if found, `false` otherwise.
 
 ```maxon
-var s = set from [1, 2, 3]
+var s = Set from [1, 2, 3]
 s.contains(2)  // true
 s.contains(5)  // false
 ```
@@ -115,7 +115,7 @@ s.contains(5)  // false
 Remove an element from the set. Returns `true` if the element was present and removed, `false` if it wasn't in the set.
 
 ```maxon
-var s = set from [1, 2, 3]
+var s = Set from [1, 2, 3]
 s.remove(2)    // Returns true, set is now {1, 3}
 s.remove(5)    // Returns false, element wasn't present
 ```
@@ -125,7 +125,7 @@ s.remove(5)    // Returns false, element wasn't present
 Get the number of elements in the set.
 
 ```maxon
-var s = set from [1, 2, 3]
+var s = Set from [1, 2, 3]
 s.count()      // 3
 ```
 
@@ -134,7 +134,7 @@ s.count()      // 3
 Get the current capacity (number of slots) of the internal hash table.
 
 ```maxon
-var s = set from [1, 2, 3]
+var s = Set from [1, 2, 3]
 s.capacity()   // 16 (initial capacity)
 ```
 
@@ -147,7 +147,7 @@ The set automatically grows when the load factor (count/capacity) exceeds 75%. W
 <!-- test: basic.creation -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3]
+    var s = Set from [1, 2, 3]
     return s.count()
 end 'main'
 ```
@@ -158,7 +158,7 @@ end 'main'
 <!-- test: basic.contains-true -->
 ```maxon
 function main() returns int
-    var s = set from [10, 20, 30]
+    var s = Set from [10, 20, 30]
     if s.contains(20) 'check'
         return 1
     end 'check'
@@ -172,7 +172,7 @@ end 'main'
 <!-- test: basic.contains-false -->
 ```maxon
 function main() returns int
-    var s = set from [10, 20, 30]
+    var s = Set from [10, 20, 30]
     if s.contains(99) 'check'
         return 1
     end 'check'
@@ -186,7 +186,7 @@ end 'main'
 <!-- test: insert.new-element -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3]
+    var s = Set from [1, 2, 3]
     s.insert(4)
     return s.count()
 end 'main'
@@ -198,7 +198,7 @@ end 'main'
 <!-- test: insert.duplicate -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3]
+    var s = Set from [1, 2, 3]
     s.insert(2)
     return s.count()
 end 'main'
@@ -210,7 +210,7 @@ end 'main'
 <!-- test: insert.then-contains -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3]
+    var s = Set from [1, 2, 3]
     s.insert(5)
     if s.contains(5) 'check'
         return 1
@@ -225,7 +225,7 @@ end 'main'
 <!-- test: remove.existing -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3]
+    var s = Set from [1, 2, 3]
     var removed = s.remove(2)
     if removed 'check'
         return s.count()
@@ -240,7 +240,7 @@ end 'main'
 <!-- test: remove.nonexistent -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3]
+    var s = Set from [1, 2, 3]
     var removed = s.remove(99)
     if removed 'check'
         return 1
@@ -255,7 +255,7 @@ end 'main'
 <!-- test: remove.then-contains -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3]
+    var s = Set from [1, 2, 3]
     s.remove(2)
     if s.contains(2) 'check'
         return 1
@@ -270,7 +270,7 @@ end 'main'
 <!-- test: capacity.initial -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3]
+    var s = Set from [1, 2, 3]
     return s.capacity()
 end 'main'
 ```
@@ -281,7 +281,7 @@ end 'main'
 <!-- test: grow.trigger -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    var s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     return s.capacity()
 end 'main'
 ```
@@ -292,7 +292,7 @@ end 'main'
 <!-- test: grow.preserves-elements -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    var s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     var allPresent = 1
     var i = 1
     while i <= 15 'check'
@@ -311,7 +311,7 @@ end 'main'
 <!-- test: empty.single-element -->
 ```maxon
 function main() returns int
-    var s = set from [42]
+    var s = Set from [42]
     return s.count()
 end 'main'
 ```
@@ -322,7 +322,7 @@ end 'main'
 <!-- test: remove-reinsert -->
 ```maxon
 function main() returns int
-    var s = set from [1, 2, 3]
+    var s = Set from [1, 2, 3]
     s.remove(2)
     s.insert(2)
     if s.contains(2) 'check'
@@ -338,7 +338,7 @@ end 'main'
 <!-- test: negative-values -->
 ```maxon
 function main() returns int
-    var s = set from [0 - 5, 0 - 3, 0 - 1, 0, 1, 3, 5]
+    var s = Set from [0 - 5, 0 - 3, 0 - 1, 0, 1, 3, 5]
     if s.contains(0 - 3) 'check'
         return s.count()
     end 'check'
