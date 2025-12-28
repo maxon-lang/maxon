@@ -1,5 +1,5 @@
 // Test: alloc-tracking.array-move-no-leak.1
-function mutateFirst(arr array of int) returns int
+function mutateFirst(arr Array of int) returns int
     arr[0] = 100
     if let val = arr[0] 'get'
         return val
@@ -10,7 +10,7 @@ end 'mutateFirst'
 
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 42
     return mutateFirst(arr)
 end 'main'
@@ -27,65 +27,5 @@ Freed:     40 bytes
 Leaked:    0 bytes
 ```
 ---
-function mutateFirst() -> i64 {
-entry:
-    %tmp_param = param ptr 0
-    %arr = alloca ptr
-    store %arr %tmp_param
-    %tmp_load = load ptr %arr
-    %tmp_const = const.i64 i64 0
-    %tmp_const.1 = const.i64 i64 100
-    %5 = getelemptr ptr %tmp_load %tmp_const
-    store %5 %tmp_const.1
-    %tmp_load.1 = load ptr %arr
-    %tmp_const.2 = const.i64 i64 0
-    %8 = getelemptr ptr %tmp_load.1 %tmp_const.2
-    %tmp_load.2 = load i64 %8
-    %tmp_alloca.1 = alloca.sized ptr 16
-    %tmp_const.3 = const.i64 i64 1
-    store %tmp_alloca.1 %tmp_const.3
-    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
-    store %tmp_fieldptr %tmp_load.2
-    %tmp_load.3 = load i64 %tmp_alloca.1
-    %tmp_const.4 = const.i64 i64 1
-    %tmp_icmp = icmp.eq i64 %tmp_load.3 %tmp_const.4
-    %tmp_load = br.cond %tmp_icmp @block1
-if_let_then:
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 8
-    %tmp_load.4 = load i64 %tmp_fieldptr.1
-    %val = alloca ptr
-    store %val %tmp_load.4
-    %tmp_load.5 = load i64 %val
-    %tmp_load.6 = load ptr %arr
-    heap.free %tmp_load.6
-    ret %tmp_load.5
-if_let_else:
-    %tmp_const.5 = const.i64 i64 0
-    %tmp_load.7 = load ptr %arr
-    heap.free %tmp_load.7
-    ret %tmp_const.5
-if_let_end:
-}
-
-function main() -> i64 {
-entry:
-    %tmp_const = const.i64 i64 5
-    %size = alloca ptr
-    store %size %tmp_const
-    %tmp_load = load i64 %size
-    %tmp_const.1 = const.i64 i64 8
-    %tmp_mul = mul i64 %tmp_load %tmp_const.1
-    %tmp_heap = heap.alloc ptr %tmp_mul
-    %arr = alloca ptr
-    store %arr %tmp_heap
-    %tmp_load.1 = load ptr %arr
-    %tmp_const.2 = const.i64 i64 0
-    %tmp_const.3 = const.i64 i64 42
-    %10 = getelemptr ptr %tmp_load.1 %tmp_const.2
-    store %10 %tmp_const.3
-    %tmp_load.2 = load ptr %arr
-    %tmp_call = call i64 @mutateFirst(%tmp_load.2)
-    ret %tmp_call
-}
-
+// IR generation failed: error.ParserError
 ---

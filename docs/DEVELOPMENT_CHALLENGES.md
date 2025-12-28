@@ -44,7 +44,7 @@ Based on the documentation, here are the biggest problems encountered during Max
 
 ## 5. **Empty Array Initial Allocation Leak**
 
-- `var arr = array of int` allocated 8 bytes via raw malloc (no refcount header)
+- `var arr = Array of int` allocated 8 bytes via raw malloc (no refcount header)
 - `_managed_array_release` expected a header, so memory was never freed
 - **Fix**: Empty mutable arrays start with `capacity = 0`, `push()` creates proper heap buffer
 

@@ -104,13 +104,13 @@ The semantic analyzer validates the AST and performs type checking. It catches e
 
 ### Generic Type Instantiation (Monomorphization)
 
-Maxon uses **monomorphization** for generic types like `map from K to V`. Instead of runtime polymorphism, the compiler generates specialized versions of generic types for each concrete type combination used.
+Maxon uses **monomorphization** for generic types like `Map from K to V`. Instead of runtime polymorphism, the compiler generates specialized versions of generic types for each concrete type combination used.
 
 **How it works:**
 
 1. **Declaration:** Generic types are declared with type parameters:
    ```maxon
-   type map from KeyType to ValueType
+   type Map from KeyType to ValueType
        _keys [16]KeyType
        _values [16]ValueType
        ...
@@ -119,8 +119,8 @@ Maxon uses **monomorphization** for generic types like `map from K to V`. Instea
 
 2. **Instantiation:** When used with concrete types, a specialized type is created:
    ```maxon
-   var ages = map from string to int  ' Creates map<string,int>
-   var scores = map from int to float ' Creates map<int,float>
+   var ages = Map from string to int  ' Creates map<string,int>
+   var scores = Map from int to float ' Creates map<int,float>
    ```
 
 3. **Specialization:** The compiler generates unique type types with concrete fields:
@@ -259,7 +259,7 @@ The compiler includes a minimal runtime written in MIR (not C). This eliminates 
 Maxon includes a standard library written in Maxon itself:
 
 - `stdlib/fmt/` — String formatting (`format_int`, `format_float`, etc.)
-- `stdlib/collections/` — Collection types (`map from K to V`)
+- `stdlib/collections/` — Collection types (`Map from K to V`)
 - `stdlib/io/` — File I/O (planned)
 - `stdlib/math/` — Additional math functions
 
@@ -268,7 +268,7 @@ Maxon includes a standard library written in Maxon itself:
 The collections library provides generic data structures:
 
 **Map (Hash Map):**
-- Generic hash map: `map from KeyType to ValueType`
+- Generic hash map: `Map from KeyType to ValueType`
 - Open addressing with linear probing
 - Automatic resizing at 75% load factor
 - Supports any key type with `hash()` and `equals()` methods

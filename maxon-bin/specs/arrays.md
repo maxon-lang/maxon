@@ -11,7 +11,7 @@ Arrays are contiguous sequences of elements of the same type. The implementation
 
 1. **Mutable array literals** - `var arr = [1, 2, 3]` creates a stack-allocated mutable array
 2. **Immutable array literals** - `let arr = [1, 2, 3]` creates a read-only array (currently stack-allocated, future: data section)
-3. **Sized arrays** - `var arr = array of N T` creates a fixed-size array (currently stack-allocated, future: heap for large arrays)
+3. **Sized arrays** - `var arr = Array of N T` creates a fixed-size array (currently stack-allocated, future: heap for large arrays)
 4. **Index access** - `arr[i]` reads element at index i
 5. **Index assignment** - `arr[i] = value` writes to element at index i (mutable arrays only)
 
@@ -76,10 +76,10 @@ var x = constants[1]  // Can read elements
 
 ## Sized Arrays
 
-Create a fixed-size array using `array of N T` syntax:
+Create a fixed-size array using `Array of N T` syntax:
 
 ```text
-var buffer = array of 10 int
+var buffer = Array of 10 int
 buffer[0] = 42
 buffer[1] = 100
 ```
@@ -339,7 +339,7 @@ end 'main'
 <!-- test: sized-array-write-read -->
 ```maxon
 function main() returns int
-    var arr = array of 5 int
+    var arr = Array of 5 int
     arr[0] = 42
     if let val = arr[0] 'get'
         return val
@@ -355,7 +355,7 @@ end 'main'
 <!-- test: sized-array-multiple -->
 ```maxon
 function main() returns int
-    var arr = array of 3 int
+    var arr = Array of 3 int
     arr[0] = 10
     arr[1] = 20
     arr[2] = 30
@@ -373,7 +373,7 @@ end 'main'
 <!-- test: sized-array-sum -->
 ```maxon
 function main() returns int
-    var arr = array of 4 int
+    var arr = Array of 4 int
     arr[0] = 1
     arr[1] = 2
     arr[2] = 3
@@ -423,7 +423,7 @@ Sized arrays must be mutable since they have no initial contents.
 
 ```maxon
 function main() returns int
-    let arr = array of 5 int
+    let arr = Array of 5 int
     return 0
 end 'main'
 ```

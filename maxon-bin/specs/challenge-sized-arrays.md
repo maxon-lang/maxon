@@ -22,7 +22,7 @@ Sized arrays allocate space for a fixed number of elements.
 <!-- test: sized-array-default-values -->
 ```maxon
 function main() returns int
-    var arr = array of 3 int
+    var arr = Array of 3 int
     arr[1] = 42
     if let val = arr[1] 'get'
         return val
@@ -38,7 +38,7 @@ end 'main'
 <!-- test: sized-array-all-elements-writable -->
 ```maxon
 function main() returns int
-    var arr = array of 5 int
+    var arr = Array of 5 int
     arr[0] = 1
     arr[1] = 2
     arr[2] = 3
@@ -71,7 +71,7 @@ end 'main'
 ```maxon
 function main() returns int
     var n = 3
-    var arr = array of n int
+    var arr = Array of n int
     arr[0] = 10
     arr[1] = 20
     arr[2] = 30
@@ -95,7 +95,7 @@ end 'main'
 <!-- test: variable-sized-array-from-parameter -->
 ```maxon
 function make_array(size int) returns int
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 42
     if let val = arr[0] 'get'
         return val
@@ -118,7 +118,7 @@ function main() returns int
     var base = 2
     var multiplier = 3
     var size = base * multiplier
-    var arr = array of size int
+    var arr = Array of size int
     arr[5] = 99
     if let val = arr[5] 'get'
         return val
@@ -134,7 +134,7 @@ end 'main'
 <!-- test: error.sized-array-negative-size -->
 ```maxon
 function main() returns int
-    var arr = array of -3 int
+    var arr = Array of -3 int
     return 0
 end 'main'
 ```
@@ -148,7 +148,7 @@ error E014: specs\fragments\challenge-sized-arrays.error.sized-array-negative-si
 Passing an array to a function that only reads it borrows the array.
 
 ```maxon
-function readFirst(arr array of 3 int) returns int
+function readFirst(arr Array of 3 int) returns int
     if let val = arr[0] 'get'
         return val
     end 'get' else 'nil'
@@ -157,7 +157,7 @@ function readFirst(arr array of 3 int) returns int
 end 'readFirst'
 
 function main() returns int
-    var arr = array of 3 int
+    var arr = Array of 3 int
     arr[0] = 42
     var result = readFirst(arr)
     var val = 0
@@ -175,7 +175,7 @@ end 'main'
 Passing an array to a function that modifies it moves the array.
 
 ```maxon
-function mutate(arr array of 3 int) returns int
+function mutate(arr Array of 3 int) returns int
     arr[0] = 100
     if let val = arr[0] 'get'
         return val
@@ -185,7 +185,7 @@ function mutate(arr array of 3 int) returns int
 end 'mutate'
 
 function main() returns int
-    var arr = array of 3 int
+    var arr = Array of 3 int
     arr[0] = 42
     return mutate(arr)
 end 'main'
@@ -198,7 +198,7 @@ end 'main'
 Using an array after it has been moved should be a compile-time error.
 
 ```maxon
-function mutate(arr array of 3 int) returns int
+function mutate(arr Array of 3 int) returns int
     arr[0] = 100
     if let val = arr[0] 'get'
         return val
@@ -208,7 +208,7 @@ function mutate(arr array of 3 int) returns int
 end 'mutate'
 
 function main() returns int
-    var arr = array of 3 int
+    var arr = Array of 3 int
     arr[0] = 42
     var result = mutate(arr)
     if let val = arr[0] 'get'
@@ -226,7 +226,7 @@ error E008: specs\fragments\challenge-sized-arrays.error.array-use-after-move.1.
 Multiple borrows of the same array should be allowed.
 
 ```maxon
-function readFirst(arr array of 3 int) returns int
+function readFirst(arr Array of 3 int) returns int
     if let val = arr[0] 'get'
         return val
     end 'get' else 'nil'
@@ -235,7 +235,7 @@ function readFirst(arr array of 3 int) returns int
 end 'readFirst'
 
 function main() returns int
-    var arr = array of 3 int
+    var arr = Array of 3 int
     arr[0] = 10
     var a = readFirst(arr)
     var b = readFirst(arr)
@@ -251,7 +251,7 @@ end 'main'
 Immutable array cannot be passed to function that mutates it.
 
 ```maxon
-function mutate(arr array of 3 int) returns int
+function mutate(arr Array of 3 int) returns int
     arr[0] = 100
     if let val = arr[0] 'get'
         return val
@@ -273,7 +273,7 @@ error E010: specs\fragments\challenge-sized-arrays.error.let-array-cannot-move.1
 After moving an array, reassigning it should allow using it again.
 
 ```maxon
-function consume(arr array of 3 int) returns int
+function consume(arr Array of 3 int) returns int
     arr[0] = 100
     if let val = arr[0] 'get'
         return val
@@ -283,10 +283,10 @@ function consume(arr array of 3 int) returns int
 end 'consume'
 
 function main() returns int
-    var arr = array of 3 int
+    var arr = Array of 3 int
     arr[0] = 10
     var first = consume(arr)
-    arr = array of 3 int
+    arr = Array of 3 int
     arr[0] = 20
     var second = consume(arr)
     return first + second

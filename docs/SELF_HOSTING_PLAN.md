@@ -209,7 +209,7 @@ var first = numbers.get(0)
 - Resize logic with capacity management
 
 **Compiler component to rewrite:** Lexer (~500 lines)
-- Token stream is just a dynamic array of tokens
+- Token stream is just a dynamic Array of tokens
 - Simple enough to validate Vector implementation
 - No complex data structures needed yet
 
@@ -247,7 +247,7 @@ var parts = str.split(' ')
 
 **Language Feature:**
 ```maxon
-var symbols = map from string to int
+var symbols = Map from string to int
 symbols.insert("foo", 42)
 var value = symbols.get("foo")
 var exists = symbols.contains("foo")

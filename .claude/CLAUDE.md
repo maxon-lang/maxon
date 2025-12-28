@@ -151,14 +151,14 @@ match expr 'label'
 end 'label'
 
 // Arrays
-var arr = array of 10 int   // sized array
+var arr = Array of 10 int   // sized array
 let vals = [1, 2, 3]        // array literal
 var elem = arr[0]           // indexing
 var size = arr.count()      // length
 
 // Types
 int float bool byte character string
-array of T
+Array of T
 T or nil                    // optional type
 
 // Operators

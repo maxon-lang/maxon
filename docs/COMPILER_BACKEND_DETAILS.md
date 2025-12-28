@@ -77,7 +77,7 @@ enum class MIRTypeKind {
 
 ### Generic Type Support
 
-MIR handles monomorphized generic types through specialized type definitions. When the frontend instantiates a generic type like `map from string to int`, the MIR code generator:
+MIR handles monomorphized generic types through specialized type definitions. When the frontend instantiates a generic type like `Map from string to int`, the MIR code generator:
 
 1. **Creates a unique type type:** `map<string,int>` with concrete field types
 2. **Maintains type bindings:** A map of type parameter → concrete type (e.g., `KeyType → string`)
@@ -985,11 +985,11 @@ Fixed use-after-free crashes when assigning array variables to struct fields in 
 
 **Bug Fix: Null Pointer in `retainManagedTypesInArrayElements`:**
 
-Fixed crash when deep-copying arrays containing zero-initialized managed types (e.g., `array of 10 string`).
+Fixed crash when deep-copying arrays containing zero-initialized managed types (e.g., `Array of 10 string`).
 
-**Root Cause:** After `memcpy`-ing array data, `retainManagedTypesInArrayElements()` iterates through elements to increment refcounts for managed types. For string fields, it loads the `_managed` pointer and calls `_managed_string_retain()`. However, for sized arrays like `array of 10 string`, elements are zero-initialized (null pointers). Calling `_managed_string_retain(null)` crashes because it tries to read a refcount at offset `-8` from null.
+**Root Cause:** After `memcpy`-ing array data, `retainManagedTypesInArrayElements()` iterates through elements to increment refcounts for managed types. For string fields, it loads the `_managed` pointer and calls `_managed_string_retain()`. However, for sized arrays like `Array of 10 string`, elements are zero-initialized (null pointers). Calling `_managed_string_retain(null)` crashes because it tries to read a refcount at offset `-8` from null.
 
-**Symptom:** Map tests crashed with segfault because `map.init` creates sized arrays (`array of 16 string`) whose elements are null.
+**Symptom:** Map tests crashed with segfault because `map.init` creates sized arrays (`Array of 16 string`) whose elements are null.
 
 **Fix:** Added null checks before calling retain in `retainManagedTypesInArrayElements()`:
 ```cpp
@@ -1054,7 +1054,7 @@ Replaced the fragile multi-pass size recomputation with a robust dependency-trac
    - **Location:** [codegen_mir_stmt_assign.cpp](maxon-bin/codegen_mir/codegen_mir_stmt_assign.cpp)
 
 3. **Empty Array Initial Allocation Leak:**
-   - **Problem:** `var arr = array of int` allocated 8 bytes via raw `malloc` (no refcount header) that was never freed because `_managed_array_release` expected a header.
+   - **Problem:** `var arr = Array of int` allocated 8 bytes via raw `malloc` (no refcount header) that was never freed because `_managed_array_release` expected a header.
    - **Fix:** Empty mutable arrays now start with `capacity = 0` (stack-like, no allocation). When `push()` is called, `_managed_array_alloc` creates a proper heap buffer with the 8-byte refcount header.
    - **Location:** [codegen_mir_stmt_decl.cpp:254](maxon-bin/codegen_mir/codegen_mir_stmt_decl.cpp#L254)
 
@@ -1143,7 +1143,7 @@ Two related issues with type size computation when structs contain nested struct
 - Added monomorphization for generic type types
 - New `currentTypeBindings` map in codegen tracks type parameter substitutions
 - Dynamic method resolution resolves calls like `key.hash()` to concrete implementations
-- Support for specializing `map from K to V` with any key/value types
+- Support for specializing `Map from K to V` with any key/value types
 
 **Primitive Type Methods:**
 - Implemented inline codegen for `int.hash()`, `int.equals(other int)`
@@ -1152,7 +1152,7 @@ Two related issues with type size computation when structs contain nested struct
 - Methods registered in semantic analyzer as built-in functions
 
 **Collections Library:**
-- Added `map from KeyType to ValueType` generic hash map
+- Added `Map from KeyType to ValueType` generic hash map
 - Open addressing with linear probing collision resolution
 - Automatic resizing (grow) at 75% load factor
 - Methods: `insert()`, `get()`, `has()`, `remove()`, `count()`, `clear()`

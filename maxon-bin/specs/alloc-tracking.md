@@ -65,7 +65,7 @@ Leaked:    0 bytes
 ```maxon
 function main() returns int
     let size = 10
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 42
     if let val = arr[0] 'get'
         return val
@@ -111,8 +111,8 @@ Leaked:    0 bytes
 function main() returns int
     let size1 = 5
     let size2 = 10
-    var arr1 = array of size1 int
-    var arr2 = array of size2 int
+    var arr1 = Array of size1 int
+    var arr2 = Array of size2 int
     arr1[0] = 1
     arr2[0] = 2
     var sum = 0
@@ -145,7 +145,7 @@ Leaked:    0 bytes
 ```maxon
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 42
     if true 'check'
         if let val = arr[0] 'get'
@@ -175,7 +175,7 @@ Leaked:    0 bytes
 ```maxon
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 42
     if false 'check'
         return 0
@@ -203,7 +203,7 @@ Leaked:    0 bytes
 <!-- test: array-passed-to-function -->
 <!-- TrackAllocs: true -->
 ```maxon
-function sum_first(arr array of int) returns int
+function sum_first(arr Array of int) returns int
     if let val = arr[0] 'get'
         return val
     end 'get' else 'nil'
@@ -213,7 +213,7 @@ end 'sum_first'
 
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 99
     return sum_first(arr)
 end 'main'
@@ -237,7 +237,7 @@ Leaked:    0 bytes
 function main() returns int
     let a = 2
     let b = 5
-    var arr = array of (a * b) int
+    var arr = Array of (a * b) int
     arr[0] = 77
     if let val = arr[0] 'get'
         return val
@@ -262,7 +262,7 @@ Leaked:    0 bytes
 <!-- test: array-borrow-no-leak -->
 <!-- TrackAllocs: true -->
 ```maxon
-function readFirst(arr array of int) returns int
+function readFirst(arr Array of int) returns int
     if let val = arr[0] 'get'
         return val
     end 'get' else 'nil'
@@ -272,7 +272,7 @@ end 'readFirst'
 
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 42
     let result = readFirst(arr)
     var sum = 0
@@ -298,7 +298,7 @@ Leaked:    0 bytes
 <!-- test: array-borrow-multiple-times -->
 <!-- TrackAllocs: true -->
 ```maxon
-function getElement(arr array of int, idx int) returns int
+function getElement(arr Array of int, idx int) returns int
     if let val = arr[idx] 'get'
         return val
     end 'get' else 'nil'
@@ -308,7 +308,7 @@ end 'getElement'
 
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 10
     arr[1] = 20
     arr[2] = 30
@@ -339,7 +339,7 @@ function main() returns int
     var sum = 0
     while i < 3 'loop'
         let size = 5
-        var arr = array of size int
+        var arr = Array of size int
         arr[0] = i
         if let val = arr[0] 'get'
             sum = sum + val
@@ -369,7 +369,7 @@ Leaked:    0 bytes
 <!-- test: array-move-no-leak -->
 <!-- TrackAllocs: true -->
 ```maxon
-function mutateFirst(arr array of int) returns int
+function mutateFirst(arr Array of int) returns int
     arr[0] = 100
     if let val = arr[0] 'get'
         return val
@@ -380,7 +380,7 @@ end 'mutateFirst'
 
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 42
     return mutateFirst(arr)
 end 'main'
@@ -401,7 +401,7 @@ Leaked:    0 bytes
 <!-- test: array-move-chain -->
 <!-- TrackAllocs: true -->
 ```maxon
-function addTen(arr array of int) returns int
+function addTen(arr Array of int) returns int
     var val = 0
     if let v = arr[0] 'get'
         val = v
@@ -414,7 +414,7 @@ function addTen(arr array of int) returns int
     end 'nil'
 end 'addTen'
 
-function doubleAddTen(arr array of int) returns int
+function doubleAddTen(arr Array of int) returns int
     var val = 0
     if let v = arr[0] 'get'
         val = v
@@ -425,7 +425,7 @@ end 'doubleAddTen'
 
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 5
     return doubleAddTen(arr)
 end 'main'
@@ -446,7 +446,7 @@ Leaked:    0 bytes
 <!-- test: two-arrays-one-moved-one-borrowed -->
 <!-- TrackAllocs: true -->
 ```maxon
-function readIt(arr array of int) returns int
+function readIt(arr Array of int) returns int
     if let val = arr[0] 'get'
         return val
     end 'get' else 'nil'
@@ -454,7 +454,7 @@ function readIt(arr array of int) returns int
     end 'nil'
 end 'readIt'
 
-function writeIt(arr array of int) returns int
+function writeIt(arr Array of int) returns int
     arr[0] = 99
     if let val = arr[0] 'get'
         return val
@@ -465,8 +465,8 @@ end 'writeIt'
 
 function main() returns int
     let size = 5
-    var arr1 = array of size int
-    var arr2 = array of size int
+    var arr1 = Array of size int
+    var arr2 = Array of size int
     arr1[0] = 10
     arr2[0] = 20
     let borrowed = readIt(arr1)
@@ -496,7 +496,7 @@ Zero-size arrays do not allocate memory.
 ```maxon
 function main() returns int
     let size = 0
-    var arr = array of size int
+    var arr = Array of size int
     if size > 0 'check'
         arr[0] = 1
     end 'check'
@@ -521,9 +521,9 @@ Reassigning a heap array frees the old memory and allocates new memory.
 ```maxon
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 10
-    arr = array of size int
+    arr = Array of size int
     arr[0] = 20
     if let val = arr[0] 'get'
         return val

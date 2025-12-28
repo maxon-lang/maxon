@@ -22,8 +22,8 @@
 // ```
 
 export type Set uses Element is InitableFromArrayLiteral with Element
-	var elements array of Element   // Element storage
-	var states array of byte        // Slot states: 0=empty, 1=occupied, 2=deleted
+	var elements Array of Element   // Element storage
+	var states Array of int         // Slot states: 0=empty, 1=occupied, 2=deleted
 	var count int                   // Number of occupied entries
 	var capacity int                // Total slots
 
@@ -40,8 +40,8 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 	end 'calc_cap'
 
 	// Allocate internal arrays
-	var elems = array of cap Element
-	var sts = array of cap byte
+	var elems = Array of cap Element
+	var sts = Array of cap int
 
 	// Create the set type (copies array structs by value)
 	var result = Self{elements: elems, states: sts, count: 0, capacity: cap}
@@ -82,7 +82,7 @@ export function insert(element Element)
 	var probes = 0
 
 	while probes < capacity 'probe'
-		var state = states[index] as int
+		var state = states[index]
 
 		if state == 0 'empty'
 			// Empty slot - insert here or at first deleted
@@ -92,7 +92,7 @@ export function insert(element Element)
 			end 'use_deleted'
 
 			elements[insertIndex] = element
-			states[insertIndex] = 1 as byte
+			states[insertIndex] = 1
 			count = count + 1
 			return
 		end 'empty'
@@ -115,7 +115,7 @@ export function insert(element Element)
 	// But if we do, insert at first deleted slot
 	if firstDeleted >= 0 'fallback'
 		elements[firstDeleted] = element
-		states[firstDeleted] = 1 as byte
+		states[firstDeleted] = 1
 		count = count + 1
 	end 'fallback'
 end 'insert'
@@ -130,7 +130,7 @@ export function contains(element Element) returns bool
 
 	var probes = 0
 	while probes < capacity 'probe'
-		var state = states[index] as int
+		var state = states[index]
 
 		if state == 0 'empty'
 			return false
@@ -157,14 +157,14 @@ export function remove(element Element) returns bool
 
 	var probes = 0
 	while probes < capacity 'probe'
-		var state = states[index] as int
+		var state = states[index]
 
 		if state == 0 'empty'
 			return false
 		end 'empty'
 
 		if state == 1 and elements[index].equals(element) 'found'
-			states[index] = 2 as byte
+			states[index] = 2
 			count = count - 1
 			return true
 		end 'found'
@@ -196,8 +196,8 @@ function grow()
 	var oldStates = states
 
 	// Allocate new arrays
-	var newElements = array of newCapacity Element
-	var newStates = array of newCapacity byte
+	var newElements = Array of newCapacity Element
+	var newStates = Array of newCapacity int
 
 	// Update type to use new arrays
 	elements = newElements
@@ -213,7 +213,7 @@ function grow()
 	// Rehash all occupied entries from old arrays
 	var i = 0
 	while i < oldCapacity 'rehash'
-		var state = oldStates[i] as int
+		var state = oldStates[i]
 		if state == 1 'occupied'
 			// Re-insert into new arrays using insert logic
 			var element = oldElements[i]
@@ -225,12 +225,12 @@ function grow()
 			end 'fix_negative'
 
 			// Find empty slot (no deleted slots in fresh array)
-			while states[index] as int != 0 'find_slot'
+			while states[index] != 0 'find_slot'
 				index = (index + 1) mod newCapacity
 			end 'find_slot'
 
 			elements[index] = element
-			states[index] = 1 as byte
+			states[index] = 1
 			count = count + 1
 		end 'occupied'
 		i = i + 1

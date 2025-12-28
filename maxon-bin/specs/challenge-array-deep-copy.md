@@ -22,7 +22,7 @@ When you assign an array to a struct field, Maxon performs a deep copy of the ar
 <!-- test: struct-with-array-field-simple -->
 ```maxon
 type Container
-    var data array of int
+    var data Array of int
 end 'Container'
 
 function main() returns int
@@ -42,7 +42,7 @@ end 'main'
 <!-- test: struct-array-field-independent -->
 ```maxon
 type Container
-    var data array of int
+    var data Array of int
 end 'Container'
 
 function main() returns int
@@ -63,7 +63,7 @@ end 'main'
 <!-- test: struct-array-field-modify-struct -->
 ```maxon
 type Container
-    var data array of int
+    var data Array of int
 end 'Container'
 
 function main() returns int
@@ -84,7 +84,7 @@ end 'main'
 <!-- test: struct-array-returned-from-function -->
 ```maxon
 type Container
-    var data array of int
+    var data Array of int
 end 'Container'
 
 function makeContainer() returns Container
@@ -108,7 +108,7 @@ end 'main'
 <!-- test: struct-array-returned-all-elements -->
 ```maxon
 type Container
-    var data array of int
+    var data Array of int
 end 'Container'
 
 function makeContainer() returns Container
@@ -144,7 +144,7 @@ end 'main'
 <!-- test: nested-function-calls-with-struct-array -->
 ```maxon
 type Container
-    var data array of int
+    var data Array of int
 end 'Container'
 
 function processContainer(c Container) returns int

@@ -223,11 +223,11 @@ end 'useType'
 end 'ValueHolder'
 
 type Container
-	var items map from string to ValueHolder
+	var items Map from string to ValueHolder
 
 	function create() returns Container
 		return Container{
-			items: map from string to ValueHolder
+			items: Map from string to ValueHolder
 		}
 	end 'create'
 end 'Container'
@@ -244,7 +244,7 @@ end 'Container'
 		await vscode.window.showTextDocument(testDocument);
 
 		// Go to definition on 'ValueHolder' in the map type (line 5, around col 35)
-		// "	var items map from string to ValueHolder"
+		// "	var items Map from string to ValueHolder"
 		const position = new vscode.Position(5, 35);
 		const locations = await getDefinitionLocations(testDocument, position);
 

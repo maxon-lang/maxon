@@ -411,7 +411,7 @@ end 'main'`;
         this.timeout(10000);
 
         // Match expression as return value - gives clauses and end should be indented
-        const badlyFormattedContent = `function main(args array of string) returns int
+        const badlyFormattedContent = `function main(args Array of string) returns int
 \tvar command = args[1]
 \treturn match command 'dispatch'
 "compile" gives compileCommand(args)

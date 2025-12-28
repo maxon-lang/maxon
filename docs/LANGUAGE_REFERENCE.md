@@ -269,21 +269,21 @@ var sub3 = s[..5]            // "hello" (from start to index)
 
 **Array Type Syntax**
 ```maxon
-array of int              // array of integers
-array of float            // array of floats  
-array of array of int     // nested array (2D)
+Array of int              // Array of integers
+Array of float            // Array of floats  
+Array of Array of int     // nested array (2D)
 ```
 
 **Creating Arrays**
 ```maxon
-var numbers = array of 10 int   // Sized array of 10 integers (zero-initialized)
+var numbers = Array of 10 int   // Sized Array of 10 integers (zero-initialized)
 let values = [1, 2, 3]          // Immutable array from literal (stack buffer)
 var items = [1, 2, 3]           // Mutable array from literal (heap buffer)
 ```
 
 **Function Parameters**
 ```maxon
-function process(data array of int) returns int
+function process(data Array of int) returns int
     return data[0]
 end 'process'
 ```
@@ -319,13 +319,13 @@ Maps are hash-based key-value collections with O(1) average lookup time.
 
 **Declaration**
 ```maxon
-var m = map from KeyType to ValueType
+var m = Map from KeyType to ValueType
 ```
 
 **Examples**
 ```maxon
-var scores = map from int to int
-var names = map from string to string
+var scores = Map from int to int
+var names = Map from string to string
 ```
 
 **Key Type Restrictions**
@@ -350,7 +350,7 @@ Non-hashable types (like `float`) cannot be used as map keys and will produce a 
 
 **Usage Examples**
 ```maxon
-var m = map from int to int
+var m = Map from int to int
 
 // Insert key-value pairs
 m.insert(1, 100)
@@ -388,7 +388,7 @@ var cap = m.capacity()       // 16 (default initial capacity)
 **Automatic Resizing**
 Maps automatically grow when the load factor exceeds 75%:
 ```maxon
-var m = map from int to int
+var m = Map from int to int
 // Initial capacity: 16, grows at 12 entries
 var i = 0
 while i < 20 'insert'
@@ -1075,7 +1075,7 @@ var result2 = divide(dividend = 10, divisor = 2)  // Named for clarity
 
 **Array Parameters**
 ```maxon
-function sum(numbers array of int) returns int
+function sum(numbers Array of int) returns int
     var total = 0
     for num in numbers 'loop'
         total = total + num
@@ -1626,7 +1626,7 @@ end 'main'
 type BuildConfig
     var name string           // Executable name
     var output string         // Output path (e.g., "bin/app.exe")
-    var sources array of string  // Source files (empty = auto-discover)
+    var sources Array of string  // Source files (empty = auto-discover)
     var optimize bool         // Enable optimizations
     var debug_info bool       // Include debug symbols
 end 'BuildConfig'

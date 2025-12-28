@@ -5,7 +5,7 @@ Enable the maxon compiler to compile the self-hosted compiler in `maxon-bin-self
 
 ## Self-hosted compiler needs (missing in maxon):**
 - Strings (literals, interpolation, methods)
-- Maps (`map from K to V`)
+- Maps (`Map from K to V`)
 - Match expressions
 - For-in loops
 - Logical operators (`and`, `or`, `not`)
@@ -139,7 +139,7 @@ Enable the maxon compiler to compile the self-hosted compiler in `maxon-bin-self
 **Note:** Static arrays (`Array of N T`, literals `[1, 2, 3]`) and bounds-checked indexing are implemented.
 
 #### 5.2 Map Type
-- [ ] Parse `map from K to V` type syntax
+- [ ] Parse `Map from K to V` type syntax
 - [ ] Runtime representation (hash table)
 - [ ] Files: `2-parser.zig`, `ast.zig`, `4-ast_to_ir.zig`
 

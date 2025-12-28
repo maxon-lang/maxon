@@ -60,7 +60,7 @@ pub const FieldDecl = struct {
 };
 
 pub const ArrayTypeExpr = struct {
-    size: ?i64, // null for unsized (array of int), value for sized (array of 3 int)
+    size: ?i64, // null for unsized (Array of int), value for sized (Array of 3 int)
     element_type: []const u8,
 };
 
@@ -71,7 +71,7 @@ pub const GenericTypeExpr = struct {
 
 pub const TypeExpr = union(enum) {
     simple: []const u8, // int, float, MyStruct
-    array: ArrayTypeExpr, // array of int, array of 3 int
+    array: ArrayTypeExpr, // Array of int, Array of 3 int
     generic: GenericTypeExpr, // Array of int, Map of string int
     optional: *const TypeExpr, // T or nil
 };

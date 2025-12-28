@@ -180,7 +180,7 @@ end 'main'
 <!-- test: struct-array-field-moved-into-type -->
 ```maxon
 type Container
-    var data array of int
+    var data Array of int
 end 'Container'
 
 function main() returns int
@@ -265,7 +265,7 @@ end 'main'
 Moved arrays are not freed by the original owner, preventing double-free.
 The caller allocates, the callee (mutateFirst) takes ownership and frees.
 ```maxon
-function mutateFirst(arr array of int) returns int
+function mutateFirst(arr Array of int) returns int
     arr[0] = 100
     if let val = arr[0] 'get'
         return val
@@ -276,7 +276,7 @@ end 'mutateFirst'
 
 function main() returns int
     let size = 3
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 42
     return mutateFirst(arr)
 end 'main'

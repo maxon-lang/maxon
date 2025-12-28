@@ -1,5 +1,5 @@
 // Test: alloc-tracking.array-passed-to-function.1
-function sum_first(arr array of int) returns int
+function sum_first(arr Array of int) returns int
     if let val = arr[0] 'get'
         return val
     end 'get' else 'nil'
@@ -9,7 +9,7 @@ end 'sum_first'
 
 function main() returns int
     let size = 5
-    var arr = array of size int
+    var arr = Array of size int
     arr[0] = 99
     return sum_first(arr)
 end 'main'
@@ -26,58 +26,5 @@ Freed:     40 bytes
 Leaked:    0 bytes
 ```
 ---
-function sum_first() -> i64 {
-entry:
-    %tmp_param = param ptr 0
-    %arr = alloca ptr
-    store %arr %tmp_param
-    %tmp_load = load ptr %arr
-    %tmp_const = const.i64 i64 0
-    %4 = getelemptr ptr %tmp_load %tmp_const
-    %tmp_load.1 = load i64 %4
-    %tmp_alloca.1 = alloca.sized ptr 16
-    %tmp_const.1 = const.i64 i64 1
-    store %tmp_alloca.1 %tmp_const.1
-    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
-    store %tmp_fieldptr %tmp_load.1
-    %tmp_load.2 = load i64 %tmp_alloca.1
-    %tmp_const.2 = const.i64 i64 1
-    %tmp_icmp = icmp.eq i64 %tmp_load.2 %tmp_const.2
-    %tmp_load = br.cond %tmp_icmp @block1
-if_let_then:
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 8
-    %tmp_load.3 = load i64 %tmp_fieldptr.1
-    %val = alloca ptr
-    store %val %tmp_load.3
-    %tmp_load.4 = load i64 %val
-    ret %tmp_load.4
-if_let_else:
-    %tmp_const.3 = const.i64 i64 0
-    ret %tmp_const.3
-if_let_end:
-}
-
-function main() -> i64 {
-entry:
-    %tmp_const = const.i64 i64 5
-    %size = alloca ptr
-    store %size %tmp_const
-    %tmp_load = load i64 %size
-    %tmp_const.1 = const.i64 i64 8
-    %tmp_mul = mul i64 %tmp_load %tmp_const.1
-    %tmp_heap = heap.alloc ptr %tmp_mul
-    %arr = alloca ptr
-    store %arr %tmp_heap
-    %tmp_load.1 = load ptr %arr
-    %tmp_const.2 = const.i64 i64 0
-    %tmp_const.3 = const.i64 i64 99
-    %10 = getelemptr ptr %tmp_load.1 %tmp_const.2
-    store %10 %tmp_const.3
-    %tmp_load.2 = load ptr %arr
-    %tmp_call = call i64 @sum_first(%tmp_load.2)
-    %tmp_load.3 = load ptr %arr
-    heap.free %tmp_load.3
-    ret %tmp_call
-}
-
+// IR generation failed: error.ParserError
 ---

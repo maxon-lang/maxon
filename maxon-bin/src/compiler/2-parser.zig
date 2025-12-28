@@ -415,7 +415,7 @@ pub const Parser = struct {
     }
 
     fn parseTypeExpr(self: *Parser) !ast.TypeExpr {
-        // Check for array type: array of [size] element_type
+        // Check for array type: Array of [size] element_type
         var base_type: ast.TypeExpr = undefined;
         if (self.check(.array)) {
             _ = self.advance(); // consume 'array'
@@ -1120,7 +1120,7 @@ pub const Parser = struct {
         if (self.check(.lbracket)) {
             return try self.parseArrayLiteral();
         }
-        // Sized array: array of N type
+        // Sized array: Array of N type
         if (self.check(.array)) {
             return try self.parseSizedArray();
         }

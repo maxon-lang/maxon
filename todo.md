@@ -44,7 +44,7 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 
 ## Ideas
 - reorganize structs to improve cache locality
-- array syntax: var x = array of 10 int
+- array syntax: var x = Array of 10 int
 - define structs by usage 
 	var p = Point { x: 3, y: 4 }
 	type has x and y
