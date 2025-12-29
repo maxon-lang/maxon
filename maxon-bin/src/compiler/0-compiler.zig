@@ -7,6 +7,7 @@ const ir = @import("ir.zig");
 const mutation_analysis = @import("3-mutation_analysis.zig");
 const optimizer = @import("5-optimizer.zig");
 const ir_codegen = @import("ir_codegen.zig");
+const asm_gen = @import("asm_gen.zig");
 const pe = @import("7-pe.zig");
 pub const debug = @import("debug.zig");
 pub const compile_error = @import("error.zig");
@@ -34,6 +35,8 @@ pub const CompileResult = struct {
 /// Public compile options exposed to CLI
 pub const CompileOptions = struct {
     track_allocs: bool = false,
+    emit_ir: bool = false,
+    emit_asm: bool = false,
 };
 
 /// Options for the compilation pipeline
@@ -41,6 +44,7 @@ const PipelineOptions = struct {
     source_file: ?[]const u8 = null,
     result: ?*CompileResult = null,
     track_allocs: bool = false,
+    emit_ir: bool = false,
     external_funcs: ?[]const ast_to_ir.ExternalFuncSignature = null,
     external_types: ?[]const ast_to_ir.ExternalTypeInfo = null,
 };
@@ -241,7 +245,7 @@ pub fn compileWithFile(source: []const u8, output_path: []const u8, source_file:
 }
 
 pub fn compileWithOptions(source: []const u8, output_path: []const u8, source_file: []const u8, options: CompileOptions, allocator: std.mem.Allocator, result: *CompileResult) !void {
-    return compileWithInfo(source, output_path, source_file, .{ .track_allocs = options.track_allocs }, allocator, result);
+    return compileWithInfo(source, output_path, source_file, .{ .track_allocs = options.track_allocs, .emit_ir = options.emit_ir }, allocator, result);
 }
 
 fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]const u8, pipeline_opts: PipelineOptions, allocator: std.mem.Allocator, result: *CompileResult) !void {
@@ -252,8 +256,10 @@ fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]
     });
     defer frontend.deinit();
 
-    // Emit IR to file
-    try writeIrFile(frontend.ir_module, output_path, allocator);
+    // Emit IR to file if requested
+    if (pipeline_opts.emit_ir) {
+        try writeIrFile(frontend.ir_module, output_path, allocator);
+    }
 
     // 6 - Generate x86-64 code
     debug.log("Generating x86-64 code from IR", .{});
@@ -386,8 +392,15 @@ pub fn compileMultiple(
 
     const final_module = &merged.?.ir_module;
 
-    // Emit IR to file
-    try writeIrFile(final_module.*, output_path, allocator);
+    // Emit IR to file if requested
+    if (options.emit_ir) {
+        try writeIrFile(final_module.*, output_path, allocator);
+    }
+
+    // Emit assembly to file if requested
+    if (options.emit_asm) {
+        try writeAsmFile(final_module.*, output_path, allocator);
+    }
 
     // Generate x86-64 code
     debug.log("Generating x86-64 code from merged IR", .{});
@@ -769,6 +782,35 @@ fn writeIrFile(ir_module: ir.Module, output_path: []const u8, allocator: std.mem
     };
     defer ir_file.close();
     ir_file.writeAll(ir_text) catch {
+        return error.WriteError;
+    };
+}
+
+fn writeAsmFile(ir_module: ir.Module, output_path: []const u8, allocator: std.mem.Allocator) !void {
+    const asm_path = blk: {
+        if (std.mem.endsWith(u8, output_path, ".exe")) {
+            const base = output_path[0 .. output_path.len - 4];
+            break :blk std.fmt.allocPrint(allocator, "{s}.asm", .{base}) catch {
+                return error.WriteError;
+            };
+        } else {
+            break :blk std.fmt.allocPrint(allocator, "{s}.asm", .{output_path}) catch {
+                return error.WriteError;
+            };
+        }
+    };
+    defer allocator.free(asm_path);
+
+    const asm_text = asm_gen.generateAssembly(ir_module, allocator) catch {
+        return error.WriteError;
+    };
+    defer allocator.free(asm_text);
+
+    const asm_file = std.fs.cwd().createFile(asm_path, .{}) catch {
+        return error.WriteError;
+    };
+    defer asm_file.close();
+    asm_file.writeAll(asm_text) catch {
         return error.WriteError;
     };
 }

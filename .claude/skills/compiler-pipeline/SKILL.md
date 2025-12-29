@@ -81,12 +81,24 @@ Source Code (.maxon)
 | Compile and run | `./bin/maxon run file.maxon` |
 | Compile only | `./bin/maxon compile file.maxon` |
 | Compile with IR output | `./bin/maxon compile file.maxon --emit-ir` |
+| Compile with ASM output | `./bin/maxon compile file.maxon --emit-asm` |
+| Compile with verbose output | `./bin/maxon compile file.maxon -v` |
 
 ## Debugging Tips
 
 ### Viewing IR Output
 ```bash
 ./bin/maxon compile file.maxon --emit-ir
+```
+
+### Viewing Assembly Output
+```bash
+./bin/maxon compile file.maxon --emit-asm
+```
+
+### Enabling Verbose Output
+```bash
+./bin/maxon compile file.maxon -v
 ```
 
 ### Tracing Issues
@@ -99,10 +111,12 @@ Source Code (.maxon)
 ### Common Debugging Flow
 
 1. Create minimal repro case
-2. Compile with `--emit-ir` to see IR
-3. Identify which stage produces wrong output
-4. Add debug prints in that stage
-5. Trace the issue to root cause
+2. Compile with `--emit-ir` to see IR output
+3. Compile with `--emit-asm` to see generated assembly
+4. Use `-v` flag for verbose compiler output
+5. Identify which stage produces wrong output
+6. Add debug prints in that stage
+7. Trace the issue to root cause
 
 ## Adding New Features
 

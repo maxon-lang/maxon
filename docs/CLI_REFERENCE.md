@@ -32,8 +32,9 @@ maxon compile <source.maxon> [options]
 
 | Option | Description |
 |--------|-------------|
-| `--debug` | Enable debug output (default) |
-| `--no-debug` | Disable debug output |
+| `-v` | Enable verbose/debug output |
+| `--emit-ir` | Emit IR output to `<source>.ir` |
+| `--emit-asm` | Emit assembly output to `<source>.asm` |
 | `--track-allocs` | Enable runtime allocation tracking |
 
 **Output:**
@@ -49,8 +50,14 @@ maxon compile hello.maxon
 # Compile with allocation tracking
 maxon compile app.maxon --track-allocs
 
-# Compile without debug info
-maxon compile app.maxon --no-debug
+# Compile with verbose output
+maxon compile app.maxon -v
+
+# Emit IR output
+maxon compile app.maxon --emit-ir
+
+# Emit assembly output
+maxon compile app.maxon --emit-asm
 ```
 
 ---
@@ -68,8 +75,9 @@ maxon build [options]
 
 | Option | Description |
 |--------|-------------|
-| `--debug` | Enable debug output (default) |
-| `--no-debug` | Disable debug output |
+| `-v` | Enable verbose/debug output |
+| `--emit-ir` | Emit IR output |
+| `--emit-asm` | Emit assembly output |
 | `--track-allocs` | Enable runtime allocation tracking |
 
 **Behavior:**
@@ -114,7 +122,6 @@ maxon test [options]
 |--------|-------------|
 | `--filter <pattern>` | Run only tests matching the pattern |
 | `--verbose` | Show detailed output for each test |
-| `-j <N>`, `--jobs <N>` | Run tests with N parallel jobs |
 
 **Examples:**
 ```bash
@@ -127,12 +134,8 @@ maxon test --filter "array"
 # Run with verbose output
 maxon test --verbose
 
-# Run with 4 parallel jobs
-maxon test -j 4
-maxon test --jobs 4
-
 # Combine options
-maxon test --filter "string" --verbose -j 8
+maxon test --filter "string" --verbose
 ```
 
 **Output:**
@@ -299,8 +302,14 @@ cd maxon-bin
 ### Debugging Compilation Issues
 
 ```bash
-# Enable debug output (shows IR, codegen details)
-maxon compile problem.maxon --debug
+# Enable verbose output (shows compilation progress)
+maxon compile problem.maxon -v
+
+# Emit IR for inspection
+maxon compile problem.maxon --emit-ir
+
+# Emit assembly for inspection
+maxon compile problem.maxon --emit-asm
 
 # Check for memory issues
 maxon compile app.maxon --track-allocs

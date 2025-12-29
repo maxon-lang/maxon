@@ -32,6 +32,8 @@ When debugging issues, follow this systematic approach:
 - Create a minimal test case that reproduces the issue
 - Save test files to `/temp` directory and clean up when done
 - Use `./bin/maxon compile file.maxon --emit-ir` to examine IR output
+- Use `./bin/maxon compile file.maxon --emit-asm` to examine assembly output
+- Use `-v` flag to enable verbose compiler output
 
 ### 2. Identify the Failure Point
 - Determine which compilation stage is producing incorrect output
@@ -57,7 +59,9 @@ When debugging issues, follow this systematic approach:
 
 - Build compiler: `cd maxon-bin && zig build`
 - Run tests: `cd maxon-bin && zig build test`
-- Compile with IR: `./bin/maxon compile file.maxon --emit-ir`
+- Compile with IR output: `./bin/maxon compile file.maxon --emit-ir`
+- Compile with ASM output: `./bin/maxon compile file.maxon --emit-asm`
+- Compile with verbose output: `./bin/maxon compile file.maxon -v`
 - Run program: `./bin/maxon run file.maxon`
 
 ## Output Format

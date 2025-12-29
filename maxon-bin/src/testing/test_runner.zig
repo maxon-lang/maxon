@@ -179,10 +179,7 @@ pub fn runAllTests(
     // Determine number of workers (default to half CPU count for in-process compilation)
     const cpu_count = std.Thread.getCpuCount() catch 4;
     const default_workers = @max(1, cpu_count / 2);
-    const num_workers = if (options.jobs == 0)
-        @min(default_workers, total)
-    else
-        @min(options.jobs, total);
+    const num_workers = @min(default_workers, total);
 
     // Single-threaded fast path
     if (num_workers == 1) {

@@ -16,15 +16,13 @@ The compilation pipeline is:
 
 ### 1. Verbose Logging
 
-The compiler has built-in verbose logging at three levels:
+The compiler has built-in verbose logging. Use the `-v` flag to enable it:
 
 ```bash
-maxon compile file.maxon -v      # Level 1: Progress, phase names
-maxon compile file.maxon -vv     # Level 2: Detailed info, timing
-maxon compile file.maxon -vvv    # Level 3: Trace, individual items
+maxon compile file.maxon -v      # Enable verbose output
 ```
 
-**Level 1 (`-v`)** shows phase progress:
+**Verbose output (`-v`)** shows phase progress:
 ```
 === Maxon Compiler ===
 [Lexer] Tokenized: 43 tokens from file.maxon
@@ -34,27 +32,6 @@ maxon compile file.maxon -vvv    # Level 3: Trace, individual items
 [Opt] Dead code elimination complete
 [x86] Generating executable...
 Output: file.exe
-```
-
-**Level 2 (`-vv`)** adds timing and counts:
-```
-[Lexer]   Tokenization time: 45µs
-[Lexer]   Token breakdown: 11 keywords, 10 identifiers, 6 numbers
-[Parser]   Parse time: 82µs
-[Semantic]   Analysis time: 47µs
-[MIR]   Pass 1: Creating type types (0 structs)
-[MIR]   Pass 2: Creating function declarations (1 functions)
-[Opt]   Dead code elimination time: 139µs
-```
-
-**Level 3 (`-vvv`)** shows individual items (useful for debugging):
-```
-[Lexer]     Token[0]: type=0 value='function' line=1 col=1
-[Lexer]     Token[1]: type=1 value='main' line=1 col=10
-[Parser]     Function: main -> int (0 params)
-[Semantic]     Dependency resolution iteration 1
-[MIR]     Declaring function: main -> int
-[MIR]     Target triple: x86_64-pc-windows-msvc
 ```
 
 **Log phase prefixes:**
@@ -96,9 +73,8 @@ llvm-project/bin/llvm-objdump -d file.exe | grep -A30 "1400010dd:"
 
 ### 4. Run Test Fragments
 ```bash
-maxon test-fragments           # Run all language tests
-maxon test-fragments -v        # With progress output
-maxon test-fragments -vv       # With detailed output
+maxon test                     # Run all language tests
+maxon test --verbose           # With detailed output
 ```
 
 ### 5. Run Backend Unit Tests

@@ -76,7 +76,6 @@ pub const TestResult = struct {
 pub const TestOptions = struct {
     filter: ?[]const u8 = null, // Run only tests matching pattern
     verbose: bool = false,
-    jobs: usize = 0, // Number of parallel workers (0 = auto-detect CPU count)
 };
 
 /// Summary of test run

@@ -1862,17 +1862,20 @@ maxon program.maxon
 # Compile to executable
 maxon compile program.maxon -o program.exe
 
-# Emit LLVM IR alongside executable
+# Emit IR alongside executable
 maxon compile program.maxon --emit-ir
 
+# Emit assembly alongside executable
+maxon compile program.maxon --emit-asm
+
+# Enable verbose output
+maxon compile program.maxon -v
+
 # Run language tests
-maxon test-fragments
+maxon test
 
-# Extract tests from specs
-maxon extract-specs
-
-# Regenerate IR for test fragments
-maxon regen-fragments
+# Run tests with verbose output
+maxon test --verbose
 ```
 
 ---

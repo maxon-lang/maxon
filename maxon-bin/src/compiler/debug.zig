@@ -1,7 +1,7 @@
 const std = @import("std");
 
-/// Debug logging configuration - set to false for production builds
-pub var enabled: bool = true;
+/// Debug logging configuration - disabled by default, enable with -v flag
+pub var enabled: bool = false;
 
 /// Log a debug message
 pub fn log(comptime fmt: []const u8, args: anytype) void {

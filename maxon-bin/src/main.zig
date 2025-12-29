@@ -38,12 +38,15 @@ fn printUsage() void {
     std.debug.print("  build                   Build project from current directory\n", .{});
     std.debug.print("  test                    Run spec fragment tests\n", .{});
     std.debug.print("\nCompile Options:\n", .{});
-    std.debug.print("  --no-debug              Disable debug output\n", .{});
-    std.debug.print("  --debug                 Enable debug output (default)\n", .{});
+    std.debug.print("  -v                      Enable verbose/debug output\n", .{});
     std.debug.print("  --track-allocs          Enable runtime allocation tracking\n", .{});
+    std.debug.print("  --emit-ir               Emit IR output (.ir file)\n", .{});
+    std.debug.print("  --emit-asm              Emit assembly output (.asm file)\n", .{});
     std.debug.print("\nBuild Options:\n", .{});
-    std.debug.print("  --no-debug              Disable debug output\n", .{});
+    std.debug.print("  -v                      Enable verbose/debug output\n", .{});
     std.debug.print("  --track-allocs          Enable runtime allocation tracking\n", .{});
+    std.debug.print("  --emit-ir               Emit IR output (.ir file)\n", .{});
+    std.debug.print("  --emit-asm              Emit assembly output (.asm file)\n", .{});
     std.debug.print("\nTest Options:\n", .{});
     std.debug.print("  --filter <pattern>      Run only tests matching pattern\n", .{});
     std.debug.print("  --verbose               Show detailed output\n", .{});
@@ -52,22 +55,29 @@ fn printUsage() void {
 fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     var source_path: ?[:0]u8 = null;
     var track_allocs = false;
+    var emit_ir = false;
+    var emit_asm = false;
 
     // Parse arguments
     for (args[2..]) |arg| {
-        if (std.mem.eql(u8, arg, "--no-debug")) {
-            compiler.debug.enabled = false;
-        } else if (std.mem.eql(u8, arg, "--debug")) {
+        if (std.mem.eql(u8, arg, "-v")) {
             compiler.debug.enabled = true;
         } else if (std.mem.eql(u8, arg, "--track-allocs")) {
             track_allocs = true;
-        } else if (arg[0] != '-') {
+        } else if (std.mem.eql(u8, arg, "--emit-ir")) {
+            emit_ir = true;
+        } else if (std.mem.eql(u8, arg, "--emit-asm")) {
+            emit_asm = true;
+        } else if (arg.len > 0 and arg[0] == '-') {
+            std.debug.print("Unknown option: {s}\n", .{arg});
+            std.process.exit(1);
+        } else {
             source_path = arg;
         }
     }
 
     if (source_path == null) {
-        std.debug.print("Usage: maxon compile <source.maxon> [--no-debug]\n", .{});
+        std.debug.print("Usage: maxon compile <source.maxon> [-v]\n", .{});
         std.process.exit(1);
     }
 
@@ -138,7 +148,7 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     compiler.compileMultiple(
         sources.items,
         output_path,
-        .{ .track_allocs = track_allocs },
+        .{ .track_allocs = track_allocs, .emit_ir = emit_ir, .emit_asm = emit_asm },
         allocator,
         &result,
     ) catch |err| {
@@ -151,19 +161,62 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     };
 
     std.debug.print("Compiled: {s}\n", .{output_path});
+    if (emit_ir) {
+        const ir_path = blk: {
+            if (std.mem.endsWith(u8, output_path, ".exe")) {
+                const base = output_path[0 .. output_path.len - 4];
+                break :blk std.fmt.allocPrint(allocator, "{s}.ir", .{base}) catch {
+                    std.debug.print("Out of memory\n", .{});
+                    std.process.exit(1);
+                };
+            } else {
+                break :blk std.fmt.allocPrint(allocator, "{s}.ir", .{output_path}) catch {
+                    std.debug.print("Out of memory\n", .{});
+                    std.process.exit(1);
+                };
+            }
+        };
+        defer allocator.free(ir_path);
+        std.debug.print("IR:        {s}\n", .{ir_path});
+    }
+    if (emit_asm) {
+        const asm_path = blk: {
+            if (std.mem.endsWith(u8, output_path, ".exe")) {
+                const base = output_path[0 .. output_path.len - 4];
+                break :blk std.fmt.allocPrint(allocator, "{s}.asm", .{base}) catch {
+                    std.debug.print("Out of memory\n", .{});
+                    std.process.exit(1);
+                };
+            } else {
+                break :blk std.fmt.allocPrint(allocator, "{s}.asm", .{output_path}) catch {
+                    std.debug.print("Out of memory\n", .{});
+                    std.process.exit(1);
+                };
+            }
+        };
+        defer allocator.free(asm_path);
+        std.debug.print("Assembly:  {s}\n", .{asm_path});
+    }
 }
 
 fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
     var track_allocs = false;
+    var emit_ir = false;
+    var emit_asm = false;
 
     // Parse arguments
     for (args[2..]) |arg| {
-        if (std.mem.eql(u8, arg, "--no-debug")) {
-            compiler.debug.enabled = false;
-        } else if (std.mem.eql(u8, arg, "--debug")) {
+        if (std.mem.eql(u8, arg, "-v")) {
             compiler.debug.enabled = true;
         } else if (std.mem.eql(u8, arg, "--track-allocs")) {
             track_allocs = true;
+        } else if (std.mem.eql(u8, arg, "--emit-ir")) {
+            emit_ir = true;
+        } else if (std.mem.eql(u8, arg, "--emit-asm")) {
+            emit_asm = true;
+        } else if (arg.len > 0 and arg[0] == '-') {
+            std.debug.print("Unknown option: {s}\n", .{arg});
+            std.process.exit(1);
         }
     }
 
@@ -242,7 +295,7 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
     compiler.compileMultiple(
         all_sources.items,
         output_path,
-        .{ .track_allocs = track_allocs },
+        .{ .track_allocs = track_allocs, .emit_ir = emit_ir, .emit_asm = emit_asm },
         allocator,
         &result,
     ) catch |err| {
@@ -255,6 +308,42 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
     };
 
     std.debug.print("Built: {s}\n", .{output_path});
+    if (emit_ir) {
+        const ir_path = blk: {
+            if (std.mem.endsWith(u8, output_path, ".exe")) {
+                const base = output_path[0 .. output_path.len - 4];
+                break :blk std.fmt.allocPrint(allocator, "{s}.ir", .{base}) catch {
+                    std.debug.print("Out of memory\n", .{});
+                    std.process.exit(1);
+                };
+            } else {
+                break :blk std.fmt.allocPrint(allocator, "{s}.ir", .{output_path}) catch {
+                    std.debug.print("Out of memory\n", .{});
+                    std.process.exit(1);
+                };
+            }
+        };
+        defer allocator.free(ir_path);
+        std.debug.print("IR:        {s}\n", .{ir_path});
+    }
+    if (emit_asm) {
+        const asm_path = blk: {
+            if (std.mem.endsWith(u8, output_path, ".exe")) {
+                const base = output_path[0 .. output_path.len - 4];
+                break :blk std.fmt.allocPrint(allocator, "{s}.asm", .{base}) catch {
+                    std.debug.print("Out of memory\n", .{});
+                    std.process.exit(1);
+                };
+            } else {
+                break :blk std.fmt.allocPrint(allocator, "{s}.asm", .{output_path}) catch {
+                    std.debug.print("Out of memory\n", .{});
+                    std.process.exit(1);
+                };
+            }
+        };
+        defer allocator.free(asm_path);
+        std.debug.print("Assembly:  {s}\n", .{asm_path});
+    }
 }
 
 fn runTest(args: [][:0]u8, allocator: std.mem.Allocator) void {
@@ -271,11 +360,9 @@ fn runTest(args: [][:0]u8, allocator: std.mem.Allocator) void {
             }
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             options.verbose = true;
-        } else if (std.mem.eql(u8, arg, "--jobs") or std.mem.eql(u8, arg, "-j")) {
-            i += 1;
-            if (i < args.len) {
-                options.jobs = std.fmt.parseInt(usize, args[i], 10) catch 0;
-            }
+        } else if (arg.len > 0 and arg[0] == '-') {
+            std.debug.print("Unknown option: {s}\n", .{arg});
+            std.process.exit(1);
         }
     }
 

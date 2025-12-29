@@ -47,21 +47,15 @@ For users who need Visual Studio or WinDbg, provide optional PDB conversion:
 [cv2pdb](https://github.com/rainers/cv2pdb) converts DWARF → PDB automatically:
 
 ```bash
-# Automatic conversion during build
-maxon compile program.maxon --debug
+# Compile and then convert to PDB
+maxon compile program.maxon
 cv2pdb program.exe  # Creates program.pdb
-```
-
-**Integration in compiler:**
-```bash
-maxon compile program.maxon --debug --pdb
-# Automatically runs cv2pdb if available
 ```
 
 **Build script integration:**
 ```makefile
 %.exe: %.maxon
-	maxon compile $< --debug
+	maxon compile $<
 	@if command -v cv2pdb >/dev/null; then \
 		cv2pdb $@; \
 	fi
@@ -347,8 +341,8 @@ ext install vadimcn.vscode-lldb
 
 **Option 1: Use cv2pdb**
 ```bash
-# Add to build script
-maxon compile program.maxon --debug
+# Compile and convert to PDB
+maxon compile program.maxon
 cv2pdb program.exe
 # Now works in Visual Studio
 ```
@@ -363,7 +357,7 @@ cv2pdb program.exe
 ## Success Criteria
 
 ### Phase 1 Complete:
-- [x] Compile with `--debug` flag
+- [x] Compile with debug info (default)
 - [x] Set breakpoints by line in VS Code
 - [x] Step through code
 - [x] Inspect simple variables (int, float)
@@ -405,8 +399,8 @@ cv2pdb program.exe
 
 ### Manual Testing
 ```bash
-# 1. Compile with debug info
-maxon compile test.maxon --debug
+# 1. Compile (debug info is included by default)
+maxon compile test.maxon
 
 # 2. Verify DWARF is present
 dwarfdump --verify test.exe
@@ -431,7 +425,7 @@ language-tests/debug/test_callstack.maxon
 
 # Script to verify debug info
 scripts/verify-debug.sh:
-  - Compile with --debug
+  - Compile the file
   - Run dwarfdump --verify
   - Check for expected sections
   - Validate DIE structure
@@ -473,15 +467,15 @@ scripts/verify-debug.sh:
 **If needed later, add as post-processing:**
 
 ```cpp
-// In main.cpp compile command
-if (options.debugInfo && options.generatePDB) {
+// In main.zig compile command
+if (options.generatePDB) {
     // Try to run cv2pdb
     if (findExecutable("cv2pdb")) {
         runCommand("cv2pdb " + outputExe);
-        std::cout << "Generated PDB: " << baseName << ".pdb" << std::endl;
+        print("Generated PDB: " + baseName + ".pdb");
     } else {
-        std::cerr << "Warning: cv2pdb not found, PDB not generated" << std::endl;
-        std::cerr << "Install from: https://github.com/rainers/cv2pdb" << std::endl;
+        warn("cv2pdb not found, PDB not generated");
+        warn("Install from: https://github.com/rainers/cv2pdb");
     }
 }
 ```
