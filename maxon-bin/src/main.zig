@@ -108,7 +108,7 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
 
     // Load stdlib
     const stdlib_path = compiler.findStdlibPath(allocator) catch {
-        std.debug.print("Error: stdlib not found\n", .{});
+        compiler.printStdlibNotFoundError(allocator);
         std.process.exit(1);
     };
     defer allocator.free(stdlib_path);
@@ -205,7 +205,7 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
 
     // Load stdlib
     const stdlib_path = compiler.findStdlibPath(allocator) catch {
-        std.debug.print("Error: stdlib not found\n", .{});
+        compiler.printStdlibNotFoundError(allocator);
         std.process.exit(1);
     };
     defer allocator.free(stdlib_path);

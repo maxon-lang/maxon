@@ -442,6 +442,101 @@ pub fn findStdlibPath(allocator: std.mem.Allocator) ![]const u8 {
     return error.StdlibNotFound;
 }
 
+/// Normalize a path by resolving .. and . components without requiring the path to exist.
+fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+    // Split path into components and resolve .. by removing previous component
+    var components: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer components.deinit(allocator);
+
+    // Handle Windows absolute paths (e.g., "C:\...")
+    var start: usize = 0;
+    var root_prefix: []const u8 = "";
+    if (path.len >= 2 and path[1] == ':') {
+        // Windows drive letter
+        if (path.len >= 3 and (path[2] == '\\' or path[2] == '/')) {
+            root_prefix = path[0..3];
+            start = 3;
+        } else {
+            root_prefix = path[0..2];
+            start = 2;
+        }
+    } else if (path.len >= 1 and (path[0] == '\\' or path[0] == '/')) {
+        root_prefix = path[0..1];
+        start = 1;
+    }
+
+    // Split remaining path by separators
+    var iter = std.mem.tokenizeAny(u8, path[start..], "\\/");
+    while (iter.next()) |component| {
+        if (std.mem.eql(u8, component, "..")) {
+            // Go up one directory
+            if (components.items.len > 0) {
+                _ = components.pop();
+            }
+        } else if (!std.mem.eql(u8, component, ".")) {
+            // Add normal component (skip ".")
+            try components.append(allocator, component);
+        }
+    }
+
+    // Rebuild the path
+    const sep = if (std.mem.indexOf(u8, path, "\\") != null) "\\" else "/";
+    var result: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer result.deinit(allocator);
+
+    try result.appendSlice(allocator, root_prefix);
+    for (components.items, 0..) |component, i| {
+        if (i > 0) {
+            try result.appendSlice(allocator, sep);
+        }
+        try result.appendSlice(allocator, component);
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
+/// Print a detailed error message when stdlib is not found.
+/// Shows the actual absolute paths that were searched.
+pub fn printStdlibNotFoundError(allocator: std.mem.Allocator) void {
+    std.debug.print("Error: stdlib not found\n\n", .{});
+    std.debug.print("The compiler could not locate the standard library directory.\n\n", .{});
+    std.debug.print("Searched locations:\n", .{});
+
+    // Get path to this executable
+    var exe_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe_path = std.fs.selfExePath(&exe_path_buf) catch {
+        std.debug.print("  (could not determine executable path)\n", .{});
+        return;
+    };
+
+    const exe_dir = std.fs.path.dirname(exe_path) orelse {
+        std.debug.print("  (could not determine executable directory)\n", .{});
+        return;
+    };
+
+    const paths_to_try = [_][]const []const u8{
+        &.{ exe_dir, "..", "..", "..", "stdlib" },
+        &.{ exe_dir, "..", "..", "stdlib" },
+        &.{ exe_dir, "..", "stdlib" },
+        &.{ exe_dir, "stdlib" },
+    };
+
+    for (paths_to_try) |path_parts| {
+        const path = std.fs.path.join(allocator, path_parts) catch {
+            std.debug.print("  (allocation failed)\n", .{});
+            continue;
+        };
+        defer allocator.free(path);
+
+        // Normalize the path by resolving .. components manually
+        const normalized = normalizePath(allocator, path) catch path;
+        defer if (normalized.ptr != path.ptr) allocator.free(normalized);
+        std.debug.print("  - {s}\n", .{normalized});
+    }
+
+    std.debug.print("\nMake sure the 'stdlib' directory exists in one of these locations.\n", .{});
+}
+
 /// Load a stdlib module by name (e.g., "collections/array").
 /// Returns the source content or error if not found.
 pub fn loadStdlibModule(

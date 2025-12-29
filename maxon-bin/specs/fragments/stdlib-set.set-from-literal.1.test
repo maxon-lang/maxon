@@ -1,0 +1,89 @@
+// Test: stdlib-set.set-from-literal.1
+function main() returns int
+    var s Set of int = [1, 2, 3]
+    if s.count() != 3 'count'
+        return 1
+    end 'count'
+    if s.contains(1) == false 'c1'
+        return 2
+    end 'c1'
+    if s.contains(2) == false 'c2'
+        return 3
+    end 'c2'
+    if s.contains(3) == false 'c3'
+        return 4
+    end 'c3'
+    return 0
+end 'main'
+---
+ExitCode: 0
+---
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 24
+    %tmp_const = const.i64 i64 3
+    %tmp_const.1 = const.i64 i64 24
+    %tmp_heap = heap.alloc ptr %tmp_const.1
+    %tmp_const.2 = const.i64 i64 1
+    %tmp_const.3 = const.i64 i64 0
+    %6 = getelemptr ptr %tmp_heap %tmp_const.3
+    store %6 %tmp_const.2
+    %tmp_const.4 = const.i64 i64 2
+    %tmp_const.5 = const.i64 i64 1
+    %9 = getelemptr ptr %tmp_heap %tmp_const.5
+    store %9 %tmp_const.4
+    %tmp_const.6 = const.i64 i64 3
+    %tmp_const.7 = const.i64 i64 2
+    %12 = getelemptr ptr %tmp_heap %tmp_const.7
+    store %12 %tmp_const.6
+    %tmp_const.8 = const.i64 i64 0
+    %14 = getelemptr ptr %tmp_alloca %tmp_const.8
+    store %14 %tmp_heap
+    %tmp_const.9 = const.i64 i64 1
+    %16 = getelemptr ptr %tmp_alloca %tmp_const.9
+    store %16 %tmp_const
+    %tmp_const.10 = const.i64 i64 2
+    %18 = getelemptr ptr %tmp_alloca %tmp_const.10
+    store %18 %tmp_const
+    %s = alloca.sized ptr 32
+    %tmp_call = call ptr @Set$init(%s, %tmp_alloca)
+    %tmp_call.1 = call i64 @Set$count(%s)
+    %tmp_const.11 = const.i64 i64 3
+    %tmp_icmp = icmp.ne i64 %tmp_call.1 %tmp_const.11
+    %tmp_const.1 = br.cond %tmp_icmp @block1
+then:
+    %tmp_const.12 = const.i64 i64 1
+    ret %tmp_const.12
+end:
+    %tmp_const.13 = const.i64 i64 1
+    %tmp_call.2 = call i64 @Set$contains(%s, %tmp_const.13)
+    %tmp_const.14 = const.i64 i64 0
+    %tmp_icmp.1 = icmp.eq i64 %tmp_call.2 %tmp_const.14
+    %tmp_const.2 = br.cond %tmp_icmp.1 @block3
+then:
+    %tmp_const.15 = const.i64 i64 2
+    ret %tmp_const.15
+end:
+    %tmp_const.16 = const.i64 i64 2
+    %tmp_call.3 = call i64 @Set$contains(%s, %tmp_const.16)
+    %tmp_const.17 = const.i64 i64 0
+    %tmp_icmp.2 = icmp.eq i64 %tmp_call.3 %tmp_const.17
+    %6 = br.cond %tmp_icmp.2 @block5
+then:
+    %tmp_const.18 = const.i64 i64 3
+    ret %tmp_const.18
+end:
+    %tmp_const.19 = const.i64 i64 3
+    %tmp_call.4 = call i64 @Set$contains(%s, %tmp_const.19)
+    %tmp_const.20 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.eq i64 %tmp_call.4 %tmp_const.20
+    %tmp_const.5 = br.cond %tmp_icmp.3 @block7
+then:
+    %tmp_const.21 = const.i64 i64 4
+    ret %tmp_const.21
+end:
+    %tmp_const.22 = const.i64 i64 0
+    ret %tmp_const.22
+}
+
+---

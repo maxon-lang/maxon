@@ -609,7 +609,7 @@ pub const AstToIr = struct {
 
         for (type_decl.fields, 0..) |field, i| {
             const value_type: ValueType = switch (field.type_expr) {
-                .simple, .generic => blk: {
+                .simple => blk: {
                     const base_name = typeExprBaseTypeName(field.type_expr).?;
                     const resolved = self.resolveTypeName(base_name);
                     // Check for internal type access
@@ -623,6 +623,16 @@ pub const AstToIr = struct {
                         .primitive => |p| .{ .primitive = .{ .ir_type = p, .name = resolved } },
                         .enum_type => .{ .enum_type = resolved },
                     };
+                },
+                .generic => |gen| blk: {
+                    // For generic types like "Array of int", monomorphize them
+                    const resolved_args = try self.allocator.alloc([]const u8, gen.type_args.len);
+                    defer self.allocator.free(resolved_args);
+                    for (gen.type_args, 0..) |arg, j| {
+                        resolved_args[j] = self.resolveTypeName(arg);
+                    }
+                    const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
+                    break :blk .{ .struct_type = mono_name };
                 },
                 .optional => |wrapped| blk: {
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
@@ -870,7 +880,13 @@ pub const AstToIr = struct {
             },
             .generic => |gen| {
                 // For generic types like "Array of int", monomorphize them
-                const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, gen.type_args);
+                // Resolve type arguments first (e.g., "Element" -> "int" when inside Set$int)
+                const resolved_args = try self.allocator.alloc([]const u8, gen.type_args.len);
+                defer self.allocator.free(resolved_args);
+                for (gen.type_args, 0..) |arg, i| {
+                    resolved_args[i] = self.resolveTypeName(arg);
+                }
+                const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
                 return .{ .struct_type = mono_name };
             },
             .optional => |wrapped| {
@@ -931,10 +947,14 @@ pub const AstToIr = struct {
         }
 
         // Set up generic parameter mappings (needed for field type resolution AND method registration)
-        for (type_decl.generic_params, type_args) |param, arg| {
+        // Save previous values to restore later (for nested generic types like Set<Array<Element>>)
+        var saved_params = try self.allocator.alloc(?[]const u8, type_decl.generic_params.len);
+        defer self.allocator.free(saved_params);
+        for (type_decl.generic_params, type_args, 0..) |param, arg, i| {
+            saved_params[i] = self.generic_params.get(param);
             try self.generic_params.put(self.allocator, param, arg);
         }
-        // Note: We clean up generic_params at the very end, after method registration
+        // Note: We restore generic_params at the very end, after method registration
 
         // Allow stdlib builtins when monomorphizing stdlib types (e.g., Array$int)
         // This must be set BEFORE processing fields since field types may be internal types
@@ -1028,9 +1048,13 @@ pub const AstToIr = struct {
         self.var_map.deinit(self.allocator);
         self.var_map = saved_var_map;
 
-        // Clean up generic params after everything is done
-        for (type_decl.generic_params) |param| {
-            _ = self.generic_params.remove(param);
+        // Restore generic params after everything is done
+        for (type_decl.generic_params, 0..) |param, i| {
+            if (saved_params[i]) |prev_value| {
+                try self.generic_params.put(self.allocator, param, prev_value);
+            } else {
+                _ = self.generic_params.remove(param);
+            }
         }
 
         return mono_name;
@@ -1536,7 +1560,7 @@ pub const AstToIr = struct {
     }
 
     /// Free heap-allocated variables, optionally filtering to only loop-scoped vars
-    fn freeHeapVars(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(void)) !void {
+    fn freeHeapVars(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(OwnershipState)) !void {
         var iter = self.var_map.iterator();
         while (iter.next()) |entry| {
             if (exclude_vars) |excluded| {
@@ -1572,7 +1596,7 @@ pub const AstToIr = struct {
         try self.freeHeapVars(null);
     }
 
-    fn freeLoopScopedHeapVars(self: *AstToIr, pre_loop_vars: *std.StringHashMapUnmanaged(void)) !void {
+    fn freeLoopScopedHeapVars(self: *AstToIr, pre_loop_vars: *std.StringHashMapUnmanaged(OwnershipState)) !void {
         try self.freeHeapVars(pre_loop_vars);
     }
 
@@ -1878,12 +1902,12 @@ pub const AstToIr = struct {
         // Use max u32 as sentinel to indicate "needs patching"
         self.loop_end_block = 0xFFFFFFFF;
 
-        // Save variable names before entering loop body (for scoped cleanup)
-        var pre_loop_vars = std.StringHashMapUnmanaged(void){};
+        // Save variable names and ownership state before entering loop body
+        var pre_loop_vars = std.StringHashMapUnmanaged(OwnershipState){};
         defer pre_loop_vars.deinit(self.allocator);
-        var iter = self.var_map.keyIterator();
-        while (iter.next()) |key| {
-            try pre_loop_vars.put(self.allocator, key.*, {});
+        var iter = self.var_map.iterator();
+        while (iter.next()) |entry| {
+            try pre_loop_vars.put(self.allocator, entry.key_ptr.*, entry.value_ptr.state);
         }
 
         // Convert body statements (body block is current)
@@ -1892,12 +1916,14 @@ pub const AstToIr = struct {
         }
 
         // Check for variables moved inside loop body - they would be invalid on next iteration
-        var pre_iter = pre_loop_vars.keyIterator();
-        while (pre_iter.next()) |key| {
-            if (self.var_map.getPtr(key.*)) |var_info| {
-                if (var_info.state == .moved) {
+        // Only flag an error if the variable was OWNED before the loop and is now MOVED
+        var pre_iter = pre_loop_vars.iterator();
+        while (pre_iter.next()) |entry| {
+            if (self.var_map.getPtr(entry.key_ptr.*)) |var_info| {
+                const was_owned = entry.value_ptr.* == .owned;
+                if (was_owned and var_info.state == .moved) {
                     // Variable was moved in loop body - next iteration would use moved value
-                    debug.astToIr("variable '{s}' was moved in loop body\n", .{key.*});
+                    debug.astToIr("variable '{s}' was moved in loop body\n", .{entry.key_ptr.*});
                     self.reportError(.E008);
                     return error.UseAfterMove;
                 }
@@ -2005,12 +2031,12 @@ pub const AstToIr = struct {
         self.loop_cond_block = cond_block_idx;
         self.loop_end_block = 0xFFFFFFFF; // sentinel for patching
 
-        // Save variable names before entering loop body
-        var pre_loop_vars = std.StringHashMapUnmanaged(void){};
+        // Save variable names and ownership state before entering loop body
+        var pre_loop_vars = std.StringHashMapUnmanaged(OwnershipState){};
         defer pre_loop_vars.deinit(self.allocator);
-        var iter = self.var_map.keyIterator();
-        while (iter.next()) |key| {
-            try pre_loop_vars.put(self.allocator, key.*, {});
+        var iter = self.var_map.iterator();
+        while (iter.next()) |entry| {
+            try pre_loop_vars.put(self.allocator, entry.key_ptr.*, entry.value_ptr.state);
         }
 
         // Extract the value from the optional result (offset 8)
@@ -2033,11 +2059,13 @@ pub const AstToIr = struct {
         }
 
         // Check for variables moved inside loop body
-        var pre_iter = pre_loop_vars.keyIterator();
-        while (pre_iter.next()) |key| {
-            if (self.var_map.getPtr(key.*)) |var_info| {
-                if (var_info.state == .moved) {
-                    debug.astToIr("variable '{s}' was moved in loop body\n", .{key.*});
+        // Only flag an error if the variable was OWNED before the loop and is now MOVED
+        var pre_iter = pre_loop_vars.iterator();
+        while (pre_iter.next()) |entry| {
+            if (self.var_map.getPtr(entry.key_ptr.*)) |var_info| {
+                const was_owned = entry.value_ptr.* == .owned;
+                if (was_owned and var_info.state == .moved) {
+                    debug.astToIr("variable '{s}' was moved in loop body\n", .{entry.key_ptr.*});
                     self.reportError(.E008);
                     return error.UseAfterMove;
                 }
@@ -2834,9 +2862,11 @@ pub const AstToIr = struct {
         if (self.in_stdlib_method) return true;
 
         const path = self.source_file orelse return false;
-        // Check for /stdlib/ or \stdlib\ in path
+        // Check for /stdlib/ or \stdlib\ in path (including at the start)
         return std.mem.indexOf(u8, path, "/stdlib/") != null or
-            std.mem.indexOf(u8, path, "\\stdlib\\") != null;
+            std.mem.indexOf(u8, path, "\\stdlib\\") != null or
+            std.mem.startsWith(u8, path, "stdlib/") or
+            std.mem.startsWith(u8, path, "stdlib\\");
     }
 
     /// Check if a type name is internal (starts with underscore)
@@ -3616,7 +3646,9 @@ pub const AstToIr = struct {
         const capacity_typed = try self.convertExpression(arr.size.*);
 
         // Get or create monomorphized Array type for the element type
-        var type_args = [_][]const u8{arr.element_type};
+        // Resolve element type first (e.g., "Element" -> "int" when inside Set$int)
+        const resolved_elem = self.resolveTypeName(arr.element_type);
+        var type_args = [_][]const u8{resolved_elem};
         const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
 
         // Get struct info for the monomorphized Array type
