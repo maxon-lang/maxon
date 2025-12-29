@@ -20,6 +20,8 @@ pub fn main() !void {
 
     if (std.mem.eql(u8, command, "compile")) {
         runCompile(args, allocator);
+    } else if (std.mem.eql(u8, command, "build")) {
+        runBuild(args, allocator);
     } else if (std.mem.eql(u8, command, "test")) {
         runTest(args, allocator);
     } else {
@@ -32,11 +34,15 @@ pub fn main() !void {
 fn printUsage() void {
     std.debug.print("Usage: maxon <command> [args]\n\n", .{});
     std.debug.print("Commands:\n", .{});
-    std.debug.print("  compile <source.maxon>  Compile a source file\n", .{});
+    std.debug.print("  compile <source.maxon>  Compile a single source file\n", .{});
+    std.debug.print("  build                   Build project from current directory\n", .{});
     std.debug.print("  test                    Run spec fragment tests\n", .{});
     std.debug.print("\nCompile Options:\n", .{});
     std.debug.print("  --no-debug              Disable debug output\n", .{});
     std.debug.print("  --debug                 Enable debug output (default)\n", .{});
+    std.debug.print("  --track-allocs          Enable runtime allocation tracking\n", .{});
+    std.debug.print("\nBuild Options:\n", .{});
+    std.debug.print("  --no-debug              Disable debug output\n", .{});
     std.debug.print("  --track-allocs          Enable runtime allocation tracking\n", .{});
     std.debug.print("\nTest Options:\n", .{});
     std.debug.print("  --filter <pattern>      Run only tests matching pattern\n", .{});
@@ -145,6 +151,110 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     };
 
     std.debug.print("Compiled: {s}\n", .{output_path});
+}
+
+fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
+    var track_allocs = false;
+
+    // Parse arguments
+    for (args[2..]) |arg| {
+        if (std.mem.eql(u8, arg, "--no-debug")) {
+            compiler.debug.enabled = false;
+        } else if (std.mem.eql(u8, arg, "--debug")) {
+            compiler.debug.enabled = true;
+        } else if (std.mem.eql(u8, arg, "--track-allocs")) {
+            track_allocs = true;
+        }
+    }
+
+    // Get current working directory
+    const cwd_path = std.fs.cwd().realpathAlloc(allocator, ".") catch |err| {
+        std.debug.print("Error getting current directory: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer allocator.free(cwd_path);
+
+    // Scan for .maxon files
+    const user_sources = compiler.collectProjectFiles(cwd_path, allocator) catch |err| {
+        std.debug.print("Error scanning directory: {}\n", .{err});
+        std.process.exit(1);
+    };
+    defer compiler.freeProjectSources(user_sources, allocator);
+
+    if (user_sources.len == 0) {
+        std.debug.print("Error: No .maxon files found in current directory\n", .{});
+        std.process.exit(1);
+    }
+
+    // Find file with main()
+    const main_file = compiler.findMainFile(user_sources) catch |err| {
+        switch (err) {
+            error.NoMainFunction => std.debug.print("Error: No main() function found in any .maxon file\n", .{}),
+            error.MultipleMainFunctions => std.debug.print("Error: Multiple main() functions found\n", .{}),
+        }
+        std.process.exit(1);
+    };
+
+    // Determine output name from directory name
+    const dir_name = std.fs.path.basename(cwd_path);
+    const output_path = std.fmt.allocPrint(allocator, "{s}.exe", .{dir_name}) catch {
+        std.debug.print("Out of memory\n", .{});
+        std.process.exit(1);
+    };
+    defer allocator.free(output_path);
+
+    // Load stdlib
+    const stdlib_path = compiler.findStdlibPath(allocator) catch {
+        std.debug.print("Error: stdlib not found\n", .{});
+        std.process.exit(1);
+    };
+    defer allocator.free(stdlib_path);
+
+    const stdlib_modules = compiler.loadAllStdlibModules(stdlib_path, allocator) catch {
+        std.debug.print("Error: failed to load stdlib modules\n", .{});
+        std.process.exit(1);
+    };
+    defer compiler.freeStdlibModules(stdlib_modules, allocator);
+
+    // Build combined sources array: stdlib first, then user files
+    var all_sources: std.ArrayListUnmanaged(compiler.Source) = .empty;
+    defer all_sources.deinit(allocator);
+
+    for (stdlib_modules) |mod| {
+        all_sources.append(allocator, mod) catch {
+            std.debug.print("Error: out of memory\n", .{});
+            std.process.exit(1);
+        };
+    }
+    for (user_sources) |src| {
+        all_sources.append(allocator, src) catch {
+            std.debug.print("Error: out of memory\n", .{});
+            std.process.exit(1);
+        };
+    }
+
+    // Print what we're building
+    std.debug.print("Building project with {d} source file(s)...\n", .{user_sources.len});
+    std.debug.print("  Main: {s}\n", .{main_file});
+
+    // Compile all together
+    var result: compiler.CompileResult = .{ .error_info = null };
+    compiler.compileMultiple(
+        all_sources.items,
+        output_path,
+        .{ .track_allocs = track_allocs },
+        allocator,
+        &result,
+    ) catch |err| {
+        if (result.error_info) |error_info| {
+            error_info.printToStderr();
+        } else {
+            std.debug.print("Build failed: {}\n", .{err});
+        }
+        std.process.exit(1);
+    };
+
+    std.debug.print("Built: {s}\n", .{output_path});
 }
 
 fn runTest(args: [][:0]u8, allocator: std.mem.Allocator) void {

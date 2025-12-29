@@ -244,19 +244,42 @@ pub fn compileMultiple(
         // Extract type info from parsed AST
         const type_info = ast_to_ir.extractTypeInfo(program, allocator) catch continue;
         for (type_info) |t| {
-            try all_types.append(allocator, t);
+            // Set source_path so we can distinguish stdlib from user code
+            var t_with_path = t;
+            t_with_path.source_path = source.path;
+            try all_types.append(allocator, t_with_path);
         }
         allocator.free(type_info); // Free the slice but keep the items
 
         // Extract function signatures from parsed AST
         const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
         for (func_sigs) |sig| {
-            try all_funcs.append(allocator, sig);
+            // Set source_path so we can distinguish stdlib from user code
+            var sig_with_path = sig;
+            sig_with_path.source_path = source.path;
+            try all_funcs.append(allocator, sig_with_path);
         }
         allocator.free(func_sigs); // Free the slice but keep the items
     }
 
     // Phase 2: Compile and merge all sources with collected type info and function signatures
+    // Filter external symbols to only include exported ones (unexported symbols are file-private)
+    var exported_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
+    defer exported_funcs.deinit(allocator);
+    for (all_funcs.items) |func| {
+        if (func.is_exported) {
+            try exported_funcs.append(allocator, func);
+        }
+    }
+
+    var exported_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
+    defer exported_types.deinit(allocator);
+    for (all_types.items) |t| {
+        if (t.is_exported) {
+            try exported_types.append(allocator, t);
+        }
+    }
+
     var merged: ?FrontendResult = null;
     defer if (merged) |*m| m.deinit();
 
@@ -264,8 +287,8 @@ pub fn compileMultiple(
         var frontend = try runFrontend(source.content, allocator, .{
             .source_file = source.path,
             .result = result,
-            .external_funcs = all_funcs.items,
-            .external_types = all_types.items,
+            .external_funcs = exported_funcs.items,
+            .external_types = exported_types.items,
         });
 
         if (merged) |*m| {
@@ -418,6 +441,124 @@ fn collectStdlibFiles(
 
 /// Free all sources returned by loadAllStdlibModules
 pub fn freeStdlibModules(sources: []Source, allocator: std.mem.Allocator) void {
+    for (sources) |src| {
+        allocator.free(src.path);
+        allocator.free(src.content);
+    }
+    allocator.free(sources);
+}
+
+// ============================================================================
+// Project File Collection (for maxon build)
+// ============================================================================
+
+/// Error types for main() detection
+pub const MainDetectionError = error{
+    NoMainFunction,
+    MultipleMainFunctions,
+};
+
+/// Collect all .maxon files from a project directory (not stdlib).
+/// Returns a list of Source structs for all .maxon files found.
+pub fn collectProjectFiles(
+    project_path: []const u8,
+    allocator: std.mem.Allocator,
+) ![]Source {
+    var sources: std.ArrayListUnmanaged(Source) = .empty;
+    errdefer {
+        for (sources.items) |src| {
+            allocator.free(src.path);
+            allocator.free(src.content);
+        }
+        sources.deinit(allocator);
+    }
+
+    try collectProjectFilesRecursive(project_path, &sources, allocator);
+
+    return sources.toOwnedSlice(allocator);
+}
+
+fn collectProjectFilesRecursive(
+    current_path: []const u8,
+    sources: *std.ArrayListUnmanaged(Source),
+    allocator: std.mem.Allocator,
+) !void {
+    var dir = std.fs.cwd().openDir(current_path, .{ .iterate = true }) catch {
+        return; // Skip directories that can't be opened
+    };
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        const full_entry_path = try std.fs.path.join(allocator, &.{ current_path, entry.name });
+        defer allocator.free(full_entry_path);
+
+        if (entry.kind == .directory) {
+            // Skip hidden directories and common non-source directories
+            if (entry.name[0] != '.' and
+                !std.mem.eql(u8, entry.name, "node_modules") and
+                !std.mem.eql(u8, entry.name, "zig-out") and
+                !std.mem.eql(u8, entry.name, "zig-cache"))
+            {
+                try collectProjectFilesRecursive(full_entry_path, sources, allocator);
+            }
+        } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".maxon")) {
+            const content = std.fs.cwd().readFileAlloc(allocator, full_entry_path, 1024 * 1024) catch {
+                continue; // Skip files that can't be read
+            };
+
+            const path_copy = try allocator.dupe(u8, full_entry_path);
+
+            try sources.append(allocator, .{
+                .path = path_copy,
+                .content = content,
+            });
+        }
+    }
+}
+
+/// Find which source file contains the main() function.
+/// Returns the path of the file containing main().
+pub fn findMainFile(sources: []const Source) MainDetectionError![]const u8 {
+    var main_file: ?[]const u8 = null;
+
+    for (sources) |src| {
+        if (containsMainFunction(src.content)) {
+            if (main_file != null) {
+                return error.MultipleMainFunctions;
+            }
+            main_file = src.path;
+        }
+    }
+
+    return main_file orelse error.NoMainFunction;
+}
+
+/// Check if source content contains a main() function definition.
+/// Uses simple text matching for efficiency.
+fn containsMainFunction(content: []const u8) bool {
+    // Look for "function main(" pattern
+    var i: usize = 0;
+    while (i < content.len) {
+        // Find "function"
+        if (i + 8 <= content.len and std.mem.eql(u8, content[i .. i + 8], "function")) {
+            var j = i + 8;
+            // Skip whitespace
+            while (j < content.len and (content[j] == ' ' or content[j] == '\t')) {
+                j += 1;
+            }
+            // Check for "main("
+            if (j + 5 <= content.len and std.mem.eql(u8, content[j .. j + 5], "main(")) {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    return false;
+}
+
+/// Free sources returned by collectProjectFiles
+pub fn freeProjectSources(sources: []Source, allocator: std.mem.Allocator) void {
     for (sources) |src| {
         allocator.free(src.path);
         allocator.free(src.content);

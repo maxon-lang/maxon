@@ -152,6 +152,8 @@ pub const ExternalFuncSignature = struct {
     return_type: ir.Type,
     return_type_name: ?[]const u8 = null, // struct type name if returning a struct
     return_value_type: ?ValueType = null, // Full return type info (for optionals, etc.)
+    is_exported: bool = false, // Whether this function is exported from its module
+    source_path: ?[]const u8 = null, // Source file path (to distinguish stdlib vs user)
 };
 
 /// External type info - for cross-module compilation
@@ -161,6 +163,8 @@ pub const ExternalTypeInfo = struct {
     fields: []const ExternalFieldInfo,
     /// Original type declaration for generic types (needed for monomorphization)
     type_decl: ?*const ast.TypeDecl = null,
+    is_exported: bool = false, // Whether this type is exported from its module
+    source_path: ?[]const u8 = null, // Source file path (to distinguish stdlib vs user)
 };
 
 /// External field info - for cross-module compilation
@@ -3989,6 +3993,7 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
             .size = offset,
             .fields = try fields.toOwnedSlice(allocator),
             .type_decl = decl_ptr,
+            .is_exported = type_decl.is_export,
         });
     }
 
@@ -4026,6 +4031,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             .return_type = return_type,
             .return_type_name = return_type_name,
             .return_value_type = return_value_type,
+            .is_exported = func.is_export,
         });
     }
 
@@ -4057,11 +4063,13 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             else
                 null;
 
+            // Methods inherit export status from their containing type
             try signatures.append(allocator, .{
                 .name = mangled_name,
                 .return_type = return_type,
                 .return_type_name = return_type_name,
                 .return_value_type = return_value_type,
+                .is_exported = type_decl.is_export or method.is_export,
             });
         }
     }

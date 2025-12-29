@@ -1,0 +1,60 @@
+// Test: static-methods.export-static-method.1
+type Factory
+    var id int
+
+    export static function create(val int) returns Factory
+        return Factory{id: val}
+    end 'create'
+
+    export static function zero() returns Factory
+        return Factory.create(0)
+    end 'zero'
+end 'Factory'
+
+function main() returns int
+    var f1 = Factory.create(100)
+    var f2 = Factory.zero()
+    return f1.id + f2.id
+end 'main'
+---
+ExitCode: 100
+---
+function main() -> i64 {
+entry:
+    %f1 = alloca.sized ptr 8
+    %tmp_const = const.i64 i64 100
+    %tmp_call = call ptr @Factory$create(%f1, %tmp_const)
+    %f2 = alloca.sized ptr 8
+    %tmp_call.1 = call ptr @Factory$zero(%f2)
+    %tmp_fieldptr = getfieldptr ptr %f1 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_fieldptr.1 = getfieldptr ptr %f2 0
+    %tmp_load.1 = load i64 %tmp_fieldptr.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    ret %tmp_add
+}
+
+function Factory$create() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %val = param i64 1
+    %val.1 = alloca ptr
+    store %val.1 %val
+    %8 = memset %tmp_param 0
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_load = load i64 %val.1
+    store %tmp_fieldptr %tmp_load
+    ret %tmp_param
+}
+
+function Factory$zero() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %tmp_alloca = alloca.sized ptr 8
+    %tmp_const = const.i64 i64 0
+    %tmp_call = call ptr @Factory$create(%tmp_alloca, %tmp_const)
+    %8 = memcpy %tmp_param %tmp_alloca
+    ret %tmp_param
+}
+
+---

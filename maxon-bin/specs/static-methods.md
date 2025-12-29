@@ -88,3 +88,27 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: export-static-method -->
+```maxon
+type Factory
+    var id int
+
+    export static function create(val int) returns Factory
+        return Factory{id: val}
+    end 'create'
+
+    export static function zero() returns Factory
+        return Factory.create(0)
+    end 'zero'
+end 'Factory'
+
+function main() returns int
+    var f1 = Factory.create(100)
+    var f2 = Factory.zero()
+    return f1.id + f2.id
+end 'main'
+```
+```exitcode
+100
+```
