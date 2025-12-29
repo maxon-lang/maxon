@@ -48,11 +48,6 @@ Based on the documentation, here are the biggest problems encountered during Max
 - `_managed_array_release` expected a header, so memory was never freed
 - **Fix**: Empty mutable arrays start with `capacity = 0`, `push()` creates proper heap buffer
 
-## 6. **Optimizer Bug - Redundant Load/Store Elimination**
-
-- Currently **disabled** due to incorrectly correlating stores and loads across different allocas
-- Still on the TODO list to fix
-
 ---
 
 ## Pattern of Issues

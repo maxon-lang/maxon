@@ -29,6 +29,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 11. [Standard Library](#standard-library)
 12. [Build System](#build-system)
 13. [Memory Model](#memory-model)
+    - [Ownership System](#ownership-system)
 
 ---
 
@@ -1686,6 +1687,79 @@ The LSP automatically detects project boundaries and provides:
 
 ## Memory Model
 
+### Ownership System
+
+Maxon implements a compile-time ownership system that tracks value ownership and prevents use-after-move errors without runtime overhead.
+
+Every variable in Maxon has ownership of its value. When a variable is passed to a function:
+
+- **Borrow**: If the function only reads the parameter, ownership stays with the caller
+- **Move**: If the function mutates the parameter, ownership transfers to the callee
+
+After a move, the original variable cannot be used or reassigned - this is a compile-time error.
+
+**Example:**
+```maxon
+function main() returns int
+    var a = 42              // a owns the value 42
+
+    var b = foo(a)          // borrow - foo only reads z
+    a = a + 1               // OK - a still owns its value
+
+    bar(a)                  // move - bar mutates z, ownership transfers
+
+    // a = a + 1            // ERROR: Cannot assign after ownership transferred
+    // return a             // ERROR: Cannot use after ownership transferred
+
+    return b                // OK - b is still owned
+end 'main'
+
+function foo(z int) returns int
+    return z + 4            // only reads z - borrows
+end 'foo'
+
+function bar(z int)
+    z = z + 1               // mutates z - takes ownership
+end 'bar'
+```
+
+**How Ownership Works:**
+
+The compiler runs a mutation analysis pass that scans each function to determine which parameters it mutates:
+1. Direct assignment to a parameter (`z = ...`)
+2. Array element assignment (`arr[i] = ...` where `arr` is a parameter)
+3. Member assignment (`obj.field = ...` where `obj` is a parameter)
+4. Passing to another function that mutates that parameter position
+
+During semantic analysis, each variable has an ownership state:
+- `Owned` - Variable owns its value and can be used
+- `Moved` - Ownership has been transferred; any use is an error
+
+**Error Messages:**
+```
+Semantic Error: example.maxon:10:4
+Cannot assign to variable 'a' after ownership was transferred
+  Ownership transferred to function 'bar' at line 8
+  Note: Once ownership is transferred, the variable cannot be used or reassigned
+```
+
+**Control Flow:**
+
+If a variable is moved in any branch of a conditional, it's considered moved after the conditional:
+```maxon
+var a = 42
+if condition 'c'
+    bar(a)          // moves a in this branch
+end 'c'
+// a is now moved - might have been moved depending on condition
+return a            // ERROR
+```
+
+**Design Principles:**
+- All types have ownership (including primitives like `int`, `float`, `bool`)
+- Automatic mutation detection (no explicit `&mut` annotations needed)
+- Compile-time only - zero runtime overhead
+
 ### Stack Allocation
 - Local variables (`var`, `let`)
 - Function parameters
@@ -1701,6 +1775,7 @@ The LSP automatically detects project boundaries and provides:
 ### Safety
 - No bounds checking on arrays
 - No null checks
+- Use-after-move prevented at compile time (see Ownership System above)
 
 ### Calling Convention
 - Simple types (int, float, bool, character) passed by value
