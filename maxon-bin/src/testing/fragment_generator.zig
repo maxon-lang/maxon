@@ -186,19 +186,11 @@ fn writeFragment(
     // Generate and include IR (for informational purposes)
     switch (test_case.expected) {
         .success => {
-            // Generate IR for success tests
+            // Generate IR for success tests - this must succeed
             const ir = compiler.compileToIr(test_case.source, allocator) catch |err| {
-                // If IR generation fails, include error message
-                const err_msg = try std.fmt.allocPrint(allocator, "// IR generation failed: {}\n", .{err});
-                defer allocator.free(err_msg);
-                try content.appendSlice(allocator, err_msg);
-                try content.appendSlice(allocator, "---\n");
-
-                // Write to file
-                const file = try std.fs.cwd().createFile(full_path, .{});
-                defer file.close();
-                try file.writeAll(content.items);
-                return;
+                // IR generation failed - this is an error, propagate it
+                std.debug.print("IR generation failed for test '{s}': {}\n", .{ test_case.name, err });
+                return err;
             };
             defer allocator.free(ir);
             try content.appendSlice(allocator, ir);

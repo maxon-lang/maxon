@@ -610,6 +610,8 @@ pub const AstToIr = struct {
                 .simple, .generic => blk: {
                     const base_name = typeExprBaseTypeName(field.type_expr).?;
                     const resolved = self.resolveTypeName(base_name);
+                    // Check for internal type access
+                    try self.checkInternalTypeAccess(resolved);
                     const field_type_info = self.type_map.get(resolved) orelse {
                         std.debug.print("[AST->IR] registerType field '{s}': unknown type '{s}'\n", .{ field.name, resolved });
                         return error.UnknownType;
@@ -849,6 +851,8 @@ pub const AstToIr = struct {
             .simple => {
                 const base_name = typeExprBaseTypeName(type_expr).?;
                 const resolved = self.resolveTypeName(base_name);
+                // Check for internal type access
+                try self.checkInternalTypeAccess(resolved);
                 const type_info = self.type_map.get(resolved) orelse {
                     std.debug.print("[AST->IR] typeExprToValueType: unknown type '{s}' (resolved from '{s}')\n", .{ resolved, base_name });
                     return error.UnknownType;
@@ -928,12 +932,20 @@ pub const AstToIr = struct {
         }
         // Note: We clean up generic_params at the very end, after method registration
 
+        // Allow stdlib builtins when monomorphizing stdlib types (e.g., Array$int)
+        // This must be set BEFORE processing fields since field types may be internal types
+        const saved_in_stdlib = self.in_stdlib_method;
+        self.in_stdlib_method = true;
+
         // Register the monomorphized type
         var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
         var offset: i32 = 0;
 
         for (type_decl.fields, 0..) |field, i| {
-            const value_type: ValueType = try self.typeExprToValueType(field.type_expr);
+            const value_type: ValueType = self.typeExprToValueType(field.type_expr) catch |e| {
+                self.in_stdlib_method = saved_in_stdlib;
+                return e;
+            };
             const field_size: i32 = switch (value_type) {
                 .struct_type => |name| blk: {
                     const info = self.type_map.get(name) orelse {
@@ -990,14 +1002,10 @@ pub const AstToIr = struct {
         const saved_sret_ptr = self.sret_ptr;
         const saved_sret_size = self.sret_size;
         const saved_self_ptr = self.self_ptr;
-        const saved_in_stdlib = self.in_stdlib_method;
 
         // Save current var_map - method conversion will clear it
         const saved_var_map = self.var_map;
         self.var_map = .{};
-
-        // Allow stdlib builtins when converting methods from external types (stdlib)
-        self.in_stdlib_method = true;
 
         for (type_decl.methods) |method| {
             try self.convertMethod(mono_name, method);
@@ -2814,7 +2822,7 @@ pub const AstToIr = struct {
     };
 
     /// Check if current source file is part of stdlib
-    /// Check if we're in stdlib code (either compiling a stdlib file or converting stdlib methods)
+    /// Internal types are allowed in stdlib code and monomorphized stdlib methods
     fn isStdlibFile(self: *AstToIr) bool {
         // Allow stdlib builtins when converting monomorphized stdlib methods
         if (self.in_stdlib_method) return true;
@@ -2823,6 +2831,20 @@ pub const AstToIr = struct {
         // Check for /stdlib/ or \stdlib\ in path
         return std.mem.indexOf(u8, path, "/stdlib/") != null or
             std.mem.indexOf(u8, path, "\\stdlib\\") != null;
+    }
+
+    /// Check if a type name is internal (starts with underscore)
+    /// Internal types like __ManagedArray can only be used in stdlib code
+    fn isInternalType(type_name: []const u8) bool {
+        return type_name.len > 0 and type_name[0] == '_';
+    }
+
+    /// Check if internal type access is allowed, returns error if not
+    fn checkInternalTypeAccess(self: *AstToIr, type_name: []const u8) ConvertError!void {
+        if (isInternalType(type_name) and !self.isStdlibFile()) {
+            self.reportErrorWithDetails(.E018, type_name);
+            return error.SemanticError;
+        }
     }
 
     fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {

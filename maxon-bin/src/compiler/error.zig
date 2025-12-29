@@ -19,6 +19,7 @@ pub const ErrorCode = enum {
     E015,
     E016,
     E017,
+    E018,
 
     const Info = struct {
         code: []const u8,
@@ -43,6 +44,7 @@ pub const ErrorCode = enum {
         .{ .code = "E015", .message = "missing interface method" },
         .{ .code = "E016", .message = "stdlib-only intrinsic called from user code" },
         .{ .code = "E017", .message = "nil coalescing requires optional type" },
+        .{ .code = "E018", .message = "internal type used outside stdlib" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

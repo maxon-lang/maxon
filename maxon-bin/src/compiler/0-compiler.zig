@@ -125,31 +125,90 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
 
 /// Compile source and return the IR as a string (for fragment generation)
 pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8 {
-    // Load stdlib to get function signatures
+    // Load all stdlib modules (same as main compile path)
     const stdlib_path = try findStdlibPath(allocator);
     defer allocator.free(stdlib_path);
 
-    const exp_module = try loadStdlibModule(stdlib_path, "math/exp", allocator);
-    defer allocator.free(exp_module.path);
-    defer allocator.free(exp_module.content);
+    const stdlib_modules = try loadAllStdlibModules(stdlib_path, allocator);
+    defer freeStdlibModules(stdlib_modules, allocator);
 
-    // Compile stdlib first
-    var stdlib_frontend = try runFrontend(exp_module.content, allocator, .{
-        .source_file = exp_module.path,
-    });
-    defer stdlib_frontend.deinit();
+    // Build combined sources: stdlib first, then user source
+    var all_sources = try allocator.alloc(Source, stdlib_modules.len + 1);
+    defer allocator.free(all_sources);
 
-    // Use function signatures extracted from AST (preserves full type info)
-    const external_funcs = stdlib_frontend.func_signatures orelse return error.NoSignatures;
+    for (stdlib_modules, 0..) |mod, i| {
+        all_sources[i] = mod;
+    }
+    all_sources[stdlib_modules.len] = .{ .path = "<test>", .content = source };
 
-    // Compile user source with external signatures
-    var user_frontend = try runFrontend(source, allocator, .{
-        .external_funcs = external_funcs,
-    });
-    defer user_frontend.deinit();
+    // Use compileMultipleToIr to get proper IR with all stdlib types
+    var result: CompileResult = .{ .error_info = null };
+    return compileMultipleToIr(all_sources, allocator, &result);
+}
 
-    // Return only the user module's IR (not merged with stdlib)
-    return user_frontend.ir_module.printToString(allocator) catch {
+/// Compile multiple sources and return combined IR as string
+fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, result: *CompileResult) ![]const u8 {
+    if (sources.len == 0) return error.NoSignatures;
+
+    // Use an arena allocator for Phase 1 ASTs
+    var phase1_arena = std.heap.ArenaAllocator.init(allocator);
+    defer phase1_arena.deinit();
+    const phase1_allocator = phase1_arena.allocator();
+
+    // Phase 1: Parse all sources and collect type info AND function signatures
+    var all_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
+    defer {
+        for (all_types.items) |t| {
+            allocator.free(t.fields);
+        }
+        all_types.deinit(allocator);
+    }
+
+    var all_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
+    defer {
+        for (all_funcs.items) |sig| {
+            allocator.free(sig.name);
+        }
+        all_funcs.deinit(allocator);
+    }
+
+    for (sources) |source| {
+        var lexer = Lexer.init(source.content);
+        const tokens = lexer.tokenize(phase1_allocator) catch continue;
+
+        var parser = Parser.initWithFile(tokens, phase1_allocator, source.path);
+        const program = parser.parse() catch continue;
+
+        const type_info = ast_to_ir.extractTypeInfo(program, allocator) catch continue;
+        for (type_info) |t| {
+            var t_with_path = t;
+            t_with_path.source_path = source.path;
+            try all_types.append(allocator, t_with_path);
+        }
+        allocator.free(type_info);
+
+        const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
+        for (func_sigs) |sig| {
+            var sig_with_path = sig;
+            sig_with_path.source_path = source.path;
+            try all_funcs.append(allocator, sig_with_path);
+        }
+        allocator.free(func_sigs);
+    }
+
+    // Phase 2: Compile the last source (user code) with all types/funcs available
+    const last_source = sources[sources.len - 1];
+    var frontend = runFrontend(last_source.content, allocator, .{
+        .source_file = last_source.path,
+        .result = result,
+        .external_funcs = all_funcs.items,
+        .external_types = all_types.items,
+    }) catch {
+        return error.IrError;
+    };
+    defer frontend.deinit();
+
+    return frontend.ir_module.printToString(allocator) catch {
         return error.WriteError;
     };
 }
