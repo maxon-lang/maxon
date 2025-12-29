@@ -1,0 +1,71 @@
+// Test: primitive-hashable.float.hash.zero-normalization.1
+function main() returns int
+    var pos = 0.0
+    var neg = 0.0 - 0.0
+    var h1 = pos.hash()
+    var h2 = neg.hash()
+    if h1 == h2 'eq'
+        return 1
+    end 'eq'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_fconst = const.f64 f64 0
+    %pos = alloca ptr
+    store %pos %tmp_fconst
+    %tmp_fconst.1 = const.f64 f64 0
+    %tmp_fconst.2 = const.f64 f64 0
+    %tmp_fsub = fsub f64 %tmp_fconst.1 %tmp_fconst.2
+    %neg = alloca ptr
+    store %neg %tmp_fsub
+    %tmp_load = load f64 %pos
+    %tmp_fconst.3 = const.f64 f64 0
+    %tmp_fcmp = fcmp.eq i64 %tmp_load %tmp_fconst.3
+    %tmp_alloca.2 = alloca ptr
+    %tmp_fconst.1 = br.cond %tmp_fcmp @block1
+float_hash_zero:
+    %tmp_const = const.i64 i64 0
+    store %tmp_alloca.2 %tmp_const
+    br @block3
+float_hash_nonzero:
+    %tmp_bitcast = bitcast.f64.i64 i64 %tmp_load
+    store %tmp_alloca.2 %tmp_bitcast
+    br @block3
+float_hash_end:
+    %tmp_load.1 = load i64 %tmp_alloca.2
+    %h1 = alloca ptr
+    store %h1 %tmp_load.1
+    %tmp_load.2 = load f64 %neg
+    %tmp_fconst.4 = const.f64 f64 0
+    %tmp_fcmp.1 = fcmp.eq i64 %tmp_load.2 %tmp_fconst.4
+    %tmp_alloca.4 = alloca ptr
+    %neg = br.cond %tmp_fcmp.1 @block4
+float_hash_zero:
+    %tmp_const.1 = const.i64 i64 0
+    store %tmp_alloca.4 %tmp_const.1
+    br @block6
+float_hash_nonzero:
+    %tmp_bitcast.1 = bitcast.f64.i64 i64 %tmp_load.2
+    store %tmp_alloca.4 %tmp_bitcast.1
+    br @block6
+float_hash_end:
+    %tmp_load.3 = load i64 %tmp_alloca.4
+    %h2 = alloca ptr
+    store %h2 %tmp_load.3
+    %tmp_load.4 = load i64 %h1
+    %tmp_load.5 = load i64 %h2
+    %tmp_icmp = icmp.eq i64 %tmp_load.4 %tmp_load.5
+    %tmp_fcmp = br.cond %tmp_icmp @block7
+then:
+    %tmp_const.2 = const.i64 i64 1
+    ret %tmp_const.2
+end:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+}
+
+---

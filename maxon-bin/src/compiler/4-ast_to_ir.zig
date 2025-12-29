@@ -35,9 +35,27 @@ const OptionalInfo = struct {
     wrapped_struct_type: ?[]const u8 = null, // struct name if wrapped is a struct
 };
 
+/// Primitive type info - tracks IR type and source type name
+const PrimitiveInfo = struct {
+    ir_type: ir.Type,
+    name: []const u8, // "int", "float", "bool", "byte"
+
+    /// Create PrimitiveInfo from ir.Type with inferred type name
+    fn fromIrType(ir_type: ir.Type) PrimitiveInfo {
+        const type_name = switch (ir_type) {
+            .i64 => "int",
+            .f64 => "float",
+            .ptr => "ptr",
+            .void => "void",
+            .i32 => "int",
+        };
+        return .{ .ir_type = ir_type, .name = type_name };
+    }
+};
+
 /// Extended type info for variable tracking
 const ValueType = union(enum) {
-    primitive: ir.Type,
+    primitive: PrimitiveInfo,
     struct_type: []const u8,
     array_type: ArrayInfo,
     enum_type: []const u8,
@@ -45,7 +63,7 @@ const ValueType = union(enum) {
 
     fn toPrimitiveType(self: ValueType) ir.Type {
         return switch (self) {
-            .primitive => |p| p,
+            .primitive => |p| p.ir_type,
             .enum_type => .i64,
             .struct_type, .array_type => .ptr,
             .optional_type => .ptr, // Optionals are pointers to 16-byte structures
@@ -448,9 +466,9 @@ pub const AstToIr = struct {
         // Register __ManagedArray compiler-internal type (24 bytes: ptr + len + capacity)
         // This is a parameterized type - element type is tracked separately in ArrayInfo
         const managed_array_fields = try self.allocator.alloc(FieldInfo, 3);
-        managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = .ptr } };
-        managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = .i64 } };
-        managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = .i64 } };
+        managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } } };
+        managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+        managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
         try self.type_map.put(self.allocator, "__ManagedArray", .{
             .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 24 },
         });
@@ -587,7 +605,7 @@ pub const AstToIr = struct {
                     };
                     break :blk switch (field_type_info) {
                         .struct_type => .{ .struct_type = resolved },
-                        .primitive => |p| .{ .primitive = p },
+                        .primitive => |p| .{ .primitive = .{ .ir_type = p, .name = resolved } },
                         .enum_type => .{ .enum_type = resolved },
                     };
                 },
@@ -644,13 +662,15 @@ pub const AstToIr = struct {
             const value_type: ValueType = blk: {
                 // Map type name to ValueType
                 if (std.mem.eql(u8, field.type_name, "int")) {
-                    break :blk .{ .primitive = .i64 };
+                    break :blk .{ .primitive = .{ .ir_type = .i64, .name = "int" } };
                 } else if (std.mem.eql(u8, field.type_name, "float")) {
-                    break :blk .{ .primitive = .f64 };
+                    break :blk .{ .primitive = .{ .ir_type = .f64, .name = "float" } };
                 } else if (std.mem.eql(u8, field.type_name, "bool")) {
-                    break :blk .{ .primitive = .i64 };
+                    break :blk .{ .primitive = .{ .ir_type = .i64, .name = "bool" } };
+                } else if (std.mem.eql(u8, field.type_name, "byte")) {
+                    break :blk .{ .primitive = .{ .ir_type = .i64, .name = "byte" } };
                 } else if (std.mem.eql(u8, field.type_name, "ptr")) {
-                    break :blk .{ .primitive = .ptr };
+                    break :blk .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } };
                 } else if (std.mem.eql(u8, field.type_name, "__ManagedArray")) {
                     // Managed arrays are structs, but we treat them specially
                     break :blk .{ .struct_type = field.type_name };
@@ -823,8 +843,10 @@ pub const AstToIr = struct {
                 };
                 return if (type_info.isStruct())
                     .{ .struct_type = resolved }
+                else if (type_info == .enum_type)
+                    .{ .enum_type = resolved }
                 else
-                    .{ .primitive = type_info.irType() };
+                    .{ .primitive = .{ .ir_type = type_info.irType(), .name = resolved } };
             },
             .generic => |gen| {
                 // For generic types like "Array of int", monomorphize them
@@ -1732,7 +1754,7 @@ pub const AstToIr = struct {
             } else {
                 try self.var_map.put(self.allocator, binding_name, VarInfo.init(
                     binding_ptr,
-                    .{ .primitive = wrapped_type },
+                    .{ .primitive = PrimitiveInfo.fromIrType(wrapped_type) },
                     true,
                     false,
                 ));
@@ -1974,7 +1996,7 @@ pub const AstToIr = struct {
         // Register the loop variable - allocate a slot and store the value there
         const var_slot = try self.func().emitAlloca(opt_info.wrapped);
         try self.func().emitStore(var_slot, element_value);
-        try self.var_map.put(self.allocator, for_stmt.var_name, VarInfo.init(var_slot, .{ .primitive = opt_info.wrapped }, false, false));
+        try self.var_map.put(self.allocator, for_stmt.var_name, VarInfo.init(var_slot, .{ .primitive = PrimitiveInfo.fromIrType(opt_info.wrapped) }, false, false));
 
         // Convert body statements
         for (for_stmt.body) |stmt| {
@@ -2094,7 +2116,7 @@ pub const AstToIr = struct {
             ));
         } else {
             // Primitive binding: use init (no slot indirection needed)
-            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(var_ptr, .{ .primitive = wrapped_type }, true, // mutable
+            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(var_ptr, .{ .primitive = PrimitiveInfo.fromIrType(wrapped_type) }, true, // mutable
                 false));
         }
 
@@ -2151,9 +2173,9 @@ pub const AstToIr = struct {
 
     fn convertExpression(self: *AstToIr, expr: ast.Expression) ConvertError!TypedValue {
         return switch (expr) {
-            .integer => |v| .{ .value = try self.func().emitConstI64(v), .ty = .{ .primitive = .i64 } },
-            .float_lit => |v| .{ .value = try self.func().emitConstF64(v), .ty = .{ .primitive = .f64 } },
-            .bool_lit => |v| .{ .value = try self.func().emitConstI64(if (v) 1 else 0), .ty = .{ .primitive = .i64 } },
+            .integer => |v| .{ .value = try self.func().emitConstI64(v), .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } },
+            .float_lit => |v| .{ .value = try self.func().emitConstF64(v), .ty = .{ .primitive = .{ .ir_type = .f64, .name = "float" } } },
+            .bool_lit => |v| .{ .value = try self.func().emitConstI64(if (v) 1 else 0), .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } },
             .nil_lit => self.createNilOptional(.i64),
             .self_expr => self.convertSelfExpr(),
             .identifier => |name| self.convertIdentifierOrField(name),
@@ -2295,13 +2317,15 @@ pub const AstToIr = struct {
                 const op: ir.Instruction.Op = if (is_float) .fsub else .sub;
                 const ty: ir.Type = if (is_float) .f64 else .i64;
                 const result = try self.func().emitBinaryOp(op, zero, operand.value, ty);
-                return .{ .value = result, .ty = .{ .primitive = ty } };
+                // Preserve the operand's type name for negate
+                const type_name = if (operand.ty == .primitive) operand.ty.primitive.name else if (is_float) "float" else "int";
+                return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = ty, .name = type_name } } };
             },
             .not => {
                 // Logical not: x == 0
                 const zero = try self.func().emitConstI64(0);
                 const result = try self.func().emitBinaryOp(.icmp_eq, operand.value, zero, .i64);
-                return .{ .value = result, .ty = .{ .primitive = .i64 } };
+                return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
             },
         }
     }
@@ -2329,7 +2353,9 @@ pub const AstToIr = struct {
         else
             try self.emitIntOp(bin.op, left_val, right_val);
 
-        return .{ .value = result, .ty = .{ .primitive = result_ty } };
+        // Determine the result type name based on IR type
+        const type_name = if (result_ty == .f64) "float" else "int";
+        return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = result_ty, .name = type_name } } };
     }
 
     fn emitFloatOp(self: *AstToIr, op: ast.BinaryOp, left: ir.Value, right: ir.Value) ConvertError!ir.Value {
@@ -2377,7 +2403,7 @@ pub const AstToIr = struct {
                     return error.TypeMismatch;
                 },
             };
-            return .{ .value = result, .ty = .{ .primitive = .i64 } };
+            return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
         } else if (left_is_optional) {
             // Left is optional, right is a value - unwrap left and compare
             // Load the value from offset 8 of the optional
@@ -2393,7 +2419,7 @@ pub const AstToIr = struct {
                 .ge => .icmp_ge,
             };
             const result = try self.func().emitBinaryOp(op, left_val, right.value, .i64);
-            return .{ .value = result, .ty = .{ .primitive = .i64 } };
+            return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
         } else if (right_is_optional) {
             // Right is optional, left is a value - unwrap right and compare
             // Load the value from offset 8 of the optional
@@ -2409,7 +2435,7 @@ pub const AstToIr = struct {
                 .ge => .icmp_ge,
             };
             const result = try self.func().emitBinaryOp(op, left.value, right_val, .i64);
-            return .{ .value = result, .ty = .{ .primitive = .i64 } };
+            return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
         }
 
         const left_prim = left.ty.toPrimitiveType();
@@ -2436,7 +2462,7 @@ pub const AstToIr = struct {
                 .ge => .fcmp_ge,
             };
             const result = try self.func().emitBinaryOp(op, left_val, right_val, .i64);
-            return .{ .value = result, .ty = .{ .primitive = .i64 } };
+            return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
         }
 
         // Integer comparison
@@ -2449,7 +2475,7 @@ pub const AstToIr = struct {
             .ge => .icmp_ge,
         };
         const result = try self.func().emitBinaryOp(op, left.value, right.value, .i64);
-        return .{ .value = result, .ty = .{ .primitive = .i64 } };
+        return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
     }
 
     fn convertLogical(self: *AstToIr, log: ast.LogicalExpr) ConvertError!TypedValue {
@@ -2468,7 +2494,7 @@ pub const AstToIr = struct {
                 const right_bool = try self.func().emitBinaryOp(.icmp_ne, right.value, zero, .i64);
                 // AND the two boolean values using multiplication (0*x=0, 1*1=1)
                 const result = try self.func().emitBinaryOp(.mul, left_bool, right_bool, .i64);
-                return .{ .value = result, .ty = .{ .primitive = .i64 } };
+                return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
             },
         }
     }
@@ -2702,7 +2728,7 @@ pub const AstToIr = struct {
             }
             // Assume i64 return type - this will be resolved at link time
             const result = try self.func().emitCall(call.func_name, args, .i64);
-            return .{ .value = result orelse 0, .ty = .{ .primitive = .i64 } };
+            return .{ .value = result orelse 0, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
         };
 
         // Check if return type is optional (needs sret for 16-byte struct)
@@ -2753,7 +2779,7 @@ pub const AstToIr = struct {
         if (func_info.return_value_type) |vtype| {
             return .{ .value = result orelse 0, .ty = vtype };
         }
-        return .{ .value = result orelse 0, .ty = .{ .primitive = func_info.return_type } };
+        return .{ .value = result orelse 0, .ty = .{ .primitive = PrimitiveInfo.fromIrType(func_info.return_type) } };
     }
 
     // ------------------------------------------------------------------------
@@ -2811,7 +2837,7 @@ pub const AstToIr = struct {
 
         const result = self.func().emitUnaryOp(builtin.op, arg.value, builtin.ret_type) catch return error.OutOfMemory;
 
-        return .{ .value = result, .ty = .{ .primitive = builtin.ret_type } };
+        return .{ .value = result, .ty = .{ .primitive = PrimitiveInfo.fromIrType(builtin.ret_type) } };
     }
 
     // ------------------------------------------------------------------------
@@ -2856,7 +2882,7 @@ pub const AstToIr = struct {
         const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
         const len = try self.func().emitLoad(len_ptr, .i64);
 
-        return .{ .value = len, .ty = .{ .primitive = .i64 } };
+        return .{ .value = len, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
     }
 
     /// __managed_array_capacity(managed) -> int
@@ -2872,7 +2898,7 @@ pub const AstToIr = struct {
         const cap_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
         const cap = try self.func().emitLoad(cap_ptr, .i64);
 
-        return .{ .value = cap, .ty = .{ .primitive = .i64 } };
+        return .{ .value = cap, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
     }
 
     /// __managed_array_create(capacity) -> __ManagedArray
@@ -2908,7 +2934,7 @@ pub const AstToIr = struct {
         const cap_ptr = try self.func().emitGetFieldPtr(managed_ptr, 16);
         try self.func().emitStore(cap_ptr, capacity.value);
 
-        return .{ .value = managed_ptr, .ty = .{ .primitive = .ptr } };
+        return .{ .value = managed_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } } };
     }
 
     /// __managed_array_set_at(managed, index, value) -> void
@@ -2932,7 +2958,7 @@ pub const AstToIr = struct {
         // Store value
         try self.func().emitStore(elem_ptr, value.value);
 
-        return .{ .value = 0, .ty = .{ .primitive = .void } };
+        return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
     }
 
     /// __managed_array_set_length(managed, new_len) -> void
@@ -2950,7 +2976,7 @@ pub const AstToIr = struct {
         const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
         try self.func().emitStore(len_ptr, new_len.value);
 
-        return .{ .value = 0, .ty = .{ .primitive = .void } };
+        return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
     }
 
     /// __managed_array_grow(managed, new_capacity) -> void
@@ -2981,7 +3007,7 @@ pub const AstToIr = struct {
         const cap_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
         try self.func().emitStore(cap_ptr, new_capacity.value);
 
-        return .{ .value = 0, .ty = .{ .primitive = .void } };
+        return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
     }
 
     /// __managed_array_shift_right(managed, start_index, count) -> void
@@ -3038,7 +3064,7 @@ pub const AstToIr = struct {
         // Finish loop and restore end block
         try loop.finish(self);
 
-        return .{ .value = 0, .ty = .{ .primitive = .void } };
+        return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
     }
 
     /// __managed_array_shift_left(managed, start_index, count) -> void
@@ -3100,7 +3126,7 @@ pub const AstToIr = struct {
         // Finish loop and restore end block
         try loop.finish(self);
 
-        return .{ .value = 0, .ty = .{ .primitive = .void } };
+        return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
     }
 
     fn checkOwnershipTransfer(self: *AstToIr, func_name: []const u8, arg_expr: ast.Expression, param_idx: usize) ConvertError!void {
@@ -3380,7 +3406,7 @@ pub const AstToIr = struct {
             try self.func().setValueName(result_ptr, decl.name);
             try self.var_map.put(self.allocator, decl.name, VarInfo.init(
                 result_ptr,
-                .{ .primitive = func_info.return_type },
+                .{ .primitive = PrimitiveInfo.fromIrType(func_info.return_type) },
                 self.current_decl_is_mutable,
                 false,
             ));
@@ -3698,7 +3724,7 @@ pub const AstToIr = struct {
         else if (func_info.return_type_name) |name|
             .{ .struct_type = name }
         else
-            .{ .primitive = func_info.return_type };
+            .{ .primitive = PrimitiveInfo.fromIrType(func_info.return_type) };
 
         return .{ .value = result orelse try self.func().emitConstI64(0), .ty = ret_ty };
     }
@@ -3734,7 +3760,118 @@ pub const AstToIr = struct {
             return self.emitMethodCall(base_typed.ty.struct_type, mcall.method_name, mcall.args, base_typed.value);
         }
 
+        // Check if this is a primitive type with hash/equals methods
+        if (base_typed.ty == .primitive) {
+            return self.emitPrimitiveMethodCall(base_typed, mcall.method_name, mcall.args);
+        }
+
         debug.astToIr("error: method call on non-struct type", .{});
+        return error.SemanticError;
+    }
+
+    /// Emit a method call on a primitive type (hash, equals)
+    fn emitPrimitiveMethodCall(self: *AstToIr, base_typed: TypedValue, method_name: []const u8, arg_exprs: []const ast.Expression) ConvertError!TypedValue {
+        const prim_info = base_typed.ty.primitive;
+        const type_name = prim_info.name;
+
+        if (std.mem.eql(u8, method_name, "hash")) {
+            return self.emitPrimitiveHash(base_typed.value, type_name);
+        } else if (std.mem.eql(u8, method_name, "equals")) {
+            if (arg_exprs.len != 1) {
+                self.reportError(.E011);
+                return error.WrongArgumentCount;
+            }
+            const other = try self.convertExpression(arg_exprs[0]);
+            return self.emitPrimitiveEquals(base_typed.value, other.value, type_name);
+        }
+
+        debug.astToIr("error: unknown method '{s}' on primitive type '{s}'", .{ method_name, type_name });
+        return error.SemanticError;
+    }
+
+    /// Emit hash() for primitive types
+    fn emitPrimitiveHash(self: *AstToIr, value: ir.Value, type_name: []const u8) ConvertError!TypedValue {
+        if (std.mem.eql(u8, type_name, "int")) {
+            // int.hash() returns the value directly
+            return .{ .value = value, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+        } else if (std.mem.eql(u8, type_name, "float")) {
+            // float.hash() - normalize -0.0 to +0.0, then bitcast to i64
+            // Following Swift's approach: if isZero, use 0, else use bitPattern
+            const zero = try self.func().emitConstF64(0.0);
+            const is_zero = try self.func().emitBinaryOp(.fcmp_eq, value, zero, .i64);
+
+            // Allocate result storage
+            const result_ptr = try self.func().emitAlloca(.i64);
+
+            // Entry block is the current last block (before we add new blocks)
+            const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+            // Create blocks for branching
+            const zero_block_idx: u32 = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("float_hash_zero");
+            const nonzero_block_idx: u32 = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("float_hash_nonzero");
+            const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("float_hash_end");
+
+            // Branch based on is_zero (from entry block)
+            const entry_block = &self.func().blocks.items[entry_block_idx];
+            try entry_block.instructions.append(self.allocator, .{
+                .op = .br_cond,
+                .operands = .{ .{ .value = is_zero }, .{ .block_ref = zero_block_idx } },
+                .result = nonzero_block_idx, // false branch target
+            });
+
+            // Pop end_block temporarily so we can work with zero/nonzero blocks
+            const end_block = self.func().blocks.pop().?;
+            const nonzero_block = self.func().blocks.pop().?;
+
+            // Now current block is zero_block
+            // Zero case: store 0
+            const zero_i64 = try self.func().emitConstI64(0);
+            try self.func().emitStore(result_ptr, zero_i64);
+            try self.func().emitBr(end_block_idx);
+
+            // Restore nonzero block and work with it
+            try self.func().blocks.append(self.allocator, nonzero_block);
+
+            // Non-zero case: bitcast float to i64
+            const bitcast_value = try self.func().emitUnaryOp(.bitcast_f64_to_i64, value, .i64);
+            try self.func().emitStore(result_ptr, bitcast_value);
+            try self.func().emitBr(end_block_idx);
+
+            // Restore end block
+            try self.func().blocks.append(self.allocator, end_block);
+
+            // End block: load result
+            const result = try self.func().emitLoad(result_ptr, .i64);
+
+            return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+        } else if (std.mem.eql(u8, type_name, "bool")) {
+            // bool.hash() returns 1 for true, 0 for false (value is already 0 or 1)
+            return .{ .value = value, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+        } else if (std.mem.eql(u8, type_name, "byte")) {
+            // byte.hash() returns the value directly
+            return .{ .value = value, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+        }
+
+        debug.astToIr("error: hash not supported for type '{s}'", .{type_name});
+        return error.SemanticError;
+    }
+
+    /// Emit equals() for primitive types
+    fn emitPrimitiveEquals(self: *AstToIr, left: ir.Value, right: ir.Value, type_name: []const u8) ConvertError!TypedValue {
+        if (std.mem.eql(u8, type_name, "int") or std.mem.eql(u8, type_name, "bool") or std.mem.eql(u8, type_name, "byte")) {
+            // Integer comparison
+            const result = try self.func().emitBinaryOp(.icmp_eq, left, right, .i64);
+            return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
+        } else if (std.mem.eql(u8, type_name, "float")) {
+            // Float comparison (follows IEEE semantics: NaN != NaN)
+            const result = try self.func().emitBinaryOp(.fcmp_eq, left, right, .i64);
+            return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
+        }
+
+        debug.astToIr("error: equals not supported for type '{s}'", .{type_name});
         return error.SemanticError;
     }
 };

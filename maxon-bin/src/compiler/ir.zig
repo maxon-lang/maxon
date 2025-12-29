@@ -61,6 +61,7 @@ pub const Instruction = struct {
         fptosi, // float to signed int
         sitofp, // signed int to float
         fabs, // float absolute value
+        bitcast_f64_to_i64, // reinterpret f64 bits as i64 (for hashing)
 
         // Control flow
         ret,
@@ -124,6 +125,7 @@ pub const Instruction = struct {
                 .fptosi => "fptosi",
                 .sitofp => "sitofp",
                 .fabs => "fabs",
+                .bitcast_f64_to_i64 => "bitcast.f64.i64",
                 .ret => "ret",
                 .br => "br",
                 .br_cond => "br.cond",
@@ -312,6 +314,7 @@ pub const Function = struct {
             .heap_alloc => "tmp_heap",
             .heap_free => "tmp_free",
             .heap_realloc => "tmp_realloc",
+            .bitcast_f64_to_i64 => "tmp_bitcast",
         };
     }
 

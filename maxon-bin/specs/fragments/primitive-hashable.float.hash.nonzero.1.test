@@ -1,0 +1,47 @@
+// Test: primitive-hashable.float.hash.nonzero.1
+function main() returns int
+    var f = 3.14
+    var h = f.hash()
+    if h != 0 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_fconst = const.f64 f64 3.14
+    %f = alloca ptr
+    store %f %tmp_fconst
+    %tmp_load = load f64 %f
+    %tmp_fconst.1 = const.f64 f64 0
+    %tmp_fcmp = fcmp.eq i64 %tmp_load %tmp_fconst.1
+    %tmp_alloca.1 = alloca ptr
+    %tmp_load = br.cond %tmp_fcmp @block1
+float_hash_zero:
+    %tmp_const = const.i64 i64 0
+    store %tmp_alloca.1 %tmp_const
+    br @block3
+float_hash_nonzero:
+    %tmp_bitcast = bitcast.f64.i64 i64 %tmp_load
+    store %tmp_alloca.1 %tmp_bitcast
+    br @block3
+float_hash_end:
+    %tmp_load.1 = load i64 %tmp_alloca.1
+    %h = alloca ptr
+    store %h %tmp_load.1
+    %tmp_load.2 = load i64 %h
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_icmp = icmp.ne i64 %tmp_load.2 %tmp_const.1
+    %tmp_alloca.1 = br.cond %tmp_icmp @block4
+then:
+    %tmp_const.2 = const.i64 i64 1
+    ret %tmp_const.2
+end:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+}
+
+---

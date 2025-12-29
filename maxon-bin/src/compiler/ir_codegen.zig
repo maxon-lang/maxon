@@ -1142,6 +1142,7 @@ pub const IrCodegen = struct {
             .fptosi => try self.genFpToSi(inst),
             .sitofp => try self.genSiToFp(inst),
             .fabs => try self.genFabs(inst),
+            .bitcast_f64_to_i64 => try self.genBitcastF64ToI64(inst),
             .ret => try self.genRet(inst),
             .param => try self.genParam(inst),
             .call => try self.genCall(inst),
@@ -1506,6 +1507,15 @@ pub const IrCodegen = struct {
         // Clear sign bit: AND with 0x7FFFFFFFFFFFFFFF
         try self.enc.fabsXmm0();
         try self.storeToStack(inst.result.?, .f64);
+    }
+
+    fn genBitcastF64ToI64(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Load f64 value to xmm0
+        try self.loadToXmm(inst.operands[0].value, .xmm0);
+        // Move bits from xmm0 to rax using movq
+        try self.enc.movqRaxXmm0();
+        // Store as i64
+        try self.storeToStack(inst.result.?, .i64);
     }
 
     fn genRet(self: *IrCodegen, inst: ir.Instruction) !void {
