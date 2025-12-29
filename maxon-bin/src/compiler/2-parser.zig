@@ -420,72 +420,50 @@ pub const Parser = struct {
     }
 
     fn parseTypeExpr(self: *Parser) !ast.TypeExpr {
-        // Check for array type: Array of [size] element_type
         var base_type: ast.TypeExpr = undefined;
-        if (self.check(.array)) {
-            _ = self.advance(); // consume 'array'
-            _ = try self.expect(.of);
 
-            // Check for optional size (integer literal)
-            var size: ?i64 = null;
-            if (self.check(.integer)) {
-                const size_token = self.advance();
-                size = std.fmt.parseInt(i64, size_token.text, 10) catch {
-                    self.reportError(.E001);
-                    return error.InvalidNumber;
-                };
+        // Parse type name (may include "Array" which is treated as a generic type)
+        const type_name = try self.expectTypeName();
+
+        // Check for generic type instantiation: TypeName of arg1 [arg2 ...]
+        if (self.check(.of)) {
+            _ = self.advance(); // consume 'of'
+
+            // Parse type arguments for generic types
+            // Note: "Array of int" and "Array of 5 int" are both stdlib Array types
+            var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
+            errdefer type_args.deinit(self.allocator);
+
+            // For Array type, skip optional size integer (e.g., "Array of 3 int")
+            // The size is only used in expressions, not in type annotations
+            if (std.mem.eql(u8, type_name, "Array") and self.check(.integer)) {
+                _ = self.advance(); // skip the size - it's ignored for type checking
             }
 
-            // Parse element type
-            const elem_type = try self.expectTypeName();
+            // First type argument is required
+            try type_args.append(self.allocator, try self.expectTypeName());
 
-            base_type = .{ .array = .{
-                .size = size,
-                .element_type = elem_type,
+            // Additional type arguments are optional (for types like Map of string int)
+            while (self.check(.identifier)) {
+                // Only consume if it looks like a type name (starts with lowercase or is a known type)
+                const next = self.peek(0);
+                if (next == null) break;
+                // Check if this could be a type name (heuristic: not 'or', 'and', etc.)
+                if (std.mem.eql(u8, next.?.text, "or") or
+                    std.mem.eql(u8, next.?.text, "and") or
+                    std.mem.eql(u8, next.?.text, "nil"))
+                {
+                    break;
+                }
+                try type_args.append(self.allocator, try self.expectTypeName());
+            }
+
+            base_type = .{ .generic = .{
+                .base_type = type_name,
+                .type_args = try type_args.toOwnedSlice(self.allocator),
             } };
         } else {
-            // Simple type name or generic type (e.g., Array of int)
-            const type_name = try self.expectTypeName();
-
-            // Check for generic type instantiation: TypeName of arg1 [arg2 ...]
-            if (self.check(.of)) {
-                _ = self.advance(); // consume 'of'
-
-                // Parse type arguments for generic types
-                // Note: "Array of int" and "Array of 5 int" are both stdlib Array types
-                var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
-                errdefer type_args.deinit(self.allocator);
-
-                // For Array type, skip optional size integer (e.g., "Array of 3 int")
-                if (std.mem.eql(u8, type_name, "Array") and self.check(.integer)) {
-                    _ = self.advance(); // skip the size - it's ignored for type checking
-                }
-
-                // First type argument is required
-                try type_args.append(self.allocator, try self.expectTypeName());
-
-                // Additional type arguments are optional (for types like Map of string int)
-                while (self.check(.identifier)) {
-                    // Only consume if it looks like a type name (starts with lowercase or is a known type)
-                    const next = self.peek(0);
-                    if (next == null) break;
-                    // Check if this could be a type name (heuristic: not 'or', 'and', etc.)
-                    if (std.mem.eql(u8, next.?.text, "or") or
-                        std.mem.eql(u8, next.?.text, "and") or
-                        std.mem.eql(u8, next.?.text, "nil"))
-                    {
-                        break;
-                    }
-                    try type_args.append(self.allocator, try self.expectTypeName());
-                }
-
-                base_type = .{ .generic = .{
-                    .base_type = type_name,
-                    .type_args = try type_args.toOwnedSlice(self.allocator),
-                } };
-            } else {
-                base_type = .{ .simple = type_name };
-            }
+            base_type = .{ .simple = type_name };
         }
 
         // Check for optional: T or nil
@@ -1139,7 +1117,7 @@ pub const Parser = struct {
         }
         // Sized array: Array of N type
         if (self.check(.array)) {
-            return try self.parseSizedArray();
+            return try self.parseArrayType();
         }
         // Check for Self keyword (for Self{...} struct initialization in methods)
         if (self.check(.Self)) {
@@ -1164,7 +1142,7 @@ pub const Parser = struct {
                 // - minus (negative): Array of -3 int
                 // - lowercase identifier (variable): Array of n int
                 // Generic types have a type name (int/float/bool/byte or capitalized identifier)
-                const is_sized_array = blk: {
+                const is_array_type = blk: {
                     if (!std.mem.eql(u8, token.text, "Array")) break :blk false;
                     if (self.check(.integer) or self.check(.lparen) or self.check(.minus)) break :blk true;
                     if (self.check(.identifier)) {
@@ -1187,7 +1165,7 @@ pub const Parser = struct {
                     break :blk false;
                 };
 
-                if (is_sized_array) {
+                if (is_array_type) {
                     // Parse size expression
                     const size_expr = try self.parseExpression() orelse {
                         self.reportError(.E003);
@@ -1198,7 +1176,7 @@ pub const Parser = struct {
                     // Parse element type
                     const elem_type = try self.expectTypeName();
 
-                    return try self.parsePostfix(.{ .sized_array = .{
+                    return try self.parsePostfix(.{ .array_type = .{
                         .size = size_ptr,
                         .element_type = elem_type,
                     } });
@@ -1354,7 +1332,7 @@ pub const Parser = struct {
         } });
     }
 
-    fn parseSizedArray(self: *Parser) ParseError!ast.Expression {
+    fn parseArrayType(self: *Parser) ParseError!ast.Expression {
         _ = try self.expect(.array);
         _ = try self.expect(.of);
 
@@ -1368,7 +1346,7 @@ pub const Parser = struct {
         // Parse element type
         const elem_type = try self.expectTypeName();
 
-        return try self.parsePostfix(.{ .sized_array = .{
+        return try self.parsePostfix(.{ .array_type = .{
             .size = size_ptr,
             .element_type = elem_type,
         } });

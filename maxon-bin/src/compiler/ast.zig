@@ -59,11 +59,6 @@ pub const FieldDecl = struct {
     is_mutable: bool,
 };
 
-pub const ArrayTypeExpr = struct {
-    size: ?i64, // null for unsized (Array of int), value for sized (Array of 3 int)
-    element_type: []const u8,
-};
-
 pub const GenericTypeExpr = struct {
     base_type: []const u8, // Array, Map, etc.
     type_args: []const []const u8, // [int], [string, int], etc.
@@ -71,7 +66,6 @@ pub const GenericTypeExpr = struct {
 
 pub const TypeExpr = union(enum) {
     simple: []const u8, // int, float, MyStruct
-    array: ArrayTypeExpr, // Array of int, Array of 3 int
     generic: GenericTypeExpr, // Array of int, Map of string int
     optional: *const TypeExpr, // T or nil
 };
@@ -252,7 +246,7 @@ pub const IndexExpr = struct {
     index: *const Expression,
 };
 
-pub const SizedArrayExpr = struct {
+pub const ArrayTypeExpr = struct {
     size: *const Expression,
     element_type: []const u8,
 };
@@ -284,7 +278,7 @@ pub const Expression = union(enum) {
     field_access: FieldAccessExpr,
     array_literal: ArrayLiteralExpr,
     index: IndexExpr,
-    sized_array: SizedArrayExpr,
+    array_type: ArrayTypeExpr,
     method_call: MethodCallExpr,
     nil_coalesce: NilCoalesceExpr,
 };

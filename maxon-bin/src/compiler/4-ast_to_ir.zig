@@ -591,11 +591,6 @@ pub const AstToIr = struct {
                         .enum_type => .{ .enum_type = resolved },
                     };
                 },
-                .array => |arr| .{ .array_type = .{
-                    .element_type = try self.lookupIrType(arr.element_type),
-                    .size = if (arr.size) |s| @intCast(s) else null,
-                    .storage = .stack,
-                } },
                 .optional => |wrapped| blk: {
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
                     break :blk .{ .optional_type = .{
@@ -778,18 +773,6 @@ pub const AstToIr = struct {
                     if (type_info.isStruct()) ret_type_name = base_name;
                     break :blk type_info.irType();
                 },
-                .array => |arr| {
-                    // Array return types are returned as pointers
-                    const elem_type = try self.lookupIrType(arr.element_type);
-                    ret_value_type = .{
-                        .array_type = .{
-                            .element_type = elem_type,
-                            .size = if (arr.size) |s| @intCast(s) else null,
-                            .storage = .heap, // Returned arrays are heap-allocated
-                        },
-                    };
-                    break :blk .ptr;
-                },
                 .optional => |wrapped| {
                     // Optional return types are returned as pointers
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
@@ -825,7 +808,7 @@ pub const AstToIr = struct {
         return switch (type_expr) {
             .simple => |name| name,
             .generic => |gen| gen.base_type,
-            .array, .optional => null,
+            .optional => null,
         };
     }
 
@@ -847,15 +830,6 @@ pub const AstToIr = struct {
                 // For generic types like "Array of int", monomorphize them
                 const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, gen.type_args);
                 return .{ .struct_type = mono_name };
-            },
-            .array => |arr| {
-                const resolved_elem = self.resolveTypeName(arr.element_type);
-                const elem_type = try self.lookupIrType(resolved_elem);
-                return .{ .array_type = .{
-                    .element_type = elem_type,
-                    .size = if (arr.size) |s| @intCast(s) else null,
-                    .storage = .stack,
-                } };
             },
             .optional => |wrapped| {
                 const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
@@ -1037,17 +1011,6 @@ pub const AstToIr = struct {
                     if (type_info.isStruct()) ret_type_name = resolved;
                     break :blk type_info.irType();
                 },
-                .array => |arr| {
-                    const elem_type = try self.lookupIrType(arr.element_type);
-                    ret_value_type = .{
-                        .array_type = .{
-                            .element_type = elem_type,
-                            .size = if (arr.size) |s| @intCast(s) else null,
-                            .storage = .heap,
-                        },
-                    };
-                    break :blk .ptr;
-                },
                 .optional => |wrapped| {
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
                     ret_value_type = .{
@@ -1112,7 +1075,6 @@ pub const AstToIr = struct {
                         }
                     }
                 },
-                .array => {},
                 .optional => {
                     // Optionals are 16 bytes (tag + value), use sret
                     uses_sret = true;
@@ -1128,7 +1090,7 @@ pub const AstToIr = struct {
                     const resolved = self.resolveTypeName(base_name);
                     break :blk try self.lookupIrType(resolved);
                 },
-                .array, .optional => break :blk .ptr,
+                .optional => break :blk .ptr,
             }
         } else .void;
 
@@ -1227,7 +1189,6 @@ pub const AstToIr = struct {
                         }
                     }
                 },
-                .array => {}, // Arrays returned as pointers, no sret needed
                 .optional => {
                     // Optionals are 16 bytes (tag + value), use sret
                     uses_sret = true;
@@ -1242,7 +1203,7 @@ pub const AstToIr = struct {
                     const base_name = typeExprBaseTypeName(rt).?;
                     break :blk try self.lookupIrType(base_name);
                 },
-                .array, .optional => break :blk .ptr,
+                .optional => break :blk .ptr,
             }
         } else .void;
 
@@ -1421,8 +1382,8 @@ pub const AstToIr = struct {
     fn convertVarDecl(self: *AstToIr, decl: ast.VarDecl) !void {
         debug.astToIr("Converting var decl: {s}", .{decl.name});
 
-        // Sized arrays cannot be immutable (they have no initial contents)
-        if (!self.current_decl_is_mutable and decl.value == .sized_array) {
+        // Array types cannot be immutable (they have no initial contents)
+        if (!self.current_decl_is_mutable and decl.value == .array_type) {
             self.reportError(.E013);
             return error.SemanticError;
         }
@@ -1433,7 +1394,7 @@ pub const AstToIr = struct {
             const type_name: ?[]const u8 = switch (type_ann) {
                 .generic => |gen| gen.base_type,
                 .simple => |name| name,
-                .array, .optional => null,
+                .optional => null,
             };
             if (type_name) |t_name| {
                 if (self.typeConformsTo(t_name, "InitableFromArrayLiteral")) {
@@ -2205,7 +2166,7 @@ pub const AstToIr = struct {
             .field_access => |fa| self.convertFieldAccess(fa),
             .array_literal => |arr| self.convertArrayLiteral(arr),
             .index => |idx| self.convertIndex(idx),
-            .sized_array => |sized| self.convertSizedArray(sized),
+            .array_type => |arr| self.convertArrayType(arr),
             .method_call => |mcall| self.convertMethodCallExpr(mcall),
             .nil_coalesce => |nc| self.convertNilCoalesce(nc),
         };
@@ -3581,12 +3542,12 @@ pub const AstToIr = struct {
         };
     }
 
-    fn convertSizedArray(self: *AstToIr, sized: ast.SizedArrayExpr) ConvertError!TypedValue {
+    fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!TypedValue {
         // Convert size expression (capacity)
-        const capacity_typed = try self.convertExpression(sized.size.*);
+        const capacity_typed = try self.convertExpression(arr.size.*);
 
         // Get or create monomorphized Array type for the element type
-        var type_args = [_][]const u8{sized.element_type};
+        var type_args = [_][]const u8{arr.element_type};
         const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
 
         // Get struct info for the monomorphized Array type
@@ -3604,7 +3565,7 @@ pub const AstToIr = struct {
         };
 
         // Build __ManagedArray with the given capacity
-        // For sized arrays (Array of N int), len = capacity so all elements are immediately accessible
+        // For Array of N int, len = capacity so all elements are immediately accessible
         // Allocate __ManagedArray on stack (24 bytes: ptr + len + capacity)
         const managed_ptr = try self.func().emitAllocaSized(24);
 
@@ -3616,7 +3577,7 @@ pub const AstToIr = struct {
         // Store buffer pointer at offset 0
         try self.func().emitStore(managed_ptr, buffer);
 
-        // Store len = capacity at offset 8 (sized arrays have all elements accessible)
+        // Store len = capacity at offset 8 (arrays have all elements accessible)
         const len_ptr = try self.func().emitGetFieldPtr(managed_ptr, 8);
         try self.func().emitStore(len_ptr, capacity_typed.value);
 
@@ -3865,7 +3826,6 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
         for (type_decl.fields) |field| {
             const type_name: []const u8 = switch (field.type_expr) {
                 .simple => |name| name,
-                .array => "ptr", // Arrays stored as pointers
                 .generic => |gen| gen.base_type, // Use base type for generics
                 .optional => "ptr", // Optionals stored as pointers
             };
@@ -3985,7 +3945,6 @@ fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
             // Struct types return ptr
             return .ptr;
         },
-        .array => .ptr,
         .generic => .ptr,
         .optional => .ptr,
     };
@@ -4023,6 +3982,6 @@ fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
             return name;
         },
         .generic => |gen| gen.base_type,
-        .array, .optional => null,
+        .optional => null,
     };
 }

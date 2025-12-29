@@ -640,8 +640,8 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
             freeExpressionArgs(idx.base.*, allocator);
             freeExpressionArgs(idx.index.*, allocator);
         },
-        .sized_array => |sized| {
-            freeExpressionArgs(sized.size.*, allocator);
+        .array_type => |arr| {
+            freeExpressionArgs(arr.size.*, allocator);
         },
         .method_call => |mcall| {
             freeExpressionArgs(mcall.base.*, allocator);
@@ -668,6 +668,6 @@ fn freeTypeExpr(type_expr: ?ast.TypeExpr, allocator: std.mem.Allocator) void {
             freeTypeExpr(inner.*, allocator);
             allocator.destroy(@constCast(inner));
         },
-        .simple, .generic, .array => {},
+        .simple, .generic => {},
     }
 }
