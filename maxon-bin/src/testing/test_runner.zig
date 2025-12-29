@@ -1,9 +1,52 @@
 const std = @import("std");
 const testing = @import("testing.zig");
 const fragment_gen = @import("fragment_generator.zig");
+const compiler = @import("../compiler/0-compiler.zig");
 
 const SPECS_DIR = "specs";
 const FRAGMENTS_DIR = "specs" ++ std.fs.path.sep_str ++ "fragments";
+
+const WorkerContext = struct {
+    fragments: []Fragment,
+    results: []testing.TestResult,
+    next_index: std.atomic.Value(usize),
+    completed_count: std.atomic.Value(usize),
+    allocator: std.mem.Allocator,
+    options: testing.TestOptions,
+    print_mutex: std.Thread.Mutex,
+    stdlib_modules: []const compiler.Source,
+};
+
+/// Cached stdlib modules (loaded once, reused across all tests)
+var cached_stdlib: ?[]const compiler.Source = null;
+var stdlib_allocator: ?std.mem.Allocator = null;
+
+fn getStdlibModules(allocator: std.mem.Allocator) ![]const compiler.Source {
+    if (cached_stdlib) |modules| {
+        return modules;
+    }
+
+    const stdlib_path = try compiler.findStdlibPath(allocator);
+    defer allocator.free(stdlib_path);
+
+    cached_stdlib = try compiler.loadAllStdlibModules(stdlib_path, allocator);
+    stdlib_allocator = allocator;
+    return cached_stdlib.?;
+}
+
+fn freeStdlibCache() void {
+    if (cached_stdlib) |modules| {
+        if (stdlib_allocator) |alloc| {
+            for (modules) |mod| {
+                alloc.free(mod.path);
+                alloc.free(mod.content);
+            }
+            alloc.free(modules);
+        }
+    }
+    cached_stdlib = null;
+    stdlib_allocator = null;
+}
 
 /// Extract the error line from compiler stderr (line starting with "error ")
 fn extractErrorLine(stderr: []const u8) ?[]const u8 {
@@ -59,12 +102,16 @@ pub fn runAllTests(
     };
     defer fragments_dir.close();
 
-    var results: std.ArrayListUnmanaged(testing.TestResult) = .empty;
-    var total: usize = 0;
-    var passed: usize = 0;
-    var failed: usize = 0;
-    var skipped: usize = 0;
+    // First pass: collect all fragments
+    var fragments_list: std.ArrayListUnmanaged(Fragment) = .empty;
+    defer {
+        for (fragments_list.items) |*f| {
+            f.deinit(allocator);
+        }
+        fragments_list.deinit(allocator);
+    }
 
+    var skipped: usize = 0;
     var iter = fragments_dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind != .file) continue;
@@ -89,21 +136,132 @@ pub fn runAllTests(
             std.debug.print("Error parsing fragment '{s}': {}\n", .{ entry.name, err });
             continue;
         };
-        defer fragment.deinit(allocator);
 
         // Check filter
         if (options.filter) |filter| {
             if (std.mem.indexOf(u8, fragment.name, filter) == null) {
                 skipped += 1;
+                fragment.deinit(allocator);
                 continue;
             }
         }
 
-        total += 1;
+        try fragments_list.append(allocator, fragment);
+    }
 
-        // Run the test
-        const result = runTest(allocator, fragment, options);
-        try results.append(allocator, result);
+    const total = fragments_list.items.len;
+    if (total == 0) {
+        return testing.TestSummary{
+            .total = 0,
+            .passed = 0,
+            .failed = 0,
+            .skipped = skipped,
+            .results = &.{},
+        };
+    }
+
+    // Load stdlib once for all tests
+    const stdlib_modules = getStdlibModules(allocator) catch {
+        std.debug.print("Error: Failed to load stdlib\n", .{});
+        return testing.TestSummary{
+            .total = 0,
+            .passed = 0,
+            .failed = 0,
+            .skipped = skipped,
+            .results = &.{},
+        };
+    };
+    defer freeStdlibCache();
+
+    // Allocate results array
+    const results = try allocator.alloc(testing.TestResult, total);
+
+    // Determine number of workers (default to half CPU count for in-process compilation)
+    const cpu_count = std.Thread.getCpuCount() catch 4;
+    const default_workers = @max(1, cpu_count / 2);
+    const num_workers = if (options.jobs == 0)
+        @min(default_workers, total)
+    else
+        @min(options.jobs, total);
+
+    // Single-threaded fast path
+    if (num_workers == 1) {
+        std.debug.print("Running {d} tests with 1 worker\n", .{total});
+        return runTestsSequential(allocator, fragments_list.items, results, options, skipped, stdlib_modules);
+    }
+
+    std.debug.print("Running {d} tests with {d} workers\n", .{ total, num_workers });
+
+    // Set up worker context
+    var ctx = WorkerContext{
+        .fragments = fragments_list.items,
+        .results = results,
+        .next_index = std.atomic.Value(usize).init(0),
+        .completed_count = std.atomic.Value(usize).init(0),
+        .allocator = allocator,
+        .options = options,
+        .print_mutex = .{},
+        .stdlib_modules = stdlib_modules,
+    };
+
+    // Spawn worker threads
+    const workers = try allocator.alloc(std.Thread, num_workers);
+    defer allocator.free(workers);
+
+    for (workers) |*worker| {
+        worker.* = try std.Thread.spawn(.{}, workerThread, .{&ctx});
+    }
+
+    // Wait for all workers to complete
+    for (workers) |worker| {
+        worker.join();
+    }
+
+    // Count results
+    var passed: usize = 0;
+    var failed: usize = 0;
+    for (results) |result| {
+        switch (result.status) {
+            .passed => passed += 1,
+            .failed => failed += 1,
+            .skipped => skipped += 1,
+        }
+    }
+
+    // Clean up generated .exe and .ir files in fragments directory
+    var cleanup_iter = fragments_dir.iterate();
+    while (cleanup_iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.endsWith(u8, entry.name, ".exe") or std.mem.endsWith(u8, entry.name, ".ir")) {
+            fragments_dir.deleteFile(entry.name) catch {};
+        }
+    }
+
+    return testing.TestSummary{
+        .total = total,
+        .passed = passed,
+        .failed = failed,
+        .skipped = skipped,
+        .results = results,
+    };
+}
+
+/// Sequential test execution (single thread)
+fn runTestsSequential(
+    allocator: std.mem.Allocator,
+    fragments: []Fragment,
+    results: []testing.TestResult,
+    options: testing.TestOptions,
+    initial_skipped: usize,
+    stdlib_modules: []const compiler.Source,
+) testing.TestSummary {
+    var passed: usize = 0;
+    var failed: usize = 0;
+    var skipped = initial_skipped;
+
+    for (fragments, 0..) |fragment, i| {
+        const result = runTest(allocator, fragment, options, stdlib_modules);
+        results[i] = result;
 
         switch (result.status) {
             .passed => {
@@ -125,22 +283,51 @@ pub fn runAllTests(
         }
     }
 
-    // Clean up generated .exe and .ir files in fragments directory
-    var cleanup_iter = fragments_dir.iterate();
-    while (cleanup_iter.next() catch null) |entry| {
-        if (entry.kind != .file) continue;
-        if (std.mem.endsWith(u8, entry.name, ".exe") or std.mem.endsWith(u8, entry.name, ".ir")) {
-            fragments_dir.deleteFile(entry.name) catch {};
-        }
-    }
-
     return testing.TestSummary{
-        .total = total,
+        .total = fragments.len,
         .passed = passed,
         .failed = failed,
         .skipped = skipped,
-        .results = try results.toOwnedSlice(allocator),
+        .results = results,
     };
+}
+
+/// Worker thread function
+fn workerThread(ctx: *WorkerContext) void {
+    while (true) {
+        // Atomically get next test index
+        const index = ctx.next_index.fetchAdd(1, .seq_cst);
+        if (index >= ctx.fragments.len) {
+            break;
+        }
+
+        const fragment = ctx.fragments[index];
+        const result = runTest(ctx.allocator, fragment, ctx.options, ctx.stdlib_modules);
+        ctx.results[index] = result;
+
+        // Print result with mutex to avoid interleaved output
+        {
+            ctx.print_mutex.lock();
+            defer ctx.print_mutex.unlock();
+
+            switch (result.status) {
+                .passed => {
+                    if (ctx.options.verbose) {
+                        std.debug.print("PASS: {s}\n", .{fragment.name});
+                    }
+                },
+                .failed => {
+                    std.debug.print("\nFAIL: {s}\n", .{fragment.name});
+                    if (result.message) |msg| {
+                        std.debug.print("  {s}\n", .{msg});
+                    }
+                },
+                .skipped => {},
+            }
+        }
+
+        _ = ctx.completed_count.fetchAdd(1, .seq_cst);
+    }
 }
 
 /// Parse a fragment file
@@ -164,7 +351,8 @@ pub fn parseFragment(allocator: std.mem.Allocator, content: []const u8, file_pat
 
     // Find first ---
     const first_sep = std.mem.indexOf(u8, content, "\n---\n") orelse return error.InvalidFragment;
-    const source = try allocator.dupe(u8, std.mem.trim(u8, content[first_newline + 1 .. first_sep], "\r\n"));
+    // Include the "// Test:" comment line in source to preserve line numbers for error messages
+    const source = try allocator.dupe(u8, std.mem.trim(u8, content[0..first_sep], "\r\n"));
     errdefer allocator.free(source);
 
     // Store file path
@@ -248,11 +436,12 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8) !testing.Te
     } };
 }
 
-/// Run a single test
+/// Run a single test using in-process compilation
 fn runTest(
     allocator: std.mem.Allocator,
     fragment: Fragment,
     options: testing.TestOptions,
+    stdlib_modules: []const compiler.Source,
 ) testing.TestResult {
     _ = options;
 
@@ -271,29 +460,46 @@ fn runTest(
     };
     defer allocator.free(temp_exe);
 
-    // Determine the compiler executable path
-    const exe_path = getCompilerPath(allocator) catch {
-        return .{ .name = fragment.name, .status = .failed, .message = "Failed to get compiler path" };
-    };
-    defer allocator.free(exe_path);
-
-    // Run the compiler directly on the fragment file (lexer stops at ---)
+    // Get track_allocs option from expected result
     const track_allocs = switch (fragment.expected) {
         .success => |s| s.track_allocs,
         .compiler_error => false,
     };
-    const compile_result = runCompiler(allocator, exe_path, fragment.file_path, track_allocs) catch {
-        return .{ .name = fragment.name, .status = .failed, .message = "Failed to run compiler" };
+
+    // Compile in-process using the compiler module directly
+    // Disable debug logging to avoid polluting test output
+    compiler.debug.enabled = false;
+
+    // Use an arena allocator backed by the page allocator to avoid GPA contention
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const compile_allocator = arena.allocator();
+
+    // Build sources array: stdlib first, then user code
+    const sources = compile_allocator.alloc(compiler.Source, stdlib_modules.len + 1) catch {
+        return .{ .name = fragment.name, .status = .failed, .message = "Failed to allocate sources" };
     };
-    defer {
-        allocator.free(compile_result.stdout);
-        allocator.free(compile_result.stderr);
+
+    for (stdlib_modules, 0..) |mod, i| {
+        sources[i] = mod;
     }
+    sources[stdlib_modules.len] = .{ .path = fragment.file_path, .content = fragment.source };
+
+    var compile_result: compiler.CompileResult = .{ .error_info = null };
+    const compile_options = compiler.CompileOptions{ .track_allocs = track_allocs };
+
+    const compile_success = if (compiler.compileMultiple(
+        sources,
+        temp_exe,
+        compile_options,
+        compile_allocator,
+        &compile_result,
+    )) |_| true else |_| false;
 
     switch (fragment.expected) {
         .compiler_error => |expected_err| {
             // For error tests, compilation should fail
-            if (compile_result.term.Exited == 0) {
+            if (compile_success) {
                 return .{
                     .name = fragment.name,
                     .status = .failed,
@@ -301,8 +507,22 @@ fn runTest(
                 };
             }
 
-            // Extract the error line from stderr (line starting with "error ")
-            const actual_error = extractErrorLine(compile_result.stderr) orelse compile_result.stderr;
+            // Format the actual error message
+            var actual_error_allocated = false;
+            const actual_error = if (compile_result.error_info) |err| blk: {
+                actual_error_allocated = true;
+                break :blk std.fmt.allocPrint(allocator, "error {s}: {s}:{d}:{d}: {s}", .{
+                    err.code.format(),
+                    err.location.file orelse "",
+                    err.location.line,
+                    err.location.column,
+                    err.message,
+                }) catch {
+                    actual_error_allocated = false;
+                    break :blk "Failed to format error";
+                };
+            } else "Unknown compilation error";
+            defer if (actual_error_allocated) allocator.free(actual_error);
 
             // Check for exact match of error line
             if (!std.mem.eql(u8, std.mem.trim(u8, actual_error, " \t\r\n"), std.mem.trim(u8, expected_err, " \t\r\n"))) {
@@ -314,8 +534,10 @@ fn runTest(
         },
         .success => |expected| {
             // For success tests, compilation should succeed
-            if (compile_result.term.Exited != 0) {
-                const msg = std.fmt.allocPrint(allocator, "Compilation failed: {s}", .{compile_result.stderr}) catch "Compilation failed";
+            if (!compile_success) {
+                const msg = if (compile_result.error_info) |err| blk: {
+                    break :blk std.fmt.allocPrint(allocator, "Compilation failed: {s}", .{err.message}) catch "Compilation failed";
+                } else "Compilation failed";
                 return .{ .name = fragment.name, .status = .failed, .message = msg };
             }
 
@@ -354,43 +576,6 @@ const ProcessResult = struct {
     stderr: []const u8,
     term: std.process.Child.Term,
 };
-
-fn getCompilerPath(allocator: std.mem.Allocator) ![]const u8 {
-    // Try to find the compiler executable
-    // First, try the build output directory
-    const paths_to_try = [_][]const u8{
-        "zig-out/bin/maxon.exe",
-        "zig-out/bin/maxon",
-        "./maxon.exe",
-        "./maxon",
-    };
-
-    for (paths_to_try) |path| {
-        if (std.fs.cwd().access(path, .{})) |_| {
-            return try allocator.dupe(u8, path);
-        } else |_| {}
-    }
-
-    return error.CompilerNotFound;
-}
-
-fn runCompiler(allocator: std.mem.Allocator, exe_path: []const u8, source_path: []const u8, track_allocs: bool) !ProcessResult {
-    const argv = if (track_allocs)
-        &[_][]const u8{ exe_path, "compile", source_path, "--no-debug", "--track-allocs" }
-    else
-        &[_][]const u8{ exe_path, "compile", source_path, "--no-debug" };
-
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-    });
-
-    return ProcessResult{
-        .stdout = result.stdout,
-        .stderr = result.stderr,
-        .term = result.term,
-    };
-}
 
 fn runExecutable(allocator: std.mem.Allocator, exe_path: []const u8) !ProcessResult {
     const result = try std.process.Child.run(.{

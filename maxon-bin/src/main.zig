@@ -271,6 +271,11 @@ fn runTest(args: [][:0]u8, allocator: std.mem.Allocator) void {
             }
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             options.verbose = true;
+        } else if (std.mem.eql(u8, arg, "--jobs") or std.mem.eql(u8, arg, "-j")) {
+            i += 1;
+            if (i < args.len) {
+                options.jobs = std.fmt.parseInt(usize, args[i], 10) catch 0;
+            }
         }
     }
 

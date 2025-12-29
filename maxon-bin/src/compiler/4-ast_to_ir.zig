@@ -477,13 +477,15 @@ pub const AstToIr = struct {
         // Register __ManagedArray compiler-internal type (24 bytes: ptr + len + capacity)
         // This is a parameterized type - element type is tracked separately in ArrayInfo
         const managed_array_fields = try self.allocator.alloc(FieldInfo, 3);
-        errdefer self.allocator.free(managed_array_fields);
         managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } } };
         managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
         managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
-        try self.type_map.put(self.allocator, "__ManagedArray", .{
+        self.type_map.put(self.allocator, "__ManagedArray", .{
             .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 24 },
-        });
+        }) catch {
+            self.allocator.free(managed_array_fields);
+            return error.OutOfMemory;
+        };
 
         // Register interfaces first (needed for conformance checking)
         for (program.interfaces) |iface| try self.registerInterface(iface);
