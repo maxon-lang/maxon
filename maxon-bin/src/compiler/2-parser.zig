@@ -448,50 +448,41 @@ pub const Parser = struct {
             const type_name = try self.expectTypeName();
 
             // Check for generic type instantiation: TypeName of arg1 [arg2 ...]
-            // or sized array type: Array of N type
             if (self.check(.of)) {
                 _ = self.advance(); // consume 'of'
 
-                // Check for sized array type: Array of N type (where N is an integer)
+                // Parse type arguments for generic types
+                // Note: "Array of int" and "Array of 5 int" are both stdlib Array types
+                var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
+                errdefer type_args.deinit(self.allocator);
+
+                // For Array type, skip optional size integer (e.g., "Array of 3 int")
                 if (std.mem.eql(u8, type_name, "Array") and self.check(.integer)) {
-                    const size_token = self.advance();
-                    const size = std.fmt.parseInt(i64, size_token.text, 10) catch {
-                        self.reportError(.E001);
-                        return error.InvalidNumber;
-                    };
-                    const elem_type = try self.expectTypeName();
-                    base_type = .{ .array = .{
-                        .size = size,
-                        .element_type = elem_type,
-                    } };
-                } else {
-                    // Parse type arguments
-                    var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
-                    errdefer type_args.deinit(self.allocator);
-
-                    // First type argument is required
-                    try type_args.append(self.allocator, try self.expectTypeName());
-
-                    // Additional type arguments are optional (for types like Map of string int)
-                    while (self.check(.identifier)) {
-                        // Only consume if it looks like a type name (starts with lowercase or is a known type)
-                        const next = self.peek(0);
-                        if (next == null) break;
-                        // Check if this could be a type name (heuristic: not 'or', 'and', etc.)
-                        if (std.mem.eql(u8, next.?.text, "or") or
-                            std.mem.eql(u8, next.?.text, "and") or
-                            std.mem.eql(u8, next.?.text, "nil"))
-                        {
-                            break;
-                        }
-                        try type_args.append(self.allocator, try self.expectTypeName());
-                    }
-
-                    base_type = .{ .generic = .{
-                        .base_type = type_name,
-                        .type_args = try type_args.toOwnedSlice(self.allocator),
-                    } };
+                    _ = self.advance(); // skip the size - it's ignored for type checking
                 }
+
+                // First type argument is required
+                try type_args.append(self.allocator, try self.expectTypeName());
+
+                // Additional type arguments are optional (for types like Map of string int)
+                while (self.check(.identifier)) {
+                    // Only consume if it looks like a type name (starts with lowercase or is a known type)
+                    const next = self.peek(0);
+                    if (next == null) break;
+                    // Check if this could be a type name (heuristic: not 'or', 'and', etc.)
+                    if (std.mem.eql(u8, next.?.text, "or") or
+                        std.mem.eql(u8, next.?.text, "and") or
+                        std.mem.eql(u8, next.?.text, "nil"))
+                    {
+                        break;
+                    }
+                    try type_args.append(self.allocator, try self.expectTypeName());
+                }
+
+                base_type = .{ .generic = .{
+                    .base_type = type_name,
+                    .type_args = try type_args.toOwnedSlice(self.allocator),
+                } };
             } else {
                 base_type = .{ .simple = type_name };
             }
