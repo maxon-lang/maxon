@@ -146,6 +146,7 @@ pub const Encoder = struct {
         switch (reg) {
             .rcx => try self.emit(&.{ 0x48, 0x8B, 0x01 }),
             .rsi => try self.emit(&.{ 0x48, 0x8B, 0x06 }),
+            .r10 => try self.emit(&.{ 0x49, 0x8B, 0x02 }),
             else => return error.UnsupportedRegister,
         }
     }
@@ -154,7 +155,48 @@ pub const Encoder = struct {
         switch (reg) {
             .rcx => try self.emit(&.{ 0x48, 0x89, 0x01 }),
             .rdi => try self.emit(&.{ 0x48, 0x89, 0x07 }),
+            .r10 => try self.emit(&.{ 0x49, 0x89, 0x02 }),
+            .r11 => try self.emit(&.{ 0x49, 0x89, 0x03 }),
             else => return error.UnsupportedRegister,
+        }
+    }
+
+    // R10/R11 helpers for memcpy/memset (caller-saved scratch registers on Windows x64)
+    pub fn movR10RbpOffset(self: *Encoder, offset: i32) !void {
+        try self.emitWithRbpOffset(&.{ 0x4C, 0x8B, 0x55 }, offset); // mov r10, [rbp+off]
+    }
+
+    pub fn leaR10RbpOffset(self: *Encoder, offset: i32) !void {
+        try self.emitWithRbpOffset(&.{ 0x4C, 0x8D, 0x55 }, offset); // lea r10, [rbp+off]
+    }
+
+    pub fn movR11RbpOffset(self: *Encoder, offset: i32) !void {
+        try self.emitWithRbpOffset(&.{ 0x4C, 0x8B, 0x5D }, offset); // mov r11, [rbp+off]
+    }
+
+    pub fn leaR11RbpOffset(self: *Encoder, offset: i32) !void {
+        try self.emitWithRbpOffset(&.{ 0x4C, 0x8D, 0x5D }, offset); // lea r11, [rbp+off]
+    }
+
+    pub fn movRaxMemR10Offset(self: *Encoder, offset: i32) !void {
+        if (offset == 0) {
+            try self.movRaxMem(.r10);
+        } else if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0x49, 0x8B, 0x42, @bitCast(@as(i8, @intCast(offset))) }); // mov rax, [r10+off8]
+        } else {
+            try self.emit(&.{ 0x49, 0x8B, 0x82 }); // mov rax, [r10+off32]
+            try self.emitI32(offset);
+        }
+    }
+
+    pub fn movMemR11OffsetRax(self: *Encoder, offset: i32) !void {
+        if (offset == 0) {
+            try self.movMemRax(.r11);
+        } else if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0x49, 0x89, 0x43, @bitCast(@as(i8, @intCast(offset))) }); // mov [r11+off8], rax
+        } else {
+            try self.emit(&.{ 0x49, 0x89, 0x83 }); // mov [r11+off32], rax
+            try self.emitI32(offset);
         }
     }
 

@@ -49,8 +49,9 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 		// Insert each element from the managed array
 		var i = 0
 		while i < numElements 'insert_loop'
-			var elem = managed[i]
-			result.insert(elem)
+			if let elem = managed[i] 'get_elem'
+				result.insert(elem)
+			end 'get_elem'
 			i = i + 1
 		end 'insert_loop'
 
@@ -61,6 +62,15 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 	/// If the element already exists, this is a no-op
 	/// Automatically resizes the set when load factor exceeds 75%
 	export function insert(element Element)
+		// Initialize if empty struct was created with zero capacity
+		if capacity == 0 'init_empty'
+			var newElements = Array of 16 Element
+			var newStates = Array of 16 int
+			elements = newElements
+			states = newStates
+			capacity = 16
+		end 'init_empty'
+
 		// Check load factor and grow if needed (75% threshold)
 		var loadLimit = (capacity * 3) / 4
 		if count >= loadLimit 'grow'
@@ -124,6 +134,11 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 
 	/// Check if element exists in the set
 	export function contains(element Element) returns bool
+		// Empty set contains nothing
+		if capacity == 0 'empty_check'
+			return false
+		end 'empty_check'
+
 		var hash = element.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
@@ -158,6 +173,11 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 
 	/// Remove element from set, returns true if element was present
 	export function remove(element Element) returns bool
+		// Empty set has nothing to remove
+		if capacity == 0 'empty_check'
+			return false
+		end 'empty_check'
+
 		var hash = element.hash()
 		var index = hash mod capacity
 		if index < 0 'fix_negative'
@@ -206,6 +226,9 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 	function grow()
 		var oldCapacity = capacity
 		var newCapacity = oldCapacity * 2
+		if newCapacity == 0 'handle_zero'
+			newCapacity = 16
+		end 'handle_zero'
 
 		// Save references to old arrays
 		var oldElements = elements

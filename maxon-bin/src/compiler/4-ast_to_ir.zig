@@ -1468,15 +1468,28 @@ pub const AstToIr = struct {
         // Check for InitableFromArrayLiteral transformation
         // Syntax: var arr Array of int = [1, 2, 3] (generic) or var arr IntArray = [...] (simple)
         if (decl.type_annotation) |type_ann| {
-            const type_name: ?[]const u8 = switch (type_ann) {
+            const base_type_name: ?[]const u8 = switch (type_ann) {
                 .generic => |gen| gen.base_type,
                 .simple => |name| name,
                 .optional => null,
             };
-            if (type_name) |t_name| {
+            if (base_type_name) |t_name| {
                 if (self.typeConformsTo(t_name, "InitableFromArrayLiteral")) {
                     if (decl.value == .array_literal) {
-                        try self.convertInitableFromArrayLiteralSimple(decl, t_name);
+                        // For generic types, get the monomorphized type name
+                        const resolved_type_name: []const u8 = switch (type_ann) {
+                            .generic => |gen| blk: {
+                                var resolved_args = try self.allocator.alloc([]const u8, gen.type_args.len);
+                                defer self.allocator.free(resolved_args);
+                                for (gen.type_args, 0..) |arg, i| {
+                                    resolved_args[i] = self.resolveTypeName(arg);
+                                }
+                                break :blk try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
+                            },
+                            .simple => |name| name,
+                            .optional => unreachable,
+                        };
+                        try self.convertInitableFromArrayLiteralSimple(decl, resolved_type_name);
                         return;
                     }
                 }
@@ -1492,7 +1505,21 @@ pub const AstToIr = struct {
         // Primitives/enums need alloca for the value; slot types need alloca for the pointer
         const needs_alloca = init_typed.ty == .primitive or init_typed.ty == .enum_type or uses_slot;
 
-        const ptr = if (needs_alloca) blk: {
+        // Struct types from field accesses need to be copied to a new local allocation
+        // to avoid aliasing issues (e.g., var oldElements = elements before overwriting elements)
+        const needs_struct_copy = init_typed.ty == .struct_type and
+            (decl.value == .identifier or decl.value == .field_access);
+
+        const ptr = if (needs_struct_copy) blk: {
+            // Allocate new memory for the struct and copy data
+            const struct_name = init_typed.ty.struct_type;
+            const struct_info = self.type_map.get(struct_name) orelse return error.UnknownType;
+            const size = struct_info.struct_type.size;
+            const p = try self.func().emitAllocaSized(size);
+            try self.func().setValueName(p, decl.name);
+            try self.func().emitMemcpy(p, init_typed.value, size);
+            break :blk p;
+        } else if (needs_alloca) blk: {
             const alloca_type = if (uses_slot) .ptr else init_typed.ty.toPrimitiveType();
             const p = try self.func().emitAlloca(alloca_type);
             try self.func().setValueName(p, decl.name);
@@ -1669,7 +1696,16 @@ pub const AstToIr = struct {
                             const value_typed = try self.convertExpression(assign.value);
                             const self_val = self.self_ptr.?;
                             const field_ptr = try self.func().emitGetFieldPtr(self_val, field.offset);
-                            try self.func().emitStore(field_ptr, value_typed.value);
+
+                            // Track ownership transfer: source variable is moved to field
+                            try self.trackFieldOwnershipTransfer(assign.value, type_name);
+
+                            if (field.isStruct()) {
+                                // Struct fields are embedded inline - copy the full data
+                                try self.func().emitMemcpy(field_ptr, value_typed.value, field.size);
+                            } else {
+                                try self.func().emitStore(field_ptr, value_typed.value);
+                            }
                             return;
                         }
                     }
@@ -1708,7 +1744,13 @@ pub const AstToIr = struct {
         const field_info = try lookupField(struct_info, assign.field_name);
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
         const val_typed = try self.convertExpression(assign.value);
-        try self.func().emitStore(field_ptr, val_typed.value);
+
+        if (field_info.isStruct()) {
+            // Struct fields are embedded inline - copy the full data
+            try self.func().emitMemcpy(field_ptr, val_typed.value, field_info.size);
+        } else {
+            try self.func().emitStore(field_ptr, val_typed.value);
+        }
     }
 
     fn convertIndexAssign(self: *AstToIr, assign: ast.IndexAssign) ConvertError!void {
@@ -1756,29 +1798,23 @@ pub const AstToIr = struct {
         // Determine what blocks we need
         const has_else = if_stmt.else_body != null or if_stmt.else_if != null;
 
+        // Save entry block index - we'll emit br_cond later with correct target indices
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
         // Create then block
         const then_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock(if (is_if_let) "if_let_then" else "then");
 
-        // Create else block (if needed)
-        var else_block_idx: u32 = undefined;
+        // Create else block (if needed) - actual index determined after then body
         if (has_else or is_if_let) {
-            else_block_idx = @intCast(self.func().blocks.items.len);
             _ = try self.func().addBlock(if (is_if_let) "if_let_else" else "else");
         }
 
-        // Create end block
-        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        // Create end block - actual index determined after all bodies
         _ = try self.func().addBlock(if (is_if_let) "if_let_end" else "end");
 
-        // Emit conditional branch in the previous block
-        const branch_target_if_false = if (has_else or is_if_let) else_block_idx else end_block_idx;
-        const entry_block = &self.func().blocks.items[then_block_idx - 1];
-        try entry_block.instructions.append(self.allocator, .{
-            .op = .br_cond,
-            .operands = .{ .{ .value = condition_value }, .{ .block_ref = then_block_idx } },
-            .result = branch_target_if_false,
-        });
+        // DON'T emit br_cond yet - nested ifs in body will shift block indices
+        // We'll emit it after all blocks are restored with correct indices
 
         // Save end block, remove it temporarily
         const end_block = self.func().blocks.pop().?;
@@ -1836,7 +1872,9 @@ pub const AstToIr = struct {
 
         // Restore and generate else block if needed
         var else_exit_block_idx: ?u32 = null;
+        var actual_else_block_idx: u32 = undefined;
         if (has_else or is_if_let) {
+            actual_else_block_idx = @intCast(self.func().blocks.items.len);
             try self.func().blocks.append(self.allocator, else_block.?);
 
             // Check for else-if chain (not allowed for if-let)
@@ -1859,6 +1897,14 @@ pub const AstToIr = struct {
         // Restore end block - NOW get its actual index
         const actual_end_block_idx: u32 = @intCast(self.func().blocks.items.len);
         try self.func().blocks.append(self.allocator, end_block);
+
+        // NOW emit br_cond with correct block indices (after nested ifs shifted things)
+        const branch_target_if_false = if (has_else or is_if_let) actual_else_block_idx else actual_end_block_idx;
+        try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = condition_value }, .{ .block_ref = then_block_idx } },
+            .result = branch_target_if_false,
+        });
 
         // Now emit the deferred branches with the correct end block index
         if (then_exit_block_idx) |idx| {

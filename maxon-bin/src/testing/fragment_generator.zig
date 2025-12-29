@@ -6,18 +6,40 @@ const debug = compiler.debug;
 
 /// Check if fragments need regeneration based on file modification times
 pub fn needsRegeneration(specs_dir: []const u8, fragments_dir: []const u8) bool {
-    // Get the newest spec file mtime
-    const newest_spec_mtime = getNewestMtime(specs_dir, ".md") catch return true;
+    // Get the newest spec file mtime and count
+    const spec_info = getMtimeAndCount(specs_dir, ".md") catch return true;
 
     // Get the oldest fragment file mtime (or check if fragments exist)
     const oldest_fragment_mtime = getOldestMtime(fragments_dir, ".test") catch return true;
 
+    // Get fragment count to detect added/removed specs
+    const fragment_count = getFileCount(fragments_dir, ".test") catch return true;
+
+    // Regenerate if no fragments exist
+    if (fragment_count == 0) return true;
+
+    // Check if spec count matches stored count in .spec_count file
+    // This detects newly added specs even if their mtime is old (e.g., copied files)
+    if (specCountChanged(fragments_dir, spec_info.count)) return true;
+
     // Regenerate if any spec is newer than the oldest fragment
-    if (newest_spec_mtime > oldest_fragment_mtime) return true;
+    if (spec_info.newest_mtime > oldest_fragment_mtime) return true;
 
     // Also regenerate if the compiler binary is newer than the oldest fragment
     const compiler_mtime = getCompilerMtime() catch return true;
     return compiler_mtime > oldest_fragment_mtime;
+}
+
+fn specCountChanged(fragments_dir: []const u8, current_count: usize) bool {
+    // Read stored spec count from .spec_count file
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const count_file_path = std.fmt.bufPrint(&path_buf, "{s}{c}.spec_count", .{ fragments_dir, std.fs.path.sep }) catch return true;
+
+    const content = std.fs.cwd().readFileAlloc(std.heap.page_allocator, count_file_path, 64) catch return true;
+    defer std.heap.page_allocator.free(content);
+
+    const stored_count = std.fmt.parseInt(usize, std.mem.trim(u8, content, " \t\r\n"), 10) catch return true;
+    return stored_count != current_count;
 }
 
 fn getCompilerMtime() !i128 {
@@ -29,6 +51,48 @@ fn getCompilerMtime() !i128 {
 }
 
 var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+
+const MtimeInfo = struct {
+    newest_mtime: i128,
+    count: usize,
+};
+
+fn getMtimeAndCount(dir_path: []const u8, extension: []const u8) !MtimeInfo {
+    var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    defer dir.close();
+
+    var newest: i128 = 0;
+    var count: usize = 0;
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, extension)) continue;
+
+        const stat = try dir.statFile(entry.name);
+        if (stat.mtime > newest) {
+            newest = stat.mtime;
+        }
+        count += 1;
+    }
+
+    if (count == 0) return error.NoFilesFound;
+    return .{ .newest_mtime = newest, .count = count };
+}
+
+fn getFileCount(dir_path: []const u8, extension: []const u8) !usize {
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return error.NoFilesFound;
+    defer dir.close();
+
+    var count: usize = 0;
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, extension)) continue;
+        count += 1;
+    }
+
+    return count;
+}
 
 fn getNewestMtime(dir_path: []const u8, extension: []const u8) !i128 {
     var dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
@@ -173,10 +237,25 @@ pub fn generateFragments(
         }
     }
 
+    // Write spec count file for change detection
+    writeSpecCount(fragments_dir, specs.len);
+
     return testing.GenerationResult{
         .fragments_written = total,
         .specs_processed = specs.len,
     };
+}
+
+fn writeSpecCount(fragments_dir: []const u8, count: usize) void {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const count_file_path = std.fmt.bufPrint(&path_buf, "{s}{c}.spec_count", .{ fragments_dir, std.fs.path.sep }) catch return;
+
+    var content_buf: [32]u8 = undefined;
+    const content = std.fmt.bufPrint(&content_buf, "{d}", .{count}) catch return;
+
+    const file = std.fs.cwd().createFile(count_file_path, .{}) catch return;
+    defer file.close();
+    file.writeAll(content) catch return;
 }
 
 fn ensureFragmentsDir(fragments_dir: []const u8) !void {

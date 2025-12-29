@@ -1332,40 +1332,33 @@ pub const IrCodegen = struct {
         }
     }
 
+
     fn genMemcpy(self: *IrCodegen, inst: ir.Instruction) !void {
         const dest_val = inst.operands[0].value;
         const src_val = inst.operands[1].value;
         const size: i32 = @intCast(inst.result.?);
 
-        // Load dest pointer to rdi
-        const dest_offset = try self.getStackOffset(dest_val);
-        if (self.isIndirect(dest_val)) {
-            try self.enc.emitWithRbpOffset(&.{ 0x48, 0x8B, 0x7D }, dest_offset); // mov rdi, [rbp+off]
-        } else {
-            try self.enc.emitWithRbpOffset(&.{ 0x48, 0x8D, 0x7D }, dest_offset); // lea rdi, [rbp+off]
-        }
-
-        // Load src pointer to rsi
+        // Load src pointer to r10 (caller-saved, safe to clobber)
         const src_offset = try self.getStackOffset(src_val);
         if (self.isIndirect(src_val)) {
-            try self.enc.emitWithRbpOffset(&.{ 0x48, 0x8B, 0x75 }, src_offset); // mov rsi, [rbp+off]
+            try self.enc.movR10RbpOffset(src_offset);
         } else {
-            try self.enc.emitWithRbpOffset(&.{ 0x48, 0x8D, 0x75 }, src_offset); // lea rsi, [rbp+off]
+            try self.enc.leaR10RbpOffset(src_offset);
         }
 
-        // Copy 8 bytes at a time
+        // Load dest pointer to r11 (caller-saved, safe to clobber)
+        const dest_offset = try self.getStackOffset(dest_val);
+        if (self.isIndirect(dest_val)) {
+            try self.enc.movR11RbpOffset(dest_offset);
+        } else {
+            try self.enc.leaR11RbpOffset(dest_offset);
+        }
+
+        // Copy 8 bytes at a time using r10 (src) and r11 (dest)
         var copied: i32 = 0;
         while (copied < size) : (copied += 8) {
-            if (copied == 0) {
-                try self.enc.movRaxMem(.rsi);
-            } else {
-                try self.enc.emit(&.{ 0x48, 0x8B, 0x46, @intCast(copied) }); // mov rax, [rsi+off]
-            }
-            if (copied == 0) {
-                try self.enc.movMemRax(.rdi);
-            } else {
-                try self.enc.emit(&.{ 0x48, 0x89, 0x47, @intCast(copied) }); // mov [rdi+off], rax
-            }
+            try self.enc.movRaxMemR10Offset(copied);
+            try self.enc.movMemR11OffsetRax(copied);
         }
     }
 
@@ -1374,12 +1367,12 @@ pub const IrCodegen = struct {
         const byte_val: u8 = @intCast(inst.operands[1].immediate_i32);
         const size: i32 = @intCast(inst.result.?);
 
-        // Load dest pointer to rdi
+        // Load dest pointer to r11 (caller-saved, safe to clobber)
         const dest_offset = try self.getStackOffset(dest_val);
         if (self.isIndirect(dest_val)) {
-            try self.enc.emitWithRbpOffset(&.{ 0x48, 0x8B, 0x7D }, dest_offset); // mov rdi, [rbp+off]
+            try self.enc.movR11RbpOffset(dest_offset);
         } else {
-            try self.enc.emitWithRbpOffset(&.{ 0x48, 0x8D, 0x7D }, dest_offset); // lea rdi, [rbp+off]
+            try self.enc.leaR11RbpOffset(dest_offset);
         }
 
         // For byte_val = 0, use xor rax, rax; otherwise mov rax, val*0x0101010101010101
@@ -1392,14 +1385,10 @@ pub const IrCodegen = struct {
             try self.enc.emit(&@as([8]u8, @bitCast(fill_val)));
         }
 
-        // Store 8 bytes at a time
+        // Store 8 bytes at a time using r11 (dest)
         var stored: i32 = 0;
         while (stored < size) : (stored += 8) {
-            if (stored == 0) {
-                try self.enc.movMemRax(.rdi);
-            } else {
-                try self.enc.emit(&.{ 0x48, 0x89, 0x47, @intCast(stored) }); // mov [rdi+off], rax
-            }
+            try self.enc.movMemR11OffsetRax(stored);
         }
     }
 
