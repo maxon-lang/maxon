@@ -48,6 +48,176 @@ pub const CodegenOptions = struct {
     track_allocs: bool = false,
 };
 
+/// Register allocation information for a function
+/// Tracks register assignments, stack slots, and callee-saved register usage
+/// for proper function prologue/epilogue generation
+const RegAllocInfo = struct {
+    /// Maps IR values to allocated GPRs
+    reg_map: std.AutoHashMapUnmanaged(ir.Value, x86.Gpr),
+    /// Maps IR values to allocated XMM registers
+    xmm_map: std.AutoHashMapUnmanaged(ir.Value, x86.Xmm),
+    /// Maps IR values to stack slot offsets (relative to RBP)
+    stack_slots: std.AutoHashMapUnmanaged(ir.Value, i32),
+    /// Calculated frame size
+    frame_size: i32,
+    /// Callee-saved GPRs that were used and need save/restore
+    used_callee_saved_gprs: std.ArrayListUnmanaged(x86.Gpr),
+    /// Callee-saved XMM registers that were used and need save/restore
+    used_callee_saved_xmms: std.ArrayListUnmanaged(x86.Xmm),
+    /// Maximum outgoing stack arguments (for calls with >4 args)
+    outgoing_stack_args_size: u32,
+    /// Whether function has hidden return pointer (large struct return)
+    /// Windows x64 ABI: Large structs (> 8 bytes) are returned via hidden pointer in RCX
+    has_hidden_ret_ptr: bool,
+    /// Stack offset where hidden return pointer is saved (valid when has_hidden_ret_ptr is true)
+    /// The caller passes the return buffer pointer in RCX, which we save here in the prologue
+    hidden_ret_ptr_offset: i32,
+
+    fn init() RegAllocInfo {
+        return .{
+            .reg_map = .{},
+            .xmm_map = .{},
+            .stack_slots = .{},
+            .frame_size = 0,
+            .used_callee_saved_gprs = .{},
+            .used_callee_saved_xmms = .{},
+            .outgoing_stack_args_size = 0,
+            .has_hidden_ret_ptr = false,
+            .hidden_ret_ptr_offset = 0,
+        };
+    }
+
+    fn deinit(self: *RegAllocInfo, allocator: std.mem.Allocator) void {
+        self.reg_map.deinit(allocator);
+        self.xmm_map.deinit(allocator);
+        self.stack_slots.deinit(allocator);
+        self.used_callee_saved_gprs.deinit(allocator);
+        self.used_callee_saved_xmms.deinit(allocator);
+    }
+};
+
+/// Liveness analysis results
+/// Tracks which values are live across function calls, which is critical
+/// for register allocation - such values must be in callee-saved registers or spilled
+const LivenessInfo = struct {
+    /// Values that are live across at least one call instruction
+    live_across_calls: std.AutoHashMapUnmanaged(ir.Value, void),
+
+    fn init() LivenessInfo {
+        return .{
+            .live_across_calls = .{},
+        };
+    }
+
+    fn deinit(self: *LivenessInfo, allocator: std.mem.Allocator) void {
+        self.live_across_calls.deinit(allocator);
+    }
+};
+
+/// Analyze which values are live across function calls
+/// Algorithm from old compiler (x86_reg_alloc.cpp lines 88-189):
+/// - For each basic block with calls, track where values are defined
+/// - For each operand use, check if any call exists between definition and use
+/// - If so, mark value as live across calls
+/// - Parameters are conservatively marked live across all calls
+fn analyzeLiveness(allocator: std.mem.Allocator, func: *const ir.Function) !LivenessInfo {
+    var info = LivenessInfo.init();
+
+    for (func.blocks.items) |block| {
+        // Find all call instruction indices in this block
+        var call_indices: std.ArrayListUnmanaged(usize) = .empty;
+        defer call_indices.deinit(allocator);
+
+        for (block.instructions.items, 0..) |inst, i| {
+            if (inst.op == .call) {
+                try call_indices.append(allocator, i);
+            }
+        }
+
+        if (call_indices.items.len == 0) continue;
+
+        // Track where each value is defined in this block
+        var def_index: std.AutoHashMapUnmanaged(ir.Value, usize) = .{};
+        defer def_index.deinit(allocator);
+
+        for (block.instructions.items, 0..) |inst, i| {
+            // Record definition point for this instruction's result
+            if (inst.result) |result| {
+                try def_index.put(allocator, result, i);
+            }
+
+            // Check each operand use to see if it crosses a call
+            const operands = [_]ir.Instruction.Operand{ inst.operands[0], inst.operands[1] };
+            for (operands) |operand| {
+                switch (operand) {
+                    .value => |val| {
+                        if (def_index.get(val)) |def_idx| {
+                            // Value defined in this block - check if any call is between def and use
+                            for (call_indices.items) |call_idx| {
+                                if (def_idx < call_idx and call_idx < i) {
+                                    try info.live_across_calls.put(allocator, val, {});
+                                    break;
+                                }
+                            }
+                        } else {
+                            // Value defined in previous block or is a parameter
+                            // If there's any call before this use, value crosses it
+                            for (call_indices.items) |call_idx| {
+                                if (call_idx < i) {
+                                    try info.live_across_calls.put(allocator, val, {});
+                                    break;
+                                }
+                            }
+                        }
+                    },
+                    .call_args => |args| {
+                        // Check each argument in the call
+                        for (args) |arg_val| {
+                            if (def_index.get(arg_val)) |def_idx| {
+                                for (call_indices.items) |call_idx| {
+                                    if (def_idx < call_idx and call_idx < i) {
+                                        try info.live_across_calls.put(allocator, arg_val, {});
+                                        break;
+                                    }
+                                }
+                            } else {
+                                for (call_indices.items) |call_idx| {
+                                    if (call_idx < i) {
+                                        try info.live_across_calls.put(allocator, arg_val, {});
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+    }
+
+    return info;
+}
+
+/// Check if a return type requires hidden pointer (large struct/optional > 8 bytes)
+/// Windows x64 ABI: Large structs and optionals are returned via a hidden pointer
+/// passed in RCX, which shifts all other parameters right by one register.
+///
+/// Currently ir.Type doesn't have struct size info, so this is infrastructure
+/// for future when we add struct types with size information. For now, this
+/// returns false as all current types fit in 8 bytes or less.
+fn hasHiddenReturnPointer(ret_type: ir.Type) bool {
+    // Current IR types are all <= 8 bytes:
+    // - i32, i64, f64: scalar types that fit in a register
+    // - ptr: 8-byte pointer
+    // - void: no return value
+    //
+    // Future enhancement: When struct types are added to ir.Type with size info,
+    // this should return true for structs/optionals > 8 bytes.
+    _ = ret_type;
+    return false;
+}
+
 /// x86-64 code generator from IR
 pub const IrCodegen = struct {
     allocator: std.mem.Allocator,
@@ -75,6 +245,11 @@ pub const IrCodegen = struct {
     func_return_types: std.StringHashMapUnmanaged(ir.Type),
     // Track the type of value stored at each alloca location
     stored_types: std.AutoHashMapUnmanaged(ir.Value, ir.Type),
+    // Register allocation info for current function (used by future register allocator)
+    reg_alloc: RegAllocInfo,
+    // Maximum outgoing stack args size for current function (for calls with >4 args)
+    // This is computed at the start of function generation by scanning all calls
+    outgoing_stack_args_size: i32,
 
     pub fn init(allocator: std.mem.Allocator, code: *std.ArrayListUnmanaged(u8), options: CodegenOptions) IrCodegen {
         return .{
@@ -96,6 +271,8 @@ pub const IrCodegen = struct {
             .tracking_data_patches = .{},
             .func_return_types = .{},
             .stored_types = .{},
+            .reg_alloc = RegAllocInfo.init(),
+            .outgoing_stack_args_size = 0,
         };
     }
 
@@ -111,6 +288,7 @@ pub const IrCodegen = struct {
         self.tracking_data_patches.deinit(self.allocator);
         self.func_return_types.deinit(self.allocator);
         self.stored_types.deinit(self.allocator);
+        self.reg_alloc.deinit(self.allocator);
     }
 
     /// Get external call patches for PE writer
@@ -1067,6 +1245,104 @@ pub const IrCodegen = struct {
         }
     }
 
+    /// Calculate frame size with proper alignment considering callee-saved pushes
+    /// From old compiler (x86_reg_alloc.cpp lines 517-578):
+    /// - After push rbp: RSP % 16 == 0
+    /// - After N callee-saved pushes: RSP % 16 == (N % 2) * 8
+    /// - If N is odd, frame_size must be 8 mod 16
+    /// - If N is even, frame_size must be 0 mod 16
+    fn calculateAlignedFrameSize(base_size: i32, num_callee_saved: usize) i32 {
+        var frame = base_size;
+        if (num_callee_saved % 2 == 1) {
+            // Odd pushes: need frame % 16 == 8
+            if (@mod(frame, 16) == 0) {
+                frame += 8;
+            } else if (@mod(frame, 16) != 8) {
+                frame = (frame + 15) & ~@as(i32, 15);
+                frame += 8;
+            }
+        } else {
+            // Even pushes: need frame % 16 == 0
+            if (@mod(frame, 16) != 0) {
+                frame = (frame + 15) & ~@as(i32, 15);
+            }
+        }
+        return frame;
+    }
+
+    /// Allocate registers for a function based on liveness analysis
+    /// This determines which callee-saved registers will be used and need save/restore
+    fn allocateRegisters(self: *IrCodegen, func: *const ir.Function, liveness: *const LivenessInfo) !void {
+        // Reset reg_alloc for this function
+        self.reg_alloc.deinit(self.allocator);
+        self.reg_alloc = RegAllocInfo.init();
+
+        // Check if this function returns a large struct or Optional (> 8 bytes)
+        // Windows x64 ABI: Large structs/optionals are returned via hidden pointer in RCX
+        // This shifts all other parameters right by one register
+        self.reg_alloc.has_hidden_ret_ptr = hasHiddenReturnPointer(func.return_type);
+
+        // Track available callee-saved registers
+        var available_gprs: std.ArrayListUnmanaged(x86.Gpr) = .empty;
+        defer available_gprs.deinit(self.allocator);
+        for (x86.win64.callee_saved_gprs) |reg| {
+            try available_gprs.append(self.allocator, reg);
+        }
+
+        var available_xmms: std.ArrayListUnmanaged(x86.Xmm) = .empty;
+        defer available_xmms.deinit(self.allocator);
+        for (x86.win64.callee_saved_xmms) |reg| {
+            try available_xmms.append(self.allocator, reg);
+        }
+
+        // Allocate values that are live across calls to callee-saved registers
+        // For now, just track which values need callee-saved regs
+        // The actual value locations will still use the existing stack-based approach
+        // but we record which callee-saved regs are used for the prologue/epilogue
+
+        // Future enhancement: iterate over liveness.live_across_calls to assign
+        // callee-saved registers to values that are live across function calls.
+        // For now, the stack-based approach handles all values, so no callee-saved
+        // registers are actually used yet. This infrastructure is in place for
+        // when we implement true register allocation.
+        _ = liveness;
+    }
+
+    /// Emit callee-saved register saves after prologue
+    /// GPRs are pushed, XMMs are stored via movsd to stack slots
+    fn emitCalleeSavedSaves(self: *IrCodegen) !void {
+        // Push GPRs (adjusts RSP)
+        for (self.reg_alloc.used_callee_saved_gprs.items) |reg| {
+            try self.enc.pushGpr(reg);
+        }
+
+        // Store XMM registers to stack (need to allocate space first)
+        // Each XMM save needs 8 bytes (movsd saves 64-bit double)
+        for (self.reg_alloc.used_callee_saved_xmms.items, 0..) |xmm, i| {
+            // Store at [rbp - (base_offset + i*8)]
+            // XMM save slots are allocated after GPR pushes in frame calculation
+            const offset: i32 = self.reg_alloc.frame_size - @as(i32, @intCast(i * 8 + 8));
+            try self.enc.movsdRbpOffsetXmm(offset, xmm);
+        }
+    }
+
+    /// Emit callee-saved register restores before epilogue
+    /// XMMs are loaded via movsd, GPRs are popped in reverse order
+    fn emitCalleeSavedRestores(self: *IrCodegen) !void {
+        // Restore XMM registers from stack (in any order)
+        for (self.reg_alloc.used_callee_saved_xmms.items, 0..) |xmm, i| {
+            const offset: i32 = self.reg_alloc.frame_size - @as(i32, @intCast(i * 8 + 8));
+            try self.enc.movsdXmmRbpOffset(xmm, offset);
+        }
+
+        // Pop GPRs in reverse order
+        var i: usize = self.reg_alloc.used_callee_saved_gprs.items.len;
+        while (i > 0) {
+            i -= 1;
+            try self.enc.popGpr(self.reg_alloc.used_callee_saved_gprs.items[i]);
+        }
+    }
+
     fn generateFunction(self: *IrCodegen, func: *const ir.Function) !void {
         self.value_locations.clearRetainingCapacity();
         self.value_types.clearRetainingCapacity();
@@ -1078,9 +1354,55 @@ pub const IrCodegen = struct {
         self.current_func_name = func.name;
         self.current_func_ret_type = func.return_type;
 
+        // Scan all calls to find maximum number of arguments
+        // Windows x64 ABI: first 4 args in registers, rest on stack
+        var max_args: usize = 0;
+        for (func.blocks.items) |block| {
+            for (block.instructions.items) |inst| {
+                if (inst.op == .call) {
+                    const args = inst.operands[1].call_args;
+                    if (args.len > max_args) {
+                        max_args = args.len;
+                    }
+                }
+            }
+        }
+        // Calculate space needed for stack arguments (args beyond first 4)
+        // Each stack argument takes 8 bytes, aligned to 8 bytes
+        if (max_args > 4) {
+            self.outgoing_stack_args_size = @as(i32, @intCast((max_args - 4) * 8));
+        } else {
+            self.outgoing_stack_args_size = 0;
+        }
+
+        // Perform liveness analysis to determine which values are live across calls
+        var liveness = try analyzeLiveness(self.allocator, func);
+        defer liveness.deinit(self.allocator);
+
+        // Allocate registers based on liveness (determines callee-saved reg usage)
+        try self.allocateRegisters(func, &liveness);
+
+        // Calculate number of callee-saved registers that will be pushed
+        const num_callee_saved_gprs = self.reg_alloc.used_callee_saved_gprs.items.len;
+        const num_callee_saved_xmms = self.reg_alloc.used_callee_saved_xmms.items.len;
+
         // Emit prologue with placeholder stack size (will be patched after)
         const func_start = self.code.items.len;
         try self.enc.prologue(0);
+
+        // Push callee-saved GPRs after prologue but before stack frame allocation
+        // Note: The stack frame size will be patched to account for these pushes
+        try self.emitCalleeSavedSaves();
+
+        // If function has hidden return pointer, save RCX to a stack slot
+        // Windows x64 ABI: Large struct returns have the destination pointer in RCX
+        // We must save it immediately as RCX will be clobbered by the function body
+        if (self.reg_alloc.has_hidden_ret_ptr) {
+            const hidden_ptr_offset = self.allocStackSlots(1);
+            self.reg_alloc.hidden_ret_ptr_offset = hidden_ptr_offset;
+            // mov [rbp+offset], rcx - save the hidden return pointer
+            try self.enc.emitWithRbpOffset(&.{ 0x48, 0x89, 0x4D }, hidden_ptr_offset);
+        }
 
         // Generate code for each block, recording block start offsets
         for (func.blocks.items) |block| {
@@ -1095,11 +1417,24 @@ pub const IrCodegen = struct {
         // Patch all jumps now that we know block offsets
         try self.patchJumps();
 
-        // Calculate actual stack size and patch the prologue
+        // Calculate actual stack size accounting for callee-saved registers
         // next_stack_offset is negative, representing bytes below rbp
-        // Add 8 for alignment and round up to 16-byte boundary (Windows x64 ABI)
-        const stack_used: i32 = -self.next_stack_offset;
-        const stack_size: i32 = (stack_used + 15) & ~@as(i32, 15); // Round up to 16
+        var stack_used: i32 = -self.next_stack_offset;
+
+        // Add space for XMM saves (8 bytes each, stored in frame)
+        stack_used += @as(i32, @intCast(num_callee_saved_xmms * 8));
+
+        // Add space for outgoing stack arguments (for calls with >4 args)
+        // This reserves space at the bottom of the frame for passing stack arguments
+        stack_used += self.outgoing_stack_args_size;
+
+        // Calculate frame size with proper alignment considering GPR pushes
+        // GPR pushes happen after prologue, so they affect RSP alignment
+        const stack_size = calculateAlignedFrameSize(stack_used, num_callee_saved_gprs);
+
+        // Store frame size in reg_alloc for use by emitCalleeSavedRestores
+        self.reg_alloc.frame_size = stack_size;
+
         // Prologue layout: push rbp (1) + mov rbp,rsp (3) + sub rsp,imm32 (3+4)
         // The imm32 is at offset 7 from function start
         const stack_size_offset = func_start + 7;
@@ -1514,12 +1849,32 @@ pub const IrCodegen = struct {
 
             debug.codegen("  ret: val=%{d}, type={s}, func={s}", .{ ret_val, ret_type.format(), self.current_func_name });
 
-            if (ret_type == .f64) {
+            if (self.reg_alloc.has_hidden_ret_ptr) {
+                // Large struct return: copy result to caller's buffer via hidden pointer
+                // The hidden pointer was saved in prologue at hidden_ret_ptr_offset
+                //
+                // For now, this handles single-value returns by storing through the pointer.
+                // When struct types with size info are added, this should use memcpy for
+                // multi-slot structs.
+                //
+                // Load hidden pointer into a scratch register (R10)
+                try self.enc.movR10RbpOffset(self.reg_alloc.hidden_ret_ptr_offset);
+                // Load return value into RAX
+                try self.loadToRax(ret_val);
+                // Store through hidden pointer: mov [r10], rax
+                try self.enc.movMemRax(.r10);
+                // Return the pointer in RAX (as per Windows x64 ABI for struct returns)
+                try self.enc.emit(&.{ 0x4C, 0x89, 0xD0 }); // mov rax, r10
+            } else if (ret_type == .f64) {
                 try self.loadToXmm(ret_val, .xmm0);
             } else {
                 try self.loadToRax(ret_val);
             }
         }
+
+        // Restore callee-saved registers before epilogue
+        // XMMs are loaded from stack, GPRs are popped in reverse order
+        try self.emitCalleeSavedRestores();
 
         if (std.mem.eql(u8, self.current_func_name, "main") and !self.track_allocs) {
             // Exit code in RCX for ExitProcess (when not using _start wrapper)
@@ -1534,35 +1889,68 @@ pub const IrCodegen = struct {
 
     fn genParam(self: *IrCodegen, inst: ir.Instruction) !void {
         const result = inst.result.?;
-        const param_idx = inst.operands[0].immediate_i32;
+        var param_idx = inst.operands[0].immediate_i32;
         const ty = inst.result_type;
         const offset = self.allocStackSlots(1);
 
-        if (ty == .f64) {
-            // Float param in XMM register - store to stack
-            const xmm_modrm: u8 = switch (param_idx) {
-                0 => 0x45, // xmm0
-                1 => 0x4D, // xmm1
-                2 => 0x55, // xmm2
-                3 => 0x5D, // xmm3
-                else => return error.TooManyParameters,
-            };
-            try self.enc.emitWithRbpOffset(&.{ 0xF2, 0x0F, 0x11, xmm_modrm }, offset);
-            try self.setValueLocation(result, .{ .stack = offset }, .f64);
-        } else {
-            // Integer/pointer param in GPR - mov to rax then store
-            switch (param_idx) {
-                0 => try self.enc.movRaxRcx(),
-                1 => try self.enc.movRaxRdx(),
-                2 => try self.enc.emit(&.{ 0x4C, 0x89, 0xC0 }), // mov rax, r8
-                3 => try self.enc.emit(&.{ 0x4C, 0x89, 0xC8 }), // mov rax, r9
-                else => return error.TooManyParameters,
-            }
-            try self.enc.movRbpOffsetRax(offset);
-            try self.setValueLocation(result, .{ .stack = offset }, ty);
+        // If function has hidden return pointer, shift parameter indices
+        // Windows x64 ABI: RCX has hidden ptr, RDX has param 0, R8 has param 1, etc.
+        if (self.reg_alloc.has_hidden_ret_ptr) {
+            param_idx += 1;
+        }
 
-            if (ty == .ptr) {
-                try self.markIndirect(result);
+        if (param_idx < 4) {
+            // First 4 parameters come in registers
+            if (ty == .f64) {
+                // Float param in XMM register - store to stack
+                const xmm_modrm: u8 = switch (param_idx) {
+                    0 => 0x45, // xmm0
+                    1 => 0x4D, // xmm1
+                    2 => 0x55, // xmm2
+                    3 => 0x5D, // xmm3
+                    else => unreachable,
+                };
+                try self.enc.emitWithRbpOffset(&.{ 0xF2, 0x0F, 0x11, xmm_modrm }, offset);
+                try self.setValueLocation(result, .{ .stack = offset }, .f64);
+            } else {
+                // Integer/pointer param in GPR - mov to rax then store
+                switch (param_idx) {
+                    0 => try self.enc.movRaxRcx(),
+                    1 => try self.enc.movRaxRdx(),
+                    2 => try self.enc.emit(&.{ 0x4C, 0x89, 0xC0 }), // mov rax, r8
+                    3 => try self.enc.emit(&.{ 0x4C, 0x89, 0xC8 }), // mov rax, r9
+                    else => unreachable,
+                }
+                try self.enc.movRbpOffsetRax(offset);
+                try self.setValueLocation(result, .{ .stack = offset }, ty);
+
+                if (ty == .ptr) {
+                    try self.markIndirect(result);
+                }
+            }
+        } else {
+            // Parameters 5+ come from the caller's stack frame
+            // Located at [RBP + 16 + 32 + (param_idx - 4) * 8]
+            // 16 = return address (8) + saved RBP (8)
+            // 32 = shadow space (Windows x64 ABI)
+            const stack_param_offset: i32 = 16 + 32 + @as(i32, @intCast((param_idx - 4) * 8));
+
+            if (ty == .f64) {
+                // Load float from caller's stack to xmm0, then store to our local slot
+                // movsd xmm0, [rbp+stack_param_offset]
+                try self.enc.movsdXmm0RbpOffset(stack_param_offset);
+                // movsd [rbp+offset], xmm0
+                try self.enc.movsdRbpOffsetXmm0(offset);
+                try self.setValueLocation(result, .{ .stack = offset }, .f64);
+            } else {
+                // Load integer/pointer from caller's stack frame to our local slot
+                try self.enc.movRaxRbpOffset(stack_param_offset);
+                try self.enc.movRbpOffsetRax(offset);
+                try self.setValueLocation(result, .{ .stack = offset }, ty);
+
+                if (ty == .ptr) {
+                    try self.markIndirect(result);
+                }
             }
         }
     }
@@ -1575,38 +1963,163 @@ pub const IrCodegen = struct {
 
         debug.codegen("  Calling {s} with {d} args", .{ func_name, args.len });
 
-        try self.loadArgs(args, true);
-        try self.enc.allocShadowSpace();
-        const patch_offset = try self.enc.callRel32();
-        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
-        try self.enc.freeShadowSpace();
+        // Check if called function returns large struct requiring hidden pointer
+        const callee_has_hidden_ret = hasHiddenReturnPointer(ret_type);
 
-        if (inst.result) |result| {
-            debug.codegen("  call result: %{d} of type {s}", .{ result, ret_type.format() });
-            try self.storeReturnValue(result, ret_type);
+        if (callee_has_hidden_ret) {
+            // Allocate stack space for result buffer
+            // For now, allocate 1 slot (8 bytes). When struct types with size info
+            // are added, this should allocate based on the struct size.
+            const result_offset = self.allocStackSlots(1);
+
+            // Pass pointer to result space as first argument (RCX)
+            try self.enc.leaRcxRbpOffset(result_offset);
+
+            // Load remaining args shifted by 1 (RDX gets arg 0, R8 gets arg 1, etc.)
+            try self.loadArgsShifted(args, 1, true);
+
+            try self.enc.allocShadowSpace();
+            const patch_offset = try self.enc.callRel32();
+            try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
+            try self.enc.freeShadowSpace();
+
+            // Result is in the stack buffer we allocated
+            // RAX contains the pointer to it (as per ABI), but we already know where it is
+            if (inst.result) |result| {
+                debug.codegen("  call result (hidden ptr): %{d} of type {s}", .{ result, ret_type.format() });
+                // The result is already at result_offset on the stack
+                try self.setValueLocation(result, .{ .stack = result_offset }, ret_type);
+                if (ret_type == .ptr) {
+                    try self.markIndirect(result);
+                }
+            }
+        } else {
+            // Normal call without hidden return pointer
+            try self.loadArgs(args, true);
+            try self.enc.allocShadowSpace();
+            const patch_offset = try self.enc.callRel32();
+            try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
+            try self.enc.freeShadowSpace();
+
+            if (inst.result) |result| {
+                debug.codegen("  call result: %{d} of type {s}", .{ result, ret_type.format() });
+                try self.storeReturnValue(result, ret_type);
+            }
         }
     }
 
-    /// Load arguments into registers. use_lea controls whether direct pointers use LEA.
+    /// Load arguments into registers (first 4) and stack (5+).
+    /// use_lea controls whether direct pointers use LEA for the first 4 args.
+    /// Windows x64 ABI: RCX, RDX, R8, R9 for first 4 integer/pointer args
+    /// XMM0-XMM3 for first 4 float args (same position as corresponding GPR)
+    /// Args 5+ go on stack at [RSP + 32 + (i-4)*8] after shadow space allocation
     fn loadArgs(self: *IrCodegen, args: []const ir.Value, use_lea: bool) !void {
         for (args, 0..) |arg, i| {
-            if (i >= 4) return error.TooManyArguments;
-
             const arg_type = self.value_types.get(arg) orelse return error.ValueTypeNotFound;
 
-            if (arg_type == .f64) {
-                try self.loadToXmm(arg, if (i == 0) .xmm0 else .xmm1);
-            } else if (use_lea and arg_type == .ptr and !self.isIndirect(arg)) {
-                // LEA - get pointer to struct on stack
-                const loc = self.value_locations.get(arg) orelse return error.ValueNotFound;
-                const offset = switch (loc) {
-                    .stack => |o| o,
-                    else => return error.UnsupportedArgumentLocation,
-                };
-                try self.emitLeaArgReg(i, offset);
+            if (i < 4) {
+                // First 4 args go in registers
+                if (arg_type == .f64) {
+                    const xmm: x86.Xmm = switch (i) {
+                        0 => .xmm0,
+                        1 => .xmm1,
+                        2 => .xmm2,
+                        3 => .xmm3,
+                        else => unreachable,
+                    };
+                    try self.loadToXmm(arg, xmm);
+                } else if (use_lea and arg_type == .ptr and !self.isIndirect(arg)) {
+                    // LEA - get pointer to struct on stack
+                    const loc = self.value_locations.get(arg) orelse return error.ValueNotFound;
+                    const offset = switch (loc) {
+                        .stack => |o| o,
+                        else => return error.UnsupportedArgumentLocation,
+                    };
+                    try self.emitLeaArgReg(i, offset);
+                } else {
+                    try self.loadToRax(arg);
+                    try self.movArgRegRax(i);
+                }
             } else {
-                try self.loadToRax(arg);
-                try self.movArgRegRax(i);
+                // Args 5+ go on stack. We write at [RSP + (i-4)*8] BEFORE shadow
+                // space allocation (sub rsp, 32). After allocation, these will be
+                // at [RSP + 32 + (i-4)*8] which is where the callee expects them.
+                const stack_offset: i32 = @as(i32, @intCast((i - 4) * 8));
+
+                if (arg_type == .f64) {
+                    try self.loadToXmm(arg, .xmm0);
+                    // movsd [rsp+offset], xmm0
+                    try self.enc.movsdRspOffsetXmm0(stack_offset);
+                } else if (use_lea and arg_type == .ptr and !self.isIndirect(arg)) {
+                    // LEA for stack argument - load address to rax then store to stack
+                    const loc = self.value_locations.get(arg) orelse return error.ValueNotFound;
+                    const bp_offset = switch (loc) {
+                        .stack => |o| o,
+                        else => return error.UnsupportedArgumentLocation,
+                    };
+                    try self.enc.leaRaxRbpOffset(bp_offset);
+                    try self.enc.movRspOffsetRax(stack_offset);
+                } else {
+                    try self.loadToRax(arg);
+                    // mov [rsp+offset], rax
+                    try self.enc.movRspOffsetRax(stack_offset);
+                }
+            }
+        }
+    }
+
+    /// Load arguments into registers with an offset (for hidden return pointer calls).
+    /// Similar to loadArgs but shifts register assignments by `shift` positions.
+    /// When shift=1: arg 0 goes to RDX (position 1), arg 1 goes to R8 (position 2), etc.
+    /// This is used when RCX is occupied by the hidden return pointer.
+    fn loadArgsShifted(self: *IrCodegen, args: []const ir.Value, shift: usize, use_lea: bool) !void {
+        for (args, 0..) |arg, i| {
+            const arg_type = self.value_types.get(arg) orelse return error.ValueTypeNotFound;
+            const shifted_idx = i + shift;
+
+            if (shifted_idx < 4) {
+                // Args that fit in registers (after shift)
+                if (arg_type == .f64) {
+                    const xmm: x86.Xmm = switch (shifted_idx) {
+                        0 => .xmm0,
+                        1 => .xmm1,
+                        2 => .xmm2,
+                        3 => .xmm3,
+                        else => unreachable,
+                    };
+                    try self.loadToXmm(arg, xmm);
+                } else if (use_lea and arg_type == .ptr and !self.isIndirect(arg)) {
+                    // LEA - get pointer to struct on stack
+                    const loc = self.value_locations.get(arg) orelse return error.ValueNotFound;
+                    const offset = switch (loc) {
+                        .stack => |o| o,
+                        else => return error.UnsupportedArgumentLocation,
+                    };
+                    try self.emitLeaArgReg(shifted_idx, offset);
+                } else {
+                    try self.loadToRax(arg);
+                    try self.movArgRegRax(shifted_idx);
+                }
+            } else {
+                // Args that go on stack (shifted_idx >= 4)
+                // Stack offset is based on shifted index, not original
+                const stack_offset: i32 = @as(i32, @intCast((shifted_idx - 4) * 8));
+
+                if (arg_type == .f64) {
+                    try self.loadToXmm(arg, .xmm0);
+                    try self.enc.movsdRspOffsetXmm0(stack_offset);
+                } else if (use_lea and arg_type == .ptr and !self.isIndirect(arg)) {
+                    const loc = self.value_locations.get(arg) orelse return error.ValueNotFound;
+                    const bp_offset = switch (loc) {
+                        .stack => |o| o,
+                        else => return error.UnsupportedArgumentLocation,
+                    };
+                    try self.enc.leaRaxRbpOffset(bp_offset);
+                    try self.enc.movRspOffsetRax(stack_offset);
+                } else {
+                    try self.loadToRax(arg);
+                    try self.enc.movRspOffsetRax(stack_offset);
+                }
             }
         }
     }

@@ -838,7 +838,7 @@ whilecond:
     %tmp_load.7 = load i64 %i
     %tmp_load.8 = load i64 %numElements
     %tmp_icmp.1 = icmp.lt i64 %tmp_load.7 %tmp_load.8
-    %tmp_const.1 = br.cond %tmp_icmp.1 @block5
+    %tmp_load.3 = br.cond %tmp_icmp.1 @block5
 whilebody:
     %tmp_load.9 = load i64 %i
     %tmp_load.10 = load ptr %managed
@@ -865,13 +865,24 @@ managed_index_out_of_bounds:
     store %tmp_alloca.8 %tmp_const.10
     br @block8
 managed_index_merge:
+    %tmp_load.13 = load i64 %tmp_alloca.8
+    %tmp_const.11 = const.i64 i64 1
+    %tmp_icmp.4 = icmp.eq i64 %tmp_load.13 %tmp_const.11
+    %tmp_mul = br.cond %tmp_icmp.4 @block9
+if_let_then:
+    %tmp_fieldptr.11 = getfieldptr ptr %tmp_alloca.8 8
+    %tmp_load.14 = load i64 %tmp_fieldptr.11
     %elem = alloca ptr
-    store %elem %tmp_alloca.8
-    %tmp_load.13 = load ptr %elem
-    call @Set$int$insert(%result, %tmp_load.13)
-    %tmp_load.14 = load i64 %i
-    %tmp_const.12 = const.i64 i64 1
-    %tmp_add.1 = add i64 %tmp_load.14 %tmp_const.12
+    store %elem %tmp_load.14
+    %tmp_load.15 = load i64 %elem
+    call @Set$int$insert(%result, %tmp_load.15)
+    br @block11
+if_let_else:
+    br @block11
+if_let_end:
+    %tmp_load.16 = load i64 %i
+    %tmp_const.13 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.16 %tmp_const.13
     store %i %tmp_add.1
     br @block4
 whilecont:

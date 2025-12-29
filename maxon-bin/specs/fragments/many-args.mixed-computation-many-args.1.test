@@ -1,0 +1,66 @@
+// Test: many-args.mixed-computation-many-args.1
+function compute(a int, b int, c int, d int, e int, f int) returns int
+    let reg_sum int = a + b + c + d
+    let stack_sum int = e + f
+    return reg_sum * stack_sum
+end 'compute'
+
+function main() returns int
+    return compute(1, 2, 3, 4, 10, 5)
+end 'main'
+---
+ExitCode: 150
+---
+function compute() -> i64 {
+entry:
+    %a = param i64 0
+    %a.1 = alloca ptr
+    store %a.1 %a
+    %b = param i64 1
+    %b.1 = alloca ptr
+    store %b.1 %b
+    %c = param i64 2
+    %c.1 = alloca ptr
+    store %c.1 %c
+    %d = param i64 3
+    %d.1 = alloca ptr
+    store %d.1 %d
+    %e = param i64 4
+    %e.1 = alloca ptr
+    store %e.1 %e
+    %f = param i64 5
+    %f.1 = alloca ptr
+    store %f.1 %f
+    %tmp_load = load i64 %a.1
+    %tmp_load.1 = load i64 %b.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    %tmp_load.2 = load i64 %c.1
+    %tmp_add.1 = add i64 %tmp_add %tmp_load.2
+    %tmp_load.3 = load i64 %d.1
+    %tmp_add.2 = add i64 %tmp_add.1 %tmp_load.3
+    %reg_sum = alloca ptr
+    store %reg_sum %tmp_add.2
+    %tmp_load.4 = load i64 %e.1
+    %tmp_load.5 = load i64 %f.1
+    %tmp_add.3 = add i64 %tmp_load.4 %tmp_load.5
+    %stack_sum = alloca ptr
+    store %stack_sum %tmp_add.3
+    %tmp_load.6 = load i64 %reg_sum
+    %tmp_load.7 = load i64 %stack_sum
+    %tmp_mul = mul i64 %tmp_load.6 %tmp_load.7
+    ret %tmp_mul
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 1
+    %tmp_const.1 = const.i64 i64 2
+    %tmp_const.2 = const.i64 i64 3
+    %tmp_const.3 = const.i64 i64 4
+    %tmp_const.4 = const.i64 i64 10
+    %tmp_const.5 = const.i64 i64 5
+    %tmp_call = call i64 @compute(%tmp_const, %tmp_const.1, %tmp_const.2, %tmp_const.3, %tmp_const.4, %tmp_const.5)
+    ret %tmp_call
+}
+
+---

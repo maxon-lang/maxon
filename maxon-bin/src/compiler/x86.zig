@@ -30,6 +30,14 @@ pub const Xmm = enum(u4) {
     xmm5 = 5,
     xmm6 = 6,
     xmm7 = 7,
+    xmm8 = 8,
+    xmm9 = 9,
+    xmm10 = 10,
+    xmm11 = 11,
+    xmm12 = 12,
+    xmm13 = 13,
+    xmm14 = 14,
+    xmm15 = 15,
 };
 
 /// Windows x64 calling convention constants
@@ -37,6 +45,13 @@ pub const win64 = struct {
     pub const shadow_space: u8 = 32;
     pub const arg_regs = [_]Gpr{ .rcx, .rdx, .r8, .r9 };
     pub const arg_xmms = [_]Xmm{ .xmm0, .xmm1, .xmm2, .xmm3 };
+
+    // Callee-saved registers (must be preserved across function calls)
+    pub const callee_saved_gprs = [_]Gpr{ .rbx, .rsi, .rdi, .r12, .r13, .r14, .r15 };
+    pub const callee_saved_xmms = [_]Xmm{ .xmm6, .xmm7, .xmm8, .xmm9, .xmm10, .xmm11, .xmm12, .xmm13, .xmm14, .xmm15 };
+
+    // Caller-saved registers (may be clobbered by function calls)
+    pub const caller_saved_gprs = [_]Gpr{ .rax, .rcx, .rdx, .r8, .r9, .r10, .r11 };
 };
 
 /// x86-64 instruction encoder
@@ -103,6 +118,10 @@ pub const Encoder = struct {
 
     pub fn leaRaxRbpOffset(self: *Encoder, offset: i32) !void {
         try self.emitWithRbpOffset(&.{ 0x48, 0x8D, 0x45 }, offset);
+    }
+
+    pub fn leaRcxRbpOffset(self: *Encoder, offset: i32) !void {
+        try self.emitWithRbpOffset(&.{ 0x48, 0x8D, 0x4D }, offset);
     }
 
     pub fn movRaxRcx(self: *Encoder) !void {
@@ -216,6 +235,34 @@ pub const Encoder = struct {
         try self.emitByte(0x5D);
     }
 
+    /// Push a general-purpose register onto the stack
+    /// For r8-r15, emits REX prefix (0x41) followed by push opcode
+    pub fn pushGpr(self: *Encoder, reg: Gpr) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        if (reg_num >= 8) {
+            // r8-r15 need REX.B prefix
+            try self.emitByte(0x41);
+            try self.emitByte(0x50 + (reg_num - 8));
+        } else {
+            // rax-rdi use standard encoding
+            try self.emitByte(0x50 + reg_num);
+        }
+    }
+
+    /// Pop a general-purpose register from the stack
+    /// For r8-r15, emits REX prefix (0x41) followed by pop opcode
+    pub fn popGpr(self: *Encoder, reg: Gpr) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        if (reg_num >= 8) {
+            // r8-r15 need REX.B prefix
+            try self.emitByte(0x41);
+            try self.emitByte(0x58 + (reg_num - 8));
+        } else {
+            // rax-rdi use standard encoding
+            try self.emitByte(0x58 + reg_num);
+        }
+    }
+
     pub fn ret(self: *Encoder) !void {
         try self.emitByte(0xC3);
     }
@@ -264,6 +311,70 @@ pub const Encoder = struct {
         try self.emit(&.{ 0x48, 0x83, 0xC4, imm });
     }
 
+    pub fn subRspImm32(self: *Encoder, imm: i32) !void {
+        try self.emit(&.{ 0x48, 0x81, 0xEC });
+        try self.emitI32(imm);
+    }
+
+    pub fn addRspImm32(self: *Encoder, imm: i32) !void {
+        try self.emit(&.{ 0x48, 0x81, 0xC4 });
+        try self.emitI32(imm);
+    }
+
+    /// MOV [RSP+offset], RAX - store RAX to stack relative to RSP
+    pub fn movRspOffsetRax(self: *Encoder, offset: i32) !void {
+        // RSP-relative addressing requires SIB byte (base=RSP, index=none)
+        if (offset >= -128 and offset <= 127) {
+            // mod=01 (disp8), reg=000 (rax), rm=100 (SIB follows)
+            // SIB: scale=00, index=100 (none), base=100 (rsp)
+            try self.emit(&.{ 0x48, 0x89, 0x44, 0x24, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            // mod=10 (disp32), reg=000 (rax), rm=100 (SIB follows)
+            try self.emit(&.{ 0x48, 0x89, 0x84, 0x24 });
+            try self.emitI32(offset);
+        }
+    }
+
+    /// MOV RAX, [RSP+offset] - load RAX from stack relative to RSP
+    pub fn movRaxRspOffset(self: *Encoder, offset: i32) !void {
+        if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0x48, 0x8B, 0x44, 0x24, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            try self.emit(&.{ 0x48, 0x8B, 0x84, 0x24 });
+            try self.emitI32(offset);
+        }
+    }
+
+    /// MOVSD [RSP+offset], XMM0 - store XMM0 to stack relative to RSP
+    pub fn movsdRspOffsetXmm0(self: *Encoder, offset: i32) !void {
+        if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0xF2, 0x0F, 0x11, 0x44, 0x24, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            try self.emit(&.{ 0xF2, 0x0F, 0x11, 0x84, 0x24 });
+            try self.emitI32(offset);
+        }
+    }
+
+    /// MOVSD XMM0, [RSP+offset] - load XMM0 from stack relative to RSP
+    pub fn movsdXmm0RspOffset(self: *Encoder, offset: i32) !void {
+        if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0xF2, 0x0F, 0x10, 0x44, 0x24, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            try self.emit(&.{ 0xF2, 0x0F, 0x10, 0x84, 0x24 });
+            try self.emitI32(offset);
+        }
+    }
+
+    /// LEA RAX, [RSP+offset] - load effective address relative to RSP
+    pub fn leaRaxRspOffset(self: *Encoder, offset: i32) !void {
+        if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0x48, 0x8D, 0x44, 0x24, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            try self.emit(&.{ 0x48, 0x8D, 0x84, 0x24 });
+            try self.emitI32(offset);
+        }
+    }
+
     pub fn shlRaxImm8(self: *Encoder, imm: u8) !void {
         try self.emit(&.{ 0x48, 0xC1, 0xE0, imm });
     }
@@ -282,6 +393,58 @@ pub const Encoder = struct {
 
     pub fn movsdXmm1RbpOffset(self: *Encoder, offset: i32) !void {
         try self.emitWithRbpOffset(&.{ 0xF2, 0x0F, 0x10, 0x4D }, offset);
+    }
+
+    /// Store XMM register to [rbp+offset]
+    /// MOVSD [rbp+offset], xmm
+    pub fn movsdRbpOffsetXmm(self: *Encoder, offset: i32, xmm: Xmm) !void {
+        const xmm_num: u8 = @intFromEnum(xmm);
+        if (xmm_num >= 8) {
+            // xmm8-xmm15 need REX.R prefix (0x44)
+            if (offset >= -128 and offset <= 127) {
+                try self.emit(&.{ 0xF2, 0x44, 0x0F, 0x11, 0x45 + ((xmm_num - 8) << 3) });
+                try self.emitByte(@bitCast(@as(i8, @intCast(offset))));
+            } else {
+                try self.emit(&.{ 0xF2, 0x44, 0x0F, 0x11, 0x85 + ((xmm_num - 8) << 3) });
+                try self.emitI32(offset);
+            }
+        } else {
+            // xmm0-xmm7 use standard encoding
+            // ModR/M: mod=01 (disp8), reg=xmm, r/m=101 (rbp)
+            if (offset >= -128 and offset <= 127) {
+                try self.emit(&.{ 0xF2, 0x0F, 0x11, 0x45 + (xmm_num << 3) });
+                try self.emitByte(@bitCast(@as(i8, @intCast(offset))));
+            } else {
+                try self.emit(&.{ 0xF2, 0x0F, 0x11, 0x85 + (xmm_num << 3) });
+                try self.emitI32(offset);
+            }
+        }
+    }
+
+    /// Load XMM register from [rbp+offset]
+    /// MOVSD xmm, [rbp+offset]
+    pub fn movsdXmmRbpOffset(self: *Encoder, xmm: Xmm, offset: i32) !void {
+        const xmm_num: u8 = @intFromEnum(xmm);
+        if (xmm_num >= 8) {
+            // xmm8-xmm15 need REX.R prefix (0x44)
+            if (offset >= -128 and offset <= 127) {
+                try self.emit(&.{ 0xF2, 0x44, 0x0F, 0x10, 0x45 + ((xmm_num - 8) << 3) });
+                try self.emitByte(@bitCast(@as(i8, @intCast(offset))));
+            } else {
+                try self.emit(&.{ 0xF2, 0x44, 0x0F, 0x10, 0x85 + ((xmm_num - 8) << 3) });
+                try self.emitI32(offset);
+            }
+        } else {
+            // xmm0-xmm7 use standard encoding
+            // ModR/M: mod=01 (disp8), reg=xmm, r/m=101 (rbp)
+            if (offset >= -128 and offset <= 127) {
+                try self.emit(&.{ 0xF2, 0x0F, 0x10, 0x45 + (xmm_num << 3) });
+                try self.emitByte(@bitCast(@as(i8, @intCast(offset))));
+            } else {
+                try self.emit(&.{ 0xF2, 0x0F, 0x10, 0x85 + (xmm_num << 3) });
+                try self.emitI32(offset);
+            }
+        }
     }
 
     pub fn movsdXmm0Xmm1(self: *Encoder) !void {
