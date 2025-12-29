@@ -180,18 +180,36 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
         const program = parser.parse() catch continue;
 
         const type_info = ast_to_ir.extractTypeInfo(program, allocator) catch continue;
+        var types_appended: usize = 0;
+        errdefer {
+            // Free fields from items that weren't appended to all_types
+            for (type_info[types_appended..]) |t| {
+                allocator.free(t.fields);
+            }
+            allocator.free(type_info);
+        }
         for (type_info) |t| {
             var t_with_path = t;
             t_with_path.source_path = source.path;
             try all_types.append(allocator, t_with_path);
+            types_appended += 1;
         }
         allocator.free(type_info);
 
         const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
+        var sigs_appended: usize = 0;
+        errdefer {
+            // Free names from items that weren't appended to all_funcs
+            for (func_sigs[sigs_appended..]) |sig| {
+                allocator.free(sig.name);
+            }
+            allocator.free(func_sigs);
+        }
         for (func_sigs) |sig| {
             var sig_with_path = sig;
             sig_with_path.source_path = source.path;
             try all_funcs.append(allocator, sig_with_path);
+            sigs_appended += 1;
         }
         allocator.free(func_sigs);
     }

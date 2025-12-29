@@ -477,6 +477,7 @@ pub const AstToIr = struct {
         // Register __ManagedArray compiler-internal type (24 bytes: ptr + len + capacity)
         // This is a parameterized type - element type is tracked separately in ArrayInfo
         const managed_array_fields = try self.allocator.alloc(FieldInfo, 3);
+        errdefer self.allocator.free(managed_array_fields);
         managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } } };
         managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
         managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
@@ -603,6 +604,7 @@ pub const AstToIr = struct {
             null;
 
         var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
+        errdefer self.allocator.free(fields);
         var offset: i32 = 0;
 
         for (type_decl.fields, 0..) |field, i| {
@@ -670,6 +672,7 @@ pub const AstToIr = struct {
         if (self.type_map.contains(ext_type.name)) return;
 
         var fields = try self.allocator.alloc(FieldInfo, ext_type.fields.len);
+        errdefer self.allocator.free(fields);
 
         for (ext_type.fields, 0..) |field, i| {
             const value_type: ValueType = blk: {
@@ -715,6 +718,7 @@ pub const AstToIr = struct {
 
     fn registerEnum(self: *AstToIr, enum_decl: ast.EnumDecl) !void {
         var members: std.StringHashMapUnmanaged(i64) = .{};
+        errdefer members.deinit(self.allocator);
         for (enum_decl.members, 0..) |member, i| {
             try members.put(self.allocator, member, @intCast(i));
         }
@@ -939,6 +943,7 @@ pub const AstToIr = struct {
 
         // Register the monomorphized type
         var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
+        errdefer self.allocator.free(fields);
         var offset: i32 = 0;
 
         for (type_decl.fields, 0..) |field, i| {
@@ -1019,7 +1024,8 @@ pub const AstToIr = struct {
         self.sret_size = saved_sret_size;
         self.self_ptr = saved_self_ptr;
 
-        // Restore var_map
+        // Free the temporary var_map used for method conversion and restore the saved one
+        self.var_map.deinit(self.allocator);
         self.var_map = saved_var_map;
 
         // Clean up generic params after everything is done
@@ -2335,7 +2341,7 @@ pub const AstToIr = struct {
 
         switch (un.op) {
             .negate => {
-                // Negate: 0 - x
+                // Negate: -x
                 const zero = if (is_float) try self.func().emitConstF64(0.0) else try self.func().emitConstI64(0);
                 const op: ir.Instruction.Op = if (is_float) .fsub else .sub;
                 const ty: ir.Type = if (is_float) .f64 else .i64;

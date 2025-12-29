@@ -36,7 +36,7 @@ end 'main'
 <!-- test: subtraction -->
 ```maxon
 function main() returns int
-    return 20 - 8
+    return 20-8
 end 'main'
 ```
 ```exitcode

@@ -1671,7 +1671,7 @@ pub const IrCodegen = struct {
         // jnz do_alloc (jump if size != 0)
         const zero_check_jnz = try self.enc.jneRel32();
 
-        // Size is 0 - set result to null and skip allocation
+        // Size is -set result to null and skip allocation
         try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax (null pointer)
         const skip_alloc_jmp = try self.enc.jmpRel32(); // jump to after allocation
 

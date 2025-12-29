@@ -14,7 +14,7 @@ The unary minus operator negates a numeric value. It works on both integers and 
 **Implementation:**
 - Parser: `parseUnary()` handles `-` before `parsePrimary()`
 - AST: `UnaryExpr` with `UnaryOp.negate`
-- IR: Emits `0 - x` for integers, `0.0 - x` for floats
+- IR: Emits `-x` for integers, `-x` for floats
 
 ## Documentation
 

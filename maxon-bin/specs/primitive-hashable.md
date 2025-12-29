@@ -139,7 +139,7 @@ end 'main'
 ```maxon
 function main() returns int
     var pos = 0.0
-    var neg = 0.0 - 0.0
+    var neg = -0.0
     var h1 = pos.hash()
     var h2 = neg.hash()
     if h1 == h2 'eq'
