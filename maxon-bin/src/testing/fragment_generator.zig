@@ -73,6 +73,28 @@ fn getOldestMtime(dir_path: []const u8, extension: []const u8) !i128 {
     return oldest;
 }
 
+const FragmentWorkerContext = struct {
+    test_cases: []testing.TestCase,
+    fragments_dir: []const u8,
+    next_index: std.atomic.Value(usize),
+    error_count: std.atomic.Value(usize),
+    allocator: std.mem.Allocator,
+};
+
+fn fragmentWorkerThread(ctx: *FragmentWorkerContext) void {
+    while (true) {
+        const index = ctx.next_index.fetchAdd(1, .seq_cst);
+        if (index >= ctx.test_cases.len) {
+            break;
+        }
+
+        const test_case = ctx.test_cases[index];
+        writeFragment(ctx.allocator, ctx.fragments_dir, test_case) catch {
+            _ = ctx.error_count.fetchAdd(1, .seq_cst);
+        };
+    }
+}
+
 /// Generate fragment files from specs
 pub fn generateFragments(
     allocator: std.mem.Allocator,
@@ -97,19 +119,62 @@ pub fn generateFragments(
     // Ensure fragments directory exists (create if needed, delete old files)
     try ensureFragmentsDir(fragments_dir);
 
-    var fragments_written: usize = 0;
+    // Collect all test cases from non-draft specs
+    var test_cases_list: std.ArrayListUnmanaged(testing.TestCase) = .empty;
+    defer test_cases_list.deinit(allocator);
 
-    // Write each test case as a fragment (skip draft specs)
     for (specs) |spec| {
         if (spec.status == .draft) continue;
         for (spec.tests) |test_case| {
+            try test_cases_list.append(allocator, test_case);
+        }
+    }
+
+    const total = test_cases_list.items.len;
+    if (total == 0) {
+        return testing.GenerationResult{
+            .fragments_written = 0,
+            .specs_processed = specs.len,
+        };
+    }
+
+    // Determine number of workers
+    const cpu_count = std.Thread.getCpuCount() catch 4;
+    const num_workers = @min(@max(1, cpu_count / 2), total);
+
+    if (num_workers == 1) {
+        // Single-threaded path
+        for (test_cases_list.items) |test_case| {
             try writeFragment(allocator, fragments_dir, test_case);
-            fragments_written += 1;
+        }
+    } else {
+        // Multi-threaded path
+        var ctx = FragmentWorkerContext{
+            .test_cases = test_cases_list.items,
+            .fragments_dir = fragments_dir,
+            .next_index = std.atomic.Value(usize).init(0),
+            .error_count = std.atomic.Value(usize).init(0),
+            .allocator = allocator,
+        };
+
+        const workers = try allocator.alloc(std.Thread, num_workers);
+        defer allocator.free(workers);
+
+        for (workers) |*worker| {
+            worker.* = try std.Thread.spawn(.{}, fragmentWorkerThread, .{&ctx});
+        }
+
+        for (workers) |worker| {
+            worker.join();
+        }
+
+        if (ctx.error_count.load(.seq_cst) > 0) {
+            return error.FragmentGenerationFailed;
         }
     }
 
     return testing.GenerationResult{
-        .fragments_written = fragments_written,
+        .fragments_written = total,
         .specs_processed = specs.len,
     };
 }
@@ -127,25 +192,26 @@ fn ensureFragmentsDir(fragments_dir: []const u8) !void {
 }
 
 fn writeFragment(
-    allocator: std.mem.Allocator,
+    _: std.mem.Allocator,
     fragments_dir: []const u8,
     test_case: testing.TestCase,
 ) !void {
+    // Use arena allocator to avoid GPA contention in multi-threaded context
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
     // Build filename: test_name.test
     const filename = try std.fmt.allocPrint(allocator, "{s}.test", .{test_case.name});
-    defer allocator.free(filename);
 
     // Build full path
     const full_path = try std.fs.path.join(allocator, &.{ fragments_dir, filename });
-    defer allocator.free(full_path);
 
     // Build content as a string
     var content: std.ArrayListUnmanaged(u8) = .empty;
-    defer content.deinit(allocator);
 
     // Write test header
     const header = try std.fmt.allocPrint(allocator, "// Test: {s}\n", .{test_case.name});
-    defer allocator.free(header);
     try content.appendSlice(allocator, header);
 
     // Write source code
@@ -156,7 +222,6 @@ fn writeFragment(
     switch (test_case.expected) {
         .success => |s| {
             const exit_line = try std.fmt.allocPrint(allocator, "ExitCode: {d}\n", .{s.exit_code});
-            defer allocator.free(exit_line);
             try content.appendSlice(allocator, exit_line);
             if (s.track_allocs) {
                 try content.appendSlice(allocator, "TrackAllocs: true\n");
@@ -169,7 +234,6 @@ fn writeFragment(
                     try content.appendSlice(allocator, "\n```\n");
                 } else {
                     const stdout_line = try std.fmt.allocPrint(allocator, "Stdout: {s}\n", .{stdout});
-                    defer allocator.free(stdout_line);
                     try content.appendSlice(allocator, stdout_line);
                 }
             }
@@ -192,7 +256,6 @@ fn writeFragment(
                 std.debug.print("IR generation failed for test '{s}': {}\n", .{ test_case.name, err });
                 return err;
             };
-            defer allocator.free(ir);
             try content.appendSlice(allocator, ir);
         },
         .compiler_error => {
