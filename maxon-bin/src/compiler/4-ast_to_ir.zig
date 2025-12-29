@@ -429,6 +429,10 @@ pub const AstToIr = struct {
     }
 
     pub fn deinit(self: *AstToIr) void {
+        // Clean up the IR module (important for error paths where convert() fails)
+        // In success case, module was transferred out and replaced with empty module
+        self.module.deinit();
+
         self.var_map.deinit(self.allocator);
 
         var type_iter = self.type_map.iterator();
@@ -443,7 +447,10 @@ pub const AstToIr = struct {
 
         var func_iter = self.func_map.iterator();
         while (func_iter.next()) |entry| {
-            self.allocator.free(entry.value_ptr.param_types);
+            // Only free if non-empty (empty slices may be static literals)
+            if (entry.value_ptr.param_types.len > 0) {
+                self.allocator.free(entry.value_ptr.param_types);
+            }
         }
         self.func_map.deinit(self.allocator);
 
@@ -811,6 +818,7 @@ pub const AstToIr = struct {
         } else .void;
 
         var param_types = try self.allocator.alloc(ParamType, decl.params.len);
+        errdefer self.allocator.free(param_types);
         for (decl.params, 0..) |param, i| {
             param_types[i] = .{
                 .ty = try self.typeExprToValueType(param.type_expr),
@@ -892,7 +900,10 @@ pub const AstToIr = struct {
         }
 
         const mono_name = self.allocator.dupe(u8, name_parts.items) catch return error.OutOfMemory;
-        try self.module.trackString(mono_name);
+        self.module.trackString(mono_name) catch {
+            self.allocator.free(mono_name);
+            return error.OutOfMemory;
+        };
 
         // Check if already registered
         if (self.type_map.contains(mono_name)) {
@@ -4004,7 +4015,13 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
 /// This includes methods from type declarations
 pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalFuncSignature {
     var signatures = std.ArrayListUnmanaged(ExternalFuncSignature){};
-    errdefer signatures.deinit(allocator);
+    errdefer {
+        // Free allocated names in case of error
+        for (signatures.items) |sig| {
+            allocator.free(sig.name);
+        }
+        signatures.deinit(allocator);
+    }
 
     // Extract standalone functions
     for (program.functions) |func| {

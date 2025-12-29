@@ -88,6 +88,12 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
     // Extract function signatures from AST before freeing
     // (needed for cross-module compilation with full type info)
     const func_signatures = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch null;
+    errdefer if (func_signatures) |sigs| {
+        for (sigs) |sig| {
+            allocator.free(sig.name);
+        }
+        allocator.free(sigs);
+    };
 
     defer freeProgram(program, allocator);
 
@@ -604,6 +610,9 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
         allocator.free(type_decl.fields);
         // Free methods and their contents
         for (type_decl.methods) |method| {
+            for (method.params) |param| {
+                freeTypeExpr(param.type_expr, allocator);
+            }
             allocator.free(method.params);
             for (method.body) |stmt| {
                 freeStatementArgs(stmt, allocator);
@@ -631,6 +640,9 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
 
     for (program.interfaces) |iface| {
         for (iface.methods) |method| {
+            for (method.params) |param| {
+                freeTypeExpr(param.type_expr, allocator);
+            }
             allocator.free(method.params);
             freeTypeExpr(method.return_type, allocator);
             if (method.default_body) |body| {
@@ -651,6 +663,9 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
             freeStatementArgs(stmt, allocator);
         }
         allocator.free(func.body);
+        for (func.params) |param| {
+            freeTypeExpr(param.type_expr, allocator);
+        }
         allocator.free(func.params);
         freeTypeExpr(func.return_type, allocator);
     }
@@ -660,6 +675,7 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
 fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
     switch (stmt.kind) {
         .let_decl, .var_decl => |decl| {
+            freeTypeExpr(decl.type_annotation, allocator);
             freeExpressionArgs(decl.value, allocator);
         },
         .@"return" => |ret| {
@@ -767,6 +783,9 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(field.value.*, allocator);
             }
             allocator.free(sinit.fields);
+            if (sinit.type_args.len > 0) {
+                allocator.free(sinit.type_args);
+            }
         },
         .field_access => |fa| {
             freeExpressionArgs(fa.base.*, allocator);
@@ -809,6 +828,11 @@ fn freeTypeExpr(type_expr: ?ast.TypeExpr, allocator: std.mem.Allocator) void {
             freeTypeExpr(inner.*, allocator);
             allocator.destroy(@constCast(inner));
         },
-        .simple, .generic => {},
+        .generic => |g| {
+            if (g.type_args.len > 0) {
+                allocator.free(g.type_args);
+            }
+        },
+        .simple => {},
     }
 }

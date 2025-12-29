@@ -550,9 +550,13 @@ pub const Module = struct {
     };
 
     pub fn mergeWithOptions(self: *Module, other: *Module, options: MergeOptions) !void {
-        for (other.functions.items) |func| {
+        for (other.functions.items) |*func| {
             // Skip non-exported functions if exports_only is set
-            if (options.exports_only and !func.is_exported) continue;
+            if (options.exports_only and !func.is_exported) {
+                // Free the skipped function's resources
+                func.deinit();
+                continue;
+            }
 
             // Skip if we already have a function with this name
             var exists = false;
@@ -563,10 +567,13 @@ pub const Module = struct {
                 }
             }
             if (!exists) {
-                try self.functions.append(self.allocator, func);
+                try self.functions.append(self.allocator, func.*);
+            } else {
+                // Free the duplicate function's resources
+                func.deinit();
             }
         }
-        // Clear other's functions list without freeing items (they were moved)
+        // Clear other's functions list without freeing items (they were moved or freed)
         other.functions.items.len = 0;
 
         // Move allocated strings from other module to this one

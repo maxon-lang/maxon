@@ -282,7 +282,14 @@ fn runTest(args: [][:0]u8, allocator: std.mem.Allocator) void {
     };
     const elapsed_ns = timer.read();
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
-    defer allocator.free(summary.results);
+    defer {
+        for (summary.results) |result| {
+            if (result.message) |msg| {
+                allocator.free(msg);
+            }
+        }
+        allocator.free(summary.results);
+    }
 
     // Print summary
     summary.printSummaryDebug(elapsed_ms);
