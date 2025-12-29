@@ -63,6 +63,8 @@ For every new feature, you MUST follow the spec-driven development process:
 - Run all tests: `cd maxon-bin && zig build test`
 - Compile a file: `./bin/maxon compile file.maxon`
 - Compile with IR output: `./bin/maxon compile file.maxon --emit-ir`
+- Compile with ASM output: `./bin/maxon compile file.maxon --emit-asm`
+- Compile with verbose output: `./bin/maxon compile file.maxon -v`
 - Run a file: `./bin/maxon run file.maxon`
 
 ## Error Handling
