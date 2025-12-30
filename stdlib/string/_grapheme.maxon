@@ -72,6 +72,19 @@ export function countGraphemesManaged(managed __ManagedString) returns int
 	return countGraphemesManagedRange(managed, 0, __string_len(managed))
 end 'countGraphemesManaged'
 
+/// Convert a byte index to a grapheme (character) index
+/// Returns the number of grapheme clusters before the byte position
+export function byteIndexToGraphemeIndex(managed __ManagedString, byteIdx int) returns int
+	var graphemeIdx = 0
+	var pos = 0
+	var len = __string_len(managed)
+	while pos < byteIdx and pos < len 'count'
+		pos = findGraphemeEndManagedRange(managed, 0, pos, len)
+		graphemeIdx = graphemeIdx + 1
+	end 'count'
+	return graphemeIdx
+end 'byteIndexToGraphemeIndex'
+
 // Grapheme_Cluster_Break property values (used as return values):
 //   0 = Other, 1 = CR, 2 = LF, 3 = Control, 4 = Extend, 5 = ZWJ,
 //   6 = Regional_Indicator, 7 = Prepend, 8 = SpacingMark,

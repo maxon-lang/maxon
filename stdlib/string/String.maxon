@@ -96,4 +96,141 @@ export type String is Hashable, Equatable, Iterable with Character, InitableFrom
 	export function concat(other String) returns String
 		return __string_concat(_managed, other._managed)
 	end 'concat'
+
+	// Search methods
+	export function startsWith(prefix String) returns bool
+		return startsWithManaged(_managed, prefix._managed)
+	end 'startsWith'
+
+	export function endsWith(suffix String) returns bool
+		return endsWithManaged(_managed, suffix._managed)
+	end 'endsWith'
+
+	export function contains(needle String) returns bool
+		return findManaged(_managed, needle._managed) >= 0
+	end 'contains'
+
+	export function find(needle String) returns StringIndex or nil
+		var byteIdx = findManaged(_managed, needle._managed)
+		if byteIdx < 0 'not_found'
+			return nil
+		end 'not_found'
+		// Convert byte index to grapheme (char) index
+		var charIdx = byteIndexToGraphemeIndex(_managed, byteIdx)
+		return StringIndex{_charIndex: charIdx, _bytePos: byteIdx}
+	end 'find'
+
+	// Slicing - returns a new String backed by slice into this string's buffer
+	export function slice(start StringIndex, end_ StringIndex) returns String
+		return __string_slice(_managed, start._bytePos, end_._bytePos)
+	end 'slice'
+
+	// View methods
+	export function bytes() returns ByteView
+		return ByteView{_managed: _managed, _pos: 0}
+	end 'bytes'
+
+	export function codepoints() returns CodepointView
+		return CodepointView{_managed: _managed, _pos: 0}
+	end 'codepoints'
+
+	export function utf16() returns UTF16View
+		return UTF16View{_managed: _managed, _bytePos: 0, _highSurrogate: 0}
+	end 'utf16'
+
+	// Replace methods
+	export function replace(old String, new_ String) returns String
+		var oldLen = __string_len(old._managed)
+		if oldLen == 0 'empty_old'
+			return String{_managed: _managed, _iterPos: 0}
+		end 'empty_old'
+
+		// We build the result incrementally using __ManagedString
+		var pos = 0
+		var selfLen = __string_len(_managed)
+
+		// First pass: find all matches and count them
+		var matchCount = 0
+		var searchPos = 0
+		while searchPos <= selfLen - oldLen 'count_loop'
+			var idx = findManagedRange(_managed, searchPos, selfLen - searchPos, old._managed)
+			if idx < 0 'no_more_count'
+				break 'count_loop'
+			end 'no_more_count'
+			matchCount = matchCount + 1
+			searchPos = searchPos + idx + oldLen
+		end 'count_loop'
+
+		// If no matches, return self
+		if matchCount == 0 'no_matches'
+			return String{_managed: _managed, _iterPos: 0}
+		end 'no_matches'
+
+		// Build result by processing matches
+		var builtResult = __string_slice(_managed, 0, 0)  // Empty slice as starting point
+		pos = 0
+		while pos <= selfLen - oldLen 'search'
+			var idx = findManagedRange(_managed, pos, selfLen - pos, old._managed)
+			if idx < 0 'no_more'
+				break 'search'
+			end 'no_more'
+
+			var matchPos = pos + idx
+			// Append prefix (from pos to matchPos)
+			if matchPos > pos 'has_prefix'
+				var prefixSlice = __string_slice(_managed, pos, matchPos)
+				builtResult = __string_concat(builtResult, prefixSlice)
+			end 'has_prefix'
+
+			// Append replacement
+			builtResult = __string_concat(builtResult, new_._managed)
+			pos = matchPos + oldLen
+		end 'search'
+
+		// Append remaining suffix
+		if pos < selfLen 'has_suffix'
+			var suffixSlice = __string_slice(_managed, pos, selfLen)
+			builtResult = __string_concat(builtResult, suffixSlice)
+		end 'has_suffix'
+
+		return builtResult
+	end 'replace'
+
+	export function replaceFirst(old String, new_ String) returns String
+		var oldLen = __string_len(old._managed)
+		if oldLen == 0 'empty_old'
+			return String{_managed: _managed, _iterPos: 0}
+		end 'empty_old'
+
+		var idx = findManaged(_managed, old._managed)
+		if idx < 0 'not_found'
+			return String{_managed: _managed, _iterPos: 0}
+		end 'not_found'
+
+		var selfLen = __string_len(_managed)
+		var prefixSlice = __string_slice(_managed, 0, idx)
+		var suffixSlice = __string_slice(_managed, idx + oldLen, selfLen)
+		return __string_concat(__string_concat(prefixSlice, new_._managed), suffixSlice)
+	end 'replaceFirst'
+
+	// Case conversion
+	export function toLower() returns String
+		var len = __string_len(_managed)
+		if len == 0 'empty'
+			return String{_managed: _managed, _iterPos: 0}
+		end 'empty'
+
+		// Make a unique copy for mutation
+		var copy = __string_make_unique(_managed)
+		var i = 0
+		while i < len 'convert'
+			var b = __string_byte_at(copy, i)
+			// ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
+			if b >= 65 and b <= 90 'is_upper'
+				__string_set_byte(copy, i, b + 32)
+			end 'is_upper'
+			i = i + 1
+		end 'convert'
+		return String{_managed: copy, _iterPos: 0}
+	end 'toLower'
 end 'String'
