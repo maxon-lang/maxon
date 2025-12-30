@@ -42,6 +42,39 @@ The returned string is immutable to prevent modification of the shared storage.
 Strings with length ≤15 bytes are stored inline (no heap allocation).
 Strings with length >15 bytes use heap allocation with COW semantics.
 
+### COW (Copy-on-Write) Semantics
+
+Heap-allocated strings use reference counting for memory efficiency:
+- When a string is assigned to another variable, they share storage (refcount incremented)
+- `__string_make_unique()` creates a mutable copy when mutation is needed
+- Slices store `parent_off` to track their position in the parent string
+- Reference count is decremented on scope exit; storage freed when refcount reaches zero
+
+### Borrow Checking
+
+The compiler tracks when strings have active slices borrowed from them:
+- **E020**: "cannot modify borrowed string" - triggered when trying to modify a string that has active slices
+- **E021**: "string goes out of scope while borrowed" - triggered when a string goes out of scope while slices reference it
+
+This prevents dangling references and ensures memory safety without garbage collection.
+
+### Updated Memory Layout (24 bytes)
+
+Heap-allocated strings use a 24-byte structure:
+
+```
+Offset 0:  ptr buffer      (8 bytes) - pointer to UTF-8 data
+Offset 8:  i32 len         (4 bytes) - length in bytes
+Offset 12: i32 cap_flags   (4 bytes) - capacity with flag bits
+Offset 16: i32 refcount    (4 bytes) - reference count for COW
+Offset 20: i32 parent_off  (4 bytes) - offset in parent for slices
+
+cap_flags low 2 bits:
+- 0b00 = SSO/constant (no heap cleanup needed)
+- 0b01 = Heap-allocated (COW mode, refcounted)
+- 0b10 = Slice mode (borrowed view into parent)
+```
+
 ## Documentation
 
 The `string` type provides an efficient, UTF-8 encoded string with automatic memory management.
@@ -157,6 +190,35 @@ utf16TrailSurrogate(128512)  // 56832 (0xDE00)
 // Decode surrogate pair to codepoint
 utf16DecodeSurrogates(55357, 56832)  // 128512 (U+1F600)
 ```
+
+### String Slicing
+
+Create a substring view that shares storage with the original string:
+
+```maxon
+var s = "hello world"
+var start = s.startIndex()
+if let spaceIdx = s.find(" ") 'found'
+    var sub = s.slice(start, spaceIdx)  // "hello" - shares storage with s
+    print(sub)
+end 'found'
+```
+
+Slices are immutable views into the parent string. They do not copy data, making them efficient for parsing and substring operations.
+
+### Copy-on-Write Behavior
+
+Strings use copy-on-write (COW) semantics for efficiency:
+
+```maxon
+var original = "hello"
+var copy = original        // Both share the same storage
+copy = copy.toLower()      // copy gets its own storage, original unchanged
+print(original)            // "hello" - not modified
+print(copy)                // "hello" - new copy
+```
+
+When you assign a string to another variable, they share storage. If either is mutated, a copy is made automatically, ensuring the other remains unchanged.
 
 ## Tests
 
@@ -1519,4 +1581,149 @@ end 'main'
 5
 7
 5
+```
+
+<!-- test: slice-basic -->
+### Basic String Slicing
+```maxon
+function main() returns int
+    var s = "hello world"
+    var start = s.startIndex()
+    if let spaceIdx = s.find(" ") 'found'
+        var sub = s.slice(start, spaceIdx)
+        print(sub)
+    end 'found'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: slice-full -->
+### Slice Entire String
+```maxon
+function main() returns int
+    var s = "hello"
+    var start = s.startIndex()
+    var endIdx = s.endIndex()
+    var sub = s.slice(start, endIdx)
+    print(sub)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- test: slice-empty -->
+### Empty Slice
+```maxon
+function main() returns int
+    var s = "hello"
+    var start = s.startIndex()
+    var sub = s.slice(start, start)
+    print("{sub.count()}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: slice-iteration -->
+### Iterate Over Sliced String
+```maxon
+function main() returns int
+    var s = "abcdef"
+    var start = s.startIndex()
+    if let idx = s.find("d") 'found'
+        var sub = s.slice(start, idx)
+        for c in sub 'loop'
+            print("{c}")
+        end 'loop'
+    end 'found'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a
+b
+c
+```
+
+<!-- test: cow-mutation-copies -->
+### COW Mutation Creates Copy
+```maxon
+function main() returns int
+    var original = "HELLO"
+    var copy = original
+    copy = copy.toLower()
+    print(original)
+    print(copy)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+HELLO
+hello
+```
+
+<!-- test: cow-original-unchanged -->
+### COW Original Unchanged After Copy Mutation
+```maxon
+function main() returns int
+    var a = "TEST STRING"
+    var b = a
+    var c = a
+    b = b.toLower()
+    print(a)
+    print(b)
+    print(c)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+TEST STRING
+test string
+TEST STRING
+```
+
+<!-- test: cow-slice-independent -->
+### Slice Is Independent After Parent Goes Out of Scope
+Demonstrates that sliced strings work correctly.
+```maxon
+function main() returns int
+    var s = "hello world"
+    var start = s.startIndex()
+    if let spaceIdx = s.find(" ") 'found'
+        var sub = s.slice(start, spaceIdx)
+        print(sub)
+    end 'found'
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
 ```
