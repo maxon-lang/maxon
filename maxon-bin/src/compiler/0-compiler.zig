@@ -333,7 +333,6 @@ pub fn compileMultiple(
         // Extract type info from parsed AST
         const type_info = ast_to_ir.extractTypeInfo(program, allocator) catch continue;
         for (type_info) |t| {
-            // Set source_path so we can distinguish stdlib from user code
             var t_with_path = t;
             t_with_path.source_path = source.path;
             try all_types.append(allocator, t_with_path);
@@ -821,6 +820,10 @@ fn writeAsmFile(ir_module: ir.Module, output_path: []const u8, allocator: std.me
 
 fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
     for (program.types) |type_decl| {
+        // Free type_args in field type_exprs before freeing the fields slice
+        for (type_decl.fields) |field| {
+            freeTypeExpr(field.type_expr, allocator);
+        }
         allocator.free(type_decl.fields);
         // Free methods and their contents
         for (type_decl.methods) |method| {
@@ -1009,6 +1012,13 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(elem, allocator);
             }
             allocator.free(arr.elements);
+        },
+        .map_literal => |map| {
+            for (map.entries) |entry| {
+                freeExpressionArgs(entry.key.*, allocator);
+                freeExpressionArgs(entry.value.*, allocator);
+            }
+            allocator.free(map.entries);
         },
         .index => |idx| {
             freeExpressionArgs(idx.base.*, allocator);

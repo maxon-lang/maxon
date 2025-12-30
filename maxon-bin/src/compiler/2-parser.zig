@@ -444,7 +444,7 @@ pub const Parser = struct {
             try type_args.append(self.allocator, try self.expectTypeName());
 
             // Additional type arguments are optional (for types like Map of string int)
-            while (self.check(.identifier)) {
+            while (self.check(.identifier) or self.check(.int) or self.check(.float)) {
                 // Only consume if it looks like a type name (starts with lowercase or is a known type)
                 const next = self.peek(0);
                 if (next == null) break;
@@ -461,6 +461,27 @@ pub const Parser = struct {
             base_type = .{ .generic = .{
                 .base_type = type_name,
                 .type_args = try type_args.toOwnedSlice(self.allocator),
+            } };
+        } else if (self.check(.from)) {
+            // Check for "TypeName from K to V" syntax (two-argument generics like Map)
+            _ = self.advance(); // consume 'from'
+
+            // Parse first type argument (key type)
+            const key_type = try self.expectTypeName();
+
+            // Expect 'to' keyword
+            _ = try self.expect(.to);
+
+            // Parse second type argument (value type)
+            const value_type = try self.expectTypeName();
+
+            var type_args_arr = try self.allocator.alloc([]const u8, 2);
+            type_args_arr[0] = key_type;
+            type_args_arr[1] = value_type;
+
+            base_type = .{ .generic = .{
+                .base_type = type_name,
+                .type_args = type_args_arr,
             } };
         } else {
             base_type = .{ .simple = type_name };
@@ -1190,7 +1211,7 @@ pub const Parser = struct {
                 try type_args.append(self.allocator, try self.expectTypeName());
 
                 // Additional type arguments (for types like Map of string int)
-                while (self.check(.identifier)) {
+                while (self.check(.identifier) or self.check(.int) or self.check(.float)) {
                     const next = self.peek(0);
                     if (next == null) break;
                     // Stop if next token is a keyword or could be part of expression
@@ -1203,7 +1224,7 @@ pub const Parser = struct {
                     // Only continue if followed by identifier (another type arg)
                     // or lbrace (struct init)
                     const peek1 = self.peek(1);
-                    if (peek1 != null and peek1.?.type != .identifier and peek1.?.type != .lbrace) {
+                    if (peek1 != null and peek1.?.type != .identifier and peek1.?.type != .int and peek1.?.type != .float and peek1.?.type != .lbrace) {
                         break;
                     }
                     try type_args.append(self.allocator, try self.expectTypeName());
@@ -1215,6 +1236,33 @@ pub const Parser = struct {
                 }
 
                 // Otherwise this is just a generic type used as expression (error case)
+                self.reportError(.E002);
+                return error.UnexpectedToken;
+            }
+
+
+            // Check for "TypeName from K to V{}" syntax (two-argument generics like Map)
+            if (self.check(.from)) {
+                _ = self.advance(); // consume 'from'
+
+                // Parse first type argument (key type)
+                const key_type = try self.expectTypeName();
+
+                // Expect 'to' keyword
+                _ = try self.expect(.to);
+
+                // Parse second type argument (value type)
+                const value_type = try self.expectTypeName();
+
+                // Must be followed by struct init {}
+                if (self.check(.lbrace)) {
+                    const type_args_slice = try self.allocator.alloc([]const u8, 2);
+                    type_args_slice[0] = key_type;
+                    type_args_slice[1] = value_type;
+                    return try self.parseStructInit(token.text, type_args_slice);
+                }
+
+                // Error: Map from K to V requires {}
                 self.reportError(.E002);
                 return error.UnexpectedToken;
             }
@@ -1304,15 +1352,22 @@ pub const Parser = struct {
     fn parseArrayLiteral(self: *Parser) ParseError!ast.Expression {
         _ = try self.expect(.lbracket);
 
-        var elements: std.ArrayListUnmanaged(ast.Expression) = .empty;
-        errdefer elements.deinit(self.allocator);
-
         if (!self.check(.rbracket)) {
-            // Parse first element
+            // Parse first expression (could be array element or map key)
             const first = try self.parseExpression() orelse {
                 self.reportError(.E003);
                 return error.ExpectedExpression;
             };
+
+            // Check if this is a map literal (key: value)
+            if (self.check(.colon)) {
+                return try self.parseMapLiteralRest(first);
+            }
+
+            // Otherwise, continue parsing as array literal
+            var elements: std.ArrayListUnmanaged(ast.Expression) = .empty;
+            errdefer elements.deinit(self.allocator);
+
             try elements.append(self.allocator, first);
 
             // Parse remaining elements
@@ -1324,11 +1379,59 @@ pub const Parser = struct {
                 };
                 try elements.append(self.allocator, elem);
             }
+
+            _ = try self.expect(.rbracket);
+            return try self.parsePostfix(.{ .array_literal = .{
+                .elements = try elements.toOwnedSlice(self.allocator),
+            } });
+        }
+
+        // Empty array literal: []
+        _ = try self.expect(.rbracket);
+        return try self.parsePostfix(.{ .array_literal = .{
+            .elements = &.{},
+        } });
+    }
+
+    /// Parse the rest of a map literal after the first key has been parsed.
+    /// Called when we've seen `[key` and the next token is `:`.
+    fn parseMapLiteralRest(self: *Parser, first_key: ast.Expression) ParseError!ast.Expression {
+        var entries: std.ArrayListUnmanaged(ast.MapEntry) = .empty;
+        errdefer entries.deinit(self.allocator);
+
+        // Parse first entry's value (we already have the key)
+        _ = try self.expect(.colon);
+        const first_value = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+        try entries.append(self.allocator, .{
+            .key = try self.createExpr(first_key),
+            .value = try self.createExpr(first_value),
+        });
+
+        // Parse remaining entries
+        while (self.check(.comma)) {
+            _ = self.advance(); // consume ','
+
+            const key = try self.parseExpression() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            _ = try self.expect(.colon);
+            const value = try self.parseExpression() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            try entries.append(self.allocator, .{
+                .key = try self.createExpr(key),
+                .value = try self.createExpr(value),
+            });
         }
 
         _ = try self.expect(.rbracket);
-        return try self.parsePostfix(.{ .array_literal = .{
-            .elements = try elements.toOwnedSlice(self.allocator),
+        return try self.parsePostfix(.{ .map_literal = .{
+            .entries = try entries.toOwnedSlice(self.allocator),
         } });
     }
 

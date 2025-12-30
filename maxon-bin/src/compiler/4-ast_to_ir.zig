@@ -1277,6 +1277,28 @@ pub const AstToIr = struct {
                         return;
                     }
                 }
+
+                // Check for InitableFromMapLiteral transformation
+                // Syntax: var m Map from K to V = ["a": 1, "b": 2] (generic) or var m StringIntMap = [...] (simple)
+                if (self.typeConformsTo(t_name, "InitableFromMapLiteral")) {
+                    if (decl.value == .map_literal) {
+                        // For generic types, get the monomorphized type name
+                        const resolved_type_name: []const u8 = switch (type_ann) {
+                            .generic => |gen| blk: {
+                                var resolved_args = try self.allocator.alloc([]const u8, gen.type_args.len);
+                                defer self.allocator.free(resolved_args);
+                                for (gen.type_args, 0..) |arg, i| {
+                                    resolved_args[i] = self.resolveTypeName(arg);
+                                }
+                                break :blk try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
+                            },
+                            .simple => |name| name,
+                            .optional => unreachable,
+                        };
+                        try self.convertInitableFromMapLiteralSimple(decl, resolved_type_name);
+                        return;
+                    }
+                }
             }
         }
 
@@ -2076,6 +2098,7 @@ pub const AstToIr = struct {
             .struct_init => |sinit| self.convertStructInit(sinit),
             .field_access => |fa| self.convertFieldAccess(fa),
             .array_literal => |arr| self.convertArrayLiteral(arr),
+            .map_literal => |map| self.convertMapLiteral(map),
             .index => |idx| self.convertIndex(idx),
             .array_type => |arr| self.convertArrayType(arr),
             .method_call => |mcall| self.convertMethodCallExpr(mcall),
@@ -2955,6 +2978,137 @@ pub const AstToIr = struct {
         }
     }
 
+    /// Convert InitableFromMapLiteral with type annotation: var m Map from K to V = ["a": 1, "b": 2]
+    /// Creates two __ManagedArrays (keys and values) and calls Type$InitableFromMapLiteral$init(keys, values)
+    fn convertInitableFromMapLiteralSimple(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
+        const map_lit = decl.value.map_literal;
+        const entries = map_lit.entries;
+
+        debug.astToIr("InitableFromMapLiteral: {s} with {d} entries", .{ type_name, entries.len });
+
+        // Allocate two __ManagedArrays on stack (24 bytes each: ptr + len + capacity)
+        const keys_managed_ptr = try self.func().emitAllocaSized(24);
+        const values_managed_ptr = try self.func().emitAllocaSized(24);
+
+        if (entries.len == 0) {
+            // Empty map: buffer=null, len=0, capacity=0 for both arrays
+            const null_ptr = try self.func().emitConstI64(0);
+
+            // Initialize keys __ManagedArray
+            const keys_buffer_slot = try self.func().emitGetElemPtr(keys_managed_ptr, null_ptr, 0);
+            try self.func().emitStore(keys_buffer_slot, null_ptr);
+            const len_offset = try self.func().emitConstI64(1);
+            const keys_len_slot = try self.func().emitGetElemPtr(keys_managed_ptr, len_offset, 8);
+            try self.func().emitStore(keys_len_slot, null_ptr);
+            const cap_offset = try self.func().emitConstI64(2);
+            const keys_cap_slot = try self.func().emitGetElemPtr(keys_managed_ptr, cap_offset, 8);
+            try self.func().emitStore(keys_cap_slot, null_ptr);
+
+            // Initialize values __ManagedArray
+            const values_buffer_slot = try self.func().emitGetElemPtr(values_managed_ptr, null_ptr, 0);
+            try self.func().emitStore(values_buffer_slot, null_ptr);
+            const values_len_slot = try self.func().emitGetElemPtr(values_managed_ptr, len_offset, 8);
+            try self.func().emitStore(values_len_slot, null_ptr);
+            const values_cap_slot = try self.func().emitGetElemPtr(values_managed_ptr, cap_offset, 8);
+            try self.func().emitStore(values_cap_slot, null_ptr);
+        } else {
+            // Allocate buffers for keys and values on heap
+            const elem_count = try self.func().emitConstI64(@intCast(entries.len));
+            const elem_size: i64 = 8; // All elements are 8 bytes
+            const buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(elem_size))));
+            const keys_buffer = try self.func().emitHeapAlloc(buffer_size);
+            const values_buffer = try self.func().emitHeapAlloc(buffer_size);
+
+            // Store entries into buffers
+            for (entries, 0..) |entry, i| {
+                const key_typed = try self.convertExpression(entry.key.*);
+                const value_typed = try self.convertExpression(entry.value.*);
+                const idx_val = try self.func().emitConstI64(@intCast(i));
+
+                const key_ptr = try self.func().emitGetElemPtr(keys_buffer, idx_val, @intCast(elem_size));
+                try self.func().emitStore(key_ptr, key_typed.value);
+
+                const value_ptr = try self.func().emitGetElemPtr(values_buffer, idx_val, @intCast(elem_size));
+                try self.func().emitStore(value_ptr, value_typed.value);
+            }
+
+            // Initialize keys __ManagedArray: {buffer, len, capacity}
+            const zero = try self.func().emitConstI64(0);
+            const keys_buffer_slot = try self.func().emitGetElemPtr(keys_managed_ptr, zero, 0);
+            try self.func().emitStore(keys_buffer_slot, keys_buffer);
+            const len_offset = try self.func().emitConstI64(1);
+            const keys_len_slot = try self.func().emitGetElemPtr(keys_managed_ptr, len_offset, 8);
+            try self.func().emitStore(keys_len_slot, elem_count);
+            const cap_offset = try self.func().emitConstI64(2);
+            const keys_cap_slot = try self.func().emitGetElemPtr(keys_managed_ptr, cap_offset, 8);
+            try self.func().emitStore(keys_cap_slot, elem_count);
+
+            // Initialize values __ManagedArray: {buffer, len, capacity}
+            const values_buffer_slot = try self.func().emitGetElemPtr(values_managed_ptr, zero, 0);
+            try self.func().emitStore(values_buffer_slot, values_buffer);
+            const values_len_slot = try self.func().emitGetElemPtr(values_managed_ptr, len_offset, 8);
+            try self.func().emitStore(values_len_slot, elem_count);
+            const values_cap_slot = try self.func().emitGetElemPtr(values_managed_ptr, cap_offset, 8);
+            try self.func().emitStore(values_cap_slot, elem_count);
+        }
+
+        // Call Type$init(keys, values) - the static init method from InitableFromMapLiteral interface
+        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
+        try self.module.trackString(init_func_name);
+
+        // Look up the function and type info
+        const func_info = self.func_map.get(init_func_name) orelse {
+            self.reportErrorWithDetails(.E003, init_func_name);
+            return error.UnknownFunction;
+        };
+        const type_info = self.type_map.get(type_name) orelse {
+            std.debug.print("[AST->IR] InitableFromMapLiteral: unknown type '{s}'\n", .{type_name});
+            return error.UnknownType;
+        };
+
+        // Check if return type is a struct (needs sret)
+        const uses_sret = type_info == .struct_type;
+
+        if (uses_sret) {
+            // Allocate space for returned struct
+            const struct_size = type_info.struct_type.size;
+            const result_ptr = try self.func().emitAllocaSized(struct_size);
+
+            // Build args: [sret_ptr, keys_managed_ptr, values_managed_ptr]
+            var args = try self.func().allocator.alloc(ir.Value, 3);
+            args[0] = result_ptr;
+            args[1] = keys_managed_ptr;
+            args[2] = values_managed_ptr;
+
+            // Call init with sret
+            _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+            // Store result in var_map
+            try self.func().setValueName(result_ptr, decl.name);
+            try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+                result_ptr,
+                .{ .struct_type = type_name },
+                self.current_decl_is_mutable,
+                false,
+            ));
+        } else {
+            // Non-struct return type (unlikely for InitableFromMapLiteral)
+            var args = try self.func().allocator.alloc(ir.Value, 2);
+            args[0] = keys_managed_ptr;
+            args[1] = values_managed_ptr;
+            const result = try self.func().emitCall(init_func_name, args, func_info.return_type);
+            const result_ptr = try self.func().emitAlloca(func_info.return_type);
+            try self.func().emitStore(result_ptr, result orelse 0);
+            try self.func().setValueName(result_ptr, decl.name);
+            try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+                result_ptr,
+                .{ .primitive = PrimitiveInfo.fromIrType(func_info.return_type) },
+                self.current_decl_is_mutable,
+                false,
+            ));
+        }
+    }
+
     fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) ConvertError!TypedValue {
         const elements = arr_lit.elements;
 
@@ -2984,6 +3138,115 @@ pub const AstToIr = struct {
         return .{
             .value = arr_ptr,
             .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .stack, .element_struct_type = elem_struct_type } },
+        };
+    }
+
+    fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ConvertError!TypedValue {
+        const entries = map_lit.entries;
+
+        // Empty map literals require type annotation (cannot infer types)
+        if (entries.len == 0) {
+            debug.astToIr("error: empty map literal requires type annotation", .{});
+            self.reportError(.E006);
+            return error.UnknownType;
+        }
+
+        // Infer key and value types from the first entry
+        const first_key_typed = try self.convertExpression(entries[0].key.*);
+        const first_value_typed = try self.convertExpression(entries[0].value.*);
+
+        const key_type_name = first_key_typed.ty.getTypeName() orelse {
+            debug.astToIr("error: map key type must be a named type (primitive or struct)", .{});
+            self.reportError(.E006);
+            return error.UnknownType;
+        };
+        const value_type_name = first_value_typed.ty.getTypeName() orelse {
+            debug.astToIr("error: map value type must be a named type (primitive or struct)", .{});
+            self.reportError(.E006);
+            return error.UnknownType;
+        };
+
+        debug.astToIr("Map literal: {d} entries, key type={s}, value type={s}", .{ entries.len, key_type_name, value_type_name });
+
+        // Build the monomorphized Map type name: Map$KeyType$ValueType
+        var type_args = [_][]const u8{ key_type_name, value_type_name };
+        const map_type_name = try self.getOrCreateMonomorphizedType("Map", &type_args);
+
+        // Create two __ManagedArrays on stack (24 bytes each: ptr + len + capacity)
+        const keys_managed_ptr = try self.func().emitAllocaSized(24);
+        const values_managed_ptr = try self.func().emitAllocaSized(24);
+
+        // Allocate buffers for keys and values on heap
+        const elem_count = try self.func().emitConstI64(@intCast(entries.len));
+        const elem_size: i64 = 8; // All elements are 8 bytes
+        const buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(elem_size))));
+        const keys_buffer = try self.func().emitHeapAlloc(buffer_size);
+        const values_buffer = try self.func().emitHeapAlloc(buffer_size);
+
+        // Store entries into buffers
+        for (entries, 0..) |entry, i| {
+            const key_typed = if (i == 0) first_key_typed else try self.convertExpression(entry.key.*);
+            const value_typed = if (i == 0) first_value_typed else try self.convertExpression(entry.value.*);
+            const idx_val = try self.func().emitConstI64(@intCast(i));
+
+            const key_ptr = try self.func().emitGetElemPtr(keys_buffer, idx_val, @intCast(elem_size));
+            try self.func().emitStore(key_ptr, key_typed.value);
+
+            const value_ptr = try self.func().emitGetElemPtr(values_buffer, idx_val, @intCast(elem_size));
+            try self.func().emitStore(value_ptr, value_typed.value);
+        }
+
+        // Initialize keys __ManagedArray: {buffer, len, capacity}
+        const zero = try self.func().emitConstI64(0);
+        const keys_buffer_slot = try self.func().emitGetElemPtr(keys_managed_ptr, zero, 0);
+        try self.func().emitStore(keys_buffer_slot, keys_buffer);
+        const len_offset = try self.func().emitConstI64(1);
+        const keys_len_slot = try self.func().emitGetElemPtr(keys_managed_ptr, len_offset, 8);
+        try self.func().emitStore(keys_len_slot, elem_count);
+        const cap_offset = try self.func().emitConstI64(2);
+        const keys_cap_slot = try self.func().emitGetElemPtr(keys_managed_ptr, cap_offset, 8);
+        try self.func().emitStore(keys_cap_slot, elem_count);
+
+        // Initialize values __ManagedArray: {buffer, len, capacity}
+        const values_buffer_slot = try self.func().emitGetElemPtr(values_managed_ptr, zero, 0);
+        try self.func().emitStore(values_buffer_slot, values_buffer);
+        const values_len_slot = try self.func().emitGetElemPtr(values_managed_ptr, len_offset, 8);
+        try self.func().emitStore(values_len_slot, elem_count);
+        const values_cap_slot = try self.func().emitGetElemPtr(values_managed_ptr, cap_offset, 8);
+        try self.func().emitStore(values_cap_slot, elem_count);
+
+        // Build init function name: Map$K$V$init (static init from InitableFromMapLiteral interface)
+        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{map_type_name});
+        try self.module.trackString(init_func_name);
+
+        // Look up function and type info
+        const func_info = self.func_map.get(init_func_name) orelse {
+            debug.astToIr("error: Map type missing InitableFromMapLiteral.init: {s}", .{init_func_name});
+            self.reportErrorWithDetails(.E003, init_func_name);
+            return error.UnknownFunction;
+        };
+        const type_info = self.type_map.get(map_type_name) orelse {
+            debug.astToIr("error: unknown Map type: {s}", .{map_type_name});
+            self.reportError(.E006);
+            return error.UnknownType;
+        };
+
+        // Map$init returns a struct, so use sret calling convention
+        const struct_size = type_info.struct_type.size;
+        const result_ptr = try self.func().emitAllocaSized(struct_size);
+
+        // Build args: [sret_ptr, keys_managed_ptr, values_managed_ptr]
+        var args = try self.allocator.alloc(ir.Value, 3);
+        args[0] = result_ptr;
+        args[1] = keys_managed_ptr;
+        args[2] = values_managed_ptr;
+
+        // Call init with sret
+        _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+        return .{
+            .value = result_ptr,
+            .ty = .{ .struct_type = map_type_name },
         };
     }
 

@@ -74,6 +74,17 @@ pub const ValueType = union(enum) {
     pub fn isOptional(self: ValueType) bool {
         return self == .optional_type;
     }
+
+    /// Get the canonical type name for this ValueType
+    /// Returns the primitive name ("int", "float", etc.) or struct type name
+    pub fn getTypeName(self: ValueType) ?[]const u8 {
+        return switch (self) {
+            .primitive => |p| p.name,
+            .struct_type => |name| name,
+            .enum_type => |name| name,
+            .array_type, .optional_type => null,
+        };
+    }
 };
 
 /// Struct field info

@@ -272,7 +272,7 @@ The collections library provides generic data structures:
 - Open addressing with linear probing
 - Automatic resizing at 75% load factor
 - Supports any key type with `hash()` and `equals()` methods
-- Location: `stdlib/collections/map.maxon`
+- Location: `stdlib/collections/Map.maxon`
 
 ## Safe FFI
 

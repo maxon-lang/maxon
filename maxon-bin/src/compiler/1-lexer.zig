@@ -35,6 +35,8 @@ pub const TokenType = enum {
     Self,
     interface,
     extends,
+    from,
+    to,
 
     // Types
     int,
@@ -418,6 +420,8 @@ pub const Lexer = struct {
             .{ "Self", TokenType.Self },
             .{ "interface", TokenType.interface },
             .{ "extends", TokenType.extends },
+            .{ "from", TokenType.from },
+            .{ "to", TokenType.to },
         };
         inline for (keywords) |kw| {
             if (std.mem.eql(u8, text, kw[0])) {

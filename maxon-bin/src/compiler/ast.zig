@@ -241,6 +241,15 @@ pub const ArrayLiteralExpr = struct {
     elements: []const Expression,
 };
 
+pub const MapEntry = struct {
+    key: *const Expression,
+    value: *const Expression,
+};
+
+pub const MapLiteralExpr = struct {
+    entries: []const MapEntry,
+};
+
 pub const IndexExpr = struct {
     base: *const Expression,
     index: *const Expression,
@@ -277,6 +286,7 @@ pub const Expression = union(enum) {
     struct_init: StructInitExpr,
     field_access: FieldAccessExpr,
     array_literal: ArrayLiteralExpr,
+    map_literal: MapLiteralExpr,
     index: IndexExpr,
     array_type: ArrayTypeExpr,
     method_call: MethodCallExpr,

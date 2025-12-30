@@ -1156,7 +1156,7 @@ Two related issues with type size computation when structs contain nested struct
 - Open addressing with linear probing collision resolution
 - Automatic resizing (grow) at 75% load factor
 - Methods: `insert()`, `get()`, `has()`, `remove()`, `count()`, `clear()`
-- Location: `stdlib/collections/map.maxon`
+- Location: `stdlib/collections/Map.maxon`
 
 ### Winchester 1.2 (2025-11-27)
 

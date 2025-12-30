@@ -1,0 +1,339 @@
+// stdlib/collections/Map.maxon
+// Hash map implementation using open addressing with linear probing
+//
+// **Design Philosophy**:
+// - Open addressing for cache-friendly access
+// - Linear probing for simplicity
+// - Automatic resize at 75% load factor
+// - Keys must implement Hashable interface
+//
+// **Slot States**:
+// - 0 = EMPTY (never used)
+// - 1 = OCCUPIED (has valid key-value pair)
+// - 2 = DELETED (tombstone for probing continuity)
+//
+// **Usage**:
+// ```maxon
+// var m = Map from ["a": 1, "b": 2, "c": 3]
+// m.insert("d", 4)
+// if let v = m.get("b") 'check'
+//     print("found: {v}")
+// end 'check'
+// ```
+
+export type Map uses Key, Value is Dictionary with Key, Value, InitableFromMapLiteral with Key, Value
+	var keys Array of Key              // Key storage
+	var values Array of Value          // Value storage
+	var states Array of int            // Slot states: 0=empty, 1=occupied, 2=deleted
+	var count int                      // Number of occupied entries
+	var capacity int                   // Total slots
+
+	// InitableFromMapLiteral conformance - initialize Map from map literal
+	// Called by the compiler for `Map from ["a": 1, "b": 2]` syntax
+	static function InitableFromMapLiteral.init(keys __ManagedArray, values __ManagedArray) returns Self
+		// Get number of elements in the managed arrays
+		var numElements = __managed_array_len(keys)
+
+		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
+		var cap = 16
+		while cap < numElements * 2 'calc_cap'
+			cap = cap * 2
+		end 'calc_cap'
+
+		// Allocate internal arrays
+		var ks = Array of cap Key
+		var vs = Array of cap Value
+		var sts = Array of cap int
+
+		// Create the map type (copies array structs by value)
+		var result = Self{keys: ks, values: vs, states: sts, count: 0, capacity: cap}
+
+		// Insert each key-value pair from the managed arrays
+		var i = 0
+		while i < numElements 'insert_loop'
+			if let k = keys[i] 'get_key'
+				if let v = values[i] 'get_value'
+					result.insert(k, v)
+				end 'get_value'
+			end 'get_key'
+			i = i + 1
+		end 'insert_loop'
+
+		return result
+	end 'init'
+
+	/// Insert a key-value pair into the map
+	/// If the key already exists, updates the value
+	/// Automatically resizes the map when load factor exceeds 75%
+	export function insert(key Key, value Value)
+		// Initialize if empty struct was created with zero capacity
+		if capacity == 0 'init_empty'
+			var newKeys = Array of 16 Key
+			var newValues = Array of 16 Value
+			var newStates = Array of 16 int
+			keys = newKeys
+			values = newValues
+			states = newStates
+			capacity = 16
+		end 'init_empty'
+
+		// Check load factor and grow if needed (75% threshold)
+		var loadLimit = (capacity * 3) / 4
+		if count >= loadLimit 'grow'
+			grow()
+		end 'grow'
+
+		var hash = key.hash()
+		var index = hash mod capacity
+		if index < 0 'fix_negative'
+			index = index + capacity
+		end 'fix_negative'
+
+		var firstDeleted = -1
+		var probes = 0
+
+		while probes < capacity 'probe'
+			var state = 0
+			if let s = states[index] 'unwrap_state'
+				state = s
+			end 'unwrap_state'
+
+			if state == 0 'empty'
+				// Empty slot - insert here or at first deleted
+				var insertIndex = index
+				if firstDeleted >= 0 'use_deleted'
+					insertIndex = firstDeleted
+				end 'use_deleted'
+
+				keys[insertIndex] = key
+				values[insertIndex] = value
+				states[insertIndex] = 1
+				count = count + 1
+				return
+			end 'empty'
+
+			if state == 2 and firstDeleted < 0 'mark_deleted'
+				firstDeleted = index
+			end 'mark_deleted'
+
+			if state == 1 'check_exists'
+				if let existing = keys[index] 'unwrap_existing'
+					if existing.equals(key) 'exists'
+						// Key already exists - update value
+						values[index] = value
+						return
+					end 'exists'
+				end 'unwrap_existing'
+			end 'check_exists'
+
+			// Linear probing
+			index = (index + 1) mod capacity
+			probes = probes + 1
+		end 'probe'
+
+		// Should never reach here if load factor is maintained
+		// But if we do, insert at first deleted slot
+		if firstDeleted >= 0 'fallback'
+			keys[firstDeleted] = key
+			values[firstDeleted] = value
+			states[firstDeleted] = 1
+			count = count + 1
+		end 'fallback'
+	end 'insert'
+
+	/// Get the value for a key, returns nil if not found
+	export function get(key Key) returns Value or nil
+		// Empty map contains nothing
+		if capacity == 0 'empty_check'
+			return nil
+		end 'empty_check'
+
+		var hash = key.hash()
+		var index = hash mod capacity
+		if index < 0 'fix_negative'
+			index = index + capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < capacity 'probe'
+			var state = 0
+			if let s = states[index] 'unwrap_state'
+				state = s
+			end 'unwrap_state'
+
+			if state == 0 'empty'
+				return nil
+			end 'empty'
+
+			if state == 1 'check_found'
+				if let existing = keys[index] 'unwrap_existing'
+					if existing.equals(key) 'found'
+						return values[index]
+					end 'found'
+				end 'unwrap_existing'
+			end 'check_found'
+
+			index = (index + 1) mod capacity
+			probes = probes + 1
+		end 'probe'
+
+		return nil
+	end 'get'
+
+	/// Check if key exists in the map
+	export function contains(key Key) returns bool
+		// Empty map contains nothing
+		if capacity == 0 'empty_check'
+			return false
+		end 'empty_check'
+
+		var hash = key.hash()
+		var index = hash mod capacity
+		if index < 0 'fix_negative'
+			index = index + capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < capacity 'probe'
+			var state = 0
+			if let s = states[index] 'unwrap_state'
+				state = s
+			end 'unwrap_state'
+
+			if state == 0 'empty'
+				return false
+			end 'empty'
+
+			if state == 1 'check_found'
+				if let existing = keys[index] 'unwrap_existing'
+					if existing.equals(key) 'found'
+						return true
+					end 'found'
+				end 'unwrap_existing'
+			end 'check_found'
+
+			index = (index + 1) mod capacity
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'contains'
+
+	/// Remove key from map, returns true if key was present
+	export function remove(key Key) returns bool
+		// Empty map has nothing to remove
+		if capacity == 0 'empty_check'
+			return false
+		end 'empty_check'
+
+		var hash = key.hash()
+		var index = hash mod capacity
+		if index < 0 'fix_negative'
+			index = index + capacity
+		end 'fix_negative'
+
+		var probes = 0
+		while probes < capacity 'probe'
+			var state = 0
+			if let s = states[index] 'unwrap_state'
+				state = s
+			end 'unwrap_state'
+
+			if state == 0 'empty'
+				return false
+			end 'empty'
+
+			if state == 1 'check_found'
+				if let existing = keys[index] 'unwrap_existing'
+					if existing.equals(key) 'found'
+						states[index] = 2
+						count = count - 1
+						return true
+					end 'found'
+				end 'unwrap_existing'
+			end 'check_found'
+
+			index = (index + 1) mod capacity
+			probes = probes + 1
+		end 'probe'
+
+		return false
+	end 'remove'
+
+	/// Get number of entries in the map
+	export function count() returns int
+		return count
+	end 'count'
+
+	/// Get current capacity (total number of slots)
+	export function capacity() returns int
+		return capacity
+	end 'capacity'
+
+	// Internal: grow the table when load factor exceeds threshold
+	function grow()
+		var oldCapacity = capacity
+		var newCapacity = oldCapacity * 2
+		if newCapacity == 0 'handle_zero'
+			newCapacity = 16
+		end 'handle_zero'
+
+		// Save references to old arrays
+		var oldKeys = keys
+		var oldValues = values
+		var oldStates = states
+
+		// Allocate new arrays
+		var newKeys = Array of newCapacity Key
+		var newValues = Array of newCapacity Value
+		var newStates = Array of newCapacity int
+
+		// Update type to use new arrays
+		keys = newKeys
+		values = newValues
+		states = newStates
+		capacity = newCapacity
+		count = 0
+
+		// Rehash all occupied entries from old arrays
+		var i = 0
+		while i < oldCapacity 'rehash'
+			var state = 0
+			if let s = oldStates[i] 'unwrap_state'
+				state = s
+			end 'unwrap_state'
+
+			if state == 1 'occupied'
+				// Re-insert into new arrays using insert logic
+				if let key = oldKeys[i] 'unwrap_key'
+					if let value = oldValues[i] 'unwrap_value'
+						var hash = key.hash()
+						var index = hash mod newCapacity
+						if index < 0 'fix_negative'
+							index = index + newCapacity
+						end 'fix_negative'
+
+						// Find empty slot (no deleted slots in fresh array)
+						var currentState = 0
+						if let cs = states[index] 'unwrap_current'
+							currentState = cs
+						end 'unwrap_current'
+						while currentState != 0 'find_slot'
+							index = (index + 1) mod newCapacity
+							currentState = 0
+							if let nextS = states[index] 'unwrap_next'
+								currentState = nextS
+							end 'unwrap_next'
+						end 'find_slot'
+
+						keys[index] = key
+						values[index] = value
+						states[index] = 1
+						count = count + 1
+					end 'unwrap_value'
+				end 'unwrap_key'
+			end 'occupied'
+			i = i + 1
+		end 'rehash'
+	end 'grow'
+end 'Map'

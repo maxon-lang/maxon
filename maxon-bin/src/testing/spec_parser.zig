@@ -287,7 +287,14 @@ fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_
         const block_end = std.mem.indexOfPos(u8, content, content_start, "```") orelse return null;
 
         const exit_code_str = std.mem.trim(u8, content[content_start..block_end], " \t\r\n");
-        const exit_code = std.fmt.parseInt(u8, exit_code_str, 10) catch return ParseError.InvalidExitCode;
+        const exit_code = std.fmt.parseInt(u8, exit_code_str, 10) catch {
+            std.debug.print("InvalidExitCode: could not parse '{s}' as exit code at position {d}\n", .{ exit_code_str, content_start });
+            // Show context around the error
+            const context_start = if (start_pos > 200) start_pos - 200 else 0;
+            const context_end = @min(block_end + 100, content.len);
+            std.debug.print("Context:\n---\n{s}\n---\n", .{ content[context_start..context_end] });
+            return ParseError.InvalidExitCode;
+        };
 
         var end_pos = block_end + 3;
 
@@ -362,7 +369,7 @@ pub fn parseAllSpecs(
 
         // Parse spec
         const spec = parseSpec(allocator, spec_name, content) catch |err| {
-            std.debug.print("Error parsing spec file '{s}': {}\n", .{ entry.name, err });
+            std.debug.print("Error parsing spec file '{s}': {s}\n", .{ entry.name, @errorName(err) });
             continue;
         };
 
