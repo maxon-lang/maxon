@@ -7,7 +7,7 @@ const ir = @import("ir.zig");
 const mutation_analysis = @import("3-mutation_analysis.zig");
 const optimizer = @import("5-optimizer.zig");
 const ir_codegen = @import("ir_codegen.zig");
-const asm_gen = @import("asm_gen.zig");
+const disasm = @import("disasm.zig");
 const pe = @import("7-pe.zig");
 pub const debug = @import("debug.zig");
 pub const compile_error = @import("error.zig");
@@ -418,11 +418,6 @@ pub fn compileMultiple(
         try writeIrFile(final_module.*, output_path, allocator);
     }
 
-    // Emit assembly to file if requested
-    if (options.emit_asm) {
-        try writeAsmFile(final_module.*, output_path, allocator);
-    }
-
     // Generate x86-64 code
     debug.log("Generating x86-64 code from merged IR", .{});
     const codegen_result = ir_codegen.generate(final_module.*, allocator, .{
@@ -433,6 +428,11 @@ pub fn compileMultiple(
     };
     defer allocator.free(codegen_result.code);
     defer allocator.free(codegen_result.external_patches);
+
+    // Emit assembly to file if requested (disassemble actual machine code)
+    if (options.emit_asm) {
+        try writeAsmFileFromCode(codegen_result.code, output_path, allocator);
+    }
 
     // Write PE executable
     pe.writePE(output_path, codegen_result.code, codegen_result.external_patches) catch {
@@ -807,7 +807,8 @@ fn writeIrFile(ir_module: ir.Module, output_path: []const u8, allocator: std.mem
     };
 }
 
-fn writeAsmFile(ir_module: ir.Module, output_path: []const u8, allocator: std.mem.Allocator) !void {
+/// Write disassembled machine code to .asm file using Zydis
+fn writeAsmFileFromCode(code: []const u8, output_path: []const u8, allocator: std.mem.Allocator) !void {
     const asm_path = blk: {
         if (std.mem.endsWith(u8, output_path, ".exe")) {
             const base = output_path[0 .. output_path.len - 4];
@@ -822,7 +823,10 @@ fn writeAsmFile(ir_module: ir.Module, output_path: []const u8, allocator: std.me
     };
     defer allocator.free(asm_path);
 
-    const asm_text = asm_gen.generateAssembly(ir_module, allocator) catch {
+    // PE base address for .text section (standard Windows value)
+    const base_addr: u64 = 0x00401000;
+
+    const asm_text = disasm.disassemble(code, base_addr, allocator) catch {
         return error.WriteError;
     };
     defer allocator.free(asm_text);

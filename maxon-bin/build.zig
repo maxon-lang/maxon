@@ -13,6 +13,14 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Add Zydis C library for disassembly
+    exe.addCSourceFile(.{
+        .file = b.path("src/vendor/zydis/Zydis.c"),
+        .flags = &.{"-DZYDIS_STATIC_BUILD"},
+    });
+    exe.addIncludePath(b.path("src/vendor/zydis"));
+    exe.linkLibC();
+
     b.installArtifact(exe);
 
     // Copy maxon.exe to /bin after build
