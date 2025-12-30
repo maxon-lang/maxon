@@ -125,8 +125,12 @@ pub const ForStmt = struct {
     label: []const u8,
 };
 
-pub const BreakStmt = struct {};
-pub const ContinueStmt = struct {};
+pub const BreakStmt = struct {
+    label: ?[]const u8 = null, // Optional label to break to
+};
+pub const ContinueStmt = struct {
+    label: ?[]const u8 = null, // Optional label to continue to
+};
 
 pub const ElseUnwrapDecl = struct {
     var_name: []const u8,
@@ -186,6 +190,7 @@ pub const CompareOp = enum {
 
 pub const LogicalOp = enum {
     @"and",
+    @"or",
 };
 
 pub const LogicalExpr = struct {
@@ -271,6 +276,11 @@ pub const NilCoalesceExpr = struct {
     default: *const Expression,
 };
 
+pub const CastExpr = struct {
+    expr: *const Expression,
+    target_type: []const u8, // "int", "byte", "float", etc.
+};
+
 pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
@@ -278,6 +288,8 @@ pub const Expression = union(enum) {
     nil_lit,
     self_expr, // reference to current instance in methods
     identifier: []const u8,
+    string_literal: []const u8, // double-quoted string literal "hello"
+    char_literal: []const u8, // single-quoted character literal 'a' (grapheme cluster, UTF-8 bytes)
     unary: UnaryExpr,
     binary: BinaryExpr,
     compare: CompareExpr,
@@ -291,4 +303,5 @@ pub const Expression = union(enum) {
     array_type: ArrayTypeExpr,
     method_call: MethodCallExpr,
     nil_coalesce: NilCoalesceExpr,
+    cast: CastExpr,
 };

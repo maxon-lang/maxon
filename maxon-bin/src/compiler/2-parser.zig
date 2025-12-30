@@ -412,6 +412,11 @@ pub const Parser = struct {
         if (self.check(.Self)) {
             return self.advance().text;
         }
+        if (self.check(.array)) {
+            _ = self.advance();
+            // Normalize lowercase 'array' keyword to 'Array' type name
+            return "Array";
+        }
         if (self.check(.identifier)) {
             return self.advance().text;
         }
@@ -557,13 +562,17 @@ pub const Parser = struct {
         }
         if (self.check(.@"break")) {
             _ = self.advance();
+            // Optional label after break
+            const label = if (self.check(.string)) self.advance().text else null;
             _ = try self.expect(.newline);
-            return stmtAt(.{ .break_stmt = .{} }, start_line);
+            return stmtAt(.{ .break_stmt = .{ .label = label } }, start_line);
         }
         if (self.check(.@"continue")) {
             _ = self.advance();
+            // Optional label after continue
+            const label = if (self.check(.string)) self.advance().text else null;
             _ = try self.expect(.newline);
-            return stmtAt(.{ .continue_stmt = .{} }, start_line);
+            return stmtAt(.{ .continue_stmt = .{ .label = label } }, start_line);
         }
         // Check for assignment, index assignment, or call statement: identifier or self...
         if (self.check(.identifier) or self.check(.self)) {
@@ -938,34 +947,33 @@ pub const Parser = struct {
     }
 
     fn parseExpression(self: *Parser) ParseError!?ast.Expression {
-        return try self.parseNilCoalesce();
+        return try self.parseLogicalOr();
     }
 
-    fn parseNilCoalesce(self: *Parser) ParseError!?ast.Expression {
+    fn parseLogicalOr(self: *Parser) ParseError!?ast.Expression {
         var left = try self.parseLogicalAnd() orelse return null;
 
-        // Check for 'or' keyword (nil coalescing)
-        if (self.check(.@"or")) {
+        while (self.check(.@"or")) {
             // Make sure 'or' is not followed by 'nil' (that's a type annotation, not expression)
             const next = self.peek(1);
             if (next != null and next.?.type == .nil) {
-                // This is "T or nil" type annotation, not nil coalescing
-                return left;
+                // This is "T or nil" type annotation, not logical or
+                break;
             }
 
             _ = self.advance();
-            const default_expr = try self.parseComparison() orelse {
+            const right = try self.parseLogicalAnd() orelse {
                 self.reportError(.E003);
                 return error.ExpectedExpression;
             };
 
-            // Create heap-allocated copies of both expressions
-            const opt_ptr = try self.createExpr(left);
-            const def_ptr = try self.createExpr(default_expr);
+            const left_ptr = try self.createExpr(left);
+            const right_ptr = try self.createExpr(right);
 
-            left = .{ .nil_coalesce = .{
-                .optional = opt_ptr,
-                .default = def_ptr,
+            left = .{ .logical = .{
+                .left = left_ptr,
+                .op = .@"or",
+                .right = right_ptr,
             } };
         }
         return left;
@@ -1066,6 +1074,18 @@ pub const Parser = struct {
                 .operand = try self.createExpr(operand),
             } };
         }
+        // Check for logical not
+        if (self.check(.@"not")) {
+            _ = self.advance();
+            const operand = try self.parseUnary() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            return .{ .unary = .{
+                .op = .not,
+                .operand = try self.createExpr(operand),
+            } };
+        }
         return self.parsePrimary();
     }
 
@@ -1126,6 +1146,11 @@ pub const Parser = struct {
         if (self.check(.nil)) {
             _ = self.advance();
             return try self.parsePostfix(.nil_lit);
+        }
+        // String literal
+        if (self.check(.string_literal)) {
+            const token = self.advance();
+            return try self.parsePostfix(.{ .string_literal = token.text });
         }
         // Self expression (instance reference in methods)
         if (self.check(.self)) {
@@ -1342,6 +1367,15 @@ pub const Parser = struct {
                     .base = base_ptr,
                     .index = try self.createExpr(index_expr),
                 } };
+            } else if (self.check(.as)) {
+                // Type cast: expr as Type
+                _ = self.advance(); // consume 'as'
+                const target_type = try self.expectTypeName();
+                const base_ptr = try self.createExpr(expr);
+                expr = .{ .cast = .{
+                    .expr = base_ptr,
+                    .target_type = target_type,
+                } };
             } else {
                 break;
             }
@@ -1516,7 +1550,9 @@ pub const Parser = struct {
 
         _ = try self.expect(.rparen);
         const args_slice = try args.toOwnedSlice(self.allocator);
-        return .{ .call = .{ .func_name = func_name, .args = args_slice } };
+        const call_expr: ast.Expression = .{ .call = .{ .func_name = func_name, .args = args_slice } };
+        // Allow postfix operators (field access, indexing, cast) on call results
+        return try self.parsePostfix(call_expr);
     }
 
     fn expect(self: *Parser, token_type: TokenType) !Token {

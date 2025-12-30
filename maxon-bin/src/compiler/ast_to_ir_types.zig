@@ -40,11 +40,12 @@ pub const PrimitiveInfo = struct {
     /// Create PrimitiveInfo from ir.Type with inferred type name
     pub fn fromIrType(ir_type: ir.Type) PrimitiveInfo {
         const type_name = switch (ir_type) {
+            .i8 => "byte",
+            .i32 => "int",
             .i64 => "int",
             .f64 => "float",
             .ptr => "ptr",
             .void => "void",
-            .i32 => "int",
         };
         return .{ .ir_type = ir_type, .name = type_name };
     }

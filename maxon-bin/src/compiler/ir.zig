@@ -6,6 +6,7 @@ pub const Value = u32;
 
 /// IR Type
 pub const Type = enum {
+    i8, // byte type
     i32,
     i64,
     f64,
@@ -14,6 +15,7 @@ pub const Type = enum {
 
     pub fn format(self: Type) []const u8 {
         return switch (self) {
+            .i8 => "i8",
             .i32 => "i32",
             .i64 => "i64",
             .f64 => "f64",
@@ -28,13 +30,15 @@ pub const Instruction = struct {
     op: Op,
     result: ?Value = null,
     result_type: Type = .void,
-    operands: [2]Operand = .{ .none, .none },
+    operands: [3]Operand = .{ .none, .none, .none },
 
     pub const Op = enum {
         // Constants
+        const_i8,
         const_i32,
         const_i64,
         const_f64,
+        const_string, // string constant (pointer to data section)
 
         // Memory
         alloca,
@@ -42,6 +46,8 @@ pub const Instruction = struct {
         alloca_dynamic, // alloca with runtime size value
         load,
         store,
+        store_i8, // store byte
+        store_i32, // store 32-bit int
         getfieldptr,
 
         // Integer arithmetic
@@ -50,6 +56,10 @@ pub const Instruction = struct {
         mul,
         div,
         mod,
+
+        // Bitwise operations
+        band, // bitwise AND
+        bitor, // bitwise OR
 
         // Float arithmetic
         fadd,
@@ -62,6 +72,9 @@ pub const Instruction = struct {
         sitofp, // signed int to float
         fabs, // float absolute value
         bitcast_f64_to_i64, // reinterpret f64 bits as i64 (for hashing)
+        sext_i32_i64, // sign-extend i32 to i64
+        trunc_i64_i32, // truncate i64 to i32
+        zext_i8_i64, // zero-extend i8 (byte) to i64
 
         // Control flow
         ret,
@@ -94,7 +107,8 @@ pub const Instruction = struct {
         getelemptr, // Get pointer to array element
 
         // Memory operations
-        memcpy, // Copy memory: dest, src, size
+        memcpy, // Copy memory: dest, src, size (static i32 size in result field)
+        memcpy_dyn, // Copy memory with dynamic size: dest, src, size_value
         memset, // Set memory: dest, value, size (value is typically 0)
 
         // Heap allocation
@@ -104,20 +118,26 @@ pub const Instruction = struct {
 
         pub fn format(self: Op) []const u8 {
             return switch (self) {
+                .const_i8 => "const.i8",
                 .const_i32 => "const.i32",
                 .const_i64 => "const.i64",
                 .const_f64 => "const.f64",
+                .const_string => "const.string",
                 .alloca => "alloca",
                 .alloca_sized => "alloca.sized",
                 .alloca_dynamic => "alloca.dynamic",
                 .load => "load",
                 .store => "store",
+                .store_i8 => "store.i8",
+                .store_i32 => "store.i32",
                 .getfieldptr => "getfieldptr",
                 .add => "add",
                 .sub => "sub",
                 .mul => "mul",
                 .div => "div",
                 .mod => "mod",
+                .band => "band",
+                .bitor => "bitor",
                 .fadd => "fadd",
                 .fsub => "fsub",
                 .fmul => "fmul",
@@ -126,6 +146,9 @@ pub const Instruction = struct {
                 .sitofp => "sitofp",
                 .fabs => "fabs",
                 .bitcast_f64_to_i64 => "bitcast.f64.i64",
+                .sext_i32_i64 => "sext.i32.i64",
+                .trunc_i64_i32 => "trunc.i64.i32",
+                .zext_i8_i64 => "zext.i8.i64",
                 .ret => "ret",
                 .br => "br",
                 .br_cond => "br.cond",
@@ -145,6 +168,7 @@ pub const Instruction = struct {
                 .param => "param",
                 .getelemptr => "getelemptr",
                 .memcpy => "memcpy",
+                .memcpy_dyn => "memcpy.dyn",
                 .memset => "memset",
                 .heap_alloc => "heap.alloc",
                 .heap_free => "heap.free",
@@ -163,6 +187,7 @@ pub const Instruction = struct {
         func_name: []const u8,
         call_args: []const Value,
         elem_size: i32, // Element size for getelemptr
+        string_data: []const u8, // String constant data
     };
 };
 
@@ -283,18 +308,22 @@ pub const Function = struct {
     /// Get a base name for an operation type (temporary values).
     fn opToBaseName(op: Instruction.Op) []const u8 {
         return switch (op) {
+            .const_i8 => "tmp_const",
             .const_i32 => "tmp_const",
             .const_i64 => "tmp_const",
             .const_f64 => "tmp_fconst",
+            .const_string => "tmp_strconst",
             .alloca, .alloca_sized, .alloca_dynamic => "tmp_alloca",
             .load => "tmp_load",
-            .store => "tmp_store",
+            .store, .store_i8, .store_i32 => "tmp_store",
             .getfieldptr => "tmp_fieldptr",
             .add => "tmp_add",
             .sub => "tmp_sub",
             .mul => "tmp_mul",
             .div => "tmp_div",
             .mod => "tmp_mod",
+            .band => "tmp_band",
+            .bitor => "tmp_bitor",
             .fadd => "tmp_fadd",
             .fsub => "tmp_fsub",
             .fmul => "tmp_fmul",
@@ -302,6 +331,10 @@ pub const Function = struct {
             .fptosi => "tmp_fptosi",
             .sitofp => "tmp_sitofp",
             .fabs => "tmp_fabs",
+            .bitcast_f64_to_i64 => "tmp_bitcast",
+            .sext_i32_i64 => "tmp_sext",
+            .trunc_i64_i32 => "tmp_trunc",
+            .zext_i8_i64 => "tmp_zext",
             .ret => "tmp_ret",
             .br, .br_cond => "tmp_br",
             .icmp_eq, .icmp_ne, .icmp_lt, .icmp_le, .icmp_gt, .icmp_ge => "tmp_icmp",
@@ -310,11 +343,11 @@ pub const Function = struct {
             .param => "tmp_param",
             .getelemptr => "tmp_elemptr",
             .memcpy => "tmp_memcpy",
+            .memcpy_dyn => "tmp_memcpy",
             .memset => "tmp_memset",
             .heap_alloc => "tmp_heap",
             .heap_free => "tmp_free",
             .heap_realloc => "tmp_realloc",
-            .bitcast_f64_to_i64 => "tmp_bitcast",
         };
     }
 
@@ -325,7 +358,7 @@ pub const Function = struct {
     }
 
     // Core emit helpers
-    fn emitWithResult(self: *Function, op: Instruction.Op, result_type: Type, operands: [2]Instruction.Operand) !Value {
+    fn emitWithResult(self: *Function, op: Instruction.Op, result_type: Type, operands: [3]Instruction.Operand) !Value {
         const result = self.newValue();
         try self.emit(.{ .op = op, .result = result, .result_type = result_type, .operands = operands });
         // Auto-name based on operation type
@@ -334,36 +367,49 @@ pub const Function = struct {
     }
 
     pub fn emitBinaryOp(self: *Function, op: Instruction.Op, lhs: Value, rhs: Value, ty: Type) !Value {
-        return self.emitWithResult(op, ty, .{ .{ .value = lhs }, .{ .value = rhs } });
+        return self.emitWithResult(op, ty, .{ .{ .value = lhs }, .{ .value = rhs }, .none });
     }
 
     pub fn emitUnaryOp(self: *Function, op: Instruction.Op, src: Value, ty: Type) !Value {
-        return self.emitWithResult(op, ty, .{ .{ .value = src }, .none });
+        return self.emitWithResult(op, ty, .{ .{ .value = src }, .none, .none });
     }
 
     // Constants
+    pub fn emitConstI8(self: *Function, value: u8) !Value {
+        return self.emitWithResult(.const_i8, .i8, .{ .{ .immediate_i32 = @intCast(value) }, .none, .none });
+    }
+
+    pub fn emitConstI32(self: *Function, value: i32) !Value {
+        return self.emitWithResult(.const_i32, .i32, .{ .{ .immediate_i32 = value }, .none, .none });
+    }
+
     pub fn emitConstI64(self: *Function, value: i64) !Value {
-        return self.emitWithResult(.const_i64, .i64, .{ .{ .immediate_i64 = value }, .none });
+        return self.emitWithResult(.const_i64, .i64, .{ .{ .immediate_i64 = value }, .none, .none });
     }
 
     pub fn emitConstF64(self: *Function, value: f64) !Value {
-        return self.emitWithResult(.const_f64, .f64, .{ .{ .immediate_f64 = value }, .none });
+        return self.emitWithResult(.const_f64, .f64, .{ .{ .immediate_f64 = value }, .none, .none });
+    }
+
+    /// Emit a string constant (pointer to data section)
+    pub fn emitStringConstant(self: *Function, str: []const u8) !Value {
+        return self.emitWithResult(.const_string, .ptr, .{ .{ .string_data = str }, .none, .none });
     }
 
     // Memory
     pub fn emitAlloca(self: *Function, ty: Type) !Value {
         _ = ty;
-        return self.emitWithResult(.alloca, .ptr, .{ .none, .none });
+        return self.emitWithResult(.alloca, .ptr, .{ .none, .none, .none });
     }
 
     pub fn emitAllocaSized(self: *Function, size_bytes: i32) !Value {
         if (size_bytes <= 0) return error.ZeroSizeAllocation;
-        return self.emitWithResult(.alloca_sized, .ptr, .{ .{ .immediate_i32 = size_bytes }, .none });
+        return self.emitWithResult(.alloca_sized, .ptr, .{ .{ .immediate_i32 = size_bytes }, .none, .none });
     }
 
     pub fn emitAllocaDynamic(self: *Function, size_value: Value) !Value {
         // Note: for dynamic sizes, zero-check must happen at runtime
-        return self.emitWithResult(.alloca_dynamic, .ptr, .{ .{ .value = size_value }, .none });
+        return self.emitWithResult(.alloca_dynamic, .ptr, .{ .{ .value = size_value }, .none, .none });
     }
 
     pub fn emitLoad(self: *Function, ptr: Value, ty: Type) !Value {
@@ -371,40 +417,45 @@ pub const Function = struct {
     }
 
     pub fn emitStore(self: *Function, ptr: Value, value: Value) !void {
-        try self.emit(.{ .op = .store, .operands = .{ .{ .value = ptr }, .{ .value = value } } });
+        try self.emit(.{ .op = .store, .operands = .{ .{ .value = ptr }, .{ .value = value }, .none } });
+    }
+
+    pub fn emitStoreI8(self: *Function, ptr: Value, value: Value) !void {
+        try self.emit(.{ .op = .store_i8, .operands = .{ .{ .value = ptr }, .{ .value = value }, .none } });
+    }
+
+    pub fn emitStoreI32(self: *Function, ptr: Value, value: Value) !void {
+        try self.emit(.{ .op = .store_i32, .operands = .{ .{ .value = ptr }, .{ .value = value }, .none } });
     }
 
     pub fn emitGetFieldPtr(self: *Function, base_ptr: Value, field_offset: i32) !Value {
-        return self.emitWithResult(.getfieldptr, .ptr, .{ .{ .value = base_ptr }, .{ .immediate_i32 = field_offset } });
+        return self.emitWithResult(.getfieldptr, .ptr, .{ .{ .value = base_ptr }, .{ .immediate_i32 = field_offset }, .none });
     }
 
     pub fn emitGetElemPtr(self: *Function, base_ptr: Value, index: Value, elem_size: i32) !Value {
         const result = self.newValue();
-        // The codegen will need to track element sizes separately
-        // For simplicity, assume all elements are 8 bytes (i64/f64/ptr)
-        _ = elem_size;
         try self.emit(.{
             .op = .getelemptr,
             .result = result,
             .result_type = .ptr,
-            .operands = .{ .{ .value = base_ptr }, .{ .value = index } },
+            .operands = .{ .{ .value = base_ptr }, .{ .value = index }, .{ .elem_size = elem_size } },
         });
         return result;
     }
 
     // Control flow
     pub fn emitRet(self: *Function, value: ?Value) !void {
-        try self.emit(.{ .op = .ret, .operands = .{ if (value) |v| .{ .value = v } else .none, .none } });
+        try self.emit(.{ .op = .ret, .operands = .{ if (value) |v| .{ .value = v } else .none, .none, .none } });
     }
 
     pub fn emitBr(self: *Function, block_idx: u32) !void {
-        try self.emit(.{ .op = .br, .operands = .{ .{ .block_ref = block_idx }, .none } });
+        try self.emit(.{ .op = .br, .operands = .{ .{ .block_ref = block_idx }, .none, .none } });
     }
 
     pub fn emitBrCond(self: *Function, cond: Value, then_block: u32, else_block: u32) !void {
         try self.emit(.{
             .op = .br_cond,
-            .operands = .{ .{ .value = cond }, .{ .block_ref = then_block } },
+            .operands = .{ .{ .value = cond }, .{ .block_ref = then_block }, .none },
             .result = else_block, // Use result field for else block
         });
     }
@@ -412,24 +463,34 @@ pub const Function = struct {
     // Function calls
     pub fn emitCall(self: *Function, func_name: []const u8, args: []const Value, ret_type: Type) !?Value {
         if (ret_type == .void) {
-            try self.emit(.{ .op = .call, .operands = .{ .{ .func_name = func_name }, .{ .call_args = args } } });
+            try self.emit(.{ .op = .call, .operands = .{ .{ .func_name = func_name }, .{ .call_args = args }, .none } });
             return null;
         }
-        return try self.emitWithResult(.call, ret_type, .{ .{ .func_name = func_name }, .{ .call_args = args } });
+        return try self.emitWithResult(.call, ret_type, .{ .{ .func_name = func_name }, .{ .call_args = args }, .none });
     }
 
     // Parameters
     pub fn emitParam(self: *Function, param_index: i32, ty: Type) !Value {
-        return self.emitWithResult(.param, ty, .{ .{ .immediate_i32 = param_index }, .none });
+        return self.emitWithResult(.param, ty, .{ .{ .immediate_i32 = param_index }, .none, .none });
     }
 
-    // Memory copy
+    // Memory copy (static size)
     pub fn emitMemcpy(self: *Function, dest: Value, src: Value, size: i32) !void {
         try self.emit(.{
             .op = .memcpy,
-            .operands = .{ .{ .value = dest }, .{ .value = src } },
+            .operands = .{ .{ .value = dest }, .{ .value = src }, .none },
             .result_type = .void,
             .result = @intCast(size), // Store size in result field
+        });
+    }
+
+    // Memory copy (dynamic size value)
+    pub fn emitMemcpyDynamic(self: *Function, dest: Value, src: Value, size: Value) !void {
+        try self.emit(.{
+            .op = .memcpy_dyn,
+            .operands = .{ .{ .value = dest }, .{ .value = src }, .none },
+            .result_type = .void,
+            .result = size, // Store size value reference in result field
         });
     }
 
@@ -437,7 +498,7 @@ pub const Function = struct {
     pub fn emitMemset(self: *Function, dest: Value, byte_value: u8, size: i32) !void {
         try self.emit(.{
             .op = .memset,
-            .operands = .{ .{ .value = dest }, .{ .immediate_i32 = @intCast(byte_value) } },
+            .operands = .{ .{ .value = dest }, .{ .immediate_i32 = @intCast(byte_value) }, .none },
             .result_type = .void,
             .result = @intCast(size), // Store size in result field
         });
@@ -445,15 +506,15 @@ pub const Function = struct {
 
     // Heap allocation
     pub fn emitHeapAlloc(self: *Function, size: Value) !Value {
-        return self.emitWithResult(.heap_alloc, .ptr, .{ .{ .value = size }, .none });
+        return self.emitWithResult(.heap_alloc, .ptr, .{ .{ .value = size }, .none, .none });
     }
 
     pub fn emitHeapFree(self: *Function, ptr: Value) !void {
-        try self.emit(.{ .op = .heap_free, .operands = .{ .{ .value = ptr }, .none } });
+        try self.emit(.{ .op = .heap_free, .operands = .{ .{ .value = ptr }, .none, .none } });
     }
 
     pub fn emitHeapRealloc(self: *Function, old_ptr: Value, new_size: Value) !Value {
-        return self.emitWithResult(.heap_realloc, .ptr, .{ .{ .value = old_ptr }, .{ .value = new_size } });
+        return self.emitWithResult(.heap_realloc, .ptr, .{ .{ .value = old_ptr }, .{ .value = new_size }, .none });
     }
 };
 
@@ -631,6 +692,7 @@ fn printInstruction(writer: anytype, inst: Instruction, func: *const Function) !
                 try writer.writeAll(")");
             },
             .elem_size => |size| try writer.print(" elemsize={d}", .{size}),
+            .string_data => |str| try writer.print(" \"{s}\"", .{str}),
         }
     }
 }

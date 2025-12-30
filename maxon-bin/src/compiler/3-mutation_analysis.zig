@@ -162,9 +162,13 @@ pub const MutationAnalyzer = struct {
                 self.checkExpressionForParamMutation(nc.optional.*, param_indices, mutated);
                 self.checkExpressionForParamMutation(nc.default.*, param_indices, mutated);
             },
-            // integer, float_lit, nil_lit, unary, binary, compare, logical, call, struct_init, array_literal, map_literal, array_type:
-            // These cannot be mutation targets (only identifier, field_access, index can)
-            .integer, .float_lit, .bool_lit, .nil_lit, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .array_type => {},
+            // Cast expressions - check the inner expression
+            .cast => |c| {
+                self.checkExpressionForParamMutation(c.expr.*, param_indices, mutated);
+            },
+            // Literals and compound expressions cannot be mutation targets
+            // Only identifier, field_access, index can be mutated
+            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .array_type => {},
         }
     }
 

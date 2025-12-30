@@ -116,7 +116,7 @@ suite('Stdlib Cross-File Diagnostics', () => {
 		this.timeout(60000);
 
 		// Step 1: Create a consumer file that calls findGraphemeEndManaged
-		const consumerContent = `function testGrapheme(m _ManagedString) returns int
+		const consumerContent = `function testGrapheme(m__ManagedString) returns int
 	return findGraphemeEndManaged(m, 0, 10)
 end 'testGrapheme'
 `;
@@ -188,7 +188,7 @@ end 'testGrapheme'
 		this.timeout(60000);
 
 		// Step 1: Create consumer file
-		const consumerContent = `function testGrapheme(m _ManagedString) returns int
+		const consumerContent = `function testGrapheme(m__ManagedString) returns int
 	return findGraphemeEndManaged(m, 0, 10)
 end 'testGrapheme'
 `;

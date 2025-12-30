@@ -24,6 +24,7 @@ pub const TokenType = enum {
     false,
     @"and",
     @"or",
+    @"not",
     nil,
     // Type system keywords
     uses,
@@ -37,6 +38,7 @@ pub const TokenType = enum {
     extends,
     from,
     to,
+    as, // type cast operator
 
     // Types
     int,
@@ -47,6 +49,8 @@ pub const TokenType = enum {
     integer,
     float_literal,
     string, // for 'label' in end statements
+    string_literal, // double-quoted string literals: "hello"
+    char_literal, // single character literals: 'A' (when not used as end label)
 
     // Punctuation
     lparen,
@@ -247,6 +251,30 @@ pub const Lexer = struct {
                 continue;
             }
 
+            // Double-quoted string literal
+            if (c == '"') {
+                const start_col = self.column;
+                const start = self.pos + 1;
+                self.pos += 1;
+                self.column += 1;
+                // UTF-8: scan bytes until closing quote, handling escape sequences
+                while (self.pos < self.source.len and self.source[self.pos] != '"') {
+                    if (self.source[self.pos] == '\\' and self.pos + 1 < self.source.len) {
+                        // Skip escape sequence
+                        self.pos += 2;
+                        self.column += 2;
+                    } else {
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                }
+                const text = self.source[start..self.pos];
+                self.pos += 1; // skip closing quote
+                self.column += 1;
+                try tokens.append(allocator, .{ .type = .string_literal, .text = text, .line = self.line, .column = start_col });
+                continue;
+            }
+
             // Comma
             if (c == ',') {
                 try tokens.append(allocator, .{ .type = .comma, .text = ",", .line = self.line, .column = self.column });
@@ -407,6 +435,7 @@ pub const Lexer = struct {
             .{ "false", TokenType.false },
             .{ "and", TokenType.@"and" },
             .{ "or", TokenType.@"or" },
+            .{ "not", TokenType.@"not" },
             .{ "nil", TokenType.nil },
             .{ "int", TokenType.int },
             .{ "float", TokenType.float },
@@ -422,6 +451,7 @@ pub const Lexer = struct {
             .{ "extends", TokenType.extends },
             .{ "from", TokenType.from },
             .{ "to", TokenType.to },
+            .{ "as", TokenType.as },
         };
         inline for (keywords) |kw| {
             if (std.mem.eql(u8, text, kw[0])) {

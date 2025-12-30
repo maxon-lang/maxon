@@ -1040,8 +1040,11 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         .nil_coalesce => {
             // Skip - pointers are managed by parser's expr_ptrs
         },
-        // integer, float_lit, bool_lit, nil_lit, self_expr, identifier: no nested allocations to free
-        .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier => {},
+        .cast => |c| {
+            freeExpressionArgs(c.expr.*, allocator);
+        },
+        // Simple literals with no nested allocations to free
+        .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier, .string_literal, .char_literal => {},
     }
 }
 

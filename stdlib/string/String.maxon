@@ -1,0 +1,99 @@
+// stdlib/string/string.maxon
+// String type with Hashable, Equatable, Iterable, StringIndex
+
+// StringIndex type - type-safe string position
+export type StringIndex is Equatable, Comparable
+	var _charIndex int
+	var _bytePos int
+
+	export function charIndex() returns int
+		return _charIndex
+	end 'charIndex'
+
+	function Equatable.equals(other StringIndex) returns bool
+		return _charIndex == other._charIndex
+	end 'equals'
+
+	function Comparable.compare(other StringIndex) returns int
+		if _charIndex < other._charIndex 'less'
+			return 0 - 1
+		end 'less'
+		if _charIndex > other._charIndex 'greater'
+			return 1
+		end 'greater'
+		return 0
+	end 'compare'
+end 'StringIndex'
+
+export type String is Hashable, Equatable, Iterable with Character, InitableFromStringLiteral
+	var _managed __ManagedString
+	var _iterPos int
+
+	static function InitableFromStringLiteral.init(managed __ManagedString) returns String
+		return String{_managed: managed, _iterPos: 0}
+	end 'init'
+
+	export function byteLength() returns int
+		return __string_len(_managed)
+	end 'byteLength'
+
+	export function isEmpty() returns bool
+		return __string_len(_managed) == 0
+	end 'isEmpty'
+
+	/// Get grapheme cluster count (number of user-perceived characters)
+	export function count() returns int
+		return countGraphemesManaged(_managed)
+	end 'count'
+
+	function Hashable.hash() returns int
+		return fnvHashManagedRange(_managed, 0, __string_len(_managed))
+	end 'hash'
+
+	function Equatable.equals(other String) returns bool
+		var lenA = __string_len(_managed)
+		var lenB = __string_len(other._managed)
+		if lenA != lenB 'lenMismatch'
+			return false
+		end 'lenMismatch'
+		var i = 0
+		while i < lenA 'byteCheck'
+			if __string_byte_at(_managed, i) != __string_byte_at(other._managed, i) 'mismatch'
+				return false
+			end 'mismatch'
+			i = i + 1
+		end 'byteCheck'
+		return true
+	end 'equals'
+
+	function Iterable.next() returns Character or nil
+		if _iterPos < __string_len(_managed) 'check'
+			var len = __string_len(_managed)
+			var endPos = findGraphemeEndManaged(_managed, _iterPos, len)
+			var graphemeLen = endPos - _iterPos
+			let grapheme = _makeCharFromBytes(_iterPos, graphemeLen)
+			_iterPos = endPos
+			return grapheme
+		end 'check'
+		return nil
+	end 'next'
+
+	function _makeCharFromBytes(pos int, len int) returns Character
+		return __make_char_from_bytes(_managed, pos, len)
+	end '_makeCharFromBytes'
+
+	// String index methods
+	export function startIndex() returns StringIndex
+		return StringIndex{_charIndex: 0, _bytePos: 0}
+	end 'startIndex'
+
+	export function endIndex() returns StringIndex
+		var charCount = countGraphemesManaged(_managed)
+		return StringIndex{_charIndex: charCount, _bytePos: __string_len(_managed)}
+	end 'endIndex'
+
+	// concat method
+	export function concat(other String) returns String
+		return __string_concat(_managed, other._managed)
+	end 'concat'
+end 'String'

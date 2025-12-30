@@ -291,6 +291,14 @@ pub const Encoder = struct {
         try self.emit(&.{ 0x48, 0x99, 0x48, 0xF7, 0xF9 }); // cqo; idiv rcx
     }
 
+    pub fn andRaxRcx(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0x21, 0xC8 }); // and rax, rcx
+    }
+
+    pub fn orRaxRcx(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0x09, 0xC8 }); // or rax, rcx
+    }
+
     pub fn addRaxImm8(self: *Encoder, imm: u8) !void {
         try self.emit(&.{ 0x48, 0x83, 0xC0, imm });
     }
@@ -651,5 +659,70 @@ pub const Encoder = struct {
     /// MOVZX rax, al - zero-extend al to rax
     pub fn movzxRaxAl(self: *Encoder) !void {
         try self.emit(&.{ 0x48, 0x0F, 0xB6, 0xC0 });
+    }
+
+    /// MOVSXD rax, eax - sign-extend eax to rax
+    pub fn movsxdRaxEax(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0x63, 0xC0 });
+    }
+
+    /// MOV rsi, [rbp+offset] - load qword to rsi
+    pub fn movRsiRbpOffset(self: *Encoder, offset: i32) !void {
+        if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0x48, 0x8B, 0x75 });
+            try self.emit(&.{@bitCast(@as(i8, @intCast(offset)))});
+        } else {
+            try self.emit(&.{ 0x48, 0x8B, 0xB5 });
+            try self.emit(&@as([4]u8, @bitCast(offset)));
+        }
+    }
+
+    /// LEA rsi, [rbp+offset] - load effective address to rsi
+    pub fn leaRsiRbpOffset(self: *Encoder, offset: i32) !void {
+        if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0x48, 0x8D, 0x75 });
+            try self.emit(&.{@bitCast(@as(i8, @intCast(offset)))});
+        } else {
+            try self.emit(&.{ 0x48, 0x8D, 0xB5 });
+            try self.emit(&@as([4]u8, @bitCast(offset)));
+        }
+    }
+
+    /// MOV rdi, [rbp+offset] - load qword to rdi
+    pub fn movRdiRbpOffset(self: *Encoder, offset: i32) !void {
+        if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0x48, 0x8B, 0x7D });
+            try self.emit(&.{@bitCast(@as(i8, @intCast(offset)))});
+        } else {
+            try self.emit(&.{ 0x48, 0x8B, 0xBD });
+            try self.emit(&@as([4]u8, @bitCast(offset)));
+        }
+    }
+
+    /// LEA rdi, [rbp+offset] - load effective address to rdi
+    pub fn leaRdiRbpOffset(self: *Encoder, offset: i32) !void {
+        if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0x48, 0x8D, 0x7D });
+            try self.emit(&.{@bitCast(@as(i8, @intCast(offset)))});
+        } else {
+            try self.emit(&.{ 0x48, 0x8D, 0xBD });
+            try self.emit(&@as([4]u8, @bitCast(offset)));
+        }
+    }
+
+    /// MOV rcx, [rbp+offset] - load qword to rcx (for loadToRcx)
+    pub fn movRcxRbpOffsetQ(self: *Encoder, offset: i32) !void {
+        if (offset >= -128 and offset <= 127) {
+            try self.emit(&.{ 0x48, 0x8B, 0x4D });
+            try self.emit(&.{@bitCast(@as(i8, @intCast(offset)))});
+        } else {
+            try self.emit(&.{ 0x48, 0x8B, 0x8D });
+            try self.emit(&@as([4]u8, @bitCast(offset)));
+        }
+    }
+
+    /// REP MOVSB - repeat move string (byte)
+    pub fn repMovsb(self: *Encoder) !void {
+        try self.emit(&.{ 0xF3, 0xA4 });
     }
 };

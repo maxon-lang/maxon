@@ -350,9 +350,12 @@ pub const IrCodegen = struct {
     fn loadValue(self: *IrCodegen, val: ir.Value, target: LoadTarget) !void {
         const loc = self.value_locations.get(val) orelse return error.InvalidValue;
         switch (loc) {
-            .stack => |offset| switch (target) {
-                .rax => try self.enc.movRaxRbpOffset(offset),
-                .xmm => |xmm| if (xmm == .xmm0) try self.enc.movsdXmm0RbpOffset(offset) else try self.enc.movsdXmm1RbpOffset(offset),
+            .stack => |offset| {
+                debug.codegen("    loadValue: val=%{d}, stack offset={d}, target={s}", .{ val, offset, @tagName(target) });
+                switch (target) {
+                    .rax => try self.enc.movRaxRbpOffset(offset),
+                    .xmm => |xmm| if (xmm == .xmm0) try self.enc.movsdXmm0RbpOffset(offset) else try self.enc.movsdXmm1RbpOffset(offset),
+                }
             },
             .register => |reg| switch (target) {
                 .rax => {
@@ -371,6 +374,20 @@ pub const IrCodegen = struct {
 
     fn loadToRax(self: *IrCodegen, val: ir.Value) !void {
         try self.loadValue(val, .rax);
+    }
+
+    fn loadToRcx(self: *IrCodegen, val: ir.Value) !void {
+        const loc = self.value_locations.get(val) orelse return error.InvalidValue;
+        switch (loc) {
+            .stack => |offset| try self.enc.movRcxRbpOffsetQ(offset),
+            .register => |reg| {
+                if (reg == .rax) try self.enc.movRcxRax() else if (reg == .rdx) {
+                    // mov rcx, rdx
+                    try self.enc.emit(&.{ 0x48, 0x89, 0xD1 });
+                } else if (reg != .rcx) return error.UnsupportedRegister;
+            },
+            .xmm => return error.CannotLoadXmmToGpr,
+        }
     }
 
     fn loadToXmm(self: *IrCodegen, val: ir.Value, target: x86.Xmm) !void {
@@ -1463,6 +1480,8 @@ pub const IrCodegen = struct {
     fn generateInstruction(self: *IrCodegen, inst: ir.Instruction) !void {
         debug.codegen("Generating: {s}, result: {?}", .{ inst.op.format(), inst.result });
         switch (inst.op) {
+            .const_i8 => try self.genConst32(inst, inst.operands[0].immediate_i32, .i8),
+            .const_i32 => try self.genConst32(inst, inst.operands[0].immediate_i32, .i32),
             .const_i64 => try self.genConst64(inst, inst.operands[0].immediate_i64, .i64),
             .const_f64 => try self.genConst64(inst, @bitCast(inst.operands[0].immediate_f64), .f64),
             .alloca => try self.genAlloca(inst),
@@ -1471,17 +1490,23 @@ pub const IrCodegen = struct {
             .getfieldptr => try self.genGetFieldPtr(inst),
             .getelemptr => try self.genGetElemPtr(inst),
             .store => try self.genStore(inst),
+            .store_i8 => try self.genStoreI8(inst),
+            .store_i32 => try self.genStoreI32(inst),
             .load => try self.genLoad(inst),
-            .add, .sub, .mul, .div, .mod => try self.genIntBinaryOp(inst),
+            .add, .sub, .mul, .div, .mod, .band, .bitor => try self.genIntBinaryOp(inst),
             .fadd, .fsub, .fmul, .fdiv => try self.genFloatBinaryOp(inst),
             .fptosi => try self.genFpToSi(inst),
             .sitofp => try self.genSiToFp(inst),
             .fabs => try self.genFabs(inst),
             .bitcast_f64_to_i64 => try self.genBitcastF64ToI64(inst),
+            .sext_i32_i64 => try self.genSextI32I64(inst),
+            .trunc_i64_i32 => try self.genTruncI64I32(inst),
+            .zext_i8_i64 => try self.genZextI8I64(inst),
             .ret => try self.genRet(inst),
             .param => try self.genParam(inst),
             .call => try self.genCall(inst),
             .memcpy => try self.genMemcpy(inst),
+            .memcpy_dyn => try self.genMemcpyDyn(inst),
             .memset => try self.genMemset(inst),
             .heap_alloc => try self.genHeapAlloc(inst),
             .heap_free => try self.genHeapFree(inst),
@@ -1500,13 +1525,25 @@ pub const IrCodegen = struct {
             .icmp_ge => try self.genIcmp(inst, .ge),
             .br => try self.genBr(inst),
             .br_cond => try self.genBrCond(inst),
-            else => debug.codegen("  Skipping unhandled instruction", .{}),
+            else => {
+                std.debug.print("ERROR: Unhandled IR instruction: {s}\n", .{inst.op.format()});
+                return error.UnhandledInstruction;
+            },
         }
     }
 
     // ------------------------------------------------------------------------
     // Instruction Generators
     // ------------------------------------------------------------------------
+
+    fn genConst32(self: *IrCodegen, inst: ir.Instruction, value: i32, ty: ir.Type) !void {
+        const result = inst.result.?;
+        const offset = self.allocStackSlots(1);
+        // Sign-extend to 64-bit for storage (stack slots are 8 bytes)
+        try self.enc.movRaxImm64(@as(i64, value));
+        try self.enc.movRbpOffsetRax(offset);
+        try self.setValueLocation(result, .{ .stack = offset }, ty);
+    }
 
     fn genConst64(self: *IrCodegen, inst: ir.Instruction, value: i64, ty: ir.Type) !void {
         const result = inst.result.?;
@@ -1520,6 +1557,7 @@ pub const IrCodegen = struct {
         const offset = self.allocStackSlots(1);
         try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = offset });
         try self.value_types.put(self.allocator, inst.result.?, inst.result_type);
+        debug.codegen("  alloca: result=%{d}, offset={d}, type={s}", .{ inst.result.?, offset, inst.result_type.format() });
     }
 
     fn genAllocaSized(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -1570,6 +1608,8 @@ pub const IrCodegen = struct {
         const field_offset = inst.operands[1].immediate_i32;
         const base_stack_offset = try self.getStackOffset(base_val);
 
+        debug.codegen("  getfieldptr: base=%{d}, offset={d}, base_stack_offset={d}, indirect={}", .{ base_val, field_offset, base_stack_offset, self.isIndirect(base_val) });
+
         if (self.isIndirect(base_val)) {
             // Base is indirect - load the pointer, add offset, store the result
             try self.enc.movRaxRbpOffset(base_stack_offset);
@@ -1581,18 +1621,23 @@ pub const IrCodegen = struct {
             try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = result_offset });
             try self.value_types.put(self.allocator, inst.result.?, .ptr);
             try self.markIndirect(inst.result.?);
+            debug.codegen("    -> indirect: result=%{d}, result_stack_offset={d}", .{ inst.result.?, result_offset });
         } else {
             // Base is direct - the stack slot IS the struct, just compute offset
             const field_stack_offset = base_stack_offset + field_offset;
             try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = field_stack_offset });
             try self.value_types.put(self.allocator, inst.result.?, .ptr);
+            debug.codegen("    -> direct: result=%{d}, field_stack_offset={d}", .{ inst.result.?, field_stack_offset });
         }
     }
 
     fn genGetElemPtr(self: *IrCodegen, inst: ir.Instruction) !void {
         const base_val = inst.operands[0].value;
         const index_val = inst.operands[1].value;
+        const elem_size = inst.operands[2].elem_size;
         const result = inst.result.?;
+
+        debug.codegen("  getelemptr: base=%{d}, index=%{d}, elem_size={d}", .{ base_val, index_val, elem_size });
 
         // Load base pointer to RAX
         if (self.value_locations.get(base_val)) |base_loc| {
@@ -1616,8 +1661,23 @@ pub const IrCodegen = struct {
         // Load index to RAX
         try self.loadToRax(index_val);
 
-        // Multiply index by element size (8): shl rax, 3
-        try self.enc.shlRaxImm8(3);
+        // Multiply index by element size
+        if (elem_size == 8) {
+            // shl rax, 3 (multiply by 8)
+            try self.enc.shlRaxImm8(3);
+        } else if (elem_size == 4) {
+            // shl rax, 2 (multiply by 4)
+            try self.enc.shlRaxImm8(2);
+        } else if (elem_size == 2) {
+            // shl rax, 1 (multiply by 2)
+            try self.enc.shlRaxImm8(1);
+        } else if (elem_size == 1) {
+            // No multiplication needed for byte access
+        } else {
+            // General case: imul rax, elem_size
+            try self.enc.emit(&.{ 0x48, 0x6B, 0xC0 }); // imul rax, rax, imm8
+            try self.enc.emit(&.{@as(u8, @intCast(@as(u32, @bitCast(elem_size)) & 0xFF))});
+        }
 
         // Add base: add rax, rcx
         try self.enc.addRaxRcx();
@@ -1635,6 +1695,9 @@ pub const IrCodegen = struct {
         const val = inst.operands[1].value;
         const offset = try self.getStackOffset(ptr);
         const val_type = self.value_types.get(val) orelse return error.ValueTypeNotFound;
+        const val_offset = self.getStackOffset(val) catch -999;
+
+        debug.codegen("  store: ptr=%{d}, val=%{d}, ptr_offset={d}, val_offset={d}, ptr_indirect={}, val_indirect={}, val_type={s}", .{ ptr, val, offset, val_offset, self.isIndirect(ptr), self.isIndirect(val), val_type.format() });
 
         // Track what type was stored at this location for later loads
         try self.stored_types.put(self.allocator, ptr, val_type);
@@ -1654,19 +1717,68 @@ pub const IrCodegen = struct {
             // If value is a ptr type that's NOT indirect, we need its address (lea)
             // not its contents (mov)
             if (val_type == .ptr and !self.isIndirect(val)) {
-                const val_offset = try self.getStackOffset(val);
-                try self.enc.leaRaxRbpOffset(val_offset);
+                const val_off = try self.getStackOffset(val);
+                try self.enc.leaRaxRbpOffset(val_off);
+                debug.codegen("    -> lea for non-indirect ptr: val_offset={d}", .{val_off});
             } else {
                 try self.loadToRax(val);
+                debug.codegen("    -> loadToRax for value", .{});
             }
             if (self.isIndirect(ptr)) {
                 try self.enc.movMemRax(.rcx);
+                debug.codegen("    -> indirect store: mov [rcx], rax", .{});
             } else {
                 try self.enc.movRbpOffsetRax(offset);
+                debug.codegen("    -> direct store: mov [rbp+{d}], rax", .{offset});
             }
         }
     }
 
+    fn genStoreI8(self: *IrCodegen, inst: ir.Instruction) !void {
+        const ptr = inst.operands[0].value;
+        const val = inst.operands[1].value;
+        const offset = try self.getStackOffset(ptr);
+
+        // Load value to AL (low byte of RAX)
+        try self.loadToRax(val);
+
+        if (self.isIndirect(ptr)) {
+            // Load pointer to RCX, store byte to [RCX]
+            try self.enc.movRcxRbpOffset(offset);
+            // mov [rcx], al
+            try self.enc.emit(&.{ 0x88, 0x01 });
+        } else {
+            // Store byte directly to stack: mov [rbp+offset], al
+            const off_bytes: [4]u8 = @bitCast(offset);
+            try self.enc.emit(&.{ 0x88, 0x85 }); // mov [rbp+disp32], al
+            try self.enc.emit(&off_bytes);
+        }
+    }
+
+    fn genStoreI32(self: *IrCodegen, inst: ir.Instruction) !void {
+        const ptr = inst.operands[0].value;
+        const val = inst.operands[1].value;
+        const offset = try self.getStackOffset(ptr);
+
+        debug.codegen("  store.i32: ptr=%{d}, val=%{d}, offset={d}, indirect={}", .{ ptr, val, offset, self.isIndirect(ptr) });
+
+        // Load value to EAX (low 32 bits of RAX)
+        try self.loadToRax(val);
+
+        if (self.isIndirect(ptr)) {
+            // Load pointer to RCX, store dword to [RCX]
+            try self.enc.movRcxRbpOffset(offset);
+            // mov [rcx], eax
+            try self.enc.emit(&.{ 0x89, 0x01 });
+            debug.codegen("    -> indirect store: mov [rcx], eax", .{});
+        } else {
+            // Store dword directly to stack: mov [rbp+offset], eax
+            const off_bytes: [4]u8 = @bitCast(offset);
+            try self.enc.emit(&.{ 0x89, 0x85 }); // mov [rbp+disp32], eax
+            try self.enc.emit(&off_bytes);
+            debug.codegen("    -> direct store: mov [rbp+{d}], eax", .{offset});
+        }
+    }
 
     fn genMemcpy(self: *IrCodegen, inst: ir.Instruction) !void {
         const dest_val = inst.operands[0].value;
@@ -1695,6 +1807,35 @@ pub const IrCodegen = struct {
             try self.enc.movRaxMemR10Offset(copied);
             try self.enc.movMemR11OffsetRax(copied);
         }
+    }
+
+    fn genMemcpyDyn(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Dynamic-sized memcpy using rep movsb
+        const dest_val = inst.operands[0].value;
+        const src_val = inst.operands[1].value;
+        const size_val = inst.result.?; // Size is stored in result field as IR Value
+
+        // Load size to rcx (rep count)
+        try self.loadToRcx(size_val);
+
+        // Load src pointer to rsi
+        const src_offset = try self.getStackOffset(src_val);
+        if (self.isIndirect(src_val)) {
+            try self.enc.movRsiRbpOffset(src_offset);
+        } else {
+            try self.enc.leaRsiRbpOffset(src_offset);
+        }
+
+        // Load dest pointer to rdi
+        const dest_offset = try self.getStackOffset(dest_val);
+        if (self.isIndirect(dest_val)) {
+            try self.enc.movRdiRbpOffset(dest_offset);
+        } else {
+            try self.enc.leaRdiRbpOffset(dest_offset);
+        }
+
+        // rep movsb: copy rcx bytes from [rsi] to [rdi]
+        try self.enc.repMovsb();
     }
 
     fn genMemset(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -1734,16 +1875,38 @@ pub const IrCodegen = struct {
         // Prefer the type that was actually stored at this location, otherwise use IR type
         const ty = self.stored_types.get(ptr) orelse inst.result_type;
 
+        debug.codegen("  load: ptr=%{d}, offset={d}, type={s}, indirect={}", .{ ptr, offset, ty.format(), self.isIndirect(ptr) });
+
         if (self.isIndirect(ptr)) {
             try self.enc.movRcxRbpOffset(offset);
             if (ty == .f64) {
                 try self.enc.movsdXmm0MemRcx();
+            } else if (ty == .i8) {
+                // Load 1 byte with zero extension: movzx rax, byte [rcx]
+                try self.enc.emit(&.{ 0x48, 0x0F, 0xB6, 0x01 }); // movzx rax, byte [rcx]
+                debug.codegen("    -> indirect i8 load: movzx rax, byte [rcx]", .{});
+            } else if (ty == .i32) {
+                // Load 4 bytes with sign extension: movsxd rax, [rcx]
+                try self.enc.emit(&.{ 0x48, 0x63, 0x01 }); // movsxd rax, [rcx]
+                debug.codegen("    -> indirect i32 load: movsxd rax, [rcx]", .{});
             } else {
                 try self.enc.movRaxMem(.rcx);
             }
         } else {
             if (ty == .f64) {
                 try self.enc.movsdXmm0RbpOffset(offset);
+            } else if (ty == .i8) {
+                // Load 1 byte with zero extension: movzx rax, byte [rbp+offset]
+                const off_bytes: [4]u8 = @bitCast(offset);
+                try self.enc.emit(&.{ 0x48, 0x0F, 0xB6, 0x85 }); // movzx rax, byte [rbp+disp32]
+                try self.enc.emit(&off_bytes);
+                debug.codegen("    -> direct i8 load: movzx rax, byte [rbp+{d}]", .{offset});
+            } else if (ty == .i32) {
+                // Load 4 bytes with sign extension: movsxd rax, [rbp+offset]
+                const off_bytes: [4]u8 = @bitCast(offset);
+                try self.enc.emit(&.{ 0x48, 0x63, 0x85 }); // movsxd rax, [rbp+disp32]
+                try self.enc.emit(&off_bytes);
+                debug.codegen("    -> direct i32 load: movsxd rax, [rbp+{d}]", .{offset});
             } else {
                 try self.enc.movRaxRbpOffset(offset);
             }
@@ -1776,6 +1939,8 @@ pub const IrCodegen = struct {
                 try self.enc.idivRcx();
                 try self.enc.movRaxRdx();
             },
+            .band => try self.enc.andRaxRcx(),
+            .bitor => try self.enc.orRaxRcx(),
             else => unreachable,
         }
 
@@ -1839,6 +2004,30 @@ pub const IrCodegen = struct {
         // Move bits from xmm0 to rax using movq
         try self.enc.movqRaxXmm0();
         // Store as i64
+        try self.storeToStack(inst.result.?, .i64);
+    }
+
+    fn genSextI32I64(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Sign-extend i32 to i64: movsxd rax, eax
+        try self.loadToRax(inst.operands[0].value);
+        // The value is already in rax as i64 due to 64-bit load, but we need to sign-extend
+        // movsxd rax, eax (sign-extend lower 32 bits to 64 bits)
+        try self.enc.movsxdRaxEax();
+        try self.storeToStack(inst.result.?, .i64);
+    }
+
+    fn genTruncI64I32(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Truncate i64 to i32: just use lower 32 bits
+        try self.loadToRax(inst.operands[0].value);
+        // Store as i32 (lower 32 bits)
+        try self.storeToStack(inst.result.?, .i32);
+    }
+
+    fn genZextI8I64(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Zero-extend i8 (byte) to i64: movzx rax, al
+        try self.loadToRax(inst.operands[0].value);
+        // movzx rax, al (zero-extend byte to 64 bits)
+        try self.enc.movzxRaxAl();
         try self.storeToStack(inst.result.?, .i64);
     }
 
@@ -2571,6 +2760,10 @@ pub const IrCodegen = struct {
         const result = inst.result.?;
         const lhs = inst.operands[0].value;
         const rhs = inst.operands[1].value;
+
+        const lhs_offset = self.getStackOffset(lhs) catch -999;
+        const rhs_offset = self.getStackOffset(rhs) catch -999;
+        debug.codegen("  icmp: lhs=%{d}(off={d},ind={}), rhs=%{d}(off={d},ind={}), op={s}", .{ lhs, lhs_offset, self.isIndirect(lhs), rhs, rhs_offset, self.isIndirect(rhs), @tagName(op) });
 
         // Load lhs to rax, save it, load rhs to rcx, restore lhs
         try self.loadToRax(lhs);
