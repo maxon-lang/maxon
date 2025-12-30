@@ -250,6 +250,8 @@ pub const IrCodegen = struct {
     // Maximum outgoing stack args size for current function (for calls with >4 args)
     // This is computed at the start of function generation by scanning all calls
     outgoing_stack_args_size: i32,
+    // Pending stack space for external calls with 5+ parameters
+    pending_stack_space: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator, code: *std.ArrayListUnmanaged(u8), options: CodegenOptions) IrCodegen {
         return .{
@@ -273,6 +275,7 @@ pub const IrCodegen = struct {
             .stored_types = .{},
             .reg_alloc = RegAllocInfo.init(),
             .outgoing_stack_args_size = 0,
+            .pending_stack_space = 0,
         };
     }
 
@@ -423,6 +426,9 @@ pub const IrCodegen = struct {
             }
         }
 
+        // Generate __write_stdout runtime function (always needed for print)
+        try self.generateWriteStdout();
+
         // Generate tracking support functions if enabled
         if (self.track_allocs) {
             try self.generateTrackingFunctions();
@@ -552,34 +558,16 @@ pub const IrCodegen = struct {
         try self.enc.prologue(64);
 
         // Call __enable_alloc_tracking
-        try self.enc.allocShadowSpace();
-        const enable_patch = try self.enc.callRel32();
-        try self.call_patches.append(self.allocator, .{
-            .offset = enable_patch,
-            .target_func = "__enable_alloc_tracking",
-        });
-        try self.enc.freeShadowSpace();
+        try self.emitInternalCall("__enable_alloc_tracking");
 
         // Call main
-        try self.enc.allocShadowSpace();
-        const main_patch = try self.enc.callRel32();
-        try self.call_patches.append(self.allocator, .{
-            .offset = main_patch,
-            .target_func = "main",
-        });
-        try self.enc.freeShadowSpace();
+        try self.emitInternalCall("main");
 
         // Save main's return value to R12 (callee-saved)
         try self.enc.emit(&.{ 0x49, 0x89, 0xC4 }); // mov r12, rax
 
         // Call __print_alloc_summary
-        try self.enc.allocShadowSpace();
-        const summary_patch = try self.enc.callRel32();
-        try self.call_patches.append(self.allocator, .{
-            .offset = summary_patch,
-            .target_func = "__print_alloc_summary",
-        });
-        try self.enc.freeShadowSpace();
+        try self.emitInternalCall("__print_alloc_summary");
 
         // Call ExitProcess with main's return value
         try self.enc.emit(&.{ 0x4C, 0x89, 0xE1 }); // mov rcx, r12
@@ -716,22 +704,16 @@ pub const IrCodegen = struct {
         // Save buffer ptr to R13
         try self.enc.emit(&.{ 0x49, 0x89, 0xCD }); // mov r13, rcx
 
-        // WriteFile(hFile=R14, lpBuffer=R13, nNumberOfBytesToWrite=len, lpNumberOfBytesWritten=NULL, lpOverlapped=NULL)
+        // WriteFile(hFile=R14, lpBuffer=R13, nBytes=len, lpWritten=NULL, lpOverlapped=NULL)
+        try self.beginExternalCall(1);
         try self.enc.emit(&.{ 0x4C, 0x89, 0xF1 }); // mov rcx, r14 (handle)
         try self.enc.emit(&.{ 0x4C, 0x89, 0xEA }); // mov rdx, r13 (buffer)
         try self.enc.emit(&.{ 0x41, 0xB8 }); // mov r8d, imm32 (length)
         try self.enc.emitI32(@intCast(string_len));
-        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
-        // Push NULL for lpOverlapped (5th arg on stack)
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40 (shadow + arg)
-        try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rsp+32], 0
-        const write_patch = try self.enc.callIndirectRip();
-        try self.external_patches.append(self.allocator, .{
-            .offset = write_patch,
-            .dll = "kernel32.dll",
-            .func_name = "WriteFile",
-        });
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
+        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (lpNumberOfBytesWritten = NULL)
+        try self.emitStackParam(0, 0); // lpOverlapped = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "WriteFile");
+        try self.endExternalCall();
     }
 
     /// Generate __track_alloc - tracks an allocation
@@ -1030,6 +1012,61 @@ pub const IrCodegen = struct {
         try self.enc.ret();
     }
 
+    /// Generate __write_stdout(buffer, length) -> bytes_written
+    /// Writes buffer to stdout using WriteFile
+    /// Parameters: RCX = buffer pointer, RDX = length
+    /// Returns: RAX = bytes written (same as length on success)
+    fn generateWriteStdout(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__write_stdout", self.code.items.len);
+
+        // Simplified version - just call GetStdHandle and WriteFile
+        // Parameters: RCX = buffer pointer, RDX = length
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+
+        // Save args to stack: [rbp-16] = buffer, [rbp-8] = length
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF0 }); // mov [rbp-16], rcx (buffer)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xF8 }); // mov [rbp-8], rdx (length)
+
+        // Initialize bytes_written to 0 at [rbp-24]
+        try self.enc.emit(&.{ 0x48, 0xC7, 0x45, 0xE8, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rbp-24], 0
+
+        // GetStdHandle(-11) to get stdout
+        try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE = -11
+        try self.emitExternalCall("kernel32.dll", "GetStdHandle");
+        // RAX now has stdout handle, save to [rbp-32]
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xE0 }); // mov [rbp-32], rax
+
+        // DEBUG: Return the handle to see if GetStdHandle worked
+        // A valid handle should be a non-zero value
+        // For debugging: skip WriteFile and just return handle
+        // Uncomment below to skip WriteFile and return handle
+        // try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xE0 }); // mov rax, [rbp-32] (return handle)
+        // For now, continue with WriteFile call
+
+        // WriteFile(handle, buffer, length, &bytes_written, NULL)
+        // WriteFile(handle, buffer, length, &bytes_written, lpOverlapped=NULL)
+        try self.beginExternalCall(1); // 5 params = 4 reg + 1 stack
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE0 }); // mov rcx, [rbp-32] (handle)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x55, 0xF0 }); // mov rdx, [rbp-16] (buffer)
+        try self.enc.emit(&.{ 0x44, 0x8B, 0x45, 0xF8 }); // mov r8d, [rbp-8] (length as DWORD)
+        try self.enc.emit(&.{ 0x4C, 0x8D, 0x4D, 0xE8 }); // lea r9, [rbp-24] (&bytes_written)
+        try self.emitStackParam(0, 0); // lpOverlapped = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "WriteFile");
+        try self.endExternalCall();
+
+        // Return bytes_written
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xE8 }); // mov rax, [rbp-24]
+
+        // Epilogue
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
     /// Helper to print a static string - assumes R15 = stdout handle
     fn printStaticString(self: *IrCodegen, str: []const u8) !void {
         const string_len: u32 = @intCast(str.len);
@@ -1057,20 +1094,15 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x48, 0x89, 0xC8 }); // mov rax, rcx (save buffer)
 
         // WriteFile(hFile=R15, lpBuffer=buffer, nBytes=len, lpWritten=NULL, lpOverlapped=NULL)
+        try self.beginExternalCall(1);
         try self.enc.emit(&.{ 0x4C, 0x89, 0xF9 }); // mov rcx, r15 (handle)
         try self.enc.emit(&.{ 0x48, 0x89, 0xC2 }); // mov rdx, rax (buffer)
         try self.enc.emit(&.{ 0x41, 0xB8 }); // mov r8d, imm32 (length)
         try self.enc.emitI32(@intCast(string_len));
-        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40
-        try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rsp+32], 0
-        const write_patch = try self.enc.callIndirectRip();
-        try self.external_patches.append(self.allocator, .{
-            .offset = write_patch,
-            .dll = "kernel32.dll",
-            .func_name = "WriteFile",
-        });
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
+        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (lpNumberOfBytesWritten = NULL)
+        try self.emitStackParam(0, 0); // lpOverlapped = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "WriteFile");
+        try self.endExternalCall();
         try self.enc.popRax();
     }
 
@@ -1081,36 +1113,26 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xD0 }); // mov rax, [rbp-48] (tag len)
 
         // WriteFile(hFile=R15, lpBuffer=R12, nBytes=rax, lpWritten=NULL, lpOverlapped=NULL)
+        try self.beginExternalCall(1);
         try self.enc.emit(&.{ 0x4C, 0x89, 0xF9 }); // mov rcx, r15 (handle)
         try self.enc.emit(&.{ 0x4C, 0x89, 0xE2 }); // mov rdx, r12 (buffer = tag ptr)
         try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax (length)
-        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40
-        try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rsp+32], 0
-        const write_patch = try self.enc.callIndirectRip();
-        try self.external_patches.append(self.allocator, .{
-            .offset = write_patch,
-            .dll = "kernel32.dll",
-            .func_name = "WriteFile",
-        });
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
+        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (lpNumberOfBytesWritten = NULL)
+        try self.emitStackParam(0, 0); // lpOverlapped = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "WriteFile");
+        try self.endExternalCall();
     }
 
     /// Emit WriteFile call with buffer in RDX and length in R8
-    /// Assumes R15 = stdout handle
+    /// Assumes R15 = stdout handle, RDX = buffer, R8 = length
     fn emitWriteFileCall(self: *IrCodegen) !void {
+        try self.beginExternalCall(1);
         try self.enc.emit(&.{ 0x4C, 0x89, 0xF9 }); // mov rcx, r15 (handle)
         // RDX already has buffer, R8 already has length
-        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (NULL)
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x28 }); // sub rsp, 40
-        try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rsp+32], 0
-        const write_patch = try self.enc.callIndirectRip();
-        try self.external_patches.append(self.allocator, .{
-            .offset = write_patch,
-            .dll = "kernel32.dll",
-            .func_name = "WriteFile",
-        });
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x28 }); // add rsp, 40
+        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (lpNumberOfBytesWritten = NULL)
+        try self.emitStackParam(0, 0); // lpOverlapped = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "WriteFile");
+        try self.endExternalCall();
     }
 
     /// Helper to print number from a stack offset - assumes R15 = stdout handle
@@ -1250,9 +1272,13 @@ pub const IrCodegen = struct {
 
     fn patchCalls(self: *IrCodegen) !void {
         for (self.call_patches.items) |patch| {
-            const target_offset = self.func_offsets.get(patch.target_func) orelse continue;
+            const target_offset = self.func_offsets.get(patch.target_func) orelse {
+                std.debug.print("WARNING: Call to unknown function '{s}' not patched!\n", .{patch.target_func});
+                continue;
+            };
             // Calculate relative offset: target - (patch_location + 4)
             const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(patch.offset + 4)));
+
             // Write the relative offset at the patch location
             const bytes: [4]u8 = @bitCast(rel_offset);
             self.code.items[patch.offset] = bytes[0];
@@ -1783,7 +1809,7 @@ pub const IrCodegen = struct {
     fn genMemcpy(self: *IrCodegen, inst: ir.Instruction) !void {
         const dest_val = inst.operands[0].value;
         const src_val = inst.operands[1].value;
-        const size: i32 = @intCast(inst.result.?);
+        const size: i32 = inst.operands[2].immediate_i32;
 
         // Load src pointer to r10 (caller-saved, safe to clobber)
         const src_offset = try self.getStackOffset(src_val);
@@ -1813,7 +1839,7 @@ pub const IrCodegen = struct {
         // Dynamic-sized memcpy using rep movsb
         const dest_val = inst.operands[0].value;
         const src_val = inst.operands[1].value;
-        const size_val = inst.result.?; // Size is stored in result field as IR Value
+        const size_val = inst.operands[2].value;
 
         // Load size to rcx (rep count)
         try self.loadToRcx(size_val);
@@ -1841,7 +1867,7 @@ pub const IrCodegen = struct {
     fn genMemset(self: *IrCodegen, inst: ir.Instruction) !void {
         const dest_val = inst.operands[0].value;
         const byte_val: u8 = @intCast(inst.operands[1].immediate_i32);
-        const size: i32 = @intCast(inst.result.?);
+        const size: i32 = inst.operands[2].immediate_i32;
 
         // Load dest pointer to r11 (caller-saved, safe to clobber)
         const dest_offset = try self.getStackOffset(dest_val);
@@ -2167,10 +2193,7 @@ pub const IrCodegen = struct {
             // Load remaining args shifted by 1 (RDX gets arg 0, R8 gets arg 1, etc.)
             try self.loadArgsShifted(args, 1, true);
 
-            try self.enc.allocShadowSpace();
-            const patch_offset = try self.enc.callRel32();
-            try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
-            try self.enc.freeShadowSpace();
+            try self.emitInternalCall(func_name);
 
             // Result is in the stack buffer we allocated
             // RAX contains the pointer to it (as per ABI), but we already know where it is
@@ -2185,10 +2208,7 @@ pub const IrCodegen = struct {
         } else {
             // Normal call without hidden return pointer
             try self.loadArgs(args, true);
-            try self.enc.allocShadowSpace();
-            const patch_offset = try self.enc.callRel32();
-            try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
-            try self.enc.freeShadowSpace();
+            try self.emitInternalCall(func_name);
 
             if (inst.result) |result| {
                 debug.codegen("  call result: %{d} of type {s}", .{ result, ret_type.format() });
@@ -2340,13 +2360,109 @@ pub const IrCodegen = struct {
         }
     }
 
-    /// Emit an external call and record patch site
+    // ============================================================================
+    // Call Helpers (Windows x64 Calling Convention)
+    // ============================================================================
+    //
+    // Windows x64 Calling Convention:
+    // - First 4 args: RCX, RDX, R8, R9
+    // - Args 5+: Stack at [rsp+0x20], [rsp+0x28], etc. (after 32-byte shadow space)
+    // - 32-byte shadow space is ALWAYS required, even for <4 args
+    // - Stack must be 16-byte aligned at the call instruction
+    //
+    // IMPORTANT: Stack parameters must be set AFTER allocating stack space!
+    //
+    // Simple calls (≤4 params, no stack params needed after call setup):
+    //   emitInternalCall(func_name)     - for Maxon functions
+    //   emitExternalCall(dll, func)     - for DLL functions
+    //
+    // Complex calls (5+ params OR need to set params after stack allocation):
+    //   beginCall(num_stack_params)     - allocate shadow + stack space
+    //   // set up RCX, RDX, R8, R9
+    //   emitStackParam(0, value)        - set 5th param at [rsp+0x20]
+    //   emitInternalCallAfterSetup(func) OR emitExternalCallAfterSetup(dll, func)
+    //   endCall()                       - restore stack
+    // ============================================================================
+
+    /// Allocate stack space for a call (shadow space + stack parameters)
+    /// Use this when you need to set up parameters AFTER allocation (e.g., 5+ params)
+    /// Call endCall() after the call to restore the stack
+    fn beginCall(self: *IrCodegen, num_stack_params: u32) !void {
+        // Shadow space (32) + stack params (8 each), aligned to 16 bytes
+        const total_space = 32 + num_stack_params * 8;
+        const aligned_space = (total_space + 15) & ~@as(u32, 15);
+
+        if (aligned_space <= 127) {
+            try self.enc.emit(&.{ 0x48, 0x83, 0xEC, @intCast(aligned_space) });
+        } else {
+            try self.enc.emit(&.{ 0x48, 0x81, 0xEC });
+            try self.enc.emitI32(@intCast(aligned_space));
+        }
+        self.pending_stack_space = aligned_space;
+    }
+
+    /// Restore stack after beginCall()
+    fn endCall(self: *IrCodegen) !void {
+        const space = self.pending_stack_space;
+        if (space <= 127) {
+            try self.enc.emit(&.{ 0x48, 0x83, 0xC4, @intCast(space) });
+        } else {
+            try self.enc.emit(&.{ 0x48, 0x81, 0xC4 });
+            try self.enc.emitI32(@intCast(space));
+        }
+        self.pending_stack_space = 0;
+    }
+
+    /// Emit a stack parameter for calls with 5+ arguments
+    /// param_index: 0 = 5th param at [rsp+0x20], 1 = 6th param at [rsp+0x28], etc.
+    fn emitStackParam(self: *IrCodegen, param_index: u32, value: i64) !void {
+        const offset: u8 = @intCast(0x20 + param_index * 8);
+        if (value == 0) {
+            try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, offset, 0x00, 0x00, 0x00, 0x00 });
+        } else {
+            try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, offset });
+            try self.enc.emitI32(@intCast(value));
+        }
+    }
+
+    // --- Simple call helpers (handle shadow space internally) ---
+
+    /// Simple internal call for Maxon functions with ≤4 parameters
+    /// Caller must set up RCX, RDX, R8, R9 BEFORE calling this
+    fn emitInternalCall(self: *IrCodegen, func_name: []const u8) !void {
+        try self.enc.allocShadowSpace();
+        const patch_offset = try self.enc.callRel32();
+        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
+        try self.enc.freeShadowSpace();
+    }
+
+    /// Simple external call for DLL functions with ≤4 parameters
+    /// Caller must set up RCX, RDX, R8, R9 BEFORE calling this
     fn emitExternalCall(self: *IrCodegen, dll: []const u8, func_name: []const u8) !void {
         try self.enc.allocShadowSpace();
         const patch_offset = try self.enc.callIndirectRip();
         try self.external_patches.append(self.allocator, .{ .offset = patch_offset, .dll = dll, .func_name = func_name });
         try self.enc.freeShadowSpace();
     }
+
+    // --- Call-after-setup helpers (use after beginCall) ---
+
+    /// Emit internal call after beginCall() - for Maxon functions
+    fn emitInternalCallAfterSetup(self: *IrCodegen, func_name: []const u8) !void {
+        const patch_offset = try self.enc.callRel32();
+        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
+    }
+
+    /// Emit external call after beginCall() - for DLL functions
+    fn emitExternalCallAfterSetup(self: *IrCodegen, dll: []const u8, func_name: []const u8) !void {
+        const patch_offset = try self.enc.callIndirectRip();
+        try self.external_patches.append(self.allocator, .{ .offset = patch_offset, .dll = dll, .func_name = func_name });
+    }
+
+    // Legacy alias
+    const beginExternalCall = beginCall;
+    const endExternalCall = endCall;
+
 
     fn genHeapAlloc(self: *IrCodegen, inst: ir.Instruction) !void {
         const size_val = inst.operands[0].value;
@@ -2412,10 +2528,7 @@ pub const IrCodegen = struct {
 
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE9 }); // mov rcx, r13 (ptr)
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE2 }); // mov rdx, r12 (size)
-            try self.enc.allocShadowSpace();
-            const patch_offset = try self.enc.callRel32();
-            try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = "__track_alloc" });
-            try self.enc.freeShadowSpace();
+            try self.emitInternalCall("__track_alloc");
             // Restore ptr from R13 to RAX
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE8 }); // mov rax, r13
         }
@@ -2497,10 +2610,7 @@ pub const IrCodegen = struct {
             // Call __track_free(ptr=RCX, size=RDX, tag_ptr=R8, tag_len=R9)
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE1 }); // mov rcx, r12 (ptr)
             try self.enc.emit(&.{ 0x4C, 0x89, 0xF2 }); // mov rdx, r14 (size)
-            try self.enc.allocShadowSpace();
-            const patch_offset = try self.enc.callRel32();
-            try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = "__track_free" });
-            try self.enc.freeShadowSpace();
+            try self.emitInternalCall("__track_free");
         }
 
         try self.emitExternalCall("kernel32.dll", "GetProcessHeap");
@@ -2575,10 +2685,7 @@ pub const IrCodegen = struct {
 
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE1 }); // mov rcx, r12 (ptr)
             try self.enc.emit(&.{ 0x4C, 0x89, 0xEA }); // mov rdx, r13 (size)
-            try self.enc.allocShadowSpace();
-            const track_patch = try self.enc.callRel32();
-            try self.call_patches.append(self.allocator, .{ .offset = track_patch, .target_func = "__track_alloc" });
-            try self.enc.freeShadowSpace();
+            try self.emitInternalCall("__track_alloc");
             // Restore ptr from R12 to RAX
             try self.enc.emit(&.{ 0x4C, 0x89, 0xE0 }); // mov rax, r12
         }
@@ -2649,11 +2756,9 @@ pub const IrCodegen = struct {
             try self.enc.emit(&.{ 0x4D, 0x89, 0xE9 }); // mov r9, r13 (new_size)
 
             // Stack args: tag_ptr at [rsp+32], tag_len at [rsp+40]
-            try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x38 }); // sub rsp, 56 (shadow + 2 args)
+            try self.beginCall(2); // 6 params = 4 reg + 2 stack
 
             // LEA RAX, [RIP + disp32] for tag_ptr
-            // RIP will point after the LEA instruction (7 bytes: 3 opcode + 4 disp)
-            // We need to compute offset from that RIP to tag_pos
             const lea_pos = self.code.items.len;
             const rip_after_lea = lea_pos + 7;
             const rip_offset: i32 = @intCast(@as(i64, @intCast(tag_pos)) - @as(i64, @intCast(rip_after_lea)));
@@ -2661,13 +2766,11 @@ pub const IrCodegen = struct {
             try self.enc.emitI32(rip_offset);
             try self.enc.emit(&.{ 0x48, 0x89, 0x44, 0x24, 0x20 }); // mov [rsp+32], rax (tag_ptr)
 
-            // mov [rsp+40], tag_len
-            try self.enc.emit(&.{ 0x48, 0xC7, 0x44, 0x24, 0x28 }); // mov qword [rsp+40], imm32
-            try self.enc.emitI32(@intCast(tag.len));
+            // Set tag_len at [rsp+40]
+            try self.emitStackParam(1, @intCast(tag.len));
 
-            const track_patch = try self.enc.callRel32();
-            try self.call_patches.append(self.allocator, .{ .offset = track_patch, .target_func = "__track_realloc" });
-            try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x38 }); // add rsp, 56
+            try self.emitInternalCallAfterSetup("__track_realloc");
+            try self.endCall();
 
             // Restore new_ptr from R14 to RAX
             try self.enc.emit(&.{ 0x4C, 0x89, 0xF0 }); // mov rax, r14
@@ -2715,10 +2818,7 @@ pub const IrCodegen = struct {
 
         try self.enc.emit(&.{ 0x4C, 0x89, 0xE1 }); // mov rcx, r12 (ptr)
         try self.enc.emit(&.{ 0x4C, 0x89, 0xFA }); // mov rdx, r15 (size)
-        try self.enc.allocShadowSpace();
-        const patch_offset = try self.enc.callRel32();
-        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = "__track_free" });
-        try self.enc.freeShadowSpace();
+        try self.emitInternalCall("__track_free");
     }
 
     const CmpOp = enum { eq, ne, lt, le, gt, ge };
@@ -2805,7 +2905,7 @@ pub const IrCodegen = struct {
     fn genBrCond(self: *IrCodegen, inst: ir.Instruction) !void {
         const cond = inst.operands[0].value;
         const then_block = inst.operands[1].block_ref;
-        const else_block: u32 = @intCast(inst.result.?); // else block stored in result field
+        const else_block = inst.operands[2].block_ref;
 
         // Load condition to rax
         try self.loadToRax(cond);

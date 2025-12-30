@@ -455,8 +455,7 @@ pub const Function = struct {
     pub fn emitBrCond(self: *Function, cond: Value, then_block: u32, else_block: u32) !void {
         try self.emit(.{
             .op = .br_cond,
-            .operands = .{ .{ .value = cond }, .{ .block_ref = then_block }, .none },
-            .result = else_block, // Use result field for else block
+            .operands = .{ .{ .value = cond }, .{ .block_ref = then_block }, .{ .block_ref = else_block } },
         });
     }
 
@@ -478,9 +477,7 @@ pub const Function = struct {
     pub fn emitMemcpy(self: *Function, dest: Value, src: Value, size: i32) !void {
         try self.emit(.{
             .op = .memcpy,
-            .operands = .{ .{ .value = dest }, .{ .value = src }, .none },
-            .result_type = .void,
-            .result = @intCast(size), // Store size in result field
+            .operands = .{ .{ .value = dest }, .{ .value = src }, .{ .immediate_i32 = size } },
         });
     }
 
@@ -488,9 +485,7 @@ pub const Function = struct {
     pub fn emitMemcpyDynamic(self: *Function, dest: Value, src: Value, size: Value) !void {
         try self.emit(.{
             .op = .memcpy_dyn,
-            .operands = .{ .{ .value = dest }, .{ .value = src }, .none },
-            .result_type = .void,
-            .result = size, // Store size value reference in result field
+            .operands = .{ .{ .value = dest }, .{ .value = src }, .{ .value = size } },
         });
     }
 
@@ -498,9 +493,7 @@ pub const Function = struct {
     pub fn emitMemset(self: *Function, dest: Value, byte_value: u8, size: i32) !void {
         try self.emit(.{
             .op = .memset,
-            .operands = .{ .{ .value = dest }, .{ .immediate_i32 = @intCast(byte_value) }, .none },
-            .result_type = .void,
-            .result = @intCast(size), // Store size in result field
+            .operands = .{ .{ .value = dest }, .{ .immediate_i32 = @intCast(byte_value) }, .{ .immediate_i32 = size } },
         });
     }
 

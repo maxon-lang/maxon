@@ -72,6 +72,15 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
         return convertStringIntrinsic(self, call);
     }
 
+    // Check for __cstring_* intrinsics (stdlib-only)
+    if (std.mem.startsWith(u8, call.func_name, "__cstring_")) {
+        if (!isStdlibFile(self)) {
+            self.reportError(.E016, call.func_name);
+            return error.SemanticError;
+        }
+        return convertCstringIntrinsic(self, call);
+    }
+
     const builtin = for (builtins) |b| {
         if (std.mem.eql(u8, call.func_name, b.name)) break b;
     } else return error.NotABuiltin;
@@ -430,6 +439,45 @@ fn convertStringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     }
 }
 
+/// Dispatch __cstring_* intrinsics
+fn convertCstringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    const name = call.func_name;
+
+    if (std.mem.eql(u8, name, "__cstring_write_stdout")) {
+        return intrinsicCstringWriteStdout(self, call);
+    } else {
+        self.reportError(.E019, name);
+        return error.SemanticError;
+    }
+}
+
+/// __cstring_write_stdout(cs) -> int
+/// Writes the cstring to stdout, returns bytes written
+fn intrinsicCstringWriteStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    if (call.args.len != 1) {
+        self.reportError(.E011, call.func_name);
+        return error.WrongArgumentCount;
+    }
+
+    const cstring = try self.convertExpression(call.args[0]);
+
+    // Load data pointer from cstring (offset 0)
+    const data_ptr = try self.func().emitLoad(cstring.value, .ptr);
+
+    // Load length from cstring (offset 8)
+    const len_field = try self.func().emitGetFieldPtr(cstring.value, 8);
+    const length = try self.func().emitLoad(len_field, .i64);
+
+    // Call __write_stdout(buffer, length) -> bytes_written
+    const args = try self.allocator.alloc(ir.Value, 2);
+    args[0] = data_ptr;
+    args[1] = length;
+
+    const result = try self.func().emitCall("__write_stdout", args, .i64);
+
+    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+}
+
 /// __string_len(managed) -> int
 /// Returns the byte length of the __ManagedString (offset 8, i32)
 fn intrinsicStringLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -691,8 +739,10 @@ fn intrinsicStringSetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
 }
 
-/// __string_to_cstring(managed) -> cstring
-/// Returns a pointer to the string's buffer for FFI use
+/// __string_to_cstring(managed) -> cstring struct
+/// Creates a cstring struct from a __ManagedString.
+/// For SSO/Heap mode: shares buffer (already null-terminated), holds reference to managed string
+/// For Slice mode: copies data to new null-terminated buffer (cstring owns its buffer)
 fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
         self.reportError(.E011, call.func_name);
@@ -701,10 +751,134 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 
     const managed = try self.convertExpression(call.args[0]);
 
-    // Load buffer pointer (offset 0) - this is already null-terminated for constants
+    // Allocate cstring struct on stack (24 bytes: data + length + managed)
+    const cstring_ptr = try self.func().emitAllocaSized(24);
+
+    // Load cap_flags (offset 12) to determine mode
+    const cap_ptr = try self.func().emitGetFieldPtr(managed.value, 12);
+    const cap_flags = try self.func().emitLoad(cap_ptr, .i32);
+
+    // Check if slice mode: (cap_flags & 0x3) == 2
+    const three = try self.func().emitConstI32(3);
+    const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+    const two = try self.func().emitConstI32(2);
+    const is_slice = try self.func().emitBinaryOp(.icmp_eq, mode, two, .i32);
+
+    // Create all blocks upfront without popping - add them in execution order
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const slice_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cstr_slice");
+
+    // We need to defer emitting the slice block code until after we set up the branch
+    // For now, let's use a simpler approach: just build everything linearly
+
+    // First, emit the conditional branch to decide slice vs nonslice
+    // We'll patch the target indices after creating all blocks
+
+    // === SLICE BLOCK: Copy data to new null-terminated buffer ===
+    // Load source buffer pointer (offset 0)
+    const slice_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+
+    // Load length (offset 8, i32) and extend to i64
+    const slice_len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
+    const slice_len_i32 = try self.func().emitLoad(slice_len_ptr, .i32);
+    const slice_len = try self.func().emitUnaryOp(.sext_i32_i64, slice_len_i32, .i64);
+
+    // Allocate new buffer of size (length + 1) for null terminator
+    const one_i64 = try self.func().emitConstI64(1);
+    const alloc_size = try self.func().emitBinaryOp(.add, slice_len, one_i64, .i64);
+    const new_buf = try self.func().emitHeapAlloc(alloc_size);
+
+    // memcpy from slice buffer to new buffer
+    try self.func().emitMemcpyDynamic(new_buf, slice_buf_ptr, slice_len);
+
+    // Write null terminator at new_buf[length]
+    const null_pos = try self.func().emitBinaryOp(.add, new_buf, slice_len, .ptr);
+    const zero_byte = try self.func().emitConstI64(0);
+    try self.func().emitStoreI8(null_pos, zero_byte);
+
+    // Store into cstring struct
+    // cstring.data = new_buf (offset 0)
+    try self.func().emitStore(cstring_ptr, new_buf);
+    // cstring.length = slice_len (offset 8)
+    const cstr_len_field = try self.func().emitGetFieldPtr(cstring_ptr, 8);
+    try self.func().emitStore(cstr_len_field, slice_len);
+    // cstring.managed = null (offset 16) - cstring owns its buffer
+    const cstr_managed_field = try self.func().emitGetFieldPtr(cstring_ptr, 16);
+    const null_ptr = try self.func().emitConstI64(0);
+    try self.func().emitStore(cstr_managed_field, null_ptr);
+
+    // Create nonslice block
+    const nonslice_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cstr_nonslice");
+
+    // === NON-SLICE BLOCK: Share existing buffer ===
+    // Load buffer pointer (offset 0) - already null-terminated
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
-    return .{ .value = buf_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "cstring" } } };
+    // Load length (offset 8, i32) and extend to i64
+    const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
+    const len_i32 = try self.func().emitLoad(len_ptr, .i32);
+    const length = try self.func().emitUnaryOp(.sext_i32_i64, len_i32, .i64);
+
+    // Store into cstring struct
+    // cstring.data = buf_ptr (offset 0)
+    try self.func().emitStore(cstring_ptr, buf_ptr);
+    // cstring.length = length (offset 8)
+    const ns_len_field = try self.func().emitGetFieldPtr(cstring_ptr, 8);
+    try self.func().emitStore(ns_len_field, length);
+    // cstring.managed = managed pointer (offset 16)
+    const ns_managed_field = try self.func().emitGetFieldPtr(cstring_ptr, 16);
+    try self.func().emitStore(ns_managed_field, managed.value);
+
+    // Incref the managed string if heap mode: (cap_flags & 0x3) == 1
+    const one_i32 = try self.func().emitConstI32(1);
+    const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+
+    // Create incref block
+    const incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cstr_incref");
+
+    // In incref block: increment refcount (offset 16 in __ManagedString)
+    const ref_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
+    const old_ref = try self.func().emitLoad(ref_ptr, .i32);
+    const one_ref = try self.func().emitConstI32(1);
+    const new_ref = try self.func().emitBinaryOp(.add, old_ref, one_ref, .i32);
+    try self.func().emitStoreI32(ref_ptr, new_ref);
+
+    // Create end block
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cstr_end");
+
+    // Now go back and add the branch instructions to the right blocks
+
+    // Entry block: branch to slice or nonslice based on is_slice
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_slice }, .{ .block_ref = slice_block_idx }, .{ .block_ref = nonslice_block_idx } },
+    });
+
+    // Slice block ends with branch to end
+    try self.func().blocks.items[slice_block_idx].instructions.append(self.allocator, .{
+        .op = .br,
+        .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
+        .result = null,
+    });
+
+    // Nonslice block ends with branch to incref or end based on is_heap
+    try self.func().blocks.items[nonslice_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = incref_block_idx }, .{ .block_ref = end_block_idx } },
+    });
+
+    // Incref block ends with branch to end
+    try self.func().blocks.items[incref_block_idx].instructions.append(self.allocator, .{
+        .op = .br,
+        .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
+        .result = null,
+    });
+
+    return .{ .value = cstring_ptr, .ty = .{ .struct_type = "cstring" } };
 }
 
 /// __string_from_characters(buffer, length) -> __ManagedString

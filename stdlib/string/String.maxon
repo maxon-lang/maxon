@@ -138,6 +138,13 @@ export type String is Hashable, Equatable, Iterable with Character, InitableFrom
 		return UTF16View{_managed: _managed, _bytePos: 0, _highSurrogate: 0}
 	end 'utf16'
 
+	/// Convert to a C-compatible null-terminated string for FFI operations
+	/// For normal strings, shares the existing buffer (with refcount)
+	/// For slices, allocates and copies to a new null-terminated buffer
+	export function cstr() returns cstring
+		return __string_to_cstring(_managed)
+	end 'cstr'
+
 	// Replace methods
 	export function replace(old String, new_ String) returns String
 		var oldLen = __string_len(old._managed)

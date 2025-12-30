@@ -429,15 +429,15 @@ pub fn compileMultiple(
     defer allocator.free(codegen_result.code);
     defer allocator.free(codegen_result.external_patches);
 
-    // Emit assembly to file if requested (disassemble actual machine code)
-    if (options.emit_asm) {
-        try writeAsmFileFromCode(codegen_result.code, output_path, allocator);
-    }
-
     // Write PE executable
     pe.writePE(output_path, codegen_result.code, codegen_result.external_patches) catch {
         return error.WriteError;
     };
+
+    // Emit assembly to file if requested (disassemble from final PE with patches applied)
+    if (options.emit_asm) {
+        try writeAsmFileFromPE(output_path, allocator);
+    }
 }
 
 /// Find stdlib directory relative to the executable.
@@ -807,8 +807,8 @@ fn writeIrFile(ir_module: ir.Module, output_path: []const u8, allocator: std.mem
     };
 }
 
-/// Write disassembled machine code to .asm file using Zydis
-fn writeAsmFileFromCode(code: []const u8, output_path: []const u8, allocator: std.mem.Allocator) !void {
+/// Write disassembled machine code to .asm file by reading from the generated PE
+fn writeAsmFileFromPE(output_path: []const u8, allocator: std.mem.Allocator) !void {
     const asm_path = blk: {
         if (std.mem.endsWith(u8, output_path, ".exe")) {
             const base = output_path[0 .. output_path.len - 4];
@@ -823,8 +823,57 @@ fn writeAsmFileFromCode(code: []const u8, output_path: []const u8, allocator: st
     };
     defer allocator.free(asm_path);
 
-    // PE base address for .text section (standard Windows value)
-    const base_addr: u64 = 0x00401000;
+    // Read the PE file and extract .text section
+    const pe_file = std.fs.cwd().openFile(output_path, .{}) catch {
+        return error.WriteError;
+    };
+    defer pe_file.close();
+
+    const pe_data = pe_file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch {
+        return error.WriteError;
+    };
+    defer allocator.free(pe_data);
+
+    // Parse PE to find .text section
+    // DOS header: e_lfanew at offset 0x3C gives PE header offset
+    if (pe_data.len < 0x40) return error.WriteError;
+    const pe_offset = std.mem.readInt(u32, pe_data[0x3C..0x40], .little);
+    if (pe_offset + 24 > pe_data.len) return error.WriteError;
+
+    // PE signature check
+    if (!std.mem.eql(u8, pe_data[pe_offset..][0..4], "PE\x00\x00")) return error.WriteError;
+
+    // COFF header starts at pe_offset + 4
+    const coff_offset = pe_offset + 4;
+    const num_sections = std.mem.readInt(u16, pe_data[coff_offset + 2 ..][0..2], .little);
+    const optional_header_size = std.mem.readInt(u16, pe_data[coff_offset + 16 ..][0..2], .little);
+
+    // Section headers start after optional header
+    const section_table_offset = coff_offset + 20 + optional_header_size;
+
+    // Find .text section
+    var text_rva: u32 = 0;
+    var text_size: u32 = 0;
+    var text_file_offset: u32 = 0;
+    for (0..num_sections) |i| {
+        const section_offset = section_table_offset + i * 40;
+        if (section_offset + 40 > pe_data.len) return error.WriteError;
+
+        const name = pe_data[section_offset..][0..8];
+        if (std.mem.eql(u8, name, ".text\x00\x00\x00")) {
+            text_size = std.mem.readInt(u32, pe_data[section_offset + 8 ..][0..4], .little);
+            text_rva = std.mem.readInt(u32, pe_data[section_offset + 12 ..][0..4], .little);
+            text_file_offset = std.mem.readInt(u32, pe_data[section_offset + 20 ..][0..4], .little);
+            break;
+        }
+    }
+
+    if (text_size == 0) return error.WriteError;
+
+    const code = pe_data[text_file_offset..][0..text_size];
+
+    // PE base address for .text section (0x140000000 image base + section RVA)
+    const base_addr: u64 = 0x140000000 + @as(u64, text_rva);
 
     const asm_text = disasm.disassemble(code, base_addr, allocator) catch {
         return error.WriteError;

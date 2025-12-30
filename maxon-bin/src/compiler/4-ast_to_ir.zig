@@ -84,8 +84,7 @@ pub const LoopBlocks = struct {
     fn emitCondBranch(self: *LoopBlocks, self_ir: *AstToIr, cond_value: ir.Value) !void {
         try self_ir.func().blocks.items[self.cond_block_idx].instructions.append(self_ir.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = cond_value }, .{ .block_ref = self.body_block_idx }, .none },
-            .result = self.end_block_idx,
+            .operands = .{ .{ .value = cond_value }, .{ .block_ref = self.body_block_idx }, .{ .block_ref = self.end_block_idx } },
         });
 
         // Restore body block as current
@@ -250,8 +249,7 @@ pub const AstToIr = struct {
         // Emit conditional branch from entry block
         try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = is_heap }, .{ .block_ref = incref_block_idx }, .none },
-            .result = end_block_idx,
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = incref_block_idx }, .{ .block_ref = end_block_idx } },
         });
 
         // In incref block: increment refcount
@@ -300,8 +298,7 @@ pub const AstToIr = struct {
         // Emit conditional branch from entry block to decref or end
         try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .none },
-            .result = end_block_idx,
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = end_block_idx } },
         });
 
         // In decref block: decrement refcount and check if zero
@@ -321,8 +318,7 @@ pub const AstToIr = struct {
         // Emit branch from decref block to free or end
         try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = is_zero }, .{ .block_ref = free_block_idx }, .none },
-            .result = end_block_idx,
+            .operands = .{ .{ .value = is_zero }, .{ .block_ref = free_block_idx }, .{ .block_ref = end_block_idx } },
         });
 
         // In free block: load buffer pointer and free it
@@ -334,6 +330,107 @@ pub const AstToIr = struct {
 
         // Restore end block
         try self.func().blocks.append(self.allocator, end_block);
+    }
+
+    /// Emit cleanup for a cstring variable.
+    /// cstring struct: data(8) + length(8) + managed(8)
+    /// If managed != null: decref the __ManagedString (cstring borrowed from String)
+    /// If managed == null: free the data pointer (cstring owns buffer from slice copy)
+    fn emitCstringCleanup(self: *AstToIr, cstring_ptr: ir.Value) !void {
+        // Load managed pointer (offset 16)
+        const managed_field = try self.func().emitGetFieldPtr(cstring_ptr, 16);
+        const managed_ptr = try self.func().emitLoad(managed_field, .ptr);
+
+        // Check if managed != null
+        const null_val = try self.func().emitConstI64(0);
+        const is_not_null = try self.func().emitBinaryOp(.icmp_ne, managed_ptr, null_val, .i64);
+
+        // Create all blocks in execution order
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+        const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("cstr_decref");
+
+        // === DECREF BLOCK: managed != null, decref the __ManagedString ===
+        const cap_ptr = try self.func().emitGetFieldPtr(managed_ptr, 12);
+        const cap_flags = try self.func().emitLoad(cap_ptr, .i32);
+        const three = try self.func().emitConstI32(3);
+        const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+        const one_i32 = try self.func().emitConstI32(1);
+        const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+
+        const do_decref_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("cstr_do_decref");
+
+        // In do_decref block: decrement refcount, free if zero
+        const ref_ptr = try self.func().emitGetFieldPtr(managed_ptr, 16);
+        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
+        const one_ref = try self.func().emitConstI32(1);
+        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i32);
+        try self.func().emitStoreI32(ref_ptr, new_ref);
+        const zero = try self.func().emitConstI32(0);
+        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i32);
+
+        const do_free_managed_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("cstr_free_managed");
+
+        // In free managed block: free the buffer
+        const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
+        try self.func().emitHeapFree(buf_ptr);
+
+        const skip_decref_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("cstr_skip_decref");
+
+        const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("cstr_free");
+
+        // === FREE BLOCK: managed == null, free the data pointer ===
+        const data_ptr = try self.func().emitLoad(cstring_ptr, .ptr);
+        try self.func().emitHeapFree(data_ptr);
+
+        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("cstr_cleanup_end");
+
+        // Now go back and add all the branch instructions
+
+        // Entry: if managed != null -> decref, else -> free
+        try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_not_null }, .{ .block_ref = decref_block_idx }, .{ .block_ref = free_block_idx } },
+        });
+
+        // Decref block: if heap mode -> do_decref, else -> skip_decref
+        try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = do_decref_idx }, .{ .block_ref = skip_decref_idx } },
+        });
+
+        // Do_decref block: if refcount zero -> free_managed, else -> skip_decref
+        try self.func().blocks.items[do_decref_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_zero }, .{ .block_ref = do_free_managed_idx }, .{ .block_ref = skip_decref_idx } },
+        });
+
+        // Free_managed block: goto end
+        try self.func().blocks.items[do_free_managed_idx].instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
+            .result = null,
+        });
+
+        // Skip_decref block: goto end
+        try self.func().blocks.items[skip_decref_idx].instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
+            .result = null,
+        });
+
+        // Free block: goto end
+        try self.func().blocks.items[free_block_idx].instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
+            .result = null,
+        });
     }
 
     // ------------------------------------------------------------------------
@@ -490,6 +587,21 @@ pub const AstToIr = struct {
             .struct_type = .{ .name = "__ManagedString", .fields = managed_string_fields, .size = 24 },
         }) catch {
             self.allocator.free(managed_string_fields);
+            return error.OutOfMemory;
+        };
+
+        // Register cstring compiler-internal type (24 bytes)
+        // Layout: data(8) + length(8) + managed(8)
+        // For non-slice strings: data points to String's buffer, managed points to __ManagedString (incref'd)
+        // For slice strings: data points to newly allocated null-terminated copy, managed = null
+        const cstring_fields = try self.allocator.alloc(FieldInfo, 3);
+        cstring_fields[0] = .{ .name = "data", .offset = 0, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } } };
+        cstring_fields[1] = .{ .name = "length", .offset = 8, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+        cstring_fields[2] = .{ .name = "managed", .offset = 16, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } } };
+        self.type_map.put(self.allocator, "cstring", .{
+            .struct_type = .{ .name = "cstring", .fields = cstring_fields, .size = 24 },
+        }) catch {
+            self.allocator.free(cstring_fields);
             return error.OutOfMemory;
         };
 
@@ -1703,6 +1815,14 @@ pub const AstToIr = struct {
                     // Use COW decref which checks heap mode and frees if refcount reaches 0
                     try self.emitStringDecref(var_info.ptr);
                 }
+                // Handle cstring type cleanup
+                // cstring struct: data(8) + length(8) + managed(8)
+                // If managed != null: decref the __ManagedString
+                // If managed == null: free the data pointer (cstring owns its buffer from slice copy)
+                if (std.mem.eql(u8, var_info.ty.struct_type, "cstring") and var_info.state != .moved) {
+                    if (var_info.is_parameter) continue;
+                    try self.emitCstringCleanup(var_info.ptr);
+                }
             }
         }
     }
@@ -1998,8 +2118,7 @@ pub const AstToIr = struct {
         const branch_target_if_false = if (has_else or is_if_let) actual_else_block_idx else actual_end_block_idx;
         try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = condition_value }, .{ .block_ref = then_block_idx }, .none },
-            .result = branch_target_if_false,
+            .operands = .{ .{ .value = condition_value }, .{ .block_ref = then_block_idx }, .{ .block_ref = branch_target_if_false } },
         });
 
         // Now emit the deferred branches with the correct end block index
@@ -2105,8 +2224,7 @@ pub const AstToIr = struct {
         // Now emit the conditional branch in the condition block with the correct cont_block_idx
         try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = cond_typed.value }, .{ .block_ref = body_block_idx }, .none },
-            .result = cont_block_idx,
+            .operands = .{ .{ .value = cond_typed.value }, .{ .block_ref = body_block_idx }, .{ .block_ref = cont_block_idx } },
         });
 
         // Patch any break statements that used the sentinel value
@@ -2247,8 +2365,7 @@ pub const AstToIr = struct {
         // Emit conditional branch in condition block: if is_not_nil, go to body; else fall through to cont
         try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = is_not_nil }, .{ .block_ref = body_block_idx }, .none },
-            .result = cont_block_idx,
+            .operands = .{ .{ .value = is_not_nil }, .{ .block_ref = body_block_idx }, .{ .block_ref = cont_block_idx } },
         });
 
         // Patch any break statements
@@ -2335,8 +2452,7 @@ pub const AstToIr = struct {
         const entry_block = &self.func().blocks.items[some_block_idx - 1];
         try entry_block.instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = has_value }, .{ .block_ref = some_block_idx }, .none },
-            .result = nil_block_idx,
+            .operands = .{ .{ .value = has_value }, .{ .block_ref = some_block_idx }, .{ .block_ref = nil_block_idx } },
         });
 
         // Save end and nil blocks
@@ -3425,8 +3541,7 @@ pub const AstToIr = struct {
         const entry_block = &self.func().blocks.items[has_value_block_idx - 1];
         try entry_block.instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = has_value }, .{ .block_ref = has_value_block_idx }, .none },
-            .result = use_default_block_idx,
+            .operands = .{ .{ .value = has_value }, .{ .block_ref = has_value_block_idx }, .{ .block_ref = use_default_block_idx } },
         });
 
         // Pop merge block temporarily
@@ -3720,8 +3835,7 @@ pub const AstToIr = struct {
         const entry_block = &self.func().blocks.items[in_bounds_block_idx - 1];
         try entry_block.instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx }, .none },
-            .result = out_of_bounds_block_idx,
+            .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx }, .{ .block_ref = out_of_bounds_block_idx } },
         });
 
         // Save merge and out_of_bounds blocks
@@ -4562,8 +4676,7 @@ pub const AstToIr = struct {
         const entry_block = &self.func().blocks.items[in_bounds_block_idx - 1];
         try entry_block.instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx }, .none },
-            .result = out_of_bounds_block_idx,
+            .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx }, .{ .block_ref = out_of_bounds_block_idx } },
         });
 
         // Save merge and out_of_bounds blocks
@@ -4933,8 +5046,7 @@ pub const AstToIr = struct {
             const entry_block = &self.func().blocks.items[entry_block_idx];
             try entry_block.instructions.append(self.allocator, .{
                 .op = .br_cond,
-                .operands = .{ .{ .value = is_zero }, .{ .block_ref = zero_block_idx }, .none },
-                .result = nonzero_block_idx, // false branch target
+                .operands = .{ .{ .value = is_zero }, .{ .block_ref = zero_block_idx }, .{ .block_ref = nonzero_block_idx } },
             });
 
             // Pop end_block temporarily so we can work with zero/nonzero blocks
