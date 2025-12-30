@@ -610,7 +610,7 @@ pub const AstToIr = struct {
         const old_fields: ?[]const FieldInfo = if (self.type_map.get(type_decl.name)) |existing|
             switch (existing) {
                 .struct_type => |s| s.fields,
-                else => null,
+                .primitive, .enum_type => null,
             }
         else
             null;
@@ -661,7 +661,7 @@ pub const AstToIr = struct {
                     };
                     break :blk switch (info) {
                         .struct_type => |s| s.size,
-                        else => 8,
+                        .primitive, .enum_type => 8,
                     };
                 },
                 .primitive, .enum_type, .array_type => 8, // arrays stored as pointers
@@ -995,7 +995,7 @@ pub const AstToIr = struct {
                     };
                     break :blk switch (info) {
                         .struct_type => |s| s.size,
-                        else => 8,
+                        .primitive, .enum_type => 8,
                     };
                 },
                 .primitive, .enum_type, .array_type => 8,
@@ -1829,7 +1829,7 @@ pub const AstToIr = struct {
         const base = try self.convertExpression(assign.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            else => {
+            .primitive, .array_type, .enum_type, .optional_type => {
                 std.debug.print("[AST->IR] convertFieldAssign: expected struct type for field '{s}'\n", .{assign.field_name});
                 self.reportError(.E006);
                 return error.UnknownType;
@@ -1926,7 +1926,7 @@ pub const AstToIr = struct {
         if (if_stmt.binding_name) |binding_name| {
             const opt_info = switch (cond_typed.ty) {
                 .optional_type => |info| info,
-                else => OptionalInfo{ .wrapped = .i64 },
+                .primitive, .struct_type, .array_type, .enum_type => OptionalInfo{ .wrapped = .i64 },
             };
             const wrapped_type = opt_info.wrapped;
             const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
@@ -2186,7 +2186,7 @@ pub const AstToIr = struct {
         // Extract the value from the optional result (offset 8)
         const opt_info = switch (next_result.ty) {
             .optional_type => |info| info,
-            else => OptionalInfo{ .wrapped = .i64 },
+            .primitive, .struct_type, .array_type, .enum_type => OptionalInfo{ .wrapped = .i64 },
         };
         const value_offset = try self.func().emitConstI64(8);
         const value_ptr = try self.func().emitBinaryOp(.add, next_result.value, value_offset, .ptr);
@@ -2299,7 +2299,7 @@ pub const AstToIr = struct {
         // Get the wrapped type info
         const opt_info = switch (opt_typed.ty) {
             .optional_type => |info| info,
-            else => OptionalInfo{ .wrapped = .i64 },
+            .primitive, .struct_type, .array_type, .enum_type => OptionalInfo{ .wrapped = .i64 },
         };
         const wrapped_type = opt_info.wrapped;
 
@@ -2900,7 +2900,7 @@ pub const AstToIr = struct {
             const result = switch (cmp.op) {
                 .eq => try self.func().emitBinaryOp(.icmp_eq, tag, zero, .i64),
                 .ne => try self.func().emitBinaryOp(.icmp_ne, tag, zero, .i64),
-                else => {
+                .lt, .le, .gt, .ge => {
                     // < > <= >= don't make sense for optional/nil comparison
                     self.reportError(.E003);
                     return error.TypeMismatch;
@@ -3042,7 +3042,7 @@ pub const AstToIr = struct {
         // Get optional type info - must be an optional type
         const opt_info = switch (opt_typed.ty) {
             .optional_type => |info| info,
-            else => {
+            .primitive, .struct_type, .array_type, .enum_type => {
                 // Left operand is not an optional type - this is an error
                 self.reportError(.E017);
                 return error.TypeMismatch;
@@ -3207,7 +3207,7 @@ pub const AstToIr = struct {
         const base = try self.convertExpression(faccess.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            else => {
+            .primitive, .array_type, .enum_type, .optional_type => {
                 std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
                 self.reportError(.E006);
                 return error.UnknownType;
@@ -3976,7 +3976,7 @@ pub const AstToIr = struct {
         const elem_type = first_typed.ty.toPrimitiveType();
         const elem_struct_type: ?[]const u8 = switch (first_typed.ty) {
             .struct_type => |name| name,
-            else => null,
+            .primitive, .array_type, .enum_type, .optional_type => null,
         };
         const total_size = @as(i32, @intCast(elements.len)) * 8;
         const arr_ptr = try self.func().emitAllocaSized(total_size);
@@ -4119,7 +4119,7 @@ pub const AstToIr = struct {
 
         const arr_info = switch (base_typed.ty) {
             .array_type => |a| a,
-            else => {
+            .primitive, .struct_type, .enum_type, .optional_type => {
                 std.debug.print("[AST->IR] convertIndexExpr: expected array type\n", .{});
                 self.reportError(.E006);
                 return error.UnknownType;
@@ -4136,9 +4136,30 @@ pub const AstToIr = struct {
             // First, find the array name from the base expression
             const arr_name = switch (idx.base.*) {
                 .identifier => |name| name,
-                else => {
-                    // For non-identifier bases, we can't do bounds checking with dynamic size
-                    // Fall back to direct access (unsafe)
+                // For non-identifier bases, we can't do bounds checking with dynamic size
+                // Fall back to direct access (unsafe)
+                .integer,
+                .float_lit,
+                .bool_lit,
+                .nil_lit,
+                .self_expr,
+                .string_literal,
+                .char_literal,
+                .unary,
+                .binary,
+                .compare,
+                .logical,
+                .call,
+                .struct_init,
+                .field_access,
+                .array_literal,
+                .map_literal,
+                .index,
+                .array_type,
+                .method_call,
+                .nil_coalesce,
+                .cast,
+                => {
                     const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
                     const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
                     return self.createSomeOptional(val, arr_info.element_type);
@@ -4244,7 +4265,7 @@ pub const AstToIr = struct {
 
         const struct_info = switch (type_info) {
             .struct_type => |s| s,
-            else => {
+            .primitive, .enum_type => {
                 debug.astToIr("error: Array type is not a struct: {s}", .{array_type_name});
                 return error.UnknownType;
             },
@@ -4465,7 +4486,7 @@ pub const AstToIr = struct {
         // Get the type name from the TypedValue
         const type_name = switch (base_typed.ty) {
             .struct_type => |name| name,
-            else => {
+            .primitive, .array_type, .enum_type, .optional_type => {
                 debug.astToIr("error: method call on non-struct type", .{});
                 return error.SemanticError;
             },
@@ -4845,7 +4866,7 @@ fn getValueTypeFromTypeExpr(te: ast.TypeExpr) ?ValueType {
                 },
             };
         },
-        else => null,
+        .simple, .generic => null,
     };
 }
 

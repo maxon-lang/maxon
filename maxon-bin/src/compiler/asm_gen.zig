@@ -105,7 +105,7 @@ fn generateInstruction(writer: anytype, inst: ir.Instruction) !void {
                     .add => "add",
                     .sub => "sub",
                     .mul => "imul",
-                    else => "add",
+                    else => unreachable,
                 };
                 if (inst.op == .mul) {
                     try writer.print("    imul rax, rcx\n", .{});
