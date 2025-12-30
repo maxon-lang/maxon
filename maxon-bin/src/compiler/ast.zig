@@ -281,6 +281,17 @@ pub const CastExpr = struct {
     target_type: []const u8, // "int", "byte", "float", etc.
 };
 
+pub const InterpolatedStringPart = struct {
+    is_expression: bool,
+    literal_value: ?[]const u8, // For literal parts
+    expr: ?*const Expression, // For expression parts
+    format_spec: ?[]const u8, // Optional format specifier (text after : in {expr:fmt})
+};
+
+pub const InterpolatedStringExpr = struct {
+    parts: []const InterpolatedStringPart,
+};
+
 pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
@@ -289,6 +300,7 @@ pub const Expression = union(enum) {
     self_expr, // reference to current instance in methods
     identifier: []const u8,
     string_literal: []const u8, // double-quoted string literal "hello"
+    interpolated_string: InterpolatedStringExpr, // string with interpolation "hello {name}!"
     char_literal: []const u8, // single-quoted character literal 'a' (grapheme cluster, UTF-8 bytes)
     unary: UnaryExpr,
     binary: BinaryExpr,

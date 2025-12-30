@@ -85,9 +85,7 @@ pub fn runAllTests(
     options: testing.TestOptions,
 ) !testing.TestSummary {
     // Regenerate fragments if specs changed
-    _ = fragment_gen.regenerateIfNeeded(allocator, SPECS_DIR, FRAGMENTS_DIR) catch |err| {
-        std.debug.print("Warning: Could not check/regenerate fragments: {}\n", .{err});
-    };
+    _ = try fragment_gen.regenerateIfNeeded(allocator, SPECS_DIR, FRAGMENTS_DIR);
 
     // Collect all fragment files
     var fragments_dir = std.fs.cwd().openDir(FRAGMENTS_DIR, .{ .iterate = true }) catch |err| {

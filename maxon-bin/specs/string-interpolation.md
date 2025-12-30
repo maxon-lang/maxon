@@ -148,7 +148,7 @@ type Point is Stringable
     var x int
     var y int
 
-    function Stringable.toString(format string or nil) returns string
+    function Stringable.toString(format String or nil) returns String
         return "({self.x}, {self.y})"
     end 'toString'
 end 'Point'
@@ -741,7 +741,7 @@ type Pair is Stringable
     var first int
     var second int
 
-    function Stringable.toString(_ string or nil) returns string
+    function Stringable.toString(_ String or nil) returns String
         return "[{first}, {second}]"
     end 'toString'
 end 'Pair'
@@ -766,7 +766,7 @@ end 'main'
 type Counter is Stringable
     var value int
 
-    function Stringable.toString(format string or nil) returns string
+    function Stringable.toString(format String or nil) returns String
         if let fmt = format 'unwrap'
             if fmt == "verbose" 'verbose'
                 return "Counter(value={value})"
@@ -796,10 +796,10 @@ Counter(value=42)
 <!-- test: multiple-stringable -->
 ```maxon
 type Name is Stringable
-    var first string
-    var last string
+    var first String
+    var last String
 
-    function Stringable.toString(_ string or nil) returns string
+    function Stringable.toString(_ String or nil) returns String
         return "{first} {last}"
     end 'toString'
 end 'Name'
@@ -807,7 +807,7 @@ end 'Name'
 type Age is Stringable
     var years int
 
-    function Stringable.toString(_ string or nil) returns string
+    function Stringable.toString(_ String or nil) returns String
         return "{years} years old"
     end 'toString'
 end 'Age'

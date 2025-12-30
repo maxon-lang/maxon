@@ -49,6 +49,7 @@ pub const TokenType = enum {
     integer,
     float_literal,
     string_literal, // double-quoted string literals: "hello"
+    string_interp, // string with interpolation: "hello {name}!"
     char_literal, // single-quoted literals: 'A' (used for both character literals and end labels)
 
     // Punctuation
@@ -257,18 +258,24 @@ pub const Lexer = struct {
                 continue;
             }
 
-            // Double-quoted string literal
+            // Double-quoted string literal (may contain interpolation)
             if (c == '"') {
                 const start_col = self.column;
                 const start = self.pos + 1;
                 self.pos += 1;
                 self.column += 1;
+                var has_interpolation = false;
                 // UTF-8: scan bytes until closing quote, handling escape sequences
                 while (self.pos < self.source.len and self.source[self.pos] != '"') {
                     if (self.source[self.pos] == '\\' and self.pos + 1 < self.source.len) {
-                        // Skip escape sequence
+                        // Skip escape sequence (including \{ and \})
                         self.pos += 2;
                         self.column += 2;
+                    } else if (self.source[self.pos] == '{') {
+                        // Unescaped { means interpolation
+                        has_interpolation = true;
+                        self.pos += 1;
+                        self.column += 1;
                     } else {
                         self.pos += 1;
                         self.column += 1;
@@ -277,7 +284,8 @@ pub const Lexer = struct {
                 const text = self.source[start..self.pos];
                 self.pos += 1; // skip closing quote
                 self.column += 1;
-                try tokens.append(allocator, .{ .type = .string_literal, .text = text, .line = self.line, .column = start_col });
+                const token_type: TokenType = if (has_interpolation) .string_interp else .string_literal;
+                try tokens.append(allocator, .{ .type = token_type, .text = text, .line = self.line, .column = start_col });
                 continue;
             }
 

@@ -283,7 +283,7 @@ fn writeFragment(
     // Build filename: test_name.test
     const filename = try std.fmt.allocPrint(allocator, "{s}.test", .{test_case.name});
 
-    // Build full path
+    // Build full path (relative for file operations)
     const full_path = try std.fs.path.join(allocator, &.{ fragments_dir, filename });
 
     // Build content as a string
@@ -326,12 +326,19 @@ fn writeFragment(
 
     try content.appendSlice(allocator, "---\n");
 
+    // Write partial file first so it exists for error messages
+    {
+        const file = try std.fs.cwd().createFile(full_path, .{});
+        defer file.close();
+        try file.writeAll(content.items);
+    }
+
     // Generate and include IR (for informational purposes)
     switch (test_case.expected) {
         .success => {
             // Generate IR for success tests - this must succeed
             var compile_result: compiler.CompileResult = .{ .error_info = null };
-            const ir = compiler.compileToIrWithResult(test_case.source, allocator, &compile_result) catch |err| {
+            const ir = compiler.compileToIrWithResult(test_case.source, allocator, &compile_result, full_path) catch |err| {
                 // IR generation failed - print detailed error info
                 std.debug.print("IR generation failed for test '{s}': {}\n", .{ test_case.name, err });
                 if (compile_result.error_info) |error_info| {
@@ -349,7 +356,7 @@ fn writeFragment(
 
     try content.appendSlice(allocator, "---\n");
 
-    // Write to file
+    // Write final file with IR
     const file = try std.fs.cwd().createFile(full_path, .{});
     defer file.close();
     try file.writeAll(content.items);

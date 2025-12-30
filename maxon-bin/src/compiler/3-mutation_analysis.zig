@@ -168,7 +168,7 @@ pub const MutationAnalyzer = struct {
             },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
-            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .array_type => {},
+            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .array_type, .interpolated_string => {},
         }
     }
 

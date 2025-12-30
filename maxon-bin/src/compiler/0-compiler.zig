@@ -151,7 +151,7 @@ pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8
 }
 
 /// Compile source and return the IR as a string, with error details exposed
-pub fn compileToIrWithResult(source: []const u8, allocator: std.mem.Allocator, result: *CompileResult) ![]const u8 {
+pub fn compileToIrWithResult(source: []const u8, allocator: std.mem.Allocator, result: *CompileResult, source_file: ?[]const u8) ![]const u8 {
     // Load all stdlib modules (same as main compile path)
     const stdlib_path = try findStdlibPath(allocator);
     defer allocator.free(stdlib_path);
@@ -166,7 +166,7 @@ pub fn compileToIrWithResult(source: []const u8, allocator: std.mem.Allocator, r
     for (stdlib_modules, 0..) |mod, i| {
         all_sources[i] = mod;
     }
-    all_sources[stdlib_modules.len] = .{ .path = "<test>", .content = source };
+    all_sources[stdlib_modules.len] = .{ .path = source_file orelse "<test>", .content = source };
 
     // Use compileMultipleToIr to get proper IR with all stdlib types
     return compileMultipleToIr(all_sources, allocator, result);
@@ -1068,6 +1068,14 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         },
         .cast => |c| {
             freeExpressionArgs(c.expr.*, allocator);
+        },
+        .interpolated_string => |interp| {
+            for (interp.parts) |part| {
+                if (part.expr) |e| {
+                    freeExpressionArgs(e.*, allocator);
+                }
+            }
+            allocator.free(interp.parts);
         },
         // Simple literals with no nested allocations to free
         .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier, .string_literal, .char_literal => {},

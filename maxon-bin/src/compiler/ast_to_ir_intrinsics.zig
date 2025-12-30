@@ -48,7 +48,7 @@ pub fn isInternalType(type_name: []const u8) bool {
 /// Check if internal type access is allowed, returns error if not
 pub fn checkInternalTypeAccess(self: *AstToIr, type_name: []const u8) ConvertError!void {
     if (isInternalType(type_name) and !isStdlibFile(self)) {
-        self.reportErrorWithDetails(.E018, type_name);
+        self.reportError(.E018, type_name);
         return error.SemanticError;
     }
 }
@@ -57,7 +57,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     // Check for __managed_array_* intrinsics (stdlib-only)
     if (std.mem.startsWith(u8, call.func_name, "__managed_array_")) {
         if (!isStdlibFile(self)) {
-            self.reportErrorWithDetails(.E016, call.func_name);
+            self.reportError(.E016, call.func_name);
             return error.SemanticError;
         }
         return convertManagedArrayIntrinsic(self, call);
@@ -66,7 +66,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     // Check for __string_* intrinsics (stdlib-only)
     if (std.mem.startsWith(u8, call.func_name, "__string_")) {
         if (!isStdlibFile(self)) {
-            self.reportErrorWithDetails(.E016, call.func_name);
+            self.reportError(.E016, call.func_name);
             return error.SemanticError;
         }
         return convertStringIntrinsic(self, call);
@@ -77,13 +77,13 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     } else return error.NotABuiltin;
 
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
     const arg = try self.convertExpression(call.args[0]);
     if (arg.ty.toPrimitiveType() != builtin.arg_type) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.TypeMismatch;
     }
 
@@ -116,7 +116,7 @@ fn convertManagedArrayIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError
     } else if (std.mem.eql(u8, name, "__managed_array_shift_left")) {
         return intrinsicManagedArrayShiftLeft(self, call);
     } else {
-        self.reportErrorWithDetails(.E019, name);
+        self.reportError(.E019, name);
         return error.SemanticError;
     }
 }
@@ -125,7 +125,7 @@ fn convertManagedArrayIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError
 /// Returns the length field of the __ManagedArray
 fn intrinsicManagedArrayLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -141,7 +141,7 @@ fn intrinsicManagedArrayLen(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 /// Returns the capacity field of the __ManagedArray
 fn intrinsicManagedArrayCapacity(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -159,7 +159,7 @@ fn intrinsicManagedArrayCapacity(self: *AstToIr, call: ast.CallExpr) ConvertErro
 /// Returns a pointer to the 24-byte __ManagedArray struct
 fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -193,7 +193,7 @@ fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!
 /// Sets element at index (no bounds checking - caller must verify)
 fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 3) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -217,7 +217,7 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
 /// Sets the length field of the __ManagedArray
 fn intrinsicManagedArraySetLength(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 2) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -235,7 +235,7 @@ fn intrinsicManagedArraySetLength(self: *AstToIr, call: ast.CallExpr) ConvertErr
 /// Reallocates buffer to new_capacity (must be > current capacity)
 fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 2) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -267,7 +267,7 @@ fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
 /// Iterates backwards from end to start to handle overlap correctly
 fn intrinsicManagedArrayShiftRight(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 3) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -324,7 +324,7 @@ fn intrinsicManagedArrayShiftRight(self: *AstToIr, call: ast.CallExpr) ConvertEr
 /// Iterates forwards from start to end to handle overlap correctly
 fn intrinsicManagedArrayShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 3) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -425,7 +425,7 @@ fn convertStringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     } else if (std.mem.eql(u8, name, "__string_cap_flags")) {
         return intrinsicStringCapFlags(self, call);
     } else {
-        self.reportErrorWithDetails(.E019, name);
+        self.reportError(.E019, name);
         return error.SemanticError;
     }
 }
@@ -434,7 +434,7 @@ fn convertStringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
 /// Returns the byte length of the __ManagedString (offset 8, i32)
 fn intrinsicStringLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -452,7 +452,7 @@ fn intrinsicStringLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
 /// Returns the byte at the given index in the string buffer
 fn intrinsicStringByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 2) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -483,7 +483,7 @@ fn intrinsicStringByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 ///   - parent_off = byte offset from parent buffer start
 fn intrinsicStringSlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 3) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -549,7 +549,7 @@ fn intrinsicStringSlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
 /// New layout (24 bytes): buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
 fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 2) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -618,7 +618,7 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 /// New layout (24 bytes): buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
 fn intrinsicStringMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -671,7 +671,7 @@ fn intrinsicStringMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
 /// Sets a byte at the given index (caller must ensure string is unique)
 fn intrinsicStringSetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 3) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -695,7 +695,7 @@ fn intrinsicStringSetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
 /// Returns a pointer to the string's buffer for FFI use
 fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -711,7 +711,7 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 /// Creates a new string from a byte array buffer
 fn intrinsicStringFromCharacters(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 2) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -766,7 +766,7 @@ fn intrinsicStringFromCharacters(self: *AstToIr, call: ast.CallExpr) ConvertErro
 /// Does nothing for SSO or constant strings
 fn intrinsicStringIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -788,7 +788,7 @@ fn intrinsicStringIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 /// Does nothing for SSO or constant strings (cap_flags & 0x1 == 0)
 fn intrinsicStringDecref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -811,7 +811,7 @@ fn intrinsicStringDecref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 /// Returns the current reference count
 fn intrinsicStringRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -829,7 +829,7 @@ fn intrinsicStringRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!Type
 /// Returns true if the string is heap-allocated (cap_flags & 0x1 == 1)
 fn intrinsicStringIsHeap(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 
@@ -850,7 +850,7 @@ fn intrinsicStringIsHeap(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 /// Returns the cap_flags field (for debugging/introspection)
 fn intrinsicStringCapFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
-        self.reportError(.E011);
+        self.reportError(.E011, call.func_name);
         return error.WrongArgumentCount;
     }
 

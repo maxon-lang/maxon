@@ -1,6 +1,8 @@
 const std = @import("std");
-const Token = @import("1-lexer.zig").Token;
-const TokenType = @import("1-lexer.zig").TokenType;
+const lexer_mod = @import("1-lexer.zig");
+const Token = lexer_mod.Token;
+const TokenType = lexer_mod.TokenType;
+const Lexer = lexer_mod.Lexer;
 const ast = @import("ast.zig");
 const debug = @import("debug.zig");
 const err = @import("error.zig");
@@ -1152,6 +1154,11 @@ pub const Parser = struct {
             const token = self.advance();
             return try self.parsePostfix(.{ .string_literal = token.text });
         }
+        // String with interpolation
+        if (self.check(.string_interp)) {
+            const token = self.advance();
+            return try self.parseInterpolatedString(token.text);
+        }
         // Character literal (also used for end labels, but here as an expression)
         if (self.check(.char_literal)) {
             const token = self.advance();
@@ -1317,6 +1324,117 @@ pub const Parser = struct {
             return try self.parsePostfix(expr);
         }
         return null;
+    }
+
+    /// Parse an interpolated string like "Hello {name}!"
+    /// The raw_text is the content between quotes (without the quotes)
+    fn parseInterpolatedString(self: *Parser, raw_text: []const u8) ParseError!ast.Expression {
+        var parts: std.ArrayListUnmanaged(ast.InterpolatedStringPart) = .empty;
+        errdefer parts.deinit(self.allocator);
+
+        var pos: usize = 0;
+        var literal_start: usize = 0;
+
+        while (pos < raw_text.len) {
+            if (raw_text[pos] == '\\' and pos + 1 < raw_text.len) {
+                // Escape sequence - keep it in the literal (will be processed in IR gen)
+                pos += 2;
+            } else if (raw_text[pos] == '{') {
+                // End current literal part (if any)
+                if (pos > literal_start) {
+                    try parts.append(self.allocator, .{
+                        .is_expression = false,
+                        .literal_value = raw_text[literal_start..pos],
+                        .expr = null,
+                        .format_spec = null,
+                    });
+                }
+
+                // Find matching } tracking depth for nested brackets/parens/braces
+                const expr_start = pos + 1;
+                var expr_end = expr_start;
+                var depth: usize = 1;
+                var format_spec_start: ?usize = null;
+
+                while (expr_end < raw_text.len and depth > 0) {
+                    const ch = raw_text[expr_end];
+                    if (ch == '\\' and expr_end + 1 < raw_text.len) {
+                        // Skip escape sequence in expression (e.g., string literals)
+                        expr_end += 2;
+                        continue;
+                    }
+                    if (ch == '{' or ch == '(' or ch == '[') {
+                        depth += 1;
+                    } else if (ch == '}') {
+                        depth -= 1;
+                        if (depth == 0) break;
+                    } else if (ch == ')' or ch == ']') {
+                        if (depth > 1) depth -= 1;
+                    } else if (ch == ':' and depth == 1 and format_spec_start == null) {
+                        // Format specifier starts here (only at outermost level)
+                        format_spec_start = expr_end + 1;
+                    }
+                    expr_end += 1;
+                }
+
+                // Extract expression text (excluding format spec if present)
+                const expr_text_end = if (format_spec_start) |fs| fs - 1 else expr_end;
+                const expr_text = raw_text[expr_start..expr_text_end];
+
+                // Parse the expression using a sub-lexer and sub-parser
+                var sub_lexer = Lexer.init(expr_text);
+                const expr_tokens = sub_lexer.tokenize(self.allocator) catch {
+                    return error.OutOfMemory;
+                };
+                defer self.allocator.free(expr_tokens);
+
+                var sub_parser = Parser.init(expr_tokens, self.allocator);
+                defer sub_parser.deinit();
+
+                const expr = sub_parser.parseExpression() catch {
+                    self.reportError(.E003);
+                    return error.ExpectedExpression;
+                } orelse {
+                    self.reportError(.E003);
+                    return error.ExpectedExpression;
+                };
+
+                // Extract format spec if present
+                const format_spec: ?[]const u8 = if (format_spec_start) |fs|
+                    raw_text[fs..expr_end]
+                else
+                    null;
+
+                // Move the expression pointer to our arena
+                const expr_ptr = try self.createExpr(expr);
+
+                try parts.append(self.allocator, .{
+                    .is_expression = true,
+                    .literal_value = null,
+                    .expr = expr_ptr,
+                    .format_spec = format_spec,
+                });
+
+                pos = expr_end + 1; // Skip past }
+                literal_start = pos;
+            } else {
+                pos += 1;
+            }
+        }
+
+        // Add final literal part if any
+        if (pos > literal_start) {
+            try parts.append(self.allocator, .{
+                .is_expression = false,
+                .literal_value = raw_text[literal_start..pos],
+                .expr = null,
+                .format_spec = null,
+            });
+        }
+
+        return try self.parsePostfix(.{ .interpolated_string = .{
+            .parts = try parts.toOwnedSlice(self.allocator),
+        } });
     }
 
     fn parsePostfix(self: *Parser, base_expr: ast.Expression) ParseError!ast.Expression {

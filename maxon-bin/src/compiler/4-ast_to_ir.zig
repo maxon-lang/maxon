@@ -165,23 +165,20 @@ pub const AstToIr = struct {
         };
     }
 
-    pub fn reportError(self: *AstToIr, code: err.ErrorCode) void {
-        self.last_error = .{
-            .code = code,
-            .message = code.message(),
-            .location = .{
-                .file = self.source_file,
-                .line = @intCast(self.current_line),
-                .column = 1, // Column not tracked in AST
-            },
-        };
-    }
-
-    pub fn reportErrorWithDetails(self: *AstToIr, code: err.ErrorCode, details: []const u8) void {
+    pub fn reportError(self: *AstToIr, code: err.ErrorCode, details: []const u8) void {
         // Format: "base message: 'details'"
         const base_msg = code.message();
         const formatted = std.fmt.allocPrint(self.allocator, "{s}: '{s}'", .{ base_msg, details }) catch {
-            self.reportError(code);
+            // Fallback if allocation fails
+            self.last_error = .{
+                .code = code,
+                .message = base_msg,
+                .location = .{
+                    .file = self.source_file,
+                    .line = @intCast(self.current_line),
+                    .column = 1,
+                },
+            };
             return;
         };
         self.last_error = .{
@@ -339,7 +336,6 @@ pub const AstToIr = struct {
         try self.func().blocks.append(self.allocator, end_block);
     }
 
-
     // ------------------------------------------------------------------------
     // Borrow Checking Helpers
     // ------------------------------------------------------------------------
@@ -368,7 +364,7 @@ pub const AstToIr = struct {
         if (self.var_map.get(var_name)) |var_info| {
             if (self.isStringType(var_info.ty) and var_info.borrow_state == .borrowed) {
                 const msg = std.fmt.allocPrint(self.allocator, "Cannot modify string '{s}' while it is borrowed", .{var_name}) catch {
-                    self.reportError(.E020);
+                    self.reportError(.E020, var_name);
                     return error.SemanticError;
                 };
                 self.last_error = .{
@@ -389,7 +385,7 @@ pub const AstToIr = struct {
             const var_info = entry.value_ptr.*;
             if (self.isStringType(var_info.ty) and var_info.borrow_state == .borrowed) {
                 const msg = std.fmt.allocPrint(self.allocator, "String '{s}' goes out of scope while still borrowed", .{entry.key_ptr.*}) catch {
-                    self.reportError(.E021);
+                    self.reportError(.E021, entry.key_ptr.*);
                     return error.SemanticError;
                 };
                 self.last_error = .{
@@ -555,7 +551,7 @@ pub const AstToIr = struct {
 
     fn lookupIrType(self: *AstToIr, name: []const u8) !ir.Type {
         const type_info = self.type_map.get(name) orelse {
-            std.debug.print("[AST->IR] lookupIrType: unknown type '{s}'\n", .{name});
+            self.reportError(.E006, name);
             return error.UnknownType;
         };
         return type_info.irType();
@@ -563,22 +559,23 @@ pub const AstToIr = struct {
 
     fn lookupStructInfo(self: *AstToIr, type_name: []const u8) !StructTypeInfo {
         const type_info = self.type_map.get(type_name) orelse {
-            std.debug.print("[AST->IR] lookupStructInfo: unknown type '{s}'\n", .{type_name});
+            self.reportError(.E006, type_name);
             return error.UnknownType;
         };
         return switch (type_info) {
             .struct_type => |s| s,
             .primitive, .enum_type => {
-                std.debug.print("[AST->IR] lookupStructInfo: '{s}' is not a struct\n", .{type_name});
+                self.reportError(.E006, type_name);
                 return error.UnknownType;
             },
         };
     }
 
-    fn lookupField(struct_info: StructTypeInfo, field_name: []const u8) !FieldInfo {
+    fn lookupField(self: *AstToIr, struct_info: StructTypeInfo, field_name: []const u8) !FieldInfo {
         for (struct_info.fields) |f| {
             if (std.mem.eql(u8, f.name, field_name)) return f;
         }
+        self.reportError(.E007, field_name);
         return error.UnknownField;
     }
 
@@ -627,7 +624,7 @@ pub const AstToIr = struct {
                     // Check for internal type access
                     try intrinsics.checkInternalTypeAccess(self, resolved);
                     const field_type_info = self.type_map.get(resolved) orelse {
-                        std.debug.print("[AST->IR] registerType field '{s}': unknown type '{s}'\n", .{ field.name, resolved });
+                        self.reportError(.E006, resolved);
                         return error.UnknownType;
                     };
                     break :blk switch (field_type_info) {
@@ -656,7 +653,7 @@ pub const AstToIr = struct {
             const field_size: i32 = switch (value_type) {
                 .struct_type => |name| blk: {
                     const info = self.type_map.get(name) orelse {
-                        std.debug.print("[AST->IR] registerType field size: unknown struct type '{s}'\n", .{name});
+                        self.reportError(.E006, name);
                         return error.UnknownType;
                     };
                     break :blk switch (info) {
@@ -789,7 +786,7 @@ pub const AstToIr = struct {
                         conformance.interface_name,
                         iface_method.name,
                     }) catch {
-                        self.reportError(.E015);
+                        self.reportError(.E015, iface_method.name);
                         return error.SemanticError;
                     };
                     self.last_error = .{
@@ -826,7 +823,7 @@ pub const AstToIr = struct {
                 .simple, .generic => {
                     const base_name = typeExprBaseTypeName(rt).?;
                     const type_info = self.type_map.get(base_name) orelse {
-                        std.debug.print("[AST->IR] registerFunction '{s}': unknown return type '{s}'\n", .{ decl.name, base_name });
+                        self.reportError(.E006, base_name);
                         return error.UnknownType;
                     };
                     if (type_info.isStruct()) ret_type_name = base_name;
@@ -880,7 +877,7 @@ pub const AstToIr = struct {
                 // Check for internal type access
                 try intrinsics.checkInternalTypeAccess(self, resolved);
                 const type_info = self.type_map.get(resolved) orelse {
-                    std.debug.print("[AST->IR] typeExprToValueType: unknown type '{s}' (resolved from '{s}')\n", .{ resolved, base_name });
+                    self.reportError(.E006, resolved);
                     return error.UnknownType;
                 };
                 return if (type_info.isStruct())
@@ -948,13 +945,13 @@ pub const AstToIr = struct {
 
         // Get the original generic type declaration
         const type_decl = self.type_decl_map.get(base_type) orelse {
-            debug.astToIr("Unknown generic type: {s}\n", .{base_type});
+            self.reportError(.E006, base_type);
             return error.UnknownType;
         };
 
         // Verify we have the right number of type arguments
         if (type_decl.generic_params.len != type_args.len) {
-            debug.astToIr("Wrong number of type args for {s}: expected {d}, got {d}\n", .{ base_type, type_decl.generic_params.len, type_args.len });
+            self.reportError(.E011, base_type);
             return error.TypeMismatch;
         }
 
@@ -986,7 +983,7 @@ pub const AstToIr = struct {
             const field_size: i32 = switch (value_type) {
                 .struct_type => |name| blk: {
                     const info = self.type_map.get(name) orelse {
-                        debug.astToIr("Monomorphize: unknown struct type '{s}'\n", .{name});
+                        self.reportError(.E006, name);
                         // Clean up on error
                         for (type_decl.generic_params) |param| {
                             _ = self.generic_params.remove(param);
@@ -1092,7 +1089,7 @@ pub const AstToIr = struct {
                     const base_name = typeExprBaseTypeName(rt).?;
                     const resolved = self.resolveTypeName(base_name);
                     const type_info = self.type_map.get(resolved) orelse {
-                        std.debug.print("[AST->IR] Unknown return type: {s} (resolved from {s})\n", .{ resolved, base_name });
+                        self.reportError(.E006, resolved);
                         return error.UnknownType;
                     };
                     if (type_info.isStruct()) ret_type_name = resolved;
@@ -1248,7 +1245,7 @@ pub const AstToIr = struct {
         while (iter.next()) |entry| {
             if (!entry.value_ptr.used) {
                 debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
-                self.reportErrorWithDetails(.E014, entry.key_ptr.*);
+                self.reportError(.E014, entry.key_ptr.*);
                 return error.UnusedVariable;
             }
         }
@@ -1337,7 +1334,7 @@ pub const AstToIr = struct {
         while (iter.next()) |entry| {
             if (!entry.value_ptr.used) {
                 debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
-                self.reportErrorWithDetails(.E014, entry.key_ptr.*);
+                self.reportError(.E014, entry.key_ptr.*);
                 return error.UnusedVariable;
             }
         }
@@ -1471,7 +1468,7 @@ pub const AstToIr = struct {
 
         // Array types cannot be immutable (they have no initial contents)
         if (!self.current_decl_is_mutable and decl.value == .array_type) {
-            self.reportError(.E013);
+            self.reportError(.E013, decl.name);
             return error.SemanticError;
         }
 
@@ -1565,7 +1562,10 @@ pub const AstToIr = struct {
         const ptr = if (needs_struct_copy) blk: {
             // Allocate new memory for the struct and copy data
             const struct_name = init_typed.ty.struct_type;
-            const struct_info = self.type_map.get(struct_name) orelse return error.UnknownType;
+            const struct_info = self.type_map.get(struct_name) orelse {
+                self.reportError(.E006, struct_name);
+                return error.UnknownType;
+            };
             const size = struct_info.struct_type.size;
             const p = try self.func().emitAllocaSized(size);
             try self.func().setValueName(p, decl.name);
@@ -1720,7 +1720,7 @@ pub const AstToIr = struct {
         if (self.var_map.getPtr(assign.target)) |var_info| {
             if (!var_info.is_mutable) {
                 debug.astToIr("cannot assign to immutable variable '{s}'\n", .{assign.target});
-                self.reportError(.E009);
+                self.reportError(.E009, assign.target);
                 return error.ImmutableAssign;
             }
             // Check if this string is borrowed - cannot modify while borrowed
@@ -1780,7 +1780,7 @@ pub const AstToIr = struct {
                             // Check if field is mutable
                             if (!self.isFieldMutable(type_name, assign.target)) {
                                 debug.astToIr("cannot assign to immutable field '{s}'\n", .{assign.target});
-                                self.reportError(.E009);
+                                self.reportError(.E009, assign.target);
                                 return error.ImmutableAssign;
                             }
 
@@ -1811,7 +1811,7 @@ pub const AstToIr = struct {
 
         // Variable not found
         debug.astToIr("error: undefined variable '{s}'\n", .{assign.target});
-        self.reportError(.E005);
+        self.reportError(.E005, assign.target);
         return error.UndefinedVariable;
     }
 
@@ -1831,13 +1831,13 @@ pub const AstToIr = struct {
             .struct_type => |name| name,
             .primitive, .array_type, .enum_type, .optional_type => {
                 std.debug.print("[AST->IR] convertFieldAssign: expected struct type for field '{s}'\n", .{assign.field_name});
-                self.reportError(.E006);
+                self.reportError(.E006, assign.field_name);
                 return error.UnknownType;
             },
         };
 
         const struct_info = try self.lookupStructInfo(type_name);
-        const field_info = try lookupField(struct_info, assign.field_name);
+        const field_info = try self.lookupField(struct_info, assign.field_name);
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
         const val_typed = try self.convertExpression(assign.value);
 
@@ -1855,7 +1855,7 @@ pub const AstToIr = struct {
             const var_name = assign.base.identifier;
             if (self.var_map.get(var_name)) |var_info| {
                 if (!var_info.is_mutable) {
-                    self.reportError(.E009);
+                    self.reportError(.E009, var_name);
                     return error.ImmutableAssign;
                 }
             }
@@ -2068,7 +2068,7 @@ pub const AstToIr = struct {
                 if (was_owned and var_info.state == .moved) {
                     // Variable was moved in loop body - next iteration would use moved value
                     debug.astToIr("variable '{s}' was moved in loop body\n", .{entry.key_ptr.*});
-                    self.reportError(.E008);
+                    self.reportError(.E008, entry.key_ptr.*);
                     return error.UseAfterMove;
                 }
             }
@@ -2210,7 +2210,7 @@ pub const AstToIr = struct {
                 const was_owned = entry.value_ptr.* == .owned;
                 if (was_owned and var_info.state == .moved) {
                     debug.astToIr("variable '{s}' was moved in loop body\n", .{entry.key_ptr.*});
-                    self.reportError(.E008);
+                    self.reportError(.E008, entry.key_ptr.*);
                     return error.UseAfterMove;
                 }
             }
@@ -2271,7 +2271,7 @@ pub const AstToIr = struct {
         if (self.loop_end_block) |end_block| {
             try self.func().emitBr(end_block);
         } else {
-            self.reportError(.E012);
+            self.reportError(.E012, "break");
             return error.SemanticError;
         }
     }
@@ -2280,7 +2280,7 @@ pub const AstToIr = struct {
         if (self.loop_cond_block) |cond_block| {
             try self.func().emitBr(cond_block);
         } else {
-            self.reportError(.E012);
+            self.reportError(.E012, "continue");
             return error.SemanticError;
         }
     }
@@ -2396,17 +2396,18 @@ pub const AstToIr = struct {
             .method_call => |mcall| self.convertMethodCallExpr(mcall),
             .nil_coalesce => |nc| self.convertNilCoalesce(nc),
             .cast => |c| self.convertCast(c),
+            .interpolated_string => |interp| self.convertInterpolatedString(interp),
         };
     }
 
     /// Convert 'self' expression - reference to current instance
     fn convertSelfExpr(self: *AstToIr) ConvertError!TypedValue {
         const self_val = self.self_ptr orelse {
-            self.reportError(.E005);
+            self.reportError(.E005, "self");
             return error.UndefinedVariable;
         };
         const type_name = self.current_type_name orelse {
-            self.reportError(.E005);
+            self.reportError(.E005, "self (no type context)");
             return error.UndefinedVariable;
         };
         // Mark self as used
@@ -2629,6 +2630,359 @@ pub const AstToIr = struct {
         return .{ .value = str_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "string" } } };
     }
 
+    /// Convert an interpolated string expression to a String
+    /// Processes each part (literal or expression), converts to strings, and concatenates
+    fn convertInterpolatedString(self: *AstToIr, interp: ast.InterpolatedStringExpr) ConvertError!TypedValue {
+        if (interp.parts.len == 0) {
+            // Empty interpolated string - just return empty string
+            return self.convertStringLiteral("");
+        }
+
+        // Convert each part to a String value (pointer to String struct)
+        var string_parts: std.ArrayListUnmanaged(ir.Value) = .empty;
+        defer string_parts.deinit(self.allocator);
+
+        for (interp.parts) |part| {
+            if (part.is_expression) {
+                // Expression part - evaluate and convert to string
+                const expr = part.expr orelse continue;
+                const typed_val = try self.convertExpression(expr.*);
+
+                // Convert the value to a String based on its type
+                const str_val = try self.convertToString(typed_val, part.format_spec);
+                try string_parts.append(self.allocator, str_val);
+            } else {
+                // Literal part - process escape sequences and convert to String
+                const literal = part.literal_value orelse continue;
+                const processed = try self.processEscapeSequences(literal);
+                defer self.allocator.free(processed);
+
+                const str_typed = try self.convertStringLiteral(processed);
+                try string_parts.append(self.allocator, str_typed.value);
+            }
+        }
+
+        if (string_parts.items.len == 0) {
+            return self.convertStringLiteral("");
+        }
+
+        if (string_parts.items.len == 1) {
+            return .{ .value = string_parts.items[0], .ty = .{ .struct_type = "String" } };
+        }
+
+        // Concatenate all parts: result = concat(concat(a, b), c)...
+        var result = string_parts.items[0];
+        for (string_parts.items[1..]) |next_val| {
+            result = try self.emitStringConcatCall(result, next_val);
+        }
+
+        return .{ .value = result, .ty = .{ .struct_type = "String" } };
+    }
+
+    /// Convert a TypedValue to a String pointer
+    /// Handles different types: String (passthrough), int, float, bool
+    fn convertToString(self: *AstToIr, typed_val: TypedValue, format_spec: ?[]const u8) ConvertError!ir.Value {
+        _ = format_spec; // TODO: Use format spec for custom formatting
+
+        switch (typed_val.ty) {
+            .struct_type => |type_name| {
+                if (std.mem.eql(u8, type_name, "String")) {
+                    // Already a String, just return it
+                    return typed_val.value;
+                }
+                // TODO: Check for Stringable interface
+                self.reportError(.E005, type_name);
+                return error.UndefinedVariable;
+            },
+            .primitive => |prim| {
+                if (std.mem.eql(u8, prim.name, "int") or prim.ir_type == .i64) {
+                    return self.convertIntToString(typed_val.value);
+                } else if (std.mem.eql(u8, prim.name, "float") or prim.ir_type == .f64) {
+                    return self.convertFloatToString(typed_val.value);
+                } else if (std.mem.eql(u8, prim.name, "bool")) {
+                    return self.convertBoolToString(typed_val.value);
+                }
+                self.reportError(.E005, prim.name);
+                return error.UndefinedVariable;
+            },
+            else => {
+                self.reportError(.E005, "unsupported type for interpolation");
+                return error.UndefinedVariable;
+            },
+        }
+    }
+
+    /// Convert an int to a String
+    fn convertIntToString(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
+        return self.emitIntToStringCall(value);
+    }
+
+    /// Convert a float to a String
+    fn convertFloatToString(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
+        return self.emitFloatToStringCall(value);
+    }
+
+    /// Convert a bool to a String
+    fn convertBoolToString(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
+        return self.emitBoolToStringCall(value);
+    }
+
+    /// Emit a call to concatenate two String values
+    fn emitStringConcatCall(self: *AstToIr, a: ir.Value, b: ir.Value) ConvertError!ir.Value {
+        // Get the _managed field from both String structs (offset 0)
+        const a_managed = try self.func().emitGetFieldPtr(a, 0);
+        const b_managed = try self.func().emitGetFieldPtr(b, 0);
+
+        // Create a new result managed string (24 bytes)
+        const result_managed = try self.func().emitAllocaSized(24);
+
+        // Get lengths (stored as i32 at offset 8)
+        const a_len_ptr = try self.func().emitGetFieldPtr(a_managed, 8);
+        const a_len_i32 = try self.func().emitLoad(a_len_ptr, .i32);
+        const b_len_ptr = try self.func().emitGetFieldPtr(b_managed, 8);
+        const b_len_i32 = try self.func().emitLoad(b_len_ptr, .i32);
+
+        // Sign-extend lengths to i64 for arithmetic
+        const a_len = try self.func().emitUnaryOp(.sext_i32_i64, a_len_i32, .i64);
+        const b_len = try self.func().emitUnaryOp(.sext_i32_i64, b_len_i32, .i64);
+        const total_len = try self.func().emitBinaryOp(.add, a_len, b_len, .i64);
+
+        // Allocate new buffer: total_len + 1 for null terminator
+        const one = try self.func().emitConstI64(1);
+        const buffer_size = try self.func().emitBinaryOp(.add, total_len, one, .i64);
+        const new_buffer = try self.func().emitHeapAlloc(buffer_size);
+
+        // Copy first string
+        const a_buf_ptr = try self.func().emitGetFieldPtr(a_managed, 0);
+        const a_buf = try self.func().emitLoad(a_buf_ptr, .ptr);
+        try self.func().emitMemcpyDynamic(new_buffer, a_buf, a_len);
+
+        // Copy second string at offset a_len
+        const b_buf_ptr = try self.func().emitGetFieldPtr(b_managed, 0);
+        const b_buf = try self.func().emitLoad(b_buf_ptr, .ptr);
+        const offset_ptr = try self.func().emitGetElemPtr(new_buffer, a_len, 1);
+        try self.func().emitMemcpyDynamic(offset_ptr, b_buf, b_len);
+
+        // Null terminate
+        const null_offset = try self.func().emitGetElemPtr(new_buffer, total_len, 1);
+        const null_byte = try self.func().emitConstI8(0);
+        try self.func().emitStoreI8(null_offset, null_byte);
+
+        // Store in result managed string
+        const result_buf_slot = try self.func().emitGetFieldPtr(result_managed, 0);
+        try self.func().emitStore(result_buf_slot, new_buffer);
+
+        const total_len_32 = try self.func().emitUnaryOp(.trunc_i64_i32, total_len, .i32);
+        const result_len_slot = try self.func().emitGetFieldPtr(result_managed, 8);
+        try self.func().emitStoreI32(result_len_slot, total_len_32);
+
+        // cap_flags = (capacity * 4) | 0b01 for heap mode
+        const four = try self.func().emitConstI32(4);
+        const cap_shift = try self.func().emitBinaryOp(.mul, total_len_32, four, .i32);
+        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
+        const cap_slot = try self.func().emitGetFieldPtr(result_managed, 12);
+        try self.func().emitStoreI32(cap_slot, cap_flags);
+
+        // refcount = 1
+        const one_i32 = try self.func().emitConstI32(1);
+        const ref_slot = try self.func().emitGetFieldPtr(result_managed, 16);
+        try self.func().emitStoreI32(ref_slot, one_i32);
+
+        // parent_off = 0
+        const zero_i32 = try self.func().emitConstI32(0);
+        const off_slot = try self.func().emitGetFieldPtr(result_managed, 20);
+        try self.func().emitStoreI32(off_slot, zero_i32);
+
+        // Now wrap in a String struct
+        // String layout: _managed (24 bytes) + _iterPos (8 bytes) = 32 bytes
+        const string_ptr = try self.func().emitAllocaSized(32);
+
+        // Copy managed string to String._managed
+        try self.func().emitMemcpy(string_ptr, result_managed, 24);
+
+        // Set _iterPos = 0
+        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
+        const zero_i64 = try self.func().emitConstI64(0);
+        try self.func().emitStore(iter_pos_ptr, zero_i64);
+
+        return string_ptr;
+    }
+
+    /// Emit code to convert an int to a String
+    fn emitIntToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
+        // Allocate buffer on heap (22 bytes max: sign + 20 digits + null)
+        const buffer_size = try self.func().emitConstI64(22);
+        const buffer = try self.func().emitHeapAlloc(buffer_size);
+
+        // Call __runtime_int_to_string(buffer, value) -> returns length
+        var args = try self.allocator.alloc(ir.Value, 2);
+        args[0] = buffer;
+        args[1] = value;
+        const len = (try self.func().emitCall("__runtime_int_to_string", args, .i64)).?;
+
+        // Create managed string
+        const managed_ptr = try self.func().emitAllocaSized(24);
+
+        const buf_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
+        try self.func().emitStore(buf_slot, buffer);
+
+        const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len, .i32);
+        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
+        try self.func().emitStoreI32(len_slot, len_i32);
+
+        // cap_flags = (cap * 4) | 0b01 for heap mode
+        const four_c1 = try self.func().emitConstI32(4);
+        const cap_shift = try self.func().emitBinaryOp(.mul, len_i32, four_c1, .i32);
+        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
+        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
+        try self.func().emitStoreI32(cap_slot, cap_flags);
+
+        const one_i32 = try self.func().emitConstI32(1);
+        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
+        try self.func().emitStoreI32(ref_slot, one_i32);
+
+        const zero_i32 = try self.func().emitConstI32(0);
+        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
+        try self.func().emitStoreI32(off_slot, zero_i32);
+
+        // Wrap in String struct
+        const string_ptr = try self.func().emitAllocaSized(32);
+        try self.func().emitMemcpy(string_ptr, managed_ptr, 24);
+        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
+        try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
+
+        return string_ptr;
+    }
+
+    /// Emit code to convert a float to a String
+    fn emitFloatToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
+        // Allocate buffer (32 bytes should be enough for most floats)
+        const buffer_size = try self.func().emitConstI64(32);
+        const buffer = try self.func().emitHeapAlloc(buffer_size);
+
+        // Call __runtime_float_to_string(buffer, value) -> returns length
+        var args = try self.allocator.alloc(ir.Value, 2);
+        args[0] = buffer;
+        args[1] = value;
+        const len = (try self.func().emitCall("__runtime_float_to_string", args, .i64)).?;
+
+        // Create managed string and String (same as int)
+        const managed_ptr = try self.func().emitAllocaSized(24);
+
+        const buf_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
+        try self.func().emitStore(buf_slot, buffer);
+
+        const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len, .i32);
+        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
+        try self.func().emitStoreI32(len_slot, len_i32);
+
+        // cap_flags = (cap * 4) | 0b01 for heap mode
+        const four_c2 = try self.func().emitConstI32(4);
+        const cap_shift = try self.func().emitBinaryOp(.mul, len_i32, four_c2, .i32);
+        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
+        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
+        try self.func().emitStoreI32(cap_slot, cap_flags);
+
+        const one_i32 = try self.func().emitConstI32(1);
+        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
+        try self.func().emitStoreI32(ref_slot, one_i32);
+
+        const zero_i32 = try self.func().emitConstI32(0);
+        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
+        try self.func().emitStoreI32(off_slot, zero_i32);
+
+        const string_ptr = try self.func().emitAllocaSized(32);
+        try self.func().emitMemcpy(string_ptr, managed_ptr, 24);
+        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
+        try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
+
+        return string_ptr;
+    }
+
+    /// Emit code to convert a bool to a String
+    fn emitBoolToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
+        // Call __runtime_bool_to_string(value) -> returns String pointer
+        // The runtime function returns a pointer to a static "true" or "false" string
+
+        // Create a buffer for the result (6 bytes max: "false\0")
+        const buffer_size = try self.func().emitConstI64(6);
+        const buffer = try self.func().emitHeapAlloc(buffer_size);
+
+        // Call __runtime_bool_to_string(buffer, value) -> returns length
+        var args = try self.allocator.alloc(ir.Value, 2);
+        args[0] = buffer;
+        args[1] = value;
+        const len = (try self.func().emitCall("__runtime_bool_to_string", args, .i64)).?;
+
+        // Create managed string
+        const managed_ptr = try self.func().emitAllocaSized(24);
+
+        const buf_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
+        try self.func().emitStore(buf_slot, buffer);
+
+        const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len, .i32);
+        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
+        try self.func().emitStoreI32(len_slot, len_i32);
+
+        // cap_flags = (cap * 4) | 0b01 for heap mode
+        const four_c3 = try self.func().emitConstI32(4);
+        const cap_shift = try self.func().emitBinaryOp(.mul, len_i32, four_c3, .i32);
+        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
+        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
+        try self.func().emitStoreI32(cap_slot, cap_flags);
+
+        const one_i32 = try self.func().emitConstI32(1);
+        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
+        try self.func().emitStoreI32(ref_slot, one_i32);
+
+        const zero_i32 = try self.func().emitConstI32(0);
+        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
+        try self.func().emitStoreI32(off_slot, zero_i32);
+
+        // Wrap in String struct
+        const string_ptr = try self.func().emitAllocaSized(32);
+        try self.func().emitMemcpy(string_ptr, managed_ptr, 24);
+        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
+        try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
+
+        return string_ptr;
+    }
+
+    /// Process escape sequences in a string literal
+    /// Converts \n, \t, \r, \\, \", \{, \} to their actual characters
+    fn processEscapeSequences(self: *AstToIr, raw: []const u8) ![]u8 {
+        var result: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer result.deinit(self.allocator);
+
+        var i: usize = 0;
+        while (i < raw.len) {
+            if (raw[i] == '\\' and i + 1 < raw.len) {
+                const next = raw[i + 1];
+                switch (next) {
+                    'n' => try result.append(self.allocator, '\n'),
+                    't' => try result.append(self.allocator, '\t'),
+                    'r' => try result.append(self.allocator, '\r'),
+                    '\\' => try result.append(self.allocator, '\\'),
+                    '"' => try result.append(self.allocator, '"'),
+                    '{' => try result.append(self.allocator, '{'),
+                    '}' => try result.append(self.allocator, '}'),
+                    '0' => try result.append(self.allocator, 0),
+                    else => {
+                        // Unknown escape, keep both characters
+                        try result.append(self.allocator, '\\');
+                        try result.append(self.allocator, next);
+                    },
+                }
+                i += 2;
+            } else {
+                try result.append(self.allocator, raw[i]);
+                i += 1;
+            }
+        }
+
+        return result.toOwnedSlice(self.allocator);
+    }
+
     /// Convert character literal expression to a character type
     /// This creates a Character struct with the literal data
     fn convertCharLiteral(self: *AstToIr, char_bytes: []const u8) ConvertError!TypedValue {
@@ -2727,13 +3081,13 @@ pub const AstToIr = struct {
 
     fn convertIdentifier(self: *AstToIr, name: []const u8) ConvertError!TypedValue {
         const info = self.var_map.getPtr(name) orelse {
-            self.reportError(.E005);
+            self.reportError(.E005, name);
             return error.UndefinedVariable;
         };
 
         if (info.state == .moved) {
             debug.astToIr("variable '{s}' was moved\n", .{name});
-            self.reportError(.E008);
+            self.reportError(.E008, name);
             return error.UseAfterMove;
         }
 
@@ -2790,7 +3144,7 @@ pub const AstToIr = struct {
         else {
             // Unknown cast target type
             debug.astToIr("Unknown cast target type: {s}\n", .{target_type_name});
-            self.reportErrorWithDetails(.E006, target_type_name);
+            self.reportError(.E006, target_type_name);
             return error.TypeMismatch;
         };
 
@@ -2902,7 +3256,7 @@ pub const AstToIr = struct {
                 .ne => try self.func().emitBinaryOp(.icmp_ne, tag, zero, .i64),
                 .lt, .le, .gt, .ge => {
                     // < > <= >= don't make sense for optional/nil comparison
-                    self.reportError(.E003);
+                    self.reportError(.E003, "comparison operators < > <= >= not valid for optional/nil");
                     return error.TypeMismatch;
                 },
             };
@@ -3044,7 +3398,7 @@ pub const AstToIr = struct {
             .optional_type => |info| info,
             .primitive, .struct_type, .array_type, .enum_type => {
                 // Left operand is not an optional type - this is an error
-                self.reportError(.E017);
+                self.reportError(.E017, "left operand of ?? must be optional type");
                 return error.TypeMismatch;
             },
         };
@@ -3151,7 +3505,7 @@ pub const AstToIr = struct {
         try self.func().emitMemset(dest_ptr, 0, struct_info.size);
 
         for (sinit.fields) |field_init| {
-            const field_info = try lookupField(struct_info, field_init.name);
+            const field_info = try self.lookupField(struct_info, field_init.name);
             const field_ptr = try self.func().emitGetFieldPtr(dest_ptr, field_info.offset);
             const field_val = try self.convertExpression(field_init.value.*);
 
@@ -3180,7 +3534,7 @@ pub const AstToIr = struct {
 
         if (!var_info.is_mutable) {
             debug.astToIr("cannot move immutable variable '{s}' into struct\n", .{var_name});
-            self.reportError(.E010);
+            self.reportError(.E010, var_name);
             return error.ImmutableMove;
         }
         var_info.markMoved(target_type, self.current_line);
@@ -3192,7 +3546,7 @@ pub const AstToIr = struct {
             if (self.type_map.get(faccess.base.identifier)) |type_info| {
                 if (type_info == .enum_type) {
                     const member_value = type_info.enum_type.members.get(faccess.field_name) orelse {
-                        self.reportError(.E007);
+                        self.reportError(.E007, faccess.field_name);
                         return error.UnknownField;
                     };
                     return .{
@@ -3209,13 +3563,13 @@ pub const AstToIr = struct {
             .struct_type => |name| name,
             .primitive, .array_type, .enum_type, .optional_type => {
                 std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
-                self.reportError(.E006);
+                self.reportError(.E006, faccess.field_name);
                 return error.UnknownType;
             },
         };
 
         const struct_info = try self.lookupStructInfo(type_name);
-        const field_info = try lookupField(struct_info, faccess.field_name);
+        const field_info = try self.lookupField(struct_info, faccess.field_name);
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
 
         // Struct fields are embedded (return ptr directly); others are loaded
@@ -3326,7 +3680,7 @@ pub const AstToIr = struct {
 
         if (!var_info.is_mutable) {
             debug.astToIr("cannot move immutable variable '{s}'\n", .{var_name});
-            self.reportError(.E010);
+            self.reportError(.E010, var_name);
             return error.ImmutableMove;
         }
 
@@ -3424,6 +3778,7 @@ pub const AstToIr = struct {
 
         const func_info = self.func_map.get(mangled_name) orelse {
             debug.astToIr("error: stdlib Array missing 'get' method for type '{s}'", .{type_name});
+            self.reportError(.E003, mangled_name);
             return error.SemanticError;
         };
 
@@ -3459,6 +3814,7 @@ pub const AstToIr = struct {
 
         const func_info = self.func_map.get(mangled_name) orelse {
             debug.astToIr("error: stdlib Array missing 'set' method for type '{s}'", .{type_name});
+            self.reportError(.E003, mangled_name);
             return error.SemanticError;
         };
 
@@ -3551,11 +3907,11 @@ pub const AstToIr = struct {
 
         // Look up the function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
-            self.reportErrorWithDetails(.E003, init_func_name);
+            self.reportError(.E003, init_func_name);
             return error.UnknownFunction;
         };
         const type_info = self.type_map.get(type_name) orelse {
-            std.debug.print("[AST->IR] InitableFromArrayLiteral: unknown type '{s}'\n", .{type_name});
+            self.reportError(.E006, type_name);
             return error.UnknownType;
         };
 
@@ -3680,11 +4036,11 @@ pub const AstToIr = struct {
 
         // Look up the function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
-            self.reportErrorWithDetails(.E003, init_func_name);
+            self.reportError(.E003, init_func_name);
             return error.UnknownFunction;
         };
         const type_info = self.type_map.get(type_name) orelse {
-            std.debug.print("[AST->IR] InitableFromMapLiteral: unknown type '{s}'\n", .{type_name});
+            self.reportError(.E006, type_name);
             return error.UnknownType;
         };
 
@@ -3804,11 +4160,11 @@ pub const AstToIr = struct {
 
         // Look up the function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
-            self.reportErrorWithDetails(.E003, init_func_name);
+            self.reportError(.E003, init_func_name);
             return error.UnknownFunction;
         };
         const type_info = self.type_map.get(type_name) orelse {
-            std.debug.print("[AST->IR] InitableFromStringLiteral: unknown type '{s}'\n", .{type_name});
+            self.reportError(.E006, type_name);
             return error.UnknownType;
         };
 
@@ -3919,11 +4275,11 @@ pub const AstToIr = struct {
         try self.module.trackString(init_func_name);
 
         const func_info = self.func_map.get(init_func_name) orelse {
-            self.reportErrorWithDetails(.E003, init_func_name);
+            self.reportError(.E003, init_func_name);
             return error.UnknownFunction;
         };
         const type_info = self.type_map.get(type_name) orelse {
-            std.debug.print("[AST->IR] InitableFromCharLiteral: unknown type '{s}'\n", .{type_name});
+            self.reportError(.E006, type_name);
             return error.UnknownType;
         };
 
@@ -4000,7 +4356,7 @@ pub const AstToIr = struct {
         // Empty map literals require type annotation (cannot infer types)
         if (entries.len == 0) {
             debug.astToIr("error: empty map literal requires type annotation", .{});
-            self.reportError(.E006);
+            self.reportError(.E006, "empty map literal requires type annotation");
             return error.UnknownType;
         }
 
@@ -4010,12 +4366,12 @@ pub const AstToIr = struct {
 
         const key_type_name = first_key_typed.ty.getTypeName() orelse {
             debug.astToIr("error: map key type must be a named type (primitive or struct)", .{});
-            self.reportError(.E006);
+            self.reportError(.E006, "map key type must be a named type");
             return error.UnknownType;
         };
         const value_type_name = first_value_typed.ty.getTypeName() orelse {
             debug.astToIr("error: map value type must be a named type (primitive or struct)", .{});
-            self.reportError(.E006);
+            self.reportError(.E006, "map value type must be a named type");
             return error.UnknownType;
         };
 
@@ -4075,12 +4431,12 @@ pub const AstToIr = struct {
         // Look up function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
             debug.astToIr("error: Map type missing InitableFromMapLiteral.init: {s}", .{init_func_name});
-            self.reportErrorWithDetails(.E003, init_func_name);
+            self.reportError(.E003, init_func_name);
             return error.UnknownFunction;
         };
         const type_info = self.type_map.get(map_type_name) orelse {
             debug.astToIr("error: unknown Map type: {s}", .{map_type_name});
-            self.reportError(.E006);
+            self.reportError(.E006, map_type_name);
             return error.UnknownType;
         };
 
@@ -4121,7 +4477,7 @@ pub const AstToIr = struct {
             .array_type => |a| a,
             .primitive, .struct_type, .enum_type, .optional_type => {
                 std.debug.print("[AST->IR] convertIndexExpr: expected array type\n", .{});
-                self.reportError(.E006);
+                self.reportError(.E006, "expected array type for indexing");
                 return error.UnknownType;
             },
         };
@@ -4159,6 +4515,7 @@ pub const AstToIr = struct {
                 .method_call,
                 .nil_coalesce,
                 .cast,
+                .interpolated_string,
                 => {
                     const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
                     const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
@@ -4332,6 +4689,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: method call on non-struct type", .{});
+        self.reportError(.E003, "method call on non-struct type in statement");
         return error.SemanticError;
     }
 
@@ -4343,6 +4701,7 @@ pub const AstToIr = struct {
 
         const func_info = self.func_map.get(mangled_name) orelse {
             debug.astToIr("error: unknown method '{s}' on type '{s}'", .{ method_name, type_name });
+            self.reportError(.E003, mangled_name);
             return error.SemanticError;
         };
 
@@ -4418,6 +4777,7 @@ pub const AstToIr = struct {
 
         const func_info = self.func_map.get(mangled_name) orelse {
             debug.astToIr("error: unknown method '{s}' on type '{s}'", .{ method_name, type_name });
+            self.reportError(.E003, mangled_name);
             return error.SemanticError;
         };
 
@@ -4488,6 +4848,7 @@ pub const AstToIr = struct {
             .struct_type => |name| name,
             .primitive, .array_type, .enum_type, .optional_type => {
                 debug.astToIr("error: method call on non-struct type", .{});
+                self.reportError(.E003, method_name);
                 return error.SemanticError;
             },
         };
@@ -4518,6 +4879,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: method call on non-struct type", .{});
+        self.reportError(.E003, mcall.method_name);
         return error.SemanticError;
     }
 
@@ -4530,7 +4892,7 @@ pub const AstToIr = struct {
             return self.emitPrimitiveHash(base_typed.value, type_name);
         } else if (std.mem.eql(u8, method_name, "equals")) {
             if (arg_exprs.len != 1) {
-                self.reportError(.E011);
+                self.reportError(.E011, "equals() requires exactly 1 argument");
                 return error.WrongArgumentCount;
             }
             const other = try self.convertExpression(arg_exprs[0]);
@@ -4538,6 +4900,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: unknown method '{s}' on primitive type '{s}'", .{ method_name, type_name });
+        self.reportError(.E003, method_name);
         return error.SemanticError;
     }
 
@@ -4608,6 +4971,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: hash not supported for type '{s}'", .{type_name});
+        self.reportError(.E003, type_name);
         return error.SemanticError;
     }
 
@@ -4624,6 +4988,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: equals not supported for type '{s}'", .{type_name});
+        self.reportError(.E003, type_name);
         return error.SemanticError;
     }
 };
