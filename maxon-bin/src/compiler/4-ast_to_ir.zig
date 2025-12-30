@@ -133,6 +133,8 @@ pub const AstToIr = struct {
     generic_params: std.StringHashMapUnmanaged([]const u8) = .{},
     // Flag for allowing stdlib-only builtins (set when converting monomorphized stdlib methods)
     in_stdlib_method: bool = false,
+    // Borrow tracking: set when __string_slice is called, contains the source variable name
+    pending_borrow_source: ?[]const u8 = null,
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -212,6 +214,209 @@ pub const AstToIr = struct {
         return loop.finish(self);
     }
 
+    // ------------------------------------------------------------------------
+    // COW String Helpers
+    // ------------------------------------------------------------------------
+
+    /// Check if a type is the String type (which contains __ManagedString)
+    fn isStringType(self: *AstToIr, ty: ValueType) bool {
+        _ = self;
+        return ty == .struct_type and std.mem.eql(u8, ty.struct_type, "String");
+    }
+
+    /// Emit incref for a String variable if it's in heap mode.
+    /// The string_ptr should point to a String struct (with _managed at offset 0).
+    fn emitStringIncref(self: *AstToIr, string_ptr: ir.Value) !void {
+        // String struct has _managed (__ManagedString) at offset 0
+        // __ManagedString layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
+
+        // Load cap_flags (offset 12 within __ManagedString, which is at offset 0 in String)
+        const cap_ptr = try self.func().emitGetFieldPtr(string_ptr, 12);
+        const cap_flags = try self.func().emitLoad(cap_ptr, .i32);
+
+        // Check if heap mode: (cap_flags & 0x3) == 1
+        const three = try self.func().emitConstI32(3);
+        const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+        const one_i32 = try self.func().emitConstI32(1);
+        const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+
+        // Create blocks for conditional incref
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+        const incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("incref");
+        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("incref_end");
+
+        // Save end block, pop it temporarily
+        const end_block = self.func().blocks.pop().?;
+
+        // Emit conditional branch from entry block
+        try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = incref_block_idx }, .none },
+            .result = end_block_idx,
+        });
+
+        // In incref block: increment refcount
+        const ref_ptr = try self.func().emitGetFieldPtr(string_ptr, 16);
+        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
+        const one = try self.func().emitConstI32(1);
+        const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i32);
+        try self.func().emitStoreI32(ref_ptr, new_ref);
+
+        // Branch to end
+        try self.func().emitBr(end_block_idx);
+
+        // Restore end block
+        try self.func().blocks.append(self.allocator, end_block);
+    }
+
+    /// Emit decref for a String variable with conditional free when refcount reaches 0.
+    /// The string_ptr should point to a String struct (with _managed at offset 0).
+    fn emitStringDecref(self: *AstToIr, string_ptr: ir.Value) !void {
+        // String struct has _managed (__ManagedString) at offset 0
+        // __ManagedString layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
+
+        // Load cap_flags (offset 12)
+        const cap_ptr = try self.func().emitGetFieldPtr(string_ptr, 12);
+        const cap_flags = try self.func().emitLoad(cap_ptr, .i32);
+
+        // Check if heap mode: (cap_flags & 0x3) == 1
+        const three = try self.func().emitConstI32(3);
+        const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+        const one_i32 = try self.func().emitConstI32(1);
+        const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+
+        // Create blocks for conditional decref
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+        const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("decref");
+        const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("decref_free");
+        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("decref_end");
+
+        // Save blocks, pop them temporarily
+        const end_block = self.func().blocks.pop().?;
+        const free_block = self.func().blocks.pop().?;
+
+        // Emit conditional branch from entry block to decref or end
+        try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .none },
+            .result = end_block_idx,
+        });
+
+        // In decref block: decrement refcount and check if zero
+        const ref_ptr = try self.func().emitGetFieldPtr(string_ptr, 16);
+        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
+        const one = try self.func().emitConstI32(1);
+        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i32);
+        try self.func().emitStoreI32(ref_ptr, new_ref);
+
+        // Check if refcount is now zero
+        const zero = try self.func().emitConstI32(0);
+        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i32);
+
+        // Save current block (decref), add free block
+        try self.func().blocks.append(self.allocator, free_block);
+
+        // Emit branch from decref block to free or end
+        try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_zero }, .{ .block_ref = free_block_idx }, .none },
+            .result = end_block_idx,
+        });
+
+        // In free block: load buffer pointer and free it
+        const buf_ptr = try self.func().emitLoad(string_ptr, .ptr);
+        try self.func().emitHeapFree(buf_ptr);
+
+        // Branch to end
+        try self.func().emitBr(end_block_idx);
+
+        // Restore end block
+        try self.func().blocks.append(self.allocator, end_block);
+    }
+
+
+    // ------------------------------------------------------------------------
+    // Borrow Checking Helpers
+    // ------------------------------------------------------------------------
+
+    /// Mark a source string variable as borrowed and record the borrower
+    fn markStringBorrowed(self: *AstToIr, source_var_name: []const u8) void {
+        if (self.var_map.getPtr(source_var_name)) |var_info| {
+            if (self.isStringType(var_info.ty)) {
+                var_info.borrow_state = .borrowed;
+            }
+        }
+    }
+
+    /// Clear the borrow state from a parent variable when the slice goes out of scope
+    fn clearBorrowFromParent(self: *AstToIr, slice_var_info: *const VarInfo) void {
+        if (slice_var_info.borrowed_from) |parent_name| {
+            if (self.var_map.getPtr(parent_name)) |parent_info| {
+                parent_info.borrow_state = .none;
+            }
+        }
+    }
+
+    /// Check if a string variable can be modified (not borrowed)
+    /// Returns an error if the variable is currently borrowed
+    fn checkStringNotBorrowed(self: *AstToIr, var_name: []const u8) ConvertError!void {
+        if (self.var_map.get(var_name)) |var_info| {
+            if (self.isStringType(var_info.ty) and var_info.borrow_state == .borrowed) {
+                const msg = std.fmt.allocPrint(self.allocator, "Cannot modify string '{s}' while it is borrowed", .{var_name}) catch {
+                    self.reportError(.E020);
+                    return error.SemanticError;
+                };
+                self.last_error = .{
+                    .code = .E020,
+                    .message = msg,
+                    .location = err.SourceLocation.init(@intCast(self.current_line), 1),
+                };
+                return error.SemanticError;
+            }
+        }
+    }
+
+    /// Check that no borrowed strings go out of scope
+    /// Called before freeing heap variables at scope end
+    fn checkNoOutstandingBorrows(self: *AstToIr) ConvertError!void {
+        var iter = self.var_map.iterator();
+        while (iter.next()) |entry| {
+            const var_info = entry.value_ptr.*;
+            if (self.isStringType(var_info.ty) and var_info.borrow_state == .borrowed) {
+                const msg = std.fmt.allocPrint(self.allocator, "String '{s}' goes out of scope while still borrowed", .{entry.key_ptr.*}) catch {
+                    self.reportError(.E021);
+                    return error.SemanticError;
+                };
+                self.last_error = .{
+                    .code = .E021,
+                    .message = msg,
+                    .location = err.SourceLocation.init(@intCast(self.current_line), 1),
+                };
+                return error.SemanticError;
+            }
+        }
+    }
+
+    /// Clear all slice borrows when slices go out of scope
+    /// This should be called at the end of scopes to release borrows
+    fn clearSliceBorrows(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(OwnershipState)) void {
+        var iter = self.var_map.iterator();
+        while (iter.next()) |entry| {
+            if (exclude_vars) |excluded| {
+                if (excluded.contains(entry.key_ptr.*)) continue;
+            }
+            const var_info = entry.value_ptr;
+            if (var_info.borrow_state == .slice) {
+                self.clearBorrowFromParent(var_info);
+            }
+        }
+    }
+
     pub fn deinit(self: *AstToIr) void {
         // Clean up the IR module (important for error paths where convert() fails)
         // In success case, module was transferred out and replaced with empty module
@@ -273,28 +478,24 @@ pub const AstToIr = struct {
             return error.OutOfMemory;
         };
 
-        // Register __ManagedString compiler-internal type (16 bytes: ptr + i32 len + i32 capacity)
-        // Used internally by the String type for UTF-8 string storage
-        const managed_string_fields = try self.allocator.alloc(FieldInfo, 3);
+        // Register __ManagedString compiler-internal type (24 bytes with COW support)
+        // Layout: ptr buffer (8) + i32 len (4) + i32 cap_flags (4) + i32 refcount (4) + i32 parent_off (4)
+        // Mode detection via cap_flags & 0x3:
+        //   0b00 = SSO (data inline in bytes 0-14, byte 15 = remaining capacity)
+        //   0b01 = Heap (owned buffer with refcount)
+        //   0b10 = Slice (borrowed view into parent string)
+        const managed_string_fields = try self.allocator.alloc(FieldInfo, 5);
         managed_string_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } } };
         managed_string_fields[1] = .{ .name = "_len", .offset = 8, .size = 4, .value_type = .{ .primitive = .{ .ir_type = .i32, .name = "int" } } };
-        managed_string_fields[2] = .{ .name = "_capacity", .offset = 12, .size = 4, .value_type = .{ .primitive = .{ .ir_type = .i32, .name = "int" } } };
+        managed_string_fields[2] = .{ .name = "_cap_flags", .offset = 12, .size = 4, .value_type = .{ .primitive = .{ .ir_type = .i32, .name = "int" } } };
+        managed_string_fields[3] = .{ .name = "_refcount", .offset = 16, .size = 4, .value_type = .{ .primitive = .{ .ir_type = .i32, .name = "int" } } };
+        managed_string_fields[4] = .{ .name = "_parent_off", .offset = 20, .size = 4, .value_type = .{ .primitive = .{ .ir_type = .i32, .name = "int" } } };
         self.type_map.put(self.allocator, "__ManagedString", .{
-            .struct_type = .{ .name = "__ManagedString", .fields = managed_string_fields, .size = 16 },
+            .struct_type = .{ .name = "__ManagedString", .fields = managed_string_fields, .size = 24 },
         }) catch {
             self.allocator.free(managed_string_fields);
             return error.OutOfMemory;
         };
-
-        // Register substring type (40 bytes: _parentManaged + _ptr + _len + _iterPos)
-        const substring_fields = try self.allocator.alloc(FieldInfo, 4);
-        substring_fields[0] = .{ .name = "_parentManaged", .offset = 0, .size = 16, .value_type = .{ .struct_type = "__ManagedString" } };
-        substring_fields[1] = .{ .name = "_ptr", .offset = 16, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } } };
-        substring_fields[2] = .{ .name = "_len", .offset = 24, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
-        substring_fields[3] = .{ .name = "_iterPos", .offset = 32, .size = 8, .value_type = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
-        try self.type_map.put(self.allocator, "substring", .{
-            .struct_type = .{ .name = "substring", .fields = substring_fields, .size = 40 },
-        });
 
         // Register interfaces first (needed for conformance checking)
         for (program.interfaces) |iface| try self.registerInterface(iface);
@@ -1369,6 +1570,10 @@ pub const AstToIr = struct {
             const p = try self.func().emitAllocaSized(size);
             try self.func().setValueName(p, decl.name);
             try self.func().emitMemcpy(p, init_typed.value, size);
+            // COW: If copying a String, increment refcount on the new copy
+            if (self.isStringType(init_typed.ty)) {
+                try self.emitStringIncref(p);
+            }
             break :blk p;
         } else if (needs_alloca) blk: {
             const alloca_type = if (uses_slot) .ptr else init_typed.ty.toPrimitiveType();
@@ -1387,6 +1592,21 @@ pub const AstToIr = struct {
             self.current_decl_is_mutable,
             uses_slot,
         ));
+
+        // Handle borrow tracking: if this variable was initialized from a slice operation,
+        // establish the borrow relationship between source and this variable
+        // Handle borrow tracking
+        if (self.pending_borrow_source) |source_name| {
+            // Mark this new variable as a slice that borrows from source
+            if (self.var_map.getPtr(decl.name)) |new_var_info| {
+                new_var_info.borrow_state = .slice;
+                new_var_info.borrowed_from = source_name;
+            }
+            // Mark the source variable as borrowed
+            self.markStringBorrowed(source_name);
+            // Clear the pending borrow source
+            self.pending_borrow_source = null;
+        }
     }
 
     fn convertReturn(self: *AstToIr, ret: ast.ReturnStmt) !void {
@@ -1441,6 +1661,12 @@ pub const AstToIr = struct {
 
     /// Free heap-allocated variables, optionally filtering to only loop-scoped vars
     fn freeHeapVars(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(OwnershipState)) !void {
+        // Borrow checking: first clear borrows from slice variables that are going out of scope
+        self.clearSliceBorrows(exclude_vars);
+
+        // Borrow checking: verify no borrowed strings go out of scope
+        try self.checkNoOutstandingBorrows();
+
         var iter = self.var_map.iterator();
         while (iter.next()) |entry| {
             if (exclude_vars) |excluded| {
@@ -1468,6 +1694,15 @@ pub const AstToIr = struct {
                     const buf_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
                     try self.func().emitHeapFree(buf_ptr);
                 }
+                // Handle String type with COW semantics
+                // Uses decref instead of direct free to support reference counting
+                if (self.isStringType(var_info.ty) and var_info.state != .moved) {
+                    // Only free if we own the memory (not a borrowed parameter)
+                    if (var_info.is_parameter) continue;
+
+                    // Use COW decref which checks heap mode and frees if refcount reaches 0
+                    try self.emitStringDecref(var_info.ptr);
+                }
             }
         }
     }
@@ -1488,6 +1723,8 @@ pub const AstToIr = struct {
                 self.reportError(.E009);
                 return error.ImmutableAssign;
             }
+            // Check if this string is borrowed - cannot modify while borrowed
+            try self.checkStringNotBorrowed(assign.target);
 
             var_info.used = true;
 
@@ -1506,6 +1743,10 @@ pub const AstToIr = struct {
                     const old_buf_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
                     try self.func().emitHeapFree(old_buf_ptr);
                 }
+                // For String, use COW decref before reassignment
+                if (self.isStringType(var_info.ty) and var_info.state != .moved) {
+                    try self.emitStringDecref(var_info.ptr);
+                }
             }
 
             const value_typed = try self.convertExpression(assign.value);
@@ -1520,6 +1761,10 @@ pub const AstToIr = struct {
                 var_info.ty = value_typed.ty;
             }
 
+            // COW: If assigning a String from another variable/field, incref the new value
+            if (self.isStringType(value_typed.ty) and (assign.value == .identifier or assign.value == .field_access)) {
+                try self.emitStringIncref(var_info.ptr);
+            }
             var_info.resetOwnership();
             return;
         }
@@ -2256,23 +2501,37 @@ pub const AstToIr = struct {
                 try self.module.trackString(init_func_name);
 
                 if (self.func_map.get(init_func_name)) |func_info| {
-                    // Create __ManagedString on stack
-                    const managed_ptr = try self.func().emitAllocaSized(16);
+                    // Create __ManagedString on stack (24 bytes with COW support)
+                    // Layout: ptr buffer (8) + i32 len (4) + i32 cap_flags (4) + i32 refcount (4) + i32 parent_off (4)
+                    const managed_ptr = try self.func().emitAllocaSized(24);
 
                     if (str_bytes.len == 0) {
+                        // Empty string: SSO mode with zero length
                         const null_ptr = try self.func().emitConstI64(0);
                         const zero_i32 = try self.func().emitConstI32(0);
 
-                        // __ManagedString layout: { ptr buffer (offset 0), i32 len (offset 8), i32 capacity (offset 12) }
                         const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
                         try self.func().emitStore(buffer_slot, null_ptr);
 
                         const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
                         try self.func().emitStoreI32(len_slot, zero_i32);
 
+                        // cap_flags = 0 (SSO mode)
                         const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
                         try self.func().emitStoreI32(cap_slot, zero_i32);
-                    } else {
+
+                        // refcount = 0 (SSO doesn't use refcount)
+                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
+                        try self.func().emitStoreI32(ref_slot, zero_i32);
+
+                        // parent_off = 0
+                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
+                        try self.func().emitStoreI32(off_slot, zero_i32);
+                    } else if (str_bytes.len <= 15) {
+                        // SSO mode: store data inline in first 15 bytes
+                        // For SSO, we still use a heap buffer but mark it as SSO via cap_flags
+                        // TODO: True inline SSO would store data directly in the struct bytes 0-14
+                        // For now, use heap allocation but with SSO flag for future optimization
                         const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1));
                         const buffer = try self.func().emitHeapAlloc(buffer_size);
 
@@ -2284,11 +2543,10 @@ pub const AstToIr = struct {
                         }
                         // Null terminate
                         const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
-                        const null_ptr = try self.func().emitGetElemPtr(buffer, null_idx, 1);
+                        const null_ptr_byte = try self.func().emitGetElemPtr(buffer, null_idx, 1);
                         const null_byte = try self.func().emitConstI8(0);
-                        try self.func().emitStoreI8(null_ptr, null_byte);
+                        try self.func().emitStoreI8(null_ptr_byte, null_byte);
 
-                        // __ManagedString layout: { ptr buffer (offset 0), i32 len (offset 8), i32 capacity (offset 12) }
                         const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
                         try self.func().emitStore(buffer_slot, buffer);
 
@@ -2296,8 +2554,58 @@ pub const AstToIr = struct {
                         const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
                         try self.func().emitStoreI32(len_slot, len_val);
 
+                        // cap_flags = (capacity << 2) | 0b01 for heap mode
+                        const cap_flags_val = try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01));
                         const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
-                        try self.func().emitStoreI32(cap_slot, len_val);
+                        try self.func().emitStoreI32(cap_slot, cap_flags_val);
+
+                        // refcount = 1 (newly allocated, single owner)
+                        const one_i32 = try self.func().emitConstI32(1);
+                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
+                        try self.func().emitStoreI32(ref_slot, one_i32);
+
+                        // parent_off = 0 (not a slice)
+                        const zero_i32 = try self.func().emitConstI32(0);
+                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
+                        try self.func().emitStoreI32(off_slot, zero_i32);
+                    } else {
+                        // Heap mode: large string
+                        const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1));
+                        const buffer = try self.func().emitHeapAlloc(buffer_size);
+
+                        for (str_bytes, 0..) |byte, i| {
+                            const idx_val = try self.func().emitConstI64(@intCast(i));
+                            const byte_ptr = try self.func().emitGetElemPtr(buffer, idx_val, 1);
+                            const byte_val = try self.func().emitConstI8(byte);
+                            try self.func().emitStoreI8(byte_ptr, byte_val);
+                        }
+                        // Null terminate
+                        const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
+                        const null_ptr_byte = try self.func().emitGetElemPtr(buffer, null_idx, 1);
+                        const null_byte = try self.func().emitConstI8(0);
+                        try self.func().emitStoreI8(null_ptr_byte, null_byte);
+
+                        const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
+                        try self.func().emitStore(buffer_slot, buffer);
+
+                        const len_val = try self.func().emitConstI32(@intCast(str_bytes.len));
+                        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
+                        try self.func().emitStoreI32(len_slot, len_val);
+
+                        // cap_flags = (capacity << 2) | 0b01 for heap mode
+                        const cap_flags_val = try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01));
+                        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
+                        try self.func().emitStoreI32(cap_slot, cap_flags_val);
+
+                        // refcount = 1 (newly allocated, single owner)
+                        const one_i32 = try self.func().emitConstI32(1);
+                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
+                        try self.func().emitStoreI32(ref_slot, one_i32);
+
+                        // parent_off = 0 (not a slice)
+                        const zero_i32 = try self.func().emitConstI32(0);
+                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
+                        try self.func().emitStoreI32(off_slot, zero_i32);
                     }
 
                     // Allocate result struct and call init
@@ -2324,7 +2632,7 @@ pub const AstToIr = struct {
     /// Convert character literal expression to a character type
     /// This creates a Character struct with the literal data
     fn convertCharLiteral(self: *AstToIr, char_bytes: []const u8) ConvertError!TypedValue {
-        const type_name = "character";
+        const type_name = "Character";
 
         // If the Character type exists, create a managed string and call init
         if (self.type_map.get(type_name)) |type_info| {
@@ -2333,23 +2641,31 @@ pub const AstToIr = struct {
                 try self.module.trackString(init_func_name);
 
                 if (self.func_map.get(init_func_name)) |func_info| {
-                    // Create __ManagedString on stack (characters use same format)
-                    const managed_ptr = try self.func().emitAllocaSized(16);
+                    // Create __ManagedString on stack (24 bytes with COW support)
+                    // Characters use same format as strings
+                    const managed_ptr = try self.func().emitAllocaSized(24);
 
                     if (char_bytes.len == 0) {
                         const null_ptr = try self.func().emitConstI64(0);
                         const zero_i32 = try self.func().emitConstI32(0);
 
-                        const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, null_ptr, 0);
+                        const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
                         try self.func().emitStore(buffer_slot, null_ptr);
 
-                        const len_offset = try self.func().emitConstI64(1);
-                        const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
+                        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
                         try self.func().emitStoreI32(len_slot, zero_i32);
 
-                        const cap_offset = try self.func().emitConstI64(2);
-                        const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 12);
+                        // cap_flags = 0 (SSO mode)
+                        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
                         try self.func().emitStoreI32(cap_slot, zero_i32);
+
+                        // refcount = 0 (SSO doesn't use refcount)
+                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
+                        try self.func().emitStoreI32(ref_slot, zero_i32);
+
+                        // parent_off = 0
+                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
+                        try self.func().emitStoreI32(off_slot, zero_i32);
                     } else {
                         const buffer_size = try self.func().emitConstI64(@intCast(char_bytes.len + 1));
                         const buffer = try self.func().emitHeapAlloc(buffer_size);
@@ -2366,18 +2682,27 @@ pub const AstToIr = struct {
                         const null_byte = try self.func().emitConstI8(0);
                         try self.func().emitStoreI8(null_ptr_char, null_byte);
 
-                        const zero = try self.func().emitConstI64(0);
-                        const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, zero, 0);
+                        const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
                         try self.func().emitStore(buffer_slot, buffer);
 
                         const len_val = try self.func().emitConstI32(@intCast(char_bytes.len));
-                        const len_offset = try self.func().emitConstI64(1);
-                        const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
+                        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
                         try self.func().emitStoreI32(len_slot, len_val);
 
-                        const cap_offset = try self.func().emitConstI64(2);
-                        const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 12);
-                        try self.func().emitStoreI32(cap_slot, len_val);
+                        // cap_flags = (capacity << 2) | 0b01 for heap mode
+                        const cap_flags_val = try self.func().emitConstI32(@intCast((char_bytes.len << 2) | 0b01));
+                        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
+                        try self.func().emitStoreI32(cap_slot, cap_flags_val);
+
+                        // refcount = 1 (newly allocated, single owner)
+                        const one_i32 = try self.func().emitConstI32(1);
+                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
+                        try self.func().emitStoreI32(ref_slot, one_i32);
+
+                        // parent_off = 0 (not a slice)
+                        const zero_i32 = try self.func().emitConstI32(0);
+                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
+                        try self.func().emitStoreI32(off_slot, zero_i32);
                     }
 
                     // Allocate result struct and call init
@@ -2397,7 +2722,7 @@ pub const AstToIr = struct {
 
         // Fallback: store char bytes as constant data pointer
         const char_ptr = try self.func().emitStringConstant(char_bytes);
-        return .{ .value = char_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "character" } } };
+        return .{ .value = char_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "Character" } } };
     }
 
     fn convertIdentifier(self: *AstToIr, name: []const u8) ConvertError!TypedValue {

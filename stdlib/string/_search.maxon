@@ -1,18 +1,7 @@
 // stdlib/string/_search.maxon
 // Internal search helpers for string types
 //
-// Purpose: Centralize string search algorithms to avoid duplication
-//          across string and substring types.
-//
-// Unified Implementation: Uses __substring_parent_managed() and
-//   __substring_byte_offset() intrinsics to allow substring to reuse
-//   the managed string implementation with offset adjustment.
-//
-// Note: All search methods take string (not substring) as the needle parameter,
-//       which simplifies implementation - we only need __ManagedString for needle.
-//
-// Maintenance: Single algorithm implementation - substring wrapper delegates
-//              to managed version with parent string and offset.
+// Purpose: Centralize string search algorithms for string types.
 
 // ============================================
 // startsWith helpers
@@ -41,14 +30,6 @@ export function startsWithManaged(haystack __ManagedString, needle __ManagedStri
 	return startsWithManagedRange(haystack, 0, __string_len(haystack), needle)
 end 'startsWithManaged'
 
-/// Check if a substring starts with the given prefix
-export function startsWithSubstring(haystack substring, needle __ManagedString) returns bool
-	var parent = __substring_parent_managed(haystack)
-	var offset = __substring_byte_offset(haystack)
-	var len = __substring_len(haystack)
-	return startsWithManagedRange(parent, offset, len, needle)
-end 'startsWithSubstring'
-
 // ============================================
 // endsWith helpers
 // ============================================
@@ -76,14 +57,6 @@ end 'endsWithManagedRange'
 export function endsWithManaged(haystack __ManagedString, needle __ManagedString) returns bool
 	return endsWithManagedRange(haystack, 0, __string_len(haystack), needle)
 end 'endsWithManaged'
-
-/// Check if a substring ends with the given suffix
-export function endsWithSubstring(haystack substring, needle __ManagedString) returns bool
-	var parent = __substring_parent_managed(haystack)
-	var offset = __substring_byte_offset(haystack)
-	var len = __substring_len(haystack)
-	return endsWithManagedRange(parent, offset, len, needle)
-end 'endsWithSubstring'
 
 // ============================================
 // find helpers (naive string search)
@@ -126,12 +99,3 @@ end 'findManagedRange'
 export function findManaged(haystack __ManagedString, needle __ManagedString) returns int
 	return findManagedRange(haystack, 0, __string_len(haystack), needle)
 end 'findManaged'
-
-/// Find the first occurrence of needle in a substring
-/// Returns the byte index of the match, or -1 if not found
-export function findSubstring(haystack substring, needle __ManagedString) returns int
-	var parent = __substring_parent_managed(haystack)
-	var offset = __substring_byte_offset(haystack)
-	var len = __substring_len(haystack)
-	return findManagedRange(parent, offset, len, needle)
-end 'findSubstring'

@@ -221,7 +221,6 @@ c.toString()           // Convert to string
 | Type | Size | Description |
 |------|------|-------------|
 | `string` | 16-byte | UTF-8 string (owned, copy-on-write) |
-| `substring` | 24-byte | String view (reference to string data) |
 | `cstring` | 24-byte | FFI-friendly null-terminated string reference |
 
 **String Characteristics:**

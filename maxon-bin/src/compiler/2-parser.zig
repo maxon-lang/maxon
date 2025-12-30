@@ -219,7 +219,7 @@ pub const Parser = struct {
         }
 
         _ = try self.expect(.end);
-        _ = try self.expect(.string);
+        _ = try self.expect(.char_literal);
         try self.expectEndNewline();
 
         return .{
@@ -389,7 +389,7 @@ pub const Parser = struct {
         }
 
         _ = try self.expect(.end);
-        _ = try self.expect(.string); // label
+        _ = try self.expect(.char_literal); // label
 
         return statements.toOwnedSlice(self.allocator);
     }
@@ -563,14 +563,14 @@ pub const Parser = struct {
         if (self.check(.@"break")) {
             _ = self.advance();
             // Optional label after break
-            const label = if (self.check(.string)) self.advance().text else null;
+            const label = if (self.check(.char_literal)) self.advance().text else null;
             _ = try self.expect(.newline);
             return stmtAt(.{ .break_stmt = .{ .label = label } }, start_line);
         }
         if (self.check(.@"continue")) {
             _ = self.advance();
             // Optional label after continue
-            const label = if (self.check(.string)) self.advance().text else null;
+            const label = if (self.check(.char_literal)) self.advance().text else null;
             _ = try self.expect(.newline);
             return stmtAt(.{ .continue_stmt = .{ .label = label } }, start_line);
         }
@@ -687,7 +687,7 @@ pub const Parser = struct {
                 _ = self.advance(); // consume 'else'
 
                 // Parse label
-                const label = try self.expect(.string);
+                const label = try self.expect(.char_literal);
 
                 // Require newline
                 _ = try self.expect(.newline);
@@ -706,7 +706,7 @@ pub const Parser = struct {
 
                 // Parse end 'label'
                 _ = try self.expect(.end);
-                _ = try self.expect(.string);
+                _ = try self.expect(.char_literal);
 
                 // Require newline after end (or allow EOF)
                 if (!self.isAtEnd() and !self.check(.newline)) {
@@ -766,7 +766,7 @@ pub const Parser = struct {
     /// Parse 'end 'label'' and consume trailing newline (or EOF)
     fn parseEndAndNewline(self: *Parser) ParseError!void {
         _ = try self.expect(.end);
-        _ = try self.expect(.string);
+        _ = try self.expect(.char_literal);
         try self.expectTrailingNewline();
     }
 
@@ -807,11 +807,11 @@ pub const Parser = struct {
         }
 
         // Parse else block: else 'label' ... end 'label'
-        const else_label_tok = try self.expect(.string);
+        const else_label_tok = try self.expect(.char_literal);
         _ = try self.expect(.newline);
         const else_body = try self.parseBlockBody();
         _ = try self.expect(.end);
-        _ = try self.expect(.string);
+        _ = try self.expect(.char_literal);
 
         return .{ .body = else_body, .label = else_label_tok.text, .else_if = null };
     }
@@ -835,12 +835,12 @@ pub const Parser = struct {
                 return error.ExpectedExpression;
             };
 
-            const label = try self.expect(.string);
+            const label = try self.expect(.char_literal);
             _ = try self.expect(.newline);
 
             const body = try self.parseBlockBody();
             _ = try self.expect(.end);
-            _ = try self.expect(.string);
+            _ = try self.expect(.char_literal);
 
             const else_clause = try self.parseElseClause(false);
             try self.expectTrailingNewline();
@@ -868,12 +868,12 @@ pub const Parser = struct {
             return error.ExpectedExpression;
         };
 
-        const label = try self.expect(.string);
+        const label = try self.expect(.char_literal);
         _ = try self.expect(.newline);
 
         const body = try self.parseBlockBody();
         _ = try self.expect(.end);
-        _ = try self.expect(.string);
+        _ = try self.expect(.char_literal);
 
         const else_clause = try self.parseElseClause(true);
 
@@ -901,7 +901,7 @@ pub const Parser = struct {
             return error.ExpectedExpression;
         };
 
-        const label = try self.expect(.string);
+        const label = try self.expect(.char_literal);
         _ = try self.expect(.newline);
 
         const body = try self.parseBlockBody();
@@ -931,7 +931,7 @@ pub const Parser = struct {
         };
 
         // Expect label
-        const label = try self.expect(.string);
+        const label = try self.expect(.char_literal);
         _ = try self.expect(.newline);
 
         // Parse body
@@ -1151,6 +1151,11 @@ pub const Parser = struct {
         if (self.check(.string_literal)) {
             const token = self.advance();
             return try self.parsePostfix(.{ .string_literal = token.text });
+        }
+        // Character literal (also used for end labels, but here as an expression)
+        if (self.check(.char_literal)) {
+            const token = self.advance();
+            return try self.parsePostfix(.{ .char_literal = token.text });
         }
         // Self expression (instance reference in methods)
         if (self.check(.self)) {
@@ -1631,7 +1636,7 @@ pub const Parser = struct {
 
         // Parse end 'label'
         _ = try self.expect(.end);
-        _ = try self.expect(.string); // label
+        _ = try self.expect(.char_literal); // label
 
         // Require newline after end (or EOF)
         if (!self.isAtEnd() and !self.check(.newline)) {
@@ -1680,7 +1685,7 @@ pub const Parser = struct {
         }
 
         _ = try self.expect(.end);
-        _ = try self.expect(.string);
+        _ = try self.expect(.char_literal);
         try self.expectEndNewline();
 
         return .{

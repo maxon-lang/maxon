@@ -72,15 +72,6 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
         return convertStringIntrinsic(self, call);
     }
 
-    // Check for __substring_* intrinsics (stdlib-only)
-    if (std.mem.startsWith(u8, call.func_name, "__substring_")) {
-        if (!isStdlibFile(self)) {
-            self.reportErrorWithDetails(.E016, call.func_name);
-            return error.SemanticError;
-        }
-        return convertSubstringIntrinsic(self, call);
-    }
-
     const builtin = for (builtins) |b| {
         if (std.mem.eql(u8, call.func_name, b.name)) break b;
     } else return error.NotABuiltin;
@@ -423,6 +414,16 @@ fn convertStringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
         return intrinsicStringToCstring(self, call);
     } else if (std.mem.eql(u8, name, "__string_from_characters")) {
         return intrinsicStringFromCharacters(self, call);
+    } else if (std.mem.eql(u8, name, "__string_incref")) {
+        return intrinsicStringIncref(self, call);
+    } else if (std.mem.eql(u8, name, "__string_decref")) {
+        return intrinsicStringDecref(self, call);
+    } else if (std.mem.eql(u8, name, "__string_refcount")) {
+        return intrinsicStringRefcount(self, call);
+    } else if (std.mem.eql(u8, name, "__string_is_heap")) {
+        return intrinsicStringIsHeap(self, call);
+    } else if (std.mem.eql(u8, name, "__string_cap_flags")) {
+        return intrinsicStringCapFlags(self, call);
     } else {
         self.reportErrorWithDetails(.E019, name);
         return error.SemanticError;
@@ -470,49 +471,82 @@ fn intrinsicStringByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     return .{ .value = byte_val, .ty = .{ .primitive = .{ .ir_type = .i8, .name = "byte" } } };
 }
 
-/// __string_slice(managed, start, end) -> substring
-/// Creates a substring view into the managed string
-/// Returns a 40-byte substring struct: { _parentManaged(16), _ptr(8), _len(8), _iterPos(8) }
+/// __string_slice(managed, start, end) -> __ManagedString (slice mode)
+/// Creates a slice view into the managed string
+/// Returns a 24-byte __ManagedString with cap_flags = 0b10 (slice mode)
+/// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
+/// For slice mode:
+///   - buffer points into parent's buffer at slice start
+///   - len is the slice byte length
+///   - cap_flags = 0b10 (slice mode indicator)
+///   - refcount = 0 (unused for slices)
+///   - parent_off = byte offset from parent buffer start
 fn intrinsicStringSlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 3) {
         self.reportError(.E011);
         return error.WrongArgumentCount;
     }
 
+    // Track borrow source for compile-time borrow checking
+    // The first arg is a __ManagedString, typically accessed via _managed field
+    // We trace back to find the String variable being borrowed
+    if (call.args[0] == .field_access) {
+        const fa = call.args[0].field_access;
+        if (fa.base.* == .identifier) {
+            // Field access on a variable: str._managed -> borrow from "str"
+            self.pending_borrow_source = fa.base.identifier;
+        } else if (fa.base.* == .self_expr) {
+            // Field access on self: self._managed (or just _managed) -> borrow from caller's variable
+            // This is inside a method, so we'll track via "self" context
+            // The actual caller variable is tracked when method returns
+            self.pending_borrow_source = "self";
+        }
+    } else if (call.args[0] == .identifier) {
+        // Direct variable access (unlikely but handle it)
+        self.pending_borrow_source = call.args[0].identifier;
+    }
+
     const managed = try self.convertExpression(call.args[0]);
     const start = try self.convertExpression(call.args[1]);
     const end = try self.convertExpression(call.args[2]);
 
-    // Allocate substring struct (40 bytes: 16 + 8 + 8 + 8)
-    const sub_ptr = try self.func().emitAllocaSized(40);
+    // Allocate slice __ManagedString struct (24 bytes)
+    const slice_ptr = try self.func().emitAllocaSized(24);
 
-    // Copy the __ManagedString to _parentManaged (offset 0, 16 bytes)
-    // This retains reference to parent for refcounting
-    try self.func().emitMemcpy(sub_ptr, managed.value, 16);
+    // Load buffer pointer from parent managed string
+    const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
-    // Load buffer pointer from managed string
-    const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+    // Calculate slice buffer = parent_buf_ptr + start (offset 0)
+    const slice_buf = try self.func().emitBinaryOp(.add, parent_buf_ptr, start.value, .ptr);
+    try self.func().emitStore(slice_ptr, slice_buf);
 
-    // Calculate _ptr = buf_ptr + start (offset 16)
-    const slice_ptr = try self.func().emitBinaryOp(.add, buf_ptr, start.value, .ptr);
-    const ptr_field = try self.func().emitGetFieldPtr(sub_ptr, 16);
-    try self.func().emitStore(ptr_field, slice_ptr);
+    // Calculate len = end - start (offset 8, i32)
+    const len_i64 = try self.func().emitBinaryOp(.sub, end.value, start.value, .i64);
+    const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len_i64, .i32);
+    const len_field = try self.func().emitGetFieldPtr(slice_ptr, 8);
+    try self.func().emitStoreI32(len_field, len_i32);
 
-    // Calculate _len = end - start (offset 24)
-    const len = try self.func().emitBinaryOp(.sub, end.value, start.value, .i64);
-    const len_field = try self.func().emitGetFieldPtr(sub_ptr, 24);
-    try self.func().emitStore(len_field, len);
+    // Set cap_flags = 0b10 (slice mode) (offset 12, i32)
+    const two = try self.func().emitConstI32(2);
+    const cap_field = try self.func().emitGetFieldPtr(slice_ptr, 12);
+    try self.func().emitStoreI32(cap_field, two);
 
-    // Set _iterPos = 0 (offset 32)
-    const zero = try self.func().emitConstI64(0);
-    const iter_field = try self.func().emitGetFieldPtr(sub_ptr, 32);
-    try self.func().emitStore(iter_field, zero);
+    // Set refcount = 0 (unused for slices) (offset 16, i32)
+    const zero_i32 = try self.func().emitConstI32(0);
+    const ref_field = try self.func().emitGetFieldPtr(slice_ptr, 16);
+    try self.func().emitStoreI32(ref_field, zero_i32);
 
-    return .{ .value = sub_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "substring" } } };
+    // Store parent_off = start (byte offset into parent buffer) (offset 20, i32)
+    const start_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, start.value, .i32);
+    const off_field = try self.func().emitGetFieldPtr(slice_ptr, 20);
+    try self.func().emitStoreI32(off_field, start_i32);
+
+    return .{ .value = slice_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };
 }
 
 /// __string_concat(a, b) -> __ManagedString
 /// Concatenates two managed strings into a new heap-allocated string
+/// New layout (24 bytes): buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
 fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 2) {
         self.reportError(.E011);
@@ -534,8 +568,8 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     // Calculate total length
     const total_len = try self.func().emitBinaryOp(.add, a_len, b_len, .i64);
 
-    // Allocate new __ManagedString struct (16 bytes)
-    const result_ptr = try self.func().emitAllocaSized(16);
+    // Allocate new __ManagedString struct (24 bytes)
+    const result_ptr = try self.func().emitAllocaSized(24);
 
     // Allocate buffer on heap: total_len bytes
     const buf_ptr = try self.func().emitHeapAlloc(total_len);
@@ -548,9 +582,23 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const len_field = try self.func().emitGetFieldPtr(result_ptr, 8);
     try self.func().emitStoreI32(len_field, len_i32);
 
-    // Store capacity = total_len (offset 12, i32)
+    // Store cap_flags = (capacity * 4) | 0b01 for heap mode (offset 12, i32)
+    // Using multiply by 4 instead of shift left by 2
+    const four = try self.func().emitConstI32(4);
+    const cap_shifted = try self.func().emitBinaryOp(.mul, len_i32, four, .i32);
+    const one = try self.func().emitConstI32(1);
+    const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shifted, one, .i32);
     const cap_field = try self.func().emitGetFieldPtr(result_ptr, 12);
-    try self.func().emitStoreI32(cap_field, len_i32);
+    try self.func().emitStoreI32(cap_field, cap_flags);
+
+    // Store refcount = 1 (offset 16, i32)
+    const ref_field = try self.func().emitGetFieldPtr(result_ptr, 16);
+    try self.func().emitStoreI32(ref_field, one);
+
+    // Store parent_off = 0 (offset 20, i32)
+    const zero = try self.func().emitConstI32(0);
+    const off_field = try self.func().emitGetFieldPtr(result_ptr, 20);
+    try self.func().emitStoreI32(off_field, zero);
 
     // Copy first string: memcpy(buf_ptr, a.buffer, a_len)
     const a_buf = try self.func().emitLoad(a.value, .ptr);
@@ -566,7 +614,8 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 
 /// __string_make_unique(managed) -> __ManagedString
 /// Creates a mutable copy of the string (COW - copy on write)
-/// If already unique (refcount == 1), returns the same string
+/// Always creates a new independent copy with refcount = 1
+/// New layout (24 bytes): buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
 fn intrinsicStringMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
         self.reportError(.E011);
@@ -580,8 +629,8 @@ fn intrinsicStringMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const len_i32 = try self.func().emitLoad(len_ptr, .i32);
     const len = try self.func().emitUnaryOp(.sext_i32_i64, len_i32, .i64);
 
-    // Allocate new __ManagedString struct (16 bytes)
-    const result_ptr = try self.func().emitAllocaSized(16);
+    // Allocate new __ManagedString struct (24 bytes)
+    const result_ptr = try self.func().emitAllocaSized(24);
 
     // Allocate new buffer on heap
     const new_buf = try self.func().emitHeapAlloc(len);
@@ -597,9 +646,23 @@ fn intrinsicStringMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const new_len_field = try self.func().emitGetFieldPtr(result_ptr, 8);
     try self.func().emitStoreI32(new_len_field, len_i32);
 
-    // Store capacity = length (offset 12, i32)
+    // Store cap_flags = (capacity * 4) | 0b01 for heap mode (offset 12, i32)
+    // Using multiply by 4 instead of shift left by 2
+    const four = try self.func().emitConstI32(4);
+    const cap_shifted = try self.func().emitBinaryOp(.mul, len_i32, four, .i32);
+    const one = try self.func().emitConstI32(1);
+    const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shifted, one, .i32);
     const cap_field = try self.func().emitGetFieldPtr(result_ptr, 12);
-    try self.func().emitStoreI32(cap_field, len_i32);
+    try self.func().emitStoreI32(cap_field, cap_flags);
+
+    // Store refcount = 1 (offset 16, i32)
+    const ref_field = try self.func().emitGetFieldPtr(result_ptr, 16);
+    try self.func().emitStoreI32(ref_field, one);
+
+    // Store parent_off = 0 (offset 20, i32)
+    const zero = try self.func().emitConstI32(0);
+    const off_field = try self.func().emitGetFieldPtr(result_ptr, 20);
+    try self.func().emitStoreI32(off_field, zero);
 
     return .{ .value = result_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };
 }
@@ -655,8 +718,8 @@ fn intrinsicStringFromCharacters(self: *AstToIr, call: ast.CallExpr) ConvertErro
     const buffer = try self.convertExpression(call.args[0]);
     const length = try self.convertExpression(call.args[1]);
 
-    // Allocate new __ManagedString struct (16 bytes)
-    const result_ptr = try self.func().emitAllocaSized(16);
+    // Allocate new __ManagedString struct (24 bytes)
+    const result_ptr = try self.func().emitAllocaSized(24);
 
     // Allocate buffer on heap
     const new_buf = try self.func().emitHeapAlloc(length.value);
@@ -673,220 +736,130 @@ fn intrinsicStringFromCharacters(self: *AstToIr, call: ast.CallExpr) ConvertErro
     const len_field = try self.func().emitGetFieldPtr(result_ptr, 8);
     try self.func().emitStoreI32(len_field, len_i32);
 
-    // Store capacity = length (offset 12, i32)
+    // Store cap_flags = (capacity * 4) | 0b01 for heap mode (offset 12, i32)
+    // Using multiply by 4 instead of shift left by 2
+    const four = try self.func().emitConstI32(4);
+    const cap_shifted = try self.func().emitBinaryOp(.mul, len_i32, four, .i32);
+    const one = try self.func().emitConstI32(1);
+    const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shifted, one, .i32);
     const cap_field = try self.func().emitGetFieldPtr(result_ptr, 12);
-    try self.func().emitStoreI32(cap_field, len_i32);
+    try self.func().emitStoreI32(cap_field, cap_flags);
+
+    // Store refcount = 1 (offset 16, i32)
+    const ref_field = try self.func().emitGetFieldPtr(result_ptr, 16);
+    try self.func().emitStoreI32(ref_field, one);
+
+    // Store parent_off = 0 (offset 20, i32)
+    const zero = try self.func().emitConstI32(0);
+    const off_field = try self.func().emitGetFieldPtr(result_ptr, 20);
+    try self.func().emitStoreI32(off_field, zero);
 
     return .{ .value = result_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };
 }
 
 // ============================================================================
-// Substring Intrinsics (stdlib-only)
+// Reference Counting Intrinsics for COW Strings
 // ============================================================================
-//
-// Substring memory layout (40 bytes):
-//   Offset 0:  _parentManaged __ManagedString (16 bytes) - Parent string for refcount
-//   Offset 16: _ptr ptr                       (8 bytes)  - Pointer into parent's buffer
-//   Offset 24: _len int                       (8 bytes)  - Byte length of substring
-//   Offset 32: _iterPos int                   (8 bytes)  - Current iteration position
 
-fn convertSubstringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    const name = call.func_name;
-
-    if (std.mem.eql(u8, name, "__substring_to_string")) {
-        return intrinsicSubstringToString(self, call);
-    } else if (std.mem.eql(u8, name, "__substring_len")) {
-        return intrinsicSubstringLen(self, call);
-    } else if (std.mem.eql(u8, name, "__substring_byte_at")) {
-        return intrinsicSubstringByteAt(self, call);
-    } else if (std.mem.eql(u8, name, "__substring_slice")) {
-        return intrinsicSubstringSlice(self, call);
-    } else if (std.mem.eql(u8, name, "__substring_parent_managed")) {
-        return intrinsicSubstringParentManaged(self, call);
-    } else if (std.mem.eql(u8, name, "__substring_byte_offset")) {
-        return intrinsicSubstringByteOffset(self, call);
-    } else if (std.mem.eql(u8, name, "__substring_iter_pos")) {
-        return intrinsicSubstringIterPos(self, call);
-    } else {
-        self.reportErrorWithDetails(.E019, name);
-        return error.SemanticError;
-    }
-}
-
-/// __substring_to_string(sub) -> __ManagedString
-/// Converts a substring to an owned string by copying the data
-fn intrinsicSubstringToString(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __string_incref(managed) -> void
+/// Increments the reference count for heap-allocated strings
+/// Does nothing for SSO or constant strings
+fn intrinsicStringIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
         self.reportError(.E011);
         return error.WrongArgumentCount;
     }
 
-    const sub = try self.convertExpression(call.args[0]);
+    const managed = try self.convertExpression(call.args[0]);
 
-    // Load _ptr (offset 16)
-    const ptr_field = try self.func().emitGetFieldPtr(sub.value, 16);
-    const src_ptr = try self.func().emitLoad(ptr_field, .ptr);
+    // Load refcount (offset 16, i32) and increment
+    const ref_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
+    const old_ref = try self.func().emitLoad(ref_ptr, .i32);
+    const one = try self.func().emitConstI32(1);
+    const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i32);
+    try self.func().emitStoreI32(ref_ptr, new_ref);
 
-    // Load _len (offset 24)
-    const len_field = try self.func().emitGetFieldPtr(sub.value, 24);
-    const len = try self.func().emitLoad(len_field, .i64);
-
-    // Allocate new __ManagedString struct (16 bytes)
-    const result_ptr = try self.func().emitAllocaSized(16);
-
-    // Allocate new buffer on heap
-    const new_buf = try self.func().emitHeapAlloc(len);
-
-    // Copy data from substring
-    try self.func().emitMemcpyDynamic(new_buf, src_ptr, len);
-
-    // Store buffer pointer (offset 0)
-    try self.func().emitStore(result_ptr, new_buf);
-
-    // Store length (offset 8, i32)
-    const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len, .i32);
-    const len_store_field = try self.func().emitGetFieldPtr(result_ptr, 8);
-    try self.func().emitStoreI32(len_store_field, len_i32);
-
-    // Store capacity = length (offset 12, i32)
-    const cap_field = try self.func().emitGetFieldPtr(result_ptr, 12);
-    try self.func().emitStoreI32(cap_field, len_i32);
-
-    return .{ .value = result_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };
+    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
 }
 
-/// __substring_len(sub) -> int
-/// Returns the byte length of the substring
-fn intrinsicSubstringLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __string_decref(managed) -> void
+/// Decrements the reference count for heap-allocated strings
+/// Frees the buffer when refcount reaches 0
+/// Does nothing for SSO or constant strings (cap_flags & 0x1 == 0)
+fn intrinsicStringDecref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
         self.reportError(.E011);
         return error.WrongArgumentCount;
     }
 
-    const sub = try self.convertExpression(call.args[0]);
+    const managed = try self.convertExpression(call.args[0]);
 
-    // Load _len field (offset 24)
-    const len_field = try self.func().emitGetFieldPtr(sub.value, 24);
-    const len = try self.func().emitLoad(len_field, .i64);
+    // Load refcount (offset 16, i32) and decrement
+    const ref_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
+    const old_ref = try self.func().emitLoad(ref_ptr, .i32);
+    const one = try self.func().emitConstI32(1);
+    const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i32);
+    try self.func().emitStoreI32(ref_ptr, new_ref);
 
-    return .{ .value = len, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+    // TODO: Add conditional free when refcount reaches 0
+    // For now, this just decrements - actual free handled by freeHeapVars
+
+    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
 }
 
-/// __substring_byte_at(sub, index) -> byte
-/// Returns the byte at the given index in the substring
-fn intrinsicSubstringByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    if (call.args.len != 2) {
-        self.reportError(.E011);
-        return error.WrongArgumentCount;
-    }
-
-    const sub = try self.convertExpression(call.args[0]);
-    const index = try self.convertExpression(call.args[1]);
-
-    // Load _ptr (offset 16)
-    const ptr_field = try self.func().emitGetFieldPtr(sub.value, 16);
-    const buf_ptr = try self.func().emitLoad(ptr_field, .ptr);
-
-    // Calculate byte address: buf_ptr + index
-    const byte_ptr = try self.func().emitBinaryOp(.add, buf_ptr, index.value, .ptr);
-
-    // Load single byte
-    const byte_val = try self.func().emitLoad(byte_ptr, .i8);
-
-    return .{ .value = byte_val, .ty = .{ .primitive = .{ .ir_type = .i8, .name = "byte" } } };
-}
-
-/// __substring_slice(sub, start, end) -> substring
-/// Creates a new substring from an existing substring
-fn intrinsicSubstringSlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    if (call.args.len != 3) {
-        self.reportError(.E011);
-        return error.WrongArgumentCount;
-    }
-
-    const sub = try self.convertExpression(call.args[0]);
-    const start = try self.convertExpression(call.args[1]);
-    const end = try self.convertExpression(call.args[2]);
-
-    // Allocate new substring struct (40 bytes)
-    const result_ptr = try self.func().emitAllocaSized(40);
-
-    // Copy _parentManaged from source substring (offset 0, 16 bytes)
-    try self.func().emitMemcpy(result_ptr, sub.value, 16);
-
-    // Load source _ptr (offset 16)
-    const src_ptr_field = try self.func().emitGetFieldPtr(sub.value, 16);
-    const src_ptr = try self.func().emitLoad(src_ptr_field, .ptr);
-
-    // Calculate new _ptr = src_ptr + start
-    const new_ptr = try self.func().emitBinaryOp(.add, src_ptr, start.value, .ptr);
-    const ptr_field = try self.func().emitGetFieldPtr(result_ptr, 16);
-    try self.func().emitStore(ptr_field, new_ptr);
-
-    // Calculate _len = end - start
-    const len = try self.func().emitBinaryOp(.sub, end.value, start.value, .i64);
-    const len_field = try self.func().emitGetFieldPtr(result_ptr, 24);
-    try self.func().emitStore(len_field, len);
-
-    // Set _iterPos = 0
-    const zero = try self.func().emitConstI64(0);
-    const iter_field = try self.func().emitGetFieldPtr(result_ptr, 32);
-    try self.func().emitStore(iter_field, zero);
-
-    return .{ .value = result_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "substring" } } };
-}
-
-/// __substring_parent_managed(sub) -> __ManagedString
-/// Returns a pointer to the parent __ManagedString (for refcount and byte access)
-fn intrinsicSubstringParentManaged(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __string_refcount(managed) -> int
+/// Returns the current reference count
+fn intrinsicStringRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
         self.reportError(.E011);
         return error.WrongArgumentCount;
     }
 
-    const sub = try self.convertExpression(call.args[0]);
+    const managed = try self.convertExpression(call.args[0]);
 
-    // The _parentManaged is at offset 0 of substring
-    // Return the substring pointer itself since first 16 bytes ARE the __ManagedString
-    return .{ .value = sub.value, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };
+    // Load refcount (offset 16, i32)
+    const ref_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
+    const ref_i32 = try self.func().emitLoad(ref_ptr, .i32);
+    const ref = try self.func().emitUnaryOp(.sext_i32_i64, ref_i32, .i64);
+
+    return .{ .value = ref, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
 }
 
-/// __substring_byte_offset(sub) -> int
-/// Returns the byte offset of this substring within the parent string's buffer
-fn intrinsicSubstringByteOffset(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __string_is_heap(managed) -> bool
+/// Returns true if the string is heap-allocated (cap_flags & 0x1 == 1)
+fn intrinsicStringIsHeap(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
         self.reportError(.E011);
         return error.WrongArgumentCount;
     }
 
-    const sub = try self.convertExpression(call.args[0]);
+    const managed = try self.convertExpression(call.args[0]);
 
-    // Load parent buffer pointer (offset 0 of _parentManaged)
-    const parent_buf = try self.func().emitLoad(sub.value, .ptr);
+    // Load cap_flags (offset 12, i32)
+    const cap_ptr = try self.func().emitGetFieldPtr(managed.value, 12);
+    const cap_flags = try self.func().emitLoad(cap_ptr, .i32);
 
-    // Load _ptr (offset 16)
-    const ptr_field = try self.func().emitGetFieldPtr(sub.value, 16);
-    const sub_ptr = try self.func().emitLoad(ptr_field, .ptr);
+    // Check if bit 0 is set (heap mode)
+    const one = try self.func().emitConstI32(1);
+    const is_heap = try self.func().emitBinaryOp(.band, cap_flags, one, .i32);
 
-    // Calculate offset = _ptr - parent_buf
-    const offset = try self.func().emitBinaryOp(.sub, sub_ptr, parent_buf, .i64);
-
-    return .{ .value = offset, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+    return .{ .value = is_heap, .ty = .{ .primitive = .{ .ir_type = .i32, .name = "bool" } } };
 }
 
-/// __substring_iter_pos(sub) -> int
-/// Returns the current iteration position of the substring
-fn intrinsicSubstringIterPos(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __string_cap_flags(managed) -> int
+/// Returns the cap_flags field (for debugging/introspection)
+fn intrinsicStringCapFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     if (call.args.len != 1) {
         self.reportError(.E011);
         return error.WrongArgumentCount;
     }
 
-    const sub = try self.convertExpression(call.args[0]);
+    const managed = try self.convertExpression(call.args[0]);
 
-    // Load _iterPos field (offset 32)
-    const iter_field = try self.func().emitGetFieldPtr(sub.value, 32);
-    const iter_pos = try self.func().emitLoad(iter_field, .i64);
+    // Load cap_flags (offset 12, i32)
+    const cap_ptr = try self.func().emitGetFieldPtr(managed.value, 12);
+    const cap_i32 = try self.func().emitLoad(cap_ptr, .i32);
+    const cap = try self.func().emitUnaryOp(.sext_i32_i64, cap_i32, .i64);
 
-    return .{ .value = iter_pos, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+    return .{ .value = cap, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
 }

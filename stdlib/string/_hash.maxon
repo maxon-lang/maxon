@@ -1,15 +1,7 @@
 // stdlib/string/_hash.maxon
 // Internal hash and equality helpers for string types
 //
-// Purpose: Centralize hash and equality algorithms to avoid duplication
-//          across string, substring, and character types.
-//
-// Unified Implementation: Uses __substring_parent_managed() and
-//   __substring_byte_offset() intrinsics to allow substring to reuse
-//   the managed string implementation with offset adjustment.
-//
-// Maintenance: Single algorithm implementation - substring wrapper delegates
-//              to managed version with parent string and offset.
+// Purpose: Centralize hash and equality algorithms for string types.
 
 // ============================================
 // Hash helpers (djb2 algorithm)
@@ -32,15 +24,6 @@ end 'hashManagedStringRange'
 export function hashManagedString(managed __ManagedString) returns int
 	return hashManagedStringRange(managed, 0, __string_len(managed))
 end 'hashManagedString'
-
-/// Hash a substring using the djb2 algorithm
-/// Returns a 32-bit hash value
-export function hashSubstring(sub substring) returns int
-	var parent = __substring_parent_managed(sub)
-	var offset = __substring_byte_offset(sub)
-	var len = __substring_len(sub)
-	return hashManagedStringRange(parent, offset, len)
-end 'hashSubstring'
 
 // ============================================
 // Equality helpers (byte-by-byte comparison)
@@ -66,18 +49,3 @@ export function equalsManagedString(a __ManagedString, b __ManagedString) return
 	end 'length_check'
 	return equalsManagedStringRange(a, 0, b, 0, len)
 end 'equalsManagedString'
-
-/// Compare two substrings for byte-by-byte equality
-export function equalsSubstring(a substring, b substring) returns bool
-	var len = __substring_len(a)
-	if len != __substring_len(b) 'length_check'
-		return false
-	end 'length_check'
-
-	var aParent = __substring_parent_managed(a)
-	var aOffset = __substring_byte_offset(a)
-	var bParent = __substring_parent_managed(b)
-	var bOffset = __substring_byte_offset(b)
-
-	return equalsManagedStringRange(aParent, aOffset, bParent, bOffset, len)
-end 'equalsSubstring'

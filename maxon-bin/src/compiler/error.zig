@@ -21,6 +21,8 @@ pub const ErrorCode = enum {
     E017,
     E018,
     E019,
+    E020,
+    E021,
 
     const Info = struct {
         code: []const u8,
@@ -47,6 +49,8 @@ pub const ErrorCode = enum {
         .{ .code = "E017", .message = "nil coalescing requires optional type" },
         .{ .code = "E018", .message = "internal type used outside stdlib" },
         .{ .code = "E019", .message = "unknown intrinsic" },
+        .{ .code = "E020", .message = "cannot modify borrowed string" },
+        .{ .code = "E021", .message = "string goes out of scope while borrowed" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

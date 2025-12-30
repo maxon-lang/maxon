@@ -195,6 +195,14 @@ pub const OwnershipState = enum {
     moved,
 };
 
+/// Borrow state of a variable (for string borrow checking)
+pub const BorrowState = enum {
+    none, // Not borrowed
+    borrowed, // Has active borrows from it
+    slice, // Is itself a slice/borrow from another variable
+};
+
+
 /// Variable info - tracks allocation, type, and ownership
 pub const VarInfo = struct {
     ptr: ir.Value,
@@ -208,6 +216,10 @@ pub const VarInfo = struct {
     uses_slot: bool,
     /// If true, this is a function parameter (caller owns memory, don't free)
     is_parameter: bool,
+    /// For slices: name of parent variable this was borrowed from
+    borrowed_from: ?[]const u8 = null,
+    /// Current borrow state
+    borrow_state: BorrowState = .none,
 
     pub fn init(ptr: ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
         return .{

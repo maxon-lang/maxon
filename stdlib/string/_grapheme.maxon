@@ -1,14 +1,6 @@
 // Internal grapheme cluster helpers for string types
 //
-// Purpose: Centralize grapheme cluster operations (UAX #29 algorithm)
-//          to avoid duplication across string and substring types.
-//
-// Unified Implementation: Uses __substring_parent_managed() and
-//   __substring_byte_offset() intrinsics to allow substring to reuse
-//   the managed string implementation with offset adjustment.
-//
-// Maintenance: Single algorithm implementation - substring wrapper delegates
-//              to managed version with parent string and offset.
+// Purpose: Centralize grapheme cluster operations (UAX #29 algorithm) for string types.
 
 // ============================================
 // Find grapheme end helpers (UAX #29)
@@ -60,14 +52,6 @@ export function findGraphemeEndManaged(managed __ManagedString, startPos int, le
 	return findGraphemeEndManagedRange(managed, 0, startPos, len)
 end 'findGraphemeEndManaged'
 
-/// Find the end of the grapheme cluster in a substring starting at startPos
-/// Returns the byte offset of the end of the grapheme cluster
-export function findGraphemeEndSubstring(sub substring, startPos int, len int) returns int
-	var parent = __substring_parent_managed(sub)
-	var offset = __substring_byte_offset(sub)
-	return findGraphemeEndManagedRange(parent, offset, startPos, len)
-end 'findGraphemeEndSubstring'
-
 // ============================================
 // Count grapheme helpers
 // ============================================
@@ -87,14 +71,6 @@ end 'countGraphemesManagedRange'
 export function countGraphemesManaged(managed __ManagedString) returns int
 	return countGraphemesManagedRange(managed, 0, __string_len(managed))
 end 'countGraphemesManaged'
-
-/// Count the total number of grapheme clusters in a substring
-export function countGraphemesSubstring(sub substring) returns int
-	var parent = __substring_parent_managed(sub)
-	var offset = __substring_byte_offset(sub)
-	var len = __substring_len(sub)
-	return countGraphemesManagedRange(parent, offset, len)
-end 'countGraphemesSubstring'
 
 // Grapheme_Cluster_Break property values (used as return values):
 //   0 = Other, 1 = CR, 2 = LF, 3 = Control, 4 = Extend, 5 = ZWJ,

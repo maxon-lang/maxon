@@ -150,6 +150,28 @@ pub fn compileToIr(source: []const u8, allocator: std.mem.Allocator) ![]const u8
     return compileMultipleToIr(all_sources, allocator, &result);
 }
 
+/// Compile source and return the IR as a string, with error details exposed
+pub fn compileToIrWithResult(source: []const u8, allocator: std.mem.Allocator, result: *CompileResult) ![]const u8 {
+    // Load all stdlib modules (same as main compile path)
+    const stdlib_path = try findStdlibPath(allocator);
+    defer allocator.free(stdlib_path);
+
+    const stdlib_modules = try loadAllStdlibModules(stdlib_path, allocator);
+    defer freeStdlibModules(stdlib_modules, allocator);
+
+    // Build combined sources: stdlib first, then user source
+    var all_sources = try allocator.alloc(Source, stdlib_modules.len + 1);
+    defer allocator.free(all_sources);
+
+    for (stdlib_modules, 0..) |mod, i| {
+        all_sources[i] = mod;
+    }
+    all_sources[stdlib_modules.len] = .{ .path = "<test>", .content = source };
+
+    // Use compileMultipleToIr to get proper IR with all stdlib types
+    return compileMultipleToIr(all_sources, allocator, result);
+}
+
 /// Compile multiple sources and return combined IR as string
 fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, result: *CompileResult) ![]const u8 {
     if (sources.len == 0) return error.NoSignatures;

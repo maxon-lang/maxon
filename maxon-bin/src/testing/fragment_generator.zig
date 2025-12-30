@@ -330,9 +330,13 @@ fn writeFragment(
     switch (test_case.expected) {
         .success => {
             // Generate IR for success tests - this must succeed
-            const ir = compiler.compileToIr(test_case.source, allocator) catch |err| {
-                // IR generation failed - this is an error, propagate it
+            var compile_result: compiler.CompileResult = .{ .error_info = null };
+            const ir = compiler.compileToIrWithResult(test_case.source, allocator, &compile_result) catch |err| {
+                // IR generation failed - print detailed error info
                 std.debug.print("IR generation failed for test '{s}': {}\n", .{ test_case.name, err });
+                if (compile_result.error_info) |error_info| {
+                    error_info.printToStderr();
+                }
                 return err;
             };
             try content.appendSlice(allocator, ir);
