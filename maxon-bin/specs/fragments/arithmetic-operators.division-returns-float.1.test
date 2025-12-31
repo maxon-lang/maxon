@@ -1,0 +1,22 @@
+// Test: arithmetic-operators.division-returns-float.1
+function main() returns int
+    var result = 20 / 3      // 6.666...
+    return trunc(result * 10.0)  // 66.666... * 10 = 66.666..., trunc = 66
+end 'main'
+---
+ExitCode: 66
+---
+function main() -> i64 {
+entry:
+    %tmp_div = const.i64 i64 6
+    %result = alloca ptr
+    store %result %tmp_div
+    %tmp_load = load i64 %result
+    %tmp_fconst = const.f64 f64 10
+    %tmp_sitofp = sitofp f64 %tmp_load
+    %tmp_fmul = fmul f64 %tmp_sitofp %tmp_fconst
+    %tmp_fptosi = fptosi i64 %tmp_fmul
+    ret %tmp_fptosi
+}
+
+---

@@ -340,9 +340,11 @@ fn writeFragment(
             var compile_result: compiler.CompileResult = .{ .error_info = null };
             const ir = compiler.compileToIrWithResult(test_case.source, allocator, &compile_result, full_path) catch |err| {
                 // IR generation failed - print detailed error info
-                std.debug.print("IR generation failed for test '{s}': {}\n", .{ test_case.name, err });
                 if (compile_result.error_info) |error_info| {
+                    std.debug.print("IR generation failed for test '{s}': ", .{test_case.name});
                     error_info.printToStderr();
+                } else {
+                    std.debug.print("IR generation failed for test '{s}': {}\n", .{ test_case.name, err });
                 }
                 return err;
             };

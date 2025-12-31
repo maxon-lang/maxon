@@ -1,0 +1,62 @@
+// stdlib/math/log.maxon
+// Natural logarithm implementation
+// Namespace: stdlib.math (automatically inferred from file path)
+
+/// Calculate natural logarithm (ln) of x
+/// Uses Taylor series approximation around x=1
+export function log(x float) returns float
+	// Handle special cases
+	if x <= 0.0 'invalid'
+		return 0.0  // undefined for non-positive values
+	end 'invalid'
+
+	if x == 1.0 'one'
+		return 0.0
+	end 'one'
+
+	// For values far from 1, use log(x) = log(x/2^n) + n*log(2)
+	// to bring x closer to 1 where Taylor series converges faster
+	var n = 0
+	var y = x
+
+	// Normalize to range [0.5, 1.0)
+	while y >= 1.0 'normalize_down'
+		y = y / 2.0
+		n = n + 1
+	end 'normalize_down'
+
+	while y < 0.5 'normalize_up'
+		y = y * 2.0
+		n = n - 1
+	end 'normalize_up'
+
+	// Now compute log(y) using Taylor series: log(y) = 2 * sum((z^(2k+1))/(2k+1))
+	// where z = (y-1)/(y+1), converges for all y > 0
+	var num = y - 1.0
+	var den = y + 1.0
+	var z = num / den
+	var z_squared = z * z
+	var term = z
+	var sum = term
+	var k = 1
+
+	// Compute first 20 terms for good precision
+	while k < 20 'series'
+		term = term * z_squared
+		var divisor = 2 * k + 1
+		var divisor_float = divisor as float
+		sum = sum + term / divisor_float
+		k = k + 1
+	end 'series'
+
+	var result = 2.0 * sum
+
+	// Add back the normalization: log(x) = log(y) + n*log(2)
+	// log(2) ≈ 0.693147180559945
+	var log2 = 0.693147180559945
+	var n_float = n as float
+	result = result + n_float * log2
+
+	return result
+end 'log'
+

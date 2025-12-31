@@ -13,9 +13,7 @@ StringProtocol: Extends BidirectionalCollection. This is the specific protocol t
 Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
 
 ## Priorities
-- remove "stringable" from function Stringable.toString(_ String or nil) returns String
 - error handling - have optionals return error instead of nil
-- string formatting
 - self hosting features
 - hex literals
 - debugging (speed up the dev process)
@@ -23,9 +21,8 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - parser needs to be strict about new lines
 
 ## TODO
-- implement swift inspired stdlib file support
+- implement swift inspired stdlib File support
 - see if we can/should get rid of MIR arrays, and also strings use StaticArray
-- simplify fmt formatting, print("{a} foo {b}", a, b) should just be print("{a} foo {b}")
 - platform specific optimization for runtime
 - warnings as errors in release mode
 - compiler error codes
@@ -34,7 +31,6 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - cross compiling
 - DeadCodeEliminationPass::isPureFunction has hardcoded list of pure functions. Can analyzer determine if its pure? isPureFunction
 - Extra Inhabitants to optimize memory layout
-- restrict calling compiler intrinsics/builtins to stdlib
 - toLower/toUpper need to be unicode aware, maybe other string functions too
 - add "implement interface" code action
 - code actions should be directly linked to the errors that made them needed
