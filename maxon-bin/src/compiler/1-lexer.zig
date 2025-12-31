@@ -378,6 +378,21 @@ pub const Lexer = struct {
             if (c >= '0' and c <= '9') {
                 const start = self.pos;
                 const start_col = self.column;
+
+                // Check for hex literal (0x or 0X)
+                if (c == '0' and self.pos + 1 < self.source.len and
+                    (self.source[self.pos + 1] == 'x' or self.source[self.pos + 1] == 'X'))
+                {
+                    self.pos += 2; // skip 0x
+                    self.column += 2;
+                    while (self.pos < self.source.len and isHexDigit(self.source[self.pos])) {
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
+                    continue;
+                }
+
                 while (self.pos < self.source.len and self.source[self.pos] >= '0' and self.source[self.pos] <= '9') {
                     self.pos += 1;
                     self.column += 1;
@@ -514,6 +529,10 @@ pub const Lexer = struct {
 
     fn isIdentifierContinue(c: u8) bool {
         return isIdentifierStart(c) or (c >= '0' and c <= '9') or c >= 0x80;
+    }
+
+    fn isHexDigit(c: u8) bool {
+        return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
     }
 
     fn utf8ByteLen(first_byte: u8) usize {

@@ -1185,7 +1185,7 @@ pub const Parser = struct {
     fn parsePrimary(self: *Parser) ParseError!?ast.Expression {
         if (self.check(.integer)) {
             const token = self.advance();
-            const value = std.fmt.parseInt(i64, token.text, 10) catch {
+            const value = std.fmt.parseInt(i64, token.text, 0) catch {
                 self.reportError(.E001);
                 return error.InvalidNumber;
             };
