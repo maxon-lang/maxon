@@ -1,0 +1,54 @@
+// Test: break.break.multiple-conditions.1
+function main() returns int
+    var x = 5
+    var count = 0
+    while x < 100 'loop'
+        x = x + 1
+        count = count + 1
+        if count == 3 'check'
+            break
+        end 'check'
+    end 'loop'
+    return x
+end 'main'
+---
+ExitCode: 8
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 5
+    %x = alloca ptr
+    store %x %tmp_const
+    %tmp_const.1 = const.i64 i64 0
+    %count = alloca ptr
+    store %count %tmp_const.1
+    br @block1
+whilecond:
+    %tmp_load = load i64 %x
+    %tmp_const.2 = const.i64 i64 100
+    %tmp_icmp = icmp.lt i64 %tmp_load %tmp_const.2
+    br.cond %tmp_icmp @block2 @block5
+whilebody:
+    %tmp_load.1 = load i64 %x
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.1 %tmp_const.3
+    store %x %tmp_add
+    %tmp_load.2 = load i64 %count
+    %tmp_const.4 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.2 %tmp_const.4
+    store %count %tmp_add.1
+    %tmp_load.3 = load i64 %count
+    %tmp_const.5 = const.i64 i64 3
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.3 %tmp_const.5
+    br.cond %tmp_icmp.1 @block3 @block4
+then:
+    br @block5
+    br @block4
+end:
+    br @block1
+whilecont:
+    %tmp_load.4 = load i64 %x
+    ret %tmp_load.4
+}
+
+---

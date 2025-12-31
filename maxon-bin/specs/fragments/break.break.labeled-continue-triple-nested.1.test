@@ -1,0 +1,94 @@
+// Test: break.break.labeled-continue-triple-nested.1
+function main() returns int
+    var count = 0
+    var a = 0
+    while a < 2 'outer'
+        a = a + 1
+        var b = 0
+        while b < 3 'middle'
+            b = b + 1
+            var c = 0
+            while c < 4 'inner'
+                c = c + 1
+                count = count + 1
+                if c == 2 'check'
+                    continue 'middle'
+                end 'check'
+            end 'inner'
+        end 'middle'
+    end 'outer'
+    return count
+end 'main'
+---
+ExitCode: 12
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %count = alloca ptr
+    store %count %tmp_const
+    %tmp_const.1 = const.i64 i64 0
+    %a = alloca ptr
+    store %a %tmp_const.1
+    br @block1
+whilecond:
+    %tmp_load = load i64 %a
+    %tmp_const.2 = const.i64 i64 2
+    %tmp_icmp = icmp.lt i64 %tmp_load %tmp_const.2
+    br.cond %tmp_icmp @block2 @block11
+whilebody:
+    %tmp_load.1 = load i64 %a
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.1 %tmp_const.3
+    store %a %tmp_add
+    %tmp_const.4 = const.i64 i64 0
+    %b = alloca ptr
+    store %b %tmp_const.4
+    br @block3
+whilecond:
+    %tmp_load.2 = load i64 %b
+    %tmp_const.5 = const.i64 i64 3
+    %tmp_icmp.1 = icmp.lt i64 %tmp_load.2 %tmp_const.5
+    br.cond %tmp_icmp.1 @block4 @block10
+whilebody:
+    %tmp_load.3 = load i64 %b
+    %tmp_const.6 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.3 %tmp_const.6
+    store %b %tmp_add.1
+    %tmp_const.7 = const.i64 i64 0
+    %c = alloca ptr
+    store %c %tmp_const.7
+    br @block5
+whilecond:
+    %tmp_load.4 = load i64 %c
+    %tmp_const.8 = const.i64 i64 4
+    %tmp_icmp.2 = icmp.lt i64 %tmp_load.4 %tmp_const.8
+    br.cond %tmp_icmp.2 @block6 @block9
+whilebody:
+    %tmp_load.5 = load i64 %c
+    %tmp_const.9 = const.i64 i64 1
+    %tmp_add.2 = add i64 %tmp_load.5 %tmp_const.9
+    store %c %tmp_add.2
+    %tmp_load.6 = load i64 %count
+    %tmp_const.10 = const.i64 i64 1
+    %tmp_add.3 = add i64 %tmp_load.6 %tmp_const.10
+    store %count %tmp_add.3
+    %tmp_load.7 = load i64 %c
+    %tmp_const.11 = const.i64 i64 2
+    %tmp_icmp.3 = icmp.eq i64 %tmp_load.7 %tmp_const.11
+    br.cond %tmp_icmp.3 @block7 @block8
+then:
+    br @block3
+    br @block8
+end:
+    br @block5
+whilecont:
+    br @block3
+whilecont:
+    br @block1
+whilecont:
+    %tmp_load.8 = load i64 %count
+    ret %tmp_load.8
+}
+
+---

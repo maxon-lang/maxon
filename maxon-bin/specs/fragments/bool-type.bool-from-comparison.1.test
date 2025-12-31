@@ -1,0 +1,29 @@
+// Test: bool-type.bool-from-comparison.1
+function main() returns int
+    var result = 5 > 3
+    if result 'check'
+        return 42
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 5
+    %tmp_const.1 = const.i64 i64 3
+    %tmp_icmp = icmp.gt i64 %tmp_const %tmp_const.1
+    %result = alloca ptr
+    store %result %tmp_icmp
+    %tmp_load = load i64 %result
+    br.cond %tmp_load @block1 @block2
+then:
+    %tmp_const.2 = const.i64 i64 42
+    ret %tmp_const.2
+end:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+}
+
+---

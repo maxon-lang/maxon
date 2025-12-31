@@ -96,6 +96,13 @@ pub const LoopBlocks = struct {
     }
 };
 
+/// Labeled loop info for break/continue with labels
+const LabeledLoop = struct {
+    label: []const u8,
+    cond_block: u32,
+    end_block: u32, // 0xFFFFFFFF sentinel until patched
+};
+
 // ============================================================================
 // AST to IR Converter
 // ============================================================================
@@ -124,6 +131,8 @@ pub const AstToIr = struct {
     // Loop context for break/continue
     loop_end_block: ?u32 = null,
     loop_cond_block: ?u32 = null,
+    // Labeled loop stack: maps labels to (cond_block, end_block) pairs
+    labeled_loops: std.ArrayListUnmanaged(LabeledLoop) = .{},
     // Current function name (for mutation analysis lookup)
     current_func_name: ?[]const u8 = null,
     // Method context: current type name when converting methods
@@ -2027,8 +2036,8 @@ pub const AstToIr = struct {
             .if_stmt => |if_s| try self.convertIfStmt(if_s),
             .while_stmt => |while_s| try self.convertWhileStmt(while_s),
             .for_stmt => |for_s| try self.convertForStmt(for_s),
-            .break_stmt => try self.convertBreakStmt(),
-            .continue_stmt => try self.convertContinueStmt(),
+            .break_stmt => |brk| try self.convertBreakStmt(brk),
+            .continue_stmt => |cont| try self.convertContinueStmt(cont),
             .else_unwrap_decl => |unwrap| try self.convertElseUnwrapDecl(unwrap),
         }
     }
@@ -2728,6 +2737,15 @@ pub const AstToIr = struct {
         // Use max u32 as sentinel to indicate "needs patching"
         self.loop_end_block = 0xFFFFFFFF;
 
+        // Register labeled loop for break/continue with labels
+        if (while_stmt.label.len > 0) {
+            try self.labeled_loops.append(self.allocator, .{
+                .label = while_stmt.label,
+                .cond_block = cond_block_idx,
+                .end_block = 0xFFFFFFFE - @as(u32, @intCast(self.labeled_loops.items.len)),
+            });
+        }
+
         // Save variable names and ownership state before entering loop body
         var pre_loop_vars = std.StringHashMapUnmanaged(OwnershipState){};
         defer pre_loop_vars.deinit(self.allocator);
@@ -2796,6 +2814,22 @@ pub const AstToIr = struct {
                 if (instr.op == .br) {
                     if (instr.operands[0] == .block_ref and instr.operands[0].block_ref == 0xFFFFFFFF) {
                         instr.operands[0] = .{ .block_ref = cont_block_idx };
+                    }
+                }
+            }
+        }
+
+
+        // Pop labeled loop from stack and patch its sentinel if we pushed one
+        if (while_stmt.label.len > 0) {
+            const labeled_loop = self.labeled_loops.pop().?;
+            // Patch any labeled break statements that targeted this loop's sentinel
+            for (self.func().blocks.items[body_block_idx..cont_block_idx]) |*block| {
+                for (block.instructions.items) |*instr| {
+                    if (instr.op == .br) {
+                        if (instr.operands[0] == .block_ref and instr.operands[0].block_ref == labeled_loop.end_block) {
+                            instr.operands[0] = .{ .block_ref = cont_block_idx };
+                        }
                     }
                 }
             }
@@ -2875,6 +2909,15 @@ pub const AstToIr = struct {
         const saved_cond_block = self.loop_cond_block;
         self.loop_cond_block = cond_block_idx;
         self.loop_end_block = 0xFFFFFFFF; // sentinel for patching
+
+        // Register labeled loop for break/continue with labels
+        if (for_stmt.label.len > 0) {
+            try self.labeled_loops.append(self.allocator, .{
+                .label = for_stmt.label,
+                .cond_block = cond_block_idx,
+                .end_block = 0xFFFFFFFE - @as(u32, @intCast(self.labeled_loops.items.len)),
+            });
+        }
 
         // Save variable names and ownership state before entering loop body
         var pre_loop_vars = std.StringHashMapUnmanaged(OwnershipState){};
@@ -2976,12 +3019,46 @@ pub const AstToIr = struct {
             }
         }
 
+
+        // Pop labeled loop from stack and patch its sentinel if we pushed one
+        if (for_stmt.label.len > 0) {
+            const labeled_loop = self.labeled_loops.pop().?;
+            // Patch any labeled break statements that targeted this loop's sentinel
+            for (self.func().blocks.items[body_block_idx..cont_block_idx]) |*block| {
+                for (block.instructions.items) |*instr| {
+                    if (instr.op == .br) {
+                        if (instr.operands[0] == .block_ref and instr.operands[0].block_ref == labeled_loop.end_block) {
+                            instr.operands[0] = .{ .block_ref = cont_block_idx };
+                        }
+                    }
+                }
+            }
+        }
+
         // Restore loop context
         self.loop_end_block = saved_end_block;
         self.loop_cond_block = saved_cond_block;
     }
 
-    fn convertBreakStmt(self: *AstToIr) ConvertError!void {
+    fn convertBreakStmt(self: *AstToIr, brk: ast.BreakStmt) ConvertError!void {
+        // Check for labeled break
+        if (brk.label) |label| {
+            // Search labeled_loops stack from top (innermost) to bottom (outermost)
+            var i: usize = self.labeled_loops.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (std.mem.eql(u8, self.labeled_loops.items[i].label, label)) {
+                    // Found the target loop - emit branch to its end block
+                    // The end_block is 0xFFFFFFFF sentinel which gets patched later
+                    try self.func().emitBr(self.labeled_loops.items[i].end_block);
+                    return;
+                }
+            }
+            // Label not found
+            self.reportError(.E012, label);
+            return error.SemanticError;
+        }
+        // Unlabeled break - use current loop
         if (self.loop_end_block) |end_block| {
             try self.func().emitBr(end_block);
         } else {
@@ -2990,7 +3067,24 @@ pub const AstToIr = struct {
         }
     }
 
-    fn convertContinueStmt(self: *AstToIr) ConvertError!void {
+    fn convertContinueStmt(self: *AstToIr, cont: ast.ContinueStmt) ConvertError!void {
+        // Check for labeled continue
+        if (cont.label) |label| {
+            // Search labeled_loops stack from top (innermost) to bottom (outermost)
+            var i: usize = self.labeled_loops.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (std.mem.eql(u8, self.labeled_loops.items[i].label, label)) {
+                    // Found the target loop - emit branch to its condition block
+                    try self.func().emitBr(self.labeled_loops.items[i].cond_block);
+                    return;
+                }
+            }
+            // Label not found
+            self.reportError(.E012, label);
+            return error.SemanticError;
+        }
+        // Unlabeled continue - use current loop
         if (self.loop_cond_block) |cond_block| {
             try self.func().emitBr(cond_block);
         } else {

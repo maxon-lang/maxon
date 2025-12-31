@@ -1,0 +1,39 @@
+// Test: bool-type.bool-parameter.1
+function test_bool_param(flag bool) returns int
+    if flag 'check'
+        return 1
+    end 'check' else 'else_check'
+        return 0
+    end 'else_check'
+end 'test_bool_param'
+
+function main() returns int
+    return test_bool_param(true)
+end 'main'
+---
+ExitCode: 1
+---
+function test_bool_param() -> i64 {
+entry:
+    %flag = param i64 0
+    %flag.1 = alloca ptr
+    store %flag.1 %flag
+    %tmp_load = load i64 %flag.1
+    br.cond %tmp_load @block1 @block2
+then:
+    %tmp_const = const.i64 i64 1
+    ret %tmp_const
+else:
+    %tmp_const.1 = const.i64 i64 0
+    ret %tmp_const.1
+end:
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 1
+    %tmp_call = call i64 @test_bool_param(%tmp_const)
+    ret %tmp_call
+}
+
+---

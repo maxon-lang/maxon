@@ -1,0 +1,61 @@
+// Test: break.break.labeled-break-triple-nested.1
+function main() returns int
+    var result = 0
+    while true 'outer'
+        while true 'middle'
+            while true 'inner'
+                result = result + 1
+                if result == 5 'check'
+                    break 'outer'
+                end 'check'
+            end 'inner'
+        end 'middle'
+    end 'outer'
+    return result
+end 'main'
+---
+ExitCode: 5
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %result = alloca ptr
+    store %result %tmp_const
+    br @block1
+whilecond:
+    %tmp_const.1 = const.i64 i64 1
+    br.cond %tmp_const.1 @block2 @block11
+whilebody:
+    br @block3
+whilecond:
+    %tmp_const.2 = const.i64 i64 1
+    br.cond %tmp_const.2 @block4 @block10
+whilebody:
+    br @block5
+whilecond:
+    %tmp_const.3 = const.i64 i64 1
+    br.cond %tmp_const.3 @block6 @block9
+whilebody:
+    %tmp_load = load i64 %result
+    %tmp_const.4 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load %tmp_const.4
+    store %result %tmp_add
+    %tmp_load.1 = load i64 %result
+    %tmp_const.5 = const.i64 i64 5
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.5
+    br.cond %tmp_icmp @block7 @block8
+then:
+    br @block11
+    br @block8
+end:
+    br @block5
+whilecont:
+    br @block3
+whilecont:
+    br @block1
+whilecont:
+    %tmp_load.2 = load i64 %result
+    ret %tmp_load.2
+}
+
+---
