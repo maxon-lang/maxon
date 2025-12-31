@@ -25,7 +25,7 @@ Top-level `let` declarations define compile-time constants at module scope. Only
 
 ### Constant Expression Evaluation
 - `const_eval.h/cpp` implements `ConstExprEvaluator` class
-- Supports: literals (int, float, bool, string), arithmetic ops, comparisons, logical ops, casts, global references
+- Supports: literals (int, float, bool, String), arithmetic ops, comparisons, logical ops, casts, global references
 - Builds dependency graph from initializer expressions
 - Topologically sorts globals using Kahn's algorithm
 - Reports circular dependency errors with involved global names

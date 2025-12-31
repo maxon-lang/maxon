@@ -282,4 +282,5 @@ pub const ConvertError = error{
 pub const InterfaceInfo = struct {
     name: []const u8,
     methods: []const ast.InterfaceMethod,
+    associated_types: []const []const u8, // ["Element", "Key", "Value"] from `uses Element, Key, Value`
 };

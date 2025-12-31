@@ -59,6 +59,18 @@ fn extractErrorLine(stderr: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Normalize path separators to forward slashes for cross-platform consistency
+fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
+    if (std.mem.indexOf(u8, path, "\\") == null) {
+        return path; // No backslashes, return as-is
+    }
+    const result = try allocator.alloc(u8, path.len);
+    for (path, 0..) |c, i| {
+        result[i] = if (c == '\\') '/' else c;
+    }
+    return result;
+}
+
 /// Parsed fragment file
 pub const Fragment = struct {
     name: []const u8,
@@ -506,10 +518,15 @@ fn runTest(
             var actual_error_allocated = false;
             const actual_error = if (compile_result.error_info) |err| blk: {
                 actual_error_allocated = true;
+                // Normalize path separators to forward slashes for cross-platform consistency
+                const file_path = err.location.file orelse "";
+                const normalized_path = normalizePath(allocator, file_path) catch file_path;
+                defer if (normalized_path.ptr != file_path.ptr) allocator.free(normalized_path);
+
                 if (err.code) |code| {
                     break :blk std.fmt.allocPrint(allocator, "error {s}: {s}:{d}:{d}: {s}", .{
                         code.format(),
-                        err.location.file orelse "",
+                        normalized_path,
                         err.location.line,
                         err.location.column,
                         err.message,
@@ -519,7 +536,7 @@ fn runTest(
                     };
                 } else {
                     break :blk std.fmt.allocPrint(allocator, "internal error: {s}:{d}:{d}: {s}", .{
-                        err.location.file orelse "",
+                        normalized_path,
                         err.location.line,
                         err.location.column,
                         err.message,

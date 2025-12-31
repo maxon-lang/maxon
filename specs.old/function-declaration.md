@@ -62,7 +62,7 @@ Use `_` as a parameter name to indicate an unused parameter. This is useful when
 Multiple `_` parameters are allowed in the same function:
 
 ```maxon
-function callback(_ int, _ string, value float) returns float
+function callback(_ int, _ String, value float) returns float
     return value * 2.0
 end 'callback'
 ```
@@ -189,7 +189,7 @@ end 'main'
 
 <!-- test: discard-multiple-parameters -->
 ```maxon
-function useThird(_ int, _ string, c int) returns int
+function useThird(_ int, _ String, c int) returns int
     return c
 end 'useThird'
 

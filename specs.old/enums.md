@@ -154,7 +154,7 @@ enum HttpStatus int
     serverError = 500
 end 'HttpStatus'
 
-enum Planet string
+enum Planet String
     earth = "Earth"
     mars = "Mars"
     venus = "Venus"
@@ -175,7 +175,7 @@ Cases can carry additional data called associated values:
 ```maxon
 enum Result
     success(value int)
-    failure(code int, message string)
+    failure(code int, message String)
     pending
 end 'Result'
 ```

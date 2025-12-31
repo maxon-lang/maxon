@@ -1101,8 +1101,9 @@ pub const AstToIr = struct {
         try self.interface_map.put(self.allocator, iface.name, .{
             .name = iface.name,
             .methods = iface.methods,
+            .associated_types = iface.generic_params,
         });
-        debug.astToIr("Registered interface '{s}' with {d} methods", .{ iface.name, iface.methods.len });
+        debug.astToIr("Registered interface '{s}' with {d} methods, {d} associated types", .{ iface.name, iface.methods.len, iface.generic_params.len });
     }
 
     fn checkInterfaceConformance(self: *AstToIr, type_decl: ast.TypeDecl) !void {
@@ -1115,28 +1116,22 @@ pub const AstToIr = struct {
                 continue;
             };
 
-            // Check that all required interface methods are implemented
-            for (iface.methods) |iface_method| {
-                // Skip methods with default implementations (they're optional to override)
-                if (iface_method.has_default_impl) continue;
+            // Build a map of associated type name -> bound type
+            var type_bindings = std.StringHashMapUnmanaged([]const u8){};
+            defer type_bindings.deinit(self.allocator);
 
-                // Look for matching method in type
-                var found = false;
-                for (type_decl.methods) |type_method| {
-                    if (std.mem.eql(u8, type_method.name, iface_method.name)) {
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
-                    // Missing required method - report detailed error
-                    const msg = std.fmt.allocPrint(self.allocator, "type '{s}' does not implement interface '{s}': missing method '{s}'", .{
+            // Check that all required associated types are bound
+            for (iface.associated_types, 0..) |assoc_type, i| {
+                if (i < conformance.type_args.len) {
+                    try type_bindings.put(self.allocator, assoc_type, conformance.type_args[i]);
+                } else {
+                    // Missing type binding
+                    const msg = std.fmt.allocPrint(self.allocator, "Type '{s}' does not define required associated type '{s}' from interface '{s}'", .{
                         type_decl.name,
+                        assoc_type,
                         conformance.interface_name,
-                        iface_method.name,
                     }) catch {
-                        self.reportError(.E015, iface_method.name);
+                        self.reportError(.E015, assoc_type);
                         return error.SemanticError;
                     };
                     self.last_error = .{
@@ -1144,13 +1139,153 @@ pub const AstToIr = struct {
                         .message = msg,
                         .location = .{
                             .file = self.source_file,
-                            .line = 1, // Type declaration line not tracked
+                            .line = 1,
                             .column = 1,
                         },
                     };
                     return error.SemanticError;
                 }
             }
+
+            // Check that all required interface methods are implemented
+            var missing_methods = std.ArrayListUnmanaged([]const u8){};
+            defer missing_methods.deinit(self.allocator);
+
+            for (iface.methods) |iface_method| {
+                // Skip methods with default implementations (they're optional to override)
+                if (iface_method.has_default_impl) continue;
+
+                // Look for matching method in type
+                var found_method: ?ast.MethodDecl = null;
+                for (type_decl.methods) |type_method| {
+                    if (std.mem.eql(u8, type_method.name, iface_method.name)) {
+                        found_method = type_method;
+                        break;
+                    }
+                }
+
+                if (found_method) |type_method| {
+                    // Check return type match (with associated type substitution)
+                    if (iface_method.return_type) |iface_ret| {
+                        if (type_method.return_type) |impl_ret| {
+                            const expected = self.resolveAssociatedTypeWithSelf(iface_ret, type_bindings, type_decl.name);
+                            const actual = typeExprToString(impl_ret);
+                            if (!std.mem.eql(u8, expected, actual)) {
+                                const msg = std.fmt.allocPrint(self.allocator, "Method '{s}.{s}' has return type '{s}' but interface '{s}' requires '{s}'", .{
+                                    type_decl.name,
+                                    iface_method.name,
+                                    actual,
+                                    conformance.interface_name,
+                                    expected,
+                                }) catch {
+                                    self.reportError(.E015, iface_method.name);
+                                    return error.SemanticError;
+                                };
+                                self.last_error = .{
+                                    .code = .E015,
+                                    .message = msg,
+                                    .location = .{
+                                        .file = self.source_file,
+                                        .line = 1,
+                                        .column = 1,
+                                    },
+                                };
+                                return error.SemanticError;
+                            }
+                        }
+                    }
+
+                    // Check parameter types match (with associated type substitution)
+                    if (iface_method.params.len == type_method.params.len) {
+                        for (iface_method.params, 0..) |iface_param, i| {
+                            const expected = self.resolveAssociatedTypeWithSelf(iface_param.type_expr, type_bindings, type_decl.name);
+                            const actual = typeExprToString(type_method.params[i].type_expr);
+                            if (!std.mem.eql(u8, expected, actual)) {
+                                const msg = std.fmt.allocPrint(self.allocator, "Method '{s}.{s}' parameter {d} has type '{s}' but interface '{s}' requires '{s}'", .{
+                                    type_decl.name,
+                                    iface_method.name,
+                                    i + 1,
+                                    actual,
+                                    conformance.interface_name,
+                                    expected,
+                                }) catch {
+                                    self.reportError(.E015, iface_method.name);
+                                    return error.SemanticError;
+                                };
+                                self.last_error = .{
+                                    .code = .E015,
+                                    .message = msg,
+                                    .location = .{
+                                        .file = self.source_file,
+                                        .line = 1,
+                                        .column = 1,
+                                    },
+                                };
+                                return error.SemanticError;
+                            }
+                        }
+                    }
+                } else {
+                    // Missing method - collect for aggregate error
+                    const resolved_ret = if (iface_method.return_type) |rt|
+                        self.resolveAssociatedTypeWithSelf(rt, type_bindings, type_decl.name)
+                    else
+                        "void";
+                    const method_sig = std.fmt.allocPrint(self.allocator, "{s}() returns {s}", .{
+                        iface_method.name,
+                        resolved_ret,
+                    }) catch continue;
+                    try missing_methods.append(self.allocator, method_sig);
+                }
+            }
+
+            // Report missing methods as aggregate error
+            if (missing_methods.items.len > 0) {
+                var msg_buf: std.ArrayListUnmanaged(u8) = .empty;
+                const writer = msg_buf.writer(self.allocator);
+                writer.print("Partial interface implementation: type '{s}' is missing {d} method(s):", .{
+                    type_decl.name,
+                    missing_methods.items.len,
+                }) catch {};
+                for (missing_methods.items) |method_sig| {
+                    writer.print("\n  - {s}", .{method_sig}) catch {};
+                }
+                self.last_error = .{
+                    .code = .E015,
+                    .message = msg_buf.toOwnedSlice(self.allocator) catch "",
+                    .location = .{
+                        .file = self.source_file,
+                        .line = 1,
+                        .column = 1,
+                    },
+                };
+                return error.SemanticError;
+            }
+        }
+    }
+
+    /// Resolve a type expression by substituting associated types and Self with their bound types
+    fn resolveAssociatedTypeWithSelf(self: *AstToIr, type_expr: ast.TypeExpr, bindings: std.StringHashMapUnmanaged([]const u8), self_type: []const u8) []const u8 {
+        _ = self;
+        switch (type_expr) {
+            .simple => |name| {
+                // Handle Self specially
+                if (std.mem.eql(u8, name, "Self")) return self_type;
+                // Check if this is an associated type that should be substituted
+                return bindings.get(name) orelse name;
+            },
+            .generic => |g| {
+                if (std.mem.eql(u8, g.base_type, "Self")) return self_type;
+                return bindings.get(g.base_type) orelse g.base_type;
+            },
+            .optional => |wrapped| {
+                const inner = switch (wrapped.*) {
+                    .simple => |name| if (std.mem.eql(u8, name, "Self")) self_type else bindings.get(name) orelse name,
+                    .generic => |g| if (std.mem.eql(u8, g.base_type, "Self")) self_type else bindings.get(g.base_type) orelse g.base_type,
+                    .optional => "?",
+                };
+                return inner;
+            },
         }
     }
 
@@ -1216,6 +1351,19 @@ pub const AstToIr = struct {
             .simple => |name| name,
             .generic => |gen| gen.base_type,
             .optional => null,
+        };
+    }
+
+    /// Convert type expression to string representation for error messages
+    fn typeExprToString(type_expr: ast.TypeExpr) []const u8 {
+        return switch (type_expr) {
+            .simple => |name| name,
+            .generic => |gen| gen.base_type,
+            .optional => |wrapped| switch (wrapped.*) {
+                .simple => |name| name,
+                .generic => |gen| gen.base_type,
+                .optional => "?",
+            },
         };
     }
 

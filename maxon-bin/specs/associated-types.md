@@ -279,17 +279,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:6:1
-Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
-
-  6 | type Broken is HasElement
-    | ^
-
-Semantic Error: temp_fragment.maxon:6:1
-Method 'Broken.get' has return type 'int' but interface 'HasElement' requires 'Element'
-
-  6 | type Broken is HasElement
-    | ^
+error E015: specs/fragments/associated-types.doc-example-3.1.test:1:1: Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
 ```
 
 ### Error: Partial Implementation
@@ -315,12 +305,8 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:7:1
-Partial interface implementation: type 'Partial' is missing 1 method(s):
+error E015: specs/fragments/associated-types.doc-example-4.1.test:1:1: Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns int
-
-  7 | type Partial is TwoMethods with int
-    | ^
 ```
 
 ### Error: Type Mismatch in Method
@@ -345,11 +331,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:6:1
-Method 'WrongReturn.produce' has return type 'int' but interface 'Producer' requires 'float'
-
-  6 | type WrongReturn is Producer with float
-    | ^
+error E015: specs/fragments/associated-types.doc-example-5.1.test:1:1: Method 'WrongReturn.produce' has return type 'int' but interface 'Producer' requires 'float'
 ```
 
 
@@ -449,10 +431,10 @@ interface CharSource uses Element
     function getChar() returns Element
 end 'CharSource'
 
-type SingleChar is CharSource with character
-    var ch character
+type SingleChar is CharSource with Character
+    var ch Character
 
-    function CharSource.getChar() returns character
+    function CharSource.getChar() returns Character
         return ch
     end 'getChar'
 end 'SingleChar'
@@ -515,17 +497,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:6:1
-Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
-
-  6 | type Missing is NeedsElement
-    | ^
-
-Semantic Error: temp_fragment.maxon:6:1
-Method 'Missing.get' has return type 'int' but interface 'NeedsElement' requires 'Element'
-
-  6 | type Missing is NeedsElement
-    | ^
+error E015: specs/fragments/associated-types.missing-type-binding-error.1.test:1:1: Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
 ```
 
 
@@ -549,12 +521,8 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:7:1
-Partial interface implementation: type 'Partial' is missing 1 method(s):
+error E015: specs/fragments/associated-types.partial-implementation-error.1.test:1:1: Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns int
-
-  7 | type Partial is TwoMethods with int
-    | ^
 ```
 
 
@@ -577,11 +545,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:6:1
-Method 'WrongType.make' has return type 'int' but interface 'Typed' requires 'float'
-
-  6 | type WrongType is Typed with float
-    | ^
+error E015: specs/fragments/associated-types.wrong-return-type-error.1.test:1:1: Method 'WrongType.make' has return type 'int' but interface 'Typed' requires 'float'
 ```
 
 
@@ -604,11 +568,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:6:1
-Method 'WrongParam.accept' parameter 1 has type 'int' but interface 'Acceptor' requires 'float'
-
-  6 | type WrongParam is Acceptor with float
-    | ^
+error E015: specs/fragments/associated-types.wrong-param-type-error.1.test:1:1: Method 'WrongParam.accept' parameter 1 has type 'int' but interface 'Acceptor' requires 'float'
 ```
 
 

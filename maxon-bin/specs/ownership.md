@@ -191,7 +191,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs\fragments\ownership.struct-array-field-moved-into-type.1.test:9:5: use after move: 'arr'
+error E008: specs/fragments/ownership.struct-array-field-moved-into-type.1.test:9:5: use after move: 'arr'
 ```
 
 ## Memory Safety Tests
@@ -216,7 +216,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs\fragments\ownership.error.use-after-conditional-move.1.test:11:5: use after move: 'a'
+error E008: specs/fragments/ownership.error.use-after-conditional-move.1.test:11:5: use after move: 'a'
 ```
 
 <!-- test: error.use-after-move-in-loop -->
@@ -237,7 +237,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs\fragments\ownership.error.use-after-move-in-loop.1.test:11:9: use after move: 'a'
+error E008: specs/fragments/ownership.error.use-after-move-in-loop.1.test:11:9: use after move: 'a'
 ```
 
 <!-- test: reassign-after-move-primitive -->

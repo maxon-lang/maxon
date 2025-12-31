@@ -246,14 +246,14 @@ pub const Parser = struct {
             const first_arg = try self.expectTypeName();
             try type_args.append(self.allocator, first_arg);
 
-            // Additional type args separated by commas (stop at newline or next keyword)
+            // Additional type args separated by commas (stop at newline or next conformance)
             while (self.check(.comma)) {
                 // Peek to check if this comma separates type args or conformances
                 if (self.peek(1)) |next| {
                     // If next is an identifier or type keyword, check if after that is 'with' (new conformance)
                     if (next.type == .identifier or self.isTypeKeyword(next.type)) {
                         if (self.peek(2)) |after_ident| {
-                            if (after_ident.type == .with or after_ident.type == .newline) {
+                            if (after_ident.type == .with) {
                                 // This comma separates conformances, not type args
                                 break;
                             }

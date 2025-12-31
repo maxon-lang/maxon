@@ -158,7 +158,8 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs\fragments\interface-conformance.conformance-missing-method.1.test:1:1: type 'BadCounter' does not implement interface 'Counter': missing method 'increment'
+error E015: specs/fragments/interface-conformance.conformance-missing-method.1.test:1:1: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
+  - increment() returns void
 ```
 
 <!-- test: conformance-extra-methods-ok -->

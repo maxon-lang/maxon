@@ -1,0 +1,72 @@
+// Test: associated-types.associated-type-in-param.1
+interface Accumulator uses Item
+    function add(item Item) returns Self
+    function total() returns int
+end 'Accumulator'
+
+type IntSum is Accumulator with int
+    var sum int
+
+    function Accumulator.add(item int) returns IntSum
+        return IntSum{sum: sum + item}
+    end 'add'
+
+    function Accumulator.total() returns int
+        return sum
+    end 'total'
+end 'IntSum'
+
+function main() returns int
+    var acc = IntSum{sum: 0}
+    acc = acc.add(10)
+    acc = acc.add(32)
+    return acc.total()
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %acc = alloca.sized ptr 8
+    memset %acc 0 8
+    %tmp_fieldptr = getfieldptr ptr %acc 0
+    %tmp_const = const.i64 i64 0
+    store %tmp_fieldptr %tmp_const
+    %tmp_alloca.1 = alloca.sized ptr 8
+    %tmp_const.1 = const.i64 i64 10
+    %tmp_call = call ptr @IntSum$add(%tmp_alloca.1, %acc, %tmp_const.1)
+    memcpy %acc %tmp_alloca.1 8
+    %tmp_alloca.2 = alloca.sized ptr 8
+    %tmp_const.2 = const.i64 i64 32
+    %tmp_call.1 = call ptr @IntSum$add(%tmp_alloca.2, %acc, %tmp_const.2)
+    memcpy %acc %tmp_alloca.2 8
+    %tmp_call.2 = call i64 @IntSum$total(%acc)
+    ret %tmp_call.2
+}
+
+function IntSum$add() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    %item = param i64 2
+    %item.1 = alloca ptr
+    store %item.1 %item
+    memset %tmp_param 0 8
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_fieldptr.1 = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %tmp_load.1 = load i64 %item.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    store %tmp_fieldptr %tmp_add
+    ret %tmp_param
+}
+
+function IntSum$total() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+---

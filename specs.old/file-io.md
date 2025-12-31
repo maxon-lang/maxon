@@ -47,7 +47,7 @@ File I/O functions provide basic file reading and writing capabilities.
 
 Read the entire contents of a text file as a UTF-8 encoded string.
 
-**Signature:** `readTextFile(path string) string or nil`
+**Signature:** `readTextFile(path String) string or nil`
 
 **Parameters:**
 - `path`: File path as a string
@@ -77,7 +77,7 @@ Could not read file
 
 Write a string to a text file using UTF-8 encoding.
 
-**Signature:** `writeTextFile(path string, content string) bool`
+**Signature:** `writeTextFile(path string, content String) bool`
 
 **Parameters:**
 - `path`: File path as a string

@@ -478,7 +478,7 @@ end 'main'
 <!-- test: optional-struct-field-nil -->
 ```maxon
 type Person
-	var name string
+	var name String
 	var age int or nil
 end 'Person'
 
@@ -498,7 +498,7 @@ end 'main'
 <!-- test: optional-struct-field-value -->
 ```maxon
 type Person
-	var name string
+	var name String
 	var age int or nil
 end 'Person'
 

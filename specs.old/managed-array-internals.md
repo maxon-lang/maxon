@@ -252,7 +252,7 @@ Leaked:    0 bytes
 Calling `.count()` on an array field of a struct should work correctly.
 ```maxon
 type Config
-    var sources array of string
+    var sources array of String
 end 'Config'
 
 function main() returns int

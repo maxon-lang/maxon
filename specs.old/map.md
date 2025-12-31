@@ -101,7 +101,7 @@ The key and value types are automatically inferred from the literal values.
 You can also create an empty map with explicit types:
 
 ```maxon
-var m = map from string to int
+var m = map from String to int
 ```
 
 ## Methods
