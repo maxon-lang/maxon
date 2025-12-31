@@ -14,45 +14,25 @@ end 'main'
 ExitCode: 0
 TrackAllocs: true
 Stdout: ```
-ALLOC #1: 32 bytes (string metadata)
-ALLOC #2: 32 bytes (string metadata)
-ALLOC #3: 10 bytes (string concat)
-ALLOC #4: 10 bytes (string concat)
-ALLOC #5: 32 bytes (string concat)
-FREE #1: 32 bytes (string reassign meta)
-ALLOC #6: 11 bytes (string concat)
-ALLOC #7: 11 bytes (string concat)
-ALLOC #8: 32 bytes (string concat)
-FREE #4: 10 bytes (string reassign)
-FREE #3: 10 bytes (string reassign)
-FREE #5: 32 bytes (string reassign meta)
-ALLOC #9: 12 bytes (string concat)
-ALLOC #10: 12 bytes (string concat)
-ALLOC #11: 32 bytes (string concat)
-FREE #7: 11 bytes (string reassign)
-FREE #6: 11 bytes (string reassign)
-FREE #8: 32 bytes (string reassign meta)
-ALLOC #12: 10 bytes (int.toString)
-ALLOC #13: 10 bytes (int.toString)
-ALLOC #14: 32 bytes (int.toString)
-3ALLOC #15: 32 bytes (string metadata)
-ALLOC #16: 10 bytes (cstring conversion)
-ALLOC #17: 10 bytes (cstring conversion)
-FREE #17: 10 bytes (cstring release)
-FREE #16: 10 bytes (cstring release)
-
-FREE #15: 32 bytes (string metadata)
-FREE #13: 10 bytes (cstring release)
-FREE #12: 10 bytes (cstring release)
-FREE #14: 32 bytes (string metadata)
-FREE #10: 12 bytes (string literal)
-FREE #9: 12 bytes (string literal)
-FREE #11: 32 bytes (string metadata)
-FREE #2: 32 bytes (string metadata)
+ALLOC #1: 2 bytes (dynamic array)
+ALLOC #2: 2 bytes (dynamic array)
+ALLOC #3: 3 bytes (dynamic array)
+FREE #2: 2 bytes (dynamic array)
+ALLOC #4: 4 bytes (dynamic array)
+FREE #3: 3 bytes (dynamic array)
+ALLOC #5: 22 bytes (dynamic array)
+ALLOC #6: 2 bytes (dynamic array)
+ALLOC #7: 3 bytes (dynamic array)
+3
+FREE #5: 22 bytes (dynamic array)
+FREE #6: 2 bytes (dynamic array)
+FREE #7: 3 bytes (dynamic array)
+FREE #1: 2 bytes (dynamic array)
+FREE #4: 4 bytes (dynamic array)
 
 === ALLOC STATS ===
-Allocated: 330 bytes
-Freed:     330 bytes
+Allocated: 38 bytes
+Freed:     38 bytes
 Leaked:    0 bytes
 ```
 ---
@@ -93,7 +73,7 @@ entry:
     %tmp_const.8 = const.i32 i32 5
     store.i32 %tmp_fieldptr.7 %tmp_const.8
     %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.2 16
-    %tmp_const.9 = const.i32 i32 1
+    %tmp_const.9 = const.i32 i32 0
     store.i32 %tmp_fieldptr.8 %tmp_const.9
     %tmp_fieldptr.9 = getfieldptr ptr %tmp_alloca.2 20
     %tmp_const.10 = const.i32 i32 0
@@ -230,7 +210,7 @@ whilecont:
     %tmp_const.37 = const.i32 i32 5
     store.i32 %tmp_fieldptr.32 %tmp_const.37
     %tmp_fieldptr.33 = getfieldptr ptr %tmp_alloca.9 16
-    %tmp_const.38 = const.i32 i32 1
+    %tmp_const.38 = const.i32 i32 0
     store.i32 %tmp_fieldptr.33 %tmp_const.38
     %tmp_fieldptr.34 = getfieldptr ptr %tmp_alloca.9 20
     %tmp_const.39 = const.i32 i32 0
@@ -283,7 +263,7 @@ whilecont:
     %tmp_const.46 = const.i64 i64 0
     store %tmp_fieldptr.46 %tmp_const.46
     %tmp_call.5 = call i64 @print(%tmp_alloca.12)
-    %tmp_fieldptr.47 = getfieldptr ptr %tmp_alloca.10 12
+    %tmp_fieldptr.47 = getfieldptr ptr %tmp_alloca.8 12
     %tmp_load.13 = load i32 %tmp_fieldptr.47
     %tmp_const.47 = const.i32 i32 3
     %tmp_band.1 = band i32 %tmp_load.13 %tmp_const.47
@@ -291,7 +271,7 @@ whilecont:
     %tmp_icmp.3 = icmp.eq i32 %tmp_band.1 %tmp_const.48
     br.cond %tmp_icmp.3 @block7 @block9
 decref:
-    %tmp_fieldptr.48 = getfieldptr ptr %tmp_alloca.10 16
+    %tmp_fieldptr.48 = getfieldptr ptr %tmp_alloca.8 16
     %tmp_load.14 = load i32 %tmp_fieldptr.48
     %tmp_const.49 = const.i32 i32 1
     %tmp_sub.1 = sub i32 %tmp_load.14 %tmp_const.49
@@ -300,54 +280,96 @@ decref:
     %tmp_icmp.4 = icmp.eq i32 %tmp_sub.1 %tmp_const.50
     br.cond %tmp_icmp.4 @block8 @block9
 decref_free:
-    %tmp_load.15 = load ptr %tmp_alloca.10
+    %tmp_load.15 = load ptr %tmp_alloca.8
     heap.free %tmp_load.15
     br @block9
 decref_end:
-    %tmp_const.51 = const.i64 i64 0
-    %tmp_fieldptr.49 = getfieldptr ptr %x 12
+    %tmp_fieldptr.49 = getfieldptr ptr %tmp_alloca.10 12
     %tmp_load.16 = load i32 %tmp_fieldptr.49
-    %tmp_const.52 = const.i32 i32 3
-    %tmp_band.2 = band i32 %tmp_load.16 %tmp_const.52
-    %tmp_const.53 = const.i32 i32 1
-    %tmp_icmp.5 = icmp.eq i32 %tmp_band.2 %tmp_const.53
+    %tmp_const.51 = const.i32 i32 3
+    %tmp_band.2 = band i32 %tmp_load.16 %tmp_const.51
+    %tmp_const.52 = const.i32 i32 1
+    %tmp_icmp.5 = icmp.eq i32 %tmp_band.2 %tmp_const.52
     br.cond %tmp_icmp.5 @block10 @block12
 decref:
-    %tmp_fieldptr.50 = getfieldptr ptr %x 16
+    %tmp_fieldptr.50 = getfieldptr ptr %tmp_alloca.10 16
     %tmp_load.17 = load i32 %tmp_fieldptr.50
-    %tmp_const.54 = const.i32 i32 1
-    %tmp_sub.2 = sub i32 %tmp_load.17 %tmp_const.54
+    %tmp_const.53 = const.i32 i32 1
+    %tmp_sub.2 = sub i32 %tmp_load.17 %tmp_const.53
     store.i32 %tmp_fieldptr.50 %tmp_sub.2
-    %tmp_const.55 = const.i32 i32 0
-    %tmp_icmp.6 = icmp.eq i32 %tmp_sub.2 %tmp_const.55
+    %tmp_const.54 = const.i32 i32 0
+    %tmp_icmp.6 = icmp.eq i32 %tmp_sub.2 %tmp_const.54
     br.cond %tmp_icmp.6 @block11 @block12
 decref_free:
-    %tmp_load.18 = load ptr %x
+    %tmp_load.18 = load ptr %tmp_alloca.10
     heap.free %tmp_load.18
     br @block12
 decref_end:
-    %tmp_fieldptr.51 = getfieldptr ptr %s 12
+    %tmp_fieldptr.51 = getfieldptr ptr %tmp_alloca.12 12
     %tmp_load.19 = load i32 %tmp_fieldptr.51
-    %tmp_const.56 = const.i32 i32 3
-    %tmp_band.3 = band i32 %tmp_load.19 %tmp_const.56
-    %tmp_const.57 = const.i32 i32 1
-    %tmp_icmp.7 = icmp.eq i32 %tmp_band.3 %tmp_const.57
+    %tmp_const.55 = const.i32 i32 3
+    %tmp_band.3 = band i32 %tmp_load.19 %tmp_const.55
+    %tmp_const.56 = const.i32 i32 1
+    %tmp_icmp.7 = icmp.eq i32 %tmp_band.3 %tmp_const.56
     br.cond %tmp_icmp.7 @block13 @block15
 decref:
-    %tmp_fieldptr.52 = getfieldptr ptr %s 16
+    %tmp_fieldptr.52 = getfieldptr ptr %tmp_alloca.12 16
     %tmp_load.20 = load i32 %tmp_fieldptr.52
-    %tmp_const.58 = const.i32 i32 1
-    %tmp_sub.3 = sub i32 %tmp_load.20 %tmp_const.58
+    %tmp_const.57 = const.i32 i32 1
+    %tmp_sub.3 = sub i32 %tmp_load.20 %tmp_const.57
     store.i32 %tmp_fieldptr.52 %tmp_sub.3
-    %tmp_const.59 = const.i32 i32 0
-    %tmp_icmp.8 = icmp.eq i32 %tmp_sub.3 %tmp_const.59
+    %tmp_const.58 = const.i32 i32 0
+    %tmp_icmp.8 = icmp.eq i32 %tmp_sub.3 %tmp_const.58
     br.cond %tmp_icmp.8 @block14 @block15
 decref_free:
-    %tmp_load.21 = load ptr %s
+    %tmp_load.21 = load ptr %tmp_alloca.12
     heap.free %tmp_load.21
     br @block15
 decref_end:
-    ret %tmp_const.51
+    %tmp_const.59 = const.i64 i64 0
+    %tmp_fieldptr.53 = getfieldptr ptr %x 12
+    %tmp_load.22 = load i32 %tmp_fieldptr.53
+    %tmp_const.60 = const.i32 i32 3
+    %tmp_band.4 = band i32 %tmp_load.22 %tmp_const.60
+    %tmp_const.61 = const.i32 i32 1
+    %tmp_icmp.9 = icmp.eq i32 %tmp_band.4 %tmp_const.61
+    br.cond %tmp_icmp.9 @block16 @block18
+decref:
+    %tmp_fieldptr.54 = getfieldptr ptr %x 16
+    %tmp_load.23 = load i32 %tmp_fieldptr.54
+    %tmp_const.62 = const.i32 i32 1
+    %tmp_sub.4 = sub i32 %tmp_load.23 %tmp_const.62
+    store.i32 %tmp_fieldptr.54 %tmp_sub.4
+    %tmp_const.63 = const.i32 i32 0
+    %tmp_icmp.10 = icmp.eq i32 %tmp_sub.4 %tmp_const.63
+    br.cond %tmp_icmp.10 @block17 @block18
+decref_free:
+    %tmp_load.24 = load ptr %x
+    heap.free %tmp_load.24
+    br @block18
+decref_end:
+    %tmp_fieldptr.55 = getfieldptr ptr %s 12
+    %tmp_load.25 = load i32 %tmp_fieldptr.55
+    %tmp_const.64 = const.i32 i32 3
+    %tmp_band.5 = band i32 %tmp_load.25 %tmp_const.64
+    %tmp_const.65 = const.i32 i32 1
+    %tmp_icmp.11 = icmp.eq i32 %tmp_band.5 %tmp_const.65
+    br.cond %tmp_icmp.11 @block19 @block21
+decref:
+    %tmp_fieldptr.56 = getfieldptr ptr %s 16
+    %tmp_load.26 = load i32 %tmp_fieldptr.56
+    %tmp_const.66 = const.i32 i32 1
+    %tmp_sub.5 = sub i32 %tmp_load.26 %tmp_const.66
+    store.i32 %tmp_fieldptr.56 %tmp_sub.5
+    %tmp_const.67 = const.i32 i32 0
+    %tmp_icmp.12 = icmp.eq i32 %tmp_sub.5 %tmp_const.67
+    br.cond %tmp_icmp.12 @block20 @block21
+decref_free:
+    %tmp_load.27 = load ptr %s
+    heap.free %tmp_load.27
+    br @block21
+decref_end:
+    ret %tmp_const.59
 }
 
 ---

@@ -271,10 +271,13 @@ pub const AstToIr = struct {
             try self.func().emitStoreI8(try self.func().emitGetElemPtr(buffer, null_idx, 1), try self.func().emitConstI8(0));
 
             // Initialize __ManagedString fields
+            // Note: refcount starts at 0, not 1. When this is passed to String$init,
+            // the struct copy will increment refcount to 1. This ensures proper COW semantics
+            // where the final owner has refcount=1 after initialization.
             try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 0), buffer);
             try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 8), try self.func().emitConstI32(@intCast(str_bytes.len)));
             try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 12), try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01)));
-            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 16), try self.func().emitConstI32(1));
+            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 16), try self.func().emitConstI32(0));
             try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 20), try self.func().emitConstI32(0));
         }
 
@@ -300,6 +303,7 @@ pub const AstToIr = struct {
         try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 12), cap_flags);
 
         // refcount = 1 at offset 16
+        // Note: This starts at 1 because emitStringFromManaged does raw memcpy without incref
         try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 16), try self.func().emitConstI32(1));
 
         // parent_off = 0 at offset 20
@@ -2247,6 +2251,11 @@ pub const AstToIr = struct {
                             try self.emitStringIncref(var_info.ptr);
                         }
                     }
+                    // For String assignment from a temporary (literal/interpolation/etc),
+                    // remove the source from temporaries since ownership was transferred to the variable
+                    if (self.isStringType(var_info.ty)) {
+                        self.removeFromTemporaries(value_typed.value);
+                    }
                 } else {
                     var_info.ptr = value_typed.value;
                 }
@@ -3582,7 +3591,10 @@ pub const AstToIr = struct {
         try self.func().emitStoreI8(null_offset, try self.func().emitConstI8(0));
 
         const result_managed = try self.emitManagedStringFromBuffer(new_buffer, total_len);
-        return self.emitStringFromManaged(result_managed);
+        const string_ptr = try self.emitStringFromManaged(result_managed);
+        // Track as temporary for cleanup after expression evaluation
+        try self.temporary_strings.append(self.allocator, string_ptr);
+        return string_ptr;
     }
 
     /// Emit code to convert an int to a String
@@ -3598,7 +3610,10 @@ pub const AstToIr = struct {
         const len = (try self.func().emitCall("__runtime_int_to_string", args, .i64)).?;
 
         const managed_ptr = try self.emitManagedStringFromBuffer(buffer, len);
-        return self.emitStringFromManaged(managed_ptr);
+        const string_ptr = try self.emitStringFromManaged(managed_ptr);
+        // Track as temporary for cleanup after expression evaluation
+        try self.temporary_strings.append(self.allocator, string_ptr);
+        return string_ptr;
     }
 
     /// Emit code to convert a float to a String
@@ -3614,7 +3629,10 @@ pub const AstToIr = struct {
         const len = (try self.func().emitCall("__runtime_float_to_string", args, .i64)).?;
 
         const managed_ptr = try self.emitManagedStringFromBuffer(buffer, len);
-        return self.emitStringFromManaged(managed_ptr);
+        const string_ptr = try self.emitStringFromManaged(managed_ptr);
+        // Track as temporary for cleanup after expression evaluation
+        try self.temporary_strings.append(self.allocator, string_ptr);
+        return string_ptr;
     }
 
     /// Emit code to convert a bool to a String
@@ -3630,7 +3648,10 @@ pub const AstToIr = struct {
         const len = (try self.func().emitCall("__runtime_bool_to_string", args, .i64)).?;
 
         const managed_ptr = try self.emitManagedStringFromBuffer(buffer, len);
-        return self.emitStringFromManaged(managed_ptr);
+        const string_ptr = try self.emitStringFromManaged(managed_ptr);
+        // Track as temporary for cleanup after expression evaluation
+        try self.temporary_strings.append(self.allocator, string_ptr);
+        return string_ptr;
     }
 
     /// Process escape sequences in a string literal
