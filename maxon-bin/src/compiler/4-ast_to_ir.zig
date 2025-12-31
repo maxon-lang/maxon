@@ -4022,7 +4022,7 @@ pub const AstToIr = struct {
             .sub => self.func().emitBinaryOp(.fsub, left, right, .f64),
             .mul => self.func().emitBinaryOp(.fmul, left, right, .f64),
             .div => self.func().emitBinaryOp(.fdiv, left, right, .f64),
-            .mod => error.FloatModNotSupported,
+            .mod, .band, .bitor, .bxor, .shl, .shr => error.FloatModNotSupported,
         };
     }
 
@@ -4033,6 +4033,11 @@ pub const AstToIr = struct {
             .mul => self.func().emitBinaryOp(.mul, left, right, .i64),
             .div => self.func().emitBinaryOp(.div, left, right, .i64),
             .mod => self.func().emitBinaryOp(.mod, left, right, .i64),
+            .band => self.func().emitBinaryOp(.band, left, right, .i64),
+            .bitor => self.func().emitBinaryOp(.bitor, left, right, .i64),
+            .bxor => self.func().emitBinaryOp(.bxor, left, right, .i64),
+            .shl => self.func().emitBinaryOp(.shl, left, right, .i64),
+            .shr => self.func().emitBinaryOp(.shr, left, right, .i64),
         };
     }
 

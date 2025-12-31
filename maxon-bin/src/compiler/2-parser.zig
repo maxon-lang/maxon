@@ -994,11 +994,11 @@ pub const Parser = struct {
     }
 
     fn parseLogicalAnd(self: *Parser) ParseError!?ast.Expression {
-        var left = try self.parseComparison() orelse return null;
+        var left = try self.parseBitwiseOr() orelse return null;
 
         while (self.check(.@"and")) {
             _ = self.advance();
-            const right = try self.parseComparison() orelse {
+            const right = try self.parseBitwiseOr() orelse {
                 self.reportError(.E003);
                 return error.ExpectedExpression;
             };
@@ -1015,12 +1015,43 @@ pub const Parser = struct {
         return left;
     }
 
+    fn parseBitwiseOr(self: *Parser) ParseError!?ast.Expression {
+        return self.parseBinaryOp(.pipe, .bitor, parseBitwiseXor);
+    }
+
+    fn parseBitwiseXor(self: *Parser) ParseError!?ast.Expression {
+        return self.parseBinaryOp(.caret, .bxor, parseBitwiseAnd);
+    }
+
+    fn parseBitwiseAnd(self: *Parser) ParseError!?ast.Expression {
+        return self.parseBinaryOp(.ampersand, .band, parseComparison);
+    }
+
+    fn parseBinaryOp(
+        self: *Parser,
+        token: TokenType,
+        op: ast.BinaryOp,
+        comptime nextParser: fn (*Parser) ParseError!?ast.Expression,
+    ) ParseError!?ast.Expression {
+        var left = try nextParser(self) orelse return null;
+
+        while (self.check(token)) {
+            _ = self.advance();
+            const right = try nextParser(self) orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            left = try self.makeBinary(left, op, right);
+        }
+        return left;
+    }
+
     fn parseComparison(self: *Parser) ParseError!?ast.Expression {
-        var left = try self.parseAdditive() orelse return null;
+        var left = try self.parseShift() orelse return null;
 
         if (self.matchComparison()) |op| {
             _ = self.advance();
-            const right = try self.parseAdditive() orelse {
+            const right = try self.parseShift() orelse {
                 self.reportError(.E003);
                 return error.ExpectedExpression;
             };
@@ -1045,6 +1076,26 @@ pub const Parser = struct {
             .op = op,
             .right = try self.createExpr(right),
         } };
+    }
+
+    fn parseShift(self: *Parser) ParseError!?ast.Expression {
+        var left = try self.parseAdditive() orelse return null;
+
+        while (self.matchShift()) |op| {
+            _ = self.advance();
+            const right = try self.parseAdditive() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            left = try self.makeBinary(left, op, right);
+        }
+        return left;
+    }
+
+    fn matchShift(self: *Parser) ?ast.BinaryOp {
+        if (self.check(.left_shift)) return .shl;
+        if (self.check(.right_shift)) return .shr;
+        return null;
     }
 
     fn parseAdditive(self: *Parser) ParseError!?ast.Expression {

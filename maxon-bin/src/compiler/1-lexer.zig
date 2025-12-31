@@ -73,6 +73,11 @@ pub const TokenType = enum {
     comma,
     colon,
     dot,
+    ampersand, // &
+    pipe, // |
+    caret, // ^
+    left_shift, // <<
+    right_shift, // >>
 
     // Formatting
     newline,
@@ -175,8 +180,12 @@ pub const Lexer = struct {
                 // Single ! not supported yet
             }
             if (c == '<') {
-                // Check for <=
-                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                // Check for << or <=
+                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '<') {
+                    try tokens.append(allocator, .{ .type = .left_shift, .text = "<<", .line = self.line, .column = self.column });
+                    self.pos += 2;
+                    self.column += 2;
+                } else if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
                     try tokens.append(allocator, .{ .type = .less_equals, .text = "<=", .line = self.line, .column = self.column });
                     self.pos += 2;
                     self.column += 2;
@@ -188,8 +197,12 @@ pub const Lexer = struct {
                 continue;
             }
             if (c == '>') {
-                // Check for >=
-                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                // Check for >> or >=
+                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '>') {
+                    try tokens.append(allocator, .{ .type = .right_shift, .text = ">>", .line = self.line, .column = self.column });
+                    self.pos += 2;
+                    self.column += 2;
+                } else if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
                     try tokens.append(allocator, .{ .type = .greater_equals, .text = ">=", .line = self.line, .column = self.column });
                     self.pos += 2;
                     self.column += 2;
@@ -228,6 +241,26 @@ pub const Lexer = struct {
                     continue;
                 }
                 try tokens.append(allocator, .{ .type = .slash, .text = "/", .line = self.line, .column = self.column });
+                self.pos += 1;
+                self.column += 1;
+                continue;
+            }
+
+            // Bitwise operators
+            if (c == '&') {
+                try tokens.append(allocator, .{ .type = .ampersand, .text = "&", .line = self.line, .column = self.column });
+                self.pos += 1;
+                self.column += 1;
+                continue;
+            }
+            if (c == '|') {
+                try tokens.append(allocator, .{ .type = .pipe, .text = "|", .line = self.line, .column = self.column });
+                self.pos += 1;
+                self.column += 1;
+                continue;
+            }
+            if (c == '^') {
+                try tokens.append(allocator, .{ .type = .caret, .text = "^", .line = self.line, .column = self.column });
                 self.pos += 1;
                 self.column += 1;
                 continue;

@@ -2050,7 +2050,7 @@ pub const IrCodegen = struct {
             .store_i8 => try self.genStoreI8(inst),
             .store_i32 => try self.genStoreI32(inst),
             .load => try self.genLoad(inst),
-            .add, .sub, .mul, .div, .mod, .band, .bitor => try self.genIntBinaryOp(inst),
+            .add, .sub, .mul, .div, .mod, .band, .bitor, .bxor, .shl, .shr => try self.genIntBinaryOp(inst),
             .fadd, .fsub, .fmul, .fdiv => try self.genFloatBinaryOp(inst),
             .fptosi => try self.genFpToSi(inst),
             .sitofp => try self.genSiToFp(inst),
@@ -2509,6 +2509,9 @@ pub const IrCodegen = struct {
             },
             .band => try self.enc.andRaxRcx(),
             .bitor => try self.enc.orRaxRcx(),
+            .bxor => try self.enc.xorRaxRcx(),
+            .shl => try self.enc.shlRaxCl(),
+            .shr => try self.enc.sarRaxCl(),
             else => unreachable,
         }
 

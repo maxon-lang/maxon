@@ -184,6 +184,11 @@ pub const BinaryOp = enum {
     mul,
     div,
     mod,
+    band, // bitwise AND
+    bitor, // bitwise OR
+    bxor, // bitwise XOR
+    shl, // left shift
+    shr, // right shift
 };
 
 pub const CompareOp = enum {

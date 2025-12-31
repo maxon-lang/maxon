@@ -73,6 +73,9 @@ pub const Instruction = struct {
         // Bitwise operations
         band, // bitwise AND
         bitor, // bitwise OR
+        bxor, // bitwise XOR
+        shl, // left shift
+        shr, // right shift (arithmetic)
 
         // Float arithmetic
         fadd,
@@ -152,6 +155,9 @@ pub const Instruction = struct {
                 .mod => "mod",
                 .band => "band",
                 .bitor => "bitor",
+                .bxor => "bxor",
+                .shl => "shl",
+                .shr => "shr",
                 .fadd => "fadd",
                 .fsub => "fsub",
                 .fmul => "fmul",
@@ -340,6 +346,9 @@ pub const Function = struct {
             .mod => "tmp_mod",
             .band => "tmp_band",
             .bitor => "tmp_bitor",
+            .bxor => "tmp_bxor",
+            .shl => "tmp_shl",
+            .shr => "tmp_shr",
             .fadd => "tmp_fadd",
             .fsub => "tmp_fsub",
             .fmul => "tmp_fmul",

@@ -299,6 +299,18 @@ pub const Encoder = struct {
         try self.emit(&.{ 0x48, 0x09, 0xC8 }); // or rax, rcx
     }
 
+    pub fn xorRaxRcx(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0x31, 0xC8 }); // xor rax, rcx
+    }
+
+    pub fn shlRaxCl(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0xD3, 0xE0 }); // shl rax, cl
+    }
+
+    pub fn sarRaxCl(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0xD3, 0xF8 }); // sar rax, cl (arithmetic right shift)
+    }
+
     pub fn addRaxImm8(self: *Encoder, imm: u8) !void {
         try self.emit(&.{ 0x48, 0x83, 0xC0, imm });
     }
