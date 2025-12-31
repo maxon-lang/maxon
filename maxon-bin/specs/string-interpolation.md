@@ -67,7 +67,7 @@ var name = "World"
 print("Hello, {name}!")  // "Hello, World!"
 
 var x = 42
-print("The answer is {x}")  // "The answer is 42"
+print("The answer is {x}\n")  // "The answer is 42"
 ```
 
 ### Expression Interpolation
@@ -77,9 +77,9 @@ Any valid expression can be embedded:
 ```maxon
 var a = 5
 var b = 3
-print("{a} + {b} = {a + b}")  // "5 + 3 = 8"
+print("{a} + {b} = {a + b}\n")  // "5 + 3 = 8"
 
-print("Double: {a * 2}")  // "Double: 10"
+print("Double: {a * 2}\n")  // "Double: 10"
 ```
 
 ### Built-in Type Support
@@ -88,13 +88,13 @@ All built-in types are automatically convertible to strings:
 
 ```maxon
 // Integers
-print("Count: {42}")  // "Count: 42"
+print("Count: {42}\n")  // "Count: 42"
 
 // Floats
-print("Pi: {3.14159}")  // "Pi: 3.14159"
+print("Pi: {3.14159}\n")  // "Pi: 3.14159"
 
 // Booleans
-print("Active: {true}")  // "Active: true"
+print("Active: {true}\n")  // "Active: true"
 ```
 
 ### Negative Numbers
@@ -103,7 +103,7 @@ Unary operators work inside interpolation:
 
 ```maxon
 print("Temp: {-10} degrees")  // "Temp: -10 degrees"
-print("Value: {-3.5}")  // "Value: -3.5"
+print("Value: {-3.5}\n")  // "Value: -3.5"
 ```
 
 ### Escape Sequences
@@ -127,7 +127,7 @@ enum Color int
 end 'Color'
 
 var c = Color.green
-print("Color value: {c}")  // "Color value: 2"
+print("Color value: {c}\n")  // "Color value: 2"
 
 // String-backed enum
 enum Status string
@@ -136,7 +136,7 @@ enum Status string
 end 'Status'
 
 var s = Status.active
-print("Status: {s}")  // "Status: Active"
+print("Status: {s}\n")  // "Status: Active"
 ```
 
 ### Custom Types
@@ -154,7 +154,7 @@ type Point is Stringable
 end 'Point'
 
 var p = Point{x: 1, y: 2}
-print("Location: {p}")  // "Location: (1, 2)"
+print("Location: {p}\n")  // "Location: (1, 2)"
 ```
 
 ### Migration from Concatenation
@@ -212,7 +212,7 @@ Hello, World!
 ```maxon
 function main() returns int
     var x = 42
-    print("Value: {x}")
+    print("Value: {x}\n")
     return 0
 end 'main'
 ```
@@ -228,7 +228,7 @@ Value: 42
 <!-- test: integer-literal -->
 ```maxon
 function main() returns int
-    print("Answer: {42}")
+    print("Answer: {42}\n")
     return 0
 end 'main'
 ```
@@ -245,7 +245,7 @@ Answer: 42
 ```maxon
 function main() returns int
     var x = 0 - 5
-    print("Negative: {x}")
+    print("Negative: {x}\n")
     return 0
 end 'main'
 ```
@@ -261,7 +261,7 @@ Negative: -5
 <!-- test: negative-unary -->
 ```maxon
 function main() returns int
-    print("Value: {0-10}")
+    print("Value: {0-10}\n")
     return 0
 end 'main'
 ```
@@ -278,7 +278,7 @@ Value: -10
 ```maxon
 function main() returns int
     var pi = 3.14159
-    print("Pi: {pi}")
+    print("Pi: {pi}\n")
     return 0
 end 'main'
 ```
@@ -294,7 +294,7 @@ Pi: 3.141589
 <!-- test: float-literal -->
 ```maxon
 function main() returns int
-    print("Value: {2.5}")
+    print("Value: {2.5}\n")
     return 0
 end 'main'
 ```
@@ -311,7 +311,7 @@ Value: 2.5
 ```maxon
 function main() returns int
     var temp = 0.0 - 3.5
-    print("Temp: {temp}")
+    print("Temp: {temp}\n")
     return 0
 end 'main'
 ```
@@ -328,7 +328,7 @@ Temp: -3.5
 ```maxon
 function main() returns int
     var flag = true
-    print("Active: {flag}")
+    print("Active: {flag}\n")
     return 0
 end 'main'
 ```
@@ -345,7 +345,7 @@ Active: true
 ```maxon
 function main() returns int
     var flag = false
-    print("Active: {flag}")
+    print("Active: {flag}\n")
     return 0
 end 'main'
 ```
@@ -361,7 +361,7 @@ Active: false
 <!-- test: bool-literal -->
 ```maxon
 function main() returns int
-    print("Yes: {true}, No: {false}")
+    print("Yes: {true}, No: {false}\n")
     return 0
 end 'main'
 ```
@@ -379,7 +379,7 @@ Yes: true, No: false
 function main() returns int
     var a = 5
     var b = 3
-    print("{a} + {b} = {a + b}")
+    print("{a} + {b} = {a + b}\n")
     return 0
 end 'main'
 ```
@@ -396,7 +396,7 @@ end 'main'
 ```maxon
 function main() returns int
     var x = 10
-    print("Double: {x * 2}, Triple: {x * 3}")
+    print("Double: {x * 2}, Triple: {x * 3}\n")
     return 0
 end 'main'
 ```
@@ -414,7 +414,7 @@ Double: 20, Triple: 30
 function main() returns int
     var a = 2
     var b = 3
-    print("Result: {(a + b) * 2}")
+    print("Result: {(a + b) * 2}\n")
     return 0
 end 'main'
 ```
@@ -431,7 +431,7 @@ Result: 10
 ```maxon
 function main() returns int
     var x = 42
-    print("{x}")
+    print("{x}\n")
     return 0
 end 'main'
 ```
@@ -449,7 +449,7 @@ end 'main'
 function main() returns int
     var a = "Hello"
     var b = "World"
-    print("{a}{b}")
+    print("{a}{b}\n")
     return 0
 end 'main'
 ```
@@ -468,7 +468,7 @@ function main() returns int
     var a = "A"
     var b = "B"
     var c = "C"
-    print("{a}{b}{c}")
+    print("{a}{b}{c}\n")
     return 0
 end 'main'
 ```
@@ -520,7 +520,7 @@ Use {expr} for interpolation
 ```maxon
 function main() returns int
     var x = 42
-    print("Value \{x\} is {x}")
+    print("Value \{x\} is {x}\n")
     return 0
 end 'main'
 ```
@@ -538,7 +538,7 @@ Value {x} is 42
 function main() returns int
     var i = 0
     while i < 3 'loop'
-        print("Count: {i}")
+        print("Count: {i}\n")
         i = i + 1
     end 'loop'
     return 0
@@ -562,7 +562,7 @@ function double(x int) returns int
 end 'double'
 
 function main() returns int
-    print("Double of 5: {double(5)}")
+    print("Double of 5: {double(5)}\n")
     return 0
 end 'main'
 ```
@@ -579,7 +579,7 @@ Double of 5: 10
 ```maxon
 function main() returns int
     var s = "hello"
-    print("Length: {s.count()}")
+    print("Length: {s.count()}\n")
     return 0
 end 'main'
 ```
@@ -597,7 +597,7 @@ Length: 5
 function main() returns int
     var a = 5
     var b = 3
-    print("a > b: {a > b}")
+    print("a > b: {a > b}\n")
     return 0
 end 'main'
 ```
@@ -615,7 +615,7 @@ a > b: true
 function main() returns int
     var x = true
     var y = false
-    print("x and y: {x and y}")
+    print("x and y: {x and y}\n")
     return 0
 end 'main'
 ```
@@ -632,7 +632,7 @@ x and y: false
 ```maxon
 function main() returns int
     var r = 2.0
-    print("Area: {3.14159 * r * r}")
+    print("Area: {3.14159 * r * r}\n")
     return 0
 end 'main'
 ```
@@ -651,7 +651,7 @@ function main() returns int
     var name = "test"
     var count = 5
     var active = true
-    print("Name: {name}, Count: {count}, Active: {active}")
+    print("Name: {name}, Count: {count}, Active: {active}\n")
     return 0
 end 'main'
 ```
@@ -668,7 +668,7 @@ Name: test, Count: 5, Active: true
 ```maxon
 function main() returns int
     var big = 2147483647
-    print("Max int: {big}")
+    print("Max int: {big}\n")
     return 0
 end 'main'
 ```
@@ -686,7 +686,7 @@ Max int: 2147483647
 function main() returns int
     var i = 0
     var f = 0.0
-    print("Int: {i}, Float: {f}")
+    print("Int: {i}, Float: {f}\n")
     return 0
 end 'main'
 ```
@@ -722,7 +722,7 @@ Line2: done
 function main() returns int
     var a = 1
     var b = 2
-    print("{a}\t{b}")
+    print("{a}\t{b}\n")
     return 0
 end 'main'
 ```
@@ -748,7 +748,7 @@ end 'Pair'
 
 function main() returns int
     var p = Pair{first: 1, second: 2}
-    print("{p}")
+    print("{p}\n")
     return 0
 end 'main'
 ```
@@ -778,8 +778,8 @@ end 'Counter'
 
 function main() returns int
     var c = Counter{value: 42}
-    print("{c}")
-    print("{c:verbose}")
+    print("{c}\n")
+    print("{c:verbose}\n")
     return 0
 end 'main'
 ```
@@ -815,7 +815,7 @@ end 'Age'
 function main() returns int
     var name = Name{first: "John", last: "Doe"}
     var age = Age{years: 30}
-    print("{name}, {age}")
+    print("{name}, {age}\n")
     return 0
 end 'main'
 ```
@@ -838,7 +838,7 @@ end 'Color'
 
 function main() returns int
     var c = Color.green
-    print("Color value: {c}")
+    print("Color value: {c}\n")
     return 0
 end 'main'
 ```
@@ -862,7 +862,7 @@ end 'Direction'
 
 function main() returns int
     var d = Direction.east
-    print("Direction: {d}")
+    print("Direction: {d}\n")
     return 0
 end 'main'
 ```
@@ -885,7 +885,7 @@ end 'Status'
 
 function main() returns int
     var s = Status.active
-    print("Status: {s}")
+    print("Status: {s}\n")
     return 0
 end 'main'
 ```
@@ -909,7 +909,7 @@ end 'Priority'
 function main() returns int
     var p1 = Priority.low
     var p2 = Priority.high
-    print("Priorities: {p1} and {p2}")
+    print("Priorities: {p1} and {p2}\n")
     return 0
 end 'main'
 ```

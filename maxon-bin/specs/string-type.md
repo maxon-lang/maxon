@@ -122,7 +122,7 @@ Iterate over grapheme clusters (user-perceived characters) in a string:
 ```maxon
 var s = "café"
 for c in s 'loop'
-    print("{c}")  // Prints c, a, f, é (4 chars, not 5 bytes)
+    print("{c}\n")  // Prints c, a, f, é (4 chars, not 5 bytes)
 end 'loop'
 ```
 
@@ -136,28 +136,28 @@ Strings provide multiple views for different iteration granularities:
 ```maxon
 for c in "café" 'chars'
     // c is a character (grapheme cluster)
-    print("{c}")
+    print("{c}\n")
 end 'chars'
 ```
 
 **Codepoint view** - Unicode codepoints (int):
 ```maxon
 for cp in s.codepoints() 'codepoints'
-    print("{cp}")  // Unicode codepoint values
+    print("{cp}\n")  // Unicode codepoint values
 end 'codepoints'
 ```
 
 **Byte view** - Raw UTF-8 bytes:
 ```maxon
 for b in s.bytes() 'bytes'
-    print("{b}")  // Raw byte values
+    print("{b}\n")  // Raw byte values
 end 'bytes'
 ```
 
 **UTF-16 view** - UTF-16 code units (useful for Windows API or JavaScript interop):
 ```maxon
 for u in s.utf16() 'utf16'
-    print("{u}")  // UTF-16 code units
+    print("{u}\n")  // UTF-16 code units
 end 'utf16'
 ```
 
@@ -165,7 +165,7 @@ Characters outside the Basic Multilingual Plane (codepoints > U+FFFF like emoji)
 ```maxon
 var emoji = "😀"
 for u in emoji.utf16() 'loop'
-    print("{u}")  // 55357, 56832 (surrogate pair for U+1F600)
+    print("{u}\n")  // 55357, 56832 (surrogate pair for U+1F600)
 end 'loop'
 ```
 
@@ -360,7 +360,7 @@ Hello, Maxon!
 ```maxon
 function main() returns int
     var s = "hello"
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -377,12 +377,12 @@ function main() returns int
     var empty = ""
     var nonempty = "hello"
     if empty.isEmpty() 'check1'
-        print("{1}")
+        print("{1}\n")
     end 'check1'
     if nonempty.isEmpty() 'check2'
-        print("{0}")
+        print("{0}\n")
     end 'check2' else 'not_empty'
-        print("{2}")
+        print("{2}\n")
     end 'not_empty'
     return 0
 end 'main'
@@ -400,10 +400,10 @@ end 'main'
 function main() returns int
     var s = "hello world"
     if s.startsWith("hello") 'c1'
-        print("{1}")
+        print("{1}\n")
     end 'c1'
     if s.startsWith("world") 'c2'
-        print("{0}")
+        print("{0}\n")
     end 'c2'
     return 0
 end 'main'
@@ -420,10 +420,10 @@ end 'main'
 function main() returns int
     var s = "hello world"
     if s.endsWith("world") 'c1'
-        print("{1}")
+        print("{1}\n")
     end 'c1'
     if s.endsWith("hello") 'c2'
-        print("{0}")
+        print("{0}\n")
     end 'c2'
     return 0
 end 'main'
@@ -440,10 +440,10 @@ end 'main'
 function main() returns int
     var s = "hello world"
     if s.contains("lo wo") 'c1'
-        print("{1}")
+        print("{1}\n")
     end 'c1'
     if s.contains("xyz") 'c2'
-        print("{0}")
+        print("{0}\n")
     end 'c2'
     return 0
 end 'main'
@@ -460,14 +460,14 @@ end 'main'
 function main() returns int
     var s = "hello world"
     if let idx = s.find("world") 'found'
-        print("{idx.charIndex()}")
+        print("{idx.charIndex()}\n")
     end 'found' else 'not_found'
-        print("{0 - 1}")
+        print("{0 - 1}\n")
     end 'not_found'
     if let idx2 = s.find("xyz") 'found2'
-        print("{idx2.charIndex()}")
+        print("{idx2.charIndex()}\n")
     end 'found2' else 'not_found2'
-        print("{0 - 1}")
+        print("{0 - 1}\n")
     end 'not_found2'
     return 0
 end 'main'
@@ -629,7 +629,7 @@ hello world
 function main() returns int
     var s = "abc"
     for c in s 'loop'
-        print("{c}")
+        print("{c}\n")
     end 'loop'
     return 0
 end 'main'
@@ -648,7 +648,7 @@ c
 function main() returns int
     var s = "abc"
     for b in s.bytes() 'loop'
-        print("{b}")
+        print("{b}\n")
     end 'loop'
     return 0
 end 'main'
@@ -667,7 +667,7 @@ end 'main'
 function main() returns int
     var s = "ABC"
     for u in s.utf16() 'loop'
-        print("{u}")
+        print("{u}\n")
     end 'loop'
     return 0
 end 'main'
@@ -686,7 +686,7 @@ end 'main'
 function main() returns int
     var s = "αβγ"
     for u in s.utf16() 'loop'
-        print("{u}")
+        print("{u}\n")
     end 'loop'
     return 0
 end 'main'
@@ -705,7 +705,7 @@ end 'main'
 function main() returns int
     var s = "😀"
     for u in s.utf16() 'loop'
-        print("{u}")
+        print("{u}\n")
     end 'loop'
     return 0
 end 'main'
@@ -723,7 +723,7 @@ end 'main'
 function main() returns int
     var s = "A😀B"
     for u in s.utf16() 'loop'
-        print("{u}")
+        print("{u}\n")
     end 'loop'
     return 0
 end 'main'
@@ -743,7 +743,7 @@ end 'main'
 function main() returns int
     var s = "A😀B"
     var view = s.utf16()
-    print("{view.count()}")
+    print("{view.count()}\n")
     return 0
 end 'main'
 ```
@@ -759,13 +759,13 @@ end 'main'
 function main() returns int
     // 0xD83D = 55357 (high surrogate for 😀)
     if utf16IsLeadSurrogate(55357) 'c1'
-        print("{1}")
+        print("{1}\n")
     end 'c1'
     if utf16IsLeadSurrogate(56832) 'c2'
-        print("{0}")
+        print("{0}\n")
     end 'c2'
     if utf16IsLeadSurrogate(65) 'c3'
-        print("{0}")
+        print("{0}\n")
     end 'c3'
     return 0
 end 'main'
@@ -782,13 +782,13 @@ end 'main'
 function main() returns int
     // 0xDE00 = 56832 (low surrogate for 😀)
     if utf16IsTrailSurrogate(56832) 'c4'
-        print("{1}")
+        print("{1}\n")
     end 'c4'
     if utf16IsTrailSurrogate(55357) 'c5'
-        print("{0}")
+        print("{0}\n")
     end 'c5'
     if utf16IsTrailSurrogate(65) 'c6'
-        print("{0}")
+        print("{0}\n")
     end 'c6'
     return 0
 end 'main'
@@ -804,13 +804,13 @@ end 'main'
 ```maxon
 function main() returns int
     if utf16IsSurrogate(55357) 'c7'
-        print("{1}")
+        print("{1}\n")
     end 'c7'
     if utf16IsSurrogate(56832) 'c8'
-        print("{2}")
+        print("{2}\n")
     end 'c8'
     if utf16IsSurrogate(65) 'c9'
-        print("{0}")
+        print("{0}\n")
     end 'c9'
     return 0
 end 'main'
@@ -826,9 +826,9 @@ end 'main'
 <!-- test: utf16-width -->
 ```maxon
 function main() returns int
-    print("{utf16Width(65)}")      // ASCII 'A' = 1 code unit
-    print("{utf16Width(945)}")     // Greek α = 1 code unit (BMP)
-    print("{utf16Width(128512)}")  // 😀 U+1F600 = 2 code units
+    print("{utf16Width(65)}\n")      // ASCII 'A' = 1 code unit
+    print("{utf16Width(945)}\n")     // Greek α = 1 code unit (BMP)
+    print("{utf16Width(128512)}\n")  // 😀 U+1F600 = 2 code units
     return 0
 end 'main'
 ```
@@ -845,8 +845,8 @@ end 'main'
 ```maxon
 function main() returns int
     // 😀 U+1F600 = 128512
-    print("{utf16LeadSurrogate(128512)}")   // 55357 (0xD83D)
-    print("{utf16TrailSurrogate(128512)}")  // 56832 (0xDE00)
+    print("{utf16LeadSurrogate(128512)}\n")   // 55357 (0xD83D)
+    print("{utf16TrailSurrogate(128512)}\n")  // 56832 (0xDE00)
     return 0
 end 'main'
 ```
@@ -863,7 +863,7 @@ end 'main'
 function main() returns int
     // Decode surrogate pair back to codepoint
     var cp = utf16DecodeSurrogates(55357, 56832)
-    print("{cp}")  // 128512 (U+1F600)
+    print("{cp}\n")  // 128512 (U+1F600)
     return 0
 end 'main'
 ```
@@ -878,16 +878,16 @@ end 'main'
 ```maxon
 function main() returns int
     if utf16IsBmp(65) 'c10'
-        print("{1}")       // ASCII
+        print("{1}\n")       // ASCII
     end 'c10'
     if utf16IsBmp(945) 'c11'
-        print("{2}")      // Greek α
+        print("{2}\n")      // Greek α
     end 'c11'
     if utf16IsBmp(65535) 'c12'
-        print("{3}")    // U+FFFF (last BMP)
+        print("{3}\n")    // U+FFFF (last BMP)
     end 'c12'
     if utf16IsBmp(128512) 'c13'
-        print("{0}")   // 😀 (not BMP)
+        print("{0}\n")   // 😀 (not BMP)
     end 'c13'
     return 0
 end 'main'
@@ -905,13 +905,13 @@ end 'main'
 ```maxon
 function main() returns int
     if utf16IsValidSurrogatePair(55357, 56832) 'c14'
-        print("{1}")  // valid pair
+        print("{1}\n")  // valid pair
     end 'c14'
     if utf16IsValidSurrogatePair(56832, 55357) 'c15'
-        print("{0}")  // reversed
+        print("{0}\n")  // reversed
     end 'c15'
     if utf16IsValidSurrogatePair(65, 66) 'c16'
-        print("{0}")        // not surrogates
+        print("{0}\n")        // not surrogates
     end 'c16'
     return 0
 end 'main'
@@ -928,7 +928,7 @@ end 'main'
 function main() returns int
     // String > 15 bytes triggers heap allocation
     var s = "This is a longer string that exceeds 15 bytes"
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -948,7 +948,7 @@ function main() returns int
     var first_printed = false
     for b in s.bytes() 'read_first'
         if not first_printed 'print_first'
-            print("{b}")
+            print("{b}\n")
             first_printed = true
         end 'print_first'
     end 'read_first'
@@ -957,7 +957,7 @@ function main() returns int
     for b in s.bytes() 'read_all'
         last_byte = b
     end 'read_all'
-    print("{last_byte}")
+    print("{last_byte}\n")
     return 0
 end 'main'
 ```
@@ -975,9 +975,9 @@ function main() returns int
     var a = "This string is definitely longer than fifteen bytes"
     var b = "This string is definitely longer than fifteen bytes"
     if a == b 'check'
-        print("{1}")
+        print("{1}\n")
     end 'check' else 'not_equal'
-        print("{0}")
+        print("{0}\n")
     end 'not_equal'
     return 0
 end 'main'
@@ -995,9 +995,9 @@ function main() returns int
     var a = "This string is definitely longer than fifteen bytes"
     var b = "This string is definitely longer than fifteen chars"
     if a != b 'check'
-        print("{1}")
+        print("{1}\n")
     end 'check' else 'are_equal'
-        print("{0}")
+        print("{0}\n")
     end 'are_equal'
     return 0
 end 'main'
@@ -1020,7 +1020,7 @@ function main() returns int
             sum = sum + cp
         end 'get_cp'
     end 'loop'
-    print("{sum}")  // 65+66+...+80 = 1160
+    print("{sum}\n")  // 65+66+...+80 = 1160
     return 0
 end 'main'
 ```
@@ -1042,7 +1042,7 @@ function main() returns int
             count = count + 1
         end 'use'
     end 'loop'
-    print("{count}")
+    print("{count}\n")
     return 0
 end 'main'
 ```
@@ -1058,11 +1058,11 @@ end 'main'
 function main() returns int
     // Exactly 15 bytes - should use SSO (constant data)
     var sso = "123456789012345"
-    print("{sso.count()}")
+    print("{sso.count()}\n")
 
     // 16 bytes - should use heap
     var heap = "1234567890123456"
-    print("{heap.count()}")
+    print("{heap.count()}\n")
     return 0
 end 'main'
 ```
@@ -1079,10 +1079,10 @@ end 'main'
 function main() returns int
     var s = "This is a very long string that is heap allocated"
     if s.startsWith("This is") 'c17'
-        print("{1}")
+        print("{1}\n")
     end 'c17'
     if s.startsWith("That is") 'c18'
-        print("{0}")
+        print("{0}\n")
     end 'c18'
     return 0
 end 'main'
@@ -1099,10 +1099,10 @@ end 'main'
 function main() returns int
     var s = "This is a very long string that is heap allocated"
     if s.endsWith("heap allocated") 'c19'
-        print("{1}")
+        print("{1}\n")
     end 'c19'
     if s.endsWith("stack allocated") 'c20'
-        print("{0}")
+        print("{0}\n")
     end 'c20'
     return 0
 end 'main'
@@ -1119,10 +1119,10 @@ end 'main'
 function main() returns int
     var s = "This is a very long string that is heap allocated"
     if s.contains("long string") 'c21'
-        print("{1}")
+        print("{1}\n")
     end 'c21'
     if s.contains("short string") 'c22'
-        print("{0}")
+        print("{0}\n")
     end 'c22'
     return 0
 end 'main'
@@ -1139,14 +1139,14 @@ end 'main'
 function main() returns int
     var s = "This is a very long string that is heap allocated"
     if let idx = s.find("very") 'found'
-        print("{idx.charIndex()}")
+        print("{idx.charIndex()}\n")
     end 'found' else 'not_found'
-        print("{0 - 1}")
+        print("{0 - 1}\n")
     end 'not_found'
     if let idx2 = s.find("missing") 'found2'
-        print("{idx2.charIndex()}")
+        print("{idx2.charIndex()}\n")
     end 'found2' else 'not_found2'
-        print("{0 - 1}")
+        print("{0 - 1}\n")
     end 'not_found2'
     return 0
 end 'main'
@@ -1165,7 +1165,7 @@ function main() returns int
     var small = "hello"
     var large = "This is a longer string"
     if small != large 'check'
-        print("{1}")
+        print("{1}\n")
     end 'check'
     return 0
 end 'main'
@@ -1184,7 +1184,7 @@ function main() returns int
     var a = "hello"
     var b = " world"
     var s = "{a}{b}"
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -1233,7 +1233,7 @@ function main() returns int
     var c = "c"
     var d = "d"
     var s = "{a}{b}{c}{d}"
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -1300,7 +1300,7 @@ function main() returns int
         s = "{s}{x}"
         i = i + 1
     end 'loop'
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -1356,7 +1356,7 @@ Leaked:    0 bytes
 function main() returns int
     if true 'scope'
         var temp = "heap allocated string here!"
-        print("{temp.count()}")
+        print("{temp.count()}\n")
     end 'scope'
     return 0
 end 'main'
@@ -1411,7 +1411,7 @@ hello
 ```maxon
 function main() returns int
     var s = "hello"
-    print("{s.bytes().count()}")
+    print("{s.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -1427,7 +1427,7 @@ end 'main'
 ```maxon
 function main() returns int
     var s = "café"
-    print("{s.bytes().count()}")  // 5 bytes (c=1, a=1, f=1, é=2)
+    print("{s.bytes().count()}\n")  // 5 bytes (c=1, a=1, f=1, é=2)
     return 0
 end 'main'
 ```
@@ -1443,7 +1443,7 @@ end 'main'
 ```maxon
 function main() returns int
     var s = "café"
-    print("{s.count()}")  // 4 graphemes
+    print("{s.count()}\n")  // 4 graphemes
     return 0
 end 'main'
 ```
@@ -1459,8 +1459,8 @@ end 'main'
 ```maxon
 function main() returns int
     var s = "🇺🇸"  // Flag emoji (1 grapheme, 8 bytes)
-    print("{s.count()}")
-    print("{s.bytes().count()}")
+    print("{s.count()}\n")
+    print("{s.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -1483,7 +1483,7 @@ function main() returns int
         _unused = _unused
         count = count + 1
     end 'loop'
-    print("{count}")
+    print("{count}\n")
     return 0
 end 'main'
 ```
@@ -1505,7 +1505,7 @@ function main() returns int
         _unused = _unused
         count = count + 1
     end 'loop'
-    print("{count}")
+    print("{count}\n")
     return 0
 end 'main'
 ```
@@ -1527,7 +1527,7 @@ function main() returns int
         _unused = _unused
         count = count + 1
     end 'loop'
-    print("{count}")
+    print("{count}\n")
     return 0
 end 'main'
 ```
@@ -1544,7 +1544,7 @@ end 'main'
 function main() returns int
     var s = "Aé"  // A (1 codepoint) + é (1 codepoint if precomposed)
     for cp in s.codepoints() 'loop'
-        print("{cp}")
+        print("{cp}\n")
     end 'loop'
     return 0
 end 'main'
@@ -1561,15 +1561,15 @@ end 'main'
 ```maxon
 function main() returns int
     var s = "hello"
-    print("{s.count()}")
+    print("{s.count()}\n")
 
     var u = "abc"
     u = "testing"
-    print("{u.count()}")
+    print("{u.count()}\n")
 
     var v = ""
     v = "world"
-    print("{v.count()}")
+    print("{v.count()}\n")
 
     return 0
 end 'main'
@@ -1629,7 +1629,7 @@ function main() returns int
     var s = "hello"
     var start = s.startIndex()
     var sub = s.slice(start, start)
-    print("{sub.count()}")
+    print("{sub.count()}\n")
     return 0
 end 'main'
 ```
@@ -1649,7 +1649,7 @@ function main() returns int
     if let idx = s.find("d") 'found'
         var sub = s.slice(start, idx)
         for c in sub 'loop'
-            print("{c}")
+            print("{c}\n")
         end 'loop'
     end 'found'
     return 0

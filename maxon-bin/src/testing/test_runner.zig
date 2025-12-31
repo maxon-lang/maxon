@@ -537,8 +537,9 @@ fn runTest(
             }
 
             // Run the executable
-            const run_result = runExecutable(allocator, temp_exe) catch {
-                return .{ .name = fragment.name, .status = .failed, .message = "Failed to run executable" };
+            const run_result = runExecutable(allocator, temp_exe) catch |err| {
+                const msg = if (err == error.ProcessTimeout) "Test timed out (possible infinite loop)" else "Failed to run executable";
+                return .{ .name = fragment.name, .status = .failed, .message = msg };
             };
             defer {
                 allocator.free(run_result.stdout);
@@ -572,15 +573,234 @@ const ProcessResult = struct {
     term: std.process.Child.Term,
 };
 
+/// Timeout for test execution in milliseconds
+const TEST_TIMEOUT_MS: u32 = 1000;
+
+// Windows Job Object APIs not in Zig's kernel32 bindings
+const JOBOBJECTINFOCLASS = enum(c_int) {
+    JobObjectExtendedLimitInformation = 9,
+};
+
+const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {
+    PerProcessUserTimeLimit: i64,
+    PerJobUserTimeLimit: i64,
+    LimitFlags: u32,
+    MinimumWorkingSetSize: usize,
+    MaximumWorkingSetSize: usize,
+    ActiveProcessLimit: u32,
+    Affinity: usize,
+    PriorityClass: u32,
+    SchedulingClass: u32,
+};
+
+const IO_COUNTERS = extern struct {
+    ReadOperationCount: u64,
+    WriteOperationCount: u64,
+    OtherOperationCount: u64,
+    ReadTransferCount: u64,
+    WriteTransferCount: u64,
+    OtherTransferCount: u64,
+};
+
+const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = extern struct {
+    BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION,
+    IoInfo: IO_COUNTERS,
+    ProcessMemoryLimit: usize,
+    JobMemoryLimit: usize,
+    PeakProcessMemoryUsed: usize,
+    PeakJobMemoryUsed: usize,
+};
+
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
+const CREATE_SUSPENDED: u32 = 0x00000004;
+const STARTF_USESTDHANDLES: u32 = 0x00000100;
+const HANDLE_FLAG_INHERIT: u32 = 0x00000001;
+const WAIT_OBJECT_0: u32 = 0;
+const WAIT_TIMEOUT: u32 = 258;
+
+extern "kernel32" fn CreateJobObjectA(
+    lpJobAttributes: ?*std.os.windows.SECURITY_ATTRIBUTES,
+    lpName: ?[*:0]const u8,
+) callconv(.winapi) ?std.os.windows.HANDLE;
+
+extern "kernel32" fn SetInformationJobObject(
+    hJob: std.os.windows.HANDLE,
+    JobObjectInformationClass: JOBOBJECTINFOCLASS,
+    lpJobObjectInformation: *anyopaque,
+    cbJobObjectInformationLength: u32,
+) callconv(.winapi) std.os.windows.BOOL;
+
+extern "kernel32" fn AssignProcessToJobObject(
+    hJob: std.os.windows.HANDLE,
+    hProcess: std.os.windows.HANDLE,
+) callconv(.winapi) std.os.windows.BOOL;
+
+extern "kernel32" fn CreatePipe(
+    hReadPipe: *?std.os.windows.HANDLE,
+    hWritePipe: *?std.os.windows.HANDLE,
+    lpPipeAttributes: ?*std.os.windows.SECURITY_ATTRIBUTES,
+    nSize: std.os.windows.DWORD,
+) callconv(.winapi) std.os.windows.BOOL;
+
+extern "kernel32" fn ReadFile(
+    hFile: std.os.windows.HANDLE,
+    lpBuffer: [*]u8,
+    nNumberOfBytesToRead: std.os.windows.DWORD,
+    lpNumberOfBytesRead: ?*std.os.windows.DWORD,
+    lpOverlapped: ?*anyopaque,
+) callconv(.winapi) std.os.windows.BOOL;
+
+extern "kernel32" fn ResumeThread(
+    hThread: std.os.windows.HANDLE,
+) callconv(.winapi) std.os.windows.DWORD;
+
+extern "kernel32" fn WaitForSingleObject(
+    hHandle: std.os.windows.HANDLE,
+    dwMilliseconds: std.os.windows.DWORD,
+) callconv(.winapi) std.os.windows.DWORD;
+
+extern "kernel32" fn GetExitCodeProcess(
+    hProcess: std.os.windows.HANDLE,
+    lpExitCode: *std.os.windows.DWORD,
+) callconv(.winapi) std.os.windows.BOOL;
+
+extern "kernel32" fn TerminateProcess(
+    hProcess: std.os.windows.HANDLE,
+    uExitCode: c_uint,
+) callconv(.winapi) std.os.windows.BOOL;
+
 fn runExecutable(allocator: std.mem.Allocator, exe_path: []const u8) !ProcessResult {
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{exe_path},
-    });
+    const windows = std.os.windows;
+    const kernel32 = windows.kernel32;
+
+    // Create a job object to ensure all child processes are killed on timeout
+    const job_handle = CreateJobObjectA(null, null) orelse {
+        return error.CreateJobFailed;
+    };
+    defer windows.CloseHandle(job_handle);
+
+    // Configure job to kill all processes when job handle is closed
+    var jeli: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std.mem.zeroes(JOBOBJECT_EXTENDED_LIMIT_INFORMATION);
+    jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+
+    if (SetInformationJobObject(
+        job_handle,
+        .JobObjectExtendedLimitInformation,
+        @ptrCast(&jeli),
+        @sizeOf(JOBOBJECT_EXTENDED_LIMIT_INFORMATION),
+    ) == 0) {
+        return error.SetJobInfoFailed;
+    }
+
+    // Convert exe path to null-terminated wide string
+    var exe_path_w: [std.fs.max_path_bytes:0]u16 = undefined;
+    const exe_path_len = std.unicode.wtf8ToWtf16Le(&exe_path_w, exe_path) catch return error.InvalidPath;
+    exe_path_w[exe_path_len] = 0;
+
+    // Set up startup info
+    var si: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
+    si.cb = @sizeOf(windows.STARTUPINFOW);
+    si.dwFlags = STARTF_USESTDHANDLES;
+
+    // Create pipes for stdout
+    var stdout_read: ?windows.HANDLE = null;
+    var stdout_write: ?windows.HANDLE = null;
+    var sa: windows.SECURITY_ATTRIBUTES = .{
+        .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
+        .lpSecurityDescriptor = null,
+        .bInheritHandle = 1, // TRUE
+    };
+
+    if (CreatePipe(&stdout_read, &stdout_write, &sa, 0) == 0) {
+        return error.CreatePipeFailed;
+    }
+    defer if (stdout_read) |h| windows.CloseHandle(h);
+
+    // Don't inherit the read end
+    if (kernel32.SetHandleInformation(stdout_read.?, HANDLE_FLAG_INHERIT, 0) == 0) {
+        windows.CloseHandle(stdout_write.?);
+        return error.SetHandleInfoFailed;
+    }
+
+    si.hStdOutput = stdout_write;
+    si.hStdError = stdout_write; // Redirect stderr to same pipe
+    si.hStdInput = null;
+
+    // Create the process (suspended)
+    var pi: windows.PROCESS_INFORMATION = undefined;
+    const creation_flags: windows.CreateProcessFlags = .{ .create_suspended = true };
+    if (kernel32.CreateProcessW(
+        @ptrCast(&exe_path_w),
+        null,
+        null,
+        null,
+        1, // Inherit handles = TRUE
+        creation_flags,
+        null,
+        null,
+        &si,
+        &pi,
+    ) == 0) {
+        windows.CloseHandle(stdout_write.?);
+        return error.CreateProcessFailed;
+    }
+    defer windows.CloseHandle(pi.hProcess);
+    defer windows.CloseHandle(pi.hThread);
+
+    // Close write end of pipe in parent (child has it now)
+    windows.CloseHandle(stdout_write.?);
+    stdout_write = null;
+
+    // Add process to job before resuming
+    if (AssignProcessToJobObject(job_handle, pi.hProcess) == 0) {
+        _ = TerminateProcess(pi.hProcess, 1);
+        return error.AssignJobFailed;
+    }
+
+    // Resume the process
+    if (ResumeThread(pi.hThread) == @as(windows.DWORD, @bitCast(@as(i32, -1)))) {
+        return error.ResumeThreadFailed;
+    }
+
+    // Wait for process with timeout
+    const wait_result = WaitForSingleObject(pi.hProcess, TEST_TIMEOUT_MS);
+
+    var exit_code: windows.DWORD = 0;
+    var timed_out = false;
+
+    if (wait_result == WAIT_TIMEOUT) {
+        timed_out = true;
+        // Job object will kill all processes when we close it (via defer)
+    } else if (wait_result == WAIT_OBJECT_0) {
+        // Process completed - get exit code
+        if (GetExitCodeProcess(pi.hProcess, &exit_code) == 0) {
+            exit_code = 1;
+        }
+    } else {
+        return error.WaitFailed;
+    }
+
+    if (timed_out) {
+        // Give Windows time to release file locks after killing processes
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+        return error.ProcessTimeout;
+    }
+
+    // Read stdout from pipe
+    var stdout_list: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer stdout_list.deinit(allocator);
+
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        var bytes_read: windows.DWORD = 0;
+        const read_result = ReadFile(stdout_read.?, &buf, buf.len, &bytes_read, null);
+        if (read_result == 0 or bytes_read == 0) break;
+        try stdout_list.appendSlice(allocator, buf[0..bytes_read]);
+    }
 
     return ProcessResult{
-        .stdout = result.stdout,
-        .stderr = result.stderr,
-        .term = result.term,
+        .stdout = try stdout_list.toOwnedSlice(allocator),
+        .stderr = &.{}, // stderr goes to same pipe as stdout
+        .term = .{ .Exited = @truncate(exit_code) },
     };
 }

@@ -24,9 +24,15 @@ pub const InterfaceDecl = struct {
     methods: []InterfaceMethod,
 };
 
+pub const EnumMember = struct {
+    name: []const u8,
+    value: ?*const Expression, // Optional explicit value (e.g., red = 1)
+};
+
 pub const EnumDecl = struct {
     name: []const u8,
-    members: []const []const u8,
+    backing_type: ?[]const u8, // Optional backing type (int, string, etc.)
+    members: []const EnumMember,
 };
 
 pub const InterfaceConformance = struct {

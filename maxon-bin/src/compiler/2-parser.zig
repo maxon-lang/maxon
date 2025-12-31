@@ -1731,11 +1731,17 @@ pub const Parser = struct {
         _ = try self.expect(.@"enum");
         const name_token = try self.expect(.identifier);
 
-        // Require newline after enum name
+        // Parse optional backing type (e.g., "enum Color int" or "enum Status string")
+        var backing_type: ?[]const u8 = null;
+        if (self.check(.identifier) or self.check(.int) or self.check(.float)) {
+            backing_type = self.advance().text;
+        }
+
+        // Require newline after enum declaration
         _ = try self.expect(.newline);
 
         // Parse members
-        var members: std.ArrayListUnmanaged([]const u8) = .empty;
+        var members: std.ArrayListUnmanaged(ast.EnumMember) = .empty;
         errdefer members.deinit(self.allocator);
 
         while (!self.check(.end) and !self.isAtEnd()) {
@@ -1745,9 +1751,26 @@ pub const Parser = struct {
                 continue;
             }
 
-            // Parse member name (just an identifier)
+            // Parse member name
             const member_name = try self.expect(.identifier);
-            try members.append(self.allocator, member_name.text);
+
+            // Parse optional value assignment (e.g., "red = 1" or "active = \"Active\"")
+            var value: ?*const ast.Expression = null;
+            if (self.check(.equals)) {
+                _ = self.advance(); // consume '='
+                const expr = try self.parseExpression() orelse {
+                    self.reportError(.E003);
+                    return error.ExpectedExpression;
+                };
+                const expr_ptr = try self.allocator.create(ast.Expression);
+                expr_ptr.* = expr;
+                value = expr_ptr;
+            }
+
+            try members.append(self.allocator, .{
+                .name = member_name.text,
+                .value = value,
+            });
 
             _ = try self.expect(.newline);
         }
@@ -1764,6 +1787,7 @@ pub const Parser = struct {
 
         return .{
             .name = name_token.text,
+            .backing_type = backing_type,
             .members = try members.toOwnedSlice(self.allocator),
         };
     }

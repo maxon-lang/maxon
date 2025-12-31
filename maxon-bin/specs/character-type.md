@@ -101,10 +101,10 @@ The `asciiValue()` method returns the ASCII code (0-127) for single-byte ASCII c
 
 ```maxon
 var letter = 'A'
-print("{letter.asciiValue()}")  // Prints: 65
+print("{letter.asciiValue()}\n")  // Prints: 65
 
 var digit = '0'
-print("{digit.asciiValue()}")   // Prints: 48
+print("{digit.asciiValue()}\n")   // Prints: 48
 ```
 
 For non-ASCII characters (multi-byte UTF-8 or values >= 128), `asciiValue()` returns `nil`.
@@ -166,7 +166,7 @@ end 'main'
 ```maxon
 function main() returns int
     var c = 'é'
-    print("{c.bytes().count()}")
+    print("{c.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -183,7 +183,7 @@ end 'main'
 ```maxon
 function main() returns int
     var c = '中'
-    print("{c.bytes().count()}")
+    print("{c.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -200,7 +200,7 @@ end 'main'
 ```maxon
 function main() returns int
     var c = '🎉'
-    print("{c.bytes().count()}")
+    print("{c.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -287,7 +287,7 @@ end 'main'
 ```maxon
 function main() returns int
     var emoji = '🎉'
-    print("{emoji}")
+    print("{emoji}\n")
     return 0
 end 'main'
 ```
@@ -304,8 +304,8 @@ end 'main'
 ```maxon
 function main() returns int
     var flag = '🇺🇸'
-    print("{flag.bytes().count()}")
-    print("{flag}")
+    print("{flag.bytes().count()}\n")
+    print("{flag}\n")
     return 0
 end 'main'
 ```
@@ -323,7 +323,7 @@ end 'main'
 ```maxon
 function main() returns int
     var family = '👨‍👩‍👧'
-    print("{family.bytes().count()}")
+    print("{family.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -340,7 +340,7 @@ end 'main'
 ```maxon
 function main() returns int
     var wave = '👋🏽'
-    print("{wave.bytes().count()}")
+    print("{wave.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -360,10 +360,10 @@ function main() returns int
     var tab = '\t'
     var backslash = '\\'
     var quote = '\''
-    print("{newline.bytes().count()}")
-    print("{tab.bytes().count()}")
-    print("{backslash.bytes().count()}")
-    print("{quote.bytes().count()}")
+    print("{newline.bytes().count()}\n")
+    print("{tab.bytes().count()}\n")
+    print("{backslash.bytes().count()}\n")
+    print("{quote.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -384,7 +384,7 @@ end 'main'
 function main() returns int
     var c = 'A'
     if let val = c.asciiValue() 'unwrap'
-        print("{val}")
+        print("{val}\n")
     end 'unwrap'
     return 0
 end 'main'
@@ -403,7 +403,7 @@ end 'main'
 function main() returns int
     var c = '0'
     if let val = c.asciiValue() 'unwrap'
-        print("{val}")
+        print("{val}\n")
     end 'unwrap'
     return 0
 end 'main'
@@ -422,7 +422,7 @@ end 'main'
 function main() returns int
     var c = 'a'
     if let val = c.asciiValue() 'unwrap'
-        print("{val}")
+        print("{val}\n")
     end 'unwrap'
     return 0
 end 'main'
@@ -441,7 +441,7 @@ end 'main'
 function main() returns int
     var c = ' '
     if let val = c.asciiValue() 'unwrap'
-        print("{val}")
+        print("{val}\n")
     end 'unwrap'
     return 0
 end 'main'
@@ -460,7 +460,7 @@ end 'main'
 function main() returns int
     var c = '\n'
     if let val = c.asciiValue() 'unwrap'
-        print("{val}")
+        print("{val}\n")
     end 'unwrap'
     return 0
 end 'main'
@@ -479,7 +479,7 @@ end 'main'
 function main() returns int
     var c = 'é'
     if let val = c.asciiValue() 'unwrap'
-        print("{val}")
+        print("{val}\n")
     end 'unwrap' else 'nil_case'
         print("nil")
     end 'nil_case'
@@ -500,7 +500,7 @@ nil
 function main() returns int
     var c = '🎉'
     if let val = c.asciiValue() 'unwrap'
-        print("{val}")
+        print("{val}\n")
     end 'unwrap' else 'nil_case'
         print("nil")
     end 'nil_case'

@@ -116,6 +116,8 @@ pub const AstToIr = struct {
     // For struct returns: pointer passed by caller for return value
     sret_ptr: ?ir.Value,
     sret_size: i32,
+    // For optional returns: info about the wrapped type (if returning optional)
+    sret_optional_info: ?OptionalInfo = null,
     // Error tracking
     source_file: ?[]const u8,
     last_error: ?err.CompileError,
@@ -639,11 +641,19 @@ pub const AstToIr = struct {
         }
         self.type_map.deinit(self.allocator);
 
+        // Track freed pointers to avoid double-free when the same FuncInfo
+        // is registered under multiple names (e.g., interface methods)
+        var freed_ptrs = std.AutoHashMap([*]const ParamType, void).init(self.allocator);
+        defer freed_ptrs.deinit();
         var func_iter = self.func_map.iterator();
         while (func_iter.next()) |entry| {
             // Only free if non-empty (empty slices may be static literals)
             if (entry.value_ptr.param_types.len > 0) {
-                self.allocator.free(entry.value_ptr.param_types);
+                const ptr = entry.value_ptr.param_types.ptr;
+                if (!freed_ptrs.contains(ptr)) {
+                    freed_ptrs.put(ptr, {}) catch {};
+                    self.allocator.free(entry.value_ptr.param_types);
+                }
             }
         }
         self.func_map.deinit(self.allocator);
@@ -801,6 +811,63 @@ pub const AstToIr = struct {
         }
         self.reportError(.E007, field_name);
         return error.UnknownField;
+    }
+
+    /// Get the size of a type from a TypeExpr. Primitives are 8 bytes, structs use their registered size.
+    fn getTypeSize(self: *AstToIr, te: ast.TypeExpr) i32 {
+        return switch (te) {
+            .simple => |name| {
+                // Check if it's a primitive type (all 8 bytes)
+                if (std.mem.eql(u8, name, "int") or
+                    std.mem.eql(u8, name, "float") or
+                    std.mem.eql(u8, name, "bool") or
+                    std.mem.eql(u8, name, "byte"))
+                {
+                    return 8;
+                }
+                // Resolve type aliases (string -> String, character -> Character)
+                const resolved = self.resolveTypeName(name);
+                // Look up struct size from type_map
+                if (self.type_map.get(resolved)) |type_info| {
+                    if (type_info == .struct_type) {
+                        return type_info.struct_type.size;
+                    }
+                }
+                // Default to 8 bytes for unknown types
+                return 8;
+            },
+            .generic => |gen| {
+                // Look up monomorphized type or base type
+                const resolved = self.resolveTypeName(gen.base_type);
+                if (self.type_map.get(resolved)) |type_info| {
+                    if (type_info == .struct_type) {
+                        return type_info.struct_type.size;
+                    }
+                }
+                return 8;
+            },
+            .optional => |wrapped| {
+                // Optional size = 8 (tag) + wrapped size
+                return 8 + self.getTypeSize(wrapped.*);
+            },
+        };
+    }
+
+    /// Get the size of an optional type from its OptionalInfo.
+    /// Uses wrapped_struct_type to look up struct sizes when the wrapped type is a struct.
+    fn getOptionalSize(self: *AstToIr, opt_info: OptionalInfo) i32 {
+        // 8 bytes for the tag (discriminant)
+        const tag_size: i32 = 8;
+        // If wrapped type is a struct, look up its size
+        if (opt_info.wrapped_struct_type) |struct_name| {
+            if (self.type_map.get(struct_name)) |type_info| {
+                if (type_info == .struct_type) {
+                    return tag_size + type_info.struct_type.size;
+                }
+            }
+        }
+        // Default: primitive types are 8 bytes
+        return tag_size + 8;
     }
 
     pub fn func(self: *AstToIr) *ir.Function {
@@ -962,8 +1029,17 @@ pub const AstToIr = struct {
     fn registerEnum(self: *AstToIr, enum_decl: ast.EnumDecl) !void {
         var members: std.StringHashMapUnmanaged(i64) = .{};
         errdefer members.deinit(self.allocator);
-        for (enum_decl.members, 0..) |member, i| {
-            try members.put(self.allocator, member, @intCast(i));
+        var next_value: i64 = 0;
+        for (enum_decl.members) |member| {
+            if (member.value) |value_expr| {
+                // Explicit value - evaluate constant expression
+                if (value_expr.* == .integer) {
+                    next_value = value_expr.integer;
+                }
+                // TODO: Handle string backing types
+            }
+            try members.put(self.allocator, member.name, next_value);
+            next_value += 1;
         }
         try self.type_map.put(self.allocator, enum_decl.name, .{
             .enum_type = .{ .name = enum_decl.name, .members = members },
@@ -1294,15 +1370,34 @@ pub const AstToIr = struct {
     }
 
     /// Register a method as a function with mangled name: TypeName$methodName
+    /// For interface methods (qualified_name set), also registers TypeName$Interface.methodName
     fn registerMethod(self: *AstToIr, type_name: []const u8, method: ast.MethodDecl) !void {
         // Save current type context for Self resolution
         const saved_type = self.current_type_name;
         self.current_type_name = type_name;
         defer self.current_type_name = saved_type;
 
-        // Generate mangled name and track in module for cleanup
+        // Always register under short method name for regular calls (e.g., TypeName$count)
         const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
         try self.module.trackString(mangled_name);
+
+        // Check if method is already registered (avoid double allocation)
+        const already_registered = self.func_map.contains(mangled_name);
+
+        // For already registered methods, still need to check if interface qualified name needs registering
+        if (already_registered) {
+            if (method.qualified_name) |qualified| {
+                const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
+                try self.module.trackString(qualified_mangled);
+                if (!self.func_map.contains(qualified_mangled)) {
+                    // Get the existing func_info and register under qualified name
+                    const func_info = self.func_map.get(mangled_name).?;
+                    try self.func_map.put(self.allocator, qualified_mangled, func_info);
+                    debug.astToIr("Registered interface method '{s}' as '{s}' (added qualified name)", .{ method.name, qualified_mangled });
+                }
+            }
+            return;
+        }
 
         // Determine return type
         var ret_type_name: ?[]const u8 = null;
@@ -1321,9 +1416,15 @@ pub const AstToIr = struct {
                 },
                 .optional => |wrapped| {
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
+                    // Preserve struct type name for optional struct types (e.g., Character or nil)
+                    const wrapped_struct_name: ?[]const u8 = if (wrapped_value_type == .struct_type)
+                        wrapped_value_type.struct_type
+                    else
+                        null;
                     ret_value_type = .{
                         .optional_type = .{
                             .wrapped = wrapped_value_type.toPrimitiveType(),
+                            .wrapped_struct_type = wrapped_struct_name,
                         },
                     };
                     break :blk .ptr;
@@ -1347,14 +1448,24 @@ pub const AstToIr = struct {
             };
         }
 
-        try self.func_map.put(self.allocator, mangled_name, .{
+        const func_info = FuncInfo{
             .return_type = ret_type,
             .return_type_name = ret_type_name,
             .return_value_type = ret_value_type,
             .param_types = param_types,
-        });
+        };
 
-        debug.astToIr("Registered method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, ret_type.format() });
+        try self.func_map.put(self.allocator, mangled_name, func_info);
+
+        // For interface methods, also register under qualified name (e.g., TypeName$Stringable.toString)
+        if (method.qualified_name) |qualified| {
+            const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
+            try self.module.trackString(qualified_mangled);
+            try self.func_map.put(self.allocator, qualified_mangled, func_info);
+            debug.astToIr("Registered interface method '{s}' as '{s}' and '{s}'", .{ method.name, mangled_name, qualified_mangled });
+        } else {
+            debug.astToIr("Registered method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, ret_type.format() });
+        }
     }
 
     /// Convert a method to IR
@@ -1364,13 +1475,14 @@ pub const AstToIr = struct {
         self.current_type_name = type_name;
         defer self.current_type_name = saved_type;
 
-        // Generate mangled name and track in module for cleanup
+        // Generate mangled name using short method name (matches registerMethod)
         const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
         try self.module.trackString(mangled_name);
 
         // Determine return type (same as registerMethod)
         var uses_sret = false;
         var sret_struct_size: i32 = 0;
+        var sret_opt_info: ?OptionalInfo = null;
         if (method.return_type) |rt| {
             switch (rt) {
                 .simple, .generic => {
@@ -1383,10 +1495,17 @@ pub const AstToIr = struct {
                         }
                     }
                 },
-                .optional => {
-                    // Optionals are 16 bytes (tag + value), use sret
+                .optional => |wrapped| {
+                    // Optional size = 8 (tag) + wrapped_value_size
+                    // For struct types (e.g., Character), this correctly accounts for their size
                     uses_sret = true;
-                    sret_struct_size = 16;
+                    sret_struct_size = 8 + self.getTypeSize(wrapped.*);
+                    // Track the wrapped type info for proper return handling
+                    const wrapped_struct_name = getStructNameFromTypeExpr(wrapped.*);
+                    sret_opt_info = .{
+                        .wrapped = getIrTypeFromTypeExpr(wrapped.*),
+                        .wrapped_struct_type = wrapped_struct_name,
+                    };
                 },
             }
         }
@@ -1411,6 +1530,7 @@ pub const AstToIr = struct {
         // Reset sret state
         self.sret_ptr = null;
         self.sret_size = 0;
+        self.sret_optional_info = null;
         self.self_ptr = null;
 
         // Parameter offset for sret
@@ -1418,6 +1538,7 @@ pub const AstToIr = struct {
         if (uses_sret) {
             self.sret_ptr = try ir_func.emitParam(0, .ptr);
             self.sret_size = sret_struct_size;
+            self.sret_optional_info = sret_opt_info;
             param_offset = 1;
         }
 
@@ -1464,10 +1585,10 @@ pub const AstToIr = struct {
             self_info.used = true;
         }
 
-        // Check for unused variables
+        // Check for unused variables (skip '_' which is the conventional "ignore" name)
         var iter = self.var_map.iterator();
         while (iter.next()) |entry| {
-            if (!entry.value_ptr.used) {
+            if (!entry.value_ptr.used and !std.mem.eql(u8, entry.key_ptr.*, "_")) {
                 debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
                 self.reportError(.E014, entry.key_ptr.*);
                 return error.UnusedVariable;
@@ -1486,6 +1607,7 @@ pub const AstToIr = struct {
         // Check if this function returns a struct (needs sret)
         var uses_sret = false;
         var sret_struct_size: i32 = 0;
+        var sret_opt_info: ?OptionalInfo = null;
         if (decl.return_type) |rt| {
             switch (rt) {
                 .simple, .generic => {
@@ -1497,10 +1619,17 @@ pub const AstToIr = struct {
                         }
                     }
                 },
-                .optional => {
-                    // Optionals are 16 bytes (tag + value), use sret
+                .optional => |wrapped| {
+                    // Optional size = 8 (tag) + wrapped_value_size
+                    // For struct types (e.g., Character), this correctly accounts for their size
                     uses_sret = true;
-                    sret_struct_size = 16;
+                    sret_struct_size = 8 + self.getTypeSize(wrapped.*);
+                    // Track the wrapped type info for proper return handling
+                    const wrapped_struct_name = getStructNameFromTypeExpr(wrapped.*);
+                    sret_opt_info = .{
+                        .wrapped = getIrTypeFromTypeExpr(wrapped.*),
+                        .wrapped_struct_type = wrapped_struct_name,
+                    };
                 },
             }
         }
@@ -1524,12 +1653,14 @@ pub const AstToIr = struct {
         // Reset sret state
         self.sret_ptr = null;
         self.sret_size = 0;
+        self.sret_optional_info = null;
 
         // If returning struct, first parameter is sret pointer
         var param_offset: i32 = 0;
         if (uses_sret) {
             self.sret_ptr = try ir_func.emitParam(0, .ptr);
             self.sret_size = sret_struct_size;
+            self.sret_optional_info = sret_opt_info;
             param_offset = 1;
         }
 
@@ -1553,10 +1684,10 @@ pub const AstToIr = struct {
             }
         }
 
-        // Check for unused variables
+        // Check for unused variables (skip '_' which is the conventional "ignore" name)
         var iter = self.var_map.iterator();
         while (iter.next()) |entry| {
-            if (!entry.value_ptr.used) {
+            if (!entry.value_ptr.used and !std.mem.eql(u8, entry.key_ptr.*, "_")) {
                 debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
                 self.reportError(.E014, entry.key_ptr.*);
                 return error.UnusedVariable;
@@ -1863,15 +1994,29 @@ pub const AstToIr = struct {
                 // Returning an existing struct variable or optional - copy to sret buffer
                 const typed_val = try self.convertExpression(expr);
 
-                // If returning a non-optional value from an optional-returning function (sret_size == 16),
+                // If returning a non-optional value from an optional-returning function,
                 // wrap the value in a Some optional
-                if (self.sret_size == 16 and typed_val.ty != .optional_type) {
+                if (self.sret_optional_info != null and typed_val.ty != .optional_type) {
+                    const opt_info = self.sret_optional_info.?;
                     // Write tag = 1 (has value) to sret
                     const one = try self.func().emitConstI64(1);
                     try self.func().emitStore(sret, one);
                     // Write value at offset 8
                     const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
-                    try self.func().emitStore(value_ptr, typed_val.value);
+                    // For struct types, memcpy the contents; for primitives, store the value
+                    if (opt_info.wrapped_struct_type) |struct_name| {
+                        if (self.type_map.get(struct_name)) |type_info| {
+                            if (type_info == .struct_type) {
+                                try self.func().emitMemcpy(value_ptr, typed_val.value, type_info.struct_type.size);
+                            } else {
+                                try self.func().emitStore(value_ptr, typed_val.value);
+                            }
+                        } else {
+                            try self.func().emitStore(value_ptr, typed_val.value);
+                        }
+                    } else {
+                        try self.func().emitStore(value_ptr, typed_val.value);
+                    }
                 } else {
                     try self.func().emitMemcpy(sret, typed_val.value, self.sret_size);
                 }
@@ -2395,6 +2540,7 @@ pub const AstToIr = struct {
         // In condition block: call .next() on the iterable
         const iterable_typed = try self.convertExpression(for_stmt.iterable);
 
+
         // Call the next() method on the iterable
         const next_result = try self.convertMethodCallOnTyped(iterable_typed, "next", &.{});
 
@@ -2436,9 +2582,15 @@ pub const AstToIr = struct {
         const element_value = try self.func().emitLoad(value_ptr, opt_info.wrapped);
 
         // Register the loop variable - allocate a slot and store the value there
+        // For struct types (like Character), use the struct type; otherwise use primitive
         const var_slot = try self.func().emitAlloca(opt_info.wrapped);
         try self.func().emitStore(var_slot, element_value);
-        try self.var_map.put(self.allocator, for_stmt.var_name, VarInfo.init(var_slot, .{ .primitive = PrimitiveInfo.fromIrType(opt_info.wrapped) }, false, false));
+        const var_type: ValueType = if (opt_info.wrapped_struct_type) |struct_name|
+            .{ .struct_type = struct_name }
+        else
+            .{ .primitive = PrimitiveInfo.fromIrType(opt_info.wrapped) };
+
+        try self.var_map.put(self.allocator, for_stmt.var_name, VarInfo.init(var_slot, var_type, false, false));
 
         // Convert body statements
         for (for_stmt.body) |stmt| {
@@ -2821,8 +2973,6 @@ pub const AstToIr = struct {
     /// Convert a TypedValue to a String pointer
     /// Handles different types: String (passthrough), int, float, bool
     fn convertToString(self: *AstToIr, typed_val: TypedValue, format_spec: ?[]const u8) ConvertError!ir.Value {
-        _ = format_spec; // TODO: Use format spec for custom formatting
-
         switch (typed_val.ty) {
             .struct_type => |type_name| {
                 if (std.mem.eql(u8, type_name, "String")) {
@@ -2833,7 +2983,10 @@ pub const AstToIr = struct {
                     // Convert Character to String by copying its _managed field
                     return self.convertCharacterToString(typed_val.value);
                 }
-                // TODO: Check for Stringable interface
+                // Check for Stringable interface conformance
+                if (self.typeConformsTo(type_name, "Stringable")) {
+                    return self.callStringableToString(type_name, typed_val.value, format_spec);
+                }
                 self.reportError(.E005, type_name);
                 return error.UndefinedVariable;
             },
@@ -2847,6 +3000,10 @@ pub const AstToIr = struct {
                 }
                 self.reportError(.E005, prim.name);
                 return error.UndefinedVariable;
+            },
+            .enum_type => {
+                // Enums are stored as i64 values, convert like integers
+                return self.convertIntToString(typed_val.value);
             },
             else => {
                 self.reportError(.E005, "unsupported type for interpolation");
@@ -2868,6 +3025,48 @@ pub const AstToIr = struct {
     /// Convert a bool to a String
     fn convertBoolToString(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         return self.emitBoolToStringCall(value);
+    }
+
+    /// Call Stringable.toString() on a type that conforms to Stringable
+    /// Returns a pointer to the resulting String
+    fn callStringableToString(self: *AstToIr, type_name: []const u8, value_ptr: ir.Value, format_spec: ?[]const u8) ConvertError!ir.Value {
+        // Build the method name: TypeName$Stringable.toString
+        const method_name = try std.fmt.allocPrint(self.allocator, "{s}$Stringable.toString", .{type_name});
+        try self.module.trackString(method_name);
+
+        const func_info = self.func_map.get(method_name) orelse {
+            self.reportError(.E005, method_name);
+            return error.UndefinedVariable;
+        };
+
+        // Allocate space for the return value (String is 32 bytes)
+        const result_ptr = try self.func().emitAllocaSized(32);
+
+        // Prepare the format argument (optional string)
+        // For now, pass nil (represented as an optional with tag=0)
+        const format_opt = try self.func().emitAllocaSized(16);
+        if (format_spec) |spec| {
+            // Create a String from the format spec and store as some
+            const one = try self.func().emitConstI64(1);
+            try self.func().emitStore(format_opt, one);
+            const format_str = try self.convertStringLiteral(spec);
+            const value_ptr_off = try self.func().emitGetFieldPtr(format_opt, 8);
+            try self.func().emitStore(value_ptr_off, format_str.value);
+        } else {
+            // Store nil (tag=0)
+            const zero = try self.func().emitConstI64(0);
+            try self.func().emitStore(format_opt, zero);
+        }
+
+        // Call toString(self, format) -> result_ptr contains the String
+        var args = try self.func().allocator.alloc(ir.Value, 3);
+        args[0] = result_ptr; // Return slot
+        args[1] = value_ptr; // self
+        args[2] = format_opt; // format argument
+
+        _ = try self.func().emitCall(method_name, args, func_info.return_type);
+
+        return result_ptr;
     }
 
     /// Convert a Character to a String
@@ -3604,8 +3803,9 @@ pub const AstToIr = struct {
         // If returning struct or optional, allocate buffer in caller and pass as first arg
         if (returns_struct) {
             if (returns_optional) {
-                // Optional is 16 bytes (tag + value)
-                sret_buffer = try self.func().emitAllocaSized(16);
+                // Optional size = 8 (tag) + wrapped_value_size
+                const opt_info = func_info.return_value_type.?.optional_type;
+                sret_buffer = try self.func().emitAllocaSized(self.getOptionalSize(opt_info));
             } else {
                 const struct_name = func_info.return_type_name.?;
                 const struct_info = try self.lookupStructInfo(struct_name);
@@ -4581,8 +4781,9 @@ pub const AstToIr = struct {
         var sret_buffer: ?ir.Value = null;
         if (returns_struct) {
             if (returns_optional) {
-                // Optional is 16 bytes (tag + value)
-                sret_buffer = try self.func().emitAllocaSized(16);
+                // Optional size = 8 (tag) + wrapped_value_size
+                const opt_info = func_info.return_value_type.?.optional_type;
+                sret_buffer = try self.func().emitAllocaSized(self.getOptionalSize(opt_info));
             } else {
                 const struct_info = try self.lookupStructInfo(func_info.return_type_name.?);
                 sret_buffer = try self.func().emitAllocaSized(struct_info.size);
@@ -4657,7 +4858,9 @@ pub const AstToIr = struct {
         var sret_buffer: ?ir.Value = null;
         if (returns_struct) {
             if (returns_optional) {
-                sret_buffer = try self.func().emitAllocaSized(16);
+                // Optional size = 8 (tag) + wrapped_value_size
+                const opt_info = func_info.return_value_type.?.optional_type;
+                sret_buffer = try self.func().emitAllocaSized(self.getOptionalSize(opt_info));
             } else {
                 const struct_info = try self.lookupStructInfo(func_info.return_type_name.?);
                 sret_buffer = try self.func().emitAllocaSized(struct_info.size);
@@ -4941,11 +5144,11 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
 
             // Most types are 8 bytes (i64, f64, ptr)
             // __ManagedArray is a special compiler-internal type that is 24 bytes
-            // __ManagedString is a special compiler-internal type that is 16 bytes
+            // __ManagedString is a special compiler-internal type that is 24 bytes
             const field_size: i32 = if (std.mem.eql(u8, type_name, "__ManagedArray"))
                 24
             else if (std.mem.eql(u8, type_name, "__ManagedString"))
-                16
+                24
             else
                 8;
 
@@ -5080,9 +5283,12 @@ fn getValueTypeFromTypeExpr(te: ast.TypeExpr) ?ValueType {
     return switch (te) {
         .optional => |wrapped| {
             const wrapped_ir_type = getIrTypeFromTypeExpr(wrapped.*);
+            // Also get the struct name for struct types
+            const wrapped_struct_name = getStructNameFromTypeExpr(wrapped.*);
             return .{
                 .optional_type = .{
                     .wrapped = wrapped_ir_type,
+                    .wrapped_struct_type = wrapped_struct_name,
                 },
             };
         },

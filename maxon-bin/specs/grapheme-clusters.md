@@ -99,8 +99,8 @@ Strings automatically use grapheme clusters for iteration:
 
 ```maxon
 var s = "👨‍👩‍👧"  // Family emoji - 1 grapheme, 18 bytes, 5 codepoints
-print("{s.count()}")         // 1 (grapheme count)
-print("{s.bytes().count()}") // 18 (byte count)
+print("{s.count()}\n")         // 1 (grapheme count)
+print("{s.bytes().count()}\n") // 18 (byte count)
 
 for c in s 'loop'
     // Iterates once, c is the family emoji
@@ -117,7 +117,7 @@ Each ASCII character is its own grapheme:
 ```maxon
 function main() returns int
     var s = "abc"
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -136,7 +136,7 @@ Multi-byte characters are single graphemes:
 ```maxon
 function main() returns int
     var s = "中文"  // 2 CJK characters
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -155,7 +155,7 @@ Basic emoji are single graphemes:
 ```maxon
 function main() returns int
     var s = "🎉🎊🎁"  // 3 emoji
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -174,8 +174,8 @@ Flag emoji (pairs of regional indicators) are single graphemes:
 ```maxon
 function main() returns int
     var s = "🇺🇸"  // US flag (2 regional indicators = 1 grapheme)
-    print("{s.count()}")
-    print("{s.bytes().count()}")
+    print("{s.count()}\n")
+    print("{s.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -195,7 +195,7 @@ Multiple flags are separate graphemes:
 ```maxon
 function main() returns int
     var s = "🇺🇸🇬🇧🇫🇷"  // 3 flags
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -214,8 +214,8 @@ Emoji with skin tone modifiers are single graphemes:
 ```maxon
 function main() returns int
     var s = "👋🏽"  // Wave + medium skin tone
-    print("{s.count()}")
-    print("{s.bytes().count()}")
+    print("{s.count()}\n")
+    print("{s.bytes().count()}\n")
     return 0
 end 'main'
 ```
@@ -235,7 +235,7 @@ Family emoji (ZWJ sequences) are single graphemes:
 ```maxon
 function main() returns int
     var s = "👨‍👩‍👧"  // Man + ZWJ + Woman + ZWJ + Girl
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -254,7 +254,7 @@ Professional emoji (ZWJ sequences) are single graphemes:
 ```maxon
 function main() returns int
     var s = "👨‍💻"  // Man + ZWJ + Computer = Man Technologist
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -273,7 +273,7 @@ CR+LF is a single grapheme (GB3):
 ```maxon
 function main() returns int
     var s = "\r\n"
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -292,7 +292,7 @@ Mixed ASCII, emoji, and CJK:
 ```maxon
 function main() returns int
     var s = "Hi🎉中"  // H, i, party, 中 = 4 graphemes
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -309,7 +309,7 @@ end 'main'
 ```maxon
 function main() returns int
     var prop = graphemeBreakProperty(65)  // 'A'
-    print("{prop}")  // GBP_Other = 0
+    print("{prop}\n")  // GBP_Other = 0
     return 0
 end 'main'
 ```
@@ -326,7 +326,7 @@ end 'main'
 ```maxon
 function main() returns int
     var prop = graphemeBreakProperty(13)  // CR
-    print("{prop}")  // GBP_CR = 1
+    print("{prop}\n")  // GBP_CR = 1
     return 0
 end 'main'
 ```
@@ -343,7 +343,7 @@ end 'main'
 ```maxon
 function main() returns int
     var prop = graphemeBreakProperty(10)  // LF
-    print("{prop}")  // GBP_LF = 2
+    print("{prop}\n")  // GBP_LF = 2
     return 0
 end 'main'
 ```
@@ -360,7 +360,7 @@ end 'main'
 ```maxon
 function main() returns int
     var prop = graphemeBreakProperty(8205)  // ZWJ U+200D
-    print("{prop}")  // GBP_ZWJ = 5
+    print("{prop}\n")  // GBP_ZWJ = 5
     return 0
 end 'main'
 ```
@@ -377,7 +377,7 @@ end 'main'
 ```maxon
 function main() returns int
     var prop = graphemeBreakProperty(127482)  // Regional Indicator U
-    print("{prop}")  // GBP_Regional_Indicator = 6
+    print("{prop}\n")  // GBP_Regional_Indicator = 6
     return 0
 end 'main'
 ```
@@ -394,10 +394,10 @@ end 'main'
 ```maxon
 function main() returns int
     if isExtendedPictographic(128512) 'c1'
-        print("{1}")  // 😀
+        print("{1}\n")  // 😀
     end 'c1'
     if isExtendedPictographic(65) 'c2'
-        print("{0}")      // 'A'
+        print("{0}\n")      // 'A'
     end 'c2'
     return 0
 end 'main'
