@@ -523,6 +523,63 @@ pub const Encoder = struct {
         try self.emitByte(0x58); // pop rax
     }
 
+    /// Square root of xmm0
+    /// SQRTSD xmm0, xmm0 = F2 0F 51 C0
+    pub fn sqrtsdXmm0(self: *Encoder) !void {
+        try self.emit(&.{ 0xF2, 0x0F, 0x51, 0xC0 });
+    }
+
+    /// Round xmm0 toward positive infinity (ceiling)
+    /// ROUNDSD xmm0, xmm0, 0x02 = 66 0F 3A 0B C0 02
+    pub fn roundsdCeilXmm0(self: *Encoder) !void {
+        try self.emit(&.{ 0x66, 0x0F, 0x3A, 0x0B, 0xC0, 0x02 });
+    }
+
+    /// Round xmm0 toward negative infinity (floor)
+    /// ROUNDSD xmm0, xmm0, 0x01 = 66 0F 3A 0B C0 01
+    pub fn roundsdFloorXmm0(self: *Encoder) !void {
+        try self.emit(&.{ 0x66, 0x0F, 0x3A, 0x0B, 0xC0, 0x01 });
+    }
+
+    /// Round xmm0 half away from zero (standard mathematical rounding)
+    /// Implements: round(x) = trunc(x + copysign(0.5, x))
+    /// This adds 0.5 with the same sign as x, then truncates
+    pub fn roundsdRoundHalfAwayXmm0(self: *Encoder) !void {
+        // Load 0.5 into xmm1
+        // mov rax, 0x3FE0000000000000 (0.5 in IEEE 754 double)
+        try self.emit(&.{ 0x48, 0xB8 }); // mov rax, imm64
+        try self.emit(&.{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xE0, 0x3F }); // 0.5
+        // Push rax to stack
+        try self.emitByte(0x50); // push rax
+        // MOVQ xmm1, [rsp] - load 0.5 into xmm1
+        try self.emit(&.{ 0xF3, 0x0F, 0x7E, 0x0C, 0x24 }); // movq xmm1, [rsp]
+        // Pop (restore stack)
+        try self.emitByte(0x58); // pop rax
+
+        // Copy sign from xmm0 to xmm1 (copysign(0.5, x))
+        // Load sign mask 0x8000000000000000 into xmm2
+        try self.emit(&.{ 0x48, 0xB8 }); // mov rax, imm64
+        try self.emit(&.{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80 }); // sign bit mask
+        try self.emitByte(0x50); // push rax
+        try self.emit(&.{ 0xF3, 0x0F, 0x7E, 0x14, 0x24 }); // movq xmm2, [rsp]
+        try self.emitByte(0x58); // pop rax
+
+        // xmm2 = xmm0 & sign_mask (extract sign of x)
+        // ANDPD xmm2, xmm0: 66 0F 54 D0
+        try self.emit(&.{ 0x66, 0x0F, 0x54, 0xD0 }); // andpd xmm2, xmm0
+
+        // xmm1 = xmm1 | xmm2 (apply sign to 0.5)
+        // ORPD xmm1, xmm2: 66 0F 56 CA
+        try self.emit(&.{ 0x66, 0x0F, 0x56, 0xCA }); // orpd xmm1, xmm2
+
+        // xmm0 = xmm0 + xmm1 (x + copysign(0.5, x))
+        // ADDSD xmm0, xmm1: F2 0F 58 C1
+        try self.emit(&.{ 0xF2, 0x0F, 0x58, 0xC1 }); // addsd xmm0, xmm1
+
+        // ROUNDSD xmm0, xmm0, 0x03 (truncate toward zero)
+        try self.emit(&.{ 0x66, 0x0F, 0x3A, 0x0B, 0xC0, 0x03 });
+    }
+
     /// Move 64 bits from xmm0 to rax (for bitcast f64 to i64)
     /// MOVQ rax, xmm0 = 66 48 0F 7E C0
     pub fn movqRaxXmm0(self: *Encoder) !void {

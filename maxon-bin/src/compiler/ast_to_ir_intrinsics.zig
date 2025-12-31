@@ -22,6 +22,10 @@ const Builtin = struct {
 const builtins = [_]Builtin{
     .{ .name = "trunc", .op = .fptosi, .arg_type = .f64, .ret_type = .i64 },
     .{ .name = "abs", .op = .fabs, .arg_type = .f64, .ret_type = .f64 },
+    .{ .name = "sqrt", .op = .fsqrt, .arg_type = .f64, .ret_type = .f64 },
+    .{ .name = "ceil", .op = .fceil, .arg_type = .f64, .ret_type = .i64 },
+    .{ .name = "floor", .op = .ffloor, .arg_type = .f64, .ret_type = .i64 },
+    .{ .name = "round", .op = .fround, .arg_type = .f64, .ret_type = .i64 },
 };
 
 /// Check if current source file is part of stdlib
@@ -99,13 +103,20 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     }
 
     const arg = try self.convertExpression(call.args[0]);
-    if (arg.ty.toPrimitiveType() != builtin.arg_type) {
+    const arg_prim = arg.ty.toPrimitiveType();
+
+    // Get the actual value to use, with implicit int-to-float promotion if needed
+    const actual_value = if (arg_prim != builtin.arg_type) blk: {
+        // Allow int -> float promotion for builtins expecting float
+        if (builtin.arg_type == .f64 and arg_prim == .i64) {
+            break :blk self.func().emitUnaryOp(.sitofp, arg.value, .f64) catch return error.OutOfMemory;
+        }
         const msg = std.fmt.allocPrint(self.allocator, "{s}() requires {s} argument", .{ call.func_name, builtin.arg_type.toMaxonName() }) catch call.func_name;
         self.reportError(.E022, msg);
         return error.TypeMismatch;
-    }
+    } else arg.value;
 
-    const result = self.func().emitUnaryOp(builtin.op, arg.value, builtin.ret_type) catch return error.OutOfMemory;
+    const result = self.func().emitUnaryOp(builtin.op, actual_value, builtin.ret_type) catch return error.OutOfMemory;
 
     return .{ .value = result, .ty = .{ .primitive = builtin.ret_type.toMaxonName() } };
 }

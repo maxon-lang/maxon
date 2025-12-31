@@ -2055,6 +2055,10 @@ pub const IrCodegen = struct {
             .fptosi => try self.genFpToSi(inst),
             .sitofp => try self.genSiToFp(inst),
             .fabs => try self.genFabs(inst),
+            .fsqrt => try self.genFsqrt(inst),
+            .fceil => try self.genFceil(inst),
+            .ffloor => try self.genFfloor(inst),
+            .fround => try self.genFround(inst),
             .bitcast_f64_to_i64 => try self.genBitcastF64ToI64(inst),
             .sext_i32_i64 => try self.genSextI32I64(inst),
             .trunc_i64_i32 => try self.genTruncI64I32(inst),
@@ -2567,6 +2571,51 @@ pub const IrCodegen = struct {
         // Clear sign bit: AND with 0x7FFFFFFFFFFFFFFF
         try self.enc.fabsXmm0();
         try self.storeToStack(inst.result.?, .f64);
+    }
+
+    fn genFsqrt(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Load float value to xmm0
+        try self.loadToXmm(inst.operands[0].value, .xmm0);
+        // Square root: SQRTSD xmm0, xmm0
+        try self.enc.sqrtsdXmm0();
+        // Result is float, store as f64
+        try self.storeToStack(inst.result.?, .f64);
+    }
+
+    fn genFceil(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Load float value to xmm0
+        try self.loadToXmm(inst.operands[0].value, .xmm0);
+        // Round toward positive infinity using ROUNDSD with mode 0x02
+        try self.enc.roundsdCeilXmm0();
+        // Convert rounded float to signed int: CVTTSD2SI rax, xmm0
+        try self.enc.cvttsd2siRaxXmm0();
+        try self.storeToStack(inst.result.?, .i64);
+    }
+
+    fn genFfloor(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Load float value to xmm0
+        try self.loadToXmm(inst.operands[0].value, .xmm0);
+        // Round toward negative infinity using ROUNDSD with mode 0x01
+        try self.enc.roundsdFloorXmm0();
+        // Convert rounded float to signed int: CVTTSD2SI rax, xmm0
+        try self.enc.cvttsd2siRaxXmm0();
+        try self.storeToStack(inst.result.?, .i64);
+    }
+
+    fn genFround(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Load float value to xmm0
+        try self.loadToXmm(inst.operands[0].value, .xmm0);
+        // Add 0.5 and floor to get "round half away from zero" for positive numbers
+        // For negative numbers, we need: floor(x + 0.5) also works correctly
+        // Actually, for proper "round half away from zero":
+        //   round(x) = floor(x + 0.5) for x >= 0
+        //   round(x) = ceil(x - 0.5) for x < 0
+        // Simpler: round(x) = trunc(x + copysign(0.5, x))
+        // We use: copysign(0.5, x) + x, then truncate
+        try self.enc.roundsdRoundHalfAwayXmm0();
+        // Convert rounded float to signed int: CVTTSD2SI rax, xmm0
+        try self.enc.cvttsd2siRaxXmm0();
+        try self.storeToStack(inst.result.?, .i64);
     }
 
     fn genBitcastF64ToI64(self: *IrCodegen, inst: ir.Instruction) !void {

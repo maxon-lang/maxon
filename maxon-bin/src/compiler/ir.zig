@@ -87,6 +87,10 @@ pub const Instruction = struct {
         fptosi, // float to signed int
         sitofp, // signed int to float
         fabs, // float absolute value
+        fsqrt, // float square root
+        fceil, // ceiling of float to int (round toward positive infinity)
+        ffloor, // floor of float to int (round toward negative infinity)
+        fround, // round float to nearest int (round to nearest even)
         bitcast_f64_to_i64, // reinterpret f64 bits as i64 (for hashing)
         sext_i32_i64, // sign-extend i32 to i64
         trunc_i64_i32, // truncate i64 to i32
@@ -165,6 +169,10 @@ pub const Instruction = struct {
                 .fptosi => "fptosi",
                 .sitofp => "sitofp",
                 .fabs => "fabs",
+                .fsqrt => "fsqrt",
+                .fceil => "fceil",
+                .ffloor => "ffloor",
+                .fround => "fround",
                 .bitcast_f64_to_i64 => "bitcast.f64.i64",
                 .sext_i32_i64 => "sext.i32.i64",
                 .trunc_i64_i32 => "trunc.i64.i32",
@@ -356,6 +364,10 @@ pub const Function = struct {
             .fptosi => "tmp_fptosi",
             .sitofp => "tmp_sitofp",
             .fabs => "tmp_fabs",
+            .fsqrt => "tmp_fsqrt",
+            .fceil => "tmp_fceil",
+            .ffloor => "tmp_ffloor",
+            .fround => "tmp_fround",
             .bitcast_f64_to_i64 => "tmp_bitcast",
             .sext_i32_i64 => "tmp_sext",
             .trunc_i64_i32 => "tmp_trunc",

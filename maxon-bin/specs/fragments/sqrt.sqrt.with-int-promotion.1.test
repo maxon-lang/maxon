@@ -1,0 +1,25 @@
+// Test: sqrt.sqrt.with-int-promotion.1
+function main() returns int
+    var x = 16  // int
+    var result = sqrt(x)  // x promoted to 16.0
+    return trunc(result)
+end 'main'
+---
+ExitCode: 4
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 16
+    %x = alloca ptr
+    store %x %tmp_const
+    %tmp_load = load i64 %x
+    %tmp_sitofp = sitofp f64 %tmp_load
+    %tmp_fsqrt = fsqrt f64 %tmp_sitofp
+    %result = alloca ptr
+    store %result %tmp_fsqrt
+    %tmp_load.1 = load f64 %result
+    %tmp_fptosi = fptosi i64 %tmp_load.1
+    ret %tmp_fptosi
+}
+
+---
