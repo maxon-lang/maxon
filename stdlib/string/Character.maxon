@@ -4,7 +4,7 @@
 // A character represents an Extended Grapheme Cluster (EGC).
 // Uses same __ManagedString storage as String.
 
-export type Character is Hashable, Equatable, InitableFromCharLiteral
+export type Character is Hashable, Equatable, Comparable, InitableFromCharLiteral
 	var _managed __ManagedString
 
 	// InitableFromCharLiteral conformance
@@ -43,6 +43,36 @@ export type Character is Hashable, Equatable, InitableFromCharLiteral
 		end 'compare_loop'
 		return true
 	end 'equals'
+
+	// Comparable conformance
+	// Compares characters byte-by-byte (lexicographic comparison)
+	function Comparable.compare(other Character) returns int
+		var len1 = __string_len(_managed)
+		var len2 = __string_len(other._managed)
+		var minLen = len1
+		if len2 < len1 'min_check'
+			minLen = len2
+		end 'min_check'
+		var i = 0
+		while i < minLen 'compare_loop'
+			var b1 = __string_byte_at(_managed, i) as int
+			var b2 = __string_byte_at(other._managed, i) as int
+			if b1 < b2 'byte_lt'
+				return 0 - 1
+			end 'byte_lt'
+			if b1 > b2 'byte_gt'
+				return 1
+			end 'byte_gt'
+			i = i + 1
+		end 'compare_loop'
+		if len1 < len2 'len_lt'
+			return 0 - 1
+		end 'len_lt'
+		if len1 > len2 'len_gt'
+			return 1
+		end 'len_gt'
+		return 0
+	end 'compare'
 
 	// Hashable conformance (djb2 hash algorithm)
 	function Hashable.hash() returns int

@@ -581,8 +581,8 @@ fn intrinsicStringByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     // Load buffer pointer (offset 0)
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
-    // Calculate byte address: buf_ptr + index
-    const byte_ptr = try self.func().emitBinaryOp(.add, buf_ptr, index.value, .ptr);
+    // Calculate byte address using getelemptr (handles pointer arithmetic properly)
+    const byte_ptr = try self.func().emitGetElemPtr(buf_ptr, index.value, 1);
 
     // Load single byte
     const byte_val = try self.func().emitLoad(byte_ptr, .i8);
@@ -801,11 +801,12 @@ fn intrinsicStringSetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     // Load buffer pointer (offset 0)
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
-    // Calculate byte address: buf_ptr + index
-    const byte_ptr = try self.func().emitBinaryOp(.add, buf_ptr, index.value, .ptr);
+    // Calculate byte address using getelemptr (handles pointer arithmetic properly)
+    const byte_ptr = try self.func().emitGetElemPtr(buf_ptr, index.value, 1);
 
-    // Store byte value
-    try self.func().emitStore(byte_ptr, byte_val.value);
+    // Truncate byte value from i64 to i8 and store
+    const byte_i8 = try self.func().emitUnaryOp(.trunc_i64_i8, byte_val.value, .i8);
+    try self.func().emitStoreI8(byte_ptr, byte_i8);
 
     return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
 }

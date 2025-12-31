@@ -504,6 +504,15 @@ pub const Parser = struct {
             return .{ .optional = wrapped };
         }
 
+        // Check for shorthand optional: T?
+        if (self.check(.question)) {
+            _ = self.advance(); // consume '?'
+
+            const wrapped = try self.allocator.create(ast.TypeExpr);
+            wrapped.* = base_type;
+            return .{ .optional = wrapped };
+        }
+
         return base_type;
     }
 

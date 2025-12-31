@@ -295,7 +295,7 @@ pub const AstToIr = struct {
     }
 
     /// Wrap a __ManagedString pointer in a full String struct (adds iter_pos field).
-    fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.Value) !ir.Value {
+    pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.Value) !ir.Value {
         const string_ptr = try self.func().emitAllocaSized(32);
         try self.func().emitMemcpy(string_ptr, managed_ptr, MANAGED_STRING_SIZE);
         const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
@@ -1522,6 +1522,13 @@ pub const AstToIr = struct {
         } else .void;
 
         const ir_func = try self.module.addFunctionWithExport(mangled_name, ret_type, method.is_export);
+// Set alias for interface methods (e.g., Type$Interface.method)
+        if (method.qualified_name) |qualified| {
+            const alias = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
+            try self.module.trackString(alias);
+            ir_func.alias = alias;
+        }
+
         self.current_func = ir_func;
         self.current_func_name = mangled_name;
         self.var_map.clearRetainingCapacity();
@@ -1985,12 +1992,33 @@ pub const AstToIr = struct {
             // If using sret and returning a struct literal, write directly to sret buffer
             if (self.sret_ptr) |sret| {
                 if (expr == .struct_init) {
-                    // Initialize struct directly into sret buffer (no intermediate copy)
-                    try self.initStructInto(expr.struct_init, sret);
+                    if (self.sret_optional_info != null) {
+                        // Returning struct init from optional-returning function
+                        // Write tag = 1 (has value) first
+                        const one = try self.func().emitConstI64(1);
+                        try self.func().emitStore(sret, one);
+                        // Initialize struct at offset 8 (after the tag)
+                        const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
+                        try self.initStructInto(expr.struct_init, value_ptr);
+                    } else {
+                        // Initialize struct directly into sret buffer (no intermediate copy)
+                        try self.initStructInto(expr.struct_init, sret);
+                    }
                     try self.freeHeapAllocations();
                     try self.func().emitRet(sret);
                     return;
                 }
+
+                // Special handling for returning nil from optional-returning function
+                if (expr == .nil_lit and self.sret_optional_info != null) {
+                    // Write tag = 0 (nil) directly to sret
+                    const zero = try self.func().emitConstI64(0);
+                    try self.func().emitStore(sret, zero);
+                    try self.freeHeapAllocations();
+                    try self.func().emitRet(sret);
+                    return;
+                }
+
                 // Returning an existing struct variable or optional - copy to sret buffer
                 const typed_val = try self.convertExpression(expr);
 
@@ -2018,7 +2046,22 @@ pub const AstToIr = struct {
                         try self.func().emitStore(value_ptr, typed_val.value);
                     }
                 } else {
-                    try self.func().emitMemcpy(sret, typed_val.value, self.sret_size);
+                    // Check if returning __ManagedString to a String-returning function
+                    const is_managed_string = typed_val.ty == .primitive and
+                        std.mem.eql(u8, typed_val.ty.primitive.name, "__ManagedString");
+                    const expects_string = self.current_func_name != null and
+                        self.type_map.get("String") != null and self.sret_size == 32;
+
+                    if (is_managed_string and expects_string) {
+                        // Wrap __ManagedString (24 bytes) into String (32 bytes)
+                        // Copy managed string to offset 0-23
+                        try self.func().emitMemcpy(sret, typed_val.value, MANAGED_STRING_SIZE);
+                        // Set _iterPos to 0 at offset 24
+                        const iter_pos_ptr = try self.func().emitGetFieldPtr(sret, 24);
+                        try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
+                    } else {
+                        try self.func().emitMemcpy(sret, typed_val.value, self.sret_size);
+                    }
                 }
                 try self.freeHeapAllocations();
                 try self.func().emitRet(sret);
@@ -2320,15 +2363,19 @@ pub const AstToIr = struct {
             };
             const wrapped_type = opt_info.wrapped;
             const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
-            const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
-
-            const binding_ptr = try self.func().emitAlloca(wrapped_type);
-            try self.func().setValueName(binding_ptr, binding_name);
-            try self.func().emitStore(binding_ptr, unwrapped_value);
 
             if (opt_info.wrapped_struct_type) |struct_name| {
-                try self.var_map.put(self.allocator, binding_name, VarInfo.init(binding_ptr, .{ .struct_type = struct_name }, true, true));
+                // For struct types, the payload is the struct data inline (not a pointer to it)
+                // Just use value_ptr directly as the binding - it points to the struct data
+                // uses_slot = false because value_ptr is already a pointer to the struct, not a slot
+                try self.func().setValueName(value_ptr, binding_name);
+                try self.var_map.put(self.allocator, binding_name, VarInfo.init(value_ptr, .{ .struct_type = struct_name }, true, false));
             } else {
+                // For primitive types, load the value and store in a new slot
+                const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
+                const binding_ptr = try self.func().emitAlloca(wrapped_type);
+                try self.func().setValueName(binding_ptr, binding_name);
+                try self.func().emitStore(binding_ptr, unwrapped_value);
                 try self.var_map.put(self.allocator, binding_name, VarInfo.init(
                     binding_ptr,
                     .{ .primitive = PrimitiveInfo.fromIrType(wrapped_type) },
@@ -2540,7 +2587,6 @@ pub const AstToIr = struct {
         // In condition block: call .next() on the iterable
         const iterable_typed = try self.convertExpression(for_stmt.iterable);
 
-
         // Call the next() method on the iterable
         const next_result = try self.convertMethodCallOnTyped(iterable_typed, "next", &.{});
 
@@ -2579,12 +2625,20 @@ pub const AstToIr = struct {
         };
         const value_offset = try self.func().emitConstI64(8);
         const value_ptr = try self.func().emitBinaryOp(.add, next_result.value, value_offset, .ptr);
-        const element_value = try self.func().emitLoad(value_ptr, opt_info.wrapped);
 
-        // Register the loop variable - allocate a slot and store the value there
-        // For struct types (like Character), use the struct type; otherwise use primitive
-        const var_slot = try self.func().emitAlloca(opt_info.wrapped);
-        try self.func().emitStore(var_slot, element_value);
+        // Register the loop variable
+        // For struct types, use the pointer directly (struct data is inline in the optional)
+        // For primitive types, load the value and store in a new slot
+        const var_slot: ir.Value = if (opt_info.wrapped_struct_type) |_| blk: {
+            // For struct types, the payload is the struct data inline
+            break :blk value_ptr;
+        } else blk: {
+            const element_value = try self.func().emitLoad(value_ptr, opt_info.wrapped);
+            const slot = try self.func().emitAlloca(opt_info.wrapped);
+            try self.func().emitStore(slot, element_value);
+            break :blk slot;
+        };
+
         const var_type: ValueType = if (opt_info.wrapped_struct_type) |struct_name|
             .{ .struct_type = struct_name }
         else
@@ -2698,7 +2752,16 @@ pub const AstToIr = struct {
         const wrapped_type = opt_info.wrapped;
 
         // Create a stack slot for the variable being declared
-        const var_ptr = try self.func().emitAlloca(wrapped_type);
+        // For struct types, allocate enough space for the struct
+        const var_ptr = if (opt_info.wrapped_struct_type) |struct_name| blk: {
+            const struct_size = if (self.type_map.get(struct_name)) |type_info| s: {
+                if (type_info == .struct_type) {
+                    break :s type_info.struct_type.size;
+                }
+                break :s 8;
+            } else 8;
+            break :blk try self.func().emitAllocaSized(struct_size);
+        } else try self.func().emitAlloca(wrapped_type);
         try self.func().setValueName(var_ptr, unwrap.var_name);
 
         // Add to var_map so the default body can assign to it
@@ -2738,8 +2801,23 @@ pub const AstToIr = struct {
 
         // In "some" block: unwrap and store value
         const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
-        const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
-        try self.func().emitStore(var_ptr, unwrapped_value);
+        if (opt_info.wrapped_struct_type != null) {
+            // For struct types, copy the struct data from the optional payload to var_ptr
+            // Get the struct size
+            const struct_size = if (opt_info.wrapped_struct_type) |struct_name| blk: {
+                if (self.type_map.get(struct_name)) |type_info| {
+                    if (type_info == .struct_type) {
+                        break :blk type_info.struct_type.size;
+                    }
+                }
+                break :blk 8; // fallback
+            } else 8;
+            try self.func().emitMemcpy(var_ptr, value_ptr, struct_size);
+        } else {
+            // For primitive types, load and store
+            const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
+            try self.func().emitStore(var_ptr, unwrapped_value);
+        }
         try self.func().emitBr(end_block_idx);
 
         // Restore nil block
@@ -2885,6 +2963,10 @@ pub const AstToIr = struct {
     /// Convert string literal expression to a string type
     /// This creates a String struct with the literal data
     fn convertStringLiteral(self: *AstToIr, str_bytes: []const u8) ConvertError!TypedValue {
+        // Process escape sequences
+        const processed = try self.processEscapeSequences(str_bytes);
+        defer self.allocator.free(processed);
+
         // Check if "String" type exists and conforms to InitableFromStringLiteral
         const type_name = "String";
 
@@ -2895,7 +2977,7 @@ pub const AstToIr = struct {
                 try self.module.trackString(init_func_name);
 
                 if (self.func_map.get(init_func_name)) |func_info| {
-                    const managed_ptr = try self.emitManagedStringFromBytes(str_bytes);
+                    const managed_ptr = try self.emitManagedStringFromBytes(processed);
 
                     // Allocate result struct and call init
                     const struct_size = type_info.struct_type.size;
@@ -2917,7 +2999,7 @@ pub const AstToIr = struct {
 
         // Fallback: store string bytes as a pointer to constant data
         // This is used when String type is not available
-        const str_ptr = try self.func().emitStringConstant(str_bytes);
+        const str_ptr = try self.func().emitStringConstant(processed);
         return .{ .value = str_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "string" } } };
     }
 
@@ -2987,27 +3069,28 @@ pub const AstToIr = struct {
                 if (self.typeConformsTo(type_name, "Stringable")) {
                     return self.callStringableToString(type_name, typed_val.value, format_spec);
                 }
-                self.reportError(.E005, type_name);
-                return error.UndefinedVariable;
+                self.reportError(.E006, type_name);
+                return error.UnknownType;
             },
             .primitive => |prim| {
-                if (std.mem.eql(u8, prim.name, "int") or prim.ir_type == .i64) {
+                // Check bool first since it also has ir_type == .i64
+                if (std.mem.eql(u8, prim.name, "bool")) {
+                    return self.convertBoolToString(typed_val.value);
+                } else if (std.mem.eql(u8, prim.name, "int") or prim.ir_type == .i64) {
                     return self.convertIntToString(typed_val.value);
                 } else if (std.mem.eql(u8, prim.name, "float") or prim.ir_type == .f64) {
                     return self.convertFloatToString(typed_val.value);
-                } else if (std.mem.eql(u8, prim.name, "bool")) {
-                    return self.convertBoolToString(typed_val.value);
                 }
-                self.reportError(.E005, prim.name);
-                return error.UndefinedVariable;
+                self.reportError(.E006, prim.name);
+                return error.UnknownType;
             },
             .enum_type => {
                 // Enums are stored as i64 values, convert like integers
                 return self.convertIntToString(typed_val.value);
             },
             else => {
-                self.reportError(.E005, "unsupported type for interpolation");
-                return error.UndefinedVariable;
+                self.reportError(.E006, "unsupported type for interpolation");
+                return error.UnknownType;
             },
         }
     }
@@ -3193,6 +3276,7 @@ pub const AstToIr = struct {
                     't' => try result.append(self.allocator, '\t'),
                     'r' => try result.append(self.allocator, '\r'),
                     '\\' => try result.append(self.allocator, '\\'),
+                    '\'' => try result.append(self.allocator, '\''),
                     '"' => try result.append(self.allocator, '"'),
                     '{' => try result.append(self.allocator, '{'),
                     '}' => try result.append(self.allocator, '}'),
@@ -3218,6 +3302,9 @@ pub const AstToIr = struct {
     fn convertCharLiteral(self: *AstToIr, char_bytes: []const u8) ConvertError!TypedValue {
         const type_name = "Character";
 
+        // Process escape sequences in the character literal
+        const processed_bytes = try self.processEscapeSequences(char_bytes);
+
         // If the Character type exists, create a managed string and call init
         if (self.type_map.get(type_name)) |type_info| {
             if (type_info == .struct_type) {
@@ -3225,7 +3312,7 @@ pub const AstToIr = struct {
                 try self.module.trackString(init_func_name);
 
                 if (self.func_map.get(init_func_name)) |func_info| {
-                    const managed_ptr = try self.emitManagedStringFromBytes(char_bytes);
+                    const managed_ptr = try self.emitManagedStringFromBytes(processed_bytes);
 
                     // Allocate result struct and call init
                     const struct_size = type_info.struct_type.size;
@@ -3243,7 +3330,7 @@ pub const AstToIr = struct {
         }
 
         // Fallback: store char bytes as constant data pointer
-        const char_ptr = try self.func().emitStringConstant(char_bytes);
+        const char_ptr = try self.func().emitStringConstant(processed_bytes);
         return .{ .value = char_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "Character" } } };
     }
 
@@ -3482,6 +3569,25 @@ pub const AstToIr = struct {
                         const negated = try self.func().emitBinaryOp(.icmp_eq, equals_result.value, zero, .i64);
                         return .{ .value = negated, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
                     }
+                }
+            }
+
+            // Check for Comparable for ordering operators (<, <=, >, >=)
+            if (self.typeConformsTo(type_name, "Comparable")) {
+                if (cmp.op != .eq and cmp.op != .ne) {
+                    // Call the compare() method: left.compare(right)
+                    // Returns -1 for less, 0 for equal, 1 for greater
+                    const compare_result = try self.emitMethodCallWithIrArgs(type_name, "compare", &.{right.value}, left.value);
+
+                    const zero = try self.func().emitConstI64(0);
+                    const result = switch (cmp.op) {
+                        .lt => try self.func().emitBinaryOp(.icmp_lt, compare_result.value, zero, .i64),
+                        .le => try self.func().emitBinaryOp(.icmp_le, compare_result.value, zero, .i64),
+                        .gt => try self.func().emitBinaryOp(.icmp_gt, compare_result.value, zero, .i64),
+                        .ge => try self.func().emitBinaryOp(.icmp_ge, compare_result.value, zero, .i64),
+                        else => unreachable,
+                    };
+                    return .{ .value = result, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "bool" } } };
                 }
             }
         }
@@ -4259,9 +4365,11 @@ pub const AstToIr = struct {
     fn convertInitableFromStringLiteral(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
         const str_bytes = decl.value.string_literal;
 
-        debug.astToIr("InitableFromStringLiteral: {s} with {d} bytes", .{ type_name, str_bytes.len });
+        const processed = try self.processEscapeSequences(str_bytes);
+        defer self.allocator.free(processed);
+        debug.astToIr("InitableFromStringLiteral: {s} with {d} bytes", .{ type_name, processed.len });
 
-        const managed_ptr = try self.emitManagedStringFromBytes(str_bytes);
+        const managed_ptr = try self.emitManagedStringFromBytes(processed);
 
         // Call Type$init(managed) - the static init method
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
@@ -4322,10 +4430,12 @@ pub const AstToIr = struct {
     /// Creates a __ManagedString from the character bytes and calls Type$init(managed)
     fn convertInitableFromCharLiteral(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
         const char_bytes = decl.value.char_literal;
+        // Process escape sequences in the character literal
+        const processed_bytes = try self.processEscapeSequences(char_bytes);
 
-        debug.astToIr("InitableFromCharLiteral: {s} with {d} bytes", .{ type_name, char_bytes.len });
+        debug.astToIr("InitableFromCharLiteral: {s} with {d} bytes", .{ type_name, processed_bytes.len });
 
-        const managed_ptr = try self.emitManagedStringFromBytes(char_bytes);
+        const managed_ptr = try self.emitManagedStringFromBytes(processed_bytes);
 
         // Call Type$init(managed) - the static init method
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});

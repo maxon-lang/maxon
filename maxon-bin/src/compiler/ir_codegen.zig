@@ -191,7 +191,7 @@ fn analyzeLiveness(allocator: std.mem.Allocator, func: *const ir.Function) !Live
                         }
                     },
                     else => {},
-                }
+            }
             }
         }
     }
@@ -358,7 +358,7 @@ pub const IrCodegen = struct {
                 switch (target) {
                     .rax => try self.enc.movRaxRbpOffset(offset),
                     .xmm => |xmm| if (xmm == .xmm0) try self.enc.movsdXmm0RbpOffset(offset) else try self.enc.movsdXmm1RbpOffset(offset),
-                }
+            }
             },
             .register => |reg| switch (target) {
                 .rax => {
@@ -415,6 +415,9 @@ pub const IrCodegen = struct {
         // Generate main function first (entry point)
         if (module.getFunction("main")) |func| {
             try self.func_offsets.put(self.allocator, func.name, self.code.items.len);
+                if (func.alias) |alias| {
+                    try self.func_offsets.put(self.allocator, alias, self.code.items.len);
+            }
             try self.generateFunction(func);
         }
 
@@ -422,6 +425,9 @@ pub const IrCodegen = struct {
         for (module.functions.items) |*func| {
             if (!std.mem.eql(u8, func.name, "main")) {
                 try self.func_offsets.put(self.allocator, func.name, self.code.items.len);
+                if (func.alias) |alias| {
+                    try self.func_offsets.put(self.allocator, alias, self.code.items.len);
+                }
                 try self.generateFunction(func);
             }
         }
@@ -1218,31 +1224,333 @@ pub const IrCodegen = struct {
 
     /// Generate __runtime_float_to_string(buffer, value) -> length
     /// Converts an f64 float to its string representation
-    /// For now, uses a simple fixed-point representation
+    /// Native implementation - no C runtime dependency
+    /// Format: up to 6 decimal places, trailing zeros removed (but keeps at least one decimal)
     fn generateRuntimeFloatToString(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__runtime_float_to_string", self.code.items.len);
 
-        // Prologue
+        // Parameters: RCX = buffer, XMM1 = float value (Windows x64 calling convention)
+        // Returns: RAX = length of string written
+        //
+        // Stack layout:
+        //   [rbp-8]  = original buffer pointer
+        //   [rbp-16] = current write position
+        //   [rbp-24] = integer part digit start (for reversal)
+        //   [rbp-32] = first fractional digit position (for trimming)
+
+        // Prologue - save callee-saved registers we'll use
         try self.enc.pushRbp();
         try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
         try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+        try self.enc.emit(&.{ 0x53 }); // push rbx
+        try self.enc.emit(&.{ 0x56 }); // push rsi
+        try self.enc.emit(&.{ 0x57 }); // push rdi
 
-        // For now, just write "0.0" as a placeholder
-        // TODO: Implement proper float-to-string conversion
-        // Parameters: RCX = buffer, XMM1 = float value (Windows x64 calling convention)
+        // Save original buffer pointer
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF8 }); // mov [rbp-8], rcx
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF0 }); // mov [rbp-16], rcx (current pos = buffer start)
 
-        // Write "0.0" to buffer
+        // ========== SECTION 1: Check for special values (NaN, Inf) ==========
+        // Extract float bits to RAX
+        try self.enc.emit(&.{ 0x66, 0x48, 0x0F, 0x7E, 0xC8 }); // movq rax, xmm1
+
+        // Check exponent: if (exponent == 0x7FF) then special value
+        try self.enc.emit(&.{ 0x48, 0x89, 0xC2 }); // mov rdx, rax
+        try self.enc.emit(&.{ 0x48, 0xC1, 0xEA, 0x34 }); // shr rdx, 52 (get exponent + sign in bits 0-11)
+        try self.enc.emit(&.{ 0x81, 0xE2, 0xFF, 0x07, 0x00, 0x00 }); // and edx, 0x7FF (mask exponent)
+        try self.enc.emit(&.{ 0x81, 0xFA, 0xFF, 0x07, 0x00, 0x00 }); // cmp edx, 0x7FF
+        const jne_not_special = self.code.items.len;
+        try self.enc.emit(&.{ 0x0F, 0x85, 0x00, 0x00, 0x00, 0x00 }); // jne not_special (patch later)
+
+        // It's a special value - check mantissa for NaN vs Inf
+        // Mantissa is bits 0-51 of rax
+        try self.enc.emit(&.{ 0x48, 0xB9 }); // mov rcx, imm64 (mantissa mask)
+        try self.enc.emitI64(0x000FFFFFFFFFFFFF);
+        try self.enc.emit(&.{ 0x48, 0x21, 0xC8 }); // and rax, rcx (isolate mantissa)
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+
+        // Reload buffer pointer for writing
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16]
+
+        const jz_is_inf = self.code.items.len;
+        try self.enc.emit(&.{ 0x74, 0x00 }); // jz is_infinity (patch later)
+
+        // ===== Write "nan" =====
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x6E }); // mov byte [rcx], 'n'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x01, 0x61 }); // mov byte [rcx+1], 'a'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x02, 0x6E }); // mov byte [rcx+2], 'n'
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x03, 0x00, 0x00, 0x00 }); // mov rax, 3
+        const jmp_to_epilogue_nan = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp epilogue
+
+        // ===== is_infinity: check sign and write "inf" or "-inf" =====
+        const is_inf_pos = self.code.items.len;
+        self.code.items[jz_is_inf + 1] = @intCast(is_inf_pos - (jz_is_inf + 2));
+
+        // Get original bits again to check sign
+        try self.enc.emit(&.{ 0x66, 0x48, 0x0F, 0x7E, 0xC8 }); // movq rax, xmm1
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax (sign bit in bit 63)
+        const jns_pos_inf = self.code.items.len;
+        try self.enc.emit(&.{ 0x79, 0x00 }); // jns positive_inf
+
+        // Negative infinity: write "-inf"
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x2D }); // mov byte [rcx], '-'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x01, 0x69 }); // mov byte [rcx+1], 'i'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x02, 0x6E }); // mov byte [rcx+2], 'n'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x03, 0x66 }); // mov byte [rcx+3], 'f'
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x04, 0x00, 0x00, 0x00 }); // mov rax, 4
+        const jmp_to_epilogue_neginf = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp epilogue
+
+        // Positive infinity: write "inf"
+        const pos_inf_pos = self.code.items.len;
+        self.code.items[jns_pos_inf + 1] = @intCast(pos_inf_pos - (jns_pos_inf + 2));
+
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x69 }); // mov byte [rcx], 'i'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x01, 0x6E }); // mov byte [rcx+1], 'n'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x02, 0x66 }); // mov byte [rcx+2], 'f'
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x03, 0x00, 0x00, 0x00 }); // mov rax, 3
+        const jmp_to_epilogue_posinf = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp epilogue
+
+        // ========== not_special: Normal float processing ==========
+        const not_special_pos = self.code.items.len;
+        // Patch the jne not_special
+        const jne_rel: i32 = @intCast(@as(i64, @intCast(not_special_pos)) - @as(i64, @intCast(jne_not_special)) - 6);
+        self.code.items[jne_not_special + 2] = @truncate(@as(u32, @bitCast(jne_rel)));
+        self.code.items[jne_not_special + 3] = @truncate(@as(u32, @bitCast(jne_rel)) >> 8);
+        self.code.items[jne_not_special + 4] = @truncate(@as(u32, @bitCast(jne_rel)) >> 16);
+        self.code.items[jne_not_special + 5] = @truncate(@as(u32, @bitCast(jne_rel)) >> 24);
+
+        // ========== SECTION 2: Handle sign ==========
+        // Check if negative (bit 63 set)
+        try self.enc.emit(&.{ 0x66, 0x48, 0x0F, 0x7E, 0xC8 }); // movq rax, xmm1
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+        const jns_not_neg = self.code.items.len;
+        try self.enc.emit(&.{ 0x79, 0x00 }); // jns not_negative
+
+        // Write '-' and take absolute value
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16]
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x2D }); // mov byte [rcx], '-'
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC1 }); // inc rcx
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF0 }); // mov [rbp-16], rcx
+
+        // Clear sign bit in XMM1: andpd xmm1, [sign_mask]
+        // Use movabs to load mask, then clear sign bit via integer ops
+        try self.enc.emit(&.{ 0x48, 0xB8 }); // mov rax, imm64 (sign mask: clear bit 63)
+        try self.enc.emitI64(0x7FFFFFFFFFFFFFFF);
+        try self.enc.emit(&.{ 0x66, 0x48, 0x0F, 0x7E, 0xCA }); // movq rdx, xmm1
+        try self.enc.emit(&.{ 0x48, 0x21, 0xC2 }); // and rdx, rax
+        try self.enc.emit(&.{ 0x66, 0x48, 0x0F, 0x6E, 0xCA }); // movq xmm1, rdx
+
+        const not_neg_pos = self.code.items.len;
+        self.code.items[jns_not_neg + 1] = @intCast(not_neg_pos - (jns_not_neg + 2));
+
+        // ========== SECTION 3: Handle zero case ==========
+        // Compare xmm1 with 0.0
+        try self.enc.emit(&.{ 0x66, 0x0F, 0xEF, 0xC0 }); // pxor xmm0, xmm0 (xmm0 = 0.0)
+        try self.enc.emit(&.{ 0x66, 0x0F, 0x2E, 0xC8 }); // ucomisd xmm1, xmm0
+        const jne_not_zero = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jne not_zero
+
+        // Value is zero: write "0.0"
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16]
         try self.enc.emit(&.{ 0xC6, 0x01, 0x30 }); // mov byte [rcx], '0'
         try self.enc.emit(&.{ 0xC6, 0x41, 0x01, 0x2E }); // mov byte [rcx+1], '.'
         try self.enc.emit(&.{ 0xC6, 0x41, 0x02, 0x30 }); // mov byte [rcx+2], '0'
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC1, 0x03 }); // add rcx, 3
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF0 }); // mov [rbp-16], rcx
+        // Calculate length
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xF0 }); // mov rax, [rbp-16]
+        try self.enc.emit(&.{ 0x48, 0x2B, 0x45, 0xF8 }); // sub rax, [rbp-8]
+        const jmp_to_epilogue_zero = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp epilogue
 
-        // Return length = 3
-        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x03, 0x00, 0x00, 0x00 }); // mov rax, 3
+        const not_zero_pos = self.code.items.len;
+        self.code.items[jne_not_zero + 1] = @intCast(not_zero_pos - (jne_not_zero + 2));
 
-        // Epilogue
+        // ========== SECTION 4: Extract integer part ==========
+        // cvttsd2si rax, xmm1 (truncate to integer)
+        try self.enc.emit(&.{ 0xF2, 0x48, 0x0F, 0x2C, 0xC1 }); // cvttsd2si rax, xmm1
+        try self.enc.emit(&.{ 0x48, 0x89, 0xC3 }); // mov rbx, rax (save integer part)
+
+        // Extract fractional part: xmm1 = xmm1 - (double)integer_part
+        try self.enc.emit(&.{ 0xF2, 0x48, 0x0F, 0x2A, 0xC0 }); // cvtsi2sd xmm0, rax
+        try self.enc.emit(&.{ 0xF2, 0x0F, 0x5C, 0xC8 }); // subsd xmm1, xmm0 (xmm1 = fractional part)
+
+        // ========== SECTION 5: Convert integer part to string ==========
+        // Similar to generateRuntimeIntToString but for unsigned value in rbx
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16] (current buffer pos)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xE8 }); // mov [rbp-24], rcx (save digit start)
+
+        // Special case: integer part == 0
+        try self.enc.emit(&.{ 0x48, 0x85, 0xDB }); // test rbx, rbx
+        const jnz_int_not_zero = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jnz int_not_zero
+
+        // Integer is zero, write '0'
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x30 }); // mov byte [rcx], '0'
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC1 }); // inc rcx
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF0 }); // mov [rbp-16], rcx
+        const jmp_past_int_loop = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp past_int_loop (use 32-bit jump)
+
+        const int_not_zero_pos = self.code.items.len;
+        self.code.items[jnz_int_not_zero + 1] = @intCast(int_not_zero_pos - (jnz_int_not_zero + 2));
+
+        // Loop: extract digits from rbx (integer part)
+        try self.enc.emit(&.{ 0x48, 0x89, 0xD8 }); // mov rax, rbx
+
+        const int_loop_start = self.code.items.len;
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+        const jz_int_end = self.code.items.len;
+        try self.enc.emit(&.{ 0x74, 0x00 }); // jz int_loop_end
+
+        // digit = rax % 10, quotient in rax
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx
+        try self.enc.emit(&.{ 0x49, 0xC7, 0xC0, 0x0A, 0x00, 0x00, 0x00 }); // mov r8, 10
+        try self.enc.emit(&.{ 0x49, 0xF7, 0xF0 }); // div r8 (rax = quotient, rdx = remainder)
+
+        // Write digit
+        try self.enc.emit(&.{ 0x80, 0xC2, 0x30 }); // add dl, '0'
+        try self.enc.emit(&.{ 0x88, 0x11 }); // mov [rcx], dl
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC1 }); // inc rcx
+
+        // Loop back
+        const int_loop_back: i8 = @intCast(@as(i64, @intCast(int_loop_start)) - @as(i64, @intCast(self.code.items.len)) - 2);
+        try self.enc.emit(&.{ 0xEB, @bitCast(int_loop_back) }); // jmp int_loop_start
+
+        const int_loop_end_pos = self.code.items.len;
+        self.code.items[jz_int_end + 1] = @intCast(int_loop_end_pos - (jz_int_end + 2));
+
+        // Save end position and reverse digits
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF0 }); // mov [rbp-16], rcx
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xE8 }); // mov rsi, [rbp-24] (start)
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x79, 0xFF }); // lea rdi, [rcx-1] (end-1)
+
+        // Reverse loop
+        const rev_loop_start = self.code.items.len;
+        try self.enc.emit(&.{ 0x48, 0x39, 0xFE }); // cmp rsi, rdi
+        const jae_rev_end = self.code.items.len;
+        try self.enc.emit(&.{ 0x73, 0x00 }); // jae rev_end
+
+        // Swap bytes
+        try self.enc.emit(&.{ 0x8A, 0x06 }); // mov al, [rsi]
+        try self.enc.emit(&.{ 0x8A, 0x1F }); // mov bl, [rdi]
+        try self.enc.emit(&.{ 0x88, 0x1E }); // mov [rsi], bl
+        try self.enc.emit(&.{ 0x88, 0x07 }); // mov [rdi], al
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC6 }); // inc rsi
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xCF }); // dec rdi
+
+        const rev_loop_back: i8 = @intCast(@as(i64, @intCast(rev_loop_start)) - @as(i64, @intCast(self.code.items.len)) - 2);
+        try self.enc.emit(&.{ 0xEB, @bitCast(rev_loop_back) }); // jmp rev_loop
+
+        const rev_end_pos = self.code.items.len;
+        self.code.items[jae_rev_end + 1] = @intCast(rev_end_pos - (jae_rev_end + 2));
+
+        // Patch jmp_past_int_loop (32-bit jump)
+        const past_int_loop_pos = self.code.items.len;
+        const jmp_past_rel: i32 = @intCast(@as(i64, @intCast(past_int_loop_pos)) - @as(i64, @intCast(jmp_past_int_loop)) - 5);
+        self.code.items[jmp_past_int_loop + 1] = @truncate(@as(u32, @bitCast(jmp_past_rel)));
+        self.code.items[jmp_past_int_loop + 2] = @truncate(@as(u32, @bitCast(jmp_past_rel)) >> 8);
+        self.code.items[jmp_past_int_loop + 3] = @truncate(@as(u32, @bitCast(jmp_past_rel)) >> 16);
+        self.code.items[jmp_past_int_loop + 4] = @truncate(@as(u32, @bitCast(jmp_past_rel)) >> 24);
+
+        // ========== SECTION 6: Write decimal point and fractional digits ==========
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16]
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x2E }); // mov byte [rcx], '.'
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC1 }); // inc rcx
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xE0 }); // mov [rbp-32], rcx (save first frac digit pos)
+
+        // Load constant 10.0 into xmm0
+        // 10.0 in IEEE 754: 0x4024000000000000
+        try self.enc.emit(&.{ 0x48, 0xB8 }); // mov rax, imm64
+        try self.enc.emitI64(0x4024000000000000);
+        try self.enc.emit(&.{ 0x66, 0x48, 0x0F, 0x6E, 0xC0 }); // movq xmm0, rax
+
+        // Loop 6 times to extract 6 fractional digits
+        try self.enc.emit(&.{ 0x41, 0xB8, 0x06, 0x00, 0x00, 0x00 }); // mov r8d, 6
+
+        const frac_loop_start = self.code.items.len;
+        // frac *= 10
+        try self.enc.emit(&.{ 0xF2, 0x0F, 0x59, 0xC8 }); // mulsd xmm1, xmm0
+
+        // digit = (int)frac
+        try self.enc.emit(&.{ 0xF2, 0x48, 0x0F, 0x2C, 0xC1 }); // cvttsd2si rax, xmm1
+
+        // frac -= digit
+        try self.enc.emit(&.{ 0xF2, 0x48, 0x0F, 0x2A, 0xD0 }); // cvtsi2sd xmm2, rax
+        try self.enc.emit(&.{ 0xF2, 0x0F, 0x5C, 0xCA }); // subsd xmm1, xmm2
+
+        // Write digit
+        try self.enc.emit(&.{ 0x04, 0x30 }); // add al, '0'
+        try self.enc.emit(&.{ 0x88, 0x01 }); // mov [rcx], al
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC1 }); // inc rcx
+
+        // Decrement counter and loop
+        try self.enc.emit(&.{ 0x41, 0xFF, 0xC8 }); // dec r8d
+        const jnz_frac_loop: i8 = @intCast(@as(i64, @intCast(frac_loop_start)) - @as(i64, @intCast(self.code.items.len)) - 2);
+        try self.enc.emit(&.{ 0x75, @bitCast(jnz_frac_loop) }); // jnz frac_loop
+
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF0 }); // mov [rbp-16], rcx
+
+        // ========== SECTION 7: Trim trailing zeros ==========
+        // rcx points past last digit, [rbp-32] = first fractional digit
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x7D, 0xE0 }); // mov rdi, [rbp-32] (first frac digit)
+
+        const trim_loop_start = self.code.items.len;
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC9 }); // dec rcx
+        try self.enc.emit(&.{ 0x48, 0x39, 0xF9 }); // cmp rcx, rdi (at first digit?)
+        const je_trim_keep_first = self.code.items.len;
+        try self.enc.emit(&.{ 0x74, 0x00 }); // je trim_keep_first (keep at least one digit)
+
+        try self.enc.emit(&.{ 0x80, 0x39, 0x30 }); // cmp byte [rcx], '0'
+        const je_trim_loop: i8 = @intCast(@as(i64, @intCast(trim_loop_start)) - @as(i64, @intCast(self.code.items.len)) - 2);
+        try self.enc.emit(&.{ 0x74, @bitCast(je_trim_loop) }); // je trim_loop
+
+        // Not a zero, move past it
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC1 }); // inc rcx
+        const jmp_trim_done = self.code.items.len;
+        try self.enc.emit(&.{ 0xEB, 0x00 }); // jmp trim_done
+
+        // At first digit - include it by incrementing past it
+        const trim_keep_first_pos = self.code.items.len;
+        self.code.items[je_trim_keep_first + 1] = @intCast(trim_keep_first_pos - (je_trim_keep_first + 2));
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC1 }); // inc rcx (move past first digit to include it)
+
+        const trim_done_pos = self.code.items.len;
+        self.code.items[jmp_trim_done + 1] = @intCast(trim_done_pos - (jmp_trim_done + 2));
+
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF0 }); // mov [rbp-16], rcx
+
+        // ========== SECTION 8: Calculate length and return ==========
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xF0 }); // mov rax, [rbp-16] (end)
+        try self.enc.emit(&.{ 0x48, 0x2B, 0x45, 0xF8 }); // sub rax, [rbp-8] (start)
+
+        // ========== Epilogue ==========
+        const epilogue_start = self.code.items.len;
+        try self.enc.emit(&.{ 0x5F }); // pop rdi
+        try self.enc.emit(&.{ 0x5E }); // pop rsi
+        try self.enc.emit(&.{ 0x5B }); // pop rbx
         try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
         try self.enc.popRbp();
         try self.enc.ret();
+
+        // Patch all jumps to epilogue
+        const patchJmpToEpilogue = struct {
+            fn patch(code_items: []u8, jmp_pos: usize, target: usize) void {
+                const rel: i32 = @intCast(@as(i64, @intCast(target)) - @as(i64, @intCast(jmp_pos)) - 5);
+                code_items[jmp_pos + 1] = @truncate(@as(u32, @bitCast(rel)));
+                code_items[jmp_pos + 2] = @truncate(@as(u32, @bitCast(rel)) >> 8);
+                code_items[jmp_pos + 3] = @truncate(@as(u32, @bitCast(rel)) >> 16);
+                code_items[jmp_pos + 4] = @truncate(@as(u32, @bitCast(rel)) >> 24);
+            }
+        }.patch;
+
+        patchJmpToEpilogue(self.code.items, jmp_to_epilogue_nan, epilogue_start);
+        patchJmpToEpilogue(self.code.items, jmp_to_epilogue_neginf, epilogue_start);
+        patchJmpToEpilogue(self.code.items, jmp_to_epilogue_posinf, epilogue_start);
+        patchJmpToEpilogue(self.code.items, jmp_to_epilogue_zero, epilogue_start);
     }
 
     /// Generate __runtime_bool_to_string(buffer, value) -> length
@@ -1630,7 +1938,7 @@ pub const IrCodegen = struct {
                     if (args.len > max_args) {
                         max_args = args.len;
                     }
-                }
+            }
             }
         }
         // Calculate space needed for stack arguments (args beyond first 4)
@@ -1750,6 +2058,7 @@ pub const IrCodegen = struct {
             .bitcast_f64_to_i64 => try self.genBitcastF64ToI64(inst),
             .sext_i32_i64 => try self.genSextI32I64(inst),
             .trunc_i64_i32 => try self.genTruncI64I32(inst),
+            .trunc_i64_i8 => try self.genTruncI64I8(inst),
             .zext_i8_i64 => try self.genZextI8I64(inst),
             .ret => try self.genRet(inst),
             .param => try self.genParam(inst),
@@ -2272,6 +2581,13 @@ pub const IrCodegen = struct {
         try self.storeToStack(inst.result.?, .i32);
     }
 
+    fn genTruncI64I8(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Truncate i64 to i8: just use lower 8 bits
+        try self.loadToRax(inst.operands[0].value);
+        // Store as i8 (lower 8 bits)
+        try self.storeToStack(inst.result.?, .i8);
+    }
+
     fn genZextI8I64(self: *IrCodegen, inst: ir.Instruction) !void {
         // Zero-extend i8 (byte) to i64: movzx rax, al
         try self.loadToRax(inst.operands[0].value);
@@ -2358,13 +2674,13 @@ pub const IrCodegen = struct {
                     2 => try self.enc.emit(&.{ 0x4C, 0x89, 0xC0 }), // mov rax, r8
                     3 => try self.enc.emit(&.{ 0x4C, 0x89, 0xC8 }), // mov rax, r9
                     else => unreachable,
-                }
+            }
                 try self.enc.movRbpOffsetRax(offset);
                 try self.setValueLocation(result, .{ .stack = offset }, ty);
 
                 if (ty == .ptr) {
                     try self.markIndirect(result);
-                }
+            }
             }
         } else {
             // Parameters 5+ come from the caller's stack frame
@@ -2388,7 +2704,7 @@ pub const IrCodegen = struct {
 
                 if (ty == .ptr) {
                     try self.markIndirect(result);
-                }
+            }
             }
         }
     }
@@ -2426,7 +2742,7 @@ pub const IrCodegen = struct {
                 try self.setValueLocation(result, .{ .stack = result_offset }, ret_type);
                 if (ret_type == .ptr) {
                     try self.markIndirect(result);
-                }
+            }
             }
         } else {
             // Normal call without hidden return pointer
@@ -2471,7 +2787,7 @@ pub const IrCodegen = struct {
                 } else {
                     try self.loadToRax(arg);
                     try self.movArgRegRax(i);
-                }
+            }
             } else {
                 // Args 5+ go on stack. We write at [RSP + (i-4)*8] BEFORE shadow
                 // space allocation (sub rsp, 32). After allocation, these will be
@@ -2495,7 +2811,7 @@ pub const IrCodegen = struct {
                     try self.loadToRax(arg);
                     // mov [rsp+offset], rax
                     try self.enc.movRspOffsetRax(stack_offset);
-                }
+            }
             }
         }
     }
@@ -2531,7 +2847,7 @@ pub const IrCodegen = struct {
                 } else {
                     try self.loadToRax(arg);
                     try self.movArgRegRax(shifted_idx);
-                }
+            }
             } else {
                 // Args that go on stack (shifted_idx >= 4)
                 // Stack offset is based on shifted index, not original
@@ -2551,7 +2867,7 @@ pub const IrCodegen = struct {
                 } else {
                     try self.loadToRax(arg);
                     try self.enc.movRspOffsetRax(stack_offset);
-                }
+            }
             }
         }
     }

@@ -74,6 +74,7 @@ pub const Instruction = struct {
         bitcast_f64_to_i64, // reinterpret f64 bits as i64 (for hashing)
         sext_i32_i64, // sign-extend i32 to i64
         trunc_i64_i32, // truncate i64 to i32
+        trunc_i64_i8, // truncate i64 to i8 (byte)
         zext_i8_i64, // zero-extend i8 (byte) to i64
 
         // Control flow
@@ -148,6 +149,7 @@ pub const Instruction = struct {
                 .bitcast_f64_to_i64 => "bitcast.f64.i64",
                 .sext_i32_i64 => "sext.i32.i64",
                 .trunc_i64_i32 => "trunc.i64.i32",
+                .trunc_i64_i8 => "trunc.i64.i8",
                 .zext_i8_i64 => "zext.i8.i64",
                 .ret => "ret",
                 .br => "br",
@@ -210,6 +212,7 @@ pub const BasicBlock = struct {
 
 /// IR Function
 pub const Function = struct {
+    alias: ?[]const u8 = null, // Alternate name for interface methods
     name: []const u8,
     return_type: Type,
     is_exported: bool,
@@ -334,6 +337,7 @@ pub const Function = struct {
             .bitcast_f64_to_i64 => "tmp_bitcast",
             .sext_i32_i64 => "tmp_sext",
             .trunc_i64_i32 => "tmp_trunc",
+            .trunc_i64_i8 => "tmp_trunc_i8",
             .zext_i8_i64 => "tmp_zext",
             .ret => "tmp_ret",
             .br, .br_cond => "tmp_br",

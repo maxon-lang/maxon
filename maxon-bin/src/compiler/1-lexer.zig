@@ -73,6 +73,7 @@ pub const TokenType = enum {
     comma,
     colon,
     dot,
+    question, // ? for optional types
 
     // Formatting
     newline,
@@ -378,6 +379,14 @@ pub const Lexer = struct {
                 const text = self.source[start..self.pos];
                 const token_type = getKeyword(text) orelse .identifier;
                 try tokens.append(allocator, .{ .type = token_type, .text = text, .line = self.line, .column = start_col });
+                continue;
+            }
+
+            // Question mark (for optional types like int?)
+            if (c == '?') {
+                try tokens.append(allocator, .{ .type = .question, .text = "?", .line = self.line, .column = self.column });
+                self.pos += 1;
+                self.column += 1;
                 continue;
             }
 
