@@ -424,27 +424,29 @@ end:
     %tmp_load.3 = load i64 %otherLen
     %tmp_add = add i64 %tmp_load.2 %tmp_load.3
     call @Array$int$ensureCapacity(%self, %tmp_add)
+    %tmp_alloca.2 = alloca.sized ptr 32
+    memcpy %tmp_alloca.2 %other 32
     br @block3
 forcond:
-    %tmp_alloca.2 = alloca.sized ptr 16
-    %tmp_call.1 = call ptr @Array$int$next(%tmp_alloca.2, %other)
-    %tmp_load.4 = load i64 %tmp_alloca.2
+    %tmp_alloca.3 = alloca.sized ptr 16
+    %tmp_call.1 = call ptr @Array$int$next(%tmp_alloca.3, %tmp_alloca.2)
+    %tmp_load.4 = load i64 %tmp_alloca.3
     %tmp_const.2 = const.i64 i64 0
     %tmp_icmp.1 = icmp.eq i64 %tmp_load.4 %tmp_const.2
     %tmp_icmp.2 = icmp.eq i64 %tmp_icmp.1 %tmp_const.2
     br.cond %tmp_icmp.2 @block4 @block5
 forbody:
     %tmp_const.3 = const.i64 i64 8
-    %tmp_add.1 = add ptr %tmp_alloca.2 %tmp_const.3
+    %tmp_add.1 = add ptr %tmp_alloca.3 %tmp_const.3
     %tmp_load.5 = load i64 %tmp_add.1
-    %tmp_alloca.3 = alloca ptr
-    store %tmp_alloca.3 %tmp_load.5
+    %tmp_alloca.4 = alloca ptr
+    store %tmp_alloca.4 %tmp_load.5
     %tmp_fieldptr.2 = getfieldptr ptr %self 0
     %tmp_load.6 = load i64 %len
-    %tmp_load.7 = load i64 %tmp_alloca.3
+    %tmp_load.7 = load i64 %tmp_alloca.4
     %tmp_load.8 = load ptr %tmp_fieldptr.2
-    %30 = getelemptr ptr %tmp_load.8 %tmp_load.6 elemsize=8
-    store %30 %tmp_load.7
+    %31 = getelemptr ptr %tmp_load.8 %tmp_load.6 elemsize=8
+    store %31 %tmp_load.7
     %tmp_load.9 = load i64 %len
     %tmp_const.4 = const.i64 i64 1
     %tmp_add.2 = add i64 %tmp_load.9 %tmp_const.4

@@ -191,7 +191,7 @@ fn analyzeLiveness(allocator: std.mem.Allocator, func: *const ir.Function) !Live
                         }
                     },
                     else => {},
-            }
+                }
             }
         }
     }
@@ -358,7 +358,7 @@ pub const IrCodegen = struct {
                 switch (target) {
                     .rax => try self.enc.movRaxRbpOffset(offset),
                     .xmm => |xmm| if (xmm == .xmm0) try self.enc.movsdXmm0RbpOffset(offset) else try self.enc.movsdXmm1RbpOffset(offset),
-            }
+                }
             },
             .register => |reg| switch (target) {
                 .rax => {
@@ -415,8 +415,8 @@ pub const IrCodegen = struct {
         // Generate main function first (entry point)
         if (module.getFunction("main")) |func| {
             try self.func_offsets.put(self.allocator, func.name, self.code.items.len);
-                if (func.alias) |alias| {
-                    try self.func_offsets.put(self.allocator, alias, self.code.items.len);
+            if (func.alias) |alias| {
+                try self.func_offsets.put(self.allocator, alias, self.code.items.len);
             }
             try self.generateFunction(func);
         }
@@ -1242,9 +1242,9 @@ pub const IrCodegen = struct {
         try self.enc.pushRbp();
         try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
         try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
-        try self.enc.emit(&.{ 0x53 }); // push rbx
-        try self.enc.emit(&.{ 0x56 }); // push rsi
-        try self.enc.emit(&.{ 0x57 }); // push rdi
+        try self.enc.emit(&.{0x53}); // push rbx
+        try self.enc.emit(&.{0x56}); // push rsi
+        try self.enc.emit(&.{0x57}); // push rdi
 
         // Save original buffer pointer
         try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF8 }); // mov [rbp-8], rcx
@@ -1529,9 +1529,9 @@ pub const IrCodegen = struct {
 
         // ========== Epilogue ==========
         const epilogue_start = self.code.items.len;
-        try self.enc.emit(&.{ 0x5F }); // pop rdi
-        try self.enc.emit(&.{ 0x5E }); // pop rsi
-        try self.enc.emit(&.{ 0x5B }); // pop rbx
+        try self.enc.emit(&.{0x5F}); // pop rdi
+        try self.enc.emit(&.{0x5E}); // pop rsi
+        try self.enc.emit(&.{0x5B}); // pop rbx
         try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
         try self.enc.popRbp();
         try self.enc.ret();
@@ -1938,7 +1938,7 @@ pub const IrCodegen = struct {
                     if (args.len > max_args) {
                         max_args = args.len;
                     }
-            }
+                }
             }
         }
         // Calculate space needed for stack arguments (args beyond first 4)
@@ -2138,6 +2138,7 @@ pub const IrCodegen = struct {
         try self.value_types.put(self.allocator, inst.result.?, .ptr);
         // Mark as indirect because the slot contains a pointer that needs to be dereferenced
         try self.markIndirect(inst.result.?);
+        debug.codegen("  alloca.sized: result=%{d}, size={d}, num_slots={d}, base_offset={d}, struct_offset={d}, ptr_slot={d}", .{ inst.result.?, size, num_slots, base_offset, struct_offset, ptr_slot });
     }
 
     fn genAllocaDynamic(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -2433,7 +2434,7 @@ pub const IrCodegen = struct {
         // Prefer the type that was actually stored at this location, otherwise use IR type
         const ty = self.stored_types.get(ptr) orelse inst.result_type;
 
-        debug.codegen("  load: ptr=%{d}, offset={d}, type={s}, indirect={}", .{ ptr, offset, ty.format(), self.isIndirect(ptr) });
+        debug.codegen("  load: result=%{d}, ptr=%{d}, offset={d}, type={s}, indirect={}", .{ result, ptr, offset, ty.format(), self.isIndirect(ptr) });
 
         if (self.isIndirect(ptr)) {
             try self.enc.movRcxRbpOffset(offset);
@@ -2449,6 +2450,7 @@ pub const IrCodegen = struct {
                 debug.codegen("    -> indirect i32 load: movsxd rax, [rcx]", .{});
             } else {
                 try self.enc.movRaxMem(.rcx);
+                debug.codegen("    -> indirect ptr load: mov rax, [rcx]", .{});
             }
         } else {
             if (ty == .f64) {
@@ -2467,9 +2469,17 @@ pub const IrCodegen = struct {
                 debug.codegen("    -> direct i32 load: movsxd rax, [rbp+{d}]", .{offset});
             } else {
                 try self.enc.movRaxRbpOffset(offset);
+                debug.codegen("    -> direct load: mov rax, [rbp+{d}]", .{offset});
             }
         }
-        try self.storeToStack(result, ty);
+        const result_offset = self.allocStackSlots(1);
+        debug.codegen("    -> storing result to stack offset {d}", .{result_offset});
+        if (ty == .f64) {
+            try self.enc.movsdRbpOffsetXmm0(result_offset);
+        } else {
+            try self.enc.movRbpOffsetRax(result_offset);
+        }
+        try self.setValueLocation(result, .{ .stack = result_offset }, ty);
         // When loading a pointer, mark result as indirect because the loaded value
         // is itself a pointer that points elsewhere (e.g., heap memory)
         if (ty == .ptr) {
@@ -2674,13 +2684,13 @@ pub const IrCodegen = struct {
                     2 => try self.enc.emit(&.{ 0x4C, 0x89, 0xC0 }), // mov rax, r8
                     3 => try self.enc.emit(&.{ 0x4C, 0x89, 0xC8 }), // mov rax, r9
                     else => unreachable,
-            }
+                }
                 try self.enc.movRbpOffsetRax(offset);
                 try self.setValueLocation(result, .{ .stack = offset }, ty);
 
                 if (ty == .ptr) {
                     try self.markIndirect(result);
-            }
+                }
             }
         } else {
             // Parameters 5+ come from the caller's stack frame
@@ -2704,7 +2714,7 @@ pub const IrCodegen = struct {
 
                 if (ty == .ptr) {
                     try self.markIndirect(result);
-            }
+                }
             }
         }
     }
@@ -2742,7 +2752,7 @@ pub const IrCodegen = struct {
                 try self.setValueLocation(result, .{ .stack = result_offset }, ret_type);
                 if (ret_type == .ptr) {
                     try self.markIndirect(result);
-            }
+                }
             }
         } else {
             // Normal call without hidden return pointer
@@ -2787,7 +2797,7 @@ pub const IrCodegen = struct {
                 } else {
                     try self.loadToRax(arg);
                     try self.movArgRegRax(i);
-            }
+                }
             } else {
                 // Args 5+ go on stack. We write at [RSP + (i-4)*8] BEFORE shadow
                 // space allocation (sub rsp, 32). After allocation, these will be
@@ -2811,7 +2821,7 @@ pub const IrCodegen = struct {
                     try self.loadToRax(arg);
                     // mov [rsp+offset], rax
                     try self.enc.movRspOffsetRax(stack_offset);
-            }
+                }
             }
         }
     }
@@ -2847,7 +2857,7 @@ pub const IrCodegen = struct {
                 } else {
                     try self.loadToRax(arg);
                     try self.movArgRegRax(shifted_idx);
-            }
+                }
             } else {
                 // Args that go on stack (shifted_idx >= 4)
                 // Stack offset is based on shifted index, not original
@@ -2867,7 +2877,7 @@ pub const IrCodegen = struct {
                 } else {
                     try self.loadToRax(arg);
                     try self.enc.movRspOffsetRax(stack_offset);
-            }
+                }
             }
         }
     }
@@ -3001,7 +3011,6 @@ pub const IrCodegen = struct {
     // Legacy alias
     const beginExternalCall = beginCall;
     const endExternalCall = endCall;
-
 
     fn genHeapAlloc(self: *IrCodegen, inst: ir.Instruction) !void {
         const size_val = inst.operands[0].value;

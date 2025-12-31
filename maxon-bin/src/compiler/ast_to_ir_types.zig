@@ -119,9 +119,15 @@ pub const StructTypeInfo = struct {
 };
 
 /// Enum type info - maps member names to their integer values
+/// For string-backed enums, also stores the backing string values
 pub const EnumTypeInfo = struct {
     name: []const u8,
     members: std.StringHashMapUnmanaged(i64),
+    backing_type: BackingType = .int,
+    /// For string-backed enums: maps ordinal to string value
+    string_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{},
+
+    pub const BackingType = enum { int, string };
 };
 
 /// Type info - primitives, structs, or enums
@@ -201,7 +207,6 @@ pub const BorrowState = enum {
     borrowed, // Has active borrows from it
     slice, // Is itself a slice/borrow from another variable
 };
-
 
 /// Variable info - tracks allocation, type, and ownership
 pub const VarInfo = struct {

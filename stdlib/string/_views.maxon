@@ -63,14 +63,13 @@ end 'CodepointView'
 export type UTF16View is Iterable with int
 	var _managed __ManagedString
 	var _bytePos int
-	var _highSurrogate int  // Pending high surrogate (0 if none)
+	var _pendingCodepoint int  // Codepoint pending its low surrogate (0 if none)
 
 	function Iterable.next() returns int or nil
-		// If we have a pending high surrogate, return the low surrogate
-		if _highSurrogate != 0 'has_pending'
-			var cp = utf8DecodeAt(_managed, _bytePos - utf8ByteLengthAt(_managed, _bytePos - 1))
-			var low = utf16TrailSurrogate(cp)
-			_highSurrogate = 0
+		// If we have a pending codepoint, return its low surrogate
+		if _pendingCodepoint != 0 'has_pending'
+			var low = utf16TrailSurrogate(_pendingCodepoint)
+			_pendingCodepoint = 0
 			return low
 		end 'has_pending'
 
@@ -88,7 +87,8 @@ export type UTF16View is Iterable with int
 		end 'bmp'
 
 		// Supplementary codepoint (surrogate pair)
-		_highSurrogate = cp
+		// Store the codepoint so we can return the low surrogate next iteration
+		_pendingCodepoint = cp
 		return utf16LeadSurrogate(cp)
 	end 'next'
 

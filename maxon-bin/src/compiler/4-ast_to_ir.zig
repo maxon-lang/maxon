@@ -1043,22 +1043,40 @@ pub const AstToIr = struct {
     fn registerEnum(self: *AstToIr, enum_decl: ast.EnumDecl) !void {
         var members: std.StringHashMapUnmanaged(i64) = .{};
         errdefer members.deinit(self.allocator);
+
+        // Determine backing type
+        const backing_type: types.EnumTypeInfo.BackingType = if (enum_decl.backing_type) |bt|
+            (if (std.mem.eql(u8, bt, "string")) .string else .int)
+        else
+            .int;
+
+        // For string-backed enums, store the string values
+        var string_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{};
+        errdefer string_values.deinit(self.allocator);
+
         var next_value: i64 = 0;
         for (enum_decl.members) |member| {
             if (member.value) |value_expr| {
                 // Explicit value - evaluate constant expression
                 if (value_expr.* == .integer) {
                     next_value = value_expr.integer;
+                } else if (value_expr.* == .string_literal and backing_type == .string) {
+                    // Store the string backing value for this ordinal
+                    try string_values.put(self.allocator, next_value, value_expr.string_literal);
                 }
-                // TODO: Handle string backing types
             }
             try members.put(self.allocator, member.name, next_value);
             next_value += 1;
         }
         try self.type_map.put(self.allocator, enum_decl.name, .{
-            .enum_type = .{ .name = enum_decl.name, .members = members },
+            .enum_type = .{
+                .name = enum_decl.name,
+                .members = members,
+                .backing_type = backing_type,
+                .string_values = string_values,
+            },
         });
-        debug.astToIr("Registered enum '{s}' with {d} members", .{ enum_decl.name, enum_decl.members.len });
+        debug.astToIr("Registered enum '{s}' with {d} members (backing: {s})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type) });
     }
 
     fn registerInterface(self: *AstToIr, iface: ast.InterfaceDecl) !void {
@@ -2175,7 +2193,11 @@ pub const AstToIr = struct {
 
             var_info.used = true;
 
-            // For heap arrays, free old memory before evaluating RHS (to get correct alloc order)
+            // IMPORTANT: Evaluate RHS BEFORE freeing old value, since RHS may reference the old value
+            // (e.g., result = result.concat(b) needs result's buffer while evaluating RHS)
+            const value_typed = try self.convertExpression(assign.value);
+
+            // For heap arrays, free old memory AFTER evaluating RHS
             if (var_info.ty == .array_type) {
                 const arr_info = var_info.ty.array_type;
                 if (arr_info.storage == .heap and var_info.state != .moved) {
@@ -2183,20 +2205,18 @@ pub const AstToIr = struct {
                     try self.func().emitHeapFree(old_ptr);
                 }
             }
-            // For stdlib Arrays, free old buffer before reassignment
+            // For stdlib Arrays/Strings, free old buffer AFTER evaluating RHS
             if (var_info.ty == .struct_type) {
                 if (std.mem.startsWith(u8, var_info.ty.struct_type, "Array$") and var_info.state != .moved) {
                     // Load the buffer pointer from offset 0 and free it
                     const old_buf_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
                     try self.func().emitHeapFree(old_buf_ptr);
                 }
-                // For String, use COW decref before reassignment
+                // For String, use COW decref AFTER evaluating RHS
                 if (self.isStringType(var_info.ty) and var_info.state != .moved) {
                     try self.emitStringDecref(var_info.ptr);
                 }
             }
-
-            const value_typed = try self.convertExpression(assign.value);
 
             const is_reference = var_info.ty == .struct_type or var_info.ty == .array_type or var_info.ty == .optional_type;
             if (is_reference and !var_info.uses_slot) {
@@ -2321,8 +2341,33 @@ pub const AstToIr = struct {
         const idx_typed = try self.convertExpression(assign.index.*);
         const val_typed = try self.convertExpression(assign.value);
 
-        const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
-        try self.func().emitStore(elem_ptr, val_typed.value);
+        // Calculate element size for struct arrays
+        const arr_info = switch (base_typed.ty) {
+            .array_type => |a| a,
+            else => {
+                // Not an array type, use default size
+                const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
+                try self.func().emitStore(elem_ptr, val_typed.value);
+                return;
+            },
+        };
+
+        const elem_size: i32 = if (arr_info.element_struct_type) |struct_name| blk: {
+            if (self.type_map.get(struct_name)) |type_info| {
+                if (type_info == .struct_type) {
+                    break :blk type_info.struct_type.size;
+                }
+            }
+            break :blk 8;
+        } else 8;
+
+        const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
+        // For structs, copy the entire struct data; for primitives, store the value
+        if (arr_info.element_struct_type != null) {
+            try self.func().emitMemcpy(elem_ptr, val_typed.value, elem_size);
+        } else {
+            try self.func().emitStore(elem_ptr, val_typed.value);
+        }
     }
 
     fn convertIfStmt(self: *AstToIr, if_stmt: ast.IfStmt) ConvertError!void {
@@ -2379,9 +2424,8 @@ pub const AstToIr = struct {
             const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
 
             if (opt_info.wrapped_struct_type) |struct_name| {
-                // For struct types, the payload is the struct data inline (not a pointer to it)
-                // Just use value_ptr directly as the binding - it points to the struct data
-                // uses_slot = false because value_ptr is already a pointer to the struct, not a slot
+                // For struct types, the struct data is stored inline after the tag (at offset 8).
+                // value_ptr already points to this inline struct data.
                 try self.func().setValueName(value_ptr, binding_name);
                 try self.var_map.put(self.allocator, binding_name, VarInfo.init(value_ptr, .{ .struct_type = struct_name }, true, false));
             } else {
@@ -2587,6 +2631,25 @@ pub const AstToIr = struct {
     ///     body
     /// end 'loop'
     fn convertForStmt(self: *AstToIr, for_stmt: ast.ForStmt) ConvertError!void {
+        // Convert the iterable expression ONCE, before the loop
+        // This is crucial for iterators like ByteView that have mutable state (_pos)
+        const iterable_typed = try self.convertExpression(for_stmt.iterable);
+
+        // For struct iterators, we need to store the iterator in a local variable
+        // so that mutations to _pos persist across iterations
+        // We use stack allocation since the iterator lives only for the loop duration
+        const iterator_slot: ir.Value = switch (iterable_typed.ty) {
+            .struct_type => |struct_name| blk: {
+                const struct_info = try self.lookupStructInfo(struct_name);
+                // Allocate space for the struct on the stack
+                const slot = try self.func().emitAllocaSized(@intCast(struct_info.size));
+                // Copy the struct data into our slot
+                try self.func().emitMemcpy(slot, iterable_typed.value, @intCast(struct_info.size));
+                break :blk slot;
+            },
+            else => iterable_typed.value,
+        };
+
         // Create condition block
         const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("forcond");
@@ -2598,11 +2661,12 @@ pub const AstToIr = struct {
             .result = undefined,
         });
 
-        // In condition block: call .next() on the iterable
-        const iterable_typed = try self.convertExpression(for_stmt.iterable);
+        // In condition block: call next() on the stored iterator
+        // The iterator_slot already points to our mutable iterator struct
+        const iterator_for_call = TypedValue{ .value = iterator_slot, .ty = iterable_typed.ty };
 
-        // Call the next() method on the iterable
-        const next_result = try self.convertMethodCallOnTyped(iterable_typed, "next", &.{});
+        // Call the next() method on the iterator
+        const next_result = try self.convertMethodCallOnTyped(iterator_for_call, "next", &.{});
 
         // Load the tag from the optional result (offset 0) to check if nil
         const tag = try self.func().emitLoad(next_result.value, .i64);
@@ -2963,6 +3027,35 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Create a some optional with a struct pointer value
+    fn createSomeOptionalWithStructType(self: *AstToIr, struct_ptr: ir.Value, wrapped_type: ir.Type, struct_type: ?[]const u8) ConvertError!TypedValue {
+        // Get struct size for inline storage
+        const struct_size: i32 = if (struct_type) |name| blk: {
+            if (self.type_map.get(name)) |type_info| {
+                if (type_info == .struct_type) {
+                    break :blk type_info.struct_type.size;
+                }
+            }
+            break :blk 8;
+        } else 8;
+
+        // Allocate: [tag: i64][struct data inline]
+        const opt_ptr = try self.func().emitAllocaSized(8 + struct_size);
+
+        // Store tag = 1 (has value)
+        const one = try self.func().emitConstI64(1);
+        try self.func().emitStore(opt_ptr, one);
+
+        // Copy struct data inline at offset 8
+        const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, 8);
+        try self.func().emitMemcpy(value_ptr, struct_ptr, struct_size);
+
+        return .{
+            .value = opt_ptr,
+            .ty = .{ .optional_type = .{ .wrapped = wrapped_type, .wrapped_struct_type = struct_type } },
+        };
+    }
+
     /// Create a nil optional with a specific wrapped type
     fn createNilOptional(self: *AstToIr, wrapped_type: ir.Type) ConvertError!TypedValue {
         const opt_ptr = try self.func().emitAllocaSized(16);
@@ -3015,6 +3108,27 @@ pub const AstToIr = struct {
         // This is used when String type is not available
         const str_ptr = try self.func().emitStringConstant(processed);
         return .{ .value = str_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "string" } } };
+    }
+
+    /// Emit a string literal directly into a pre-allocated String pointer.
+    /// Unlike convertStringLiteral, this does NOT add to temporary_strings tracking.
+    /// Used for control-flow constructs where only one path executes at runtime.
+    fn emitStringLiteralIntoPtr(self: *AstToIr, dest_ptr: ir.Value, str_bytes: []const u8) ConvertError!void {
+        // Process escape sequences
+        const processed = try self.processEscapeSequences(str_bytes);
+        defer self.allocator.free(processed);
+
+        // Create managed string from bytes
+        const managed_ptr = try self.emitManagedStringFromBytes(processed);
+
+        // Call String$init to initialize the destination pointer
+        const init_func_name = "String$init";
+        if (self.func_map.get(init_func_name)) |func_info| {
+            var args = try self.func().allocator.alloc(ir.Value, 2);
+            args[0] = dest_ptr;
+            args[1] = managed_ptr;
+            _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+        }
     }
 
     /// Convert an interpolated string expression to a String
@@ -3100,8 +3214,15 @@ pub const AstToIr = struct {
                 self.reportInternalError(msg);
                 return error.UnknownType;
             },
-            .enum_type => {
-                // Enums are stored as i64 values, convert like integers
+            .enum_type => |enum_type_name| {
+                // Look up the enum type info
+                if (self.type_map.get(enum_type_name)) |type_info| {
+                    if (type_info.enum_type.backing_type == .string) {
+                        // String-backed enum: generate switch on ordinal to select raw string value
+                        return self.convertStringEnumToString(typed_val.value, type_info.enum_type);
+                    }
+                }
+                // Int-backed or unknown enum: convert ordinal to string
                 return self.convertIntToString(typed_val.value);
             },
             else => {
@@ -3124,6 +3245,209 @@ pub const AstToIr = struct {
     /// Convert a bool to a String
     fn convertBoolToString(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         return self.emitBoolToStringCall(value);
+    }
+
+    /// Convert a string-backed enum to its string value
+    /// Generates a switch-like cascade on the ordinal to select the raw string value
+    fn convertStringEnumToString(self: *AstToIr, ordinal_value: ir.Value, enum_info: types.EnumTypeInfo) ConvertError!ir.Value {
+        // Collect string values into a sorted list by ordinal
+        const num_members = enum_info.string_values.count();
+        if (num_members == 0) {
+            // No string values, fall back to int conversion
+            return self.convertIntToString(ordinal_value);
+        }
+
+        // Collect entries sorted by ordinal
+        const EnumEntry = struct { ordinal: i64, string_val: []const u8 };
+        var entries = try self.allocator.alloc(EnumEntry, num_members);
+        defer self.allocator.free(entries);
+
+        var iter = enum_info.string_values.iterator();
+        var idx: usize = 0;
+        while (iter.next()) |entry| {
+            entries[idx] = .{ .ordinal = entry.key_ptr.*, .string_val = entry.value_ptr.* };
+            idx += 1;
+        }
+
+        // Sort by ordinal for consistent block order
+        std.mem.sort(EnumEntry, entries, {}, struct {
+            fn lessThan(_: void, a: EnumEntry, b: EnumEntry) bool {
+                return a.ordinal < b.ordinal;
+            }
+        }.lessThan);
+
+        // Allocate a result pointer for the String (32 bytes) in entry block
+        const result_ptr = try self.func().emitAllocaSized(32);
+
+        // For single-entry enum, just create the string directly
+        if (num_members == 1) {
+            try self.emitStringLiteralIntoPtr(result_ptr, entries[0].string_val);
+            return result_ptr;
+        }
+
+        // Track blocks that need branches to end block (we'll patch them later)
+        var case_exit_blocks = try self.allocator.alloc(u32, num_members);
+        defer self.allocator.free(case_exit_blocks);
+
+        // For N entries with N > 1:
+        // - Entry 0: compare ordinal==0, if true goto case0, else goto cmp1
+        // - Entry 1: compare ordinal==1, if true goto case1, else goto cmp2 (or case_last if N-2)
+        // - ...
+        // - Entry N-1: fallback case (no comparison needed)
+
+        // Process entry 0 in current (entry) block
+        {
+            const ord_const = try self.func().emitConstI64(entries[0].ordinal);
+            const cmp = try self.func().emitBinaryOp(.icmp_eq, ordinal_value, ord_const, .i64);
+
+            // Create case0 block
+            const case0_block_idx: u32 = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("string_enum_case0");
+
+            // We need to emit branch from entry to case0 or next_cmp
+            // But we don't know next_cmp index yet - need to emit branch after creating it
+
+            // For 2-entry enum, else goes directly to case1 (fallback)
+            // For 3+ entry enum, else goes to cmp1 block
+            if (num_members == 2) {
+                // Create case1 block (fallback)
+                const case1_block_idx: u32 = @intCast(self.func().blocks.items.len);
+                _ = try self.func().addBlock("string_enum_case1");
+
+                // Create end block
+                const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+                _ = try self.func().addBlock("string_enum_end");
+
+                // Pop end and case1, keep case0 as current
+                const end_block = self.func().blocks.pop().?;
+                const case1_block = self.func().blocks.pop().?;
+
+                // Emit branch from entry (which is blocks[case0_idx - 1])
+                try self.func().blocks.items[case0_block_idx - 1].instructions.append(self.allocator, .{
+                    .op = .br_cond,
+                    .operands = .{ .{ .value = cmp }, .{ .block_ref = case0_block_idx }, .{ .block_ref = case1_block_idx } },
+                    .result = undefined,
+                });
+
+                // Now in case0 block - emit string and branch to end
+                try self.emitStringLiteralIntoPtr(result_ptr, entries[0].string_val);
+                try self.func().emitBr(end_block_idx);
+
+                // Restore case1 block and emit string
+                try self.func().blocks.append(self.allocator, case1_block);
+                try self.emitStringLiteralIntoPtr(result_ptr, entries[1].string_val);
+                try self.func().emitBr(end_block_idx);
+
+                // Restore end block
+                try self.func().blocks.append(self.allocator, end_block);
+
+                return result_ptr;
+            }
+
+            // For 3+ entries, we need multiple comparison blocks
+            // Create cmp1 block
+            const cmp1_block_idx: u32 = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("string_enum_cmp1");
+
+            // Pop cmp1 to emit branch from entry
+            const cmp1_block = self.func().blocks.pop().?;
+
+            // Emit branch from entry
+            try self.func().blocks.items[case0_block_idx - 1].instructions.append(self.allocator, .{
+                .op = .br_cond,
+                .operands = .{ .{ .value = cmp }, .{ .block_ref = case0_block_idx }, .{ .block_ref = cmp1_block_idx } },
+                .result = undefined,
+            });
+
+            // Now in case0 block - emit string
+            try self.emitStringLiteralIntoPtr(result_ptr, entries[0].string_val);
+            case_exit_blocks[0] = @intCast(self.func().blocks.items.len - 1);
+            // Don't emit branch yet - we need end block index
+
+            // Restore cmp1 block
+            try self.func().blocks.append(self.allocator, cmp1_block);
+        }
+
+        // Process entries 1 through N-2 (each gets a comparison block)
+        for (1..num_members - 1) |i| {
+            // Current block is cmp[i] or we just restored it
+            const ord_const = try self.func().emitConstI64(entries[i].ordinal);
+            const cmp = try self.func().emitBinaryOp(.icmp_eq, ordinal_value, ord_const, .i64);
+
+            // Create case[i] block
+            const case_block_idx: u32 = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("string_enum_case");
+
+            // Determine else target
+            if (i == num_members - 2) {
+                // Last comparison - else goes to case[last] (fallback)
+                const case_last_block_idx: u32 = @intCast(self.func().blocks.items.len);
+                _ = try self.func().addBlock("string_enum_case_last");
+
+                // Create end block
+                const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+                _ = try self.func().addBlock("string_enum_end");
+
+                // Pop end and case_last
+                const end_block = self.func().blocks.pop().?;
+                const case_last_block = self.func().blocks.pop().?;
+
+                // Emit branch from cmp[i] (which is blocks[case_block_idx - 1])
+                try self.func().blocks.items[case_block_idx - 1].instructions.append(self.allocator, .{
+                    .op = .br_cond,
+                    .operands = .{ .{ .value = cmp }, .{ .block_ref = case_block_idx }, .{ .block_ref = case_last_block_idx } },
+                    .result = undefined,
+                });
+
+                // Now in case[i] block - emit string
+                try self.emitStringLiteralIntoPtr(result_ptr, entries[i].string_val);
+                try self.func().emitBr(end_block_idx);
+
+                // Restore case_last and emit string
+                try self.func().blocks.append(self.allocator, case_last_block);
+                try self.emitStringLiteralIntoPtr(result_ptr, entries[num_members - 1].string_val);
+                try self.func().emitBr(end_block_idx);
+
+                // Now patch the earlier case blocks to branch to end
+                for (0..i) |j| {
+                    try self.func().blocks.items[case_exit_blocks[j]].instructions.append(self.allocator, .{
+                        .op = .br,
+                        .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
+                        .result = undefined,
+                    });
+                }
+
+                // Restore end block
+                try self.func().blocks.append(self.allocator, end_block);
+
+                return result_ptr;
+            } else {
+                // Not last comparison - else goes to next cmp block
+                const next_cmp_block_idx: u32 = @intCast(self.func().blocks.items.len);
+                _ = try self.func().addBlock("string_enum_cmp");
+
+                // Pop next_cmp
+                const next_cmp_block = self.func().blocks.pop().?;
+
+                // Emit branch from current cmp block
+                try self.func().blocks.items[case_block_idx - 1].instructions.append(self.allocator, .{
+                    .op = .br_cond,
+                    .operands = .{ .{ .value = cmp }, .{ .block_ref = case_block_idx }, .{ .block_ref = next_cmp_block_idx } },
+                    .result = undefined,
+                });
+
+                // Now in case[i] block - emit string
+                try self.emitStringLiteralIntoPtr(result_ptr, entries[i].string_val);
+                case_exit_blocks[i] = @intCast(self.func().blocks.items.len - 1);
+                // Don't emit branch yet
+
+                // Restore next_cmp block
+                try self.func().blocks.append(self.allocator, next_cmp_block);
+            }
+        }
+
+        // Should not reach here - the loop handles the last comparison
+        unreachable;
     }
 
     /// Call Stringable.toString() on a type that conforms to Stringable
@@ -4520,14 +4844,30 @@ pub const AstToIr = struct {
             .struct_type => |name| name,
             .primitive, .array_type, .enum_type, .optional_type => null,
         };
-        const total_size = @as(i32, @intCast(elements.len)) * 8;
+
+        // Determine element size: for structs, use actual struct size; for primitives, use 8 bytes
+        const elem_size: i32 = if (elem_struct_type) |struct_name| blk: {
+            if (self.type_map.get(struct_name)) |type_info| {
+                if (type_info == .struct_type) {
+                    break :blk type_info.struct_type.size;
+                }
+            }
+            break :blk 8;
+        } else 8;
+
+        const total_size = @as(i32, @intCast(elements.len)) * elem_size;
         const arr_ptr = try self.func().emitAllocaSized(total_size);
 
         for (elements, 0..) |elem, i| {
             const typed = if (i == 0) first_typed else try self.convertExpression(elem);
             const idx_val = try self.func().emitConstI64(@intCast(i));
-            const elem_ptr = try self.func().emitGetElemPtr(arr_ptr, idx_val, 8);
-            try self.func().emitStore(elem_ptr, typed.value);
+            const elem_ptr = try self.func().emitGetElemPtr(arr_ptr, idx_val, elem_size);
+            // For structs, copy the entire struct data; for primitives, store the value
+            if (elem_struct_type != null) {
+                try self.func().emitMemcpy(elem_ptr, typed.value, elem_size);
+            } else {
+                try self.func().emitStore(elem_ptr, typed.value);
+            }
         }
 
         return .{
@@ -4669,6 +5009,16 @@ pub const AstToIr = struct {
 
         const idx_typed = try self.convertExpression(idx.index.*);
 
+        // Calculate element size: for structs, use actual struct size; for primitives, use 8 bytes
+        const elem_size: i32 = if (arr_info.element_struct_type) |struct_name| blk: {
+            if (self.type_map.get(struct_name)) |type_info| {
+                if (type_info == .struct_type) {
+                    break :blk type_info.struct_type.size;
+                }
+            }
+            break :blk 8;
+        } else 8;
+
         // Get the array size for bounds checking
         const arr_size: ir.Value = if (arr_info.size) |size|
             try self.func().emitConstI64(@intCast(size))
@@ -4702,9 +5052,14 @@ pub const AstToIr = struct {
                 .cast,
                 .interpolated_string,
                 => {
-                    const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
-                    const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
-                    return self.createSomeOptional(val, arr_info.element_type);
+                    const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
+                    if (arr_info.element_struct_type != null) {
+                        // For structs, return pointer to the struct data directly
+                        return self.createSomeOptionalWithStructType(elem_ptr, arr_info.element_type, arr_info.element_struct_type);
+                    } else {
+                        const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
+                        return self.createSomeOptional(val, arr_info.element_type);
+                    }
                 },
             };
             const size_var_name = try std.fmt.allocPrint(self.allocator, "{s}_size", .{arr_name});
@@ -4712,16 +5067,29 @@ pub const AstToIr = struct {
 
             const size_var_entry = self.var_map.getPtr(size_var_name) orelse {
                 // No size variable - can't do bounds checking, fall back to direct access
-                const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
-                const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
-                return self.createSomeOptional(val, arr_info.element_type);
+                const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
+                if (arr_info.element_struct_type != null) {
+                    // For structs, return pointer to the struct data directly
+                    return self.createSomeOptionalWithStructType(elem_ptr, arr_info.element_type, arr_info.element_struct_type);
+                } else {
+                    const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
+                    return self.createSomeOptional(val, arr_info.element_type);
+                }
             };
             size_var_entry.used = true;
             break :blk try self.func().emitLoad(size_var_entry.ptr, .i64);
         };
 
-        // Allocate the result optional (16 bytes)
-        const opt_ptr = try self.func().emitAllocaSized(16);
+        // Allocate the result optional: 8 bytes tag + element size
+        const opt_size: i32 = if (arr_info.element_struct_type) |struct_name| blk: {
+            if (self.type_map.get(struct_name)) |type_info| {
+                if (type_info == .struct_type) {
+                    break :blk 8 + type_info.struct_type.size;
+                }
+            }
+            break :blk 16;
+        } else 16;
+        const opt_ptr = try self.func().emitAllocaSized(opt_size);
 
         // Bounds check: index < size AND index >= 0
         // Since we use i64, negative check is: index >= 0
@@ -4758,11 +5126,23 @@ pub const AstToIr = struct {
         const one_val = try self.func().emitConstI64(1);
         try self.func().emitStore(opt_ptr, one_val); // tag = 1
 
-        const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, 8);
-        const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
+        const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
 
         const value_slot = try self.func().emitGetFieldPtr(opt_ptr, 8);
-        try self.func().emitStore(value_slot, val);
+        if (arr_info.element_struct_type) |struct_name| {
+            // For structs, copy the struct data inline
+            const struct_size: i32 = if (self.type_map.get(struct_name)) |type_info| blk: {
+                if (type_info == .struct_type) {
+                    break :blk type_info.struct_type.size;
+                }
+                break :blk 8;
+            } else 8;
+            try self.func().emitMemcpy(value_slot, elem_ptr, struct_size);
+        } else {
+            // For primitives, load the value and store it
+            const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
+            try self.func().emitStore(value_slot, val);
+        }
 
         try self.func().emitBr(merge_block_idx);
 

@@ -675,6 +675,12 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const a = try self.convertExpression(call.args[0]);
     const b = try self.convertExpression(call.args[1]);
 
+    // IMPORTANT: Load buffer pointers BEFORE allocating new struct
+    // In loops, alloca.sized reuses the same stack location, so we must read
+    // from the old struct before potentially overwriting it when a == result
+    const a_buf = try self.func().emitLoad(a.value, .ptr);
+    const b_buf = try self.func().emitLoad(b.value, .ptr);
+
     // Load lengths (offset 8, i32)
     const a_len_ptr = try self.func().emitGetFieldPtr(a.value, 8);
     const a_len_i32 = try self.func().emitLoad(a_len_ptr, .i32);
@@ -720,12 +726,12 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     try self.func().emitStoreI32(off_field, zero);
 
     // Copy first string: memcpy(buf_ptr, a.buffer, a_len)
-    const a_buf = try self.func().emitLoad(a.value, .ptr);
+    // Note: a_buf was loaded before alloca.sized to avoid aliasing issues in loops
     try self.func().emitMemcpyDynamic(buf_ptr, a_buf, a_len);
 
     // Copy second string: memcpy(buf_ptr + a_len, b.buffer, b_len)
+    // Note: b_buf was loaded before alloca.sized to avoid aliasing issues in loops
     const dst_offset = try self.func().emitBinaryOp(.add, buf_ptr, a_len, .ptr);
-    const b_buf = try self.func().emitLoad(b.value, .ptr);
     try self.func().emitMemcpyDynamic(dst_offset, b_buf, b_len);
 
     return .{ .value = result_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };

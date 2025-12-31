@@ -1671,8 +1671,8 @@ function main() returns int
     var original = "HELLO"
     var copy = original
     copy = copy.toLower()
-    print(original)
-    print(copy)
+    print("{original}\n")
+    print("{copy}\n")
     return 0
 end 'main'
 ```
@@ -1692,9 +1692,9 @@ function main() returns int
     var b = a
     var c = a
     b = b.toLower()
-    print(a)
-    print(b)
-    print(c)
+    print("{a}\n")
+    print("{b}\n")
+    print("{c}\n")
     return 0
 end 'main'
 ```
@@ -1716,7 +1716,7 @@ function main() returns int
     var start = s.startIndex()
     if let spaceIdx = s.find(" ") 'found'
         var sub = s.slice(start, spaceIdx)
-        print(sub)
+        print("{sub}\n")
     end 'found'
     return 0
 end 'main'
