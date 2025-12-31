@@ -169,7 +169,7 @@ function main() returns int
     var x = 100
     x = x - 50
     x = x * 2
-    x = x / 5
+    x = trunc(x / 5)
     return x
 end 'main'
 ```

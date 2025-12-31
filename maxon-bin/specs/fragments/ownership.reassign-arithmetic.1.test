@@ -3,7 +3,7 @@ function main() returns int
     var x = 100
     x = x - 50
     x = x * 2
-    x = x / 5
+    x = trunc(x / 5)
     return x
 end 'main'
 ---
@@ -24,8 +24,11 @@ entry:
     store %x %tmp_mul
     %tmp_load.2 = load i64 %x
     %tmp_const.3 = const.i64 i64 5
-    %tmp_div = div i64 %tmp_load.2 %tmp_const.3
-    store %x %tmp_div
+    %tmp_sitofp = sitofp f64 %tmp_load.2
+    %tmp_sitofp.1 = sitofp f64 %tmp_const.3
+    %tmp_fdiv = fdiv f64 %tmp_sitofp %tmp_sitofp.1
+    %tmp_fptosi = fptosi i64 %tmp_fdiv
+    store %x %tmp_fptosi
     %tmp_load.3 = load i64 %x
     ret %tmp_load.3
 }

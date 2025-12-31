@@ -1043,14 +1043,17 @@ end:
     %tmp_const.8 = const.i64 i64 3
     %tmp_mul.3 = mul i64 %tmp_load.1 %tmp_const.8
     %tmp_const.9 = const.i64 i64 4
-    %tmp_div = div i64 %tmp_mul.3 %tmp_const.9
+    %tmp_sitofp = sitofp f64 %tmp_mul.3
+    %tmp_sitofp.1 = sitofp f64 %tmp_const.9
+    %tmp_fdiv = fdiv f64 %tmp_sitofp %tmp_sitofp.1
     %loadLimit = alloca ptr
-    store %loadLimit %tmp_div
+    store %loadLimit %tmp_fdiv
     %tmp_fieldptr.12 = getfieldptr ptr %self 96
     %tmp_load.2 = load i64 %tmp_fieldptr.12
-    %tmp_load.3 = load i64 %loadLimit
-    %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.3
-    br.cond %tmp_icmp.1 @block3 @block4
+    %tmp_load.3 = load f64 %loadLimit
+    %tmp_sitofp.2 = sitofp f64 %tmp_load.2
+    %tmp_fcmp = fcmp.ge i64 %tmp_sitofp.2 %tmp_load.3
+    br.cond %tmp_fcmp @block3 @block4
 then:
     call @Map$int$int$grow(%self)
     br @block4
@@ -1066,8 +1069,8 @@ end:
     store %index %tmp_mod
     %tmp_load.7 = load i64 %index
     %tmp_const.11 = const.i64 i64 0
-    %tmp_icmp.2 = icmp.lt i64 %tmp_load.7 %tmp_const.11
-    br.cond %tmp_icmp.2 @block5 @block6
+    %tmp_icmp.1 = icmp.lt i64 %tmp_load.7 %tmp_const.11
+    br.cond %tmp_icmp.1 @block5 @block6
 then:
     %tmp_load.8 = load i64 %index
     %tmp_fieldptr.14 = getfieldptr ptr %self 104
@@ -1087,8 +1090,8 @@ whilecond:
     %tmp_load.10 = load i64 %probes
     %tmp_fieldptr.15 = getfieldptr ptr %self 104
     %tmp_load.11 = load i64 %tmp_fieldptr.15
-    %tmp_icmp.3 = icmp.lt i64 %tmp_load.10 %tmp_load.11
-    br.cond %tmp_icmp.3 @block8 @block25
+    %tmp_icmp.2 = icmp.lt i64 %tmp_load.10 %tmp_load.11
+    br.cond %tmp_icmp.2 @block8 @block25
 whilebody:
     %tmp_const.15 = const.i64 i64 0
     %state = alloca ptr
@@ -1099,8 +1102,8 @@ whilebody:
     %tmp_call.3 = call ptr @Array$int$get(%tmp_alloca.14, %tmp_fieldptr.16, %tmp_load.12)
     %tmp_load.13 = load i64 %tmp_alloca.14
     %tmp_const.16 = const.i64 i64 1
-    %tmp_icmp.4 = icmp.eq i64 %tmp_load.13 %tmp_const.16
-    br.cond %tmp_icmp.4 @block9 @block10
+    %tmp_icmp.3 = icmp.eq i64 %tmp_load.13 %tmp_const.16
+    br.cond %tmp_icmp.3 @block9 @block10
 if_let_then:
     %tmp_fieldptr.17 = getfieldptr ptr %tmp_alloca.14 8
     %tmp_load.14 = load i64 %tmp_fieldptr.17
@@ -1114,16 +1117,16 @@ if_let_else:
 if_let_end:
     %tmp_load.16 = load i64 %state
     %tmp_const.17 = const.i64 i64 0
-    %tmp_icmp.5 = icmp.eq i64 %tmp_load.16 %tmp_const.17
-    br.cond %tmp_icmp.5 @block12 @block15
+    %tmp_icmp.4 = icmp.eq i64 %tmp_load.16 %tmp_const.17
+    br.cond %tmp_icmp.4 @block12 @block15
 then:
     %tmp_load.17 = load i64 %index
     %insertIndex = alloca ptr
     store %insertIndex %tmp_load.17
     %tmp_load.18 = load i64 %firstDeleted
     %tmp_const.18 = const.i64 i64 0
-    %tmp_icmp.6 = icmp.ge i64 %tmp_load.18 %tmp_const.18
-    br.cond %tmp_icmp.6 @block13 @block14
+    %tmp_icmp.5 = icmp.ge i64 %tmp_load.18 %tmp_const.18
+    br.cond %tmp_icmp.5 @block13 @block14
 then:
     %tmp_load.19 = load i64 %firstDeleted
     store %insertIndex %tmp_load.19
@@ -1154,14 +1157,14 @@ end:
 end:
     %tmp_load.26 = load i64 %state
     %tmp_const.21 = const.i64 i64 2
-    %tmp_icmp.7 = icmp.eq i64 %tmp_load.26 %tmp_const.21
+    %tmp_icmp.6 = icmp.eq i64 %tmp_load.26 %tmp_const.21
     %tmp_load.27 = load i64 %firstDeleted
     %tmp_const.22 = const.i64 i64 0
-    %tmp_icmp.8 = icmp.lt i64 %tmp_load.27 %tmp_const.22
+    %tmp_icmp.7 = icmp.lt i64 %tmp_load.27 %tmp_const.22
     %tmp_const.23 = const.i64 i64 0
+    %tmp_icmp.8 = icmp.ne i64 %tmp_icmp.6 %tmp_const.23
     %tmp_icmp.9 = icmp.ne i64 %tmp_icmp.7 %tmp_const.23
-    %tmp_icmp.10 = icmp.ne i64 %tmp_icmp.8 %tmp_const.23
-    %tmp_mul.4 = mul i64 %tmp_icmp.9 %tmp_icmp.10
+    %tmp_mul.4 = mul i64 %tmp_icmp.8 %tmp_icmp.9
     br.cond %tmp_mul.4 @block16 @block17
 then:
     %tmp_load.28 = load i64 %index
@@ -1170,8 +1173,8 @@ then:
 end:
     %tmp_load.29 = load i64 %state
     %tmp_const.24 = const.i64 i64 1
-    %tmp_icmp.11 = icmp.eq i64 %tmp_load.29 %tmp_const.24
-    br.cond %tmp_icmp.11 @block18 @block24
+    %tmp_icmp.10 = icmp.eq i64 %tmp_load.29 %tmp_const.24
+    br.cond %tmp_icmp.10 @block18 @block24
 then:
     %tmp_fieldptr.23 = getfieldptr ptr %self 0
     %tmp_load.30 = load i64 %index
@@ -1179,8 +1182,8 @@ then:
     %tmp_call.7 = call ptr @Array$int$get(%tmp_alloca.20, %tmp_fieldptr.23, %tmp_load.30)
     %tmp_load.31 = load i64 %tmp_alloca.20
     %tmp_const.25 = const.i64 i64 1
-    %tmp_icmp.12 = icmp.eq i64 %tmp_load.31 %tmp_const.25
-    br.cond %tmp_icmp.12 @block19 @block22
+    %tmp_icmp.11 = icmp.eq i64 %tmp_load.31 %tmp_const.25
+    br.cond %tmp_icmp.11 @block19 @block22
 if_let_then:
     %tmp_fieldptr.24 = getfieldptr ptr %tmp_alloca.20 8
     %tmp_load.32 = load i64 %tmp_fieldptr.24
@@ -1188,8 +1191,8 @@ if_let_then:
     store %existing %tmp_load.32
     %tmp_load.33 = load i64 %existing
     %tmp_load.34 = load i64 %key.1
-    %tmp_icmp.13 = icmp.eq i64 %tmp_load.33 %tmp_load.34
-    br.cond %tmp_icmp.13 @block20 @block21
+    %tmp_icmp.12 = icmp.eq i64 %tmp_load.33 %tmp_load.34
+    br.cond %tmp_icmp.12 @block20 @block21
 then:
     %tmp_fieldptr.25 = getfieldptr ptr %self 32
     %tmp_load.35 = load i64 %index
@@ -1219,8 +1222,8 @@ end:
 whilecont:
     %tmp_load.40 = load i64 %firstDeleted
     %tmp_const.28 = const.i64 i64 0
-    %tmp_icmp.14 = icmp.ge i64 %tmp_load.40 %tmp_const.28
-    br.cond %tmp_icmp.14 @block26 @block27
+    %tmp_icmp.13 = icmp.ge i64 %tmp_load.40 %tmp_const.28
+    br.cond %tmp_icmp.13 @block26 @block27
 then:
     %tmp_fieldptr.27 = getfieldptr ptr %self 0
     %tmp_load.41 = load i64 %firstDeleted

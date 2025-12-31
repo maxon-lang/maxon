@@ -3840,7 +3840,10 @@ pub const AstToIr = struct {
 
         const left_prim = left.ty.toPrimitiveType();
         const right_prim = right.ty.toPrimitiveType();
-        const result_ty: ir.Type = if (left_prim == .f64 or right_prim == .f64) .f64 else .i64;
+
+        // Division always returns float, other ops depend on operand types
+        const is_division = bin.op == .div;
+        const result_ty: ir.Type = if (is_division or left_prim == .f64 or right_prim == .f64) .f64 else .i64;
 
         // Promote operands if needed
         const left_val = if (result_ty == .f64 and left_prim == .i64)
