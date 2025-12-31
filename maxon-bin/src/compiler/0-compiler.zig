@@ -60,6 +60,9 @@ const FrontendResult = struct {
         if (self.func_signatures) |sigs| {
             for (sigs) |sig| {
                 self.allocator.free(sig.name);
+                if (sig.param_types.len > 0) {
+                    self.allocator.free(sig.param_types);
+                }
             }
             self.allocator.free(sigs);
         }
@@ -95,6 +98,9 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
     errdefer if (func_signatures) |sigs| {
         for (sigs) |sig| {
             allocator.free(sig.name);
+            if (sig.param_types.len > 0) {
+                allocator.free(sig.param_types);
+            }
         }
         allocator.free(sigs);
     };
@@ -194,6 +200,9 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     defer {
         for (all_funcs.items) |sig| {
             allocator.free(sig.name);
+            if (sig.param_types.len > 0) {
+                allocator.free(sig.param_types);
+            }
         }
         all_funcs.deinit(allocator);
     }
@@ -336,6 +345,9 @@ pub fn compileMultiple(
     defer {
         for (all_funcs.items) |sig| {
             allocator.free(sig.name);
+            if (sig.param_types.len > 0) {
+                allocator.free(sig.param_types);
+            }
         }
         all_funcs.deinit(allocator);
     }

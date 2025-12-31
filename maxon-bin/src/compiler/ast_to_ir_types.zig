@@ -162,6 +162,7 @@ pub const ExternalFuncSignature = struct {
     return_value_type: ?ValueType = null, // Full return type info (for optionals, etc.)
     is_exported: bool = false, // Whether this function is exported from its module
     source_path: ?[]const u8 = null, // Source file path (to distinguish stdlib vs user)
+    param_types: []const ParamType = &.{}, // Parameter types for type checking
 };
 
 /// External type info - for cross-module compilation

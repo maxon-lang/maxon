@@ -43,7 +43,6 @@ See `docs/SPECS.md` for the complete spec file format and detailed workflow.
 - **LF line endings** - All source files use Unix-style line endings
 - Don't create new documentation files unless instructed
 - Do not edit test fragments (in `maxon-bin/specs/fragments/`). These are generated from the spec files, edit the spec file.
-- **Always fix tests** - Don't worry about it pre-existing or not, if you find a failing test then fix it
 
 ## Development Notes
 - Build system uses Zig build

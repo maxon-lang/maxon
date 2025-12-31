@@ -682,17 +682,17 @@ pub const AstToIr = struct {
         }
         self.type_map.deinit(self.allocator);
 
-        // Track freed pointers to avoid double-free when the same FuncInfo
-        // is registered under multiple names (e.g., interface methods)
-        var freed_ptrs = std.AutoHashMap([*]const ParamType, void).init(self.allocator);
-        defer freed_ptrs.deinit();
+        // Free param_types from func_map entries that we allocated
+        // Use a set to track freed pointers since multiple entries may share the same param_types
+        // (e.g., interface methods are registered under both regular and qualified names)
+        var freed_ptrs = std.AutoHashMapUnmanaged(*const ParamType, void){};
+        defer freed_ptrs.deinit(self.allocator);
         var func_iter = self.func_map.iterator();
         while (func_iter.next()) |entry| {
-            // Only free if non-empty (empty slices may be static literals)
             if (entry.value_ptr.param_types.len > 0) {
-                const ptr = entry.value_ptr.param_types.ptr;
-                if (!freed_ptrs.contains(ptr)) {
-                    freed_ptrs.put(ptr, {}) catch {};
+                const ptr = &entry.value_ptr.param_types[0];
+                if (freed_ptrs.get(ptr) == null) {
+                    freed_ptrs.put(self.allocator, ptr, {}) catch {};
                     self.allocator.free(entry.value_ptr.param_types);
                 }
             }
@@ -707,6 +707,9 @@ pub const AstToIr = struct {
 
         // Generic params map doesn't own its data (references AST strings)
         self.generic_params.deinit(self.allocator);
+
+        // Clean up labeled loops stack
+        self.labeled_loops.deinit(self.allocator);
     }
 
     // ------------------------------------------------------------------------
@@ -1344,6 +1347,13 @@ pub const AstToIr = struct {
             };
         }
 
+        // Free old param_types if overwriting an existing entry (e.g., from external registration)
+        if (self.func_map.get(decl.name)) |old_info| {
+            if (old_info.param_types.len > 0) {
+                self.allocator.free(old_info.param_types);
+            }
+        }
+
         try self.func_map.put(self.allocator, decl.name, .{
             .return_type = ret_type,
             .return_type_name = ret_type_name,
@@ -1663,12 +1673,20 @@ pub const AstToIr = struct {
             .param_types = param_types,
         };
 
+        // Free old param_types if overwriting an existing entry (e.g., from external registration)
+        if (self.func_map.get(mangled_name)) |old_info| {
+            if (old_info.param_types.len > 0) {
+                self.allocator.free(old_info.param_types);
+            }
+        }
+
         try self.func_map.put(self.allocator, mangled_name, func_info);
 
         // For interface methods, also register under qualified name (e.g., TypeName$Stringable.toString)
         if (method.qualified_name) |qualified| {
             const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
             try self.module.trackString(qualified_mangled);
+            // Note: qualified_mangled shares the same param_types, so don't free when overwriting
             try self.func_map.put(self.allocator, qualified_mangled, func_info);
             debug.astToIr("Registered interface method '{s}' as '{s}' and '{s}'", .{ method.name, mangled_name, qualified_mangled });
         } else {
@@ -4526,7 +4544,7 @@ pub const AstToIr = struct {
         }
 
         const func_info = self.func_map.get(call.func_name) orelse {
-            // Unknown function (e.g., from stdlib) - still pass the arguments
+            // Unknown function - still pass the arguments (no type info for promotion)
             const args = try self.func().allocator.alloc(ir.Value, call.args.len);
             for (call.args, 0..) |arg_expr, i| {
                 const arg = try self.convertExpression(arg_expr);
@@ -4568,7 +4586,22 @@ pub const AstToIr = struct {
         const arg_offset: usize = if (returns_struct) 1 else 0;
         for (call.args, 0..) |arg_expr, i| {
             const arg = try self.convertExpression(arg_expr);
-            args[i + arg_offset] = arg.value;
+            var arg_value = arg.value;
+
+            // Implicit int→float promotion: if parameter expects float but arg is int
+            if (i < func_info.param_types.len) {
+                const param_type = func_info.param_types[i].ty;
+                const arg_prim = arg.ty.toPrimitiveType();
+                const param_expects_float = switch (param_type) {
+                    .primitive => |name| std.mem.eql(u8, name, "float"),
+                    else => false,
+                };
+                if (param_expects_float and arg_prim == .i64) {
+                    arg_value = self.func().emitUnaryOp(.sitofp, arg.value, .f64) catch return error.OutOfMemory;
+                }
+            }
+
+            args[i + arg_offset] = arg_value;
             try self.checkOwnershipTransfer(call.func_name, arg_expr, i);
         }
 
@@ -5907,11 +5940,14 @@ pub fn convertWithExternals(
             // Skip if already registered (avoid duplicates from multiple source files)
             if (converter.func_map.contains(ext_func.name)) continue;
 
+            // Make our own copy of param_types so AstToIr owns all param_types in func_map
+            const param_types_copy = try allocator.dupe(ParamType, ext_func.param_types);
+
             try converter.func_map.put(allocator, ext_func.name, .{
                 .return_type = ext_func.return_type,
                 .return_type_name = ext_func.return_type_name,
                 .return_value_type = ext_func.return_value_type,
-                .param_types = &.{},
+                .param_types = param_types_copy,
             });
             debug.astToIr("Registered external function '{s}' returning {s}", .{ ext_func.name, ext_func.return_type.toIrName() });
         }
@@ -5997,9 +6033,12 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
 pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalFuncSignature {
     var signatures = std.ArrayListUnmanaged(ExternalFuncSignature){};
     errdefer {
-        // Free allocated names in case of error
+        // Free allocated names and param_types in case of error
         for (signatures.items) |sig| {
             allocator.free(sig.name);
+            if (sig.param_types.len > 0) {
+                allocator.free(sig.param_types);
+            }
         }
         signatures.deinit(allocator);
     }
@@ -6021,6 +6060,14 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
         else
             null;
 
+        // Extract parameter types
+        const param_types = try allocator.alloc(ParamType, func.params.len);
+        for (func.params, 0..) |param, i| {
+            param_types[i] = .{
+                .ty = getValueTypeFromTypeExprForParam(param.type_expr),
+            };
+        }
+
         // Allocate copy of name for uniform ownership (all names are owned)
         const name_copy = try allocator.dupe(u8, func.name);
 
@@ -6030,6 +6077,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             .return_type_name = return_type_name,
             .return_value_type = return_value_type,
             .is_exported = func.is_export,
+            .param_types = param_types,
         });
     }
 
@@ -6061,6 +6109,14 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             else
                 null;
 
+            // Extract parameter types for methods
+            const param_types = try allocator.alloc(ParamType, method.params.len);
+            for (method.params, 0..) |param, i| {
+                param_types[i] = .{
+                    .ty = getValueTypeFromTypeExprForParam(param.type_expr),
+                };
+            }
+
             // Methods inherit export status from their containing type
             try signatures.append(allocator, .{
                 .name = mangled_name,
@@ -6068,6 +6124,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 .return_type_name = return_type_name,
                 .return_value_type = return_value_type,
                 .is_exported = type_decl.is_export or method.is_export,
+                .param_types = param_types,
             });
         }
     }
@@ -6129,5 +6186,19 @@ fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
         },
         .generic => |gen| gen.base_type,
         .optional => null,
+    };
+}
+
+/// Helper: get ValueType from TypeExpr for function parameters
+fn getValueTypeFromTypeExprForParam(te: ast.TypeExpr) ValueType {
+    return switch (te) {
+        .simple => |name| .{ .primitive = name },
+        .generic => |gen| .{ .struct_type = gen.base_type },
+        .optional => |wrapped| .{
+            .optional_type = .{
+                .wrapped = getIrTypeFromTypeExpr(wrapped.*),
+                .wrapped_struct_type = getStructNameFromTypeExpr(wrapped.*),
+            },
+        },
     };
 }
