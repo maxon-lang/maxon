@@ -100,7 +100,7 @@ pub const MutationAnalyzer = struct {
                     }
                 }
                 if (if_s.else_if) |else_if| {
-                    self.checkStatementForMutation(.{ .kind = .{ .if_stmt = else_if.* }, .line = stmt.line }, param_indices, mutated);
+                    self.checkStatementForMutation(.{ .kind = .{ .if_stmt = else_if.* }, .line = stmt.line, .column = stmt.column }, param_indices, mutated);
                 }
             },
             .while_stmt => |while_s| {

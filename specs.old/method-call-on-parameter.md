@@ -1,6 +1,6 @@
 ---
 feature: method-call-on-parameter
-status: draft
+status: stable
 keywords: method, call, parameter, same type, sibling
 category: expressions
 ---

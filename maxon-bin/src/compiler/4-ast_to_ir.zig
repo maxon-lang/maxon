@@ -112,6 +112,7 @@ pub const AstToIr = struct {
     current_decl_is_mutable: bool,
     mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
     current_line: usize,
+    current_column: usize,
     // For struct returns: pointer passed by caller for return value
     sret_ptr: ?ir.Value,
     sret_size: i32,
@@ -155,6 +156,7 @@ pub const AstToIr = struct {
             .current_decl_is_mutable = false,
             .mutation_analyzer = mutation_analyzer,
             .current_line = 1,
+            .current_column = 1,
             .sret_ptr = null,
             .sret_size = 0,
             .source_file = null,
@@ -179,7 +181,7 @@ pub const AstToIr = struct {
                 .location = .{
                     .file = self.source_file,
                     .line = @intCast(self.current_line),
-                    .column = 1,
+                    .column = @intCast(self.current_column),
                 },
             };
             return;
@@ -190,7 +192,7 @@ pub const AstToIr = struct {
             .location = .{
                 .file = self.source_file,
                 .line = @intCast(self.current_line),
-                .column = 1,
+                .column = @intCast(self.current_column),
             },
         };
     }
@@ -1844,8 +1846,9 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     fn convertStatement(self: *AstToIr, stmt: ast.Statement) !void {
-        // Track current line from AST for error reporting
+        // Track current line and column from AST for error reporting
         self.current_line = stmt.line;
+        self.current_column = stmt.column;
 
         switch (stmt.kind) {
             .let_decl => |decl| {

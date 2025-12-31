@@ -50,9 +50,9 @@ pub const Parser = struct {
         };
     }
 
-    /// Create a Statement with a specific line number
-    fn stmtAt(kind: ast.StatementKind, line: u32) ast.Statement {
-        return .{ .kind = kind, .line = line };
+    /// Create a Statement with a specific line and column number
+    fn stmtAt(kind: ast.StatementKind, line: u32, column: u32) ast.Statement {
+        return .{ .kind = kind, .line = line, .column = column };
     }
 
     pub fn deinit(self: *Parser) void {
@@ -531,7 +531,9 @@ pub const Parser = struct {
     }
 
     fn parseStatement(self: *Parser) ParseError!ast.Statement {
-        const start_line = self.current().line;
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
         if (self.check(.@"return")) {
             const ret_stmt = try self.parseReturn();
             _ = try self.expect(.newline);
@@ -567,14 +569,14 @@ pub const Parser = struct {
             // Optional label after break
             const label = if (self.check(.char_literal)) self.advance().text else null;
             _ = try self.expect(.newline);
-            return stmtAt(.{ .break_stmt = .{ .label = label } }, start_line);
+            return stmtAt(.{ .break_stmt = .{ .label = label } }, start_line, start_column);
         }
         if (self.check(.@"continue")) {
             _ = self.advance();
             // Optional label after continue
             const label = if (self.check(.char_literal)) self.advance().text else null;
             _ = try self.expect(.newline);
-            return stmtAt(.{ .continue_stmt = .{ .label = label } }, start_line);
+            return stmtAt(.{ .continue_stmt = .{ .label = label } }, start_line, start_column);
         }
         // Check for assignment, index assignment, or call statement: identifier or self...
         if (self.check(.identifier) or self.check(.self)) {
@@ -600,7 +602,7 @@ pub const Parser = struct {
                         .base = expr.index.base,
                         .index = expr.index.index,
                         .value = value,
-                    } }, start_line);
+                    } }, start_line, start_column);
                 }
 
                 // Check if this is a simple identifier (x = value)
@@ -608,7 +610,7 @@ pub const Parser = struct {
                     return stmtAt(.{ .assign = .{
                         .target = expr.identifier,
                         .value = value,
-                    } }, start_line);
+                    } }, start_line, start_column);
                 }
 
                 // Check if this is a field access (obj.field = value)
@@ -617,7 +619,7 @@ pub const Parser = struct {
                         .base = expr.field_access.base,
                         .field_name = expr.field_access.field_name,
                         .value = value,
-                    } }, start_line);
+                    } }, start_line, start_column);
                 }
 
                 // Other expressions on LHS not supported
@@ -628,13 +630,13 @@ pub const Parser = struct {
             // Check if this is a call expression (standalone function call)
             if (expr == .call) {
                 _ = try self.expect(.newline);
-                return stmtAt(.{ .call = expr.call }, start_line);
+                return stmtAt(.{ .call = expr.call }, start_line, start_column);
             }
 
             // Check if this is a method call (standalone method call like arr.push(x))
             if (expr == .method_call) {
                 _ = try self.expect(.newline);
-                return stmtAt(.{ .method_call = expr.method_call }, start_line);
+                return stmtAt(.{ .method_call = expr.method_call }, start_line, start_column);
             }
 
             // Not an assignment or call, restore position
@@ -645,7 +647,9 @@ pub const Parser = struct {
     }
 
     fn parseVarDecl(self: *Parser, is_var: bool) !ast.Statement {
-        const start_line = self.current().line;
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
         _ = self.advance(); // consume let/var
         const name_token = try self.expect(.identifier);
 
@@ -675,9 +679,9 @@ pub const Parser = struct {
                 .fields = &.{},
             } };
             if (is_var) {
-                return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } }, start_line);
+                return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } }, start_line, start_column);
             } else {
-                return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } }, start_line);
+                return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } }, start_line, start_column);
             }
         }
 
@@ -725,13 +729,13 @@ pub const Parser = struct {
                     .optional_expr = expr_ptr,
                     .default_body = try default_statements.toOwnedSlice(self.allocator),
                     .label = label.text,
-                } }, start_line);
+                } }, start_line, start_column);
             }
 
             if (is_var) {
-                return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } }, start_line);
+                return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } }, start_line, start_column);
             } else {
-                return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } }, start_line);
+                return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } }, start_line, start_column);
             }
         }
         self.reportError(.E003);
@@ -739,10 +743,12 @@ pub const Parser = struct {
     }
 
     fn parseReturn(self: *Parser) !ast.Statement {
-        const start_line = self.current().line;
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
         _ = try self.expect(.@"return");
         const expr = try self.parseExpression();
-        return stmtAt(.{ .@"return" = .{ .value = expr } }, start_line);
+        return stmtAt(.{ .@"return" = .{ .value = expr } }, start_line, start_column);
     }
 
     // -------------------------------------------------------------------------
@@ -823,7 +829,9 @@ pub const Parser = struct {
     // -------------------------------------------------------------------------
 
     fn parseIfStatement(self: *Parser) ParseError!ast.Statement {
-        const start_line = self.current().line;
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
         _ = try self.expect(.@"if");
 
         // Check for if-let: if let name = expr 'label'
@@ -855,11 +863,11 @@ pub const Parser = struct {
                 .else_label = else_clause.label,
                 .else_if = null,
                 .binding_name = name_token.text,
-            } }, start_line);
+            } }, start_line, start_column);
         }
 
         // Regular if statement (if already consumed)
-        return stmtAt(.{ .if_stmt = try self.parseIfConditionAndBody() }, start_line);
+        return stmtAt(.{ .if_stmt = try self.parseIfConditionAndBody() }, start_line, start_column);
     }
 
     /// Parse if statement after 'if' has been consumed. Used by parseIfStatement
@@ -895,7 +903,9 @@ pub const Parser = struct {
     }
 
     fn parseWhileStatement(self: *Parser) ParseError!ast.Statement {
-        const start_line = self.current().line;
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
         _ = try self.expect(.@"while");
 
         const condition = try self.parseExpression() orelse {
@@ -913,11 +923,13 @@ pub const Parser = struct {
             .condition = condition,
             .body = body,
             .label = label.text,
-        } }, start_line);
+        } }, start_line, start_column);
     }
 
     fn parseForStatement(self: *Parser) ParseError!ast.Statement {
-        const start_line = self.current().line;
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
         _ = try self.expect(.@"for");
 
         // Expect loop variable name
@@ -945,7 +957,7 @@ pub const Parser = struct {
             .iterable = iterable,
             .body = body,
             .label = label.text,
-        } }, start_line);
+        } }, start_line, start_column);
     }
 
     fn parseExpression(self: *Parser) ParseError!?ast.Expression {

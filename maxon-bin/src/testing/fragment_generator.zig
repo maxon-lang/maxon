@@ -337,8 +337,10 @@ fn writeFragment(
     switch (test_case.expected) {
         .success => {
             // Generate IR for success tests - this must succeed
+            // Compile with header included so line numbers match the fragment file
+            const source_with_header = try std.fmt.allocPrint(allocator, "{s}{s}", .{ header, test_case.source });
             var compile_result: compiler.CompileResult = .{ .error_info = null };
-            const ir = compiler.compileToIrWithResult(test_case.source, allocator, &compile_result, full_path) catch |err| {
+            const ir = compiler.compileToIrWithResult(source_with_header, allocator, &compile_result, full_path) catch |err| {
                 // IR generation failed - print detailed error info
                 if (compile_result.error_info) |error_info| {
                     std.debug.print("IR generation failed for test '{s}': ", .{test_case.name});

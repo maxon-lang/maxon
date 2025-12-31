@@ -165,6 +165,7 @@ pub const StatementKind = union(enum) {
 pub const Statement = struct {
     kind: StatementKind,
     line: u32,
+    column: u32,
 };
 
 pub const VarDecl = struct {
