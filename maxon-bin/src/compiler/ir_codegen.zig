@@ -1273,8 +1273,8 @@ pub const IrCodegen = struct {
     fn patchCalls(self: *IrCodegen) !void {
         for (self.call_patches.items) |patch| {
             const target_offset = self.func_offsets.get(patch.target_func) orelse {
-                std.debug.print("WARNING: Call to unknown function '{s}' not patched!\n", .{patch.target_func});
-                continue;
+                std.debug.print("error: call to undefined function '{s}'\n", .{patch.target_func});
+                return error.UndefinedFunction;
             };
             // Calculate relative offset: target - (patch_location + 4)
             const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(patch.offset + 4)));

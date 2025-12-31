@@ -81,6 +81,15 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
         return convertCstringIntrinsic(self, call);
     }
 
+    // Check for __make_char_* intrinsics (stdlib-only)
+    if (std.mem.startsWith(u8, call.func_name, "__make_char_")) {
+        if (!isStdlibFile(self)) {
+            self.reportError(.E016, call.func_name);
+            return error.SemanticError;
+        }
+        return convertMakeCharIntrinsic(self, call);
+    }
+
     const builtin = for (builtins) |b| {
         if (std.mem.eql(u8, call.func_name, b.name)) break b;
     } else return error.NotABuiltin;
@@ -476,6 +485,68 @@ fn intrinsicCstringWriteStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const result = try self.func().emitCall("__write_stdout", args, .i64);
 
     return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+}
+
+/// Dispatch __make_char_* intrinsics
+fn convertMakeCharIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    const name = call.func_name;
+
+    if (std.mem.eql(u8, name, "__make_char_from_bytes")) {
+        return intrinsicMakeCharFromBytes(self, call);
+    } else {
+        self.reportError(.E019, name);
+        return error.SemanticError;
+    }
+}
+
+/// __make_char_from_bytes(managed, pos, len) -> Character
+/// Creates a Character by extracting bytes from a __ManagedString
+/// Creates a slice-mode __ManagedString for the Character's _managed field
+/// Layout is identical to __string_slice but returns Character type
+fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    if (call.args.len != 3) {
+        self.reportError(.E011, call.func_name);
+        return error.WrongArgumentCount;
+    }
+
+    const managed = try self.convertExpression(call.args[0]);
+    const pos = try self.convertExpression(call.args[1]);
+    const len = try self.convertExpression(call.args[2]);
+
+    // Allocate Character struct (24 bytes - same as __ManagedString)
+    const char_ptr = try self.func().emitAllocaSized(24);
+
+    // Load buffer pointer from parent managed string
+    const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+
+    // Calculate slice buffer = parent_buf_ptr + pos (offset 0)
+    const slice_buf = try self.func().emitBinaryOp(.add, parent_buf_ptr, pos.value, .ptr);
+    try self.func().emitStore(char_ptr, slice_buf);
+
+    // Store len (offset 8, i32)
+    const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len.value, .i32);
+    const len_field = try self.func().emitGetFieldPtr(char_ptr, 8);
+    try self.func().emitStoreI32(len_field, len_i32);
+
+    // Set cap_flags = 0b10 (slice mode) (offset 12, i32)
+    const two = try self.func().emitConstI32(2);
+    const cap_field = try self.func().emitGetFieldPtr(char_ptr, 12);
+    try self.func().emitStoreI32(cap_field, two);
+
+    // Set refcount = 0 (unused for slices) (offset 16, i32)
+    const zero_i32 = try self.func().emitConstI32(0);
+    const ref_field = try self.func().emitGetFieldPtr(char_ptr, 16);
+    try self.func().emitStoreI32(ref_field, zero_i32);
+
+    // Store parent_off = pos (byte offset into parent buffer) (offset 20, i32)
+    const pos_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, pos.value, .i32);
+    const off_field = try self.func().emitGetFieldPtr(char_ptr, 20);
+    try self.func().emitStoreI32(off_field, pos_i32);
+
+    return .{
+        .value = char_ptr,
+        .ty = .{ .struct_type = "Character" },
+    };
 }
 
 /// __string_len(managed) -> int

@@ -134,6 +134,8 @@ pub const AstToIr = struct {
     in_stdlib_method: bool = false,
     // Borrow tracking: set when __string_slice is called, contains the source variable name
     pending_borrow_source: ?[]const u8 = null,
+    // Track temporary String allocations that need cleanup after each statement
+    temporary_strings: std.ArrayListUnmanaged(ir.Value) = .{},
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -213,6 +215,91 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
     // COW String Helpers
     // ------------------------------------------------------------------------
+
+    /// Size of __ManagedString struct (24 bytes with COW support)
+    /// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
+    const MANAGED_STRING_SIZE: i32 = 24;
+
+    /// Size of __ManagedArray struct (24 bytes)
+    /// Layout: buffer(8) + len(8) + capacity(8)
+    const MANAGED_ARRAY_SIZE: i32 = 24;
+
+    /// Create and initialize a __ManagedString on the stack from string bytes.
+    /// Returns a pointer to the allocated struct.
+    fn emitManagedStringFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Value {
+        const managed_ptr = try self.func().emitAllocaSized(MANAGED_STRING_SIZE);
+
+        if (str_bytes.len == 0) {
+            // Empty string: SSO mode with zero length
+            const null_ptr = try self.func().emitConstI64(0);
+            const zero_i32 = try self.func().emitConstI32(0);
+
+            try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 0), null_ptr);
+            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 8), zero_i32);
+            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 12), zero_i32);
+            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 16), zero_i32);
+            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 20), zero_i32);
+        } else {
+            // Heap allocation for string data
+            const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1));
+            const buffer = try self.func().emitHeapAlloc(buffer_size);
+
+            // Store string bytes
+            for (str_bytes, 0..) |byte, i| {
+                const idx_val = try self.func().emitConstI64(@intCast(i));
+                const byte_ptr = try self.func().emitGetElemPtr(buffer, idx_val, 1);
+                try self.func().emitStoreI8(byte_ptr, try self.func().emitConstI8(byte));
+            }
+            // Null terminate
+            const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
+            try self.func().emitStoreI8(try self.func().emitGetElemPtr(buffer, null_idx, 1), try self.func().emitConstI8(0));
+
+            // Initialize __ManagedString fields
+            try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 0), buffer);
+            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 8), try self.func().emitConstI32(@intCast(str_bytes.len)));
+            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 12), try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01)));
+            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 16), try self.func().emitConstI32(1));
+            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 20), try self.func().emitConstI32(0));
+        }
+
+        return managed_ptr;
+    }
+
+    /// Create and initialize a __ManagedString from a runtime buffer pointer and length.
+    /// Used for runtime string conversions (int to string, float to string, etc.)
+    fn emitManagedStringFromBuffer(self: *AstToIr, buffer: ir.Value, len_i64: ir.Value) !ir.Value {
+        const managed_ptr = try self.func().emitAllocaSized(MANAGED_STRING_SIZE);
+
+        // buffer pointer at offset 0
+        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 0), buffer);
+
+        // length (i32) at offset 8
+        const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len_i64, .i32);
+        try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 8), len_i32);
+
+        // cap_flags = (len << 2) | 1 for heap mode at offset 12
+        const four = try self.func().emitConstI32(4);
+        const cap_shift = try self.func().emitBinaryOp(.mul, len_i32, four, .i32);
+        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
+        try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 12), cap_flags);
+
+        // refcount = 1 at offset 16
+        try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 16), try self.func().emitConstI32(1));
+
+        // parent_off = 0 at offset 20
+        try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 20), try self.func().emitConstI32(0));
+
+        return managed_ptr;
+    }
+
+    /// Wrap a __ManagedString pointer in a full String struct (adds iter_pos field).
+    fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.Value) !ir.Value {
+        const string_ptr = try self.func().emitAllocaSized(32);
+        try self.func().emitMemcpy(string_ptr, managed_ptr, MANAGED_STRING_SIZE);
+        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
+        try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
+        return string_ptr;
+    }
 
     /// Check if a type is the String type (which contains __ManagedString)
     fn isStringType(self: *AstToIr, ty: ValueType) bool {
@@ -434,6 +521,30 @@ pub const AstToIr = struct {
     }
 
     // ------------------------------------------------------------------------
+    // Temporary String Cleanup
+    // ------------------------------------------------------------------------
+
+    /// Clean up all temporary strings and clear the list
+    fn cleanupTemporaryStrings(self: *AstToIr) !void {
+        for (self.temporary_strings.items) |str_ptr| {
+            try self.emitStringDecref(str_ptr);
+        }
+        self.temporary_strings.clearRetainingCapacity();
+    }
+
+    /// Remove a specific value from the temporary strings list (used when assigned to a variable)
+    fn removeFromTemporaries(self: *AstToIr, value: ir.Value) void {
+        var i: usize = 0;
+        while (i < self.temporary_strings.items.len) {
+            if (self.temporary_strings.items[i] == value) {
+                _ = self.temporary_strings.swapRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
     // Borrow Checking Helpers
     // ------------------------------------------------------------------------
 
@@ -515,6 +626,7 @@ pub const AstToIr = struct {
         // In success case, module was transferred out and replaced with empty module
         self.module.deinit();
 
+        self.temporary_strings.deinit(self.allocator);
         self.var_map.deinit(self.allocator);
 
         var type_iter = self.type_map.iterator();
@@ -1564,8 +1676,16 @@ pub const AstToIr = struct {
                 debug.astToIr("Converting index_assign", .{});
                 try self.convertIndexAssign(assign);
             },
-            .call => |call| _ = try self.convertCall(call),
-            .method_call => |mcall| try self.convertMethodCall(mcall),
+            .call => |call| {
+                _ = try self.convertCall(call);
+                // Clean up any temporary strings created during this call
+                try self.cleanupTemporaryStrings();
+            },
+            .method_call => |mcall| {
+                try self.convertMethodCall(mcall);
+                // Clean up any temporary strings created during this call
+                try self.cleanupTemporaryStrings();
+            },
             .if_stmt => |if_s| try self.convertIfStmt(if_s),
             .while_stmt => |while_s| try self.convertWhileStmt(while_s),
             .for_stmt => |for_s| try self.convertForStmt(for_s),
@@ -1704,6 +1824,11 @@ pub const AstToIr = struct {
             self.current_decl_is_mutable,
             uses_slot,
         ));
+
+        // If this was a temporary String, the variable now owns it - remove from temporaries
+        if (self.isStringType(init_typed.ty)) {
+            self.removeFromTemporaries(init_typed.value);
+        }
 
         // Handle borrow tracking: if this variable was initialized from a slice operation,
         // establish the borrow relationship between source and this variable
@@ -2618,112 +2743,7 @@ pub const AstToIr = struct {
                 try self.module.trackString(init_func_name);
 
                 if (self.func_map.get(init_func_name)) |func_info| {
-                    // Create __ManagedString on stack (24 bytes with COW support)
-                    // Layout: ptr buffer (8) + i32 len (4) + i32 cap_flags (4) + i32 refcount (4) + i32 parent_off (4)
-                    const managed_ptr = try self.func().emitAllocaSized(24);
-
-                    if (str_bytes.len == 0) {
-                        // Empty string: SSO mode with zero length
-                        const null_ptr = try self.func().emitConstI64(0);
-                        const zero_i32 = try self.func().emitConstI32(0);
-
-                        const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
-                        try self.func().emitStore(buffer_slot, null_ptr);
-
-                        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
-                        try self.func().emitStoreI32(len_slot, zero_i32);
-
-                        // cap_flags = 0 (SSO mode)
-                        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
-                        try self.func().emitStoreI32(cap_slot, zero_i32);
-
-                        // refcount = 0 (SSO doesn't use refcount)
-                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
-                        try self.func().emitStoreI32(ref_slot, zero_i32);
-
-                        // parent_off = 0
-                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
-                        try self.func().emitStoreI32(off_slot, zero_i32);
-                    } else if (str_bytes.len <= 15) {
-                        // SSO mode: store data inline in first 15 bytes
-                        // For SSO, we still use a heap buffer but mark it as SSO via cap_flags
-                        // TODO: True inline SSO would store data directly in the struct bytes 0-14
-                        // For now, use heap allocation but with SSO flag for future optimization
-                        const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1));
-                        const buffer = try self.func().emitHeapAlloc(buffer_size);
-
-                        for (str_bytes, 0..) |byte, i| {
-                            const idx_val = try self.func().emitConstI64(@intCast(i));
-                            const byte_ptr = try self.func().emitGetElemPtr(buffer, idx_val, 1);
-                            const byte_val = try self.func().emitConstI8(byte);
-                            try self.func().emitStoreI8(byte_ptr, byte_val);
-                        }
-                        // Null terminate
-                        const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
-                        const null_ptr_byte = try self.func().emitGetElemPtr(buffer, null_idx, 1);
-                        const null_byte = try self.func().emitConstI8(0);
-                        try self.func().emitStoreI8(null_ptr_byte, null_byte);
-
-                        const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
-                        try self.func().emitStore(buffer_slot, buffer);
-
-                        const len_val = try self.func().emitConstI32(@intCast(str_bytes.len));
-                        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
-                        try self.func().emitStoreI32(len_slot, len_val);
-
-                        // cap_flags = (capacity << 2) | 0b01 for heap mode
-                        const cap_flags_val = try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01));
-                        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
-                        try self.func().emitStoreI32(cap_slot, cap_flags_val);
-
-                        // refcount = 1 (newly allocated, single owner)
-                        const one_i32 = try self.func().emitConstI32(1);
-                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
-                        try self.func().emitStoreI32(ref_slot, one_i32);
-
-                        // parent_off = 0 (not a slice)
-                        const zero_i32 = try self.func().emitConstI32(0);
-                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
-                        try self.func().emitStoreI32(off_slot, zero_i32);
-                    } else {
-                        // Heap mode: large string
-                        const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1));
-                        const buffer = try self.func().emitHeapAlloc(buffer_size);
-
-                        for (str_bytes, 0..) |byte, i| {
-                            const idx_val = try self.func().emitConstI64(@intCast(i));
-                            const byte_ptr = try self.func().emitGetElemPtr(buffer, idx_val, 1);
-                            const byte_val = try self.func().emitConstI8(byte);
-                            try self.func().emitStoreI8(byte_ptr, byte_val);
-                        }
-                        // Null terminate
-                        const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
-                        const null_ptr_byte = try self.func().emitGetElemPtr(buffer, null_idx, 1);
-                        const null_byte = try self.func().emitConstI8(0);
-                        try self.func().emitStoreI8(null_ptr_byte, null_byte);
-
-                        const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
-                        try self.func().emitStore(buffer_slot, buffer);
-
-                        const len_val = try self.func().emitConstI32(@intCast(str_bytes.len));
-                        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
-                        try self.func().emitStoreI32(len_slot, len_val);
-
-                        // cap_flags = (capacity << 2) | 0b01 for heap mode
-                        const cap_flags_val = try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01));
-                        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
-                        try self.func().emitStoreI32(cap_slot, cap_flags_val);
-
-                        // refcount = 1 (newly allocated, single owner)
-                        const one_i32 = try self.func().emitConstI32(1);
-                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
-                        try self.func().emitStoreI32(ref_slot, one_i32);
-
-                        // parent_off = 0 (not a slice)
-                        const zero_i32 = try self.func().emitConstI32(0);
-                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
-                        try self.func().emitStoreI32(off_slot, zero_i32);
-                    }
+                    const managed_ptr = try self.emitManagedStringFromBytes(str_bytes);
 
                     // Allocate result struct and call init
                     const struct_size = type_info.struct_type.size;
@@ -2734,6 +2754,9 @@ pub const AstToIr = struct {
                     args[1] = managed_ptr;
 
                     _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+                    // Track this as a temporary String that may need cleanup
+                    try self.temporary_strings.append(self.allocator, result_ptr);
 
                     return .{ .value = result_ptr, .ty = .{ .struct_type = type_name } };
                 }
@@ -2849,9 +2872,6 @@ pub const AstToIr = struct {
         const a_managed = try self.func().emitGetFieldPtr(a, 0);
         const b_managed = try self.func().emitGetFieldPtr(b, 0);
 
-        // Create a new result managed string (24 bytes)
-        const result_managed = try self.func().emitAllocaSized(24);
-
         // Get lengths (stored as i32 at offset 8)
         const a_len_ptr = try self.func().emitGetFieldPtr(a_managed, 8);
         const a_len_i32 = try self.func().emitLoad(a_len_ptr, .i32);
@@ -2881,47 +2901,10 @@ pub const AstToIr = struct {
 
         // Null terminate
         const null_offset = try self.func().emitGetElemPtr(new_buffer, total_len, 1);
-        const null_byte = try self.func().emitConstI8(0);
-        try self.func().emitStoreI8(null_offset, null_byte);
+        try self.func().emitStoreI8(null_offset, try self.func().emitConstI8(0));
 
-        // Store in result managed string
-        const result_buf_slot = try self.func().emitGetFieldPtr(result_managed, 0);
-        try self.func().emitStore(result_buf_slot, new_buffer);
-
-        const total_len_32 = try self.func().emitUnaryOp(.trunc_i64_i32, total_len, .i32);
-        const result_len_slot = try self.func().emitGetFieldPtr(result_managed, 8);
-        try self.func().emitStoreI32(result_len_slot, total_len_32);
-
-        // cap_flags = (capacity * 4) | 0b01 for heap mode
-        const four = try self.func().emitConstI32(4);
-        const cap_shift = try self.func().emitBinaryOp(.mul, total_len_32, four, .i32);
-        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
-        const cap_slot = try self.func().emitGetFieldPtr(result_managed, 12);
-        try self.func().emitStoreI32(cap_slot, cap_flags);
-
-        // refcount = 1
-        const one_i32 = try self.func().emitConstI32(1);
-        const ref_slot = try self.func().emitGetFieldPtr(result_managed, 16);
-        try self.func().emitStoreI32(ref_slot, one_i32);
-
-        // parent_off = 0
-        const zero_i32 = try self.func().emitConstI32(0);
-        const off_slot = try self.func().emitGetFieldPtr(result_managed, 20);
-        try self.func().emitStoreI32(off_slot, zero_i32);
-
-        // Now wrap in a String struct
-        // String layout: _managed (24 bytes) + _iterPos (8 bytes) = 32 bytes
-        const string_ptr = try self.func().emitAllocaSized(32);
-
-        // Copy managed string to String._managed
-        try self.func().emitMemcpy(string_ptr, result_managed, 24);
-
-        // Set _iterPos = 0
-        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
-        const zero_i64 = try self.func().emitConstI64(0);
-        try self.func().emitStore(iter_pos_ptr, zero_i64);
-
-        return string_ptr;
+        const result_managed = try self.emitManagedStringFromBuffer(new_buffer, total_len);
+        return self.emitStringFromManaged(result_managed);
     }
 
     /// Emit code to convert an int to a String
@@ -2936,38 +2919,8 @@ pub const AstToIr = struct {
         args[1] = value;
         const len = (try self.func().emitCall("__runtime_int_to_string", args, .i64)).?;
 
-        // Create managed string
-        const managed_ptr = try self.func().emitAllocaSized(24);
-
-        const buf_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
-        try self.func().emitStore(buf_slot, buffer);
-
-        const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len, .i32);
-        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
-        try self.func().emitStoreI32(len_slot, len_i32);
-
-        // cap_flags = (cap * 4) | 0b01 for heap mode
-        const four_c1 = try self.func().emitConstI32(4);
-        const cap_shift = try self.func().emitBinaryOp(.mul, len_i32, four_c1, .i32);
-        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
-        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
-        try self.func().emitStoreI32(cap_slot, cap_flags);
-
-        const one_i32 = try self.func().emitConstI32(1);
-        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
-        try self.func().emitStoreI32(ref_slot, one_i32);
-
-        const zero_i32 = try self.func().emitConstI32(0);
-        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
-        try self.func().emitStoreI32(off_slot, zero_i32);
-
-        // Wrap in String struct
-        const string_ptr = try self.func().emitAllocaSized(32);
-        try self.func().emitMemcpy(string_ptr, managed_ptr, 24);
-        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
-        try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
-
-        return string_ptr;
+        const managed_ptr = try self.emitManagedStringFromBuffer(buffer, len);
+        return self.emitStringFromManaged(managed_ptr);
     }
 
     /// Emit code to convert a float to a String
@@ -2982,44 +2935,12 @@ pub const AstToIr = struct {
         args[1] = value;
         const len = (try self.func().emitCall("__runtime_float_to_string", args, .i64)).?;
 
-        // Create managed string and String (same as int)
-        const managed_ptr = try self.func().emitAllocaSized(24);
-
-        const buf_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
-        try self.func().emitStore(buf_slot, buffer);
-
-        const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len, .i32);
-        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
-        try self.func().emitStoreI32(len_slot, len_i32);
-
-        // cap_flags = (cap * 4) | 0b01 for heap mode
-        const four_c2 = try self.func().emitConstI32(4);
-        const cap_shift = try self.func().emitBinaryOp(.mul, len_i32, four_c2, .i32);
-        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
-        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
-        try self.func().emitStoreI32(cap_slot, cap_flags);
-
-        const one_i32 = try self.func().emitConstI32(1);
-        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
-        try self.func().emitStoreI32(ref_slot, one_i32);
-
-        const zero_i32 = try self.func().emitConstI32(0);
-        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
-        try self.func().emitStoreI32(off_slot, zero_i32);
-
-        const string_ptr = try self.func().emitAllocaSized(32);
-        try self.func().emitMemcpy(string_ptr, managed_ptr, 24);
-        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
-        try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
-
-        return string_ptr;
+        const managed_ptr = try self.emitManagedStringFromBuffer(buffer, len);
+        return self.emitStringFromManaged(managed_ptr);
     }
 
     /// Emit code to convert a bool to a String
     fn emitBoolToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        // Call __runtime_bool_to_string(value) -> returns String pointer
-        // The runtime function returns a pointer to a static "true" or "false" string
-
         // Create a buffer for the result (6 bytes max: "false\0")
         const buffer_size = try self.func().emitConstI64(6);
         const buffer = try self.func().emitHeapAlloc(buffer_size);
@@ -3030,38 +2951,8 @@ pub const AstToIr = struct {
         args[1] = value;
         const len = (try self.func().emitCall("__runtime_bool_to_string", args, .i64)).?;
 
-        // Create managed string
-        const managed_ptr = try self.func().emitAllocaSized(24);
-
-        const buf_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
-        try self.func().emitStore(buf_slot, buffer);
-
-        const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len, .i32);
-        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
-        try self.func().emitStoreI32(len_slot, len_i32);
-
-        // cap_flags = (cap * 4) | 0b01 for heap mode
-        const four_c3 = try self.func().emitConstI32(4);
-        const cap_shift = try self.func().emitBinaryOp(.mul, len_i32, four_c3, .i32);
-        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
-        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
-        try self.func().emitStoreI32(cap_slot, cap_flags);
-
-        const one_i32 = try self.func().emitConstI32(1);
-        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
-        try self.func().emitStoreI32(ref_slot, one_i32);
-
-        const zero_i32 = try self.func().emitConstI32(0);
-        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
-        try self.func().emitStoreI32(off_slot, zero_i32);
-
-        // Wrap in String struct
-        const string_ptr = try self.func().emitAllocaSized(32);
-        try self.func().emitMemcpy(string_ptr, managed_ptr, 24);
-        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
-        try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
-
-        return string_ptr;
+        const managed_ptr = try self.emitManagedStringFromBuffer(buffer, len);
+        return self.emitStringFromManaged(managed_ptr);
     }
 
     /// Process escape sequences in a string literal
@@ -3111,69 +3002,7 @@ pub const AstToIr = struct {
                 try self.module.trackString(init_func_name);
 
                 if (self.func_map.get(init_func_name)) |func_info| {
-                    // Create __ManagedString on stack (24 bytes with COW support)
-                    // Characters use same format as strings
-                    const managed_ptr = try self.func().emitAllocaSized(24);
-
-                    if (char_bytes.len == 0) {
-                        const null_ptr = try self.func().emitConstI64(0);
-                        const zero_i32 = try self.func().emitConstI32(0);
-
-                        const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
-                        try self.func().emitStore(buffer_slot, null_ptr);
-
-                        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
-                        try self.func().emitStoreI32(len_slot, zero_i32);
-
-                        // cap_flags = 0 (SSO mode)
-                        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
-                        try self.func().emitStoreI32(cap_slot, zero_i32);
-
-                        // refcount = 0 (SSO doesn't use refcount)
-                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
-                        try self.func().emitStoreI32(ref_slot, zero_i32);
-
-                        // parent_off = 0
-                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
-                        try self.func().emitStoreI32(off_slot, zero_i32);
-                    } else {
-                        const buffer_size = try self.func().emitConstI64(@intCast(char_bytes.len + 1));
-                        const buffer = try self.func().emitHeapAlloc(buffer_size);
-
-                        for (char_bytes, 0..) |byte, i| {
-                            const idx_val = try self.func().emitConstI64(@intCast(i));
-                            const byte_ptr = try self.func().emitGetElemPtr(buffer, idx_val, 1);
-                            const byte_val = try self.func().emitConstI8(byte);
-                            try self.func().emitStoreI8(byte_ptr, byte_val);
-                        }
-                        // Null terminate
-                        const null_idx = try self.func().emitConstI64(@intCast(char_bytes.len));
-                        const null_ptr_char = try self.func().emitGetElemPtr(buffer, null_idx, 1);
-                        const null_byte = try self.func().emitConstI8(0);
-                        try self.func().emitStoreI8(null_ptr_char, null_byte);
-
-                        const buffer_slot = try self.func().emitGetFieldPtr(managed_ptr, 0);
-                        try self.func().emitStore(buffer_slot, buffer);
-
-                        const len_val = try self.func().emitConstI32(@intCast(char_bytes.len));
-                        const len_slot = try self.func().emitGetFieldPtr(managed_ptr, 8);
-                        try self.func().emitStoreI32(len_slot, len_val);
-
-                        // cap_flags = (capacity << 2) | 0b01 for heap mode
-                        const cap_flags_val = try self.func().emitConstI32(@intCast((char_bytes.len << 2) | 0b01));
-                        const cap_slot = try self.func().emitGetFieldPtr(managed_ptr, 12);
-                        try self.func().emitStoreI32(cap_slot, cap_flags_val);
-
-                        // refcount = 1 (newly allocated, single owner)
-                        const one_i32 = try self.func().emitConstI32(1);
-                        const ref_slot = try self.func().emitGetFieldPtr(managed_ptr, 16);
-                        try self.func().emitStoreI32(ref_slot, one_i32);
-
-                        // parent_off = 0 (not a slice)
-                        const zero_i32 = try self.func().emitConstI32(0);
-                        const off_slot = try self.func().emitGetFieldPtr(managed_ptr, 20);
-                        try self.func().emitStoreI32(off_slot, zero_i32);
-                    }
+                    const managed_ptr = try self.emitManagedStringFromBytes(char_bytes);
 
                     // Allocate result struct and call init
                     const struct_size = type_info.struct_type.size;
@@ -3968,8 +3797,8 @@ pub const AstToIr = struct {
 
         debug.astToIr("InitableFromArrayLiteral: {s} with {d} elements", .{ type_name, elements.len });
 
-        // Allocate __ManagedArray on stack (24 bytes: ptr + len + capacity)
-        const managed_ptr = try self.func().emitAllocaSized(24);
+        // Allocate __ManagedArray on stack
+        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
 
         if (elements.len == 0) {
             // Empty array: buffer=null, len=0, capacity=0
@@ -4078,9 +3907,9 @@ pub const AstToIr = struct {
 
         debug.astToIr("InitableFromMapLiteral: {s} with {d} entries", .{ type_name, entries.len });
 
-        // Allocate two __ManagedArrays on stack (24 bytes each: ptr + len + capacity)
-        const keys_managed_ptr = try self.func().emitAllocaSized(24);
-        const values_managed_ptr = try self.func().emitAllocaSized(24);
+        // Allocate two __ManagedArrays on stack
+        const keys_managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
+        const values_managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
 
         if (entries.len == 0) {
             // Empty map: buffer=null, len=0, capacity=0 for both arrays
@@ -4208,65 +4037,7 @@ pub const AstToIr = struct {
 
         debug.astToIr("InitableFromStringLiteral: {s} with {d} bytes", .{ type_name, str_bytes.len });
 
-        // Allocate __ManagedString on stack (16 bytes: ptr + i32 len + i32 capacity)
-        const managed_ptr = try self.func().emitAllocaSized(16);
-
-        // Check SSO threshold: strings <= 15 bytes can use inline storage
-        // For simplicity in IR, we always use heap allocation for now
-        // SSO optimization can be added later in codegen
-        if (str_bytes.len == 0) {
-            // Empty string: buffer=null, len=0, capacity=0
-            const null_ptr = try self.func().emitConstI64(0);
-            const zero_i32 = try self.func().emitConstI32(0);
-
-            // Store buffer pointer (null)
-            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, null_ptr, 0);
-            try self.func().emitStore(buffer_slot, null_ptr);
-
-            // Store length (0)
-            const len_offset = try self.func().emitConstI64(1);
-            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
-            try self.func().emitStoreI32(len_slot, zero_i32);
-
-            // Store capacity (0 = constant string, no ownership)
-            const cap_offset = try self.func().emitConstI64(2);
-            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 12);
-            try self.func().emitStoreI32(cap_slot, zero_i32);
-        } else {
-            // Allocate buffer for string data (on heap)
-            // Add 1 for null terminator
-            const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1));
-            const buffer = try self.func().emitHeapAlloc(buffer_size);
-
-            // Store string bytes into buffer
-            for (str_bytes, 0..) |byte, i| {
-                const idx_val = try self.func().emitConstI64(@intCast(i));
-                const byte_ptr = try self.func().emitGetElemPtr(buffer, idx_val, 1);
-                const byte_val = try self.func().emitConstI8(byte);
-                try self.func().emitStoreI8(byte_ptr, byte_val);
-            }
-            // Null terminate
-            const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
-            const null_ptr = try self.func().emitGetElemPtr(buffer, null_idx, 1);
-            const null_byte = try self.func().emitConstI8(0);
-            try self.func().emitStoreI8(null_ptr, null_byte);
-
-            // Store buffer pointer into __ManagedString
-            const zero = try self.func().emitConstI64(0);
-            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, zero, 0);
-            try self.func().emitStore(buffer_slot, buffer);
-
-            // Store length (i32)
-            const len_val = try self.func().emitConstI32(@intCast(str_bytes.len));
-            const len_offset = try self.func().emitConstI64(1);
-            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
-            try self.func().emitStoreI32(len_slot, len_val);
-
-            // Store capacity (i32) - same as length for literals, indicates heap ownership
-            const cap_offset = try self.func().emitConstI64(2);
-            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 12);
-            try self.func().emitStoreI32(cap_slot, len_val);
-        }
+        const managed_ptr = try self.emitManagedStringFromBytes(str_bytes);
 
         // Call Type$init(managed) - the static init method
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
@@ -4330,59 +4101,7 @@ pub const AstToIr = struct {
 
         debug.astToIr("InitableFromCharLiteral: {s} with {d} bytes", .{ type_name, char_bytes.len });
 
-        // Allocate __ManagedString on stack (16 bytes: ptr + i32 len + i32 capacity)
-        // Character literals use the same __ManagedString format as strings
-        const managed_ptr = try self.func().emitAllocaSized(16);
-
-        if (char_bytes.len == 0) {
-            // Empty character (shouldn't happen, but handle gracefully)
-            const null_ptr = try self.func().emitConstI64(0);
-            const zero_i32 = try self.func().emitConstI32(0);
-
-            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, null_ptr, 0);
-            try self.func().emitStore(buffer_slot, null_ptr);
-
-            const len_offset = try self.func().emitConstI64(1);
-            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
-            try self.func().emitStoreI32(len_slot, zero_i32);
-
-            const cap_offset = try self.func().emitConstI64(2);
-            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 12);
-            try self.func().emitStoreI32(cap_slot, zero_i32);
-        } else {
-            // Allocate buffer for character bytes (grapheme cluster can be multiple bytes)
-            const buffer_size = try self.func().emitConstI64(@intCast(char_bytes.len + 1));
-            const buffer = try self.func().emitHeapAlloc(buffer_size);
-
-            // Store character bytes into buffer
-            for (char_bytes, 0..) |byte, i| {
-                const idx_val = try self.func().emitConstI64(@intCast(i));
-                const byte_ptr = try self.func().emitGetElemPtr(buffer, idx_val, 1);
-                const byte_val = try self.func().emitConstI8(byte);
-                try self.func().emitStoreI8(byte_ptr, byte_val);
-            }
-            // Null terminate
-            const null_idx = try self.func().emitConstI64(@intCast(char_bytes.len));
-            const null_ptr_char = try self.func().emitGetElemPtr(buffer, null_idx, 1);
-            const null_byte = try self.func().emitConstI8(0);
-            try self.func().emitStoreI8(null_ptr_char, null_byte);
-
-            // Store buffer pointer
-            const zero = try self.func().emitConstI64(0);
-            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, zero, 0);
-            try self.func().emitStore(buffer_slot, buffer);
-
-            // Store length (i32)
-            const len_val = try self.func().emitConstI32(@intCast(char_bytes.len));
-            const len_offset = try self.func().emitConstI64(1);
-            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
-            try self.func().emitStoreI32(len_slot, len_val);
-
-            // Store capacity (i32)
-            const cap_offset = try self.func().emitConstI64(2);
-            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 12);
-            try self.func().emitStoreI32(cap_slot, len_val);
-        }
+        const managed_ptr = try self.emitManagedStringFromBytes(char_bytes);
 
         // Call Type$init(managed) - the static init method
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
@@ -4495,9 +4214,9 @@ pub const AstToIr = struct {
         var type_args = [_][]const u8{ key_type_name, value_type_name };
         const map_type_name = try self.getOrCreateMonomorphizedType("Map", &type_args);
 
-        // Create two __ManagedArrays on stack (24 bytes each: ptr + len + capacity)
-        const keys_managed_ptr = try self.func().emitAllocaSized(24);
-        const values_managed_ptr = try self.func().emitAllocaSized(24);
+        // Create two __ManagedArrays on stack
+        const keys_managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
+        const values_managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
 
         // Allocate buffers for keys and values on heap
         const elem_count = try self.func().emitConstI64(@intCast(entries.len));
@@ -4743,8 +4462,8 @@ pub const AstToIr = struct {
 
         // Build __ManagedArray with the given capacity
         // For Array of N int, len = capacity so all elements are immediately accessible
-        // Allocate __ManagedArray on stack (24 bytes: ptr + len + capacity)
-        const managed_ptr = try self.func().emitAllocaSized(24);
+        // Allocate __ManagedArray on stack
+        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
 
         // Allocate buffer on heap: capacity * 8 bytes (all elements are 8 bytes)
         const elem_size = try self.func().emitConstI64(8);

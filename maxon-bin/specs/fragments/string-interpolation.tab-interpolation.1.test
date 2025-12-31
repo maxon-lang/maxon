@@ -189,8 +189,29 @@ entry:
     %tmp_const.36 = const.i64 i64 0
     store %tmp_fieldptr.40 %tmp_const.36
     %tmp_call.3 = call i64 @print(%tmp_alloca.11)
-    %tmp_const.37 = const.i64 i64 0
-    ret %tmp_const.37
+    %tmp_fieldptr.41 = getfieldptr ptr %tmp_alloca.5 12
+    %tmp_load.10 = load i32 %tmp_fieldptr.41
+    %tmp_const.37 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.10 %tmp_const.37
+    %tmp_const.38 = const.i32 i32 1
+    %tmp_icmp = icmp.eq i32 %tmp_band %tmp_const.38
+    br.cond %tmp_icmp @block1 @block3
+decref:
+    %tmp_fieldptr.42 = getfieldptr ptr %tmp_alloca.5 16
+    %tmp_load.11 = load i32 %tmp_fieldptr.42
+    %tmp_const.39 = const.i32 i32 1
+    %tmp_sub = sub i32 %tmp_load.11 %tmp_const.39
+    store.i32 %tmp_fieldptr.42 %tmp_sub
+    %tmp_const.40 = const.i32 i32 0
+    %tmp_icmp.1 = icmp.eq i32 %tmp_sub %tmp_const.40
+    br.cond %tmp_icmp.1 @block2 @block3
+decref_free:
+    %tmp_load.12 = load ptr %tmp_alloca.5
+    heap.free %tmp_load.12
+    br @block3
+decref_end:
+    %tmp_const.41 = const.i64 i64 0
+    ret %tmp_const.41
 }
 
 ---
