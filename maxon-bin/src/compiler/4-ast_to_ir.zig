@@ -58,7 +58,7 @@ pub const LoopBlocks = struct {
         try self_ir.func().blocks.items[cond_block_idx - 1].instructions.append(self_ir.allocator, .{
             .op = .br,
             .operands = .{ .{ .block_ref = cond_block_idx }, .none, .none },
-            .result = undefined,
+            .result = null,
         });
 
         // Create body and end blocks
@@ -321,6 +321,19 @@ pub const AstToIr = struct {
     fn isStringType(self: *AstToIr, ty: ValueType) bool {
         _ = self;
         return ty == .struct_type and std.mem.eql(u8, ty.struct_type, "String");
+    }
+
+    /// Copy a struct and handle refcount increment for String/__ManagedString types.
+    /// This is the single point of truth for struct copying with COW semantics.
+    fn emitStructCopy(self: *AstToIr, dest_ptr: ir.Value, src_ptr: ir.Value, size: i32, struct_name: ?[]const u8) !void {
+        try self.func().emitMemcpy(dest_ptr, src_ptr, size);
+
+        // Handle refcount for String types (which contain __ManagedString at offset 0)
+        if (struct_name) |name| {
+            if (std.mem.eql(u8, name, "String") or std.mem.eql(u8, name, "__ManagedString")) {
+                try self.emitStringIncref(dest_ptr);
+            }
+        }
     }
 
     /// Emit incref for a String variable if it's in heap mode.
@@ -1971,11 +1984,7 @@ pub const AstToIr = struct {
             const size = struct_info.struct_type.size;
             const p = try self.func().emitAllocaSized(size);
             try self.func().setValueName(p, decl.name);
-            try self.func().emitMemcpy(p, init_typed.value, size);
-            // COW: If copying a String, increment refcount on the new copy
-            if (self.isStringType(init_typed.ty)) {
-                try self.emitStringIncref(p);
-            }
+            try self.emitStructCopy(p, init_typed.value, size, struct_name);
             break :blk p;
         } else if (needs_alloca) blk: {
             const alloca_type = if (uses_slot) .ptr else init_typed.ty.toPrimitiveType();
@@ -2265,7 +2274,7 @@ pub const AstToIr = struct {
 
                             if (field.isStruct()) {
                                 // Struct fields are embedded inline - copy the full data
-                                try self.func().emitMemcpy(field_ptr, value_typed.value, field.size);
+                                try self.emitStructCopy(field_ptr, value_typed.value, field.size, field.structName());
                             } else {
                                 try self.func().emitStore(field_ptr, value_typed.value);
                             }
@@ -2310,7 +2319,7 @@ pub const AstToIr = struct {
 
         if (field_info.isStruct()) {
             // Struct fields are embedded inline - copy the full data
-            try self.func().emitMemcpy(field_ptr, val_typed.value, field_info.size);
+            try self.emitStructCopy(field_ptr, val_typed.value, field_info.size, field_info.structName());
         } else {
             try self.func().emitStore(field_ptr, val_typed.value);
         }
@@ -2363,8 +2372,8 @@ pub const AstToIr = struct {
 
         const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
         // For structs, copy the entire struct data; for primitives, store the value
-        if (arr_info.element_struct_type != null) {
-            try self.func().emitMemcpy(elem_ptr, val_typed.value, elem_size);
+        if (arr_info.element_struct_type) |struct_name| {
+            try self.emitStructCopy(elem_ptr, val_typed.value, elem_size, struct_name);
         } else {
             try self.func().emitStore(elem_ptr, val_typed.value);
         }
@@ -2501,14 +2510,14 @@ pub const AstToIr = struct {
             try self.func().blocks.items[idx].instructions.append(self.allocator, .{
                 .op = .br,
                 .operands = .{ .{ .block_ref = actual_end_block_idx }, .none, .none },
-                .result = undefined,
+                .result = null,
             });
         }
         if (else_exit_block_idx) |idx| {
             try self.func().blocks.items[idx].instructions.append(self.allocator, .{
                 .op = .br,
                 .operands = .{ .{ .block_ref = actual_end_block_idx }, .none, .none },
-                .result = undefined,
+                .result = null,
             });
         }
     }
@@ -2522,7 +2531,7 @@ pub const AstToIr = struct {
         try self.func().blocks.items[cond_block_idx - 1].instructions.append(self.allocator, .{
             .op = .br,
             .operands = .{ .{ .block_ref = cond_block_idx }, .none, .none },
-            .result = undefined,
+            .result = null,
         });
 
         // Convert condition expression in condition block
@@ -2644,7 +2653,7 @@ pub const AstToIr = struct {
                 // Allocate space for the struct on the stack
                 const slot = try self.func().emitAllocaSized(@intCast(struct_info.size));
                 // Copy the struct data into our slot
-                try self.func().emitMemcpy(slot, iterable_typed.value, @intCast(struct_info.size));
+                try self.emitStructCopy(slot, iterable_typed.value, @intCast(struct_info.size), struct_name);
                 break :blk slot;
             },
             else => iterable_typed.value,
@@ -2658,7 +2667,7 @@ pub const AstToIr = struct {
         try self.func().blocks.items[cond_block_idx - 1].instructions.append(self.allocator, .{
             .op = .br,
             .operands = .{ .{ .block_ref = cond_block_idx }, .none, .none },
-            .result = undefined,
+            .result = null,
         });
 
         // In condition block: call next() on the stored iterator
@@ -2879,18 +2888,16 @@ pub const AstToIr = struct {
 
         // In "some" block: unwrap and store value
         const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
-        if (opt_info.wrapped_struct_type != null) {
+        if (opt_info.wrapped_struct_type) |struct_name| {
             // For struct types, copy the struct data from the optional payload to var_ptr
             // Get the struct size
-            const struct_size = if (opt_info.wrapped_struct_type) |struct_name| blk: {
-                if (self.type_map.get(struct_name)) |type_info| {
-                    if (type_info == .struct_type) {
-                        break :blk type_info.struct_type.size;
-                    }
+            const struct_size = if (self.type_map.get(struct_name)) |type_info| blk: {
+                if (type_info == .struct_type) {
+                    break :blk type_info.struct_type.size;
                 }
                 break :blk 8; // fallback
             } else 8;
-            try self.func().emitMemcpy(var_ptr, value_ptr, struct_size);
+            try self.emitStructCopy(var_ptr, value_ptr, struct_size, struct_name);
         } else {
             // For primitive types, load and store
             const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
@@ -3048,7 +3055,7 @@ pub const AstToIr = struct {
 
         // Copy struct data inline at offset 8
         const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, 8);
-        try self.func().emitMemcpy(value_ptr, struct_ptr, struct_size);
+        try self.emitStructCopy(value_ptr, struct_ptr, struct_size, struct_type);
 
         return .{
             .value = opt_ptr,
@@ -3326,7 +3333,7 @@ pub const AstToIr = struct {
                 try self.func().blocks.items[case0_block_idx - 1].instructions.append(self.allocator, .{
                     .op = .br_cond,
                     .operands = .{ .{ .value = cmp }, .{ .block_ref = case0_block_idx }, .{ .block_ref = case1_block_idx } },
-                    .result = undefined,
+                    .result = null,
                 });
 
                 // Now in case0 block - emit string and branch to end
@@ -3356,7 +3363,7 @@ pub const AstToIr = struct {
             try self.func().blocks.items[case0_block_idx - 1].instructions.append(self.allocator, .{
                 .op = .br_cond,
                 .operands = .{ .{ .value = cmp }, .{ .block_ref = case0_block_idx }, .{ .block_ref = cmp1_block_idx } },
-                .result = undefined,
+                .result = null,
             });
 
             // Now in case0 block - emit string
@@ -3396,7 +3403,7 @@ pub const AstToIr = struct {
                 try self.func().blocks.items[case_block_idx - 1].instructions.append(self.allocator, .{
                     .op = .br_cond,
                     .operands = .{ .{ .value = cmp }, .{ .block_ref = case_block_idx }, .{ .block_ref = case_last_block_idx } },
-                    .result = undefined,
+                    .result = null,
                 });
 
                 // Now in case[i] block - emit string
@@ -3413,7 +3420,7 @@ pub const AstToIr = struct {
                     try self.func().blocks.items[case_exit_blocks[j]].instructions.append(self.allocator, .{
                         .op = .br,
                         .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
-                        .result = undefined,
+                        .result = null,
                     });
                 }
 
@@ -3433,7 +3440,7 @@ pub const AstToIr = struct {
                 try self.func().blocks.items[case_block_idx - 1].instructions.append(self.allocator, .{
                     .op = .br_cond,
                     .operands = .{ .{ .value = cmp }, .{ .block_ref = case_block_idx }, .{ .block_ref = next_cmp_block_idx } },
-                    .result = undefined,
+                    .result = null,
                 });
 
                 // Now in case[i] block - emit string
@@ -3502,7 +3509,7 @@ pub const AstToIr = struct {
         // Copy the _managed field from Character to String (24 bytes at offset 0)
         const char_managed = try self.func().emitGetFieldPtr(char_ptr, 0);
         const string_managed = try self.func().emitGetFieldPtr(string_ptr, 0);
-        try self.func().emitMemcpy(string_managed, char_managed, 24);
+        try self.emitStructCopy(string_managed, char_managed, 24, "__ManagedString");
 
         // Set _iterPos to 0 (at offset 24)
         const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
@@ -4127,7 +4134,7 @@ pub const AstToIr = struct {
 
             if (field_info.isStruct()) {
                 // Struct fields are embedded inline - copy the data
-                try self.func().emitMemcpy(field_ptr, field_val.value, field_info.size);
+                try self.emitStructCopy(field_ptr, field_val.value, field_info.size, field_info.structName());
             } else {
                 try self.func().emitStore(field_ptr, field_val.value);
             }
@@ -4863,8 +4870,8 @@ pub const AstToIr = struct {
             const idx_val = try self.func().emitConstI64(@intCast(i));
             const elem_ptr = try self.func().emitGetElemPtr(arr_ptr, idx_val, elem_size);
             // For structs, copy the entire struct data; for primitives, store the value
-            if (elem_struct_type != null) {
-                try self.func().emitMemcpy(elem_ptr, typed.value, elem_size);
+            if (elem_struct_type) |struct_name| {
+                try self.emitStructCopy(elem_ptr, typed.value, elem_size, struct_name);
             } else {
                 try self.func().emitStore(elem_ptr, typed.value);
             }
@@ -5137,7 +5144,7 @@ pub const AstToIr = struct {
                 }
                 break :blk 8;
             } else 8;
-            try self.func().emitMemcpy(value_slot, elem_ptr, struct_size);
+            try self.emitStructCopy(value_slot, elem_ptr, struct_size, struct_name);
         } else {
             // For primitives, load the value and store it
             const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
