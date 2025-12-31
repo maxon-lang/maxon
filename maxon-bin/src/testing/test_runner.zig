@@ -506,16 +506,28 @@ fn runTest(
             var actual_error_allocated = false;
             const actual_error = if (compile_result.error_info) |err| blk: {
                 actual_error_allocated = true;
-                break :blk std.fmt.allocPrint(allocator, "error {s}: {s}:{d}:{d}: {s}", .{
-                    err.code.format(),
-                    err.location.file orelse "",
-                    err.location.line,
-                    err.location.column,
-                    err.message,
-                }) catch {
-                    actual_error_allocated = false;
-                    break :blk "Failed to format error";
-                };
+                if (err.code) |code| {
+                    break :blk std.fmt.allocPrint(allocator, "error {s}: {s}:{d}:{d}: {s}", .{
+                        code.format(),
+                        err.location.file orelse "",
+                        err.location.line,
+                        err.location.column,
+                        err.message,
+                    }) catch {
+                        actual_error_allocated = false;
+                        break :blk "Failed to format error";
+                    };
+                } else {
+                    break :blk std.fmt.allocPrint(allocator, "internal error: {s}:{d}:{d}: {s}", .{
+                        err.location.file orelse "",
+                        err.location.line,
+                        err.location.column,
+                        err.message,
+                    }) catch {
+                        actual_error_allocated = false;
+                        break :blk "Failed to format error";
+                    };
+                }
             } else "Unknown compilation error";
             defer if (actual_error_allocated) allocator.free(actual_error);
 

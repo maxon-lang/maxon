@@ -78,14 +78,20 @@ pub const SourceLocation = struct {
 };
 
 /// Structured compile error with location and code
+/// Internal errors (compiler bugs/limitations) have code = null
 pub const CompileError = struct {
-    code: ErrorCode,
+    code: ?ErrorCode,
     message: []const u8,
     location: SourceLocation,
 
     /// Format error message: "error E001: file.maxon:10:5: message"
+    /// or for internal errors: "internal error: file.maxon:10:5: message"
     pub fn print(self: CompileError, writer: anytype) !void {
-        try writer.print("error {s}: ", .{self.code.format()});
+        if (self.code) |code| {
+            try writer.print("error {s}: ", .{code.format()});
+        } else {
+            try writer.writeAll("internal error: ");
+        }
         if (self.location.file) |file| {
             try writer.print("{s}:", .{file});
         }
@@ -94,7 +100,11 @@ pub const CompileError = struct {
 
     /// Format error message to stderr
     pub fn printToStderr(self: CompileError) void {
-        std.debug.print("error {s}: ", .{self.code.format()});
+        if (self.code) |code| {
+            std.debug.print("error {s}: ", .{code.format()});
+        } else {
+            std.debug.print("internal error: ", .{});
+        }
         if (self.location.file) |file| {
             std.debug.print("{s}:", .{file});
         }

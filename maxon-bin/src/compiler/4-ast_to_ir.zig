@@ -168,6 +168,7 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Report a user error (their code is wrong)
     pub fn reportError(self: *AstToIr, code: err.ErrorCode, details: []const u8) void {
         // Format: "base message: 'details'"
         const base_msg = code.message();
@@ -187,6 +188,19 @@ pub const AstToIr = struct {
         self.last_error = .{
             .code = code,
             .message = formatted,
+            .location = .{
+                .file = self.source_file,
+                .line = @intCast(self.current_line),
+                .column = 1,
+            },
+        };
+    }
+
+    /// Report an internal compiler error (compiler bug or limitation)
+    pub fn reportInternalError(self: *AstToIr, message: []const u8) void {
+        self.last_error = .{
+            .code = null,
+            .message = message,
             .location = .{
                 .file = self.source_file,
                 .line = @intCast(self.current_line),
@@ -1522,7 +1536,7 @@ pub const AstToIr = struct {
         } else .void;
 
         const ir_func = try self.module.addFunctionWithExport(mangled_name, ret_type, method.is_export);
-// Set alias for interface methods (e.g., Type$Interface.method)
+        // Set alias for interface methods (e.g., Type$Interface.method)
         if (method.qualified_name) |qualified| {
             const alias = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
             try self.module.trackString(alias);
@@ -3069,7 +3083,8 @@ pub const AstToIr = struct {
                 if (self.typeConformsTo(type_name, "Stringable")) {
                     return self.callStringableToString(type_name, typed_val.value, format_spec);
                 }
-                self.reportError(.E006, type_name);
+                const msg = std.fmt.allocPrint(self.allocator, "cannot convert type '{s}' to string for interpolation", .{type_name}) catch "cannot convert type to string";
+                self.reportInternalError(msg);
                 return error.UnknownType;
             },
             .primitive => |prim| {
@@ -3081,7 +3096,8 @@ pub const AstToIr = struct {
                 } else if (std.mem.eql(u8, prim.name, "float") or prim.ir_type == .f64) {
                     return self.convertFloatToString(typed_val.value);
                 }
-                self.reportError(.E006, prim.name);
+                const msg = std.fmt.allocPrint(self.allocator, "cannot convert primitive type '{s}' to string for interpolation", .{prim.name}) catch "cannot convert primitive to string";
+                self.reportInternalError(msg);
                 return error.UnknownType;
             },
             .enum_type => {
@@ -3089,7 +3105,7 @@ pub const AstToIr = struct {
                 return self.convertIntToString(typed_val.value);
             },
             else => {
-                self.reportError(.E006, "unsupported type for interpolation");
+                self.reportInternalError("unsupported type for string interpolation");
                 return error.UnknownType;
             },
         }
@@ -4050,8 +4066,8 @@ pub const AstToIr = struct {
         try self.module.trackString(mangled_name);
 
         const func_info = self.func_map.get(mangled_name) orelse {
-            debug.astToIr("error: stdlib Array missing 'get' method for type '{s}'", .{type_name});
-            self.reportError(.E003, mangled_name);
+            const msg = std.fmt.allocPrint(self.allocator, "stdlib Array type '{s}' missing 'get' method", .{type_name}) catch "stdlib Array missing get method";
+            self.reportInternalError(msg);
             return error.SemanticError;
         };
 
@@ -4086,8 +4102,8 @@ pub const AstToIr = struct {
         try self.module.trackString(mangled_name);
 
         const func_info = self.func_map.get(mangled_name) orelse {
-            debug.astToIr("error: stdlib Array missing 'set' method for type '{s}'", .{type_name});
-            self.reportError(.E003, mangled_name);
+            const msg = std.fmt.allocPrint(self.allocator, "stdlib Array type '{s}' missing 'set' method", .{type_name}) catch "stdlib Array missing set method";
+            self.reportInternalError(msg);
             return error.SemanticError;
         };
 
@@ -4309,7 +4325,8 @@ pub const AstToIr = struct {
 
         // Look up the function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
-            self.reportError(.E003, init_func_name);
+            const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method for InitableFromMapLiteral", .{type_name}) catch "missing init method";
+            self.reportInternalError(msg);
             return error.UnknownFunction;
         };
         const type_info = self.type_map.get(type_name) orelse {
@@ -4377,7 +4394,8 @@ pub const AstToIr = struct {
 
         // Look up the function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
-            self.reportError(.E003, init_func_name);
+            const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method for InitableFromStringLiteral", .{type_name}) catch "missing init method";
+            self.reportInternalError(msg);
             return error.UnknownFunction;
         };
         const type_info = self.type_map.get(type_name) orelse {
@@ -4442,7 +4460,8 @@ pub const AstToIr = struct {
         try self.module.trackString(init_func_name);
 
         const func_info = self.func_map.get(init_func_name) orelse {
-            self.reportError(.E003, init_func_name);
+            const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method for InitableFromCharLiteral", .{type_name}) catch "missing init method";
+            self.reportInternalError(msg);
             return error.UnknownFunction;
         };
         const type_info = self.type_map.get(type_name) orelse {
@@ -4597,12 +4616,11 @@ pub const AstToIr = struct {
 
         // Look up function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
-            debug.astToIr("error: Map type missing InitableFromMapLiteral.init: {s}", .{init_func_name});
-            self.reportError(.E003, init_func_name);
+            const msg = std.fmt.allocPrint(self.allocator, "Map type '{s}' missing init method for InitableFromMapLiteral", .{map_type_name}) catch "missing init method";
+            self.reportInternalError(msg);
             return error.UnknownFunction;
         };
         const type_info = self.type_map.get(map_type_name) orelse {
-            debug.astToIr("error: unknown Map type: {s}", .{map_type_name});
             self.reportError(.E006, map_type_name);
             return error.UnknownType;
         };
