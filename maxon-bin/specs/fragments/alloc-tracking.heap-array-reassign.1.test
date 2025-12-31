@@ -16,8 +16,8 @@ ExitCode: 20
 TrackAllocs: true
 Stdout: ```
 ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
 ALLOC #2: 40 bytes (dynamic array)
+FREE #1: 40 bytes (dynamic array)
 FREE #2: 40 bytes (dynamic array)
 
 === ALLOC STATS ===
@@ -61,13 +61,14 @@ entry:
     %tmp_call.2 = call ptr @Array$int$init(%tmp_alloca.5, %tmp_alloca.4)
     %tmp_load.2 = load ptr %arr
     heap.free %tmp_load.2
+    memcpy %arr %tmp_alloca.5 32
     %tmp_const.5 = const.i64 i64 0
     %tmp_const.6 = const.i64 i64 20
     %tmp_alloca.6 = alloca.sized ptr 32
-    %tmp_call.3 = call ptr @Array$int$set(%tmp_alloca.6, %tmp_alloca.5, %tmp_const.5, %tmp_const.6)
+    %tmp_call.3 = call ptr @Array$int$set(%tmp_alloca.6, %arr, %tmp_const.5, %tmp_const.6)
     %tmp_const.7 = const.i64 i64 0
     %tmp_alloca.7 = alloca.sized ptr 16
-    %tmp_call.4 = call ptr @Array$int$get(%tmp_alloca.7, %tmp_alloca.5, %tmp_const.7)
+    %tmp_call.4 = call ptr @Array$int$get(%tmp_alloca.7, %arr, %tmp_const.7)
     %tmp_load.3 = load i64 %tmp_alloca.7
     %tmp_const.8 = const.i64 i64 1
     %tmp_icmp = icmp.eq i64 %tmp_load.3 %tmp_const.8
@@ -78,12 +79,12 @@ if_let_then:
     %val = alloca ptr
     store %val %tmp_load.4
     %tmp_load.5 = load i64 %val
-    %tmp_load.6 = load ptr %tmp_alloca.5
+    %tmp_load.6 = load ptr %arr
     heap.free %tmp_load.6
     ret %tmp_load.5
 if_let_else:
     %tmp_const.9 = const.i64 i64 0
-    %tmp_load.7 = load ptr %tmp_alloca.5
+    %tmp_load.7 = load ptr %arr
     heap.free %tmp_load.7
     ret %tmp_const.9
 if_let_end:

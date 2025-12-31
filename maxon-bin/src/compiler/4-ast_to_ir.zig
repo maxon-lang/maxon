@@ -1247,6 +1247,7 @@ pub const AstToIr = struct {
                 const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
                 return .{ .optional_type = .{
                     .wrapped = wrapped_value_type.toPrimitiveType(),
+                    .wrapped_struct_type = if (wrapped_value_type == .struct_type) wrapped_value_type.struct_type else null,
                 } };
             },
         }
@@ -2229,7 +2230,26 @@ pub const AstToIr = struct {
 
             const is_reference = var_info.ty == .struct_type or var_info.ty == .array_type or var_info.ty == .optional_type;
             if (is_reference and !var_info.uses_slot) {
-                var_info.ptr = value_typed.value;
+                // For struct reassignment, we need to copy the data to the original stack location
+                // Just updating var_info.ptr would cause loops to use stale data
+                if (var_info.ty == .struct_type) {
+                    const struct_name = var_info.ty.struct_type;
+                    const struct_info = self.type_map.get(struct_name) orelse {
+                        self.reportError(.E006, struct_name);
+                        return error.UnknownType;
+                    };
+                    const size = struct_info.struct_type.size;
+                    try self.func().emitMemcpy(var_info.ptr, value_typed.value, size);
+                    // Handle String refcount - the new value's refcount is already correct from expression evaluation
+                    // but we need to incref if copying from another variable
+                    if (assign.value == .identifier or assign.value == .field_access) {
+                        if (std.mem.eql(u8, struct_name, "String") or std.mem.eql(u8, struct_name, "__ManagedString")) {
+                            try self.emitStringIncref(var_info.ptr);
+                        }
+                    }
+                } else {
+                    var_info.ptr = value_typed.value;
+                }
             } else {
                 try self.func().emitStore(var_info.ptr, value_typed.value);
             }
@@ -3015,10 +3035,17 @@ pub const AstToIr = struct {
         return self.convertIdentifier(name);
     }
 
-    /// Create a "some" optional from a value
+    /// Allocate storage for an optional based on its OptionalInfo.
+    /// Returns the pointer to the allocated optional.
+    fn allocateOptional(self: *AstToIr, opt_info: OptionalInfo) ConvertError!ir.Value {
+        const size = self.getOptionalSize(opt_info);
+        return self.func().emitAllocaSized(size);
+    }
+
+    /// Create a "some" optional from a primitive value
     fn createSomeOptional(self: *AstToIr, value: ir.Value, wrapped_type: ir.Type) ConvertError!TypedValue {
-        // Allocate 16 bytes: [tag: i64][value: i64]
-        const opt_ptr = try self.func().emitAllocaSized(16);
+        const opt_info = OptionalInfo{ .wrapped = wrapped_type };
+        const opt_ptr = try self.allocateOptional(opt_info);
 
         // Store tag = 1 (has value)
         const one = try self.func().emitConstI64(1);
@@ -3030,24 +3057,14 @@ pub const AstToIr = struct {
 
         return .{
             .value = opt_ptr,
-            .ty = .{ .optional_type = .{ .wrapped = wrapped_type } },
+            .ty = .{ .optional_type = opt_info },
         };
     }
 
-    /// Create a some optional with a struct pointer value
+    /// Create a some optional with a struct pointer value (copies struct data inline)
     fn createSomeOptionalWithStructType(self: *AstToIr, struct_ptr: ir.Value, wrapped_type: ir.Type, struct_type: ?[]const u8) ConvertError!TypedValue {
-        // Get struct size for inline storage
-        const struct_size: i32 = if (struct_type) |name| blk: {
-            if (self.type_map.get(name)) |type_info| {
-                if (type_info == .struct_type) {
-                    break :blk type_info.struct_type.size;
-                }
-            }
-            break :blk 8;
-        } else 8;
-
-        // Allocate: [tag: i64][struct data inline]
-        const opt_ptr = try self.func().emitAllocaSized(8 + struct_size);
+        const opt_info = OptionalInfo{ .wrapped = wrapped_type, .wrapped_struct_type = struct_type };
+        const opt_ptr = try self.allocateOptional(opt_info);
 
         // Store tag = 1 (has value)
         const one = try self.func().emitConstI64(1);
@@ -3055,23 +3072,29 @@ pub const AstToIr = struct {
 
         // Copy struct data inline at offset 8
         const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, 8);
+        const struct_size = self.getOptionalSize(opt_info) - 8; // Total size minus tag
         try self.emitStructCopy(value_ptr, struct_ptr, struct_size, struct_type);
 
         return .{
             .value = opt_ptr,
-            .ty = .{ .optional_type = .{ .wrapped = wrapped_type, .wrapped_struct_type = struct_type } },
+            .ty = .{ .optional_type = opt_info },
         };
     }
 
-    /// Create a nil optional with a specific wrapped type
-    fn createNilOptional(self: *AstToIr, wrapped_type: ir.Type) ConvertError!TypedValue {
-        const opt_ptr = try self.func().emitAllocaSized(16);
+    /// Create a nil optional with a specific OptionalInfo (handles both primitives and structs)
+    fn createNilOptionalWithInfo(self: *AstToIr, opt_info: OptionalInfo) ConvertError!TypedValue {
+        const opt_ptr = try self.allocateOptional(opt_info);
         const zero = try self.func().emitConstI64(0);
         try self.func().emitStore(opt_ptr, zero); // tag = 0 (nil)
         return .{
             .value = opt_ptr,
-            .ty = .{ .optional_type = .{ .wrapped = wrapped_type } },
+            .ty = .{ .optional_type = opt_info },
         };
+    }
+
+    /// Create a nil optional with a primitive wrapped type (legacy helper)
+    fn createNilOptional(self: *AstToIr, wrapped_type: ir.Type) ConvertError!TypedValue {
+        return self.createNilOptionalWithInfo(.{ .wrapped = wrapped_type });
     }
 
     /// Convert string literal expression to a string type
@@ -3472,21 +3495,23 @@ pub const AstToIr = struct {
         // Allocate space for the return value (String is 32 bytes)
         const result_ptr = try self.func().emitAllocaSized(32);
 
-        // Prepare the format argument (optional string)
-        // For now, pass nil (represented as an optional with tag=0)
-        const format_opt = try self.func().emitAllocaSized(16);
+        // Prepare the format argument (optional String)
+        const format_opt_info = OptionalInfo{ .wrapped = .ptr, .wrapped_struct_type = "String" };
         if (format_spec) |spec| {
-            // Create a String from the format spec and store as some
-            const one = try self.func().emitConstI64(1);
-            try self.func().emitStore(format_opt, one);
             const format_str = try self.convertStringLiteral(spec);
-            const value_ptr_off = try self.func().emitGetFieldPtr(format_opt, 8);
-            try self.func().emitStore(value_ptr_off, format_str.value);
-        } else {
-            // Store nil (tag=0)
-            const zero = try self.func().emitConstI64(0);
-            try self.func().emitStore(format_opt, zero);
+            const format_typed = try self.createSomeOptionalWithStructType(format_str.value, .ptr, "String");
+            // Use the allocated optional directly
+            var args = try self.func().allocator.alloc(ir.Value, 3);
+            args[0] = result_ptr;
+            args[1] = value_ptr;
+            args[2] = format_typed.value;
+            _ = try self.func().emitCall(method_name, args, func_info.return_type);
+            return result_ptr;
         }
+        // nil case
+        const format_opt = try self.allocateOptional(format_opt_info);
+        const zero = try self.func().emitConstI64(0);
+        try self.func().emitStore(format_opt, zero);
 
         // Call toString(self, format) -> result_ptr contains the String
         var args = try self.func().allocator.alloc(ir.Value, 3);
@@ -4404,7 +4429,10 @@ pub const AstToIr = struct {
 
         // The get method returns Element or nil (an optional)
         // Args: sret_ptr, self_ptr, index
-        const sret_buffer = try self.func().emitAllocaSized(16); // 16-byte optional
+        const default_type: ValueType = .{ .optional_type = .{ .wrapped = .i64 } };
+        const return_type = func_info.return_value_type orelse default_type;
+        const opt_info = if (return_type == .optional_type) return_type.optional_type else OptionalInfo{ .wrapped = .i64 };
+        const sret_buffer = try self.allocateOptional(opt_info);
 
         var args = try self.allocator.alloc(ir.Value, 3);
         args[0] = sret_buffer;
@@ -4416,7 +4444,7 @@ pub const AstToIr = struct {
         // Return the optional
         return .{
             .value = sret_buffer,
-            .ty = func_info.return_value_type orelse .{ .optional_type = .{ .wrapped = .i64 } },
+            .ty = return_type,
         };
     }
 

@@ -537,8 +537,8 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
 ALLOC #2: 40 bytes (dynamic array)
+FREE #1: 40 bytes (dynamic array)
 FREE #2: 40 bytes (dynamic array)
 
 === ALLOC STATS ===
