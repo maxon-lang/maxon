@@ -2115,7 +2115,7 @@ pub const IrCodegen = struct {
         const offset = self.allocStackSlots(1);
         try self.value_locations.put(self.allocator, inst.result.?, .{ .stack = offset });
         try self.value_types.put(self.allocator, inst.result.?, inst.result_type);
-        debug.codegen("  alloca: result=%{d}, offset={d}, type={s}", .{ inst.result.?, offset, inst.result_type.format() });
+        debug.codegen("  alloca: result=%{d}, offset={d}, type={s}", .{ inst.result.?, offset, inst.result_type.toIrName() });
     }
 
     fn genAllocaSized(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -2256,7 +2256,7 @@ pub const IrCodegen = struct {
         const val_type = self.value_types.get(val) orelse return error.ValueTypeNotFound;
         const val_offset = self.getStackOffset(val) catch -999;
 
-        debug.codegen("  store: ptr=%{d}, val=%{d}, ptr_offset={d}, val_offset={d}, ptr_indirect={}, val_indirect={}, val_type={s}", .{ ptr, val, offset, val_offset, self.isIndirect(ptr), self.isIndirect(val), val_type.format() });
+        debug.codegen("  store: ptr=%{d}, val=%{d}, ptr_offset={d}, val_offset={d}, ptr_indirect={}, val_indirect={}, val_type={s}", .{ ptr, val, offset, val_offset, self.isIndirect(ptr), self.isIndirect(val), val_type.toIrName() });
 
         // Track what type was stored at this location for later loads
         try self.stored_types.put(self.allocator, ptr, val_type);
@@ -2434,7 +2434,7 @@ pub const IrCodegen = struct {
         // Prefer the type that was actually stored at this location, otherwise use IR type
         const ty = self.stored_types.get(ptr) orelse inst.result_type;
 
-        debug.codegen("  load: result=%{d}, ptr=%{d}, offset={d}, type={s}, indirect={}", .{ result, ptr, offset, ty.format(), self.isIndirect(ptr) });
+        debug.codegen("  load: result=%{d}, ptr=%{d}, offset={d}, type={s}, indirect={}", .{ result, ptr, offset, ty.toIrName(), self.isIndirect(ptr) });
 
         if (self.isIndirect(ptr)) {
             try self.enc.movRcxRbpOffset(offset);
@@ -2611,7 +2611,7 @@ pub const IrCodegen = struct {
             const ret_val = inst.operands[0].value;
             const ret_type = self.value_types.get(ret_val) orelse return error.ValueTypeNotFound;
 
-            debug.codegen("  ret: val=%{d}, type={s}, func={s}", .{ ret_val, ret_type.format(), self.current_func_name });
+            debug.codegen("  ret: val=%{d}, type={s}, func={s}", .{ ret_val, ret_type.toIrName(), self.current_func_name });
 
             if (self.reg_alloc.has_hidden_ret_ptr) {
                 // Large struct return: copy result to caller's buffer via hidden pointer
@@ -2747,7 +2747,7 @@ pub const IrCodegen = struct {
             // Result is in the stack buffer we allocated
             // RAX contains the pointer to it (as per ABI), but we already know where it is
             if (inst.result) |result| {
-                debug.codegen("  call result (hidden ptr): %{d} of type {s}", .{ result, ret_type.format() });
+                debug.codegen("  call result (hidden ptr): %{d} of type {s}", .{ result, ret_type.toIrName() });
                 // The result is already at result_offset on the stack
                 try self.setValueLocation(result, .{ .stack = result_offset }, ret_type);
                 if (ret_type == .ptr) {
@@ -2760,7 +2760,7 @@ pub const IrCodegen = struct {
             try self.emitInternalCall(func_name);
 
             if (inst.result) |result| {
-                debug.codegen("  call result: %{d} of type {s}", .{ result, ret_type.format() });
+                debug.codegen("  call result: %{d} of type {s}", .{ result, ret_type.toIrName() });
                 try self.storeReturnValue(result, ret_type);
             }
         }

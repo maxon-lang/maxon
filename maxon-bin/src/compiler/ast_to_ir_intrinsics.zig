@@ -3,7 +3,6 @@ const ast = @import("ast.zig");
 const ir = @import("ir.zig");
 const types = @import("ast_to_ir_types.zig");
 const TypedValue = types.TypedValue;
-const PrimitiveInfo = types.PrimitiveInfo;
 const ConvertError = types.ConvertError;
 
 // Forward reference to main AstToIr module
@@ -101,13 +100,14 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
 
     const arg = try self.convertExpression(call.args[0]);
     if (arg.ty.toPrimitiveType() != builtin.arg_type) {
-        self.reportError(.E011, call.func_name);
+        const msg = std.fmt.allocPrint(self.allocator, "{s}() requires {s} argument", .{ call.func_name, builtin.arg_type.toMaxonName() }) catch call.func_name;
+        self.reportError(.E022, msg);
         return error.TypeMismatch;
     }
 
     const result = self.func().emitUnaryOp(builtin.op, arg.value, builtin.ret_type) catch return error.OutOfMemory;
 
-    return .{ .value = result, .ty = .{ .primitive = PrimitiveInfo.fromIrType(builtin.ret_type) } };
+    return .{ .value = result, .ty = .{ .primitive = builtin.ret_type.toMaxonName() } };
 }
 
 // ============================================================================
@@ -152,7 +152,7 @@ fn intrinsicManagedArrayLen(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
     const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
     const len = try self.func().emitLoad(len_ptr, .i64);
 
-    return .{ .value = len, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+    return .{ .value = len, .ty = .{ .primitive = "int" } };
 }
 
 /// __managed_array_capacity(managed) -> int
@@ -168,7 +168,7 @@ fn intrinsicManagedArrayCapacity(self: *AstToIr, call: ast.CallExpr) ConvertErro
     const cap_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
     const cap = try self.func().emitLoad(cap_ptr, .i64);
 
-    return .{ .value = cap, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+    return .{ .value = cap, .ty = .{ .primitive = "int" } };
 }
 
 /// __managed_array_create(capacity) -> __ManagedArray
@@ -204,7 +204,7 @@ fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const cap_ptr = try self.func().emitGetFieldPtr(managed_ptr, 16);
     try self.func().emitStore(cap_ptr, capacity.value);
 
-    return .{ .value = managed_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "ptr" } } };
+    return .{ .value = managed_ptr, .ty = .{ .primitive = "ptr" } };
 }
 
 /// __managed_array_set_at(managed, index, value) -> void
@@ -228,7 +228,7 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     // Store value
     try self.func().emitStore(elem_ptr, value.value);
 
-    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
+    return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
 /// __managed_array_set_length(managed, new_len) -> void
@@ -246,7 +246,7 @@ fn intrinsicManagedArraySetLength(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
     try self.func().emitStore(len_ptr, new_len.value);
 
-    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
+    return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
 /// __managed_array_grow(managed, new_capacity) -> void
@@ -277,7 +277,7 @@ fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const cap_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
     try self.func().emitStore(cap_ptr, new_capacity.value);
 
-    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
+    return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
 /// __managed_array_shift_right(managed, start_index, count) -> void
@@ -334,7 +334,7 @@ fn intrinsicManagedArrayShiftRight(self: *AstToIr, call: ast.CallExpr) ConvertEr
     // Finish loop and restore end block
     try self.finishLoop(&loop);
 
-    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
+    return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
 /// __managed_array_shift_left(managed, start_index, count) -> void
@@ -396,7 +396,7 @@ fn intrinsicManagedArrayShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertErr
     // Finish loop and restore end block
     try self.finishLoop(&loop);
 
-    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
+    return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
 // ============================================================================
@@ -484,7 +484,7 @@ fn intrinsicCstringWriteStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!
 
     const result = try self.func().emitCall("__write_stdout", args, .i64);
 
-    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
 }
 
 /// Dispatch __make_char_* intrinsics
@@ -564,7 +564,7 @@ fn intrinsicStringLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     // Sign-extend to i64 for Maxon int type
     const len = try self.func().emitUnaryOp(.sext_i32_i64, len_i32, .i64);
 
-    return .{ .value = len, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+    return .{ .value = len, .ty = .{ .primitive = "int" } };
 }
 
 /// __string_byte_at(managed, index) -> byte
@@ -587,7 +587,7 @@ fn intrinsicStringByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     // Load single byte
     const byte_val = try self.func().emitLoad(byte_ptr, .i8);
 
-    return .{ .value = byte_val, .ty = .{ .primitive = .{ .ir_type = .i8, .name = "byte" } } };
+    return .{ .value = byte_val, .ty = .{ .primitive = "byte" } };
 }
 
 /// __string_slice(managed, start, end) -> __ManagedString (slice mode)
@@ -660,7 +660,7 @@ fn intrinsicStringSlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
     const off_field = try self.func().emitGetFieldPtr(slice_ptr, 20);
     try self.func().emitStoreI32(off_field, start_i32);
 
-    return .{ .value = slice_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };
+    return .{ .value = slice_ptr, .ty = .{ .primitive = "__ManagedString" } };
 }
 
 /// __string_concat(a, b) -> __ManagedString
@@ -734,7 +734,7 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const dst_offset = try self.func().emitBinaryOp(.add, buf_ptr, a_len, .ptr);
     try self.func().emitMemcpyDynamic(dst_offset, b_buf, b_len);
 
-    return .{ .value = result_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };
+    return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedString" } };
 }
 
 /// __string_make_unique(managed) -> __ManagedString
@@ -789,7 +789,7 @@ fn intrinsicStringMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const off_field = try self.func().emitGetFieldPtr(result_ptr, 20);
     try self.func().emitStoreI32(off_field, zero);
 
-    return .{ .value = result_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };
+    return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedString" } };
 }
 
 /// __string_set_byte(managed, index, byte) -> void
@@ -814,7 +814,7 @@ fn intrinsicStringSetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     const byte_i8 = try self.func().emitUnaryOp(.trunc_i64_i8, byte_val.value, .i8);
     try self.func().emitStoreI8(byte_ptr, byte_i8);
 
-    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
+    return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
 /// __string_to_cstring(managed) -> cstring struct
@@ -1006,7 +1006,7 @@ fn intrinsicStringFromCharacters(self: *AstToIr, call: ast.CallExpr) ConvertErro
     const off_field = try self.func().emitGetFieldPtr(result_ptr, 20);
     try self.func().emitStoreI32(off_field, zero);
 
-    return .{ .value = result_ptr, .ty = .{ .primitive = .{ .ir_type = .ptr, .name = "__ManagedString" } } };
+    return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedString" } };
 }
 
 // ============================================================================
@@ -1031,7 +1031,7 @@ fn intrinsicStringIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i32);
     try self.func().emitStoreI32(ref_ptr, new_ref);
 
-    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
+    return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
 /// __string_decref(managed) -> void
@@ -1056,7 +1056,7 @@ fn intrinsicStringDecref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     // TODO: Add conditional free when refcount reaches 0
     // For now, this just decrements - actual free handled by freeHeapVars
 
-    return .{ .value = 0, .ty = .{ .primitive = .{ .ir_type = .void, .name = "void" } } };
+    return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
 /// __string_refcount(managed) -> int
@@ -1074,7 +1074,7 @@ fn intrinsicStringRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!Type
     const ref_i32 = try self.func().emitLoad(ref_ptr, .i32);
     const ref = try self.func().emitUnaryOp(.sext_i32_i64, ref_i32, .i64);
 
-    return .{ .value = ref, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+    return .{ .value = ref, .ty = .{ .primitive = "int" } };
 }
 
 /// __string_is_heap(managed) -> bool
@@ -1095,7 +1095,7 @@ fn intrinsicStringIsHeap(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const one = try self.func().emitConstI32(1);
     const is_heap = try self.func().emitBinaryOp(.band, cap_flags, one, .i32);
 
-    return .{ .value = is_heap, .ty = .{ .primitive = .{ .ir_type = .i32, .name = "bool" } } };
+    return .{ .value = is_heap, .ty = .{ .primitive = "bool" } };
 }
 
 /// __string_cap_flags(managed) -> int
@@ -1113,5 +1113,5 @@ fn intrinsicStringCapFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!Type
     const cap_i32 = try self.func().emitLoad(cap_ptr, .i32);
     const cap = try self.func().emitUnaryOp(.sext_i32_i64, cap_i32, .i64);
 
-    return .{ .value = cap, .ty = .{ .primitive = .{ .ir_type = .i64, .name = "int" } } };
+    return .{ .value = cap, .ty = .{ .primitive = "int" } };
 }

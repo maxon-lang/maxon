@@ -32,28 +32,21 @@ pub const OptionalInfo = struct {
     wrapped_struct_type: ?[]const u8 = null, // struct name if wrapped is a struct
 };
 
-/// Primitive type info - tracks IR type and source type name
-pub const PrimitiveInfo = struct {
-    ir_type: ir.Type,
-    name: []const u8, // "int", "float", "bool", "byte"
-
-    /// Create PrimitiveInfo from ir.Type with inferred type name
-    pub fn fromIrType(ir_type: ir.Type) PrimitiveInfo {
-        const type_name = switch (ir_type) {
-            .i8 => "byte",
-            .i32 => "int",
-            .i64 => "int",
-            .f64 => "float",
-            .ptr => "ptr",
-            .void => "void",
-        };
-        return .{ .ir_type = ir_type, .name = type_name };
-    }
-};
+/// Maps a Maxon type name to its IR type representation
+pub fn nameToIrType(name: []const u8) ir.Type {
+    if (std.mem.eql(u8, name, "int")) return .i64;
+    if (std.mem.eql(u8, name, "float")) return .f64;
+    if (std.mem.eql(u8, name, "bool")) return .i64;
+    if (std.mem.eql(u8, name, "byte")) return .i64;
+    if (std.mem.eql(u8, name, "void")) return .void;
+    if (std.mem.eql(u8, name, "ptr") or std.mem.eql(u8, name, "pointer")) return .ptr;
+    // All other types (structs, __ManagedString, etc.) are represented as pointers
+    return .ptr;
+}
 
 /// Extended type info for variable tracking
 pub const ValueType = union(enum) {
-    primitive: PrimitiveInfo,
+    primitive: []const u8, // type name: "int", "float", "bool", "byte", "__ManagedString", etc.
     struct_type: []const u8,
     array_type: ArrayInfo,
     enum_type: []const u8,
@@ -61,7 +54,7 @@ pub const ValueType = union(enum) {
 
     pub fn toPrimitiveType(self: ValueType) ir.Type {
         return switch (self) {
-            .primitive => |p| p.ir_type,
+            .primitive => |name| nameToIrType(name),
             .enum_type => .i64,
             .struct_type, .array_type => .ptr,
             .optional_type => .ptr, // Optionals are pointers to 16-byte structures
@@ -80,7 +73,7 @@ pub const ValueType = union(enum) {
     /// Returns the primitive name ("int", "float", etc.) or struct type name
     pub fn getTypeName(self: ValueType) ?[]const u8 {
         return switch (self) {
-            .primitive => |p| p.name,
+            .primitive => |name| name,
             .struct_type => |name| name,
             .enum_type => |name| name,
             .array_type, .optional_type => null,

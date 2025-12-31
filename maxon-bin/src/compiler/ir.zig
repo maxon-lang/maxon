@@ -13,7 +13,8 @@ pub const Type = enum {
     void,
     ptr,
 
-    pub fn format(self: Type) []const u8 {
+    /// Returns the IR-level type name (i8, i32, i64, f64, ptr, void)
+    pub fn toIrName(self: Type) []const u8 {
         return switch (self) {
             .i8 => "i8",
             .i32 => "i32",
@@ -21,6 +22,18 @@ pub const Type = enum {
             .f64 => "f64",
             .void => "void",
             .ptr => "ptr",
+        };
+    }
+
+    /// Returns the user-facing Maxon type name (byte, int, float, pointer, void)
+    pub fn toMaxonName(self: Type) []const u8 {
+        return switch (self) {
+            .i8 => "byte",
+            .i32 => "int",
+            .i64 => "int",
+            .f64 => "float",
+            .ptr => "pointer",
+            .void => "void",
         };
     }
 };
@@ -569,7 +582,7 @@ pub const Module = struct {
     /// Print IR to a writer
     pub fn print(self: *const Module, writer: anytype) !void {
         for (self.functions.items) |func| {
-            try writer.print("function {s}() -> {s} {{\n", .{ func.name, func.return_type.format() });
+            try writer.print("function {s}() -> {s} {{\n", .{ func.name, func.return_type.toIrName() });
 
             for (func.blocks.items) |block| {
                 try writer.print("{s}:\n", .{block.name});
@@ -657,7 +670,7 @@ fn printInstruction(writer: anytype, inst: Instruction, func: *const Function) !
 
     // Print type for typed operations
     if (inst.result != null and inst.result_type != .void) {
-        try writer.print(" {s}", .{inst.result_type.format()});
+        try writer.print(" {s}", .{inst.result_type.toIrName()});
     }
 
     // Print operands

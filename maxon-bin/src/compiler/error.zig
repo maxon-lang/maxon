@@ -23,6 +23,7 @@ pub const ErrorCode = enum {
     E019,
     E020,
     E021,
+    E022,
 
     const Info = struct {
         code: []const u8,
@@ -51,6 +52,7 @@ pub const ErrorCode = enum {
         .{ .code = "E019", .message = "unknown intrinsic" },
         .{ .code = "E020", .message = "cannot modify borrowed string" },
         .{ .code = "E021", .message = "string goes out of scope while borrowed" },
+        .{ .code = "E022", .message = "type mismatch" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {
