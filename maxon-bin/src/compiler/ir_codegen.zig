@@ -429,6 +429,11 @@ pub const IrCodegen = struct {
         // Generate __write_stdout runtime function (always needed for print)
         try self.generateWriteStdout();
 
+        // Generate runtime conversion functions for string interpolation
+        try self.generateRuntimeIntToString();
+        try self.generateRuntimeFloatToString();
+        try self.generateRuntimeBoolToString();
+
         // Generate tracking support functions if enabled
         if (self.track_allocs) {
             try self.generateTrackingFunctions();
@@ -1063,6 +1068,224 @@ pub const IrCodegen = struct {
 
         // Epilogue
         try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __runtime_int_to_string(buffer, value) -> length
+    /// Converts an i64 integer to its decimal string representation
+    /// Parameters: RCX = buffer pointer, RDX = i64 value
+    /// Returns: RAX = length of string written
+    fn generateRuntimeIntToString(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__runtime_int_to_string", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x30 }); // sub rsp, 48
+
+        // Save args: [rbp-8] = buffer, [rbp-16] = value
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF8 }); // mov [rbp-8], rcx (buffer)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xF0 }); // mov [rbp-16], rdx (value)
+
+        // Handle negative numbers
+        // if value < 0: write '-', negate value
+        try self.enc.emit(&.{ 0x48, 0x85, 0xD2 }); // test rdx, rdx
+        const jns_offset = self.code.items.len;
+        try self.enc.emit(&.{ 0x79, 0x00 }); // jns skip_neg (patch later)
+        const neg_start = self.code.items.len;
+
+        // Write '-' to buffer
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x2D }); // mov byte [rcx], '-'
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC1 }); // inc rcx
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF8 }); // mov [rbp-8], rcx (update buffer ptr)
+        // Negate value
+        try self.enc.emit(&.{ 0x48, 0xF7, 0xDA }); // neg rdx
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xF0 }); // mov [rbp-16], rdx
+
+        // Patch jns
+        const after_neg = self.code.items.len;
+        self.code.items[jns_offset + 1] = @intCast(after_neg - neg_start);
+
+        // Now convert abs(value) to string
+        // We write digits in reverse, then reverse them
+        // Use [rbp-24] as temp digit count
+
+        // Save original buffer position for later reversal
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF8 }); // mov rcx, [rbp-8] (buffer)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xE8 }); // mov [rbp-24], rcx (save start)
+
+        // Special case: value == 0
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xF0 }); // mov rax, [rbp-16] (value)
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+        const jnz_offset = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jnz not_zero (patch later)
+        const zero_start = self.code.items.len;
+
+        // Value is zero, write '0' and return 1
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x30 }); // mov byte [rcx], '0'
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00 }); // mov rax, 1
+        // Jump directly to epilogue
+        const jmp_to_epilogue = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp epilogue (patch later)
+
+        // Patch jnz
+        const not_zero = self.code.items.len;
+        self.code.items[jnz_offset + 1] = @intCast(not_zero - zero_start);
+
+        // Loop: extract digits
+        // rax = value, rcx = buffer ptr
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xF0 }); // mov rax, [rbp-16] (value)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF8 }); // mov rcx, [rbp-8] (buffer)
+
+        const loop_start = self.code.items.len;
+        // while (rax != 0)
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+        const jz_end_offset = self.code.items.len;
+        try self.enc.emit(&.{ 0x74, 0x00 }); // jz end_loop (patch later)
+        const jz_start = self.code.items.len;
+
+        // digit = rax % 10
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC2, 0x0A, 0x00, 0x00, 0x00 }); // mov rdx, 10
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax (save dividend)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (clear high bits for div)
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC3, 0x0A, 0x00, 0x00, 0x00 }); // mov rbx, 10
+        try self.enc.emit(&.{ 0x48, 0xF7, 0xF3 }); // div rbx (rax = quotient, rdx = remainder)
+
+        // Write digit: '0' + remainder
+        try self.enc.emit(&.{ 0x80, 0xC2, 0x30 }); // add dl, '0'
+        try self.enc.emit(&.{ 0x88, 0x11 }); // mov [rcx], dl
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC1 }); // inc rcx
+
+        // Loop back
+        const loop_back: i8 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(self.code.items.len)) - 2);
+        try self.enc.emit(&.{ 0xEB, @bitCast(loop_back) }); // jmp loop_start
+
+        // End loop
+        const end_loop = self.code.items.len;
+        self.code.items[jz_end_offset + 1] = @intCast(end_loop - jz_start);
+
+        // Now reverse the digits
+        // rcx = end of string, [rbp-24] = start of digits
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF8 }); // mov [rbp-8], rcx (save end)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xE8 }); // mov rsi, [rbp-24] (start)
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x79, 0xFF }); // lea rdi, [rcx-1] (end-1)
+
+        // while (rsi < rdi) swap
+        const rev_loop = self.code.items.len;
+        try self.enc.emit(&.{ 0x48, 0x39, 0xFE }); // cmp rsi, rdi
+        const jae_end_offset = self.code.items.len;
+        try self.enc.emit(&.{ 0x73, 0x00 }); // jae end_reverse (patch later)
+        const jae_start = self.code.items.len;
+
+        // Swap bytes
+        try self.enc.emit(&.{ 0x8A, 0x06 }); // mov al, [rsi]
+        try self.enc.emit(&.{ 0x8A, 0x1F }); // mov bl, [rdi]
+        try self.enc.emit(&.{ 0x88, 0x1E }); // mov [rsi], bl
+        try self.enc.emit(&.{ 0x88, 0x07 }); // mov [rdi], al
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC6 }); // inc rsi
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xCF }); // dec rdi
+
+        const rev_back: i8 = @intCast(@as(i64, @intCast(rev_loop)) - @as(i64, @intCast(self.code.items.len)) - 2);
+        try self.enc.emit(&.{ 0xEB, @bitCast(rev_back) }); // jmp rev_loop
+
+        const end_reverse = self.code.items.len;
+        self.code.items[jae_end_offset + 1] = @intCast(end_reverse - jae_start);
+
+        // Calculate length for non-zero case
+        // [rbp-8] = end, [rbp-24] = start of digits (after any '-')
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xF8 }); // mov rax, [rbp-8]
+        try self.enc.emit(&.{ 0x48, 0x2B, 0x45, 0xE8 }); // sub rax, [rbp-24] (end - digit_start)
+        // Check if original value was negative (check byte before digit start)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE8 }); // mov rcx, [rbp-24]
+        try self.enc.emit(&.{ 0x80, 0x79, 0xFF, 0x2D }); // cmp byte [rcx-1], '-'
+        try self.enc.emit(&.{ 0x75, 0x03 }); // jne skip_inc
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
+
+        // Epilogue (zero case jumps here with rax already set to 1)
+        const epilogue_start = self.code.items.len;
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x30 }); // add rsp, 48
+        try self.enc.popRbp();
+        try self.enc.ret();
+
+        // Patch jump from zero case to epilogue
+        const jmp_rel: i32 = @intCast(@as(i64, @intCast(epilogue_start)) - @as(i64, @intCast(jmp_to_epilogue)) - 5);
+        self.code.items[jmp_to_epilogue + 1] = @bitCast(@as(i8, @intCast(jmp_rel & 0xFF)));
+        self.code.items[jmp_to_epilogue + 2] = @bitCast(@as(i8, @intCast((jmp_rel >> 8) & 0xFF)));
+        self.code.items[jmp_to_epilogue + 3] = @bitCast(@as(i8, @intCast((jmp_rel >> 16) & 0xFF)));
+        self.code.items[jmp_to_epilogue + 4] = @bitCast(@as(i8, @intCast((jmp_rel >> 24) & 0xFF)));
+    }
+
+    /// Generate __runtime_float_to_string(buffer, value) -> length
+    /// Converts an f64 float to its string representation
+    /// For now, uses a simple fixed-point representation
+    fn generateRuntimeFloatToString(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__runtime_float_to_string", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+
+        // For now, just write "0.0" as a placeholder
+        // TODO: Implement proper float-to-string conversion
+        // Parameters: RCX = buffer, XMM1 = float value (Windows x64 calling convention)
+
+        // Write "0.0" to buffer
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x30 }); // mov byte [rcx], '0'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x01, 0x2E }); // mov byte [rcx+1], '.'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x02, 0x30 }); // mov byte [rcx+2], '0'
+
+        // Return length = 3
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x03, 0x00, 0x00, 0x00 }); // mov rax, 3
+
+        // Epilogue
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __runtime_bool_to_string(buffer, value) -> length
+    /// Converts a bool (0 or 1) to "false" or "true"
+    fn generateRuntimeBoolToString(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__runtime_bool_to_string", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+
+        // Parameters: RCX = buffer, RDX = bool value (0 or non-zero)
+        // Check if value is zero
+        try self.enc.emit(&.{ 0x48, 0x85, 0xD2 }); // test rdx, rdx
+        const jz_offset = self.code.items.len;
+        try self.enc.emit(&.{ 0x74, 0x00 }); // jz write_false (patch later)
+        const jz_start = self.code.items.len;
+
+        // Write "true"
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x74 }); // mov byte [rcx], 't'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x01, 0x72 }); // mov byte [rcx+1], 'r'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x02, 0x75 }); // mov byte [rcx+2], 'u'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x03, 0x65 }); // mov byte [rcx+3], 'e'
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x04, 0x00, 0x00, 0x00 }); // mov rax, 4
+        const jmp_end_offset = self.code.items.len;
+        try self.enc.emit(&.{ 0xEB, 0x00 }); // jmp end (patch later)
+
+        // Write "false"
+        const write_false = self.code.items.len;
+        self.code.items[jz_offset + 1] = @intCast(write_false - jz_start);
+
+        try self.enc.emit(&.{ 0xC6, 0x01, 0x66 }); // mov byte [rcx], 'f'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x01, 0x61 }); // mov byte [rcx+1], 'a'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x02, 0x6C }); // mov byte [rcx+2], 'l'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x03, 0x73 }); // mov byte [rcx+3], 's'
+        try self.enc.emit(&.{ 0xC6, 0x41, 0x04, 0x65 }); // mov byte [rcx+4], 'e'
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x05, 0x00, 0x00, 0x00 }); // mov rax, 5
+
+        // Patch jump
+        const end_func = self.code.items.len;
+        self.code.items[jmp_end_offset + 1] = @intCast(end_func - jmp_end_offset - 2);
+
+        // Epilogue (no stack frame needed for this simple function)
         try self.enc.popRbp();
         try self.enc.ret();
     }

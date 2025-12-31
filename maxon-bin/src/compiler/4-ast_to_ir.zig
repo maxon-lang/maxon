@@ -2829,6 +2829,10 @@ pub const AstToIr = struct {
                     // Already a String, just return it
                     return typed_val.value;
                 }
+                if (std.mem.eql(u8, type_name, "Character")) {
+                    // Convert Character to String by copying its _managed field
+                    return self.convertCharacterToString(typed_val.value);
+                }
                 // TODO: Check for Stringable interface
                 self.reportError(.E005, type_name);
                 return error.UndefinedVariable;
@@ -2864,6 +2868,26 @@ pub const AstToIr = struct {
     /// Convert a bool to a String
     fn convertBoolToString(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         return self.emitBoolToStringCall(value);
+    }
+
+    /// Convert a Character to a String
+    /// Character layout: { _managed: __ManagedString } (24 bytes)
+    /// String layout: { _managed: __ManagedString, _iterPos: int } (32 bytes)
+    fn convertCharacterToString(self: *AstToIr, char_ptr: ir.Value) ConvertError!ir.Value {
+        // Allocate a String struct (32 bytes)
+        const string_ptr = try self.func().emitAllocaSized(32);
+
+        // Copy the _managed field from Character to String (24 bytes at offset 0)
+        const char_managed = try self.func().emitGetFieldPtr(char_ptr, 0);
+        const string_managed = try self.func().emitGetFieldPtr(string_ptr, 0);
+        try self.func().emitMemcpy(string_managed, char_managed, 24);
+
+        // Set _iterPos to 0 (at offset 24)
+        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
+        const zero = try self.func().emitConstI64(0);
+        try self.func().emitStore(iter_pos_ptr, zero);
+
+        return string_ptr;
     }
 
     /// Emit a call to concatenate two String values

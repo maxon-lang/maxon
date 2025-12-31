@@ -233,7 +233,7 @@ c.toString()           // Convert to string
 ```maxon
 var s = "hello"              // Small string (SSO)
 var greeting = "{s} world"   // String interpolation
-print(s)                     // Print string to stdout with newline
+print(s)                     // Print string to stdout
 ```
 
 **String Properties:**
@@ -1520,7 +1520,7 @@ var result = format_int(42)   // Finds stdlib.fmt.format_int
 
 **I/O Functions**
 ```maxon
-print(value string)                     // Print string to stdout with newline
+print(value string)                     // Print string to stdout
 ```
 
 **Math Functions**
