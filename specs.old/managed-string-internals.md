@@ -62,7 +62,7 @@ Heap strings should allocate and free properly.
 ```maxon
 function main() returns int
     var s = "this is a heap allocated string!"
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -103,7 +103,7 @@ Reassigning a heap string should release the old value.
 function main() returns int
     var s = "first heap allocated value!!"
     s = "second heap allocated here!!"
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -152,7 +152,7 @@ Substrings should retain their parent string.
 function main() returns int
     var s = "hello world from heap!!"
     var sub = s.slice(s.startIndex(), s.indexAdvanced(s.startIndex(), 5))
-    print("{sub.count()}")
+    print("{sub.count()}\n")
     return 0
 end 'main'
 ```
@@ -231,7 +231,7 @@ This test verifies there are no leaks from the metadata allocation.
 ```maxon
 function main() returns int
     var s = "short"
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```
@@ -276,7 +276,7 @@ function main() returns int
         s = "{s}{a}"
         i = i + 1
     end 'loop'
-    print("{s.count()}")
+    print("{s.count()}\n")
     return 0
 end 'main'
 ```

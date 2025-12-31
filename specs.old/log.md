@@ -67,7 +67,7 @@ end 'main'
 function main() returns int
     var e = 2.71828
     var result = log(e)
-    print("{result}")
+    print("{result}\n")
     return 0
 end 'main'
 ```
@@ -95,7 +95,7 @@ end 'main'
 ```maxon
 function main() returns int
     var result = log(100.0)  // ln(100) ≈ 4.6
-    print("{result}")
+    print("{result}\n")
     return 0
 end 'main'
 ```
@@ -111,7 +111,7 @@ end 'main'
 ```maxon
 function main() returns int
     var result = log(10)  // Int promoted to float
-    print("{result}")
+    print("{result}\n")
     return 0
 end 'main'
 ```

@@ -62,7 +62,7 @@ function main() returns int
     arr.push(1)
     arr.push(2)
     arr.push(3)
-    print("{arr.count()}")
+    print("{arr.count()}\n")
     return 0
 end 'main'
 ```
@@ -105,9 +105,9 @@ function main() returns int
         if true 'inner'
             var inner_arr = array of int
             inner_arr.push(200)
-            print("{inner_arr[0]}")
+            print("{inner_arr[0]}\n")
         end 'inner'
-        print("{outer_arr[0]}")
+        print("{outer_arr[0]}\n")
     end 'outer'
     return 0
 end 'main'
@@ -166,7 +166,7 @@ Note: print with interpolation allocates for the string conversion.
 ```maxon
 function main() returns int
     var arr = [10, 20, 30]
-    print("{arr[1]}")
+    print("{arr[1]}\n")
     return 0
 end 'main'
 ```
@@ -207,7 +207,7 @@ function main() returns int
         arr.push(i)
         i = i + 1
     end 'loop'
-    print("{arr.count()}")
+    print("{arr.count()}\n")
     return 0
 end 'main'
 ```
@@ -258,7 +258,7 @@ end 'Config'
 function main() returns int
     var config = Config{sources: ["a", "b", "c"]}
     let count = config.sources.count()
-    print("{count}")
+    print("{count}\n")
     return 0
 end 'main'
 ```

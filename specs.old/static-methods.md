@@ -87,7 +87,7 @@ end 'Point'
 
 function main() returns int
     var p = Point.create(10, 20)
-    print("{p.x},{p.y}")
+    print("{p.x},{p.y}\n")
     return 0
 end 'main'
 ```
@@ -111,7 +111,7 @@ end 'Point'
 
 function main() returns int
     var p = Point.origin()
-    print("{p.x},{p.y}")
+    print("{p.x},{p.y}\n")
     return 0
 end 'main'
 ```
@@ -134,7 +134,7 @@ end 'Config'
 
 function main() returns int
     var v = Config.defaultValue()
-    print("{v}")
+    print("{v}\n")
     return 0
 end 'main'
 ```
@@ -170,7 +170,7 @@ function main() returns int
         c.increment()
         i = i + 1
     end 'loop'
-    print("{c.getValue()}")
+    print("{c.getValue()}\n")
     return 0
 end 'main'
 ```
@@ -193,7 +193,7 @@ end 'Value'
 
 function main() returns int
     var v = Value.hundred()
-    print("{v.n}")
+    print("{v.n}\n")
     return 0
 end 'main'
 ```
@@ -222,7 +222,7 @@ end 'Triple'
 
 function main() returns int
     var t = Triple.sequential()
-    print("{t.a},{t.b},{t.c}")
+    print("{t.a},{t.b},{t.c}\n")
     return 0
 end 'main'
 ```

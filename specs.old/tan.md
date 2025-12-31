@@ -77,10 +77,10 @@ function main() returns int
     var x2 = tan(0.5)
     var x3 = tan(1.0)
     var x4 = tan(0.7854)
-    print("{x1}")
-    print("{x2}")
-    print("{x3}")
-    print("{x4}")
+    print("{x1}\n")
+    print("{x2}\n")
+    print("{x3}\n")
+    print("{x4}\n")
     return 0
 end 'main'
 ```

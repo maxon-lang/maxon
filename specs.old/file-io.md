@@ -62,7 +62,7 @@ function main() returns int
         print("Could not read file")
         return 0
     end 'noFile'
-    print("File content: {content}")
+    print("File content: {content}\n")
     return 1
 end 'main'
 ```
@@ -149,7 +149,7 @@ function main() returns int
         print("File not found")
         return 1
     end 'noFile'
-    print("Content:{content}")
+    print("Content:{content}\n")
     return 0
 end 'main'
 ```
@@ -188,7 +188,7 @@ end 'main'
 function main() returns int
     var result = readTextFile("nonexistent.txt")
     if let content = result 'hasContent'
-        print("Unexpected: {content}")
+        print("Unexpected: {content}\n")
         return 1
     end 'hasContent'
     print("File not found")

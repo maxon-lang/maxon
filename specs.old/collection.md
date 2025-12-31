@@ -73,7 +73,7 @@ Returns the number of elements in the collection.
 ```maxon
 function main() returns int
     var arr = [1, 2, 3, 4, 5]
-    print("{arr.count()}")
+    print("{arr.count()}\n")
     return 0
 end 'main'
 ```
@@ -109,7 +109,7 @@ Sets the element at the specified index. Returns self for method chaining.
 function main() returns int
     var arr = [1, 2, 3]
     arr.set(1, 99)
-    print("{arr[1]}")
+    print("{arr[1]}\n")
     return 0
 end 'main'
 ```
@@ -147,7 +147,7 @@ end 'double'
 function main() returns int
     var numbers = [1, 2, 3, 4, 5]
     var doubled = numbers.map(double)
-    print("{doubled[2]}")
+    print("{doubled[2]}\n")
     return 0
 end 'main'
 ```
@@ -166,9 +166,9 @@ Transform using an inline closure with `gives`:
 function main() returns int
     var numbers = [1, 2, 3]
     var squared = numbers.map((x int) gives x * x)
-    print("{squared[0]}")
-    print("{squared[1]}")
-    print("{squared[2]}")
+    print("{squared[0]}\n")
+    print("{squared[1]}\n")
+    print("{squared[2]}\n")
     return 0
 end 'main'
 ```
@@ -187,7 +187,7 @@ end 'main'
 ```maxon
 function main() returns int
     var arr = [1, 2, 3, 4, 5]
-    print("{arr.count()}")
+    print("{arr.count()}\n")
     return 0
 end 'main'
 ```
@@ -202,7 +202,7 @@ end 'main'
 ```maxon
 function main() returns int
     var arr = array of int
-    print("{arr.count()}")
+    print("{arr.count()}\n")
     return 0
 end 'main'
 ```
@@ -252,9 +252,9 @@ function main() returns int
     var arr = [1, 2, 3]
     arr.set(0, 100)
     arr.set(2, 300)
-    print("{arr[0]}")
-    print("{arr[1]}")
-    print("{arr[2]}")
+    print("{arr[0]}\n")
+    print("{arr[1]}\n")
+    print("{arr[2]}\n")
     return 0
 end 'main'
 ```
@@ -276,11 +276,11 @@ end 'double'
 function main() returns int
     var arr = [1, 2, 3, 4, 5]
     var result = arr.map(double)
-    print("{result[0]}")
-    print("{result[1]}")
-    print("{result[2]}")
-    print("{result[3]}")
-    print("{result[4]}")
+    print("{result[0]}\n")
+    print("{result[1]}\n")
+    print("{result[2]}\n")
+    print("{result[3]}\n")
+    print("{result[4]}\n")
     return 0
 end 'main'
 ```
@@ -300,9 +300,9 @@ end 'main'
 function main() returns int
     var arr = [2, 3, 4]
     var result = arr.map((x int) gives x * 3)
-    print("{result[0]}")
-    print("{result[1]}")
-    print("{result[2]}")
+    print("{result[0]}\n")
+    print("{result[1]}\n")
+    print("{result[2]}\n")
     return 0
 end 'main'
 ```
@@ -320,10 +320,10 @@ end 'main'
 function main() returns int
     var arr = [1, 2, 3, 4]
     var squared = arr.map((n int) gives n * n)
-    print("{squared[0]}")
-    print("{squared[1]}")
-    print("{squared[2]}")
-    print("{squared[3]}")
+    print("{squared[0]}\n")
+    print("{squared[1]}\n")
+    print("{squared[2]}\n")
+    print("{squared[3]}\n")
     return 0
 end 'main'
 ```
@@ -346,9 +346,9 @@ end 'identity'
 function main() returns int
     var arr = [10, 20, 30]
     var result = arr.map(identity)
-    print("{result[0]}")
-    print("{result[1]}")
-    print("{result[2]}")
+    print("{result[0]}\n")
+    print("{result[1]}\n")
+    print("{result[2]}\n")
     return 0
 end 'main'
 ```
@@ -370,9 +370,9 @@ end 'negate'
 function main() returns int
     var arr = [1, 2, 3]
     var result = arr.map(negate)
-    print("{result[0]}")
-    print("{result[1]}")
-    print("{result[2]}")
+    print("{result[0]}\n")
+    print("{result[1]}\n")
+    print("{result[2]}\n")
     return 0
 end 'main'
 ```
@@ -390,7 +390,7 @@ end 'main'
 function main() returns int
     var arr = [42]
     var result = arr.map((x int) gives x + 8)
-    print("{result[0]}")
+    print("{result[0]}\n")
     return 0
 end 'main'
 ```

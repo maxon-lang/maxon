@@ -25,12 +25,12 @@ The function is linked automatically when used. No explicit import needed - the 
 
 ## Documentation
 
-The `print("{}")` function outputs integer values to standard output (console).
+The `print("{}\n")` function outputs integer values to standard output (console).
 
 ### Syntax
 
 ```maxon
-print("{value}")
+print("{value}\n")
 ```
 Where `value` is an `int` expression.
 
@@ -39,9 +39,9 @@ Where `value` is an `int` expression.
 ```maxon
 function main() returns int
     var x = 42
-    print("{x}")        // Prints: 42
-    print("{10 + 5}")   // Prints: 15
-    print("{100}")      // Prints: 100
+    print("{x}\n")        // Prints: 42
+    print("{10 + 5}\n")   // Prints: 15
+    print("{100}\n")      // Prints: 100
     return 0
 end 'main'
 ```
@@ -55,7 +55,7 @@ end 'main'
 ```
 
 
-Each call to `print("{}")` outputs the value followed by a newline.
+Each call to `print("{}\n")` outputs the value followed by a newline.
 
 ## Tests
 
@@ -63,7 +63,7 @@ Each call to `print("{}")` outputs the value followed by a newline.
 ```maxon
 function main() returns int
     var x = 42
-    print("{x}")
+    print("{x}\n")
     return 0
 end 'main'
 ```
@@ -78,7 +78,7 @@ end 'main'
 <!-- test: expression -->
 ```maxon
 function main() returns int
-    print("{10 + 5}")
+    print("{10 + 5}\n")
     return 0
 end 'main'
 ```
@@ -94,9 +94,9 @@ end 'main'
 ```maxon
 function main() returns int
     var x = 42
-    print("{x}")
-    print("{10 + 5}")
-    print("{100}")
+    print("{x}\n")
+    print("{10 + 5}\n")
+    print("{100}\n")
     return 0
 end 'main'
 ```

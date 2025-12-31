@@ -95,14 +95,14 @@ function main() returns int
     var r_quarter = log2(0.25) // 2^(-2) = 0.25
     
     // Print results
-    print("{r1}")
-    print("{r2}")
-    print("{r4}")
-    print("{r8}")
-    print("{r16}")
-    print("{r1024}")
-    print("{r_half}")
-    print("{r_quarter}")
+    print("{r1}\n")
+    print("{r2}\n")
+    print("{r4}\n")
+    print("{r8}\n")
+    print("{r16}\n")
+    print("{r1024}\n")
+    print("{r_half}\n")
+    print("{r_quarter}\n")
     
     return 0
 end 'main'
@@ -130,10 +130,10 @@ function main() returns int
     var r6 = log2(6.0)
     var r1000000 = log2(1000000.0)
     
-    print("{r3}")
-    print("{r5}")
-    print("{r6}")
-    print("{r1000000}")
+    print("{r3}\n")
+    print("{r5}\n")
+    print("{r6}\n")
+    print("{r1000000}\n")
     
     return 0
 end 'main'
@@ -155,10 +155,10 @@ function main() returns int
     // Test integer promotion
     var int_val = 32
     var r_int = log2(int_val)  // Should promote 32 to 32.0
-    print("{r_int}")
+    print("{r_int}\n")
     
     var r_literal = log2(64)   // Integer literal promotion
-    print("{r_literal}")
+    print("{r_literal}\n")
     
     // Verify relationship: log2(x) = log(x) / log(2)
     var test_val = 100.0
@@ -173,14 +173,14 @@ function main() returns int
     end 'abs'
     
     if abs_diff < 0.000001 'pass'
-        print("{r_int}")    // Print again to show test passed
+        print("{r_int}\n")    // Print again to show test passed
     end 'pass'
     
     // Test relationship: log2(2^x) = x
     var exponent = 7.0
     var power_val = pow(2.0, exponent)
     var r_pow = log2(power_val)
-    print("{r_pow}")
+    print("{r_pow}\n")
     
     return 0
 end 'main'
@@ -202,15 +202,15 @@ function main() returns int
     // log2(e) should equal 1/ln(2) ≈ 1.442695
     var e = 2.71828182845904523536
     var r_e = log2(e)
-    print("{r_e}")
+    print("{r_e}\n")
     
     // Test with 10
     var r_10 = log2(10.0)
-    print("{r_10}")
+    print("{r_10}\n")
     
     // Test value exactly between powers of 2
     var r_between = log2(12.0)  // Between 2^3 and 2^4
-    print("{r_between}")
+    print("{r_between}\n")
     
     return 0
 end 'main'

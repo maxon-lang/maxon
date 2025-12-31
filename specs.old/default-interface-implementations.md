@@ -126,9 +126,9 @@ end 'double'
 function main() returns int
     var arr = [1, 2, 3]
     var result = arr.map(double)
-    print("{result[0]}")
-    print("{result[1]}")
-    print("{result[2]}")
+    print("{result[0]}\n")
+    print("{result[1]}\n")
+    print("{result[2]}\n")
     return 0
 end 'main'
 ```
@@ -146,9 +146,9 @@ end 'main'
 function main() returns int
     var arr = [10, 20, 30]
     var squared = arr.map((x int) gives x * x)
-    print("{squared[0]}")
-    print("{squared[1]}")
-    print("{squared[2]}")
+    print("{squared[0]}\n")
+    print("{squared[1]}\n")
+    print("{squared[2]}\n")
     return 0
 end 'main'
 ```

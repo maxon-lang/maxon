@@ -49,7 +49,7 @@ var result = int.parse("42")    // int or nil
 function main() returns int
     var input = "123"
     if let value = int.parse(input) 'success'
-        print("{value}")
+        print("{value}\n")
         return value
     end 'success' else 'failure'
         print("Failed to parse")

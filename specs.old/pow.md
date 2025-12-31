@@ -105,7 +105,7 @@ end 'main'
 ```maxon
 function main() returns int
     var result = pow(4.0, 0.5)  // Square root
-    print("{result}")
+    print("{result}\n")
     return 0
 end 'main'
 ```

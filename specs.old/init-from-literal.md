@@ -49,7 +49,7 @@ end 'MyString'
 
 function main()
     var ms = "hello" as MyString
-    print("{ms.len()}")
+    print("{ms.len()}\n")
 end 'main'
 ```
 ```exitcode
@@ -78,7 +78,7 @@ end 'MyChar'
 
 function main()
     var mc = 'A' as MyChar
-    print("{mc.len()}")
+    print("{mc.len()}\n")
 end 'main'
 ```
 ```exitcode
@@ -107,7 +107,7 @@ end 'Wrapper'
 
 function main()
     var w = "hello" as Wrapper
-    print("{w.len()}")
+    print("{w.len()}\n")
 end 'main'
 ```
 ```stdout
@@ -130,7 +130,7 @@ end 'Wrapper'
 
 function main()
     var w = "" as Wrapper
-    print("len: {w.len()}")
+    print("len: {w.len()}\n")
 end 'main'
 ```
 ```stdout
@@ -153,7 +153,7 @@ end 'CharWrapper'
 
 function main()
     var cw = 'X' as CharWrapper
-    print("{cw.len()}")
+    print("{cw.len()}\n")
 end 'main'
 ```
 ```stdout
