@@ -1482,6 +1482,7 @@ pub const AstToIr = struct {
                 .offset = offset,
                 .size = field_size,
                 .value_type = value_type,
+                .is_mutable = field.is_mutable,
             };
             offset += field_size;
         }
@@ -2796,12 +2797,9 @@ pub const AstToIr = struct {
 
     /// Check if a field is mutable in a type declaration
     fn isFieldMutable(self: *AstToIr, type_name: []const u8, field_name: []const u8) bool {
-        _ = self;
-        _ = type_name;
-        _ = field_name;
-        // For now, assume all fields are mutable (var fields)
-        // TODO: Track field mutability in FieldInfo
-        return true;
+        const struct_info = self.lookupStructInfo(type_name) catch return true;
+        const field_info = self.lookupField(struct_info, field_name) catch return true;
+        return field_info.is_mutable;
     }
 
     fn convertFieldAssign(self: *AstToIr, assign: ast.FieldAssign) ConvertError!void {
@@ -2817,6 +2815,13 @@ pub const AstToIr = struct {
 
         const struct_info = try self.lookupStructInfo(type_name);
         const field_info = try self.lookupField(struct_info, assign.field_name);
+
+        // Check if field is mutable
+        if (!field_info.is_mutable) {
+            self.reportError(.E009, assign.field_name);
+            return error.ImmutableAssign;
+        }
+
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
         const val_typed = try self.convertExpression(assign.value);
 

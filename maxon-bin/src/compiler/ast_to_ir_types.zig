@@ -100,6 +100,7 @@ pub const FieldInfo = struct {
     offset: i32,
     size: i32,
     value_type: ValueType,
+    is_mutable: bool = true,
 
     pub fn irType(self: FieldInfo) ir.Type {
         return self.value_type.toPrimitiveType();

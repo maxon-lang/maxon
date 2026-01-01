@@ -35,6 +35,25 @@ end 'main'
 42
 ```
 
+<!-- test: immutable-field-assign-error -->
+Assigning to an immutable (`let`) field should be a compile-time error.
+
+```maxon
+type Config
+    let id int
+    var count int
+end 'Config'
+
+function main() returns int
+    var c = Config{id: 1, count: 0}
+    c.id = 2
+    return c.id
+end 'main'
+```
+```maxoncstderr
+error E009: specs/fragments/challenge-struct-field-assign.immutable-field-assign-error.1.test:9:5: cannot assign to immutable variable: 'id'
+```
+
 <!-- test: nested-struct-field-reassignment -->
 ```maxon
 type Inner

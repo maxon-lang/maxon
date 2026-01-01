@@ -471,8 +471,6 @@ fn convertStringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
         return intrinsicStringFromCharacters(self, call);
     } else if (std.mem.eql(u8, name, "__string_incref")) {
         return intrinsicStringIncref(self, call);
-    } else if (std.mem.eql(u8, name, "__string_decref")) {
-        return intrinsicStringDecref(self, call);
     } else if (std.mem.eql(u8, name, "__string_refcount")) {
         return intrinsicStringRefcount(self, call);
     } else if (std.mem.eql(u8, name, "__string_is_heap")) {
@@ -1067,31 +1065,6 @@ fn intrinsicStringIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const one = try self.func().emitConstI32(1);
     const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i32);
     try self.func().emitStoreI32(ref_ptr, new_ref);
-
-    return .{ .value = 0, .ty = .{ .primitive = "void" } };
-}
-
-/// __string_decref(managed) -> void
-/// Decrements the reference count for heap-allocated strings
-/// Frees the buffer when refcount reaches 0
-/// Does nothing for SSO or constant strings (cap_flags & 0x1 == 0)
-fn intrinsicStringDecref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    if (call.args.len != 1) {
-        self.reportError(.E011, call.func_name);
-        return error.WrongArgumentCount;
-    }
-
-    const managed = try self.convertExpression(call.args[0]);
-
-    // Load refcount (offset 16, i32) and decrement
-    const ref_ptr = try self.func().emitGetFieldPtr(managed.value, 16);
-    const old_ref = try self.func().emitLoad(ref_ptr, .i32);
-    const one = try self.func().emitConstI32(1);
-    const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i32);
-    try self.func().emitStoreI32(ref_ptr, new_ref);
-
-    // TODO: Add conditional free when refcount reaches 0
-    // For now, this just decrements - actual free handled by freeHeapVars
 
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
