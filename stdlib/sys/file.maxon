@@ -1,0 +1,55 @@
+// stdlib/sys/file.maxon
+// File operations with error handling
+
+enum FileError is Error
+	notFound
+	permissionDenied
+	alreadyExists
+	diskFull
+	invalidPath
+	readError
+	writeError
+end 'FileError'
+
+export type File
+	var _unused int  // Types require at least one field
+
+	/// Read text file content as a UTF-8 string
+	export static function readText(path String) returns String throws FileError
+		var cs = path.cstr()
+		let maybeManaged = __read_file(cs)
+		if let managed = maybeManaged 'hasData'
+			return String{_managed: managed, _iterPos: 0}
+		end 'hasData'
+		throw FileError.notFound
+	end 'readText'
+
+	/// Write string content to a text file
+	export static function writeText(path String, content String) throws FileError
+		var cs = path.cstr()
+		var contentCs = content.cstr()
+		let res = __write_file(cs, contentCs)
+		if res != 0 'failed'
+			throw FileError.writeError
+		end 'failed'
+	end 'writeText'
+
+	/// Write binary content to a file
+	export static function writeBinary(path String, content Array of byte) throws FileError
+		var cs = path.cstr()
+		let res = __write_file_binary(cs, content)
+		if res != 0 'failed'
+			throw FileError.writeError
+		end 'failed'
+	end 'writeBinary'
+
+	/// Check if a file exists at the given path
+	export static function exists(path String) returns bool
+		var cs = path.cstr()
+		let maybeManaged = __read_file(cs)
+		if let managed = maybeManaged 'hasData'
+			return true
+		end 'hasData'
+		return false
+	end 'exists'
+end 'File'

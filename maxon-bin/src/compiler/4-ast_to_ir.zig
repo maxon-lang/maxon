@@ -228,6 +228,14 @@ pub const AstToIr = struct {
     do_catch_catch_block: ?u32 = null,
     // Do-catch context: block after the entire do-catch (for successful completion)
     do_catch_end_block: ?u32 = null,
+    // Pending try error branches to patch (used when catch_dispatch index is determined late)
+    pending_try_branches: ?*std.ArrayListUnmanaged(TryBranchInfo) = null,
+
+    /// Info about a branch instruction that needs to be patched to point to catch_dispatch
+    const TryBranchInfo = struct {
+        block_idx: u32, // Index of the block containing the branch
+        instr_idx: usize, // Index of the instruction within the block
+    };
 
     const FunctionTypeAlloc = union(enum) {
         param_types: []const ValueType,
@@ -1906,10 +1914,26 @@ pub const AstToIr = struct {
             };
         }
 
+        // If method throws, the effective return type is an error union
+        var effective_ret_type = ret_type;
+        var effective_ret_value_type = ret_value_type;
+        if (m.throws_type) |error_type| {
+            // Throwing methods return via sret (error union)
+            effective_ret_type = .ptr;
+            // Create error union type info
+            effective_ret_value_type = .{
+                .error_union_type = .{
+                    .success_type = ret_type,
+                    .success_struct_type = ret_type_name,
+                    .error_enum_type = error_type,
+                },
+            };
+        }
+
         return FuncInfo{
-            .return_type = ret_type,
+            .return_type = effective_ret_type,
             .return_type_name = ret_type_name,
-            .return_value_type = ret_value_type,
+            .return_value_type = effective_ret_value_type,
             .param_types = param_types,
             .ir_generated = ir_generated,
         };
@@ -2304,12 +2328,34 @@ pub const AstToIr = struct {
         self.current_type_name = type_name;
         defer self.current_type_name = saved_type;
 
+        // Track if this method throws (for throw statement validation)
+        self.current_func_throws_type = method.throws_type;
+        defer self.current_func_throws_type = null;
+
         // Generate mangled name using short method name (matches registerMethod)
         const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
         try self.module.trackString(mangled_name);
 
         // Analyze return type for sret handling (resolve_names=true for methods)
-        const sret_info = try self.analyzeReturnType(method.return_type, true);
+        var sret_info = try self.analyzeReturnType(method.return_type, true);
+
+        // If method throws, we need to use sret for the error union
+        if (method.throws_type) |error_type| {
+            // Get the error type size
+            const error_size = if (self.type_map.get(error_type)) |type_info|
+                if (type_info == .struct_type) type_info.struct_type.size else 8
+            else
+                8;
+
+            // Get the success type size (use 8 for primitives if not already using sret)
+            const success_size = if (sret_info.uses_sret) sret_info.struct_size else 8;
+
+            // Error union layout: 8 bytes tag + max(success_size, error_size)
+            const payload_size = @max(success_size, error_size);
+            sret_info.uses_sret = true;
+            sret_info.struct_size = 8 + payload_size;
+            sret_info.optional_info = null; // We don't use optional_info for error unions
+        }
 
         const ir_func = try self.module.addFunctionWithExport(mangled_name, sret_info.ir_type, method.is_export);
         // Set alias for interface methods (e.g., Type$Interface.method)
@@ -3676,25 +3722,47 @@ pub const AstToIr = struct {
         const error_buffer = try self.func().emitAllocaSized(64);
         self.do_catch_error_buffer = error_buffer;
 
-        // Create blocks for catch handling and end
-        const catch_dispatch_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("catch_dispatch");
-        const do_end_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("do_end");
+        // Use sentinel value to indicate we're in a do-catch context
+        // The actual block index will be set after do body processing
+        // This is necessary because block indices shift as the do body creates its own blocks
+        self.do_catch_catch_block = 0xFFFFFFFF; // Sentinel meaning "to be determined"
+        self.do_catch_end_block = 0xFFFFFFFF;
 
-        // Pop the blocks for later restoration
-        const do_end_block = self.func().blocks.pop().?;
-        const catch_dispatch_block = self.func().blocks.pop().?;
+        // Process the do body - any `try` statements will record their error branches
+        // These branches will be patched after we know the actual catch_dispatch index
+        var try_error_branches = std.ArrayListUnmanaged(TryBranchInfo){};
+        defer try_error_branches.deinit(self.allocator);
+        const outer_try_branches = self.pending_try_branches;
+        self.pending_try_branches = &try_error_branches;
+        defer {
+            self.pending_try_branches = outer_try_branches;
+        }
 
-        self.do_catch_catch_block = catch_dispatch_idx;
-        self.do_catch_end_block = do_end_idx;
-
-        // Process the do body
         for (do_catch.body) |stmt| {
             try self.convertStatement(stmt);
         }
 
-        // After do body completes successfully, jump to end block
+        // Create catch_dispatch block - now we know the actual index
+        const catch_dispatch_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("catch_dispatch");
+        self.do_catch_catch_block = catch_dispatch_idx;
+
+        // Create do_end block
+        const do_end_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("do_end");
+        self.do_catch_end_block = do_end_idx;
+
+        // Pop both blocks for later restoration
+        const do_end_block = self.func().blocks.pop().?;
+        const catch_dispatch_block = self.func().blocks.pop().?;
+
+        // Patch all try error branches to point to the actual catch_dispatch_idx
+        for (try_error_branches.items) |branch_info| {
+            const block = &self.func().blocks.items[branch_info.block_idx];
+            block.instructions.items[branch_info.instr_idx].operands[0] = .{ .block_ref = catch_dispatch_idx };
+        }
+
+        // Add branch from end of do body to do_end block
         try self.func().currentBlock().?.instructions.append(self.allocator, .{
             .op = .br,
             .operands = .{ .{ .block_ref = do_end_idx }, .none, .none },
@@ -5431,11 +5499,27 @@ pub const AstToIr = struct {
                 // Copy the error union to the do-catch buffer
                 try self.func().emitMemcpy(err_buf, result_typed.value, 64);
             }
-            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+
+            // Get current block index and instruction count before adding the branch
+            const current_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+            const current_block = self.func().currentBlock().?;
+            const instr_idx = current_block.instructions.items.len;
+
+            try current_block.instructions.append(self.allocator, .{
                 .op = .br,
                 .operands = .{ .{ .block_ref = catch_block }, .none, .none },
                 .result = null,
             });
+
+            // If catch_block is sentinel (0xFFFFFFFF), record this branch for later patching
+            if (catch_block == 0xFFFFFFFF) {
+                if (self.pending_try_branches) |branches| {
+                    try branches.append(self.allocator, .{
+                        .block_idx = current_block_idx,
+                        .instr_idx = instr_idx,
+                    });
+                }
+            }
         } else {
             // Not in do-catch: propagate to function's sret and return
             if (self.sret_ptr) |sret| {

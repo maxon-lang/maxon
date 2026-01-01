@@ -93,6 +93,19 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
         return convertMakeCharIntrinsic(self, call);
     }
 
+    // Check for file I/O intrinsics (stdlib-only)
+    if (std.mem.startsWith(u8, call.func_name, "__read_file") or
+        std.mem.startsWith(u8, call.func_name, "__write_file") or
+        std.mem.startsWith(u8, call.func_name, "__list_directory") or
+        std.mem.startsWith(u8, call.func_name, "__is_directory"))
+    {
+        if (!isStdlibFile(self)) {
+            self.reportError(.E016, call.func_name);
+            return error.SemanticError;
+        }
+        return convertFileIntrinsic(self, call);
+    }
+
     const builtin = for (builtins) |b| {
         if (std.mem.eql(u8, call.func_name, b.name)) break b;
     } else return error.NotABuiltin;
@@ -1124,4 +1137,197 @@ fn intrinsicStringCapFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!Type
     const cap = try self.func().emitUnaryOp(.sext_i32_i64, cap_i32, .i64);
 
     return .{ .value = cap, .ty = .{ .primitive = "int" } };
+}
+
+// ============================================================================
+// File I/O Intrinsics (stdlib-only)
+// ============================================================================
+
+/// Dispatch __read_file, __write_file*, __list_directory, __is_directory intrinsics
+fn convertFileIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    const name = call.func_name;
+
+    if (std.mem.eql(u8, name, "__read_file")) {
+        return intrinsicReadFile(self, call);
+    } else if (std.mem.eql(u8, name, "__write_file")) {
+        return intrinsicWriteFile(self, call);
+    } else if (std.mem.eql(u8, name, "__write_file_binary")) {
+        return intrinsicWriteFileBinary(self, call);
+    } else if (std.mem.eql(u8, name, "__list_directory")) {
+        return intrinsicListDirectory(self, call);
+    } else if (std.mem.eql(u8, name, "__is_directory")) {
+        return intrinsicIsDirectory(self, call);
+    } else {
+        self.reportError(.E019, name);
+        return error.SemanticError;
+    }
+}
+
+/// __read_file(cstring) -> __ManagedString or nil
+/// Reads a file and returns its contents as a managed string, or nil on error
+fn intrinsicReadFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    if (call.args.len != 1) {
+        self.reportError(.E011, call.func_name);
+        return error.WrongArgumentCount;
+    }
+
+    const path_cstr = try self.convertExpression(call.args[0]);
+
+    // Load data pointer from cstring (offset 0)
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
+    // Call __file_read(path) -> returns ptr to __ManagedString or null
+    const args = try self.allocator.alloc(ir.Value, 1);
+    args[0] = path_ptr;
+
+    const raw_result = try self.func().emitCall("__file_read", args, .ptr);
+    const result_ptr = raw_result orelse try self.func().emitConstI64(0);
+
+    // Wrap result in an optional: allocate 16 bytes (8 tag + 8 ptr)
+    const opt_ptr = try self.func().emitAllocaSized(16);
+
+    // Check if result is null
+    const zero = try self.func().emitConstI64(0);
+    const is_null = try self.func().emitBinaryOp(.icmp_eq, result_ptr, zero, .i64);
+
+    // We need to branch: if null, store tag=0; else store tag=1 and value
+    // For simplicity, use conditional moves or just compute:
+    // tag = (result != 0) ? 1 : 0 = !is_null
+    const one = try self.func().emitConstI64(1);
+
+    // Store tag: 0 if null, 1 if not null
+    // is_null is 1 if null, 0 if not null. We want the opposite.
+    const tag = try self.func().emitBinaryOp(.sub, one, is_null, .i64);
+    try self.func().emitStore(opt_ptr, tag);
+
+    // Store value at offset 8 (even if null, it's fine - won't be accessed)
+    const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, 8);
+    try self.func().emitStore(value_ptr, result_ptr);
+
+    return .{
+        .value = opt_ptr,
+        .ty = .{ .optional_type = .{ .wrapped = .ptr, .wrapped_struct_type = "__ManagedString" } },
+    };
+}
+
+/// __write_file(path_cstring, content_cstring) -> int (0 on success, non-zero on error)
+fn intrinsicWriteFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    if (call.args.len != 2) {
+        self.reportError(.E011, call.func_name);
+        return error.WrongArgumentCount;
+    }
+
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const content_cstr = try self.convertExpression(call.args[1]);
+
+    // Load data pointers from cstrings (offset 0)
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+    const content_ptr = try self.func().emitLoad(content_cstr.value, .ptr);
+
+    // Load content length from cstring (offset 8)
+    const len_field = try self.func().emitGetFieldPtr(content_cstr.value, 8);
+    const content_len = try self.func().emitLoad(len_field, .i64);
+
+    // Call __file_write(path, content, length) -> int
+    const args = try self.allocator.alloc(ir.Value, 3);
+    args[0] = path_ptr;
+    args[1] = content_ptr;
+    args[2] = content_len;
+
+    const result = try self.func().emitCall("__file_write", args, .i64);
+
+    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
+}
+
+/// __write_file_binary(path_cstring, array) -> int (0 on success, non-zero on error)
+fn intrinsicWriteFileBinary(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    if (call.args.len != 2) {
+        self.reportError(.E011, call.func_name);
+        return error.WrongArgumentCount;
+    }
+
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const array = try self.convertExpression(call.args[1]);
+
+    // Load data pointer from cstring (offset 0)
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
+    // Load buffer pointer from array's __ManagedArray (offset 0)
+    const array_buf = try self.func().emitLoad(array.value, .ptr);
+
+    // Load length from array's __ManagedArray (offset 8)
+    const len_ptr = try self.func().emitGetFieldPtr(array.value, 8);
+    const array_len = try self.func().emitLoad(len_ptr, .i64);
+
+    // Call __file_write(path, buffer, length) -> int
+    const args = try self.allocator.alloc(ir.Value, 3);
+    args[0] = path_ptr;
+    args[1] = array_buf;
+    args[2] = array_len;
+
+    const result = try self.func().emitCall("__file_write", args, .i64);
+
+    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
+}
+
+/// __list_directory(path_cstring) -> Array of String or nil
+fn intrinsicListDirectory(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    if (call.args.len != 1) {
+        self.reportError(.E011, call.func_name);
+        return error.WrongArgumentCount;
+    }
+
+    const path_cstr = try self.convertExpression(call.args[0]);
+
+    // Load data pointer from cstring (offset 0)
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
+    // Call __dir_list(path) -> returns ptr to Array or null
+    const args = try self.allocator.alloc(ir.Value, 1);
+    args[0] = path_ptr;
+
+    const raw_result = try self.func().emitCall("__dir_list", args, .ptr);
+    const result_ptr = raw_result orelse try self.func().emitConstI64(0);
+
+    // Wrap result in an optional: allocate 16 bytes (8 tag + 8 ptr)
+    const opt_ptr = try self.func().emitAllocaSized(16);
+
+    // Check if result is null
+    const zero = try self.func().emitConstI64(0);
+    const is_null = try self.func().emitBinaryOp(.icmp_eq, result_ptr, zero, .i64);
+
+    // tag = (result != 0) ? 1 : 0 = !is_null
+    const one = try self.func().emitConstI64(1);
+    const tag = try self.func().emitBinaryOp(.sub, one, is_null, .i64);
+    try self.func().emitStore(opt_ptr, tag);
+
+    // Store value at offset 8
+    const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, 8);
+    try self.func().emitStore(value_ptr, result_ptr);
+
+    return .{
+        .value = opt_ptr,
+        .ty = .{ .optional_type = .{ .wrapped = .ptr, .wrapped_struct_type = "Array$String" } },
+    };
+}
+
+/// __is_directory(path_cstring) -> int (1 if directory, 0 otherwise)
+fn intrinsicIsDirectory(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    if (call.args.len != 1) {
+        self.reportError(.E011, call.func_name);
+        return error.WrongArgumentCount;
+    }
+
+    const path_cstr = try self.convertExpression(call.args[0]);
+
+    // Load data pointer from cstring (offset 0)
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
+    // Call __dir_is_directory(path) -> int
+    const args = try self.allocator.alloc(ir.Value, 1);
+    args[0] = path_ptr;
+
+    const result = try self.func().emitCall("__dir_is_directory", args, .i64);
+
+    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
 }

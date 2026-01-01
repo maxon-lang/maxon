@@ -440,6 +440,12 @@ pub const IrCodegen = struct {
         try self.generateRuntimeFloatToString();
         try self.generateRuntimeBoolToString();
 
+        // Generate file I/O runtime functions
+        try self.generateFileRead();
+        try self.generateFileWrite();
+        try self.generateDirIsDirectory();
+        try self.generateDirList();
+
         // Generate tracking support functions if enabled
         if (self.track_allocs) {
             try self.generateTrackingFunctions();
@@ -1594,6 +1600,368 @@ pub const IrCodegen = struct {
         self.code.items[jmp_end_offset + 1] = @intCast(end_func - jmp_end_offset - 2);
 
         // Epilogue (no stack frame needed for this simple function)
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    // ========================================================================
+    // File I/O Runtime Functions
+    // ========================================================================
+
+    /// Generate __file_read(path) -> ptr to __ManagedString or NULL
+    /// Reads entire file contents and returns a managed string
+    /// Parameters: RCX = path (null-terminated string)
+    /// Returns: RAX = ptr to __ManagedString (heap allocated) or NULL on error
+    fn generateFileRead(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__file_read", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x60 }); // sub rsp, 96
+
+        // Save path to [rbp-8]
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF8 }); // mov [rbp-8], rcx (path)
+
+        // CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
+        // GENERIC_READ = 0x80000000, FILE_SHARE_READ = 1, OPEN_EXISTING = 3
+        try self.beginExternalCall(3); // 7 params = 4 reg + 3 stack
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF8 }); // mov rcx, [rbp-8] (path)
+        try self.enc.emit(&.{ 0xBA, 0x00, 0x00, 0x00, 0x80 }); // mov edx, 0x80000000 (GENERIC_READ)
+        try self.enc.emit(&.{ 0x41, 0xB8, 0x01, 0x00, 0x00, 0x00 }); // mov r8d, 1 (FILE_SHARE_READ)
+        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (lpSecurityAttributes = NULL)
+        try self.emitStackParam(0, 3); // dwCreationDisposition = OPEN_EXISTING
+        try self.emitStackParam(1, 0); // dwFlagsAndAttributes = 0
+        try self.emitStackParam(2, 0); // hTemplateFile = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "CreateFileA");
+        try self.endExternalCall();
+
+        // Save handle to [rbp-16]
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xF0 }); // mov [rbp-16], rax (handle)
+
+        // Check for INVALID_HANDLE_VALUE (-1)
+        try self.enc.emit(&.{ 0x48, 0x83, 0xF8, 0xFF }); // cmp rax, -1
+        const jne_valid = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jne valid_handle (patch later)
+        const jne_start = self.code.items.len;
+
+        // Return NULL on error
+        try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax
+        const jmp_end1 = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp end (patch later)
+
+        // Patch jne to here
+        const valid_handle = self.code.items.len;
+        self.code.items[jne_valid + 1] = @intCast(valid_handle - jne_start);
+
+        // GetFileSize(handle, NULL) to get file size
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16] (handle)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (lpFileSizeHigh = NULL)
+        try self.emitExternalCallAfterSetup("kernel32.dll", "GetFileSize");
+        try self.enc.freeShadowSpace();
+
+        // Save file size to [rbp-24]
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xE8 }); // mov [rbp-24], rax (file size)
+
+        // Allocate buffer using HeapAlloc: size + 1 for null terminator
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xE8 }); // mov rax, [rbp-24] (size)
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xD8 }); // mov [rbp-40], rax (alloc size)
+
+        // GetProcessHeap()
+        try self.enc.allocShadowSpace();
+        try self.emitExternalCallAfterSetup("kernel32.dll", "GetProcessHeap");
+        try self.enc.freeShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xE0 }); // mov [rbp-32], rax (heap handle)
+
+        // HeapAlloc(heap, 0, size+1)
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE0 }); // mov rcx, [rbp-32] (heap)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (flags = 0)
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x45, 0xD8 }); // mov r8, [rbp-40] (size+1)
+        try self.emitExternalCallAfterSetup("kernel32.dll", "HeapAlloc");
+        try self.enc.freeShadowSpace();
+
+        // Save buffer to [rbp-48]
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xD0 }); // mov [rbp-48], rax (buffer)
+
+        // Check for NULL allocation
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+        const jnz_alloc_ok = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jnz alloc_ok (patch later)
+        const jnz_start = self.code.items.len;
+
+        // Close handle and return NULL
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16] (handle)
+        try self.emitExternalCallAfterSetup("kernel32.dll", "CloseHandle");
+        try self.enc.freeShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax
+        const jmp_end2 = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp end
+
+        // Patch jnz
+        const alloc_ok = self.code.items.len;
+        self.code.items[jnz_alloc_ok + 1] = @intCast(alloc_ok - jnz_start);
+
+        // Initialize bytes_read at [rbp-56]
+        try self.enc.emit(&.{ 0x48, 0xC7, 0x45, 0xC8, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rbp-56], 0
+
+        // ReadFile(handle, buffer, size, &bytesRead, NULL)
+        try self.beginExternalCall(1);
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16] (handle)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x55, 0xD0 }); // mov rdx, [rbp-48] (buffer)
+        try self.enc.emit(&.{ 0x44, 0x8B, 0x45, 0xE8 }); // mov r8d, [rbp-24] (size as DWORD)
+        try self.enc.emit(&.{ 0x4C, 0x8D, 0x4D, 0xC8 }); // lea r9, [rbp-56] (&bytesRead)
+        try self.emitStackParam(0, 0); // lpOverlapped = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "ReadFile");
+        try self.endExternalCall();
+
+        // Null-terminate the buffer
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xD0 }); // mov rax, [rbp-48] (buffer)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xC8 }); // mov rcx, [rbp-56] (bytes read)
+        try self.enc.emit(&.{ 0xC6, 0x04, 0x08, 0x00 }); // mov byte [rax+rcx], 0
+
+        // Close the file handle
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16] (handle)
+        try self.emitExternalCallAfterSetup("kernel32.dll", "CloseHandle");
+        try self.enc.freeShadowSpace();
+
+        // Allocate __ManagedString struct (16 bytes: buffer ptr + length)
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE0 }); // mov rcx, [rbp-32] (heap)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (flags = 0)
+        try self.enc.emit(&.{ 0x49, 0xC7, 0xC0, 0x10, 0x00, 0x00, 0x00 }); // mov r8, 16
+        try self.emitExternalCallAfterSetup("kernel32.dll", "HeapAlloc");
+        try self.enc.freeShadowSpace();
+
+        // Check for NULL
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+        const jnz_struct_ok = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jnz struct_ok (patch later)
+        const jnz_struct_start = self.code.items.len;
+
+        // Free buffer and return NULL
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE0 }); // mov rcx, [rbp-32] (heap)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (flags = 0)
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x45, 0xD0 }); // mov r8, [rbp-48] (buffer)
+        try self.emitExternalCallAfterSetup("kernel32.dll", "HeapFree");
+        try self.enc.freeShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax
+        const jmp_end3 = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp end
+
+        // Patch jnz
+        const struct_ok = self.code.items.len;
+        self.code.items[jnz_struct_ok + 1] = @intCast(struct_ok - jnz_struct_start);
+
+        // Fill in __ManagedString: [0]=buffer ptr, [8]=length
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC0 }); // mov [rbp-64], rax (save struct ptr)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xD0 }); // mov rcx, [rbp-48] (buffer)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x08 }); // mov [rax], rcx (struct.buffer = buffer)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xC8 }); // mov rcx, [rbp-56] (bytes read)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x48, 0x08 }); // mov [rax+8], rcx (struct.length = length)
+
+        // Return struct pointer
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xC0 }); // mov rax, [rbp-64]
+
+        // Epilogue
+        const epilogue = self.code.items.len;
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x60 }); // add rsp, 96
+        try self.enc.popRbp();
+        try self.enc.ret();
+
+        // Patch jumps to epilogue
+        const end_rel1: i32 = @intCast(@as(i64, @intCast(epilogue)) - @as(i64, @intCast(jmp_end1)) - 5);
+        self.code.items[jmp_end1 + 1] = @truncate(@as(u32, @bitCast(end_rel1)));
+        self.code.items[jmp_end1 + 2] = @truncate(@as(u32, @bitCast(end_rel1)) >> 8);
+        self.code.items[jmp_end1 + 3] = @truncate(@as(u32, @bitCast(end_rel1)) >> 16);
+        self.code.items[jmp_end1 + 4] = @truncate(@as(u32, @bitCast(end_rel1)) >> 24);
+
+        const end_rel2: i32 = @intCast(@as(i64, @intCast(epilogue)) - @as(i64, @intCast(jmp_end2)) - 5);
+        self.code.items[jmp_end2 + 1] = @truncate(@as(u32, @bitCast(end_rel2)));
+        self.code.items[jmp_end2 + 2] = @truncate(@as(u32, @bitCast(end_rel2)) >> 8);
+        self.code.items[jmp_end2 + 3] = @truncate(@as(u32, @bitCast(end_rel2)) >> 16);
+        self.code.items[jmp_end2 + 4] = @truncate(@as(u32, @bitCast(end_rel2)) >> 24);
+
+        const end_rel3: i32 = @intCast(@as(i64, @intCast(epilogue)) - @as(i64, @intCast(jmp_end3)) - 5);
+        self.code.items[jmp_end3 + 1] = @truncate(@as(u32, @bitCast(end_rel3)));
+        self.code.items[jmp_end3 + 2] = @truncate(@as(u32, @bitCast(end_rel3)) >> 8);
+        self.code.items[jmp_end3 + 3] = @truncate(@as(u32, @bitCast(end_rel3)) >> 16);
+        self.code.items[jmp_end3 + 4] = @truncate(@as(u32, @bitCast(end_rel3)) >> 24);
+    }
+
+    /// Generate __file_write(path, buffer, length) -> int (0 on success)
+    /// Parameters: RCX = path, RDX = buffer, R8 = length
+    /// Returns: RAX = 0 on success, non-zero on error
+    fn generateFileWrite(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__file_write", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x50 }); // sub rsp, 80
+
+        // Save args
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xF8 }); // mov [rbp-8], rcx (path)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xF0 }); // mov [rbp-16], rdx (buffer)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x45, 0xE8 }); // mov [rbp-24], r8 (length)
+
+        // CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+        // GENERIC_WRITE = 0x40000000, CREATE_ALWAYS = 2, FILE_ATTRIBUTE_NORMAL = 0x80
+        try self.beginExternalCall(3);
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF8 }); // mov rcx, [rbp-8] (path)
+        try self.enc.emit(&.{ 0xBA, 0x00, 0x00, 0x00, 0x40 }); // mov edx, 0x40000000 (GENERIC_WRITE)
+        try self.enc.emit(&.{ 0x45, 0x31, 0xC0 }); // xor r8d, r8d (dwShareMode = 0)
+        try self.enc.emit(&.{ 0x4D, 0x31, 0xC9 }); // xor r9, r9 (lpSecurityAttributes = NULL)
+        try self.emitStackParam(0, 2); // dwCreationDisposition = CREATE_ALWAYS
+        try self.emitStackParam(1, 0x80); // dwFlagsAndAttributes = FILE_ATTRIBUTE_NORMAL
+        try self.emitStackParam(2, 0); // hTemplateFile = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "CreateFileA");
+        try self.endExternalCall();
+
+        // Save handle to [rbp-32]
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xE0 }); // mov [rbp-32], rax
+
+        // Check for INVALID_HANDLE_VALUE (-1)
+        try self.enc.emit(&.{ 0x48, 0x83, 0xF8, 0xFF }); // cmp rax, -1
+        const jne_valid = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jne valid_handle
+        const jne_start = self.code.items.len;
+
+        // Return 1 on error
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00 }); // mov rax, 1
+        const jmp_end1 = self.code.items.len;
+        try self.enc.emit(&.{ 0xE9, 0x00, 0x00, 0x00, 0x00 }); // jmp end
+
+        // Patch jne
+        const valid_handle = self.code.items.len;
+        self.code.items[jne_valid + 1] = @intCast(valid_handle - jne_start);
+
+        // Initialize bytes_written at [rbp-40]
+        try self.enc.emit(&.{ 0x48, 0xC7, 0x45, 0xD8, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rbp-40], 0
+
+        // WriteFile(handle, buffer, length, &bytesWritten, NULL)
+        try self.beginExternalCall(1);
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE0 }); // mov rcx, [rbp-32] (handle)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x55, 0xF0 }); // mov rdx, [rbp-16] (buffer)
+        try self.enc.emit(&.{ 0x44, 0x8B, 0x45, 0xE8 }); // mov r8d, [rbp-24] (length as DWORD)
+        try self.enc.emit(&.{ 0x4C, 0x8D, 0x4D, 0xD8 }); // lea r9, [rbp-40] (&bytesWritten)
+        try self.emitStackParam(0, 0); // lpOverlapped = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "WriteFile");
+        try self.endExternalCall();
+
+        // Save WriteFile result
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xD0 }); // mov [rbp-48], rax
+
+        // Close handle
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE0 }); // mov rcx, [rbp-32] (handle)
+        try self.emitExternalCallAfterSetup("kernel32.dll", "CloseHandle");
+        try self.enc.freeShadowSpace();
+
+        // Return 0 on success, 1 on failure (check WriteFile result)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xD0 }); // mov rax, [rbp-48] (WriteFile result)
+        try self.enc.emit(&.{ 0x48, 0x85, 0xC0 }); // test rax, rax
+        const jnz_success = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jnz success
+        const jnz_start2 = self.code.items.len;
+
+        // WriteFile failed, return 1
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00 }); // mov rax, 1
+        const jmp_end2 = self.code.items.len;
+        try self.enc.emit(&.{ 0xEB, 0x00 }); // jmp end (short)
+        const jmp_end2_start = self.code.items.len;
+
+        // Success: return 0
+        const success = self.code.items.len;
+        self.code.items[jnz_success + 1] = @intCast(success - jnz_start2);
+        try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax
+
+        // Patch short jump
+        self.code.items[jmp_end2 + 1] = @intCast(self.code.items.len - jmp_end2_start);
+
+        // Epilogue
+        const epilogue = self.code.items.len;
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x50 }); // add rsp, 80
+        try self.enc.popRbp();
+        try self.enc.ret();
+
+        // Patch jump to epilogue
+        const end_rel1: i32 = @intCast(@as(i64, @intCast(epilogue)) - @as(i64, @intCast(jmp_end1)) - 5);
+        self.code.items[jmp_end1 + 1] = @truncate(@as(u32, @bitCast(end_rel1)));
+        self.code.items[jmp_end1 + 2] = @truncate(@as(u32, @bitCast(end_rel1)) >> 8);
+        self.code.items[jmp_end1 + 3] = @truncate(@as(u32, @bitCast(end_rel1)) >> 16);
+        self.code.items[jmp_end1 + 4] = @truncate(@as(u32, @bitCast(end_rel1)) >> 24);
+    }
+
+    /// Generate __dir_is_directory(path) -> int (1 if directory, 0 otherwise)
+    /// Parameters: RCX = path (null-terminated string)
+    /// Returns: RAX = 1 if directory, 0 otherwise
+    fn generateDirIsDirectory(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__dir_is_directory", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x20 }); // sub rsp, 32
+
+        // GetFileAttributesA(path)
+        try self.enc.allocShadowSpace();
+        // RCX already has path
+        try self.emitExternalCallAfterSetup("kernel32.dll", "GetFileAttributesA");
+        try self.enc.freeShadowSpace();
+
+        // Check for INVALID_FILE_ATTRIBUTES (0xFFFFFFFF)
+        try self.enc.emit(&.{ 0x3D, 0xFF, 0xFF, 0xFF, 0xFF }); // cmp eax, -1
+        const jne_valid = self.code.items.len;
+        try self.enc.emit(&.{ 0x75, 0x00 }); // jne valid
+        const jne_start = self.code.items.len;
+
+        // Return 0 (not a directory / doesn't exist)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax
+        const jmp_end = self.code.items.len;
+        try self.enc.emit(&.{ 0xEB, 0x00 }); // jmp end
+        const jmp_end_start = self.code.items.len;
+
+        // Patch jne
+        const valid = self.code.items.len;
+        self.code.items[jne_valid + 1] = @intCast(valid - jne_start);
+
+        // Check FILE_ATTRIBUTE_DIRECTORY (0x10)
+        try self.enc.emit(&.{ 0x25, 0x10, 0x00, 0x00, 0x00 }); // and eax, 0x10
+        try self.enc.emit(&.{ 0x85, 0xC0 }); // test eax, eax
+        try self.enc.emit(&.{ 0x0F, 0x95, 0xC0 }); // setnz al
+        try self.enc.emit(&.{ 0x0F, 0xB6, 0xC0 }); // movzx eax, al
+
+        // Patch short jump
+        self.code.items[jmp_end + 1] = @intCast(self.code.items.len - jmp_end_start);
+
+        // Epilogue
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x20 }); // add rsp, 32
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __dir_list(path) -> ptr to Array of String or NULL
+    /// Lists directory contents and returns array of filenames
+    /// Parameters: RCX = path (null-terminated string)
+    /// Returns: RAX = ptr to Array (heap allocated) or NULL on error
+    /// NOTE: This is a stub that always returns NULL - full implementation TODO
+    fn generateDirList(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__dir_list", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+
+        // Return NULL (directory listing not yet implemented)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax
+
+        // Epilogue
         try self.enc.popRbp();
         try self.enc.ret();
     }
