@@ -606,6 +606,11 @@ pub const Encoder = struct {
         return offset;
     }
 
+    /// Emit call rax (indirect call through register)
+    pub fn callRax(self: *Encoder) !void {
+        try self.emit(&.{ 0xFF, 0xD0 }); // call rax
+    }
+
     /// Emit shadow space allocation (32 bytes for Windows x64)
     pub fn allocShadowSpace(self: *Encoder) !void {
         try self.subRspImm8(win64.shadow_space);

@@ -2067,6 +2067,8 @@ pub const IrCodegen = struct {
             .ret => try self.genRet(inst),
             .param => try self.genParam(inst),
             .call => try self.genCall(inst),
+            .call_indirect => try self.genCallIndirect(inst),
+            .func_addr => try self.genFuncAddr(inst),
             .memcpy => try self.genMemcpy(inst),
             .memcpy_dyn => try self.genMemcpyDyn(inst),
             .memset => try self.genMemset(inst),
@@ -2818,6 +2820,66 @@ pub const IrCodegen = struct {
         }
     }
 
+    /// Generate indirect function call through pointer
+    fn genCallIndirect(self: *IrCodegen, inst: ir.Instruction) !void {
+        const func_ptr = inst.operands[0].value;
+        const args = inst.operands[1].call_args;
+        const ret_type = inst.result_type;
+
+        const func_ptr_offset = self.getStackOffset(func_ptr) catch -999;
+        const func_ptr_indirect = self.isIndirect(func_ptr);
+        debug.codegen("  Indirect call through %{d} (offset={d}, indirect={}) with {d} args", .{ func_ptr, func_ptr_offset, func_ptr_indirect, args.len });
+
+        // Load function pointer to R10 first (to preserve it during arg setup)
+        debug.codegen("    Loading func_ptr to RAX then R10", .{});
+        try self.loadToRax(func_ptr);
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC2 }); // mov r10, rax
+
+        // Load arguments (uses RCX, RDX, R8, R9)
+        debug.codegen("    Loading {d} args", .{args.len});
+        try self.loadArgs(args, true);
+
+        // Move function pointer to RAX for the call
+        debug.codegen("    Moving R10 back to RAX for call", .{});
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xD0 }); // mov rax, r10
+
+        // Emit indirect call through RAX
+        debug.codegen("    Emitting call rax", .{});
+        try self.enc.allocShadowSpace();
+        try self.enc.callRax();
+        try self.enc.freeShadowSpace();
+
+        if (inst.result) |result| {
+            debug.codegen("  indirect call result: %{d} of type {s}", .{ result, ret_type.toIrName() });
+            try self.storeReturnValue(result, ret_type);
+        }
+    }
+
+    /// Generate function address (get pointer to function)
+    fn genFuncAddr(self: *IrCodegen, inst: ir.Instruction) !void {
+        const func_name = inst.operands[0].func_name;
+        const result = inst.result.?;
+
+        debug.codegen("  FuncAddr: {s} -> %{d}", .{ func_name, result });
+
+        // Emit lea rax, [rip+0] with patch offset
+        // 48 8D 05 xx xx xx xx - lea rax, [rip+disp32]
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x05 });
+        const patch_offset = self.code.items.len;
+        try self.enc.emit(&.{ 0x00, 0x00, 0x00, 0x00 });
+
+        // Record patch for later resolution
+        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
+
+        // Store result to stack
+        const offset = self.allocStackSlots(1);
+        try self.enc.movRbpOffsetRax(offset);
+        try self.setValueLocation(result, .{ .stack = offset }, .ptr);
+        // Mark as indirect so when passed as argument, we load the value (function address)
+        // rather than doing LEA which would give us the address of the stack slot
+        try self.markIndirect(result);
+    }
+
     /// Load arguments into registers (first 4) and stack (5+).
     /// use_lea controls whether direct pointers use LEA for the first 4 args.
     /// Windows x64 ABI: RCX, RDX, R8, R9 for first 4 integer/pointer args
@@ -2826,6 +2888,9 @@ pub const IrCodegen = struct {
     fn loadArgs(self: *IrCodegen, args: []const ir.Value, use_lea: bool) !void {
         for (args, 0..) |arg, i| {
             const arg_type = self.value_types.get(arg) orelse return error.ValueTypeNotFound;
+            const arg_offset = self.getStackOffset(arg) catch -999;
+            const arg_indirect = self.isIndirect(arg);
+            debug.codegen("    loadArgs[{d}]: %{d} type={s} offset={d} indirect={} use_lea={}", .{ i, arg, arg_type.toIrName(), arg_offset, arg_indirect, use_lea });
 
             if (i < 4) {
                 // First 4 args go in registers
@@ -2837,6 +2902,7 @@ pub const IrCodegen = struct {
                         3 => .xmm3,
                         else => unreachable,
                     };
+                    debug.codegen("      -> float arg to xmm{d}", .{i});
                     try self.loadToXmm(arg, xmm);
                 } else if (use_lea and arg_type == .ptr and !self.isIndirect(arg)) {
                     // LEA - get pointer to struct on stack
@@ -2845,8 +2911,10 @@ pub const IrCodegen = struct {
                         .stack => |o| o,
                         else => return error.UnsupportedArgumentLocation,
                     };
+                    debug.codegen("      -> LEA (struct ptr) offset={d}", .{offset});
                     try self.emitLeaArgReg(i, offset);
                 } else {
+                    debug.codegen("      -> load value to arg reg", .{});
                     try self.loadToRax(arg);
                     try self.movArgRegRax(i);
                 }

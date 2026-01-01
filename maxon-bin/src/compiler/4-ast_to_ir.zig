@@ -147,6 +147,8 @@ pub const AstToIr = struct {
     pending_borrow_source: ?[]const u8 = null,
     // Track temporary String allocations that need cleanup after each statement
     temporary_strings: std.ArrayListUnmanaged(ir.Value) = .{},
+    // Counter for generating unique anonymous closure names
+    anon_closure_counter: u32 = 0,
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -2324,8 +2326,12 @@ pub const AstToIr = struct {
             if (var_info.ty == .array_type) {
                 const arr_info = var_info.ty.array_type;
                 if (arr_info.storage == .heap and var_info.state != .moved) {
-                    const heap_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                    try self.func().emitHeapFree(heap_ptr);
+                    // var_info.ptr points to a stack slot holding a ptr to __ManagedArray
+                    // __ManagedArray layout: [buffer_ptr, len, capacity] at offsets [0, 8, 16]
+                    // We need to free the buffer_ptr, not the __ManagedArray itself
+                    const managed_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                    const buffer_ptr = try self.func().emitLoad(managed_ptr, .ptr);
+                    try self.func().emitHeapFree(buffer_ptr);
                 }
             }
             // Handle stdlib Array types (Array$int, etc.)
@@ -2392,8 +2398,12 @@ pub const AstToIr = struct {
             if (var_info.ty == .array_type) {
                 const arr_info = var_info.ty.array_type;
                 if (arr_info.storage == .heap and var_info.state != .moved) {
-                    const old_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                    try self.func().emitHeapFree(old_ptr);
+                    // var_info.ptr points to a stack slot holding a ptr to __ManagedArray
+                    // __ManagedArray layout: [buffer_ptr, len, capacity] at offsets [0, 8, 16]
+                    // We need to free the buffer_ptr, not the __ManagedArray itself
+                    const managed_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                    const buffer_ptr = try self.func().emitLoad(managed_ptr, .ptr);
+                    try self.func().emitHeapFree(buffer_ptr);
                 }
             }
             // For stdlib Arrays/Strings, free old buffer AFTER evaluating RHS
@@ -2567,6 +2577,13 @@ pub const AstToIr = struct {
             },
         };
 
+        // For heap arrays, base_typed.value points to the __ManagedArray structure
+        // We need to load the buffer pointer from offset 0 to index into the actual data
+        const buffer_ptr: ir.Value = if (arr_info.storage == .heap)
+            try self.func().emitLoad(base_typed.value, .ptr)
+        else
+            base_typed.value;
+
         const elem_size: i32 = if (arr_info.element_struct_type) |struct_name| blk: {
             if (self.type_map.get(struct_name)) |type_info| {
                 if (type_info == .struct_type) {
@@ -2576,7 +2593,7 @@ pub const AstToIr = struct {
             break :blk 8;
         } else 8;
 
-        const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
+        const elem_ptr = try self.func().emitGetElemPtr(buffer_ptr, idx_typed.value, elem_size);
         // For structs, copy the entire struct data; for primitives, store the value
         if (arr_info.element_struct_type) |struct_name| {
             try self.emitStructCopy(elem_ptr, val_typed.value, elem_size, struct_name);
@@ -3244,6 +3261,7 @@ pub const AstToIr = struct {
             .nil_coalesce => |nc| self.convertNilCoalesce(nc),
             .cast => |c| self.convertCast(c),
             .interpolated_string => |interp| self.convertInterpolatedString(interp),
+            .closure => |clos| self.convertClosure(clos),
         };
     }
 
@@ -3300,6 +3318,15 @@ pub const AstToIr = struct {
                     }
                 }
             }
+        }
+
+        // Check if it's a function name - return function pointer
+        if (self.func_map.contains(name)) {
+            const func_ptr = try self.func().emitFuncAddr(name);
+            return .{
+                .value = func_ptr,
+                .ty = .{ .primitive = "ptr" },
+            };
         }
 
         // Fall back to original identifier behavior (will produce error for undefined)
@@ -3526,8 +3553,22 @@ pub const AstToIr = struct {
                 // Int-backed or unknown enum: convert ordinal to string
                 return self.convertIntToString(typed_val.value);
             },
-            else => {
-                self.reportInternalError("unsupported type for string interpolation");
+            .optional_type => |opt_info| {
+                // For optional types, unwrap and convert the inner value
+                // Load the value slot (offset 8 from optional pointer)
+                const value_slot = try self.func().emitGetFieldPtr(typed_val.value, 8);
+                const inner_value = try self.func().emitLoad(value_slot, opt_info.wrapped);
+                const inner_typed = TypedValue{
+                    .value = inner_value,
+                    .ty = if (opt_info.wrapped_struct_type) |struct_name|
+                        .{ .struct_type = struct_name }
+                    else
+                        .{ .primitive = opt_info.wrapped.toMaxonName() },
+                };
+                return self.convertToString(inner_typed, format_spec);
+            },
+            .array_type => {
+                self.reportInternalError("cannot convert array to string for interpolation");
                 return error.UnknownType;
             },
         }
@@ -4094,6 +4135,85 @@ pub const AstToIr = struct {
         return .{
             .value = result,
             .ty = .{ .primitive = target_type_name },
+        };
+    }
+
+    /// Convert a closure expression to a function pointer
+    /// Closures are compiled to anonymous functions
+    fn convertClosure(self: *AstToIr, clos: ast.ClosureExpr) ConvertError!TypedValue {
+        // Generate a unique name for the anonymous function
+        const anon_name = try std.fmt.allocPrint(self.allocator, "__anon_closure_{d}", .{self.anon_closure_counter});
+        self.anon_closure_counter += 1;
+        try self.module.trackString(anon_name);
+
+        // Build parameter list for the synthesized function
+        var param_ir_types = try self.allocator.alloc(ir.Type, clos.params.len);
+        var func_param_types = try self.allocator.alloc(ParamType, clos.params.len);
+        for (clos.params, 0..) |param, i| {
+            param_ir_types[i] = types.nameToIrType(param.type_name);
+            func_param_types[i] = .{ .ty = .{ .primitive = param.type_name } };
+        }
+
+        // Determine return type from the body expression type
+        // For now, assume it matches the first param type (works for map transforms)
+        const return_type: ir.Type = if (clos.params.len > 0) param_ir_types[0] else .i64;
+
+        // Save current function context - MUST capture index BEFORE addFunction which may reallocate
+        const saved_func_idx: ?usize = if (self.current_func) |curr| blk: {
+            for (self.module.functions.items, 0..) |*f, i| {
+                if (f == curr) break :blk i;
+            }
+            break :blk null;
+        } else null;
+        const saved_var_map = self.var_map;
+
+        // Create the function in the module (may reallocate functions array)
+        const func_ir = try self.module.addFunction(anon_name, return_type);
+        _ = try func_ir.addBlock("entry");
+        self.current_func = func_ir;
+        self.var_map = .empty;
+
+        // Add parameters to variable map
+        for (clos.params, 0..) |param, i| {
+            // Parameters are passed by value in registers/stack - allocate local storage
+            const param_ptr = try func_ir.emitAllocaSized(8);
+            const param_val = try func_ir.emitParam(@intCast(i), param_ir_types[i]);
+            try func_ir.emitStore(param_ptr, param_val);
+            try self.var_map.put(self.allocator, param.name, VarInfo.initParam(
+                param_ptr,
+                .{ .primitive = param.type_name },
+                false, // immutable
+                false, // doesn't use slot
+            ));
+        }
+
+        // Convert the body expression
+        const body_result = try self.convertExpression(clos.body.*);
+
+        // Emit return
+        try func_ir.emitRet(body_result.value);
+
+        // Restore context - recompute pointer from saved index (array may have been reallocated)
+        self.current_func = if (saved_func_idx) |idx| &self.module.functions.items[idx] else null;
+        self.var_map.deinit(self.allocator);
+        self.var_map = saved_var_map;
+
+        // Register this function in the function map
+        try self.func_map.put(self.allocator, anon_name, .{
+            .return_type = return_type,
+            .return_type_name = null,
+            .return_value_type = null,
+            .param_types = func_param_types,
+        });
+
+        // Free the IR types array since it's no longer needed
+        self.allocator.free(param_ir_types);
+
+        // Return the function pointer - emit func.addr to get address of the closure function
+        const func_ptr = try self.func().emitFuncAddr(anon_name);
+        return .{
+            .value = func_ptr,
+            .ty = .{ .primitive = "ptr" },
         };
     }
 
@@ -5172,10 +5292,26 @@ pub const AstToIr = struct {
     fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) ConvertError!TypedValue {
         const elements = arr_lit.elements;
 
+        // Allocate __ManagedArray on stack (24 bytes: buffer ptr, len, capacity)
+        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
+
         if (elements.len == 0) {
+            // Empty array: buffer=null, len=0, capacity=0
+            const null_ptr = try self.func().emitConstI64(0);
+            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, null_ptr, 0);
+            try self.func().emitStore(buffer_slot, null_ptr);
+
+            const len_offset = try self.func().emitConstI64(1);
+            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
+            try self.func().emitStore(len_slot, null_ptr);
+
+            const cap_offset = try self.func().emitConstI64(2);
+            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 8);
+            try self.func().emitStore(cap_slot, null_ptr);
+
             return .{
-                .value = try self.func().emitConstI64(0),
-                .ty = .{ .array_type = .{ .element_type = .i64, .size = 0, .storage = .stack } },
+                .value = managed_ptr,
+                .ty = .{ .array_type = .{ .element_type = .i64, .size = 0, .storage = .heap } },
             };
         }
 
@@ -5186,34 +5322,53 @@ pub const AstToIr = struct {
             .primitive, .array_type, .enum_type, .optional_type => null,
         };
 
-        // Determine element size: for structs, use actual struct size; for primitives, use 8 bytes
-        const elem_size: i32 = if (elem_struct_type) |struct_name| blk: {
+        // Calculate element size: structs use their actual size, primitives use 8 bytes
+        const elem_size: i64 = if (elem_struct_type) |struct_name| blk: {
             if (self.type_map.get(struct_name)) |type_info| {
                 if (type_info == .struct_type) {
-                    break :blk type_info.struct_type.size;
+                    break :blk @intCast(type_info.struct_type.size);
                 }
             }
             break :blk 8;
         } else 8;
 
-        const total_size = @as(i32, @intCast(elements.len)) * elem_size;
-        const arr_ptr = try self.func().emitAllocaSized(total_size);
+        // Allocate buffer for elements on heap
+        const elem_count = try self.func().emitConstI64(@intCast(elements.len));
+        const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
+        const buffer = try self.func().emitHeapAlloc(buffer_size);
 
+        // Store elements into buffer
         for (elements, 0..) |elem, i| {
             const typed = if (i == 0) first_typed else try self.convertExpression(elem);
             const idx_val = try self.func().emitConstI64(@intCast(i));
-            const elem_ptr = try self.func().emitGetElemPtr(arr_ptr, idx_val, elem_size);
-            // For structs, copy the entire struct data; for primitives, store the value
+            const elem_ptr = try self.func().emitGetElemPtr(buffer, idx_val, @intCast(elem_size));
             if (elem_struct_type) |struct_name| {
-                try self.emitStructCopy(elem_ptr, typed.value, elem_size, struct_name);
+                // For structs, copy the struct data
+                try self.emitStructCopy(elem_ptr, typed.value, @intCast(elem_size), struct_name);
             } else {
+                // For primitives, store the value directly
                 try self.func().emitStore(elem_ptr, typed.value);
             }
         }
 
+        // Store buffer pointer into __ManagedArray
+        const zero = try self.func().emitConstI64(0);
+        const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, zero, 0);
+        try self.func().emitStore(buffer_slot, buffer);
+
+        // Store length
+        const len_offset = try self.func().emitConstI64(1);
+        const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
+        try self.func().emitStore(len_slot, elem_count);
+
+        // Store capacity (same as length for literals)
+        const cap_offset = try self.func().emitConstI64(2);
+        const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 8);
+        try self.func().emitStore(cap_slot, elem_count);
+
         return .{
-            .value = arr_ptr,
-            .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .stack, .element_struct_type = elem_struct_type } },
+            .value = managed_ptr,
+            .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .heap, .element_struct_type = elem_struct_type } },
         };
     }
 
@@ -5348,6 +5503,13 @@ pub const AstToIr = struct {
             },
         };
 
+        // For heap arrays, base_typed.value points to the __ManagedArray structure
+        // We need to load the buffer pointer from offset 0 to index into the actual data
+        const buffer_ptr: ir.Value = if (arr_info.storage == .heap)
+            try self.func().emitLoad(base_typed.value, .ptr)
+        else
+            base_typed.value;
+
         const idx_typed = try self.convertExpression(idx.index.*);
 
         // Calculate element size: for structs, use actual struct size; for primitives, use 8 bytes
@@ -5392,8 +5554,9 @@ pub const AstToIr = struct {
                 .nil_coalesce,
                 .cast,
                 .interpolated_string,
+                .closure,
                 => {
-                    const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
+                    const elem_ptr = try self.func().emitGetElemPtr(buffer_ptr, idx_typed.value, elem_size);
                     if (arr_info.element_struct_type != null) {
                         // For structs, return pointer to the struct data directly
                         return self.createSomeOptionalWithStructType(elem_ptr, arr_info.element_type, arr_info.element_struct_type);
@@ -5408,7 +5571,7 @@ pub const AstToIr = struct {
 
             const size_var_entry = self.var_map.getPtr(size_var_name) orelse {
                 // No size variable - can't do bounds checking, fall back to direct access
-                const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
+                const elem_ptr = try self.func().emitGetElemPtr(buffer_ptr, idx_typed.value, elem_size);
                 if (arr_info.element_struct_type != null) {
                     // For structs, return pointer to the struct data directly
                     return self.createSomeOptionalWithStructType(elem_ptr, arr_info.element_type, arr_info.element_struct_type);
@@ -5467,7 +5630,7 @@ pub const AstToIr = struct {
         const one_val = try self.func().emitConstI64(1);
         try self.func().emitStore(opt_ptr, one_val); // tag = 1
 
-        const elem_ptr = try self.func().emitGetElemPtr(base_typed.value, idx_typed.value, elem_size);
+        const elem_ptr = try self.func().emitGetElemPtr(buffer_ptr, idx_typed.value, elem_size);
 
         const value_slot = try self.func().emitGetFieldPtr(opt_ptr, 8);
         if (arr_info.element_struct_type) |struct_name| {
@@ -5590,6 +5753,22 @@ pub const AstToIr = struct {
         if (base_typed.ty == .struct_type) {
             // Use emitMethodCall which handles sret correctly for struct-returning methods
             _ = try self.emitMethodCall(base_typed.ty.struct_type, mcall.method_name, mcall.args, base_typed.value);
+            return;
+        }
+
+        // Check if this is an array type - route to Array$ElementType methods
+        if (base_typed.ty == .array_type) {
+            const arr_info = base_typed.ty.array_type;
+            // Get element type name: use struct name if available, else use ir.Type.toMaxonName()
+            const elem_name = arr_info.element_struct_type orelse arr_info.element_type.toMaxonName();
+            const array_type_name = try std.fmt.allocPrint(self.allocator, "Array${s}", .{elem_name});
+            try self.module.trackString(array_type_name);
+
+            // Trigger monomorphization to create Array$ElementType and its methods
+            _ = self.getOrCreateMonomorphizedType("Array", &[_][]const u8{elem_name}) catch |e| {
+                debug.astToIr("note: could not monomorphize Array${s}: {}", .{ elem_name, e });
+            };
+            _ = try self.emitMethodCall(array_type_name, mcall.method_name, mcall.args, base_typed.value);
             return;
         }
 
@@ -5784,6 +5963,21 @@ pub const AstToIr = struct {
         // Check if this is a primitive type with hash/equals methods
         if (base_typed.ty == .primitive) {
             return self.emitPrimitiveMethodCall(base_typed, mcall.method_name, mcall.args);
+        }
+
+        // Check if this is an array type - route to Array$ElementType methods
+        if (base_typed.ty == .array_type) {
+            const arr_info = base_typed.ty.array_type;
+            // Get element type name: use struct name if available, else use ir.Type.toMaxonName()
+            const elem_name = arr_info.element_struct_type orelse arr_info.element_type.toMaxonName();
+            const array_type_name = try std.fmt.allocPrint(self.allocator, "Array${s}", .{elem_name});
+            try self.module.trackString(array_type_name);
+
+            // Trigger monomorphization to create Array$ElementType and its methods
+            _ = self.getOrCreateMonomorphizedType("Array", &[_][]const u8{elem_name}) catch |e| {
+                debug.astToIr("note: could not monomorphize Array${s}: {}", .{ elem_name, e });
+            };
+            return self.emitMethodCall(array_type_name, mcall.method_name, mcall.args, base_typed.value);
         }
 
         debug.astToIr("error: method call on non-struct type", .{});

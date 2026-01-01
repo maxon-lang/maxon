@@ -144,6 +144,8 @@ fn convertManagedArrayIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError
         return intrinsicManagedArrayShiftRight(self, call);
     } else if (std.mem.eql(u8, name, "__managed_array_shift_left")) {
         return intrinsicManagedArrayShiftLeft(self, call);
+    } else if (std.mem.eql(u8, name, "__managed_array_map")) {
+        return intrinsicManagedArrayMap(self, call);
     } else {
         self.reportError(.E019, name);
         return error.SemanticError;
@@ -408,6 +410,90 @@ fn intrinsicManagedArrayShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertErr
     try self.finishLoop(&loop);
 
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
+}
+
+/// __managed_array_map(managed, transform_fn) -> __ManagedArray
+/// Creates a new array with each element transformed by the function
+/// transform_fn is a function pointer obtained from closure or function name
+fn intrinsicManagedArrayMap(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    if (call.args.len != 2) {
+        self.reportError(.E011, call.func_name);
+        return error.WrongArgumentCount;
+    }
+
+    const managed = try self.convertExpression(call.args[0]);
+    const transform_fn = try self.convertExpression(call.args[1]);
+
+    // Load source array length and buffer
+    const len_ptr = try self.func().emitGetFieldPtr(managed.value, 8);
+    const arr_len = try self.func().emitLoad(len_ptr, .i64);
+    const buf_ptr_ptr = try self.func().emitGetFieldPtr(managed.value, 0);
+    const src_buffer = try self.func().emitLoad(buf_ptr_ptr, .ptr);
+
+    // Allocate result __ManagedArray (24 bytes: buffer ptr, len, capacity)
+    const result_managed = try self.func().emitAllocaSized(24);
+
+    // Allocate result buffer: heap alloc of len * 8 bytes
+    const eight = try self.func().emitConstI64(8);
+    const buffer_size = try self.func().emitBinaryOp(.mul, arr_len, eight, .i64);
+    const result_buffer = try self.func().emitHeapAlloc(buffer_size);
+
+    // Store buffer, len, capacity in result
+    const res_buf_ptr = try self.func().emitGetFieldPtr(result_managed, 0);
+    try self.func().emitStore(res_buf_ptr, result_buffer);
+    const res_len_ptr = try self.func().emitGetFieldPtr(result_managed, 8);
+    try self.func().emitStore(res_len_ptr, arr_len);
+    const res_cap_ptr = try self.func().emitGetFieldPtr(result_managed, 16);
+    try self.func().emitStore(res_cap_ptr, arr_len);
+
+    // Loop: for i from 0 to len
+    //   elem = src_buffer[i]
+    //   transformed = transform_fn(elem)
+    //   result_buffer[i] = transformed
+
+    // Allocate loop counter
+    const counter_ptr = try self.func().emitAllocaSized(8);
+    const zero = try self.func().emitConstI64(0);
+    try self.func().emitStore(counter_ptr, zero);
+
+    // Create loop blocks using helper
+    var loop = try self.createLoopBlocks("map_cond", "map_body", "map_end");
+
+    // Condition: i < len
+    const counter_val = try self.func().emitLoad(counter_ptr, .i64);
+    const cmp_result = try self.func().emitBinaryOp(.icmp_lt, counter_val, arr_len, .i64);
+
+    // Emit conditional branch and switch to body block
+    try self.emitLoopCondBranch(&loop, cmp_result);
+
+    // Body: load element, call transform via indirect call, store result
+    const i_val = try self.func().emitLoad(counter_ptr, .i64);
+    const elem_ptr = try self.func().emitGetElemPtr(src_buffer, i_val, 8);
+    const elem_val = try self.func().emitLoad(elem_ptr, .i64);
+
+    // Call transform function indirectly
+    const transform_args = try self.allocator.alloc(ir.Value, 1);
+    transform_args[0] = elem_val;
+    const transformed = try self.func().emitCallIndirect(transform_fn.value, transform_args, .i64);
+
+    // Store transformed value
+    const dest_ptr = try self.func().emitGetElemPtr(result_buffer, i_val, 8);
+    try self.func().emitStore(dest_ptr, transformed orelse zero);
+
+    // Increment counter
+    const one = try self.func().emitConstI64(1);
+    const next_i = try self.func().emitBinaryOp(.add, i_val, one, .i64);
+    try self.func().emitStore(counter_ptr, next_i);
+    try self.func().emitBr(loop.cond_block_idx);
+
+    // Finish loop and restore end block
+    try self.finishLoop(&loop);
+
+    // Return the result managed array pointer
+    return .{
+        .value = result_managed,
+        .ty = .{ .primitive = "ptr" }, // __ManagedArray pointer
+    };
 }
 
 // ============================================================================

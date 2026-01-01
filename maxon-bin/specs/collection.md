@@ -94,7 +94,7 @@ function main() returns int
     if let val = arr.get(1) 'get'
         return val
     end 'get'
-    return -1
+    return 0
 end 'main'
 ```
 ```exitcode
@@ -201,7 +201,7 @@ end 'main'
 <!-- test: count-empty -->
 ```maxon
 function main() returns int
-    var arr = array of int
+    var arr = Array of int{}
     print("{arr.count()}\n")
     return 0
 end 'main'
@@ -238,12 +238,12 @@ function main() returns int
     if let val = arr.get(10) 'get'
         return val
     end 'get' else 'not_found'
-        return -1
+        return 6
     end 'not_found'
 end 'main'
 ```
 ```exitcode
--1
+6
 ```
 
 <!-- test: set-basic -->

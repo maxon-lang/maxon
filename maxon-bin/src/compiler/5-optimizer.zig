@@ -148,6 +148,8 @@ fn tryFoldConstant(inst: ir.Instruction, constants: *std.AutoHashMapUnmanaged(ir
         .fcmp_gt,
         .fcmp_ge,
         .call,
+        .call_indirect,
+        .func_addr,
         .param,
         .memcpy,
         .memcpy_dyn,
@@ -548,6 +550,8 @@ fn collectPointerMappings(func: *ir.Function, ctx: *DseContext) !void {
                     .fcmp_gt,
                     .fcmp_ge,
                     .call,
+                    .call_indirect,
+                    .func_addr,
                     .param,
                     .memcpy,
                     .memcpy_dyn,
@@ -591,7 +595,7 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                         try ctx.loaded_fields.append(ctx.allocator, field_key);
                     }
                 },
-                .call => {
+                .call, .call_indirect => {
                     // Pointers passed to calls may be read
                     for (inst.operands) |op| {
                         if (op == .call_args) {
@@ -683,6 +687,7 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                 .heap_alloc,
                 .heap_free,
                 .heap_realloc,
+                .func_addr,
                 => {},
             }
         }
@@ -792,6 +797,7 @@ fn isDeadInstruction(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Va
         .br,
         .br_cond,
         .call,
+        .call_indirect,
         .memcpy,
         .memcpy_dyn,
         .memset,
@@ -850,6 +856,7 @@ fn isDeadInstruction(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Va
         .fcmp_ge,
         .param,
         .getelemptr,
+        .func_addr,
         => {},
     }
 

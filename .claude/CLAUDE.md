@@ -39,7 +39,7 @@ See `docs/SPECS.md` for the complete spec file format and detailed workflow.
 - **Clean up temp files** - Create test files in `/temp` and delete after
 - **Don't use here documents** - Write files directly with file tools
 - **Comments explain "why"** - Not "what" the code does
-- **Absolute paths** - Always use absolute paths for file operations
+- **Relative paths** - Always use relative paths for file operations
 - **LF line endings** - All source files use Unix-style line endings
 - Don't create new documentation files unless instructed
 - Do not edit test fragments (in `maxon-bin/specs/fragments/`). These are generated from the spec files, edit the spec file.

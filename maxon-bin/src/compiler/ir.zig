@@ -120,6 +120,8 @@ pub const Instruction = struct {
 
         // Function call
         call,
+        call_indirect, // Indirect function call through pointer
+        func_addr, // Get address of named function
 
         // Parameters
         param,
@@ -194,6 +196,8 @@ pub const Instruction = struct {
                 .fcmp_gt => "fcmp.gt",
                 .fcmp_ge => "fcmp.ge",
                 .call => "call",
+                .call_indirect => "call.indirect",
+                .func_addr => "func.addr",
                 .param => "param",
                 .getelemptr => "getelemptr",
                 .memcpy => "memcpy",
@@ -378,6 +382,8 @@ pub const Function = struct {
             .icmp_eq, .icmp_ne, .icmp_lt, .icmp_le, .icmp_gt, .icmp_ge => "tmp_icmp",
             .fcmp_eq, .fcmp_ne, .fcmp_lt, .fcmp_le, .fcmp_gt, .fcmp_ge => "tmp_fcmp",
             .call => "tmp_call",
+            .call_indirect => "tmp_call_ind",
+            .func_addr => "tmp_funcaddr",
             .param => "tmp_param",
             .getelemptr => "tmp_elemptr",
             .memcpy => "tmp_memcpy",
@@ -504,6 +510,20 @@ pub const Function = struct {
             return null;
         }
         return try self.emitWithResult(.call, ret_type, .{ .{ .func_name = func_name }, .{ .call_args = args }, .none });
+    }
+
+    // Indirect function call (through function pointer)
+    pub fn emitCallIndirect(self: *Function, func_ptr: Value, args: []const Value, ret_type: Type) !?Value {
+        if (ret_type == .void) {
+            try self.emit(.{ .op = .call_indirect, .operands = .{ .{ .value = func_ptr }, .{ .call_args = args }, .none } });
+            return null;
+        }
+        return try self.emitWithResult(.call_indirect, ret_type, .{ .{ .value = func_ptr }, .{ .call_args = args }, .none });
+    }
+
+    // Get address of a named function
+    pub fn emitFuncAddr(self: *Function, func_name: []const u8) !Value {
+        return self.emitWithResult(.func_addr, .ptr, .{ .{ .func_name = func_name }, .none, .none });
     }
 
     // Parameters

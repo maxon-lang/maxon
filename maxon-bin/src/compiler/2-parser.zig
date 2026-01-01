@@ -1378,6 +1378,10 @@ pub const Parser = struct {
             return try self.parsePostfix(.{ .identifier = token.text });
         }
         if (self.check(.lparen)) {
+            // Check if this is a closure: (name type, ...) gives expr
+            if (self.isClosureStart()) {
+                return try self.parseClosure();
+            }
             _ = self.advance(); // consume '('
             const expr = try self.parseExpression() orelse {
                 self.reportError(.E003);
@@ -1387,6 +1391,99 @@ pub const Parser = struct {
             return try self.parsePostfix(expr);
         }
         return null;
+    }
+
+    /// Check if the current position is the start of a closure: (name type, ...) gives
+    fn isClosureStart(self: *Parser) bool {
+        // We're at '('
+        // Closure format: (identifier type [, identifier type ...]) gives
+        // Look for pattern: ( identifier type [,|)] ) gives
+        var lookahead: usize = 1;
+
+        // Skip the lparen
+        const after_lparen = self.peek(lookahead) orelse return false;
+        if (after_lparen.type != .identifier) return false;
+        lookahead += 1;
+
+        // After identifier, expect type name (identifier or int/float/bool)
+        const type_tok = self.peek(lookahead) orelse return false;
+        if (type_tok.type != .identifier and type_tok.type != .int and type_tok.type != .float) return false;
+        lookahead += 1;
+
+        // Now we can have: ) gives  OR  , identifier type ...
+        // Skip params until we hit )
+        while (true) {
+            const tok = self.peek(lookahead) orelse return false;
+            if (tok.type == .rparen) {
+                lookahead += 1;
+                break;
+            }
+            if (tok.type == .comma) {
+                lookahead += 1;
+                // Expect identifier type
+                const id_tok = self.peek(lookahead) orelse return false;
+                if (id_tok.type != .identifier) return false;
+                lookahead += 1;
+                const t_tok = self.peek(lookahead) orelse return false;
+                if (t_tok.type != .identifier and t_tok.type != .int and t_tok.type != .float) return false;
+                lookahead += 1;
+            } else {
+                return false;
+            }
+        }
+
+        // Check for 'gives' keyword
+        const gives_tok = self.peek(lookahead) orelse return false;
+        return gives_tok.type == .gives;
+    }
+
+    /// Parse a closure: (name type, ...) gives expr
+    fn parseClosure(self: *Parser) ParseError!ast.Expression {
+        _ = self.advance(); // consume '('
+
+        var params: std.ArrayListUnmanaged(ast.ClosureParam) = .empty;
+        errdefer params.deinit(self.allocator);
+
+        // Parse params: identifier type, identifier type, ...
+        while (!self.check(.rparen)) {
+            const name_tok = try self.expect(.identifier);
+            // Parse type (can be identifier like "int" or type keyword)
+            const type_name = if (self.check(.int)) blk: {
+                _ = self.advance();
+                break :blk "int";
+            } else if (self.check(.float)) blk: {
+                _ = self.advance();
+                break :blk "float";
+            } else blk: {
+                const t = try self.expect(.identifier);
+                break :blk t.text;
+            };
+
+            try params.append(self.allocator, .{
+                .name = name_tok.text,
+                .type_name = type_name,
+            });
+
+            if (self.check(.comma)) {
+                _ = self.advance();
+            }
+        }
+
+        _ = try self.expect(.rparen);
+        _ = try self.expect(.gives);
+
+        // Parse the body expression
+        const body_expr = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+        const body_ptr = try self.createExpr(body_expr);
+
+        const owned_params = try params.toOwnedSlice(self.allocator);
+        return try self.parsePostfix(.{ .closure = .{
+            .params = owned_params,
+            .body = body_ptr,
+        } });
     }
 
     /// Parse an interpolated string like "Hello {name}!"

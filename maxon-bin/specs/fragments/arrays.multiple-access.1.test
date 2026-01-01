@@ -15,106 +15,127 @@ ExitCode: 40
 ---
 function main() -> i64 {
 entry:
+    %tmp_alloca = alloca.sized ptr 24
     %tmp_const = const.i64 i64 5
-    %arr = alloca.sized ptr 40
-    %tmp_const.1 = const.i64 i64 0
-    %3 = getelemptr ptr %arr %tmp_const.1 elemsize=8
-    store %3 %tmp_const
-    %tmp_const.2 = const.i64 i64 10
-    %tmp_const.3 = const.i64 i64 1
-    %6 = getelemptr ptr %arr %tmp_const.3 elemsize=8
-    store %6 %tmp_const.2
-    %tmp_const.4 = const.i64 i64 15
-    %tmp_const.5 = const.i64 i64 2
-    %9 = getelemptr ptr %arr %tmp_const.5 elemsize=8
+    %tmp_const.1 = const.i64 i64 5
+    %tmp_const.2 = const.i64 i64 40
+    %tmp_heap = heap.alloc ptr %tmp_const.2
+    %tmp_const.3 = const.i64 i64 0
+    %6 = getelemptr ptr %tmp_heap %tmp_const.3 elemsize=8
+    store %6 %tmp_const
+    %tmp_const.4 = const.i64 i64 10
+    %tmp_const.5 = const.i64 i64 1
+    %9 = getelemptr ptr %tmp_heap %tmp_const.5 elemsize=8
     store %9 %tmp_const.4
-    %tmp_const.6 = const.i64 i64 20
-    %tmp_const.7 = const.i64 i64 3
-    %12 = getelemptr ptr %arr %tmp_const.7 elemsize=8
+    %tmp_const.6 = const.i64 i64 15
+    %tmp_const.7 = const.i64 i64 2
+    %12 = getelemptr ptr %tmp_heap %tmp_const.7 elemsize=8
     store %12 %tmp_const.6
-    %tmp_const.8 = const.i64 i64 25
-    %tmp_const.9 = const.i64 i64 4
-    %15 = getelemptr ptr %arr %tmp_const.9 elemsize=8
+    %tmp_const.8 = const.i64 i64 20
+    %tmp_const.9 = const.i64 i64 3
+    %15 = getelemptr ptr %tmp_heap %tmp_const.9 elemsize=8
     store %15 %tmp_const.8
-    %tmp_const.10 = const.i64 i64 0
+    %tmp_const.10 = const.i64 i64 25
+    %tmp_const.11 = const.i64 i64 4
+    %18 = getelemptr ptr %tmp_heap %tmp_const.11 elemsize=8
+    store %18 %tmp_const.10
+    %tmp_const.12 = const.i64 i64 0
+    %20 = getelemptr ptr %tmp_alloca %tmp_const.12 elemsize=0
+    store %20 %tmp_heap
+    %tmp_const.13 = const.i64 i64 1
+    %22 = getelemptr ptr %tmp_alloca %tmp_const.13 elemsize=8
+    store %22 %tmp_const.1
+    %tmp_const.14 = const.i64 i64 2
+    %24 = getelemptr ptr %tmp_alloca %tmp_const.14 elemsize=8
+    store %24 %tmp_const.1
+    %arr = alloca ptr
+    store %arr %tmp_alloca
+    %tmp_const.15 = const.i64 i64 0
     %result = alloca ptr
-    store %result %tmp_const.10
-    %tmp_const.11 = const.i64 i64 2
-    %tmp_const.12 = const.i64 i64 5
-    %tmp_alloca.2 = alloca.sized ptr 16
-    %tmp_const.13 = const.i64 i64 0
-    %tmp_icmp = icmp.ge i64 %tmp_const.11 %tmp_const.13
-    %tmp_icmp.1 = icmp.lt i64 %tmp_const.11 %tmp_const.12
+    store %result %tmp_const.15
+    %tmp_load = load ptr %arr
+    %tmp_load.1 = load ptr %tmp_load
+    %tmp_const.16 = const.i64 i64 2
+    %tmp_const.17 = const.i64 i64 5
+    %tmp_alloca.3 = alloca.sized ptr 16
+    %tmp_const.18 = const.i64 i64 0
+    %tmp_icmp = icmp.ge i64 %tmp_const.16 %tmp_const.18
+    %tmp_icmp.1 = icmp.lt i64 %tmp_const.16 %tmp_const.17
     %tmp_mul = mul i64 %tmp_icmp %tmp_icmp.1
     br.cond %tmp_mul @block1 @block2
 index_in_bounds:
-    %tmp_const.14 = const.i64 i64 1
-    store %tmp_alloca.2 %tmp_const.14
-    %26 = getelemptr ptr %arr %tmp_const.11 elemsize=8
-    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load = load i64 %26
-    store %tmp_fieldptr %tmp_load
+    %tmp_const.19 = const.i64 i64 1
+    store %tmp_alloca.3 %tmp_const.19
+    %38 = getelemptr ptr %tmp_load.1 %tmp_const.16 elemsize=8
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.3 8
+    %tmp_load.2 = load i64 %38
+    store %tmp_fieldptr %tmp_load.2
     br @block3
 index_out_of_bounds:
-    %tmp_const.15 = const.i64 i64 0
-    store %tmp_alloca.2 %tmp_const.15
+    %tmp_const.20 = const.i64 i64 0
+    store %tmp_alloca.3 %tmp_const.20
     br @block3
 index_merge:
-    %tmp_load.1 = load i64 %tmp_alloca.2
-    %tmp_const.16 = const.i64 i64 1
-    %tmp_icmp.2 = icmp.eq i64 %tmp_load.1 %tmp_const.16
+    %tmp_load.3 = load i64 %tmp_alloca.3
+    %tmp_const.21 = const.i64 i64 1
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.3 %tmp_const.21
     br.cond %tmp_icmp.2 @block4 @block5
 if_let_then:
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load.2 = load i64 %tmp_fieldptr.1
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.3 8
+    %tmp_load.4 = load i64 %tmp_fieldptr.1
     %a = alloca ptr
-    store %a %tmp_load.2
-    %tmp_load.3 = load i64 %a
-    store %result %tmp_load.3
+    store %a %tmp_load.4
+    %tmp_load.5 = load i64 %a
+    store %result %tmp_load.5
     br @block6
 if_let_else:
     br @block6
 if_let_end:
-    %tmp_const.17 = const.i64 i64 4
-    %tmp_const.18 = const.i64 i64 5
-    %tmp_alloca.4 = alloca.sized ptr 16
-    %tmp_const.19 = const.i64 i64 0
-    %tmp_icmp.3 = icmp.ge i64 %tmp_const.17 %tmp_const.19
-    %tmp_icmp.4 = icmp.lt i64 %tmp_const.17 %tmp_const.18
+    %tmp_load.6 = load ptr %arr
+    %tmp_load.7 = load ptr %tmp_load.6
+    %tmp_const.22 = const.i64 i64 4
+    %tmp_const.23 = const.i64 i64 5
+    %tmp_alloca.5 = alloca.sized ptr 16
+    %tmp_const.24 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.ge i64 %tmp_const.22 %tmp_const.24
+    %tmp_icmp.4 = icmp.lt i64 %tmp_const.22 %tmp_const.23
     %tmp_mul.1 = mul i64 %tmp_icmp.3 %tmp_icmp.4
     br.cond %tmp_mul.1 @block7 @block8
 index_in_bounds:
-    %tmp_const.20 = const.i64 i64 1
-    store %tmp_alloca.4 %tmp_const.20
-    %45 = getelemptr ptr %arr %tmp_const.17 elemsize=8
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.4 8
-    %tmp_load.4 = load i64 %45
-    store %tmp_fieldptr.2 %tmp_load.4
+    %tmp_const.25 = const.i64 i64 1
+    store %tmp_alloca.5 %tmp_const.25
+    %59 = getelemptr ptr %tmp_load.7 %tmp_const.22 elemsize=8
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.5 8
+    %tmp_load.8 = load i64 %59
+    store %tmp_fieldptr.2 %tmp_load.8
     br @block9
 index_out_of_bounds:
-    %tmp_const.21 = const.i64 i64 0
-    store %tmp_alloca.4 %tmp_const.21
+    %tmp_const.26 = const.i64 i64 0
+    store %tmp_alloca.5 %tmp_const.26
     br @block9
 index_merge:
-    %tmp_load.5 = load i64 %tmp_alloca.4
-    %tmp_const.22 = const.i64 i64 1
-    %tmp_icmp.5 = icmp.eq i64 %tmp_load.5 %tmp_const.22
+    %tmp_load.9 = load i64 %tmp_alloca.5
+    %tmp_const.27 = const.i64 i64 1
+    %tmp_icmp.5 = icmp.eq i64 %tmp_load.9 %tmp_const.27
     br.cond %tmp_icmp.5 @block10 @block11
 if_let_then:
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.4 8
-    %tmp_load.6 = load i64 %tmp_fieldptr.3
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.5 8
+    %tmp_load.10 = load i64 %tmp_fieldptr.3
     %b = alloca ptr
-    store %b %tmp_load.6
-    %tmp_load.7 = load i64 %result
-    %tmp_load.8 = load i64 %b
-    %tmp_add = add i64 %tmp_load.7 %tmp_load.8
+    store %b %tmp_load.10
+    %tmp_load.11 = load i64 %result
+    %tmp_load.12 = load i64 %b
+    %tmp_add = add i64 %tmp_load.11 %tmp_load.12
     store %result %tmp_add
     br @block12
 if_let_else:
     br @block12
 if_let_end:
-    %tmp_load.9 = load i64 %result
-    ret %tmp_load.9
+    %tmp_load.13 = load i64 %result
+    %tmp_load.14 = load ptr %arr
+    %tmp_load.15 = load ptr %tmp_load.14
+    heap.free %tmp_load.15
+    ret %tmp_load.13
 }
 
 ---

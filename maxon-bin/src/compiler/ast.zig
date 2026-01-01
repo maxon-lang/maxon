@@ -304,6 +304,16 @@ pub const InterpolatedStringExpr = struct {
     parts: []const InterpolatedStringPart,
 };
 
+pub const ClosureParam = struct {
+    name: []const u8,
+    type_name: []const u8,
+};
+
+pub const ClosureExpr = struct {
+    params: []const ClosureParam,
+    body: *const Expression,
+};
+
 pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
@@ -328,4 +338,5 @@ pub const Expression = union(enum) {
     method_call: MethodCallExpr,
     nil_coalesce: NilCoalesceExpr,
     cast: CastExpr,
+    closure: ClosureExpr,
 };

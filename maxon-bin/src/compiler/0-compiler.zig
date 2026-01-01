@@ -1138,6 +1138,10 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
             }
             allocator.free(interp.parts);
         },
+        .closure => |clos| {
+            freeExpressionArgs(clos.body.*, allocator);
+            allocator.free(clos.params);
+        },
         // Simple literals with no nested allocations to free
         .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier, .string_literal, .char_literal => {},
     }

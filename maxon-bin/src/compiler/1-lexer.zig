@@ -39,6 +39,7 @@ pub const TokenType = enum {
     from,
     to,
     as, // type cast operator
+    gives, // closure syntax: (x int) gives x * 2
 
     // Types
     int,
@@ -514,6 +515,7 @@ pub const Lexer = struct {
             .{ "from", TokenType.from },
             .{ "to", TokenType.to },
             .{ "as", TokenType.as },
+            .{ "gives", TokenType.gives },
         };
         inline for (keywords) |kw| {
             if (std.mem.eql(u8, text, kw[0])) {

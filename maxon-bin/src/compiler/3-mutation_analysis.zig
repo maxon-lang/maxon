@@ -166,6 +166,10 @@ pub const MutationAnalyzer = struct {
             .cast => |c| {
                 self.checkExpressionForParamMutation(c.expr.*, param_indices, mutated);
             },
+            // Closures - check body for mutations
+            .closure => |clos| {
+                self.checkExpressionForParamMutation(clos.body.*, param_indices, mutated);
+            },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
             .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .array_type, .interpolated_string => {},

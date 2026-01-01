@@ -268,6 +268,61 @@ end:
     ret %tmp_param
 }
 
+function Array$int$map() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    %transform = param ptr 2
+    %transform.1 = alloca ptr
+    store %transform.1 %transform
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load ptr %transform.1
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load.1 = load i64 %tmp_fieldptr.1
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_fieldptr 0
+    %tmp_load.2 = load ptr %tmp_fieldptr.2
+    %tmp_alloca.1 = alloca.sized ptr 24
+    %tmp_const = const.i64 i64 8
+    %tmp_mul = mul i64 %tmp_load.1 %tmp_const
+    %tmp_heap = heap.alloc ptr %tmp_mul
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.1 0
+    store %tmp_fieldptr.3 %tmp_heap
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.1 8
+    store %tmp_fieldptr.4 %tmp_load.1
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.1 16
+    store %tmp_fieldptr.5 %tmp_load.1
+    %tmp_alloca.2 = alloca.sized ptr 8
+    %tmp_const.1 = const.i64 i64 0
+    store %tmp_alloca.2 %tmp_const.1
+    br @block1
+map_cond:
+    %tmp_load.3 = load i64 %tmp_alloca.2
+    %tmp_icmp = icmp.lt i64 %tmp_load.3 %tmp_load.1
+    br.cond %tmp_icmp @block2 @block3
+map_body:
+    %tmp_load.4 = load i64 %tmp_alloca.2
+    %22 = getelemptr ptr %tmp_load.2 %tmp_load.4 elemsize=8
+    %tmp_load.5 = load i64 %22
+    %tmp_call_ind = call.indirect i64 %tmp_load(%tmp_load.5)
+    %25 = getelemptr ptr %tmp_heap %tmp_load.4 elemsize=8
+    store %25 %tmp_call_ind
+    %tmp_const.2 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.4 %tmp_const.2
+    store %tmp_alloca.2 %tmp_add
+    br @block1
+map_end:
+    %result = alloca ptr
+    store %result %tmp_alloca.1
+    memset %tmp_param 0 32
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_param 0
+    %tmp_load.6 = load ptr %result
+    memcpy %tmp_fieldptr.6 %tmp_load.6 24
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_param 24
+    %tmp_const.3 = const.i64 i64 0
+    store %tmp_fieldptr.7 %tmp_const.3
+    ret %tmp_param
+}
+
 function Array$int$ensureCapacity() -> void {
 entry:
     %self = param ptr 0
