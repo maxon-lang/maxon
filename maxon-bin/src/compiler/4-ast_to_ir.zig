@@ -178,6 +178,7 @@ pub const AstToIr = struct {
     func_map: std.StringHashMapUnmanaged(FuncInfo),
     interface_map: std.StringHashMapUnmanaged(InterfaceInfo),
     type_decl_map: std.StringHashMapUnmanaged(ast.TypeDecl), // Type declarations for conformance lookup
+    enum_decl_map: std.StringHashMapUnmanaged(ast.EnumDecl), // Enum declarations for conformance lookup
     current_decl_is_mutable: bool,
     mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
     current_line: usize,
@@ -247,6 +248,7 @@ pub const AstToIr = struct {
             .func_map = .{},
             .interface_map = .{},
             .type_decl_map = .{},
+            .enum_decl_map = .{},
             .current_decl_is_mutable = false,
             .mutation_analyzer = mutation_analyzer,
             .current_line = 1,
@@ -812,6 +814,9 @@ pub const AstToIr = struct {
         // Type decl map doesn't own its data (references AST nodes)
         self.type_decl_map.deinit(self.allocator);
 
+        // Enum decl map doesn't own its data (references AST nodes)
+        self.enum_decl_map.deinit(self.allocator);
+
         // Generic params map doesn't own its data (references AST strings)
         self.generic_params.deinit(self.allocator);
 
@@ -1174,6 +1179,15 @@ pub const AstToIr = struct {
         else
             .int;
 
+        // Check if this enum conforms to Error interface
+        var is_error = false;
+        for (enum_decl.conformances) |conformance| {
+            if (std.mem.eql(u8, conformance.interface_name, "Error")) {
+                is_error = true;
+                break;
+            }
+        }
+
         // For string-backed enums, store the string values
         var string_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{};
         errdefer string_values.deinit(self.allocator);
@@ -1192,15 +1206,20 @@ pub const AstToIr = struct {
             try members.put(self.allocator, member.name, next_value);
             next_value += 1;
         }
+
+        // Store enum declaration for conformance lookup
+        try self.enum_decl_map.put(self.allocator, enum_decl.name, enum_decl);
+
         try self.type_map.put(self.allocator, enum_decl.name, .{
             .enum_type = .{
                 .name = enum_decl.name,
                 .members = members,
                 .backing_type = backing_type,
                 .string_values = string_values,
+                .is_error = is_error,
             },
         });
-        debug.astToIr("Registered enum '{s}' with {d} members (backing: {s})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type) });
+        debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type), is_error });
     }
 
     fn registerInterface(self: *AstToIr, iface: ast.InterfaceDecl) !void {
@@ -1214,6 +1233,27 @@ pub const AstToIr = struct {
 
     fn checkInterfaceConformance(self: *AstToIr, type_decl: ast.TypeDecl) !void {
         for (type_decl.conformances) |conformance| {
+            // Reject struct types trying to conform to Error interface
+            // Error can only be implemented by enums
+            if (std.mem.eql(u8, conformance.interface_name, "Error")) {
+                const msg = std.fmt.allocPrint(self.allocator, "Type '{s}' cannot conform to Error - only enums can implement Error", .{
+                    type_decl.name,
+                }) catch {
+                    self.reportError(.E023, type_decl.name);
+                    return error.SemanticError;
+                };
+                self.last_error = .{
+                    .code = .E023,
+                    .message = msg,
+                    .location = .{
+                        .file = self.source_file,
+                        .line = 1,
+                        .column = 1,
+                    },
+                };
+                return error.SemanticError;
+            }
+
             const iface = self.interface_map.get(conformance.interface_name) orelse {
                 // Unknown interface - skip conformance check
                 // This allows stdlib types to declare conformance to interfaces
@@ -1441,12 +1481,24 @@ pub const AstToIr = struct {
 
     /// Check if a type conforms to a specific interface by name
     fn typeConformsTo(self: *AstToIr, type_name: []const u8, interface_name: []const u8) bool {
-        const type_decl = self.type_decl_map.get(type_name) orelse return false;
-        for (type_decl.conformances) |conformance| {
-            if (std.mem.eql(u8, conformance.interface_name, interface_name)) {
-                return true;
+        // Check struct types
+        if (self.type_decl_map.get(type_name)) |type_decl| {
+            for (type_decl.conformances) |conformance| {
+                if (std.mem.eql(u8, conformance.interface_name, interface_name)) {
+                    return true;
+                }
             }
         }
+
+        // Check enum types
+        if (self.enum_decl_map.get(type_name)) |enum_decl| {
+            for (enum_decl.conformances) |conformance| {
+                if (std.mem.eql(u8, conformance.interface_name, interface_name)) {
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 
@@ -1515,7 +1567,7 @@ pub const AstToIr = struct {
                 .error_union_type = .{
                     .success_type = success_ir_type,
                     .success_struct_type = success_struct_type,
-                    .error_struct_type = decl.throws_type.?,
+                    .error_enum_type = decl.throws_type.?,
                 },
             };
         }
@@ -1677,7 +1729,7 @@ pub const AstToIr = struct {
                 return .{ .error_union_type = .{
                     .success_type = success_value_type.toPrimitiveType(),
                     .success_struct_type = if (success_value_type == .struct_type) success_value_type.struct_type else null,
-                    .error_struct_type = resolved_error,
+                    .error_enum_type = resolved_error,
                 } };
             },
         }
@@ -3566,11 +3618,16 @@ pub const AstToIr = struct {
         // Evaluate the error expression
         const error_typed = try self.convertExpression(throw_stmt.error_expr);
 
-        // Verify the error type matches (or conforms to Error)
+        // Verify the error type is an enum (errors must be enums)
         const error_type_name = switch (error_typed.ty) {
-            .struct_type => |name| name,
+            .enum_type => |name| name,
+            .struct_type => |name| {
+                // Struct errors are no longer allowed
+                self.reportError(.E023, name);
+                return error.SemanticError;
+            },
             else => {
-                self.reportError(.E001, "throw requires an error type");
+                self.reportError(.E001, "throw requires an error enum type");
                 return error.SemanticError;
             },
         };
@@ -3582,24 +3639,16 @@ pub const AstToIr = struct {
         }
 
         // For throwing functions, we use sret to return the error union
-        // Layout: [tag: 8 bytes][value/error: N bytes]
+        // Layout: [tag: 8 bytes][enum ordinal: 8 bytes]
         // tag = 0: success, tag = 1: error
         if (self.sret_ptr) |sret| {
             // Write tag = 1 (error)
             const one = try self.func().emitConstI64(1);
             try self.func().emitStore(sret, one);
 
-            // Write error value at offset 8
+            // Write enum ordinal at offset 8
             const error_ptr = try self.func().emitGetFieldPtr(sret, 8);
-            if (self.type_map.get(error_type_name)) |type_info| {
-                if (type_info == .struct_type) {
-                    try self.func().emitMemcpy(error_ptr, error_typed.value, type_info.struct_type.size);
-                } else {
-                    try self.func().emitStore(error_ptr, error_typed.value);
-                }
-            } else {
-                try self.func().emitStore(error_ptr, error_typed.value);
-            }
+            try self.func().emitStore(error_ptr, error_typed.value);
 
             // Return via sret
             try self.freeHeapAllocations();
@@ -3709,11 +3758,11 @@ pub const AstToIr = struct {
             // Get error value pointer (at offset 8 in error_buffer)
             const error_value_ptr = try self.func().emitGetFieldPtr(error_buffer, 8);
 
-            // Bind the error to a variable
+            // Bind the error to a variable (errors are now enums)
             const error_ty: ValueType = if (catch_clause.error_type) |et|
-                .{ .struct_type = et }
+                .{ .enum_type = et }
             else
-                .{ .struct_type = "Error" };
+                .{ .enum_type = "Error" };
             try self.var_map.put(self.allocator, catch_clause.binding_name, VarInfo.init(error_value_ptr, error_ty, false, false));
             defer _ = self.var_map.remove(catch_clause.binding_name);
 
@@ -5594,10 +5643,8 @@ pub const AstToIr = struct {
                     if (self.type_map.get(sn)) |ti| if (ti == .struct_type) ti.struct_type.size else 8 else 8
                 else
                     8;
-                const error_size: i32 = if (self.type_map.get(eu_info.error_struct_type)) |ti|
-                    if (ti == .struct_type) ti.struct_type.size else 8
-                else
-                    8;
+                // Error enums are always 8 bytes (i64 ordinal)
+                const error_size: i32 = 8;
                 sret_buffer = try self.func().emitAllocaSized(8 + @max(success_size, error_size));
             } else {
                 const struct_name = func_info.return_type_name.?;
@@ -7151,7 +7198,7 @@ fn getValueTypeFromTypeExpr(te: ast.TypeExpr) ?ValueType {
                 .error_union_type = .{
                     .success_type = success_ir_type,
                     .success_struct_type = success_struct_name,
-                    .error_struct_type = eu.error_type,
+                    .error_enum_type = eu.error_type,
                 },
             };
         },
@@ -7195,7 +7242,7 @@ fn getValueTypeFromTypeExprForParam(te: ast.TypeExpr) ValueType {
             .error_union_type = .{
                 .success_type = getIrTypeFromTypeExpr(eu.success_type.*),
                 .success_struct_type = getStructNameFromTypeExpr(eu.success_type.*),
-                .error_struct_type = eu.error_type,
+                .error_enum_type = eu.error_type,
             },
         },
         .function_type => .{ .primitive = "ptr" }, // Function types are represented as pointers in simple contexts

@@ -43,7 +43,7 @@ pub const FunctionTypeInfo = struct {
 pub const ErrorUnionInfo = struct {
     success_type: ir.Type, // The success type's IR type
     success_struct_type: ?[]const u8, // struct name if success is a struct
-    error_struct_type: []const u8, // The error type name (must conform to Error)
+    error_enum_type: []const u8, // The error enum type name (must be an enum conforming to Error)
 };
 
 /// Maps a Maxon type name to its IR type representation
@@ -142,6 +142,8 @@ pub const EnumTypeInfo = struct {
     backing_type: BackingType = .int,
     /// For string-backed enums: maps ordinal to string value
     string_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{},
+    /// True if this enum conforms to the Error interface
+    is_error: bool = false,
 
     pub const BackingType = enum { int, string };
 };

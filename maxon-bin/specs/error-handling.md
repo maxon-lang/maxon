@@ -12,9 +12,9 @@ category: error-handling
 Swift-style error handling with typed errors. Error unions (`T or E` where E conforms to Error) are distinct from optionals (`T or nil`).
 
 **Key Concepts:**
-- `Error` - Empty marker interface (like Swift's Error protocol)
+- `Error` - Empty marker interface that only enums can conform to
 - `throws E` - Function signature annotation for throwing functions
-- `throw expr` - Throw an error value
+- `throw expr` - Throw an error enum value
 - `try expr` - Propagate error to caller
 - `do-catch` - Block-level error handling with pattern matching
 
@@ -26,26 +26,28 @@ Swift-style error handling with typed errors. Error unions (`T or E` where E con
 - `ThrowStmt` - For `throw expr` statements
 - `TryExpr` with `TryMode` (.propagate)
 - `DoCatchStmt` and `CatchClause` for do-catch blocks
+- `EnumDecl` now supports `conformances` field for interface conformance
 
 **Function/Method Changes:**
 - `FunctionDecl`, `MethodDecl`, `InterfaceMethod` have `throws_type: ?[]const u8`
 
 **Type System:**
-- `ErrorUnionInfo` holds success type and error type
+- `ErrorUnionInfo` holds success type and error enum type
 - `error_union_type` variant in `ValueType`
+- `EnumTypeInfo` has `is_error` flag for Error-conforming enums
 
 **Memory Layout:**
 Same discriminated union pattern as optionals:
 ```
 +--------+--------------------------------+
-| tag(8) | value OR error                 |
+| tag(8) | value OR error ordinal         |
 +--------+--------------------------------+
    0=ok    success value
-   1=err   error value
+   1=err   enum ordinal (8 bytes)
 ```
 
 **Semantic Rules:**
-- Only types conforming to Error can be thrown
+- Only enums conforming to Error can be thrown (E023 for struct attempts)
 - `throw` only valid in functions with `throws` annotation
 - `try` requires the called function to throw
 - Unhandled throwing calls are compile errors
@@ -53,22 +55,38 @@ Same discriminated union pattern as optionals:
 **Implementation Status:**
 - [x] Lexer tokens
 - [x] AST nodes
-- [x] Parser support
+- [x] Parser support (including enum conformance)
 - [x] Error interface in stdlib
 - [x] IR generation for throw/try/catch
 - [x] Code generation
+- [x] Enum-only Error enforcement
 
 ## Documentation
 
 ### Defining Error Types
 
-Create error types by conforming to the `Error` interface:
+Error types must be enums that conform to the `Error` interface:
 
 ```maxon
-type FileError is Error
-    var code int
-    var path string
+// Simple enum error
+enum FileError is Error
+    notFound
+    permissionDenied
+    alreadyExists
 end 'FileError'
+
+// Int-backed enum error (for error codes)
+enum HttpError int is Error
+    badRequest = 400
+    notFound = 404
+    serverError = 500
+end 'HttpError'
+
+// String-backed enum error (for messages)
+enum ValidationError string is Error
+    emptyField = "Field cannot be empty"
+    invalidFormat = "Invalid format"
+end 'ValidationError'
 ```
 
 ### Throwing Functions
@@ -78,27 +96,15 @@ Annotate functions that can throw with `throws ErrorType`:
 ```maxon
 function readFile(path string) returns string throws FileError
     if not exists(path) 'check'
-        throw FileError{code: 404, path: path}
+        throw FileError.notFound
     end 'check'
     return contents
 end 'readFile'
 ```
 
-### Handling Single Calls (if-let)
-
-Use `if let` with an `else` clause to handle errors from a single call:
-
-```maxon
-if let contents = readFile("data.txt") 'ok'
-    print(contents)
-else e 'err'
-    print("Error: {e.path}")
-end 'ok'
-```
-
 ### Handling Blocks (do-catch)
 
-Use `do-catch` blocks for handling multiple throwing calls:
+Use `do-catch` blocks for handling throwing calls:
 
 ```maxon
 do 'io'
@@ -106,7 +112,7 @@ do 'io'
     let data = try readFile("data.json")
     process(config, data)
 catch e FileError 'fileErr'
-    print("File error: {e.path}")
+    print("File error occurred")
 catch e 'any'
     print("Unknown error")
 end 'io'
@@ -125,11 +131,44 @@ end 'loadConfig'
 
 ## Tests
 
-<!-- test: error.parse-error-type -->
+<!-- test: error.enum-simple-error -->
 ```maxon
-// Error types conform to the Error interface
-type MyError is Error
-    var code int
+// Simple enum error type
+enum MyError is Error
+    invalidInput
+    notFound
+end 'MyError'
+
+function main() returns int
+    return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.enum-int-backed-error -->
+```maxon
+// Int-backed enum error type
+enum MyError int is Error
+    invalidInput = 1
+    notFound = 404
+end 'MyError'
+
+function main() returns int
+    return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.enum-string-backed-error -->
+```maxon
+// String-backed enum error type
+enum MyError string is Error
+    invalidInput = "Invalid input"
+    notFound = "Not found"
 end 'MyError'
 
 function main() returns int
@@ -143,12 +182,11 @@ end 'main'
 <!-- test: error.parse-throws-function-signature -->
 ```maxon
 // Functions can declare they throw a specific error type
-type MyError is Error
-    var code int
+enum MyError is Error
+    failed
 end 'MyError'
 
 // This function signature declares it throws MyError
-// (body doesn't actually throw - just testing signature parsing)
 function mayFail() returns int throws MyError
     return 10
 end 'mayFail'
@@ -161,40 +199,21 @@ end 'main'
 42
 ```
 
-<!-- test: error.parse-error-with-multiple-fields -->
-```maxon
-// Error types can have multiple fields
-type DetailedError is Error
-    var code int
-    var line int
-    var column int
-end 'DetailedError'
-
-function main() returns int
-    return 42
-end 'main'
-```
-```exitcode
-42
-```
-
 <!-- test: error.throw-and-return-success -->
 ```maxon
 // Test that throwing function can return success value
-type MyError is Error
-    var code int
+enum MyError is Error
+    failed
 end 'MyError'
 
 function mayFail(shouldFail bool) returns int throws MyError
     if shouldFail 'check'
-        throw MyError{code: 1}
+        throw MyError.failed
     end 'check'
     return 42
 end 'mayFail'
 
 function main() returns int
-    // For now, just verify the function can be called
-    // (without try, we can't actually call it - testing just the parse/compile)
     return 42
 end 'main'
 ```
@@ -205,13 +224,13 @@ end 'main'
 <!-- test: error.do-catch-handles-thrown-error -->
 ```maxon
 // Test do-catch catches thrown errors
-type MyError is Error
-    var code int
+enum MyError int is Error
+    failed = 42
 end 'MyError'
 
 function mayFail(shouldFail bool) returns int throws MyError
     if shouldFail 'check'
-        throw MyError{code: 42}
+        throw MyError.failed
     end 'check'
     return 100
 end 'mayFail'
@@ -221,7 +240,8 @@ function main() returns int
         let x = try mayFail(true)
         return x
     catch e MyError 'err'
-        return e.code
+        // e is the enum ordinal (0 for first member)
+        return 42
     end 'io'
 end 'main'
 ```
@@ -232,13 +252,13 @@ end 'main'
 <!-- test: error.do-catch-success-case -->
 ```maxon
 // Test do-catch with no error thrown
-type MyError is Error
-    var code int
+enum MyError is Error
+    failed
 end 'MyError'
 
 function mayFail(shouldFail bool) returns int throws MyError
     if shouldFail 'check'
-        throw MyError{code: 42}
+        throw MyError.failed
     end 'check'
     return 100
 end 'mayFail'
@@ -248,7 +268,7 @@ function main() returns int
         let x = try mayFail(false)
         return x
     catch e MyError 'err'
-        return e.code
+        return 0
     end 'io'
 end 'main'
 ```

@@ -1356,7 +1356,7 @@ pub const Parser = struct {
             } };
         }
         // Check for logical not
-        if (self.check(.@"not")) {
+        if (self.check(.not)) {
             _ = self.advance();
             const operand = try self.parseUnary() orelse {
                 self.reportError(.E003);
@@ -1568,7 +1568,6 @@ pub const Parser = struct {
                 self.reportError(.E002);
                 return error.UnexpectedToken;
             }
-
 
             // Check for "TypeName from K to V{}" syntax (two-argument generics like Map)
             if (self.check(.from)) {
@@ -2121,9 +2120,31 @@ pub const Parser = struct {
         const name_token = try self.expect(.identifier);
 
         // Parse optional backing type (e.g., "enum Color int" or "enum Status string")
+        // Must check that the identifier is not "is" (start of conformance clause)
+        // Backing type can be identifier (like "string") or keywords like "int" or "float"
         var backing_type: ?[]const u8 = null;
-        if (self.check(.identifier) or self.check(.int) or self.check(.float)) {
+        if (self.check(.int) or self.check(.float)) {
+            // int/float keywords are valid backing types
             backing_type = self.advance().text;
+        } else if (self.check(.identifier)) {
+            const next_text = self.peek(0).?.text;
+            if (!std.mem.eql(u8, next_text, "is")) {
+                backing_type = self.advance().text;
+            }
+        }
+
+        // Parse optional interface conformances: is InterfaceName, ...
+        var conformances: std.ArrayListUnmanaged(ast.InterfaceConformance) = .empty;
+        errdefer conformances.deinit(self.allocator);
+
+        if (self.check(.is)) {
+            _ = self.advance();
+            try conformances.append(self.allocator, try self.parseInterfaceConformance());
+
+            while (self.check(.comma)) {
+                _ = self.advance();
+                try conformances.append(self.allocator, try self.parseInterfaceConformance());
+            }
         }
 
         // Require newline after enum declaration
@@ -2177,6 +2198,7 @@ pub const Parser = struct {
         return .{
             .name = name_token.text,
             .backing_type = backing_type,
+            .conformances = try conformances.toOwnedSlice(self.allocator),
             .members = try members.toOwnedSlice(self.allocator),
         };
     }

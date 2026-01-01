@@ -33,6 +33,7 @@ pub const EnumMember = struct {
 pub const EnumDecl = struct {
     name: []const u8,
     backing_type: ?[]const u8, // Optional backing type (int, string, etc.)
+    conformances: []const InterfaceConformance, // Interface conformances (e.g., is Error)
     members: []const EnumMember,
 };
 

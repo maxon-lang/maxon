@@ -1,12 +1,12 @@
 // Test: error-handling.error.do-catch-success-case.1
 // Test do-catch with no error thrown
-type MyError is Error
-    var code int
+enum MyError is Error
+    failed
 end 'MyError'
 
 function mayFail(shouldFail bool) returns int throws MyError
     if shouldFail 'check'
-        throw MyError{code: 42}
+        throw MyError.failed
     end 'check'
     return 100
 end 'mayFail'
@@ -16,7 +16,7 @@ function main() returns int
         let x = try mayFail(false)
         return x
     catch e MyError 'err'
-        return e.code
+        return 0
     end 'io'
 end 'main'
 ---
@@ -31,22 +31,18 @@ entry:
     %tmp_load = load i64 %shouldFail.1
     br.cond %tmp_load @block1 @block2
 then:
-    %tmp_alloca.1 = alloca.sized ptr 8
-    memset %tmp_alloca.1 0 8
-    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 0
-    %tmp_const = const.i64 i64 42
-    store %tmp_fieldptr %tmp_const
+    %tmp_const = const.i64 i64 0
     %tmp_const.1 = const.i64 i64 1
     store %tmp_param %tmp_const.1
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
-    memcpy %tmp_fieldptr.1 %tmp_alloca.1 8
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr %tmp_const
     ret %tmp_param
 end:
     %tmp_const.2 = const.i64 i64 100
     %tmp_const.3 = const.i64 i64 0
     store %tmp_param %tmp_const.3
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
-    store %tmp_fieldptr.2 %tmp_const.2
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.1 %tmp_const.2
     ret %tmp_param
 }
 
@@ -79,14 +75,12 @@ try_merge:
 catch_dispatch:
     br @block5
 catch_0:
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 8
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_fieldptr.1 0
-    %tmp_load.4 = load i64 %tmp_fieldptr.2
-    ret %tmp_load.4
-    br @block2
-catch_unhandled:
     %tmp_const.2 = const.i64 i64 0
     ret %tmp_const.2
+    br @block2
+catch_unhandled:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
 do_end:
 }
 

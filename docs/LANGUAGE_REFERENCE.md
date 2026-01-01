@@ -25,10 +25,11 @@ This reference provides complete syntax and semantics for the Maxon programming 
 7. [Functions](#functions)
 8. [Expressions](#expressions)
 9. [Statements](#statements)
-10. [Namespaces](#namespaces)
-11. [Standard Library](#standard-library)
-12. [Build System](#build-system)
-13. [Memory Model](#memory-model)
+10. [Error Handling](#error-handling)
+11. [Namespaces](#namespaces)
+12. [Standard Library](#standard-library)
+13. [Build System](#build-system)
+14. [Memory Model](#memory-model)
     - [Ownership System](#ownership-system)
 
 ---
@@ -941,6 +942,29 @@ function toggle(s Status) returns Status
 end 'toggle'
 ```
 
+### Enum Interface Conformance
+
+Enums can conform to interfaces using the `is` keyword, similar to types:
+
+```maxon
+enum FileError is Error
+    notFound
+    permissionDenied
+    alreadyExists
+end 'FileError'
+
+enum HttpError int is Error
+    badRequest = 400
+    notFound = 404
+    serverError = 500
+end 'HttpError'
+```
+
+**Notes:**
+- The `is Interface` clause comes after the optional backing type
+- Multiple interfaces can be specified: `enum Foo is A, B`
+- The `Error` interface can only be implemented by enums (not types/structs)
+
 ---
 
 ## Variables
@@ -1471,6 +1495,158 @@ continue           // Continue innermost loop
 continue 'label'   // Continue loop with specified label
 ```
 Skips to next iteration of the innermost loop, or continues to a specific labeled loop.
+
+---
+
+## Error Handling
+
+Maxon provides Swift-style error handling with typed errors. Error types must be enums conforming to the `Error` interface.
+
+### Defining Error Types
+
+Error types are enums that conform to the `Error` interface:
+
+```maxon
+// Simple enum error
+enum FileError is Error
+    notFound
+    permissionDenied
+    alreadyExists
+end 'FileError'
+
+// Int-backed enum error (for error codes)
+enum HttpError int is Error
+    badRequest = 400
+    notFound = 404
+    serverError = 500
+end 'HttpError'
+
+// String-backed enum error (for messages)
+enum ValidationError string is Error
+    emptyField = "Field cannot be empty"
+    invalidFormat = "Invalid format"
+end 'ValidationError'
+```
+
+**Note:** Only enums can conform to `Error`. Attempting to make a type (struct) conform to `Error` produces a compile error (E023).
+
+### Throwing Functions
+
+Functions that can throw errors declare the error type with `throws`:
+
+```maxon
+function readFile(path string) returns string throws FileError
+    if not exists(path) 'check'
+        throw FileError.notFound
+    end 'check'
+    return contents
+end 'readFile'
+```
+
+**Syntax:**
+```maxon
+function name(params) returns ReturnType throws ErrorType
+```
+
+### Throw Statement
+
+Use `throw` to throw an error value:
+
+```maxon
+throw FileError.notFound
+throw HttpError.serverError
+```
+
+**Rules:**
+- `throw` is only valid inside functions with a `throws` declaration
+- The thrown value must match the declared error type
+
+### Do-Catch Blocks
+
+Handle errors from throwing functions with `do-catch`:
+
+```maxon
+do 'io'
+    let config = try readFile("config.json")
+    let data = try readFile("data.json")
+    process(config, data)
+catch e FileError 'fileErr'
+    print("File error occurred")
+catch e 'any'
+    print("Unknown error")
+end 'io'
+```
+
+**Syntax:**
+```maxon
+do 'label'
+    // statements with try expressions
+catch bindingName ErrorType 'catchLabel'
+    // handle specific error type
+catch bindingName 'catchLabel'
+    // catch-all for any error
+end 'label'
+```
+
+### Try Expression
+
+Use `try` before calling a throwing function to propagate errors:
+
+```maxon
+function loadConfig() returns Config throws FileError
+    let contents = try readFile("config.json")
+    return parse(contents)
+end 'loadConfig'
+```
+
+**Rules:**
+- `try` is required when calling throwing functions inside a `do` block
+- Errors propagate to the nearest `catch` clause
+- In a throwing function, `try` propagates to the caller
+
+### Error Union Types
+
+Functions with `throws` return an error union type internally:
+
+```maxon
+// This function returns "string or FileError" internally
+function readFile(path string) returns string throws FileError
+```
+
+**Memory Layout:**
+```
++--------+--------------------------------+
+| tag(8) | value OR error ordinal         |
++--------+--------------------------------+
+   0=ok    success value
+   1=err   enum ordinal (8 bytes)
+```
+
+### Complete Example
+
+```maxon
+enum ParseError is Error
+    invalidSyntax
+    unexpectedEnd
+end 'ParseError'
+
+function parseNumber(s string) returns int throws ParseError
+    if s.isEmpty() 'empty'
+        throw ParseError.unexpectedEnd
+    end 'empty'
+    // parsing logic...
+    return result
+end 'parseNumber'
+
+function main() returns int
+    do 'parse'
+        let num = try parseNumber("42")
+        return num
+    catch e ParseError 'err'
+        return 0
+    end 'parse'
+end 'main'
+```
 
 ---
 
