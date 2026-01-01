@@ -987,71 +987,10 @@ pub const AstToIr = struct {
         else
             null;
 
-        var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
-        errdefer self.allocator.free(fields);
-        var offset: i32 = 0;
-
-        for (type_decl.fields, 0..) |field, i| {
-            const value_type: ValueType = switch (field.type_expr) {
-                .simple => blk: {
-                    const base_name = typeExprBaseTypeName(field.type_expr).?;
-                    const resolved = self.resolveTypeName(base_name);
-                    // Check for internal type access
-                    try intrinsics.checkInternalTypeAccess(self, resolved);
-                    const field_type_info = self.type_map.get(resolved) orelse {
-                        self.reportError(.E006, resolved);
-                        return error.UnknownType;
-                    };
-                    break :blk switch (field_type_info) {
-                        .struct_type => .{ .struct_type = resolved },
-                        .primitive => .{ .primitive = resolved },
-                        .enum_type => .{ .enum_type = resolved },
-                    };
-                },
-                .generic => |gen| blk: {
-                    // For generic types like "Array of int", monomorphize them
-                    const resolved_args = try self.allocator.alloc([]const u8, gen.type_args.len);
-                    defer self.allocator.free(resolved_args);
-                    for (gen.type_args, 0..) |arg, j| {
-                        resolved_args[j] = self.resolveTypeName(arg);
-                    }
-                    const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
-                    break :blk .{ .struct_type = mono_name };
-                },
-                .optional => |wrapped| blk: {
-                    const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
-                    break :blk .{ .optional_type = .{
-                        .wrapped = wrapped_value_type.toPrimitiveType(),
-                    } };
-                },
-                .function_type => try self.typeExprToValueType(field.type_expr),
-            };
-            const field_size: i32 = switch (value_type) {
-                .struct_type => |name| blk: {
-                    const info = self.type_map.get(name) orelse {
-                        self.reportError(.E006, name);
-                        return error.UnknownType;
-                    };
-                    break :blk switch (info) {
-                        .struct_type => |s| s.size,
-                        .primitive, .enum_type => 8,
-                    };
-                },
-                .primitive, .enum_type, .array_type => 8, // arrays stored as pointers
-                .optional_type => 8, // optionals stored as pointers to 16-byte structures
-                .function_type => 8, // function pointers are 8 bytes
-            };
-            fields[i] = .{
-                .name = field.name,
-                .offset = offset,
-                .size = field_size,
-                .value_type = value_type,
-            };
-            offset += field_size;
-        }
+        const field_result = try self.buildFieldInfos(type_decl.fields);
 
         try self.type_map.put(self.allocator, type_decl.name, .{
-            .struct_type = .{ .name = type_decl.name, .fields = fields, .size = offset },
+            .struct_type = .{ .name = type_decl.name, .fields = field_result.fields, .size = field_result.size },
         });
 
         // Now that the new entry is in the map, free the old fields if this was a re-registration
@@ -1059,7 +998,7 @@ pub const AstToIr = struct {
             self.allocator.free(of);
         }
 
-        debug.astToIr("Registered type '{s}' with size {d}", .{ type_decl.name, offset });
+        debug.astToIr("Registered type '{s}' with size {d}", .{ type_decl.name, field_result.size });
     }
 
     /// Register an external type (from stdlib or other modules)
@@ -1434,6 +1373,53 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Result from building field infos
+    const FieldInfoResult = struct {
+        fields: []FieldInfo,
+        size: i32,
+    };
+
+    /// Build FieldInfo array from type declaration fields
+    /// Shared by registerType and getOrCreateMonomorphizedType
+    fn buildFieldInfos(self: *AstToIr, type_decl_fields: []const ast.FieldDecl) !FieldInfoResult {
+        var fields = try self.allocator.alloc(FieldInfo, type_decl_fields.len);
+        errdefer self.allocator.free(fields);
+        var offset: i32 = 0;
+
+        for (type_decl_fields, 0..) |field, i| {
+            const value_type = try self.typeExprToValueType(field.type_expr);
+            const field_size: i32 = try self.getValueTypeSize(value_type);
+            fields[i] = .{
+                .name = field.name,
+                .offset = offset,
+                .size = field_size,
+                .value_type = value_type,
+            };
+            offset += field_size;
+        }
+
+        return .{ .fields = fields, .size = offset };
+    }
+
+    /// Get the size in bytes for a value type
+    fn getValueTypeSize(self: *AstToIr, value_type: ValueType) !i32 {
+        return switch (value_type) {
+            .struct_type => |name| blk: {
+                const info = self.type_map.get(name) orelse {
+                    self.reportError(.E006, name);
+                    return error.UnknownType;
+                };
+                break :blk switch (info) {
+                    .struct_type => |s| s.size,
+                    .primitive, .enum_type => 8,
+                };
+            },
+            .primitive, .enum_type, .array_type => 8,
+            .optional_type => 8,
+            .function_type => 8,
+        };
+    }
+
     fn typeExprToValueType(self: *AstToIr, type_expr: ast.TypeExpr) !ValueType {
         switch (type_expr) {
             .simple => {
@@ -1560,48 +1546,15 @@ pub const AstToIr = struct {
         self.in_stdlib_method = true;
 
         // Register the monomorphized type
-        var fields = try self.allocator.alloc(FieldInfo, type_decl.fields.len);
-        errdefer self.allocator.free(fields);
-        var offset: i32 = 0;
-
-        for (type_decl.fields, 0..) |field, i| {
-            const value_type: ValueType = self.typeExprToValueType(field.type_expr) catch |e| {
-                self.in_stdlib_method = saved_in_stdlib;
-                return e;
-            };
-            const field_size: i32 = switch (value_type) {
-                .struct_type => |name| blk: {
-                    const info = self.type_map.get(name) orelse {
-                        self.reportError(.E006, name);
-                        // Clean up on error
-                        for (type_decl.generic_params) |param| {
-                            _ = self.generic_params.remove(param);
-                        }
-                        return error.UnknownType;
-                    };
-                    break :blk switch (info) {
-                        .struct_type => |s| s.size,
-                        .primitive, .enum_type => 8,
-                    };
-                },
-                .primitive, .enum_type, .array_type => 8,
-                .optional_type => 8,
-                .function_type => 8, // Function pointers are 8 bytes
-            };
-
-            fields[i] = .{
-                .name = field.name,
-                .offset = offset,
-                .value_type = value_type,
-                .size = field_size,
-            };
-            offset += field_size;
-        }
+        const field_result = self.buildFieldInfos(type_decl.fields) catch |e| {
+            self.in_stdlib_method = saved_in_stdlib;
+            return e;
+        };
 
         const struct_info = StructTypeInfo{
             .name = mono_name,
-            .fields = fields,
-            .size = offset,
+            .fields = field_result.fields,
+            .size = field_result.size,
         };
 
         try self.type_map.put(self.allocator, mono_name, .{ .struct_type = struct_info });
@@ -2009,6 +1962,125 @@ pub const AstToIr = struct {
     }
 
     // ------------------------------------------------------------------------
+    // Function/Method Conversion Helpers
+    // ------------------------------------------------------------------------
+
+    /// Result of analyzing return type for sret handling
+    const SretInfo = struct {
+        uses_sret: bool,
+        struct_size: i32,
+        optional_info: ?OptionalInfo,
+        ir_type: ir.Type,
+    };
+
+    /// Analyze return type to determine if sret is needed and get IR type
+    /// resolve_names: if true, resolves type names through generic params (for methods)
+    fn analyzeReturnType(self: *AstToIr, return_type: ?ast.TypeExpr, resolve_names: bool) !SretInfo {
+        if (return_type == null) {
+            return .{ .uses_sret = false, .struct_size = 0, .optional_info = null, .ir_type = .void };
+        }
+
+        const rt = return_type.?;
+        var uses_sret = false;
+        var sret_struct_size: i32 = 0;
+        var sret_opt_info: ?OptionalInfo = null;
+
+        switch (rt) {
+            .simple, .generic => {
+                const base_name = typeExprBaseTypeName(rt).?;
+                const resolved = if (resolve_names) self.resolveTypeName(base_name) else base_name;
+                if (self.type_map.get(resolved)) |type_info| {
+                    if (type_info == .struct_type) {
+                        uses_sret = true;
+                        sret_struct_size = type_info.struct_type.size;
+                    }
+                }
+            },
+            .optional => |wrapped| {
+                uses_sret = true;
+                sret_struct_size = 8 + self.getTypeSize(wrapped.*);
+                const wrapped_struct_name = getStructNameFromTypeExpr(wrapped.*);
+                sret_opt_info = .{
+                    .wrapped = getIrTypeFromTypeExpr(wrapped.*),
+                    .wrapped_struct_type = wrapped_struct_name,
+                };
+            },
+            .function_type => {
+                // Function types are returned as pointers, no sret needed
+            },
+        }
+
+        const ir_type: ir.Type = switch (rt) {
+            .simple, .generic => blk: {
+                const base_name = typeExprBaseTypeName(rt).?;
+                const resolved = if (resolve_names) self.resolveTypeName(base_name) else base_name;
+                break :blk try self.lookupIrType(resolved);
+            },
+            .optional, .function_type => .ptr,
+        };
+
+        return .{
+            .uses_sret = uses_sret,
+            .struct_size = sret_struct_size,
+            .optional_info = sret_opt_info,
+            .ir_type = ir_type,
+        };
+    }
+
+    /// Setup common function state (sret, entry block, var map)
+    fn setupFunctionState(self: *AstToIr, ir_func: *ir.Function, func_name: []const u8, sret_info: SretInfo) !i32 {
+        self.current_func = ir_func;
+        self.current_func_name = func_name;
+        self.var_map.clearRetainingCapacity();
+        _ = try ir_func.addBlock("entry");
+
+        // Reset sret state
+        self.sret_ptr = null;
+        self.sret_size = 0;
+        self.sret_optional_info = null;
+
+        // If returning struct, first parameter is sret pointer
+        var param_offset: i32 = 0;
+        if (sret_info.uses_sret) {
+            self.sret_ptr = try ir_func.emitParam(0, .ptr);
+            self.sret_size = sret_info.struct_size;
+            self.sret_optional_info = sret_info.optional_info;
+            param_offset = 1;
+        }
+
+        return param_offset;
+    }
+
+    /// Convert function body and add implicit return for void functions
+    fn convertBodyAndFinalize(self: *AstToIr, body: []const ast.Statement, ret_type: ir.Type) !void {
+        for (body) |stmt| {
+            try self.convertStatement(stmt);
+        }
+
+        // For void functions, add implicit return if needed
+        if (ret_type == .void) {
+            const block = self.func().currentBlock() orelse return;
+            const needs_implicit_ret = block.instructions.items.len == 0 or
+                block.instructions.items[block.instructions.items.len - 1].op != .ret;
+            if (needs_implicit_ret) {
+                try self.func().emitRet(null);
+            }
+        }
+    }
+
+    /// Check for unused variables and report errors
+    fn checkUnusedVariables(self: *AstToIr) !void {
+        var iter = self.var_map.iterator();
+        while (iter.next()) |entry| {
+            if (!entry.value_ptr.used and !std.mem.eql(u8, entry.key_ptr.*, "_")) {
+                debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
+                self.reportError(.E014, entry.key_ptr.*);
+                return error.UnusedVariable;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
     // Method Conversion
     // ------------------------------------------------------------------------
 
@@ -2023,52 +2095,10 @@ pub const AstToIr = struct {
         const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
         try self.module.trackString(mangled_name);
 
-        // Determine return type (same as registerMethod)
-        var uses_sret = false;
-        var sret_struct_size: i32 = 0;
-        var sret_opt_info: ?OptionalInfo = null;
-        if (method.return_type) |rt| {
-            switch (rt) {
-                .simple, .generic => {
-                    const base_name = typeExprBaseTypeName(rt).?;
-                    const resolved = self.resolveTypeName(base_name);
-                    if (self.type_map.get(resolved)) |type_info| {
-                        if (type_info == .struct_type) {
-                            uses_sret = true;
-                            sret_struct_size = type_info.struct_type.size;
-                        }
-                    }
-                },
-                .optional => |wrapped| {
-                    // Optional size = 8 (tag) + wrapped_value_size
-                    // For struct types (e.g., Character), this correctly accounts for their size
-                    uses_sret = true;
-                    sret_struct_size = 8 + self.getTypeSize(wrapped.*);
-                    // Track the wrapped type info for proper return handling
-                    const wrapped_struct_name = getStructNameFromTypeExpr(wrapped.*);
-                    sret_opt_info = .{
-                        .wrapped = getIrTypeFromTypeExpr(wrapped.*),
-                        .wrapped_struct_type = wrapped_struct_name,
-                    };
-                },
-                .function_type => {
-                    // Function types are returned as pointers, no sret needed
-                },
-            }
-        }
+        // Analyze return type for sret handling (resolve_names=true for methods)
+        const sret_info = try self.analyzeReturnType(method.return_type, true);
 
-        const ret_type: ir.Type = if (method.return_type) |rt| blk: {
-            switch (rt) {
-                .simple, .generic => {
-                    const base_name = typeExprBaseTypeName(rt).?;
-                    const resolved = self.resolveTypeName(base_name);
-                    break :blk try self.lookupIrType(resolved);
-                },
-                .optional, .function_type => break :blk .ptr,
-            }
-        } else .void;
-
-        const ir_func = try self.module.addFunctionWithExport(mangled_name, ret_type, method.is_export);
+        const ir_func = try self.module.addFunctionWithExport(mangled_name, sret_info.ir_type, method.is_export);
         // Set alias for interface methods (e.g., Type$Interface.method)
         if (method.qualified_name) |qualified| {
             const alias = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
@@ -2076,25 +2106,8 @@ pub const AstToIr = struct {
             ir_func.alias = alias;
         }
 
-        self.current_func = ir_func;
-        self.current_func_name = mangled_name;
-        self.var_map.clearRetainingCapacity();
-        _ = try ir_func.addBlock("entry");
-
-        // Reset sret state
-        self.sret_ptr = null;
-        self.sret_size = 0;
-        self.sret_optional_info = null;
         self.self_ptr = null;
-
-        // Parameter offset for sret
-        var param_offset: i32 = 0;
-        if (uses_sret) {
-            self.sret_ptr = try ir_func.emitParam(0, .ptr);
-            self.sret_size = sret_struct_size;
-            self.sret_optional_info = sret_opt_info;
-            param_offset = 1;
-        }
+        var param_offset = try self.setupFunctionState(ir_func, mangled_name, sret_info);
 
         // Register implicit self parameter for instance methods
         if (!method.is_static) {
@@ -2103,7 +2116,6 @@ pub const AstToIr = struct {
             self.self_ptr = self_val;
 
             // Register self as a variable for explicit self.field access
-            // Use initParam since self is a parameter (caller owns the memory)
             try self.var_map.put(self.allocator, "self", VarInfo.initParam(
                 self_val,
                 .{ .struct_type = type_name },
@@ -2119,35 +2131,15 @@ pub const AstToIr = struct {
             try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
         }
 
-        // Convert body
-        for (method.body) |stmt| {
-            try self.convertStatement(stmt);
-        }
-
-        // For void methods, add implicit return
-        if (ret_type == .void) {
-            const block = self.func().currentBlock() orelse return;
-            const needs_implicit_ret = block.instructions.items.len == 0 or
-                block.instructions.items[block.instructions.items.len - 1].op != .ret;
-            if (needs_implicit_ret) {
-                try self.func().emitRet(null);
-            }
-        }
+        // Convert body and add implicit return for void methods
+        try self.convertBodyAndFinalize(method.body, sret_info.ir_type);
 
         // Skip unused variable check for 'self' - it's always implicitly used
         if (self.var_map.getPtr("self")) |self_info| {
             self_info.used = true;
         }
 
-        // Check for unused variables (skip '_' which is the conventional "ignore" name)
-        var iter = self.var_map.iterator();
-        while (iter.next()) |entry| {
-            if (!entry.value_ptr.used and !std.mem.eql(u8, entry.key_ptr.*, "_")) {
-                debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
-                self.reportError(.E014, entry.key_ptr.*);
-                return error.UnusedVariable;
-            }
-        }
+        try self.checkUnusedVariables();
 
         // Clear method context
         self.self_ptr = null;
@@ -2158,98 +2150,21 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     fn convertFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
-        // Check if this function returns a struct (needs sret)
-        var uses_sret = false;
-        var sret_struct_size: i32 = 0;
-        var sret_opt_info: ?OptionalInfo = null;
-        if (decl.return_type) |rt| {
-            switch (rt) {
-                .simple, .generic => {
-                    const base_name = typeExprBaseTypeName(rt).?;
-                    if (self.type_map.get(base_name)) |type_info| {
-                        if (type_info == .struct_type) {
-                            uses_sret = true;
-                            sret_struct_size = type_info.struct_type.size;
-                        }
-                    }
-                },
-                .optional => |wrapped| {
-                    // Optional size = 8 (tag) + wrapped_value_size
-                    // For struct types (e.g., Character), this correctly accounts for their size
-                    uses_sret = true;
-                    sret_struct_size = 8 + self.getTypeSize(wrapped.*);
-                    // Track the wrapped type info for proper return handling
-                    const wrapped_struct_name = getStructNameFromTypeExpr(wrapped.*);
-                    sret_opt_info = .{
-                        .wrapped = getIrTypeFromTypeExpr(wrapped.*),
-                        .wrapped_struct_type = wrapped_struct_name,
-                    };
-                },
-                .function_type => {
-                    // Function types are returned as pointers, no sret needed
-                },
-            }
-        }
+        // Analyze return type for sret handling (resolve_names=false for functions)
+        const sret_info = try self.analyzeReturnType(decl.return_type, false);
 
-        const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
-            switch (rt) {
-                .simple, .generic => {
-                    const base_name = typeExprBaseTypeName(rt).?;
-                    break :blk try self.lookupIrType(base_name);
-                },
-                .optional, .function_type => break :blk .ptr,
-            }
-        } else .void;
-
-        const ir_func = try self.module.addFunctionWithExport(decl.name, ret_type, decl.is_export);
-        self.current_func = ir_func;
-        self.current_func_name = decl.name;
-        self.var_map.clearRetainingCapacity();
-        _ = try ir_func.addBlock("entry");
-
-        // Reset sret state
-        self.sret_ptr = null;
-        self.sret_size = 0;
-        self.sret_optional_info = null;
-
-        // If returning struct, first parameter is sret pointer
-        var param_offset: i32 = 0;
-        if (uses_sret) {
-            self.sret_ptr = try ir_func.emitParam(0, .ptr);
-            self.sret_size = sret_struct_size;
-            self.sret_optional_info = sret_opt_info;
-            param_offset = 1;
-        }
+        const ir_func = try self.module.addFunctionWithExport(decl.name, sret_info.ir_type, decl.is_export);
+        const param_offset = try self.setupFunctionState(ir_func, decl.name, sret_info);
 
         // Register parameters (offset by 1 if using sret)
         for (decl.params, 0..) |param, i| {
             try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
         }
 
-        // Convert body
-        for (decl.body) |stmt| {
-            try self.convertStatement(stmt);
-        }
+        // Convert body and add implicit return for void functions
+        try self.convertBodyAndFinalize(decl.body, sret_info.ir_type);
 
-        // For void functions, add implicit return if the body doesn't end with a return
-        if (ret_type == .void) {
-            const block = self.func().currentBlock() orelse return;
-            const needs_implicit_ret = block.instructions.items.len == 0 or
-                block.instructions.items[block.instructions.items.len - 1].op != .ret;
-            if (needs_implicit_ret) {
-                try self.func().emitRet(null);
-            }
-        }
-
-        // Check for unused variables (skip '_' which is the conventional "ignore" name)
-        var iter = self.var_map.iterator();
-        while (iter.next()) |entry| {
-            if (!entry.value_ptr.used and !std.mem.eql(u8, entry.key_ptr.*, "_")) {
-                debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
-                self.reportError(.E014, entry.key_ptr.*);
-                return error.UnusedVariable;
-            }
-        }
+        try self.checkUnusedVariables();
     }
 
     fn registerParameter(self: *AstToIr, param: ast.ParamDecl, idx: i32) !void {
