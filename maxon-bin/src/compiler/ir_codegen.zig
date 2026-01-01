@@ -7,6 +7,7 @@ const x86 = @import("x86.zig");
 const CallPatch = struct {
     offset: usize,
     target_func: []const u8,
+    source_file: ?[]const u8 = null,
 };
 
 /// External call site to patch with IAT address
@@ -252,6 +253,8 @@ pub const IrCodegen = struct {
     outgoing_stack_args_size: i32,
     // Pending stack space for external calls with 5+ parameters
     pending_stack_space: u32 = 0,
+    // Source file for error reporting
+    source_file: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, code: *std.ArrayListUnmanaged(u8), options: CodegenOptions) IrCodegen {
         return .{
@@ -402,6 +405,7 @@ pub const IrCodegen = struct {
     // ------------------------------------------------------------------------
 
     pub fn generateModule(self: *IrCodegen, module: ir.Module) !void {
+        self.source_file = module.source_file;
         // Collect function return types for cross-function calls
         for (module.functions.items) |*func| {
             try self.func_return_types.put(self.allocator, func.name, func.return_type);
@@ -2172,7 +2176,14 @@ pub const IrCodegen = struct {
     fn patchCalls(self: *IrCodegen) !void {
         for (self.call_patches.items) |patch| {
             const target_offset = self.func_offsets.get(patch.target_func) orelse {
-                std.debug.print("error: call to undefined function '{s}'\n", .{patch.target_func});
+                // NOTE: This should not happen for user code anymore since undefined functions
+                // are now caught during AST->IR conversion (error E024). If this is reached,
+                // it indicates an internal compiler error or missing function registration.
+                if (patch.source_file) |file| {
+                    std.debug.print("internal error: {s}: call to undefined function '{s}' (should have been caught earlier)\n", .{ file, patch.target_func });
+                } else {
+                    std.debug.print("internal error: call to undefined function '{s}' (should have been caught earlier)\n", .{patch.target_func});
+                }
                 return error.UndefinedFunction;
             };
             // Calculate relative offset: target - (patch_location + 4)
@@ -3237,7 +3248,7 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x00, 0x00, 0x00, 0x00 });
 
         // Record patch for later resolution
-        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
+        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name, .source_file = self.source_file });
 
         // Store result to stack
         const offset = self.allocStackSlots(1);
@@ -3469,7 +3480,7 @@ pub const IrCodegen = struct {
     fn emitInternalCall(self: *IrCodegen, func_name: []const u8) !void {
         try self.enc.allocShadowSpace();
         const patch_offset = try self.enc.callRel32();
-        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
+        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name, .source_file = self.source_file });
         try self.enc.freeShadowSpace();
     }
 
@@ -3487,7 +3498,7 @@ pub const IrCodegen = struct {
     /// Emit internal call after beginCall() - for Maxon functions
     fn emitInternalCallAfterSetup(self: *IrCodegen, func_name: []const u8) !void {
         const patch_offset = try self.enc.callRel32();
-        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name });
+        try self.call_patches.append(self.allocator, .{ .offset = patch_offset, .target_func = func_name, .source_file = self.source_file });
     }
 
     /// Emit external call after beginCall() - for DLL functions

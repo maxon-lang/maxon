@@ -25,6 +25,7 @@ pub const ErrorCode = enum {
     E021,
     E022,
     E023,
+    E024,
 
     const Info = struct {
         code: []const u8,
@@ -55,6 +56,7 @@ pub const ErrorCode = enum {
         .{ .code = "E021", .message = "string goes out of scope while borrowed" },
         .{ .code = "E022", .message = "type mismatch" },
         .{ .code = "E023", .message = "Error interface can only be implemented by enums" },
+        .{ .code = "E024", .message = "undefined function" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

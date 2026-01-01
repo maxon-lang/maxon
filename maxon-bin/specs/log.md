@@ -12,8 +12,8 @@ category: stdlib
 The `log()` function calculates the natural logarithm (base e) of a number.
 
 Implementation:
-- Defined in `stdlib/math/log.maxon`
-- Signature: `log(x float) float`
+- Defined in `stdlib/Math.maxon`
+- Signature: `Math.log(x float) float`
 - Uses Taylor series approximation
 - Normalizes input to range [0.5, 1.0) for faster convergence
 - Uses transformation: log(x) = log(x/2^n) + n*log(2)
@@ -32,7 +32,7 @@ The `log()` function calculates the natural logarithm (ln) of a number.
 ### Syntax
 
 ```maxon
-log(x)
+Math.log(x)
 ```
 Parameters:
 - `x` - The value to take the logarithm of (must be positive)
@@ -44,7 +44,7 @@ Returns the natural logarithm of x.
 ```maxon
 function main() returns int
     var e = 2.71828
-    var result = log(e)  // ln(e) ≈ 1.0
+    var result = Math.log(e)  // ln(e) ≈ 1.0
     return trunc(result)
 end 'main'
 ```
@@ -66,7 +66,7 @@ end 'main'
 ```maxon
 function main() returns int
     var e = 2.71828
-    var result = log(e)
+    var result = Math.log(e)
     print("{result}\n")
     return 0
 end 'main'
@@ -82,7 +82,7 @@ end 'main'
 <!-- test: ln-of-one -->
 ```maxon
 function main() returns int
-    var result = log(1.0)
+    var result = Math.log(1.0)
     return trunc(result)
 end 'main'
 ```
@@ -94,7 +94,7 @@ end 'main'
 <!-- test: ln-of-large -->
 ```maxon
 function main() returns int
-    var result = log(100.0)  // ln(100) ≈ 4.6
+    var result = Math.log(100.0)  // ln(100) ≈ 4.6
     print("{result}\n")
     return 0
 end 'main'
@@ -110,7 +110,7 @@ end 'main'
 <!-- test: int-promotion -->
 ```maxon
 function main() returns int
-    var result = log(10)  // Int promoted to float
+    var result = Math.log(10)  // Int promoted to float
     print("{result}\n")
     return 0
 end 'main'

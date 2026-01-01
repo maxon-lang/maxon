@@ -147,11 +147,6 @@ logger.trace(LogPhase::MIR, "createLoad %", result->regId, " = load ptr %", ptr-
 logger.trace(LogPhase::x86, "loadValue regId=", value->regId, " kind=", static_cast<int>(value->kind));
 ```
 
-**For quick debugging without Logger access:**
-```cpp
-std::cerr << "[DEBUG] varName='" << varName << "' type='" << type << "'\n";
-```
-
 **Key locations for debugging:**
 
 | Component | File | What to log |

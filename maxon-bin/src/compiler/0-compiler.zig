@@ -30,6 +30,14 @@ pub const Source = struct {
 /// Result of compilation with optional error info
 pub const CompileResult = struct {
     error_info: ?compile_error.CompileError,
+
+    /// Free allocated error message if present
+    pub fn deinit(self: *CompileResult, allocator: std.mem.Allocator) void {
+        if (self.error_info) |err| {
+            // The message is allocated by reportError or similar functions
+            allocator.free(err.message);
+        }
+    }
 };
 
 /// Public compile options exposed to CLI

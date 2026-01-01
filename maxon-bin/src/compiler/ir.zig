@@ -575,6 +575,7 @@ pub const Module = struct {
     allocator: std.mem.Allocator,
     // Allocated strings that must be freed when module is deinitialized
     allocated_strings: std.ArrayListUnmanaged([]const u8) = .empty,
+    source_file: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) Module {
         return .{

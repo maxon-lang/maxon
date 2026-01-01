@@ -10,9 +10,9 @@ category: stdlib
 The `log10` function is implemented as a **stdlib function** using the natural logarithm.
 
 **Implementation Details:**
-- Category: `stdlib` (stdlib/math/log10.maxon)
+- Category: `stdlib` (stdlib/Math.maxon)
 - Implementation: Uses the identity `log10(x) = log(x) / log(10)`
-- Depends on: `log` function from stdlib
+- Depends on: `Math.log` function
 
 **Type System:**
 - Input: `float`
@@ -46,7 +46,7 @@ The `log10` function is implemented as a **stdlib function** using the natural l
 
 Calculate the base-10 logarithm of a number.
 
-**Signature:** `log10(x float) float`
+**Signature:** `Math.log10(x float) float`
 
 **Parameters:**
 - `x` - The number to take the base-10 logarithm of (must be positive)
@@ -57,13 +57,13 @@ Calculate the base-10 logarithm of a number.
 
 ```maxon
 var x = 100.0
-var y = log10(x)     // 2.0 (10^2 = 100)
+var y = Math.log10(x)     // 2.0 (10^2 = 100)
 
 var z = 1000.0
-var w = log10(z)     // 3.0 (10^3 = 1000)
+var w = Math.log10(z)     // 3.0 (10^3 = 1000)
 
 var a = 10.0
-var b = log10(a)     // 1.0 (10^1 = 10)
+var b = Math.log10(a)     // 1.0 (10^1 = 10)
 ```
 **Notes:**
 - Input must be positive (returns NaN for negative values)
@@ -77,7 +77,7 @@ var b = log10(a)     // 1.0 (10^1 = 10)
 <!-- test: log10.basic -->
 ```maxon
 function main() returns int
-    var x = log10(100.0)
+    var x = Math.log10(100.0)
     print("{x}\n")
     return 0
 end 'main'
@@ -92,7 +92,7 @@ end 'main'
 <!-- test: log10.one-thousand -->
 ```maxon
 function main() returns int
-    var x = log10(1000.0)
+    var x = Math.log10(1000.0)
     print("{x}\n")
     return 0
 end 'main'
@@ -107,7 +107,7 @@ end 'main'
 <!-- test: log10.ten -->
 ```maxon
 function main() returns int
-    var x = log10(10.0)
+    var x = Math.log10(10.0)
     print("{x}\n")
     return 0
 end 'main'
@@ -122,7 +122,7 @@ end 'main'
 <!-- test: log10.one -->
 ```maxon
 function main() returns int
-    var result = log10(1.0)
+    var result = Math.log10(1.0)
     if result == 0.0 'check'
         return 0
     end 'check'
@@ -136,7 +136,7 @@ end 'main'
 <!-- test: log10.precision -->
 ```maxon
 function main() returns int
-    var x = log10(2.0)
+    var x = Math.log10(2.0)
     print("{x}\n")
     return 0
 end 'main'
@@ -152,7 +152,7 @@ end 'main'
 ```maxon
 function main() returns int
     var x = 100  // int
-    var result = log10(x)  // x promoted to 100.0
+    var result = Math.log10(x)  // x promoted to 100.0
     print("{result}\n")
     return 0
 end 'main'
@@ -167,7 +167,7 @@ end 'main'
 <!-- test: log10.large-value -->
 ```maxon
 function main() returns int
-    var x = log10(10000.0)
+    var x = Math.log10(10000.0)
     print("{x}\n")
     return 0
 end 'main'

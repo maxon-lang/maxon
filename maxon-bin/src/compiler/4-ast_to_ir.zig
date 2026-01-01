@@ -974,8 +974,9 @@ pub const AstToIr = struct {
         }
 
         // Transfer ownership of module
-        const module = self.module;
+        var module = self.module;
         self.module = ir.Module.init(self.allocator);
+        module.source_file = self.source_file;
         return module;
     }
 
@@ -5685,15 +5686,9 @@ pub const AstToIr = struct {
         }
 
         const func_info = self.func_map.get(call.func_name) orelse {
-            // Unknown function - still pass the arguments (no type info for promotion)
-            const args = try self.func().allocator.alloc(ir.Value, call.args.len);
-            for (call.args, 0..) |arg_expr, i| {
-                const arg = try self.convertExpression(arg_expr);
-                args[i] = arg.value;
-            }
-            // Assume i64 return type - this will be resolved at link time
-            const result = try self.func().emitCall(call.func_name, args, .i64);
-            return .{ .value = result orelse 0, .ty = .{ .primitive = "int" } };
+            // Report undefined function error immediately with location
+            self.reportError(.E024, call.func_name);
+            return error.UnknownFunction;
         };
 
         // Check if return type is optional or error union (needs sret)

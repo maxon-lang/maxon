@@ -15,6 +15,7 @@ const WorkerContext = struct {
     options: testing.TestOptions,
     print_mutex: std.Thread.Mutex,
     stdlib_modules: []const compiler.Source,
+    stdlib_error_detected: std.atomic.Value(bool),
 };
 
 /// Cached stdlib modules (loaded once, reused across all tests)
@@ -61,14 +62,58 @@ fn extractErrorLine(stderr: []const u8) ?[]const u8 {
 
 /// Normalize path separators to forward slashes for cross-platform consistency
 fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
-    if (std.mem.indexOf(u8, path, "\\") == null) {
-        return path; // No backslashes, return as-is
-    }
-    const result = try allocator.alloc(u8, path.len);
+    // First convert backslashes to forward slashes
+    var temp_path = try allocator.alloc(u8, path.len);
+    defer allocator.free(temp_path);
     for (path, 0..) |c, i| {
-        result[i] = if (c == '\\') '/' else c;
+        temp_path[i] = if (c == '\\') '/' else c;
     }
-    return result;
+
+    // Try to resolve the path to get a clean absolute path
+    const resolved = std.fs.cwd().realpathAlloc(allocator, temp_path) catch {
+        // If realpathAlloc fails, try to at least normalize slashes
+        const result = try allocator.alloc(u8, path.len);
+        for (path, 0..) |c, i| {
+            result[i] = if (c == '\\') '/' else c;
+        }
+        return result;
+    };
+
+    // Get the current working directory (maxon-bin)
+    const cwd = std.fs.cwd().realpathAlloc(allocator, ".") catch {
+        return resolved;
+    };
+    defer allocator.free(cwd);
+
+    // Convert cwd backslashes to forward slashes for comparison
+    var normalized_cwd = try allocator.alloc(u8, cwd.len);
+    defer allocator.free(normalized_cwd);
+    for (cwd, 0..) |c, i| {
+        normalized_cwd[i] = if (c == '\\') '/' else c;
+    }
+
+    // Convert resolved path backslashes to forward slashes
+    var normalized_resolved = try allocator.alloc(u8, resolved.len);
+    for (resolved, 0..) |c, i| {
+        normalized_resolved[i] = if (c == '\\') '/' else c;
+    }
+    allocator.free(resolved);
+
+    // If resolved path starts with cwd, strip it
+    if (std.mem.startsWith(u8, normalized_resolved, normalized_cwd)) {
+        const relative = normalized_resolved[normalized_cwd.len..];
+        // Skip leading slash
+        const trimmed = if (relative.len > 0 and relative[0] == '/')
+            relative[1..]
+        else
+            relative;
+
+        const result = try allocator.dupe(u8, trimmed);
+        allocator.free(normalized_resolved);
+        return result;
+    }
+
+    return normalized_resolved;
 }
 
 /// Parsed fragment file
@@ -183,6 +228,86 @@ pub fn runAllTests(
     };
     defer freeStdlibCache();
 
+    // Test compile stdlib before running any tests to catch errors early
+    std.debug.print("Validating stdlib compilation...\n", .{});
+    blk: {
+        var temp_dir = std.fs.cwd().openDir("temp", .{}) catch |err| {
+            std.debug.print("Warning: Could not open temp directory: {}\n", .{err});
+            break :blk;
+        };
+        defer temp_dir.close();
+        const temp_exe = "temp/stdlib_test.exe";
+
+        // Create a minimal test program that imports stdlib
+        const test_source =
+            \\function main() returns int
+            \\    return 0
+            \\end 'main'
+        ;
+
+        var sources = try allocator.alloc(compiler.Source, stdlib_modules.len + 1);
+        defer allocator.free(sources);
+
+        for (stdlib_modules, 0..) |mod, i| {
+            sources[i] = mod;
+        }
+        sources[stdlib_modules.len] = .{ .path = "temp/stdlib_test.maxon", .content = test_source };
+
+        var compile_result: compiler.CompileResult = .{ .error_info = null };
+        defer compile_result.deinit(allocator);
+        const compile_options = compiler.CompileOptions{ .track_allocs = false };
+
+        const stdlib_ok = if (compiler.compileMultiple(
+            sources,
+            temp_exe,
+            compile_options,
+            allocator,
+            &compile_result,
+        )) |_| true else |_| false;
+
+        // Clean up test executable
+        std.fs.cwd().deleteFile(temp_exe) catch {};
+
+        if (!stdlib_ok) {
+            if (compile_result.error_info) |err| {
+                const file_path = err.location.file orelse "";
+                const normalized_path = normalizePath(allocator, file_path) catch file_path;
+                defer if (normalized_path.ptr != file_path.ptr) allocator.free(normalized_path);
+
+                if (err.code) |code| {
+                    std.debug.print("\nStdlib compilation failed:\n", .{});
+                    std.debug.print("  error {s}: {s}:{d}:{d}: {s}\n", .{
+                        code.format(),
+                        normalized_path,
+                        err.location.line,
+                        err.location.column,
+                        err.message,
+                    });
+                } else {
+                    std.debug.print("\nStdlib compilation failed:\n", .{});
+                    std.debug.print("  internal error: {s}:{d}:{d}: {s}\n", .{
+                        normalized_path,
+                        err.location.line,
+                        err.location.column,
+                        err.message,
+                    });
+                }
+            } else {
+                std.debug.print("\nStdlib compilation failed with unknown error\n", .{});
+            }
+            std.debug.print("\nSkipping all tests due to stdlib error.\n", .{});
+            return testing.TestSummary{
+                .total = 0,
+                .passed = 0,
+                .failed = 0,
+                .skipped = total,
+                .results = &.{},
+            };
+        }
+    }
+
+    std.debug.print("Stdlib validated successfully.\n", .{});
+
     // Allocate results array
     const results = try allocator.alloc(testing.TestResult, total);
 
@@ -209,6 +334,7 @@ pub fn runAllTests(
         .options = options,
         .print_mutex = .{},
         .stdlib_modules = stdlib_modules,
+        .stdlib_error_detected = std.atomic.Value(bool).init(false),
     };
 
     // Spawn worker threads
@@ -265,8 +391,20 @@ fn runTestsSequential(
     var passed: usize = 0;
     var failed: usize = 0;
     var skipped = initial_skipped;
+    var stdlib_error_encountered = false;
 
     for (fragments, 0..) |fragment, i| {
+        // Skip remaining tests if we've encountered a stdlib error
+        if (stdlib_error_encountered) {
+            results[i] = .{
+                .name = fragment.name,
+                .status = .skipped,
+                .message = null,
+            };
+            skipped += 1;
+            continue;
+        }
+
         const result = runTest(allocator, fragment, options, stdlib_modules);
         results[i] = result;
 
@@ -282,6 +420,12 @@ fn runTestsSequential(
                 std.debug.print("\nFAIL: {s}\n", .{fragment.name});
                 if (result.message) |msg| {
                     std.debug.print("  {s}\n", .{msg});
+
+                    // Check if error is from stdlib
+                    if (std.mem.indexOf(u8, msg, "stdlib/") != null) {
+                        stdlib_error_encountered = true;
+                        std.debug.print("\nError in stdlib detected. Skipping remaining tests.\n", .{});
+                    }
                 }
             },
             .skipped => {
@@ -302,6 +446,21 @@ fn runTestsSequential(
 /// Worker thread function
 fn workerThread(ctx: *WorkerContext) void {
     while (true) {
+        // Check if a stdlib error was detected
+        if (ctx.stdlib_error_detected.load(.seq_cst)) {
+            // Mark remaining tests as skipped
+            const index = ctx.next_index.fetchAdd(1, .seq_cst);
+            if (index >= ctx.fragments.len) {
+                break;
+            }
+            ctx.results[index] = .{
+                .name = ctx.fragments[index].name,
+                .status = .skipped,
+                .message = null,
+            };
+            continue;
+        }
+
         // Atomically get next test index
         const index = ctx.next_index.fetchAdd(1, .seq_cst);
         if (index >= ctx.fragments.len) {
@@ -327,6 +486,15 @@ fn workerThread(ctx: *WorkerContext) void {
                     std.debug.print("\nFAIL: {s}\n", .{fragment.name});
                     if (result.message) |msg| {
                         std.debug.print("  {s}\n", .{msg});
+
+                        // Check if error is from stdlib
+                        if (std.mem.indexOf(u8, msg, "stdlib/") != null) {
+                            // Use compare-and-swap to only print message once
+                            const was_detected = ctx.stdlib_error_detected.swap(true, .seq_cst);
+                            if (!was_detected) {
+                                std.debug.print("\nError in stdlib detected. Skipping remaining tests.\n", .{});
+                            }
+                        }
                     }
                 },
                 .skipped => {},
@@ -493,6 +661,7 @@ fn runTest(
     sources[stdlib_modules.len] = .{ .path = fragment.file_path, .content = fragment.source };
 
     var compile_result: compiler.CompileResult = .{ .error_info = null };
+    defer compile_result.deinit(compile_allocator);
     const compile_options = compiler.CompileOptions{ .track_allocs = track_allocs };
 
     const compile_success = if (compiler.compileMultiple(
@@ -560,7 +729,26 @@ fn runTest(
             // For success tests, compilation should succeed
             if (!compile_success) {
                 const msg = if (compile_result.error_info) |err| blk: {
-                    break :blk std.fmt.allocPrint(allocator, "Compilation failed: {s}", .{err.message}) catch "Compilation failed";
+                    const file_path = err.location.file orelse "";
+                    const normalized_path = normalizePath(allocator, file_path) catch file_path;
+                    defer if (normalized_path.ptr != file_path.ptr) allocator.free(normalized_path);
+
+                    if (err.code) |code| {
+                        break :blk std.fmt.allocPrint(allocator, "error {s}: {s}:{d}:{d}: {s}", .{
+                            code.format(),
+                            normalized_path,
+                            err.location.line,
+                            err.location.column,
+                            err.message,
+                        }) catch "Compilation failed";
+                    } else {
+                        break :blk std.fmt.allocPrint(allocator, "internal error: {s}:{d}:{d}: {s}", .{
+                            normalized_path,
+                            err.location.line,
+                            err.location.column,
+                            err.message,
+                        }) catch "Compilation failed";
+                    }
                 } else "Compilation failed";
                 return .{ .name = fragment.name, .status = .failed, .message = msg };
             }

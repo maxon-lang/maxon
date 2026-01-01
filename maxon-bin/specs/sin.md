@@ -7,23 +7,20 @@ category: math-intrinsic
 
 ## Developer Notes
 
-The `sin` function is implemented as a **runtime function** rather than an LLVM intrinsic.
+**Defined in:** `stdlib/Math.maxon`
+
+The `sin` function is implemented as a **static function** in the `Math` type.
 
 **Implementation Details:**
-- Keyword category: `MathIntrinsic` (lexer.cpp:44)
-- Intrinsic kind: `MathIntrinsicKind::RuntimeFunction`
-- Links to external `sin` function from `maxon-runtime`
-- Codegen: Uses `getRuntimeFunction()` to declare/link the runtime function (codegen.cpp:1115-1117)
-- The runtime function has signature: `double sin(double)`
-
-**Type System:**
+- Implemented using Taylor series expansion for sine
+- Accurate for typical use cases
 - Input: `float` (Maxon's float maps to LLVM double)
 - Output: `float`
 - Participates in implicit int→float promotion
 
 **Related Functions:**
-- `cos` - cosine function (also runtime)
-- `tan` - tangent function (also runtime)
+- `Math.cos` - cosine function
+- `Math.tan` - tangent function
 
 ## Documentation
 
@@ -31,7 +28,7 @@ The `sin` function is implemented as a **runtime function** rather than an LLVM 
 
 Calculate the sine of an angle (in radians).
 
-**Signature:** `sin(x float) float`
+**Signature:** `Math.sin(x float) float`
 
 **Parameters:**
 - `x` - The angle in radians
@@ -42,17 +39,17 @@ Calculate the sine of an angle (in radians).
 
 ```maxon
 var x = 0.0
-var y = sin(x)       // 0.0
+var y = Math.sin(x)       // 0.0
 
 // Note: π ≈ 3.14159265
 var halfPi = 1.5708  // π/2
-var z = sin(halfPi)  // 1.0 (approximately)
+var z = Math.sin(halfPi)  // 1.0 (approximately)
 ```
 **Notes:**
 - The function works with radians, not degrees
 - To convert degrees to radians: `radians = degrees * (π / 180)`
-- `sin(0.0)` returns exactly `0.0`
-- `sin(π/2)` returns approximately `1.0`
+- `Math.sin(0.0)` returns exactly `0.0`
+- `Math.sin(π/2)` returns approximately `1.0`
 - The sine function oscillates between -1 and 1
 
 ## Tests
@@ -60,10 +57,10 @@ var z = sin(halfPi)  // 1.0 (approximately)
 <!-- test: sin.basic -->
 ```maxon
 function main() returns int
-    var x1 = sin(0.0)
-    var x2 = sin(0.5)
-    var x3 = sin(1.0)
-    var x4 = sin(1.5708)
+    var x1 = Math.sin(0.0)
+    var x2 = Math.sin(0.5)
+    var x3 = Math.sin(1.0)
+    var x4 = Math.sin(1.5708)
     print("{x1}\n")
     print("{x2}\n")
     print("{x3}\n")
@@ -84,7 +81,7 @@ end 'main'
 <!-- test: sin.zero -->
 ```maxon
 function main() returns int
-    var result = sin(0.0)
+    var result = Math.sin(0.0)
     if result == 0.0 'check'
         return 0
     end 'check'
@@ -99,7 +96,7 @@ end 'main'
 ```maxon
 function main() returns int
     var x = 0  // int
-    var result = sin(x)  // x promoted to 0.0
+    var result = Math.sin(x)  // x promoted to 0.0
     if result == 0.0 'check'
         return 0
     end 'check'
