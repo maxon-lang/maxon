@@ -257,6 +257,35 @@ pub const AstToIr = struct {
     /// Layout: buffer(8) + len(8) + capacity(8)
     const MANAGED_ARRAY_SIZE: i32 = 24;
 
+    /// Allocate a __ManagedArray on the stack and initialize it as empty (buffer=null, len=0, capacity=0).
+    fn emitEmptyManagedArray(self: *AstToIr) !ir.Value {
+        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
+        try self.initManagedArrayEmpty(managed_ptr);
+        return managed_ptr;
+    }
+
+    /// Initialize an existing __ManagedArray as empty (buffer=null, len=0, capacity=0).
+    fn initManagedArrayEmpty(self: *AstToIr, managed_ptr: ir.Value) !void {
+        const null_ptr = try self.func().emitConstI64(0);
+        try self.func().emitStore(managed_ptr, null_ptr); // buffer at offset 0
+        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 8), null_ptr); // len
+        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 16), null_ptr); // capacity
+    }
+
+    /// Initialize an existing __ManagedArray with buffer, length, and capacity values.
+    fn initManagedArray(self: *AstToIr, managed_ptr: ir.Value, buffer: ir.Value, len: ir.Value, capacity: ir.Value) !void {
+        try self.func().emitStore(managed_ptr, buffer); // buffer at offset 0
+        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 8), len);
+        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 16), capacity);
+    }
+
+    /// Allocate a __ManagedArray on the stack and initialize with buffer, length, and capacity.
+    fn emitManagedArray(self: *AstToIr, buffer: ir.Value, len: ir.Value, capacity: ir.Value) !ir.Value {
+        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
+        try self.initManagedArray(managed_ptr, buffer, len, capacity);
+        return managed_ptr;
+    }
+
     /// Create and initialize a __ManagedString on the stack from string bytes.
     /// Returns a pointer to the allocated struct.
     fn emitManagedStringFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Value {
@@ -2292,7 +2321,7 @@ pub const AstToIr = struct {
                 try self.cleanupTemporaryStrings();
             },
             .method_call => |mcall| {
-                try self.convertMethodCall(mcall);
+                _ = try self.convertMethodCallExpr(mcall);
                 // Clean up any temporary strings created during this call
                 try self.cleanupTemporaryStrings();
             },
@@ -2552,7 +2581,48 @@ pub const AstToIr = struct {
         try self.func().emitRet(ret_value);
     }
 
-    /// Free heap-allocated variables, optionally filtering to only loop-scoped vars
+    /// Free heap memory for a single variable if it owns heap-allocated data.
+    /// Handles heap arrays, stdlib Array types, Strings (with COW decref), and cstrings.
+    /// Set skip_if_parameter to true when cleaning up scope (parameters are caller-owned).
+    fn freeHeapVar(self: *AstToIr, var_info: VarInfo, skip_if_parameter: bool) !void {
+        if (var_info.state == .moved) return;
+
+        if (var_info.ty == .array_type) {
+            const arr_info = var_info.ty.array_type;
+            if (arr_info.storage == .heap) {
+                // var_info.ptr points to a stack slot holding a ptr to __ManagedArray
+                // __ManagedArray layout: [buffer_ptr, len, capacity] at offsets [0, 8, 16]
+                const managed_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                const buffer_ptr = try self.func().emitLoad(managed_ptr, .ptr);
+                try self.func().emitHeapFree(buffer_ptr);
+            }
+        }
+
+        if (var_info.ty == .struct_type) {
+            const struct_name = var_info.ty.struct_type;
+
+            // Handle stdlib Array types (Array$int, etc.)
+            if (std.mem.startsWith(u8, struct_name, "Array$")) {
+                if (skip_if_parameter and var_info.is_parameter) return;
+                // Buffer pointer is at offset 0 within the inlined __ManagedArray
+                const buf_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                try self.func().emitHeapFree(buf_ptr);
+            }
+
+            // Handle String type with COW semantics
+            if (self.isStringType(var_info.ty)) {
+                if (skip_if_parameter and var_info.is_parameter) return;
+                try self.emitStringDecref(var_info.ptr);
+            }
+
+            // Handle cstring type cleanup
+            if (std.mem.eql(u8, struct_name, "cstring")) {
+                if (skip_if_parameter and var_info.is_parameter) return;
+                try self.emitCstringCleanup(var_info.ptr);
+            }
+        }
+    }
+
     fn freeHeapVars(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(OwnershipState)) !void {
         // Borrow checking: first clear borrows from slice variables that are going out of scope
         self.clearSliceBorrows(exclude_vars);
@@ -2565,50 +2635,7 @@ pub const AstToIr = struct {
             if (exclude_vars) |excluded| {
                 if (excluded.contains(entry.key_ptr.*)) continue;
             }
-            const var_info = entry.value_ptr.*;
-            if (var_info.ty == .array_type) {
-                const arr_info = var_info.ty.array_type;
-                if (arr_info.storage == .heap and var_info.state != .moved) {
-                    // var_info.ptr points to a stack slot holding a ptr to __ManagedArray
-                    // __ManagedArray layout: [buffer_ptr, len, capacity] at offsets [0, 8, 16]
-                    // We need to free the buffer_ptr, not the __ManagedArray itself
-                    const managed_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                    const buffer_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-                    try self.func().emitHeapFree(buffer_ptr);
-                }
-            }
-            // Handle stdlib Array types (Array$int, etc.)
-            // These contain an inlined __ManagedArray with a heap-allocated buffer
-            if (var_info.ty == .struct_type) {
-                if (std.mem.startsWith(u8, var_info.ty.struct_type, "Array$") and var_info.state != .moved) {
-                    // Only free if we own the memory (not a borrowed parameter)
-                    if (var_info.is_parameter) continue;
-
-                    // var_info.ptr points to the Array struct (32 bytes)
-                    // The managed field (__ManagedArray) is inlined at offset 0
-                    // The _buffer field (heap ptr) is at offset 0 within __ManagedArray
-                    // So the buffer pointer is at the very start of the struct
-                    const buf_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                    try self.func().emitHeapFree(buf_ptr);
-                }
-                // Handle String type with COW semantics
-                // Uses decref instead of direct free to support reference counting
-                if (self.isStringType(var_info.ty) and var_info.state != .moved) {
-                    // Only free if we own the memory (not a borrowed parameter)
-                    if (var_info.is_parameter) continue;
-
-                    // Use COW decref which checks heap mode and frees if refcount reaches 0
-                    try self.emitStringDecref(var_info.ptr);
-                }
-                // Handle cstring type cleanup
-                // cstring struct: data(8) + length(8) + managed(8)
-                // If managed != null: decref the __ManagedString
-                // If managed == null: free the data pointer (cstring owns its buffer from slice copy)
-                if (std.mem.eql(u8, var_info.ty.struct_type, "cstring") and var_info.state != .moved) {
-                    if (var_info.is_parameter) continue;
-                    try self.emitCstringCleanup(var_info.ptr);
-                }
-            }
+            try self.freeHeapVar(entry.value_ptr.*, true);
         }
     }
 
@@ -2637,30 +2664,8 @@ pub const AstToIr = struct {
             // (e.g., result = result.concat(b) needs result's buffer while evaluating RHS)
             const value_typed = try self.convertExpression(assign.value);
 
-            // For heap arrays, free old memory AFTER evaluating RHS
-            if (var_info.ty == .array_type) {
-                const arr_info = var_info.ty.array_type;
-                if (arr_info.storage == .heap and var_info.state != .moved) {
-                    // var_info.ptr points to a stack slot holding a ptr to __ManagedArray
-                    // __ManagedArray layout: [buffer_ptr, len, capacity] at offsets [0, 8, 16]
-                    // We need to free the buffer_ptr, not the __ManagedArray itself
-                    const managed_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                    const buffer_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-                    try self.func().emitHeapFree(buffer_ptr);
-                }
-            }
-            // For stdlib Arrays/Strings, free old buffer AFTER evaluating RHS
-            if (var_info.ty == .struct_type) {
-                if (std.mem.startsWith(u8, var_info.ty.struct_type, "Array$") and var_info.state != .moved) {
-                    // Load the buffer pointer from offset 0 and free it
-                    const old_buf_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                    try self.func().emitHeapFree(old_buf_ptr);
-                }
-                // For String, use COW decref AFTER evaluating RHS
-                if (self.isStringType(var_info.ty) and var_info.state != .moved) {
-                    try self.emitStringDecref(var_info.ptr);
-                }
-            }
+            // Free old heap memory AFTER evaluating RHS
+            try self.freeHeapVar(var_info.*, false);
 
             const is_reference = var_info.ty == .struct_type or var_info.ty == .array_type or var_info.ty == .optional_type;
             if (is_reference and !var_info.uses_slot) {
@@ -3097,7 +3102,6 @@ pub const AstToIr = struct {
             }
         }
 
-
         // Pop labeled loop from stack and patch its sentinel if we pushed one
         if (while_stmt.label.len > 0) {
             const labeled_loop = self.labeled_loops.pop().?;
@@ -3296,7 +3300,6 @@ pub const AstToIr = struct {
                 }
             }
         }
-
 
         // Pop labeled loop from stack and patch its sentinel if we pushed one
         if (for_stmt.label.len > 0) {
@@ -5196,23 +5199,9 @@ pub const AstToIr = struct {
 
         debug.astToIr("InitableFromArrayLiteral: {s} with {d} elements", .{ type_name, elements.len });
 
-        // Allocate __ManagedArray on stack
-        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
-
-        if (elements.len == 0) {
-            // Empty array: buffer=null, len=0, capacity=0
-            const null_ptr = try self.func().emitConstI64(0);
-            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, null_ptr, 0);
-            try self.func().emitStore(buffer_slot, null_ptr);
-
-            const len_offset = try self.func().emitConstI64(1);
-            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
-            try self.func().emitStore(len_slot, null_ptr);
-
-            const cap_offset = try self.func().emitConstI64(2);
-            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 8);
-            try self.func().emitStore(cap_slot, null_ptr);
-        } else {
+        const managed_ptr = if (elements.len == 0)
+            try self.emitEmptyManagedArray()
+        else blk: {
             // Allocate buffer for elements (on heap for ownership)
             const elem_count = try self.func().emitConstI64(@intCast(elements.len));
             const elem_size: i64 = 8; // All elements are 8 bytes (i64, f64, or pointer)
@@ -5227,21 +5216,8 @@ pub const AstToIr = struct {
                 try self.func().emitStore(elem_ptr, typed.value);
             }
 
-            // Store buffer pointer into __ManagedArray
-            const zero = try self.func().emitConstI64(0);
-            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, zero, 0);
-            try self.func().emitStore(buffer_slot, buffer);
-
-            // Store length
-            const len_offset = try self.func().emitConstI64(1);
-            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
-            try self.func().emitStore(len_slot, elem_count);
-
-            // Store capacity (same as length for literals)
-            const cap_offset = try self.func().emitConstI64(2);
-            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 8);
-            try self.func().emitStore(cap_slot, elem_count);
-        }
+            break :blk try self.emitManagedArray(buffer, elem_count, elem_count);
+        };
 
         // Call Type$init(managed) - the static init method
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
@@ -5312,31 +5288,12 @@ pub const AstToIr = struct {
 
         debug.astToIr("InitableFromMapLiteral: {s} with {d} entries", .{ type_name, entries.len });
 
-        // Allocate two __ManagedArrays on stack
-        const keys_managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
-        const values_managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
+        var keys_managed_ptr: ir.Value = undefined;
+        var values_managed_ptr: ir.Value = undefined;
 
         if (entries.len == 0) {
-            // Empty map: buffer=null, len=0, capacity=0 for both arrays
-            const null_ptr = try self.func().emitConstI64(0);
-
-            // Initialize keys __ManagedArray
-            const keys_buffer_slot = try self.func().emitGetElemPtr(keys_managed_ptr, null_ptr, 0);
-            try self.func().emitStore(keys_buffer_slot, null_ptr);
-            const len_offset = try self.func().emitConstI64(1);
-            const keys_len_slot = try self.func().emitGetElemPtr(keys_managed_ptr, len_offset, 8);
-            try self.func().emitStore(keys_len_slot, null_ptr);
-            const cap_offset = try self.func().emitConstI64(2);
-            const keys_cap_slot = try self.func().emitGetElemPtr(keys_managed_ptr, cap_offset, 8);
-            try self.func().emitStore(keys_cap_slot, null_ptr);
-
-            // Initialize values __ManagedArray
-            const values_buffer_slot = try self.func().emitGetElemPtr(values_managed_ptr, null_ptr, 0);
-            try self.func().emitStore(values_buffer_slot, null_ptr);
-            const values_len_slot = try self.func().emitGetElemPtr(values_managed_ptr, len_offset, 8);
-            try self.func().emitStore(values_len_slot, null_ptr);
-            const values_cap_slot = try self.func().emitGetElemPtr(values_managed_ptr, cap_offset, 8);
-            try self.func().emitStore(values_cap_slot, null_ptr);
+            keys_managed_ptr = try self.emitEmptyManagedArray();
+            values_managed_ptr = try self.emitEmptyManagedArray();
         } else {
             // Allocate buffers for keys and values on heap
             const elem_count = try self.func().emitConstI64(@intCast(entries.len));
@@ -5358,24 +5315,8 @@ pub const AstToIr = struct {
                 try self.func().emitStore(value_ptr, value_typed.value);
             }
 
-            // Initialize keys __ManagedArray: {buffer, len, capacity}
-            const zero = try self.func().emitConstI64(0);
-            const keys_buffer_slot = try self.func().emitGetElemPtr(keys_managed_ptr, zero, 0);
-            try self.func().emitStore(keys_buffer_slot, keys_buffer);
-            const len_offset = try self.func().emitConstI64(1);
-            const keys_len_slot = try self.func().emitGetElemPtr(keys_managed_ptr, len_offset, 8);
-            try self.func().emitStore(keys_len_slot, elem_count);
-            const cap_offset = try self.func().emitConstI64(2);
-            const keys_cap_slot = try self.func().emitGetElemPtr(keys_managed_ptr, cap_offset, 8);
-            try self.func().emitStore(keys_cap_slot, elem_count);
-
-            // Initialize values __ManagedArray: {buffer, len, capacity}
-            const values_buffer_slot = try self.func().emitGetElemPtr(values_managed_ptr, zero, 0);
-            try self.func().emitStore(values_buffer_slot, values_buffer);
-            const values_len_slot = try self.func().emitGetElemPtr(values_managed_ptr, len_offset, 8);
-            try self.func().emitStore(values_len_slot, elem_count);
-            const values_cap_slot = try self.func().emitGetElemPtr(values_managed_ptr, cap_offset, 8);
-            try self.func().emitStore(values_cap_slot, elem_count);
+            keys_managed_ptr = try self.emitManagedArray(keys_buffer, elem_count, elem_count);
+            values_managed_ptr = try self.emitManagedArray(values_buffer, elem_count, elem_count);
         }
 
         // Call Type$init(keys, values) - the static init method from InitableFromMapLiteral interface
@@ -5584,23 +5525,8 @@ pub const AstToIr = struct {
     fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) ConvertError!TypedValue {
         const elements = arr_lit.elements;
 
-        // Allocate __ManagedArray on stack (24 bytes: buffer ptr, len, capacity)
-        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
-
         if (elements.len == 0) {
-            // Empty array: buffer=null, len=0, capacity=0
-            const null_ptr = try self.func().emitConstI64(0);
-            const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, null_ptr, 0);
-            try self.func().emitStore(buffer_slot, null_ptr);
-
-            const len_offset = try self.func().emitConstI64(1);
-            const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
-            try self.func().emitStore(len_slot, null_ptr);
-
-            const cap_offset = try self.func().emitConstI64(2);
-            const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 8);
-            try self.func().emitStore(cap_slot, null_ptr);
-
+            const managed_ptr = try self.emitEmptyManagedArray();
             return .{
                 .value = managed_ptr,
                 .ty = .{ .array_type = .{ .element_type = .i64, .size = 0, .storage = .heap } },
@@ -5643,20 +5569,8 @@ pub const AstToIr = struct {
             }
         }
 
-        // Store buffer pointer into __ManagedArray
-        const zero = try self.func().emitConstI64(0);
-        const buffer_slot = try self.func().emitGetElemPtr(managed_ptr, zero, 0);
-        try self.func().emitStore(buffer_slot, buffer);
-
-        // Store length
-        const len_offset = try self.func().emitConstI64(1);
-        const len_slot = try self.func().emitGetElemPtr(managed_ptr, len_offset, 8);
-        try self.func().emitStore(len_slot, elem_count);
-
-        // Store capacity (same as length for literals)
-        const cap_offset = try self.func().emitConstI64(2);
-        const cap_slot = try self.func().emitGetElemPtr(managed_ptr, cap_offset, 8);
-        try self.func().emitStore(cap_slot, elem_count);
+        // Initialize __ManagedArray with buffer, length, and capacity
+        const managed_ptr = try self.emitManagedArray(buffer, elem_count, elem_count);
 
         return .{
             .value = managed_ptr,
@@ -5695,10 +5609,6 @@ pub const AstToIr = struct {
         var type_args = [_][]const u8{ key_type_name, value_type_name };
         const map_type_name = try self.getOrCreateMonomorphizedType("Map", &type_args);
 
-        // Create two __ManagedArrays on stack
-        const keys_managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
-        const values_managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
-
         // Allocate buffers for keys and values on heap
         const elem_count = try self.func().emitConstI64(@intCast(entries.len));
         const elem_size: i64 = 8; // All elements are 8 bytes
@@ -5719,24 +5629,9 @@ pub const AstToIr = struct {
             try self.func().emitStore(value_ptr, value_typed.value);
         }
 
-        // Initialize keys __ManagedArray: {buffer, len, capacity}
-        const zero = try self.func().emitConstI64(0);
-        const keys_buffer_slot = try self.func().emitGetElemPtr(keys_managed_ptr, zero, 0);
-        try self.func().emitStore(keys_buffer_slot, keys_buffer);
-        const len_offset = try self.func().emitConstI64(1);
-        const keys_len_slot = try self.func().emitGetElemPtr(keys_managed_ptr, len_offset, 8);
-        try self.func().emitStore(keys_len_slot, elem_count);
-        const cap_offset = try self.func().emitConstI64(2);
-        const keys_cap_slot = try self.func().emitGetElemPtr(keys_managed_ptr, cap_offset, 8);
-        try self.func().emitStore(keys_cap_slot, elem_count);
-
-        // Initialize values __ManagedArray: {buffer, len, capacity}
-        const values_buffer_slot = try self.func().emitGetElemPtr(values_managed_ptr, zero, 0);
-        try self.func().emitStore(values_buffer_slot, values_buffer);
-        const values_len_slot = try self.func().emitGetElemPtr(values_managed_ptr, len_offset, 8);
-        try self.func().emitStore(values_len_slot, elem_count);
-        const values_cap_slot = try self.func().emitGetElemPtr(values_managed_ptr, cap_offset, 8);
-        try self.func().emitStore(values_cap_slot, elem_count);
+        // Create __ManagedArrays for keys and values
+        const keys_managed_ptr = try self.emitManagedArray(keys_buffer, elem_count, elem_count);
+        const values_managed_ptr = try self.emitManagedArray(values_buffer, elem_count, elem_count);
 
         // Build init function name: Map$K$V$init (static init from InitableFromMapLiteral interface)
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{map_type_name});
@@ -5996,24 +5891,10 @@ pub const AstToIr = struct {
 
         // Build __ManagedArray with the given capacity
         // For Array of N int, len = capacity so all elements are immediately accessible
-        // Allocate __ManagedArray on stack
-        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
-
-        // Allocate buffer on heap: capacity * 8 bytes (all elements are 8 bytes)
         const elem_size = try self.func().emitConstI64(8);
         const buffer_size = try self.func().emitBinaryOp(.mul, capacity_typed.value, elem_size, .i64);
         const buffer = try self.func().emitHeapAlloc(buffer_size);
-
-        // Store buffer pointer at offset 0
-        try self.func().emitStore(managed_ptr, buffer);
-
-        // Store len = capacity at offset 8 (arrays have all elements accessible)
-        const len_ptr = try self.func().emitGetFieldPtr(managed_ptr, 8);
-        try self.func().emitStore(len_ptr, capacity_typed.value);
-
-        // Store capacity at offset 16
-        const cap_ptr = try self.func().emitGetFieldPtr(managed_ptr, 16);
-        try self.func().emitStore(cap_ptr, capacity_typed.value);
+        const managed_ptr = try self.emitManagedArray(buffer, capacity_typed.value, capacity_typed.value);
 
         // Call Array$init(result_ptr, managed_ptr) via InitableFromArrayLiteral interface
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
@@ -6039,47 +5920,6 @@ pub const AstToIr = struct {
             .value = result_ptr,
             .ty = .{ .struct_type = array_type_name },
         };
-    }
-
-    fn convertMethodCall(self: *AstToIr, mcall: ast.MethodCallExpr) ConvertError!void {
-        // Check if base is a type name (static method call: TypeName.method())
-        if (mcall.base.* == .identifier) {
-            const base_name = mcall.base.identifier;
-            if (self.type_map.contains(base_name)) {
-                _ = try self.emitMethodCall(base_name, mcall.method_name, mcall.args, null);
-                return;
-            }
-        }
-
-        // Convert base and get its type
-        const base_typed = try self.convertExpression(mcall.base.*);
-
-        // Check if this is a struct type with methods
-        if (base_typed.ty == .struct_type) {
-            // Use emitMethodCall which handles sret correctly for struct-returning methods
-            _ = try self.emitMethodCall(base_typed.ty.struct_type, mcall.method_name, mcall.args, base_typed.value);
-            return;
-        }
-
-        // Check if this is an array type - route to Array$ElementType methods
-        if (base_typed.ty == .array_type) {
-            const arr_info = base_typed.ty.array_type;
-            // Get element type name: use struct name if available, else use ir.Type.toMaxonName()
-            const elem_name = arr_info.element_struct_type orelse arr_info.element_type.toMaxonName();
-            const array_type_name = try std.fmt.allocPrint(self.allocator, "Array${s}", .{elem_name});
-            try self.module.trackString(array_type_name);
-
-            // Trigger monomorphization to create Array$ElementType and its methods
-            _ = self.getOrCreateMonomorphizedType("Array", &[_][]const u8{elem_name}) catch |e| {
-                debug.astToIr("note: could not monomorphize Array${s}: {}", .{ elem_name, e });
-            };
-            _ = try self.emitMethodCall(array_type_name, mcall.method_name, mcall.args, base_typed.value);
-            return;
-        }
-
-        debug.astToIr("error: method call on non-struct type", .{});
-        self.reportError(.E003, "method call on non-struct type in statement");
-        return error.SemanticError;
     }
 
     /// Emit a method call (static or instance)
