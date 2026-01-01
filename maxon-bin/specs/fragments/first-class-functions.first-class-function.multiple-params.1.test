@@ -1,0 +1,57 @@
+// Test: first-class-functions.first-class-function.multiple-params.1
+function calculate(f (int, int) returns int, a int, b int) returns int
+    return f(a, b)
+end 'calculate'
+
+function add(x int, y int) returns int
+    return x + y
+end 'add'
+
+function main() returns int
+    return calculate(add, 15, 27)
+end 'main'
+---
+ExitCode: 42
+---
+function calculate() -> i64 {
+entry:
+    %f = param ptr 0
+    %f.1 = alloca ptr
+    store %f.1 %f
+    %a = param i64 1
+    %a.1 = alloca ptr
+    store %a.1 %a
+    %b = param i64 2
+    %b.1 = alloca ptr
+    store %b.1 %b
+    %tmp_load = load ptr %f.1
+    %tmp_load.1 = load i64 %a.1
+    %tmp_load.2 = load i64 %b.1
+    %tmp_call_ind = call.indirect i64 %tmp_load(%tmp_load.1, %tmp_load.2)
+    ret %tmp_call_ind
+}
+
+function add() -> i64 {
+entry:
+    %x = param i64 0
+    %x.1 = alloca ptr
+    store %x.1 %x
+    %y = param i64 1
+    %y.1 = alloca ptr
+    store %y.1 %y
+    %tmp_load = load i64 %x.1
+    %tmp_load.1 = load i64 %y.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    ret %tmp_add
+}
+
+function main() -> i64 {
+entry:
+    %tmp_funcaddr = func.addr ptr @add
+    %tmp_const = const.i64 i64 15
+    %tmp_const.1 = const.i64 i64 27
+    %tmp_call = call i64 @calculate(%tmp_funcaddr, %tmp_const, %tmp_const.1)
+    ret %tmp_call
+}
+
+---

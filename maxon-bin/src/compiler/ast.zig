@@ -70,10 +70,17 @@ pub const GenericTypeExpr = struct {
     type_args: []const []const u8, // [int], [string, int], etc.
 };
 
+pub const FunctionTypeExpr = struct {
+    param_types: []const TypeExpr, // Parameter types
+    param_names: []const ?[]const u8, // Optional parameter names for documentation
+    return_type: ?*const TypeExpr, // null for void
+};
+
 pub const TypeExpr = union(enum) {
     simple: []const u8, // int, float, MyStruct
     generic: GenericTypeExpr, // Array of int, Map of string int
     optional: *const TypeExpr, // T or nil
+    function_type: FunctionTypeExpr, // (int, string) returns bool
 };
 
 pub const ParamDecl = struct {

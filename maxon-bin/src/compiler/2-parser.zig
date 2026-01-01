@@ -426,7 +426,12 @@ pub const Parser = struct {
         return error.UnexpectedToken;
     }
 
-    fn parseTypeExpr(self: *Parser) !ast.TypeExpr {
+    fn parseTypeExpr(self: *Parser) ParseError!ast.TypeExpr {
+        // Check for function type: (params) returns ReturnType
+        if (self.check(.lparen)) {
+            return try self.parseFunctionTypeExpr();
+        }
+
         var base_type: ast.TypeExpr = undefined;
 
         // Parse type name (may include "Array" which is treated as a generic type)
@@ -505,6 +510,96 @@ pub const Parser = struct {
         }
 
         return base_type;
+    }
+
+    /// Parse function type: (int, string) returns bool or (x int, y int) returns int
+    fn parseFunctionTypeExpr(self: *Parser) ParseError!ast.TypeExpr {
+        _ = try self.expect(.lparen);
+
+        var param_types: std.ArrayListUnmanaged(ast.TypeExpr) = .empty;
+        errdefer param_types.deinit(self.allocator);
+        var param_names: std.ArrayListUnmanaged(?[]const u8) = .empty;
+        errdefer param_names.deinit(self.allocator);
+
+        // Parse parameter list
+        if (!self.check(.rparen)) {
+            // Parse first parameter
+            const first_param = try self.parseFunctionTypeParam();
+            try param_types.append(self.allocator, first_param.type_expr);
+            try param_names.append(self.allocator, first_param.name);
+
+            // Parse additional parameters
+            while (self.check(.comma)) {
+                _ = self.advance(); // consume comma
+                const param = try self.parseFunctionTypeParam();
+                try param_types.append(self.allocator, param.type_expr);
+                try param_names.append(self.allocator, param.name);
+            }
+        }
+
+        _ = try self.expect(.rparen);
+
+        // Parse optional return type
+        var return_type: ?*const ast.TypeExpr = null;
+        if (self.check(.returns)) {
+            _ = self.advance(); // consume 'returns'
+            const ret = try self.parseTypeExpr();
+            const ret_ptr = try self.allocator.create(ast.TypeExpr);
+            ret_ptr.* = ret;
+            return_type = ret_ptr;
+        }
+
+        const base_type: ast.TypeExpr = .{ .function_type = .{
+            .param_types = try param_types.toOwnedSlice(self.allocator),
+            .param_names = try param_names.toOwnedSlice(self.allocator),
+            .return_type = return_type,
+        } };
+
+        // Check for optional: ((int) returns int) or nil
+        if (self.check(.@"or")) {
+            _ = self.advance(); // consume 'or'
+            _ = try self.expect(.nil);
+
+            const wrapped = try self.allocator.create(ast.TypeExpr);
+            wrapped.* = base_type;
+            return .{ .optional = wrapped };
+        }
+
+        return base_type;
+    }
+
+    const FunctionTypeParam = struct {
+        name: ?[]const u8,
+        type_expr: ast.TypeExpr,
+    };
+
+    /// Parse a single parameter in a function type: either "Type" or "name Type"
+    fn parseFunctionTypeParam(self: *Parser) ParseError!FunctionTypeParam {
+        // Could be: "Type" alone OR "name Type"
+        // Look ahead to distinguish: if identifier followed by type-start, first is a name
+        if (self.check(.identifier)) {
+            const first = self.advance();
+
+            // Check if next token starts a type (identifier, int, float, lparen, Array, Map, etc.)
+            const next = self.peek(0);
+            if (next != null) {
+                const next_type = next.?.type;
+                // If followed by another type expression start, first was a parameter name
+                if (next_type == .identifier or next_type == .int or next_type == .float or
+                    next_type == .lparen)
+                {
+                    const type_expr = try self.parseTypeExpr();
+                    return .{ .name = first.text, .type_expr = type_expr };
+                }
+            }
+
+            // Otherwise, first token was the type itself (e.g., a struct name)
+            return .{ .name = null, .type_expr = .{ .simple = first.text } };
+        }
+
+        // Not an identifier, parse as type directly (int, float, etc.)
+        const type_expr = try self.parseTypeExpr();
+        return .{ .name = null, .type_expr = type_expr };
     }
 
     fn parseFunctionWithExport(self: *Parser, is_export: bool) !ast.FunctionDecl {

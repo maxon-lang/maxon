@@ -930,6 +930,10 @@ pub const AstToIr = struct {
                 // Optional size = 8 (tag) + wrapped size
                 return 8 + self.getTypeSize(wrapped.*);
             },
+            .function_type => {
+                // Function pointers are always 8 bytes
+                return 8;
+            },
         };
     }
 
@@ -1020,6 +1024,7 @@ pub const AstToIr = struct {
                         .wrapped = wrapped_value_type.toPrimitiveType(),
                     } };
                 },
+                .function_type => try self.typeExprToValueType(field.type_expr),
             };
             const field_size: i32 = switch (value_type) {
                 .struct_type => |name| blk: {
@@ -1034,6 +1039,7 @@ pub const AstToIr = struct {
                 },
                 .primitive, .enum_type, .array_type => 8, // arrays stored as pointers
                 .optional_type => 8, // optionals stored as pointers to 16-byte structures
+                .function_type => 8, // function pointers are 8 bytes
             };
             fields[i] = .{
                 .name = field.name,
@@ -1315,7 +1321,7 @@ pub const AstToIr = struct {
     /// Resolve a type expression by substituting associated types and Self with their bound types
     fn resolveAssociatedTypeWithSelf(self: *AstToIr, type_expr: ast.TypeExpr, bindings: std.StringHashMapUnmanaged([]const u8), self_type: []const u8) []const u8 {
         _ = self;
-        switch (type_expr) {
+        return switch (type_expr) {
             .simple => |name| {
                 // Handle Self specially
                 if (std.mem.eql(u8, name, "Self")) return self_type;
@@ -1326,15 +1332,14 @@ pub const AstToIr = struct {
                 if (std.mem.eql(u8, g.base_type, "Self")) return self_type;
                 return bindings.get(g.base_type) orelse g.base_type;
             },
-            .optional => |wrapped| {
-                const inner = switch (wrapped.*) {
-                    .simple => |name| if (std.mem.eql(u8, name, "Self")) self_type else bindings.get(name) orelse name,
-                    .generic => |g| if (std.mem.eql(u8, g.base_type, "Self")) self_type else bindings.get(g.base_type) orelse g.base_type,
-                    .optional => "?",
-                };
-                return inner;
+            .optional => |wrapped| switch (wrapped.*) {
+                .simple => |name| if (std.mem.eql(u8, name, "Self")) self_type else bindings.get(name) orelse name,
+                .generic => |g| if (std.mem.eql(u8, g.base_type, "Self")) self_type else bindings.get(g.base_type) orelse g.base_type,
+                .optional => "?",
+                .function_type => "(fn)",
             },
-        }
+            .function_type => "(fn)",
+        };
     }
 
     /// Check if a type conforms to a specific interface by name
@@ -1372,6 +1377,11 @@ pub const AstToIr = struct {
                     };
                     break :blk .ptr;
                 },
+                .function_type => {
+                    // Function types are returned as pointers
+                    ret_value_type = try self.typeExprToValueType(rt);
+                    break :blk .ptr;
+                },
             }
         } else .void;
 
@@ -1405,7 +1415,7 @@ pub const AstToIr = struct {
         return switch (type_expr) {
             .simple => |name| name,
             .generic => |gen| gen.base_type,
-            .optional => null,
+            .optional, .function_type => null,
         };
     }
 
@@ -1418,7 +1428,9 @@ pub const AstToIr = struct {
                 .simple => |name| name,
                 .generic => |gen| gen.base_type,
                 .optional => "?",
+                .function_type => "(fn)",
             },
+            .function_type => "(fn)",
         };
     }
 
@@ -1456,6 +1468,29 @@ pub const AstToIr = struct {
                 return .{ .optional_type = .{
                     .wrapped = wrapped_value_type.toPrimitiveType(),
                     .wrapped_struct_type = if (wrapped_value_type == .struct_type) wrapped_value_type.struct_type else null,
+                } };
+            },
+            .function_type => |ft| {
+                // Convert function type expression to ValueType
+                const param_types = try self.allocator.alloc(ValueType, ft.param_types.len);
+                for (ft.param_types, 0..) |pt, i| {
+                    param_types[i] = try self.typeExprToValueType(pt);
+                }
+
+                var return_type: ?*const ValueType = null;
+                var return_ir_type: ir.Type = .void;
+                if (ft.return_type) |rt| {
+                    const ret_vt = try self.typeExprToValueType(rt.*);
+                    const ret_ptr = try self.allocator.create(ValueType);
+                    ret_ptr.* = ret_vt;
+                    return_type = ret_ptr;
+                    return_ir_type = ret_vt.toPrimitiveType();
+                }
+
+                return .{ .function_type = .{
+                    .param_types = param_types,
+                    .return_type = return_type,
+                    .return_ir_type = return_ir_type,
                 } };
             },
         }
@@ -1551,6 +1586,7 @@ pub const AstToIr = struct {
                 },
                 .primitive, .enum_type, .array_type => 8,
                 .optional_type => 8,
+                .function_type => 8, // Function pointers are 8 bytes
             };
 
             fields[i] = .{
@@ -1655,6 +1691,10 @@ pub const AstToIr = struct {
                             .wrapped_struct_type = wrapped_struct_name,
                         },
                     };
+                    break :blk .ptr;
+                },
+                .function_type => {
+                    ret_value_type = try self.typeExprToValueType(rt);
                     break :blk .ptr;
                 },
             }
@@ -1769,6 +1809,10 @@ pub const AstToIr = struct {
                             .wrapped_struct_type = wrapped_struct_name,
                         },
                     };
+                    break :blk .ptr;
+                },
+                .function_type => {
+                    ret_value_type = try self.typeExprToValueType(rt);
                     break :blk .ptr;
                 },
             }
@@ -2007,6 +2051,9 @@ pub const AstToIr = struct {
                         .wrapped_struct_type = wrapped_struct_name,
                     };
                 },
+                .function_type => {
+                    // Function types are returned as pointers, no sret needed
+                },
             }
         }
 
@@ -2017,7 +2064,7 @@ pub const AstToIr = struct {
                     const resolved = self.resolveTypeName(base_name);
                     break :blk try self.lookupIrType(resolved);
                 },
-                .optional => break :blk .ptr,
+                .optional, .function_type => break :blk .ptr,
             }
         } else .void;
 
@@ -2138,6 +2185,9 @@ pub const AstToIr = struct {
                         .wrapped_struct_type = wrapped_struct_name,
                     };
                 },
+                .function_type => {
+                    // Function types are returned as pointers, no sret needed
+                },
             }
         }
 
@@ -2147,7 +2197,7 @@ pub const AstToIr = struct {
                     const base_name = typeExprBaseTypeName(rt).?;
                     break :blk try self.lookupIrType(base_name);
                 },
-                .optional => break :blk .ptr,
+                .optional, .function_type => break :blk .ptr,
             }
         } else .void;
 
@@ -2287,6 +2337,20 @@ pub const AstToIr = struct {
                     false,
                 ));
             },
+            .function_type => {
+                // Function pointers are passed as pointers - store in a stack slot
+                const param_val = try self.func().emitParam(idx, .ptr);
+                try self.func().setValueName(param_val, param.name);
+                const ptr = try self.func().emitAlloca(.ptr);
+                try self.func().setValueName(ptr, param.name);
+                try self.func().emitStore(ptr, param_val);
+                try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                    ptr,
+                    value_type,
+                    true,
+                    true, // uses_slot for function pointers
+                ));
+            },
         }
     }
 
@@ -2349,7 +2413,7 @@ pub const AstToIr = struct {
             const base_type_name: ?[]const u8 = switch (type_ann) {
                 .generic => |gen| gen.base_type,
                 .simple => |name| name,
-                .optional => null,
+                .optional, .function_type => null,
             };
             if (base_type_name) |t_name| {
                 if (self.typeConformsTo(t_name, "InitableFromArrayLiteral")) {
@@ -2365,7 +2429,7 @@ pub const AstToIr = struct {
                                 break :blk try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
                             },
                             .simple => |name| name,
-                            .optional => unreachable,
+                            .optional, .function_type => unreachable,
                         };
                         try self.convertInitableFromArrayLiteralSimple(decl, resolved_type_name);
                         return;
@@ -2387,7 +2451,7 @@ pub const AstToIr = struct {
                                 break :blk try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
                             },
                             .simple => |name| name,
-                            .optional => unreachable,
+                            .optional, .function_type => unreachable,
                         };
                         try self.convertInitableFromMapLiteralSimple(decl, resolved_type_name);
                         return;
@@ -2418,9 +2482,10 @@ pub const AstToIr = struct {
 
         const init_typed = try self.convertExpression(decl.value);
 
-        // Heap arrays and optionals use a slot to hold the pointer
+        // Heap arrays, optionals, and function types use a slot to hold the pointer
         const uses_slot = (init_typed.ty == .array_type and init_typed.ty.array_type.storage == .heap) or
-            init_typed.ty == .optional_type;
+            init_typed.ty == .optional_type or
+            init_typed.ty == .function_type;
 
         // Primitives/enums need alloca for the value; slot types need alloca for the pointer
         const needs_alloca = init_typed.ty == .primitive or init_typed.ty == .enum_type or uses_slot;
@@ -2769,7 +2834,7 @@ pub const AstToIr = struct {
         const base = try self.convertExpression(assign.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type => {
+            .primitive, .array_type, .enum_type, .optional_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAssign: expected struct type for field '{s}'\n", .{assign.field_name});
                 self.reportError(.E006, assign.field_name);
                 return error.UnknownType;
@@ -2898,7 +2963,7 @@ pub const AstToIr = struct {
         if (if_stmt.binding_name) |binding_name| {
             const opt_info = switch (cond_typed.ty) {
                 .optional_type => |info| info,
-                .primitive, .struct_type, .array_type, .enum_type => OptionalInfo{ .wrapped = .i64 },
+                .primitive, .struct_type, .array_type, .enum_type, .function_type => OptionalInfo{ .wrapped = .i64 },
             };
             const wrapped_type = opt_info.wrapped;
             const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
@@ -3212,7 +3277,7 @@ pub const AstToIr = struct {
         // Extract the value from the optional result (offset 8)
         const opt_info = switch (next_result.ty) {
             .optional_type => |info| info,
-            .primitive, .struct_type, .array_type, .enum_type => OptionalInfo{ .wrapped = .i64 },
+            .primitive, .struct_type, .array_type, .enum_type, .function_type => OptionalInfo{ .wrapped = .i64 },
         };
         const value_offset = try self.func().emitConstI64(8);
         const value_ptr = try self.func().emitBinaryOp(.add, next_result.value, value_offset, .ptr);
@@ -3388,7 +3453,7 @@ pub const AstToIr = struct {
         // Get the wrapped type info
         const opt_info = switch (opt_typed.ty) {
             .optional_type => |info| info,
-            .primitive, .struct_type, .array_type, .enum_type => OptionalInfo{ .wrapped = .i64 },
+            .primitive, .struct_type, .array_type, .enum_type, .function_type => OptionalInfo{ .wrapped = .i64 },
         };
         const wrapped_type = opt_info.wrapped;
 
@@ -3566,12 +3631,49 @@ pub const AstToIr = struct {
             }
         }
 
-        // Check if it's a function name - return function pointer
-        if (self.func_map.contains(name)) {
+        // Check if it's a function name - return function pointer with typed function_type
+        if (self.func_map.get(name)) |func_info| {
             const func_ptr = try self.func().emitFuncAddr(name);
+
+            // Build function type from func_info
+            const param_types = try self.allocator.alloc(ValueType, func_info.param_types.len);
+            for (func_info.param_types, 0..) |pt, i| {
+                param_types[i] = pt.ty;
+            }
+
+            // Build return type
+            var return_type: ?*const ValueType = null;
+            if (func_info.return_value_type) |ret_vt| {
+                const ret_ptr = try self.allocator.create(ValueType);
+                ret_ptr.* = ret_vt;
+                return_type = ret_ptr;
+            } else if (func_info.return_type_name) |ret_name| {
+                const ret_ptr = try self.allocator.create(ValueType);
+                if (self.type_map.get(ret_name)) |type_info| {
+                    if (type_info == .struct_type) {
+                        ret_ptr.* = .{ .struct_type = ret_name };
+                    } else if (type_info == .enum_type) {
+                        ret_ptr.* = .{ .enum_type = ret_name };
+                    } else {
+                        ret_ptr.* = .{ .primitive = ret_name };
+                    }
+                } else {
+                    ret_ptr.* = .{ .primitive = ret_name };
+                }
+                return_type = ret_ptr;
+            } else if (func_info.return_type != .void) {
+                const ret_ptr = try self.allocator.create(ValueType);
+                ret_ptr.* = .{ .primitive = func_info.return_type.toMaxonName() };
+                return_type = ret_ptr;
+            }
+
             return .{
                 .value = func_ptr,
-                .ty = .{ .primitive = "ptr" },
+                .ty = .{ .function_type = .{
+                    .param_types = param_types,
+                    .return_type = return_type,
+                    .return_ir_type = func_info.return_type,
+                } },
             };
         }
 
@@ -3825,6 +3927,10 @@ pub const AstToIr = struct {
             },
             .array_type => {
                 self.reportInternalError("cannot convert array to string for interpolation");
+                return error.UnknownType;
+            },
+            .function_type => {
+                self.reportInternalError("cannot convert function to string for interpolation");
                 return error.UnknownType;
             },
         }
@@ -4461,20 +4567,34 @@ pub const AstToIr = struct {
 
         // Register this function in the function map
         try self.func_map.put(self.allocator, anon_name, .{
-            .return_type = return_type,
-            .return_type_name = null,
-            .return_value_type = null,
+            .return_type = body_result.ty.toPrimitiveType(),
+            .return_type_name = body_result.ty.getTypeName(),
+            .return_value_type = body_result.ty,
             .param_types = func_param_types,
         });
 
         // Free the IR types array since it's no longer needed
         self.allocator.free(param_ir_types);
 
+        // Build the function type for the closure
+        const closure_param_types = try self.allocator.alloc(ValueType, clos.params.len);
+        for (clos.params, 0..) |param, i| {
+            closure_param_types[i] = .{ .primitive = param.type_name };
+        }
+
+        // Build return type pointer
+        const ret_ptr = try self.allocator.create(ValueType);
+        ret_ptr.* = body_result.ty;
+
         // Return the function pointer - emit func.addr to get address of the closure function
         const func_ptr = try self.func().emitFuncAddr(anon_name);
         return .{
             .value = func_ptr,
-            .ty = .{ .primitive = "ptr" },
+            .ty = .{ .function_type = .{
+                .param_types = closure_param_types,
+                .return_type = ret_ptr,
+                .return_ir_type = body_result.ty.toPrimitiveType(),
+            } },
         };
     }
 
@@ -4714,7 +4834,7 @@ pub const AstToIr = struct {
         // Get optional type info - must be an optional type
         const opt_info = switch (opt_typed.ty) {
             .optional_type => |info| info,
-            .primitive, .struct_type, .array_type, .enum_type => {
+            .primitive, .struct_type, .array_type, .enum_type, .function_type => {
                 // Left operand is not an optional type - this is an error
                 self.reportError(.E017, "left operand of ?? must be optional type");
                 return error.TypeMismatch;
@@ -4878,7 +4998,7 @@ pub const AstToIr = struct {
         const base = try self.convertExpression(faccess.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type => {
+            .primitive, .array_type, .enum_type, .optional_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
                 self.reportError(.E006, faccess.field_name);
                 return error.UnknownType;
@@ -4905,6 +5025,13 @@ pub const AstToIr = struct {
         } else |builtin_err| switch (builtin_err) {
             error.NotABuiltin => {},
             else => return builtin_err,
+        }
+
+        // Check if calling through a function variable (indirect call)
+        if (self.var_map.get(call.func_name)) |var_info| {
+            if (var_info.ty == .function_type) {
+                return self.convertIndirectCall(call, var_info);
+            }
         }
 
         // If inside a method body, check if calling a method of the current type (implicit self)
@@ -5001,6 +5128,87 @@ pub const AstToIr = struct {
             return .{ .value = result orelse 0, .ty = vtype };
         }
         return .{ .value = result orelse 0, .ty = .{ .primitive = func_info.return_type.toMaxonName() } };
+    }
+
+    /// Convert an indirect call through a function variable
+    fn convertIndirectCall(self: *AstToIr, call: ast.CallExpr, var_info: VarInfo) ConvertError!TypedValue {
+        const func_type_info = var_info.ty.function_type;
+
+        // Load the function pointer from the variable
+        const func_ptr = if (var_info.uses_slot)
+            try self.func().emitLoad(var_info.ptr, .ptr)
+        else
+            var_info.ptr;
+
+        // Mark variable as used
+        if (self.var_map.getPtr(call.func_name)) |info| {
+            info.used = true;
+        }
+
+        // Check argument count
+        if (call.args.len != func_type_info.param_types.len) {
+            const msg = std.fmt.allocPrint(self.allocator, "expected {d} arguments, got {d}", .{ func_type_info.param_types.len, call.args.len }) catch "wrong number of arguments";
+            self.reportError(.E008, msg);
+            return error.WrongArgumentCount;
+        }
+
+        // Check if return type is a struct that needs sret
+        const returns_struct = if (func_type_info.return_type) |ret_vt| blk: {
+            break :blk ret_vt.* == .struct_type or ret_vt.* == .optional_type;
+        } else false;
+
+        var sret_buffer: ?ir.Value = null;
+        const num_args = call.args.len + @as(usize, if (returns_struct) 1 else 0);
+        const args = try self.func().allocator.alloc(ir.Value, num_args);
+
+        // If returning struct, allocate buffer in caller and pass as first arg
+        if (returns_struct) {
+            if (func_type_info.return_type) |ret_vt| {
+                if (ret_vt.* == .optional_type) {
+                    const opt_info = ret_vt.optional_type;
+                    sret_buffer = try self.func().emitAllocaSized(self.getOptionalSize(opt_info));
+                } else if (ret_vt.* == .struct_type) {
+                    const struct_name = ret_vt.struct_type;
+                    const struct_info = try self.lookupStructInfo(struct_name);
+                    sret_buffer = try self.func().emitAllocaSized(struct_info.size);
+                }
+            }
+            if (sret_buffer) |buf| {
+                args[0] = buf;
+            }
+        }
+
+        const arg_offset: usize = if (returns_struct) 1 else 0;
+        for (call.args, 0..) |arg_expr, i| {
+            const arg = try self.convertExpression(arg_expr);
+            var arg_value = arg.value;
+
+            // Implicit int→float promotion
+            if (i < func_type_info.param_types.len) {
+                const param_type = func_type_info.param_types[i];
+                const arg_prim = arg.ty.toPrimitiveType();
+                const param_expects_float = switch (param_type) {
+                    .primitive => |name| std.mem.eql(u8, name, "float"),
+                    else => false,
+                };
+                if (param_expects_float and arg_prim == .i64) {
+                    arg_value = self.func().emitUnaryOp(.sitofp, arg.value, .f64) catch return error.OutOfMemory;
+                }
+            }
+
+            args[i + arg_offset] = arg_value;
+        }
+
+        const result = try self.func().emitCallIndirect(func_ptr, args, func_type_info.return_ir_type);
+
+        // Return the appropriate type
+        if (func_type_info.return_type) |ret_vt| {
+            if (ret_vt.* == .struct_type or ret_vt.* == .optional_type) {
+                return .{ .value = sret_buffer.?, .ty = ret_vt.* };
+            }
+            return .{ .value = result orelse 0, .ty = ret_vt.* };
+        }
+        return .{ .value = result orelse 0, .ty = .{ .primitive = "void" } };
     }
 
     fn checkOwnershipTransfer(self: *AstToIr, func_name: []const u8, arg_expr: ast.Expression, param_idx: usize) ConvertError!void {
@@ -5537,7 +5745,7 @@ pub const AstToIr = struct {
         const elem_type = first_typed.ty.toPrimitiveType();
         const elem_struct_type: ?[]const u8 = switch (first_typed.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type => null,
+            .primitive, .array_type, .enum_type, .optional_type, .function_type => null,
         };
 
         // Calculate element size: structs use their actual size, primitives use 8 bytes
@@ -5689,7 +5897,7 @@ pub const AstToIr = struct {
 
         const arr_info = switch (base_typed.ty) {
             .array_type => |a| a,
-            .primitive, .struct_type, .enum_type, .optional_type => {
+            .primitive, .struct_type, .enum_type, .optional_type, .function_type => {
                 std.debug.print("[AST->IR] convertIndexExpr: expected array type\n", .{});
                 self.reportError(.E006, "expected array type for indexing");
                 return error.UnknownType;
@@ -6088,7 +6296,7 @@ pub const AstToIr = struct {
         // Get the type name from the TypedValue
         const type_name = switch (base_typed.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type => {
+            .primitive, .array_type, .enum_type, .optional_type, .function_type => {
                 debug.astToIr("error: method call on non-struct type", .{});
                 self.reportError(.E003, method_name);
                 return error.SemanticError;
@@ -6340,6 +6548,7 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
                 .simple => |name| name,
                 .generic => |gen| gen.base_type, // Use base type for generics
                 .optional => "ptr", // Optionals stored as pointers
+                .function_type => "ptr", // Function pointers
             };
 
             // Most types are 8 bytes (i64, f64, ptr)
@@ -6496,6 +6705,7 @@ fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
         },
         .generic => .ptr,
         .optional => .ptr,
+        .function_type => .ptr,
     };
 }
 
@@ -6513,7 +6723,7 @@ fn getValueTypeFromTypeExpr(te: ast.TypeExpr) ?ValueType {
                 },
             };
         },
-        .simple, .generic => null,
+        .simple, .generic, .function_type => null,
     };
 }
 
@@ -6534,7 +6744,7 @@ fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
             return name;
         },
         .generic => |gen| gen.base_type,
-        .optional => null,
+        .optional, .function_type => null,
     };
 }
 
@@ -6549,5 +6759,6 @@ fn getValueTypeFromTypeExprForParam(te: ast.TypeExpr) ValueType {
                 .wrapped_struct_type = getStructNameFromTypeExpr(wrapped.*),
             },
         },
+        .function_type => .{ .primitive = "ptr" }, // Function types are represented as pointers in simple contexts
     };
 }

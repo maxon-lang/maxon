@@ -1159,6 +1159,21 @@ fn freeTypeExpr(type_expr: ?ast.TypeExpr, allocator: std.mem.Allocator) void {
                 allocator.free(g.type_args);
             }
         },
+        .function_type => |ft| {
+            for (ft.param_types) |pt| {
+                freeTypeExpr(pt, allocator);
+            }
+            if (ft.param_types.len > 0) {
+                allocator.free(ft.param_types);
+            }
+            if (ft.param_names.len > 0) {
+                allocator.free(ft.param_names);
+            }
+            if (ft.return_type) |rt| {
+                freeTypeExpr(rt.*, allocator);
+                allocator.destroy(@constCast(rt));
+            }
+        },
         .simple => {},
     }
 }

@@ -1,0 +1,35 @@
+// Test: first-class-functions.first-class-function.basic-reference.1
+function double(x int) returns int
+    return x * 2
+end 'double'
+
+function main() returns int
+    var f = double
+    return f(21)
+end 'main'
+---
+ExitCode: 42
+---
+function double() -> i64 {
+entry:
+    %x = param i64 0
+    %x.1 = alloca ptr
+    store %x.1 %x
+    %tmp_load = load i64 %x.1
+    %tmp_const = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_load %tmp_const
+    ret %tmp_mul
+}
+
+function main() -> i64 {
+entry:
+    %tmp_funcaddr = func.addr ptr @double
+    %f = alloca ptr
+    store %f %tmp_funcaddr
+    %tmp_load = load ptr %f
+    %tmp_const = const.i64 i64 21
+    %tmp_call_ind = call.indirect i64 %tmp_load(%tmp_const)
+    ret %tmp_call_ind
+}
+
+---

@@ -1,0 +1,31 @@
+// Test: first-class-functions.first-class-function.closure-in-variable.1
+function main() returns int
+    var f = (x int) gives x * 5
+    return f(8)
+end 'main'
+---
+ExitCode: 40
+---
+function main() -> i64 {
+entry:
+    %tmp_funcaddr = func.addr ptr @__anon_closure_0
+    %f = alloca ptr
+    store %f %tmp_funcaddr
+    %tmp_load = load ptr %f
+    %tmp_const = const.i64 i64 8
+    %tmp_call_ind = call.indirect i64 %tmp_load(%tmp_const)
+    ret %tmp_call_ind
+}
+
+function __anon_closure_0() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 8
+    %tmp_param = param i64 0
+    store %tmp_alloca %tmp_param
+    %tmp_load = load i64 %tmp_alloca
+    %tmp_const = const.i64 i64 5
+    %tmp_mul = mul i64 %tmp_load %tmp_const
+    ret %tmp_mul
+}
+
+---

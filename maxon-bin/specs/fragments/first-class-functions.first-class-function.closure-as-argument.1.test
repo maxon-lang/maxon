@@ -1,0 +1,45 @@
+// Test: first-class-functions.first-class-function.closure-as-argument.1
+function apply(f (int) returns int, x int) returns int
+    return f(x)
+end 'apply'
+
+function main() returns int
+    return apply((n int) gives n + 7, 10)
+end 'main'
+---
+ExitCode: 17
+---
+function apply() -> i64 {
+entry:
+    %f = param ptr 0
+    %f.1 = alloca ptr
+    store %f.1 %f
+    %x = param i64 1
+    %x.1 = alloca ptr
+    store %x.1 %x
+    %tmp_load = load ptr %f.1
+    %tmp_load.1 = load i64 %x.1
+    %tmp_call_ind = call.indirect i64 %tmp_load(%tmp_load.1)
+    ret %tmp_call_ind
+}
+
+function main() -> i64 {
+entry:
+    %tmp_funcaddr = func.addr ptr @__anon_closure_0
+    %tmp_const = const.i64 i64 10
+    %tmp_call = call i64 @apply(%tmp_funcaddr, %tmp_const)
+    ret %tmp_call
+}
+
+function __anon_closure_0() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 8
+    %tmp_param = param i64 0
+    store %tmp_alloca %tmp_param
+    %tmp_load = load i64 %tmp_alloca
+    %tmp_const = const.i64 i64 7
+    %tmp_add = add i64 %tmp_load %tmp_const
+    ret %tmp_add
+}
+
+---

@@ -32,6 +32,13 @@ pub const OptionalInfo = struct {
     wrapped_struct_type: ?[]const u8 = null, // struct name if wrapped is a struct
 };
 
+/// Function type info - for first-class functions
+pub const FunctionTypeInfo = struct {
+    param_types: []const ValueType, // Parameter types
+    return_type: ?*const ValueType, // null for void
+    return_ir_type: ir.Type, // IR type for return value
+};
+
 /// Maps a Maxon type name to its IR type representation
 pub fn nameToIrType(name: []const u8) ir.Type {
     if (std.mem.eql(u8, name, "int")) return .i64;
@@ -51,6 +58,7 @@ pub const ValueType = union(enum) {
     array_type: ArrayInfo,
     enum_type: []const u8,
     optional_type: OptionalInfo,
+    function_type: FunctionTypeInfo, // First-class function types
 
     pub fn toPrimitiveType(self: ValueType) ir.Type {
         return switch (self) {
@@ -58,6 +66,7 @@ pub const ValueType = union(enum) {
             .enum_type => .i64,
             .struct_type, .array_type => .ptr,
             .optional_type => .ptr, // Optionals are pointers to 16-byte structures
+            .function_type => .ptr, // Function pointers are always pointers
         };
     }
 
@@ -76,8 +85,12 @@ pub const ValueType = union(enum) {
             .primitive => |name| name,
             .struct_type => |name| name,
             .enum_type => |name| name,
-            .array_type, .optional_type => null,
+            .array_type, .optional_type, .function_type => null,
         };
+    }
+
+    pub fn isFunctionType(self: ValueType) bool {
+        return self == .function_type;
     }
 };
 
