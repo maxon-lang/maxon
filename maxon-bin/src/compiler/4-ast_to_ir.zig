@@ -97,6 +97,67 @@ pub const LoopBlocks = struct {
     }
 };
 
+/// Helper for managing deferred blocks in control flow structures.
+/// Blocks are created, then popped to be restored later in the right order.
+///
+/// Usage:
+/// 1. Create blocks with addBlock (they're added to the function's block list)
+/// 2. Call deferBlocks(n) to pop n blocks (stores them internally)
+/// 3. Do work in the current block
+/// 4. Call restore(i) to append the i-th deferred block back (making it current)
+/// 5. Repeat step 4 for remaining blocks in order
+///
+/// This replaces the manual pop().?/append() dance used throughout the codebase.
+pub const DeferredBlocks = struct {
+    blocks: []ir.BasicBlock,
+    indices: []u32,
+    allocator: std.mem.Allocator,
+    count: usize,
+
+    /// Create a DeferredBlocks container that can hold up to `max_blocks` deferred blocks.
+    fn init(allocator: std.mem.Allocator, max_blocks: usize) !DeferredBlocks {
+        const blocks = try allocator.alloc(ir.BasicBlock, max_blocks);
+        errdefer allocator.free(blocks);
+        const indices = try allocator.alloc(u32, max_blocks);
+        return .{
+            .blocks = blocks,
+            .indices = indices,
+            .allocator = allocator,
+            .count = 0,
+        };
+    }
+
+    /// Pop `n` blocks from the function's block list and store them.
+    /// Blocks are stored in reverse order (last created first).
+    fn deferBlocks(self: *DeferredBlocks, self_ir: *AstToIr, n: usize) void {
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            self.blocks[i] = self_ir.func().blocks.pop().?;
+            // Index is calculated as: current length (after pop) + (n - 1 - i)
+            // But we already popped, so it's the position where this block will be restored
+            self.indices[i] = @intCast(self_ir.func().blocks.items.len + n - 1 - i);
+        }
+        self.count = n;
+    }
+
+    /// Get the block index for the i-th deferred block (0 = last popped, n-1 = first popped).
+    fn idx(self: DeferredBlocks, n: usize) u32 {
+        return self.indices[n];
+    }
+
+    /// Restore the i-th deferred block (0 = last popped = first to restore).
+    /// This appends it back to the function's block list, making it the current block.
+    fn restore(self: *DeferredBlocks, self_ir: *AstToIr, n: usize) !void {
+        try self_ir.func().blocks.append(self_ir.allocator, self.blocks[n]);
+    }
+
+    /// Clean up allocated memory.
+    fn deinit(self: *DeferredBlocks) void {
+        self.allocator.free(self.blocks);
+        self.allocator.free(self.indices);
+    }
+};
+
 /// Labeled loop info for break/continue with labels
 const LabeledLoop = struct {
     label: []const u8,
@@ -154,6 +215,13 @@ pub const AstToIr = struct {
     temporary_strings: std.ArrayListUnmanaged(ir.Value) = .{},
     // Counter for generating unique anonymous closure names
     anon_closure_counter: u32 = 0,
+    // Track function type allocations for cleanup (param_types slices and return_type pointers)
+    function_type_allocs: std.ArrayListUnmanaged(FunctionTypeAlloc) = .{},
+
+    const FunctionTypeAlloc = union(enum) {
+        param_types: []const ValueType,
+        return_type: *const ValueType,
+    };
 
     // ------------------------------------------------------------------------
     // Initialization / Cleanup
@@ -410,8 +478,10 @@ pub const AstToIr = struct {
         const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("incref_end");
 
-        // Save end block, pop it temporarily
-        const end_block = self.func().blocks.pop().?;
+        // Defer end block
+        var deferred = try DeferredBlocks.init(self.allocator, 1);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 1);
 
         // Emit conditional branch from entry block
         try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
@@ -430,7 +500,7 @@ pub const AstToIr = struct {
         try self.func().emitBr(end_block_idx);
 
         // Restore end block
-        try self.func().blocks.append(self.allocator, end_block);
+        try deferred.restore(self, 0);
     }
 
     /// Emit decref for a String variable with conditional free when refcount reaches 0.
@@ -447,9 +517,10 @@ pub const AstToIr = struct {
         const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("decref_end");
 
-        // Save blocks, pop them temporarily
-        const end_block = self.func().blocks.pop().?;
-        const free_block = self.func().blocks.pop().?;
+        // Defer end and free blocks (end=0, free=1 after pop order)
+        var deferred = try DeferredBlocks.init(self.allocator, 2);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 2);
 
         // Emit conditional branch from entry block to decref or end
         try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
@@ -468,8 +539,8 @@ pub const AstToIr = struct {
         const zero = try self.func().emitConstI32(0);
         const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i32);
 
-        // Save current block (decref), add free block
-        try self.func().blocks.append(self.allocator, free_block);
+        // Restore free block (index 1 = second popped = free_block)
+        try deferred.restore(self, 1);
 
         // Emit branch from decref block to free or end
         try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
@@ -484,8 +555,8 @@ pub const AstToIr = struct {
         // Branch to end
         try self.func().emitBr(end_block_idx);
 
-        // Restore end block
-        try self.func().blocks.append(self.allocator, end_block);
+        // Restore end block (index 0 = first popped = end_block)
+        try deferred.restore(self, 0);
     }
 
     /// Emit cleanup for a cstring variable.
@@ -736,6 +807,33 @@ pub const AstToIr = struct {
 
         // Clean up labeled loops stack
         self.labeled_loops.deinit(self.allocator);
+
+        // Clean up pending_methods generic_bindings (shared across methods of same type)
+        var freed_bindings = std.AutoHashMapUnmanaged([*]const PendingMethod.GenericBinding, void){};
+        defer freed_bindings.deinit(self.allocator);
+        var pending_iter = self.pending_methods.iterator();
+        while (pending_iter.next()) |entry| {
+            if (entry.value_ptr.generic_bindings.len > 0) {
+                const ptr = entry.value_ptr.generic_bindings.ptr;
+                if (freed_bindings.get(ptr) == null) {
+                    freed_bindings.put(self.allocator, ptr, {}) catch {};
+                    self.allocator.free(entry.value_ptr.generic_bindings);
+                }
+            }
+        }
+        self.pending_methods.deinit(self.allocator);
+
+        // Clean up methods_in_progress (usually empty, but clean up in case of error paths)
+        self.methods_in_progress.deinit(self.allocator);
+
+        // Clean up function type allocations tracked in function_type_allocs
+        for (self.function_type_allocs.items) |alloc_info| {
+            switch (alloc_info) {
+                .param_types => |pt| self.allocator.free(pt),
+                .return_type => |rt| self.allocator.destroy(rt),
+            }
+        }
+        self.function_type_allocs.deinit(self.allocator);
     }
 
     // ------------------------------------------------------------------------
@@ -1449,18 +1547,24 @@ pub const AstToIr = struct {
             .function_type => |ft| {
                 // Convert function type expression to ValueType
                 const param_types = try self.allocator.alloc(ValueType, ft.param_types.len);
+                errdefer self.allocator.free(param_types);
                 for (ft.param_types, 0..) |pt, i| {
                     param_types[i] = try self.typeExprToValueType(pt);
                 }
+                // Track for cleanup in deinit
+                try self.function_type_allocs.append(self.allocator, .{ .param_types = param_types });
 
                 var return_type: ?*const ValueType = null;
                 var return_ir_type: ir.Type = .void;
                 if (ft.return_type) |rt| {
                     const ret_vt = try self.typeExprToValueType(rt.*);
                     const ret_ptr = try self.allocator.create(ValueType);
+                    errdefer self.allocator.destroy(ret_ptr);
                     ret_ptr.* = ret_vt;
                     return_type = ret_ptr;
                     return_ir_type = ret_vt.toPrimitiveType();
+                    // Track for cleanup in deinit
+                    try self.function_type_allocs.append(self.allocator, .{ .return_type = ret_ptr });
                 }
 
                 return .{ .function_type = .{
@@ -1891,6 +1995,7 @@ pub const AstToIr = struct {
         // Also handle qualified name variant if present
         if (pending.method.qualified_name) |qualified| {
             const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ pending.type_name, qualified });
+            defer self.allocator.free(qualified_mangled);
             _ = self.pending_methods.remove(qualified_mangled);
             if (self.func_map.getPtr(qualified_mangled)) |info_ptr| {
                 info_ptr.ir_generated = true;
@@ -2816,14 +2921,11 @@ pub const AstToIr = struct {
         // DON'T emit br_cond yet - nested ifs in body will shift block indices
         // We'll emit it after all blocks are restored with correct indices
 
-        // Save end block, remove it temporarily
-        const end_block = self.func().blocks.pop().?;
-
-        // If we have else, save it too
-        var else_block: ?ir.BasicBlock = null;
-        if (has_else or is_if_let) {
-            else_block = self.func().blocks.pop().?;
-        }
+        // Defer blocks: end always, else conditionally
+        const deferred_count: usize = if (has_else or is_if_let) 2 else 1;
+        var deferred = try DeferredBlocks.init(self.allocator, deferred_count);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, deferred_count);
 
         // Now current block is "then" block
         // For if-let, bind the unwrapped value before executing body
@@ -2878,7 +2980,8 @@ pub const AstToIr = struct {
         var actual_else_block_idx: u32 = undefined;
         if (has_else or is_if_let) {
             actual_else_block_idx = @intCast(self.func().blocks.items.len);
-            try self.func().blocks.append(self.allocator, else_block.?);
+            // else_block is at index 1 (second popped)
+            try deferred.restore(self, 1);
 
             // Check for else-if chain (not allowed for if-let)
             if (if_stmt.else_if) |else_if| {
@@ -2899,7 +3002,8 @@ pub const AstToIr = struct {
 
         // Restore end block - NOW get its actual index
         const actual_end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        try self.func().blocks.append(self.allocator, end_block);
+        // end_block is at index 0 (first popped)
+        try deferred.restore(self, 0);
 
         // NOW emit br_cond with correct block indices (after nested ifs shifted things)
         const branch_target_if_false = if (has_else or is_if_let) actual_else_block_idx else actual_end_block_idx;
@@ -3337,9 +3441,10 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = has_value }, .{ .block_ref = some_block_idx }, .{ .block_ref = nil_block_idx } },
         });
 
-        // Save end and nil blocks
-        const end_block = self.func().blocks.pop().?;
-        const nil_block = self.func().blocks.pop().?;
+        // Defer end and nil blocks (end=0, nil=1 after pop order)
+        var deferred = try DeferredBlocks.init(self.allocator, 2);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 2);
 
         // In "some" block: unwrap and store value
         const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
@@ -3361,7 +3466,7 @@ pub const AstToIr = struct {
         try self.func().emitBr(end_block_idx);
 
         // Restore nil block
-        try self.func().blocks.append(self.allocator, nil_block);
+        try deferred.restore(self, 1);
 
         // Execute default body (which should assign to var_name)
         for (unwrap.default_body) |stmt| {
@@ -3376,7 +3481,7 @@ pub const AstToIr = struct {
         }
 
         // Restore end block
-        try self.func().blocks.append(self.allocator, end_block);
+        try deferred.restore(self, 0);
     }
 
     // ------------------------------------------------------------------------
@@ -4716,10 +4821,10 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = has_value }, .{ .block_ref = has_value_block_idx }, .{ .block_ref = use_default_block_idx } },
         });
 
-        // Pop merge block temporarily
-        const merge_block = self.func().blocks.pop().?;
-        // Pop default block temporarily
-        const default_block = self.func().blocks.pop().?;
+        // Defer merge and default blocks (merge=0, default=1 after pop order)
+        var deferred = try DeferredBlocks.init(self.allocator, 2);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 2);
 
         // Now in has_value block: extract the unwrapped value
         const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
@@ -4735,8 +4840,8 @@ pub const AstToIr = struct {
             .result = null,
         });
 
-        // Push default block back and switch to it
-        try self.func().blocks.append(self.allocator, default_block);
+        // Restore default block
+        try deferred.restore(self, 1);
 
         // Evaluate default expression here (short-circuit evaluation)
         const default_typed = try self.convertExpression(nc.default.*);
@@ -4751,8 +4856,8 @@ pub const AstToIr = struct {
             .result = null,
         });
 
-        // Push merge block back and switch to it
-        try self.func().blocks.append(self.allocator, merge_block);
+        // Restore merge block
+        try deferred.restore(self, 0);
 
         // Load result
         const result = try self.func().emitLoad(result_ptr, wrapped_type);
@@ -5114,9 +5219,10 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx }, .{ .block_ref = out_of_bounds_block_idx } },
         });
 
-        // Save merge and out_of_bounds blocks
-        const merge_block = self.func().blocks.pop().?;
-        const out_of_bounds_block = self.func().blocks.pop().?;
+        // Defer merge and out_of_bounds blocks (merge=0, out_of_bounds=1 after pop order)
+        var deferred = try DeferredBlocks.init(self.allocator, 2);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 2);
 
         // In-bounds block: create some(element)
         const one_val = try self.func().emitConstI64(1);
@@ -5134,7 +5240,7 @@ pub const AstToIr = struct {
         try self.func().emitBr(merge_block_idx);
 
         // Restore out-of-bounds block
-        try self.func().blocks.append(self.allocator, out_of_bounds_block);
+        try deferred.restore(self, 1);
 
         // Out-of-bounds block: create nil
         const zero_val = try self.func().emitConstI64(0);
@@ -5143,7 +5249,7 @@ pub const AstToIr = struct {
         try self.func().emitBr(merge_block_idx);
 
         // Restore merge block
-        try self.func().blocks.append(self.allocator, merge_block);
+        try deferred.restore(self, 0);
 
         // Return the optional (element type is i64 for now)
         return .{
@@ -5811,9 +5917,10 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx }, .{ .block_ref = out_of_bounds_block_idx } },
         });
 
-        // Save merge and out_of_bounds blocks
-        const merge_block = self.func().blocks.pop().?;
-        const out_of_bounds_block = self.func().blocks.pop().?;
+        // Defer merge and out_of_bounds blocks (merge=0, out_of_bounds=1 after pop order)
+        var deferred = try DeferredBlocks.init(self.allocator, 2);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 2);
 
         // In-bounds block: create some(element)
         const one_val = try self.func().emitConstI64(1);
@@ -5840,7 +5947,7 @@ pub const AstToIr = struct {
         try self.func().emitBr(merge_block_idx);
 
         // Restore out-of-bounds block
-        try self.func().blocks.append(self.allocator, out_of_bounds_block);
+        try deferred.restore(self, 1);
 
         // Out-of-bounds block: create nil
         const zero_val = try self.func().emitConstI64(0);
@@ -5849,7 +5956,7 @@ pub const AstToIr = struct {
         try self.func().emitBr(merge_block_idx);
 
         // Restore merge block
-        try self.func().blocks.append(self.allocator, merge_block);
+        try deferred.restore(self, 0);
 
         // Return the optional
         return .{
@@ -6145,9 +6252,10 @@ pub const AstToIr = struct {
                 .operands = .{ .{ .value = is_zero }, .{ .block_ref = zero_block_idx }, .{ .block_ref = nonzero_block_idx } },
             });
 
-            // Pop end_block temporarily so we can work with zero/nonzero blocks
-            const end_block = self.func().blocks.pop().?;
-            const nonzero_block = self.func().blocks.pop().?;
+            // Defer end and nonzero blocks (end=0, nonzero=1 after pop order)
+            var deferred = try DeferredBlocks.init(self.allocator, 2);
+            defer deferred.deinit();
+            deferred.deferBlocks(self, 2);
 
             // Now current block is zero_block
             // Zero case: store 0
@@ -6156,7 +6264,7 @@ pub const AstToIr = struct {
             try self.func().emitBr(end_block_idx);
 
             // Restore nonzero block and work with it
-            try self.func().blocks.append(self.allocator, nonzero_block);
+            try deferred.restore(self, 1);
 
             // Non-zero case: bitcast float to i64
             const bitcast_value = try self.func().emitUnaryOp(.bitcast_f64_to_i64, value, .i64);
@@ -6164,7 +6272,7 @@ pub const AstToIr = struct {
             try self.func().emitBr(end_block_idx);
 
             // Restore end block
-            try self.func().blocks.append(self.allocator, end_block);
+            try deferred.restore(self, 0);
 
             // End block: load result
             const result = try self.func().emitLoad(result_ptr, .i64);
