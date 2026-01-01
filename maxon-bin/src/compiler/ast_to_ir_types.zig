@@ -152,6 +152,19 @@ pub const FuncInfo = struct {
     return_type_name: ?[]const u8,
     return_value_type: ?ValueType, // Full type info for arrays
     param_types: []const ParamType,
+    ir_generated: bool = true, // false for pending lazy-generated methods
+};
+
+/// Pending method info for lazy generation of monomorphized type methods
+pub const PendingMethod = struct {
+    type_name: []const u8, // "Array$int" - the monomorphized type
+    method: *const ast.MethodDecl, // Pointer to method AST
+    generic_bindings: []const GenericBinding, // ["Element" -> "int"]
+
+    pub const GenericBinding = struct {
+        param: []const u8,
+        concrete: []const u8,
+    };
 };
 
 /// External function signature - for cross-module compilation

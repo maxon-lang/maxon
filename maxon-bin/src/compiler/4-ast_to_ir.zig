@@ -28,6 +28,7 @@ pub const OwnershipState = types.OwnershipState;
 pub const VarInfo = types.VarInfo;
 pub const ConvertError = types.ConvertError;
 pub const InterfaceInfo = types.InterfaceInfo;
+pub const PendingMethod = types.PendingMethod;
 
 /// Helper for managing intrinsic loop blocks (cond/body/end pattern).
 /// Ensures correct block ordering and branch emission to avoid infinite loops.
@@ -141,6 +142,10 @@ pub const AstToIr = struct {
     self_ptr: ?ir.Value = null,
     // Generic type parameters (e.g., "Element" -> "int" for Array of int)
     generic_params: std.StringHashMapUnmanaged([]const u8) = .{},
+    // Pending methods awaiting lazy generation (mangled_name -> PendingMethod)
+    pending_methods: std.StringHashMapUnmanaged(PendingMethod) = .{},
+    // Set of methods currently being generated (prevents infinite recursion)
+    methods_in_progress: std.StringHashMapUnmanaged(void) = .{},
     // Flag for allowing stdlib-only builtins (set when converting monomorphized stdlib methods)
     in_stdlib_method: bool = false,
     // Borrow tracking: set when __string_slice is called, contains the source variable name
@@ -1537,47 +1542,21 @@ pub const AstToIr = struct {
         try self.type_map.put(self.allocator, mono_name, .{ .struct_type = struct_info });
         try self.type_decl_map.put(self.allocator, mono_name, type_decl);
 
-        // Register methods for monomorphized type (generic_params still active here)
-        for (type_decl.methods) |method| {
-            try self.registerMethod(mono_name, method);
+        // Create generic bindings for lazy method generation
+        var bindings = try self.allocator.alloc(PendingMethod.GenericBinding, type_decl.generic_params.len);
+        for (type_decl.generic_params, type_args, 0..) |param, arg, i| {
+            bindings[i] = .{ .param = param, .concrete = arg };
         }
 
-        // Convert method bodies for monomorphized type (generic_params still active)
-        // Must save/restore function context since we're called during expression conversion
-        // IMPORTANT: Save the function INDEX, not the pointer! Adding new functions may cause
-        // the module's functions ArrayList to reallocate, invalidating existing pointers.
-        const saved_func_idx: ?usize = if (self.current_func) |f| blk: {
-            for (self.module.functions.items, 0..) |*fn_ptr, i| {
-                if (fn_ptr == f) break :blk i;
-            }
-            break :blk null;
-        } else null;
-        const saved_func_name = self.current_func_name;
-        const saved_sret_ptr = self.sret_ptr;
-        const saved_sret_size = self.sret_size;
-        const saved_self_ptr = self.self_ptr;
-
-        // Save current var_map - method conversion will clear it
-        const saved_var_map = self.var_map;
-        self.var_map = .{};
-
-        for (type_decl.methods) |method| {
-            try self.convertMethod(mono_name, method);
+        // Register method signatures only (lazy generation - IR generated on-demand)
+        for (type_decl.methods) |*method| {
+            try self.registerMethodSignatureOnly(mono_name, method, bindings);
         }
 
-        // Restore function context - recompute pointer from saved index
+        // Restore in_stdlib_method flag
         self.in_stdlib_method = saved_in_stdlib;
-        self.current_func = if (saved_func_idx) |idx| &self.module.functions.items[idx] else null;
-        self.current_func_name = saved_func_name;
-        self.sret_ptr = saved_sret_ptr;
-        self.sret_size = saved_sret_size;
-        self.self_ptr = saved_self_ptr;
 
-        // Free the temporary var_map used for method conversion and restore the saved one
-        self.var_map.deinit(self.allocator);
-        self.var_map = saved_var_map;
-
-        // Restore generic params after everything is done
+        // Restore generic params after registration
         for (type_decl.generic_params, 0..) |param, i| {
             if (saved_params[i]) |prev_value| {
                 try self.generic_params.put(self.allocator, param, prev_value);
@@ -1695,6 +1674,270 @@ pub const AstToIr = struct {
             debug.astToIr("Registered method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, ret_type.toIrName() });
         }
     }
+
+    /// Register method signature only (for lazy generation of monomorphized types).
+    /// Stores the method in pending_methods for on-demand IR generation.
+    fn registerMethodSignatureOnly(
+        self: *AstToIr,
+        type_name: []const u8,
+        method: *const ast.MethodDecl,
+        bindings: []const PendingMethod.GenericBinding,
+    ) !void {
+        // Save current type context for Self resolution
+        const saved_type = self.current_type_name;
+        self.current_type_name = type_name;
+        defer self.current_type_name = saved_type;
+
+        const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
+        try self.module.trackString(mangled_name);
+
+        // Check if method is already registered
+        if (self.func_map.contains(mangled_name)) {
+            // Still need to check if interface qualified name needs registering
+            if (method.qualified_name) |qualified| {
+                const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
+                try self.module.trackString(qualified_mangled);
+                if (!self.func_map.contains(qualified_mangled)) {
+                    const func_info = self.func_map.get(mangled_name).?;
+                    try self.func_map.put(self.allocator, qualified_mangled, func_info);
+                    // Also add to pending_methods if original is pending
+                    if (!func_info.ir_generated) {
+                        try self.pending_methods.put(self.allocator, qualified_mangled, .{
+                            .type_name = type_name,
+                            .method = method,
+                            .generic_bindings = bindings,
+                        });
+                    }
+                }
+            }
+            return;
+        }
+
+        // Determine return type (same logic as registerMethod)
+        var ret_type_name: ?[]const u8 = null;
+        var ret_value_type: ?ValueType = null;
+        const ret_type: ir.Type = if (method.return_type) |rt| blk: {
+            switch (rt) {
+                .simple, .generic => {
+                    const base_name = typeExprBaseTypeName(rt).?;
+                    const resolved = self.resolveTypeName(base_name);
+                    const type_info = self.type_map.get(resolved) orelse {
+                        self.reportError(.E006, resolved);
+                        return error.UnknownType;
+                    };
+                    if (type_info.isStruct()) ret_type_name = resolved;
+                    break :blk type_info.irType();
+                },
+                .optional => |wrapped| {
+                    const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
+                    const wrapped_struct_name: ?[]const u8 = if (wrapped_value_type == .struct_type)
+                        wrapped_value_type.struct_type
+                    else
+                        null;
+                    ret_value_type = .{
+                        .optional_type = .{
+                            .wrapped = wrapped_value_type.toPrimitiveType(),
+                            .wrapped_struct_type = wrapped_struct_name,
+                        },
+                    };
+                    break :blk .ptr;
+                },
+            }
+        } else .void;
+
+        // Count params: +1 for implicit self if not static
+        const extra_params: usize = if (method.is_static) 0 else 1;
+        var param_types = try self.allocator.alloc(ParamType, method.params.len + extra_params);
+
+        // First param is self (pointer to type instance) for instance methods
+        if (!method.is_static) {
+            param_types[0] = .{ .ty = .{ .struct_type = type_name } };
+        }
+
+        // Register explicit params
+        for (method.params, 0..) |param, i| {
+            param_types[i + extra_params] = .{
+                .ty = try self.typeExprToValueType(param.type_expr),
+            };
+        }
+
+        // Create FuncInfo with ir_generated = false (key difference from registerMethod)
+        const func_info = FuncInfo{
+            .return_type = ret_type,
+            .return_type_name = ret_type_name,
+            .return_value_type = ret_value_type,
+            .param_types = param_types,
+            .ir_generated = false,
+        };
+
+        try self.func_map.put(self.allocator, mangled_name, func_info);
+
+        // Queue for lazy generation
+        try self.pending_methods.put(self.allocator, mangled_name, .{
+            .type_name = type_name,
+            .method = method,
+            .generic_bindings = bindings,
+        });
+
+        // For interface methods, also register under qualified name
+        if (method.qualified_name) |qualified| {
+            const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
+            try self.module.trackString(qualified_mangled);
+            try self.func_map.put(self.allocator, qualified_mangled, func_info);
+            try self.pending_methods.put(self.allocator, qualified_mangled, .{
+                .type_name = type_name,
+                .method = method,
+                .generic_bindings = bindings,
+            });
+            debug.astToIr("Registered lazy method '{s}' as '{s}' and '{s}'", .{ method.name, mangled_name, qualified_mangled });
+        } else {
+            debug.astToIr("Registered lazy method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, ret_type.toIrName() });
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Context Save/Restore for Lazy Method Generation
+    // ------------------------------------------------------------------------
+
+    /// Saved conversion context for reentrant method generation
+    const SavedContext = struct {
+        func_idx: ?usize,
+        func_name: ?[]const u8,
+        sret_ptr: ?ir.Value,
+        sret_size: i32,
+        sret_optional_info: ?OptionalInfo,
+        self_ptr: ?ir.Value,
+        var_map: std.StringHashMapUnmanaged(VarInfo),
+        in_stdlib_method: bool,
+        loop_end_block: ?u32,
+        loop_cond_block: ?u32,
+    };
+
+    /// Save current conversion context before generating a method
+    fn saveConversionContext(self: *AstToIr) SavedContext {
+        // Compute function index if current_func exists
+        // (we save index, not pointer, because ArrayList may reallocate)
+        const func_idx: ?usize = if (self.current_func) |f| blk: {
+            for (self.module.functions.items, 0..) |*fn_ptr, i| {
+                if (fn_ptr == f) break :blk i;
+            }
+            break :blk null;
+        } else null;
+
+        const saved = SavedContext{
+            .func_idx = func_idx,
+            .func_name = self.current_func_name,
+            .sret_ptr = self.sret_ptr,
+            .sret_size = self.sret_size,
+            .sret_optional_info = self.sret_optional_info,
+            .self_ptr = self.self_ptr,
+            .var_map = self.var_map,
+            .in_stdlib_method = self.in_stdlib_method,
+            .loop_end_block = self.loop_end_block,
+            .loop_cond_block = self.loop_cond_block,
+        };
+
+        // Clear var_map for new method
+        self.var_map = .{};
+
+        return saved;
+    }
+
+    /// Restore conversion context after generating a method
+    fn restoreConversionContext(self: *AstToIr, saved: SavedContext) void {
+        // Free the temporary var_map used for method conversion
+        self.var_map.deinit(self.allocator);
+
+        // Restore all saved state
+        self.current_func = if (saved.func_idx) |idx| &self.module.functions.items[idx] else null;
+        self.current_func_name = saved.func_name;
+        self.sret_ptr = saved.sret_ptr;
+        self.sret_size = saved.sret_size;
+        self.sret_optional_info = saved.sret_optional_info;
+        self.self_ptr = saved.self_ptr;
+        self.var_map = saved.var_map;
+        self.in_stdlib_method = saved.in_stdlib_method;
+        self.loop_end_block = saved.loop_end_block;
+        self.loop_cond_block = saved.loop_cond_block;
+    }
+
+    /// Ensure a method has been generated (lazy generation entry point).
+    /// Called when a method is about to be invoked but hasn't had its IR generated yet.
+    fn ensureMethodGenerated(self: *AstToIr, mangled_name: []const u8) ConvertError!void {
+        // Check if already in progress (prevents infinite recursion for mutual calls)
+        if (self.methods_in_progress.contains(mangled_name)) {
+            return;
+        }
+
+        const pending = self.pending_methods.get(mangled_name) orelse {
+            // Already generated or not pending
+            return;
+        };
+
+        // Mark as in-progress before generation
+        try self.methods_in_progress.put(self.allocator, mangled_name, {});
+        defer _ = self.methods_in_progress.remove(mangled_name);
+
+        // Save context before generating the method
+        const saved_context = self.saveConversionContext();
+
+        // Save previous generic param values (for reentrancy with nested generic types)
+        var saved_generic_params = try self.allocator.alloc(?[]const u8, pending.generic_bindings.len);
+        defer self.allocator.free(saved_generic_params);
+        for (pending.generic_bindings, 0..) |binding, i| {
+            saved_generic_params[i] = self.generic_params.get(binding.param);
+            try self.generic_params.put(self.allocator, binding.param, binding.concrete);
+        }
+
+        // Allow stdlib builtins for stdlib types
+        self.in_stdlib_method = true;
+
+        // Generate the method IR
+        var gen_err: ?ConvertError = null;
+        self.convertMethod(pending.type_name, pending.method.*) catch |e| {
+            gen_err = e;
+        };
+
+        // Restore generic params to their previous values
+        for (pending.generic_bindings, 0..) |binding, i| {
+            if (saved_generic_params[i]) |prev_value| {
+                self.generic_params.put(self.allocator, binding.param, prev_value) catch {};
+            } else {
+                _ = self.generic_params.remove(binding.param);
+            }
+        }
+
+        // Restore context after generation
+        self.restoreConversionContext(saved_context);
+
+        // Propagate error if method generation failed
+        if (gen_err) |e| {
+            return e;
+        }
+
+        // Mark as generated in func_map
+        if (self.func_map.getPtr(mangled_name)) |info_ptr| {
+            info_ptr.ir_generated = true;
+        }
+
+        // Remove from pending
+        _ = self.pending_methods.remove(mangled_name);
+
+        // Also handle qualified name variant if present
+        if (pending.method.qualified_name) |qualified| {
+            const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ pending.type_name, qualified });
+            _ = self.pending_methods.remove(qualified_mangled);
+            if (self.func_map.getPtr(qualified_mangled)) |info_ptr| {
+                info_ptr.ir_generated = true;
+            }
+        }
+
+        debug.astToIr("Lazily generated method '{s}'", .{mangled_name});
+    }
+
+    // ------------------------------------------------------------------------
+    // Method Conversion
+    // ------------------------------------------------------------------------
 
     /// Convert a method to IR
     fn convertMethod(self: *AstToIr, type_name: []const u8, method: ast.MethodDecl) !void {
@@ -3412,6 +3655,11 @@ pub const AstToIr = struct {
                 try self.module.trackString(init_func_name);
 
                 if (self.func_map.get(init_func_name)) |func_info| {
+                    // Trigger lazy generation if needed
+                    if (!func_info.ir_generated) {
+                        try self.ensureMethodGenerated(init_func_name);
+                    }
+
                     const managed_ptr = try self.emitManagedStringFromBytes(processed);
 
                     // Allocate result struct and call init
@@ -3452,6 +3700,11 @@ pub const AstToIr = struct {
         // Call String$init to initialize the destination pointer
         const init_func_name = "String$init";
         if (self.func_map.get(init_func_name)) |func_info| {
+            // Trigger lazy generation if needed
+            if (!func_info.ir_generated) {
+                try self.ensureMethodGenerated(init_func_name);
+            }
+
             var args = try self.func().allocator.alloc(ir.Value, 2);
             args[0] = dest_ptr;
             args[1] = managed_ptr;
@@ -4008,6 +4261,11 @@ pub const AstToIr = struct {
                 try self.module.trackString(init_func_name);
 
                 if (self.func_map.get(init_func_name)) |func_info| {
+                    // Trigger lazy generation if needed
+                    if (!func_info.ir_generated) {
+                        try self.ensureMethodGenerated(init_func_name);
+                    }
+
                     const managed_ptr = try self.emitManagedStringFromBytes(processed_bytes);
 
                     // Allocate result struct and call init
@@ -4853,6 +5111,11 @@ pub const AstToIr = struct {
             return error.SemanticError;
         };
 
+        // Trigger lazy generation if needed
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(mangled_name);
+        }
+
         // The get method returns Element or nil (an optional)
         // Args: sret_ptr, self_ptr, index
         const default_type: ValueType = .{ .optional_type = .{ .wrapped = .i64 } };
@@ -4891,6 +5154,11 @@ pub const AstToIr = struct {
             self.reportInternalError(msg);
             return error.SemanticError;
         };
+
+        // Trigger lazy generation if needed
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(mangled_name);
+        }
 
         // The set method returns Self (the array), which is a struct
         // Args: sret_ptr, self_ptr, index, value
@@ -4984,6 +5252,12 @@ pub const AstToIr = struct {
             self.reportError(.E003, init_func_name);
             return error.UnknownFunction;
         };
+
+        // Trigger lazy generation if needed
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
         const type_info = self.type_map.get(type_name) orelse {
             self.reportError(.E006, type_name);
             return error.UnknownType;
@@ -5114,6 +5388,12 @@ pub const AstToIr = struct {
             self.reportInternalError(msg);
             return error.UnknownFunction;
         };
+
+        // Trigger lazy generation if needed
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
         const type_info = self.type_map.get(type_name) orelse {
             self.reportError(.E006, type_name);
             return error.UnknownType;
@@ -5183,6 +5463,12 @@ pub const AstToIr = struct {
             self.reportInternalError(msg);
             return error.UnknownFunction;
         };
+
+        // Trigger lazy generation if needed
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
         const type_info = self.type_map.get(type_name) orelse {
             self.reportError(.E006, type_name);
             return error.UnknownType;
@@ -5249,6 +5535,12 @@ pub const AstToIr = struct {
             self.reportInternalError(msg);
             return error.UnknownFunction;
         };
+
+        // Trigger lazy generation if needed
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
         const type_info = self.type_map.get(type_name) orelse {
             self.reportError(.E006, type_name);
             return error.UnknownType;
@@ -5456,6 +5748,12 @@ pub const AstToIr = struct {
             self.reportInternalError(msg);
             return error.UnknownFunction;
         };
+
+        // Trigger lazy generation if needed
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
         const type_info = self.type_map.get(map_type_name) orelse {
             self.reportError(.E006, map_type_name);
             return error.UnknownType;
@@ -5721,6 +6019,13 @@ pub const AstToIr = struct {
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
         try self.module.trackString(init_func_name);
 
+        // Trigger lazy generation if needed
+        if (self.func_map.get(init_func_name)) |func_info| {
+            if (!func_info.ir_generated) {
+                try self.ensureMethodGenerated(init_func_name);
+            }
+        }
+
         // Allocate space for the Array struct (sret)
         const result_ptr = try self.func().emitAllocaSized(@intCast(struct_info.size));
 
@@ -5788,6 +6093,11 @@ pub const AstToIr = struct {
             self.reportError(.E003, mangled_name);
             return error.SemanticError;
         };
+
+        // Trigger lazy generation if method IR hasn't been generated yet
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(mangled_name);
+        }
 
         // Check if return type is optional (needs sret for 16-byte struct)
         const returns_optional = if (func_info.return_value_type) |vt|
@@ -5865,6 +6175,11 @@ pub const AstToIr = struct {
             self.reportError(.E003, mangled_name);
             return error.SemanticError;
         };
+
+        // Trigger lazy generation if method IR hasn't been generated yet
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(mangled_name);
+        }
 
         // Check if return type is optional
         const returns_optional = if (func_info.return_value_type) |vt|
