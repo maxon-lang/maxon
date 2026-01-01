@@ -217,6 +217,8 @@ pub const AstToIr = struct {
     anon_closure_counter: u32 = 0,
     // Track function type allocations for cleanup (param_types slices and return_type pointers)
     function_type_allocs: std.ArrayListUnmanaged(FunctionTypeAlloc) = .{},
+    // External type declarations pending conformance check (checked after interfaces are registered)
+    pending_conformance_checks: std.ArrayListUnmanaged(*const ast.TypeDecl) = .{},
 
     const FunctionTypeAlloc = union(enum) {
         param_types: []const ValueType,
@@ -834,6 +836,9 @@ pub const AstToIr = struct {
             }
         }
         self.function_type_allocs.deinit(self.allocator);
+
+        // Pending conformance checks list doesn't own its data (references AST nodes)
+        self.pending_conformance_checks.deinit(self.allocator);
     }
 
     // ------------------------------------------------------------------------
@@ -897,6 +902,12 @@ pub const AstToIr = struct {
 
         // Register interfaces first (needed for conformance checking)
         for (program.interfaces) |iface| try self.registerInterface(iface);
+
+        // Check conformance for external types (registered before convert() was called)
+        for (self.pending_conformance_checks.items) |type_decl| {
+            try self.checkInterfaceConformance(type_decl.*);
+        }
+        self.pending_conformance_checks.clearRetainingCapacity();
 
         // Register declarations
         for (program.types) |type_decl| try self.registerType(type_decl);
@@ -1132,8 +1143,10 @@ pub const AstToIr = struct {
         });
 
         // Store type declaration for generic types (needed for monomorphization)
+        // Also queue for conformance check after interfaces are registered
         if (ext_type.type_decl) |type_decl| {
             try self.type_decl_map.put(self.allocator, ext_type.name, type_decl.*);
+            try self.pending_conformance_checks.append(self.allocator, type_decl);
         }
 
         debug.astToIr("Registered external type '{s}' with size {d}", .{ ext_type.name, ext_type.size });
@@ -1250,7 +1263,7 @@ pub const AstToIr = struct {
                     if (iface_method.return_type) |iface_ret| {
                         if (type_method.return_type) |impl_ret| {
                             const expected = self.resolveAssociatedTypeWithSelf(iface_ret, type_bindings, type_decl.name);
-                            const actual = typeExprToString(impl_ret);
+                            const actual = self.resolveAssociatedTypeWithSelf(impl_ret, type_bindings, type_decl.name);
                             if (!std.mem.eql(u8, expected, actual)) {
                                 const msg = std.fmt.allocPrint(self.allocator, "Method '{s}.{s}' has return type '{s}' but interface '{s}' requires '{s}'", .{
                                     type_decl.name,
@@ -1280,7 +1293,7 @@ pub const AstToIr = struct {
                     if (iface_method.params.len == type_method.params.len) {
                         for (iface_method.params, 0..) |iface_param, i| {
                             const expected = self.resolveAssociatedTypeWithSelf(iface_param.type_expr, type_bindings, type_decl.name);
-                            const actual = typeExprToString(type_method.params[i].type_expr);
+                            const actual = self.resolveAssociatedTypeWithSelf(type_method.params[i].type_expr, type_bindings, type_decl.name);
                             if (!std.mem.eql(u8, expected, actual)) {
                                 const msg = std.fmt.allocPrint(self.allocator, "Method '{s}.{s}' parameter {d} has type '{s}' but interface '{s}' requires '{s}'", .{
                                     type_decl.name,
@@ -1341,6 +1354,49 @@ pub const AstToIr = struct {
                     },
                 };
                 return error.SemanticError;
+            }
+
+            // Check that methods with qualified names (e.g., Collection.map) actually exist in the interface
+            for (type_decl.methods) |type_method| {
+                if (type_method.qualified_name) |qualified| {
+                    // Parse "Interface.method" format
+                    if (std.mem.indexOf(u8, qualified, ".")) |dot_pos| {
+                        const iface_name = qualified[0..dot_pos];
+                        const method_name = qualified[dot_pos + 1 ..];
+
+                        // Only validate for the current interface being checked
+                        if (std.mem.eql(u8, iface_name, conformance.interface_name)) {
+                            // Check if this method exists in the interface
+                            var method_exists = false;
+                            for (iface.methods) |iface_method| {
+                                if (std.mem.eql(u8, iface_method.name, method_name)) {
+                                    method_exists = true;
+                                    break;
+                                }
+                            }
+
+                            if (!method_exists) {
+                                const msg = std.fmt.allocPrint(self.allocator, "Method '{s}' is not defined in interface '{s}'", .{
+                                    method_name,
+                                    iface_name,
+                                }) catch {
+                                    self.reportError(.E015, method_name);
+                                    return error.SemanticError;
+                                };
+                                self.last_error = .{
+                                    .code = .E015,
+                                    .message = msg,
+                                    .location = .{
+                                        .file = self.source_file,
+                                        .line = 1,
+                                        .column = 1,
+                                    },
+                                };
+                                return error.SemanticError;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
