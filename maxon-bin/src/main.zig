@@ -3,6 +3,8 @@ const compiler = @import("compiler/0-compiler.zig");
 const test_runner = @import("testing/test_runner.zig");
 const testing = @import("testing/testing.zig");
 
+const version = "0.1.0";
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 8 }){};
     defer {
@@ -15,6 +17,18 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
+
+    // Handle global options
+    if (args.len >= 2) {
+        const first_arg = args[1];
+        if (std.mem.eql(u8, first_arg, "--help")) {
+            printUsage();
+            return;
+        } else if (std.mem.eql(u8, first_arg, "--version")) {
+            std.debug.print("maxon {s}\n", .{version});
+            return;
+        }
+    }
 
     if (args.len < 2) {
         printUsage();
@@ -37,8 +51,11 @@ pub fn main() !void {
 }
 
 fn printUsage() void {
-    std.debug.print("Usage: maxon <command> [args]\n\n", .{});
-    std.debug.print("Commands:\n", .{});
+    std.debug.print("Usage: maxon [options] <command> [args]\n\n", .{});
+    std.debug.print("Options:\n", .{});
+    std.debug.print("  --help                  Show this help message\n", .{});
+    std.debug.print("  --version               Show version information\n", .{});
+    std.debug.print("\nCommands:\n", .{});
     std.debug.print("  compile <source.maxon>  Compile a single source file\n", .{});
     std.debug.print("  build                   Build project from current directory\n", .{});
     std.debug.print("  test                    Run spec fragment tests\n", .{});
