@@ -12,6 +12,7 @@ pub const InterfaceMethod = struct {
     is_static: bool,
     params: []const ParamDecl,
     return_type: ?TypeExpr, // null for void
+    throws_type: ?[]const u8, // error type if method throws (must conform to Error)
     has_default_impl: bool,
     default_body: ?[]Statement,
 };
@@ -47,6 +48,7 @@ pub const MethodDecl = struct {
     is_export: bool,
     params: []const ParamDecl,
     return_type: ?TypeExpr, // null for void
+    throws_type: ?[]const u8, // error type if method throws (must conform to Error)
     body: []Statement,
 };
 
@@ -76,10 +78,16 @@ pub const FunctionTypeExpr = struct {
     return_type: ?*const TypeExpr, // null for void
 };
 
+pub const ErrorUnionTypeExpr = struct {
+    success_type: *const TypeExpr, // The success type T
+    error_type: []const u8, // The error type name (must conform to Error)
+};
+
 pub const TypeExpr = union(enum) {
     simple: []const u8, // int, float, MyStruct
     generic: GenericTypeExpr, // Array of int, Map of string int
     optional: *const TypeExpr, // T or nil
+    error_union: ErrorUnionTypeExpr, // T or E (where E conforms to Error)
     function_type: FunctionTypeExpr, // (int, string) returns bool
 };
 
@@ -93,6 +101,7 @@ pub const FunctionDecl = struct {
     is_export: bool,
     params: []const ParamDecl,
     return_type: ?TypeExpr, // null for void
+    throws_type: ?[]const u8, // error type if function throws (must conform to Error)
     body: []Statement,
 };
 
@@ -152,6 +161,26 @@ pub const ElseUnwrapDecl = struct {
     label: []const u8,
 };
 
+// Error handling: throw statement
+pub const ThrowStmt = struct {
+    error_expr: Expression,
+};
+
+// Error handling: catch clause for do-catch blocks
+pub const CatchClause = struct {
+    binding_name: []const u8, // 'e' in 'catch e FileError'
+    error_type: ?[]const u8, // null = catch any Error
+    body: []Statement,
+    label: []const u8,
+};
+
+// Error handling: do-catch block
+pub const DoCatchStmt = struct {
+    body: []Statement,
+    label: []const u8,
+    catches: []const CatchClause,
+};
+
 pub const StatementKind = union(enum) {
     @"return": ReturnStmt,
     let_decl: VarDecl,
@@ -167,6 +196,9 @@ pub const StatementKind = union(enum) {
     break_stmt: BreakStmt,
     continue_stmt: ContinueStmt,
     else_unwrap_decl: ElseUnwrapDecl,
+    // Error handling
+    throw_stmt: ThrowStmt,
+    do_catch_stmt: DoCatchStmt,
 };
 
 pub const Statement = struct {
@@ -321,6 +353,16 @@ pub const ClosureExpr = struct {
     body: *const Expression,
 };
 
+// Error handling: try expression modes
+pub const TryMode = enum {
+    propagate, // try expr - propagates error to caller
+};
+
+pub const TryExpr = struct {
+    expr: *const Expression,
+    mode: TryMode,
+};
+
 pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
@@ -346,4 +388,6 @@ pub const Expression = union(enum) {
     nil_coalesce: NilCoalesceExpr,
     cast: CastExpr,
     closure: ClosureExpr,
+    // Error handling
+    try_expr: TryExpr,
 };

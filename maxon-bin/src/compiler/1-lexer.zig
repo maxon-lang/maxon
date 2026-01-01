@@ -24,7 +24,7 @@ pub const TokenType = enum {
     false,
     @"and",
     @"or",
-    @"not",
+    not,
     nil,
     // Type system keywords
     uses,
@@ -40,6 +40,12 @@ pub const TokenType = enum {
     to,
     as, // type cast operator
     gives, // closure syntax: (x int) gives x * 2
+    // Error handling keywords
+    throws, // function throws error
+    throw, // throw an error
+    @"try", // try expression
+    @"catch", // catch clause
+    do, // do block for error handling
 
     // Types
     int,
@@ -498,7 +504,7 @@ pub const Lexer = struct {
             .{ "false", TokenType.false },
             .{ "and", TokenType.@"and" },
             .{ "or", TokenType.@"or" },
-            .{ "not", TokenType.@"not" },
+            .{ "not", TokenType.not },
             .{ "nil", TokenType.nil },
             .{ "int", TokenType.int },
             .{ "float", TokenType.float },
@@ -516,6 +522,12 @@ pub const Lexer = struct {
             .{ "to", TokenType.to },
             .{ "as", TokenType.as },
             .{ "gives", TokenType.gives },
+            // Error handling keywords
+            .{ "throws", TokenType.throws },
+            .{ "throw", TokenType.throw },
+            .{ "try", TokenType.@"try" },
+            .{ "catch", TokenType.@"catch" },
+            .{ "do", TokenType.do },
         };
         inline for (keywords) |kw| {
             if (std.mem.eql(u8, text, kw[0])) {

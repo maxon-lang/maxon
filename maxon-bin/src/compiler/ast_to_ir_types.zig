@@ -39,6 +39,13 @@ pub const FunctionTypeInfo = struct {
     return_ir_type: ir.Type, // IR type for return value
 };
 
+/// Error union type info - for T or E where E conforms to Error
+pub const ErrorUnionInfo = struct {
+    success_type: ir.Type, // The success type's IR type
+    success_struct_type: ?[]const u8, // struct name if success is a struct
+    error_struct_type: []const u8, // The error type name (must conform to Error)
+};
+
 /// Maps a Maxon type name to its IR type representation
 pub fn nameToIrType(name: []const u8) ir.Type {
     if (std.mem.eql(u8, name, "int")) return .i64;
@@ -58,6 +65,7 @@ pub const ValueType = union(enum) {
     array_type: ArrayInfo,
     enum_type: []const u8,
     optional_type: OptionalInfo,
+    error_union_type: ErrorUnionInfo, // T or E where E conforms to Error
     function_type: FunctionTypeInfo, // First-class function types
 
     pub fn toPrimitiveType(self: ValueType) ir.Type {
@@ -66,6 +74,7 @@ pub const ValueType = union(enum) {
             .enum_type => .i64,
             .struct_type, .array_type => .ptr,
             .optional_type => .ptr, // Optionals are pointers to 16-byte structures
+            .error_union_type => .ptr, // Error unions are pointers to discriminated union structures
             .function_type => .ptr, // Function pointers are always pointers
         };
     }
@@ -85,7 +94,7 @@ pub const ValueType = union(enum) {
             .primitive => |name| name,
             .struct_type => |name| name,
             .enum_type => |name| name,
-            .array_type, .optional_type, .function_type => null,
+            .array_type, .optional_type, .error_union_type, .function_type => null,
         };
     }
 

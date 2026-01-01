@@ -302,6 +302,7 @@ pub const Parser = struct {
         _ = try self.expect(.lparen);
         const params = try self.parseParamList();
         const return_type = try self.parseOptionalReturnType();
+        const throws_type = try self.parseOptionalThrowsClause();
         _ = try self.expect(.newline);
         const body = try self.parseBodyUntilEnd();
         try self.expectEndNewline();
@@ -314,6 +315,7 @@ pub const Parser = struct {
             .is_export = method_is_export,
             .params = params,
             .return_type = return_type,
+            .throws_type = throws_type,
             .body = body,
         };
     }
@@ -373,6 +375,16 @@ pub const Parser = struct {
         if (self.check(.returns)) {
             _ = self.advance();
             return try self.parseTypeExpr();
+        }
+        return null;
+    }
+
+    /// Parse optional throws clause: throws ErrorType
+    fn parseOptionalThrowsClause(self: *Parser) !?[]const u8 {
+        if (self.check(.throws)) {
+            _ = self.advance();
+            const error_type = try self.expect(.identifier);
+            return error_type.text;
         }
         return null;
     }
@@ -608,6 +620,7 @@ pub const Parser = struct {
         _ = try self.expect(.lparen);
         const params = try self.parseParamList();
         const return_type = try self.parseOptionalReturnType();
+        const throws_type = try self.parseOptionalThrowsClause();
         _ = try self.expect(.newline);
         const body = try self.parseBodyUntilEnd();
         try self.expectEndNewline();
@@ -617,6 +630,7 @@ pub const Parser = struct {
             .is_export = is_export,
             .params = params,
             .return_type = return_type,
+            .throws_type = throws_type,
             .body = body,
         };
     }
@@ -672,6 +686,14 @@ pub const Parser = struct {
             const label = if (self.check(.char_literal)) self.advance().text else null;
             _ = try self.expect(.newline);
             return stmtAt(.{ .continue_stmt = .{ .label = label } }, start_line, start_column);
+        }
+        // Error handling: throw statement
+        if (self.check(.throw)) {
+            return try self.parseThrowStatement();
+        }
+        // Error handling: do-catch block
+        if (self.check(.do)) {
+            return try self.parseDoCatchStatement();
         }
         // Check for assignment, index assignment, or call statement: identifier or self...
         if (self.check(.identifier) or self.check(.self)) {
@@ -1055,6 +1077,105 @@ pub const Parser = struct {
         } }, start_line, start_column);
     }
 
+    /// Parse throw statement: throw errorExpr
+    fn parseThrowStatement(self: *Parser) ParseError!ast.Statement {
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
+
+        _ = try self.expect(.throw);
+        const error_expr = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+        _ = try self.expect(.newline);
+
+        return stmtAt(.{ .throw_stmt = .{
+            .error_expr = error_expr,
+        } }, start_line, start_column);
+    }
+
+    /// Parse do-catch statement:
+    /// do 'label'
+    ///     body
+    /// catch e ErrorType 'catchLabel'
+    ///     catchBody
+    /// end 'label'
+    fn parseDoCatchStatement(self: *Parser) ParseError!ast.Statement {
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
+
+        _ = try self.expect(.do);
+        const label = try self.expect(.char_literal);
+        _ = try self.expect(.newline);
+
+        // Parse body until we hit 'catch' or 'end'
+        var body_stmts: std.ArrayListUnmanaged(ast.Statement) = .empty;
+        errdefer body_stmts.deinit(self.allocator);
+
+        while (!self.check(.@"catch") and !self.check(.end) and !self.isAtEnd()) {
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
+            try body_stmts.append(self.allocator, try self.parseStatement());
+        }
+
+        // Parse catch clauses
+        var catches: std.ArrayListUnmanaged(ast.CatchClause) = .empty;
+        errdefer catches.deinit(self.allocator);
+
+        while (self.check(.@"catch")) {
+            try catches.append(self.allocator, try self.parseCatchClause());
+        }
+
+        // Expect end 'label'
+        _ = try self.expect(.end);
+        _ = try self.expect(.char_literal); // Should match the do label
+        try self.expectEndNewline();
+
+        return stmtAt(.{ .do_catch_stmt = .{
+            .body = try body_stmts.toOwnedSlice(self.allocator),
+            .label = label.text,
+            .catches = try catches.toOwnedSlice(self.allocator),
+        } }, start_line, start_column);
+    }
+
+    /// Parse a single catch clause: catch e ErrorType 'label'
+    fn parseCatchClause(self: *Parser) ParseError!ast.CatchClause {
+        _ = try self.expect(.@"catch");
+        const binding_name = try self.expect(.identifier);
+
+        // Optional error type - if not present, catches any Error
+        var error_type: ?[]const u8 = null;
+        if (self.check(.identifier)) {
+            error_type = self.advance().text;
+        }
+
+        const label = try self.expect(.char_literal);
+        _ = try self.expect(.newline);
+
+        // Parse catch body until next catch or end
+        var catch_body: std.ArrayListUnmanaged(ast.Statement) = .empty;
+        errdefer catch_body.deinit(self.allocator);
+
+        while (!self.check(.@"catch") and !self.check(.end) and !self.isAtEnd()) {
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
+            try catch_body.append(self.allocator, try self.parseStatement());
+        }
+
+        return .{
+            .binding_name = binding_name.text,
+            .error_type = error_type,
+            .body = try catch_body.toOwnedSlice(self.allocator),
+            .label = label.text,
+        };
+    }
+
     fn parseExpression(self: *Parser) ParseError!?ast.Expression {
         return try self.parseLogicalOr();
     }
@@ -1244,6 +1365,19 @@ pub const Parser = struct {
             return .{ .unary = .{
                 .op = .not,
                 .operand = try self.createExpr(operand),
+            } };
+        }
+        // Check for try expression (error propagation)
+        if (self.check(.@"try")) {
+            _ = self.advance();
+            const mode: ast.TryMode = .propagate;
+            const operand = try self.parseUnary() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            return .{ .try_expr = .{
+                .expr = try self.createExpr(operand),
+                .mode = mode,
             } };
         }
         return self.parsePrimary();
@@ -2104,6 +2238,7 @@ pub const Parser = struct {
         _ = try self.expect(.lparen);
         const params = try self.parseParamList();
         const return_type = try self.parseOptionalReturnType();
+        const throws_type = try self.parseOptionalThrowsClause();
         _ = try self.expect(.newline);
 
         // Check if this has a default implementation (body before end/function)
@@ -2121,6 +2256,7 @@ pub const Parser = struct {
             .is_static = is_static,
             .params = params,
             .return_type = return_type,
+            .throws_type = throws_type,
             .has_default_impl = has_default_impl,
             .default_body = default_body,
         };

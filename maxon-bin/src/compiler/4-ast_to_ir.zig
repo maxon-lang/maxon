@@ -219,6 +219,14 @@ pub const AstToIr = struct {
     function_type_allocs: std.ArrayListUnmanaged(FunctionTypeAlloc) = .{},
     // External type declarations pending conformance check (checked after interfaces are registered)
     pending_conformance_checks: std.ArrayListUnmanaged(*const ast.TypeDecl) = .{},
+    // Error handling: the error type the current function throws (null if non-throwing)
+    current_func_throws_type: ?[]const u8 = null,
+    // Do-catch context: buffer to store caught error (null if not in do-catch)
+    do_catch_error_buffer: ?ir.Value = null,
+    // Do-catch context: block to jump to when an error is caught
+    do_catch_catch_block: ?u32 = null,
+    // Do-catch context: block after the entire do-catch (for successful completion)
+    do_catch_end_block: ?u32 = null,
 
     const FunctionTypeAlloc = union(enum) {
         param_types: []const ValueType,
@@ -1029,6 +1037,10 @@ pub const AstToIr = struct {
                 // Optional size = 8 (tag) + wrapped size
                 return 8 + self.getTypeSize(wrapped.*);
             },
+            .error_union => |eu| {
+                // Error union size = 8 (tag) + max(success size, error size)
+                return 8 + self.getTypeSize(eu.success_type.*);
+            },
             .function_type => {
                 // Function pointers are always 8 bytes
                 return 8;
@@ -1419,8 +1431,10 @@ pub const AstToIr = struct {
                 .simple => |name| if (std.mem.eql(u8, name, "Self")) self_type else bindings.get(name) orelse name,
                 .generic => |g| if (std.mem.eql(u8, g.base_type, "Self")) self_type else bindings.get(g.base_type) orelse g.base_type,
                 .optional => "?",
+                .error_union => "error_union",
                 .function_type => "(fn)",
             },
+            .error_union => |eu| bindings.get(eu.error_type) orelse eu.error_type,
             .function_type => "(fn)",
         };
     }
@@ -1460,6 +1474,11 @@ pub const AstToIr = struct {
                     };
                     break :blk .ptr;
                 },
+                .error_union => {
+                    // Error union return types are returned as pointers
+                    ret_value_type = try self.typeExprToValueType(rt);
+                    break :blk .ptr;
+                },
                 .function_type => {
                     // Function types are returned as pointers
                     ret_value_type = try self.typeExprToValueType(rt);
@@ -1483,10 +1502,28 @@ pub const AstToIr = struct {
             }
         }
 
+        // If function throws, the effective return type is an error union
+        var effective_ret_type = ret_type;
+        var effective_ret_value_type = ret_value_type;
+        if (decl.throws_type != null) {
+            // Throwing functions return via sret (error union)
+            effective_ret_type = .ptr;
+            // Create error union type info
+            const success_ir_type = ret_type;
+            const success_struct_type = ret_type_name;
+            effective_ret_value_type = .{
+                .error_union_type = .{
+                    .success_type = success_ir_type,
+                    .success_struct_type = success_struct_type,
+                    .error_struct_type = decl.throws_type.?,
+                },
+            };
+        }
+
         try self.func_map.put(self.allocator, decl.name, .{
-            .return_type = ret_type,
+            .return_type = effective_ret_type,
             .return_type_name = ret_type_name,
-            .return_value_type = ret_value_type,
+            .return_value_type = effective_ret_value_type,
             .param_types = param_types,
         });
 
@@ -1498,7 +1535,7 @@ pub const AstToIr = struct {
         return switch (type_expr) {
             .simple => |name| name,
             .generic => |gen| gen.base_type,
-            .optional, .function_type => null,
+            .optional, .error_union, .function_type => null,
         };
     }
 
@@ -1511,8 +1548,10 @@ pub const AstToIr = struct {
                 .simple => |name| name,
                 .generic => |gen| gen.base_type,
                 .optional => "?",
+                .error_union => "error_union",
                 .function_type => "(fn)",
             },
+            .error_union => |eu| eu.error_type,
             .function_type => "(fn)",
         };
     }
@@ -1561,6 +1600,7 @@ pub const AstToIr = struct {
             },
             .primitive, .enum_type, .array_type => 8,
             .optional_type => 8,
+            .error_union_type => 8,
             .function_type => 8,
         };
     }
@@ -1628,6 +1668,16 @@ pub const AstToIr = struct {
                     .param_types = param_types,
                     .return_type = return_type,
                     .return_ir_type = return_ir_type,
+                } };
+            },
+            .error_union => |eu| {
+                // Convert error union type: T or E where E conforms to Error
+                const success_value_type = try self.typeExprToValueType(eu.success_type.*);
+                const resolved_error = self.resolveTypeName(eu.error_type);
+                return .{ .error_union_type = .{
+                    .success_type = success_value_type.toPrimitiveType(),
+                    .success_struct_type = if (success_value_type == .struct_type) success_value_type.struct_type else null,
+                    .error_struct_type = resolved_error,
                 } };
             },
         }
@@ -1774,6 +1824,11 @@ pub const AstToIr = struct {
                             .wrapped_struct_type = wrapped_struct_name,
                         },
                     };
+                    break :blk .ptr;
+                },
+                .error_union => {
+                    // Error union return types are returned as pointers
+                    ret_value_type = try self.typeExprToValueType(rt);
                     break :blk .ptr;
                 },
                 .function_type => {
@@ -2106,6 +2161,11 @@ pub const AstToIr = struct {
                     .wrapped_struct_type = wrapped_struct_name,
                 };
             },
+            .error_union => |eu| {
+                // Error unions use sret like optionals
+                uses_sret = true;
+                sret_struct_size = 8 + self.getTypeSize(eu.success_type.*);
+            },
             .function_type => {
                 // Function types are returned as pointers, no sret needed
             },
@@ -2117,7 +2177,7 @@ pub const AstToIr = struct {
                 const resolved = if (resolve_names) self.resolveTypeName(base_name) else base_name;
                 break :blk try self.lookupIrType(resolved);
             },
-            .optional, .function_type => .ptr,
+            .optional, .error_union, .function_type => .ptr,
         };
 
         return .{
@@ -2251,8 +2311,30 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     fn convertFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
+        // Track if this function throws (for throw statement validation)
+        self.current_func_throws_type = decl.throws_type;
+        defer self.current_func_throws_type = null;
+
         // Analyze return type for sret handling (resolve_names=false for functions)
-        const sret_info = try self.analyzeReturnType(decl.return_type, false);
+        var sret_info = try self.analyzeReturnType(decl.return_type, false);
+
+        // If function throws, we need to use sret for the error union
+        if (decl.throws_type) |error_type| {
+            // Get the error type size
+            const error_size = if (self.type_map.get(error_type)) |type_info|
+                if (type_info == .struct_type) type_info.struct_type.size else 8
+            else
+                8;
+
+            // Get the success type size (use 8 for primitives if not already using sret)
+            const success_size = if (sret_info.uses_sret) sret_info.struct_size else 8;
+
+            // Error union layout: 8 bytes tag + max(success_size, error_size)
+            const payload_size = @max(success_size, error_size);
+            sret_info.uses_sret = true;
+            sret_info.struct_size = 8 + payload_size;
+            sret_info.optional_info = null; // We don't use optional_info for error unions
+        }
 
         const ir_func = try self.module.addFunctionWithExport(decl.name, sret_info.ir_type, decl.is_export);
         const param_offset = try self.setupFunctionState(ir_func, decl.name, sret_info);
@@ -2304,7 +2386,7 @@ pub const AstToIr = struct {
                 }
                 try self.var_map.put(self.allocator, param.name, var_info);
             },
-            .array_type, .optional_type => {
+            .array_type, .optional_type, .error_union_type => {
                 // Reference types are passed as pointers - store in a stack slot
                 const param_val = try self.func().emitParam(idx, .ptr);
                 const slot_ptr = try self.func().emitAlloca(.ptr);
@@ -2411,6 +2493,9 @@ pub const AstToIr = struct {
             .break_stmt => |brk| try self.convertBreakStmt(brk),
             .continue_stmt => |cont| try self.convertContinueStmt(cont),
             .else_unwrap_decl => |unwrap| try self.convertElseUnwrapDecl(unwrap),
+            // Error handling
+            .throw_stmt => |throw_s| try self.convertThrowStmt(throw_s),
+            .do_catch_stmt => |dc| try self.convertDoCatchStmt(dc),
         }
     }
 
@@ -2429,7 +2514,7 @@ pub const AstToIr = struct {
             const base_type_name: ?[]const u8 = switch (type_ann) {
                 .generic => |gen| gen.base_type,
                 .simple => |name| name,
-                .optional, .function_type => null,
+                .optional, .error_union, .function_type => null,
             };
             if (base_type_name) |t_name| {
                 if (self.typeConformsTo(t_name, "InitableFromArrayLiteral")) {
@@ -2445,7 +2530,7 @@ pub const AstToIr = struct {
                                 break :blk try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
                             },
                             .simple => |name| name,
-                            .optional, .function_type => unreachable,
+                            .optional, .error_union, .function_type => unreachable,
                         };
                         try self.convertInitableFromArrayLiteralSimple(decl, resolved_type_name);
                         return;
@@ -2467,7 +2552,7 @@ pub const AstToIr = struct {
                                 break :blk try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
                             },
                             .simple => |name| name,
-                            .optional, .function_type => unreachable,
+                            .optional, .error_union, .function_type => unreachable,
                         };
                         try self.convertInitableFromMapLiteralSimple(decl, resolved_type_name);
                         return;
@@ -2599,6 +2684,33 @@ pub const AstToIr = struct {
 
                 // Returning an existing struct variable or optional - copy to sret buffer
                 const typed_val = try self.convertExpression(expr);
+
+                // If returning from a throwing function, wrap in success result
+                if (self.current_func_throws_type != null and self.sret_optional_info == null) {
+                    // Write tag = 0 (success) to sret
+                    const zero = try self.func().emitConstI64(0);
+                    try self.func().emitStore(sret, zero);
+                    // Write value at offset 8
+                    const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
+                    // For struct types, memcpy the contents; for primitives, store the value
+                    if (typed_val.ty == .struct_type) {
+                        const struct_name = typed_val.ty.struct_type;
+                        if (self.type_map.get(struct_name)) |type_info| {
+                            if (type_info == .struct_type) {
+                                try self.func().emitMemcpy(value_ptr, typed_val.value, type_info.struct_type.size);
+                            } else {
+                                try self.func().emitStore(value_ptr, typed_val.value);
+                            }
+                        } else {
+                            try self.func().emitStore(value_ptr, typed_val.value);
+                        }
+                    } else {
+                        try self.func().emitStore(value_ptr, typed_val.value);
+                    }
+                    try self.freeHeapAllocations();
+                    try self.func().emitRet(sret);
+                    return;
+                }
 
                 // If returning a non-optional value from an optional-returning function,
                 // wrap the value in a Some optional
@@ -2862,7 +2974,7 @@ pub const AstToIr = struct {
         const base = try self.convertExpression(assign.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type, .function_type => {
+            .primitive, .array_type, .enum_type, .optional_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAssign: expected struct type for field '{s}'\n", .{assign.field_name});
                 self.reportError(.E006, assign.field_name);
                 return error.UnknownType;
@@ -2993,7 +3105,7 @@ pub const AstToIr = struct {
         if (if_stmt.binding_name) |binding_name| {
             const opt_info = switch (cond_typed.ty) {
                 .optional_type => |info| info,
-                .primitive, .struct_type, .array_type, .enum_type, .function_type => OptionalInfo{ .wrapped = .i64 },
+                .primitive, .struct_type, .array_type, .enum_type, .error_union_type, .function_type => OptionalInfo{ .wrapped = .i64 },
             };
             const wrapped_type = opt_info.wrapped;
             const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
@@ -3292,7 +3404,7 @@ pub const AstToIr = struct {
         // Extract the value from the optional result (offset 8)
         const opt_info = switch (next_result.ty) {
             .optional_type => |info| info,
-            .primitive, .struct_type, .array_type, .enum_type, .function_type => OptionalInfo{ .wrapped = .i64 },
+            .primitive, .struct_type, .array_type, .enum_type, .error_union_type, .function_type => OptionalInfo{ .wrapped = .i64 },
         };
         const value_offset = try self.func().emitConstI64(8);
         const value_ptr = try self.func().emitBinaryOp(.add, next_result.value, value_offset, .ptr);
@@ -3444,6 +3556,216 @@ pub const AstToIr = struct {
         }
     }
 
+    fn convertThrowStmt(self: *AstToIr, throw_stmt: ast.ThrowStmt) ConvertError!void {
+        // Verify we're in a throwing function
+        const throws_type = self.current_func_throws_type orelse {
+            self.reportError(.E001, "throw statement in non-throwing function");
+            return error.SemanticError;
+        };
+
+        // Evaluate the error expression
+        const error_typed = try self.convertExpression(throw_stmt.error_expr);
+
+        // Verify the error type matches (or conforms to Error)
+        const error_type_name = switch (error_typed.ty) {
+            .struct_type => |name| name,
+            else => {
+                self.reportError(.E001, "throw requires an error type");
+                return error.SemanticError;
+            },
+        };
+
+        // Check that thrown type matches declared throws type
+        if (!std.mem.eql(u8, error_type_name, throws_type)) {
+            self.reportError(.E001, "thrown error type does not match function's throws declaration");
+            return error.SemanticError;
+        }
+
+        // For throwing functions, we use sret to return the error union
+        // Layout: [tag: 8 bytes][value/error: N bytes]
+        // tag = 0: success, tag = 1: error
+        if (self.sret_ptr) |sret| {
+            // Write tag = 1 (error)
+            const one = try self.func().emitConstI64(1);
+            try self.func().emitStore(sret, one);
+
+            // Write error value at offset 8
+            const error_ptr = try self.func().emitGetFieldPtr(sret, 8);
+            if (self.type_map.get(error_type_name)) |type_info| {
+                if (type_info == .struct_type) {
+                    try self.func().emitMemcpy(error_ptr, error_typed.value, type_info.struct_type.size);
+                } else {
+                    try self.func().emitStore(error_ptr, error_typed.value);
+                }
+            } else {
+                try self.func().emitStore(error_ptr, error_typed.value);
+            }
+
+            // Return via sret
+            try self.freeHeapAllocations();
+            try self.func().emitRet(sret);
+        } else {
+            // This shouldn't happen for throwing functions, but handle gracefully
+            self.reportError(.E001, "throwing function missing sret pointer");
+            return error.SemanticError;
+        }
+    }
+
+    fn convertDoCatchStmt(self: *AstToIr, do_catch: ast.DoCatchStmt) ConvertError!void {
+        // Save the outer do-catch context (for nested do-catch blocks)
+        const outer_error_buffer = self.do_catch_error_buffer;
+        const outer_catch_block = self.do_catch_catch_block;
+        const outer_end_block = self.do_catch_end_block;
+        defer {
+            self.do_catch_error_buffer = outer_error_buffer;
+            self.do_catch_catch_block = outer_catch_block;
+            self.do_catch_end_block = outer_end_block;
+        }
+
+        // Allocate buffer for storing the caught error (error union: tag + payload)
+        // We use a generous size to hold any error type
+        const error_buffer = try self.func().emitAllocaSized(64);
+        self.do_catch_error_buffer = error_buffer;
+
+        // Create blocks for catch handling and end
+        const catch_dispatch_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("catch_dispatch");
+        const do_end_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("do_end");
+
+        // Pop the blocks for later restoration
+        const do_end_block = self.func().blocks.pop().?;
+        const catch_dispatch_block = self.func().blocks.pop().?;
+
+        self.do_catch_catch_block = catch_dispatch_idx;
+        self.do_catch_end_block = do_end_idx;
+
+        // Process the do body
+        for (do_catch.body) |stmt| {
+            try self.convertStatement(stmt);
+        }
+
+        // After do body completes successfully, jump to end block
+        try self.func().currentBlock().?.instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = do_end_idx }, .none, .none },
+            .result = null,
+        });
+
+        // Restore catch_dispatch block
+        try self.func().blocks.append(self.allocator, catch_dispatch_block);
+
+        // Create blocks for each catch clause and a final "unhandled" case
+        var catch_blocks = try std.ArrayList(u32).initCapacity(self.allocator, do_catch.catches.len + 1);
+        defer catch_blocks.deinit(self.allocator);
+
+        for (do_catch.catches, 0..) |_, i| {
+            const catch_block_idx: u32 = @intCast(self.func().blocks.items.len);
+            // Use stack buffer for block name to avoid allocation
+            var name_buf: [32]u8 = undefined;
+            const catch_name = std.fmt.bufPrint(&name_buf, "catch_{d}", .{i}) catch "catch";
+            _ = try self.func().addBlock(catch_name);
+            try catch_blocks.append(self.allocator, catch_block_idx);
+        }
+
+        // Unhandled block (propagate to outer handler or function return)
+        const unhandled_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("catch_unhandled");
+        try catch_blocks.append(self.allocator, unhandled_idx);
+
+        // Pop all the catch blocks for later restoration
+        var deferred_catch_blocks = try std.ArrayList(ir.BasicBlock).initCapacity(self.allocator, catch_blocks.items.len);
+        defer deferred_catch_blocks.deinit(self.allocator);
+
+        for (0..catch_blocks.items.len) |_| {
+            try deferred_catch_blocks.append(self.allocator, self.func().blocks.pop().?);
+        }
+
+        // The catch dispatch block checks error tag and jumps to appropriate catch
+        // For simplicity, we just jump to the first catch and let it chain
+        // (More sophisticated: check error type tag against each catch's expected type)
+        if (do_catch.catches.len > 0) {
+            // Jump to first catch block
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = catch_blocks.items[0] }, .none, .none },
+                .result = null,
+            });
+        } else {
+            // No catch clauses - jump to unhandled
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = unhandled_idx }, .none, .none },
+                .result = null,
+            });
+        }
+
+        // Restore and process each catch block
+        for (do_catch.catches, 0..) |catch_clause, i| {
+            // Restore this catch block as current
+            const idx = deferred_catch_blocks.items.len - 1 - i;
+            try self.func().blocks.append(self.allocator, deferred_catch_blocks.items[idx]);
+
+            // Get error value pointer (at offset 8 in error_buffer)
+            const error_value_ptr = try self.func().emitGetFieldPtr(error_buffer, 8);
+
+            // Bind the error to a variable
+            const error_ty: ValueType = if (catch_clause.error_type) |et|
+                .{ .struct_type = et }
+            else
+                .{ .struct_type = "Error" };
+            try self.var_map.put(self.allocator, catch_clause.binding_name, VarInfo.init(error_value_ptr, error_ty, false, false));
+            defer _ = self.var_map.remove(catch_clause.binding_name);
+
+            // Process catch body
+            for (catch_clause.body) |stmt| {
+                try self.convertStatement(stmt);
+            }
+
+            // Jump to end block after catch body
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = do_end_idx }, .none, .none },
+                .result = null,
+            });
+        }
+
+        // Restore unhandled block
+        try self.func().blocks.append(self.allocator, deferred_catch_blocks.items[0]);
+
+        // Unhandled: if in outer do-catch, propagate there; else propagate to function return
+        if (outer_catch_block) |outer_catch| {
+            // Copy error to outer buffer and jump
+            if (outer_error_buffer) |outer_buf| {
+                try self.func().emitMemcpy(outer_buf, error_buffer, 64);
+            }
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = outer_catch }, .none, .none },
+                .result = null,
+            });
+        } else if (self.current_func_throws_type != null) {
+            // Propagate to function's sret and return
+            if (self.sret_ptr) |sret| {
+                // Copy error union to sret
+                try self.func().emitMemcpy(sret, error_buffer, self.sret_size);
+                try self.func().emitRet(sret);
+            } else {
+                // Should not happen
+                self.reportError(.E001, "unhandled error in non-throwing context");
+                return error.SemanticError;
+            }
+        } else {
+            // Runtime error: unhandled exception
+            // For now, just return 0 (could call abort or panic)
+            const zero = try self.func().emitConstI64(0);
+            try self.func().emitRet(zero);
+        }
+
+        // Restore end block
+        try self.func().blocks.append(self.allocator, do_end_block);
+    }
+
     fn convertElseUnwrapDecl(self: *AstToIr, unwrap: ast.ElseUnwrapDecl) ConvertError!void {
         // Convert the optional expression
         const opt_typed = try self.convertExpression(unwrap.optional_expr.*);
@@ -3454,7 +3776,7 @@ pub const AstToIr = struct {
         // Get the wrapped type info
         const opt_info = switch (opt_typed.ty) {
             .optional_type => |info| info,
-            .primitive, .struct_type, .array_type, .enum_type, .function_type => OptionalInfo{ .wrapped = .i64 },
+            .primitive, .struct_type, .array_type, .enum_type, .error_union_type, .function_type => OptionalInfo{ .wrapped = .i64 },
         };
         const wrapped_type = opt_info.wrapped;
 
@@ -3575,6 +3897,7 @@ pub const AstToIr = struct {
             .cast => |c| self.convertCast(c),
             .interpolated_string => |interp| self.convertInterpolatedString(interp),
             .closure => |clos| self.convertClosure(clos),
+            .try_expr => |try_e| self.convertTryExpr(try_e),
         };
     }
 
@@ -3945,6 +4268,10 @@ pub const AstToIr = struct {
             },
             .array_type => {
                 self.reportInternalError("cannot convert array to string for interpolation");
+                return error.UnknownType;
+            },
+            .error_union_type => {
+                self.reportInternalError("cannot convert error union to string for interpolation");
                 return error.UnknownType;
             },
             .function_type => {
@@ -4831,6 +5158,67 @@ pub const AstToIr = struct {
                 return .{ .value = result, .ty = .{ .primitive = "bool" } };
             },
             .@"or" => {
+                // If left is an optional type, treat as nil coalescing
+                if (left.ty == .optional_type) {
+                    const opt_info = left.ty.optional_type;
+                    const wrapped_type = opt_info.wrapped;
+
+                    // Allocate result storage
+                    const result_ptr = try self.func().emitAlloca(wrapped_type);
+
+                    // Check if optional has a value (tag != 0)
+                    const has_value = try self.emitOptionalHasValue(left.value);
+
+                    // Create blocks for branching
+                    const has_value_block_idx: u32 = @intCast(self.func().blocks.items.len);
+                    _ = try self.func().addBlock("or_has_value");
+                    const use_default_block_idx: u32 = @intCast(self.func().blocks.items.len);
+                    _ = try self.func().addBlock("or_default");
+                    const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
+                    _ = try self.func().addBlock("or_merge");
+
+                    // Emit conditional branch from current block
+                    const entry_block = &self.func().blocks.items[has_value_block_idx - 1];
+                    try entry_block.instructions.append(self.allocator, .{
+                        .op = .br_cond,
+                        .operands = .{ .{ .value = has_value }, .{ .block_ref = has_value_block_idx }, .{ .block_ref = use_default_block_idx } },
+                    });
+
+                    // Defer merge and default blocks
+                    var deferred = try DeferredBlocks.init(self.allocator, 2);
+                    defer deferred.deinit();
+                    deferred.deferBlocks(self, 2);
+
+                    // Has value block: extract unwrapped value
+                    const value_ptr = try self.func().emitGetFieldPtr(left.value, 8);
+                    const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
+                    try self.func().emitStore(result_ptr, unwrapped_value);
+
+                    try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                        .op = .br,
+                        .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+                        .result = null,
+                    });
+
+                    // Default block: use right value as default
+                    try deferred.restore(self, 1);
+                    try self.func().emitStore(result_ptr, right.value);
+
+                    try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                        .op = .br,
+                        .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+                        .result = null,
+                    });
+
+                    // Merge block: load result
+                    try deferred.restore(self, 0);
+                    const final_value = try self.func().emitLoad(result_ptr, wrapped_type);
+
+                    // Return the unwrapped type
+                    const type_name = wrapped_type.toMaxonName();
+                    return .{ .value = final_value, .ty = .{ .primitive = type_name } };
+                }
+
                 // Logical 'or' - at least one value must be non-zero (truthy)
                 // We implement this as: (left != 0) | (right != 0)
                 // Using bitwise OR: if either is 1, result is 1
@@ -4852,7 +5240,7 @@ pub const AstToIr = struct {
         // Get optional type info - must be an optional type
         const opt_info = switch (opt_typed.ty) {
             .optional_type => |info| info,
-            .primitive, .struct_type, .array_type, .enum_type, .function_type => {
+            .primitive, .struct_type, .array_type, .enum_type, .error_union_type, .function_type => {
                 // Left operand is not an optional type - this is an error
                 self.reportError(.E017, "left operand of ?? must be optional type");
                 return error.TypeMismatch;
@@ -4923,6 +5311,102 @@ pub const AstToIr = struct {
         // Load result
         const result = try self.func().emitLoad(result_ptr, wrapped_type);
         return .{ .value = result, .ty = default_typed.ty };
+    }
+
+    /// Convert try expression: `try expr` (propagate)
+    fn convertTryExpr(self: *AstToIr, try_e: ast.TryExpr) ConvertError!TypedValue {
+        // The inner expression must be a call to a throwing function
+        // For now, we only support function calls
+        const inner_expr = try_e.expr.*;
+
+        // Evaluate the inner expression (this calls the throwing function)
+        const result_typed = try self.convertExpression(inner_expr);
+
+        // The result should be an error union (from a throwing function via sret)
+        // Check the tag at offset 0: 0 = success, 1 = error
+
+        // Load the tag
+        const tag = try self.func().emitLoad(result_typed.value, .i64);
+        const zero = try self.func().emitConstI64(0);
+        const is_success = try self.func().emitBinaryOp(.icmp_eq, tag, zero, .i64);
+
+        // try - propagate error to caller or do-catch block
+        // Check if we're in a do-catch block
+        const in_do_catch = self.do_catch_catch_block != null;
+
+        // Verify we're in a valid context for try
+        if (!in_do_catch and self.current_func_throws_type == null) {
+            self.reportError(.E001, "try requires enclosing function to throw or do-catch block");
+            return error.SemanticError;
+        }
+
+        // Create blocks for success and error cases
+        const success_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("try_success");
+        const error_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("try_propagate");
+        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("try_merge");
+
+        // Branch based on tag
+        const entry_block = &self.func().blocks.items[success_block_idx - 1];
+        try entry_block.instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_success }, .{ .block_ref = success_block_idx }, .{ .block_ref = error_block_idx } },
+        });
+
+        // Defer merge and error blocks
+        var deferred = try DeferredBlocks.init(self.allocator, 2);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 2);
+
+        // Success block: extract value and store for later use
+        const result_ptr = try self.func().emitAlloca(.i64);
+        const value_ptr = try self.func().emitGetFieldPtr(result_typed.value, 8);
+        const success_value = try self.func().emitLoad(value_ptr, .i64);
+        try self.func().emitStore(result_ptr, success_value);
+
+        try self.func().currentBlock().?.instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+            .result = null,
+        });
+
+        // Error block: propagate error
+        try deferred.restore(self, 1);
+
+        if (in_do_catch) {
+            // In do-catch: copy error to do-catch buffer and jump to catch dispatch
+            const catch_block = self.do_catch_catch_block.?;
+            if (self.do_catch_error_buffer) |err_buf| {
+                // Copy the error union to the do-catch buffer
+                try self.func().emitMemcpy(err_buf, result_typed.value, 64);
+            }
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = catch_block }, .none, .none },
+                .result = null,
+            });
+        } else {
+            // Not in do-catch: propagate to function's sret and return
+            if (self.sret_ptr) |sret| {
+                // Copy the entire error union (tag + payload)
+                try self.func().emitMemcpy(sret, result_typed.value, self.sret_size);
+                try self.func().emitRet(sret);
+            } else {
+                self.reportError(.E001, "try requires sret for error propagation");
+                return error.SemanticError;
+            }
+        }
+
+        // Merge block: load the success value
+        try deferred.restore(self, 0);
+        const final_value = try self.func().emitLoad(result_ptr, .i64);
+
+        return .{
+            .value = final_value,
+            .ty = .{ .primitive = "int" }, // TODO: Get actual success type
+        };
     }
 
     fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
@@ -5014,7 +5498,7 @@ pub const AstToIr = struct {
         const base = try self.convertExpression(faccess.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type, .function_type => {
+            .primitive, .array_type, .enum_type, .optional_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
                 self.reportError(.E006, faccess.field_name);
                 return error.UnknownType;
@@ -5079,26 +5563,42 @@ pub const AstToIr = struct {
             return .{ .value = result orelse 0, .ty = .{ .primitive = "int" } };
         };
 
-        // Check if return type is optional (needs sret for 16-byte struct)
+        // Check if return type is optional or error union (needs sret)
         const returns_optional = if (func_info.return_value_type) |vt|
             vt == .optional_type
         else
             false;
+        const returns_error_union = if (func_info.return_value_type) |vt|
+            vt == .error_union_type
+        else
+            false;
 
-        // Check if callee returns a struct or optional (needs sret)
-        const returns_struct = func_info.return_type_name != null or returns_optional;
+        // Check if callee returns a struct, optional, or error union (needs sret)
+        const returns_struct = func_info.return_type_name != null or returns_optional or returns_error_union;
         var sret_buffer: ?ir.Value = null;
 
         // Allocate args: +1 if using sret for hidden first parameter
         const num_args = call.args.len + @as(usize, if (returns_struct) 1 else 0);
         const args = try self.func().allocator.alloc(ir.Value, num_args);
 
-        // If returning struct or optional, allocate buffer in caller and pass as first arg
+        // If returning struct, optional, or error union, allocate buffer in caller and pass as first arg
         if (returns_struct) {
             if (returns_optional) {
                 // Optional size = 8 (tag) + wrapped_value_size
                 const opt_info = func_info.return_value_type.?.optional_type;
                 sret_buffer = try self.func().emitAllocaSized(self.getOptionalSize(opt_info));
+            } else if (returns_error_union) {
+                // Error union size = 8 (tag) + max(success_size, error_size)
+                const eu_info = func_info.return_value_type.?.error_union_type;
+                const success_size: i32 = if (eu_info.success_struct_type) |sn|
+                    if (self.type_map.get(sn)) |ti| if (ti == .struct_type) ti.struct_type.size else 8 else 8
+                else
+                    8;
+                const error_size: i32 = if (self.type_map.get(eu_info.error_struct_type)) |ti|
+                    if (ti == .struct_type) ti.struct_type.size else 8
+                else
+                    8;
+                sret_buffer = try self.func().emitAllocaSized(8 + @max(success_size, error_size));
             } else {
                 const struct_name = func_info.return_type_name.?;
                 const struct_info = try self.lookupStructInfo(struct_name);
@@ -5137,6 +5637,10 @@ pub const AstToIr = struct {
         }
         // If the function returns an optional with sret, return the sret buffer
         if (returns_optional) {
+            return .{ .value = sret_buffer.?, .ty = func_info.return_value_type.? };
+        }
+        // If the function returns an error union with sret, return the sret buffer
+        if (returns_error_union) {
             return .{ .value = sret_buffer.?, .ty = func_info.return_value_type.? };
         }
         // If the function returns an array, use the full array type info
@@ -5700,7 +6204,7 @@ pub const AstToIr = struct {
         const elem_type = first_typed.ty.toPrimitiveType();
         const elem_struct_type: ?[]const u8 = switch (first_typed.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type, .function_type => null,
+            .primitive, .array_type, .enum_type, .optional_type, .error_union_type, .function_type => null,
         };
 
         // Calculate element size: structs use their actual size, primitives use 8 bytes
@@ -5852,7 +6356,7 @@ pub const AstToIr = struct {
 
         const arr_info = switch (base_typed.ty) {
             .array_type => |a| a,
-            .primitive, .struct_type, .enum_type, .optional_type, .function_type => {
+            .primitive, .struct_type, .enum_type, .optional_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertIndexExpr: expected array type\n", .{});
                 self.reportError(.E006, "expected array type for indexing");
                 return error.UnknownType;
@@ -5911,6 +6415,7 @@ pub const AstToIr = struct {
                 .cast,
                 .interpolated_string,
                 .closure,
+                .try_expr,
                 => {
                     const elem_ptr = try self.func().emitGetElemPtr(buffer_ptr, idx_typed.value, elem_size);
                     if (arr_info.element_struct_type != null) {
@@ -6209,7 +6714,7 @@ pub const AstToIr = struct {
         // Get the type name from the TypedValue
         const type_name = switch (base_typed.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type, .function_type => {
+            .primitive, .array_type, .enum_type, .optional_type, .error_union_type, .function_type => {
                 debug.astToIr("error: method call on non-struct type", .{});
                 self.reportError(.E003, method_name);
                 return error.SemanticError;
@@ -6462,6 +6967,7 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
                 .simple => |name| name,
                 .generic => |gen| gen.base_type, // Use base type for generics
                 .optional => "ptr", // Optionals stored as pointers
+                .error_union => "ptr", // Error unions stored as pointers
                 .function_type => "ptr", // Function pointers
             };
 
@@ -6619,6 +7125,7 @@ fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
         },
         .generic => .ptr,
         .optional => .ptr,
+        .error_union => .ptr,
         .function_type => .ptr,
     };
 }
@@ -6634,6 +7141,17 @@ fn getValueTypeFromTypeExpr(te: ast.TypeExpr) ?ValueType {
                 .optional_type = .{
                     .wrapped = wrapped_ir_type,
                     .wrapped_struct_type = wrapped_struct_name,
+                },
+            };
+        },
+        .error_union => |eu| {
+            const success_ir_type = getIrTypeFromTypeExpr(eu.success_type.*);
+            const success_struct_name = getStructNameFromTypeExpr(eu.success_type.*);
+            return .{
+                .error_union_type = .{
+                    .success_type = success_ir_type,
+                    .success_struct_type = success_struct_name,
+                    .error_struct_type = eu.error_type,
                 },
             };
         },
@@ -6658,7 +7176,7 @@ fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
             return name;
         },
         .generic => |gen| gen.base_type,
-        .optional, .function_type => null,
+        .optional, .error_union, .function_type => null,
     };
 }
 
@@ -6671,6 +7189,13 @@ fn getValueTypeFromTypeExprForParam(te: ast.TypeExpr) ValueType {
             .optional_type = .{
                 .wrapped = getIrTypeFromTypeExpr(wrapped.*),
                 .wrapped_struct_type = getStructNameFromTypeExpr(wrapped.*),
+            },
+        },
+        .error_union => |eu| .{
+            .error_union_type = .{
+                .success_type = getIrTypeFromTypeExpr(eu.success_type.*),
+                .success_struct_type = getStructNameFromTypeExpr(eu.success_type.*),
+                .error_struct_type = eu.error_type,
             },
         },
         .function_type => .{ .primitive = "ptr" }, // Function types are represented as pointers in simple contexts

@@ -1037,6 +1037,22 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
             }
             allocator.free(unwrap.default_body);
         },
+        .throw_stmt => |throw_s| {
+            freeExpressionArgs(throw_s.error_expr, allocator);
+        },
+        .do_catch_stmt => |do_catch| {
+            for (do_catch.body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(do_catch.body);
+            for (do_catch.catches) |catch_clause| {
+                for (catch_clause.body) |catch_stmt| {
+                    freeStatementArgs(catch_stmt, allocator);
+                }
+                allocator.free(catch_clause.body);
+            }
+            allocator.free(do_catch.catches);
+        },
     }
 }
 
@@ -1142,6 +1158,9 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
             freeExpressionArgs(clos.body.*, allocator);
             allocator.free(clos.params);
         },
+        .try_expr => |te| {
+            freeExpressionArgs(te.expr.*, allocator);
+        },
         // Simple literals with no nested allocations to free
         .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier, .string_literal, .char_literal => {},
     }
@@ -1173,6 +1192,10 @@ fn freeTypeExpr(type_expr: ?ast.TypeExpr, allocator: std.mem.Allocator) void {
                 freeTypeExpr(rt.*, allocator);
                 allocator.destroy(@constCast(rt));
             }
+        },
+        .error_union => |eu| {
+            freeTypeExpr(eu.success_type.*, allocator);
+            allocator.destroy(@constCast(eu.success_type));
         },
         .simple => {},
     }

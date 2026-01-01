@@ -124,6 +124,20 @@ pub const MutationAnalyzer = struct {
                     self.checkStatementForMutation(body_stmt, param_indices, mutated);
                 }
             },
+            .throw_stmt => {
+                // Throw statements don't mutate parameters
+            },
+            .do_catch_stmt => |do_catch| {
+                // Check mutations inside do block and catch blocks
+                for (do_catch.body) |body_stmt| {
+                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                }
+                for (do_catch.catches) |catch_clause| {
+                    for (catch_clause.body) |catch_stmt| {
+                        self.checkStatementForMutation(catch_stmt, param_indices, mutated);
+                    }
+                }
+            },
         }
     }
 
@@ -169,6 +183,10 @@ pub const MutationAnalyzer = struct {
             // Closures - check body for mutations
             .closure => |clos| {
                 self.checkExpressionForParamMutation(clos.body.*, param_indices, mutated);
+            },
+            // Try expressions - check inner expression
+            .try_expr => |te| {
+                self.checkExpressionForParamMutation(te.expr.*, param_indices, mutated);
             },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
