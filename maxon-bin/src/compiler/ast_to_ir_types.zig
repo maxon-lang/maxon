@@ -134,16 +134,37 @@ pub const StructTypeInfo = struct {
     size: i32,
 };
 
+/// Associated value info for enum cases
+pub const AssociatedValueInfo = struct {
+    name: []const u8,
+    type_name: []const u8,
+    ir_type: ir.Type,
+};
+
+/// Enum case info - includes associated values if any
+pub const EnumCaseInfo = struct {
+    tag: i64, // Ordinal/tag value
+    associated_values: []const AssociatedValueInfo, // Empty for simple cases
+};
+
 /// Enum type info - maps member names to their integer values
 /// For string-backed enums, also stores the backing string values
 pub const EnumTypeInfo = struct {
     name: []const u8,
     members: std.StringHashMapUnmanaged(i64),
+    /// Extended case info including associated values
+    case_info: std.StringHashMapUnmanaged(EnumCaseInfo) = .{},
     backing_type: BackingType = .int,
     /// For string-backed enums: maps ordinal to string value
     string_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{},
     /// True if this enum conforms to the Error interface
     is_error: bool = false,
+    /// True if any case has associated values
+    has_associated_values: bool = false,
+    /// Maximum payload size for associated values (used for memory layout)
+    max_payload_size: i32 = 0,
+    /// True if enum was declared with explicit backing type (e.g., "enum Status int")
+    has_explicit_backing_type: bool = false,
 
     pub const BackingType = enum { int, string };
 };

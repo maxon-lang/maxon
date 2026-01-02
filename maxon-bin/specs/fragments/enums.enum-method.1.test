@@ -1,0 +1,54 @@
+// Test: enums.enum-method.1
+enum Direction
+    north
+    south
+
+    function isNorth() returns bool
+        if self == Direction.north 'check'
+            return true
+        end 'check'
+        return false
+    end 'isNorth'
+end 'Direction'
+
+function main() returns int
+    let d = Direction.north
+    if d.isNorth() 'test'
+        return 1
+    end 'test'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %d = alloca ptr
+    store %d %tmp_const
+    %tmp_load = load i64 %d
+    %tmp_call = call i64 @Direction$isNorth(%tmp_load)
+    br.cond %tmp_call @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 1
+    ret %tmp_const.1
+end:
+    %tmp_const.2 = const.i64 i64 0
+    ret %tmp_const.2
+}
+
+function Direction$isNorth() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %self %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 1
+    ret %tmp_const.1
+end:
+    %tmp_const.2 = const.i64 i64 0
+    ret %tmp_const.2
+}
+
+---

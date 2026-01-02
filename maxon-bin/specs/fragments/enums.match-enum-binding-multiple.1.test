@@ -1,0 +1,60 @@
+// Test: enums.match-enum-binding-multiple.1
+enum Result
+    success(value int)
+    failure(code int)
+end 'Result'
+
+function main() returns int
+    var r = Result.failure(99)
+    match r 'handle'
+        success(v) then return v
+        failure(c) then return c
+    end 'handle'
+end 'main'
+---
+ExitCode: 99
+---
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca ptr
+    %tmp_const = const.i64 i64 16
+    %tmp_heap = heap.alloc ptr %tmp_const
+    store %tmp_alloca %tmp_heap
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_heap %tmp_const.1
+    %tmp_const.2 = const.i64 i64 99
+    %tmp_fieldptr = getfieldptr ptr %tmp_heap 8
+    store %tmp_fieldptr %tmp_const.2
+    %tmp_load = load ptr %tmp_alloca
+    %r = alloca ptr
+    store %r %tmp_load
+    %tmp_load.2 = load i64 %r
+    br @block1
+match_check:
+    %tmp_const.5 = const.i64 i64 0
+    %tmp_load.3 = load i64 %tmp_load.2
+    %tmp_icmp = icmp.eq i64 %tmp_load.3 %tmp_const.5
+    br.cond %tmp_icmp @block2 @block3
+match_body:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_load.2 8
+    %tmp_load.4 = load i64 %tmp_fieldptr.1
+    %tmp_alloca.2 = alloca ptr
+    store %tmp_alloca.2 %tmp_load.4
+    %tmp_load.5 = load i64 %tmp_alloca.2
+    ret %tmp_load.5
+match_check:
+    %tmp_const.6 = const.i64 i64 1
+    %tmp_load.6 = load i64 %tmp_load.2
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.6 %tmp_const.6
+    br.cond %tmp_icmp.1 @block4 @block0
+match_body:
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_load.2 8
+    %tmp_load.7 = load i64 %tmp_fieldptr.2
+    %tmp_alloca.3 = alloca ptr
+    store %tmp_alloca.3 %tmp_load.7
+    %tmp_load.8 = load i64 %tmp_alloca.3
+    ret %tmp_load.8
+match_merge:
+}
+
+---

@@ -1,0 +1,60 @@
+// Test: enums.enum-method-returns-enum.1
+enum Toggle
+    on
+    off
+
+    function flip() returns Toggle
+        if self == Toggle.on 'check'
+            return Toggle.off
+        end 'check'
+        return Toggle.on
+    end 'flip'
+end 'Toggle'
+
+function main() returns int
+    let t = Toggle.on
+    let flipped = t.flip()
+    if flipped == Toggle.off 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %t = alloca ptr
+    store %t %tmp_const
+    %tmp_load = load i64 %t
+    %tmp_call = call i64 @Toggle$flip(%tmp_load)
+    %flipped = alloca ptr
+    store %flipped %tmp_call
+    %tmp_load.1 = load i64 %flipped
+    %tmp_const.1 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.1
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.2 = const.i64 i64 1
+    ret %tmp_const.2
+end:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+}
+
+function Toggle$flip() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %self %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 1
+    ret %tmp_const.1
+end:
+    %tmp_const.2 = const.i64 i64 0
+    ret %tmp_const.2
+}
+
+---

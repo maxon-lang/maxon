@@ -1,0 +1,48 @@
+// Test: enums.associated-value-construction.1
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function main() returns int
+    var c = Container.value(42)
+    var e = Container.empty
+    // Construction works - verify by checking tags are different
+    if c != e 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca ptr
+    %tmp_const = const.i64 i64 16
+    %tmp_heap = heap.alloc ptr %tmp_const
+    store %tmp_alloca %tmp_heap
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_heap %tmp_const.1
+    %tmp_const.2 = const.i64 i64 42
+    %tmp_fieldptr = getfieldptr ptr %tmp_heap 8
+    store %tmp_fieldptr %tmp_const.2
+    %tmp_load = load ptr %tmp_alloca
+    %c = alloca ptr
+    store %c %tmp_load
+    %tmp_const.3 = const.i64 i64 0
+    %e = alloca ptr
+    store %e %tmp_const.3
+    %tmp_load.1 = load i64 %c
+    %tmp_load.2 = load i64 %e
+    %tmp_icmp = icmp.ne i64 %tmp_load.1 %tmp_load.2
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.4 = const.i64 i64 1
+    ret %tmp_const.4
+end:
+    %tmp_const.5 = const.i64 i64 0
+    ret %tmp_const.5
+}
+
+---

@@ -1263,14 +1263,13 @@ pub const Parser = struct {
             // Parse patterns (may have multiple via 'or')
             var patterns: std.ArrayListUnmanaged(ast.Expression) = .empty;
             errdefer patterns.deinit(self.allocator);
+            var pattern_bindings: std.ArrayListUnmanaged(?ast.PatternBinding) = .empty;
+            errdefer pattern_bindings.deinit(self.allocator);
 
-            // Parse pattern at logical-and precedence level (excludes 'or' operator)
-            // so we can handle 'or' as pattern separator
-            const first_pattern = try self.parseLogicalAnd() orelse {
-                self.reportError(.E003);
-                return error.ExpectedExpression;
-            };
-            try patterns.append(self.allocator, first_pattern);
+            // Parse first pattern (may be identifier with bindings like `value(n)`)
+            const first_result = try self.parseMatchPattern();
+            try patterns.append(self.allocator, first_result.pattern);
+            try pattern_bindings.append(self.allocator, first_result.binding);
 
             while (self.check(.@"or")) {
                 // Check for 'or nil' which is type annotation, not pattern
@@ -1278,11 +1277,9 @@ pub const Parser = struct {
                 if (next != null and next.?.type == .nil) break;
 
                 _ = self.advance(); // consume 'or'
-                const pattern = try self.parseLogicalAnd() orelse {
-                    self.reportError(.E003);
-                    return error.ExpectedExpression;
-                };
-                try patterns.append(self.allocator, pattern);
+                const pattern_result = try self.parseMatchPattern();
+                try patterns.append(self.allocator, pattern_result.pattern);
+                try pattern_bindings.append(self.allocator, pattern_result.binding);
             }
 
             _ = try self.expect(.then);
@@ -1292,6 +1289,7 @@ pub const Parser = struct {
 
             try cases.append(self.allocator, .{
                 .patterns = try patterns.toOwnedSlice(self.allocator),
+                .pattern_bindings = try pattern_bindings.toOwnedSlice(self.allocator),
                 .body = try self.createStmt(result.stmt),
                 .has_fallthrough = result.has_fallthrough,
             });
@@ -1321,6 +1319,109 @@ pub const Parser = struct {
         stmt: ast.Statement,
         has_fallthrough: bool,
     };
+
+    const MatchPatternResult = struct {
+        pattern: ast.Expression,
+        binding: ?ast.PatternBinding,
+    };
+
+    /// Parse a match pattern, which may include bindings for associated values
+    /// Examples: `empty`, `value(n)`, `pair(a, b)`, `Color.red`, `Color.value(n)`
+    fn parseMatchPattern(self: *Parser) ParseError!MatchPatternResult {
+        // Check for identifier possibly followed by bindings or field access
+        if (self.check(.identifier)) {
+            const ident_token = self.advance();
+
+            // Check if followed by '.' for field access (e.g., Color.red)
+            if (self.check(.dot)) {
+                _ = self.advance(); // consume '.'
+                const field_token = try self.expect(.identifier);
+
+                // Check if field access is followed by '(' for bindings (e.g., Color.value(n))
+                if (self.check(.lparen)) {
+                    _ = self.advance(); // consume '('
+
+                    var bindings: std.ArrayListUnmanaged([]const u8) = .empty;
+                    errdefer bindings.deinit(self.allocator);
+
+                    if (!self.check(.rparen)) {
+                        const first_binding = try self.expect(.identifier);
+                        try bindings.append(self.allocator, first_binding.text);
+
+                        while (self.check(.comma)) {
+                            _ = self.advance();
+                            const next_binding = try self.expect(.identifier);
+                            try bindings.append(self.allocator, next_binding.text);
+                        }
+                    }
+                    _ = try self.expect(.rparen);
+
+                    // Create field access expression for the pattern
+                    const base_expr = try self.createExpr(.{ .identifier = ident_token.text });
+                    return .{
+                        .pattern = .{ .field_access = .{ .base = base_expr, .field_name = field_token.text } },
+                        .binding = .{
+                            .case_name = field_token.text,
+                            .bindings = try bindings.toOwnedSlice(self.allocator),
+                        },
+                    };
+                }
+
+                // Simple field access like Color.red
+                const base_expr = try self.createExpr(.{ .identifier = ident_token.text });
+                return .{
+                    .pattern = .{ .field_access = .{ .base = base_expr, .field_name = field_token.text } },
+                    .binding = null,
+                };
+            }
+
+            // Check if followed by '(' for bindings (bare identifier with bindings like `value(n)`)
+            if (self.check(.lparen)) {
+                _ = self.advance(); // consume '('
+
+                var bindings: std.ArrayListUnmanaged([]const u8) = .empty;
+                errdefer bindings.deinit(self.allocator);
+
+                // Parse first binding name
+                if (!self.check(.rparen)) {
+                    const first_binding = try self.expect(.identifier);
+                    try bindings.append(self.allocator, first_binding.text);
+
+                    // Parse additional binding names
+                    while (self.check(.comma)) {
+                        _ = self.advance(); // consume ','
+                        const next_binding = try self.expect(.identifier);
+                        try bindings.append(self.allocator, next_binding.text);
+                    }
+                }
+                _ = try self.expect(.rparen);
+
+                return .{
+                    .pattern = .{ .identifier = ident_token.text },
+                    .binding = .{
+                        .case_name = ident_token.text,
+                        .bindings = try bindings.toOwnedSlice(self.allocator),
+                    },
+                };
+            }
+
+            // Plain identifier, no bindings
+            return .{
+                .pattern = .{ .identifier = ident_token.text },
+                .binding = null,
+            };
+        }
+
+        // Fall back to regular expression parsing for other patterns
+        const pattern = try self.parseLogicalAnd() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+        return .{
+            .pattern = pattern,
+            .binding = null,
+        };
+    }
 
     /// Parse a single statement in a match case, handling 'and fallthrough'
     fn parseMatchCaseBody(self: *Parser) ParseError!MatchCaseResult {
@@ -1489,14 +1590,13 @@ pub const Parser = struct {
             // Parse patterns (may have multiple via 'or')
             var patterns: std.ArrayListUnmanaged(ast.Expression) = .empty;
             errdefer patterns.deinit(self.allocator);
+            var pattern_bindings: std.ArrayListUnmanaged(?ast.PatternBinding) = .empty;
+            errdefer pattern_bindings.deinit(self.allocator);
 
-            // Parse pattern at logical-and precedence level (excludes 'or' operator)
-            // so we can handle 'or' as pattern separator
-            const first_pattern = try self.parseLogicalAnd() orelse {
-                self.reportError(.E003);
-                return error.ExpectedExpression;
-            };
-            try patterns.append(self.allocator, first_pattern);
+            // Parse first pattern (may be identifier with bindings like `value(n)`)
+            const first_result = try self.parseMatchPattern();
+            try patterns.append(self.allocator, first_result.pattern);
+            try pattern_bindings.append(self.allocator, first_result.binding);
 
             while (self.check(.@"or")) {
                 // Check for 'or nil' which is type annotation, not pattern
@@ -1504,11 +1604,9 @@ pub const Parser = struct {
                 if (next != null and next.?.type == .nil) break;
 
                 _ = self.advance(); // consume 'or'
-                const pattern = try self.parseLogicalAnd() orelse {
-                    self.reportError(.E003);
-                    return error.ExpectedExpression;
-                };
-                try patterns.append(self.allocator, pattern);
+                const pattern_result = try self.parseMatchPattern();
+                try patterns.append(self.allocator, pattern_result.pattern);
+                try pattern_bindings.append(self.allocator, pattern_result.binding);
             }
 
             _ = try self.expect(.gives);
@@ -1522,6 +1620,7 @@ pub const Parser = struct {
 
             try cases.append(self.allocator, .{
                 .patterns = try patterns.toOwnedSlice(self.allocator),
+                .pattern_bindings = try pattern_bindings.toOwnedSlice(self.allocator),
                 .result = result,
             });
         }
@@ -2545,9 +2644,11 @@ pub const Parser = struct {
         // Require newline after enum declaration
         _ = try self.expect(.newline);
 
-        // Parse members
+        // Parse members and methods
         var members: std.ArrayListUnmanaged(ast.EnumMember) = .empty;
         errdefer members.deinit(self.allocator);
+        var methods: std.ArrayListUnmanaged(ast.MethodDecl) = .empty;
+        errdefer methods.deinit(self.allocator);
 
         while (!self.check(.end) and !self.isAtEnd()) {
             // Skip blank lines
@@ -2556,10 +2657,47 @@ pub const Parser = struct {
                 continue;
             }
 
+            // Check if this is a method (function keyword)
+            if (self.check(.function)) {
+                const method = try self.parseMethodDecl();
+                try methods.append(self.allocator, method);
+                continue;
+            }
+
             // Parse member name
             const member_name = try self.expect(.identifier);
 
+            // Parse optional associated values (e.g., "value(n int)" or "pair(a int, b int)")
+            var associated_values: std.ArrayListUnmanaged(ast.ParamDecl) = .empty;
+            errdefer associated_values.deinit(self.allocator);
+
+            if (self.check(.lparen)) {
+                _ = self.advance(); // consume '('
+                // Parse first associated value (name Type)
+                if (!self.check(.rparen)) {
+                    const param_name = try self.expect(.identifier);
+                    const param_type = try self.parseTypeExpr();
+                    try associated_values.append(self.allocator, .{
+                        .name = param_name.text,
+                        .type_expr = param_type,
+                    });
+
+                    // Parse additional associated values
+                    while (self.check(.comma)) {
+                        _ = self.advance(); // consume ','
+                        const next_name = try self.expect(.identifier);
+                        const next_type = try self.parseTypeExpr();
+                        try associated_values.append(self.allocator, .{
+                            .name = next_name.text,
+                            .type_expr = next_type,
+                        });
+                    }
+                }
+                _ = try self.expect(.rparen);
+            }
+
             // Parse optional value assignment (e.g., "red = 1" or "active = \"Active\"")
+            // This is for raw value enums, not associated values
             var value: ?*const ast.Expression = null;
             if (self.check(.equals)) {
                 _ = self.advance(); // consume '='
@@ -2573,6 +2711,9 @@ pub const Parser = struct {
             try members.append(self.allocator, .{
                 .name = member_name.text,
                 .value = value,
+                .associated_values = try associated_values.toOwnedSlice(self.allocator),
+                .line = member_name.line,
+                .column = member_name.column,
             });
 
             _ = try self.expect(.newline);
@@ -2593,6 +2734,7 @@ pub const Parser = struct {
             .backing_type = backing_type,
             .conformances = try conformances.toOwnedSlice(self.allocator),
             .members = try members.toOwnedSlice(self.allocator),
+            .methods = try methods.toOwnedSlice(self.allocator),
         };
     }
 

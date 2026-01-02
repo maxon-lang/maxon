@@ -1218,6 +1218,12 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(default.*, allocator);
             }
         },
+        .enum_case => |ec| {
+            for (ec.args) |arg| {
+                freeExpressionArgs(arg, allocator);
+            }
+            allocator.free(ec.args);
+        },
         // Simple literals with no nested allocations to free
         .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier, .string_literal, .char_literal => {},
     }

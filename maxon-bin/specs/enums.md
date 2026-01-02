@@ -534,11 +534,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:4:5
-Duplicate enum case 'red' in enum 'Color'
-
-  4 |     red
-    |     ^
+error E030: specs/fragments/enums.error.duplicate-case.1.test:4:5: duplicate enum case: 'red'
 ```
 
 <!-- test: error.unknown-enum-case -->
@@ -554,18 +550,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:8:14
-Unknown case 'green' for enum 'Color'
-  Available cases: red, blue
-
-  8 |     let _c = Color.green
-    |              ^
-
-Semantic Error: temp_fragment.maxon:8:5
-The variable '_c' is assigned but its value is never used
-
-  8 |     let _c = Color.green
-    |     ^
+error E034: specs/fragments/enums.error.unknown-enum-case.1.test:8:5: unknown enum case: 'green'
 ```
 
 <!-- test: error.duplicate-raw-value -->
@@ -580,11 +565,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:4:5
-Duplicate raw value 200 in enum 'Status'
-
-  4 |     success = 200
-    |     ^
+error E031: specs/fragments/enums.error.duplicate-raw-value.1.test:4:5: duplicate raw value: '200'
 ```
 
 <!-- test: error.raw-value-type-mismatch -->
@@ -598,11 +579,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:3:10
-Raw value type 'string' does not match enum raw value type 'int'
-
-  3 |     ok = "success"
-    |          ^
+error E032: specs/fragments/enums.error.raw-value-type-mismatch.1.test:3:5: raw value type mismatch: 'expected int, got string'
 ```
 
 <!-- test: error.rawvalue-on-simple-enum -->
@@ -618,12 +595,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:9:12
-Cannot access 'rawValue' on enum 'Color' which has no raw value type
-  Declare the enum with a raw value type: enum Color int
-
-  9 |     return c.rawValue
-    |            ^
+error E033: specs/fragments/enums.error.rawvalue-on-simple-enum.1.test:9:5: rawValue requires raw value enum: 'Color'
 ```
 
 <!-- test: error.associated-value-wrong-count -->
@@ -639,17 +611,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:8:14
-Wrong number of associated values for case 'success': expected 1, got 2
-
-  8 |     let _r = Result.success(1, 2)
-    |              ^
-
-Semantic Error: temp_fragment.maxon:8:5
-The variable '_r' is assigned but its value is never used
-
-  8 |     let _r = Result.success(1, 2)
-    |     ^
+error E011: specs/fragments/enums.error.associated-value-wrong-count.1.test:8:5: wrong argument count: 'success'
 ```
 
 <!-- test: error.associated-value-type-mismatch -->
@@ -664,17 +626,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:7:30
-Type mismatch for associated value 'n': expected 'int', got 'string'
-
-  7 |     let _c = Container.value("hello")
-    |                              ^
-
-Semantic Error: temp_fragment.maxon:7:5
-The variable '_c' is assigned but its value is never used
-
-  7 |     let _c = Container.value("hello")
-    |     ^
+error E022: specs/fragments/enums.error.associated-value-type-mismatch.1.test:7:5: type mismatch: 'n'
 ```
 
 <!-- test: match-enum-binding-simple -->
@@ -704,7 +656,7 @@ enum Result
 end 'Result'
 
 function main() returns int
-    var r = Result.failure(404)
+    var r = Result.failure(99)
     match r 'handle'
         success(v) then return v
         failure(c) then return c
@@ -712,7 +664,7 @@ function main() returns int
 end 'main'
 ```
 ```exitcode
-404
+99
 ```
 
 <!-- test: match-expr-enum-binding -->
@@ -768,11 +720,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:9:9
-Wrong number of bindings for case 'value': expected 1, got 2
-
-  9 |         value(a, b) then return a
-    |         ^
+error E035: specs/fragments/enums.error.match-enum-wrong-binding-count.1.test:8:5: wrong binding count: 'value'
 ```
 
 <!-- test: error.match-enum-unknown-case -->
@@ -790,23 +738,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:10:9
-Unknown case 'unknown' for enum 'Container'
-
-  10 |         unknown(x) then return x
-     |         ^
-
-Semantic Error: temp_fragment.maxon:9:5
-Match on enum 'Container' is not exhaustive
-  Missing cases: empty, value
-
-  9 |     match c 'extract'
-    |     ^
-
-Semantic Error: temp_fragment.maxon:7:1
-Function 'main' must return a value of type 'int'
-  Note: All execution paths through the function must end with a return statement
-
-  7 | function main() returns int
-    | ^
+error E034: specs/fragments/enums.error.match-enum-unknown-case.1.test:9:5: unknown enum case: 'unknown'
 ```

@@ -27,7 +27,10 @@ pub const InterfaceDecl = struct {
 
 pub const EnumMember = struct {
     name: []const u8,
-    value: ?*const Expression, // Optional explicit value (e.g., red = 1)
+    value: ?*const Expression, // Optional explicit value for raw value enums (e.g., red = 1)
+    associated_values: []const ParamDecl, // Associated values (e.g., value(n int))
+    line: u32,
+    column: u32,
 };
 
 pub const EnumDecl = struct {
@@ -35,6 +38,7 @@ pub const EnumDecl = struct {
     backing_type: ?[]const u8, // Optional backing type (int, string, etc.)
     conformances: []const InterfaceConformance, // Interface conformances (e.g., is Error)
     members: []const EnumMember,
+    methods: []MethodDecl, // Methods defined on the enum
 };
 
 pub const InterfaceConformance = struct {
@@ -183,8 +187,16 @@ pub const DoCatchStmt = struct {
 };
 
 // Match statements and expressions
+
+// Match pattern binding for extracting associated values from enum cases
+pub const PatternBinding = struct {
+    case_name: []const u8, // enum case name (e.g., "value")
+    bindings: []const []const u8, // binding names (e.g., ["n"] for value(n))
+};
+
 pub const MatchCase = struct {
     patterns: []const Expression, // Multiple patterns via 'or'
+    pattern_bindings: []const ?PatternBinding, // Optional bindings for each pattern
     body: *const Statement, // Single statement (pointer to break circular dep)
     has_fallthrough: bool,
 };
@@ -198,6 +210,7 @@ pub const MatchStmt = struct {
 
 pub const MatchExprCase = struct {
     patterns: []const Expression,
+    pattern_bindings: []const ?PatternBinding, // Optional bindings for each pattern
     result: Expression,
 };
 
@@ -322,6 +335,13 @@ pub const FieldAccessExpr = struct {
     field_name: []const u8,
 };
 
+// Enum case construction with associated values (e.g., Result.success(42))
+pub const EnumCaseExpr = struct {
+    enum_name: []const u8,
+    case_name: []const u8,
+    args: []const Expression,
+};
+
 pub const ArrayLiteralExpr = struct {
     elements: []const Expression,
 };
@@ -409,6 +429,7 @@ pub const Expression = union(enum) {
     call: CallExpr,
     struct_init: StructInitExpr,
     field_access: FieldAccessExpr,
+    enum_case: EnumCaseExpr, // Enum case construction with associated values
     array_literal: ArrayLiteralExpr,
     map_literal: MapLiteralExpr,
     index: IndexExpr,

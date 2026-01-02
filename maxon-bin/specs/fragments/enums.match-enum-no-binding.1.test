@@ -1,0 +1,47 @@
+// Test: enums.match-enum-no-binding.1
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function main() returns int
+    var c = Container.empty
+    match c 'check'
+        empty then return 1
+        value(n) then return n
+    end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %c = alloca ptr
+    store %c %tmp_const
+    %tmp_load.1 = load i64 %c
+    br @block1
+match_check:
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_load.2 = load i64 %tmp_load.1
+    %tmp_icmp = icmp.eq i64 %tmp_load.2 %tmp_const.3
+    br.cond %tmp_icmp @block2 @block3
+match_body:
+    %tmp_const.4 = const.i64 i64 1
+    ret %tmp_const.4
+match_check:
+    %tmp_const.5 = const.i64 i64 1
+    %tmp_load.3 = load i64 %tmp_load.1
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.3 %tmp_const.5
+    br.cond %tmp_icmp.1 @block4 @block0
+match_body:
+    %tmp_fieldptr = getfieldptr ptr %tmp_load.1 8
+    %tmp_load.4 = load i64 %tmp_fieldptr
+    %tmp_alloca.1 = alloca ptr
+    store %tmp_alloca.1 %tmp_load.4
+    %tmp_load.5 = load i64 %tmp_alloca.1
+    ret %tmp_load.5
+match_merge:
+}
+
+---

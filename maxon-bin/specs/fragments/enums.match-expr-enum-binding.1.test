@@ -1,0 +1,67 @@
+// Test: enums.match-expr-enum-binding.1
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function main() returns int
+    var c = Container.value(10)
+    var result = match c 'get'
+        empty gives 0
+        value(n) gives n * 2
+    end 'get'
+    return result
+end 'main'
+---
+ExitCode: 20
+---
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca ptr
+    %tmp_const = const.i64 i64 16
+    %tmp_heap = heap.alloc ptr %tmp_const
+    store %tmp_alloca %tmp_heap
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_heap %tmp_const.1
+    %tmp_const.2 = const.i64 i64 10
+    %tmp_fieldptr = getfieldptr ptr %tmp_heap 8
+    store %tmp_fieldptr %tmp_const.2
+    %tmp_load = load ptr %tmp_alloca
+    %c = alloca ptr
+    store %c %tmp_load
+    %tmp_load.1 = load i64 %c
+    %tmp_alloca.2 = alloca ptr
+    br @block1
+match_expr_check:
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_load.2 = load i64 %tmp_load.1
+    %tmp_icmp = icmp.eq i64 %tmp_load.2 %tmp_const.3
+    br.cond %tmp_icmp @block2 @block3
+match_expr_body:
+    %tmp_const.4 = const.i64 i64 0
+    store %tmp_alloca.2 %tmp_const.4
+    br @block5
+match_expr_check:
+    %tmp_const.5 = const.i64 i64 1
+    %tmp_load.3 = load i64 %tmp_load.1
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.3 %tmp_const.5
+    br.cond %tmp_icmp.1 @block4 @block5
+match_expr_body:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_load.1 8
+    %tmp_load.4 = load i64 %tmp_fieldptr.1
+    %tmp_alloca.3 = alloca ptr
+    store %tmp_alloca.3 %tmp_load.4
+    %tmp_load.5 = load i64 %tmp_alloca.3
+    %tmp_const.6 = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_load.5 %tmp_const.6
+    store %tmp_alloca.2 %tmp_mul
+    br @block5
+match_expr_merge:
+    %tmp_load.6 = load i64 %tmp_alloca.2
+    %result = alloca ptr
+    store %result %tmp_load.6
+    %tmp_load.7 = load i64 %result
+    ret %tmp_load.7
+}
+
+---

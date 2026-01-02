@@ -31,6 +31,12 @@ pub const ErrorCode = enum {
     E027,
     E028,
     E029,
+    E030, // duplicate enum case
+    E031, // duplicate raw value
+    E032, // raw value type mismatch
+    E033, // rawValue on simple enum
+    E034, // unknown enum case
+    E035, // wrong binding count in match
 
     const Info = struct {
         code: []const u8,
@@ -67,6 +73,12 @@ pub const ErrorCode = enum {
         .{ .code = "E027", .message = "duplicate pattern in match" },
         .{ .code = "E028", .message = "pattern type mismatch" },
         .{ .code = "E029", .message = "default case must be last" },
+        .{ .code = "E030", .message = "duplicate enum case" },
+        .{ .code = "E031", .message = "duplicate raw value" },
+        .{ .code = "E032", .message = "raw value type mismatch" },
+        .{ .code = "E033", .message = "rawValue requires raw value enum" },
+        .{ .code = "E034", .message = "unknown enum case" },
+        .{ .code = "E035", .message = "wrong binding count" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

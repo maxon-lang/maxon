@@ -1,0 +1,35 @@
+// Test: enums.enum-not-equal.1
+enum Status
+    pending
+    active
+    done
+end 'Status'
+
+function main() returns int
+    var s = Status.pending
+    if s != Status.active 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %s = alloca ptr
+    store %s %tmp_const
+    %tmp_load = load i64 %s
+    %tmp_const.1 = const.i64 i64 1
+    %tmp_icmp = icmp.ne i64 %tmp_load %tmp_const.1
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.2 = const.i64 i64 1
+    ret %tmp_const.2
+end:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+}
+
+---

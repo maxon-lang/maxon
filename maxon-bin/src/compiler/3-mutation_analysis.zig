@@ -210,6 +210,12 @@ pub const MutationAnalyzer = struct {
                     self.checkExpressionForParamMutation(default.*, param_indices, mutated);
                 }
             },
+            // Enum case construction - check args for mutations
+            .enum_case => |ec| {
+                for (ec.args) |arg| {
+                    self.checkExpressionForParamMutation(arg, param_indices, mutated);
+                }
+            },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
             .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .array_type, .interpolated_string => {},

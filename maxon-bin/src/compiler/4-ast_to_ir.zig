@@ -377,6 +377,25 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Report an error at a specific source location
+    pub fn reportErrorAt(self: *AstToIr, code: err.ErrorCode, details: []const u8, line: u32, column: u32) void {
+        const base_msg = code.message();
+        const formatted = std.fmt.allocPrint(self.allocator, "{s}: '{s}'", .{ base_msg, details }) catch {
+            self.last_error = .{
+                .code = code,
+                .message = base_msg,
+                .location = .{ .file = self.source_file, .line = line, .column = column },
+            };
+            return;
+        };
+        self.last_error = .{
+            .code = code,
+            .message = formatted,
+            .location = .{ .file = self.source_file, .line = line, .column = column },
+            .message_allocated = true,
+        };
+    }
+
     /// Report an internal compiler error (compiler bug or limitation)
     pub fn reportInternalError(self: *AstToIr, message: []const u8) void {
         self.last_error = .{
@@ -1028,6 +1047,13 @@ pub const AstToIr = struct {
             }
         }
 
+        // Register methods from enums
+        for (program.enums) |enum_decl| {
+            for (enum_decl.methods) |method| {
+                try self.registerMethod(enum_decl.name, method);
+            }
+        }
+
         // Check interface conformance for all types
         for (program.types) |type_decl| {
             try self.checkInterfaceConformance(type_decl);
@@ -1048,6 +1074,13 @@ pub const AstToIr = struct {
             // Clean up generic params
             for (type_decl.generic_params) |param| {
                 _ = self.generic_params.remove(param);
+            }
+        }
+
+        // Convert methods from enums
+        for (program.enums) |enum_decl| {
+            for (enum_decl.methods) |method| {
+                try self.convertMethod(enum_decl.name, method);
             }
         }
 
@@ -1260,6 +1293,9 @@ pub const AstToIr = struct {
         var members: std.StringHashMapUnmanaged(i64) = .{};
         errdefer members.deinit(self.allocator);
 
+        var case_info: std.StringHashMapUnmanaged(types.EnumCaseInfo) = .{};
+        errdefer case_info.deinit(self.allocator);
+
         // Determine backing type
         const backing_type: types.EnumTypeInfo.BackingType = if (enum_decl.backing_type) |bt|
             (if (std.mem.eql(u8, bt, "string")) .string else .int)
@@ -1279,18 +1315,87 @@ pub const AstToIr = struct {
         var string_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{};
         errdefer string_values.deinit(self.allocator);
 
+        var has_associated_values = false;
+        var max_payload_size: i32 = 0;
+
+        // Track seen raw values for duplicate detection
+        var seen_raw_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{};
+        defer seen_raw_values.deinit(self.allocator);
+
         var next_value: i64 = 0;
         for (enum_decl.members) |member| {
+            // Check for duplicate case names
+            if (members.contains(member.name)) {
+                self.reportErrorAt(.E030, member.name, member.line, member.column);
+                return error.SemanticError;
+            }
+
             if (member.value) |value_expr| {
                 // Explicit value - evaluate constant expression
                 if (value_expr.* == .integer) {
                     next_value = value_expr.integer;
+
+                    // Check for duplicate raw values
+                    if (seen_raw_values.get(next_value)) |_| {
+                        const msg = try std.fmt.allocPrint(self.allocator, "{d}", .{next_value});
+                        try self.module.trackString(msg);
+                        self.reportErrorAt(.E031, msg, member.line, member.column);
+                        return error.SemanticError;
+                    }
                 } else if (value_expr.* == .string_literal and backing_type == .string) {
                     // Store the string backing value for this ordinal
                     try string_values.put(self.allocator, next_value, value_expr.string_literal);
+                } else if (value_expr.* == .string_literal and backing_type == .int) {
+                    // Type mismatch: string value for int-backed enum
+                    self.reportErrorAt(.E032, "expected int, got string", member.line, member.column);
+                    return error.SemanticError;
+                } else if (value_expr.* == .integer and backing_type == .string) {
+                    // Type mismatch: int value for string-backed enum
+                    self.reportErrorAt(.E032, "expected string, got int", member.line, member.column);
+                    return error.SemanticError;
                 }
             }
+
+            // Track this raw value
+            try seen_raw_values.put(self.allocator, next_value, member.name);
             try members.put(self.allocator, member.name, next_value);
+
+            // Build associated value info for this case
+            var assoc_values = std.ArrayListUnmanaged(types.AssociatedValueInfo){};
+            var payload_size: i32 = 0;
+
+            for (member.associated_values) |av| {
+                const type_name = switch (av.type_expr) {
+                    .simple => |name| name,
+                    else => "ptr", // Complex types are pointers
+                };
+                const av_ir_type = types.nameToIrType(type_name);
+                const av_size: i32 = switch (av_ir_type) {
+                    .i64, .f64, .ptr => 8,
+                    .i32 => 4,
+                    .i8 => 1,
+                    .void => 0,
+                };
+                payload_size += av_size;
+                try assoc_values.append(self.allocator, .{
+                    .name = av.name,
+                    .type_name = type_name,
+                    .ir_type = av_ir_type,
+                });
+            }
+
+            if (assoc_values.items.len > 0) {
+                has_associated_values = true;
+                if (payload_size > max_payload_size) {
+                    max_payload_size = payload_size;
+                }
+            }
+
+            try case_info.put(self.allocator, member.name, .{
+                .tag = next_value,
+                .associated_values = try assoc_values.toOwnedSlice(self.allocator),
+            });
+
             next_value += 1;
         }
 
@@ -1301,12 +1406,16 @@ pub const AstToIr = struct {
             .enum_type = .{
                 .name = enum_decl.name,
                 .members = members,
+                .case_info = case_info,
                 .backing_type = backing_type,
                 .string_values = string_values,
                 .is_error = is_error,
+                .has_associated_values = has_associated_values,
+                .max_payload_size = max_payload_size,
+                .has_explicit_backing_type = enum_decl.backing_type != null,
             },
         });
-        debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type), is_error });
+        debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {}, has_assoc: {})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type), is_error, has_associated_values });
     }
 
     fn registerInterface(self: *AstToIr, iface: ast.InterfaceDecl) !void {
@@ -3730,7 +3839,7 @@ pub const AstToIr = struct {
         // Check 3: pattern type must match scrutinee type
         for (match_stmt.cases) |match_case| {
             for (match_case.patterns) |pattern| {
-                const pattern_typed = try self.convertExpressionForTypeCheck(pattern);
+                const pattern_typed = try self.convertPatternForTypeCheck(pattern, scrutinee_ty);
                 if (!self.typesAreCompatibleForMatch(scrutinee_ty, pattern_typed.ty)) {
                     // Set location to the pattern (approximate - use body line)
                     self.current_line = match_case.body.line;
@@ -3854,6 +3963,11 @@ pub const AstToIr = struct {
         return try self.convertExpression(expr);
     }
 
+    /// Convert pattern expression for type checking in the context of a scrutinee type.
+    fn convertPatternForTypeCheck(self: *AstToIr, pattern: ast.Expression, scrutinee_ty: ValueType) ConvertError!TypedValue {
+        return try self.convertPatternExpression(pattern, scrutinee_ty);
+    }
+
     /// Check if two types are compatible for match pattern matching
     fn typesAreCompatibleForMatch(self: *AstToIr, scrutinee_ty: ValueType, pattern_ty: ValueType) bool {
         _ = self;
@@ -3897,6 +4011,136 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Set up local variables for pattern bindings (e.g., `value(n)` extracts `n` from enum associated value)
+    fn setupPatternBindings(self: *AstToIr, match_case: ast.MatchCase, scrutinee_value: ir.Value, scrutinee_ty: ValueType) ConvertError!void {
+        const enum_name = scrutinee_ty.enum_type;
+        const type_info = self.type_map.get(enum_name) orelse return;
+        if (type_info != .enum_type) return;
+        const enum_info = type_info.enum_type;
+
+        // For each pattern with bindings, set up local variables
+        for (match_case.pattern_bindings) |maybe_binding| {
+            const binding = maybe_binding orelse continue;
+
+            // Get the case info for this pattern
+            const case_info = enum_info.case_info.get(binding.case_name) orelse {
+                // Unknown case - report error
+                self.reportError(.E034, binding.case_name);
+                return error.SemanticError;
+            };
+
+            // Validate binding count matches associated values count
+            if (binding.bindings.len != case_info.associated_values.len) {
+                self.reportError(.E035, binding.case_name);
+                return error.SemanticError;
+            }
+
+            if (case_info.associated_values.len == 0) continue;
+
+            // Check if this enum has associated values (stored as pointer)
+            if (!enum_info.has_associated_values) continue;
+
+            // Extract each associated value and bind it to the local variable
+            var offset: i32 = 8; // Start after tag
+            for (case_info.associated_values, 0..) |av, ai| {
+                const binding_name = binding.bindings[ai];
+
+                // Load the associated value from scrutinee
+                const payload_ptr = try self.func().emitGetFieldPtr(scrutinee_value, offset);
+                const value = try self.func().emitLoad(payload_ptr, av.ir_type);
+
+                // Create local variable for the binding
+                const var_ptr = try self.func().emitAlloca(av.ir_type);
+                try self.func().emitStore(var_ptr, value);
+
+                // Determine the ValueType for this binding
+                const binding_ty: ValueType = if (std.mem.eql(u8, av.type_name, "int"))
+                    .{ .primitive = "int" }
+                else if (std.mem.eql(u8, av.type_name, "float"))
+                    .{ .primitive = "float" }
+                else if (std.mem.eql(u8, av.type_name, "bool"))
+                    .{ .primitive = "bool" }
+                else
+                    .{ .primitive = av.type_name };
+
+                // Register in var_map
+                try self.var_map.put(self.allocator, binding_name, types.VarInfo.init(var_ptr, binding_ty, false, false));
+
+                offset += switch (av.ir_type) {
+                    .i64, .f64, .ptr => 8,
+                    .i32 => 4,
+                    .i8 => 1,
+                    .void => 0,
+                };
+            }
+        }
+    }
+
+    /// Set up pattern bindings for match expressions (similar to setupPatternBindings but for MatchExprCase)
+    fn setupPatternBindingsExpr(self: *AstToIr, match_case: ast.MatchExprCase, scrutinee_value: ir.Value, scrutinee_ty: ValueType) ConvertError!void {
+        const enum_name = scrutinee_ty.enum_type;
+        const type_info = self.type_map.get(enum_name) orelse return;
+        if (type_info != .enum_type) return;
+        const enum_info = type_info.enum_type;
+
+        // For each pattern with bindings, set up local variables
+        for (match_case.pattern_bindings) |maybe_binding| {
+            const binding = maybe_binding orelse continue;
+
+            // Get the case info for this pattern
+            const case_info = enum_info.case_info.get(binding.case_name) orelse {
+                // Unknown case - report error
+                self.reportError(.E034, binding.case_name);
+                return error.SemanticError;
+            };
+
+            // Validate binding count matches associated values count
+            if (binding.bindings.len != case_info.associated_values.len) {
+                self.reportError(.E035, binding.case_name);
+                return error.SemanticError;
+            }
+
+            if (case_info.associated_values.len == 0) continue;
+
+            // Check if this enum has associated values (stored as pointer)
+            if (!enum_info.has_associated_values) continue;
+
+            // Extract each associated value and bind it to the local variable
+            var offset: i32 = 8; // Start after tag
+            for (case_info.associated_values, 0..) |av, ai| {
+                const binding_name = binding.bindings[ai];
+
+                // Load the associated value from scrutinee
+                const payload_ptr = try self.func().emitGetFieldPtr(scrutinee_value, offset);
+                const value = try self.func().emitLoad(payload_ptr, av.ir_type);
+
+                // Create local variable for the binding
+                const var_ptr = try self.func().emitAlloca(av.ir_type);
+                try self.func().emitStore(var_ptr, value);
+
+                // Determine the ValueType for this binding
+                const binding_ty: ValueType = if (std.mem.eql(u8, av.type_name, "int"))
+                    .{ .primitive = "int" }
+                else if (std.mem.eql(u8, av.type_name, "float"))
+                    .{ .primitive = "float" }
+                else if (std.mem.eql(u8, av.type_name, "bool"))
+                    .{ .primitive = "bool" }
+                else
+                    .{ .primitive = av.type_name };
+
+                // Register in var_map
+                try self.var_map.put(self.allocator, binding_name, types.VarInfo.init(var_ptr, binding_ty, false, false));
+
+                offset += switch (av.ir_type) {
+                    .i64, .f64, .ptr => 8,
+                    .i32 => 4,
+                    .i8 => 1,
+                    .void => 0,
+                };
+            }
+        }
+    }
+
     /// Check if a pattern matches an enum member
     fn patternMatchesEnumMember(self: *AstToIr, pattern: ast.Expression, enum_name: []const u8, member_name: []const u8) bool {
         _ = self;
@@ -3908,6 +4152,10 @@ pub const AstToIr = struct {
                     else => return false,
                 };
                 return std.mem.eql(u8, base_name, enum_name) and std.mem.eql(u8, fa.field_name, member_name);
+            },
+            .identifier => |id| {
+                // Bare identifier like `empty` or `value` matches the same member name
+                return std.mem.eql(u8, id, member_name);
             },
             else => return false,
         }
@@ -3996,7 +4244,7 @@ pub const AstToIr = struct {
             // Emit pattern comparisons in check block
             var cmp_result: ir.Value = undefined;
             for (match_case.patterns, 0..) |pattern, pi| {
-                const pattern_typed = try self.convertExpression(pattern);
+                const pattern_typed = try self.convertPatternExpression(pattern, scrutinee_typed.ty);
                 const this_cmp = try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
                 cmp_result = if (pi == 0) this_cmp else try self.func().emitBinaryOp(.bitor, cmp_result, this_cmp, .i64);
             }
@@ -4021,6 +4269,11 @@ pub const AstToIr = struct {
 
             // Re-push the body block to continue with body code
             try self.func().blocks.append(self.allocator, body_block);
+
+            // Set up pattern bindings for associated value extraction
+            if (scrutinee_typed.ty == .enum_type) {
+                try self.setupPatternBindings(match_case, scrutinee_value, scrutinee_typed.ty);
+            }
 
             // Execute body statement
             try self.convertStatement(match_case.body.*);
@@ -4122,6 +4375,36 @@ pub const AstToIr = struct {
         }
     }
 
+    /// Convert a pattern expression in the context of a match scrutinee type.
+    /// If the scrutinee is an enum and the pattern is a bare identifier, resolve it as an enum case.
+    fn convertPatternExpression(self: *AstToIr, pattern: ast.Expression, scrutinee_ty: ValueType) ConvertError!TypedValue {
+        // If scrutinee is an enum and pattern is a bare identifier, try to resolve as enum case
+        if (scrutinee_ty == .enum_type) {
+            const enum_name = scrutinee_ty.enum_type;
+            if (pattern == .identifier) {
+                const case_name = pattern.identifier;
+                // Look up enum type
+                if (self.type_map.get(enum_name)) |type_info| {
+                    if (type_info == .enum_type) {
+                        // Try to find this case in the enum
+                        if (type_info.enum_type.members.get(case_name)) |member_value| {
+                            return .{
+                                .value = try self.func().emitConstI64(member_value),
+                                .ty = .{ .enum_type = enum_name },
+                            };
+                        } else {
+                            // Unknown case - report error
+                            self.reportError(.E034, case_name);
+                            return error.SemanticError;
+                        }
+                    }
+                }
+            }
+        }
+        // Fall back to normal expression conversion
+        return self.convertExpression(pattern);
+    }
+
     /// Emit a comparison between scrutinee and pattern, returning a boolean value
     fn emitPatternCompare(self: *AstToIr, scrutinee: ir.Value, scrutinee_ty: ValueType, pattern: TypedValue) ConvertError!ir.Value {
         // Determine comparison type based on scrutinee type
@@ -4133,7 +4416,19 @@ pub const AstToIr = struct {
                     return try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64);
                 }
             },
-            .enum_type => try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64),
+            .enum_type => |enum_name| {
+                // For enums with associated values, scrutinee is a pointer - extract the tag first
+                const type_info = self.type_map.get(enum_name) orelse {
+                    return try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64);
+                };
+                if (type_info == .enum_type and type_info.enum_type.has_associated_values) {
+                    // Load tag from offset 0 of the scrutinee pointer
+                    const tag = try self.func().emitLoad(scrutinee, .i64);
+                    return try self.func().emitBinaryOp(.icmp_eq, tag, pattern.value, .i64);
+                }
+                // Simple enum - scrutinee is the tag directly
+                return try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64);
+            },
             .struct_type => |name| {
                 // For struct types that implement Equatable, use the equals method
                 if (self.typeConformsTo(name, "Equatable")) {
@@ -4239,7 +4534,7 @@ pub const AstToIr = struct {
             // Emit pattern comparisons
             var cmp_result: ir.Value = undefined;
             for (match_case.patterns, 0..) |pattern, pi| {
-                const pattern_typed = try self.convertExpression(pattern);
+                const pattern_typed = try self.convertPatternExpression(pattern, scrutinee_typed.ty);
                 const this_cmp = try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
 
                 if (pi == 0) {
@@ -4273,6 +4568,11 @@ pub const AstToIr = struct {
             // Deferred (reversed): merge, [default], body[n-1], check[n-1], ..., body[1], check[1], body[0]
             const body_deferred_idx = num_deferred - 1 - (2 * i);
             try deferred.restore(self, body_deferred_idx);
+
+            // Set up pattern bindings for match expressions
+            if (scrutinee_typed.ty == .enum_type) {
+                try self.setupPatternBindingsExpr(match_case, scrutinee_value, scrutinee_typed.ty);
+            }
 
             // Evaluate result expression and store
             const case_result = try self.convertExpression(match_case.result);
@@ -4674,6 +4974,7 @@ pub const AstToIr = struct {
             .closure => |clos| self.convertClosure(clos),
             .try_expr => |try_e| self.convertTryExpr(try_e),
             .match_expr => |me| self.convertMatchExpr(me),
+            .enum_case => |ec| self.convertEnumCase(ec),
         };
     }
 
@@ -6245,8 +6546,8 @@ pub const AstToIr = struct {
             if (self.type_map.get(faccess.base.identifier)) |type_info| {
                 if (type_info == .enum_type) {
                     const member_value = type_info.enum_type.members.get(faccess.field_name) orelse {
-                        self.reportError(.E007, faccess.field_name);
-                        return error.UnknownField;
+                        self.reportError(.E034, faccess.field_name);
+                        return error.SemanticError;
                     };
                     return .{
                         .value = try self.func().emitConstI64(member_value),
@@ -6258,6 +6559,43 @@ pub const AstToIr = struct {
 
         // Struct field access
         const base = try self.convertExpression(faccess.base.*);
+
+        // Handle .rawValue for enum types
+        if (base.ty == .enum_type) {
+            const enum_name = base.ty.enum_type;
+            if (std.mem.eql(u8, faccess.field_name, "rawValue")) {
+                // Get enum type info
+                const type_info = self.type_map.get(enum_name) orelse {
+                    self.reportError(.E006, enum_name);
+                    return error.UnknownType;
+                };
+                if (type_info != .enum_type) {
+                    self.reportError(.E006, enum_name);
+                    return error.UnknownType;
+                }
+                const enum_info = type_info.enum_type;
+
+                // Check if enum has an explicit backing type
+                if (!enum_info.has_explicit_backing_type) {
+                    self.reportError(.E033, enum_name);
+                    return error.SemanticError;
+                }
+
+                // For int-backed enums, the enum value IS the raw value
+                if (enum_info.backing_type == .int) {
+                    return .{ .value = base.value, .ty = .{ .primitive = "int" } };
+                } else {
+                    // For string-backed enums, look up in string_values table
+                    // For now, return the ordinal as int
+                    return .{ .value = base.value, .ty = .{ .primitive = "int" } };
+                }
+            }
+            // Enum values don't have other fields
+            std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
+            self.reportError(.E006, faccess.field_name);
+            return error.UnknownType;
+        }
+
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
             .primitive, .array_type, .enum_type, .optional_type, .error_union_type, .function_type => {
@@ -6278,6 +6616,93 @@ pub const AstToIr = struct {
             try self.func().emitLoad(field_ptr, field_info.value_type.toPrimitiveType());
 
         return .{ .value = value, .ty = field_info.value_type };
+    }
+
+    /// Convert enum case construction with associated values (e.g., Result.success(42))
+    fn convertEnumCase(self: *AstToIr, ec: ast.EnumCaseExpr) ConvertError!TypedValue {
+        // Look up enum type
+        const type_info = self.type_map.get(ec.enum_name) orelse {
+            self.reportError(.E006, ec.enum_name);
+            return error.UnknownType;
+        };
+
+        if (type_info != .enum_type) {
+            self.reportError(.E006, ec.enum_name);
+            return error.UnknownType;
+        }
+
+        const enum_info = type_info.enum_type;
+
+        // Get case info
+        const case_info = enum_info.case_info.get(ec.case_name) orelse {
+            self.reportError(.E034, ec.case_name);
+            return error.SemanticError;
+        };
+
+        // Validate argument count
+        if (ec.args.len != case_info.associated_values.len) {
+            self.reportError(.E011, ec.case_name);
+            return error.WrongArgumentCount;
+        }
+
+        if (!enum_info.has_associated_values) {
+            // Simple enum without associated values - just return the tag
+            return .{
+                .value = try self.func().emitConstI64(case_info.tag),
+                .ty = .{ .enum_type = ec.enum_name },
+            };
+        }
+
+        // For enums with associated values, allocate storage for tag + payload
+        // Layout: [tag: i64][payload...]
+        const total_size = 8 + enum_info.max_payload_size; // tag is i64
+        const enum_ptr = try self.func().emitAlloca(.ptr);
+
+        // Allocate memory for enum storage
+        const alloc_val = try self.func().emitConstI64(total_size);
+        const mem_ptr = try self.func().emitHeapAlloc(alloc_val);
+        try self.func().emitStore(enum_ptr, mem_ptr);
+
+        // Store tag
+        const tag_val = try self.func().emitConstI64(case_info.tag);
+        try self.func().emitStore(mem_ptr, tag_val);
+
+        // Store associated values
+        var offset: i32 = 8; // Start after tag
+        for (case_info.associated_values, 0..) |av, i| {
+            const arg_typed = try self.convertExpression(ec.args[i]);
+
+            // Type check: verify argument type matches expected associated value type
+            const expected_type = av.type_name;
+            const actual_type = arg_typed.ty.getTypeName();
+            if (actual_type) |actual| {
+                if (!std.mem.eql(u8, actual, expected_type)) {
+                    // Handle string compatibility
+                    const is_string_match = (std.mem.eql(u8, expected_type, "String") and std.mem.eql(u8, actual, "__ManagedString")) or
+                        (std.mem.eql(u8, expected_type, "__ManagedString") and std.mem.eql(u8, actual, "String"));
+                    if (!is_string_match) {
+                        self.reportError(.E022, av.name);
+                        return error.TypeMismatch;
+                    }
+                }
+            }
+
+            const payload_ptr = try self.func().emitGetFieldPtr(mem_ptr, offset);
+            try self.func().emitStore(payload_ptr, arg_typed.value);
+            offset += switch (av.ir_type) {
+                .i64, .f64, .ptr => 8,
+                .i32 => 4,
+                .i8 => 1,
+                .void => 0,
+            };
+        }
+
+        // Return the pointer to the enum storage
+        const loaded_ptr = try self.func().emitLoad(enum_ptr, .ptr);
+        return .{
+            .value = loaded_ptr,
+            .ty = .{ .enum_type = ec.enum_name },
+        };
     }
 
     /// Apply implicit int→float promotion if needed
@@ -7146,6 +7571,7 @@ pub const AstToIr = struct {
                 .closure,
                 .try_expr,
                 .match_expr,
+                .enum_case,
                 => {
                     const elem_ptr = try self.func().emitGetElemPtr(buffer_ptr, idx_typed.value, elem_size);
                     if (arr_info.element_struct_type != null) {
@@ -7441,10 +7867,26 @@ pub const AstToIr = struct {
     }
 
     fn convertMethodCallExpr(self: *AstToIr, mcall: ast.MethodCallExpr) ConvertError!TypedValue {
-        // Check if base is a type name (static method call: TypeName.method())
+        // Check if base is a type name (static method call: TypeName.method() or enum case construction)
         if (mcall.base.* == .identifier) {
             const base_name = mcall.base.identifier;
-            if (self.type_map.contains(base_name)) {
+            if (self.type_map.get(base_name)) |type_info| {
+                // Check if this is an enum case construction (e.g., Container.value(42))
+                if (type_info == .enum_type) {
+                    const enum_info = type_info.enum_type;
+                    // Check if method_name is an enum case with associated values
+                    if (enum_info.case_info.get(mcall.method_name)) |case_info| {
+                        if (case_info.associated_values.len > 0) {
+                            // This is enum case construction
+                            return self.convertEnumCase(.{
+                                .enum_name = base_name,
+                                .case_name = mcall.method_name,
+                                .args = mcall.args,
+                            });
+                        }
+                    }
+                }
+                // Regular static method call
                 return self.emitMethodCall(base_name, mcall.method_name, mcall.args, null);
             }
         }
@@ -7460,6 +7902,12 @@ pub const AstToIr = struct {
         // Check if this is a primitive type with hash/equals methods
         if (base_typed.ty == .primitive) {
             return self.emitPrimitiveMethodCall(base_typed, mcall.method_name, mcall.args);
+        }
+
+        // Check if this is an enum type with methods
+        if (base_typed.ty == .enum_type) {
+            const enum_name = base_typed.ty.enum_type;
+            return self.emitMethodCall(enum_name, mcall.method_name, mcall.args, base_typed.value);
         }
 
         // Check if this is an array type - route to Array$ElementType methods

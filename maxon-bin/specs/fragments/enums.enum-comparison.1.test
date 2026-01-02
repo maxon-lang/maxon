@@ -1,0 +1,52 @@
+// Test: enums.enum-comparison.1
+enum Status
+    pending
+    active
+    done
+end 'Status'
+
+function main() returns int
+    var s1 = Status.pending
+    var s2 = Status.pending
+    var s3 = Status.active
+    if s1 == s2 'eq'
+        if s1 != s3 'neq'
+            return 1
+        end 'neq'
+    end 'eq'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %s1 = alloca ptr
+    store %s1 %tmp_const
+    %tmp_const.1 = const.i64 i64 0
+    %s2 = alloca ptr
+    store %s2 %tmp_const.1
+    %tmp_const.2 = const.i64 i64 1
+    %s3 = alloca ptr
+    store %s3 %tmp_const.2
+    %tmp_load = load i64 %s1
+    %tmp_load.1 = load i64 %s2
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_load.1
+    br.cond %tmp_icmp @block1 @block4
+then:
+    %tmp_load.2 = load i64 %s1
+    %tmp_load.3 = load i64 %s3
+    %tmp_icmp.1 = icmp.ne i64 %tmp_load.2 %tmp_load.3
+    br.cond %tmp_icmp.1 @block2 @block3
+then:
+    %tmp_const.3 = const.i64 i64 1
+    ret %tmp_const.3
+end:
+    br @block4
+end:
+    %tmp_const.4 = const.i64 i64 0
+    ret %tmp_const.4
+}
+
+---

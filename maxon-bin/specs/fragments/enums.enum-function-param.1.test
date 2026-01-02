@@ -1,0 +1,57 @@
+// Test: enums.enum-function-param.1
+enum Status
+    on
+    off
+end 'Status'
+
+function isOn(s Status) returns bool
+    if s == Status.on 'check'
+        return true
+    end 'check'
+    return false
+end 'isOn'
+
+function main() returns int
+    var status = Status.on
+    if isOn(status) 'test'
+        return 1
+    end 'test'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function isOn() -> i64 {
+entry:
+    %s = param i64 0
+    %s.1 = alloca ptr
+    store %s.1 %s
+    %tmp_load = load i64 %s.1
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 1
+    ret %tmp_const.1
+end:
+    %tmp_const.2 = const.i64 i64 0
+    ret %tmp_const.2
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %status = alloca ptr
+    store %status %tmp_const
+    %tmp_load = load i64 %status
+    %tmp_call = call i64 @isOn(%tmp_load)
+    br.cond %tmp_call @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 1
+    ret %tmp_const.1
+end:
+    %tmp_const.2 = const.i64 i64 0
+    ret %tmp_const.2
+}
+
+---
