@@ -1120,9 +1120,9 @@ pub const Parser = struct {
     /// Parse do-catch statement:
     /// do 'label'
     ///     body
-    /// catch e ErrorType 'catchLabel'
+    /// end 'label' catch (e ErrorType) 'catchLabel'
     ///     catchBody
-    /// end 'label'
+    /// end 'catchLabel'
     fn parseDoCatchStatement(self: *Parser) ParseError!ast.Statement {
         const start_token = self.current();
         const start_line = start_token.line;
@@ -1132,11 +1132,11 @@ pub const Parser = struct {
         const label = try self.expect(.char_literal);
         _ = try self.expect(.newline);
 
-        // Parse body until we hit 'catch' or 'end'
+        // Parse body until we hit 'end'
         var body_stmts: std.ArrayListUnmanaged(ast.Statement) = .empty;
         errdefer body_stmts.deinit(self.allocator);
 
-        while (!self.check(.@"catch") and !self.check(.end) and !self.isAtEnd()) {
+        while (!self.check(.end) and !self.isAtEnd()) {
             if (self.check(.newline)) {
                 _ = self.advance();
                 continue;
@@ -1144,7 +1144,11 @@ pub const Parser = struct {
             try body_stmts.append(self.allocator, try self.parseStatement());
         }
 
-        // Parse catch clauses
+        // Expect end 'label' followed by catch
+        _ = try self.expect(.end);
+        _ = try self.expect(.char_literal); // Should match the do label
+
+        // Parse catch clauses (at least one required)
         var catches: std.ArrayListUnmanaged(ast.CatchClause) = .empty;
         errdefer catches.deinit(self.allocator);
 
@@ -1152,10 +1156,10 @@ pub const Parser = struct {
             try catches.append(self.allocator, try self.parseCatchClause());
         }
 
-        // Expect end 'label'
-        _ = try self.expect(.end);
-        _ = try self.expect(.char_literal); // Should match the do label
-        try self.expectEndNewline();
+        if (catches.items.len == 0) {
+            self.reportError(.E003); // Expected catch clause
+            return error.ExpectedExpression;
+        }
 
         return stmtAt(.{ .do_catch_stmt = .{
             .body = try body_stmts.toOwnedSlice(self.allocator),
@@ -1164,9 +1168,10 @@ pub const Parser = struct {
         } }, start_line, start_column);
     }
 
-    /// Parse a single catch clause: catch e ErrorType 'label'
+    /// Parse a single catch clause: catch (e ErrorType) 'label' ... end 'label'
     fn parseCatchClause(self: *Parser) ParseError!ast.CatchClause {
         _ = try self.expect(.@"catch");
+        _ = try self.expect(.lparen);
         const binding_name = try self.expect(.identifier);
 
         // Optional error type - if not present, catches any Error
@@ -1175,19 +1180,30 @@ pub const Parser = struct {
             error_type = self.advance().text;
         }
 
+        _ = try self.expect(.rparen);
         const label = try self.expect(.char_literal);
         _ = try self.expect(.newline);
 
-        // Parse catch body until next catch or end
+        // Parse catch body until end
         var catch_body: std.ArrayListUnmanaged(ast.Statement) = .empty;
         errdefer catch_body.deinit(self.allocator);
 
-        while (!self.check(.@"catch") and !self.check(.end) and !self.isAtEnd()) {
+        while (!self.check(.end) and !self.isAtEnd()) {
             if (self.check(.newline)) {
                 _ = self.advance();
                 continue;
             }
             try catch_body.append(self.allocator, try self.parseStatement());
+        }
+
+        // Expect end 'catchLabel'
+        _ = try self.expect(.end);
+        const end_label = try self.expect(.char_literal);
+        _ = end_label; // Could verify it matches the catch label
+
+        // Only expect newline if not followed by another catch
+        if (!self.check(.@"catch")) {
+            try self.expectEndNewline();
         }
 
         return .{

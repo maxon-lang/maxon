@@ -4499,23 +4499,18 @@ pub const AstToIr = struct {
         // Restore catch_dispatch block
         try self.func().blocks.append(self.allocator, catch_dispatch_block);
 
-        // Create blocks for each catch clause and a final "unhandled" case
-        var catch_blocks = try std.ArrayList(u32).initCapacity(self.allocator, do_catch.catches.len + 1);
+        // Create blocks for each catch clause
+        // Note: catches are required by the parser, so we always have at least one
+        var catch_blocks = try std.ArrayList(u32).initCapacity(self.allocator, do_catch.catches.len);
         defer catch_blocks.deinit(self.allocator);
 
         for (do_catch.catches, 0..) |_, i| {
             const catch_block_idx: u32 = @intCast(self.func().blocks.items.len);
-            // Use stack buffer for block name to avoid allocation
             var name_buf: [32]u8 = undefined;
             const catch_name = std.fmt.bufPrint(&name_buf, "catch_{d}", .{i}) catch "catch";
             _ = try self.func().addBlock(catch_name);
             try catch_blocks.append(self.allocator, catch_block_idx);
         }
-
-        // Unhandled block (propagate to outer handler or function return)
-        const unhandled_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("catch_unhandled");
-        try catch_blocks.append(self.allocator, unhandled_idx);
 
         // Pop all the catch blocks for later restoration
         var deferred_catch_blocks = try std.ArrayList(ir.BasicBlock).initCapacity(self.allocator, catch_blocks.items.len);
@@ -4525,24 +4520,13 @@ pub const AstToIr = struct {
             try deferred_catch_blocks.append(self.allocator, self.func().blocks.pop().?);
         }
 
-        // The catch dispatch block checks error tag and jumps to appropriate catch
-        // For simplicity, we just jump to the first catch and let it chain
+        // Catch dispatch jumps to first catch block
         // (More sophisticated: check error type tag against each catch's expected type)
-        if (do_catch.catches.len > 0) {
-            // Jump to first catch block
-            try self.func().currentBlock().?.instructions.append(self.allocator, .{
-                .op = .br,
-                .operands = .{ .{ .block_ref = catch_blocks.items[0] }, .none, .none },
-                .result = null,
-            });
-        } else {
-            // No catch clauses - jump to unhandled
-            try self.func().currentBlock().?.instructions.append(self.allocator, .{
-                .op = .br,
-                .operands = .{ .{ .block_ref = unhandled_idx }, .none, .none },
-                .result = null,
-            });
-        }
+        try self.func().currentBlock().?.instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = catch_blocks.items[0] }, .none, .none },
+            .result = null,
+        });
 
         // Restore and process each catch block
         for (do_catch.catches, 0..) |catch_clause, i| {
@@ -4572,46 +4556,6 @@ pub const AstToIr = struct {
                 .operands = .{ .{ .block_ref = do_end_idx }, .none, .none },
                 .result = null,
             });
-        }
-
-        // Restore unhandled block
-        try self.func().blocks.append(self.allocator, deferred_catch_blocks.items[0]);
-
-        // Unhandled: if in outer do-catch, propagate there; else propagate to function return
-        // Note: if there are catch clauses, this block is unreachable (dispatch jumps to first catch)
-        // but we still need valid IR for it
-        if (do_catch.catches.len > 0) {
-            // Unreachable - catch clauses handle all errors, just jump to end
-            try self.func().currentBlock().?.instructions.append(self.allocator, .{
-                .op = .br,
-                .operands = .{ .{ .block_ref = do_end_idx }, .none, .none },
-                .result = null,
-            });
-        } else if (outer_catch_block) |outer_catch| {
-            // Copy error to outer buffer and jump
-            if (outer_error_buffer) |outer_buf| {
-                try self.func().emitMemcpy(outer_buf, error_buffer, 64);
-            }
-            try self.func().currentBlock().?.instructions.append(self.allocator, .{
-                .op = .br,
-                .operands = .{ .{ .block_ref = outer_catch }, .none, .none },
-                .result = null,
-            });
-        } else if (self.current_func_throws_type != null) {
-            // Propagate to function's sret and return
-            if (self.sret_ptr) |sret| {
-                // Copy error union to sret
-                try self.func().emitMemcpy(sret, error_buffer, self.sret_size);
-                try self.func().emitRet(sret);
-            } else {
-                // Should not happen
-                self.reportError(.E001, "unhandled error in non-throwing context");
-                return error.SemanticError;
-            }
-        } else {
-            // Runtime error: unhandled exception - panic with error type
-            const error_type = self.do_catch_error_type orelse "Error";
-            try self.emitPanic(error_type);
         }
 
         // Restore end block

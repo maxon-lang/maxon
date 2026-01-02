@@ -63,10 +63,10 @@ function main() returns int
             print("{f}\n")
         end 'loop'
         return 0
-    catch e DirectoryError 'err'
+    end 'list' catch (e DirectoryError) 'err'
         print("Failed to list directory")
         return 1
-    end 'list'
+    end 'err'
 end 'main'
 ```
 
@@ -113,9 +113,9 @@ function main() returns int
     do 'list'
         let files = try Directory.list("temp")
         return files.count()
-    catch e DirectoryError 'err'
+    end 'list' catch (e DirectoryError) 'err'
         return 0
-    end 'list'
+    end 'err'
 end 'main'
 ```
 ```exitcode-gte
@@ -130,10 +130,10 @@ function main() returns int
         files = files  // Use the variable to avoid unused warning
         print("Found files\n")
         return 1
-    catch e DirectoryError 'err'
+    end 'list' catch (e DirectoryError) 'err'
         print("Directory not found")
         return 0
-    end 'list'
+    end 'err'
 end 'main'
 ```
 ```exitcode

@@ -111,11 +111,11 @@ do 'io'
     let config = try readFile("config.json")
     let data = try readFile("data.json")
     process(config, data)
-catch e FileError 'fileErr'
+end 'io' catch (e FileError) 'fileErr'
     print("File error occurred")
-catch e 'any'
+end 'fileErr' catch (e) 'any'
     print("Unknown error")
-end 'io'
+end 'any'
 ```
 
 ### Error Propagation
@@ -239,10 +239,10 @@ function main() returns int
     do 'io'
         let x = try mayFail(true)
         return x
-    catch e MyError 'err'
+    end 'io' catch (e MyError) 'err'
         // e is the enum ordinal (0 for first member)
         return 42
-    end 'io'
+    end 'err'
 end 'main'
 ```
 ```exitcode
@@ -267,9 +267,9 @@ function main() returns int
     do 'io'
         let x = try mayFail(false)
         return x
-    catch e MyError 'err'
+    end 'io' catch (e MyError) 'err'
         return 0
-    end 'io'
+    end 'err'
 end 'main'
 ```
 ```exitcode
@@ -296,36 +296,12 @@ function main() returns int
     do 'io'
         let x = try middle()
         return x
-    catch e MyError 'err'
+    end 'io' catch (e MyError) 'err'
         return 99
-    end 'io'
+    end 'err'
 end 'main'
 ```
 ```exitcode
 99
 ```
 
-<!-- test: error.uncaught-error-panics -->
-```maxon
-// Test that uncaught errors cause panic
-enum MyError is Error
-    failed
-end 'MyError'
-
-function mayFail() returns int throws MyError
-    throw MyError.failed
-end 'mayFail'
-
-function main() returns int
-    do 'io'
-        let x = try mayFail()
-        return x
-    end 'io'
-end 'main'
-```
-```stdout
-panic: unhandled MyError
-```
-```exitcode
-1
-```

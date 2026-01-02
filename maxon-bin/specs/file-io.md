@@ -80,10 +80,10 @@ function main() returns int
         let content = try File.readText("example.txt")
         print("File content: {content}\n")
         return 1
-    catch e FileError 'err'
+    end 'read' catch (e FileError) 'err'
         print("Could not read file\n")
         return 0
-    end 'read'
+    end 'err'
 end 'main'
 ```
 ```exitcode
@@ -151,10 +151,10 @@ function main() returns int
         let content = try File.readText("nonexistent_file_xyz.txt")
         print("Content:{content}\n")
         return 0
-    catch e FileError 'err'
+    end 'read' catch (e FileError) 'err'
         print("File not found")
         return 42
-    end 'read'
+    end 'err'
 end 'main'
 ```
 ```exitcode
@@ -171,10 +171,10 @@ function main() returns int
         let content = try File.readText("nonexistent.txt")
         print("Unexpected: {content}\n")
         return 1
-    catch e FileError 'err'
+    end 'read' catch (e FileError) 'err'
         print("File not found")
         return 0
-    end 'read'
+    end 'err'
 end 'main'
 ```
 ```exitcode
