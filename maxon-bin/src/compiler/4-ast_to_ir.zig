@@ -158,6 +158,79 @@ pub const DeferredBlocks = struct {
     }
 };
 
+/// Builder for common 2-way conditional branching pattern.
+/// Handles creating blocks, deferring them, emitting conditional branch, and restoring.
+/// Pattern: entry -> (condition) -> then_block or else_block -> merge_block
+pub const BranchBuilder = struct {
+    deferred: DeferredBlocks,
+    then_block_idx: u32,
+    else_block_idx: u32,
+    merge_block_idx: u32,
+    entry_block_idx: u32,
+    self_ir: *AstToIr,
+
+    /// Create a 2-way branch from the current block.
+    /// Creates then, else, and merge blocks, defers else and merge.
+    /// Current block becomes the then block after this call.
+    pub fn init(
+        self_ir: *AstToIr,
+        condition: ir.Value,
+        then_name: []const u8,
+        else_name: []const u8,
+        merge_name: []const u8,
+    ) !BranchBuilder {
+        const entry_block_idx: u32 = @intCast(self_ir.func().blocks.items.len - 1);
+        const then_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+        _ = try self_ir.func().addBlock(then_name);
+        const else_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+        _ = try self_ir.func().addBlock(else_name);
+        const merge_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+        _ = try self_ir.func().addBlock(merge_name);
+
+        // Defer merge and else blocks (merge=0, else=1 after pop order)
+        var deferred = try DeferredBlocks.init(self_ir.allocator, 2);
+        deferred.deferBlocks(self_ir, 2);
+
+        // Emit conditional branch from entry block
+        try self_ir.func().blocks.items[entry_block_idx].instructions.append(self_ir.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = condition }, .{ .block_ref = then_block_idx }, .{ .block_ref = else_block_idx } },
+        });
+
+        return .{
+            .deferred = deferred,
+            .then_block_idx = then_block_idx,
+            .else_block_idx = else_block_idx,
+            .merge_block_idx = merge_block_idx,
+            .entry_block_idx = entry_block_idx,
+            .self_ir = self_ir,
+        };
+    }
+
+    /// Switch to the else block. Call this after generating then block code.
+    /// Optionally emits a branch to merge from the then block.
+    pub fn switchToElse(self: *BranchBuilder, branch_to_merge: bool) !void {
+        if (branch_to_merge) {
+            try self.self_ir.func().emitBr(self.merge_block_idx);
+        }
+        try self.deferred.restore(self.self_ir, 1);
+    }
+
+    /// Switch to the merge block. Call this after generating else block code.
+    /// Optionally emits a branch to merge from the else block.
+    pub fn switchToMerge(self: *BranchBuilder, branch_to_merge: bool) !void {
+        if (branch_to_merge) {
+            try self.self_ir.func().emitBr(self.merge_block_idx);
+        }
+        try self.deferred.restore(self.self_ir, 0);
+    }
+
+    /// Clean up. Must be called when done.
+    pub fn deinit(self: *BranchBuilder) void {
+        self.deferred.deinit();
+    }
+};
+
 /// Labeled loop info for break/continue with labels
 const LabeledLoop = struct {
     label: []const u8,
@@ -4586,33 +4659,14 @@ pub const AstToIr = struct {
                 false));
         }
 
-        // Create blocks
-        const some_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("else_unwrap_some");
+        // Create 2-way branch: has_value -> unwrap, else -> execute default body
+        var branch = try BranchBuilder.init(self, has_value, "else_unwrap_some", "else_unwrap_nil", "else_unwrap_end");
+        defer branch.deinit();
 
-        const nil_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("else_unwrap_nil");
-
-        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("else_unwrap_end");
-
-        // Emit conditional branch
-        const entry_block = &self.func().blocks.items[some_block_idx - 1];
-        try entry_block.instructions.append(self.allocator, .{
-            .op = .br_cond,
-            .operands = .{ .{ .value = has_value }, .{ .block_ref = some_block_idx }, .{ .block_ref = nil_block_idx } },
-        });
-
-        // Defer end and nil blocks (end=0, nil=1 after pop order)
-        var deferred = try DeferredBlocks.init(self.allocator, 2);
-        defer deferred.deinit();
-        deferred.deferBlocks(self, 2);
-
-        // In "some" block: unwrap and store value
+        // Then block ("some"): unwrap and store value
         const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
         if (opt_info.wrapped_struct_type) |struct_name| {
             // For struct types, copy the struct data from the optional payload to var_ptr
-            // Get the struct size
             const struct_size = if (self.type_map.get(struct_name)) |type_info| blk: {
                 if (type_info == .struct_type) {
                     break :blk type_info.struct_type.size;
@@ -4625,25 +4679,23 @@ pub const AstToIr = struct {
             const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
             try self.func().emitStore(var_ptr, unwrapped_value);
         }
-        try self.func().emitBr(end_block_idx);
 
-        // Restore nil block
-        try deferred.restore(self, 1);
+        // Switch to else block
+        try branch.switchToElse(true);
 
-        // Execute default body (which should assign to var_name)
+        // Else block ("nil"): execute default body (which should assign to var_name)
         for (unwrap.default_body) |stmt| {
             try self.convertStatement(stmt);
         }
 
-        // Branch to end
-        if (self.func().currentBlock()) |block| {
-            if (block.instructions.items.len == 0 or block.instructions.items[block.instructions.items.len - 1].op != .ret) {
-                try self.func().emitBr(end_block_idx);
-            }
-        }
+        // Branch to end only if the block doesn't already have a terminator
+        const needs_branch = if (self.func().currentBlock()) |block|
+            block.instructions.items.len == 0 or block.instructions.items[block.instructions.items.len - 1].op != .ret
+        else
+            true;
 
-        // Restore end block
-        try deferred.restore(self, 0);
+        // Switch to merge block
+        try branch.switchToMerge(needs_branch);
     }
 
     // ------------------------------------------------------------------------
@@ -5970,49 +6022,25 @@ pub const AstToIr = struct {
                     // Check if optional has a value (tag != 0)
                     const has_value = try self.emitOptionalHasValue(left.value);
 
-                    // Create blocks for branching
-                    const has_value_block_idx: u32 = @intCast(self.func().blocks.items.len);
-                    _ = try self.func().addBlock("or_has_value");
-                    const use_default_block_idx: u32 = @intCast(self.func().blocks.items.len);
-                    _ = try self.func().addBlock("or_default");
-                    const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
-                    _ = try self.func().addBlock("or_merge");
+                    // Create 2-way branch: has_value -> extract, else -> use default
+                    var branch = try BranchBuilder.init(self, has_value, "or_has_value", "or_default", "or_merge");
+                    defer branch.deinit();
 
-                    // Emit conditional branch from current block
-                    const entry_block = &self.func().blocks.items[has_value_block_idx - 1];
-                    try entry_block.instructions.append(self.allocator, .{
-                        .op = .br_cond,
-                        .operands = .{ .{ .value = has_value }, .{ .block_ref = has_value_block_idx }, .{ .block_ref = use_default_block_idx } },
-                    });
-
-                    // Defer merge and default blocks
-                    var deferred = try DeferredBlocks.init(self.allocator, 2);
-                    defer deferred.deinit();
-                    deferred.deferBlocks(self, 2);
-
-                    // Has value block: extract unwrapped value
+                    // Then block: extract unwrapped value
                     const value_ptr = try self.func().emitGetFieldPtr(left.value, 8);
                     const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
                     try self.func().emitStore(result_ptr, unwrapped_value);
 
-                    try self.func().currentBlock().?.instructions.append(self.allocator, .{
-                        .op = .br,
-                        .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-                        .result = null,
-                    });
+                    // Switch to else block
+                    try branch.switchToElse(true);
 
-                    // Default block: use right value as default
-                    try deferred.restore(self, 1);
+                    // Else block: use right value as default
                     try self.func().emitStore(result_ptr, right.value);
 
-                    try self.func().currentBlock().?.instructions.append(self.allocator, .{
-                        .op = .br,
-                        .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-                        .result = null,
-                    });
+                    // Switch to merge block
+                    try branch.switchToMerge(true);
 
-                    // Merge block: load result
-                    try deferred.restore(self, 0);
+                    // Load result
                     const final_value = try self.func().emitLoad(result_ptr, wrapped_type);
 
                     // Return the unwrapped type
@@ -6056,58 +6084,24 @@ pub const AstToIr = struct {
         // Check if optional has a value
         const has_value = try self.emitOptionalHasValue(opt_typed.value);
 
-        // Create blocks for branching
-        const has_value_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("coalesce_has_value");
-        const use_default_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("coalesce_default");
-        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("coalesce_merge");
+        // Create 2-way branch: has_value -> extract, else -> use default
+        var branch = try BranchBuilder.init(self, has_value, "coalesce_has_value", "coalesce_default", "coalesce_merge");
+        defer branch.deinit();
 
-        // Emit conditional branch from current block
-        const entry_block = &self.func().blocks.items[has_value_block_idx - 1];
-        try entry_block.instructions.append(self.allocator, .{
-            .op = .br_cond,
-            .operands = .{ .{ .value = has_value }, .{ .block_ref = has_value_block_idx }, .{ .block_ref = use_default_block_idx } },
-        });
-
-        // Defer merge and default blocks (merge=0, default=1 after pop order)
-        var deferred = try DeferredBlocks.init(self.allocator, 2);
-        defer deferred.deinit();
-        deferred.deferBlocks(self, 2);
-
-        // Now in has_value block: extract the unwrapped value
+        // Then block: extract the unwrapped value
         const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
         const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
-
-        // Store unwrapped value to result
         try self.func().emitStore(result_ptr, unwrapped_value);
 
-        // Branch to merge
-        try self.func().currentBlock().?.instructions.append(self.allocator, .{
-            .op = .br,
-            .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-            .result = null,
-        });
+        // Switch to else block
+        try branch.switchToElse(true);
 
-        // Restore default block
-        try deferred.restore(self, 1);
-
-        // Evaluate default expression here (short-circuit evaluation)
+        // Else block: evaluate default expression (short-circuit evaluation)
         const default_typed = try self.convertExpression(nc.default.*);
-
-        // Store default value to result
         try self.func().emitStore(result_ptr, default_typed.value);
 
-        // Branch to merge
-        try self.func().currentBlock().?.instructions.append(self.allocator, .{
-            .op = .br,
-            .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-            .result = null,
-        });
-
-        // Restore merge block
-        try deferred.restore(self, 0);
+        // Switch to merge block
+        try branch.switchToMerge(true);
 
         // Load result
         const result = try self.func().emitLoad(result_ptr, wrapped_type);
@@ -6580,29 +6574,11 @@ pub const AstToIr = struct {
         const is_less_than_len = try self.func().emitBinaryOp(.icmp_lt, idx_typed.value, len, .i64);
         const in_bounds = try self.func().emitBinaryOp(.mul, is_non_negative, is_less_than_len, .i64);
 
-        // Create blocks for branching
-        const in_bounds_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("managed_index_in_bounds");
+        // Create 2-way branch: in_bounds -> get element, else -> return nil
+        var branch = try BranchBuilder.init(self, in_bounds, "managed_index_in_bounds", "managed_index_out_of_bounds", "managed_index_merge");
+        defer branch.deinit();
 
-        const out_of_bounds_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("managed_index_out_of_bounds");
-
-        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("managed_index_merge");
-
-        // Emit conditional branch in previous block
-        const entry_block = &self.func().blocks.items[in_bounds_block_idx - 1];
-        try entry_block.instructions.append(self.allocator, .{
-            .op = .br_cond,
-            .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx }, .{ .block_ref = out_of_bounds_block_idx } },
-        });
-
-        // Defer merge and out_of_bounds blocks (merge=0, out_of_bounds=1 after pop order)
-        var deferred = try DeferredBlocks.init(self.allocator, 2);
-        defer deferred.deinit();
-        deferred.deferBlocks(self, 2);
-
-        // In-bounds block: create some(element)
+        // Then block: create some(element)
         const one_val = try self.func().emitConstI64(1);
         try self.func().emitStore(opt_ptr, one_val); // tag = 1
 
@@ -6615,19 +6591,15 @@ pub const AstToIr = struct {
         const value_slot = try self.func().emitGetFieldPtr(opt_ptr, 8);
         try self.func().emitStore(value_slot, val);
 
-        try self.func().emitBr(merge_block_idx);
+        // Switch to else block
+        try branch.switchToElse(true);
 
-        // Restore out-of-bounds block
-        try deferred.restore(self, 1);
-
-        // Out-of-bounds block: create nil
+        // Else block: create nil
         const zero_val = try self.func().emitConstI64(0);
         try self.func().emitStore(opt_ptr, zero_val); // tag = 0
 
-        try self.func().emitBr(merge_block_idx);
-
-        // Restore merge block
-        try deferred.restore(self, 0);
+        // Switch to merge block
+        try branch.switchToMerge(true);
 
         // Return the optional (element type is i64 for now)
         return .{
@@ -7280,29 +7252,11 @@ pub const AstToIr = struct {
         // Since we don't have a direct AND instruction, use multiplication (both are 0 or 1)
         const in_bounds = try self.func().emitBinaryOp(.mul, is_non_negative, is_less_than_size, .i64);
 
-        // Create blocks for branching
-        const in_bounds_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("index_in_bounds");
+        // Create 2-way branch: in_bounds -> get element, else -> return nil
+        var branch = try BranchBuilder.init(self, in_bounds, "index_in_bounds", "index_out_of_bounds", "index_merge");
+        defer branch.deinit();
 
-        const out_of_bounds_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("index_out_of_bounds");
-
-        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("index_merge");
-
-        // Emit conditional branch in previous block
-        const entry_block = &self.func().blocks.items[in_bounds_block_idx - 1];
-        try entry_block.instructions.append(self.allocator, .{
-            .op = .br_cond,
-            .operands = .{ .{ .value = in_bounds }, .{ .block_ref = in_bounds_block_idx }, .{ .block_ref = out_of_bounds_block_idx } },
-        });
-
-        // Defer merge and out_of_bounds blocks (merge=0, out_of_bounds=1 after pop order)
-        var deferred = try DeferredBlocks.init(self.allocator, 2);
-        defer deferred.deinit();
-        deferred.deferBlocks(self, 2);
-
-        // In-bounds block: create some(element)
+        // Then block: create some(element)
         const one_val = try self.func().emitConstI64(1);
         try self.func().emitStore(opt_ptr, one_val); // tag = 1
 
@@ -7324,19 +7278,15 @@ pub const AstToIr = struct {
             try self.func().emitStore(value_slot, val);
         }
 
-        try self.func().emitBr(merge_block_idx);
+        // Switch to else block
+        try branch.switchToElse(true);
 
-        // Restore out-of-bounds block
-        try deferred.restore(self, 1);
-
-        // Out-of-bounds block: create nil
+        // Else block: create nil
         const zero_val = try self.func().emitConstI64(0);
         try self.func().emitStore(opt_ptr, zero_val); // tag = 0
 
-        try self.func().emitBr(merge_block_idx);
-
-        // Restore merge block
-        try deferred.restore(self, 0);
+        // Switch to merge block
+        try branch.switchToMerge(true);
 
         // Return the optional
         return .{
@@ -7622,47 +7572,25 @@ pub const AstToIr = struct {
             // Allocate result storage
             const result_ptr = try self.func().emitAlloca(.i64);
 
-            // Entry block is the current last block (before we add new blocks)
-            const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+            // Create 2-way branch: is_zero -> return 0, else -> bitcast
+            var branch = try BranchBuilder.init(self, is_zero, "float_hash_zero", "float_hash_nonzero", "float_hash_end");
+            defer branch.deinit();
 
-            // Create blocks for branching
-            const zero_block_idx: u32 = @intCast(self.func().blocks.items.len);
-            _ = try self.func().addBlock("float_hash_zero");
-            const nonzero_block_idx: u32 = @intCast(self.func().blocks.items.len);
-            _ = try self.func().addBlock("float_hash_nonzero");
-            const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-            _ = try self.func().addBlock("float_hash_end");
-
-            // Branch based on is_zero (from entry block)
-            const entry_block = &self.func().blocks.items[entry_block_idx];
-            try entry_block.instructions.append(self.allocator, .{
-                .op = .br_cond,
-                .operands = .{ .{ .value = is_zero }, .{ .block_ref = zero_block_idx }, .{ .block_ref = nonzero_block_idx } },
-            });
-
-            // Defer end and nonzero blocks (end=0, nonzero=1 after pop order)
-            var deferred = try DeferredBlocks.init(self.allocator, 2);
-            defer deferred.deinit();
-            deferred.deferBlocks(self, 2);
-
-            // Now current block is zero_block
-            // Zero case: store 0
+            // Then block (zero case): store 0
             const zero_i64 = try self.func().emitConstI64(0);
             try self.func().emitStore(result_ptr, zero_i64);
-            try self.func().emitBr(end_block_idx);
 
-            // Restore nonzero block and work with it
-            try deferred.restore(self, 1);
+            // Switch to else block
+            try branch.switchToElse(true);
 
-            // Non-zero case: bitcast float to i64
+            // Else block (non-zero case): bitcast float to i64
             const bitcast_value = try self.func().emitUnaryOp(.bitcast_f64_to_i64, value, .i64);
             try self.func().emitStore(result_ptr, bitcast_value);
-            try self.func().emitBr(end_block_idx);
 
-            // Restore end block
-            try deferred.restore(self, 0);
+            // Switch to merge block
+            try branch.switchToMerge(true);
 
-            // End block: load result
+            // Load result
             const result = try self.func().emitLoad(result_ptr, .i64);
 
             return .{ .value = result, .ty = .{ .primitive = "int" } };
