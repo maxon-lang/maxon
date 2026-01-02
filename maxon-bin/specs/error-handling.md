@@ -275,3 +275,57 @@ end 'main'
 ```exitcode
 100
 ```
+
+<!-- test: error.propagate-error-to-caller -->
+```maxon
+// Test error propagation: inner function throws, middle propagates, outer catches
+enum MyError is Error
+    failed
+end 'MyError'
+
+function inner() returns int throws MyError
+    throw MyError.failed
+end 'inner'
+
+function middle() returns int throws MyError
+    let x = try inner()
+    return x
+end 'middle'
+
+function main() returns int
+    do 'io'
+        let x = try middle()
+        return x
+    catch e MyError 'err'
+        return 99
+    end 'io'
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: error.uncaught-error-panics -->
+```maxon
+// Test that uncaught errors cause panic
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+    throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+    do 'io'
+        let x = try mayFail()
+        return x
+    end 'io'
+end 'main'
+```
+```stdout
+panic: unhandled MyError
+```
+```exitcode
+1
+```

@@ -271,7 +271,7 @@ const ExpectedOutput = struct {
 };
 
 fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_pos: usize) ParseError!?ExpectedOutput {
-    // Look for ```exitcode or ```maxoncstderr
+    // Look for ```exitcode, ```stdout, or ```maxoncstderr
     const next_block_marker = std.mem.indexOfPos(u8, content, start_pos, "```") orelse return null;
 
     // Don't look too far ahead (max 100 chars of whitespace)
@@ -281,8 +281,37 @@ fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_
     const line_end = std.mem.indexOfPos(u8, content, after_marker, "\n") orelse return null;
     const block_type = std.mem.trim(u8, content[after_marker..line_end], " \t\r");
 
-    if (std.mem.eql(u8, block_type, "exitcode")) {
-        // Success test
+    // Handle stdout before exitcode (stdout then exitcode order)
+    if (std.mem.eql(u8, block_type, "stdout")) {
+        const stdout_content_start = line_end + 1;
+        const stdout_block_end = std.mem.indexOfPos(u8, content, stdout_content_start, "```") orelse return null;
+        const stdout_text = try allocator.dupe(u8, std.mem.trim(u8, content[stdout_content_start..stdout_block_end], "\r\n"));
+
+        const end_pos = stdout_block_end + 3;
+
+        // Now look for the required exitcode block
+        if (findCodeBlock(content, end_pos, "exitcode") catch null) |exitcode_block| {
+            const exitcode_marker = std.mem.indexOfPos(u8, content, end_pos, "```exitcode");
+            if (exitcode_marker != null and exitcode_marker.? - end_pos <= 20) {
+                const exit_code_str = std.mem.trim(u8, exitcode_block.content, " \t\r\n");
+                const exit_code = std.fmt.parseInt(u8, exit_code_str, 10) catch {
+                    allocator.free(stdout_text);
+                    return ParseError.InvalidExitCode;
+                };
+                return ExpectedOutput{
+                    .expectation = .{ .success = .{
+                        .exit_code = exit_code,
+                        .stdout = stdout_text,
+                    } },
+                    .end_pos = exitcode_block.end,
+                };
+            }
+        }
+        // stdout without exitcode - not valid, clean up and return null
+        allocator.free(stdout_text);
+        return null;
+    } else if (std.mem.eql(u8, block_type, "exitcode")) {
+        // Success test (exitcode then optional stdout order)
         const content_start = line_end + 1;
         const block_end = std.mem.indexOfPos(u8, content, content_start, "```") orelse return null;
 

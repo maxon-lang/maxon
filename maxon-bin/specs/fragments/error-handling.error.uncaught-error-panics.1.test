@@ -1,48 +1,31 @@
-// Test: error-handling.error.do-catch-success-case.1
-// Test do-catch with no error thrown
+// Test: error-handling.error.uncaught-error-panics.1
+// Test that uncaught errors cause panic
 enum MyError is Error
     failed
 end 'MyError'
 
-function mayFail(shouldFail bool) returns int throws MyError
-    if shouldFail 'check'
-        throw MyError.failed
-    end 'check'
-    return 100
+function mayFail() returns int throws MyError
+    throw MyError.failed
 end 'mayFail'
 
 function main() returns int
     do 'io'
-        let x = try mayFail(false)
+        let x = try mayFail()
         return x
-    catch e MyError 'err'
-        return 0
     end 'io'
 end 'main'
 ---
-ExitCode: 100
+ExitCode: 1
+Stdout: panic: unhandled MyError
 ---
 function mayFail() -> i64 {
 entry:
     %tmp_param = param ptr 0
-    %shouldFail = param i64 1
-    %shouldFail.1 = alloca ptr
-    store %shouldFail.1 %shouldFail
-    %tmp_load = load i64 %shouldFail.1
-    br.cond %tmp_load @block1 @block2
-then:
     %tmp_const = const.i64 i64 0
     %tmp_const.1 = const.i64 i64 1
     store %tmp_param %tmp_const.1
     %tmp_fieldptr = getfieldptr ptr %tmp_param 8
     store %tmp_fieldptr %tmp_const
-    ret %tmp_param
-end:
-    %tmp_const.2 = const.i64 i64 100
-    %tmp_const.3 = const.i64 i64 0
-    store %tmp_param %tmp_const.3
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
-    store %tmp_fieldptr.1 %tmp_const.2
     ret %tmp_param
 }
 
@@ -50,11 +33,10 @@ function main() -> i64 {
 entry:
     %tmp_alloca = alloca.sized ptr 64
     %tmp_alloca.1 = alloca.sized ptr 16
-    %tmp_const = const.i64 i64 0
-    %tmp_call = call ptr @mayFail(%tmp_alloca.1, %tmp_const)
+    %tmp_call = call ptr @mayFail(%tmp_alloca.1)
     %tmp_load = load i64 %tmp_alloca.1
-    %tmp_const.1 = const.i64 i64 0
-    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.1
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
     br.cond %tmp_icmp @block1 @block2
 try_success:
     %tmp_alloca.2 = alloca ptr
@@ -74,12 +56,11 @@ try_merge:
     br @block5
 catch_dispatch:
     br @block5
-catch_0:
-    %tmp_const.2 = const.i64 i64 0
-    ret %tmp_const.2
-    br @block5
 catch_unhandled:
-    br @block5
+    %tmp_strconst = const.string ptr "panic: unhandled MyError
+"
+    %tmp_const.1 = const.i64 i64 25
+    call @__panic(%tmp_strconst, %tmp_const.1)
 do_end:
 }
 

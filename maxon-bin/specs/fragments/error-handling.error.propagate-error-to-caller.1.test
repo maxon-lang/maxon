@@ -1,0 +1,104 @@
+// Test: error-handling.error.propagate-error-to-caller.1
+// Test error propagation: inner function throws, middle propagates, outer catches
+enum MyError is Error
+    failed
+end 'MyError'
+
+function inner() returns int throws MyError
+    throw MyError.failed
+end 'inner'
+
+function middle() returns int throws MyError
+    let x = try inner()
+    return x
+end 'middle'
+
+function main() returns int
+    do 'io'
+        let x = try middle()
+        return x
+    catch e MyError 'err'
+        return 99
+    end 'io'
+end 'main'
+---
+ExitCode: 99
+---
+function inner() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %tmp_const = const.i64 i64 0
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_param %tmp_const.1
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr %tmp_const
+    ret %tmp_param
+}
+
+function middle() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %tmp_alloca = alloca.sized ptr 16
+    %tmp_call = call ptr @inner(%tmp_alloca)
+    %tmp_load = load i64 %tmp_alloca
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+try_success:
+    %tmp_alloca.1 = alloca ptr
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
+    %tmp_load.1 = load i64 %tmp_fieldptr
+    store %tmp_alloca.1 %tmp_load.1
+    br @block3
+try_propagate:
+    memcpy %tmp_param %tmp_alloca 16
+    ret %tmp_param
+try_merge:
+    %tmp_load.2 = load i64 %tmp_alloca.1
+    %x = alloca ptr
+    store %x %tmp_load.2
+    %tmp_load.3 = load i64 %x
+    %tmp_const.1 = const.i64 i64 0
+    store %tmp_param %tmp_const.1
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.1 %tmp_load.3
+    ret %tmp_param
+}
+
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 64
+    %tmp_alloca.1 = alloca.sized ptr 16
+    %tmp_call = call ptr @middle(%tmp_alloca.1)
+    %tmp_load = load i64 %tmp_alloca.1
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+try_success:
+    %tmp_alloca.2 = alloca ptr
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
+    %tmp_load.1 = load i64 %tmp_fieldptr
+    store %tmp_alloca.2 %tmp_load.1
+    br @block3
+try_propagate:
+    memcpy %tmp_alloca %tmp_alloca.1 64
+    br @block4
+try_merge:
+    %tmp_load.2 = load i64 %tmp_alloca.2
+    %x = alloca ptr
+    store %x %tmp_load.2
+    %tmp_load.3 = load i64 %x
+    ret %tmp_load.3
+    br @block5
+catch_dispatch:
+    br @block5
+catch_0:
+    %tmp_const.1 = const.i64 i64 99
+    ret %tmp_const.1
+    br @block5
+catch_unhandled:
+    br @block5
+do_end:
+}
+
+---

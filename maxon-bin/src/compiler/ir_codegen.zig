@@ -44,6 +44,18 @@ const TrackingDataPatch = struct {
     field: TrackingDataField, // Which field we're accessing
 };
 
+/// String constant entry for data section
+const StringConstant = struct {
+    data: []const u8, // String bytes
+    offset: usize, // Offset in data section (set after code generation)
+};
+
+/// Patch for RIP-relative access to string constant
+const StringConstantPatch = struct {
+    code_offset: usize, // Where the RIP-relative displacement is in code
+    string_index: usize, // Index into string_constants array
+};
+
 /// Code generation options
 pub const CodegenOptions = struct {
     track_allocs: bool = false,
@@ -255,6 +267,12 @@ pub const IrCodegen = struct {
     pending_stack_space: u32 = 0,
     // Source file for error reporting
     source_file: ?[]const u8 = null,
+    // String constants for data section
+    string_constants: std.ArrayListUnmanaged(StringConstant),
+    // Patches for string constant references
+    string_constant_patches: std.ArrayListUnmanaged(StringConstantPatch),
+    // Offset where string data section starts (set after code generation)
+    string_data_offset: ?usize = null,
 
     pub fn init(allocator: std.mem.Allocator, code: *std.ArrayListUnmanaged(u8), options: CodegenOptions) IrCodegen {
         return .{
@@ -279,6 +297,8 @@ pub const IrCodegen = struct {
             .reg_alloc = RegAllocInfo.init(),
             .outgoing_stack_args_size = 0,
             .pending_stack_space = 0,
+            .string_constants = .{},
+            .string_constant_patches = .{},
         };
     }
 
@@ -295,6 +315,8 @@ pub const IrCodegen = struct {
         self.func_return_types.deinit(self.allocator);
         self.stored_types.deinit(self.allocator);
         self.reg_alloc.deinit(self.allocator);
+        self.string_constants.deinit(self.allocator);
+        self.string_constant_patches.deinit(self.allocator);
     }
 
     /// Get external call patches for PE writer
@@ -439,6 +461,9 @@ pub const IrCodegen = struct {
         // Generate __write_stdout runtime function (always needed for print)
         try self.generateWriteStdout();
 
+        // Generate __panic runtime function (for unhandled errors)
+        try self.generatePanic();
+
         // Generate runtime conversion functions for string interpolation
         try self.generateRuntimeIntToString();
         try self.generateRuntimeFloatToString();
@@ -459,6 +484,12 @@ pub const IrCodegen = struct {
             try self.patchTrackingDataRefs();
         }
 
+        // Generate string constants data section and patch references
+        if (self.string_constants.items.len > 0) {
+            try self.generateStringData();
+            try self.patchStringConstantRefs();
+        }
+
         // Patch call sites
         try self.patchCalls();
     }
@@ -474,6 +505,41 @@ pub const IrCodegen = struct {
             const rip = patch.code_offset + 4;
             // Calculate relative offset: target - rip
             const rel: i32 = @intCast(@as(i64, @intCast(field_offset)) - @as(i64, @intCast(rip)));
+
+            // Write the displacement
+            const bytes: [4]u8 = @bitCast(rel);
+            self.code.items[patch.code_offset] = bytes[0];
+            self.code.items[patch.code_offset + 1] = bytes[1];
+            self.code.items[patch.code_offset + 2] = bytes[2];
+            self.code.items[patch.code_offset + 3] = bytes[3];
+        }
+    }
+
+    /// Generate string constants data section
+    /// Appends all string data to the code buffer and records their offsets
+    fn generateStringData(self: *IrCodegen) !void {
+        // Align to 8 bytes for safety
+        while (self.code.items.len % 8 != 0) {
+            try self.code.append(self.allocator, 0);
+        }
+        self.string_data_offset = self.code.items.len;
+
+        // Append each string and record its offset
+        for (self.string_constants.items) |*str_const| {
+            str_const.offset = self.code.items.len;
+            try self.code.appendSlice(self.allocator, str_const.data);
+        }
+    }
+
+    /// Patch all RIP-relative references to string constants
+    fn patchStringConstantRefs(self: *IrCodegen) !void {
+        for (self.string_constant_patches.items) |patch| {
+            // Get the string's actual offset in code
+            const str_offset = self.string_constants.items[patch.string_index].offset;
+            // RIP at time of instruction is patch.code_offset + 4 (after the disp32)
+            const rip = patch.code_offset + 4;
+            // Calculate relative offset: target - rip
+            const rel: i32 = @intCast(@as(i64, @intCast(str_offset)) - @as(i64, @intCast(rip)));
 
             // Write the displacement
             const bytes: [4]u8 = @bitCast(rel);
@@ -1084,6 +1150,31 @@ pub const IrCodegen = struct {
 
         // Epilogue
         try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __panic(message_ptr, message_len) -> noreturn
+    /// Writes panic message to stdout and exits with code 1
+    /// Parameters: RCX = message pointer, RDX = message length
+    fn generatePanic(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__panic", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x20 }); // sub rsp, 32
+
+        // Parameters already in RCX (message_ptr) and RDX (message_len)
+        // Call __write_stdout to print the message
+        try self.emitInternalCall("__write_stdout");
+
+        // Call ExitProcess(1) to terminate with error code
+        try self.enc.movRcxImm32(1);
+        try self.emitExternalCall("kernel32.dll", "ExitProcess");
+
+        // Epilogue (never reached but for completeness)
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x20 }); // add rsp, 32
         try self.enc.popRbp();
         try self.enc.ret();
     }
@@ -2420,6 +2511,7 @@ pub const IrCodegen = struct {
             .const_i32 => try self.genConst32(inst, inst.operands[0].immediate_i32, .i32),
             .const_i64 => try self.genConst64(inst, inst.operands[0].immediate_i64, .i64),
             .const_f64 => try self.genConst64(inst, @bitCast(inst.operands[0].immediate_f64), .f64),
+            .const_string => try self.genConstString(inst),
             .alloca => try self.genAlloca(inst),
             .alloca_sized => try self.genAllocaSized(inst),
             .alloca_dynamic => try self.genAllocaDynamic(inst),
@@ -2468,10 +2560,6 @@ pub const IrCodegen = struct {
             .icmp_ge => try self.genIcmp(inst, .ge),
             .br => try self.genBr(inst),
             .br_cond => try self.genBrCond(inst),
-            else => {
-                std.debug.print("ERROR: Unhandled IR instruction: {s}\n", .{inst.op.format()});
-                return error.UnhandledInstruction;
-            },
         }
     }
 
@@ -2494,6 +2582,38 @@ pub const IrCodegen = struct {
         try self.enc.movRaxImm64(value);
         try self.enc.movRbpOffsetRax(offset);
         try self.setValueLocation(result, .{ .stack = offset }, ty);
+    }
+
+    fn genConstString(self: *IrCodegen, inst: ir.Instruction) !void {
+        const result = inst.result.?;
+        const str_data = inst.operands[0].string_data;
+
+        // Add string to constants table
+        const string_index = self.string_constants.items.len;
+        try self.string_constants.append(self.allocator, .{
+            .data = str_data,
+            .offset = 0, // Will be set after code generation
+        });
+
+        // Allocate stack slot for the pointer
+        const offset = self.allocStackSlots(1);
+
+        // Emit LEA with placeholder RIP-relative offset (will be patched later)
+        // LEA RAX, [RIP + disp32]
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x05 }); // LEA RAX, [RIP + disp32]
+        // Record patch location (current position is where disp32 goes)
+        try self.string_constant_patches.append(self.allocator, .{
+            .code_offset = self.code.items.len,
+            .string_index = string_index,
+        });
+        // Emit placeholder displacement
+        try self.enc.emit(&.{ 0x00, 0x00, 0x00, 0x00 });
+
+        // Store pointer to stack
+        try self.enc.movRbpOffsetRax(offset);
+        try self.setValueLocation(result, .{ .stack = offset }, .ptr);
+        // Mark as indirect so loadArgs loads the value (the string pointer) rather than LEA
+        try self.markIndirect(result);
     }
 
     fn genAlloca(self: *IrCodegen, inst: ir.Instruction) !void {

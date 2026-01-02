@@ -228,6 +228,8 @@ pub const AstToIr = struct {
     do_catch_catch_block: ?u32 = null,
     // Do-catch context: block after the entire do-catch (for successful completion)
     do_catch_end_block: ?u32 = null,
+    // Do-catch context: error type name for panic message (tracked from try expressions)
+    do_catch_error_type: ?[]const u8 = null,
     // Pending try error branches to patch (used when catch_dispatch index is determined late)
     pending_try_branches: ?*std.ArrayListUnmanaged(TryBranchInfo) = null,
 
@@ -3712,10 +3714,12 @@ pub const AstToIr = struct {
         const outer_error_buffer = self.do_catch_error_buffer;
         const outer_catch_block = self.do_catch_catch_block;
         const outer_end_block = self.do_catch_end_block;
+        const outer_error_type = self.do_catch_error_type;
         defer {
             self.do_catch_error_buffer = outer_error_buffer;
             self.do_catch_catch_block = outer_catch_block;
             self.do_catch_end_block = outer_end_block;
+            self.do_catch_error_type = outer_error_type;
         }
 
         // Allocate buffer for storing the caught error (error union: tag + payload)
@@ -3728,6 +3732,7 @@ pub const AstToIr = struct {
         // This is necessary because block indices shift as the do body creates its own blocks
         self.do_catch_catch_block = 0xFFFFFFFF; // Sentinel meaning "to be determined"
         self.do_catch_end_block = 0xFFFFFFFF;
+        self.do_catch_error_type = null; // Will be set by try expressions
 
         // Process the do body - any `try` statements will record their error branches
         // These branches will be patched after we know the actual catch_dispatch index
@@ -3852,7 +3857,16 @@ pub const AstToIr = struct {
         try self.func().blocks.append(self.allocator, deferred_catch_blocks.items[0]);
 
         // Unhandled: if in outer do-catch, propagate there; else propagate to function return
-        if (outer_catch_block) |outer_catch| {
+        // Note: if there are catch clauses, this block is unreachable (dispatch jumps to first catch)
+        // but we still need valid IR for it
+        if (do_catch.catches.len > 0) {
+            // Unreachable - catch clauses handle all errors, just jump to end
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = do_end_idx }, .none, .none },
+                .result = null,
+            });
+        } else if (outer_catch_block) |outer_catch| {
             // Copy error to outer buffer and jump
             if (outer_error_buffer) |outer_buf| {
                 try self.func().emitMemcpy(outer_buf, error_buffer, 64);
@@ -3874,10 +3888,9 @@ pub const AstToIr = struct {
                 return error.SemanticError;
             }
         } else {
-            // Runtime error: unhandled exception
-            // For now, just return 0 (could call abort or panic)
-            const zero = try self.func().emitConstI64(0);
-            try self.func().emitRet(zero);
+            // Runtime error: unhandled exception - panic with error type
+            const error_type = self.do_catch_error_type orelse "Error";
+            try self.emitPanic(error_type);
         }
 
         // Restore end block
@@ -4782,6 +4795,27 @@ pub const AstToIr = struct {
         return string_ptr;
     }
 
+    /// Emit a panic call with the given error type name
+    /// Prints "panic: unhandled {error_type}\n" and exits with code 1
+    fn emitPanic(self: *AstToIr, error_type: []const u8) ConvertError!void {
+        // Build the panic message: "panic: unhandled {error_type}\n"
+        var msg_buf: [128]u8 = undefined;
+        const msg_slice = std.fmt.bufPrint(&msg_buf, "panic: unhandled {s}\n", .{error_type}) catch "panic: unhandled error\n";
+
+        // Dupe the message so it persists (the buffer is on the stack)
+        const msg = try self.allocator.dupe(u8, msg_slice);
+
+        // Emit string constant for the message (stored in data section)
+        const msg_ptr = try self.func().emitStringConstant(msg);
+        const msg_len = try self.func().emitConstI64(@intCast(msg.len));
+
+        // Call __panic(msg_ptr, msg_len)
+        var args = try self.allocator.alloc(ir.Value, 2);
+        args[0] = msg_ptr;
+        args[1] = msg_len;
+        _ = try self.func().emitCall("__panic", args, .void);
+    }
+
     /// Process escape sequences in a string literal
     /// Converts \n, \t, \r, \\, \", \{, \} to their actual characters
     fn processEscapeSequences(self: *AstToIr, raw: []const u8) ![]u8 {
@@ -5499,6 +5533,13 @@ pub const AstToIr = struct {
             if (self.do_catch_error_buffer) |err_buf| {
                 // Copy the error union to the do-catch buffer
                 try self.func().emitMemcpy(err_buf, result_typed.value, 64);
+            }
+
+            // Track the error type for panic messages
+            if (self.do_catch_error_type == null) {
+                if (result_typed.ty == .error_union_type) {
+                    self.do_catch_error_type = result_typed.ty.error_union_type.error_enum_type;
+                }
             }
 
             // Get current block index and instruction count before adding the branch
