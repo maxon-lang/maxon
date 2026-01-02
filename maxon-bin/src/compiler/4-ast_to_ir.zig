@@ -5652,6 +5652,19 @@ pub const AstToIr = struct {
         return .{ .value = value, .ty = field_info.value_type };
     }
 
+    /// Apply implicit int→float promotion if needed
+    fn applyIntToFloatPromotion(self: *AstToIr, arg_value: ir.Value, arg_type: ValueType, param_type: ValueType) !ir.Value {
+        const arg_prim = arg_type.toPrimitiveType();
+        const param_expects_float = switch (param_type) {
+            .primitive => |name| std.mem.eql(u8, name, "float"),
+            else => false,
+        };
+        if (param_expects_float and arg_prim == .i64) {
+            return self.func().emitUnaryOp(.sitofp, arg_value, .f64) catch return error.OutOfMemory;
+        }
+        return arg_value;
+    }
+
     fn convertCall(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
         // Handle built-in functions
         if (intrinsics.convertBuiltin(self, call)) |result| {
@@ -5740,15 +5753,7 @@ pub const AstToIr = struct {
 
             // Implicit int→float promotion: if parameter expects float but arg is int
             if (i < func_info.param_types.len) {
-                const param_type = func_info.param_types[i].ty;
-                const arg_prim = arg.ty.toPrimitiveType();
-                const param_expects_float = switch (param_type) {
-                    .primitive => |name| std.mem.eql(u8, name, "float"),
-                    else => false,
-                };
-                if (param_expects_float and arg_prim == .i64) {
-                    arg_value = self.func().emitUnaryOp(.sitofp, arg.value, .f64) catch return error.OutOfMemory;
-                }
+                arg_value = try self.applyIntToFloatPromotion(arg_value, arg.ty, func_info.param_types[i].ty);
             }
 
             args[i + arg_offset] = arg_value;
@@ -5831,15 +5836,7 @@ pub const AstToIr = struct {
 
             // Implicit int→float promotion
             if (i < func_type_info.param_types.len) {
-                const param_type = func_type_info.param_types[i];
-                const arg_prim = arg.ty.toPrimitiveType();
-                const param_expects_float = switch (param_type) {
-                    .primitive => |name| std.mem.eql(u8, name, "float"),
-                    else => false,
-                };
-                if (param_expects_float and arg_prim == .i64) {
-                    arg_value = self.func().emitUnaryOp(.sitofp, arg.value, .f64) catch return error.OutOfMemory;
-                }
+                arg_value = try self.applyIntToFloatPromotion(arg_value, arg.ty, func_type_info.param_types[i]);
             }
 
             args[i + arg_offset] = arg_value;
@@ -6791,9 +6788,17 @@ pub const AstToIr = struct {
         // Explicit arguments - either convert expressions or use pre-converted values
         switch (call_args) {
             .expressions => |exprs| {
-                for (exprs) |arg_expr| {
+                for (exprs, 0..) |arg_expr, i| {
                     const arg = try self.convertExpression(arg_expr);
-                    args[arg_idx] = arg.value;
+                    var arg_value = arg.value;
+
+                    // Implicit int→float promotion: if parameter expects float but arg is int
+                    const param_index = i + self_offset; // Account for self parameter
+                    if (param_index < func_info.param_types.len) {
+                        arg_value = try self.applyIntToFloatPromotion(arg_value, arg.ty, func_info.param_types[param_index].ty);
+                    }
+
+                    args[arg_idx] = arg_value;
                     arg_idx += 1;
                 }
             },

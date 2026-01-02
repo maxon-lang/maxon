@@ -242,17 +242,30 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
         const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
         var sigs_appended: usize = 0;
         errdefer {
-            // Free names from items that weren't appended to all_funcs
+            // Free names and param_types from items that weren't appended to all_funcs
             for (func_sigs[sigs_appended..]) |sig| {
                 allocator.free(sig.name);
+                if (sig.param_types.len > 0) {
+                    allocator.free(sig.param_types);
+                }
             }
             allocator.free(func_sigs);
         }
         for (func_sigs) |sig| {
+            // Make a deep copy of param_types so it outlives the AST frontend
+            const param_types_copy = try allocator.dupe(ast_to_ir.ParamType, sig.param_types);
+
             var sig_with_path = sig;
             sig_with_path.source_path = source.path;
+            sig_with_path.param_types = param_types_copy;
             try all_funcs.append(allocator, sig_with_path);
             sigs_appended += 1;
+        }
+        // Free the original param_types slices (we made copies)
+        for (func_sigs) |sig| {
+            if (sig.param_types.len > 0) {
+                allocator.free(sig.param_types);
+            }
         }
         allocator.free(func_sigs);
     }
@@ -947,6 +960,11 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
 
     for (program.enums) |enum_decl| {
         allocator.free(enum_decl.members);
+        // Free conformances and their type_args
+        for (enum_decl.conformances) |conformance| {
+            allocator.free(conformance.type_args);
+        }
+        allocator.free(enum_decl.conformances);
     }
     allocator.free(program.enums);
 
