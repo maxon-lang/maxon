@@ -28,19 +28,10 @@ pub const Parser = struct {
     last_error: ?err.CompileError,
 
     pub fn init(tokens: []const Token, allocator: std.mem.Allocator) Parser {
-        return .{
-            .tokens = tokens,
-            .pos = 0,
-            .allocator = allocator,
-            .expr_ptrs = .empty,
-            .ifstmt_ptrs = .empty,
-            .stmt_ptrs = .empty,
-            .source_file = null,
-            .last_error = null,
-        };
+        return initWithFile(tokens, allocator, null);
     }
 
-    pub fn initWithFile(tokens: []const Token, allocator: std.mem.Allocator, source_file: []const u8) Parser {
+    pub fn initWithFile(tokens: []const Token, allocator: std.mem.Allocator, source_file: ?[]const u8) Parser {
         return .{
             .tokens = tokens,
             .pos = 0,
@@ -928,6 +919,19 @@ pub const Parser = struct {
         }
     }
 
+    /// Check for 'and fallthrough' suffix in match case, consuming both tokens if present
+    fn checkAndConsumeFallthrough(self: *Parser) bool {
+        if (self.check(.@"and")) {
+            const next = self.peek(1);
+            if (next != null and next.?.type == .fallthrough) {
+                _ = self.advance(); // consume 'and'
+                _ = self.advance(); // consume 'fallthrough'
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// Result of parsing an else clause
     const ElseClause = struct {
         body: ?[]ast.Statement,
@@ -1132,21 +1136,9 @@ pub const Parser = struct {
         const label = try self.expect(.char_literal);
         _ = try self.expect(.newline);
 
-        // Parse body until we hit 'end'
-        var body_stmts: std.ArrayListUnmanaged(ast.Statement) = .empty;
-        errdefer body_stmts.deinit(self.allocator);
-
-        while (!self.check(.end) and !self.isAtEnd()) {
-            if (self.check(.newline)) {
-                _ = self.advance();
-                continue;
-            }
-            try body_stmts.append(self.allocator, try self.parseStatement());
-        }
-
-        // Expect end 'label' followed by catch
+        const body = try self.parseBlockBody();
         _ = try self.expect(.end);
-        _ = try self.expect(.char_literal); // Should match the do label
+        _ = try self.expect(.char_literal);
 
         // Parse catch clauses (at least one required)
         var catches: std.ArrayListUnmanaged(ast.CatchClause) = .empty;
@@ -1162,7 +1154,7 @@ pub const Parser = struct {
         }
 
         return stmtAt(.{ .do_catch_stmt = .{
-            .body = try body_stmts.toOwnedSlice(self.allocator),
+            .body = body,
             .label = label.text,
             .catches = try catches.toOwnedSlice(self.allocator),
         } }, start_line, start_column);
@@ -1184,22 +1176,9 @@ pub const Parser = struct {
         const label = try self.expect(.char_literal);
         _ = try self.expect(.newline);
 
-        // Parse catch body until end
-        var catch_body: std.ArrayListUnmanaged(ast.Statement) = .empty;
-        errdefer catch_body.deinit(self.allocator);
-
-        while (!self.check(.end) and !self.isAtEnd()) {
-            if (self.check(.newline)) {
-                _ = self.advance();
-                continue;
-            }
-            try catch_body.append(self.allocator, try self.parseStatement());
-        }
-
-        // Expect end 'catchLabel'
+        const catch_body = try self.parseBlockBody();
         _ = try self.expect(.end);
-        const end_label = try self.expect(.char_literal);
-        _ = end_label; // Could verify it matches the catch label
+        _ = try self.expect(.char_literal);
 
         // Only expect newline if not followed by another catch
         if (!self.check(.@"catch")) {
@@ -1209,7 +1188,7 @@ pub const Parser = struct {
         return .{
             .binding_name = binding_name.text,
             .error_type = error_type,
-            .body = try catch_body.toOwnedSlice(self.allocator),
+            .body = catch_body,
             .label = label.text,
         };
     }
@@ -1325,6 +1304,27 @@ pub const Parser = struct {
         binding: ?ast.PatternBinding,
     };
 
+    /// Parse a parenthesized list of binding names: (name1, name2, ...)
+    /// Expects lparen already consumed, returns the list and consumes rparen
+    fn parsePatternBindings(self: *Parser) ParseError![]const []const u8 {
+        var bindings: std.ArrayListUnmanaged([]const u8) = .empty;
+        errdefer bindings.deinit(self.allocator);
+
+        if (!self.check(.rparen)) {
+            const first_binding = try self.expect(.identifier);
+            try bindings.append(self.allocator, first_binding.text);
+
+            while (self.check(.comma)) {
+                _ = self.advance();
+                const next_binding = try self.expect(.identifier);
+                try bindings.append(self.allocator, next_binding.text);
+            }
+        }
+        _ = try self.expect(.rparen);
+
+        return bindings.toOwnedSlice(self.allocator);
+    }
+
     /// Parse a match pattern, which may include bindings for associated values
     /// Examples: `empty`, `value(n)`, `pair(a, b)`, `Color.red`, `Color.value(n)`
     fn parseMatchPattern(self: *Parser) ParseError!MatchPatternResult {
@@ -1336,39 +1336,23 @@ pub const Parser = struct {
             if (self.check(.dot)) {
                 _ = self.advance(); // consume '.'
                 const field_token = try self.expect(.identifier);
+                const base_expr = try self.createExpr(.{ .identifier = ident_token.text });
 
                 // Check if field access is followed by '(' for bindings (e.g., Color.value(n))
                 if (self.check(.lparen)) {
                     _ = self.advance(); // consume '('
+                    const bindings = try self.parsePatternBindings();
 
-                    var bindings: std.ArrayListUnmanaged([]const u8) = .empty;
-                    errdefer bindings.deinit(self.allocator);
-
-                    if (!self.check(.rparen)) {
-                        const first_binding = try self.expect(.identifier);
-                        try bindings.append(self.allocator, first_binding.text);
-
-                        while (self.check(.comma)) {
-                            _ = self.advance();
-                            const next_binding = try self.expect(.identifier);
-                            try bindings.append(self.allocator, next_binding.text);
-                        }
-                    }
-                    _ = try self.expect(.rparen);
-
-                    // Create field access expression for the pattern
-                    const base_expr = try self.createExpr(.{ .identifier = ident_token.text });
                     return .{
                         .pattern = .{ .field_access = .{ .base = base_expr, .field_name = field_token.text } },
                         .binding = .{
                             .case_name = field_token.text,
-                            .bindings = try bindings.toOwnedSlice(self.allocator),
+                            .bindings = bindings,
                         },
                     };
                 }
 
                 // Simple field access like Color.red
-                const base_expr = try self.createExpr(.{ .identifier = ident_token.text });
                 return .{
                     .pattern = .{ .field_access = .{ .base = base_expr, .field_name = field_token.text } },
                     .binding = null,
@@ -1378,29 +1362,13 @@ pub const Parser = struct {
             // Check if followed by '(' for bindings (bare identifier with bindings like `value(n)`)
             if (self.check(.lparen)) {
                 _ = self.advance(); // consume '('
-
-                var bindings: std.ArrayListUnmanaged([]const u8) = .empty;
-                errdefer bindings.deinit(self.allocator);
-
-                // Parse first binding name
-                if (!self.check(.rparen)) {
-                    const first_binding = try self.expect(.identifier);
-                    try bindings.append(self.allocator, first_binding.text);
-
-                    // Parse additional binding names
-                    while (self.check(.comma)) {
-                        _ = self.advance(); // consume ','
-                        const next_binding = try self.expect(.identifier);
-                        try bindings.append(self.allocator, next_binding.text);
-                    }
-                }
-                _ = try self.expect(.rparen);
+                const bindings = try self.parsePatternBindings();
 
                 return .{
                     .pattern = .{ .identifier = ident_token.text },
                     .binding = .{
                         .case_name = ident_token.text,
-                        .bindings = try bindings.toOwnedSlice(self.allocator),
+                        .bindings = bindings,
                     },
                 };
             }
@@ -1428,7 +1396,6 @@ pub const Parser = struct {
         const start_token = self.current();
         const start_line = start_token.line;
         const start_column = start_token.column;
-        var has_fallthrough = false;
 
         // Handle return statement
         if (self.check(.@"return")) {
@@ -1436,14 +1403,7 @@ pub const Parser = struct {
             const value = try self.parseExpression();
             // Check for 'and fallthrough' - not allowed with return, but we parse it anyway
             // Semantic analysis will catch the error
-            if (self.check(.@"and")) {
-                const next = self.peek(1);
-                if (next != null and next.?.type == .fallthrough) {
-                    _ = self.advance(); // consume 'and'
-                    _ = self.advance(); // consume 'fallthrough'
-                    has_fallthrough = true;
-                }
-            }
+            const has_fallthrough = self.checkAndConsumeFallthrough();
             _ = try self.expect(.newline);
             return .{
                 .stmt = stmtAt(.{ .@"return" = .{ .value = value } }, start_line, start_column),
@@ -1466,16 +1426,7 @@ pub const Parser = struct {
                     return error.ExpectedExpression;
                 };
 
-                // Check for 'and fallthrough'
-                if (self.check(.@"and")) {
-                    const next = self.peek(1);
-                    if (next != null and next.?.type == .fallthrough) {
-                        _ = self.advance(); // consume 'and'
-                        _ = self.advance(); // consume 'fallthrough'
-                        has_fallthrough = true;
-                    }
-                }
-
+                const has_fallthrough = self.checkAndConsumeFallthrough();
                 _ = try self.expect(.newline);
 
                 if (expr == .identifier) {
@@ -1513,15 +1464,7 @@ pub const Parser = struct {
 
             // Function call or method call
             if (expr == .call) {
-                // Check for 'and fallthrough'
-                if (self.check(.@"and")) {
-                    const next = self.peek(1);
-                    if (next != null and next.?.type == .fallthrough) {
-                        _ = self.advance(); // consume 'and'
-                        _ = self.advance(); // consume 'fallthrough'
-                        has_fallthrough = true;
-                    }
-                }
+                const has_fallthrough = self.checkAndConsumeFallthrough();
                 _ = try self.expect(.newline);
                 return .{
                     .stmt = stmtAt(.{ .call = expr.call }, start_line, start_column),
@@ -1529,15 +1472,7 @@ pub const Parser = struct {
                 };
             }
             if (expr == .method_call) {
-                // Check for 'and fallthrough'
-                if (self.check(.@"and")) {
-                    const next = self.peek(1);
-                    if (next != null and next.?.type == .fallthrough) {
-                        _ = self.advance(); // consume 'and'
-                        _ = self.advance(); // consume 'fallthrough'
-                        has_fallthrough = true;
-                    }
-                }
+                const has_fallthrough = self.checkAndConsumeFallthrough();
                 _ = try self.expect(.newline);
                 return .{
                     .stmt = stmtAt(.{ .method_call = expr.method_call }, start_line, start_column),

@@ -890,7 +890,10 @@ pub const AstToIr = struct {
         while (type_iter.next()) |entry| {
             switch (entry.value_ptr.*) {
                 .struct_type => |s| self.allocator.free(s.fields),
-                .enum_type => |*e| e.members.deinit(self.allocator),
+                .enum_type => |*e| {
+                    e.members.deinit(self.allocator);
+                    e.case_info.deinit(self.allocator);
+                },
                 .primitive => {},
             }
         }
