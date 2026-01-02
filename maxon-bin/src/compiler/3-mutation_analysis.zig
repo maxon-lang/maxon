@@ -138,6 +138,15 @@ pub const MutationAnalyzer = struct {
                     }
                 }
             },
+            .match_stmt => |match_s| {
+                // Check mutations inside match case bodies
+                for (match_s.cases) |match_case| {
+                    self.checkStatementForMutation(match_case.body.*, param_indices, mutated);
+                }
+                if (match_s.default_case) |default| {
+                    self.checkStatementForMutation(default.*, param_indices, mutated);
+                }
+            },
         }
     }
 
@@ -187,6 +196,19 @@ pub const MutationAnalyzer = struct {
             // Try expressions - check inner expression
             .try_expr => |te| {
                 self.checkExpressionForParamMutation(te.expr.*, param_indices, mutated);
+            },
+            // Match expressions - check scrutinee, patterns and results
+            .match_expr => |me| {
+                self.checkExpressionForParamMutation(me.scrutinee.*, param_indices, mutated);
+                for (me.cases) |match_case| {
+                    for (match_case.patterns) |pattern| {
+                        self.checkExpressionForParamMutation(pattern, param_indices, mutated);
+                    }
+                    self.checkExpressionForParamMutation(match_case.result, param_indices, mutated);
+                }
+                if (me.default_expr) |default| {
+                    self.checkExpressionForParamMutation(default.*, param_indices, mutated);
+                }
             },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated

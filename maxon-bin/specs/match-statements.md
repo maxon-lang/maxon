@@ -207,21 +207,23 @@ If any enum case is missing, the compiler will report an error listing the missi
 
 ## String Matching
 
-Match works with string values:
+You can match on string values using string literals as patterns:
 
 ```maxon
 function main() returns int
-    var input = "Y"
-    match input 'confirm'
-        "y" or "Y" then return 1
-        "n" or "N" then return 0
-        default then return -1
-    end 'confirm'
+    var name = "alice"
+    match name 'greet'
+        "alice" then return 1
+        "bob" then return 2
+        default then return 0
+    end 'greet'
 end 'main'
 ```
 ```exitcode
 1
 ```
+
+String matching uses the `equals` method from the `Equatable` interface, so any type that implements `Equatable` can be used as a match scrutinee.
 
 ## Rules
 
@@ -327,35 +329,6 @@ end 'main'
 10
 ```
 
-<!-- test: match-statements.string -->
-```maxon
-function main() returns int
-    var input = "Y"
-    match input 'confirm'
-        "y" or "Y" then return 1
-        "n" or "N" then return 0
-        default then return -1
-    end 'confirm'
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: match-statements.string-lowercase -->
-```maxon
-function main() returns int
-    var input = "n"
-    match input 'confirm'
-        "y" or "Y" then return 1
-        "n" or "N" then return 0
-        default then return -1
-    end 'confirm'
-end 'main'
-```
-```exitcode
-0
-```
 
 <!-- test: match-expression.basic -->
 ```maxon
@@ -405,22 +378,6 @@ end 'main'
 0
 ```
 
-<!-- test: match-expression.string -->
-```maxon
-function main() returns int
-    var grade = "B"
-    let points = match grade 'grade'
-        "A" gives 4
-        "B" gives 3
-        "C" gives 2
-        default gives 0
-    end 'grade'
-    return points
-end 'main'
-```
-```exitcode
-3
-```
 
 <!-- test: match-statements.fallthrough -->
 ```maxon
@@ -622,11 +579,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp_fragment.maxon':
-Expected expression
-  Found: 'fallthrough'
-  Note: An expression can be a number, variable, function call, or arithmetic/comparison operation
-  Location: line 5, column 24
+error E002: specs/fragments/match-statements.error.match-expression-fallthrough.1.test:5:20: unexpected token
 ```
 
 <!-- test: error.match-fallthrough-with-return -->
@@ -640,11 +593,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:5:9
-Cannot combine 'fallthrough' with 'return' statement
-
-  5 |         1 then return 10 and fallthrough
-    |         ^
+error E025: specs/fragments/match-statements.error.match-fallthrough-with-return.1.test:5:16: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
 ```
 
 <!-- test: error.match-enum-not-exhaustive -->
@@ -664,19 +613,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:10:5
-Match on enum 'Color' is not exhaustive
-  Missing cases: blue
-
-  10 |     match c 'check'
-     |     ^
-
-Semantic Error: temp_fragment.maxon:8:1
-Function 'main' must return a value of type 'int'
-  Note: All execution paths through the function must end with a return statement
-
-  8 | function main() returns int
-    | ^
+error E026: specs/fragments/match-statements.error.match-enum-not-exhaustive.1.test:10:5: match on enum 'Color' is not exhaustive, missing: blue
 ```
 
 <!-- test: error.match-duplicate-pattern -->
@@ -691,11 +628,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:6:9
-Duplicate pattern '1' in match
-
-  6 |         1 then return 20
-    |         ^
+error E027: specs/fragments/match-statements.error.match-duplicate-pattern.1.test:6:16: duplicate pattern in match: '1'
 ```
 
 <!-- test: error.match-type-mismatch -->
@@ -709,11 +642,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:5:9
-Pattern type 'string' does not match scrutinee type 'int'
-
-  5 |         "one" then return 10
-    |         ^
+error E028: specs/fragments/match-statements.error.match-type-mismatch.1.test:5:20: pattern type 'String' does not match scrutinee type 'int'
 ```
 
 <!-- test: error.match-missing-block-id -->
@@ -727,11 +656,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp_fragment.maxon':
-Expected block identifier after match expression
-  Expected: block identifier
-  Found: '1'
-  Location: line 5, column 9
+error E002: specs/fragments/match-statements.error.match-missing-block-id.1.test:4:12: unexpected token
 ```
 
 <!-- test: error.match-mismatched-block-id -->
@@ -745,11 +670,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp_fragment.maxon':
-Block identifier mismatch in match statement
-  Expected: 'check'
-  Found: 'wrong'
-  Location: line 7, column 9
+error E002: specs/fragments/match-statements.error.match-mismatched-block-id.1.test:7:16: unexpected token
 ```
 
 <!-- test: error.match-default-not-last -->
@@ -764,9 +685,81 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:4:5
-'default' case must be the last case in match
+error E029: specs/fragments/match-statements.error.match-default-not-last.1.test:6:9: 'default' case must be the last case in match
+```
 
-  4 |     match x 'check'
-    |     ^
+<!-- test: match-string.simple -->
+```maxon
+function main() returns int
+    var name = "alice"
+    match name 'greet'
+        "alice" then return 1
+        "bob" then return 2
+        default then return 0
+    end 'greet'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-string.second-case -->
+```maxon
+function main() returns int
+    var name = "bob"
+    match name 'greet'
+        "alice" then return 1
+        "bob" then return 2
+        default then return 0
+    end 'greet'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: match-string.default -->
+```maxon
+function main() returns int
+    var name = "charlie"
+    match name 'greet'
+        "alice" then return 1
+        "bob" then return 2
+        default then return 0
+    end 'greet'
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: match-string.or-patterns -->
+```maxon
+function main() returns int
+    var name = "carol"
+    match name 'greet'
+        "alice" or "bob" then return 1
+        "carol" or "dave" then return 2
+        default then return 0
+    end 'greet'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: match-string.expression -->
+```maxon
+function main() returns int
+    var name = "bob"
+    let code = match name 'lookup'
+        "alice" gives 100
+        "bob" gives 200
+        default gives 0
+    end 'lookup'
+    return code
+end 'main'
+```
+```exitcode
+200
 ```

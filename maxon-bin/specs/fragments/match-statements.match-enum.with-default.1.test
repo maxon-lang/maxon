@@ -1,0 +1,38 @@
+// Test: match-statements.match-enum.with-default.1
+enum Color
+    red
+    green
+    blue
+end 'Color'
+
+function main() returns int
+    var c = Color.blue
+    match c 'check'
+        Color.red then return 1
+        default then return 0
+    end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 2
+    %c = alloca ptr
+    store %c %tmp_const
+    %tmp_load.1 = load i64 %c
+    br @block1
+match_check:
+    %tmp_const.2 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.2
+    br.cond %tmp_icmp @block2 @block3
+match_body:
+    %tmp_const.3 = const.i64 i64 1
+    ret %tmp_const.3
+match_default:
+    %tmp_const.4 = const.i64 i64 0
+    ret %tmp_const.4
+match_merge:
+}
+
+---

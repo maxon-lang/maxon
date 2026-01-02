@@ -1,0 +1,49 @@
+// Test: match-statements.doc-example-2.1
+function main() returns int
+    var input = 3
+    match input 'eval'
+        1 or 2 then return 10
+        3 or 4 or 5 then return 20
+        default then return 0
+    end 'eval'
+end 'main'
+---
+ExitCode: 20
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 3
+    %input = alloca ptr
+    store %input %tmp_const
+    %tmp_load.1 = load i64 %input
+    br @block1
+match_check:
+    %tmp_const.6 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.6
+    %tmp_const.7 = const.i64 i64 2
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.1 %tmp_const.7
+    %tmp_bitor = bitor i64 %tmp_icmp %tmp_icmp.1
+    br.cond %tmp_bitor @block2 @block3
+match_body:
+    %tmp_const.8 = const.i64 i64 10
+    ret %tmp_const.8
+match_check:
+    %tmp_const.9 = const.i64 i64 3
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.1 %tmp_const.9
+    %tmp_const.10 = const.i64 i64 4
+    %tmp_icmp.3 = icmp.eq i64 %tmp_load.1 %tmp_const.10
+    %tmp_bitor.1 = bitor i64 %tmp_icmp.2 %tmp_icmp.3
+    %tmp_const.11 = const.i64 i64 5
+    %tmp_icmp.4 = icmp.eq i64 %tmp_load.1 %tmp_const.11
+    %tmp_bitor.2 = bitor i64 %tmp_bitor.1 %tmp_icmp.4
+    br.cond %tmp_bitor.2 @block4 @block5
+match_body:
+    %tmp_const.12 = const.i64 i64 20
+    ret %tmp_const.12
+match_default:
+    %tmp_const.13 = const.i64 i64 0
+    ret %tmp_const.13
+match_merge:
+}
+
+---

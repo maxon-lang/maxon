@@ -21,6 +21,7 @@ pub const Parser = struct {
     allocator: std.mem.Allocator,
     expr_ptrs: std.ArrayListUnmanaged(*ast.Expression),
     ifstmt_ptrs: std.ArrayListUnmanaged(*ast.IfStmt),
+    stmt_ptrs: std.ArrayListUnmanaged(*ast.Statement),
     /// Source file path for error messages
     source_file: ?[]const u8,
     /// Last error with location info
@@ -33,6 +34,7 @@ pub const Parser = struct {
             .allocator = allocator,
             .expr_ptrs = .empty,
             .ifstmt_ptrs = .empty,
+            .stmt_ptrs = .empty,
             .source_file = null,
             .last_error = null,
         };
@@ -45,6 +47,7 @@ pub const Parser = struct {
             .allocator = allocator,
             .expr_ptrs = .empty,
             .ifstmt_ptrs = .empty,
+            .stmt_ptrs = .empty,
             .source_file = source_file,
             .last_error = null,
         };
@@ -62,6 +65,8 @@ pub const Parser = struct {
         self.expr_ptrs.deinit(self.allocator);
         // Note: ifstmt_ptrs are freed by freeProgram in 0-compiler.zig
         self.ifstmt_ptrs.deinit(self.allocator);
+        // Note: stmt_ptrs are freed by freeProgram in 0-compiler.zig
+        self.stmt_ptrs.deinit(self.allocator);
     }
 
     pub fn parse(self: *Parser) ParseError!ast.Program {
@@ -145,6 +150,19 @@ pub const Parser = struct {
         self.last_error = .{
             .code = code,
             .message = code.message(),
+            .location = .{
+                .file = self.source_file,
+                .line = tok.line,
+                .column = tok.column,
+            },
+        };
+    }
+
+    fn reportErrorWithMessage(self: *Parser, message: []const u8) void {
+        const tok = self.current();
+        self.last_error = .{
+            .code = .E029, // default case must be last
+            .message = message,
             .location = .{
                 .file = self.source_file,
                 .line = tok.line,
@@ -695,6 +713,10 @@ pub const Parser = struct {
         if (self.check(.do)) {
             return try self.parseDoCatchStatement();
         }
+        // Match statement
+        if (self.check(.match)) {
+            return try self.parseMatchStatement();
+        }
         // Check for assignment, index assignment, or call statement: identifier or self...
         if (self.check(.identifier) or self.check(.self)) {
             const start_pos = self.pos;
@@ -1176,6 +1198,345 @@ pub const Parser = struct {
         };
     }
 
+    /// Parse match statement: match <expr> 'label' ... end 'label'
+    fn parseMatchStatement(self: *Parser) ParseError!ast.Statement {
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
+
+        _ = try self.expect(.match);
+
+        // Parse scrutinee expression
+        const scrutinee = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+
+        // Parse block identifier
+        const label = try self.expect(.char_literal);
+        _ = try self.expect(.newline);
+
+        // Parse cases
+        var cases: std.ArrayListUnmanaged(ast.MatchCase) = .empty;
+        errdefer cases.deinit(self.allocator);
+        var default_case: ?*const ast.Statement = null;
+        var saw_default = false;
+
+        while (!self.check(.end) and !self.isAtEnd()) {
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
+
+            // Check for default case
+            if (self.check(.default)) {
+                _ = self.advance();
+                _ = try self.expect(.then);
+                const result = try self.parseMatchCaseBody();
+                default_case = try self.createStmt(result.stmt);
+                saw_default = true;
+                continue;
+            }
+
+            // Error if we see a pattern after default
+            if (saw_default) {
+                self.reportErrorWithMessage("'default' case must be the last case in match");
+                return error.UnexpectedToken;
+            }
+
+            // Parse patterns (may have multiple via 'or')
+            var patterns: std.ArrayListUnmanaged(ast.Expression) = .empty;
+            errdefer patterns.deinit(self.allocator);
+
+            // Parse pattern at logical-and precedence level (excludes 'or' operator)
+            // so we can handle 'or' as pattern separator
+            const first_pattern = try self.parseLogicalAnd() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            try patterns.append(self.allocator, first_pattern);
+
+            while (self.check(.@"or")) {
+                // Check for 'or nil' which is type annotation, not pattern
+                const next = self.peek(1);
+                if (next != null and next.?.type == .nil) break;
+
+                _ = self.advance(); // consume 'or'
+                const pattern = try self.parseLogicalAnd() orelse {
+                    self.reportError(.E003);
+                    return error.ExpectedExpression;
+                };
+                try patterns.append(self.allocator, pattern);
+            }
+
+            _ = try self.expect(.then);
+
+            // Parse single statement (handles newline internally)
+            const result = try self.parseMatchCaseBody();
+
+            try cases.append(self.allocator, .{
+                .patterns = try patterns.toOwnedSlice(self.allocator),
+                .body = try self.createStmt(result.stmt),
+                .has_fallthrough = result.has_fallthrough,
+            });
+        }
+
+        // Parse end 'label'
+        _ = try self.expect(.end);
+        const end_label = try self.expect(.char_literal);
+
+        // Verify labels match
+        if (!std.mem.eql(u8, label.text, end_label.text)) {
+            self.reportError(.E002);
+            return error.UnexpectedToken;
+        }
+
+        try self.expectTrailingNewline();
+
+        return stmtAt(.{ .match_stmt = .{
+            .scrutinee = scrutinee,
+            .cases = try cases.toOwnedSlice(self.allocator),
+            .default_case = default_case,
+            .label = label.text,
+        } }, start_line, start_column);
+    }
+
+    const MatchCaseResult = struct {
+        stmt: ast.Statement,
+        has_fallthrough: bool,
+    };
+
+    /// Parse a single statement in a match case, handling 'and fallthrough'
+    fn parseMatchCaseBody(self: *Parser) ParseError!MatchCaseResult {
+        const start_token = self.current();
+        const start_line = start_token.line;
+        const start_column = start_token.column;
+        var has_fallthrough = false;
+
+        // Handle return statement
+        if (self.check(.@"return")) {
+            _ = self.advance();
+            const value = try self.parseExpression();
+            // Check for 'and fallthrough' - not allowed with return, but we parse it anyway
+            // Semantic analysis will catch the error
+            if (self.check(.@"and")) {
+                const next = self.peek(1);
+                if (next != null and next.?.type == .fallthrough) {
+                    _ = self.advance(); // consume 'and'
+                    _ = self.advance(); // consume 'fallthrough'
+                    has_fallthrough = true;
+                }
+            }
+            _ = try self.expect(.newline);
+            return .{
+                .stmt = stmtAt(.{ .@"return" = .{ .value = value } }, start_line, start_column),
+                .has_fallthrough = has_fallthrough,
+            };
+        }
+
+        // Parse other statements (assignment, call, etc.)
+        if (self.check(.identifier) or self.check(.self)) {
+            const expr = try self.parseExpression() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+
+            // Check if followed by '='
+            if (self.check(.equals)) {
+                _ = self.advance(); // consume '='
+                const value = try self.parseExpression() orelse {
+                    self.reportError(.E003);
+                    return error.ExpectedExpression;
+                };
+
+                // Check for 'and fallthrough'
+                if (self.check(.@"and")) {
+                    const next = self.peek(1);
+                    if (next != null and next.?.type == .fallthrough) {
+                        _ = self.advance(); // consume 'and'
+                        _ = self.advance(); // consume 'fallthrough'
+                        has_fallthrough = true;
+                    }
+                }
+
+                _ = try self.expect(.newline);
+
+                if (expr == .identifier) {
+                    return .{
+                        .stmt = stmtAt(.{ .assign = .{
+                            .target = expr.identifier,
+                            .value = value,
+                        } }, start_line, start_column),
+                        .has_fallthrough = has_fallthrough,
+                    };
+                }
+                if (expr == .field_access) {
+                    return .{
+                        .stmt = stmtAt(.{ .field_assign = .{
+                            .base = expr.field_access.base,
+                            .field_name = expr.field_access.field_name,
+                            .value = value,
+                        } }, start_line, start_column),
+                        .has_fallthrough = has_fallthrough,
+                    };
+                }
+                if (expr == .index) {
+                    return .{
+                        .stmt = stmtAt(.{ .index_assign = .{
+                            .base = expr.index.base,
+                            .index = expr.index.index,
+                            .value = value,
+                        } }, start_line, start_column),
+                        .has_fallthrough = has_fallthrough,
+                    };
+                }
+                self.reportError(.E002);
+                return error.UnexpectedToken;
+            }
+
+            // Function call or method call
+            if (expr == .call) {
+                // Check for 'and fallthrough'
+                if (self.check(.@"and")) {
+                    const next = self.peek(1);
+                    if (next != null and next.?.type == .fallthrough) {
+                        _ = self.advance(); // consume 'and'
+                        _ = self.advance(); // consume 'fallthrough'
+                        has_fallthrough = true;
+                    }
+                }
+                _ = try self.expect(.newline);
+                return .{
+                    .stmt = stmtAt(.{ .call = expr.call }, start_line, start_column),
+                    .has_fallthrough = has_fallthrough,
+                };
+            }
+            if (expr == .method_call) {
+                // Check for 'and fallthrough'
+                if (self.check(.@"and")) {
+                    const next = self.peek(1);
+                    if (next != null and next.?.type == .fallthrough) {
+                        _ = self.advance(); // consume 'and'
+                        _ = self.advance(); // consume 'fallthrough'
+                        has_fallthrough = true;
+                    }
+                }
+                _ = try self.expect(.newline);
+                return .{
+                    .stmt = stmtAt(.{ .method_call = expr.method_call }, start_line, start_column),
+                    .has_fallthrough = has_fallthrough,
+                };
+            }
+        }
+
+        self.reportError(.E002);
+        return error.UnexpectedToken;
+    }
+
+    /// Parse match expression: match <expr> 'label' ... end 'label'
+    fn parseMatchExpression(self: *Parser) ParseError!ast.Expression {
+        _ = try self.expect(.match);
+
+        // Parse scrutinee expression
+        const scrutinee = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+
+        // Parse block identifier
+        const label = try self.expect(.char_literal);
+        _ = try self.expect(.newline);
+
+        // Parse cases
+        var cases: std.ArrayListUnmanaged(ast.MatchExprCase) = .empty;
+        errdefer cases.deinit(self.allocator);
+        var default_expr: ?ast.Expression = null;
+
+        while (!self.check(.end) and !self.isAtEnd()) {
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
+
+            // Check for default case
+            if (self.check(.default)) {
+                _ = self.advance();
+                _ = try self.expect(.gives);
+                default_expr = try self.parseExpression() orelse {
+                    self.reportError(.E003);
+                    return error.ExpectedExpression;
+                };
+                _ = try self.expect(.newline);
+                continue;
+            }
+
+            // Parse patterns (may have multiple via 'or')
+            var patterns: std.ArrayListUnmanaged(ast.Expression) = .empty;
+            errdefer patterns.deinit(self.allocator);
+
+            // Parse pattern at logical-and precedence level (excludes 'or' operator)
+            // so we can handle 'or' as pattern separator
+            const first_pattern = try self.parseLogicalAnd() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            try patterns.append(self.allocator, first_pattern);
+
+            while (self.check(.@"or")) {
+                // Check for 'or nil' which is type annotation, not pattern
+                const next = self.peek(1);
+                if (next != null and next.?.type == .nil) break;
+
+                _ = self.advance(); // consume 'or'
+                const pattern = try self.parseLogicalAnd() orelse {
+                    self.reportError(.E003);
+                    return error.ExpectedExpression;
+                };
+                try patterns.append(self.allocator, pattern);
+            }
+
+            _ = try self.expect(.gives);
+
+            // Parse result expression
+            const result = try self.parseExpression() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            _ = try self.expect(.newline);
+
+            try cases.append(self.allocator, .{
+                .patterns = try patterns.toOwnedSlice(self.allocator),
+                .result = result,
+            });
+        }
+
+        // Parse end 'label'
+        _ = try self.expect(.end);
+        const end_label = try self.expect(.char_literal);
+
+        // Verify labels match
+        if (!std.mem.eql(u8, label.text, end_label.text)) {
+            self.reportError(.E002);
+            return error.UnexpectedToken;
+        }
+
+        // Create the scrutinee pointer
+        const scrutinee_ptr = try self.createExpr(scrutinee);
+
+        // Create the default expression pointer if present
+        const default_expr_ptr: ?*const ast.Expression = if (default_expr) |de|
+            try self.createExpr(de)
+        else
+            null;
+
+        return try self.parsePostfix(.{ .match_expr = .{
+            .scrutinee = scrutinee_ptr,
+            .cases = try cases.toOwnedSlice(self.allocator),
+            .default_expr = default_expr_ptr,
+            .label = label.text,
+        } });
+    }
+
     fn parseExpression(self: *Parser) ParseError!?ast.Expression {
         return try self.parseLogicalOr();
     }
@@ -1213,6 +1574,13 @@ pub const Parser = struct {
         var left = try self.parseBitwiseOr() orelse return null;
 
         while (self.check(.@"and")) {
+            // Check if 'and' is followed by 'fallthrough' - if so, this is not a logical operator
+            // It's the 'and fallthrough' suffix for match case statements
+            const next = self.peek(1);
+            if (next != null and next.?.type == .fallthrough) {
+                break;
+            }
+
             _ = self.advance();
             const right = try self.parseBitwiseOr() orelse {
                 self.reportError(.E003);
@@ -1411,7 +1779,18 @@ pub const Parser = struct {
         return ptr;
     }
 
+    fn createStmt(self: *Parser, stmt: ast.Statement) !*ast.Statement {
+        const ptr = try self.allocator.create(ast.Statement);
+        ptr.* = stmt;
+        try self.stmt_ptrs.append(self.allocator, ptr);
+        return ptr;
+    }
+
     fn parsePrimary(self: *Parser) ParseError!?ast.Expression {
+        // Match expression
+        if (self.check(.match)) {
+            return try self.parseMatchExpression();
+        }
         if (self.check(.integer)) {
             const token = self.advance();
             const value = std.fmt.parseInt(i64, token.text, 0) catch {
@@ -2172,9 +2551,7 @@ pub const Parser = struct {
                     self.reportError(.E003);
                     return error.ExpectedExpression;
                 };
-                const expr_ptr = try self.allocator.create(ast.Expression);
-                expr_ptr.* = expr;
-                value = expr_ptr;
+                value = try self.createExpr(expr);
             }
 
             try members.append(self.allocator, .{

@@ -46,6 +46,11 @@ pub const TokenType = enum {
     @"try", // try expression
     @"catch", // catch clause
     do, // do block for error handling
+    // Match statement keywords
+    match, // match statement/expression
+    then, // case separator for statements
+    fallthrough, // continue to next case body
+    default, // default case
 
     // Types
     int,
@@ -528,6 +533,11 @@ pub const Lexer = struct {
             .{ "try", TokenType.@"try" },
             .{ "catch", TokenType.@"catch" },
             .{ "do", TokenType.do },
+            // Match statement keywords
+            .{ "match", TokenType.match },
+            .{ "then", TokenType.then },
+            .{ "fallthrough", TokenType.fallthrough },
+            .{ "default", TokenType.default },
         };
         inline for (keywords) |kw| {
             if (std.mem.eql(u8, text, kw[0])) {

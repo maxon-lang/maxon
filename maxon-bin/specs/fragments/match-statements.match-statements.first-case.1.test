@@ -1,0 +1,40 @@
+// Test: match-statements.match-statements.first-case.1
+function main() returns int
+    var x = 1
+    match x 'check'
+        1 then return 10
+        2 then return 20
+        default then return 0
+    end 'check'
+end 'main'
+---
+ExitCode: 10
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 1
+    %x = alloca ptr
+    store %x %tmp_const
+    %tmp_load.1 = load i64 %x
+    br @block1
+match_check:
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.3
+    br.cond %tmp_icmp @block2 @block3
+match_body:
+    %tmp_const.4 = const.i64 i64 10
+    ret %tmp_const.4
+match_check:
+    %tmp_const.5 = const.i64 i64 2
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.1 %tmp_const.5
+    br.cond %tmp_icmp.1 @block4 @block5
+match_body:
+    %tmp_const.6 = const.i64 i64 20
+    ret %tmp_const.6
+match_default:
+    %tmp_const.7 = const.i64 i64 0
+    ret %tmp_const.7
+match_merge:
+}
+
+---

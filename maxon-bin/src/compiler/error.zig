@@ -26,6 +26,11 @@ pub const ErrorCode = enum {
     E022,
     E023,
     E024,
+    E025,
+    E026,
+    E027,
+    E028,
+    E029,
 
     const Info = struct {
         code: []const u8,
@@ -57,6 +62,11 @@ pub const ErrorCode = enum {
         .{ .code = "E022", .message = "type mismatch" },
         .{ .code = "E023", .message = "Error interface can only be implemented by enums" },
         .{ .code = "E024", .message = "undefined function" },
+        .{ .code = "E025", .message = "match fallthrough with return" },
+        .{ .code = "E026", .message = "match not exhaustive" },
+        .{ .code = "E027", .message = "duplicate pattern in match" },
+        .{ .code = "E028", .message = "pattern type mismatch" },
+        .{ .code = "E029", .message = "default case must be last" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {
@@ -89,6 +99,7 @@ pub const CompileError = struct {
     code: ?ErrorCode,
     message: []const u8,
     location: SourceLocation,
+    message_allocated: bool = false,
 
     /// Format error message: "error E001: file.maxon:10:5: message"
     /// or for internal errors: "internal error: file.maxon:10:5: message"

@@ -34,8 +34,9 @@ pub const CompileResult = struct {
     /// Free allocated error message if present
     pub fn deinit(self: *CompileResult, allocator: std.mem.Allocator) void {
         if (self.error_info) |err| {
-            // The message is allocated by reportError or similar functions
-            allocator.free(err.message);
+            if (err.message_allocated) {
+                allocator.free(err.message);
+            }
         }
     }
 };
@@ -1079,6 +1080,22 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
             }
             allocator.free(do_catch.catches);
         },
+        .match_stmt => |match_s| {
+            freeExpressionArgs(match_s.scrutinee, allocator);
+            for (match_s.cases) |match_case| {
+                for (match_case.patterns) |pattern| {
+                    freeExpressionArgs(pattern, allocator);
+                }
+                allocator.free(match_case.patterns);
+                freeStatementArgs(match_case.body.*, allocator);
+                allocator.destroy(match_case.body);
+            }
+            allocator.free(match_s.cases);
+            if (match_s.default_case) |default| {
+                freeStatementArgs(default.*, allocator);
+                allocator.destroy(default);
+            }
+        },
     }
 }
 
@@ -1186,6 +1203,20 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
         },
         .try_expr => |te| {
             freeExpressionArgs(te.expr.*, allocator);
+        },
+        .match_expr => |me| {
+            freeExpressionArgs(me.scrutinee.*, allocator);
+            for (me.cases) |match_case| {
+                for (match_case.patterns) |pattern| {
+                    freeExpressionArgs(pattern, allocator);
+                }
+                allocator.free(match_case.patterns);
+                freeExpressionArgs(match_case.result, allocator);
+            }
+            allocator.free(me.cases);
+            if (me.default_expr) |default| {
+                freeExpressionArgs(default.*, allocator);
+            }
         },
         // Simple literals with no nested allocations to free
         .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier, .string_literal, .char_literal => {},

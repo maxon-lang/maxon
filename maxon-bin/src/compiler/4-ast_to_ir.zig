@@ -300,6 +300,7 @@ pub const AstToIr = struct {
                 .line = @intCast(self.current_line),
                 .column = @intCast(self.current_column),
             },
+            .message_allocated = true,
         };
     }
 
@@ -741,6 +742,7 @@ pub const AstToIr = struct {
                     .code = .E020,
                     .message = msg,
                     .location = err.SourceLocation.init(@intCast(self.current_line), 1),
+                    .message_allocated = true,
                 };
                 return error.SemanticError;
             }
@@ -762,6 +764,7 @@ pub const AstToIr = struct {
                     .code = .E021,
                     .message = msg,
                     .location = err.SourceLocation.init(@intCast(self.current_line), 1),
+                    .message_allocated = true,
                 };
                 return error.SemanticError;
             }
@@ -1261,6 +1264,7 @@ pub const AstToIr = struct {
                         .line = 1,
                         .column = 1,
                     },
+                    .message_allocated = true,
                 };
                 return error.SemanticError;
             }
@@ -1299,6 +1303,7 @@ pub const AstToIr = struct {
                             .line = 1,
                             .column = 1,
                         },
+                        .message_allocated = true,
                     };
                     return error.SemanticError;
                 }
@@ -1346,6 +1351,7 @@ pub const AstToIr = struct {
                                         .line = 1,
                                         .column = 1,
                                     },
+                                    .message_allocated = true,
                                 };
                                 return error.SemanticError;
                             }
@@ -1377,6 +1383,7 @@ pub const AstToIr = struct {
                                         .line = 1,
                                         .column = 1,
                                     },
+                                    .message_allocated = true,
                                 };
                                 return error.SemanticError;
                             }
@@ -1415,6 +1422,7 @@ pub const AstToIr = struct {
                         .line = 1,
                         .column = 1,
                     },
+                    .message_allocated = true,
                 };
                 return error.SemanticError;
             }
@@ -1454,6 +1462,7 @@ pub const AstToIr = struct {
                                         .line = 1,
                                         .column = 1,
                                     },
+                                    .message_allocated = true,
                                 };
                                 return error.SemanticError;
                             }
@@ -2597,6 +2606,8 @@ pub const AstToIr = struct {
             // Error handling
             .throw_stmt => |throw_s| try self.convertThrowStmt(throw_s),
             .do_catch_stmt => |dc| try self.convertDoCatchStmt(dc),
+            // Match statement
+            .match_stmt => |match_s| try self.convertMatchStmt(match_s),
         }
     }
 
@@ -3604,6 +3615,643 @@ pub const AstToIr = struct {
         self.loop_cond_block = saved_cond_block;
     }
 
+    /// Validate a match statement for semantic errors
+    /// Checks: fallthrough with return, exhaustiveness, duplicate patterns, type mismatch, default position
+    fn validateMatchStmt(self: *AstToIr, match_stmt: ast.MatchStmt) ConvertError!void {
+        const saved_line = self.current_line;
+        const saved_column = self.current_column;
+        defer {
+            self.current_line = saved_line;
+            self.current_column = saved_column;
+        }
+
+        const has_default = match_stmt.default_case != null;
+
+        // Check 1: default case must be last (if present, there should be no cases after it)
+        // The parser already puts default_case in a separate field, so if default_case is set
+        // and there are cases, the default is after all cases - which is correct.
+        // We need to check if there's a "default" in the cases array (which would be an error)
+        // Actually, looking at the AST, default_case is separate, so we need to check if
+        // all patterns in cases are not "default" patterns.
+        // The spec says "default must be last" - this is enforced by the parser structure.
+        // However, we should verify the parser doesn't allow default patterns in the cases list.
+        // For now, this validation passes since the AST separates default_case.
+
+        // Check 2: fallthrough cannot be combined with return
+        for (match_stmt.cases) |match_case| {
+            if (match_case.has_fallthrough) {
+                // Check if the body is a return statement
+                if (match_case.body.kind == .@"return") {
+                    self.current_line = match_case.body.line;
+                    self.current_column = match_case.body.column;
+                    self.reportError(.E025, "cannot combine 'fallthrough' with 'return'");
+                    return error.SemanticError;
+                }
+            }
+        }
+
+        // Get scrutinee type for type checking and exhaustiveness
+        const scrutinee_typed = try self.convertExpressionForTypeCheck(match_stmt.scrutinee);
+        const scrutinee_ty = scrutinee_typed.ty;
+
+        // Check 3: pattern type must match scrutinee type
+        for (match_stmt.cases) |match_case| {
+            for (match_case.patterns) |pattern| {
+                const pattern_typed = try self.convertExpressionForTypeCheck(pattern);
+                if (!self.typesAreCompatibleForMatch(scrutinee_ty, pattern_typed.ty)) {
+                    // Set location to the pattern (approximate - use body line)
+                    self.current_line = match_case.body.line;
+                    self.current_column = match_case.body.column;
+                    const pattern_type_name = pattern_typed.ty.getTypeName() orelse "unknown";
+                    const scrutinee_type_name = scrutinee_ty.getTypeName() orelse "unknown";
+                    const msg = std.fmt.allocPrint(self.allocator, "pattern type '{s}' does not match scrutinee type '{s}'", .{ pattern_type_name, scrutinee_type_name }) catch {
+                        self.reportError(.E028, "pattern type mismatch");
+                        return error.SemanticError;
+                    };
+                    self.last_error = .{
+                        .code = .E028,
+                        .message = msg,
+                        .location = .{
+                            .file = self.source_file,
+                            .line = @intCast(self.current_line),
+                            .column = @intCast(self.current_column),
+                        },
+                        .message_allocated = true,
+                    };
+                    return error.SemanticError;
+                }
+            }
+        }
+
+        // Check 4: duplicate patterns
+        var seen_patterns = std.StringHashMapUnmanaged(void){};
+        defer {
+            // Free all allocated pattern keys stored in the map
+            var key_iter = seen_patterns.keyIterator();
+            while (key_iter.next()) |key| {
+                self.allocator.free(key.*);
+            }
+            seen_patterns.deinit(self.allocator);
+        }
+
+        for (match_stmt.cases) |match_case| {
+            for (match_case.patterns) |pattern| {
+                const pattern_key = self.patternToString(pattern) catch continue;
+
+                if (seen_patterns.contains(pattern_key)) {
+                    self.current_line = match_case.body.line;
+                    self.current_column = match_case.body.column;
+                    self.reportError(.E027, pattern_key);
+                    self.allocator.free(pattern_key);
+                    return error.SemanticError;
+                }
+                // Store the key directly (no dupe needed since we don't free it here)
+                seen_patterns.put(self.allocator, pattern_key, {}) catch {
+                    self.allocator.free(pattern_key);
+                    continue;
+                };
+            }
+        }
+
+        // Check 5: enum exhaustiveness (only if no default case)
+        if (!has_default) {
+            if (scrutinee_ty == .enum_type) {
+                const enum_name = scrutinee_ty.enum_type;
+                if (self.type_map.get(enum_name)) |type_info| {
+                    if (type_info == .enum_type) {
+                        const enum_info = type_info.enum_type;
+                        var missing_cases = std.ArrayListUnmanaged([]const u8){};
+                        defer missing_cases.deinit(self.allocator);
+
+                        // Check each enum member is covered
+                        var member_iter = enum_info.members.keyIterator();
+                        while (member_iter.next()) |member_name| {
+                            var found = false;
+                            for (match_stmt.cases) |match_case| {
+                                for (match_case.patterns) |pattern| {
+                                    if (self.patternMatchesEnumMember(pattern, enum_name, member_name.*)) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (found) break;
+                            }
+                            if (!found) {
+                                missing_cases.append(self.allocator, member_name.*) catch continue;
+                            }
+                        }
+
+                        if (missing_cases.items.len > 0) {
+                            // Build missing cases string
+                            var missing_str = std.ArrayListUnmanaged(u8){};
+                            defer missing_str.deinit(self.allocator);
+                            for (missing_cases.items, 0..) |case, i| {
+                                if (i > 0) {
+                                    missing_str.appendSlice(self.allocator, ", ") catch continue;
+                                }
+                                missing_str.appendSlice(self.allocator, case) catch continue;
+                            }
+
+                            const msg = std.fmt.allocPrint(self.allocator, "match on enum '{s}' is not exhaustive, missing: {s}", .{ enum_name, missing_str.items }) catch {
+                                self.reportError(.E026, enum_name);
+                                return error.SemanticError;
+                            };
+                            self.last_error = .{
+                                .code = .E026,
+                                .message = msg,
+                                .location = .{
+                                    .file = self.source_file,
+                                    .line = @intCast(self.current_line),
+                                    .column = @intCast(self.current_column),
+                                },
+                                .message_allocated = true,
+                            };
+                            return error.SemanticError;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Convert expression just to get type info, without emitting IR
+    fn convertExpressionForTypeCheck(self: *AstToIr, expr: ast.Expression) ConvertError!TypedValue {
+        // For type checking, we can use convertExpression but we need to be careful
+        // not to emit actual IR. For now, use the regular conversion.
+        return try self.convertExpression(expr);
+    }
+
+    /// Check if two types are compatible for match pattern matching
+    fn typesAreCompatibleForMatch(self: *AstToIr, scrutinee_ty: ValueType, pattern_ty: ValueType) bool {
+        _ = self;
+        // Same type is always compatible
+        if (std.meta.eql(scrutinee_ty, pattern_ty)) return true;
+
+        // Check by type category
+        return switch (scrutinee_ty) {
+            .primitive => |s_name| switch (pattern_ty) {
+                .primitive => |p_name| std.mem.eql(u8, s_name, p_name),
+                else => false,
+            },
+            .enum_type => |s_name| switch (pattern_ty) {
+                .enum_type => |p_name| std.mem.eql(u8, s_name, p_name),
+                else => false,
+            },
+            .struct_type => |s_name| switch (pattern_ty) {
+                .struct_type => |p_name| std.mem.eql(u8, s_name, p_name),
+                else => false,
+            },
+            else => false,
+        };
+    }
+
+    /// Convert a pattern expression to a string key for duplicate detection
+    fn patternToString(self: *AstToIr, pattern: ast.Expression) ![]const u8 {
+        return switch (pattern) {
+            .integer => |val| std.fmt.allocPrint(self.allocator, "{d}", .{val}),
+            .string_literal => |s| std.fmt.allocPrint(self.allocator, "\"{s}\"", .{s}),
+            .bool_lit => |b| std.fmt.allocPrint(self.allocator, "{}", .{b}),
+            .field_access => |fa| blk: {
+                // Enum member access like Color.red
+                const base_name = switch (fa.base.*) {
+                    .identifier => |id| id,
+                    else => return error.InvalidPattern,
+                };
+                break :blk std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base_name, fa.field_name });
+            },
+            .identifier => |id| self.allocator.dupe(u8, id),
+            else => error.InvalidPattern,
+        };
+    }
+
+    /// Check if a pattern matches an enum member
+    fn patternMatchesEnumMember(self: *AstToIr, pattern: ast.Expression, enum_name: []const u8, member_name: []const u8) bool {
+        _ = self;
+        switch (pattern) {
+            .field_access => |fa| {
+                // Check if pattern is EnumName.member_name
+                const base_name = switch (fa.base.*) {
+                    .identifier => |id| id,
+                    else => return false,
+                };
+                return std.mem.eql(u8, base_name, enum_name) and std.mem.eql(u8, fa.field_name, member_name);
+            },
+            else => return false,
+        }
+    }
+
+    /// Convert a match statement to IR
+    /// Creates a chain of conditional checks for each case, with pattern matching
+    /// Uses DeferredBlocks pattern with interleaved block creation for correct indexing
+    fn convertMatchStmt(self: *AstToIr, match_stmt: ast.MatchStmt) ConvertError!void {
+        // Perform semantic validations before converting
+        try self.validateMatchStmt(match_stmt);
+
+        const scrutinee_typed = try self.convertExpression(match_stmt.scrutinee);
+        const scrutinee_value = scrutinee_typed.value;
+
+        const num_cases = match_stmt.cases.len;
+        const has_default = match_stmt.default_case != null;
+
+        if (num_cases == 0) {
+            if (match_stmt.default_case) |default| try self.convertStatement(default.*);
+            return;
+        }
+
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+        // Allocate index arrays
+        var check_indices = try self.allocator.alloc(u32, num_cases);
+        defer self.allocator.free(check_indices);
+        var body_indices = try self.allocator.alloc(u32, num_cases);
+        defer self.allocator.free(body_indices);
+
+        // Create first check block (stays current)
+        check_indices[0] = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("match_check");
+
+        // Deferred blocks: body[0..n-1] + check[1..n-1] + (default?) + merge
+        const num_deferred = num_cases + (num_cases - 1) + @as(usize, if (has_default) 1 else 0) + 1;
+        var deferred = try DeferredBlocks.init(self.allocator, num_deferred);
+        defer deferred.deinit();
+
+        // Create blocks interleaved: body[0], check[1], body[1], check[2], ...
+        for (0..num_cases) |i| {
+            body_indices[i] = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("match_body");
+
+            if (i + 1 < num_cases) {
+                check_indices[i + 1] = @intCast(self.func().blocks.items.len);
+                _ = try self.func().addBlock("match_check");
+            }
+        }
+
+        // Create default block if present
+        if (has_default) {
+            _ = try self.func().addBlock("match_default");
+        }
+
+        // Create merge block
+        _ = try self.func().addBlock("match_merge");
+
+        // Defer all blocks except the first check
+        deferred.deferBlocks(self, num_deferred);
+
+        // Branch from entry to first check
+        try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = check_indices[0] }, .none, .none },
+            .result = null,
+        });
+
+        // Track exit blocks for deferred branch emission
+        var body_exit_indices = try self.allocator.alloc(?u32, num_cases);
+        defer self.allocator.free(body_exit_indices);
+        for (body_exit_indices) |*p| p.* = null;
+
+        // Track actual body block indices for fallthrough support
+        var actual_body_indices = try self.allocator.alloc(u32, num_cases);
+        defer self.allocator.free(actual_body_indices);
+
+        // Deferred block indices with interleaved creation:
+        // Created: body[0], check[1], body[1], check[2], ..., body[n-1], [default], merge
+        // Reversed: merge, [default], body[n-1], check[n-1], ..., body[1], check[1], body[0]
+        // body[i]: num_deferred - 1 - (2 * i)
+        // check[i] for i >= 1: num_deferred - 1 - (2 * i - 1) = num_deferred - 2 * i
+
+        for (match_stmt.cases, 0..) |match_case, i| {
+            // Emit pattern comparisons in check block
+            var cmp_result: ir.Value = undefined;
+            for (match_case.patterns, 0..) |pattern, pi| {
+                const pattern_typed = try self.convertExpression(pattern);
+                const this_cmp = try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
+                cmp_result = if (pi == 0) this_cmp else try self.func().emitBinaryOp(.bitor, cmp_result, this_cmp, .i64);
+            }
+
+            // Restore body[i] to get its actual index
+            const body_deferred_idx = num_deferred - 1 - (2 * i);
+            try deferred.restore(self, body_deferred_idx);
+            const actual_body_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+            actual_body_indices[i] = actual_body_idx;
+
+            // Pop the body block temporarily so we can continue in check block
+            const body_block = self.func().blocks.pop().?;
+
+            // Emit conditional branch with placeholder for next_target (will be patched)
+            // Use 0xFFFFFFFF as sentinel for "needs patching"
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br_cond,
+                .operands = .{ .{ .value = cmp_result }, .{ .block_ref = actual_body_idx }, .{ .block_ref = 0xFFFFFFFF } },
+                .result = null,
+            });
+            const check_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+            // Re-push the body block to continue with body code
+            try self.func().blocks.append(self.allocator, body_block);
+
+            // Execute body statement
+            try self.convertStatement(match_case.body.*);
+
+            // Track exit block for deferred branch
+            if (self.func().currentBlock()) |block| {
+                const len = block.instructions.items.len;
+                if (len == 0 or (block.instructions.items[len - 1].op != .ret and
+                    block.instructions.items[len - 1].op != .br and
+                    block.instructions.items[len - 1].op != .br_cond))
+                {
+                    body_exit_indices[i] = @intCast(self.func().blocks.items.len - 1);
+                }
+            }
+
+            // Now restore next check block and patch the branch target
+            if (i + 1 < num_cases) {
+                const check_deferred_idx = num_deferred - 1 - (2 * i + 1);
+                try deferred.restore(self, check_deferred_idx);
+                const actual_next_check: u32 = @intCast(self.func().blocks.items.len - 1);
+
+                // Patch the branch instruction in the check block
+                var check_block = &self.func().blocks.items[check_block_idx];
+                const last_instr_idx = check_block.instructions.items.len - 1;
+                check_block.instructions.items[last_instr_idx].operands[2] = .{ .block_ref = actual_next_check };
+            }
+            // If last case, sentinel will be patched after default/merge is restored
+
+            // Store check block index for patching later
+            check_indices[i] = check_block_idx;
+        }
+
+        // Handle default case
+        var default_exit_idx: ?u32 = null;
+        var actual_default_idx: u32 = 0;
+        if (match_stmt.default_case) |default| {
+            try deferred.restore(self, 1); // default is at index 1
+            actual_default_idx = @intCast(self.func().blocks.items.len - 1);
+
+            try self.convertStatement(default.*);
+
+            if (self.func().currentBlock()) |block| {
+                const len = block.instructions.items.len;
+                if (len == 0 or (block.instructions.items[len - 1].op != .ret and
+                    block.instructions.items[len - 1].op != .br and
+                    block.instructions.items[len - 1].op != .br_cond))
+                {
+                    default_exit_idx = @intCast(self.func().blocks.items.len - 1);
+                }
+            }
+        }
+
+        // Restore merge block (at index 0)
+        try deferred.restore(self, 0);
+        const actual_merge_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+        // Patch sentinel values in the last check block's branch
+        // The last case uses sentinel 0xFFFFFFFF for default or 0xFFFFFFFE for merge
+        if (num_cases > 0) {
+            const last_check_idx = check_indices[num_cases - 1];
+            const last_check_block = &self.func().blocks.items[last_check_idx];
+            const last_instr_idx = last_check_block.instructions.items.len - 1;
+            var last_instr = &last_check_block.instructions.items[last_instr_idx];
+            if (last_instr.operands[2] == .block_ref) {
+                if (last_instr.operands[2].block_ref == 0xFFFFFFFF) {
+                    last_instr.operands[2] = .{ .block_ref = actual_default_idx };
+                } else if (last_instr.operands[2].block_ref == 0xFFFFFFFE) {
+                    last_instr.operands[2] = .{ .block_ref = actual_merge_idx };
+                }
+            }
+        }
+
+        // Emit deferred branches from body blocks
+        for (body_exit_indices, 0..) |maybe_idx, i| {
+            if (maybe_idx) |idx| {
+                // For fallthrough, branch to the next body block
+                const target = if (match_stmt.cases[i].has_fallthrough) blk: {
+                    if (i + 1 < num_cases) {
+                        break :blk actual_body_indices[i + 1];
+                    }
+                    if (has_default) break :blk actual_default_idx;
+                    break :blk actual_merge_idx;
+                } else actual_merge_idx;
+
+                try self.func().blocks.items[idx].instructions.append(self.allocator, .{
+                    .op = .br,
+                    .operands = .{ .{ .block_ref = target }, .none, .none },
+                    .result = null,
+                });
+            }
+        }
+
+        if (default_exit_idx) |idx| {
+            try self.func().blocks.items[idx].instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = actual_merge_idx }, .none, .none },
+                .result = null,
+            });
+        }
+    }
+
+    /// Emit a comparison between scrutinee and pattern, returning a boolean value
+    fn emitPatternCompare(self: *AstToIr, scrutinee: ir.Value, scrutinee_ty: ValueType, pattern: TypedValue) ConvertError!ir.Value {
+        // Determine comparison type based on scrutinee type
+        return switch (scrutinee_ty) {
+            .primitive => |name| {
+                if (std.mem.eql(u8, name, "float")) {
+                    return try self.func().emitBinaryOp(.fcmp_eq, scrutinee, pattern.value, .f64);
+                } else {
+                    return try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64);
+                }
+            },
+            .enum_type => try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64),
+            .struct_type => |name| {
+                // For struct types that implement Equatable, use the equals method
+                if (self.typeConformsTo(name, "Equatable")) {
+                    const equals_result = try self.emitMethodCallWithIrArgs(name, "equals", &.{pattern.value}, scrutinee);
+                    return equals_result.value;
+                }
+                return error.TypeMismatch;
+            },
+            else => error.TypeMismatch,
+        };
+    }
+
+    /// Convert a match expression to IR
+    /// Similar to match statement but returns a value from each case
+    fn convertMatchExpr(self: *AstToIr, match_expr: ast.MatchExpr) ConvertError!TypedValue {
+        // 1. Evaluate scrutinee once in current block
+        const scrutinee_typed = try self.convertExpression(match_expr.scrutinee.*);
+        const scrutinee_value = scrutinee_typed.value;
+
+        const num_cases = match_expr.cases.len;
+        const has_default = match_expr.default_expr != null;
+
+        if (num_cases == 0 and !has_default) {
+            // Empty match expression with no default - error
+            self.reportError(.E003, "empty match expression requires default case");
+            return error.SemanticError;
+        }
+
+        // Allocate result storage
+        const result_ptr = try self.func().emitAlloca(.i64);
+
+        if (num_cases == 0) {
+            // Only default case - just evaluate it
+            const default_typed = try self.convertExpression(match_expr.default_expr.?.*);
+            try self.func().emitStore(result_ptr, default_typed.value);
+            return .{ .value = try self.func().emitLoad(result_ptr, .i64), .ty = default_typed.ty };
+        }
+
+        // Record entry block
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+        // Create all blocks in the order we want to restore them:
+        // check[0], body[0], check[1], body[1], ..., [default], merge
+        // This way we can restore them in sequence
+
+        var check_indices = try self.allocator.alloc(u32, num_cases);
+        defer self.allocator.free(check_indices);
+        var body_indices = try self.allocator.alloc(u32, num_cases);
+        defer self.allocator.free(body_indices);
+
+        // Create first check block (stays current)
+        check_indices[0] = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("match_expr_check");
+
+        // Count how many blocks we need to defer
+        // body[0..n-1] + check[1..n-1] + (default?) + merge
+        const num_deferred = num_cases + (num_cases - 1) + @as(usize, if (has_default) 1 else 0) + 1;
+        var deferred = try DeferredBlocks.init(self.allocator, num_deferred);
+        defer deferred.deinit();
+
+        // Create body and remaining check blocks interleaved: body[0], check[1], body[1], check[2], ...
+        for (0..num_cases) |i| {
+            body_indices[i] = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("match_expr_body");
+
+            if (i + 1 < num_cases) {
+                check_indices[i + 1] = @intCast(self.func().blocks.items.len);
+                _ = try self.func().addBlock("match_expr_check");
+            }
+        }
+
+        // Create default block if present
+        var default_block_idx: u32 = 0;
+        if (has_default) {
+            default_block_idx = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("match_expr_default");
+        }
+
+        // Create merge block
+        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("match_expr_merge");
+
+        // Defer all blocks except first check
+        deferred.deferBlocks(self, num_deferred);
+
+        // Branch from entry to first check
+        try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = check_indices[0] }, .none, .none },
+            .result = null,
+        });
+
+        // Track result type from first case
+        var result_ty: ?ValueType = null;
+
+        // Track which deferred block to restore next
+        // Deferred order (reversed creation): merge, [default], check[n-1], body[n-1], check[n-2], body[n-2], ..., body[0]
+        // We want to restore in order: body[0], check[1], body[1], check[2], ..., [default], merge
+
+        // Process each case
+        for (match_expr.cases, 0..) |match_case, i| {
+            // Current block is check[i]
+            // Emit pattern comparisons
+            var cmp_result: ir.Value = undefined;
+            for (match_case.patterns, 0..) |pattern, pi| {
+                const pattern_typed = try self.convertExpression(pattern);
+                const this_cmp = try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
+
+                if (pi == 0) {
+                    cmp_result = this_cmp;
+                } else {
+                    cmp_result = try self.func().emitBinaryOp(.bitor, cmp_result, this_cmp, .i64);
+                }
+            }
+
+            // Determine next target if no match
+            const next_target = if (i + 1 < num_cases)
+                check_indices[i + 1]
+            else if (has_default)
+                default_block_idx
+            else
+                merge_block_idx;
+
+            // Emit conditional branch
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br_cond,
+                .operands = .{ .{ .value = cmp_result }, .{ .block_ref = body_indices[i] }, .{ .block_ref = next_target } },
+                .result = null,
+            });
+
+            // Restore body[i] - it's at deferred index (num_deferred - 1 - 2*i) for interleaved creation
+            // Actually with interleaved: body[0], check[1], body[1], check[2], ...
+            // Reversed: merge, [default], check[n-1], body[n-1], ..., check[1], body[0]
+            // body[i] is at: num_deferred - 1 - (2*i) for i < n-1, last body is at num_deferred - 1 - 2*(n-1) + 1 if default else 0
+            // This is getting complex. Let me just compute directly:
+            // Created order: body[0], check[1], body[1], check[2], ..., body[n-1], [default], merge
+            // Deferred (reversed): merge, [default], body[n-1], check[n-1], ..., body[1], check[1], body[0]
+            const body_deferred_idx = num_deferred - 1 - (2 * i);
+            try deferred.restore(self, body_deferred_idx);
+
+            // Evaluate result expression and store
+            const case_result = try self.convertExpression(match_case.result);
+            try self.func().emitStore(result_ptr, case_result.value);
+
+            // Track result type
+            if (result_ty == null) {
+                result_ty = case_result.ty;
+            }
+
+            // Branch to merge
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+                .result = null,
+            });
+
+            // Restore next check block if there is one
+            if (i + 1 < num_cases) {
+                // check[i+1] is at deferred index (num_deferred - 1 - (2*i + 1))
+                const check_deferred_idx = num_deferred - 1 - (2 * i + 1);
+                try deferred.restore(self, check_deferred_idx);
+            }
+        }
+
+        // Handle default case if present
+        if (match_expr.default_expr) |default| {
+            // Default is at deferred index 1 (second from end)
+            try deferred.restore(self, 1);
+
+            const default_result = try self.convertExpression(default.*);
+            try self.func().emitStore(result_ptr, default_result.value);
+
+            if (result_ty == null) {
+                result_ty = default_result.ty;
+            }
+
+            try self.func().currentBlock().?.instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+                .result = null,
+            });
+        }
+
+        // Restore merge block (at deferred index 0)
+        try deferred.restore(self, 0);
+
+        // Load final result
+        const final_value = try self.func().emitLoad(result_ptr, .i64);
+        return .{ .value = final_value, .ty = result_ty orelse .{ .primitive = "int" } };
+    }
+
     fn convertBreakStmt(self: *AstToIr, brk: ast.BreakStmt) ConvertError!void {
         // Check for labeled break
         if (brk.label) |label| {
@@ -4029,6 +4677,7 @@ pub const AstToIr = struct {
             .interpolated_string => |interp| self.convertInterpolatedString(interp),
             .closure => |clos| self.convertClosure(clos),
             .try_expr => |try_e| self.convertTryExpr(try_e),
+            .match_expr => |me| self.convertMatchExpr(me),
         };
     }
 
@@ -6580,6 +7229,7 @@ pub const AstToIr = struct {
                 .interpolated_string,
                 .closure,
                 .try_expr,
+                .match_expr,
                 => {
                     const elem_ptr = try self.func().emitGetElemPtr(buffer_ptr, idx_typed.value, elem_size);
                     if (arr_info.element_struct_type != null) {

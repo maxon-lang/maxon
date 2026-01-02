@@ -1,0 +1,60 @@
+// Test: match-statements.match-enum.expression.1
+enum Status
+    pending
+    approved
+    rejected
+end 'Status'
+
+function main() returns int
+    var s = Status.approved
+    let code = match s 'eval'
+        Status.pending gives 0
+        Status.approved gives 1
+        Status.rejected gives 2
+    end 'eval'
+    return code
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 1
+    %s = alloca ptr
+    store %s %tmp_const
+    %tmp_load = load i64 %s
+    %tmp_alloca.1 = alloca ptr
+    br @block1
+match_expr_check:
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.1
+    br.cond %tmp_icmp @block2 @block3
+match_expr_body:
+    %tmp_const.2 = const.i64 i64 0
+    store %tmp_alloca.1 %tmp_const.2
+    br @block7
+match_expr_check:
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load %tmp_const.3
+    br.cond %tmp_icmp.1 @block4 @block5
+match_expr_body:
+    %tmp_const.4 = const.i64 i64 1
+    store %tmp_alloca.1 %tmp_const.4
+    br @block7
+match_expr_check:
+    %tmp_const.5 = const.i64 i64 2
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load %tmp_const.5
+    br.cond %tmp_icmp.2 @block6 @block7
+match_expr_body:
+    %tmp_const.6 = const.i64 i64 2
+    store %tmp_alloca.1 %tmp_const.6
+    br @block7
+match_expr_merge:
+    %tmp_load.1 = load i64 %tmp_alloca.1
+    %code = alloca ptr
+    store %code %tmp_load.1
+    %tmp_load.2 = load i64 %code
+    ret %tmp_load.2
+}
+
+---

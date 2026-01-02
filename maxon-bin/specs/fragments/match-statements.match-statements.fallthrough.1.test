@@ -1,0 +1,56 @@
+// Test: match-statements.match-statements.fallthrough.1
+function main() returns int
+    var x = 1
+    var result = 0
+    match x 'check'
+        1 then result = result + 10 and fallthrough
+        2 then result = result + 20
+        default then result = result + 100
+    end 'check'
+    return result
+end 'main'
+---
+ExitCode: 30
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 1
+    %x = alloca ptr
+    store %x %tmp_const
+    %tmp_const.1 = const.i64 i64 0
+    %result = alloca ptr
+    store %result %tmp_const.1
+    %tmp_load.1 = load i64 %x
+    br @block1
+match_check:
+    %tmp_const.4 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.4
+    br.cond %tmp_icmp @block2 @block3
+match_body:
+    %tmp_load.2 = load i64 %result
+    %tmp_const.5 = const.i64 i64 10
+    %tmp_add = add i64 %tmp_load.2 %tmp_const.5
+    store %result %tmp_add
+    br @block4
+match_check:
+    %tmp_const.6 = const.i64 i64 2
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.1 %tmp_const.6
+    br.cond %tmp_icmp.1 @block4 @block5
+match_body:
+    %tmp_load.3 = load i64 %result
+    %tmp_const.7 = const.i64 i64 20
+    %tmp_add.1 = add i64 %tmp_load.3 %tmp_const.7
+    store %result %tmp_add.1
+    br @block6
+match_default:
+    %tmp_load.4 = load i64 %result
+    %tmp_const.8 = const.i64 i64 100
+    %tmp_add.2 = add i64 %tmp_load.4 %tmp_const.8
+    store %result %tmp_add.2
+    br @block6
+match_merge:
+    %tmp_load.5 = load i64 %result
+    ret %tmp_load.5
+}
+
+---

@@ -182,6 +182,32 @@ pub const DoCatchStmt = struct {
     catches: []const CatchClause,
 };
 
+// Match statements and expressions
+pub const MatchCase = struct {
+    patterns: []const Expression, // Multiple patterns via 'or'
+    body: *const Statement, // Single statement (pointer to break circular dep)
+    has_fallthrough: bool,
+};
+
+pub const MatchStmt = struct {
+    scrutinee: Expression,
+    cases: []const MatchCase,
+    default_case: ?*const Statement, // Pointer to break circular dep
+    label: []const u8,
+};
+
+pub const MatchExprCase = struct {
+    patterns: []const Expression,
+    result: Expression,
+};
+
+pub const MatchExpr = struct {
+    scrutinee: *const Expression,
+    cases: []const MatchExprCase,
+    default_expr: ?*const Expression,
+    label: []const u8,
+};
+
 pub const StatementKind = union(enum) {
     @"return": ReturnStmt,
     let_decl: VarDecl,
@@ -200,6 +226,8 @@ pub const StatementKind = union(enum) {
     // Error handling
     throw_stmt: ThrowStmt,
     do_catch_stmt: DoCatchStmt,
+    // Match statements
+    match_stmt: MatchStmt,
 };
 
 pub const Statement = struct {
@@ -391,4 +419,6 @@ pub const Expression = union(enum) {
     closure: ClosureExpr,
     // Error handling
     try_expr: TryExpr,
+    // Match expressions
+    match_expr: MatchExpr,
 };

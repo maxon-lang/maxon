@@ -1,0 +1,50 @@
+// Test: match-statements.match-expression.default.1
+function main() returns int
+    var x = 99
+    let result = match x 'eval'
+        1 gives 10
+        2 gives 20
+        default gives 0
+    end 'eval'
+    return result
+end 'main'
+---
+ExitCode: 0
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 99
+    %x = alloca ptr
+    store %x %tmp_const
+    %tmp_load = load i64 %x
+    %tmp_alloca.1 = alloca ptr
+    br @block1
+match_expr_check:
+    %tmp_const.1 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.1
+    br.cond %tmp_icmp @block2 @block3
+match_expr_body:
+    %tmp_const.2 = const.i64 i64 10
+    store %tmp_alloca.1 %tmp_const.2
+    br @block6
+match_expr_check:
+    %tmp_const.3 = const.i64 i64 2
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load %tmp_const.3
+    br.cond %tmp_icmp.1 @block4 @block5
+match_expr_body:
+    %tmp_const.4 = const.i64 i64 20
+    store %tmp_alloca.1 %tmp_const.4
+    br @block6
+match_expr_default:
+    %tmp_const.5 = const.i64 i64 0
+    store %tmp_alloca.1 %tmp_const.5
+    br @block6
+match_expr_merge:
+    %tmp_load.1 = load i64 %tmp_alloca.1
+    %result = alloca ptr
+    store %result %tmp_load.1
+    %tmp_load.2 = load i64 %result
+    ret %tmp_load.2
+}
+
+---
