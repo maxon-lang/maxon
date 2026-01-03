@@ -26,7 +26,7 @@ No imports or includes needed!
 ```maxon
 function main() returns int
     // pow() is automatically found in stdlib/math/
-    var result = pow(2.0, 3.0)
+    var result = Math.pow(2.0, 3.0)
     return trunc(result)
 end 'main'
 ```
@@ -56,7 +56,7 @@ end 'main'
 ```maxon
 // pow -> log, exp
 function main() returns int
-    var result = pow(2.0, 3.0)
+    var result = Math.pow(2.0, 3.0)
     if result > 7.5 'check'
         return 8
     end 'check'
@@ -83,7 +83,7 @@ end 'main'
 <!-- test: qualified-call -->
 ```maxon
 function main() returns int
-    return trunc(pow(2.0, 4.0))
+    return trunc(Math.pow(2.0, 4.0))
 end 'main'
 ```
 ```exitcode
@@ -94,7 +94,7 @@ end 'main'
 <!-- test: wrong-arg-count -->
 ```maxon
 function main() returns int
-    return trunc(pow(2.0))
+    return trunc(Math.pow(2.0))
 end 'main'
 ```
 ```maxoncstderr
@@ -102,7 +102,7 @@ Semantic Error: temp_fragment.maxon:3:18
 Missing required argument for parameter 'exponent'
   Add: exponent = <value>
 
-  3 |     return trunc(pow(2.0))
+  3 |     return trunc(Math.pow(2.0))
     |                  ^
 ```
 

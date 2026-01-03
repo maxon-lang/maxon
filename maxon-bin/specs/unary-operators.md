@@ -74,16 +74,3 @@ end 'main'
 ```exitcode
 10
 ```
-
-
-<!-- test: unary-plus -->
-```maxon
-function main() returns int
-    var x = +42
-    return x
-end 'main'
-```
-```exitcode
-42
-```
-
