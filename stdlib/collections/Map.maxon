@@ -21,16 +21,18 @@
 // end 'check'
 // ```
 
-export type Map uses Key, Value is Dictionary with Key, Value, InitableFromMapLiteral with Key, Value
+// Map is special-cased by the compiler for map literal initialization.
+// It receives __ManagedArrays directly rather than going through InitableFromMapLiteral.
+export type Map uses Key, Value is Dictionary with Key, Value
 	var keys Array of Key              // Key storage
 	var values Array of Value          // Value storage
 	var states Array of int            // Slot states: 0=empty, 1=occupied, 2=deleted
 	var count int                      // Number of occupied entries
 	var capacity int                   // Total slots
 
-	// InitableFromMapLiteral conformance - initialize Map from map literal
+	// Internal init used by compiler for map literal initialization
 	// Called by the compiler for `Map from ["a": 1, "b": 2]` syntax
-	static function InitableFromMapLiteral.init(keys __ManagedArray, values __ManagedArray) returns Self
+	static function Builtin.init(keys __ManagedArray, values __ManagedArray) returns Self
 		// Get number of elements in the managed arrays
 		var numElements = __managed_array_len(keys)
 

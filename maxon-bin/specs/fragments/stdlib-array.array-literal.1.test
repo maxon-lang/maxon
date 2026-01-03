@@ -20,13 +20,13 @@ ExitCode: 0
 ---
 function main() -> i64 {
 entry:
-    %tmp_const = const.i64 i64 3
-    %tmp_const.1 = const.i64 i64 24
-    %tmp_heap = heap.alloc ptr %tmp_const.1
-    %tmp_const.2 = const.i64 i64 1
+    %tmp_const = const.i64 i64 1
+    %tmp_const.1 = const.i64 i64 3
+    %tmp_const.2 = const.i64 i64 24
+    %tmp_heap = heap.alloc ptr %tmp_const.2
     %tmp_const.3 = const.i64 i64 0
     %5 = getelemptr ptr %tmp_heap %tmp_const.3 elemsize=8
-    store %5 %tmp_const.2
+    store %5 %tmp_const
     %tmp_const.4 = const.i64 i64 2
     %tmp_const.5 = const.i64 i64 1
     %8 = getelemptr ptr %tmp_heap %tmp_const.5 elemsize=8
@@ -38,66 +38,59 @@ entry:
     %tmp_alloca = alloca.sized ptr 24
     store %tmp_alloca %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
-    store %tmp_fieldptr %tmp_const
+    store %tmp_fieldptr %tmp_const.1
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 16
-    store %tmp_fieldptr.1 %tmp_const
-    %arr = alloca.sized ptr 32
-    %tmp_call = call ptr @Array$int$init(%arr, %tmp_alloca)
-    %tmp_call.1 = call i64 @Array$int$count(%arr)
+    store %tmp_fieldptr.1 %tmp_const.1
+    %arr = alloca ptr
+    store %arr %tmp_alloca
+    %tmp_load = load ptr %arr
+    %tmp_call = call i64 @Array$int$count(%tmp_load)
     %tmp_const.8 = const.i64 i64 3
-    %tmp_icmp = icmp.ne i64 %tmp_call.1 %tmp_const.8
+    %tmp_icmp = icmp.ne i64 %tmp_call %tmp_const.8
     br.cond %tmp_icmp @block1 @block2
 then:
     %tmp_const.9 = const.i64 i64 1
-    %tmp_load = load ptr %arr
-    heap.free %tmp_load
+    %tmp_load.1 = load ptr %arr
+    %tmp_load.2 = load ptr %tmp_load.1
+    heap.free %tmp_load.2
     ret %tmp_const.9
 end:
+    %tmp_load.3 = load ptr %arr
     %tmp_alloca.2 = alloca.sized ptr 16
     %tmp_const.10 = const.i64 i64 1
-    %tmp_call.2 = call ptr @Array$int$get(%tmp_alloca.2, %arr, %tmp_const.10)
-    %tmp_load.1 = load i64 %tmp_alloca.2
+    %tmp_call.1 = call ptr @Array$int$get(%tmp_alloca.2, %tmp_load.3, %tmp_const.10)
+    %tmp_load.4 = load i64 %tmp_alloca.2
     %tmp_const.11 = const.i64 i64 1
-    %tmp_icmp.1 = icmp.eq i64 %tmp_load.1 %tmp_const.11
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.4 %tmp_const.11
     br.cond %tmp_icmp.1 @block3 @block6
 if_let_then:
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load.2 = load i64 %tmp_fieldptr.2
+    %tmp_load.5 = load i64 %tmp_fieldptr.2
     %v = alloca ptr
-    store %v %tmp_load.2
-    %tmp_load.3 = load i64 %v
+    store %v %tmp_load.5
+    %tmp_load.6 = load i64 %v
     %tmp_const.12 = const.i64 i64 2
-    %tmp_icmp.2 = icmp.ne i64 %tmp_load.3 %tmp_const.12
+    %tmp_icmp.2 = icmp.ne i64 %tmp_load.6 %tmp_const.12
     br.cond %tmp_icmp.2 @block4 @block5
 then:
     %tmp_const.13 = const.i64 i64 2
-    %tmp_load.4 = load ptr %arr
-    heap.free %tmp_load.4
+    %tmp_load.7 = load ptr %arr
+    %tmp_load.8 = load ptr %tmp_load.7
+    heap.free %tmp_load.8
     ret %tmp_const.13
 end:
     %tmp_const.14 = const.i64 i64 0
-    %tmp_load.5 = load ptr %arr
-    heap.free %tmp_load.5
+    %tmp_load.9 = load ptr %arr
+    %tmp_load.10 = load ptr %tmp_load.9
+    heap.free %tmp_load.10
     ret %tmp_const.14
 if_let_else:
     %tmp_const.15 = const.i64 i64 3
-    %tmp_load.6 = load ptr %arr
-    heap.free %tmp_load.6
+    %tmp_load.11 = load ptr %arr
+    %tmp_load.12 = load ptr %tmp_load.11
+    heap.free %tmp_load.12
     ret %tmp_const.15
 if_let_end:
-}
-
-function Array$int$init() -> ptr {
-entry:
-    %tmp_param = param ptr 0
-    %managed = param ptr 1
-    memset %tmp_param 0 32
-    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
-    memcpy %tmp_fieldptr %managed 24
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 24
-    %tmp_const = const.i64 i64 0
-    store %tmp_fieldptr.1 %tmp_const
-    ret %tmp_param
 }
 
 function Array$int$count() -> i64 {

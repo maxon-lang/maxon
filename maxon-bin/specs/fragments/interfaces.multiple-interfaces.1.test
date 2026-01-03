@@ -1,12 +1,4 @@
 // Test: interfaces.multiple-interfaces.1
-interface Hashable
-    function hash() returns int
-end 'Hashable'
-
-interface Equatable
-    function equals(other Self) returns int
-end 'Equatable'
-
 type Point is Hashable, Equatable
     var x int
     var y int
@@ -30,4 +22,67 @@ function main() returns int
 end 'main'
 ---
 ExitCode: 8
+---
+function main() -> i64 {
+entry:
+    %p1 = alloca.sized ptr 16
+    memset %p1 0 16
+    %tmp_fieldptr = getfieldptr ptr %p1 0
+    %tmp_const = const.i64 i64 3
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %p1 8
+    %tmp_const.1 = const.i64 i64 4
+    store %tmp_fieldptr.1 %tmp_const.1
+    %p2 = alloca.sized ptr 16
+    memset %p2 0 16
+    %tmp_fieldptr.2 = getfieldptr ptr %p2 0
+    %tmp_const.2 = const.i64 i64 3
+    store %tmp_fieldptr.2 %tmp_const.2
+    %tmp_fieldptr.3 = getfieldptr ptr %p2 8
+    %tmp_const.3 = const.i64 i64 4
+    store %tmp_fieldptr.3 %tmp_const.3
+    %tmp_call = call i64 @Point$hash(%p1)
+    %tmp_call.1 = call i64 @Point$equals(%p1, %p2)
+    %tmp_add = add i64 %tmp_call %tmp_call.1
+    ret %tmp_add
+}
+
+function Point$hash() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_fieldptr.1 = getfieldptr ptr %self 8
+    %tmp_load.1 = load i64 %tmp_fieldptr.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    ret %tmp_add
+}
+
+function Point$equals() -> i64 {
+entry:
+    %self = param ptr 0
+    %other = param ptr 1
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_fieldptr.1 = getfieldptr ptr %other 0
+    %tmp_load.1 = load i64 %tmp_fieldptr.1
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_load.1
+    %tmp_fieldptr.2 = getfieldptr ptr %self 8
+    %tmp_load.2 = load i64 %tmp_fieldptr.2
+    %tmp_fieldptr.3 = getfieldptr ptr %other 8
+    %tmp_load.3 = load i64 %tmp_fieldptr.3
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.2 %tmp_load.3
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp.2 = icmp.ne i64 %tmp_icmp %tmp_const
+    %tmp_icmp.3 = icmp.ne i64 %tmp_icmp.1 %tmp_const
+    %tmp_mul = mul i64 %tmp_icmp.2 %tmp_icmp.3
+    br.cond %tmp_mul @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 1
+    ret %tmp_const.1
+end:
+    %tmp_const.2 = const.i64 i64 0
+    ret %tmp_const.2
+}
+
 ---

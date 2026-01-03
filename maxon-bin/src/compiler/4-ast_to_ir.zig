@@ -5274,7 +5274,7 @@ pub const AstToIr = struct {
         // Create managed string from bytes
         const managed_ptr = try self.emitManagedStringFromBytes(processed);
 
-        // Call String$init to initialize the destination pointer
+        // Call String$init to initialize the destination pointer (Builtin.init is also registered as init)
         const init_func_name = "String$init";
         if (self.func_map.get(init_func_name)) |func_info| {
             // Trigger lazy generation if needed
@@ -5943,9 +5943,24 @@ pub const AstToIr = struct {
 
     /// Convert type cast expression (x as Type)
     fn convertCast(self: *AstToIr, cast: ast.CastExpr) ConvertError!TypedValue {
+        const target_type_name = cast.target_type;
+
+        // Check for string literal cast to InitableFromStringLiteral type
+        if (cast.expr.* == .string_literal) {
+            if (self.typeConformsTo(target_type_name, "InitableFromStringLiteral")) {
+                return self.convertStringLiteralCast(cast.expr.string_literal, target_type_name);
+            }
+        }
+
+        // Check for character literal cast to InitableFromCharLiteral type
+        if (cast.expr.* == .char_literal) {
+            if (self.typeConformsTo(target_type_name, "InitableFromCharLiteral")) {
+                return self.convertCharLiteralCast(cast.expr.char_literal, target_type_name);
+            }
+        }
+
         const source = try self.convertExpression(cast.expr.*);
         const source_type = source.ty.toPrimitiveType();
-        const target_type_name = cast.target_type;
 
         // Determine target IR type from type name
         const target_ir_type: ir.Type = if (std.mem.eql(u8, target_type_name, "int"))
@@ -7277,6 +7292,8 @@ pub const AstToIr = struct {
     }
 
     /// Implementation of InitableFromArrayLiteral transformation
+    /// Array is special-cased: receives __ManagedArray directly.
+    /// Other types receive an Array (following Swift's ExpressibleByArrayLiteral pattern).
     fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
         const arr_lit = decl.value.array_literal;
         const elements = arr_lit.elements;
@@ -7303,7 +7320,45 @@ pub const AstToIr = struct {
             break :blk try self.emitManagedArray(buffer, elem_count, elem_count);
         };
 
-        // Call Type$init(managed) - the static init method
+        // Check if this is the Array type (special-cased: receives __ManagedArray directly)
+        // Other types receive an Array (we create one first, then pass it to their init)
+        // Note: type_name may be monomorphized like "Array$int", so check for prefix
+        const is_array_type = std.mem.eql(u8, type_name, "Array") or std.mem.startsWith(u8, type_name, "Array$");
+
+        // For non-Array types, first create an Array from the __ManagedArray
+        var init_arg: ir.Value = undefined;
+        if (is_array_type) {
+            init_arg = managed_ptr;
+        } else {
+            // Create an Array by calling Array$init(__ManagedArray)
+            const array_init_name = "Array$init";
+            const array_func_info = self.func_map.get(array_init_name) orelse {
+                self.reportInternalError("Array$init not found for InitableFromArrayLiteral");
+                return error.UnknownFunction;
+            };
+
+            if (!array_func_info.ir_generated) {
+                try self.ensureMethodGenerated(array_init_name);
+            }
+
+            // Get Array type info for size
+            const array_type_info = self.type_map.get("Array") orelse {
+                self.reportError(.E006, "Array");
+                return error.UnknownType;
+            };
+
+            const array_size = array_type_info.struct_type.size;
+            const array_ptr = try self.func().emitAllocaSized(array_size);
+
+            var array_args = try self.func().allocator.alloc(ir.Value, 2);
+            array_args[0] = array_ptr;
+            array_args[1] = managed_ptr;
+            _ = try self.func().emitCall(array_init_name, array_args, array_func_info.return_type);
+
+            init_arg = array_ptr;
+        }
+
+        // Call Type$init - the static init method
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
         try self.module.trackString(init_func_name);
 
@@ -7331,10 +7386,10 @@ pub const AstToIr = struct {
             const struct_size = type_info.struct_type.size;
             const result_ptr = try self.func().emitAllocaSized(struct_size);
 
-            // Build args: [sret_ptr, managed_ptr]
+            // Build args: [sret_ptr, init_arg]
             var args = try self.func().allocator.alloc(ir.Value, 2);
             args[0] = result_ptr;
-            args[1] = managed_ptr;
+            args[1] = init_arg;
 
             // Call init with sret
             _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
@@ -7350,7 +7405,7 @@ pub const AstToIr = struct {
         } else {
             // Non-struct return type (unlikely for InitableFromArrayLiteral)
             var args = try self.func().allocator.alloc(ir.Value, 1);
-            args[0] = managed_ptr;
+            args[0] = init_arg;
             const result = try self.func().emitCall(init_func_name, args, func_info.return_type);
             const result_ptr = try self.func().emitAlloca(func_info.return_type);
             try self.func().emitStore(result_ptr, result orelse 0);
@@ -7365,7 +7420,8 @@ pub const AstToIr = struct {
     }
 
     /// Convert InitableFromMapLiteral with type annotation: var m Map from K to V = ["a": 1, "b": 2]
-    /// Creates two __ManagedArrays (keys and values) and calls Type$InitableFromMapLiteral$init(keys, values)
+    /// Map is special-cased: receives __ManagedArrays directly.
+    /// Other types receive two Arrays (following Swift's ExpressibleByDictionaryLiteral pattern).
     fn convertInitableFromMapLiteralSimple(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
         const map_lit = decl.value.map_literal;
         const entries = map_lit.entries;
@@ -7403,6 +7459,55 @@ pub const AstToIr = struct {
             values_managed_ptr = try self.emitManagedArray(values_buffer, elem_count, elem_count);
         }
 
+        // Check if this is the Map type (special-cased: receives __ManagedArrays directly)
+        // Other types receive Arrays (we create them first, then pass to their init)
+        // Note: type_name may be monomorphized like "Map$int$int", so check for prefix
+        const is_map_type = std.mem.eql(u8, type_name, "Map") or std.mem.startsWith(u8, type_name, "Map$");
+
+        // For non-Map types, first create Arrays from the __ManagedArrays
+        var keys_arg: ir.Value = undefined;
+        var values_arg: ir.Value = undefined;
+        if (is_map_type) {
+            keys_arg = keys_managed_ptr;
+            values_arg = values_managed_ptr;
+        } else {
+            // Create Arrays by calling Array$init(__ManagedArray)
+            const array_init_name = "Array$init";
+            const array_func_info = self.func_map.get(array_init_name) orelse {
+                self.reportInternalError("Array$init not found for InitableFromMapLiteral");
+                return error.UnknownFunction;
+            };
+
+            if (!array_func_info.ir_generated) {
+                try self.ensureMethodGenerated(array_init_name);
+            }
+
+            // Get Array type info for size
+            const array_type_info = self.type_map.get("Array") orelse {
+                self.reportError(.E006, "Array");
+                return error.UnknownType;
+            };
+
+            const array_size = array_type_info.struct_type.size;
+
+            // Create keys Array
+            const keys_array_ptr = try self.func().emitAllocaSized(array_size);
+            var keys_array_args = try self.func().allocator.alloc(ir.Value, 2);
+            keys_array_args[0] = keys_array_ptr;
+            keys_array_args[1] = keys_managed_ptr;
+            _ = try self.func().emitCall(array_init_name, keys_array_args, array_func_info.return_type);
+
+            // Create values Array
+            const values_array_ptr = try self.func().emitAllocaSized(array_size);
+            var values_array_args = try self.func().allocator.alloc(ir.Value, 2);
+            values_array_args[0] = values_array_ptr;
+            values_array_args[1] = values_managed_ptr;
+            _ = try self.func().emitCall(array_init_name, values_array_args, array_func_info.return_type);
+
+            keys_arg = keys_array_ptr;
+            values_arg = values_array_ptr;
+        }
+
         // Call Type$init(keys, values) - the static init method from InitableFromMapLiteral interface
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
         try self.module.trackString(init_func_name);
@@ -7432,11 +7537,11 @@ pub const AstToIr = struct {
             const struct_size = type_info.struct_type.size;
             const result_ptr = try self.func().emitAllocaSized(struct_size);
 
-            // Build args: [sret_ptr, keys_managed_ptr, values_managed_ptr]
+            // Build args: [sret_ptr, keys_arg, values_arg]
             var args = try self.func().allocator.alloc(ir.Value, 3);
             args[0] = result_ptr;
-            args[1] = keys_managed_ptr;
-            args[2] = values_managed_ptr;
+            args[1] = keys_arg;
+            args[2] = values_arg;
 
             // Call init with sret
             _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
@@ -7452,8 +7557,8 @@ pub const AstToIr = struct {
         } else {
             // Non-struct return type (unlikely for InitableFromMapLiteral)
             var args = try self.func().allocator.alloc(ir.Value, 2);
-            args[0] = keys_managed_ptr;
-            args[1] = values_managed_ptr;
+            args[0] = keys_arg;
+            args[1] = values_arg;
             const result = try self.func().emitCall(init_func_name, args, func_info.return_type);
             const result_ptr = try self.func().emitAlloca(func_info.return_type);
             try self.func().emitStore(result_ptr, result orelse 0);
@@ -7468,13 +7573,51 @@ pub const AstToIr = struct {
     }
 
     /// Common implementation for initable types (String, Character, custom types).
-    /// Takes already-processed bytes and calls Type$init(managed).
+    /// String is special-cased: receives __ManagedString directly.
+    /// Other types receive a String (following Swift's ExpressibleByStringLiteral pattern).
     fn convertInitableFromBytes(self: *AstToIr, bytes: []const u8, type_name: []const u8, decl_name: []const u8) !void {
         debug.astToIr("InitableFromBytes: {s} with {d} bytes", .{ type_name, bytes.len });
 
         const managed_ptr = try self.emitManagedStringFromBytes(bytes);
 
-        // Call Type$init(managed) - the static init method
+        // String type is special-cased: it receives __ManagedString directly
+        // Other types receive a String (we create one first, then pass it to their init)
+        const is_string_type = std.mem.eql(u8, type_name, "String");
+
+        // For non-String types, first create a String from the __ManagedString
+        var init_arg: ir.Value = undefined;
+        if (is_string_type) {
+            init_arg = managed_ptr;
+        } else {
+            // Create a String by calling String$init(__ManagedString) (Builtin.init is also registered as init)
+            const string_init_name = "String$init";
+            const string_func_info = self.func_map.get(string_init_name) orelse {
+                self.reportInternalError("String$init not found for InitableFromStringLiteral");
+                return error.UnknownFunction;
+            };
+
+            if (!string_func_info.ir_generated) {
+                try self.ensureMethodGenerated(string_init_name);
+            }
+
+            // Get String type info for size
+            const string_type_info = self.type_map.get("String") orelse {
+                self.reportError(.E006, "String");
+                return error.UnknownType;
+            };
+
+            const string_size = string_type_info.struct_type.size;
+            const string_ptr = try self.func().emitAllocaSized(string_size);
+
+            var string_args = try self.func().allocator.alloc(ir.Value, 2);
+            string_args[0] = string_ptr;
+            string_args[1] = managed_ptr;
+            _ = try self.func().emitCall(string_init_name, string_args, string_func_info.return_type);
+
+            init_arg = string_ptr;
+        }
+
+        // Call Type$init - the static init method
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
         try self.module.trackString(init_func_name);
 
@@ -7503,7 +7646,7 @@ pub const AstToIr = struct {
 
             var args = try self.func().allocator.alloc(ir.Value, 2);
             args[0] = result_ptr;
-            args[1] = managed_ptr;
+            args[1] = init_arg;
 
             _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
 
@@ -7516,7 +7659,7 @@ pub const AstToIr = struct {
             ));
         } else {
             var args = try self.func().allocator.alloc(ir.Value, 1);
-            args[0] = managed_ptr;
+            args[0] = init_arg;
             const result = try self.func().emitCall(init_func_name, args, func_info.return_type);
             const result_ptr = try self.func().emitAlloca(func_info.return_type);
             try self.func().emitStore(result_ptr, result orelse 0);
@@ -7538,10 +7681,217 @@ pub const AstToIr = struct {
     }
 
     /// Convert InitableFromCharLiteral: var c character = 'a'
+    /// Character is special-cased: receives __ManagedString directly.
+    /// Other types receive a Character (following Swift's ExpressibleByStringLiteral pattern).
     fn convertInitableFromCharLiteral(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
         const processed = try self.processEscapeSequences(decl.value.char_literal);
         defer self.allocator.free(processed);
-        try self.convertInitableFromBytes(processed, type_name, decl.name);
+
+        const managed_ptr = try self.emitManagedStringFromBytes(processed);
+
+        // Character type is special-cased: it receives __ManagedString directly
+        // Other types receive a Character (we create one first, then pass it to their init)
+        const is_character_type = std.mem.eql(u8, type_name, "Character");
+
+        var init_arg: ir.Value = undefined;
+        if (is_character_type) {
+            init_arg = managed_ptr;
+        } else {
+            // Create a Character by calling Character$init(__ManagedString)
+            const char_init_name = "Character$init";
+            const char_func_info = self.func_map.get(char_init_name) orelse {
+                self.reportInternalError("Character$init not found for InitableFromCharLiteral");
+                return error.UnknownFunction;
+            };
+
+            if (!char_func_info.ir_generated) {
+                try self.ensureMethodGenerated(char_init_name);
+            }
+
+            // Get Character type info for size
+            const char_type_info = self.type_map.get("Character") orelse {
+                self.reportError(.E006, "Character");
+                return error.UnknownType;
+            };
+
+            const char_size = char_type_info.struct_type.size;
+            const char_ptr = try self.func().emitAllocaSized(char_size);
+
+            var char_args = try self.func().allocator.alloc(ir.Value, 2);
+            char_args[0] = char_ptr;
+            char_args[1] = managed_ptr;
+            _ = try self.func().emitCall(char_init_name, char_args, char_func_info.return_type);
+
+            init_arg = char_ptr;
+        }
+
+        // Call Type$init - the static init method
+        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
+        try self.module.trackString(init_func_name);
+
+        const func_info = self.func_map.get(init_func_name) orelse {
+            const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method for InitableFromCharLiteral", .{type_name}) catch "missing init method";
+            self.reportInternalError(msg);
+            return error.UnknownFunction;
+        };
+
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
+        const type_info = self.type_map.get(type_name) orelse {
+            self.reportError(.E006, type_name);
+            return error.UnknownType;
+        };
+
+        const struct_size = type_info.struct_type.size;
+        const result_ptr = try self.func().emitAllocaSized(struct_size);
+
+        var args = try self.func().allocator.alloc(ir.Value, 2);
+        args[0] = result_ptr;
+        args[1] = init_arg;
+
+        _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+        try self.func().setValueName(result_ptr, decl.name);
+        try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+            result_ptr,
+            .{ .struct_type = type_name },
+            self.current_decl_is_mutable,
+            false,
+        ));
+    }
+
+    /// Convert string literal cast: "hello" as MyType
+    /// Returns a TypedValue for the result of the cast expression
+    fn convertStringLiteralCast(self: *AstToIr, str_literal: []const u8, type_name: []const u8) ConvertError!TypedValue {
+        const processed = try self.processEscapeSequences(str_literal);
+        defer self.allocator.free(processed);
+
+        const managed_ptr = try self.emitManagedStringFromBytes(processed);
+
+        // Create a String by calling String$init(__ManagedString) (Builtin.init is also registered as init)
+        const string_init_name = "String$init";
+        const string_func_info = self.func_map.get(string_init_name) orelse {
+            self.reportInternalError("String$init not found for cast");
+            return error.UnknownFunction;
+        };
+
+        if (!string_func_info.ir_generated) {
+            try self.ensureMethodGenerated(string_init_name);
+        }
+
+        // Get String type info for size
+        const string_type_info = self.type_map.get("String") orelse {
+            self.reportError(.E006, "String");
+            return error.UnknownType;
+        };
+
+        const string_size = string_type_info.struct_type.size;
+        const string_ptr = try self.func().emitAllocaSized(string_size);
+
+        var string_args = try self.func().allocator.alloc(ir.Value, 2);
+        string_args[0] = string_ptr;
+        string_args[1] = managed_ptr;
+        _ = try self.func().emitCall(string_init_name, string_args, string_func_info.return_type);
+
+        // Call Type$init(String) - the static init method
+        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
+        try self.module.trackString(init_func_name);
+
+        const func_info = self.func_map.get(init_func_name) orelse {
+            const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method for InitableFromStringLiteral", .{type_name}) catch "missing init method";
+            self.reportInternalError(msg);
+            return error.UnknownFunction;
+        };
+
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
+        const type_info = self.type_map.get(type_name) orelse {
+            self.reportError(.E006, type_name);
+            return error.UnknownType;
+        };
+
+        const struct_size = type_info.struct_type.size;
+        const result_ptr = try self.func().emitAllocaSized(struct_size);
+
+        var args = try self.func().allocator.alloc(ir.Value, 2);
+        args[0] = result_ptr;
+        args[1] = string_ptr;
+        _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+        return .{
+            .value = result_ptr,
+            .ty = .{ .struct_type = type_name },
+        };
+    }
+
+    /// Convert character literal cast: 'A' as MyType
+    /// Returns a TypedValue for the result of the cast expression
+    fn convertCharLiteralCast(self: *AstToIr, char_literal: []const u8, type_name: []const u8) ConvertError!TypedValue {
+        const processed = try self.processEscapeSequences(char_literal);
+        defer self.allocator.free(processed);
+
+        const managed_ptr = try self.emitManagedStringFromBytes(processed);
+
+        // Create a Character by calling Character$init(__ManagedString)
+        const char_init_name = "Character$init";
+        const char_func_info = self.func_map.get(char_init_name) orelse {
+            self.reportInternalError("Character$init not found for cast");
+            return error.UnknownFunction;
+        };
+
+        if (!char_func_info.ir_generated) {
+            try self.ensureMethodGenerated(char_init_name);
+        }
+
+        // Get Character type info for size
+        const char_type_info = self.type_map.get("Character") orelse {
+            self.reportError(.E006, "Character");
+            return error.UnknownType;
+        };
+
+        const char_size = char_type_info.struct_type.size;
+        const char_ptr = try self.func().emitAllocaSized(char_size);
+
+        var char_args = try self.func().allocator.alloc(ir.Value, 2);
+        char_args[0] = char_ptr;
+        char_args[1] = managed_ptr;
+        _ = try self.func().emitCall(char_init_name, char_args, char_func_info.return_type);
+
+        // Call Type$init(Character) - the static init method
+        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
+        try self.module.trackString(init_func_name);
+
+        const func_info = self.func_map.get(init_func_name) orelse {
+            const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method for InitableFromCharLiteral", .{type_name}) catch "missing init method";
+            self.reportInternalError(msg);
+            return error.UnknownFunction;
+        };
+
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
+        const type_info = self.type_map.get(type_name) orelse {
+            self.reportError(.E006, type_name);
+            return error.UnknownType;
+        };
+
+        const struct_size = type_info.struct_type.size;
+        const result_ptr = try self.func().emitAllocaSized(struct_size);
+
+        var args = try self.func().allocator.alloc(ir.Value, 2);
+        args[0] = result_ptr;
+        args[1] = char_ptr;
+        _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+        return .{
+            .value = result_ptr,
+            .ty = .{ .struct_type = type_name },
+        };
     }
 
     fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) ConvertError!TypedValue {

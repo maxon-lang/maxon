@@ -12,38 +12,33 @@ category: type-system
 The `InitableFromStringLiteral` and `InitableFromCharLiteral` interfaces allow user-defined types to be initialized from string and character literals using cast syntax.
 
 Implementation:
-- Interfaces defined in `stdlib/interfaces.maxon`
-- Cast expression handling in `codegen_mir_expr.cpp` (around line 77-155)
+- Interfaces defined in `stdlib/Interfaces.maxon`
 - Compiler checks if target type conforms to `InitableFromStringLiteral` or `InitableFromCharLiteral`
-- If conforming, generates a `_ManagedString` and calls `Type.init(managed)`
+- For `InitableFromStringLiteral`: compiler creates a `String` and passes it to `Type.init(value)`
+- For `InitableFromCharLiteral`: compiler creates a `__ManagedString` and passes it to `Type.init(managed)`
 
 Key points:
 - Uses cast syntax: `"hello" as MyType` or `'A' as MyCharType`
-- The `init` method receives a `_ManagedString` containing the literal's UTF-8 bytes
-- Built-in `string` and `character` types use optimized inline initialization
-- User-defined types go through the interface's `init` method
-
-`_ManagedString` layout:
-- `_buffer`: pointer to UTF-8 byte data
-- `_len`: byte length
-- `_capacity`: 0 for constant data (no heap cleanup needed)
+- `InitableFromStringLiteral.init()` receives a `String` (following Swift's ExpressibleByStringLiteral pattern)
+- `InitableFromCharLiteral.init()` receives a `__ManagedString` containing the character's UTF-8 bytes
+- `String` itself is special-cased by the compiler (uses `Builtin.init` with `__ManagedString` directly)
 
 ## Documentation
 
 ### InitableFromStringLiteral
 
-Types conforming to `InitableFromStringLiteral` can be initialized from string literals using cast syntax:
+Types conforming to `InitableFromStringLiteral` can be initialized from string literals using cast syntax. The `init` method receives a `String`:
 
 ```maxon
 type MyString is InitableFromStringLiteral
-    var _managed __ManagedString
+    var _value String
 
-    static function InitableFromStringLiteral.init(managed __ManagedString) returns MyString
-        return MyString{_managed: managed}
+    static function InitableFromStringLiteral.init(value String) returns MyString
+        return MyString{_value: value}
     end 'init'
 
     export function len() returns int
-        return __string_len(_managed)
+        return _value.byteLength()
     end 'len'
 end 'MyString'
 
@@ -61,18 +56,18 @@ end 'main'
 
 ### InitableFromCharLiteral
 
-Types conforming to `InitableFromCharLiteral` can be initialized from character literals:
+Types conforming to `InitableFromCharLiteral` can be initialized from character literals. The `init` method receives a `Character`:
 
 ```maxon
 type MyChar is InitableFromCharLiteral
-    var _managed __ManagedString
+    var _value Character
 
-    static function InitableFromCharLiteral.init(managed __ManagedString) returns MyChar
-        return MyChar{_managed: managed}
+    static function InitableFromCharLiteral.init(value Character) returns MyChar
+        return MyChar{_value: value}
     end 'init'
 
     export function len() returns int
-        return __string_len(_managed)
+        return _value.byteLength()
     end 'len'
 end 'MyChar'
 
@@ -92,16 +87,16 @@ end 'main'
 
 <!-- test: init-from-string-literal-basic -->
 ```maxon
-// User-defined type that wraps a string and can be created from string literals
+// User-defined type that wraps a String and can be created from string literals
 type Wrapper is InitableFromStringLiteral
-    var _managed __ManagedString
+    var _value String
 
-    static function InitableFromStringLiteral.init(managed __ManagedString) returns Wrapper
-        return Wrapper{_managed: managed}
+    static function InitableFromStringLiteral.init(value String) returns Wrapper
+        return Wrapper{_value: value}
     end 'init'
 
     export function len() returns int
-        return __string_len(_managed)
+        return _value.byteLength()
     end 'len'
 end 'Wrapper'
 
@@ -117,14 +112,14 @@ end 'main'
 <!-- test: init-from-string-literal-empty -->
 ```maxon
 type Wrapper is InitableFromStringLiteral
-    var _managed __ManagedString
+    var _value String
 
-    static function InitableFromStringLiteral.init(managed __ManagedString) returns Wrapper
-        return Wrapper{_managed: managed}
+    static function InitableFromStringLiteral.init(value String) returns Wrapper
+        return Wrapper{_value: value}
     end 'init'
 
     export function len() returns int
-        return __string_len(_managed)
+        return _value.byteLength()
     end 'len'
 end 'Wrapper'
 
@@ -140,14 +135,14 @@ len: 0
 <!-- test: init-from-char-literal-basic -->
 ```maxon
 type CharWrapper is InitableFromCharLiteral
-    var _managed __ManagedString
+    var _value Character
 
-    static function InitableFromCharLiteral.init(managed __ManagedString) returns CharWrapper
-        return CharWrapper{_managed: managed}
+    static function InitableFromCharLiteral.init(value Character) returns CharWrapper
+        return CharWrapper{_value: value}
     end 'init'
 
     export function len() returns int
-        return __string_len(_managed)
+        return _value.byteLength()
     end 'len'
 end 'CharWrapper'
 

@@ -8,13 +8,13 @@ ExitCode: 3
 ---
 function main() -> i64 {
 entry:
-    %tmp_const = const.i64 i64 3
-    %tmp_const.1 = const.i64 i64 24
-    %tmp_heap = heap.alloc ptr %tmp_const.1
-    %tmp_const.2 = const.i64 i64 10
+    %tmp_const = const.i64 i64 10
+    %tmp_const.1 = const.i64 i64 3
+    %tmp_const.2 = const.i64 i64 24
+    %tmp_heap = heap.alloc ptr %tmp_const.2
     %tmp_const.3 = const.i64 i64 0
     %5 = getelemptr ptr %tmp_heap %tmp_const.3 elemsize=8
-    store %5 %tmp_const.2
+    store %5 %tmp_const
     %tmp_const.4 = const.i64 i64 20
     %tmp_const.5 = const.i64 i64 1
     %8 = getelemptr ptr %tmp_heap %tmp_const.5 elemsize=8
@@ -26,28 +26,17 @@ entry:
     %tmp_alloca = alloca.sized ptr 24
     store %tmp_alloca %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
-    store %tmp_fieldptr %tmp_const
+    store %tmp_fieldptr %tmp_const.1
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 16
-    store %tmp_fieldptr.1 %tmp_const
-    %arr = alloca.sized ptr 32
-    %tmp_call = call ptr @Array$int$init(%arr, %tmp_alloca)
-    %tmp_call.1 = call i64 @Array$int$count(%arr)
+    store %tmp_fieldptr.1 %tmp_const.1
+    %arr = alloca ptr
+    store %arr %tmp_alloca
     %tmp_load = load ptr %arr
-    heap.free %tmp_load
-    ret %tmp_call.1
-}
-
-function Array$int$init() -> ptr {
-entry:
-    %tmp_param = param ptr 0
-    %managed = param ptr 1
-    memset %tmp_param 0 32
-    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
-    memcpy %tmp_fieldptr %managed 24
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 24
-    %tmp_const = const.i64 i64 0
-    store %tmp_fieldptr.1 %tmp_const
-    ret %tmp_param
+    %tmp_call = call i64 @Array$int$count(%tmp_load)
+    %tmp_load.1 = load ptr %arr
+    %tmp_load.2 = load ptr %tmp_load.1
+    heap.free %tmp_load.2
+    ret %tmp_call
 }
 
 function Array$int$count() -> i64 {

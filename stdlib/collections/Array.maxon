@@ -1,17 +1,19 @@
 // stdlib/collections/Array.maxon
 
-export type Array uses Element is Collection with Element, InitableFromArrayLiteral with Element
+// Array is special-cased by the compiler for array literal initialization.
+// It receives __ManagedArray directly rather than going through InitableFromArrayLiteral.
+export type Array uses Element is Collection with Element
 	var managed __ManagedArray  // Compiler-managed opaque array storage
 	var iterIndex int          // Current iteration position
 
 	// =========================================================================
-	// InitableFromArrayLiteral conformance
+	// Builtin initialization (compiler special-case)
 	// =========================================================================
 
-	// Initialize array from compiler-constructed __ManagedArray
+	// Internal init used by compiler for array literal initialization
 	// The compiler passes an opaque __ManagedArray value
 	// Used for both array literals and "Array of N int" syntax
-	static function InitableFromArrayLiteral.init(managed __ManagedArray) returns Self
+	static function Builtin.init(managed __ManagedArray) returns Self
 		return Self{managed: managed, iterIndex: 0}
 	end 'init'
 

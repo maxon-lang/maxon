@@ -212,10 +212,6 @@ end 'main'
 
 <!-- test: basic-interface -->
 ```maxon
-interface Hashable
-    function hash() returns int
-end 'Hashable'
-
 type Point is Hashable
     var x int
     var y int
@@ -294,14 +290,6 @@ end 'main'
 
 <!-- test: multiple-interfaces -->
 ```maxon
-interface Hashable
-    function hash() returns int
-end 'Hashable'
-
-interface Equatable
-    function equals(other Self) returns int
-end 'Equatable'
-
 type Point is Hashable, Equatable
     var x int
     var y int

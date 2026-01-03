@@ -25,11 +25,14 @@ export type StringIndex is Equatable, Comparable
 	end 'compare'
 end 'StringIndex'
 
-export type String is Hashable, Equatable, Iterable with Character, InitableFromStringLiteral
+// String is special-cased by the compiler for string literal initialization.
+// It receives __ManagedString directly rather than going through InitableFromStringLiteral.
+export type String is Hashable, Equatable, Iterable with Character
 	var _managed __ManagedString
 	var _iterPos int
 
-	static function InitableFromStringLiteral.init(managed __ManagedString) returns String
+	// Internal init used by compiler for string literal initialization
+	static function Builtin.init(managed __ManagedString) returns String
 		return String{_managed: managed, _iterPos: 0}
 	end 'init'
 

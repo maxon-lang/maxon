@@ -3909,9 +3909,11 @@ pub const IrCodegen = struct {
 
         try self.emitExternalCall("kernel32.dll", "GetProcessHeap");
 
-        // HeapAlloc(hHeap=RAX, dwFlags=0, dwBytes=size)
+        // HeapAlloc(hHeap=RAX, dwFlags=HEAP_ZERO_MEMORY, dwBytes=size)
+        // HEAP_ZERO_MEMORY (0x8) ensures allocated memory is zeroed
         try self.enc.movRcxRax();
-        try self.enc.xorRdxRdx();
+        // mov rdx, 8 (HEAP_ZERO_MEMORY flag)
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC2, 0x08, 0x00, 0x00, 0x00 }); // mov rdx, imm32
         try self.enc.movR8R12();
 
         try self.emitExternalCall("kernel32.dll", "HeapAlloc");

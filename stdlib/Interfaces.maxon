@@ -84,38 +84,36 @@ export interface Dictionary uses Key, Value
 end 'Dictionary'
 
 // InitableFromStringLiteral - types that can be initialized from string literals
-// The compiler constructs a__ManagedString and passes it to InitableFromStringLiteral.
-//__ManagedString is a compiler-internal type with layout: { ptr buffer, i32 len, i32 capacity }
-// - capacity = 0 for constant data (no heap cleanup needed)
-// - capacity > 0 for heap-allocated data with refcount header
-// The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.init(managed)
+// The compiler creates a String from the literal and passes it to init().
+// This follows the Swift ExpressibleByStringLiteral pattern.
+// The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.init(String.init(managed))
+// Note: String itself is special-cased by the compiler (uses __ManagedString directly).
 export interface InitableFromStringLiteral
-	static function init(managed __ManagedString) returns Self
+	static function init(value String) returns Self
 end 'InitableFromStringLiteral'
 
 // InitableFromCharLiteral - types that can be initialized from character literals
 // Similar to InitableFromStringLiteral but for single-character literals like 'A' or '🎉'
-// The compiler constructs a__ManagedString containing the character's UTF-8 bytes
+// The compiler creates a Character from the literal and passes it to init().
+// Note: Character itself is special-cased by the compiler (uses __ManagedString directly).
 export interface InitableFromCharLiteral
-	static function init(managed __ManagedString) returns Self
+	static function init(value Character) returns Self
 end 'InitableFromCharLiteral'
 
 // InitableFromArrayLiteral - types that can be initialized from array literals
-// The compiler constructs a __ManagedArray and passes it to init.
-// __ManagedArray is a compiler-internal opaque type with layout: { ptr buffer, i64 len, i64 capacity }
-// - capacity = 0 for constant data (no heap cleanup needed, read-only)
-// - capacity > 0 for heap-allocated data with refcount header
-// The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(managed)
-// The element type is inferred from the interface's generic parameter.
+// The compiler creates an Array from the literal and passes it to init().
+// This follows the Swift ExpressibleByArrayLiteral pattern.
+// The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(Array.init(managed))
+// Note: Array itself is special-cased by the compiler (uses __ManagedArray directly).
 export interface InitableFromArrayLiteral uses Element
-	static function init(managed __ManagedArray) returns Self
+	static function init(value Array of Element) returns Self
 end 'InitableFromArrayLiteral'
 
 // InitableFromMapLiteral - types that can be initialized from map literals
 // Map literals use syntax: ["key1": value1, "key2": value2]
-// The compiler constructs two parallel __ManagedArrays (keys and values) and passes them to init.
+// The compiler creates two Arrays (keys and values) and passes them to init().
 // Both arrays have the same length and corresponding indices represent key-value pairs.
-// The compiler detects conformance and transforms: var x = ["a": 1, "b": 2] -> var x = map.init(keys, values)
+// Note: Map itself is special-cased by the compiler (uses __ManagedArray directly).
 export interface InitableFromMapLiteral uses Key, Value
-	static function init(keys __ManagedArray, values __ManagedArray) returns Self
+	static function init(keys Array of Key, values Array of Value) returns Self
 end 'InitableFromMapLiteral'

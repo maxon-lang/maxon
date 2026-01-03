@@ -29,9 +29,9 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 
 	// InitableFromArrayLiteral conformance - initialize Set from array literal
 	// Called by the compiler for `Set from [1, 2, 3]` syntax
-	static function InitableFromArrayLiteral.init(managed __ManagedArray) returns Self
-		// Get number of elements in the managed array
-		var numElements = __managed_array_len(managed)
+	static function InitableFromArrayLiteral.init(arr Array of Element) returns Self
+		// Get number of elements in the array
+		var numElements = arr.count()
 
 		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
 		var cap = 16
@@ -46,13 +46,9 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 		// Create the set type (copies array structs by value)
 		var result = Self{elements: elems, states: sts, count: 0, capacity: cap}
 
-		// Insert each element from the managed array
-		var i = 0
-		while i < numElements 'insert_loop'
-			if let elem = managed[i] 'get_elem'
-				result.insert(elem)
-			end 'get_elem'
-			i = i + 1
+		// Insert each element from the array
+		for elem in arr 'insert_loop'
+			result.insert(elem)
 		end 'insert_loop'
 
 		return result
