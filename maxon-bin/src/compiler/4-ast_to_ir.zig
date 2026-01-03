@@ -1669,6 +1669,18 @@ pub const AstToIr = struct {
         return tag_size + 8;
     }
 
+    /// Get the ValueType for the wrapped value inside an optional.
+    /// Handles struct, enum, and primitive types correctly.
+    fn getOptionalWrappedValueType(opt_info: OptionalInfo) ValueType {
+        if (opt_info.wrapped_struct_type) |struct_name| {
+            return .{ .struct_type = struct_name };
+        } else if (opt_info.wrapped_enum_type) |enum_name| {
+            return .{ .enum_type = enum_name };
+        } else {
+            return .{ .primitive = opt_info.wrapped.toMaxonName() };
+        }
+    }
+
     pub fn func(self: *AstToIr) *ir.Function {
         return self.current_func.?;
     }
@@ -2252,6 +2264,8 @@ pub const AstToIr = struct {
                     ret_value_type = .{
                         .optional_type = .{
                             .wrapped = wrapped_value_type.toPrimitiveType(),
+                            .wrapped_struct_type = if (wrapped_value_type == .struct_type) wrapped_value_type.struct_type else null,
+                            .wrapped_enum_type = if (wrapped_value_type == .enum_type) wrapped_value_type.enum_type else null,
                         },
                     };
                     break :blk .ptr;
@@ -2423,6 +2437,7 @@ pub const AstToIr = struct {
                 return .{ .optional_type = .{
                     .wrapped = wrapped_value_type.toPrimitiveType(),
                     .wrapped_struct_type = if (wrapped_value_type == .struct_type) wrapped_value_type.struct_type else null,
+                    .wrapped_enum_type = if (wrapped_value_type == .enum_type) wrapped_value_type.enum_type else null,
                 } };
             },
             .function_type => |ft| {
@@ -2602,10 +2617,15 @@ pub const AstToIr = struct {
                         wrapped_value_type.struct_type
                     else
                         null;
+                    const wrapped_enum_name: ?[]const u8 = if (wrapped_value_type == .enum_type)
+                        wrapped_value_type.enum_type
+                    else
+                        null;
                     ret_value_type = .{
                         .optional_type = .{
                             .wrapped = wrapped_value_type.toPrimitiveType(),
                             .wrapped_struct_type = wrapped_struct_name,
+                            .wrapped_enum_type = wrapped_enum_name,
                         },
                     };
                     break :blk .ptr;
@@ -4082,24 +4102,20 @@ pub const AstToIr = struct {
             const opt_info = cond_typed.ty.optional_type;
             const wrapped_type = opt_info.wrapped;
             const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
+            const var_value_type = getOptionalWrappedValueType(opt_info);
 
-            if (opt_info.wrapped_struct_type) |struct_name| {
+            if (opt_info.wrapped_struct_type != null) {
                 // For struct types, the struct data is stored inline after the tag (at offset 8).
                 // value_ptr already points to this inline struct data.
                 try self.func().setValueName(value_ptr, binding_name);
-                try self.var_map.put(self.allocator, binding_name, VarInfo.init(value_ptr, .{ .struct_type = struct_name }, true, false));
+                try self.var_map.put(self.allocator, binding_name, VarInfo.init(value_ptr, var_value_type, true, false));
             } else {
-                // For primitive types, load the value and store in a new slot
+                // For primitive/enum types, load the value and store in a new slot
                 const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
                 const binding_ptr = try self.func().emitAlloca(wrapped_type);
                 try self.func().setValueName(binding_ptr, binding_name);
                 try self.func().emitStore(binding_ptr, unwrapped_value);
-                try self.var_map.put(self.allocator, binding_name, VarInfo.init(
-                    binding_ptr,
-                    .{ .primitive = wrapped_type.toMaxonName() },
-                    true,
-                    false,
-                ));
+                try self.var_map.put(self.allocator, binding_name, VarInfo.init(binding_ptr, var_value_type, true, false));
             }
         }
 
@@ -4397,8 +4413,8 @@ pub const AstToIr = struct {
 
         // Register the loop variable
         // For struct types, use the pointer directly (struct data is inline in the optional)
-        // For primitive types, load the value and store in a new slot
-        const var_slot: ir.Value = if (opt_info.wrapped_struct_type) |_| blk: {
+        // For primitive/enum types, load the value and store in a new slot
+        const var_slot: ir.Value = if (opt_info.wrapped_struct_type != null) blk: {
             // For struct types, the payload is the struct data inline
             break :blk value_ptr;
         } else blk: {
@@ -4408,11 +4424,7 @@ pub const AstToIr = struct {
             break :blk slot;
         };
 
-        const var_type: ValueType = if (opt_info.wrapped_struct_type) |struct_name|
-            .{ .struct_type = struct_name }
-        else
-            .{ .primitive = opt_info.wrapped.toMaxonName() };
-
+        const var_type = getOptionalWrappedValueType(opt_info);
         try self.var_map.put(self.allocator, for_stmt.var_name, VarInfo.init(var_slot, var_type, false, false));
 
         // Convert body statements (with new label scope)
@@ -5601,18 +5613,9 @@ pub const AstToIr = struct {
         try self.func().setValueName(var_ptr, unwrap.var_name);
 
         // Add to var_map so the default body can assign to it
-        if (opt_info.wrapped_struct_type) |struct_name| {
-            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(
-                var_ptr,
-                .{ .struct_type = struct_name },
-                true, // mutable
-                true,
-            ));
-        } else {
-            // Primitive binding: use init (no slot indirection needed)
-            try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(var_ptr, .{ .primitive = wrapped_type.toMaxonName() }, true, // mutable
-                false));
-        }
+        const var_value_type = getOptionalWrappedValueType(opt_info);
+        const is_struct = opt_info.wrapped_struct_type != null;
+        try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(var_ptr, var_value_type, true, is_struct));
 
         // Create 2-way branch: has_value -> unwrap, else -> execute default body
         var branch = try BranchBuilder.init(self, has_value, "else_unwrap_some", "else_unwrap_nil", "else_unwrap_end");

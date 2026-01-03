@@ -30,6 +30,7 @@ pub const ArrayInfo = struct {
 pub const OptionalInfo = struct {
     wrapped: ir.Type, // The underlying type (i64, f64, ptr)
     wrapped_struct_type: ?[]const u8 = null, // struct name if wrapped is a struct
+    wrapped_enum_type: ?[]const u8 = null, // enum name if wrapped is an enum
 };
 
 /// Function type info - for first-class functions
