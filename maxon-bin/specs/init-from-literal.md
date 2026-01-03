@@ -42,9 +42,10 @@ type MyString is InitableFromStringLiteral
     end 'len'
 end 'MyString'
 
-function main()
+function main() returns int
     var ms = "hello" as MyString
     print("{ms.len()}\n")
+    return 0
 end 'main'
 ```
 ```exitcode
@@ -71,9 +72,10 @@ type MyChar is InitableFromCharLiteral
     end 'len'
 end 'MyChar'
 
-function main()
+function main() returns int
     var mc = 'A' as MyChar
     print("{mc.len()}\n")
+    return 0
 end 'main'
 ```
 ```exitcode

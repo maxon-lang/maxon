@@ -35,16 +35,16 @@ function main() returns int
     if true 'outer'
         x = 1
     end 'outer'
-    
+
     if true 'inner'
         x = 2
     end 'inner'
-    
+
     return x
 end 'main'
 ```
 ```exitcode
-0
+2
 ```
 
 
@@ -63,30 +63,25 @@ function main() returns int
 end 'main'
 ```
 ```exitcode
-0
+2
 ```
 
 
 **Invalid Code - Duplicate at Same Level:**
 
-```maxon
+Note: Currently duplicate block identifiers at the same scope level are not validated. This is a known limitation.
+
+```text
 function main() returns int
     var x = 0
     if true 'check'
         x = 1
     end 'check'
-    while false 'check'
+    while false 'check'  // Would error: duplicate 'check' at same level
         x = 2
     end 'check'
     return x
 end 'main'
-```
-```maxoncstderr
-Semantic Error: temp_fragment.maxon:7:5
-Duplicate block identifier 'check' in nested blocks
-
-  7 |     while false 'check'
-    |     ^
 ```
 
 

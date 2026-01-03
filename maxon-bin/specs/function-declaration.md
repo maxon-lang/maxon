@@ -165,10 +165,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp_fragment.maxon':
-Unexpected token: 'int'
-  Note: Expected a statement (var, let, if, while, return, break, continue, match, or assignment)
-  Location: line 2, column 16
+error E002: specs/fragments/function-declaration.missing-returns-keyword-error.1.test:2:16: unexpected token
 ```
 
 
