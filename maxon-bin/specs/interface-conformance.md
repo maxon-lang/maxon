@@ -11,7 +11,7 @@ category: type-system
 
 ### Declaring Interface Conformance
 
-Types declare interface conformance using the `is` keyword:
+Types declare interface conformance using the `is` keyword. Methods implementing interface requirements must use the qualified name `InterfaceName.methodName`:
 
 ```text
 interface Printable
@@ -19,7 +19,7 @@ interface Printable
 end 'Printable'
 
 type MyType is Printable
-    function toString() returns int
+    function Printable.toString() returns int
         return 42
     end 'toString'
 end 'MyType'
@@ -37,7 +37,7 @@ end 'MyType'
 
 ### Conformance Errors
 
-If a type declares conformance but doesn't implement all required methods, a compile error is reported:
+If a type declares conformance but doesn't implement all required methods (or doesn't use qualified names), a compile error is reported:
 
 ```text
 interface Counter
@@ -46,10 +46,10 @@ interface Counter
 end 'Counter'
 
 type BadCounter is Counter
-    function get() returns int
+    function Counter.get() returns int
         return 0
     end 'get'
-    // ERROR: missing 'increment' method
+    // ERROR: missing 'Counter.increment' method
 end 'BadCounter'
 ```
 
@@ -65,11 +65,11 @@ end 'Counter'
 type SimpleCounter is Counter
     var value int
 
-    function get() returns int
+    function Counter.get() returns int
         return value
     end 'get'
 
-    function increment()
+    function Counter.increment()
         value = value + 1
     end 'increment'
 end 'SimpleCounter'
@@ -98,11 +98,11 @@ end 'Writable'
 type Buffer is Readable, Writable
     var data int
 
-    function read() returns int
+    function Readable.read() returns int
         return data
     end 'read'
 
-    function write(value int)
+    function Writable.write(value int)
         data = value
     end 'write'
 end 'Buffer'
@@ -127,7 +127,7 @@ end 'Counter'
 type BadCounter is Counter
     var value int
 
-    function get() returns int
+    function Counter.get() returns int
         return value
     end 'get'
 end 'BadCounter'
@@ -150,7 +150,7 @@ end 'Simple'
 type Extended is Simple
     var value int
 
-    function getValue() returns int
+    function Simple.getValue() returns int
         return value
     end 'getValue'
 
@@ -166,6 +166,30 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: conformance-unqualified-method-error -->
+```maxon
+interface Counter
+    function get() returns int
+end 'Counter'
+
+type BadCounter is Counter
+    var value int
+
+    // ERROR: method must be declared as Counter.get
+    function get() returns int
+        return value
+    end 'get'
+end 'BadCounter'
+
+function main() returns int
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E015: specs/fragments/interface-conformance.conformance-unqualified-method-error.1.test:1:1: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
+  - get() returns int
 ```
 
 <!-- test: conformance-no-interface -->

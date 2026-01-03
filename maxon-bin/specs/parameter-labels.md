@@ -200,19 +200,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:7:23
-Positional argument after named argument
-  All positional arguments must come before named arguments
-
-  7 |     return add(a = 3, 4)
-    |                       ^
-
-Semantic Error: temp_fragment.maxon:7:12
-Missing required argument for parameter 'b'
-  Add: b = <value>
-
-  7 |     return add(a = 3, 4)
-    |            ^
+error E048: specs/fragments/parameter-labels.error-positional-after-named.1.test:7:24: All positional arguments must come before named arguments
 ```
 
 <!-- test: error-unknown-param-name -->
@@ -226,19 +214,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:7:18
-Unknown parameter name 'person'
-  Function 'greet' has no parameter with this name
-
-  7 |     return greet(person = 42)
-    |                  ^
-
-Semantic Error: temp_fragment.maxon:7:12
-Missing required argument for parameter 'name'
-  Add: name = <value>
-
-  7 |     return greet(person = 42)
-    |            ^
+error E045: specs/fragments/parameter-labels.error-unknown-param-name.1.test:7:5: unknown parameter name: 'person'
 ```
 
 <!-- test: error-default-positional -->
@@ -252,11 +228,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:7:22
-Too many positional arguments
+error E046: specs/fragments/parameter-labels.error-default-positional.1.test:7:5: Too many positional arguments
   Function 'repeat' has 1 required parameter
-
-  7 |     return repeat(7, 6)
-    |                      ^
 ```
 

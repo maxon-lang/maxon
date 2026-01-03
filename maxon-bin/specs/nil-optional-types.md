@@ -259,12 +259,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:8:9
-Cannot use optional type 'int or nil' without unwrapping
-  Note: Use 'if let' to safely unwrap optional values before using them
-
-  8 | 	return x + 5
-    |         ^
+error E038: specs/fragments/nil-optional-types.error.use-optional-without-unwrap.1.test:8:2: optional type used without unwrapping: 'x'
 ```
 
 <!-- test: error.return-nil-to-non-optional -->
@@ -274,13 +269,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:3:2
-Cannot return 'nil' from non-optional return type
-  Function return type: int
-  Note: To return nil, change the function return type to 'int or nil'
-
-  3 | 	return nil
-    |  ^
+error E041: specs/fragments/nil-optional-types.error.return-nil-to-non-optional.1.test:3:2: cannot return nil from non-optional: 'int'
 ```
 
 <!-- test: error.iflet-non-optional -->
@@ -294,7 +283,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E039: specs/fragments/nil-optional-types.error.iflet-non-optional.1.test:4:2: if let requires optional type: 'val'
+error E039: specs/fragments/nil-optional-types.error.iflet-non-optional.1.test:4:2: if let requires optional type: ''x' has type 'int', not optional'
 ```
 
 <!-- test: error.else-unwrap-non-optional -->
@@ -308,19 +297,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:4:2
-'else' unwrapping requires an optional type, got 'int'
-  Note: Use 'var x = expr else ...' only with optional types (T or nil)
-
-  4 | 	var result = x else 'default'
-    |  ^
-
-Semantic Error: temp_fragment.maxon:7:9
-Undefined variable: 'result'
-  Note: Variable must be declared with 'var' or 'let' before use
-
-  7 | 	return result
-    |         ^
+error E040: specs/fragments/nil-optional-types.error.else-unwrap-non-optional.1.test:4:2: else unwrap requires optional type: ''x' has type 'int', not optional'
 ```
 
 <!-- test: error.else-unwrap-missing-assignment -->
@@ -338,13 +315,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:8:2
-Variable 'result' must be assigned a value in the else block
-  The else block is only executed when the optional is nil
-  Note: You must provide a default value by assigning to 'result' in the else block
-
-  8 | 	var result = opt else 'default'
-    |  ^
+error E044: specs/fragments/nil-optional-types.error.else-unwrap-missing-assignment.1.test:8:2: else unwrap missing assignment: 'result'
 ```
 
 <!-- test: error.nested-optional -->
@@ -354,7 +325,7 @@ function broken() returns int or nil or nil
 end 'broken'
 ```
 ```maxoncstderr
-error E002: specs/fragments/nil-optional-types.error.nested-optional.1.test:2:38: unexpected token
+error E002: specs/fragments/nil-optional-types.error.nested-optional.1.test:2:38: unexpected token: 'or'
 ```
 
 <!-- test: optional-param-nil -->

@@ -498,7 +498,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E002: specs/fragments/match-statements.error.match-expression-fallthrough.1.test:5:20: unexpected token
+error E002: specs/fragments/match-statements.error.match-expression-fallthrough.1.test:5:20: unexpected token: 'and'
 ```
 
 <!-- test: error.match-fallthrough-with-return -->
@@ -575,7 +575,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E002: specs/fragments/match-statements.error.match-missing-block-id.1.test:4:12: unexpected token
+error E042: specs/fragments/match-statements.error.match-missing-block-id.1.test:4:12: missing block identifier
 ```
 
 <!-- test: error.match-mismatched-block-id -->
@@ -589,7 +589,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E002: specs/fragments/match-statements.error.match-mismatched-block-id.1.test:7:16: unexpected token
+error E043: specs/fragments/match-statements.error.match-mismatched-block-id.1.test:7:16: block identifier mismatch: expected 'check', got 'wrong'
 ```
 
 <!-- test: error.match-default-not-last -->

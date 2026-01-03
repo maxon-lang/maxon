@@ -98,11 +98,6 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:3:18
-Missing required argument for parameter 'exponent'
-  Add: exponent = <value>
-
-  3 |     return trunc(Math.pow(2.0))
-    |                  ^
+error E011: specs/fragments/stdlib-autodiscovery.wrong-arg-count.1.test:3:5: Wrong number of arguments: expected 2, got 1
 ```
 

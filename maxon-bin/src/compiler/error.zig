@@ -43,6 +43,14 @@ pub const ErrorCode = enum {
     E039, // if let requires optional type
     E040, // else unwrap requires optional type
     E041, // cannot return nil from non-optional
+    E042, // missing block identifier
+    E043, // block identifier mismatch
+    E044, // else unwrap missing assignment
+    E045, // unknown parameter name
+    E046, // positional argument for default parameter
+    E047, // duplicate argument
+    E048, // positional argument after named argument
+    E049, // missing required argument
 
     const Info = struct {
         code: []const u8,
@@ -91,6 +99,14 @@ pub const ErrorCode = enum {
         .{ .code = "E039", .message = "if let requires optional type" },
         .{ .code = "E040", .message = "else unwrap requires optional type" },
         .{ .code = "E041", .message = "cannot return nil from non-optional" },
+        .{ .code = "E042", .message = "missing block identifier" },
+        .{ .code = "E043", .message = "block identifier mismatch" },
+        .{ .code = "E044", .message = "else unwrap missing assignment" },
+        .{ .code = "E045", .message = "unknown parameter name" },
+        .{ .code = "E046", .message = "positional argument for parameter with default value" },
+        .{ .code = "E047", .message = "duplicate argument" },
+        .{ .code = "E048", .message = "All positional arguments must come before named arguments" },
+        .{ .code = "E049", .message = "missing required argument" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

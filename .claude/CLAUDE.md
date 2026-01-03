@@ -44,7 +44,7 @@ See `docs/SPECS.md` for the complete spec file format and detailed workflow.
 - Do not edit test fragments (in `maxon-bin/specs/fragments/`). These are generated from the spec files, edit the spec file.
 
 ## Development Notes
-- Build system uses Zig build
+- Build system uses Zig build. The compiler is in the maxon-bin directory.
 - All tests must pass before commits to main
 
 ## Writing VSCode Extension Tests

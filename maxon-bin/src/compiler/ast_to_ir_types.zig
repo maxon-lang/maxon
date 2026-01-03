@@ -102,6 +102,19 @@ pub const ValueType = union(enum) {
     pub fn isFunctionType(self: ValueType) bool {
         return self == .function_type;
     }
+
+    /// Get a user-friendly display name for any ValueType
+    pub fn toDisplayName(self: ValueType) []const u8 {
+        return switch (self) {
+            .primitive => |name| name,
+            .struct_type => |name| name,
+            .enum_type => |name| name,
+            .array_type => "array",
+            .optional_type => "optional",
+            .error_union_type => "error union",
+            .function_type => "function",
+        };
+    }
 };
 
 /// Struct field info

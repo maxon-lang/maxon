@@ -2032,12 +2032,21 @@ pub const AstToIr = struct {
                 // Skip methods with default implementations (they're optional to override)
                 if (iface_method.has_default_impl) continue;
 
-                // Look for matching method in type
+                // Look for matching method in type - must have qualified name "Interface.method"
                 var found_method: ?ast.MethodDecl = null;
                 for (type_decl.methods) |type_method| {
-                    if (std.mem.eql(u8, type_method.name, iface_method.name)) {
-                        found_method = type_method;
-                        break;
+                    // Method must have qualified_name matching "InterfaceName.methodName"
+                    if (type_method.qualified_name) |qualified| {
+                        if (std.mem.indexOf(u8, qualified, ".")) |dot_pos| {
+                            const iface_name = qualified[0..dot_pos];
+                            const method_name = qualified[dot_pos + 1 ..];
+                            if (std.mem.eql(u8, iface_name, source_interface) and
+                                std.mem.eql(u8, method_name, iface_method.name))
+                            {
+                                found_method = type_method;
+                                break;
+                            }
+                        }
                     }
                 }
 
@@ -2070,7 +2079,53 @@ pub const AstToIr = struct {
                                 };
                                 return error.SemanticError;
                             }
+                        } else {
+                            // Interface expects a return type but implementation has none
+                            const expected = self.resolveAssociatedTypeWithSelf(iface_ret, type_bindings, type_decl.name);
+                            const msg = std.fmt.allocPrint(self.allocator, "Method '{s}.{s}' has no return type but interface '{s}' requires '{s}'", .{
+                                type_decl.name,
+                                iface_method.name,
+                                source_interface,
+                                expected,
+                            }) catch {
+                                self.reportError(.E015, iface_method.name);
+                                return error.SemanticError;
+                            };
+                            self.last_error = .{
+                                .code = .E015,
+                                .message = msg,
+                                .location = .{
+                                    .file = self.source_file,
+                                    .line = 1,
+                                    .column = 1,
+                                },
+                                .message_allocated = true,
+                            };
+                            return error.SemanticError;
                         }
+                    } else if (type_method.return_type) |impl_ret| {
+                        // Interface expects no return type but implementation has one
+                        const actual = self.resolveAssociatedTypeWithSelf(impl_ret, type_bindings, type_decl.name);
+                        const msg = std.fmt.allocPrint(self.allocator, "Method '{s}.{s}' has return type '{s}' but interface '{s}' requires no return type", .{
+                            type_decl.name,
+                            iface_method.name,
+                            actual,
+                            source_interface,
+                        }) catch {
+                            self.reportError(.E015, iface_method.name);
+                            return error.SemanticError;
+                        };
+                        self.last_error = .{
+                            .code = .E015,
+                            .message = msg,
+                            .location = .{
+                                .file = self.source_file,
+                                .line = 1,
+                                .column = 1,
+                            },
+                            .message_allocated = true,
+                        };
+                        return error.SemanticError;
                     }
 
                     // Check parameter types match (with associated type substitution)
@@ -2814,6 +2869,7 @@ pub const AstToIr = struct {
         in_stdlib_method: bool,
         loop_end_block: ?u32,
         loop_cond_block: ?u32,
+        temporary_strings: std.ArrayListUnmanaged(ir.Value),
     };
 
     /// Save current conversion context before generating a method
@@ -2838,18 +2894,21 @@ pub const AstToIr = struct {
             .in_stdlib_method = self.in_stdlib_method,
             .loop_end_block = self.loop_end_block,
             .loop_cond_block = self.loop_cond_block,
+            .temporary_strings = self.temporary_strings,
         };
 
-        // Clear var_map for new method
+        // Clear var_map and temporary_strings for new method
         self.var_map = .{};
+        self.temporary_strings = .{};
 
         return saved;
     }
 
     /// Restore conversion context after generating a method
     fn restoreConversionContext(self: *AstToIr, saved: SavedContext) void {
-        // Free the temporary var_map used for method conversion
+        // Free the temporary var_map and temporary_strings used for method conversion
         self.var_map.deinit(self.allocator);
+        self.temporary_strings.deinit(self.allocator);
 
         // Restore all saved state
         self.current_func = if (saved.func_idx) |idx| &self.module.functions.items[idx] else null;
@@ -2862,6 +2921,7 @@ pub const AstToIr = struct {
         self.in_stdlib_method = saved.in_stdlib_method;
         self.loop_end_block = saved.loop_end_block;
         self.loop_cond_block = saved.loop_cond_block;
+        self.temporary_strings = saved.temporary_strings;
     }
 
     /// Ensure a method has been generated (lazy generation entry point).
@@ -3629,6 +3689,19 @@ pub const AstToIr = struct {
         var ret_value: ?ir.Value = null;
 
         if (ret.value) |expr| {
+            // Check for returning nil from non-optional function (before any other handling)
+            if (expr == .nil_lit and self.sret_optional_info == null) {
+                // Get the return type name for the error message
+                const ret_type_name = if (self.func().return_type == .i64)
+                    "int"
+                else if (self.func().return_type == .f64)
+                    "float"
+                else
+                    "non-optional";
+                self.reportError(.E041, ret_type_name);
+                return error.TypeMismatch;
+            }
+
             // If using sret and returning a struct literal, write directly to sret buffer
             if (self.sret_ptr) |sret| {
                 if (expr == .struct_init) {
@@ -3650,6 +3723,7 @@ pub const AstToIr = struct {
                 }
 
                 // Special handling for returning nil from optional-returning function
+                // (non-optional case already handled above)
                 if (expr == .nil_lit and self.sret_optional_info != null) {
                     // Write tag = 0 (nil) directly to sret
                     const zero = try self.func().emitConstI64(0);
@@ -4096,7 +4170,14 @@ pub const AstToIr = struct {
         if (if_stmt.binding_name) |binding_name| {
             // Validate that the expression is an optional type
             if (cond_typed.ty != .optional_type) {
-                self.reportError(.E039, binding_name);
+                // Get a readable name for the expression being checked
+                const expr_name = if (if_stmt.condition == .identifier)
+                    if_stmt.condition.identifier
+                else
+                    "expression";
+                const type_name = cond_typed.ty.toDisplayName();
+                const msg = std.fmt.allocPrint(self.allocator, "'{s}' has type '{s}', not optional", .{ expr_name, type_name }) catch expr_name;
+                self.reportError(.E039, msg);
                 return error.TypeMismatch;
             }
             const opt_info = cond_typed.ty.optional_type;
@@ -5588,7 +5669,14 @@ pub const AstToIr = struct {
 
         // Validate that the expression is an optional type
         if (opt_typed.ty != .optional_type) {
-            self.reportError(.E040, unwrap.var_name);
+            // Get a readable name for the expression being unwrapped
+            const expr_name = if (unwrap.optional_expr.* == .identifier)
+                unwrap.optional_expr.identifier
+            else
+                "expression";
+            const type_name = opt_typed.ty.toDisplayName();
+            const msg = std.fmt.allocPrint(self.allocator, "'{s}' has type '{s}', not optional", .{ expr_name, type_name }) catch expr_name;
+            self.reportError(.E040, msg);
             return error.TypeMismatch;
         }
 
@@ -5616,6 +5704,12 @@ pub const AstToIr = struct {
         const var_value_type = getOptionalWrappedValueType(opt_info);
         const is_struct = opt_info.wrapped_struct_type != null;
         try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(var_ptr, var_value_type, true, is_struct));
+
+        // Validate that the else body contains an assignment to var_name
+        if (!elseBlockAssignsTo(unwrap.default_body, unwrap.var_name)) {
+            self.reportError(.E044, unwrap.var_name);
+            return error.SemanticError;
+        }
 
         // Create 2-way branch: has_value -> unwrap, else -> execute default body
         var branch = try BranchBuilder.init(self, has_value, "else_unwrap_some", "else_unwrap_nil", "else_unwrap_end");
@@ -5657,6 +5751,21 @@ pub const AstToIr = struct {
 
         // Switch to merge block
         try branch.switchToMerge(needs_branch);
+    }
+
+    /// Check if a statement list contains an assignment to the given variable name
+    fn elseBlockAssignsTo(stmts: []ast.Statement, var_name: []const u8) bool {
+        for (stmts) |stmt| {
+            switch (stmt.kind) {
+                .assign => |assign| {
+                    if (std.mem.eql(u8, assign.target, var_name)) {
+                        return true;
+                    }
+                },
+                else => {},
+            }
+        }
+        return false;
     }
 
     /// Guard-let: `let x = opt or 'label' ... end 'label'`
@@ -6884,6 +6993,18 @@ pub const AstToIr = struct {
         const left = try self.convertExpression(bin.left.*);
         const right = try self.convertExpression(bin.right.*);
 
+        // Check for optional types used without unwrapping
+        if (left.ty == .optional_type) {
+            const expr_name = if (bin.left.* == .identifier) bin.left.identifier else "expression";
+            self.reportError(.E038, expr_name);
+            return error.TypeMismatch;
+        }
+        if (right.ty == .optional_type) {
+            const expr_name = if (bin.right.* == .identifier) bin.right.identifier else "expression";
+            self.reportError(.E038, expr_name);
+            return error.TypeMismatch;
+        }
+
         const left_prim = left.ty.toPrimitiveType();
         const right_prim = right.ty.toPrimitiveType();
 
@@ -7721,9 +7842,26 @@ pub const AstToIr = struct {
             }
         }
 
-        // Validate: positional args can only fill required params
+        // Validate: positional args can only fill required params (not those with defaults)
         if (positional_args.len > required_count) {
-            self.reportError(.E011, func_name);
+            const msg = std.fmt.allocPrint(self.allocator, "Too many positional arguments\n  Function '{s}' has {d} required parameter{s}", .{
+                func_name,
+                required_count,
+                if (required_count == 1) "" else "s",
+            }) catch {
+                self.reportError(.E046, func_name);
+                return error.WrongArgumentCount;
+            };
+            self.last_error = .{
+                .code = .E046,
+                .message = msg,
+                .location = .{
+                    .file = self.source_file,
+                    .line = @intCast(self.current_line),
+                    .column = @intCast(self.current_column),
+                },
+                .message_allocated = true,
+            };
             return error.WrongArgumentCount;
         }
 
@@ -7754,13 +7892,13 @@ pub const AstToIr = struct {
             }
 
             if (found_idx == null) {
-                self.reportError(.E011, named.name);
+                self.reportError(.E045, named.name);
                 return error.UnknownParameter;
             }
 
             const idx = found_idx.?;
             if (filled[idx]) {
-                self.reportError(.E011, named.name);
+                self.reportError(.E047, named.name);
                 return error.DuplicateArgument;
             }
 
@@ -7774,7 +7912,23 @@ pub const AstToIr = struct {
                 if (param.default_value) |default| {
                     resolved[i] = .{ .default = default };
                 } else {
-                    self.reportError(.E011, param.name);
+                    const msg = std.fmt.allocPrint(self.allocator, "Missing required argument '{s}' in call to '{s}'", .{
+                        param.name,
+                        func_name,
+                    }) catch {
+                        self.reportError(.E049, param.name);
+                        return error.MissingArgument;
+                    };
+                    self.last_error = .{
+                        .code = .E049,
+                        .message = msg,
+                        .location = .{
+                            .file = self.source_file,
+                            .line = @intCast(self.current_line),
+                            .column = @intCast(self.current_column),
+                        },
+                        .message_allocated = true,
+                    };
                     return error.MissingArgument;
                 }
             }
@@ -8247,7 +8401,11 @@ pub const AstToIr = struct {
         args[3] = val_typed.value;
 
         _ = try self.func().emitCall(mangled_name, args, func_info.return_type);
-        // We don't need to do anything with the return value since it's just for chaining
+
+        // Copy the returned array back to the original location
+        // The set method returns Self (the modified array), and since arrays are value types
+        // with internal mutation, we need to copy the result back to update the source
+        try self.func().emitMemcpy(base_typed.value, sret_buffer, 32);
     }
 
     // ------------------------------------------------------------------------
@@ -9400,7 +9558,23 @@ pub const AstToIr = struct {
             const is_instance_method = self_value != null;
             const expected_args = if (is_instance_method) func_info.param_types.len - 1 else func_info.param_types.len;
             if (call_args.len() != expected_args) {
-                self.reportError(.E011, method_name);
+                const msg = std.fmt.allocPrint(self.allocator, "Wrong number of arguments: expected {d}, got {d}", .{
+                    expected_args,
+                    call_args.len(),
+                }) catch {
+                    self.reportError(.E011, method_name);
+                    return error.WrongArgumentCount;
+                };
+                self.last_error = .{
+                    .code = .E011,
+                    .message = msg,
+                    .location = .{
+                        .file = self.source_file,
+                        .line = @intCast(self.current_line),
+                        .column = @intCast(self.current_column),
+                    },
+                    .message_allocated = true,
+                };
                 return error.WrongArgumentCount;
             }
         }
