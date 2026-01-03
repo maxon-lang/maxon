@@ -124,8 +124,16 @@ export type String is Hashable, Equatable, Iterable with Character
 	end 'find'
 
 	// Slicing - returns a new String backed by slice into this string's buffer
-	export function slice(start StringIndex, end_ StringIndex) returns String
-		return __string_slice(_managed, start._bytePos, end_._bytePos)
+	// Use end_= for end position, or length= for character count
+	export function slice(start StringIndex, end_ StringIndex or nil = nil, length int or nil = nil) returns String
+		if let len = length 'has_length'
+			var endBytePos = graphemeOffsetToBytePos(_managed, start._bytePos, len)
+			return __string_slice(_managed, start._bytePos, endBytePos)
+		end 'has_length'
+		if let endIdx = end_ 'has_end'
+			return __string_slice(_managed, start._bytePos, endIdx._bytePos)
+		end 'has_end'
+		return __string_slice(_managed, start._bytePos, __string_len(_managed))
 	end 'slice'
 
 	// View methods

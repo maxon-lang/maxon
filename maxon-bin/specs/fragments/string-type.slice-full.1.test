@@ -3,7 +3,7 @@ function main() returns int
     var s = "hello"
     var start = s.startIndex()
     var endIdx = s.endIndex()
-    var sub = s.slice(start, endIdx)
+    var sub = s.slice(start, end_ = endIdx)
     print(sub)
     return 0
 end 'main'
@@ -61,52 +61,60 @@ entry:
     %endIdx = alloca.sized ptr 16
     %tmp_call.2 = call ptr @String$endIndex(%endIdx, %s)
     %sub = alloca.sized ptr 32
-    %tmp_call.3 = call ptr @String$slice(%sub, %s, %start, %endIdx)
+    %tmp_alloca.5 = alloca.sized ptr 24
+    %tmp_const.17 = const.i64 i64 1
+    store %tmp_alloca.5 %tmp_const.17
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.5 8
+    memcpy %tmp_fieldptr.5 %endIdx 16
+    %tmp_alloca.6 = alloca.sized ptr 16
+    %tmp_const.18 = const.i64 i64 0
+    store %tmp_alloca.6 %tmp_const.18
+    %tmp_call.3 = call ptr @String$slice(%sub, %s, %start, %tmp_alloca.5, %tmp_alloca.6)
     %tmp_call.4 = call i64 @print(%sub)
-    %tmp_const.17 = const.i64 i64 0
-    %tmp_fieldptr.5 = getfieldptr ptr %s 12
-    %tmp_load = load i32 %tmp_fieldptr.5
-    %tmp_const.18 = const.i32 i32 3
-    %tmp_band = band i32 %tmp_load %tmp_const.18
-    %tmp_const.19 = const.i32 i32 1
-    %tmp_icmp = icmp.eq i32 %tmp_band %tmp_const.19
+    %tmp_const.19 = const.i64 i64 0
+    %tmp_fieldptr.6 = getfieldptr ptr %s 12
+    %tmp_load = load i32 %tmp_fieldptr.6
+    %tmp_const.20 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load %tmp_const.20
+    %tmp_const.21 = const.i32 i32 1
+    %tmp_icmp = icmp.eq i32 %tmp_band %tmp_const.21
     br.cond %tmp_icmp @block1 @block3
 decref:
-    %tmp_fieldptr.6 = getfieldptr ptr %s 16
-    %tmp_load.1 = load i32 %tmp_fieldptr.6
-    %tmp_const.20 = const.i32 i32 1
-    %tmp_sub = sub i32 %tmp_load.1 %tmp_const.20
-    store.i32 %tmp_fieldptr.6 %tmp_sub
-    %tmp_const.21 = const.i32 i32 0
-    %tmp_icmp.1 = icmp.eq i32 %tmp_sub %tmp_const.21
+    %tmp_fieldptr.7 = getfieldptr ptr %s 16
+    %tmp_load.1 = load i32 %tmp_fieldptr.7
+    %tmp_const.22 = const.i32 i32 1
+    %tmp_sub = sub i32 %tmp_load.1 %tmp_const.22
+    store.i32 %tmp_fieldptr.7 %tmp_sub
+    %tmp_const.23 = const.i32 i32 0
+    %tmp_icmp.1 = icmp.eq i32 %tmp_sub %tmp_const.23
     br.cond %tmp_icmp.1 @block2 @block3
 decref_free:
     %tmp_load.2 = load ptr %s
     heap.free %tmp_load.2 tag="string cleanup"
     br @block3
 decref_end:
-    %tmp_fieldptr.7 = getfieldptr ptr %sub 12
-    %tmp_load.3 = load i32 %tmp_fieldptr.7
-    %tmp_const.22 = const.i32 i32 3
-    %tmp_band.1 = band i32 %tmp_load.3 %tmp_const.22
-    %tmp_const.23 = const.i32 i32 1
-    %tmp_icmp.2 = icmp.eq i32 %tmp_band.1 %tmp_const.23
+    %tmp_fieldptr.8 = getfieldptr ptr %sub 12
+    %tmp_load.3 = load i32 %tmp_fieldptr.8
+    %tmp_const.24 = const.i32 i32 3
+    %tmp_band.1 = band i32 %tmp_load.3 %tmp_const.24
+    %tmp_const.25 = const.i32 i32 1
+    %tmp_icmp.2 = icmp.eq i32 %tmp_band.1 %tmp_const.25
     br.cond %tmp_icmp.2 @block4 @block6
 decref:
-    %tmp_fieldptr.8 = getfieldptr ptr %sub 16
-    %tmp_load.4 = load i32 %tmp_fieldptr.8
-    %tmp_const.24 = const.i32 i32 1
-    %tmp_sub.1 = sub i32 %tmp_load.4 %tmp_const.24
-    store.i32 %tmp_fieldptr.8 %tmp_sub.1
-    %tmp_const.25 = const.i32 i32 0
-    %tmp_icmp.3 = icmp.eq i32 %tmp_sub.1 %tmp_const.25
+    %tmp_fieldptr.9 = getfieldptr ptr %sub 16
+    %tmp_load.4 = load i32 %tmp_fieldptr.9
+    %tmp_const.26 = const.i32 i32 1
+    %tmp_sub.1 = sub i32 %tmp_load.4 %tmp_const.26
+    store.i32 %tmp_fieldptr.9 %tmp_sub.1
+    %tmp_const.27 = const.i32 i32 0
+    %tmp_icmp.3 = icmp.eq i32 %tmp_sub.1 %tmp_const.27
     br.cond %tmp_icmp.3 @block5 @block6
 decref_free:
     %tmp_load.5 = load ptr %sub
     heap.free %tmp_load.5 tag="string cleanup"
     br @block6
 decref_end:
-    ret %tmp_const.17
+    ret %tmp_const.19
 }
 
 ---

@@ -257,7 +257,7 @@ var sub3 = s[..5]            // "hello" (from start to index)
 - Lightweight view into another string's data
 - Does not own the data (keeps parent string alive)
 - Immutable
-- Created via `s.slice(start, end)` method
+- Created via `s.slice(start, end_ = endIndex)` or `s.slice(start, length = count)`
 - Use `toString()` to create an owned copy
 
 **CString Type:**

@@ -131,7 +131,7 @@ Create a substring view that shares storage with the original string:
 var s = "hello world"
 var start = s.startIndex()
 if let spaceIdx = s.find(" ") 'found'
-    var sub = s.slice(start, spaceIdx)  // "hello" - shares storage with s
+    var sub = s.slice(start, end_ = spaceIdx)  // "hello" - shares storage with s
     print(sub)
 end 'found'
 ```
@@ -1464,7 +1464,7 @@ function main() returns int
     var s = "hello world"
     var start = s.startIndex()
     if let spaceIdx = s.find(" ") 'found'
-        var sub = s.slice(start, spaceIdx)
+        var sub = s.slice(start, end_ = spaceIdx)
         print(sub)
     end 'found'
     return 0
@@ -1484,7 +1484,7 @@ function main() returns int
     var s = "hello"
     var start = s.startIndex()
     var endIdx = s.endIndex()
-    var sub = s.slice(start, endIdx)
+    var sub = s.slice(start, end_ = endIdx)
     print(sub)
     return 0
 end 'main'
@@ -1502,7 +1502,7 @@ hello
 function main() returns int
     var s = "hello"
     var start = s.startIndex()
-    var sub = s.slice(start, start)
+    var sub = s.slice(start, end_ = start)
     print("{sub.count()}\n")
     return 0
 end 'main'
@@ -1521,7 +1521,7 @@ function main() returns int
     var s = "abcdef"
     var start = s.startIndex()
     if let idx = s.find("d") 'found'
-        var sub = s.slice(start, idx)
+        var sub = s.slice(start, end_ = idx)
         for c in sub 'loop'
             print("{c}\n")
         end 'loop'
@@ -1589,7 +1589,7 @@ function main() returns int
     var s = "hello world"
     var start = s.startIndex()
     if let spaceIdx = s.find(" ") 'found'
-        var sub = s.slice(start, spaceIdx)
+        var sub = s.slice(start, end_ = spaceIdx)
         print("{sub}\n")
     end 'found'
     return 0

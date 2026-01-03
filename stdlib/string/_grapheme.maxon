@@ -85,6 +85,19 @@ export function byteIndexToGraphemeIndex(managed __ManagedString, byteIdx int) r
 	return graphemeIdx
 end 'byteIndexToGraphemeIndex'
 
+/// Advance from a byte position by a number of grapheme clusters
+/// Returns the byte position after advancing by `count` graphemes
+export function graphemeOffsetToBytePos(managed __ManagedString, startBytePos int, count int) returns int
+	var pos = startBytePos
+	var len = __string_len(managed)
+	var i = 0
+	while i < count and pos < len 'advance'
+		pos = findGraphemeEndManagedRange(managed, 0, pos, len)
+		i = i + 1
+	end 'advance'
+	return pos
+end 'graphemeOffsetToBytePos'
+
 // Grapheme_Cluster_Break property values (used as return values):
 //   0 = Other, 1 = CR, 2 = LF, 3 = Control, 4 = Extend, 5 = ZWJ,
 //   6 = Regional_Indicator, 7 = Prepend, 8 = SpacingMark,
