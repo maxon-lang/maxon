@@ -4,29 +4,6 @@ status: stable
 keywords: break, loop, control flow, exit
 category: control-flow
 ---
-
-## Developer Notes
-
-Break statement exits the innermost enclosing loop.
-
-**Implementation Details:**
-- Keyword: `break` (lexer.cpp, TokenType::Break)
-- Parser: `parseBreak()` in parser.cpp
-- AST node: `BreakAST` (ast.h)
-- Codegen: Generates unconditional branch to loop continuation block
-
-**Semantic Rules:**
-- Must be inside a loop (while or for)
-- Exits only the innermost loop (or specified labeled loop)
-- Labeled break allows breaking to a specific outer loop
-- Cannot break from nested functions
-- Valid in both single-line and multi-line contexts
-
-**Code Generation:**
-- Creates branch to the loop's continuation block
-- Uses LLVM's `BranchInst` with loop exit as target
-- Subsequent code in the same block becomes unreachable
-
 ## Documentation
 
 # Break Statement

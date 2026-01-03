@@ -7,34 +7,6 @@ category: types
 
 # Substring Type
 
-## Developer Notes
-
-The `substring` type provides a zero-copy view into a string's buffer. Instead of copying data when slicing, a substring holds a reference to the parent string's storage.
-
-### Memory Layout
-
-**Substring Type (24 bytes):**
-- `_parentManaged ptr` - pointer to parent's `__ManagedStringData`
-- `_ptr ptr` - pointer into parent's buffer at slice start
-- `_len i32` - byte length of substring
-- `_iterPos i32` - iteration position (for `Iterable`)
-
-### Reference Counting
-
-When a substring is created from a heap-allocated string:
-1. The parent's refcount is incremented (retained)
-2. When the substring goes out of scope, the parent's refcount is decremented
-3. The parent buffer is freed when refcount reaches 0
-
-For SSO (small string optimization) strings, no refcount management is needed since the data is stored inline.
-
-### Implementation
-
-- Semantic analyzer: `semantic_analyzer_expr.cpp` - `__substring_*` intrinsics
-- Codegen: `codegen_mir_expr.cpp` - `generateSubstringIntrinsic()`
-- Scope cleanup: `codegen_mir.cpp` - `generateScopeCleanup()` handles substring cleanup
-- stdlib: `stdlib/string/string.maxon` - `substring` type and methods
-
 ## Documentation
 
 The `substring` type is a lightweight view into a string's buffer. Substrings are created via the `slice()` method and provide zero-copy access to a portion of a string.

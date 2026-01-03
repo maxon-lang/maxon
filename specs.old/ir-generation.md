@@ -7,31 +7,6 @@ category: compilation
 
 # IR Generation
 
-## Developer Notes
-
-The compiler generates LLVM IR (Intermediate Representation) in two modes:
-
-1. **Optimized IR** - Default, with `-O3` optimization
-   - Dead code elimination
-   - Constant folding
-   - Inlining
-   - Loop optimizations
-   - Minimal instructions
-
-2. **Debug IR** - With `-g` flag
-   - Preserves all code structure
-   - No optimizations
-   - Easier to debug
-   - Maps closely to source
-
-Implementation:
-- `CodeGenerator` class creates LLVM IR
-- Uses LLVM C++ API to build IR
-- Optimization level set in `Module` creation
-- Both modes generate correct code, optimized is just faster
-
-Test fragments store both optimized and debug IR for validation.
-
 ## Documentation
 
 The compiler generates LLVM Intermediate Representation (IR) code.

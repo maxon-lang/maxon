@@ -7,19 +7,6 @@ category: statements
 
 # Return Statement
 
-## Developer Notes
-
-The `return` statement exits a function and optionally provides a value to the caller. Implementation details:
-
-- Parsed in `Parser::parseReturnStatement()`
-- Represented by `ReturnStmt` AST node
-- Must match the function's declared return type
-- Generates LLVM `ret` instruction
-- Type checking ensures the expression type matches function return type
-- All code paths in a function must return (validated by semantic analyzer)
-
-The return value expression is evaluated first, then the function exits. There is no implicit return for functions - all functions must explicitly return.
-
 ## Documentation
 
 The `return` statement exits the current function and optionally returns a value to the caller.

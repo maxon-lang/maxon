@@ -5,27 +5,6 @@ status: implemented
 
 # Type Cast (`as` Operator)
 
-## Developer Notes
-
-The `as` operator provides explicit type conversion between primitive types. Implementation spans:
-
-- **Lexer (1-lexer.zig)**: Added `as` keyword token at line 40, and keyword recognition at line 426
-- **Parser (2-parser.zig)**: Handles `as` as a postfix operator in `parsePostfix()` (around line 1345), binding tighter than comparison. Also updated `parseCall()` to call `parsePostfix` after parsing function calls so `foo() as int` works.
-- **AST (ast.zig)**: New `CastExpr` struct with `expr` and `target_type` fields (line 274), and `cast` variant in Expression union (line 301)
-- **Mutation Analysis (3-mutation_analysis.zig)**: Added case for `.cast` to check inner expression
-- **AST-to-IR (4-ast_to_ir.zig)**: New `convertCast` function handles conversions using existing instructions
-- **IR (ir.zig)**: Added `band` (bitwise AND) instruction for byte truncation
-- **Codegen (ir_codegen.zig)**: Added `band` to integer binary ops
-- **x86.zig**: Added `andRaxRcx` instruction encoding
-
-Supported conversions:
-- `int` to `float`: `sitofp` (signed int to floating point)
-- `float` to `int`: `fptosi` (floating point to signed int, truncates toward zero)
-- `int` to `byte`: bitwise AND with 0xFF (keeps lower 8 bits)
-- `float` to `byte`: `fptosi` then AND with 0xFF
-- `byte` to `int`: no-op (byte already stored as i64)
-- Same type: no-op
-
 ## Documentation
 
 The `as` operator converts a value from one type to another.

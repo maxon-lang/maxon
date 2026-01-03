@@ -42,7 +42,7 @@ Verify that the implementation includes ALL required components:
 
 **Spec-Driven Development:**
 - All language features have a corresponding spec file
-- Spec files contain: Developer Notes, Documentation, and Tests
+- Spec files contain: Documentation, and Tests
 - Test fragments are generated from specs, never manually edited
 
 ### 4. Common Issues to Flag

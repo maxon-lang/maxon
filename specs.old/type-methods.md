@@ -7,37 +7,6 @@ category: type-system
 
 # Type Methods
 
-## Developer Notes
-
-Type methods are functions declared inside a type definition that operate on instances of that type.
-
-**Declaration:**
-- Methods are declared with `function` keyword inside a type body
-- Instance methods have implicit `self` parameter referring to the instance
-- Static methods use `static function` and don't receive `self`
-- Methods can be exported with `export` modifier
-- Qualified names like `Interface.methodName` indicate interface method implementations
-
-**AST:**
-- `MethodDecl` struct with name, qualified_name, is_static, is_export, params, return_type, body
-- `TypeDecl` extended with `methods: []MethodDecl`
-
-**Lexer Keywords:**
-- `self` - reference to current instance
-- `Self` - type name of enclosing type
-- `static` - method without self parameter
-- `export` - publicly visible method
-
-**Code Generation:**
-- Methods generate IR functions with mangled names: `TypeName$methodName`
-- Instance methods receive implicit `self` pointer as first parameter
-- Method calls are converted to function calls with receiver as first argument
-
-**Parser:**
-- `parseMethodDecl()` handles method signatures inside type bodies
-- Methods can appear after fields in type definition
-- Method body is parsed same as function body
-
 ## Documentation
 
 Types can contain methods - functions that operate on type instances.

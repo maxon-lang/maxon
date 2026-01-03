@@ -7,26 +7,6 @@ category: types
 
 # Byte Type
 
-## Developer Notes
-
-The `byte` type represents an 8-bit unsigned integer value (0-255).
-
-### Implementation
-
-- AST: `ByteExprAST` node in `ast.h` (for constant byte expressions)
-- Type: Represented as `i8` in IR
-- Codegen: Generates `i8` constants
-
-### Creating Byte Values
-
-Byte values are created by casting integer literals to byte:
-- `42 as byte` - byte with value 42
-- `0 as byte` - zero byte
-- `255 as byte` - maximum byte value
-- `0xff as byte` - hex literal cast to byte
-
-Range checking is performed at compile time when casting constant expressions - values outside 0-255 produce an error.
-
 ## Documentation
 
 The `byte` type represents a single 8-bit unsigned value (0-255).

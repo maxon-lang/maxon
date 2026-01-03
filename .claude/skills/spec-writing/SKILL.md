@@ -17,13 +17,6 @@ status: implemented | in-progress | planned
 
 # Feature Name
 
-## Developer Notes
-
-Implementation details for maintainers:
-- Which compiler stages are affected
-- Key design decisions
-- Edge cases to handle
-
 ## Documentation
 
 User-facing documentation explaining:

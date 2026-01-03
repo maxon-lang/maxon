@@ -3,20 +3,6 @@ feature: managed-array-internals
 category: internals
 status: stable
 ---
-
-## Developer Notes
-
-This spec covers internal tests for the managed array system. These tests verify:
-- Stack vs heap allocation thresholds
-- Reference counting behavior
-- Scope-based cleanup
-- Memory tracking accuracy
-
-The managed array system uses:
-- Capacity semantics: 0 = stack allocated, >0 = heap allocated with ownership
-- 8-byte header for heap arrays (refcount + data_size)
-- Automatic cleanup at scope exit
-
 ## Documentation
 
 ### Array Memory Management

@@ -7,22 +7,6 @@ category: operators
 
 # Comparison Operators
 
-## Developer Notes
-
-Comparison operators compare two values and return a `bool` result.
-
-Implementation:
-- Parsed in `Parser::parseBinaryExpression()`
-- Lower precedence than arithmetic operators
-- Result type is always `bool` (LLVM `i1`)
-- Integer comparisons use LLVM `icmp` with predicates: `eq`, `ne`, `slt`, `sgt`, `sle`, `sge`
-- Float comparisons use LLVM `fcmp` with ordered predicates: `oeq`, `one`, `olt`, `ogt`, `ole`, `oge`
-- Type checker ensures both operands have same type (uses contextual literal typing for byte↔int)
-- See `contextual-literal-typing` spec for type matching rules
-- Common in condition expressions for `if` and `while`
-
-Note: Maxon uses `==` for equality and `!=` for inequality.
-
 ## Documentation
 
 Comparison operators compare two values and return `true` or `false`.

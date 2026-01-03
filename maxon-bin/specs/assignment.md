@@ -7,24 +7,6 @@ category: statements
 
 # Assignment Statement
 
-## Developer Notes
-
-Assignment updates the value of a mutable variable (declared with `var`).
-
-Implementation:
-- Parsed in `Parser::parseAssignmentStatement()`
-- Syntax: `identifier = expression`
-- Represented by `AssignmentStmt` AST node
-- Type checker ensures variable is mutable (not `let`)
-- Type checker ensures expression type matches variable type
-- Code generation uses LLVM `store` instruction
-- Variable must already be declared
-
-Cannot assign to:
-- `let` variables (immutable)
-- Function names
-- Undeclared identifiers
-
 ## Documentation
 
 The assignment operator `=` updates the value of a mutable variable.

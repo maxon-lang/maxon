@@ -7,23 +7,6 @@ category: types
 
 # Float Type
 
-## Developer Notes
-
-The `float` type represents double-precision (64-bit) floating-point numbers, mapped to LLVM `double` type.
-
-Key implementation:
-- Represented as LLVM `double` (IEEE 754 binary64)
-- Float literals must contain a decimal point
-- Parsed in `Lexer::readNumber()` when '.' is encountered
-- Supports arithmetic: `+`, `-`, `*`, `/` (no modulo)
-- Supports comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
-- Cannot be cast to `int`; use `trunc()` for truncation toward zero
-- Math intrinsics require float arguments: `sin`, `cos`, `tan`, `sqrt`, `abs`, `floor`, `ceil`, `round`, `trunc`
-- Arithmetic operations support mixed int/float (int promoted to float)
-- Comparisons require exact type match (no implicit promotion between int and float)
-
-Used extensively for mathematical computations and scientific calculations.
-
 ## Documentation
 
 The `float` type stores 64-bit double-precision floating-point numbers.

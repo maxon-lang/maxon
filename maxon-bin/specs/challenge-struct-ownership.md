@@ -5,12 +5,6 @@ keywords: struct, ownership, borrow, move
 category: semantics
 ---
 
-# Developer Notes
-
-Tests for Challenge 7 from DEVELOPMENT_CHALLENGES.md: Ownership with Structs.
-
-Ownership semantics must work correctly with struct values.
-
 # Documentation
 
 ## Struct Ownership

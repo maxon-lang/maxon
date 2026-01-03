@@ -5,12 +5,6 @@ keywords: array, struct, elements, memory
 category: semantics
 ---
 
-# Developer Notes
-
-Tests for Challenge 4 from DEVELOPMENT_CHALLENGES.md: Array with Struct Elements.
-
-Arrays containing struct elements require proper copying of each struct.
-
 # Documentation
 
 ## Arrays of Structs

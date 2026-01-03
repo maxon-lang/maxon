@@ -4,29 +4,6 @@ status: stable
 keywords: method, call, parameter, same type, sibling
 category: expressions
 ---
-
-## Developer Notes
-
-When inside a method, calling a method on a parameter of the same type must work correctly.
-The compiler must distinguish between:
-1. Sibling method calls: `count()` inside `string` calls `self.count()`
-2. Method calls on parameters: `other.count()` inside `string` calls `other.count()`
-
-**The Bug:**
-When we call `other.method()` where `other` is a parameter of the same type as `self`,
-the semantic analyzer incorrectly treats it as a sibling method call. This causes:
-- The compiler to skip parameter 0 (self) thinking it will be injected
-- But the parser already added `other` as args[0]
-- Result: "Too many positional arguments" error
-
-**Fix:**
-A sibling method call is ONLY when:
-1. We're inside a method (currentReceiverType is set)
-2. The called method is from the same type
-3. The call has NO explicit receiver (args.size() < expected params - 1)
-
-If args[0] already provides a value for `self`, it's NOT a sibling call.
-
 ## Documentation
 
 # Method Calls on Parameters of the Same Type

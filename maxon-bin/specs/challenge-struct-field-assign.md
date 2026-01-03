@@ -5,12 +5,6 @@ keywords: struct, field, assignment, mutation
 category: semantics
 ---
 
-# Developer Notes
-
-Tests for Challenge 6 from DEVELOPMENT_CHALLENGES.md: Struct Field Assignment.
-
-Assigning to struct fields after creation.
-
 # Documentation
 
 ## Struct Field Assignment

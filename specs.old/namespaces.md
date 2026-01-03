@@ -7,20 +7,6 @@ category: organization
 
 # Namespaces
 
-## Developer Notes
-
-Namespaces are automatically derived from file paths and provide logical grouping of functions. Key implementation:
-
-- Namespace derived from file path in `deriveNamespace()` (compiler.cpp)
-- File path `stdlib/fmt/integer.maxon` → namespace `stdlib.fmt`
-- `export` keyword makes functions visible outside the file
-- Non-exported functions have internal linkage (file-private)
-- Functions are registered with qualified names (namespace.function)
-- Suffix matching allows unqualified calls when unambiguous
-- Names are mangled with namespace prefix for uniqueness in LLVM IR
-
-The semantic analyzer handles name resolution using suffix matching for unqualified names.
-
 ## Documentation
 
 Namespaces are derived from the file's location in the directory structure. Functions can be exported to make them available to other files.

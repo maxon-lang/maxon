@@ -7,31 +7,6 @@ category: stdlib
 
 # Stdlib Array Type
 
-## Developer Notes
-
-The stdlib `Array` type provides a generic, dynamically-sized collection. It uses the `__ManagedArray` internal type for heap-allocated storage.
-
-**Implementation Details:**
-- `Array of T` is monomorphized to `Array$T` (e.g., `Array$int`)
-- Each method is monomorphized: `Array$int$push`, `Array$int$get`, etc.
-- The underlying storage is a 24-byte `__ManagedArray` (buffer ptr, length, capacity)
-- Array type is 32 bytes total (24-byte managed + 8-byte iterIndex for iteration)
-
-**Key Components:**
-- `stdlib/collections/Array.maxon` - The Array type definition
-- `__managed_array_alloc(capacity)` - Allocates buffer
-- `__managed_array_get(buffer, len, index)` - Returns optional value
-- `__managed_array_set_at(buffer, len, cap, index, value)` - Sets value
-- `__managed_array_push(buffer, len, cap, value)` - Appends value
-- `__managed_array_pop(buffer, len, cap)` - Removes and returns last
-
-**Monomorphization:**
-When the compiler sees `Array of int`:
-1. Look up `Array` in type_map (from stdlib)
-2. Clone the type with `Element` → `int`
-3. Register as `Array$int`
-4. Each method gets mangled name: `Array$int$push`
-
 ## Documentation
 
 ### Array Type

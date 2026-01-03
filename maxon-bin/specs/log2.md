@@ -4,45 +4,6 @@ status: stable
 keywords: log2, logarithm, base-2, math
 category: stdlib
 ---
-
-## Developer Notes
-
-The `log2` function is implemented as a **stdlib function** using the natural logarithm.
-
-**Implementation Details:**
-- Category: `stdlib` (stdlib/Math.maxon)
-- Implementation: Uses the identity `log2(x) = log(x) / log(2)`
-- Depends on: `Math.log` function
-
-**Type System:**
-- Input: `float`
-- Output: `float`
-- Participates in implicit int→float promotion
-
-**Algorithm:**
-- Uses the mathematical identity: log₂(x) = ln(x) / ln(2)
-- Relies on the existing `log` (natural logarithm) implementation
-- ln(2) ≈ 0.693147180559945309417232121458
-
-**Performance:**
-- Performance depends on the `log` function implementation
-- Single division operation after computing natural logarithm
-- Handles special cases (zero, negative, one, two) directly
-
-**Special Cases (IEEE 754 / Zig Reference):**
-- `log2(+inf)` = `+inf`
-- `log2(0)` = `-inf`
-- `log2(x)` = `nan` if x < 0
-- `log2(nan)` = `nan`
-- `log2(1.0)` = `0.0` (exact)
-- `log2(2.0)` = `1.0` (exact)
-
-**Related Functions:**
-- `log` - natural logarithm (base e)
-- `log10` - base-10 logarithm
-- `exp` - exponential function (e^x)
-- `pow` - general exponentiation
-
 ## Documentation
 
 # log2

@@ -7,27 +7,6 @@ category: type-system
 
 # Types
 
-## Developer Notes
-
-Types are composite types that group related data together.
-
-**Declaration:**
-- Type fields must be declared with `let` (immutable) or `var` (mutable)
-- Fields can have explicit types or inferred types with initializers
-
-**Mutability Rules:**
-- Type instance mutability determined by `let` vs `var` declaration
-- `let` type: Cannot modify any fields (instance is immutable)
-- `var` type: Can modify `var` fields, cannot modify `let` fields
-- Field-level mutability is checked at compile time
-
-**Implementation:**
-- Parser: `parseStructDef()` in parser_decl.cpp
-- AST: `StructDefAST` with `StructField` entries containing `isImmutable` flag
-- Semantic: `VariableInfo.isImmutable` tracks instance mutability
-- Semantic: `StructFieldInfo.isImmutable` tracks field mutability
-- Assignment validation in `analyzeAssignmentStmt()` checks both
-
 ## Documentation
 
 Types define custom data types with named fields.

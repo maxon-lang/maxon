@@ -4,28 +4,6 @@ status: stable
 keywords: floor, rounding, math, conversion
 category: math-intrinsic
 ---
-
-## Developer Notes
-
-The `floor` function is implemented as an **LLVM intrinsic** for type conversion.
-
-**Implementation Details:**
-- Keyword category: `MathIntrinsic` (lexer.cpp:30)
-- Intrinsic kind: `MathIntrinsicKind::LLVMIntrinsic`
-- LLVM intrinsic ID: `llvm::Intrinsic::floor`
-- Returns integer type (converts float → int)
-- Codegen: Generates LLVM floor intrinsic + fptosi conversion
-
-**Type System:**
-- Input: `float`
-- Output: `int`
-- Rounds down toward negative infinity
-
-**Rounding Behavior:**
-- Always rounds down (toward negative infinity)
-- `floor(3.9)` = 3
-- `floor(-3.1)` = -4 (rounds down, not toward zero)
-
 ## Documentation
 
 # floor

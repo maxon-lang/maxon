@@ -4,31 +4,6 @@ status: stable
 keywords: hash, equals, hashable, equatable, primitives
 category: type-system
 ---
-
-## Developer Notes
-
-Built-in types (`int`, `float`, `bool`, `byte`) implement `Hashable` and `Equatable` interfaces
-as compiler intrinsics in `4-ast_to_ir.zig`.
-
-**Implementation Details:**
-- Method calls on primitives are handled in `convertMethodCallExpr`
-- `emitPrimitiveMethodCall` dispatches to type-specific implementations
-- `emitPrimitiveHash` and `emitPrimitiveEquals` generate inline IR
-
-**Hash Implementations:**
-- `int.hash()`: Returns value directly (identity hash)
-- `float.hash()`: Normalizes -0.0 to +0.0, then bitcasts to i64 (Swift approach)
-- `bool.hash()`: Returns 1 for true, 0 for false
-- `byte.hash()`: Returns value directly
-
-**Equals Implementations:**
-- All types use direct comparison (`icmp_eq` for int/bool/byte, `fcmp_eq` for float)
-- Float follows IEEE semantics: `NaN.equals(NaN)` returns false
-
-**Key Design Decisions:**
-- Float hash uses Swift's approach to ensure `0.0.hash() == (-0.0).hash()`
-- Uses `bitcast_f64_to_i64` IR operation for float hash
-
 ## Documentation
 
 # Primitive Hashable and Equatable

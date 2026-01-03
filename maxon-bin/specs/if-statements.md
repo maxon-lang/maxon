@@ -4,53 +4,6 @@ status: stable
 keywords: if, else, conditional, branching, control flow
 category: control-flow
 ---
-
-## Developer Notes
-
-If statements provide conditional execution in Maxon.
-
-**Implementation Details:**
-- Keywords: `if`, `else` (lexer.cpp)
-- Parser: `parseIf()` in parser.cpp
-- AST node: `IfStmtAST` (ast.h) with `blockId` for if-branch and `elseBlockId` for else-branch
-- Requires block identifiers for all if/else statements
-- Each branch (if and else) has its own block identifier
-- Enforces explicit block structure with `end` keyword
-
-**Syntax:**
-
-**If statement (no else):**
-```
-if <condition> 'identifier'
-    <statements>
-end 'identifier'
-```
-
-**If-else statement:**
-```
-if <condition> 'if_id'
-    <statements>
-end 'if_id' else 'else_id'
-    <statements>
-end 'else_id'
-```
-
-**Else-if chain:**
-```
-if <condition1> 'case1'
-    <statements>
-end 'case1' else if <condition2> 'case2'
-    <statements>
-end 'case2' else 'default'
-    <statements>
-end 'default'
-```
-
-**Code Generation:**
-- Creates basic blocks for then, else (optional), and continuation
-- Uses conditional branch instruction for the condition
-- Phi nodes for value merging when needed
-
 ## Documentation
 
 # If Statements

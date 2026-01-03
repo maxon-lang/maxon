@@ -7,19 +7,6 @@ category: expressions
 
 # Parentheses in Expressions
 
-## Developer Notes
-
-Parentheses `()` are used to group expressions and override operator precedence.
-
-Implementation:
-- Parsed in `Parser::parsePrimaryExpression()`
-- When `(` is encountered, recursively parse inner expression
-- Expects matching `)` at the end
-- No special AST node - just affects parse tree structure
-- Allows explicit control of evaluation order
-
-Example: `(2 + 3) * 4` evaluates to 20, not 14.
-
 ## Documentation
 
 Parentheses group expressions and control evaluation order.

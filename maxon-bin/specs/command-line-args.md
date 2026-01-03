@@ -7,45 +7,6 @@ category: functions
 
 # Command Line Arguments
 
-## Developer Notes
-
-Command line arguments are passed to `main()` as an Array of Strings when the signature includes `args Array of String`.
-
-### Main Function Signatures
-
-The `main()` function supports two signatures:
-
-1. `returns int` - No arguments
-2. `returns int` - Receives command line arguments
-
-### Implementation
-
-**Parser:**
-- `parseMainFunction()` in `parser.cpp` detects the `args Array of String` parameter
-- Sets `mainTakesArgs` flag when the signature includes args parameter
-
-**Codegen (codegen_mir.cpp):**
-- Checks `mainTakesArgs` to determine whether to pass arguments to `main()`
-- On Windows: calls `__get_command_args()` which returns `{ ptr data, i32 length }`
-- On Linux: TODO - currently passes null/zero (not yet implemented)
-
-**Runtime (runtime_windows.mir):**
-- `__get_command_args()` function implemented in `runtime_windows.mir`
-- Uses Windows APIs: `GetCommandLineW()`, `CommandLineToArgvW()`, `WideCharToMultiByte()`
-- Converts wide strings to UTF-8 encoded Maxon strings
-- Returns Array of String structs (16 bytes each for SSO layout)
-
-### Memory Layout
-
-The args array is a `Array of String` (dynamic Array of Strings):
-- Array struct: `{ ptr data, i32 length, i32 capacity }`
-- Each string element: 16 bytes (SSO format - see string-type.md)
-
-### Platform Support
-
-- **Windows**: Fully implemented
-- **Linux**: Not yet implemented (passes empty array)
-
 ## Documentation
 
 # Command Line Arguments

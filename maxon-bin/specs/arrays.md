@@ -4,51 +4,6 @@ status: stable
 keywords: [arrays, indexing, array literal, index access, index assignment, sized array]
 category: types
 ---
-
-## Developer Notes
-
-Arrays are contiguous sequences of elements of the same type. The implementation supports:
-
-1. **Mutable array literals** - `var arr = [1, 2, 3]` creates a stack-allocated mutable array
-2. **Immutable array literals** - `let arr = [1, 2, 3]` creates a read-only array (currently stack-allocated, future: data section)
-3. **Sized arrays** - `var arr = Array of N T` creates a fixed-size array (currently stack-allocated, future: heap for large arrays)
-4. **Index access** - `arr[i]` reads element at index i
-5. **Index assignment** - `arr[i] = value` writes to element at index i (mutable arrays only)
-
-Note: For dynamic arrays with push/pop/count operations, use the stdlib `Array` type instead.
-
-### AST Nodes
-
-- `ArrayLiteralExpr` - holds slice of element expressions
-- `IndexExpr` - base expression and index expression
-- `SizedArrayExpr` - size expression and element type name
-- `IndexAssign` - statement for `arr[i] = value`
-
-### IR Instructions
-
-- `alloca_sized` - allocates stack space for the array
-- `getelemptr` - calculates pointer to element: base + (index * element_size)
-- `store` - writes value to element pointer
-- `load` - reads value from element pointer
-
-### Codegen
-
-All elements are 8 bytes (i64, f64, or ptr). The `getelemptr` instruction generates:
-```text
-; Load base address to RAX
-lea rax, [rbp+base_offset]
-; Load index to RCX
-mov rcx, [rbp+index_offset]
-; Multiply index by 8 (element size)
-shl rcx, 3
-; Add to get element address
-add rax, rcx
-```
-
-### Optimizer Considerations
-
-Dead store elimination must preserve stores to array elements. The optimizer tracks `getelemptr` base pointers to ensure that if any element of an array is loaded, all stores to that array are preserved.
-
 ## Documentation
 
 # Arrays

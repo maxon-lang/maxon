@@ -4,35 +4,6 @@ status: stable
 keywords: function, closure, callback, higher-order, function pointer
 category: functions
 ---
-
-## Developer Notes
-
-First-class functions allow functions to be treated as values: stored in variables, passed as arguments, and returned from functions.
-
-**Implementation Details:**
-
-- AST: `FunctionTypeExpr` struct in `ast.zig` represents function type syntax
-- Type system: `FunctionTypeInfo` in `ast_to_ir_types.zig` tracks parameter and return types
-- Parser: `parseFunctionTypeExpr()` in `2-parser.zig` handles `(ParamTypes) returns ReturnType` syntax
-- IR: Uses existing `func_addr` opcode to get function address
-- Indirect calls: Uses existing `call_indirect` opcode
-
-**Function Type Syntax:**
-- Basic: `(int, string) returns bool`
-- Named params (optional): `(x int, y int) returns int`
-- Void return: `() returns void` or just `()`
-- Optional function: `((int) returns int) or nil`
-
-**Function References:**
-- Bare function name (no parentheses) creates a function reference
-- Variables with function types store function pointers
-- Calling through a function variable uses indirect call
-
-**Type Tracking:**
-- `convertIdentifierOrField` builds `function_type` from `FuncInfo` when referencing a function
-- `convertIndirectCall` handles calls through function variables
-- Closures now return typed `function_type` instead of untyped `ptr`
-
 ## Documentation
 
 # First-Class Functions

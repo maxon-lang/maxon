@@ -7,20 +7,6 @@ category: namespaces
 
 # Qualified Names
 
-## Developer Notes
-
-Qualified names use dot notation to call functions from specific namespaces: `namespace.function()`.
-
-Implementation:
-- Parsed in `Parser::parseFunctionCall()`
-- Syntax: `identifier '.' identifier '(' args ')'`
-- Functions stored with qualified names: `namespace.function`
-- Unqualified calls use suffix matching (`.functionName`)
-- Semantic analyzer validates ambiguous calls
-- Works across file boundaries using suffix matching
-
-The compiler allows both qualified (`math.add`) and unqualified (`add`) calls, using suffix matching to resolve unqualified names.
-
 ## Documentation
 
 Call functions from other namespaces using dot notation, or use unqualified names when unambiguous.

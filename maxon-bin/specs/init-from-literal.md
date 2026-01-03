@@ -7,22 +7,6 @@ category: type-system
 
 # InitableFrom*Literal Interfaces
 
-## Developer Notes
-
-The `InitableFromStringLiteral` and `InitableFromCharLiteral` interfaces allow user-defined types to be initialized from string and character literals using cast syntax.
-
-Implementation:
-- Interfaces defined in `stdlib/Interfaces.maxon`
-- Compiler checks if target type conforms to `InitableFromStringLiteral` or `InitableFromCharLiteral`
-- For `InitableFromStringLiteral`: compiler creates a `String` and passes it to `Type.init(value)`
-- For `InitableFromCharLiteral`: compiler creates a `__ManagedString` and passes it to `Type.init(managed)`
-
-Key points:
-- Uses cast syntax: `"hello" as MyType` or `'A' as MyCharType`
-- `InitableFromStringLiteral.init()` receives a `String` (following Swift's ExpressibleByStringLiteral pattern)
-- `InitableFromCharLiteral.init()` receives a `__ManagedString` containing the character's UTF-8 bytes
-- `String` itself is special-cased by the compiler (uses `Builtin.init` with `__ManagedString` directly)
-
 ## Documentation
 
 ### InitableFromStringLiteral

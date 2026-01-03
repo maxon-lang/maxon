@@ -7,23 +7,6 @@ category: diagnostics
 
 # Unknown Keyword Error
 
-## Developer Notes
-
-The parser reports an error when it encounters an unexpected identifier that isn't a valid keyword or statement.
-
-Implementation:
-- Detected in `Parser::parseStatement()`
-- When an identifier doesn't match known keywords (if, while, var, let, return, etc.)
-- And isn't followed by `=` (assignment) or `(` (function call)
-- Reports helpful error message suggesting what might be wrong
-- Compilation halts with parse error
-
-Common causes:
-- Typo in keyword name
-- Forgetting assignment operator
-- Forgetting function call parentheses
-- Using identifier as statement
-
 ## Documentation
 
 Using an undefined keyword or bare identifier as a statement causes a parse error.

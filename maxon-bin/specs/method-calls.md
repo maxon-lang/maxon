@@ -7,31 +7,6 @@ category: type-system
 
 # Method Calls
 
-## Developer Notes
-
-Method calls allow invoking functions defined on types. The compiler generates IR that passes the instance as an implicit first argument.
-
-**Method Resolution:**
-1. Convert base expression to get its type
-2. If struct type, look up `TypeName$methodName` in func_map
-3. Generate call with base value as first argument (self)
-4. Handle return type appropriately
-
-**IR Generation:**
-- Method `foo.bar(x)` becomes `call @Foo$bar(%foo_ptr, %x)`
-- Instance methods receive implicit `self` pointer as first parameter
-- Return values work identically to regular functions
-
-**Name Mangling:**
-- Instance methods: `TypeName$methodName`
-- Static methods: `TypeName$static$methodName` (future)
-
-**Supported Patterns:**
-- Simple: `obj.method()`
-- With args: `obj.method(arg1, arg2)`
-- Returning values: `let x = obj.getValue()`
-- Chained: `obj.method1().method2()` (when method1 returns compatible type)
-
 ## Documentation
 
 ### Calling Methods

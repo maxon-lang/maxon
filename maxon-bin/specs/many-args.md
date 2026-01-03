@@ -4,13 +4,6 @@ status: stable
 keywords: functions, arguments, calling-convention
 category: functions
 ---
-
-## Developer Notes
-
-Support for functions with more than 4 arguments. Windows x64 ABI passes the first 4
-integer/pointer arguments in RCX, RDX, R8, R9 (or XMM0-XMM3 for floats). Additional
-arguments are passed on the stack at [RSP + 32 + (i-4)*8] where 32 is the shadow space.
-
 ## Documentation
 
 # Functions with Many Arguments

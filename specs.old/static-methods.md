@@ -7,24 +7,6 @@ category: types
 
 # Static Methods
 
-## Developer Notes
-
-Static methods are functions defined inside type bodies that don't have an implicit `self` parameter. They belong to the type namespace but don't operate on instances.
-
-### Implementation Details
-
-- Parser: Checks for `static` keyword before `function` in method parsing
-- AST: `FunctionAST.isStaticMethod` flag distinguishes static from instance methods
-- Semantic Analyzer: Allows `Type.staticMethod()` calls for static methods
-- Codegen: Doesn't set `currentReceiverType` for static methods, preventing implicit self access
-
-### Key Files
-
-- `ast.h`: Added `isStaticMethod` field to `FunctionAST`
-- `parser/parser_decl.cpp`: Modified `parseMethodImpl` to handle `static` keyword
-- `semantic_analyzer/semantic_analyzer_expr.cpp`: Allow qualified calls for static methods
-- `codegen_mir/codegen_mir_function.cpp`: Skip self parameter handling for static methods
-
 ## Documentation
 
 Static methods are functions that belong to a type but don't have access to instance data. They are called using `TypeName.methodName()` syntax.

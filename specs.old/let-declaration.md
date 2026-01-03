@@ -4,28 +4,6 @@ status: stable
 keywords: let, immutable, constant, declaration
 category: declaration
 ---
-
-## Developer Notes
-
-Variables declared with `let` are immutable and cannot be reassigned.
-
-**Implementation Details:**
-- Keyword: `let` (lexer.cpp, TokenType::Let)
-- Parser: `parseVarDeclaration()` in parser.cpp (same as var)
-- AST node: `VarDeclAST` with `isConst` flag (ast.h)
-- Semantic analyzer enforces immutability
-- Stored in LLVM alloca (same as var at runtime)
-
-**Type System:**
-- Type inference works same as `var`
-- Explicit type annotation supported
-- Immutability is compile-time only (no runtime difference)
-
-**Semantic Analysis:**
-- Assignment to `let` variable is a semantic error
-- Checked during semantic analysis phase
-- Error message indicates immutability violation
-
 ## Documentation
 
 # Let Declaration (Immutable)

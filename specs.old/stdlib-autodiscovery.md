@@ -7,27 +7,6 @@ category: stdlib
 
 # Standard Library Autodiscovery
 
-## Developer Notes
-
-The compiler automatically discovers and links stdlib functions when they're called.
-
-Implementation:
-- When a function call is unresolved, compiler searches `stdlib/` directory
-- Searches recursively for `.maxon` files
-- Parses file to find matching function signature
-- Compiles and links the stdlib function
-- Handles transitive dependencies automatically
-- Example: `pow()` depends on `log()` and `exp()`, all auto-discovered
-
-Algorithm:
-1. Parse main file and identify undefined function calls
-2. Search stdlib for matching declarations
-3. Parse and compile those files
-4. Repeat for any new undefined calls (transitive)
-5. Link everything together
-
-This eliminates need for manual imports or linking.
-
 ## Documentation
 
 The standard library is automatically discovered and linked when you use its functions.

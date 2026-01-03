@@ -7,26 +7,6 @@ category: type-system
 
 # Interfaces
 
-## Developer Notes
-
-Interfaces define contracts that structs can conform to. Key implementation:
-
-- `interface` keyword parsed in `Parser::parseInterface()` (parser_decl.cpp)
-- Interface AST node `InterfaceDefAST` contains method signatures
-- Associated types declared with `uses`: `interface Foo uses Element`
-- Type conformance with `is` and type binding with `with`: `type Bar is Foo with int`
-- **Methods have implicit `self` parameter** - not declared in signatures
-- **Interface methods use `function InterfaceName.methodName(params)` syntax** to explicitly declare which interface a method implements
-- Non-interface methods use simple `function methodName(params)` syntax
-- Methods registered with qualified name `ReceiverType.methodName` in semantic analyzer
-- `Self` type in interface signatures replaced with conforming type during checking
-- Conformance validation in `SemanticAnalyzer::checkInterfaceConformance()`
-- **Partial implementation is an error** - all interface methods must be implemented
-- Methods called with method syntax `instance.method(args)`
-- Inside method bodies, bare identifiers resolve to type fields (implicit `self.`)
-
-The `Self` type is a placeholder that gets resolved to the concrete type during conformance checking. This enables interfaces to define methods that return or accept the conforming type.
-
 ## Documentation
 
 Interfaces define a set of methods that types can implement. They provide a form of interface-based polymorphism.

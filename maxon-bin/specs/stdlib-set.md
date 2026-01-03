@@ -7,35 +7,6 @@ category: stdlib
 
 # Stdlib Set Type
 
-## Developer Notes
-
-The stdlib `Set` type provides a generic hash set using open addressing with linear probing.
-
-**Implementation Details:**
-- `Set of T` is monomorphized to `Set$T` (e.g., `Set$int`)
-- Uses open addressing with linear probing for collision resolution
-- Automatic resize at 75% load factor
-- Elements must support `.hash()` and `.equals()` methods
-
-**Slot States:**
-- 0 = EMPTY (never used)
-- 1 = OCCUPIED (has valid element)
-- 2 = DELETED (tombstone for probing continuity)
-
-**Key Components:**
-- `stdlib/collections/Set.maxon` - The Set type definition
-- `elements` - Internal array for element storage
-- `states` - Internal byte array for slot states
-- `count` - Number of occupied entries
-- `capacity` - Total number of slots
-
-**Monomorphization:**
-When the compiler sees `Set of int`:
-1. Look up `Set` in type_map (from stdlib)
-2. Clone the type with `Element` → `int`
-3. Register as `Set$int`
-4. Each method gets mangled name: `Set$int$insert`
-
 ## Documentation
 
 ### Set Type

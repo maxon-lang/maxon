@@ -5,16 +5,6 @@ keywords: ownership, borrow, move
 category: semantics
 ---
 
-# Developer Notes
-
-Maxon uses inferred ownership and borrowing semantics:
-
-- If a function **reads** a parameter without modifying it, the caller **borrows** the value (retains ownership)
-- If a function **modifies** a parameter (assigns to it), the caller **transfers ownership** (moves the value)
-- Using a variable after it has been moved is a compile-time error
-
-The compiler performs a mutation analysis pass to determine which function parameters are modified, then tracks ownership state during semantic analysis.
-
 # Documentation
 
 ## Ownership Model

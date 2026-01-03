@@ -7,38 +7,6 @@ category: stdlib
 
 # File I/O
 
-## Developer Notes
-
-File I/O operations using the `File` type with static methods and `FileError` enum for error handling.
-
-### Implementation
-
-- **Runtime**: Windows API calls in `runtime_windows.mir` (`__read_file`, `__write_file`, `__write_file_binary`)
-- **Compiler**: Intrinsics in `codegen_mir_intrinsics.cpp` (`intrinsic_read_file`, `intrinsic_write_file`, `intrinsic_write_file_binary`)
-- **Declarations**: `intrinsics_defs.h` defines the function signatures
-- **Error Handling**: Uses `FileError` enum with `throws` for proper error propagation
-
-### Windows API Usage
-
-- `CreateFileA` for file creation/opening
-- `ReadFile` for reading file contents
-- `WriteFile` for writing data
-- `CloseHandle` for cleanup
-- Files are opened with `GENERIC_READ`/`GENERIC_WRITE` and `CREATE_ALWAYS`/`OPEN_EXISTING` as appropriate
-
-### String Handling
-
-- Text files use UTF-8 encoding
-- `File.readText` returns file contents as a string, or throws `FileError.notFound`
-- `File.writeText` accepts string content and converts to UTF-8 bytes
-- `File.writeBinary` accepts `Array of byte` for raw binary data
-
-### Memory Management
-
-- File contents are read into heap-allocated buffers
-- String conversion handles null-termination for C API compatibility
-- Memory tracking is supported for debugging allocations
-
 ## Documentation
 
 File I/O operations using the `File` type.

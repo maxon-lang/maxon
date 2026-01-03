@@ -7,29 +7,6 @@ category: optimization
 
 # Dead Code Elimination
 
-## Developer Notes
-
-Dead code elimination happens at two levels:
-
-### AST-Level Pruning (Compile-Time)
-Before generating MIR, the compiler builds a call graph starting from entry points
-(`main`, `_start`, `__ffi_dispatch`, and extern functions) and prunes any functions
-not reachable through the call graph.
-
-Implementation in `call_graph.cpp` and `compiler.cpp`:
-- `CallGraphBuilder` traverses function bodies to extract all call sites
-- Handles implicit calls: for-loop iterator methods, Equatable comparisons, string concat
-- Uses name aliasing to resolve unqualified names to qualified stdlib names
-- Filters `mergedProgram->functions` to only include reachable functions
-- This eliminates unused stdlib functions before MIR generation
-
-### LLVM DCE (Link-Time)
-LLVM's optimization passes provide additional dead code elimination:
-- When optimization is enabled (`-O1` or higher)
-- GlobalDCE removes any remaining unused functions
-- Eliminates unreachable basic blocks within functions
-- Reduces binary size and improves performance
-
 ## Documentation
 
 The compiler automatically removes functions that are never called (dead code).

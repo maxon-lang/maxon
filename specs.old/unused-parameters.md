@@ -7,20 +7,6 @@ category: diagnostics
 
 # Unused Parameter Detection
 
-## Developer Notes
-
-The semantic analyzer detects when function parameters are declared but never used in the function body.
-
-Implementation:
-- Checked in `SemanticAnalyzer::checkUnusedParameters()`
-- Iterates through all parameters of a function
-- Checks if parameter name appears in any expression
-- Reports error for unused parameters
-- Compilation fails if unused parameters found
-- Helps catch bugs and improve code quality
-
-This is a semantic error, not a warning. Functions must use all their parameters or not declare them.
-
 ## Documentation
 
 Maxon requires all function parameters to be used. Declaring unused parameters causes a compilation error.

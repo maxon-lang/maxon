@@ -7,41 +7,6 @@ category: operators
 
 # Bitwise Operators
 
-## Developer Notes
-
-Bitwise operators operate on integer values at the bit level.
-
-### Implementation
-
-- Lexer: `&`, `|`, `^`, `<<`, `>>` tokens in `lexer.cpp`
-- Parser: `parseBitwiseAnd()`, `parseBitwiseXor()`, `parseBitwiseOr()`, `parseShift()` in `parser_expr.cpp`
-- Codegen: `createAnd`, `createOr`, `createXor`, `createShl`, `createLShr` MIR instructions
-
-### Operator Precedence (lowest to highest)
-
-1. Logical OR (`or`)
-2. Logical AND (`and`)
-3. Bitwise OR (`|`)
-4. Bitwise XOR (`^`)
-5. Bitwise AND (`&`)
-6. Equality (`==`, `!=`)
-7. Comparison (`<`, `>`, `<=`, `>=`)
-8. Shift (`<<`, `>>`)
-9. Additive (`+`, `-`)
-10. Multiplicative (`*`, `/`, `mod`)
-11. Unary (`-`, `!`)
-
-### Internal Representation
-
-To distinguish bitwise from logical operators internally:
-- Bitwise AND: `'&'`
-- Bitwise OR: `'|'`
-- Bitwise XOR: `'^'`
-- Left shift: `'S'`
-- Right shift: `'H'`
-- Logical AND: `'A'`
-- Logical OR: `'O'`
-
 ## Documentation
 
 Maxon provides bitwise operators for manipulating individual bits of integer values.

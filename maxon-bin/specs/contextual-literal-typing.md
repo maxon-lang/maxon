@@ -7,31 +7,6 @@ category: type-system
 
 # Contextual Literal Typing
 
-## Developer Notes
-
-Contextual literal typing allows integer and byte literals to adapt to their expected type context, without implicit promotion between different type categories.
-
-Implementation:
-- Located in `SemanticAnalyzer::analyzeComparisonOperands()` in `semantic_analyzer_expr.cpp`
-- Applies to comparison operators: `==`, `!=`, `<`, `>`, `<=`, `>=`
-- Also applies to function argument type checking
-
-Rules:
-1. **Int literal in byte context**: An `int` literal (0-255) can match a `byte` type
-2. **Byte literal in int context**: A `byte` literal can match an `int` type
-3. **No int↔float adaptation**: Int literals cannot adapt to float; float literals cannot adapt to int
-4. **No implicit promotion**: Types must match exactly (after contextual adaptation)
-
-Key distinction from implicit promotion:
-- Contextual typing only affects LITERALS at compile time
-- Variables never change type - a `byte` variable cannot be compared to an `int` variable
-- Mixed int/float comparisons are compile errors, not implicit promotions
-
-AST nodes involved:
-- `NumberExprAST` - integer literals
-- `ByteExprAST` - byte literals
-- `FloatExprAST` - float literals
-
 ## Documentation
 
 Maxon uses contextual literal typing to allow integer and byte literals to adapt to their expected type context in comparisons and function calls.

@@ -7,15 +7,6 @@ category: expressions
 
 # Unary Negation
 
-## Developer Notes
-
-The unary minus operator negates a numeric value. It works on both integers and floats.
-
-**Implementation:**
-- Parser: `parseUnary()` handles `-` before `parsePrimary()`
-- AST: `UnaryExpr` with `UnaryOp.negate`
-- IR: Emits `-x` for integers, `-x` for floats
-
 ## Documentation
 
 ### Unary Negation

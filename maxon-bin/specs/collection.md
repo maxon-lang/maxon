@@ -4,50 +4,6 @@ status: stable
 keywords: collection, array, map, transform, functional, higher-order, get, set, count
 category: stdlib
 ---
-
-## Developer Notes
-
-The `Collection` interface provides indexed access and functional operations for ordered collections. Arrays implement Collection automatically.
-
-**Interface Definition** (`stdlib/interfaces.maxon`):
-```text
-export interface Collection uses Element extends Iterable
-    function count() returns int
-    function get(index int) returns Element or nil
-    function set(index int, value Element) returns Self
-    function map(transform (Element) Element) returns Self
-end 'Collection'
-```
-
-**Methods:**
-- `count()` - Returns the number of elements
-- `get(index)` - Returns element at index (nil if out of bounds)
-- `set(index, value)` - Sets element at index, returns self for chaining
-- `map(transform)` - Transforms each element using a function, returns new collection
-
-**map() Implementation:**
-- Method call `arr.map(fn)` is parsed and transformed to `map(arr, fn)` call
-- Semantic analysis in `semantic_analyzer_expr.cpp`:
-  - Validates first argument is an array type
-  - Validates second argument is a function type `(ElementType) ElementType`
-  - Returns same array type as result
-- Code generation in `codegen_mir_expr_array.cpp`:
-  - `generateMapIntrinsic()` creates inline loop
-  - Allocates result array via `malloc`
-  - Iterates source array, calls transform function, stores results
-  - Returns new array
-
-**Transform Function:**
-- Can be a named function reference: `arr.map(double)`
-- Can be a closure: `arr.map((x int) gives x * 2)`
-- Must accept one parameter matching array element type
-- Must return same type as input (Element -> Element)
-
-**Memory:**
-- Result array is heap-allocated
-- Caller is responsible for eventual cleanup
-- Source array is not modified
-
 ## Documentation
 
 # Collection

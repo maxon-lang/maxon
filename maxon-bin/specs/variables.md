@@ -4,11 +4,6 @@ status: stable
 keywords: variables, let, var
 category: declaration
 ---
-
-## Developer Notes
-
-Variable declarations using `let` (immutable) and `var` (mutable).
-
 ## Documentation
 
 # Variables

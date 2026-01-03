@@ -4,39 +4,6 @@ status: stable
 keywords: trunc, truncate, rounding, math, conversion
 category: math-intrinsic
 ---
-
-## Developer Notes
-
-The `trunc` function is implemented as an **LLVM intrinsic** for type conversion.
-
-**Implementation Details:**
-- Keyword category: `MathIntrinsic` (lexer.cpp:28)
-- Intrinsic kind: `MathIntrinsicKind::LLVMIntrinsic`
-- LLVM intrinsic ID: `llvm::Intrinsic::trunc`
-- Returns integer type (converts float → int)
-- Codegen: Generates LLVM trunc intrinsic + fptosi conversion
-
-**Type System:**
-- Input: `float`
-- Output: `int`
-- Truncates toward zero (removes fractional part)
-
-**Rounding Behavior:**
-- Always rounds toward zero
-- Equivalent to removing the decimal part
-- `trunc(3.9)` = 3
-- `trunc(-3.9)` = -3 (toward zero, not down)
-
-### Integer Division Optimization
-
-When `trunc()` is applied to integer division, the compiler optimizes the pattern:
-- Pattern: `trunc(int / int)`
-- MIR: `FPToSI(FDiv(SIToFP(a), SIToFP(b)))` -> `SDiv(a, b)`
-- Backend: Direct IDIV instruction (no float conversion overhead)
-- Implemented in: `IntegerDivisionOptimizationPass`
-
-This allows natural syntax `trunc(a/b)` to compile to efficient integer division.
-
 ## Documentation
 
 # trunc

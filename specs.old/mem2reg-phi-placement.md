@@ -7,35 +7,6 @@ category: optimization
 
 # Mem2Reg PHI Placement
 
-## Developer Notes
-
-The Mem2Reg (Memory to Register) pass promotes stack-allocated variables to SSA registers. This is one of the most important optimizations for performance.
-
-Implementation (optimizer.cpp):
-- Located in `Mem2RegPass::promoteAlloca()`
-- Uses the classic Cytron et al. algorithm for SSA construction
-- Key steps:
-  1. Identify promotable allocas (scalar types, only loads/stores)
-  2. Find definition blocks (blocks containing stores to the alloca)
-  3. Compute iterated dominance frontier for PHI placement
-  4. Insert PHI nodes at dominance frontier blocks
-  5. Rename variables using dominator tree traversal
-
-For single-definition variables (stores only in one block):
-- Simple direct replacement of loads with the stored value
-- No PHI nodes needed
-
-For multi-definition variables (stores in multiple blocks):
-- PHI nodes inserted at dominance frontier locations
-- Dominator tree traversal ensures correct reaching definitions
-- Handles if/else branches, loops, and nested control flow
-
-The algorithm correctly handles:
-- Variables assigned in different if/else branches
-- Variables modified in loops
-- Nested control flow with multiple assignments
-- Uses of variables after loop exit
-
 ## Documentation
 
 The Mem2Reg optimization eliminates stack allocations by promoting local variables to SSA registers. For variables with multiple definitions across different control flow paths, PHI nodes are inserted to merge values.

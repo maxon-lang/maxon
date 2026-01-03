@@ -42,7 +42,6 @@ When asked to plan a new feature, you will:
 
 4. **Create a Spec Outline**
    - Draft the spec file structure following the format in docs/SPECS.md
-   - Include developer notes section with implementation details
    - Propose initial test cases covering:
      - Basic functionality
      - Edge cases

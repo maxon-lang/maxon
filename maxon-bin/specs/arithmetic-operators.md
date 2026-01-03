@@ -7,23 +7,6 @@ category: operators
 
 # Arithmetic Operators
 
-## Developer Notes
-
-Maxon supports five binary arithmetic operators: `+`, `-`, `*`, `/`, `mod` (modulo).
-
-Implementation details:
-- Parsed in `Parser::parseBinaryExpression()` with precedence handling
-- `*`, `/`, `mod` have higher precedence than `+`, `-`
-- Left-associative evaluation
-- Represented by `BinaryExpr` AST node with operator token
-- Code generation in `CodeGenerator::generateBinaryExpr()`
-- Integer operations map to LLVM: `add`, `sub`, `mul`, `sdiv`, `srem`
-- Float operations map to LLVM: `fadd`, `fsub`, `fmul`, `fdiv` (no modulo)
-- Type checking ensures operands are compatible
-- Mixed int/float promotes int to float
-
-Unary `-` and `+` are handled separately (see unary-operators spec).
-
 ## Documentation
 
 Maxon supports standard arithmetic operations on numeric types.

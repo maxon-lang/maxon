@@ -7,63 +7,6 @@ category: types
 
 # Nil and Optional Types
 
-## Developer Notes
-
-Optional types allow functions to return either a value or `nil`, representing the absence of a value. Optionals can be used in:
-- Function return types: `returns int or nil`
-- Function parameters: `function bar(x int or nil)`
-- Type fields: `type Person { var age int or nil }`
-- Local variables: `var result int or nil`
-
-Implementation details:
-
-- **Type Syntax**: `T or nil` (e.g., `int or nil`, `string or nil`)
-- **Memory Layout**: Discriminated union `[tag: i8][padding][value: T]`
-  - Tag = 0: nil (value space unused)
-  - Tag = 1: has value
-  - Stack-allocated, no heap allocation or GC
-- **Nil Literal**: `nil` keyword (lexer: `KeywordCategory::Literal`)
-- **Type Safety**: Cannot use optional values without unwrapping
-- **Implicit Wrapping**: Non-nil values automatically wrapped when:
-  - Returning to optional return type
-  - Passing to optional parameter
-  - Assigning to optional type field
-
-### AST Nodes
-
-- `NilExprAST`: Represents the `nil` literal
-- `IfLetStmtAST`: Safe unwrapping with pattern matching
-- `ElseUnwrapStmtAST`: Unwrapping with mandatory default value
-
-### MIR Representation
-
-- `MIRTypeKind::Optional`: Optional type with `wrappedType` pointer
-- `createNilOptional()`: Creates optional with tag=0
-- `createSomeOptional()`: Creates optional with tag=1 and value
-
-### Semantic Analysis
-
-- `isOptionalType()`: Check if type string contains " or nil"
-- `unwrapOptionalType()`: Extract base type (removes " or nil")
-- `makeOptionalType()`: Wrap type as optional
-- Prevents nested optionals (`int or nil or nil` is rejected)
-- Requires unwrapping before arithmetic/comparison operations
-- Validates return path analysis for if-let statements
-- **Optional Parameters**: Function call analysis accepts nil, unwrapped, or optional values
-- **Optional Struct Fields**: Struct initialization analysis handles implicit wrapping
-
-### Code Generation
-
-Files:
-- `parser_decl.cpp`: Parsing of optional return types, parameters, and type fields
-- `codegen_mir_optional.cpp`: Optional type generation (if-let, else-unwrap, wrapping)
-- `codegen_mir_stmt.cpp`: Statement dispatchers for optional statements
-- `codegen_mir_expr.cpp`: Optional parameter wrapping in function calls
-- `codegen_mir_stmt_decl.cpp`: Optional field wrapping in type initialization
-- `codegen_mir_function.cpp`: Tracks parameter types for wrapping
-- `semantic_analyzer_stmt.cpp`: Type checking for optionals
-- `semantic_analyzer_expr.cpp`: Parameter and field type validation
-
 ## Documentation
 
 Optional types represent values that may or may not be present. Use `T or nil` to declare an optional type, where `T` is any type.

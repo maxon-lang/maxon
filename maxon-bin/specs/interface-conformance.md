@@ -7,27 +7,6 @@ category: type-system
 
 # Interface Conformance Checking
 
-## Developer Notes
-
-When a type declares conformance to an interface using `is InterfaceName`, the compiler must verify that all required interface methods are implemented by the type.
-
-**Conformance Rules:**
-1. Type must implement all methods declared in the interface
-2. Method signatures must match: name, parameter count, parameter types, return type
-3. Default implementations in interfaces are optional to override
-4. Interfaces can extend other interfaces - all inherited methods must also be implemented
-
-**Implementation:**
-1. Store interface declarations in `interface_map` during registration
-2. After registering each type, iterate through its conformances
-3. For each interface, verify all required methods exist in the type
-4. Report `E015` error with details if a required method is missing
-
-**Error Format:**
-```
-error E015: type 'TypeName' does not implement interface 'InterfaceName': missing method 'methodName'
-```
-
 ## Documentation
 
 ### Declaring Interface Conformance

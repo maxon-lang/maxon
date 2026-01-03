@@ -4,32 +4,6 @@ status: stable
 keywords: sqrt, square root, math
 category: math-intrinsic
 ---
-
-## Developer Notes
-
-The `sqrt` function is implemented as an **LLVM intrinsic** for optimal performance.
-
-**Implementation Details:**
-- Keyword category: `MathIntrinsic` (lexer.cpp:32)
-- Intrinsic kind: `MathIntrinsicKind::LLVMIntrinsic`
-- LLVM intrinsic ID: `llvm::Intrinsic::sqrt`
-- Codegen: Directly generates LLVM intrinsic call (codegen.cpp:1107-1113)
-- The intrinsic operates on LLVM double type
-
-**Type System:**
-- Input: `float` (Maxon's float maps to LLVM double)
-- Output: `float`
-- Participates in implicit int→float promotion
-
-**Performance:**
-- Compiled to native CPU instruction (sqrtsd on x86-64)
-- No function call overhead
-- Highly optimizable by LLVM
-
-**Related Functions:**
-- `pow` - general exponentiation (can compute nth roots)
-- `abs` - absolute value
-
 ## Documentation
 
 # sqrt

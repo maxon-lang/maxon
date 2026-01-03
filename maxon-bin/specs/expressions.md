@@ -7,24 +7,6 @@ category: expressions
 
 # Expressions
 
-## Developer Notes
-
-Expressions are combinations of values, operators, and function calls that evaluate to a result.
-
-Implementation:
-- Expressions parsed recursively with precedence handling
-- Binary expressions: `Parser::parseBinaryExpression()`
-- Unary expressions: `Parser::parseUnaryExpression()`
-- Primary expressions (literals, identifiers, function calls, parentheses): `Parser::parsePrimaryExpression()`
-- Type checking ensures operands are compatible
-- Result type determined by operands and operator
-
-Operator precedence (highest to lowest):
-1. Unary: `-`, `+`
-2. Multiplicative: `*`, `/`, `mod`
-3. Additive: `+`, `-`
-4. Comparison: `=`, `!=`, `<`, `>`, `<=`, `>=`
-
 ## Documentation
 
 Expressions combine values, operators, and function calls to compute results.

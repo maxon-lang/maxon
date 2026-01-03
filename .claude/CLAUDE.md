@@ -19,9 +19,8 @@ Maxon is a statically-typed programming language with a custom native x86-64 bac
 **All language features must have a spec file in `maxon-bin/specs/`** - this is the single source of truth.
 
 Each spec contains:
-1. **Developer Notes** - Implementation details for maintainers
-2. **Documentation** - User-facing docs
-3. **Tests** - Test cases (extracted to `maxon-bin/specs/fragments/`)
+1. **Documentation** - User-facing docs
+2. **Tests** - Test cases (extracted to `maxon-bin/specs/fragments/`)
 
 Workflow for new features:
 1. Create `maxon-bin/specs/feature-name.md` with frontmatter, notes, docs, and tests

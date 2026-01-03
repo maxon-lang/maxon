@@ -7,19 +7,6 @@ category: diagnostics
 
 # Missing Return Statement Error
 
-## Developer Notes
-
-The semantic analyzer ensures all functions that declare a return type have a return statement on all code paths.
-
-Implementation:
-- Checked in `SemanticAnalyzer::validateReturnPaths()`
-- Analyzes control flow to ensure every path returns
-- Checks if/else branches, while loops, etc.
-- Returns error if any path doesn't end with return
-- Prevents undefined behavior from missing returns
-
-The check is conservative - some unreachable code may still trigger the error if the analyzer can't prove it's unreachable.
-
 ## Documentation
 
 Functions that declare a return type must return a value on all code paths.

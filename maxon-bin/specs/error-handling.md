@@ -7,60 +7,6 @@ category: error-handling
 
 # Error Handling
 
-## Developer Notes
-
-Swift-style error handling with typed errors. Error unions (`T or E` where E conforms to Error) are distinct from optionals (`T or nil`).
-
-**Key Concepts:**
-- `Error` - Empty marker interface that only enums can conform to
-- `throws E` - Function signature annotation for throwing functions
-- `throw expr` - Throw an error enum value
-- `try expr` - Propagate error to caller
-- `do-catch` - Block-level error handling with pattern matching
-
-**Tokens Added:**
-- `throws`, `throw`, `try`, `catch`, `do`
-
-**AST Nodes:**
-- `ErrorUnionTypeExpr` - For `T or E` where E conforms to Error
-- `ThrowStmt` - For `throw expr` statements
-- `TryExpr` with `TryMode` (.propagate)
-- `DoCatchStmt` and `CatchClause` for do-catch blocks
-- `EnumDecl` now supports `conformances` field for interface conformance
-
-**Function/Method Changes:**
-- `FunctionDecl`, `MethodDecl`, `InterfaceMethod` have `throws_type: ?[]const u8`
-
-**Type System:**
-- `ErrorUnionInfo` holds success type and error enum type
-- `error_union_type` variant in `ValueType`
-- `EnumTypeInfo` has `is_error` flag for Error-conforming enums
-
-**Memory Layout:**
-Same discriminated union pattern as optionals:
-```
-+--------+--------------------------------+
-| tag(8) | value OR error ordinal         |
-+--------+--------------------------------+
-   0=ok    success value
-   1=err   enum ordinal (8 bytes)
-```
-
-**Semantic Rules:**
-- Only enums conforming to Error can be thrown (E023 for struct attempts)
-- `throw` only valid in functions with `throws` annotation
-- `try` requires the called function to throw
-- Unhandled throwing calls are compile errors
-
-**Implementation Status:**
-- [x] Lexer tokens
-- [x] AST nodes
-- [x] Parser support (including enum conformance)
-- [x] Error interface in stdlib
-- [x] IR generation for throw/try/catch
-- [x] Code generation
-- [x] Enum-only Error enforcement
-
 ## Documentation
 
 ### Defining Error Types

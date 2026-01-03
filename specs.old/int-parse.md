@@ -7,32 +7,6 @@ category: types
 
 # Int Parse
 
-## Developer Notes
-
-The `int.parse()` static method converts a string to an integer, returning an optional `int or nil` to handle invalid input safely.
-
-### Implementation Details
-
-- **Syntax**: `int.parse(str)` where `str` is a `string`
-- **Returns**: `int or nil` - the parsed integer or `nil` if parsing fails
-- **Valid input**: Optional leading `-` or `+`, followed by one or more digits
-- **Invalid input**: Returns `nil` for empty strings, non-numeric characters, overflow
-
-### Key Files
-
-- `semantic_analyzer.cpp`: Register `int.parse` as a static method with `isStaticMethod = true`
-- `codegen_mir/codegen_mir_expr.cpp`: Handle `int.parse` call, invoke runtime function
-- `maxon-runtime/runtime_windows.mir`: Implement `__int_parse` runtime function
-
-### Runtime Function
-
-The `__int_parse` function signature:
-```
-%optional_int @__int_parse(ptr %string_ptr)
-```
-
-Returns an optional int (discriminated union with tag + value).
-
 ## Documentation
 
 The `int.parse()` static method converts a string to an integer. Since parsing can fail (e.g., for non-numeric strings), it returns an optional `int or nil`.

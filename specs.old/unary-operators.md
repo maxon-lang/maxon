@@ -7,22 +7,6 @@ category: operators
 
 # Unary Operators
 
-## Developer Notes
-
-Unary operators operate on a single operand. Currently implemented: unary `-` (negate) and unary `+` (identity).
-
-Implementation:
-- Parsed in `Parser::parseUnaryExpression()`
-- Represented by `UnaryExpr` AST node
-- Higher precedence than binary operators
-- Unary `-` negates numeric values (int or float)
-- Unary `+` is identity (no-op, returns operand unchanged)
-- Code generation in `CodeGenerator::generateUnaryExpr()`
-- Integer negation uses LLVM `sub i32 0, %value`
-- Float negation uses LLVM `fneg double %value`
-
-Future: Unary `!` (logical NOT) for bool values.
-
 ## Documentation
 
 Unary operators operate on a single value.

@@ -7,38 +7,6 @@ category: infrastructure
 
 # Export Keyword
 
-## Developer Notes
-
-The `export` keyword controls symbol visibility across module boundaries. When compiling multiple files together, only exported symbols from earlier modules are visible to later modules.
-
-**Key Components:**
-
-1. Parser parses `export` before `function`, `type`, and `interface`
-2. AST stores `is_export: bool` on `FunctionDecl`, `TypeDecl`, `MethodDecl`, `InterfaceDecl`
-3. IR stores `is_exported: bool` on `Function`
-4. During module merge, only exported functions are included (via `MergeOptions.exports_only`)
-
-**Export Rules:**
-- Functions, types, and interfaces can be exported
-- Methods within types can be independently exported
-- Non-exported symbols are only visible within the same module
-- User code (main module) doesn't need exports - all its symbols are included
-
-**Usage Pattern:**
-```maxon
-export function helper() returns int
-    return 42
-end 'helper'
-
-export type Counter
-    var value int
-
-    export function increment()
-        value = value + 1
-    end 'increment'
-end 'Counter'
-```
-
 ## Documentation
 
 ### Export Keyword

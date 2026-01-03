@@ -3,20 +3,6 @@ feature: managed-string-internals
 category: internals
 status: stable
 ---
-
-## Developer Notes
-
-This spec covers internal tests for the managed string system. These tests verify:
-- SSO vs heap allocation thresholds
-- Reference counting behavior
-- Scope-based cleanup
-- Memory tracking accuracy
-
-The managed string system uses:
-- 15-byte SSO threshold (strings <= 15 bytes stored inline)
-- 8-byte header for heap strings (refcount + data_size)
-- Automatic cleanup at scope exit
-
 ## Documentation
 
 ### String Memory Management

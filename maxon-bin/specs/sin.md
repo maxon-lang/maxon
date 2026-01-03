@@ -4,24 +4,6 @@ status: stable
 keywords: sin, sine, trigonometry, math, radians
 category: math-intrinsic
 ---
-
-## Developer Notes
-
-**Defined in:** `stdlib/Math.maxon`
-
-The `sin` function is implemented as a **static function** in the `Math` type.
-
-**Implementation Details:**
-- Implemented using Taylor series expansion for sine
-- Accurate for typical use cases
-- Input: `float` (Maxon's float maps to LLVM double)
-- Output: `float`
-- Participates in implicit int→float promotion
-
-**Related Functions:**
-- `Math.cos` - cosine function
-- `Math.tan` - tangent function
-
 ## Documentation
 
 # sin

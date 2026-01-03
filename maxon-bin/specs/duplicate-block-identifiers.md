@@ -4,23 +4,6 @@ status: stable
 keywords: block, identifier, error, validation, duplicate
 category: error-handling
 ---
-
-## Developer Notes
-
-Duplicate block identifier validation ensures that each block in nested structures has a unique identifier to prevent shadowing and improve code clarity.
-
-**Implementation Details:**
-- Validation in `SemanticAnalyzer` (semantic_analyzer.cpp and semantic_analyzer.h)
-- Block ID tracking via `blockIdStack` (vector of sets)
-- Validation occurs in `declareBlockId()` method
-- Checked during analysis of `IfStmtAST`, `WhileStmtAST`, and `ForStmtAST` nodes
-
-**Behavior:**
-- Each block scope maintains a set of active block identifiers
-- When a block is encountered, its identifier is checked against the current scope
-- Error is raised if identifier already exists in the same scope
-- Block scopes are managed independently per function
-
 ## Documentation
 
 # Duplicate Block Identifiers

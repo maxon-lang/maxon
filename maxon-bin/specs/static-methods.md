@@ -7,21 +7,6 @@ category: types
 
 # Static Methods
 
-## Developer Notes
-
-Static methods are methods on a type that don't receive an implicit `self` parameter. They're useful for constructors, factory functions, and utility methods that don't need instance data.
-
-**Implementation:**
-- Parser: Checks for `static` keyword before `function` in type body
-- AST: `MethodDecl.is_static` flag
-- IR: Static methods don't get implicit `self` parameter
-- Mangling: `TypeName$methodName` (same as instance methods)
-
-**Key difference from instance methods:**
-- No implicit `self` parameter
-- Cannot access `self` or instance fields
-- Called as `TypeName.method()` from outside the type
-
 ## Documentation
 
 ### Static Methods

@@ -7,20 +7,6 @@ category: types
 
 # Bool Type
 
-## Developer Notes
-
-The `bool` type represents boolean values (true/false). Implementation details:
-
-- Represented as LLVM `i1` type
-- Two literal values: `true` and `false` (keywords)
-- Used in condition expressions for `if` and `while`
-- Can be function parameters and return values
-- Implicitly converted to int when needed (true=1, false=0)
-- Comparison operators return bool
-- Logical operators (when implemented) will operate on bool
-
-The lexer recognizes `true` and `false` as `TokenType::True` and `TokenType::False`. The parser creates `BoolLiteral` AST nodes.
-
 ## Documentation
 
 The `bool` type stores boolean values - either `true` or `false`.

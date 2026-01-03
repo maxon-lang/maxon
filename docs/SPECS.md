@@ -7,9 +7,8 @@ This document describes the format for Maxon language specification files.
 Each language feature must have a spec file in the `specs/` directory that serves as the single source of truth. Spec files contain:
 
 1. **YAML Frontmatter** - Metadata about the feature
-2. **Developer Notes** - Implementation details for maintainers
-3. **Documentation** - User-facing documentation (extracted to HTML)
-4. **Tests** - Test cases (extracted to language-tests/fragments/)
+2. **Documentation** - User-facing documentation (extracted to HTML)
+3. **Tests** - Test cases (extracted to language-tests/fragments/)
 
 ## Spec File Structure
 
@@ -21,9 +20,6 @@ keywords: [keyword1, keyword2, ...]
 category: category-name
 ---
 
-## Developer Notes
-
-Implementation details, AST nodes, codegen notes, etc.
 
 ## Documentation
 
@@ -171,10 +167,6 @@ status: stable
 keywords: [abs, absolute value, math]
 category: math-intrinsic
 ---
-
-## Developer Notes
-
-The `abs` function is implemented as an LLVM intrinsic.
 
 ## Documentation
 

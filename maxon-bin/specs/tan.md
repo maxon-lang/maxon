@@ -4,24 +4,6 @@ status: stable
 keywords: tan, tangent, trigonometry, math, radians
 category: math-intrinsic
 ---
-
-## Developer Notes
-
-**Defined in:** `stdlib/Math.maxon`
-
-The `tan` function is implemented as a **static function** in the `Math` type.
-
-**Implementation Details:**
-- Implemented as `Math.sin(x) / Math.cos(x)`
-- Accurate for typical use cases
-- Input: `float` (Maxon's float maps to LLVM double)
-- Output: `float`
-- Participates in implicit int→float promotion
-
-**Related Functions:**
-- `Math.sin` - sine function
-- `Math.cos` - cosine function
-
 ## Documentation
 
 # tan

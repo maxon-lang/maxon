@@ -7,20 +7,6 @@ category: optimization
 
 # Constant Folding
 
-## Developer Notes
-
-LLVM's optimizer performs constant folding - evaluating expressions with constant operands at compile time.
-
-Implementation:
-- Not implemented by Maxon - handled by LLVM optimization passes
-- Arithmetic with literals: `1 + 2` → `3`
-- Complex expressions: `(1+2+4)*(4+(1+2))` → `49`
-- Reduces runtime computation
-- Works with int, float, and bool operations
-- Enabled at `-O1` or higher optimization levels
-
-The compiler generates the full expression tree, but LLVM's ConstantFolding and InstCombine passes simplify it.
-
 ## Documentation
 
 The compiler evaluates constant expressions at compile time, improving performance.

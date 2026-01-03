@@ -20,7 +20,6 @@ For every new feature, you MUST follow the spec-driven development process:
 
 1. **Create or Update Spec File First**
    - Create `maxon-bin/specs/feature-name.md` with proper frontmatter
-   - Include Developer Notes explaining implementation approach
    - Write user-facing Documentation
    - Define comprehensive test cases in the Tests section
    - Never edit files in `maxon-bin/specs/fragments/` - these are auto-generated

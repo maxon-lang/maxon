@@ -4,28 +4,6 @@ status: stable
 keywords: abs, absolute value, math
 category: math-intrinsic
 ---
-
-## Developer Notes
-
-The `abs` function is implemented as an **LLVM intrinsic** for optimal performance.
-
-**Implementation Details:**
-- Keyword category: `MathIntrinsic` (lexer.cpp:35)
-- Intrinsic kind: `MathIntrinsicKind::LLVMIntrinsic`
-- LLVM intrinsic ID: `llvm::Intrinsic::fabs` (for float)
-- Codegen: Directly generates LLVM intrinsic call (codegen.cpp:1107-1113)
-- Overloaded for both int and float types
-
-**Type System:**
-- Float version: `abs(x float) float`
-- Int version: Not yet implemented (will be added in future)
-- Currently only accepts float inputs
-
-**Performance:**
-- Float version compiled to native CPU instruction
-- Int version optimized by LLVM to bitwise operations
-- No function call overhead
-
 ## Documentation
 
 # abs

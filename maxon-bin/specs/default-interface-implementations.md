@@ -7,46 +7,6 @@ category: type-system
 
 # Default Interface Implementations
 
-## Developer Notes
-
-Default interface implementations allow interfaces to provide a default body for methods that conforming types can inherit if they don't provide their own implementation.
-
-### Implementation Details
-
-**Parser** (`parser/parser_decl.cpp`):
-- `parseInterface()` detects default implementations by checking if a function body follows the signature
-- If next token after return type is not `function` or `end`, parses body using `parseStatementWithRecovery()`
-- Stores body in `InterfaceMethodSignature::defaultBody`
-- Requires matching `end 'methodName'` block identifier
-
-**AST** (`ast.h`):
-- `InterfaceMethodSignature` has `hasDefaultImplementation` bool and `defaultBody` vector
-- `defaultBody` stores the AST statements of the default implementation
-
-**Semantic Analyzer** (`semantic_analyzer.cpp`, `semantic_analyzer.h`):
-- `InterfaceMethodInfo` stores `hasDefaultImplementation` and pointer to `defaultBody`
-- `checkInterfaceConformance()` checks if method is missing from type
-- If method missing AND interface has default, synthesizes a `FunctionInfo` entry
-- Synthesized entry has `isSynthesizedDefault = true`, `defaultBody` pointer, and `typeSubstitutions`
-- Type substitutions map `Self` to concrete type and associated types to their bindings
-
-**Code Generation** (`codegen_mir.cpp`, `codegen_mir_function.cpp`):
-- `synthesizedMethods` vector stores synthesized method info from semantic analyzer
-- During declaration pass, synthesized methods are declared as regular functions
-- During body generation pass, `generateSynthesizedMethod()` generates code from the default body
-- Uses `currentTypeBindings` for type substitution during codegen
-
-### Type Substitution
-
-When generating code for a synthesized default method:
-1. `Self` is replaced with the concrete type
-2. Associated types (e.g., `Element`) are replaced with their bound types
-3. Method calls on `self` resolve to the type's methods
-
-### Override Behavior
-
-If a type provides its own implementation of a method, the default is NOT used. The type's explicit implementation takes precedence.
-
 ## Documentation
 
 ### Default Method Syntax

@@ -7,19 +7,6 @@ category: expressions
 
 # Literals
 
-## Developer Notes
-
-Literals are constant values written directly in source code.
-
-Implementation:
-- Integer literals: Parsed in `Lexer::readNumber()`, represented as `IntLiteral` AST node
-- Float literals: Must contain `.`, parsed as `FloatLiteral`
-- Character literals: Single quotes `'A'`, parsed as `CharLiteral`
-- String literals: Double quotes `"text"`, stored as global constants
-- Boolean literals: `true` and `false` keywords, represented as `BoolLiteral`
-
-Each literal type creates the appropriate LLVM constant value during code generation.
-
 ## Documentation
 
 Literals are constant values used directly in code.

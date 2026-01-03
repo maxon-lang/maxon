@@ -5,12 +5,6 @@ keywords: struct, nested, type-size, memory
 category: semantics
 ---
 
-# Developer Notes
-
-Tests for Challenge 2 from DEVELOPMENT_CHALLENGES.md: Type Size Computation Ordering.
-
-Struct sizes must be computed after all field types are fully defined. This is critical for nested structs and recursive type references.
-
 # Documentation
 
 ## Nested Structs

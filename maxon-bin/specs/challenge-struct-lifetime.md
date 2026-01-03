@@ -5,12 +5,6 @@ keywords: struct, lifetime, return, stack, heap
 category: semantics
 ---
 
-# Developer Notes
-
-Tests for Challenge 3 from DEVELOPMENT_CHALLENGES.md: Stack vs Heap Lifetime.
-
-Data created in one function must remain valid when passed to or returned to another function.
-
 # Documentation
 
 ## Struct Lifetime

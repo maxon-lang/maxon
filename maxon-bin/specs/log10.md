@@ -4,42 +4,6 @@ status: stable
 keywords: log10, logarithm, base-10, math
 category: stdlib
 ---
-
-## Developer Notes
-
-The `log10` function is implemented as a **stdlib function** using the natural logarithm.
-
-**Implementation Details:**
-- Category: `stdlib` (stdlib/Math.maxon)
-- Implementation: Uses the identity `log10(x) = log(x) / log(10)`
-- Depends on: `Math.log` function
-
-**Type System:**
-- Input: `float`
-- Output: `float`
-- Participates in implicit int→float promotion
-
-**Algorithm:**
-- Uses the mathematical identity: log₁₀(x) = ln(x) / ln(10)
-- Relies on the existing `log` (natural logarithm) implementation
-- ln(10) ≈ 2.302585092994046
-
-**Performance:**
-- Performance depends on the `log` function implementation
-- Single division operation after computing natural logarithm
-- Handles special cases (zero, negative, one) directly
-
-**Special Cases (IEEE 754 / Zig Reference):**
-- `log10(+inf)` = `+inf`
-- `log10(0)` = `-inf`
-- `log10(x)` = `nan` if x < 0
-- `log10(nan)` = `nan`
-
-**Related Functions:**
-- `log` - natural logarithm (base e)
-- `exp` - exponential function (e^x)
-- `pow` - general exponentiation
-
 ## Documentation
 
 # log10

@@ -7,53 +7,6 @@ category: strings
 
 # String Interpolation
 
-## Developer Notes
-
-String interpolation allows embedding expressions within string literals using `{expr}` syntax. The compiler converts each embedded expression to a string and concatenates all parts into the final result.
-
-### Implementation
-
-**Lexer** (`lexer.cpp`):
-- `readStringLiteral()` detects unescaped `{` in strings
-- Returns `STRING_INTERP_START`, `STRING_INTERP_MIDDLE`, or `STRING_INTERP_END` tokens
-- Tracks nesting depth for braces, parens, brackets to handle complex expressions
-- Format specifiers parsed after `:` at depth 0
-
-**AST** (`ast.h`):
-- `InterpolatedStringPart` struct with `isExpression`, `literalValue`, `expr`, `formatSpec`
-- `InterpolatedStringExprAST` contains vector of parts
-
-**Parser** (`parser_expr.cpp`):
-- `parseInterpolatedString()` builds AST from token sequence
-- Handles alternating literal and expression parts
-
-**Semantic Analyzer** (`semantic_analyzer_expr.cpp`):
-- Type-checks each embedded expression
-- Verifies expressions implement `Stringable` interface or are built-in types
-- String `+` concatenation disabled with helpful error message
-
-**Code Generation** (`codegen_mir_expr_string.cpp`):
-- `generateInterpolatedString()` converts expressions via `toString()`
-- Built-in type intrinsics: `__int_toString`, `__float_toString`, `__bool_toString`
-- Enum types: int-backed/simple enums use `__int_toString`; string-backed enums generate a switch on tag to select the raw string value
-- When no format spec provided, passes `nil` to `toString()` (not empty string)
-- When format spec is provided (e.g., `{value:fmt}`), passes format string to `toString()`
-- Concatenates all parts into single heap-allocated result
-- Intermediate results tracked for cleanup at scope exit
-
-### Memory Management
-
-- Each interpolation creates a heap-allocated string result
-- Intermediate concat results are tracked in `scopeStack.heapAllocatedStrings`
-- Mutable string variables are tracked in `scopeStack.stringVariables` for cleanup
-- At scope exit, cleanup reads the *current* buffer pointer from the variable (handles reassignment)
-
-### Escape Sequences
-
-- `\{` - Literal open brace (stored internally as `\x01{`)
-- `\}` - Literal close brace (stored internally as `\x01}`)
-- Standard escape sequences (`\n`, `\t`, `\\`, `\"`) work normally
-
 ## Documentation
 
 String interpolation allows embedding expressions directly within string literals, automatically converting values to their string representation.

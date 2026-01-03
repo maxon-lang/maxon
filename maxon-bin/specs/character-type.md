@@ -7,47 +7,6 @@ category: types
 
 # Character Type
 
-## Developer Notes
-
-`character` type representing an Extended Grapheme Cluster (EGC) — a user-perceived character.
-
-### Memory Layout
-
-**Character Type (16 bytes):**
-
-Uses identical SSO layout as `string`:
-
-Small Character (MSB of byte 15 = 0):
-- bytes 0-14: UTF-8 data (inline)
-- byte 15: remaining capacity (15 - length)
-
-Large Character (MSB of byte 15 = 1):
-- bytes 0-7: pointer to heap buffer
-- bytes 8-11: count (length in bytes)
-- bytes 12-15: capacity | 0x80000000
-
-### Implementation
-
-- Represented as LLVM `{i64, i64}` type (same as `string`)
-- Character literals enclosed in single quotes: `'A'`, `'é'`, `'👨‍👩‍👧‍👦'`
-- Most characters fit in SSO (15 bytes covers vast majority of grapheme clusters)
-- Complex emoji sequences may require heap allocation
-- Lexer handles escape sequences in `readCharLiteral()`
-- Used for string iteration (iterating a `string` yields `character` values)
-
-Common escape sequences: `\n` (newline), `\t` (tab), `\\` (backslash), `\'` (single quote).
-
-### Character vs Byte
-
-The `character` type is NOT an alias for `byte`. UTF-8 characters can span multiple bytes:
-- `'A'` = 1 byte (ASCII)
-- `'é'` = 2 bytes (Latin Extended)
-- `'中'` = 3 bytes (CJK)
-- `'🎉'` = 4 bytes (Emoji)
-- `'👨‍👩‍👧‍👦'` = 25 bytes (Family emoji with ZWJ sequences)
-
-Use `byte` for raw byte access when working with binary data or UTF-8 code units.
-
 ## Documentation
 
 The `character` type represents an Extended Grapheme Cluster (EGC) — what users perceive as a single character.

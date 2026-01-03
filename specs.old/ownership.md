@@ -7,23 +7,6 @@ category: semantic-analysis
 
 # Compile-Time Ownership System
 
-## Developer Notes
-
-The ownership system tracks which variables own their values and prevents use after ownership transfer.
-
-Implementation:
-- `OwnershipState` enum: `Owned` or `Moved`
-- `MoveInfo` struct tracks where ownership was transferred
-- Mutation analysis pass runs before semantic analysis Pass 3
-- When a variable is passed to a function that mutates its parameter, ownership transfers
-- Using a variable after ownership transfer is a compile-time error
-
-Key files:
-- `semantic_analyzer.h` - OwnershipState, MoveInfo, ParameterMutationInfo
-- `semantic_analyzer_mutation.cpp` - Mutation analysis pass
-- `semantic_analyzer_expr.cpp` - Ownership checks on variable use and function calls
-- `semantic_analyzer_stmt.cpp` - Ownership checks on assignment
-
 ## Documentation
 
 Maxon uses compile-time ownership tracking to prevent use-after-move errors.

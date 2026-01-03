@@ -4,37 +4,6 @@ status: stable
 keywords: while, loop, iteration, control flow
 category: control-flow
 ---
-
-## Developer Notes
-
-While loops are the primary iteration contype in Maxon.
-
-**Implementation Details:**
-- Keyword: `while` (lexer.cpp, TokenType::While)
-- Parser: `parseWhile()` in parser.cpp
-- AST node: `WhileAST` (ast.h)
-- Requires block identifier for multi-line body
-- Codegen: Creates basic blocks for condition, body, and continuation
-
-**Syntax:**
-```
-while <condition> 'identifier'
-    <statements>
-end 'identifier'
-```
-
-**Control Flow:**
-- Condition evaluated before each iteration
-- Body executed if condition is true
-- Supports `break` to exit loop
-- Supports `continue` to skip to next iteration
-
-**Code Generation:**
-- Creates three basic blocks: whilecond, whilebody, whilecont
-- Condition block contains comparison and conditional branch
-- Body block contains loop statements
-- Continuation block is the exit point
-
 ## Documentation
 
 # While Loops

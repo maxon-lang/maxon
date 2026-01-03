@@ -7,22 +7,6 @@ category: stdlib
 
 # Directory Operations
 
-## Developer Notes
-
-Directory operations using the `Directory` type with static methods and `DirectoryError` enum for error handling.
-
-### Implementation
-
-- **Runtime**: Windows API calls in `runtime_windows.mir` (`__list_directory`, `__is_directory`)
-- **Compiler**: Intrinsics in `codegen_mir_intrinsics.cpp`
-- **Error Handling**: Uses `DirectoryError` enum with `throws` for proper error propagation
-
-### Windows API Usage
-
-- `FindFirstFileA` / `FindNextFileA` for directory listing
-- `GetFileAttributesA` for checking directory status
-- Returns array of filenames excluding `.` and `..`
-
 ## Documentation
 
 Directory operations using the `Directory` type.

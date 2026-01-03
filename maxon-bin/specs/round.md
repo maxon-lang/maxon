@@ -4,28 +4,6 @@ status: stable
 keywords: round, rounding, math, conversion
 category: math-intrinsic
 ---
-
-## Developer Notes
-
-The `round` function is implemented as an **LLVM intrinsic** for type conversion.
-
-**Implementation Details:**
-- Keyword category: `MathIntrinsic` (lexer.cpp:29)
-- Intrinsic kind: `MathIntrinsicKind::LLVMIntrinsic`
-- LLVM intrinsic ID: `llvm::Intrinsic::round`
-- Returns integer type (converts float → int)
-- Codegen: Generates LLVM round intrinsic + fptosi conversion
-
-**Type System:**
-- Input: `float`
-- Output: `int`
-- Rounds to nearest integer value
-
-**Rounding Behavior:**
-- Rounds to nearest integer
-- Halfway cases (e.g., 2.5) round to nearest even number
-- Negative numbers round away from zero for exact halfway cases
-
 ## Documentation
 
 # round

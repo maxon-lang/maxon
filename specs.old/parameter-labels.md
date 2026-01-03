@@ -7,35 +7,6 @@ category: core
 
 # Named Arguments
 
-## Developer Notes
-
-Maxon uses named arguments:
-- All parameters are positional by default
-- Callers can optionally name any argument using `name = value` syntax
-- Parameters with default values can ONLY be provided via named arguments (not positionally)
-- Positional arguments must come before named arguments
-- Named arguments can appear in any order
-
-Implementation:
-- `FunctionParameter` has `name`, `type`, and `defaultValue` fields
-- `CallArgument` has `label` field for named arguments at call sites
-- Parser parses parameters as `name type [= default]`
-- Call sites use `name = value` syntax for named arguments
-- Semantic validation in `semantic_analyzer_expr.cpp`:
-  1. Processes positional args first, matching required params in order
-  2. Skips params with defaults when matching positional args
-  3. Named args can match any param by name (any order)
-  4. Validates no positional args after named args
-  5. Tracks filled params and validates all required params are provided
-- `CallExprAST.argToParamMapping` maps call-site args to parameter positions for codegen reordering
-
-Key rules:
-1. **Positional by default**: `function foo(x int)` allows `foo(5)` at call site
-2. **Optional naming**: Caller can use `foo(x = 5)` if desired
-3. **Default params are named-only**: Parameters with defaults cannot be passed positionally
-4. **Positional before named**: `foo(1, x = 2)` is valid, `foo(x = 2, 1)` is an error
-5. **Named args any order**: `foo(b = 2, a = 1)` is valid even if `a` is declared first
-
 ## Documentation
 
 Named arguments improve code clarity at call sites by explicitly naming parameter values.

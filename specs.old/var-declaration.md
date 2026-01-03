@@ -4,27 +4,6 @@ status: stable
 keywords: var, variable, declaration, mutable
 category: declaration
 ---
-
-## Developer Notes
-
-Variables declared with `var` are mutable and can be reassigned.
-
-**Implementation Details:**
-- Keyword: `var` (lexer.cpp, TokenType::Var)
-- Parser: `parseVarDeclaration()` in parser.cpp
-- AST node: `VarDeclAST` (ast.h)
-- Type inference from initializer expression
-- Stored in LLVM alloca (stack variable)
-
-**Type System:**
-- Type can only be inferred: `var x = 5` (infers int)
-- All variables must be initialized
-
-**Code Generation:**
-- Creates alloca instruction for stack storage
-- Stores initial value
-- Variable remains mutable (can be reassigned)
-
 ## Documentation
 
 # Variable Declaration (var)

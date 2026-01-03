@@ -4,28 +4,6 @@ status: stable
 keywords: ceil, ceiling, rounding, math, conversion
 category: math-intrinsic
 ---
-
-## Developer Notes
-
-The `ceil` function is implemented as an **LLVM intrinsic** for type conversion.
-
-**Implementation Details:**
-- Keyword category: `MathIntrinsic` (lexer.cpp:31)
-- Intrinsic kind: `MathIntrinsicKind::LLVMIntrinsic`
-- LLVM intrinsic ID: `llvm::Intrinsic::ceil`
-- Returns integer type (converts float → int)
-- Codegen: Generates LLVM ceil intrinsic + fptosi conversion
-
-**Type System:**
-- Input: `float`
-- Output: `int`
-- Rounds up toward positive infinity
-
-**Rounding Behavior:**
-- Always rounds up (toward positive infinity)
-- `ceil(3.1)` = 4
-- `ceil(-3.9)` = -3 (rounds up, not toward zero)
-
 ## Documentation
 
 # ceil

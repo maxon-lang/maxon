@@ -7,25 +7,6 @@ category: stdlib
 
 # Exponential Function
 
-## Developer Notes
-
-The `exp()` function calculates e raised to a power (e^x) where e is Euler's number.
-
-Implementation:
-- Defined in `stdlib/Math.maxon`
-- Signature: `Math.exp(x float) float`
-- Uses Taylor series: e^x = 1 + x + x^2/2! + x^3/3! + ...
-- Reduces large x values using exp(x) = exp(x/2)^2
-- Handles negative x using exp(-x) = 1/exp(x)
-- Auto-discovered by compiler stdlib system
-
-Algorithm:
-1. Handle special case (x = 0 returns 1)
-2. Handle negative x by computing exp(-x) and inverting
-3. Reduce x to smaller range by halving repeatedly
-4. Compute exp(x) using Taylor series for small x
-5. Square result for each reduction step
-
 ## Documentation
 
 The `exp()` function calculates e raised to a power (e^x).

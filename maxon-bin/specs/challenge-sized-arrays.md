@@ -5,12 +5,6 @@ keywords: array, sized, allocation, memory
 category: semantics
 ---
 
-# Developer Notes
-
-Tests for Challenge 5 from DEVELOPMENT_CHALLENGES.md: Empty and Zero-initialized Collections.
-
-Empty collections must be handled correctly without memory leaks or invalid access.
-
 # Documentation
 
 ## Sized Arrays

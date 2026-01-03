@@ -7,34 +7,6 @@ category: type-system
 
 # InitableFromArrayLiteral Interface
 
-## Developer Notes
-
-The `InitableFromArrayLiteral` interface allows types to be initialized from array literals. When a variable declaration has a type annotation and the annotated type conforms to this interface, the compiler automatically transforms the array literal into a call to the type's `init` method.
-
-**Transformation:**
-```text
-var arr Array of int = [1, 2, 3]
-```
-becomes:
-```text
-// 1. Create __ManagedArray with elements
-// 2. Call Array$init(managed)
-// 3. Store result in arr
-```
-
-**Implementation Details:**
-1. `convertVarDecl` checks for type annotation with generic type
-2. `typeConformsTo()` checks if base type conforms to `InitableFromArrayLiteral`
-3. If value is array literal, call `convertInitableFromArrayLiteral()`
-4. Creates `__ManagedArray` struct (24 bytes: ptr + len + capacity)
-5. Stores elements in heap-allocated buffer
-6. Calls `Type$init(managed_ptr)` with sret for struct return
-
-**__ManagedArray Layout:**
-- offset 0: `_buffer` (ptr) - pointer to element storage
-- offset 8: `_len` (i64) - number of elements
-- offset 16: `_capacity` (i64) - allocated capacity
-
 ## Documentation
 
 ### Array Literals with Type Annotations

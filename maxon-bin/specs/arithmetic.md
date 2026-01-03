@@ -4,11 +4,6 @@ status: stable
 keywords: arithmetic, operators, math
 category: operators
 ---
-
-## Developer Notes
-
-Basic arithmetic operators for integers.
-
 ## Documentation
 
 # Arithmetic Operators

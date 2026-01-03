@@ -73,7 +73,7 @@ maxon-bin/specs/           # Feature specifications (source of truth)
 
 3. **Write Spec Files**
    - Follow the format defined in `docs/SPECS.md`
-   - Include developer notes, user docs, and tests
+   - Include user docs, and tests
    - Ensure test cases cover key scenarios
 
 4. **Maintain Consistency**
@@ -90,9 +90,6 @@ status: implemented | in-progress | planned
 ---
 
 # Feature Name
-
-## Developer Notes
-[Implementation details for maintainers]
 
 ## Documentation
 [User-facing documentation]

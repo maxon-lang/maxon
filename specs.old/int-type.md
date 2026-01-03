@@ -7,21 +7,6 @@ category: types
 
 # Int Type
 
-## Developer Notes
-
-The `int` type is the primary integer type in Maxon, represented as a signed 32-bit integer (LLVM `i32`).
-
-Key implementation details:
-- Mapped to LLVM `i32` type
-- Default numeric type for integer literals
-- Supports arithmetic operators: `+`, `-`, `*`, `/`, `mod`
-- Supports comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=`
-- Can be cast to `float`, `bool`, `character`, and pointer types
-- Integer literals are parsed in `Lexer::readNumber()`
-- Overflow behavior follows LLVM semantics (wraps around)
-
-The `main()` function must return `int`, and the value becomes the program's exit code (0-255 on Windows).
-
 ## Documentation
 
 The `int` type stores 32-bit signed integers ranging from -2,147,483,648 to 2,147,483,647.

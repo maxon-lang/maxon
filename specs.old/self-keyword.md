@@ -7,36 +7,6 @@ category: type-system
 
 # Self and self Keywords
 
-## Developer Notes
-
-The `self` and `Self` keywords enable instance method functionality within type definitions.
-
-**`self` keyword:**
-- References the current instance within a method body
-- Implicitly available in all non-static methods
-- Can be used explicitly (`self.field`) or fields can be accessed directly (just `field`)
-- `self` is passed as an implicit first parameter to instance methods
-
-**`Self` keyword:**
-- Refers to the enclosing type name
-- Useful for returning instances of the type or type annotations within methods
-- `Self` in method signatures resolves to the concrete type name
-
-**Parser Changes:**
-- `self` token parses as a special identifier in method bodies
-- `Self` token parses as a type name that resolves to the enclosing type
-- Field access without `self.` prefix looks up fields in the current type context
-
-**IR Generation:**
-- Instance methods receive implicit `self` pointer as first parameter
-- `self` identifier loads from the first parameter
-- Field access `self.field` or bare `field` uses the self pointer + field offset
-- Method calls are generated as: `TypeName$methodName(self, args...)`
-
-**Method Name Mangling:**
-- Instance methods: `TypeName$methodName`
-- Static methods: `TypeName$static$methodName`
-
 ## Documentation
 
 ### The `self` Keyword
