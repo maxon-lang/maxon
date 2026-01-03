@@ -17,8 +17,8 @@ end 'main'
 ExitCode: 99
 TrackAllocs: true
 Stdout: ```
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 40 bytes
@@ -117,7 +117,7 @@ entry:
     %tmp_load = load i64 %size
     %tmp_const.1 = const.i64 i64 8
     %tmp_mul = mul i64 %tmp_load %tmp_const.1
-    %tmp_heap = heap.alloc ptr %tmp_mul
+    %tmp_heap = heap.alloc ptr %tmp_mul tag="array buffer"
     %tmp_alloca.1 = alloca.sized ptr 24
     store %tmp_alloca.1 %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
@@ -131,7 +131,7 @@ entry:
     call @Array$int$set(%arr, %tmp_const.2, %tmp_const.3)
     %tmp_call.1 = call i64 @sum_first(%arr)
     %tmp_load.1 = load ptr %arr
-    heap.free %tmp_load.1
+    heap.free %tmp_load.1 tag="array cleanup"
     ret %tmp_call.1
 }
 

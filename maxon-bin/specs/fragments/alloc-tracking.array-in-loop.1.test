@@ -17,12 +17,12 @@ end 'main'
 ExitCode: 3
 TrackAllocs: true
 Stdout: ```
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
-ALLOC #2: 40 bytes (dynamic array)
-FREE #2: 40 bytes (dynamic array)
-ALLOC #3: 40 bytes (dynamic array)
-FREE #3: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
+ALLOC #2: 40 bytes (array buffer)
+FREE #2: 40 bytes (array cleanup)
+ALLOC #3: 40 bytes (array buffer)
+FREE #3: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 120 bytes
@@ -51,7 +51,7 @@ whilebody:
     %tmp_load.1 = load i64 %size
     %tmp_const.4 = const.i64 i64 8
     %tmp_mul = mul i64 %tmp_load.1 %tmp_const.4
-    %tmp_heap = heap.alloc ptr %tmp_mul
+    %tmp_heap = heap.alloc ptr %tmp_mul tag="array buffer"
     %tmp_alloca.3 = alloca.sized ptr 24
     store %tmp_alloca.3 %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.3 8
@@ -88,7 +88,7 @@ if_let_end:
     %tmp_add.1 = add i64 %tmp_load.7 %tmp_const.8
     store %i %tmp_add.1
     %tmp_load.8 = load ptr %arr
-    heap.free %tmp_load.8
+    heap.free %tmp_load.8 tag="array cleanup"
     br @block1
 whilecont:
     %tmp_load.9 = load i64 %sum

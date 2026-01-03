@@ -15,7 +15,7 @@ function main() -> i64 {
 entry:
     %tmp_const = const.i64 i64 5
     %tmp_mul = const.i64 i64 40
-    %tmp_heap = heap.alloc ptr %tmp_mul
+    %tmp_heap = heap.alloc ptr %tmp_mul tag="array buffer"
     %tmp_alloca = alloca.sized ptr 24
     store %tmp_alloca %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
@@ -41,12 +41,12 @@ if_let_then:
     store %val %tmp_load.1
     %tmp_load.2 = load i64 %val
     %tmp_load.3 = load ptr %arr
-    heap.free %tmp_load.3
+    heap.free %tmp_load.3 tag="array cleanup"
     ret %tmp_load.2
 if_let_else:
     %tmp_const.6 = const.i64 i64 0
     %tmp_load.4 = load ptr %arr
-    heap.free %tmp_load.4
+    heap.free %tmp_load.4 tag="array cleanup"
     ret %tmp_const.6
 if_let_end:
 }

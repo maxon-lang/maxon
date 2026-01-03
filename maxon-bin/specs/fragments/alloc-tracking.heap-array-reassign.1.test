@@ -15,10 +15,10 @@ end 'main'
 ExitCode: 20
 TrackAllocs: true
 Stdout: ```
-ALLOC #1: 40 bytes (dynamic array)
-ALLOC #2: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
-FREE #2: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+ALLOC #2: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
+FREE #2: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 80 bytes
@@ -34,7 +34,7 @@ entry:
     %tmp_load = load i64 %size
     %tmp_const.1 = const.i64 i64 8
     %tmp_mul = mul i64 %tmp_load %tmp_const.1
-    %tmp_heap = heap.alloc ptr %tmp_mul
+    %tmp_heap = heap.alloc ptr %tmp_mul tag="array buffer"
     %tmp_alloca.1 = alloca.sized ptr 24
     store %tmp_alloca.1 %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
@@ -49,7 +49,7 @@ entry:
     %tmp_load.1 = load i64 %size
     %tmp_const.4 = const.i64 i64 8
     %tmp_mul.1 = mul i64 %tmp_load.1 %tmp_const.4
-    %tmp_heap.1 = heap.alloc ptr %tmp_mul.1
+    %tmp_heap.1 = heap.alloc ptr %tmp_mul.1 tag="array buffer"
     %tmp_alloca.3 = alloca.sized ptr 24
     store %tmp_alloca.3 %tmp_heap.1
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.3 8
@@ -59,7 +59,7 @@ entry:
     %tmp_alloca.4 = alloca.sized ptr 32
     %tmp_call.1 = call ptr @Array$int$init(%tmp_alloca.4, %tmp_alloca.3)
     %tmp_load.2 = load ptr %arr
-    heap.free %tmp_load.2
+    heap.free %tmp_load.2 tag="array cleanup"
     memcpy %arr %tmp_alloca.4 32
     %tmp_const.5 = const.i64 i64 0
     %tmp_const.6 = const.i64 i64 20
@@ -78,12 +78,12 @@ if_let_then:
     store %val %tmp_load.4
     %tmp_load.5 = load i64 %val
     %tmp_load.6 = load ptr %arr
-    heap.free %tmp_load.6
+    heap.free %tmp_load.6 tag="array cleanup"
     ret %tmp_load.5
 if_let_else:
     %tmp_const.9 = const.i64 i64 0
     %tmp_load.7 = load ptr %arr
-    heap.free %tmp_load.7
+    heap.free %tmp_load.7 tag="array cleanup"
     ret %tmp_const.9
 if_let_end:
 }

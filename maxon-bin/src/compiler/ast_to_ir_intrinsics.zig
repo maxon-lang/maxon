@@ -233,6 +233,9 @@ const ElemInfo = struct {
     type_name: ?[]const u8,
 };
 
+/// Direction for array shift operations
+const ShiftDirection = enum { left, right };
+
 /// Get element size and type info from generic_params or current_type_name
 /// Used by managed array intrinsics to determine element size at compile time
 fn getElementInfo(self: *AstToIr) ElemInfo {
@@ -270,6 +273,103 @@ fn getElementInfo(self: *AstToIr) ElemInfo {
 
     // Default to primitive (8 bytes)
     return .{ .size = 8, .is_struct = false, .type_name = null };
+}
+
+/// Helper for shift operations - handles both left and right directions
+/// For right shift: iterates backwards (i = len-1 down to start_index), dst = i + count
+/// For left shift: iterates forwards (i = 0 while src_start + i < len), src = start_index + count + i
+fn emitArrayShift(
+    self: *AstToIr,
+    managed: TypedValue,
+    start_index: TypedValue,
+    count: TypedValue,
+    direction: ShiftDirection,
+) ConvertError!void {
+    const elem_info = getElementInfo(self);
+    const elem_size_val = try self.func().emitConstI64(elem_info.size);
+
+    const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+    const len = try loadI64Field(self, managed.value, 8);
+
+    const one = try self.func().emitConstI64(1);
+    const zero = try self.func().emitConstI64(0);
+
+    // Initialize loop counter
+    const i_ptr = try self.func().emitAllocaSized(8);
+
+    // Direction-specific setup
+    const loop_name = if (direction == .right) "shift_right" else "shift_left";
+    const cond_name = if (direction == .right) "shift_right_cond" else "shift_left_cond";
+    const body_name = if (direction == .right) "shift_right_body" else "shift_left_body";
+    const end_name = if (direction == .right) "shift_right_end" else "shift_left_end";
+    _ = loop_name;
+
+    if (direction == .right) {
+        // Right shift: start at len-1
+        const init_i = try self.func().emitBinaryOp(.sub, len, one, .i64);
+        try self.func().emitStore(i_ptr, init_i);
+    } else {
+        // Left shift: start at 0
+        try self.func().emitStore(i_ptr, zero);
+    }
+
+    var loop = try self.createLoopBlocks(cond_name, body_name, end_name);
+
+    // Condition check
+    const i_val = try self.func().emitLoad(i_ptr, .i64);
+    const cond = if (direction == .right)
+        // Right: i >= start_index
+        try self.func().emitBinaryOp(.icmp_ge, i_val, start_index.value, .i64)
+    else blk: {
+        // Left: start_index + count + i < len
+        const src_idx = try self.func().emitBinaryOp(.add, start_index.value, count.value, .i64);
+        const src_idx_i = try self.func().emitBinaryOp(.add, src_idx, i_val, .i64);
+        break :blk try self.func().emitBinaryOp(.icmp_lt, src_idx_i, len, .i64);
+    };
+
+    try self.emitLoopCondBranch(&loop, cond);
+
+    // Loop body: copy element from src to dst
+    const i_val2 = try self.func().emitLoad(i_ptr, .i64);
+
+    const src_idx: ir.Value = if (direction == .right)
+        i_val2
+    else blk: {
+        // Left: src_idx = start_index + count + i
+        const base = try self.func().emitBinaryOp(.add, start_index.value, count.value, .i64);
+        break :blk try self.func().emitBinaryOp(.add, base, i_val2, .i64);
+    };
+
+    const dst_idx: ir.Value = if (direction == .right)
+        // Right: dst_idx = i + count
+        try self.func().emitBinaryOp(.add, i_val2, count.value, .i64)
+    else
+        // Left: dst_idx = start_index + i
+        try self.func().emitBinaryOp(.add, start_index.value, i_val2, .i64);
+
+    const src_offset = try self.func().emitBinaryOp(.mul, src_idx, elem_size_val, .i64);
+    const src_ptr = try self.func().emitBinaryOp(.add, buf_ptr, src_offset, .ptr);
+
+    const dst_offset = try self.func().emitBinaryOp(.mul, dst_idx, elem_size_val, .i64);
+    const dst_ptr = try self.func().emitBinaryOp(.add, buf_ptr, dst_offset, .ptr);
+
+    // Copy element: struct uses memcpy, primitive uses load/store
+    if (elem_info.is_struct) {
+        try self.func().emitMemcpy(dst_ptr, src_ptr, elem_info.size);
+    } else {
+        const elem_val = try self.func().emitLoad(src_ptr, .i64);
+        try self.func().emitStore(dst_ptr, elem_val);
+    }
+
+    // Update loop counter
+    const new_i = if (direction == .right)
+        try self.func().emitBinaryOp(.sub, i_val2, one, .i64)
+    else
+        try self.func().emitBinaryOp(.add, i_val2, one, .i64);
+    try self.func().emitStore(i_ptr, new_i);
+    try self.func().emitBr(loop.cond_block_idx);
+
+    try self.finishLoop(&loop);
 }
 
 fn convertManagedArrayIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -326,7 +426,7 @@ fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const elem_info = getElementInfo(self);
     const elem_size_val = try self.func().emitConstI64(elem_info.size);
     const buf_size = try self.func().emitBinaryOp(.mul, capacity.value, elem_size_val, .i64);
-    const buf_ptr = try self.func().emitHeapAlloc(buf_size);
+    const buf_ptr = try self.func().emitHeapAlloc(buf_size, "array buffer");
 
     try self.func().emitStore(managed_ptr, buf_ptr);
     try storeI64Field(self, managed_ptr, 8, capacity.value);
@@ -383,7 +483,7 @@ fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const new_size = try self.func().emitBinaryOp(.mul, new_capacity.value, elem_size_val, .i64);
 
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const new_buf = try self.func().emitHeapRealloc(buf_ptr, new_size);
+    const new_buf = try self.func().emitHeapRealloc(buf_ptr, new_size, "array grow");
 
     try self.func().emitStore(managed.value, new_buf);
     try storeI64Field(self, managed.value, 16, new_capacity.value);
@@ -395,58 +495,10 @@ fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
 /// Shifts elements right, iterating backwards to handle overlap
 fn intrinsicManagedArrayShiftRight(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
-
     const managed = try self.convertExpression(call.args[0]);
     const start_index = try self.convertExpression(call.args[1]);
     const count = try self.convertExpression(call.args[2]);
-
-    const elem_info = getElementInfo(self);
-    const elem_size_val = try self.func().emitConstI64(elem_info.size);
-
-    const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const len = try loadI64Field(self, managed.value, 8);
-
-    const one = try self.func().emitConstI64(1);
-
-    // Loop from i = len-1 down to start_index
-    const i_ptr = try self.func().emitAllocaSized(8);
-    const init_i = try self.func().emitBinaryOp(.sub, len, one, .i64);
-    try self.func().emitStore(i_ptr, init_i);
-
-    // Create loop blocks using helper
-    var loop = try self.createLoopBlocks("shift_right_cond", "shift_right_body", "shift_right_end");
-
-    // Condition: i >= start_index (cond block is current)
-    const i_val = try self.func().emitLoad(i_ptr, .i64);
-    const cond = try self.func().emitBinaryOp(.icmp_ge, i_val, start_index.value, .i64);
-
-    // Emit conditional branch and switch to body block
-    try self.emitLoopCondBranch(&loop, cond);
-
-    // Body: arr[i + count] = arr[i]; i--;
-    const i_val2 = try self.func().emitLoad(i_ptr, .i64);
-    const src_offset = try self.func().emitBinaryOp(.mul, i_val2, elem_size_val, .i64);
-    const src_ptr = try self.func().emitBinaryOp(.add, buf_ptr, src_offset, .ptr);
-
-    const dst_idx = try self.func().emitBinaryOp(.add, i_val2, count.value, .i64);
-    const dst_offset = try self.func().emitBinaryOp(.mul, dst_idx, elem_size_val, .i64);
-    const dst_ptr = try self.func().emitBinaryOp(.add, buf_ptr, dst_offset, .ptr);
-
-    // For structs, use memcpy; for primitives, use load/store
-    if (elem_info.is_struct) {
-        try self.func().emitMemcpy(dst_ptr, src_ptr, elem_info.size);
-    } else {
-        const elem_val = try self.func().emitLoad(src_ptr, .i64);
-        try self.func().emitStore(dst_ptr, elem_val);
-    }
-
-    const new_i = try self.func().emitBinaryOp(.sub, i_val2, one, .i64);
-    try self.func().emitStore(i_ptr, new_i);
-    try self.func().emitBr(loop.cond_block_idx);
-
-    // Finish loop and restore end block
-    try self.finishLoop(&loop);
-
+    try emitArrayShift(self, managed, start_index, count, .right);
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
@@ -457,59 +509,7 @@ fn intrinsicManagedArrayShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const managed = try self.convertExpression(call.args[0]);
     const start_index = try self.convertExpression(call.args[1]);
     const count = try self.convertExpression(call.args[2]);
-
-    const elem_info = getElementInfo(self);
-    const elem_size_val = try self.func().emitConstI64(elem_info.size);
-
-    const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const len = try loadI64Field(self, managed.value, 8);
-
-    const one = try self.func().emitConstI64(1);
-
-    // Source start index: start_index + count
-    const src_start = try self.func().emitBinaryOp(.add, start_index.value, count.value, .i64);
-
-    // Loop from i = 0, while src_start + i < len
-    const i_ptr = try self.func().emitAllocaSized(8);
-    const zero = try self.func().emitConstI64(0);
-    try self.func().emitStore(i_ptr, zero);
-
-    // Create loop blocks using helper
-    var loop = try self.createLoopBlocks("shift_left_cond", "shift_left_body", "shift_left_end");
-
-    // Condition: src_start + i < len (cond block is current)
-    const i_val = try self.func().emitLoad(i_ptr, .i64);
-    const src_idx = try self.func().emitBinaryOp(.add, src_start, i_val, .i64);
-    const cond = try self.func().emitBinaryOp(.icmp_lt, src_idx, len, .i64);
-
-    // Emit conditional branch and switch to body block
-    try self.emitLoopCondBranch(&loop, cond);
-
-    // Body: arr[start_index + i] = arr[src_start + i]; i++;
-    const i_val2 = try self.func().emitLoad(i_ptr, .i64);
-    const src_idx2 = try self.func().emitBinaryOp(.add, src_start, i_val2, .i64);
-    const src_offset = try self.func().emitBinaryOp(.mul, src_idx2, elem_size_val, .i64);
-    const src_ptr = try self.func().emitBinaryOp(.add, buf_ptr, src_offset, .ptr);
-
-    const dst_idx = try self.func().emitBinaryOp(.add, start_index.value, i_val2, .i64);
-    const dst_offset = try self.func().emitBinaryOp(.mul, dst_idx, elem_size_val, .i64);
-    const dst_ptr = try self.func().emitBinaryOp(.add, buf_ptr, dst_offset, .ptr);
-
-    // For structs, use memcpy; for primitives, use load/store
-    if (elem_info.is_struct) {
-        try self.func().emitMemcpy(dst_ptr, src_ptr, elem_info.size);
-    } else {
-        const elem_val = try self.func().emitLoad(src_ptr, .i64);
-        try self.func().emitStore(dst_ptr, elem_val);
-    }
-
-    const new_i = try self.func().emitBinaryOp(.add, i_val2, one, .i64);
-    try self.func().emitStore(i_ptr, new_i);
-    try self.func().emitBr(loop.cond_block_idx);
-
-    // Finish loop and restore end block
-    try self.finishLoop(&loop);
-
+    try emitArrayShift(self, managed, start_index, count, .left);
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
@@ -727,7 +727,7 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const total_len = try self.func().emitBinaryOp(.add, a_len, b_len, .i64);
 
     const result_ptr = try self.func().emitAllocaSized(24);
-    const buf_ptr = try self.func().emitHeapAlloc(total_len);
+    const buf_ptr = try self.func().emitHeapAlloc(total_len, "string concat");
 
     // Store buffer pointer (offset 0)
     try self.func().emitStore(result_ptr, buf_ptr);
@@ -759,7 +759,7 @@ fn intrinsicStringMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const orig_buf = try self.func().emitLoad(managed.value, .ptr);
 
     const result_ptr = try self.func().emitAllocaSized(24);
-    const new_buf = try self.func().emitHeapAlloc(len);
+    const new_buf = try self.func().emitHeapAlloc(len, "string buffer");
     try self.func().emitMemcpyDynamic(new_buf, orig_buf, len);
 
     // Store buffer pointer (offset 0)
@@ -817,7 +817,7 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 
     const one_i64 = try self.func().emitConstI64(1);
     const alloc_size = try self.func().emitBinaryOp(.add, slice_len, one_i64, .i64);
-    const new_buf = try self.func().emitHeapAlloc(alloc_size);
+    const new_buf = try self.func().emitHeapAlloc(alloc_size, "cstring conversion");
 
     try self.func().emitMemcpyDynamic(new_buf, slice_buf_ptr, slice_len);
 
@@ -890,7 +890,7 @@ fn intrinsicStringFromCharacters(self: *AstToIr, call: ast.CallExpr) ConvertErro
     const length = try self.convertExpression(call.args[1]);
 
     const result_ptr = try self.func().emitAllocaSized(24);
-    const new_buf = try self.func().emitHeapAlloc(length.value);
+    const new_buf = try self.func().emitHeapAlloc(length.value, "string buffer");
 
     // Copy data from source buffer
     const src_buf = try self.func().emitLoad(buffer.value, .ptr);
@@ -961,103 +961,83 @@ fn intrinsicStringCapFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!Type
 // File I/O Intrinsics (stdlib-only)
 // ============================================================================
 
+/// Helper for intrinsics that take a single cstring arg and return an optional pointer
+/// Used by __read_file and __list_directory
+fn emitCstringToOptional(
+    self: *AstToIr,
+    call: ast.CallExpr,
+    func_name: []const u8,
+    wrapped_type: []const u8,
+) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
+    const args = try self.allocator.alloc(ir.Value, 1);
+    args[0] = path_ptr;
+
+    const raw_result = try self.func().emitCall(func_name, args, .ptr);
+    const result_ptr = raw_result orelse try self.func().emitConstI64(0);
+
+    return wrapInOptional(self, result_ptr, wrapped_type);
+}
+
+/// Helper for intrinsics that take a cstring path and return int
+/// Used by __is_directory
+fn emitCstringToInt(
+    self: *AstToIr,
+    call: ast.CallExpr,
+    func_name: []const u8,
+) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
+    const args = try self.allocator.alloc(ir.Value, 1);
+    args[0] = path_ptr;
+
+    const result = try self.func().emitCall(func_name, args, .i64);
+    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
+}
+
+/// Helper for write intrinsics that take path + data buffer and return int
+/// Used by __write_file and __write_file_binary
+fn emitWriteFile(
+    self: *AstToIr,
+    path_cstr: TypedValue,
+    data_source: TypedValue,
+) ConvertError!TypedValue {
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+    const data_ptr = try self.func().emitLoad(data_source.value, .ptr);
+    const data_len = try loadI64Field(self, data_source.value, 8);
+
+    const args = try self.allocator.alloc(ir.Value, 3);
+    args[0] = path_ptr;
+    args[1] = data_ptr;
+    args[2] = data_len;
+
+    const result = try self.func().emitCall("__file_write", args, .i64);
+    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
+}
+
 /// Dispatch __read_file, __write_file*, __list_directory, __is_directory intrinsics
 fn convertFileIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     const name = call.func_name;
 
     if (std.mem.eql(u8, name, "__read_file")) {
-        return intrinsicReadFile(self, call);
-    } else if (std.mem.eql(u8, name, "__write_file")) {
-        return intrinsicWriteFile(self, call);
-    } else if (std.mem.eql(u8, name, "__write_file_binary")) {
-        return intrinsicWriteFileBinary(self, call);
+        return emitCstringToOptional(self, call, "__file_read", "__ManagedString");
+    } else if (std.mem.eql(u8, name, "__write_file") or std.mem.eql(u8, name, "__write_file_binary")) {
+        // Both write intrinsics work the same: path + data buffer -> int
+        try expectArgCount(self, call, 2);
+        const path_cstr = try self.convertExpression(call.args[0]);
+        const data = try self.convertExpression(call.args[1]);
+        return emitWriteFile(self, path_cstr, data);
     } else if (std.mem.eql(u8, name, "__list_directory")) {
-        return intrinsicListDirectory(self, call);
+        return emitCstringToOptional(self, call, "__dir_list", "Array$String");
     } else if (std.mem.eql(u8, name, "__is_directory")) {
-        return intrinsicIsDirectory(self, call);
+        return emitCstringToInt(self, call, "__dir_is_directory");
     } else {
         self.reportError(.E019, name);
         return error.SemanticError;
     }
-}
-
-/// __read_file(cstring) -> __ManagedString or nil
-fn intrinsicReadFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const path_cstr = try self.convertExpression(call.args[0]);
-    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
-
-    const args = try self.allocator.alloc(ir.Value, 1);
-    args[0] = path_ptr;
-
-    const raw_result = try self.func().emitCall("__file_read", args, .ptr);
-    const result_ptr = raw_result orelse try self.func().emitConstI64(0);
-
-    return wrapInOptional(self, result_ptr, "__ManagedString");
-}
-
-/// __write_file(path_cstring, content_cstring) -> int (0 on success, non-zero on error)
-fn intrinsicWriteFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 2);
-    const path_cstr = try self.convertExpression(call.args[0]);
-    const content_cstr = try self.convertExpression(call.args[1]);
-
-    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
-    const content_ptr = try self.func().emitLoad(content_cstr.value, .ptr);
-    const content_len = try loadI64Field(self, content_cstr.value, 8);
-
-    const args = try self.allocator.alloc(ir.Value, 3);
-    args[0] = path_ptr;
-    args[1] = content_ptr;
-    args[2] = content_len;
-
-    const result = try self.func().emitCall("__file_write", args, .i64);
-    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
-}
-
-/// __write_file_binary(path_cstring, array) -> int (0 on success, non-zero on error)
-fn intrinsicWriteFileBinary(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 2);
-    const path_cstr = try self.convertExpression(call.args[0]);
-    const array = try self.convertExpression(call.args[1]);
-
-    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
-    const array_buf = try self.func().emitLoad(array.value, .ptr);
-    const array_len = try loadI64Field(self, array.value, 8);
-
-    const args = try self.allocator.alloc(ir.Value, 3);
-    args[0] = path_ptr;
-    args[1] = array_buf;
-    args[2] = array_len;
-
-    const result = try self.func().emitCall("__file_write", args, .i64);
-    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
-}
-
-/// __list_directory(path_cstring) -> Array of String or nil
-fn intrinsicListDirectory(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const path_cstr = try self.convertExpression(call.args[0]);
-    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
-
-    const args = try self.allocator.alloc(ir.Value, 1);
-    args[0] = path_ptr;
-
-    const raw_result = try self.func().emitCall("__dir_list", args, .ptr);
-    const result_ptr = raw_result orelse try self.func().emitConstI64(0);
-
-    return wrapInOptional(self, result_ptr, "Array$String");
-}
-
-/// __is_directory(path_cstring) -> int (1 if directory, 0 otherwise)
-fn intrinsicIsDirectory(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const path_cstr = try self.convertExpression(call.args[0]);
-    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
-
-    const args = try self.allocator.alloc(ir.Value, 1);
-    args[0] = path_ptr;
-
-    const result = try self.func().emitCall("__dir_is_directory", args, .i64);
-    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
 }

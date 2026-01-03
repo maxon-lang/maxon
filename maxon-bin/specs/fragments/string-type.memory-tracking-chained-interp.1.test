@@ -12,27 +12,27 @@ end 'main'
 ExitCode: 0
 TrackAllocs: true
 Stdout: ```
-ALLOC #1: 2 bytes (dynamic array)
-ALLOC #2: 2 bytes (dynamic array)
-ALLOC #3: 2 bytes (dynamic array)
-ALLOC #4: 2 bytes (dynamic array)
-ALLOC #5: 3 bytes (dynamic array)
-ALLOC #6: 4 bytes (dynamic array)
-ALLOC #7: 5 bytes (dynamic array)
-ALLOC #8: 22 bytes (dynamic array)
-ALLOC #9: 2 bytes (dynamic array)
-ALLOC #10: 3 bytes (dynamic array)
+ALLOC #1: 2 bytes (string buffer)
+ALLOC #2: 2 bytes (string buffer)
+ALLOC #3: 2 bytes (string buffer)
+ALLOC #4: 2 bytes (string buffer)
+ALLOC #5: 3 bytes (string concat)
+ALLOC #6: 4 bytes (string concat)
+ALLOC #7: 5 bytes (string concat)
+ALLOC #8: 22 bytes (int.toString)
+ALLOC #9: 2 bytes (string buffer)
+ALLOC #10: 3 bytes (string concat)
 4
-FREE #5: 3 bytes (dynamic array)
-FREE #6: 4 bytes (dynamic array)
-FREE #8: 22 bytes (dynamic array)
-FREE #9: 2 bytes (dynamic array)
-FREE #10: 3 bytes (dynamic array)
-FREE #2: 2 bytes (dynamic array)
-FREE #1: 2 bytes (dynamic array)
-FREE #3: 2 bytes (dynamic array)
-FREE #7: 5 bytes (dynamic array)
-FREE #4: 2 bytes (dynamic array)
+FREE #5: 3 bytes (string cleanup)
+FREE #6: 4 bytes (string cleanup)
+FREE #8: 22 bytes (string cleanup)
+FREE #9: 2 bytes (string cleanup)
+FREE #10: 3 bytes (string cleanup)
+FREE #2: 2 bytes (string cleanup)
+FREE #1: 2 bytes (string cleanup)
+FREE #3: 2 bytes (string cleanup)
+FREE #7: 5 bytes (string cleanup)
+FREE #4: 2 bytes (string cleanup)
 
 === ALLOC STATS ===
 Allocated: 47 bytes
@@ -44,7 +44,7 @@ function main() -> i64 {
 entry:
     %tmp_alloca = alloca.sized ptr 24
     %tmp_const = const.i64 i64 2
-    %tmp_heap = heap.alloc ptr %tmp_const
+    %tmp_heap = heap.alloc ptr %tmp_const tag="string buffer"
     %tmp_const.1 = const.i64 i64 0
     %4 = getelemptr ptr %tmp_heap %tmp_const.1 elemsize=1
     %tmp_const.2 = const.i8 i8 97
@@ -71,7 +71,7 @@ entry:
     %tmp_call = call ptr @String$init(%a, %tmp_alloca)
     %tmp_alloca.2 = alloca.sized ptr 24
     %tmp_const.9 = const.i64 i64 2
-    %tmp_heap.1 = heap.alloc ptr %tmp_const.9
+    %tmp_heap.1 = heap.alloc ptr %tmp_const.9 tag="string buffer"
     %tmp_const.10 = const.i64 i64 0
     %24 = getelemptr ptr %tmp_heap.1 %tmp_const.10 elemsize=1
     %tmp_const.11 = const.i8 i8 98
@@ -98,7 +98,7 @@ entry:
     %tmp_call.1 = call ptr @String$init(%b, %tmp_alloca.2)
     %tmp_alloca.4 = alloca.sized ptr 24
     %tmp_const.18 = const.i64 i64 2
-    %tmp_heap.2 = heap.alloc ptr %tmp_const.18
+    %tmp_heap.2 = heap.alloc ptr %tmp_const.18 tag="string buffer"
     %tmp_const.19 = const.i64 i64 0
     %44 = getelemptr ptr %tmp_heap.2 %tmp_const.19 elemsize=1
     %tmp_const.20 = const.i8 i8 99
@@ -125,7 +125,7 @@ entry:
     %tmp_call.2 = call ptr @String$init(%c, %tmp_alloca.4)
     %tmp_alloca.6 = alloca.sized ptr 24
     %tmp_const.27 = const.i64 i64 2
-    %tmp_heap.3 = heap.alloc ptr %tmp_const.27
+    %tmp_heap.3 = heap.alloc ptr %tmp_const.27 tag="string buffer"
     %tmp_const.28 = const.i64 i64 0
     %64 = getelemptr ptr %tmp_heap.3 %tmp_const.28 elemsize=1
     %tmp_const.29 = const.i8 i8 100
@@ -161,7 +161,7 @@ entry:
     %tmp_add = add i64 %tmp_sext %tmp_sext.1
     %tmp_const.36 = const.i64 i64 1
     %tmp_add.1 = add i64 %tmp_add %tmp_const.36
-    %tmp_heap.4 = heap.alloc ptr %tmp_add.1
+    %tmp_heap.4 = heap.alloc ptr %tmp_add.1 tag="string concat"
     %tmp_fieldptr.24 = getfieldptr ptr %tmp_fieldptr.20 0
     %tmp_load.2 = load ptr %tmp_fieldptr.24
     memcpy.dyn %tmp_heap.4 %tmp_load.2 %tmp_sext
@@ -206,7 +206,7 @@ entry:
     %tmp_add.2 = add i64 %tmp_sext.2 %tmp_sext.3
     %tmp_const.43 = const.i64 i64 1
     %tmp_add.3 = add i64 %tmp_add.2 %tmp_const.43
-    %tmp_heap.5 = heap.alloc ptr %tmp_add.3
+    %tmp_heap.5 = heap.alloc ptr %tmp_add.3 tag="string concat"
     %tmp_fieldptr.36 = getfieldptr ptr %tmp_fieldptr.32 0
     %tmp_load.6 = load ptr %tmp_fieldptr.36
     memcpy.dyn %tmp_heap.5 %tmp_load.6 %tmp_sext.2
@@ -251,7 +251,7 @@ entry:
     %tmp_add.4 = add i64 %tmp_sext.4 %tmp_sext.5
     %tmp_const.50 = const.i64 i64 1
     %tmp_add.5 = add i64 %tmp_add.4 %tmp_const.50
-    %tmp_heap.6 = heap.alloc ptr %tmp_add.5
+    %tmp_heap.6 = heap.alloc ptr %tmp_add.5 tag="string concat"
     %tmp_fieldptr.48 = getfieldptr ptr %tmp_fieldptr.44 0
     %tmp_load.10 = load ptr %tmp_fieldptr.48
     memcpy.dyn %tmp_heap.6 %tmp_load.10 %tmp_sext.4
@@ -287,7 +287,7 @@ entry:
     store %tmp_fieldptr.55 %tmp_const.56
     %tmp_call.4 = call i64 @String$count(%s)
     %tmp_const.57 = const.i64 i64 22
-    %tmp_heap.7 = heap.alloc ptr %tmp_const.57
+    %tmp_heap.7 = heap.alloc ptr %tmp_const.57 tag="int.toString"
     %tmp_call.5 = call i64 @__runtime_int_to_string(%tmp_heap.7, %tmp_call.4)
     %tmp_alloca.14 = alloca.sized ptr 24
     %tmp_fieldptr.56 = getfieldptr ptr %tmp_alloca.14 0
@@ -314,7 +314,7 @@ entry:
     store %tmp_fieldptr.61 %tmp_const.62
     %tmp_alloca.16 = alloca.sized ptr 24
     %tmp_const.63 = const.i64 i64 2
-    %tmp_heap.8 = heap.alloc ptr %tmp_const.63
+    %tmp_heap.8 = heap.alloc ptr %tmp_const.63 tag="string buffer"
     %tmp_const.64 = const.i64 i64 0
     %209 = getelemptr ptr %tmp_heap.8 %tmp_const.64 elemsize=1
     %tmp_const.65 = const.i8 i8 10
@@ -350,7 +350,7 @@ entry:
     %tmp_add.6 = add i64 %tmp_sext.6 %tmp_sext.7
     %tmp_const.72 = const.i64 i64 1
     %tmp_add.7 = add i64 %tmp_add.6 %tmp_const.72
-    %tmp_heap.9 = heap.alloc ptr %tmp_add.7
+    %tmp_heap.9 = heap.alloc ptr %tmp_add.7 tag="string concat"
     %tmp_fieldptr.71 = getfieldptr ptr %tmp_fieldptr.67 0
     %tmp_load.14 = load ptr %tmp_fieldptr.71
     memcpy.dyn %tmp_heap.9 %tmp_load.14 %tmp_sext.6
@@ -403,7 +403,7 @@ decref:
     br.cond %tmp_icmp.1 @block2 @block3
 decref_free:
     %tmp_load.18 = load ptr %tmp_alloca.9
-    heap.free %tmp_load.18
+    heap.free %tmp_load.18 tag="string cleanup"
     br @block3
 decref_end:
     %tmp_fieldptr.81 = getfieldptr ptr %tmp_alloca.11 12
@@ -424,7 +424,7 @@ decref:
     br.cond %tmp_icmp.3 @block5 @block6
 decref_free:
     %tmp_load.21 = load ptr %tmp_alloca.11
-    heap.free %tmp_load.21
+    heap.free %tmp_load.21 tag="string cleanup"
     br @block6
 decref_end:
     %tmp_fieldptr.83 = getfieldptr ptr %tmp_alloca.15 12
@@ -445,7 +445,7 @@ decref:
     br.cond %tmp_icmp.5 @block8 @block9
 decref_free:
     %tmp_load.24 = load ptr %tmp_alloca.15
-    heap.free %tmp_load.24
+    heap.free %tmp_load.24 tag="string cleanup"
     br @block9
 decref_end:
     %tmp_fieldptr.85 = getfieldptr ptr %tmp_alloca.17 12
@@ -466,7 +466,7 @@ decref:
     br.cond %tmp_icmp.7 @block11 @block12
 decref_free:
     %tmp_load.27 = load ptr %tmp_alloca.17
-    heap.free %tmp_load.27
+    heap.free %tmp_load.27 tag="string cleanup"
     br @block12
 decref_end:
     %tmp_fieldptr.87 = getfieldptr ptr %tmp_alloca.19 12
@@ -487,7 +487,7 @@ decref:
     br.cond %tmp_icmp.9 @block14 @block15
 decref_free:
     %tmp_load.30 = load ptr %tmp_alloca.19
-    heap.free %tmp_load.30
+    heap.free %tmp_load.30 tag="string cleanup"
     br @block15
 decref_end:
     %tmp_const.99 = const.i64 i64 0
@@ -509,7 +509,7 @@ decref:
     br.cond %tmp_icmp.11 @block17 @block18
 decref_free:
     %tmp_load.33 = load ptr %b
-    heap.free %tmp_load.33
+    heap.free %tmp_load.33 tag="string cleanup"
     br @block18
 decref_end:
     %tmp_fieldptr.91 = getfieldptr ptr %a 12
@@ -530,7 +530,7 @@ decref:
     br.cond %tmp_icmp.13 @block20 @block21
 decref_free:
     %tmp_load.36 = load ptr %a
-    heap.free %tmp_load.36
+    heap.free %tmp_load.36 tag="string cleanup"
     br @block21
 decref_end:
     %tmp_fieldptr.93 = getfieldptr ptr %c 12
@@ -551,7 +551,7 @@ decref:
     br.cond %tmp_icmp.15 @block23 @block24
 decref_free:
     %tmp_load.39 = load ptr %c
-    heap.free %tmp_load.39
+    heap.free %tmp_load.39 tag="string cleanup"
     br @block24
 decref_end:
     %tmp_fieldptr.95 = getfieldptr ptr %s 12
@@ -572,7 +572,7 @@ decref:
     br.cond %tmp_icmp.17 @block26 @block27
 decref_free:
     %tmp_load.42 = load ptr %s
-    heap.free %tmp_load.42
+    heap.free %tmp_load.42 tag="string cleanup"
     br @block27
 decref_end:
     %tmp_fieldptr.97 = getfieldptr ptr %d 12
@@ -593,7 +593,7 @@ decref:
     br.cond %tmp_icmp.19 @block29 @block30
 decref_free:
     %tmp_load.45 = load ptr %d
-    heap.free %tmp_load.45
+    heap.free %tmp_load.45 tag="string cleanup"
     br @block30
 decref_end:
     ret %tmp_const.99

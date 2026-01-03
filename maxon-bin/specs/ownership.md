@@ -276,8 +276,8 @@ end 'main'
 100
 ```
 ```stdout
-ALLOC #1: 24 bytes (dynamic array)
-FREE #1: 24 bytes (dynamic array)
+ALLOC #1: 24 bytes (array buffer)
+FREE #1: 24 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 24 bytes

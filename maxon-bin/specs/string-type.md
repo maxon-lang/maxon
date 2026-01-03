@@ -1124,19 +1124,19 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 6 bytes (dynamic array)
-ALLOC #2: 7 bytes (dynamic array)
-ALLOC #3: 12 bytes (dynamic array)
-ALLOC #4: 22 bytes (dynamic array)
-ALLOC #5: 2 bytes (dynamic array)
-ALLOC #6: 4 bytes (dynamic array)
+ALLOC #1: 6 bytes (string buffer)
+ALLOC #2: 7 bytes (string buffer)
+ALLOC #3: 12 bytes (string concat)
+ALLOC #4: 22 bytes (int.toString)
+ALLOC #5: 2 bytes (string buffer)
+ALLOC #6: 4 bytes (string concat)
 11
-FREE #4: 22 bytes (dynamic array)
-FREE #5: 2 bytes (dynamic array)
-FREE #6: 4 bytes (dynamic array)
-FREE #2: 7 bytes (dynamic array)
-FREE #1: 6 bytes (dynamic array)
-FREE #3: 12 bytes (dynamic array)
+FREE #4: 22 bytes (string cleanup)
+FREE #5: 2 bytes (string cleanup)
+FREE #6: 4 bytes (string cleanup)
+FREE #2: 7 bytes (string cleanup)
+FREE #1: 6 bytes (string cleanup)
+FREE #3: 12 bytes (string cleanup)
 
 === ALLOC STATS ===
 Allocated: 53 bytes
@@ -1163,27 +1163,27 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 2 bytes (dynamic array)
-ALLOC #2: 2 bytes (dynamic array)
-ALLOC #3: 2 bytes (dynamic array)
-ALLOC #4: 2 bytes (dynamic array)
-ALLOC #5: 3 bytes (dynamic array)
-ALLOC #6: 4 bytes (dynamic array)
-ALLOC #7: 5 bytes (dynamic array)
-ALLOC #8: 22 bytes (dynamic array)
-ALLOC #9: 2 bytes (dynamic array)
-ALLOC #10: 3 bytes (dynamic array)
+ALLOC #1: 2 bytes (string buffer)
+ALLOC #2: 2 bytes (string buffer)
+ALLOC #3: 2 bytes (string buffer)
+ALLOC #4: 2 bytes (string buffer)
+ALLOC #5: 3 bytes (string concat)
+ALLOC #6: 4 bytes (string concat)
+ALLOC #7: 5 bytes (string concat)
+ALLOC #8: 22 bytes (int.toString)
+ALLOC #9: 2 bytes (string buffer)
+ALLOC #10: 3 bytes (string concat)
 4
-FREE #5: 3 bytes (dynamic array)
-FREE #6: 4 bytes (dynamic array)
-FREE #8: 22 bytes (dynamic array)
-FREE #9: 2 bytes (dynamic array)
-FREE #10: 3 bytes (dynamic array)
-FREE #2: 2 bytes (dynamic array)
-FREE #1: 2 bytes (dynamic array)
-FREE #3: 2 bytes (dynamic array)
-FREE #7: 5 bytes (dynamic array)
-FREE #4: 2 bytes (dynamic array)
+FREE #5: 3 bytes (string cleanup)
+FREE #6: 4 bytes (string cleanup)
+FREE #8: 22 bytes (string cleanup)
+FREE #9: 2 bytes (string cleanup)
+FREE #10: 3 bytes (string cleanup)
+FREE #2: 2 bytes (string cleanup)
+FREE #1: 2 bytes (string cleanup)
+FREE #3: 2 bytes (string cleanup)
+FREE #7: 5 bytes (string cleanup)
+FREE #4: 2 bytes (string cleanup)
 
 === ALLOC STATS ===
 Allocated: 47 bytes
@@ -1212,21 +1212,21 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 2 bytes (dynamic array)
-ALLOC #2: 2 bytes (dynamic array)
-ALLOC #3: 3 bytes (dynamic array)
-FREE #2: 2 bytes (dynamic array)
-ALLOC #4: 4 bytes (dynamic array)
-FREE #3: 3 bytes (dynamic array)
-ALLOC #5: 22 bytes (dynamic array)
-ALLOC #6: 2 bytes (dynamic array)
-ALLOC #7: 3 bytes (dynamic array)
+ALLOC #1: 2 bytes (string buffer)
+ALLOC #2: 2 bytes (string concat)
+ALLOC #3: 3 bytes (string concat)
+FREE #2: 2 bytes (string cleanup)
+ALLOC #4: 4 bytes (string concat)
+FREE #3: 3 bytes (string cleanup)
+ALLOC #5: 22 bytes (int.toString)
+ALLOC #6: 2 bytes (string buffer)
+ALLOC #7: 3 bytes (string concat)
 3
-FREE #5: 22 bytes (dynamic array)
-FREE #6: 2 bytes (dynamic array)
-FREE #7: 3 bytes (dynamic array)
-FREE #1: 2 bytes (dynamic array)
-FREE #4: 4 bytes (dynamic array)
+FREE #5: 22 bytes (string cleanup)
+FREE #6: 2 bytes (string cleanup)
+FREE #7: 3 bytes (string cleanup)
+FREE #1: 2 bytes (string cleanup)
+FREE #4: 4 bytes (string cleanup)
 
 === ALLOC STATS ===
 Allocated: 38 bytes
@@ -1249,15 +1249,15 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 28 bytes (dynamic array)
-ALLOC #2: 22 bytes (dynamic array)
-ALLOC #3: 2 bytes (dynamic array)
-ALLOC #4: 4 bytes (dynamic array)
+ALLOC #1: 28 bytes (string buffer)
+ALLOC #2: 22 bytes (int.toString)
+ALLOC #3: 2 bytes (string buffer)
+ALLOC #4: 4 bytes (string concat)
 27
-FREE #2: 22 bytes (dynamic array)
-FREE #3: 2 bytes (dynamic array)
-FREE #4: 4 bytes (dynamic array)
-FREE #1: 28 bytes (dynamic array)
+FREE #2: 22 bytes (string cleanup)
+FREE #3: 2 bytes (string cleanup)
+FREE #4: 4 bytes (string cleanup)
+FREE #1: 28 bytes (string cleanup)
 
 === ALLOC STATS ===
 Allocated: 56 bytes

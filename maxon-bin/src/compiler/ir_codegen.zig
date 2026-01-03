@@ -3923,8 +3923,8 @@ pub const IrCodegen = struct {
             // Save ptr to R13 across the tracking call
             try self.enc.emit(&.{ 0x49, 0x89, 0xC5 }); // mov r13, rax
 
-            // Embed tag string "dynamic array" after a jump
-            const tag = "dynamic array";
+            // Get tag from IR instruction (genHeapAlloc)
+            const tag = inst.operands[1].alloc_tag;
             const jmp_offset = try self.enc.jmpRel32();
             const tag_pos = self.code.items.len;
             try self.code.appendSlice(self.allocator, tag);
@@ -4004,8 +4004,8 @@ pub const IrCodegen = struct {
             // Save size to R14
             try self.enc.emit(&.{ 0x49, 0x89, 0xC6 }); // mov r14, rax (size)
 
-            // Embed tag string "dynamic array" after a jump
-            const tag = "dynamic array";
+            // Get tag from IR instruction
+            const tag = inst.operands[1].alloc_tag;
             const jmp_offset = try self.enc.jmpRel32();
             const tag_pos = self.code.items.len;
             try self.code.appendSlice(self.allocator, tag);
@@ -4080,8 +4080,8 @@ pub const IrCodegen = struct {
             // Save ptr to R12 across the tracking call
             try self.enc.movR12Rax();
 
-            // Embed tag string "dynamic array" after a jump
-            const tag = "dynamic array";
+            // Get tag from IR instruction
+            const tag = inst.operands[2].alloc_tag;
             const jmp_offset = try self.enc.jmpRel32();
             const tag_pos = self.code.items.len;
             try self.code.appendSlice(self.allocator, tag);
@@ -4155,8 +4155,8 @@ pub const IrCodegen = struct {
         // If tracking, call __track_realloc(old_ptr, old_size, new_ptr, new_size, tag_ptr, tag_len)
         // R12 = old_ptr, R15 = old_size, R14 = new_ptr, R13 = new_size
         if (self.track_allocs) {
-            // Embed tag string "dynamic array" after a jump
-            const tag = "dynamic array";
+            // Get tag from IR instruction
+            const tag = inst.operands[2].alloc_tag;
             const jmp_offset = try self.enc.jmpRel32();
             const tag_pos = self.code.items.len;
             try self.code.appendSlice(self.allocator, tag);
@@ -4211,10 +4211,8 @@ pub const IrCodegen = struct {
         try self.markIndirect(inst.result.?);
     }
 
-    fn emitTrackFreeCall(self: *IrCodegen) !void {
+    fn emitTrackFreeCall(self: *IrCodegen, tag: []const u8) !void {
         // Track free: ptr in R12, size in R15
-        // Embed tag string after a jump
-        const tag = "dynamic array";
         const jmp_offset = try self.enc.jmpRel32();
         const tag_pos = self.code.items.len;
         try self.code.appendSlice(self.allocator, tag);

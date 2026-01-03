@@ -19,10 +19,10 @@ end 'main'
 ExitCode: 3
 TrackAllocs: true
 Stdout: ```
-ALLOC #1: 40 bytes (dynamic array)
-ALLOC #2: 80 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
-FREE #2: 80 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+ALLOC #2: 80 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
+FREE #2: 80 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 120 bytes
@@ -41,7 +41,7 @@ entry:
     %tmp_load = load i64 %size1
     %tmp_const.2 = const.i64 i64 8
     %tmp_mul = mul i64 %tmp_load %tmp_const.2
-    %tmp_heap = heap.alloc ptr %tmp_mul
+    %tmp_heap = heap.alloc ptr %tmp_mul tag="array buffer"
     %tmp_alloca.2 = alloca.sized ptr 24
     store %tmp_alloca.2 %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
@@ -53,7 +53,7 @@ entry:
     %tmp_load.1 = load i64 %size2
     %tmp_const.3 = const.i64 i64 8
     %tmp_mul.1 = mul i64 %tmp_load.1 %tmp_const.3
-    %tmp_heap.1 = heap.alloc ptr %tmp_mul.1
+    %tmp_heap.1 = heap.alloc ptr %tmp_mul.1 tag="array buffer"
     %tmp_alloca.4 = alloca.sized ptr 24
     store %tmp_alloca.4 %tmp_heap.1
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.4 8
@@ -113,9 +113,9 @@ if_let_else:
 if_let_end:
     %tmp_load.10 = load i64 %sum
     %tmp_load.11 = load ptr %arr1
-    heap.free %tmp_load.11
+    heap.free %tmp_load.11 tag="array cleanup"
     %tmp_load.12 = load ptr %arr2
-    heap.free %tmp_load.12
+    heap.free %tmp_load.12 tag="array cleanup"
     ret %tmp_load.10
 }
 

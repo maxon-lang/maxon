@@ -14,8 +14,8 @@ end 'main'
 ExitCode: 77
 TrackAllocs: true
 Stdout: ```
-ALLOC #1: 80 bytes (dynamic array)
-FREE #1: 80 bytes (dynamic array)
+ALLOC #1: 80 bytes (array buffer)
+FREE #1: 80 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 80 bytes
@@ -36,7 +36,7 @@ entry:
     %tmp_mul = mul i64 %tmp_load %tmp_load.1
     %tmp_const.2 = const.i64 i64 8
     %tmp_mul.1 = mul i64 %tmp_mul %tmp_const.2
-    %tmp_heap = heap.alloc ptr %tmp_mul.1
+    %tmp_heap = heap.alloc ptr %tmp_mul.1 tag="array buffer"
     %tmp_alloca.2 = alloca.sized ptr 24
     store %tmp_alloca.2 %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
@@ -62,12 +62,12 @@ if_let_then:
     store %val %tmp_load.3
     %tmp_load.4 = load i64 %val
     %tmp_load.5 = load ptr %arr
-    heap.free %tmp_load.5
+    heap.free %tmp_load.5 tag="array cleanup"
     ret %tmp_load.4
 if_let_else:
     %tmp_const.7 = const.i64 i64 0
     %tmp_load.6 = load ptr %arr
-    heap.free %tmp_load.6
+    heap.free %tmp_load.6 tag="array cleanup"
     ret %tmp_const.7
 if_let_end:
 }

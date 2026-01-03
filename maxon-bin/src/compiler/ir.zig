@@ -221,6 +221,7 @@ pub const Instruction = struct {
         call_args: []const Value,
         elem_size: i32, // Element size for getelemptr
         string_data: []const u8, // String constant data
+        alloc_tag: []const u8, // Tag for heap allocations (for tracking)
     };
 };
 
@@ -556,16 +557,16 @@ pub const Function = struct {
     }
 
     // Heap allocation
-    pub fn emitHeapAlloc(self: *Function, size: Value) !Value {
-        return self.emitWithResult(.heap_alloc, .ptr, .{ .{ .value = size }, .none, .none });
+    pub fn emitHeapAlloc(self: *Function, size: Value, tag: []const u8) !Value {
+        return self.emitWithResult(.heap_alloc, .ptr, .{ .{ .value = size }, .{ .alloc_tag = tag }, .none });
     }
 
-    pub fn emitHeapFree(self: *Function, ptr: Value) !void {
-        try self.emit(.{ .op = .heap_free, .operands = .{ .{ .value = ptr }, .none, .none } });
+    pub fn emitHeapFree(self: *Function, ptr: Value, tag: []const u8) !void {
+        try self.emit(.{ .op = .heap_free, .operands = .{ .{ .value = ptr }, .{ .alloc_tag = tag }, .none } });
     }
 
-    pub fn emitHeapRealloc(self: *Function, old_ptr: Value, new_size: Value) !Value {
-        return self.emitWithResult(.heap_realloc, .ptr, .{ .{ .value = old_ptr }, .{ .value = new_size }, .none });
+    pub fn emitHeapRealloc(self: *Function, old_ptr: Value, new_size: Value, tag: []const u8) !Value {
+        return self.emitWithResult(.heap_realloc, .ptr, .{ .{ .value = old_ptr }, .{ .value = new_size }, .{ .alloc_tag = tag } });
     }
 };
 
@@ -745,6 +746,7 @@ fn printInstruction(writer: anytype, inst: Instruction, func: *const Function) !
             },
             .elem_size => |size| try writer.print(" elemsize={d}", .{size}),
             .string_data => |str| try writer.print(" \"{s}\"", .{str}),
+            .alloc_tag => |tag| try writer.print(" tag=\"{s}\"", .{tag}),
         }
     }
 }

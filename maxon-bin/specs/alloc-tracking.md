@@ -22,12 +22,12 @@ maxon compile --track-allocs myprogram.maxon
 
 Each allocation prints:
 ```text
-ALLOC #1: 80 bytes (dynamic array)
+ALLOC #1: 80 bytes (array buffer)
 ```
 
 Each free prints:
 ```text
-FREE #1: 80 bytes (dynamic array)
+FREE #1: 80 bytes (array cleanup)
 ```
 
 At exit, a summary is printed:
@@ -58,8 +58,8 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 80 bytes (dynamic array)
-FREE #1: 80 bytes (dynamic array)
+ALLOC #1: 80 bytes (array buffer)
+FREE #1: 80 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 80 bytes
@@ -109,10 +109,10 @@ end 'main'
 3
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-ALLOC #2: 80 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
-FREE #2: 80 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+ALLOC #2: 80 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
+FREE #2: 80 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 120 bytes
@@ -141,8 +141,8 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 40 bytes
@@ -171,8 +171,8 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 40 bytes
@@ -202,8 +202,8 @@ end 'main'
 99
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 40 bytes
@@ -230,8 +230,8 @@ end 'main'
 77
 ```
 ```stdout
-ALLOC #1: 80 bytes (dynamic array)
-FREE #1: 80 bytes (dynamic array)
+ALLOC #1: 80 bytes (array buffer)
+FREE #1: 80 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 80 bytes
@@ -266,8 +266,8 @@ end 'main'
 84
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 40 bytes
@@ -302,8 +302,8 @@ end 'main'
 60
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 40 bytes
@@ -333,12 +333,12 @@ end 'main'
 3
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
-ALLOC #2: 40 bytes (dynamic array)
-FREE #2: 40 bytes (dynamic array)
-ALLOC #3: 40 bytes (dynamic array)
-FREE #3: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
+ALLOC #2: 40 bytes (array buffer)
+FREE #2: 40 bytes (array cleanup)
+ALLOC #3: 40 bytes (array buffer)
+FREE #3: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 120 bytes
@@ -369,8 +369,8 @@ end 'main'
 100
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 40 bytes
@@ -414,8 +414,8 @@ end 'main'
 20
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 40 bytes
@@ -458,10 +458,10 @@ end 'main'
 109
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-ALLOC #2: 40 bytes (dynamic array)
-FREE #2: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+ALLOC #2: 40 bytes (array buffer)
+FREE #2: 40 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 80 bytes
@@ -516,10 +516,10 @@ end 'main'
 20
 ```
 ```stdout
-ALLOC #1: 40 bytes (dynamic array)
-ALLOC #2: 40 bytes (dynamic array)
-FREE #1: 40 bytes (dynamic array)
-FREE #2: 40 bytes (dynamic array)
+ALLOC #1: 40 bytes (array buffer)
+ALLOC #2: 40 bytes (array buffer)
+FREE #1: 40 bytes (array cleanup)
+FREE #2: 40 bytes (array cleanup)
 
 === ALLOC STATS ===
 Allocated: 80 bytes

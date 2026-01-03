@@ -357,7 +357,7 @@ fn handleOther(
             },
             // none, immediate_*, block_ref, func_name, elem_size, string_data:
             // These don't contain ir.Value references, so no propagation needed
-            .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data => {},
+            .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag => {},
         }
     }
 
@@ -781,7 +781,7 @@ fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
                     },
                     // none, immediate_*, block_ref, func_name, elem_size, string_data:
                     // These don't reference ir.Value, so nothing to mark as used
-                    .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data => {},
+                    .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag => {},
                 }
             }
         }

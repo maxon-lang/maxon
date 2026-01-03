@@ -513,7 +513,7 @@ pub const AstToIr = struct {
         } else {
             // Heap allocation for string data
             const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1));
-            const buffer = try self.func().emitHeapAlloc(buffer_size);
+            const buffer = try self.func().emitHeapAlloc(buffer_size, "string buffer");
 
             // Store string bytes
             for (str_bytes, 0..) |byte, i| {
@@ -691,7 +691,7 @@ pub const AstToIr = struct {
 
         // In free block: load buffer pointer and free it
         const buf_ptr = try self.func().emitLoad(string_ptr, .ptr);
-        try self.func().emitHeapFree(buf_ptr);
+        try self.func().emitHeapFree(buf_ptr, "string cleanup");
 
         // Branch to end
         try self.func().emitBr(end_block_idx);
@@ -744,7 +744,7 @@ pub const AstToIr = struct {
 
         // In free managed block: free the buffer
         const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-        try self.func().emitHeapFree(buf_ptr);
+        try self.func().emitHeapFree(buf_ptr, "string cleanup");
 
         const skip_decref_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("cstr_skip_decref");
@@ -754,7 +754,7 @@ pub const AstToIr = struct {
 
         // === FREE BLOCK: managed == null, free the data pointer ===
         const data_ptr = try self.func().emitLoad(cstring_ptr, .ptr);
-        try self.func().emitHeapFree(data_ptr);
+        try self.func().emitHeapFree(data_ptr, "cstring release");
 
         const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("cstr_cleanup_end");
@@ -1483,7 +1483,7 @@ pub const AstToIr = struct {
                 const elem_count = try self.func().emitConstI64(@intCast(elements.len));
                 const elem_size: i64 = 8;
                 const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
-                const buffer = try self.func().emitHeapAlloc(buffer_size);
+                const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
 
                 // Store elements into buffer
                 for (elements, 0..) |elem, i| {
@@ -3838,7 +3838,7 @@ pub const AstToIr = struct {
                 // __ManagedArray layout: [buffer_ptr, len, capacity] at offsets [0, 8, 16]
                 const managed_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
                 const buffer_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-                try self.func().emitHeapFree(buffer_ptr);
+                try self.func().emitHeapFree(buffer_ptr, "array cleanup");
             }
         }
 
@@ -3850,7 +3850,7 @@ pub const AstToIr = struct {
                 if (skip_if_parameter and var_info.is_parameter) return;
                 // Buffer pointer is at offset 0 within the inlined __ManagedArray
                 const buf_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
-                try self.func().emitHeapFree(buf_ptr);
+                try self.func().emitHeapFree(buf_ptr, "array cleanup");
             }
 
             // Handle String type with COW semantics
@@ -6593,7 +6593,7 @@ pub const AstToIr = struct {
         // Allocate new buffer: total_len + 1 for null terminator
         const one = try self.func().emitConstI64(1);
         const buffer_size = try self.func().emitBinaryOp(.add, total_len, one, .i64);
-        const new_buffer = try self.func().emitHeapAlloc(buffer_size);
+        const new_buffer = try self.func().emitHeapAlloc(buffer_size, "string concat");
 
         // Copy first string
         const a_buf_ptr = try self.func().emitGetFieldPtr(a_managed, 0);
@@ -6621,7 +6621,7 @@ pub const AstToIr = struct {
     fn emitIntToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Allocate buffer on heap (22 bytes max: sign + 20 digits + null)
         const buffer_size = try self.func().emitConstI64(22);
-        const buffer = try self.func().emitHeapAlloc(buffer_size);
+        const buffer = try self.func().emitHeapAlloc(buffer_size, "int.toString");
 
         // Call __runtime_int_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -6640,7 +6640,7 @@ pub const AstToIr = struct {
     fn emitFloatToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Allocate buffer (32 bytes should be enough for most floats)
         const buffer_size = try self.func().emitConstI64(32);
-        const buffer = try self.func().emitHeapAlloc(buffer_size);
+        const buffer = try self.func().emitHeapAlloc(buffer_size, "float.toString");
 
         // Call __runtime_float_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -6659,7 +6659,7 @@ pub const AstToIr = struct {
     fn emitBoolToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Create a buffer for the result (6 bytes max: "false\0")
         const buffer_size = try self.func().emitConstI64(6);
-        const buffer = try self.func().emitHeapAlloc(buffer_size);
+        const buffer = try self.func().emitHeapAlloc(buffer_size, "bool.toString");
 
         // Call __runtime_bool_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -7752,7 +7752,7 @@ pub const AstToIr = struct {
 
         // Allocate memory for enum storage
         const alloc_val = try self.func().emitConstI64(total_size);
-        const mem_ptr = try self.func().emitHeapAlloc(alloc_val);
+        const mem_ptr = try self.func().emitHeapAlloc(alloc_val, "enum storage");
         try self.func().emitStore(enum_ptr, mem_ptr);
 
         // Store tag
@@ -8431,7 +8431,7 @@ pub const AstToIr = struct {
             const elem_count = try self.func().emitConstI64(@intCast(elements.len));
             const elem_size: i64 = 8; // All elements are 8 bytes (i64, f64, or pointer)
             const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
-            const buffer = try self.func().emitHeapAlloc(buffer_size);
+            const buffer = try self.func().emitHeapAlloc(buffer_size, "set buffer");
 
             // Store elements into buffer
             for (elements, 0..) |elem, i| {
@@ -8563,8 +8563,8 @@ pub const AstToIr = struct {
             const elem_count = try self.func().emitConstI64(@intCast(entries.len));
             const elem_size: i64 = 8; // All elements are 8 bytes
             const buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(elem_size))));
-            const keys_buffer = try self.func().emitHeapAlloc(buffer_size);
-            const values_buffer = try self.func().emitHeapAlloc(buffer_size);
+            const keys_buffer = try self.func().emitHeapAlloc(buffer_size, "map buffer");
+            const values_buffer = try self.func().emitHeapAlloc(buffer_size, "map buffer");
 
             // Store entries into buffers
             for (entries, 0..) |entry, i| {
@@ -9049,7 +9049,7 @@ pub const AstToIr = struct {
         // Allocate buffer for elements on heap
         const elem_count = try self.func().emitConstI64(@intCast(elements.len));
         const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
-        const buffer = try self.func().emitHeapAlloc(buffer_size);
+        const buffer = try self.func().emitHeapAlloc(buffer_size, "set buffer");
 
         // Store elements into buffer
         for (elements, 0..) |elem, i| {
@@ -9109,8 +9109,8 @@ pub const AstToIr = struct {
         const elem_count = try self.func().emitConstI64(@intCast(entries.len));
         const elem_size: i64 = 8; // All elements are 8 bytes
         const buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(elem_size))));
-        const keys_buffer = try self.func().emitHeapAlloc(buffer_size);
-        const values_buffer = try self.func().emitHeapAlloc(buffer_size);
+        const keys_buffer = try self.func().emitHeapAlloc(buffer_size, "map buffer");
+        const values_buffer = try self.func().emitHeapAlloc(buffer_size, "map buffer");
 
         // Store entries into buffers
         for (entries, 0..) |entry, i| {
@@ -9200,7 +9200,7 @@ pub const AstToIr = struct {
             const elem_count = try self.func().emitConstI64(@intCast(elements.len));
             const elem_size: i64 = 8; // All elements are 8 bytes (i64, f64, or pointer)
             const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
-            const buffer = try self.func().emitHeapAlloc(buffer_size);
+            const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
 
             // Store elements into buffer
             for (elements, 0..) |elem, i| {
@@ -9486,7 +9486,7 @@ pub const AstToIr = struct {
         // For Array of N int, len = capacity so all elements are immediately accessible
         const elem_size = try self.func().emitConstI64(8);
         const buffer_size = try self.func().emitBinaryOp(.mul, capacity_typed.value, elem_size, .i64);
-        const buffer = try self.func().emitHeapAlloc(buffer_size);
+        const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
         const managed_ptr = try self.emitManagedArray(buffer, capacity_typed.value, capacity_typed.value);
 
         // Call Array$init(result_ptr, managed_ptr) via InitableFromArrayLiteral interface
