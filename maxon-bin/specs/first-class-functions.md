@@ -4,9 +4,9 @@ status: stable
 keywords: function, closure, callback, higher-order, function pointer
 category: functions
 ---
-## Documentation
-
 # First-Class Functions
+
+## Documentation
 
 Functions in Maxon are first-class citizens. They can be stored in variables, passed as arguments to other functions, and returned from functions.
 

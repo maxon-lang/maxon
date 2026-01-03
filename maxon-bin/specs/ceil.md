@@ -4,9 +4,9 @@ status: stable
 keywords: ceil, ceiling, rounding, math, conversion
 category: math-intrinsic
 ---
-## Documentation
-
 # ceil
+
+## Documentation
 
 Round a floating-point number up to the nearest integer (toward positive infinity).
 

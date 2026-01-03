@@ -4,8 +4,9 @@ status: stable
 keywords: struct, nested, type-size, memory
 category: semantics
 ---
+# Challenge Nested Structs
 
-# Documentation
+## Documentation
 
 ## Nested Structs
 

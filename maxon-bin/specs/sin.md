@@ -4,9 +4,9 @@ status: stable
 keywords: sin, sine, trigonometry, math, radians
 category: math-intrinsic
 ---
-## Documentation
-
 # sin
+
+## Documentation
 
 Calculate the sine of an angle (in radians).
 

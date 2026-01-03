@@ -4,8 +4,9 @@ status: stable
 keywords: array, sized, allocation, memory
 category: semantics
 ---
+# Challenge Sized Arrays
 
-# Documentation
+## Documentation
 
 ## Sized Arrays
 

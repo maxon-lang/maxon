@@ -4,9 +4,9 @@ status: stable
 keywords: hash, equals, hashable, equatable, primitives
 category: type-system
 ---
-## Documentation
-
 # Primitive Hashable and Equatable
+
+## Documentation
 
 All built-in types (`int`, `float`, `bool`, `byte`) implement the `Hashable` and `Equatable`
 interfaces, allowing them to be used in hash-based collections like `Set` and `Map`.

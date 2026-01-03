@@ -4,9 +4,9 @@ status: stable
 keywords: trunc, truncate, rounding, math, conversion
 category: math-intrinsic
 ---
-## Documentation
-
 # trunc
+
+## Documentation
 
 Truncate a floating-point number to an integer (toward zero).
 

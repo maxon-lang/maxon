@@ -4,9 +4,9 @@ status: stable
 keywords: [arrays, indexing, array literal, index access, index assignment, sized array]
 category: types
 ---
-## Documentation
-
 # Arrays
+
+## Documentation
 
 Arrays are ordered collections of elements of the same type.
 

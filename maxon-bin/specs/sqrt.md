@@ -4,9 +4,9 @@ status: stable
 keywords: sqrt, square root, math
 category: math-intrinsic
 ---
-## Documentation
-
 # sqrt
+
+## Documentation
 
 Calculate the square root of a number.
 

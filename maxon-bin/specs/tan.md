@@ -4,9 +4,9 @@ status: stable
 keywords: tan, tangent, trigonometry, math, radians
 category: math-intrinsic
 ---
-## Documentation
-
 # tan
+
+## Documentation
 
 Calculate the tangent of an angle (in radians).
 

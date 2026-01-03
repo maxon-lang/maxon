@@ -3,6 +3,8 @@ feature: managed-string-internals
 category: internals
 status: stable
 ---
+# Managed String Internals
+
 ## Documentation
 
 ### String Memory Management

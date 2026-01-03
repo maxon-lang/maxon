@@ -4,8 +4,9 @@ status: stable
 keywords: struct, lifetime, return, stack, heap
 category: semantics
 ---
+# Challenge Struct Lifetime
 
-# Documentation
+## Documentation
 
 ## Struct Lifetime
 

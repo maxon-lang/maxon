@@ -3,6 +3,8 @@ feature: managed-array-internals
 category: internals
 status: stable
 ---
+# Managed Array Internals
+
 ## Documentation
 
 ### Array Memory Management

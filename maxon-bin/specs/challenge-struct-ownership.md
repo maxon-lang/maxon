@@ -4,8 +4,9 @@ status: stable
 keywords: struct, ownership, borrow, move
 category: semantics
 ---
+# Challenge Struct Ownership
 
-# Documentation
+## Documentation
 
 ## Struct Ownership
 

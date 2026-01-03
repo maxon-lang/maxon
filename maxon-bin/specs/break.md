@@ -4,9 +4,9 @@ status: stable
 keywords: break, loop, control flow, exit
 category: control-flow
 ---
-## Documentation
-
 # Break Statement
+
+## Documentation
 
 Exit from the innermost enclosing loop.
 

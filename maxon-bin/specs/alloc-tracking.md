@@ -4,9 +4,9 @@ status: stable
 keywords: [memory, allocation, tracking, debug, heap]
 category: debugging
 ---
-## Documentation
-
 # Allocation Tracking
+
+## Documentation
 
 Debug memory issues by tracking heap allocations at runtime.
 

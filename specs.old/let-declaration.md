@@ -4,9 +4,9 @@ status: stable
 keywords: let, immutable, constant, declaration
 category: declaration
 ---
-## Documentation
-
 # Let Declaration (Immutable)
+
+## Documentation
 
 Declare an immutable variable that cannot be reassigned.
 

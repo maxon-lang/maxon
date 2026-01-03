@@ -4,9 +4,9 @@ status: stable
 keywords: while, loop, iteration, control flow
 category: control-flow
 ---
-## Documentation
-
 # While Loops
+
+## Documentation
 
 Execute a block of code repeatedly while a condition is true.
 

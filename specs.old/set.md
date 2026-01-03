@@ -4,9 +4,9 @@ status: stable
 keywords: set, collection, hash, unique, contains, insert, remove
 category: collections
 ---
-## Documentation
-
 # Set
+
+## Documentation
 
 A `Set` is a collection of unique elements. It provides fast membership testing, insertion, and removal using hash-based lookup.
 

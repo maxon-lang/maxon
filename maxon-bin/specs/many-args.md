@@ -4,9 +4,9 @@ status: stable
 keywords: functions, arguments, calling-convention
 category: functions
 ---
-## Documentation
-
 # Functions with Many Arguments
+
+## Documentation
 
 Maxon supports functions with any number of arguments. The first 4 arguments are passed
 in registers, while additional arguments are passed on the stack following the Windows

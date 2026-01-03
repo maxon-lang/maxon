@@ -4,9 +4,9 @@ status: stable
 keywords: abs, absolute value, math
 category: math-intrinsic
 ---
-## Documentation
-
 # abs
+
+## Documentation
 
 Calculate the absolute value of a number.
 

@@ -4,9 +4,9 @@ status: stable
 keywords: var, variable, declaration, mutable
 category: declaration
 ---
-## Documentation
-
 # Variable Declaration (var)
+
+## Documentation
 
 Declare a mutable variable that can be reassigned.
 

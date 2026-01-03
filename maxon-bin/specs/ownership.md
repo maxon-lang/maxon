@@ -4,8 +4,9 @@ status: stable
 keywords: ownership, borrow, move
 category: semantics
 ---
+# Ownership
 
-# Documentation
+## Documentation
 
 ## Ownership Model
 

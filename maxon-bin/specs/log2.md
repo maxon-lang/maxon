@@ -4,9 +4,9 @@ status: stable
 keywords: log2, logarithm, base-2, math
 category: stdlib
 ---
-## Documentation
-
 # log2
+
+## Documentation
 
 Calculate the base-2 logarithm of a number.
 

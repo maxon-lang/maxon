@@ -4,9 +4,9 @@ status: experimental
 keywords: match, then, gives, fallthrough, default
 category: control-flow
 ---
-## Documentation
-
 # Match Statements
+
+## Documentation
 
 Match statements provide pattern matching on values, allowing you to execute different code based on the value of an expression. Each case is a single line with exactly one statement.
 

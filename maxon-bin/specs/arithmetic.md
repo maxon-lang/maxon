@@ -4,9 +4,9 @@ status: stable
 keywords: arithmetic, operators, math
 category: operators
 ---
-## Documentation
-
 # Arithmetic Operators
+
+## Documentation
 
 Maxon supports basic arithmetic operators for integers:
 

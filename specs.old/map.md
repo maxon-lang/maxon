@@ -4,9 +4,9 @@ status: stable
 keywords: map, dictionary, hash, key-value, contains, insert, remove, get
 category: collections
 ---
-## Documentation
-
 # Map
+
+## Documentation
 
 A `map` is a collection that stores key-value pairs. It provides fast lookup, insertion, and removal using hash-based indexing.
 

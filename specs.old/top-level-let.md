@@ -4,8 +4,9 @@ status: stable
 keywords: let, global, constant, compile-time
 category: language
 ---
+# Top Level Let
 
-# Documentation
+## Documentation
 
 ## Top-Level Let Declarations
 

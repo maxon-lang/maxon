@@ -4,9 +4,9 @@ status: experimental
 keywords: stdlib, array, intrinsics, __ManagedArray, internal
 category: type-system
 ---
-## Documentation
-
 # Stdlib Array Intrinsics
+
+## Documentation
 
 The stdlib Array type uses compiler intrinsics for low-level array operations. These intrinsics are not available to user code.
 

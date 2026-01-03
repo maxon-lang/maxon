@@ -4,9 +4,9 @@ status: stable
 keywords: cos, cosine, trigonometry, math, radians
 category: math-intrinsic
 ---
-## Documentation
-
 # cos
+
+## Documentation
 
 Calculate the cosine of an angle (in radians).
 

@@ -4,9 +4,9 @@ status: stable
 keywords: block, identifier, error, validation, duplicate
 category: error-handling
 ---
-## Documentation
-
 # Duplicate Block Identifiers
+
+## Documentation
 
 The compiler prevents using the same block identifier for multiple blocks within overlapping scopes.
 

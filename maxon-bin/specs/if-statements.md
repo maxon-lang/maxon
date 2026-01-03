@@ -4,9 +4,9 @@ status: stable
 keywords: if, else, conditional, branching, control flow
 category: control-flow
 ---
-## Documentation
-
 # If Statements
+
+## Documentation
 
 Execute code conditionally based on a boolean expression.
 

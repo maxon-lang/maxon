@@ -4,9 +4,9 @@ status: stable
 keywords: variables, let, var
 category: declaration
 ---
-## Documentation
-
 # Variables
+
+## Documentation
 
 Maxon supports two kinds of variable declarations:
 

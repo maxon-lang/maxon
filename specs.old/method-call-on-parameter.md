@@ -4,9 +4,9 @@ status: stable
 keywords: method, call, parameter, same type, sibling
 category: expressions
 ---
-## Documentation
-
 # Method Calls on Parameters of the Same Type
+
+## Documentation
 
 When writing a method, you can call other methods on parameters that have the same type as `self`.
 

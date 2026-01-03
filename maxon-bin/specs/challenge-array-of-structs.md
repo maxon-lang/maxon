@@ -4,8 +4,9 @@ status: stable
 keywords: array, struct, elements, memory
 category: semantics
 ---
+# Challenge Array Of Structs
 
-# Documentation
+## Documentation
 
 ## Arrays of Structs
 

@@ -4,9 +4,9 @@ status: stable
 keywords: floor, rounding, math, conversion
 category: math-intrinsic
 ---
-## Documentation
-
 # floor
+
+## Documentation
 
 Round a floating-point number down to the nearest integer (toward negative infinity).
 

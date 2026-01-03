@@ -4,9 +4,9 @@ status: stable
 keywords: collection, array, map, transform, functional, higher-order, get, set, count
 category: stdlib
 ---
-## Documentation
-
 # Collection
+
+## Documentation
 
 The `Collection` interface provides indexed access and functional operations for ordered collections like arrays.
 

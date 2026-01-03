@@ -4,9 +4,9 @@ status: stable
 keywords: log10, logarithm, base-10, math
 category: stdlib
 ---
-## Documentation
-
 # log10
+
+## Documentation
 
 Calculate the base-10 logarithm of a number.
 
