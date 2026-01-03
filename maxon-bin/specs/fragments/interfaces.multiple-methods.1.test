@@ -1,0 +1,57 @@
+// Test: interfaces.multiple-methods.1
+interface Describable
+    function describe() returns int
+    function value() returns int
+end 'Describable'
+
+type Counter is Describable
+    var count int
+
+    function Describable.describe() returns int
+        return 100 + count
+    end 'describe'
+
+    function Describable.value() returns int
+        return count
+    end 'value'
+end 'Counter'
+
+function main() returns int
+    var c = Counter{count: 42}
+    return c.describe() + c.value()
+end 'main'
+---
+ExitCode: 184
+---
+function main() -> i64 {
+entry:
+    %c = alloca.sized ptr 8
+    memset %c 0 8
+    %tmp_fieldptr = getfieldptr ptr %c 0
+    %tmp_const = const.i64 i64 42
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call i64 @Counter$describe(%c)
+    %tmp_call.1 = call i64 @Counter$value(%c)
+    %tmp_add = add i64 %tmp_call %tmp_call.1
+    ret %tmp_add
+}
+
+function Counter$describe() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_const = const.i64 i64 100
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_add = add i64 %tmp_const %tmp_load
+    ret %tmp_add
+}
+
+function Counter$value() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+---

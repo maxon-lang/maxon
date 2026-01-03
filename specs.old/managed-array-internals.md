@@ -29,7 +29,7 @@ Small arrays with known size at compile time use stack allocation. Arrays that g
 
 ```maxon
 var stack = [1, 2, 3]  // Stack allocated (capacity = 0)
-var heap = array of int
+var heap = Array of int
 heap.push(1)  // Heap allocated (capacity > 0)
 ```
 
@@ -43,7 +43,7 @@ Arrays are automatically released when they go out of scope:
 
 ```maxon
 if true 'scope'
-    var temp = array of int
+    var temp = Array of int
     temp.push(1)
     // temp is released here
 end 'scope'
@@ -58,7 +58,7 @@ end 'scope'
 Arrays that grow via push() should allocate on heap and free properly.
 ```maxon
 function main() returns int
-    var arr = array of int
+    var arr = Array of int
     arr.push(1)
     arr.push(2)
     arr.push(3)
@@ -100,10 +100,10 @@ Heap arrays in inner scopes should be cleaned up on scope exit.
 ```maxon
 function main() returns int
     if true 'outer'
-        var outer_arr = array of int
+        var outer_arr = Array of int
         outer_arr.push(100)
         if true 'inner'
-            var inner_arr = array of int
+            var inner_arr = Array of int
             inner_arr.push(200)
             print("{inner_arr[0]}\n")
         end 'inner'
@@ -201,7 +201,7 @@ Leaked:    0 bytes
 Growing an array in a loop should release old buffers properly.
 ```maxon
 function main() returns int
-    var arr = array of int
+    var arr = Array of int
     var i = 0
     while i < 10 'loop'
         arr.push(i)
@@ -252,7 +252,7 @@ Leaked:    0 bytes
 Calling `.count()` on an array field of a struct should work correctly.
 ```maxon
 type Config
-    var sources array of String
+    var sources Array of String
 end 'Config'
 
 function main() returns int

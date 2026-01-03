@@ -1,0 +1,30 @@
+// Test: command-line-args.args-length-no-extra.1
+function main(args Array of String) returns int
+    // Without extra args, count should be 1 (just program name)
+    return args.count()
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_call = call ptr @__get_command_args()
+    %args = alloca ptr
+    store %args %tmp_call
+    %tmp_load = load ptr %args
+    %tmp_call.1 = call i64 @Array$String$count(%tmp_load)
+    %tmp_load.1 = load ptr %args
+    heap.free %tmp_load.1
+    ret %tmp_call.1
+}
+
+function Array$String$count() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load = load i64 %tmp_fieldptr.1
+    ret %tmp_load
+}
+
+---

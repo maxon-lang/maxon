@@ -130,6 +130,7 @@ pub const Fragment = struct {
         switch (self.expected) {
             .success => |s| {
                 if (s.stdout) |stdout| allocator.free(stdout);
+                if (s.run_args) |args| allocator.free(args);
             },
             .compiler_error => |err| allocator.free(err),
         }
@@ -540,7 +541,7 @@ pub fn parseFragment(allocator: std.mem.Allocator, content: []const u8, file_pat
     const metadata = content[metadata_start..second_sep];
 
     // Parse expected output
-    const expected = try parseExpected(allocator, metadata);
+    const expected = try parseExpected(allocator, metadata, file_path);
 
     return Fragment{
         .name = name,
@@ -550,7 +551,7 @@ pub fn parseFragment(allocator: std.mem.Allocator, content: []const u8, file_pat
     };
 }
 
-fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8) !testing.TestExpectation {
+fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8, file_path: []const u8) !testing.TestExpectation {
     // Check for MaxoncStderr (error test)
     if (std.mem.indexOf(u8, metadata, "MaxoncStderr:")) |_| {
         // Extract error message between ``` markers
@@ -568,6 +569,7 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8) !testing.Te
     var exit_code: u8 = 0;
     var stdout: ?[]const u8 = null;
     var track_allocs: bool = false;
+    var run_args: ?[]const u8 = null;
 
     var lines = std.mem.splitScalar(u8, metadata, '\n');
     while (lines.next()) |line| {
@@ -575,7 +577,10 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8) !testing.Te
 
         if (std.mem.startsWith(u8, trimmed, "ExitCode:")) {
             const value = std.mem.trim(u8, trimmed[9..], " \t");
-            exit_code = std.fmt.parseInt(u8, value, 10) catch return error.InvalidExitCode;
+            exit_code = std.fmt.parseInt(u8, value, 10) catch {
+                std.debug.print("InvalidExitCode in {s}: could not parse '{s}' as exit code\n", .{ file_path, value });
+                return error.InvalidExitCode;
+            };
         } else if (std.mem.startsWith(u8, trimmed, "Stdout:")) {
             const value = std.mem.trim(u8, trimmed[7..], " \t");
             // Check for multiline block format: Stdout: ```
@@ -601,6 +606,11 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8) !testing.Te
         } else if (std.mem.startsWith(u8, trimmed, "TrackAllocs:")) {
             const value = std.mem.trim(u8, trimmed[12..], " \t");
             track_allocs = std.mem.eql(u8, value, "true");
+        } else if (std.mem.startsWith(u8, trimmed, "Args:")) {
+            const value = std.mem.trim(u8, trimmed[5..], " \t");
+            if (value.len > 0) {
+                run_args = try allocator.dupe(u8, value);
+            }
         }
     }
 
@@ -608,6 +618,7 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8) !testing.Te
         .exit_code = exit_code,
         .stdout = stdout,
         .track_allocs = track_allocs,
+        .run_args = run_args,
     } };
 }
 
@@ -753,8 +764,8 @@ fn runTest(
                 return .{ .name = fragment.name, .status = .failed, .message = msg };
             }
 
-            // Run the executable
-            const run_result = runExecutable(allocator, temp_exe) catch |err| {
+            // Run the executable with optional arguments
+            const run_result = runExecutable(allocator, temp_exe, expected.run_args) catch |err| {
                 const msg = if (err == error.ProcessTimeout) "Test timed out (possible infinite loop)" else "Failed to run executable";
                 return .{ .name = fragment.name, .status = .failed, .message = msg };
             };
@@ -886,7 +897,7 @@ extern "kernel32" fn TerminateProcess(
     uExitCode: c_uint,
 ) callconv(.winapi) std.os.windows.BOOL;
 
-fn runExecutable(allocator: std.mem.Allocator, exe_path: []const u8) !ProcessResult {
+fn runExecutable(allocator: std.mem.Allocator, exe_path: []const u8, run_args: ?[]const u8) !ProcessResult {
     const windows = std.os.windows;
     const kernel32 = windows.kernel32;
 
@@ -909,10 +920,17 @@ fn runExecutable(allocator: std.mem.Allocator, exe_path: []const u8) !ProcessRes
         return error.SetJobInfoFailed;
     }
 
-    // Convert exe path to null-terminated wide string
-    var exe_path_w: [std.fs.max_path_bytes:0]u16 = undefined;
-    const exe_path_len = std.unicode.wtf8ToWtf16Le(&exe_path_w, exe_path) catch return error.InvalidPath;
-    exe_path_w[exe_path_len] = 0;
+    // Build command line with optional arguments
+    const cmd_line = if (run_args) |args|
+        std.fmt.allocPrint(allocator, "\"{s}\" {s}", .{ exe_path, args }) catch return error.OutOfMemory
+    else
+        std.fmt.allocPrint(allocator, "\"{s}\"", .{exe_path}) catch return error.OutOfMemory;
+    defer allocator.free(cmd_line);
+
+    // Convert command line to null-terminated wide string
+    var cmd_line_w: [std.fs.max_path_bytes * 2:0]u16 = undefined;
+    const cmd_line_len = std.unicode.wtf8ToWtf16Le(&cmd_line_w, cmd_line) catch return error.InvalidPath;
+    cmd_line_w[cmd_line_len] = 0;
 
     // Set up startup info
     var si: windows.STARTUPINFOW = std.mem.zeroes(windows.STARTUPINFOW);
@@ -947,8 +965,8 @@ fn runExecutable(allocator: std.mem.Allocator, exe_path: []const u8) !ProcessRes
     var pi: windows.PROCESS_INFORMATION = undefined;
     const creation_flags: windows.CreateProcessFlags = .{ .create_suspended = true };
     if (kernel32.CreateProcessW(
-        @ptrCast(&exe_path_w),
-        null,
+        null, // lpApplicationName - null means use command line
+        @ptrCast(&cmd_line_w),
         null,
         null,
         1, // Inherit handles = TRUE

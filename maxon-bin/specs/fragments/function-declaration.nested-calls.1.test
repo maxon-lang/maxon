@@ -1,0 +1,45 @@
+// Test: function-declaration.nested-calls.1
+function double(x int) returns int
+    return x * 2
+end 'double'
+
+function quadruple(x int) returns int
+    return double(double(x))
+end 'quadruple'
+
+function main() returns int
+    return quadruple(3)
+end 'main'
+---
+ExitCode: 12
+---
+function double() -> i64 {
+entry:
+    %x = param i64 0
+    %x.1 = alloca ptr
+    store %x.1 %x
+    %tmp_load = load i64 %x.1
+    %tmp_const = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_load %tmp_const
+    ret %tmp_mul
+}
+
+function quadruple() -> i64 {
+entry:
+    %x = param i64 0
+    %x.1 = alloca ptr
+    store %x.1 %x
+    %tmp_load = load i64 %x.1
+    %tmp_call = call i64 @double(%tmp_load)
+    %tmp_call.1 = call i64 @double(%tmp_call)
+    ret %tmp_call.1
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 3
+    %tmp_call = call i64 @quadruple(%tmp_const)
+    ret %tmp_call
+}
+
+---

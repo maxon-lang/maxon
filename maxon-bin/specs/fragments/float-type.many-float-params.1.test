@@ -1,0 +1,102 @@
+// Test: float-type.many-float-params.1
+// Test function with 12 float parameters
+// On Windows x64: first 4 arrive in XMM0-3, rest on caller's stack
+// This tests both register and stack-passed float parameters
+function sumFloats(a float, b float, c float, d float, e float, f float, g float, h float, i float, j float, k float, l float) returns float
+    return a + b + c + d + e + f + g + h + i + j + k + l
+end 'sumFloats'
+
+function main() returns int
+    var result = sumFloats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0)
+    return trunc(result)
+end 'main'
+---
+ExitCode: 78
+---
+function sumFloats() -> f64 {
+entry:
+    %a = param f64 0
+    %a.1 = alloca ptr
+    store %a.1 %a
+    %b = param f64 1
+    %b.1 = alloca ptr
+    store %b.1 %b
+    %c = param f64 2
+    %c.1 = alloca ptr
+    store %c.1 %c
+    %d = param f64 3
+    %d.1 = alloca ptr
+    store %d.1 %d
+    %e = param f64 4
+    %e.1 = alloca ptr
+    store %e.1 %e
+    %f = param f64 5
+    %f.1 = alloca ptr
+    store %f.1 %f
+    %g = param f64 6
+    %g.1 = alloca ptr
+    store %g.1 %g
+    %h = param f64 7
+    %h.1 = alloca ptr
+    store %h.1 %h
+    %i = param f64 8
+    %i.1 = alloca ptr
+    store %i.1 %i
+    %j = param f64 9
+    %j.1 = alloca ptr
+    store %j.1 %j
+    %k = param f64 10
+    %k.1 = alloca ptr
+    store %k.1 %k
+    %l = param f64 11
+    %l.1 = alloca ptr
+    store %l.1 %l
+    %tmp_load = load f64 %a.1
+    %tmp_load.1 = load f64 %b.1
+    %tmp_fadd = fadd f64 %tmp_load %tmp_load.1
+    %tmp_load.2 = load f64 %c.1
+    %tmp_fadd.1 = fadd f64 %tmp_fadd %tmp_load.2
+    %tmp_load.3 = load f64 %d.1
+    %tmp_fadd.2 = fadd f64 %tmp_fadd.1 %tmp_load.3
+    %tmp_load.4 = load f64 %e.1
+    %tmp_fadd.3 = fadd f64 %tmp_fadd.2 %tmp_load.4
+    %tmp_load.5 = load f64 %f.1
+    %tmp_fadd.4 = fadd f64 %tmp_fadd.3 %tmp_load.5
+    %tmp_load.6 = load f64 %g.1
+    %tmp_fadd.5 = fadd f64 %tmp_fadd.4 %tmp_load.6
+    %tmp_load.7 = load f64 %h.1
+    %tmp_fadd.6 = fadd f64 %tmp_fadd.5 %tmp_load.7
+    %tmp_load.8 = load f64 %i.1
+    %tmp_fadd.7 = fadd f64 %tmp_fadd.6 %tmp_load.8
+    %tmp_load.9 = load f64 %j.1
+    %tmp_fadd.8 = fadd f64 %tmp_fadd.7 %tmp_load.9
+    %tmp_load.10 = load f64 %k.1
+    %tmp_fadd.9 = fadd f64 %tmp_fadd.8 %tmp_load.10
+    %tmp_load.11 = load f64 %l.1
+    %tmp_fadd.10 = fadd f64 %tmp_fadd.9 %tmp_load.11
+    ret %tmp_fadd.10
+}
+
+function main() -> i64 {
+entry:
+    %tmp_fconst = const.f64 f64 1
+    %tmp_fconst.1 = const.f64 f64 2
+    %tmp_fconst.2 = const.f64 f64 3
+    %tmp_fconst.3 = const.f64 f64 4
+    %tmp_fconst.4 = const.f64 f64 5
+    %tmp_fconst.5 = const.f64 f64 6
+    %tmp_fconst.6 = const.f64 f64 7
+    %tmp_fconst.7 = const.f64 f64 8
+    %tmp_fconst.8 = const.f64 f64 9
+    %tmp_fconst.9 = const.f64 f64 10
+    %tmp_fconst.10 = const.f64 f64 11
+    %tmp_fconst.11 = const.f64 f64 12
+    %tmp_call = call f64 @sumFloats(%tmp_fconst, %tmp_fconst.1, %tmp_fconst.2, %tmp_fconst.3, %tmp_fconst.4, %tmp_fconst.5, %tmp_fconst.6, %tmp_fconst.7, %tmp_fconst.8, %tmp_fconst.9, %tmp_fconst.10, %tmp_fconst.11)
+    %result = alloca ptr
+    store %result %tmp_call
+    %tmp_load = load f64 %result
+    %tmp_fptosi = fptosi i64 %tmp_load
+    ret %tmp_fptosi
+}
+
+---

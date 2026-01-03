@@ -1,0 +1,31 @@
+// Test: interfaces.partial-implementation-error.1
+interface ThreeMethods
+    function one() returns int
+    function two() returns int
+    function three() returns int
+end 'ThreeMethods'
+
+type Incomplete is ThreeMethods
+    var value int
+
+    function ThreeMethods.one() returns int
+        return 1
+    end 'one'
+end 'Incomplete'
+
+function main() returns int
+    return 0
+end 'main'
+---
+MaxoncStderr: ```
+Semantic Error: temp_fragment.maxon:8:1
+Partial interface implementation: type 'Incomplete' is missing 2 method(s):
+  - two() returns int
+  - three() returns int
+
+  8 | type Incomplete is ThreeMethods
+    | ^
+```
+---
+// IR: N/A (compiler error test)
+---

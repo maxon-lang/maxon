@@ -9,7 +9,7 @@ category: functions
 
 ## Developer Notes
 
-Command line arguments are passed to `main()` as an array of Strings when the signature includes `args array of String`.
+Command line arguments are passed to `main()` as an Array of Strings when the signature includes `args Array of String`.
 
 ### Main Function Signatures
 
@@ -21,7 +21,7 @@ The `main()` function supports two signatures:
 ### Implementation
 
 **Parser:**
-- `parseMainFunction()` in `parser.cpp` detects the `args array of String` parameter
+- `parseMainFunction()` in `parser.cpp` detects the `args Array of String` parameter
 - Sets `mainTakesArgs` flag when the signature includes args parameter
 
 **Codegen (codegen_mir.cpp):**
@@ -33,11 +33,11 @@ The `main()` function supports two signatures:
 - `__get_command_args()` function implemented in `runtime_windows.mir`
 - Uses Windows APIs: `GetCommandLineW()`, `CommandLineToArgvW()`, `WideCharToMultiByte()`
 - Converts wide strings to UTF-8 encoded Maxon strings
-- Returns array of String structs (16 bytes each for SSO layout)
+- Returns Array of String structs (16 bytes each for SSO layout)
 
 ### Memory Layout
 
-The args array is a `array of String` (dynamic array of Strings):
+The args array is a `Array of String` (dynamic Array of Strings):
 - Array struct: `{ ptr data, i32 length, i32 capacity }`
 - Each string element: 16 bytes (SSO format - see string-type.md)
 
@@ -50,12 +50,12 @@ The args array is a `array of String` (dynamic array of Strings):
 
 # Command Line Arguments
 
-Access command line arguments in Maxon by adding `args array of String` parameter to `main()`.
+Access command line arguments in Maxon by adding `args Array of String` parameter to `main()`.
 
 ## Syntax
 
 ```text
-function main(args array of String) returns int
+function main(args Array of String) returns int
     // args[0] is the program name/path
     // args[1..n] are user-provided arguments
     return 0
@@ -71,7 +71,7 @@ end 'main'
 ## Example
 
 ```text
-function main(args array of String) returns int
+function main(args Array of String) returns int
     print("Program: ")
     print(args[0])
     
@@ -93,7 +93,7 @@ First argument: hello
 ## Iterating Over Arguments
 
 ```text
-function main(args array of String) returns int
+function main(args Array of String) returns int
     for arg in args 'loop'
         print(arg)
     end 'loop'
@@ -112,7 +112,7 @@ end 'main'
 
 <!-- test: args-length-no-extra -->
 ```maxon
-function main(args array of String) returns int
+function main(args Array of String) returns int
     // Without extra args, count should be 1 (just program name)
     return args.count()
 end 'main'
@@ -124,7 +124,7 @@ end 'main'
 <!-- test: args-with-one-arg -->
 <!-- Args: hello -->
 ```maxon
-function main(args array of String) returns int
+function main(args Array of String) returns int
     return args.count()
 end 'main'
 ```
@@ -135,7 +135,7 @@ end 'main'
 <!-- test: args-with-multiple-args -->
 <!-- Args: one two three -->
 ```maxon
-function main(args array of String) returns int
+function main(args Array of String) returns int
     return args.count()
 end 'main'
 ```
@@ -146,7 +146,7 @@ end 'main'
 <!-- test: access-first-arg -->
 <!-- Args: hello -->
 ```maxon
-function main(args array of String) returns int
+function main(args Array of String) returns int
     print(args[1])
     return 0
 end 'main'
@@ -161,10 +161,13 @@ hello
 <!-- test: access-multiple-args -->
 <!-- Args: foo bar baz -->
 ```maxon
-function main(args array of String) returns int
+function main(args Array of String) returns int
     print(args[1])
+    print("\n")
     print(args[2])
+    print("\n")
     print(args[3])
+    print("\n")
     return 0
 end 'main'
 ```
@@ -180,10 +183,11 @@ baz
 <!-- test: iterate-args -->
 <!-- Args: a b c -->
 ```maxon
-function main(args array of String) returns int
+function main(args Array of String) returns int
     var i = 1
     while i < args.count() 'loop'
         print(args[i])
+        print("\n")
         i = i + 1
     end 'loop'
     return 0
@@ -201,7 +205,7 @@ c
 <!-- test: numeric-args -->
 <!-- Args: 42 -->
 ```maxon
-function main(args array of String) returns int
+function main(args Array of String) returns int
     // Args are strings, just verify we can access them
     if args.count() == 2 'check'
         print(args[1])
@@ -220,7 +224,7 @@ end 'main'
 <!-- test: empty-string-arg -->
 <!-- Args: "" -->
 ```maxon
-function main(args array of String) returns int
+function main(args Array of String) returns int
     // Empty quoted arg
     if args[1] == "" 'check'
         return 0
@@ -235,7 +239,7 @@ end 'main'
 <!-- test: arg-with-equals -->
 <!-- Args: --key=value -->
 ```maxon
-function main(args array of String) returns int
+function main(args Array of String) returns int
     print(args[1])
     return 0
 end 'main'

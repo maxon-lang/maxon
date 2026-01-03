@@ -2634,9 +2634,19 @@ pub const AstToIr = struct {
         const ir_func = try self.module.addFunctionWithExport(decl.name, sret_info.ir_type, decl.is_export);
         const param_offset = try self.setupFunctionState(ir_func, decl.name, sret_info);
 
-        // Register parameters (offset by 1 if using sret)
-        for (decl.params, 0..) |param, i| {
-            try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
+        // Check if this is main with args parameter
+        const is_main_with_args = std.mem.eql(u8, decl.name, "main") and
+            decl.params.len == 1 and
+            self.isArgsArrayOfString(decl.params[0].type_expr);
+
+        if (is_main_with_args) {
+            // For main(args array of String), call __get_command_args() and bind result
+            try self.registerMainArgsParameter(decl.params[0]);
+        } else {
+            // Register parameters normally (offset by 1 if using sret)
+            for (decl.params, 0..) |param, i| {
+                try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
+            }
         }
 
         // Convert body and add implicit return for void functions
@@ -2745,6 +2755,47 @@ pub const AstToIr = struct {
                 ));
             },
         }
+    }
+
+    /// Check if a type expression is "array of String" (the type for main's args parameter)
+    fn isArgsArrayOfString(self: *AstToIr, type_expr: ast.TypeExpr) bool {
+        _ = self;
+        switch (type_expr) {
+            .generic => |gen| {
+                // Check for "Array of String" or "array of String"
+                if (!std.mem.eql(u8, gen.base_type, "Array") and !std.mem.eql(u8, gen.base_type, "array")) {
+                    return false;
+                }
+                // Must have exactly one type argument (the element type)
+                if (gen.type_args.len != 1) return false;
+                // Element type must be "String" or "string"
+                return std.mem.eql(u8, gen.type_args[0], "String") or std.mem.eql(u8, gen.type_args[0], "string");
+            },
+            else => return false,
+        }
+    }
+
+    /// Register the args parameter for main(args array of String)
+    /// Calls __get_command_args() to get the command line arguments
+    fn registerMainArgsParameter(self: *AstToIr, param: ast.ParamDecl) !void {
+        // Call __get_command_args() to get the array pointer
+        const args = try self.allocator.alloc(ir.Value, 0);
+        const result_ptr = try self.func().emitCall("__get_command_args", args, .ptr);
+        const array_ptr = result_ptr orelse return error.SemanticError;
+
+        // Store the pointer in a stack slot for the args variable
+        const slot_ptr = try self.func().emitAlloca(.ptr);
+        try self.func().setValueName(slot_ptr, param.name);
+        try self.func().emitStore(slot_ptr, array_ptr);
+
+        // Register the variable with Array$String type info
+        const value_type = ValueType{ .struct_type = "Array$String" };
+        try self.var_map.put(self.allocator, param.name, VarInfo.init(
+            slot_ptr,
+            value_type,
+            true, // is_initialized
+            true, // uses_slot
+        ));
     }
 
     // ------------------------------------------------------------------------
@@ -6128,8 +6179,28 @@ pub const AstToIr = struct {
             return .{ .value = result, .ty = .{ .primitive = "bool" } };
         } else if (left_is_optional) {
             // Left is optional, right is a value - unwrap left and compare
-            // Load the value from offset 8 of the optional
+            // Get pointer to the value at offset 8 of the optional
             const value_ptr = try self.func().emitGetFieldPtr(left.value, 8);
+
+            // Check if the wrapped type is a struct that implements Equatable
+            if (left.ty.optional_type.wrapped_struct_type) |struct_name| {
+                if (self.typeConformsTo(struct_name, "Equatable")) {
+                    if (cmp.op == .eq or cmp.op == .ne) {
+                        // Call equals method: unwrapped_left.equals(right)
+                        const equals_result = try self.emitMethodCallWithIrArgs(struct_name, "equals", &.{right.value}, value_ptr);
+
+                        if (cmp.op == .eq) {
+                            return .{ .value = equals_result.value, .ty = .{ .primitive = "bool" } };
+                        } else {
+                            const zero = try self.func().emitConstI64(0);
+                            const negated = try self.func().emitBinaryOp(.icmp_eq, equals_result.value, zero, .i64);
+                            return .{ .value = negated, .ty = .{ .primitive = "bool" } };
+                        }
+                    }
+                }
+            }
+
+            // Fall back to primitive comparison
             const left_val = try self.func().emitLoad(value_ptr, left.ty.optional_type.wrapped);
 
             const op: ir.Instruction.Op = switch (cmp.op) {
@@ -6144,8 +6215,28 @@ pub const AstToIr = struct {
             return .{ .value = result, .ty = .{ .primitive = "bool" } };
         } else if (right_is_optional) {
             // Right is optional, left is a value - unwrap right and compare
-            // Load the value from offset 8 of the optional
+            // Get pointer to the value at offset 8 of the optional
             const value_ptr = try self.func().emitGetFieldPtr(right.value, 8);
+
+            // Check if the wrapped type is a struct that implements Equatable
+            if (right.ty.optional_type.wrapped_struct_type) |struct_name| {
+                if (self.typeConformsTo(struct_name, "Equatable")) {
+                    if (cmp.op == .eq or cmp.op == .ne) {
+                        // Call equals method: left.equals(unwrapped_right)
+                        const equals_result = try self.emitMethodCallWithIrArgs(struct_name, "equals", &.{value_ptr}, left.value);
+
+                        if (cmp.op == .eq) {
+                            return .{ .value = equals_result.value, .ty = .{ .primitive = "bool" } };
+                        } else {
+                            const zero = try self.func().emitConstI64(0);
+                            const negated = try self.func().emitBinaryOp(.icmp_eq, equals_result.value, zero, .i64);
+                            return .{ .value = negated, .ty = .{ .primitive = "bool" } };
+                        }
+                    }
+                }
+            }
+
+            // Fall back to primitive comparison
             const right_val = try self.func().emitLoad(value_ptr, right.ty.optional_type.wrapped);
 
             const op: ir.Instruction.Op = switch (cmp.op) {
@@ -6202,12 +6293,62 @@ pub const AstToIr = struct {
             }
         }
 
+        // Type checking for comparison operands - disallow int/float mixing
+        const left_type_name = if (left.ty == .primitive) left.ty.primitive else null;
+        const right_type_name = if (right.ty == .primitive) right.ty.primitive else null;
+
+        if (left_type_name != null and right_type_name != null) {
+            const left_is_int = std.mem.eql(u8, left_type_name.?, "int");
+            const left_is_float = std.mem.eql(u8, left_type_name.?, "float");
+            const left_is_byte = std.mem.eql(u8, left_type_name.?, "byte");
+            const right_is_int = std.mem.eql(u8, right_type_name.?, "int");
+            const right_is_float = std.mem.eql(u8, right_type_name.?, "float");
+            const right_is_byte = std.mem.eql(u8, right_type_name.?, "byte");
+
+            // Check for int/float mismatch (either direction)
+            if ((left_is_int and right_is_float) or (left_is_float and right_is_int)) {
+                self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_type_name.?, right_type_name.? }) catch "type mismatch in comparison");
+                return error.TypeMismatch;
+            }
+
+            // Check for byte vs int literal - allow if literal is in range 0-255
+            if (left_is_byte and right_is_int) {
+                // Right is int - check if it's a literal in range
+                if (cmp.right.* == .integer) {
+                    const lit_value = cmp.right.integer;
+                    if (lit_value < 0 or lit_value > 255) {
+                        self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_type_name.?, right_type_name.? }) catch "type mismatch in comparison");
+                        return error.TypeMismatch;
+                    }
+                    // Literal is in range - allow the comparison
+                } else {
+                    // Right is an int variable, not a literal - error
+                    self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_type_name.?, right_type_name.? }) catch "type mismatch in comparison");
+                    return error.TypeMismatch;
+                }
+            } else if (right_is_byte and left_is_int) {
+                // Left is int - check if it's a literal in range
+                if (cmp.left.* == .integer) {
+                    const lit_value = cmp.left.integer;
+                    if (lit_value < 0 or lit_value > 255) {
+                        self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_type_name.?, right_type_name.? }) catch "type mismatch in comparison");
+                        return error.TypeMismatch;
+                    }
+                    // Literal is in range - allow the comparison
+                } else {
+                    // Left is an int variable, not a literal - error
+                    self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_type_name.?, right_type_name.? }) catch "type mismatch in comparison");
+                    return error.TypeMismatch;
+                }
+            }
+        }
+
         const left_prim = left.ty.toPrimitiveType();
         const right_prim = right.ty.toPrimitiveType();
 
-        // If either operand is float, use float comparison
+        // If either operand is float, use float comparison (only reached for float vs float)
         if (left_prim == .f64 or right_prim == .f64) {
-            // Promote int to float if needed
+            // Both must be float at this point (int/float mismatch already caught above)
             const left_val = if (left_prim == .i64)
                 try self.func().emitUnaryOp(.sitofp, left.value, .f64)
             else
@@ -6806,10 +6947,34 @@ pub const AstToIr = struct {
         for (call.args, 0..) |arg_expr, i| {
             const arg = try self.convertExpression(arg_expr);
             var arg_value = arg.value;
+            var arg_ty = arg.ty;
+
+            // Implicit optional unwrap: if arg is optional but param expects the wrapped type
+            if (i < func_info.param_types.len) {
+                const param_ty = func_info.param_types[i].ty;
+                if (arg_ty == .optional_type and param_ty != .optional_type) {
+                    // Check if param type matches the wrapped type
+                    const opt_info = arg_ty.optional_type;
+                    const param_matches = blk: {
+                        if (param_ty == .struct_type) {
+                            if (opt_info.wrapped_struct_type) |wrapped_name| {
+                                break :blk std.mem.eql(u8, param_ty.struct_type, wrapped_name);
+                            }
+                        }
+                        break :blk param_ty == .primitive and
+                            std.mem.eql(u8, param_ty.primitive, opt_info.wrapped.toMaxonName());
+                    };
+                    if (param_matches) {
+                        // Unwrap optional: get pointer to value (offset 8 from optional start)
+                        arg_value = try self.func().emitGetFieldPtr(arg_value, 8);
+                        arg_ty = param_ty;
+                    }
+                }
+            }
 
             // Implicit int→float promotion: if parameter expects float but arg is int
             if (i < func_info.param_types.len) {
-                arg_value = try self.applyIntToFloatPromotion(arg_value, arg.ty, func_info.param_types[i].ty);
+                arg_value = try self.applyIntToFloatPromotion(arg_value, arg_ty, func_info.param_types[i].ty);
             }
 
             args[i + arg_offset] = arg_value;
@@ -6929,16 +7094,37 @@ pub const AstToIr = struct {
 
     /// Index into a __ManagedArray: managed[i]
     /// Returns the element as an optional (bounds-checked)
+    /// Uses current_type_name to determine element type (e.g., Array$String -> String)
     fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression) ConvertError!TypedValue {
         const idx_typed = try self.convertExpression(index_expr);
+
+        // Extract element type from current_type_name (e.g., "Array$String" -> "String")
+        const elem_type_name: ?[]const u8 = if (self.current_type_name) |type_name| blk: {
+            if (std.mem.startsWith(u8, type_name, "Array$")) {
+                break :blk type_name[6..]; // Skip "Array$" prefix
+            }
+            break :blk null;
+        } else null;
+
+        // Determine element size and whether it's a struct
+        const ElemInfo = struct { size: i32, is_struct: bool, name: ?[]const u8 };
+        const elem_info: ElemInfo = if (elem_type_name) |tn| blk: {
+            if (self.type_map.get(tn)) |type_info| {
+                if (type_info == .struct_type) {
+                    break :blk ElemInfo{ .size = type_info.struct_type.size, .is_struct = true, .name = tn };
+                }
+            }
+            break :blk ElemInfo{ .size = 8, .is_struct = false, .name = tn };
+        } else ElemInfo{ .size = 8, .is_struct = false, .name = null };
 
         // Load buffer pointer (offset 0) and length (offset 8)
         const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
         const len_ptr = try self.func().emitGetFieldPtr(managed_ptr, 8);
         const len = try self.func().emitLoad(len_ptr, .i64);
 
-        // Allocate the result optional (16 bytes)
-        const opt_ptr = try self.func().emitAllocaSized(16);
+        // Calculate optional size: 8 (tag) + element size
+        const opt_size: i32 = 8 + elem_info.size;
+        const opt_ptr = try self.func().emitAllocaSized(opt_size);
 
         // Bounds check: index >= 0 AND index < len
         const zero = try self.func().emitConstI64(0);
@@ -6954,14 +7140,26 @@ pub const AstToIr = struct {
         const one_val = try self.func().emitConstI64(1);
         try self.func().emitStore(opt_ptr, one_val); // tag = 1
 
-        // Calculate element pointer: buf_ptr + index * 8
-        const eight = try self.func().emitConstI64(8);
-        const offset = try self.func().emitBinaryOp(.mul, idx_typed.value, eight, .i64);
+        // Calculate element pointer: buf_ptr + index * elem_size
+        const elem_size_val = try self.func().emitConstI64(elem_info.size);
+        const offset = try self.func().emitBinaryOp(.mul, idx_typed.value, elem_size_val, .i64);
         const elem_ptr = try self.func().emitBinaryOp(.add, buf_ptr, offset, .ptr);
-        const val = try self.func().emitLoad(elem_ptr, .i64);
 
         const value_slot = try self.func().emitGetFieldPtr(opt_ptr, 8);
-        try self.func().emitStore(value_slot, val);
+
+        if (elem_info.is_struct) {
+            // For struct elements, copy the struct data into the optional
+            // Note: we use plain memcpy here, not emitStructCopy, because:
+            // 1. emitStructCopy creates branch blocks for refcount handling that would
+            //    interfere with the BranchBuilder's block management
+            // 2. For read-only access (indexing), we're borrowing the data, not taking ownership
+            // If the caller wants ownership, they will copy and incref separately.
+            try self.func().emitMemcpy(value_slot, elem_ptr, elem_info.size);
+        } else {
+            // For primitive elements, load and store the value
+            const val = try self.func().emitLoad(elem_ptr, .i64);
+            try self.func().emitStore(value_slot, val);
+        }
 
         // Switch to else block
         try branch.switchToElse(true);
@@ -6973,12 +7171,12 @@ pub const AstToIr = struct {
         // Switch to merge block
         try branch.switchToMerge(true);
 
-        // Return the optional (element type is i64 for now)
+        // Return the optional with proper type info
         return .{
             .value = opt_ptr,
             .ty = .{ .optional_type = .{
-                .wrapped = .i64,
-                .wrapped_struct_type = null,
+                .wrapped = if (elem_info.is_struct) .ptr else .i64,
+                .wrapped_struct_type = elem_info.name,
             } },
         };
     }
@@ -8328,7 +8526,22 @@ fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
 /// Helper: get ValueType from TypeExpr for function parameters
 fn getValueTypeFromTypeExprForParam(te: ast.TypeExpr) ValueType {
     return switch (te) {
-        .simple => |name| .{ .primitive = name },
+        .simple => |name| blk: {
+            // Known primitives are primitive types
+            if (std.mem.eql(u8, name, "int") or
+                std.mem.eql(u8, name, "float") or
+                std.mem.eql(u8, name, "bool") or
+                std.mem.eql(u8, name, "byte") or
+                std.mem.eql(u8, name, "ptr") or
+                std.mem.eql(u8, name, "void") or
+                std.mem.eql(u8, name, "string") or
+                std.mem.eql(u8, name, "character"))
+            {
+                break :blk .{ .primitive = name };
+            }
+            // All other simple types (including String) are struct types
+            break :blk .{ .struct_type = name };
+        },
         .generic => |gen| .{ .struct_type = gen.base_type },
         .optional => |wrapped| .{
             .optional_type = .{

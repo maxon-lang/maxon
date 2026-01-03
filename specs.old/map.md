@@ -74,9 +74,9 @@ map<K,V> struct:
 **Struct Definition (stdlib/collections/map.maxon):**
 ```text
 export type map uses Key, Value is Dictionary with Key, Value
-    var keys array of Key
-    var values array of Value
-    var states array of byte
+    var keys Array of Key
+    var values Array of Value
+    var states Array of byte
     var count int
     var capacity int
 ```

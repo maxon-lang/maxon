@@ -139,9 +139,29 @@ fn extractTestsFromSection(
             }
         }
 
+        // Check for optional Args marker before the code block: <!-- Args: arg1 arg2 -->
+        var run_args: ?[]const u8 = null;
+        errdefer if (run_args) |args| allocator.free(args);
+        if (std.mem.indexOfPos(u8, section, pos, "<!-- Args:")) |args_start| {
+            // Only if it's before the code block
+            if (std.mem.indexOfPos(u8, section, pos, "```maxon")) |code_start| {
+                if (args_start < code_start) {
+                    if (std.mem.indexOfPos(u8, section, args_start, "-->")) |args_end| {
+                        const args_content = section[args_start + 10 .. args_end];
+                        const trimmed_args = std.mem.trim(u8, args_content, " \t\r\n");
+                        if (trimmed_args.len > 0) {
+                            run_args = try allocator.dupe(u8, trimmed_args);
+                        }
+                    }
+                }
+            }
+        }
+
         // Find the ```maxon block
         const code_block = try findCodeBlock(section, pos, "maxon") orelse {
             allocator.free(full_name);
+            if (run_args) |args| allocator.free(args);
+            run_args = null;
             continue;
         };
         pos = code_block.end;
@@ -150,21 +170,29 @@ fn extractTestsFromSection(
         errdefer allocator.free(source);
 
         // Find expected output: either ```exitcode or ```maxoncstderr
-        const expected = try parseExpectedOutput(allocator, section, pos) orelse {
+        const expected = try parseExpectedOutput(allocator, section, pos, spec_name) orelse {
             allocator.free(full_name);
             allocator.free(source);
+            if (run_args) |args| allocator.free(args);
+            run_args = null;
             continue;
         };
         pos = expected.end_pos;
 
-        // Apply track_allocs to success expectations
+        // Apply track_allocs and run_args to success expectations
         var final_expectation = expected.expectation;
-        if (track_allocs) {
-            switch (final_expectation) {
-                .success => |*s| s.track_allocs = true,
-                .compiler_error => {},
-            }
+        switch (final_expectation) {
+            .success => |*s| {
+                if (track_allocs) s.track_allocs = true;
+                if (run_args) |args| s.run_args = args;
+            },
+            .compiler_error => {
+                // Free run_args if test is an error test (won't be used)
+                if (run_args) |args| allocator.free(args);
+            },
         }
+        // run_args ownership transferred to expectation, clear errdefer
+        run_args = null;
 
         try test_cases.append(allocator, testing.TestCase{
             .name = full_name,
@@ -194,7 +222,7 @@ fn extractDocExamples(
         }
 
         // Try to find expected output immediately after
-        const expected = parseExpectedOutput(allocator, section, pos) catch continue orelse continue;
+        const expected = parseExpectedOutput(allocator, section, pos, spec_name) catch continue orelse continue;
         pos = expected.end_pos;
 
         // Build doc example name
@@ -270,7 +298,7 @@ const ExpectedOutput = struct {
     end_pos: usize,
 };
 
-fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_pos: usize) ParseError!?ExpectedOutput {
+fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_pos: usize, spec_name: []const u8) ParseError!?ExpectedOutput {
     // Look for ```exitcode, ```stdout, or ```maxoncstderr
     const next_block_marker = std.mem.indexOfPos(u8, content, start_pos, "```") orelse return null;
 
@@ -296,6 +324,7 @@ fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_
                 const exit_code_str = std.mem.trim(u8, exitcode_block.content, " \t\r\n");
                 const exit_code = std.fmt.parseInt(u8, exit_code_str, 10) catch {
                     allocator.free(stdout_text);
+                    std.debug.print("InvalidExitCode in {s}: could not parse '{s}' as exit code\n", .{ spec_name, exit_code_str });
                     return ParseError.InvalidExitCode;
                 };
                 return ExpectedOutput{
@@ -317,11 +346,11 @@ fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_
 
         const exit_code_str = std.mem.trim(u8, content[content_start..block_end], " \t\r\n");
         const exit_code = std.fmt.parseInt(u8, exit_code_str, 10) catch {
-            std.debug.print("InvalidExitCode: could not parse '{s}' as exit code at position {d}\n", .{ exit_code_str, content_start });
+            std.debug.print("InvalidExitCode in {s}: could not parse '{s}' as exit code at position {d}\n", .{ spec_name, exit_code_str, content_start });
             // Show context around the error
             const context_start = if (start_pos > 200) start_pos - 200 else 0;
             const context_end = @min(block_end + 100, content.len);
-            std.debug.print("Context:\n---\n{s}\n---\n", .{ content[context_start..context_end] });
+            std.debug.print("Context:\n---\n{s}\n---\n", .{content[context_start..context_end]});
             return ParseError.InvalidExitCode;
         };
 

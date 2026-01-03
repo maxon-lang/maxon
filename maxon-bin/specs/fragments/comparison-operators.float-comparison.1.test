@@ -1,0 +1,33 @@
+// Test: comparison-operators.float-comparison.1
+function main() returns int
+    var x = 3.5
+    var y = 2.1
+    if x > y 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_fconst = const.f64 f64 3.5
+    %x = alloca ptr
+    store %x %tmp_fconst
+    %tmp_fconst.1 = const.f64 f64 2.1
+    %y = alloca ptr
+    store %y %tmp_fconst.1
+    %tmp_load = load f64 %x
+    %tmp_load.1 = load f64 %y
+    %tmp_fcmp = fcmp.gt i64 %tmp_load %tmp_load.1
+    br.cond %tmp_fcmp @block1 @block2
+then:
+    %tmp_const = const.i64 i64 1
+    ret %tmp_const
+end:
+    %tmp_const.1 = const.i64 i64 0
+    ret %tmp_const.1
+}
+
+---

@@ -1,0 +1,111 @@
+// Test: command-line-args.numeric-args.1
+function main(args Array of String) returns int
+    // Args are strings, just verify we can access them
+    if args.count() == 2 'check'
+        print(args[1])
+        return 0
+    end 'check'
+    return 1
+end 'main'
+---
+ExitCode: 0
+Args: 42
+Stdout: 42
+---
+function main() -> i64 {
+entry:
+    %tmp_call = call ptr @__get_command_args()
+    %args = alloca ptr
+    store %args %tmp_call
+    %tmp_load = load ptr %args
+    %tmp_call.1 = call i64 @Array$String$count(%tmp_load)
+    %tmp_const = const.i64 i64 2
+    %tmp_icmp = icmp.eq i64 %tmp_call.1 %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_load.1 = load ptr %args
+    %tmp_const.1 = const.i64 i64 1
+    %tmp_alloca.1 = alloca.sized ptr 40
+    %tmp_call.2 = call ptr @Array$String$get(%tmp_alloca.1, %tmp_load.1, %tmp_const.1)
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
+    %tmp_call.3 = call i64 @print(%tmp_fieldptr)
+    %tmp_const.2 = const.i64 i64 0
+    %tmp_load.2 = load ptr %args
+    heap.free %tmp_load.2
+    ret %tmp_const.2
+end:
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_load.3 = load ptr %args
+    heap.free %tmp_load.3
+    ret %tmp_const.3
+}
+
+function Array$String$count() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load = load i64 %tmp_fieldptr.1
+    ret %tmp_load
+}
+
+function Array$String$get() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    %index = param i64 2
+    %index.1 = alloca ptr
+    store %index.1 %index
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %len = alloca ptr
+    store %len %tmp_load
+    %tmp_load.1 = load i64 %index.1
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.lt i64 %tmp_load.1 %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 0
+    store %tmp_param %tmp_const.1
+    ret %tmp_param
+end:
+    %tmp_load.2 = load i64 %index.1
+    %tmp_load.3 = load i64 %len
+    %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.3
+    br.cond %tmp_icmp.1 @block3 @block4
+then:
+    %tmp_const.2 = const.i64 i64 0
+    store %tmp_param %tmp_const.2
+    ret %tmp_param
+end:
+    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_load.4 = load i64 %index.1
+    %tmp_load.5 = load ptr %tmp_fieldptr.2
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 8
+    %tmp_load.6 = load i64 %tmp_fieldptr.3
+    %tmp_alloca.2 = alloca.sized ptr 40
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_icmp.2 = icmp.ge i64 %tmp_load.4 %tmp_const.3
+    %tmp_icmp.3 = icmp.lt i64 %tmp_load.4 %tmp_load.6
+    %tmp_mul = mul i64 %tmp_icmp.2 %tmp_icmp.3
+    br.cond %tmp_mul @block5 @block6
+managed_index_in_bounds:
+    %tmp_const.4 = const.i64 i64 1
+    store %tmp_alloca.2 %tmp_const.4
+    %tmp_const.5 = const.i64 i64 32
+    %tmp_mul.1 = mul i64 %tmp_load.4 %tmp_const.5
+    %tmp_add = add ptr %tmp_load.5 %tmp_mul.1
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
+    memcpy %tmp_fieldptr.4 %tmp_add 32
+    br @block7
+managed_index_out_of_bounds:
+    %tmp_const.6 = const.i64 i64 0
+    store %tmp_alloca.2 %tmp_const.6
+    br @block7
+managed_index_merge:
+    memcpy %tmp_param %tmp_alloca.2 40
+    ret %tmp_param
+}
+
+---

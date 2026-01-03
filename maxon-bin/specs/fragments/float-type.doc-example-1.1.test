@@ -1,0 +1,37 @@
+// Test: float-type.doc-example-1.1
+function circleArea(radius float) returns float
+    return 3.14159 * radius * radius
+end 'circleArea'
+
+function main() returns int
+    var area = circleArea(5.0)
+    return trunc(area)  // Returns 78
+end 'main'
+---
+ExitCode: 78
+---
+function circleArea() -> f64 {
+entry:
+    %radius = param f64 0
+    %radius.1 = alloca ptr
+    store %radius.1 %radius
+    %tmp_fconst = const.f64 f64 3.14159
+    %tmp_load = load f64 %radius.1
+    %tmp_fmul = fmul f64 %tmp_fconst %tmp_load
+    %tmp_load.1 = load f64 %radius.1
+    %tmp_fmul.1 = fmul f64 %tmp_fmul %tmp_load.1
+    ret %tmp_fmul.1
+}
+
+function main() -> i64 {
+entry:
+    %tmp_fconst = const.f64 f64 5
+    %tmp_call = call f64 @circleArea(%tmp_fconst)
+    %area = alloca ptr
+    store %area %tmp_call
+    %tmp_load = load f64 %area
+    %tmp_fptosi = fptosi i64 %tmp_load
+    ret %tmp_fptosi
+}
+
+---

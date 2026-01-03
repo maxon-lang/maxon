@@ -1,0 +1,31 @@
+// Test: contextual-literal-typing.int-literal-vs-byte-valid.1
+function main() returns int
+    var b = 42 as byte
+    if b == 42 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 42
+    %tmp_const.1 = const.i64 i64 255
+    %tmp_band = band i64 %tmp_const %tmp_const.1
+    %b = alloca ptr
+    store %b %tmp_band
+    %tmp_load = load i64 %b
+    %tmp_const.2 = const.i64 i64 42
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.2
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.3 = const.i64 i64 1
+    ret %tmp_const.3
+end:
+    %tmp_const.4 = const.i64 i64 0
+    ret %tmp_const.4
+}
+
+---

@@ -305,6 +305,10 @@ fn writeFragment(
             if (s.track_allocs) {
                 try content.appendSlice(allocator, "TrackAllocs: true\n");
             }
+            if (s.run_args) |run_args| {
+                const args_line = try std.fmt.allocPrint(allocator, "Args: {s}\n", .{run_args});
+                try content.appendSlice(allocator, args_line);
+            }
             if (s.stdout) |stdout| {
                 // Use multiline format with ``` block if stdout contains newlines
                 if (std.mem.indexOf(u8, stdout, "\n") != null) {

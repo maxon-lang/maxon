@@ -36,9 +36,9 @@ Types conforming to `InitableFromStringLiteral` can be initialized from string l
 
 ```maxon
 type MyString is InitableFromStringLiteral
-    var _managed _ManagedString
+    var _managed __ManagedString
 
-    static function InitableFromStringLiteral.init(managed _ManagedString) returns MyString
+    static function InitableFromStringLiteral.init(managed __ManagedString) returns MyString
         return MyString{_managed: managed}
     end 'init'
 
@@ -65,9 +65,9 @@ Types conforming to `InitableFromCharLiteral` can be initialized from character 
 
 ```maxon
 type MyChar is InitableFromCharLiteral
-    var _managed _ManagedString
+    var _managed __ManagedString
 
-    static function InitableFromCharLiteral.init(managed _ManagedString) returns MyChar
+    static function InitableFromCharLiteral.init(managed __ManagedString) returns MyChar
         return MyChar{_managed: managed}
     end 'init'
 
@@ -94,9 +94,9 @@ end 'main'
 ```maxon
 // User-defined type that wraps a string and can be created from string literals
 type Wrapper is InitableFromStringLiteral
-    var _managed _ManagedString
+    var _managed __ManagedString
 
-    static function InitableFromStringLiteral.init(managed _ManagedString) returns Wrapper
+    static function InitableFromStringLiteral.init(managed __ManagedString) returns Wrapper
         return Wrapper{_managed: managed}
     end 'init'
 
@@ -117,9 +117,9 @@ end 'main'
 <!-- test: init-from-string-literal-empty -->
 ```maxon
 type Wrapper is InitableFromStringLiteral
-    var _managed _ManagedString
+    var _managed __ManagedString
 
-    static function InitableFromStringLiteral.init(managed _ManagedString) returns Wrapper
+    static function InitableFromStringLiteral.init(managed __ManagedString) returns Wrapper
         return Wrapper{_managed: managed}
     end 'init'
 
@@ -140,9 +140,9 @@ len: 0
 <!-- test: init-from-char-literal-basic -->
 ```maxon
 type CharWrapper is InitableFromCharLiteral
-    var _managed _ManagedString
+    var _managed __ManagedString
 
-    static function InitableFromCharLiteral.init(managed _ManagedString) returns CharWrapper
+    static function InitableFromCharLiteral.init(managed __ManagedString) returns CharWrapper
         return CharWrapper{_managed: managed}
     end 'init'
 

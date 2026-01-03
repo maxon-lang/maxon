@@ -1,0 +1,80 @@
+// Test: function-declaration.discard-multiple-parameters.1
+function useThird(_ int, _ String, c int) returns int
+    return c
+end 'useThird'
+
+function main() returns int
+    return useThird(1, "ignored", 99)
+end 'main'
+---
+ExitCode: 99
+---
+function useThird() -> i64 {
+entry:
+    %c = param i64 2
+    %c.1 = alloca ptr
+    store %c.1 %c
+    %tmp_load = load i64 %c.1
+    ret %tmp_load
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 1
+    %tmp_alloca = alloca.sized ptr 24
+    %tmp_const.1 = const.i64 i64 8
+    %tmp_heap = heap.alloc ptr %tmp_const.1
+    %tmp_const.2 = const.i64 i64 0
+    %5 = getelemptr ptr %tmp_heap %tmp_const.2 elemsize=1
+    %tmp_const.3 = const.i8 i8 105
+    store.i8 %5 %tmp_const.3
+    %tmp_const.4 = const.i64 i64 1
+    %8 = getelemptr ptr %tmp_heap %tmp_const.4 elemsize=1
+    %tmp_const.5 = const.i8 i8 103
+    store.i8 %8 %tmp_const.5
+    %tmp_const.6 = const.i64 i64 2
+    %11 = getelemptr ptr %tmp_heap %tmp_const.6 elemsize=1
+    %tmp_const.7 = const.i8 i8 110
+    store.i8 %11 %tmp_const.7
+    %tmp_const.8 = const.i64 i64 3
+    %14 = getelemptr ptr %tmp_heap %tmp_const.8 elemsize=1
+    %tmp_const.9 = const.i8 i8 111
+    store.i8 %14 %tmp_const.9
+    %tmp_const.10 = const.i64 i64 4
+    %17 = getelemptr ptr %tmp_heap %tmp_const.10 elemsize=1
+    %tmp_const.11 = const.i8 i8 114
+    store.i8 %17 %tmp_const.11
+    %tmp_const.12 = const.i64 i64 5
+    %20 = getelemptr ptr %tmp_heap %tmp_const.12 elemsize=1
+    %tmp_const.13 = const.i8 i8 101
+    store.i8 %20 %tmp_const.13
+    %tmp_const.14 = const.i64 i64 6
+    %23 = getelemptr ptr %tmp_heap %tmp_const.14 elemsize=1
+    %tmp_const.15 = const.i8 i8 100
+    store.i8 %23 %tmp_const.15
+    %tmp_const.16 = const.i64 i64 7
+    %26 = getelemptr ptr %tmp_heap %tmp_const.16 elemsize=1
+    %tmp_const.17 = const.i8 i8 0
+    store.i8 %26 %tmp_const.17
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca 0
+    store %tmp_fieldptr %tmp_heap
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 8
+    %tmp_const.18 = const.i32 i32 7
+    store.i32 %tmp_fieldptr.1 %tmp_const.18
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca 12
+    %tmp_const.19 = const.i32 i32 29
+    store.i32 %tmp_fieldptr.2 %tmp_const.19
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca 16
+    %tmp_const.20 = const.i32 i32 0
+    store.i32 %tmp_fieldptr.3 %tmp_const.20
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca 20
+    %tmp_const.21 = const.i32 i32 0
+    store.i32 %tmp_fieldptr.4 %tmp_const.21
+    %tmp_alloca.1 = alloca.sized ptr 32
+    %tmp_call = call ptr @String$init(%tmp_alloca.1, %tmp_alloca)
+    %tmp_const.22 = const.i64 i64 99
+    %tmp_call.1 = call i64 @useThird(%tmp_const, %tmp_alloca.1, %tmp_const.22)
+    ret %tmp_call.1
+}
+
+---

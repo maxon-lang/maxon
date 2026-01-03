@@ -41,6 +41,7 @@ pub const TestCase = struct {
         switch (self.expected) {
             .success => |s| {
                 if (s.stdout) |stdout| allocator.free(stdout);
+                if (s.run_args) |args| allocator.free(args);
             },
             .compiler_error => |err| allocator.free(err),
         }
@@ -57,6 +58,7 @@ pub const SuccessExpectation = struct {
     exit_code: u8,
     stdout: ?[]const u8, // Optional expected stdout
     track_allocs: bool = false, // Enable allocation tracking
+    run_args: ?[]const u8 = null, // Command-line arguments to pass to the test executable
 };
 
 /// Result of running a test

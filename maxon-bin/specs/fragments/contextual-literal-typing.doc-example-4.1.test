@@ -1,0 +1,20 @@
+// Test: contextual-literal-typing.doc-example-4.1
+function main() returns int
+    var x = sqrt(16.0)
+    return trunc(x)
+end 'main'
+---
+ExitCode: 4
+---
+function main() -> i64 {
+entry:
+    %tmp_fconst = const.f64 f64 16
+    %tmp_fsqrt = fsqrt f64 %tmp_fconst
+    %x = alloca ptr
+    store %x %tmp_fsqrt
+    %tmp_load = load f64 %x
+    %tmp_fptosi = fptosi i64 %tmp_load
+    ret %tmp_fptosi
+}
+
+---

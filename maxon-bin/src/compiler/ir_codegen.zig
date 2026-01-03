@@ -475,6 +475,9 @@ pub const IrCodegen = struct {
         try self.generateDirIsDirectory();
         try self.generateDirList();
 
+        // Generate command-line args runtime function
+        try self.generateGetCommandArgs();
+
         // Generate tracking support functions if enabled
         if (self.track_allocs) {
             try self.generateTrackingFunctions();
@@ -2057,6 +2060,253 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x48, 0x31, 0xC0 }); // xor rax, rax
 
         // Epilogue
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __get_command_args() -> ptr to Array$String structure
+    /// Uses Windows APIs: GetCommandLineW, CommandLineToArgvW, WideCharToMultiByte
+    /// Returns a heap-allocated Array$String structure
+    ///
+    /// Array$String layout (32 bytes):
+    ///   [0]  __ManagedArray managed (24 bytes: ptr + len + cap)
+    ///   [24] int iterIndex (8 bytes)
+    /// = 32 bytes total
+    ///
+    /// __ManagedArray layout (24 bytes):
+    ///   [0]  ptr buffer  (8 bytes) - points to heap array of String elements
+    ///   [8]  i64 length  (8 bytes)
+    ///   [16] i64 capacity (8 bytes)
+    ///
+    /// String layout (32 bytes):
+    ///   [0]  __ManagedString _managed (24 bytes)
+    ///   [24] int _iterPos (8 bytes)
+    ///
+    /// __ManagedString layout (24 bytes):
+    ///   [0]  ptr buffer (8 bytes)
+    ///   [8]  i32 len    (4 bytes)
+    ///   [12] i32 cap_flags (4 bytes) - capacity with mode flags in low 2 bits (0b01 = heap)
+    ///   [16] i32 refcount (4 bytes)
+    ///   [20] i32 parent_off (4 bytes)
+    fn generateGetCommandArgs(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__get_command_args", self.code.items.len);
+
+        // Prologue with large stack frame for local storage
+        // Stack layout:
+        //   [rbp-8]   argc (from CommandLineToArgvW)
+        //   [rbp-16]  argv_w (wide string array from CommandLineToArgvW)
+        //   [rbp-24]  heap handle
+        //   [rbp-32]  result ptr (Array$String struct)
+        //   [rbp-40]  strings array ptr (array of String elements)
+        //   [rbp-48]  loop counter i
+        //   [rbp-56]  current wide string ptr
+        //   [rbp-64]  utf8 buffer size needed
+        //   [rbp-72]  utf8 buffer ptr
+        //   [rbp-80]  current String element ptr
+        //   [rbp-88]  __ManagedString ptr for current string
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x60 }); // sub rsp, 96
+
+        // Also save callee-saved registers we'll use
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
+        try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
+        try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
+
+        // Get process heap and save it
+        try self.enc.allocShadowSpace();
+        try self.emitExternalCallAfterSetup("kernel32.dll", "GetProcessHeap");
+        try self.enc.freeShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xE8 }); // mov [rbp-24], rax (heap)
+
+        // Call GetCommandLineW() to get command line as wide string
+        try self.enc.allocShadowSpace();
+        try self.emitExternalCallAfterSetup("kernel32.dll", "GetCommandLineW");
+        try self.enc.freeShadowSpace();
+        // RAX = wide command line string
+
+        // Call CommandLineToArgvW(lpCmdLine=RAX, pNumArgs=&argc)
+        // LEA RDX, [RBP-8] for argc output
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x55, 0xF8 }); // lea rdx, [rbp-8]
+        try self.enc.emit(&.{ 0x48, 0x89, 0xC1 }); // mov rcx, rax (command line)
+        try self.enc.allocShadowSpace();
+        try self.emitExternalCallAfterSetup("shell32.dll", "CommandLineToArgvW");
+        try self.enc.freeShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xF0 }); // mov [rbp-16], rax (argv_w)
+
+        // Load argc to R12 for use throughout
+        try self.enc.emit(&.{ 0x44, 0x8B, 0x65, 0xF8 }); // mov r12d, [rbp-8] (argc as 32-bit)
+        try self.enc.emit(&.{ 0x4D, 0x63, 0xE4 }); // movsxd r12, r12d (sign extend to 64-bit)
+
+        // Allocate Array$String struct (32 bytes)
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE8 }); // mov rcx, [rbp-24] (heap)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (flags = 0)
+        try self.enc.emit(&.{ 0x49, 0xC7, 0xC0, 0x20, 0x00, 0x00, 0x00 }); // mov r8, 32
+        try self.emitExternalCallAfterSetup("kernel32.dll", "HeapAlloc");
+        try self.enc.freeShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xE0 }); // mov [rbp-32], rax (result)
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (result in R15)
+
+        // Allocate strings array: argc * 32 bytes (each String is 32 bytes)
+        // Size = R12 * 32
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xE0 }); // mov rax, r12 (argc)
+        try self.enc.emit(&.{ 0x48, 0xC1, 0xE0, 0x05 }); // shl rax, 5 (multiply by 32)
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC5 }); // mov r13, rax (size)
+
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE8 }); // mov rcx, [rbp-24] (heap)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (flags = 0)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xE8 }); // mov rax, r13
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC0 }); // mov r8, rax (size)
+        try self.emitExternalCallAfterSetup("kernel32.dll", "HeapAlloc");
+        try self.enc.freeShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xD8 }); // mov [rbp-40], rax (strings array)
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC6 }); // mov r14, rax (strings array in R14)
+
+        // Initialize Array$String struct:
+        // [R15+0] = strings array ptr
+        // [R15+8] = argc (length)
+        // [R15+16] = argc (capacity)
+        // [R15+24] = 0 (iterIndex)
+        try self.enc.emit(&.{ 0x4D, 0x89, 0x37 }); // mov [r15], r14 (buffer ptr)
+        // Note: use REX.W prefix for 64-bit stores
+        try self.enc.emit(&.{ 0x4D, 0x89, 0x67, 0x08 }); // mov [r15+8], r12 (length)
+        try self.enc.emit(&.{ 0x4D, 0x89, 0x67, 0x10 }); // mov [r15+16], r12 (capacity)
+        try self.enc.emit(&.{ 0x49, 0xC7, 0x47, 0x18, 0x00, 0x00, 0x00, 0x00 }); // mov qword [r15+24], 0 (iterIndex)
+
+        // Initialize loop counter
+        try self.enc.emit(&.{ 0x48, 0xC7, 0x45, 0xD0, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rbp-48], 0
+
+        // Loop: for i = 0 to argc-1
+        const loop_start = self.code.items.len;
+
+        // Check if i >= argc
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xD0 }); // mov rax, [rbp-48] (i)
+        try self.enc.emit(&.{ 0x4C, 0x39, 0xE0 }); // cmp rax, r12 (argc)
+        // jge rel32 (0x0F 0x8D + 4-byte displacement)
+        try self.enc.emit(&.{ 0x0F, 0x8D });
+        const loop_exit_jge = self.code.items.len;
+        try self.enc.emitI32(0); // placeholder for displacement
+
+        // Get argv_w[i] (each pointer is 8 bytes)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x55, 0xF0 }); // mov rdx, [rbp-16] (argv_w)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xD0 }); // mov rax, [rbp-48] (i)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x0C, 0xC2 }); // mov rcx, [rdx+rax*8] (argv_w[i])
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xC8 }); // mov [rbp-56], rcx (wide string ptr)
+
+        // Call WideCharToMultiByte to get required buffer size
+        // WideCharToMultiByte(CP_UTF8=65001, 0, lpWideStr, -1, NULL, 0, NULL, NULL)
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC1, 0xE9, 0xFD, 0x00, 0x00 }); // mov rcx, 65001 (CP_UTF8)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (flags = 0)
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x45, 0xC8 }); // mov r8, [rbp-56] (wide string)
+        try self.enc.emit(&.{ 0x49, 0xC7, 0xC1, 0xFF, 0xFF, 0xFF, 0xFF }); // mov r9, -1 (null-terminated)
+        try self.emitStackParam(0, 0); // lpMultiByteStr = NULL
+        try self.emitStackParam(1, 0); // cbMultiByte = 0
+        try self.emitStackParam(2, 0); // lpDefaultChar = NULL
+        try self.emitStackParam(3, 0); // lpUsedDefaultChar = NULL
+        try self.emitExternalCallAfterSetup("kernel32.dll", "WideCharToMultiByte");
+        try self.enc.freeShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC0 }); // mov [rbp-64], rax (utf8 size)
+
+        // Allocate buffer for UTF-8 string (size in rax)
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xE8 }); // mov rcx, [rbp-24] (heap)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (flags = 0)
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x45, 0xC0 }); // mov r8, [rbp-64] (size)
+        try self.emitExternalCallAfterSetup("kernel32.dll", "HeapAlloc");
+        try self.enc.freeShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB8 }); // mov [rbp-72], rax (utf8 buffer)
+
+        // Convert wide string to UTF-8
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC1, 0xE9, 0xFD, 0x00, 0x00 }); // mov rcx, 65001 (CP_UTF8)
+        try self.enc.emit(&.{ 0x48, 0x31, 0xD2 }); // xor rdx, rdx (flags = 0)
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x45, 0xC8 }); // mov r8, [rbp-56] (wide string)
+        try self.enc.emit(&.{ 0x49, 0xC7, 0xC1, 0xFF, 0xFF, 0xFF, 0xFF }); // mov r9, -1 (null-terminated)
+        // Stack params
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xB8 }); // mov rax, [rbp-72] (utf8 buffer)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x44, 0x24, 0x20 }); // mov [rsp+32], rax
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xC0 }); // mov rax, [rbp-64] (utf8 size)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x44, 0x24, 0x28 }); // mov [rsp+40], rax
+        try self.emitStackParam(2, 0); // lpDefaultChar = NULL at [rsp+48]
+        try self.emitStackParam(3, 0); // lpUsedDefaultChar = NULL at [rsp+56]
+        try self.emitExternalCallAfterSetup("kernel32.dll", "WideCharToMultiByte");
+        try self.enc.freeShadowSpace();
+        // RAX = actual bytes written (including null terminator)
+
+        // Calculate String element address: R14 + i * 32
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xD0 }); // mov rax, [rbp-48] (i)
+        try self.enc.emit(&.{ 0x48, 0xC1, 0xE0, 0x05 }); // shl rax, 5 (multiply by 32)
+        try self.enc.emit(&.{ 0x4C, 0x01, 0xF0 }); // add rax, r14 (strings array base)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB0 }); // mov [rbp-80], rax (String element ptr)
+
+        // Initialize String element (32 bytes total):
+        // String layout:
+        //   [0]  __ManagedString._buffer = utf8 buffer ptr (8 bytes)
+        //   [8]  __ManagedString._len = strlen (4 bytes)
+        //   [12] __ManagedString._cap_flags = cap | 0x01 for heap mode (4 bytes)
+        //   [16] __ManagedString._refcount = 1 (4 bytes)
+        //   [20] __ManagedString._parent_off = 0 (4 bytes)
+        //   [24] _iterPos = 0 (8 bytes)
+
+        // Store buffer ptr at [element+0]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x55, 0xB8 }); // mov rdx, [rbp-72] (utf8 buffer)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xB0 }); // mov rax, [rbp-80] (element)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x10 }); // mov [rax], rdx (buffer ptr)
+
+        // Store length at [element+8] (utf8 size - 1 to exclude null terminator)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x55, 0xC0 }); // mov rdx, [rbp-64] (utf8 size including null)
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xCA }); // dec rdx (length without null)
+        try self.enc.emit(&.{ 0x89, 0x50, 0x08 }); // mov [rax+8], edx (32-bit len)
+
+        // Store cap_flags at [element+12] (capacity | 0x01 for heap mode)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x55, 0xC0 }); // mov rdx, [rbp-64] (utf8 size = capacity)
+        try self.enc.emit(&.{ 0x83, 0xCA, 0x01 }); // or edx, 1 (set heap mode flag)
+        try self.enc.emit(&.{ 0x89, 0x50, 0x0C }); // mov [rax+12], edx (32-bit cap_flags)
+
+        // Store refcount = 1 at [element+16]
+        try self.enc.emit(&.{ 0xC7, 0x40, 0x10, 0x01, 0x00, 0x00, 0x00 }); // mov dword [rax+16], 1
+
+        // Store parent_off = 0 at [element+20]
+        try self.enc.emit(&.{ 0xC7, 0x40, 0x14, 0x00, 0x00, 0x00, 0x00 }); // mov dword [rax+20], 0
+
+        // Store _iterPos = 0 at [element+24]
+        try self.enc.emit(&.{ 0x48, 0xC7, 0x40, 0x18, 0x00, 0x00, 0x00, 0x00 }); // mov qword [rax+24], 0
+
+        // Increment loop counter
+        try self.enc.emit(&.{ 0x48, 0xFF, 0x45, 0xD0 }); // inc qword [rbp-48]
+
+        // Jump back to loop start
+        const loop_back_rel: i32 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(self.code.items.len)) - 5);
+        try self.enc.emit(&.{0xE9}); // jmp rel32
+        try self.enc.emitI32(loop_back_rel);
+
+        // Loop exit: patch the jge jump
+        const loop_exit = self.code.items.len;
+        const loop_exit_rel: i32 = @intCast(@as(i64, @intCast(loop_exit)) - @as(i64, @intCast(loop_exit_jge)) - 4);
+        self.code.items[loop_exit_jge] = @truncate(@as(u32, @bitCast(loop_exit_rel)));
+        self.code.items[loop_exit_jge + 1] = @truncate(@as(u32, @bitCast(loop_exit_rel)) >> 8);
+        self.code.items[loop_exit_jge + 2] = @truncate(@as(u32, @bitCast(loop_exit_rel)) >> 16);
+        self.code.items[loop_exit_jge + 3] = @truncate(@as(u32, @bitCast(loop_exit_rel)) >> 24);
+
+        // Free the argv_w array returned by CommandLineToArgvW using LocalFree
+        try self.enc.allocShadowSpace();
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16] (argv_w)
+        try self.emitExternalCallAfterSetup("kernel32.dll", "LocalFree");
+        try self.enc.freeShadowSpace();
+
+        // Return result ptr (Array$String struct)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0xF8 }); // mov rax, r15 (result)
+
+        // Epilogue: restore callee-saved registers
+        try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
+        try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x60 }); // add rsp, 96
         try self.enc.popRbp();
         try self.enc.ret();
     }

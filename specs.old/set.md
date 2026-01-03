@@ -65,8 +65,8 @@ Set<T> struct:
 **Struct Definition (stdlib/collections/Set.maxon):**
 ```text
 export type Set uses Element is InitableFromArrayLiteral with Element
-    var _elements array of Element
-    var _states array of byte
+    var _elements Array of Element
+    var _states Array of byte
     var _count int
     var _capacity int
 ```

@@ -83,7 +83,7 @@ When a type implements an interface with default methods:
 ```maxon
 // This type gets map() automatically from Collection's default
 type IntList is Collection with int
-    var data _ManagedArray<int>
+    var data __ManagedArray<int>
 
     function Collection.count() returns int
         return __managed_array_len(self.data)
