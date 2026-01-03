@@ -1,0 +1,35 @@
+// Test: int-type.negative-int.1
+function main() returns int
+    var x = -42
+    var y = -x
+    if y == 42 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_sub = const.i64 i64 -42
+    %x = alloca ptr
+    store %x %tmp_sub
+    %tmp_load = load i64 %x
+    %tmp_const.2 = const.i64 i64 0
+    %tmp_sub.1 = sub i64 %tmp_const.2 %tmp_load
+    %y = alloca ptr
+    store %y %tmp_sub.1
+    %tmp_load.1 = load i64 %y
+    %tmp_const.3 = const.i64 i64 42
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.3
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.4 = const.i64 i64 1
+    ret %tmp_const.4
+end:
+    %tmp_const.5 = const.i64 i64 0
+    ret %tmp_const.5
+}
+
+---

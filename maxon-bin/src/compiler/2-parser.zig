@@ -69,6 +69,8 @@ pub const Parser = struct {
         errdefer interfaces.deinit(self.allocator);
         var functions: std.ArrayListUnmanaged(ast.FunctionDecl) = .empty;
         errdefer functions.deinit(self.allocator);
+        var global_constants: std.ArrayListUnmanaged(ast.GlobalConstant) = .empty;
+        errdefer global_constants.deinit(self.allocator);
 
         // Skip leading newlines
         self.skipNewlines();
@@ -79,8 +81,11 @@ pub const Parser = struct {
                 try types.append(self.allocator, try self.parseTypeDecl());
             } else if (self.check(.interface)) {
                 try interfaces.append(self.allocator, try self.parseInterfaceDecl());
+            } else if (self.check(.let)) {
+                // Top-level let declaration (non-exported)
+                try global_constants.append(self.allocator, try self.parseGlobalConstant(false));
             } else if (self.check(.@"export")) {
-                // Peek ahead to see if this is 'export type', 'export interface', or 'export function'
+                // Peek ahead to see if this is 'export type', 'export interface', 'export function', or 'export let'
                 if (self.peek(1)) |next| {
                     if (next.type == .type) {
                         try types.append(self.allocator, try self.parseTypeDecl());
@@ -89,12 +94,15 @@ pub const Parser = struct {
                     } else if (next.type == .function) {
                         _ = self.advance(); // skip 'export'
                         try functions.append(self.allocator, try self.parseFunctionWithExport(true));
+                    } else if (next.type == .let) {
+                        _ = self.advance(); // skip 'export'
+                        try global_constants.append(self.allocator, try self.parseGlobalConstant(true));
                     } else {
-                        self.reportError(.E002);
+                        self.reportErrorWithDetails(.E002, next.text);
                         return error.UnexpectedToken;
                     }
                 } else {
-                    self.reportError(.E002);
+                    self.reportErrorWithDetails(.E002, self.current().text);
                     return error.UnexpectedToken;
                 }
             } else if (self.check(.@"enum")) {
@@ -109,8 +117,8 @@ pub const Parser = struct {
                     token.text,
                     @tagName(token.type),
                 });
-                debug.parser("  Expected: 'type', 'enum', 'interface', or 'function' declaration\n", .{});
-                self.reportError(.E002);
+                debug.parser("  Expected: 'type', 'enum', 'interface', 'function', or 'let' declaration\n", .{});
+                self.reportErrorWithDetails(.E002, token.text);
                 return error.UnexpectedToken;
             }
             self.skipNewlines();
@@ -121,6 +129,7 @@ pub const Parser = struct {
             .enums = try enums.toOwnedSlice(self.allocator),
             .interfaces = try interfaces.toOwnedSlice(self.allocator),
             .functions = try functions.toOwnedSlice(self.allocator),
+            .global_constants = try global_constants.toOwnedSlice(self.allocator),
         };
     }
 
@@ -159,6 +168,25 @@ pub const Parser = struct {
                 .line = tok.line,
                 .column = tok.column,
             },
+        };
+    }
+
+    fn reportErrorWithDetails(self: *Parser, code: err.ErrorCode, details: []const u8) void {
+        const tok = self.current();
+        const formatted = std.fmt.allocPrint(self.allocator, "{s}: '{s}'", .{ code.message(), details }) catch {
+            // Fall back to basic message on allocation failure
+            self.reportError(code);
+            return;
+        };
+        self.last_error = .{
+            .code = code,
+            .message = formatted,
+            .location = .{
+                .file = self.source_file,
+                .line = tok.line,
+                .column = tok.column,
+            },
+            .message_allocated = true,
         };
     }
 
@@ -209,21 +237,50 @@ pub const Parser = struct {
                 continue;
             }
 
-            // Parse field: let/var name type
+            // Parse field: let/var name [type] [= default_value]
             const is_mutable = self.check(.@"var");
             if (!is_mutable and !self.check(.let)) {
-                self.reportError(.E002);
+                self.reportErrorWithDetails(.E002, self.current().text);
                 return error.UnexpectedToken;
             }
             _ = self.advance();
 
             const field_name = try self.expect(.identifier);
-            const field_type = try self.parseTypeExpr();
+
+            // Check if type is specified or if we have `= expr` for type inference
+            var field_type: ast.TypeExpr = undefined;
+            var default_value: ?*const ast.Expression = null;
+
+            if (self.check(.equals)) {
+                // Type inferred from default value: `var count = 0`
+                _ = self.advance(); // consume '='
+                const default_expr = try self.parseExpression() orelse {
+                    self.reportError(.E003);
+                    return error.ExpectedExpression;
+                };
+                default_value = try self.createExpr(default_expr);
+                // Infer type from the default expression
+                field_type = try self.inferTypeFromExpr(default_expr);
+            } else {
+                // Explicit type specified
+                field_type = try self.parseTypeExpr();
+
+                // Check for optional default value: `var value int = 0`
+                if (self.check(.equals)) {
+                    _ = self.advance(); // consume '='
+                    const default_expr = try self.parseExpression() orelse {
+                        self.reportError(.E003);
+                        return error.ExpectedExpression;
+                    };
+                    default_value = try self.createExpr(default_expr);
+                }
+            }
 
             try fields.append(self.allocator, .{
                 .name = field_name.text,
                 .type_expr = field_type,
                 .is_mutable = is_mutable,
+                .default_value = default_value,
             });
 
             _ = try self.expect(.newline);
@@ -240,6 +297,28 @@ pub const Parser = struct {
             .conformances = try conformances.toOwnedSlice(self.allocator),
             .fields = try fields.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),
+        };
+    }
+
+    /// Parse a top-level constant declaration: let NAME = expression
+    fn parseGlobalConstant(self: *Parser, is_export: bool) !ast.GlobalConstant {
+        const let_token = try self.expect(.let);
+        const name_token = try self.expect(.identifier);
+        _ = try self.expect(.equals);
+
+        const value_expr = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+
+        _ = try self.expect(.newline);
+
+        return .{
+            .name = name_token.text,
+            .is_export = is_export,
+            .value = value_expr,
+            .line = let_token.line,
+            .column = let_token.column,
         };
     }
 
@@ -350,7 +429,7 @@ pub const Parser = struct {
         return items.toOwnedSlice(self.allocator);
     }
 
-    /// Parse parameter list: (name type, name type, ...)
+    /// Parse parameter list: (name type, name type = default, ...)
     /// Expects lparen already consumed, consumes up to and including rparen
     fn parseParamList(self: *Parser) ![]const ast.ParamDecl {
         var params: std.ArrayListUnmanaged(ast.ParamDecl) = .empty;
@@ -359,24 +438,41 @@ pub const Parser = struct {
         if (!self.check(.rparen)) {
             const first_name = try self.expect(.identifier);
             const first_type = try self.parseTypeExpr();
+            const first_default = try self.parseOptionalDefaultValue();
             try params.append(self.allocator, .{
                 .name = first_name.text,
                 .type_expr = first_type,
+                .default_value = first_default,
             });
 
             while (self.check(.comma)) {
                 _ = self.advance();
                 const param_name = try self.expect(.identifier);
                 const param_type = try self.parseTypeExpr();
+                const param_default = try self.parseOptionalDefaultValue();
                 try params.append(self.allocator, .{
                     .name = param_name.text,
                     .type_expr = param_type,
+                    .default_value = param_default,
                 });
             }
         }
 
         _ = try self.expect(.rparen);
         return params.toOwnedSlice(self.allocator);
+    }
+
+    /// Parse optional default value for parameter: = expression
+    fn parseOptionalDefaultValue(self: *Parser) !?*const ast.Expression {
+        if (self.check(.equals)) {
+            _ = self.advance(); // consume '='
+            const expr = try self.parseExpression() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            return try self.createExpr(expr);
+        }
+        return null;
     }
 
     /// Parse optional return type: returns Type
@@ -443,7 +539,7 @@ pub const Parser = struct {
         if (self.check(.identifier)) {
             return self.advance().text;
         }
-        self.reportError(.E002);
+        self.reportErrorWithDetails(.E002, self.current().text);
         return error.UnexpectedToken;
     }
 
@@ -623,6 +719,28 @@ pub const Parser = struct {
         return .{ .name = null, .type_expr = type_expr };
     }
 
+    /// Infer a TypeExpr from an expression (for field default values)
+    fn inferTypeFromExpr(self: *Parser, expr: ast.Expression) ParseError!ast.TypeExpr {
+        _ = self;
+        return switch (expr) {
+            .integer => .{ .simple = "int" },
+            .float_lit => .{ .simple = "float" },
+            .bool_lit => .{ .simple = "bool" },
+            .string_literal, .interpolated_string => .{ .simple = "string" },
+            .char_literal => .{ .simple = "character" },
+            .nil_lit => {
+                // Cannot infer type from nil alone - this is an error case
+                // but we'll let later semantic analysis catch it
+                return .{ .simple = "nil" };
+            },
+            else => {
+                // For complex expressions, we cannot infer at parse time
+                // Return a placeholder and let semantic analysis handle it
+                return .{ .simple = "int" }; // fallback
+            },
+        };
+    }
+
     fn parseFunctionWithExport(self: *Parser, is_export: bool) !ast.FunctionDecl {
         _ = try self.expect(.function);
         const name_token = try self.expect(.identifier);
@@ -659,8 +777,8 @@ pub const Parser = struct {
         }
         if (self.check(.let)) {
             const decl_stmt = try self.parseVarDecl(false);
-            // else-unwrap handles its own newlines
-            if (decl_stmt.kind != .else_unwrap_decl) {
+            // else-unwrap and guard-let handle their own newlines
+            if (decl_stmt.kind != .else_unwrap_decl and decl_stmt.kind != .guard_let_decl) {
                 _ = try self.expect(.newline);
             }
             return decl_stmt;
@@ -753,7 +871,7 @@ pub const Parser = struct {
                 }
 
                 // Other expressions on LHS not supported
-                self.reportError(.E002);
+                self.reportErrorWithDetails(.E002, self.current().text);
                 return error.UnexpectedToken;
             }
 
@@ -772,7 +890,7 @@ pub const Parser = struct {
             // Not an assignment or call, restore position
             self.pos = start_pos;
         }
-        self.reportError(.E002);
+        self.reportErrorWithDetails(.E002, self.current().text);
         return error.UnexpectedToken;
     }
 
@@ -860,6 +978,54 @@ pub const Parser = struct {
                     .default_body = try default_statements.toOwnedSlice(self.allocator),
                     .label = label.text,
                 } }, start_line, start_column);
+            }
+
+            // Check for guard-let: let x = opt or 'label' ... end 'label'
+            // Guard-let only works with 'let', not 'var'
+            if (!is_var and self.check(.@"or")) {
+                const next = self.peek(1);
+                if (next != null and next.?.type == .char_literal) {
+                    _ = self.advance(); // consume 'or'
+
+                    // Parse label
+                    const label = try self.expect(.char_literal);
+
+                    // Require newline
+                    _ = try self.expect(.newline);
+
+                    // Parse nil body (must contain exit statement)
+                    var nil_statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
+                    errdefer nil_statements.deinit(self.allocator);
+
+                    while (!self.check(.end) and !self.isAtEnd()) {
+                        if (self.check(.newline)) {
+                            _ = self.advance();
+                            continue;
+                        }
+                        try nil_statements.append(self.allocator, try self.parseStatement());
+                    }
+
+                    // Parse end 'label'
+                    _ = try self.expect(.end);
+                    _ = try self.expect(.char_literal);
+
+                    // Require newline after end (or allow EOF)
+                    if (!self.isAtEnd() and !self.check(.newline)) {
+                        self.reportError(.E004);
+                        return error.ExpectedNewline;
+                    }
+                    if (self.check(.newline)) {
+                        _ = self.advance();
+                    }
+
+                    const expr_ptr = try self.createExpr(expr);
+                    return stmtAt(.{ .guard_let_decl = .{
+                        .var_name = name_token.text,
+                        .optional_expr = expr_ptr,
+                        .nil_body = try nil_statements.toOwnedSlice(self.allocator),
+                        .label = label.text,
+                    } }, start_line, start_column);
+                }
             }
 
             if (is_var) {
@@ -1280,7 +1446,7 @@ pub const Parser = struct {
 
         // Verify labels match
         if (!std.mem.eql(u8, label.text, end_label.text)) {
-            self.reportError(.E002);
+            self.reportErrorWithDetails(.E002, end_label.text);
             return error.UnexpectedToken;
         }
 
@@ -1458,7 +1624,7 @@ pub const Parser = struct {
                         .has_fallthrough = has_fallthrough,
                     };
                 }
-                self.reportError(.E002);
+                self.reportErrorWithDetails(.E002, self.current().text);
                 return error.UnexpectedToken;
             }
 
@@ -1481,7 +1647,7 @@ pub const Parser = struct {
             }
         }
 
-        self.reportError(.E002);
+        self.reportErrorWithDetails(.E002, self.current().text);
         return error.UnexpectedToken;
     }
 
@@ -1566,7 +1732,7 @@ pub const Parser = struct {
 
         // Verify labels match
         if (!std.mem.eql(u8, label.text, end_label.text)) {
-            self.reportError(.E002);
+            self.reportErrorWithDetails(.E002, end_label.text);
             return error.UnexpectedToken;
         }
 
@@ -1599,6 +1765,12 @@ pub const Parser = struct {
             const next = self.peek(1);
             if (next != null and next.?.type == .nil) {
                 // This is "T or nil" type annotation, not logical or
+                break;
+            }
+
+            // Check for guard-let: 'or' followed by char_literal is guard-let syntax
+            if (next != null and next.?.type == .char_literal) {
+                // This is guard-let: `let x = opt or 'label' ... end 'label'`
                 break;
             }
 
@@ -1994,15 +2166,28 @@ pub const Parser = struct {
                 }
 
                 // Otherwise this is just a generic type used as expression (error case)
-                self.reportError(.E002);
+                self.reportErrorWithDetails(.E002, self.current().text);
                 return error.UnexpectedToken;
             }
 
-            // Check for "TypeName from K to V{}" syntax (two-argument generics like Map)
+            // Check for "TypeName from ..." syntax:
+            // - "TypeName from [...]" for InitableFromArrayLiteral types like Set
+            // - "TypeName from K to V{}" for two-argument generics like Map
             if (self.check(.from)) {
                 _ = self.advance(); // consume 'from'
 
-                // Parse first type argument (key type)
+                // Check for array literal: Set from [1, 2, 3]
+                if (self.check(.lbracket)) {
+                    const arr_lit = try self.parseArrayLiteral();
+                    const arr_lit_ptr = try self.createExpr(arr_lit);
+                    return try self.parsePostfix(.{ .set_from = .{
+                        .type_name = token.text,
+                        .type_args = &.{}, // Element type inferred from array
+                        .elements = arr_lit_ptr,
+                    } });
+                }
+
+                // Otherwise, parse "TypeName from K to V{}" syntax for Map
                 const key_type = try self.expectTypeName();
 
                 // Expect 'to' keyword
@@ -2020,7 +2205,7 @@ pub const Parser = struct {
                 }
 
                 // Error: Map from K to V requires {}
-                self.reportError(.E002);
+                self.reportErrorWithDetails(.E002, self.current().text);
                 return error.UnexpectedToken;
             }
 
@@ -2265,20 +2450,22 @@ pub const Parser = struct {
                     _ = self.advance(); // consume '('
                     var args: std.ArrayListUnmanaged(ast.Expression) = .empty;
                     errdefer args.deinit(self.allocator);
+                    var named_args: std.ArrayListUnmanaged(ast.NamedArg) = .empty;
+                    errdefer named_args.deinit(self.allocator);
 
                     if (!self.check(.rparen)) {
-                        const first_arg = try self.parseExpression() orelse {
-                            self.reportError(.E003);
-                            return error.ExpectedExpression;
-                        };
-                        try args.append(self.allocator, first_arg);
+                        const arg_result = try self.parseCallArgument();
+                        switch (arg_result) {
+                            .positional => |pos_expr| try args.append(self.allocator, pos_expr),
+                            .named => |named| try named_args.append(self.allocator, named),
+                        }
                         while (self.check(.comma)) {
                             _ = self.advance();
-                            const arg = try self.parseExpression() orelse {
-                                self.reportError(.E003);
-                                return error.ExpectedExpression;
-                            };
-                            try args.append(self.allocator, arg);
+                            const next_arg = try self.parseCallArgument();
+                            switch (next_arg) {
+                                .positional => |pos_expr| try args.append(self.allocator, pos_expr),
+                                .named => |named| try named_args.append(self.allocator, named),
+                            }
                         }
                     }
                     _ = try self.expect(.rparen);
@@ -2287,6 +2474,7 @@ pub const Parser = struct {
                         .base = base_ptr,
                         .method_name = field_token.text,
                         .args = try args.toOwnedSlice(self.allocator),
+                        .named_args = try named_args.toOwnedSlice(self.allocator),
                     } };
                 } else {
                     const base_ptr = try self.createExpr(expr);
@@ -2469,30 +2657,77 @@ pub const Parser = struct {
         _ = try self.expect(.lparen);
         var args: std.ArrayListUnmanaged(ast.Expression) = .empty;
         errdefer args.deinit(self.allocator);
+        var named_args: std.ArrayListUnmanaged(ast.NamedArg) = .empty;
+        errdefer named_args.deinit(self.allocator);
 
-        // Parse argument list
+        // Parse argument list (positional args first, then named args)
         if (!self.check(.rparen)) {
-            const first_arg = try self.parseExpression() orelse {
-                self.reportError(.E003);
-                return error.ExpectedExpression;
-            };
-            try args.append(self.allocator, first_arg);
+            const arg_result = try self.parseCallArgument();
+            switch (arg_result) {
+                .positional => |expr| try args.append(self.allocator, expr),
+                .named => |named| try named_args.append(self.allocator, named),
+            }
 
             while (self.check(.comma)) {
                 _ = self.advance(); // consume ','
-                const arg = try self.parseExpression() orelse {
-                    self.reportError(.E003);
-                    return error.ExpectedExpression;
-                };
-                try args.append(self.allocator, arg);
+                const next_arg = try self.parseCallArgument();
+                switch (next_arg) {
+                    .positional => |expr| try args.append(self.allocator, expr),
+                    .named => |named| try named_args.append(self.allocator, named),
+                }
             }
         }
 
         _ = try self.expect(.rparen);
         const args_slice = try args.toOwnedSlice(self.allocator);
-        const call_expr: ast.Expression = .{ .call = .{ .func_name = func_name, .args = args_slice } };
+        const named_args_slice = try named_args.toOwnedSlice(self.allocator);
+        const call_expr: ast.Expression = .{ .call = .{
+            .func_name = func_name,
+            .args = args_slice,
+            .named_args = named_args_slice,
+        } };
         // Allow postfix operators (field access, indexing, cast) on call results
         return try self.parsePostfix(call_expr);
+    }
+
+    /// Result of parsing a call argument: either positional or named
+    const CallArgResult = union(enum) {
+        positional: ast.Expression,
+        named: ast.NamedArg,
+    };
+
+    /// Parse a single call argument, detecting if it's named (identifier = expr) or positional
+    fn parseCallArgument(self: *Parser) ParseError!CallArgResult {
+        const start_token = self.current();
+
+        // Check if this is a named argument: identifier = expr
+        if (self.check(.identifier)) {
+            if (self.peek(1)) |next_tok| {
+                if (next_tok.type == .equals) {
+                    // This is a named argument
+                    const name_token = self.advance(); // consume identifier
+                    _ = self.advance(); // consume '='
+                    const value = try self.parseExpression() orelse {
+                        self.reportError(.E003);
+                        return error.ExpectedExpression;
+                    };
+                    const value_ptr = try self.createExpr(value);
+                    return .{ .named = .{
+                        .name = name_token.text,
+                        .value = value_ptr,
+                        .line = start_token.line,
+                        .column = start_token.column,
+                    } };
+                }
+            }
+        }
+
+        // Regular positional argument
+        const expr = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+        return .{ .positional = expr };
     }
 
     fn expect(self: *Parser, token_type: TokenType) !Token {
@@ -2508,7 +2743,7 @@ pub const Parser = struct {
             expected_name,
             got_name,
         });
-        self.reportError(.E002);
+        self.reportErrorWithDetails(.E002, tok.text);
         return error.UnexpectedToken;
     }
 

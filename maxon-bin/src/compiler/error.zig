@@ -38,6 +38,11 @@ pub const ErrorCode = enum {
     E034, // unknown enum case
     E035, // wrong binding count in match
     E036, // duplicate block identifier
+    E037, // missing return statement
+    E038, // optional type used without unwrapping
+    E039, // if let requires optional type
+    E040, // else unwrap requires optional type
+    E041, // cannot return nil from non-optional
 
     const Info = struct {
         code: []const u8,
@@ -81,6 +86,11 @@ pub const ErrorCode = enum {
         .{ .code = "E034", .message = "unknown enum case" },
         .{ .code = "E035", .message = "wrong binding count" },
         .{ .code = "E036", .message = "duplicate block identifier" },
+        .{ .code = "E037", .message = "missing return statement" },
+        .{ .code = "E038", .message = "optional type used without unwrapping" },
+        .{ .code = "E039", .message = "if let requires optional type" },
+        .{ .code = "E040", .message = "else unwrap requires optional type" },
+        .{ .code = "E041", .message = "cannot return nil from non-optional" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

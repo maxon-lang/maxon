@@ -1,0 +1,52 @@
+// Test: method-call-on-parameter.sibling-method-call-still-works.1
+type Calculator
+    var base int
+    
+    function double() returns int
+        return base * 2
+    end 'double'
+    
+    function quadruple() returns int
+        // Sibling call - calls self.double()
+        return double() * 2
+    end 'quadruple'
+end 'Calculator'
+
+function main() returns int
+    var calc = Calculator{base: 5}
+    return calc.quadruple()
+end 'main'
+---
+ExitCode: 20
+---
+function main() -> i64 {
+entry:
+    %calc = alloca.sized ptr 8
+    memset %calc 0 8
+    %tmp_fieldptr = getfieldptr ptr %calc 0
+    %tmp_const = const.i64 i64 5
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call i64 @Calculator$quadruple(%calc)
+    ret %tmp_call
+}
+
+function Calculator$double() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_const = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_load %tmp_const
+    ret %tmp_mul
+}
+
+function Calculator$quadruple() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_call = call i64 @Calculator$double(%self)
+    %tmp_const = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_call %tmp_const
+    ret %tmp_mul
+}
+
+---

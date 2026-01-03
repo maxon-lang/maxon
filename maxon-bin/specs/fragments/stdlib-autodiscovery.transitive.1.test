@@ -1,0 +1,32 @@
+// Test: stdlib-autodiscovery.transitive.1
+// pow -> log, exp
+function main() returns int
+    var result = Math.pow(2.0, 3.0)
+    if result > 7.5 'check'
+        return 8
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 8
+---
+function main() -> i64 {
+entry:
+    %tmp_fconst = const.f64 f64 2
+    %tmp_fconst.1 = const.f64 f64 3
+    %tmp_call = call f64 @Math$pow(%tmp_fconst, %tmp_fconst.1)
+    %result = alloca ptr
+    store %result %tmp_call
+    %tmp_load = load f64 %result
+    %tmp_fconst.2 = const.f64 f64 7.5
+    %tmp_fcmp = fcmp.gt i64 %tmp_load %tmp_fconst.2
+    br.cond %tmp_fcmp @block1 @block2
+then:
+    %tmp_const = const.i64 i64 8
+    ret %tmp_const
+end:
+    %tmp_const.1 = const.i64 i64 0
+    ret %tmp_const.1
+}
+
+---

@@ -1,0 +1,51 @@
+// Test: top-level-let.enum-member-constant.1
+enum Color
+    Red
+    Green
+    Blue
+end 'Color'
+
+let DEFAULT_COLOR = Color.Green
+
+function main() returns int
+    match DEFAULT_COLOR 'check'
+        Color.Red then return 1
+        Color.Green then return 2
+        Color.Blue then return 3
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 2
+---
+function main() -> i64 {
+entry:
+    %tmp_const.4 = const.i64 i64 1
+    br @block1
+match_check:
+    %tmp_const.5 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_const.4 %tmp_const.5
+    br.cond %tmp_icmp @block2 @block3
+match_body:
+    %tmp_const.6 = const.i64 i64 1
+    ret %tmp_const.6
+match_check:
+    %tmp_const.7 = const.i64 i64 1
+    %tmp_icmp.1 = icmp.eq i64 %tmp_const.4 %tmp_const.7
+    br.cond %tmp_icmp.1 @block4 @block5
+match_body:
+    %tmp_const.8 = const.i64 i64 2
+    ret %tmp_const.8
+match_check:
+    %tmp_const.9 = const.i64 i64 2
+    %tmp_icmp.2 = icmp.eq i64 %tmp_const.4 %tmp_const.9
+    br.cond %tmp_icmp.2 @block6 @block0
+match_body:
+    %tmp_const.10 = const.i64 i64 3
+    ret %tmp_const.10
+match_merge:
+    %tmp_const.11 = const.i64 i64 0
+    ret %tmp_const.11
+}
+
+---

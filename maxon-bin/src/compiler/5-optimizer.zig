@@ -263,7 +263,7 @@ fn copyPropagation(func: *ir.Function, allocator: std.mem.Allocator) !void {
             switch (inst.op) {
                 .store => try handleStore(inst, &ctx, &new_instructions, allocator),
                 .load => try handleLoad(inst, &ctx, &new_instructions, allocator),
-                else => try handleOther(inst, &ctx.value_map, &new_instructions, func.allocator, allocator),
+                else => try handleOther(inst, &ctx, &new_instructions, func.allocator, allocator),
             }
         }
 
@@ -316,25 +316,40 @@ fn handleLoad(
 
 fn handleOther(
     inst: ir.Instruction,
-    value_map: *std.AutoHashMapUnmanaged(ir.Value, ir.Value),
+    ctx: *CopyPropContext,
     new_instructions: *std.ArrayListUnmanaged(ir.Instruction),
     func_allocator: std.mem.Allocator,
     temp_allocator: std.mem.Allocator,
 ) !void {
+    // memcpy to a pointer invalidates stored field values with that base
+    if (inst.op == .memcpy or inst.op == .memcpy_dyn) {
+        const dest_ptr = inst.operands[0].value;
+        // Remove all field entries whose base matches the destination
+        var i: usize = 0;
+        while (i < ctx.field_to_value.items.len) {
+            if (ctx.field_to_value.items[i].key.base == dest_ptr) {
+                ctx.allocator.free(ctx.field_to_value.items[i].key.offsets);
+                _ = ctx.field_to_value.swapRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     var new_inst = inst;
 
     for (&new_inst.operands) |*op| {
         switch (op.*) {
             .value => |v| {
-                if (value_map.get(v)) |propagated| {
+                if (ctx.value_map.get(v)) |propagated| {
                     op.* = .{ .value = propagated };
                 }
             },
             .call_args => |args| {
-                if (anyArgNeedsPropagation(args, value_map)) {
+                if (anyArgNeedsPropagation(args, &ctx.value_map)) {
                     const new_args = try func_allocator.alloc(ir.Value, args.len);
                     for (args, 0..) |arg, i| {
-                        new_args[i] = value_map.get(arg) orelse arg;
+                        new_args[i] = ctx.value_map.get(arg) orelse arg;
                     }
                     func_allocator.free(args);
                     op.* = .{ .call_args = new_args };

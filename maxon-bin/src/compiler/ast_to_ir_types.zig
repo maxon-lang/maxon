@@ -246,6 +246,8 @@ pub const ExternalFieldInfo = struct {
 /// Parameter type info
 pub const ParamType = struct {
     ty: ValueType,
+    name: []const u8 = "", // Parameter name for named argument resolution
+    default_value: ?*const ast.Expression = null, // Default value expression
 };
 
 /// Ownership state of a variable
@@ -336,6 +338,10 @@ pub const ConvertError = error{
     TypeMismatch,
     ZeroSizeAllocation,
     UnusedVariable,
+    UnknownParameter, // Named argument references unknown parameter
+    DuplicateArgument, // Same parameter specified multiple times
+    MissingArgument, // Required parameter not provided
+    MissingReturn, // Non-void function doesn't return on all paths
 };
 
 /// Interface info - stores method signatures for conformance checking

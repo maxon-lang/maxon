@@ -1,0 +1,77 @@
+// Test: nil-optional-types.iflet-else-branch.1
+function safeDivide(a int, b int) returns int or nil
+	if b == 0 'check'
+		return nil
+	end 'check'
+	return trunc(a / b)
+end 'safeDivide'
+
+function main() returns int
+	var opt = safeDivide(10, 0)
+	if let result = opt 'unwrap'
+		return result
+	end 'unwrap' else 'nil_case'
+		return 88
+	end 'nil_case'
+end 'main'
+---
+ExitCode: 88
+---
+function safeDivide() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %a = param i64 1
+    %a.1 = alloca ptr
+    store %a.1 %a
+    %b = param i64 2
+    %b.1 = alloca ptr
+    store %b.1 %b
+    %tmp_load = load i64 %b.1
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 0
+    store %tmp_param %tmp_const.1
+    ret %tmp_param
+end:
+    %tmp_load.1 = load i64 %a.1
+    %tmp_load.2 = load i64 %b.1
+    %tmp_sitofp = sitofp f64 %tmp_load.1
+    %tmp_sitofp.1 = sitofp f64 %tmp_load.2
+    %tmp_fdiv = fdiv f64 %tmp_sitofp %tmp_sitofp.1
+    %tmp_fptosi = fptosi i64 %tmp_fdiv
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr %tmp_fptosi
+    ret %tmp_param
+}
+
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 16
+    %tmp_const = const.i64 i64 10
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_call = call ptr @safeDivide(%tmp_alloca, %tmp_const, %tmp_const.1)
+    %opt = alloca ptr
+    store %opt %tmp_alloca
+    %tmp_load = load ptr %opt
+    %tmp_load.1 = load i64 %tmp_load
+    %tmp_const.2 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.2
+    br.cond %tmp_icmp @block1 @block2
+if_let_then:
+    %tmp_fieldptr = getfieldptr ptr %tmp_load 8
+    %tmp_load.2 = load i64 %tmp_fieldptr
+    %result = alloca ptr
+    store %result %tmp_load.2
+    %tmp_load.3 = load i64 %result
+    ret %tmp_load.3
+if_let_else:
+    %tmp_const.3 = const.i64 i64 88
+    ret %tmp_const.3
+if_let_end:
+}
+
+---

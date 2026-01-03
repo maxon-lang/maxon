@@ -397,7 +397,7 @@ pub const Lexer = struct {
                 {
                     self.pos += 2; // skip 0x
                     self.column += 2;
-                    while (self.pos < self.source.len and isHexDigit(self.source[self.pos])) {
+                    while (self.pos < self.source.len and (isHexDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
                         self.pos += 1;
                         self.column += 1;
                     }
@@ -405,7 +405,36 @@ pub const Lexer = struct {
                     continue;
                 }
 
-                while (self.pos < self.source.len and self.source[self.pos] >= '0' and self.source[self.pos] <= '9') {
+                // Check for binary literal (0b or 0B)
+                if (c == '0' and self.pos + 1 < self.source.len and
+                    (self.source[self.pos + 1] == 'b' or self.source[self.pos + 1] == 'B'))
+                {
+                    self.pos += 2; // skip 0b
+                    self.column += 2;
+                    while (self.pos < self.source.len and (isBinaryDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
+                    continue;
+                }
+
+                // Check for octal literal (0o or 0O)
+                if (c == '0' and self.pos + 1 < self.source.len and
+                    (self.source[self.pos + 1] == 'o' or self.source[self.pos + 1] == 'O'))
+                {
+                    self.pos += 2; // skip 0o
+                    self.column += 2;
+                    while (self.pos < self.source.len and (isOctalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
+                    continue;
+                }
+
+                // Decimal integer or float - allow underscores as separators
+                while (self.pos < self.source.len and (isDecimalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
                     self.pos += 1;
                     self.column += 1;
                 }
@@ -413,7 +442,7 @@ pub const Lexer = struct {
                 if (self.pos < self.source.len and self.source[self.pos] == '.') {
                     self.pos += 1;
                     self.column += 1;
-                    while (self.pos < self.source.len and self.source[self.pos] >= '0' and self.source[self.pos] <= '9') {
+                    while (self.pos < self.source.len and (isDecimalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
                         self.pos += 1;
                         self.column += 1;
                     }
@@ -557,6 +586,18 @@ pub const Lexer = struct {
 
     fn isHexDigit(c: u8) bool {
         return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+    }
+
+    fn isBinaryDigit(c: u8) bool {
+        return c == '0' or c == '1';
+    }
+
+    fn isOctalDigit(c: u8) bool {
+        return c >= '0' and c <= '7';
+    }
+
+    fn isDecimalDigit(c: u8) bool {
+        return c >= '0' and c <= '9';
     }
 
     fn utf8ByteLen(first_byte: u8) usize {

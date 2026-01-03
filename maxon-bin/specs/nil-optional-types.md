@@ -294,12 +294,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:4:2
-'if let' requires optional type, got 'int'
-  Note: Use 'if let' only with optional types (T or nil)
-
-  4 | 	if let val = x 'check'
-    |  ^
+error E039: specs/fragments/nil-optional-types.error.iflet-non-optional.1.test:4:2: if let requires optional type: 'val'
 ```
 
 <!-- test: error.else-unwrap-non-optional -->
@@ -359,10 +354,7 @@ function broken() returns int or nil or nil
 end 'broken'
 ```
 ```maxoncstderr
-In file 'temp_fragment.maxon':
-Unexpected token: 'or'
-  Note: Expected a statement (var, let, if, while, return, break, continue, match, or assignment)
-  Location: line 2, column 38
+error E002: specs/fragments/nil-optional-types.error.nested-optional.1.test:2:38: unexpected token
 ```
 
 <!-- test: optional-param-nil -->

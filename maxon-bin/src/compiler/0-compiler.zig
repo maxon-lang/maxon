@@ -1001,6 +1001,11 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
         freeTypeExpr(func.return_type, allocator);
     }
     allocator.free(program.functions);
+
+    for (program.global_constants) |constant| {
+        freeExpressionArgs(constant.value, allocator);
+    }
+    allocator.free(program.global_constants);
 }
 
 fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
@@ -1063,6 +1068,13 @@ fn freeStatementArgs(stmt: ast.Statement, allocator: std.mem.Allocator) void {
                 freeStatementArgs(body_stmt, allocator);
             }
             allocator.free(unwrap.default_body);
+        },
+        .guard_let_decl => |guard| {
+            freeExpressionArgs(guard.optional_expr.*, allocator);
+            for (guard.nil_body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(guard.nil_body);
         },
         .throw_stmt => |throw_s| {
             freeExpressionArgs(throw_s.error_expr, allocator);
@@ -1165,6 +1177,9 @@ fn freeExpressionArgs(expr: ast.Expression, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(entry.value.*, allocator);
             }
             allocator.free(map.entries);
+        },
+        .set_from => |sf| {
+            freeExpressionArgs(sf.elements.*, allocator);
         },
         .index => |idx| {
             freeExpressionArgs(idx.base.*, allocator);

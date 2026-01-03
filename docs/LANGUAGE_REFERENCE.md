@@ -865,20 +865,6 @@ end 'check'
 - Bindings are only in scope within the case body
 - Cases without associated values don't need parentheses
 
-### If-Case Pattern Matching
-
-For single-case matching, use `if case` syntax:
-
-```maxon
-if case success(v) = result 'check'
-    print("{v}")
-end 'check'
-
-if case failure(code, msg) = result 'error'
-    print(msg)
-end 'error'
-```
-
 ### Comparing Enum Values
 
 Enum values can be compared for equality using `==` and `!=`:

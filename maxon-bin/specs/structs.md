@@ -111,13 +111,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:9:5
-Cannot assign to field of read-only type 'p'
-  Variable declared with 'let' at line 8, column 5
-  Note: Variables declared with 'let' are immutable (read-only). Use 'var' for mutable types
-
-  9 |     p.x = 30
-    |     ^
+error E009: specs/fragments/structs.error.let-struct-field-assign.1.test:9:5: cannot assign to immutable variable: 'p'
 ```
 
 <!-- test: error.let-field-assign -->
@@ -134,13 +128,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:9:5
-Cannot assign to immutable field 'version' of type 'Config'
-  Field declared with 'let' at line 3
-  Note: Fields declared with 'let' are immutable. Use 'var' for mutable fields
-
-  9 |     c.version = 2
-    |     ^
+error E009: specs/fragments/structs.error.let-field-assign.1.test:9:5: cannot assign to immutable variable: 'version'
 ```
 
 <!-- test: simple-type -->

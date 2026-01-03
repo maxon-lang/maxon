@@ -44,12 +44,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:2:1
-Function 'main' must return a value of type 'int'
-  Note: All execution paths through the function must end with a return statement
-
-  2 | function main() returns int
-    | ^
+error E037: specs/fragments/missing-return-error.no-return.1.test:1:1: missing return statement: 'main'
 ```
 
 <!-- test: missing-else-return -->
@@ -66,12 +61,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Semantic Error: temp_fragment.maxon:2:1
-Function 'test' must return a value of type 'int'
-  Note: All execution paths through the function must end with a return statement
-
-  2 | function test(x int) returns int
-    | ^
+error E037: specs/fragments/missing-return-error.missing-else-return.1.test:1:1: missing return statement: 'test'
 ```
 
 <!-- test: valid-all-paths -->

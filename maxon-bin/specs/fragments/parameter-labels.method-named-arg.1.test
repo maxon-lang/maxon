@@ -1,0 +1,51 @@
+// Test: parameter-labels.method-named-arg.1
+type Counter
+    var value int
+
+    function add(amount int) returns Counter
+        return Counter{value: value + amount}
+    end 'add'
+end 'Counter'
+
+function main() returns int
+    var c = Counter{value: 10}
+    c = c.add(amount = 5)
+    return c.value
+end 'main'
+---
+ExitCode: 15
+---
+function main() -> i64 {
+entry:
+    %c = alloca.sized ptr 8
+    memset %c 0 8
+    %tmp_fieldptr = getfieldptr ptr %c 0
+    %tmp_const = const.i64 i64 10
+    store %tmp_fieldptr %tmp_const
+    %tmp_alloca.1 = alloca.sized ptr 8
+    %tmp_const.1 = const.i64 i64 5
+    %tmp_call = call ptr @Counter$add(%tmp_alloca.1, %c, %tmp_const.1)
+    memcpy %c %tmp_alloca.1 8
+    %tmp_fieldptr.1 = getfieldptr ptr %c 0
+    %tmp_load = load i64 %tmp_fieldptr.1
+    ret %tmp_load
+}
+
+function Counter$add() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    %amount = param i64 2
+    %amount.1 = alloca ptr
+    store %amount.1 %amount
+    memset %tmp_param 0 8
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_fieldptr.1 = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %tmp_load.1 = load i64 %amount.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    store %tmp_fieldptr %tmp_add
+    ret %tmp_param
+}
+
+---

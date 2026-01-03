@@ -1,0 +1,42 @@
+// Test: structs.struct-literal-as-arg.1
+type Point
+    var x int
+    var y int
+end 'Point'
+
+function acceptPoint(p Point) returns int
+    return p.x + p.y
+end 'acceptPoint'
+
+function main() returns int
+    return acceptPoint(Point{x: 3, y: 4})
+end 'main'
+---
+ExitCode: 7
+---
+function acceptPoint() -> i64 {
+entry:
+    %p = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %p 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_fieldptr.1 = getfieldptr ptr %p 8
+    %tmp_load.1 = load i64 %tmp_fieldptr.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    ret %tmp_add
+}
+
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 16
+    memset %tmp_alloca 0 16
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca 0
+    %tmp_const = const.i64 i64 3
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 8
+    %tmp_const.1 = const.i64 i64 4
+    store %tmp_fieldptr.1 %tmp_const.1
+    %tmp_call = call i64 @acceptPoint(%tmp_alloca)
+    ret %tmp_call
+}
+
+---

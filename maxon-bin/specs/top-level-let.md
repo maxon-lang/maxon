@@ -267,7 +267,7 @@ let SECOND = 20
 let values = [FIRST, SECOND, 30]
 
 function main() returns int
-    return values[0] + values[1] + values[2]
+    return (values[0] else 0) + (values[1] else 0) + (values[2] else 0)
 end 'main'
 ```
 ```exitcode

@@ -23,10 +23,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp_fragment.maxon':
-Unexpected identifier 'foo'
-  Note: Did you forget an assignment (=), function call (), or keyword?
-  Location: line 4, column 5
+error E002: specs/fragments/unknown-keyword-error.doc-example-1.1.test:4:5: unexpected token: 'foo'
 ```
 
 
@@ -50,10 +47,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp_fragment.maxon':
-Unexpected identifier 'foo'
-  Note: Did you forget an assignment (=), function call (), or keyword?
-  Location: line 4, column 5
+error E002: specs/fragments/unknown-keyword-error.bare-identifier.1.test:4:5: unexpected token: 'foo'
 ```
 
 <!-- test: typo-keyword -->
@@ -64,10 +58,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp_fragment.maxon':
-Unexpected identifier 'retur'
-  Note: Did you forget an assignment (=), function call (), or keyword?
-  Location: line 4, column 5
+error E002: specs/fragments/unknown-keyword-error.typo-keyword.1.test:4:5: unexpected token: 'retur'
 ```
 
 <!-- test: missing-call-parens -->
@@ -82,8 +73,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp_fragment.maxon':
-Unexpected identifier 'test'
-  Note: Did you forget an assignment (=), function call (), or keyword?
-  Location: line 7, column 5
+error E002: specs/fragments/unknown-keyword-error.missing-call-parens.1.test:7:5: unexpected token: 'test'
 ```

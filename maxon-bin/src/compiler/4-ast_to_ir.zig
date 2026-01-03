@@ -307,6 +307,30 @@ pub const AstToIr = struct {
     pending_try_branches: ?*std.ArrayListUnmanaged(TryBranchInfo) = null,
     // Scope label tracking: stack of sets for each scope level (to detect duplicate block identifiers)
     scope_labels: std.ArrayListUnmanaged(std.StringHashMapUnmanaged(void)) = .{},
+    // Global constants: evaluated compile-time constant values
+    global_constants: std.StringHashMapUnmanaged(ConstantValue) = .{},
+    // Global constant AST nodes (for forward reference resolution)
+    global_constant_asts: std.StringHashMapUnmanaged(ast.GlobalConstant) = .{},
+    // Set of constants currently being evaluated (for circular dependency detection)
+    constants_in_progress: std.StringHashMapUnmanaged(void) = .{},
+    // IR values for runtime-initialized constants (created once per function)
+    converted_runtime_constants: std.StringHashMapUnmanaged(TypedValue) = .{},
+
+    /// A compile-time constant value
+    pub const ConstantValue = union(enum) {
+        int: i64,
+        float: f64,
+        bool: bool,
+        string: []const u8,
+        array: []const ConstantValue,
+        enum_member: struct {
+            enum_name: []const u8,
+            member_name: []const u8,
+            value: i64,
+        },
+        // For runtime-initialized constants (like maps), store the AST expression
+        runtime_expr: ast.Expression,
+    };
 
     /// Info about a branch instruction that needs to be patched to point to catch_dispatch
     const TryBranchInfo = struct {
@@ -1103,6 +1127,10 @@ pub const AstToIr = struct {
             try self.checkInterfaceConformance(type_decl);
         }
 
+        // Evaluate global constants before converting functions
+        // This must happen after enums are registered so we can resolve enum member references
+        try self.evaluateGlobalConstants(program.global_constants);
+
         // Convert functions
         for (program.functions) |fn_decl| try self.convertFunction(fn_decl);
 
@@ -1133,6 +1161,413 @@ pub const AstToIr = struct {
         self.module = ir.Module.init(self.allocator);
         module.source_file = self.source_file;
         return module;
+    }
+
+    // ------------------------------------------------------------------------
+    // Global Constant Evaluation
+    // ------------------------------------------------------------------------
+
+    /// Evaluate all global constants, handling forward references and detecting circular dependencies
+    fn evaluateGlobalConstants(self: *AstToIr, constants: []const ast.GlobalConstant) ConvertError!void {
+        // First, register all constant ASTs for forward reference resolution
+        for (constants) |constant| {
+            try self.global_constant_asts.put(self.allocator, constant.name, constant);
+        }
+
+        // Then evaluate each constant (will recursively evaluate dependencies)
+        for (constants) |constant| {
+            if (!self.global_constants.contains(constant.name)) {
+                _ = try self.evaluateConstant(constant.name);
+            }
+        }
+    }
+
+    /// Evaluate a single constant by name, handling forward references
+    fn evaluateConstant(self: *AstToIr, name: []const u8) ConvertError!ConstantValue {
+        // Check if already evaluated
+        if (self.global_constants.get(name)) |value| {
+            return value;
+        }
+
+        // Check for circular dependency
+        if (self.constants_in_progress.contains(name)) {
+            // Build list of constants in the cycle for error message
+            var cycle_names: std.ArrayListUnmanaged(u8) = .empty;
+            defer cycle_names.deinit(self.allocator);
+            var iter = self.constants_in_progress.iterator();
+            var first = true;
+            while (iter.next()) |entry| {
+                if (!first) {
+                    cycle_names.appendSlice(self.allocator, ", ") catch {};
+                }
+                first = false;
+                cycle_names.appendSlice(self.allocator, entry.key_ptr.*) catch {};
+            }
+            const msg = std.fmt.allocPrint(self.allocator, "Circular dependency detected among global constants: {s}", .{cycle_names.items}) catch {
+                self.reportError(.E005, name);
+                return error.SemanticError;
+            };
+            self.last_error = .{
+                .code = .E005,
+                .message = msg,
+                .location = .{
+                    .file = self.source_file,
+                    .line = @intCast(self.current_line),
+                    .column = @intCast(self.current_column),
+                },
+            };
+            return error.SemanticError;
+        }
+
+        // Get the constant AST
+        const constant = self.global_constant_asts.get(name) orelse {
+            self.reportError(.E005, name);
+            return error.UndefinedVariable;
+        };
+
+        // Mark as in progress
+        try self.constants_in_progress.put(self.allocator, name, {});
+        defer _ = self.constants_in_progress.remove(name);
+
+        // Track location for error reporting
+        self.current_line = constant.line;
+        self.current_column = constant.column;
+
+        // Evaluate the expression
+        const value = try self.evaluateConstantExpr(constant.value);
+
+        // Store the result
+        try self.global_constants.put(self.allocator, name, value);
+
+        return value;
+    }
+
+    /// Evaluate a constant expression at compile time
+    fn evaluateConstantExpr(self: *AstToIr, expr: ast.Expression) ConvertError!ConstantValue {
+        return switch (expr) {
+            .integer => |v| .{ .int = v },
+            .float_lit => |v| .{ .float = v },
+            .bool_lit => |v| .{ .bool = v },
+            .string_literal => |s| .{ .string = s },
+            .identifier => |name| {
+                // Could be a reference to another constant
+                if (self.global_constant_asts.contains(name)) {
+                    return self.evaluateConstant(name);
+                }
+                // Unknown identifier in constant expression
+                self.reportError(.E005, name);
+                return error.UndefinedVariable;
+            },
+            .unary => |un| {
+                const operand = try self.evaluateConstantExpr(un.operand.*);
+                switch (un.op) {
+                    .negate => {
+                        if (operand == .int) {
+                            return .{ .int = -operand.int };
+                        } else if (operand == .float) {
+                            return .{ .float = -operand.float };
+                        }
+                        self.reportError(.E003, "operand");
+                        return error.SemanticError;
+                    },
+                    .not => {
+                        if (operand == .bool) {
+                            return .{ .bool = !operand.bool };
+                        }
+                        self.reportError(.E003, "operand");
+                        return error.SemanticError;
+                    },
+                }
+            },
+            .binary => |bin| {
+                const left = try self.evaluateConstantExpr(bin.left.*);
+                const right = try self.evaluateConstantExpr(bin.right.*);
+
+                // Handle integer operations
+                if (left == .int and right == .int) {
+                    const l = left.int;
+                    const r = right.int;
+                    return .{ .int = switch (bin.op) {
+                        .add => l + r,
+                        .sub => l - r,
+                        .mul => l * r,
+                        .div => @divTrunc(l, r),
+                        .mod => @mod(l, r),
+                        .band => l & r,
+                        .bitor => l | r,
+                        .bxor => l ^ r,
+                        .shl => l << @intCast(r),
+                        .shr => l >> @intCast(r),
+                    } };
+                }
+
+                // Handle float operations
+                if (left == .float and right == .float) {
+                    const l = left.float;
+                    const r = right.float;
+                    return .{ .float = switch (bin.op) {
+                        .add => l + r,
+                        .sub => l - r,
+                        .mul => l * r,
+                        .div => l / r,
+                        .mod, .band, .bitor, .bxor, .shl, .shr => {
+                            self.reportError(.E003, "operand");
+                            return error.SemanticError;
+                        },
+                    } };
+                }
+
+                // Mixed int/float - promote to float
+                if ((left == .int and right == .float) or (left == .float and right == .int)) {
+                    const l: f64 = if (left == .int) @floatFromInt(left.int) else left.float;
+                    const r: f64 = if (right == .int) @floatFromInt(right.int) else right.float;
+                    return .{ .float = switch (bin.op) {
+                        .add => l + r,
+                        .sub => l - r,
+                        .mul => l * r,
+                        .div => l / r,
+                        .mod, .band, .bitor, .bxor, .shl, .shr => {
+                            self.reportError(.E003, "operand");
+                            return error.SemanticError;
+                        },
+                    } };
+                }
+
+                self.reportError(.E003, "operand");
+                return error.SemanticError;
+            },
+            .compare => |cmp| {
+                const left = try self.evaluateConstantExpr(cmp.left.*);
+                const right = try self.evaluateConstantExpr(cmp.right.*);
+
+                // Handle integer comparisons
+                if (left == .int and right == .int) {
+                    const l = left.int;
+                    const r = right.int;
+                    return .{ .bool = switch (cmp.op) {
+                        .eq => l == r,
+                        .ne => l != r,
+                        .lt => l < r,
+                        .le => l <= r,
+                        .gt => l > r,
+                        .ge => l >= r,
+                    } };
+                }
+
+                // Handle float comparisons
+                if (left == .float and right == .float) {
+                    const l = left.float;
+                    const r = right.float;
+                    return .{ .bool = switch (cmp.op) {
+                        .eq => l == r,
+                        .ne => l != r,
+                        .lt => l < r,
+                        .le => l <= r,
+                        .gt => l > r,
+                        .ge => l >= r,
+                    } };
+                }
+
+                // Handle bool comparisons
+                if (left == .bool and right == .bool) {
+                    const l = left.bool;
+                    const r = right.bool;
+                    return .{ .bool = switch (cmp.op) {
+                        .eq => l == r,
+                        .ne => l != r,
+                        else => {
+                            self.reportError(.E003, "operand");
+                            return error.SemanticError;
+                        },
+                    } };
+                }
+
+                self.reportError(.E003, "operand");
+                return error.SemanticError;
+            },
+            .logical => |log| {
+                const left = try self.evaluateConstantExpr(log.left.*);
+                const right = try self.evaluateConstantExpr(log.right.*);
+
+                if (left == .bool and right == .bool) {
+                    return .{ .bool = switch (log.op) {
+                        .@"and" => left.bool and right.bool,
+                        .@"or" => left.bool or right.bool,
+                    } };
+                }
+
+                self.reportError(.E003, "operand");
+                return error.SemanticError;
+            },
+            .array_literal => |_| {
+                // Array literals need special handling for iteration to work
+                // They should be wrapped in Array type, so defer to runtime
+                return .{ .runtime_expr = expr };
+            },
+            .field_access => |fa| {
+                // Handle enum member access: EnumName.memberName
+                if (fa.base.* == .identifier) {
+                    const enum_name = fa.base.identifier;
+                    if (self.enum_decl_map.get(enum_name)) |enum_decl| {
+                        // Find the member
+                        var member_value: i64 = 0;
+                        for (enum_decl.members) |member| {
+                            if (std.mem.eql(u8, member.name, fa.field_name)) {
+                                return .{ .enum_member = .{
+                                    .enum_name = enum_name,
+                                    .member_name = fa.field_name,
+                                    .value = member_value,
+                                } };
+                            }
+                            member_value += 1;
+                        }
+                    }
+                }
+                self.reportError(.E003, "field access");
+                return error.SemanticError;
+            },
+            .map_literal => |_| {
+                // Map literals are initialized at runtime, not compile time
+                return .{ .runtime_expr = expr };
+            },
+            .cast => |_| {
+                // Casts are evaluated at runtime
+                return .{ .runtime_expr = expr };
+            },
+            else => {
+                // Unsupported expression type in constant context
+                self.reportError(.E003, "expression");
+                return error.SemanticError;
+            },
+        };
+    }
+
+    /// Convert a compile-time constant value to IR
+    fn convertConstantValue(self: *AstToIr, constant: ConstantValue) ConvertError!TypedValue {
+        return switch (constant) {
+            .int => |v| .{
+                .value = try self.func().emitConstI64(v),
+                .ty = .{ .primitive = "int" },
+            },
+            .float => |v| .{
+                .value = try self.func().emitConstF64(v),
+                .ty = .{ .primitive = "float" },
+            },
+            .bool => |v| .{
+                .value = try self.func().emitConstI64(if (v) 1 else 0),
+                .ty = .{ .primitive = "bool" },
+            },
+            .string => |s| self.convertStringLiteral(s),
+            .array => |elements| {
+                // Convert array constant elements to IR values directly
+                // instead of going through convertArrayLiteral which expects
+                // expressions to still be valid
+                if (elements.len == 0) {
+                    const managed_ptr = try self.emitEmptyManagedArray();
+                    return .{
+                        .value = managed_ptr,
+                        .ty = .{ .array_type = .{ .element_type = .i64, .size = 0, .storage = .heap } },
+                    };
+                }
+
+                // Determine element type from first element
+                const first_elem = elements[0];
+                const elem_type: ir.Type = switch (first_elem) {
+                    .int => .i64,
+                    .float => .f64,
+                    .bool => .i64,
+                    else => .i64,
+                };
+
+                // Allocate buffer for elements on heap
+                const elem_count = try self.func().emitConstI64(@intCast(elements.len));
+                const elem_size: i64 = 8;
+                const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
+                const buffer = try self.func().emitHeapAlloc(buffer_size);
+
+                // Store elements into buffer
+                for (elements, 0..) |elem, i| {
+                    const value = switch (elem) {
+                        .int => |v| try self.func().emitConstI64(v),
+                        .float => |v| try self.func().emitConstF64(v),
+                        .bool => |v| try self.func().emitConstI64(if (v) 1 else 0),
+                        else => {
+                            self.reportError(.E003, "array element");
+                            return error.SemanticError;
+                        },
+                    };
+                    const idx_val = try self.func().emitConstI64(@intCast(i));
+                    const elem_ptr = try self.func().emitGetElemPtr(buffer, idx_val, @intCast(elem_size));
+                    try self.func().emitStore(elem_ptr, value);
+                }
+
+                // Create managed array
+                const managed_ptr = try self.emitManagedArray(buffer, elem_count, elem_count);
+
+                return .{
+                    .value = managed_ptr,
+                    .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .heap } },
+                };
+            },
+            .enum_member => |em| .{
+                .value = try self.func().emitConstI64(em.value),
+                .ty = .{ .enum_type = em.enum_name },
+            },
+            .runtime_expr => |expr| {
+                // For runtime-initialized constants, convert the expression
+                // Array literals need to be wrapped in Array struct for iteration to work
+                if (expr == .array_literal) {
+                    return self.convertArrayConstant(expr.array_literal);
+                }
+                return self.convertExpression(expr);
+            },
+        };
+    }
+
+    /// Convert an array literal constant to an Array struct (for iteration support)
+    fn convertArrayConstant(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) ConvertError!TypedValue {
+        // First convert the array literal to a __ManagedArray
+        const arr_typed = try self.convertArrayLiteral(arr_lit);
+
+        // Determine element type name from the array type
+        const elem_type_name: []const u8 = switch (arr_typed.ty) {
+            .array_type => |a| a.element_type.toMaxonName(),
+            else => "int",
+        };
+
+        // Get or create monomorphized Array type: Array$int, Array$float, etc.
+        var type_args = [_][]const u8{elem_type_name};
+        const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
+
+        // Wrap in Array struct by calling Array$init(__ManagedArray)
+        const array_init_name = "Array$init";
+        const array_func_info = self.func_map.get(array_init_name) orelse {
+            self.reportInternalError("Array$init not found for array constant");
+            return error.UnknownFunction;
+        };
+
+        if (!array_func_info.ir_generated) {
+            try self.ensureMethodGenerated(array_init_name);
+        }
+
+        // Get Array type info for size
+        const array_type_info = self.type_map.get("Array") orelse {
+            self.reportError(.E006, "Array");
+            return error.UnknownType;
+        };
+
+        const array_size = array_type_info.struct_type.size;
+        const array_ptr = try self.func().emitAllocaSized(array_size);
+
+        var args = try self.allocator.alloc(ir.Value, 2);
+        args[0] = array_ptr;
+        args[1] = arr_typed.value;
+        _ = try self.func().emitCall(array_init_name, args, array_func_info.return_type);
+
+        return .{
+            .value = array_ptr,
+            .ty = .{ .struct_type = array_type_name },
+        };
     }
 
     // ------------------------------------------------------------------------
@@ -1839,6 +2274,8 @@ pub const AstToIr = struct {
         for (decl.params, 0..) |param, i| {
             param_types[i] = .{
                 .ty = try self.typeExprToValueType(param.type_expr),
+                .name = param.name,
+                .default_value = param.default_value,
             };
         }
 
@@ -1946,7 +2383,7 @@ pub const AstToIr = struct {
                 };
             },
             .primitive, .enum_type, .array_type => 8,
-            .optional_type => 8,
+            .optional_type => |opt_info| self.getOptionalSize(opt_info),
             .error_union_type => 8,
             .function_type => 8,
         };
@@ -2191,13 +2628,15 @@ pub const AstToIr = struct {
 
         // First param is self (pointer to type instance) for instance methods
         if (!m.is_static) {
-            param_types[0] = .{ .ty = .{ .struct_type = type_name } };
+            param_types[0] = .{ .ty = .{ .struct_type = type_name }, .name = "self" };
         }
 
         // Register explicit params
         for (m.params, 0..) |param, i| {
             param_types[i + extra_params] = .{
                 .ty = try self.typeExprToValueType(param.type_expr),
+                .name = param.name,
+                .default_value = param.default_value,
             };
         }
 
@@ -2556,6 +2995,7 @@ pub const AstToIr = struct {
         self.current_func = ir_func;
         self.current_func_name = func_name;
         self.var_map.clearRetainingCapacity();
+        self.converted_runtime_constants.clearRetainingCapacity();
         _ = try ir_func.addBlock("entry");
 
         // Reset sret state
@@ -2608,6 +3048,69 @@ pub const AstToIr = struct {
                 self.reportError(.E014, entry.key_ptr.*);
                 return error.UnusedVariable;
             }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Return Path Analysis
+    // ------------------------------------------------------------------------
+
+    /// Check if all execution paths through a statement list end with a return
+    fn allPathsReturn(body: []const ast.Statement) bool {
+        if (body.len == 0) return false;
+
+        // Check if the last statement guarantees a return
+        const last_stmt = body[body.len - 1];
+        return statementReturns(last_stmt);
+    }
+
+    /// Check if a statement guarantees a return on all paths
+    fn statementReturns(stmt: ast.Statement) bool {
+        switch (stmt.kind) {
+            .@"return" => return true,
+            .throw_stmt => return true, // throw also exits the function
+            .if_stmt => |if_s| {
+                // Both branches must return, and there must be an else branch
+                if (if_s.else_body == null and if_s.else_if == null) return false;
+
+                // Check then branch
+                if (!allPathsReturn(if_s.body)) return false;
+
+                // Check else branch
+                if (if_s.else_body) |else_body| {
+                    if (!allPathsReturn(else_body)) return false;
+                }
+
+                // Check else-if chain
+                if (if_s.else_if) |else_if| {
+                    if (!statementReturns(.{ .kind = .{ .if_stmt = else_if.* }, .line = 0, .column = 0 })) return false;
+                }
+
+                return true;
+            },
+            .match_stmt => |match_s| {
+                // All cases must return
+                for (match_s.cases) |case| {
+                    if (!statementReturns(case.body.*)) return false;
+                }
+                // If there's a default case, it must also return
+                if (match_s.default_case) |default| {
+                    return statementReturns(default.*);
+                }
+                // No default means we assume exhaustiveness (validated elsewhere)
+                // Return true if all explicit cases return
+                return match_s.cases.len > 0;
+            },
+            .do_catch_stmt => |do_catch| {
+                // The do block and all catch blocks must return
+                if (!allPathsReturn(do_catch.body)) return false;
+                for (do_catch.catches) |catch_clause| {
+                    if (!allPathsReturn(catch_clause.body)) return false;
+                }
+                return true;
+            },
+            // Other statements don't guarantee a return
+            else => return false,
         }
     }
 
@@ -2703,6 +3206,14 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     fn convertFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
+        // Check that all paths return for non-void functions
+        if (decl.return_type != null) {
+            if (!allPathsReturn(decl.body)) {
+                self.reportError(.E037, decl.name);
+                return error.MissingReturn;
+            }
+        }
+
         // Track if this function throws (for throw statement validation)
         self.current_func_throws_type = decl.throws_type;
         defer self.current_func_throws_type = null;
@@ -2936,6 +3447,7 @@ pub const AstToIr = struct {
             .break_stmt => |brk| try self.convertBreakStmt(brk),
             .continue_stmt => |cont| try self.convertContinueStmt(cont),
             .else_unwrap_decl => |unwrap| try self.convertElseUnwrapDecl(unwrap),
+            .guard_let_decl => |guard| try self.convertGuardLetDecl(guard),
             // Error handling
             .throw_stmt => |throw_s| try self.convertThrowStmt(throw_s),
             .do_catch_stmt => |dc| try self.convertDoCatchStmt(dc),
@@ -3416,6 +3928,17 @@ pub const AstToIr = struct {
     }
 
     fn convertFieldAssign(self: *AstToIr, assign: ast.FieldAssign) ConvertError!void {
+        // Check if base is an immutable variable (let struct)
+        if (assign.base.* == .identifier) {
+            const var_name = assign.base.identifier;
+            if (self.var_map.get(var_name)) |var_info| {
+                if (!var_info.is_mutable) {
+                    self.reportError(.E009, var_name);
+                    return error.ImmutableAssign;
+                }
+            }
+        }
+
         const base = try self.convertExpression(assign.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
@@ -3551,10 +4074,12 @@ pub const AstToIr = struct {
         // Now current block is "then" block
         // For if-let, bind the unwrapped value before executing body
         if (if_stmt.binding_name) |binding_name| {
-            const opt_info = switch (cond_typed.ty) {
-                .optional_type => |info| info,
-                .primitive, .struct_type, .array_type, .enum_type, .error_union_type, .function_type => OptionalInfo{ .wrapped = .i64 },
-            };
+            // Validate that the expression is an optional type
+            if (cond_typed.ty != .optional_type) {
+                self.reportError(.E039, binding_name);
+                return error.TypeMismatch;
+            }
+            const opt_info = cond_typed.ty.optional_type;
             const wrapped_type = opt_info.wrapped;
             const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
 
@@ -5049,14 +5574,17 @@ pub const AstToIr = struct {
         // Convert the optional expression
         const opt_typed = try self.convertExpression(unwrap.optional_expr.*);
 
+        // Validate that the expression is an optional type
+        if (opt_typed.ty != .optional_type) {
+            self.reportError(.E040, unwrap.var_name);
+            return error.TypeMismatch;
+        }
+
         // Check if optional has a value
         const has_value = try self.emitOptionalHasValue(opt_typed.value);
 
         // Get the wrapped type info
-        const opt_info = switch (opt_typed.ty) {
-            .optional_type => |info| info,
-            .primitive, .struct_type, .array_type, .enum_type, .error_union_type, .function_type => OptionalInfo{ .wrapped = .i64 },
-        };
+        const opt_info = opt_typed.ty.optional_type;
         const wrapped_type = opt_info.wrapped;
 
         // Create a stack slot for the variable being declared
@@ -5128,7 +5656,98 @@ pub const AstToIr = struct {
         try branch.switchToMerge(needs_branch);
     }
 
-    // ------------------------------------------------------------------------
+    /// Guard-let: `let x = opt or 'label' ... end 'label'`
+    /// If optional is nil, execute body (must exit). If has value, bind x to unwrapped.
+    fn convertGuardLetDecl(self: *AstToIr, guard: ast.GuardLetDecl) ConvertError!void {
+        // Check for duplicate block identifier at this scope level
+        try self.checkAndRegisterLabel(guard.label);
+
+        // Convert the optional expression
+        const opt_typed = try self.convertExpression(guard.optional_expr.*);
+
+        // Get the wrapped type info - must be an optional type
+        const opt_info = switch (opt_typed.ty) {
+            .optional_type => |info| info,
+            .primitive, .struct_type, .array_type, .enum_type, .error_union_type, .function_type => {
+                self.reportError(.E017, "guard-let requires optional type");
+                return error.TypeMismatch;
+            },
+        };
+        const wrapped_type = opt_info.wrapped;
+
+        // Check if optional has a value
+        const has_value = try self.emitOptionalHasValue(opt_typed.value);
+
+        // Create a stack slot for the unwrapped variable
+        const var_ptr = if (opt_info.wrapped_struct_type) |struct_name| blk: {
+            const struct_size = if (self.type_map.get(struct_name)) |type_info| s: {
+                if (type_info == .struct_type) {
+                    break :s type_info.struct_type.size;
+                }
+                break :s 8;
+            } else 8;
+            break :blk try self.func().emitAllocaSized(struct_size);
+        } else try self.func().emitAlloca(wrapped_type);
+        try self.func().setValueName(var_ptr, guard.var_name);
+
+        // Create 2-way branch: has_value -> unwrap and continue, nil -> execute body (must exit)
+        var branch = try BranchBuilder.init(self, has_value, "guard_some", "guard_nil", "guard_end");
+        defer branch.deinit();
+
+        // Then block ("some"): unwrap and store value, then jump to merge
+        const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
+        if (opt_info.wrapped_struct_type) |struct_name| {
+            const struct_size = if (self.type_map.get(struct_name)) |type_info| blk: {
+                if (type_info == .struct_type) {
+                    break :blk type_info.struct_type.size;
+                }
+                break :blk 8;
+            } else 8;
+            try self.emitStructCopy(var_ptr, value_ptr, struct_size, struct_name);
+        } else {
+            const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
+            try self.func().emitStore(var_ptr, unwrapped_value);
+        }
+
+        // Switch to else block (nil case)
+        try branch.switchToElse(true);
+
+        // Else block ("nil"): execute body (must contain exit statement)
+        try self.pushLabelScope();
+        for (guard.nil_body) |stmt| {
+            try self.convertStatement(stmt);
+        }
+        self.popLabelScope();
+
+        // The nil body MUST exit (return/break/continue), so no branch to merge is needed
+        // If it does not exit, codegen will produce invalid code, but that is a semantic error
+        // that should be caught by a separate validation pass
+        const nil_block_terminates = if (self.func().currentBlock()) |block|
+            block.instructions.items.len > 0 and block.instructions.items[block.instructions.items.len - 1].op == .ret
+        else
+            false;
+
+        // Switch to merge block
+        try branch.switchToMerge(!nil_block_terminates);
+
+        // Add the variable to var_map for use after the guard-let
+        if (opt_info.wrapped_struct_type) |struct_name| {
+            try self.var_map.put(self.allocator, guard.var_name, VarInfo.init(
+                var_ptr,
+                .{ .struct_type = struct_name },
+                false, // immutable (let binding)
+                true,
+            ));
+        } else {
+            try self.var_map.put(self.allocator, guard.var_name, VarInfo.init(
+                var_ptr,
+                .{ .primitive = wrapped_type.toMaxonName() },
+                false, // immutable (let binding)
+                false,
+            ));
+        }
+    }
+
     // Expression Conversion
     // ------------------------------------------------------------------------
 
@@ -5151,6 +5770,7 @@ pub const AstToIr = struct {
             .field_access => |fa| self.convertFieldAccess(fa),
             .array_literal => |arr| self.convertArrayLiteral(arr),
             .map_literal => |map| self.convertMapLiteral(map),
+            .set_from => |sf| self.convertSetFrom(sf),
             .index => |idx| self.convertIndex(idx),
             .array_type => |arr| self.convertArrayType(arr),
             .method_call => |mcall| self.convertMethodCallExpr(mcall),
@@ -5186,6 +5806,21 @@ pub const AstToIr = struct {
         // First try to find it as a regular variable
         if (self.var_map.contains(name)) {
             return self.convertIdentifier(name);
+        }
+
+        // Check if it's a global constant
+        if (self.global_constants.get(name)) |constant| {
+            // For runtime-initialized constants, check if we've already converted it in this function
+            if (constant == .runtime_expr) {
+                if (self.converted_runtime_constants.get(name)) |cached| {
+                    return cached;
+                }
+                // Convert and cache
+                const result = try self.convertConstantValue(constant);
+                try self.converted_runtime_constants.put(self.allocator, name, result);
+                return result;
+            }
+            return self.convertConstantValue(constant);
         }
 
         // If inside a method, check if it's a field of the current type (implicit self)
@@ -6795,7 +7430,13 @@ pub const AstToIr = struct {
         // This is important for types like Array that need zeroed memory
         try self.func().emitMemset(dest_ptr, 0, struct_info.size);
 
+        // Build a set of field names provided in the struct init
+        var provided_fields = std.StringHashMap(void).init(self.allocator);
+        defer provided_fields.deinit();
+
+        // Initialize fields from struct init expression
         for (sinit.fields) |field_init| {
+            try provided_fields.put(field_init.name, {});
             const field_info = try self.lookupField(struct_info, field_init.name);
             const field_ptr = try self.func().emitGetFieldPtr(dest_ptr, field_info.offset);
             const field_val = try self.convertExpression(field_init.value.*);
@@ -6806,8 +7447,44 @@ pub const AstToIr = struct {
             if (field_info.isStruct()) {
                 // Struct fields are embedded inline - copy the data
                 try self.emitStructCopy(field_ptr, field_val.value, field_info.size, field_info.structName());
+            } else if (field_info.value_type == .optional_type) {
+                // Optional field - check if we need to wrap the value
+                const opt_info = field_info.value_type.optional_type;
+                if (field_val.ty == .optional_type) {
+                    // Value is already optional - copy it directly (16 bytes for primitives)
+                    try self.func().emitMemcpy(field_ptr, field_val.value, self.getOptionalSize(opt_info));
+                } else {
+                    // Value is not optional - wrap it as "some"
+                    // Store tag = 1 at field_ptr
+                    const one = try self.func().emitConstI64(1);
+                    try self.func().emitStore(field_ptr, one);
+                    // Store value at offset 8
+                    const value_ptr = try self.func().emitGetFieldPtr(field_ptr, 8);
+                    try self.func().emitStore(value_ptr, field_val.value);
+                }
             } else {
                 try self.func().emitStore(field_ptr, field_val.value);
+            }
+        }
+
+        // Apply default values for fields not provided in struct init
+        if (self.type_decl_map.get(type_name)) |type_decl| {
+            for (type_decl.fields) |field_decl| {
+                // Skip if this field was already provided
+                if (provided_fields.contains(field_decl.name)) continue;
+
+                // Apply default value if present
+                if (field_decl.default_value) |default_expr| {
+                    const field_info = try self.lookupField(struct_info, field_decl.name);
+                    const field_ptr = try self.func().emitGetFieldPtr(dest_ptr, field_info.offset);
+                    const default_val = try self.convertExpression(default_expr.*);
+
+                    if (field_info.isStruct()) {
+                        try self.emitStructCopy(field_ptr, default_val.value, field_info.size, field_info.structName());
+                    } else {
+                        try self.func().emitStore(field_ptr, default_val.value);
+                    }
+                }
             }
         }
     }
@@ -6900,8 +7577,8 @@ pub const AstToIr = struct {
         const field_info = try self.lookupField(struct_info, faccess.field_name);
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
 
-        // Struct fields are embedded (return ptr directly); others are loaded
-        const value = if (field_info.value_type == .struct_type)
+        // Struct fields and optional fields are embedded (return ptr directly); others are loaded
+        const value = if (field_info.value_type == .struct_type or field_info.value_type == .optional_type)
             field_ptr
         else
             try self.func().emitLoad(field_ptr, field_info.value_type.toPrimitiveType());
@@ -7009,6 +7686,100 @@ pub const AstToIr = struct {
         return arg_value;
     }
 
+    /// Resolved argument: either a provided expression or a default value
+    const ResolvedArg = union(enum) {
+        expr: ast.Expression,
+        default: *const ast.Expression,
+    };
+
+    /// Resolve named arguments and default values to build final positional argument list.
+    /// Returns a slice of ResolvedArg for each parameter.
+    /// Validates:
+    /// - No positional args after named args
+    /// - Named args reference valid parameter names
+    /// - All required parameters are provided
+    /// - No duplicate named args
+    fn resolveCallArguments(
+        self: *AstToIr,
+        func_name: []const u8,
+        positional_args: []const ast.Expression,
+        named_args: []const ast.NamedArg,
+        param_types: []const ParamType,
+        skip_self: bool, // true for method calls where first param is implicit self
+    ) ConvertError![]const ResolvedArg {
+        const param_offset: usize = if (skip_self) 1 else 0;
+        const explicit_params = param_types[param_offset..];
+
+        // Count required parameters (those without default values)
+        var required_count: usize = 0;
+        for (explicit_params) |param| {
+            if (param.default_value == null) {
+                required_count += 1;
+            }
+        }
+
+        // Validate: positional args can only fill required params
+        if (positional_args.len > required_count) {
+            self.reportError(.E011, func_name);
+            return error.WrongArgumentCount;
+        }
+
+        // Allocate result array
+        var resolved = try self.allocator.alloc(ResolvedArg, explicit_params.len);
+        @memset(resolved, .{ .default = undefined });
+
+        // Track which parameters have been filled
+        var filled = try self.allocator.alloc(bool, explicit_params.len);
+        defer self.allocator.free(filled);
+        @memset(filled, false);
+
+        // Fill positional arguments
+        for (positional_args, 0..) |arg, i| {
+            resolved[i] = .{ .expr = arg };
+            filled[i] = true;
+        }
+
+        // Fill named arguments
+        for (named_args) |named| {
+            // Find the parameter by name
+            var found_idx: ?usize = null;
+            for (explicit_params, 0..) |param, i| {
+                if (std.mem.eql(u8, param.name, named.name)) {
+                    found_idx = i;
+                    break;
+                }
+            }
+
+            if (found_idx == null) {
+                self.reportError(.E011, named.name);
+                return error.UnknownParameter;
+            }
+
+            const idx = found_idx.?;
+            if (filled[idx]) {
+                self.reportError(.E011, named.name);
+                return error.DuplicateArgument;
+            }
+
+            resolved[idx] = .{ .expr = named.value.* };
+            filled[idx] = true;
+        }
+
+        // Fill defaults and check for missing required args
+        for (explicit_params, 0..) |param, i| {
+            if (!filled[i]) {
+                if (param.default_value) |default| {
+                    resolved[i] = .{ .default = default };
+                } else {
+                    self.reportError(.E011, param.name);
+                    return error.MissingArgument;
+                }
+            }
+        }
+
+        return resolved;
+    }
+
     fn convertCall(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
         // Handle built-in functions
         if (intrinsics.convertBuiltin(self, call)) |result| {
@@ -7048,6 +7819,16 @@ pub const AstToIr = struct {
             return error.UnknownFunction;
         };
 
+        // Resolve named arguments and default values to positional arguments
+        const resolved_args = try self.resolveCallArguments(
+            call.func_name,
+            call.args,
+            call.named_args,
+            func_info.param_types,
+            false, // no implicit self for regular functions
+        );
+        defer self.allocator.free(resolved_args);
+
         // Check if return type is optional or error union (needs sret)
         const returns_optional = if (func_info.return_value_type) |vt|
             vt == .optional_type
@@ -7063,7 +7844,7 @@ pub const AstToIr = struct {
         var sret_buffer: ?ir.Value = null;
 
         // Allocate args: +1 if using sret for hidden first parameter
-        const num_args = call.args.len + @as(usize, if (returns_struct) 1 else 0);
+        const num_args = resolved_args.len + @as(usize, if (returns_struct) 1 else 0);
         const args = try self.func().allocator.alloc(ir.Value, num_args);
 
         // If returning struct, optional, or error union, allocate buffer in caller and pass as first arg
@@ -7091,7 +7872,12 @@ pub const AstToIr = struct {
         }
 
         const arg_offset: usize = if (returns_struct) 1 else 0;
-        for (call.args, 0..) |arg_expr, i| {
+        for (resolved_args, 0..) |resolved_arg, i| {
+            // Get expression from either provided arg or default value
+            const arg_expr: ast.Expression = switch (resolved_arg) {
+                .expr => |e| e,
+                .default => |d| d.*,
+            };
             const arg = try self.convertExpression(arg_expr);
             var arg_value = arg.value;
             var arg_ty = arg.ty;
@@ -7119,13 +7905,66 @@ pub const AstToIr = struct {
                 }
             }
 
+            // Implicit optional wrap: if arg is non-optional but param expects optional
+            if (i < func_info.param_types.len) {
+                const param_ty = func_info.param_types[i].ty;
+                if (arg_ty != .optional_type and param_ty == .optional_type) {
+                    const opt_info = param_ty.optional_type;
+                    // Check if arg type matches the optional's wrapped type
+                    const type_matches = blk: {
+                        if (arg_ty == .struct_type) {
+                            if (opt_info.wrapped_struct_type) |wrapped_name| {
+                                break :blk std.mem.eql(u8, arg_ty.struct_type, wrapped_name);
+                            }
+                        }
+                        if (arg_ty == .primitive) {
+                            break :blk std.mem.eql(u8, arg_ty.primitive, opt_info.wrapped.toMaxonName());
+                        }
+                        break :blk false;
+                    };
+                    if (type_matches) {
+                        // Allocate optional struct buffer
+                        const opt_size = self.getOptionalSize(opt_info);
+                        const opt_buffer = try self.func().emitAllocaSized(opt_size);
+                        // Store tag = 1 (has value)
+                        const one = try self.func().emitConstI64(1);
+                        try self.func().emitStore(opt_buffer, one);
+                        // Store value at offset 8
+                        const value_ptr = try self.func().emitGetFieldPtr(opt_buffer, 8);
+                        if (arg_ty == .struct_type) {
+                            // For struct types, need to memcpy
+                            if (opt_info.wrapped_struct_type) |struct_name| {
+                                if (self.type_map.get(struct_name)) |type_info| {
+                                    if (type_info == .struct_type) {
+                                        try self.func().emitMemcpy(value_ptr, arg_value, type_info.struct_type.size);
+                                    } else {
+                                        try self.func().emitStore(value_ptr, arg_value);
+                                    }
+                                } else {
+                                    try self.func().emitStore(value_ptr, arg_value);
+                                }
+                            } else {
+                                try self.func().emitStore(value_ptr, arg_value);
+                            }
+                        } else {
+                            try self.func().emitStore(value_ptr, arg_value);
+                        }
+                        arg_value = opt_buffer;
+                        arg_ty = param_ty;
+                    }
+                }
+            }
+
             // Implicit int→float promotion: if parameter expects float but arg is int
             if (i < func_info.param_types.len) {
                 arg_value = try self.applyIntToFloatPromotion(arg_value, arg_ty, func_info.param_types[i].ty);
             }
 
             args[i + arg_offset] = arg_value;
-            try self.checkOwnershipTransfer(call.func_name, arg_expr, i);
+            // Only check ownership for explicitly provided args
+            if (resolved_arg == .expr) {
+                try self.checkOwnershipTransfer(call.func_name, arg_expr, i);
+            }
         }
 
         const result = try self.func().emitCall(call.func_name, args, func_info.return_type);
@@ -8177,6 +9016,120 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Convert Set from [...] expression
+    /// Parses: Set from [1, 2, 3] -> creates Set with elements
+    fn convertSetFrom(self: *AstToIr, sf: ast.SetFromExpr) ConvertError!TypedValue {
+        // The elements expression must be an array literal
+        const arr_lit = sf.elements.array_literal;
+        const elements = arr_lit.elements;
+
+        debug.astToIr("Set from: type={s}, {d} elements", .{ sf.type_name, elements.len });
+
+        // Handle empty set - still need to create it but can't infer element type
+        // For now, we'll use 'int' as default for empty sets (similar to empty arrays)
+        var elem_type_name: []const u8 = "int";
+
+        // Create __ManagedArray for elements
+        var managed_ptr: ir.Value = undefined;
+
+        if (elements.len == 0) {
+            managed_ptr = try self.emitEmptyManagedArray();
+        } else {
+            // Infer element type from first element
+            const first_typed = try self.convertExpression(elements[0]);
+            elem_type_name = first_typed.ty.getTypeName() orelse {
+                debug.astToIr("error: set element type must be a named type", .{});
+                self.reportError(.E006, "set element type must be a named type");
+                return error.UnknownType;
+            };
+
+            // Allocate buffer for elements (on heap for ownership)
+            const elem_count = try self.func().emitConstI64(@intCast(elements.len));
+            const elem_size: i64 = 8; // All elements are 8 bytes (i64, f64, or pointer)
+            const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
+            const buffer = try self.func().emitHeapAlloc(buffer_size);
+
+            // Store elements into buffer
+            for (elements, 0..) |elem, i| {
+                const typed = if (i == 0) first_typed else try self.convertExpression(elem);
+                const idx_val = try self.func().emitConstI64(@intCast(i));
+                const elem_ptr = try self.func().emitGetElemPtr(buffer, idx_val, @intCast(elem_size));
+                try self.func().emitStore(elem_ptr, typed.value);
+            }
+
+            managed_ptr = try self.emitManagedArray(buffer, elem_count, elem_count);
+        }
+
+        // Build the monomorphized Set type name: Set$ElementType
+        var type_args = [_][]const u8{elem_type_name};
+        const set_type_name = try self.getOrCreateMonomorphizedType(sf.type_name, &type_args);
+
+        debug.astToIr("Set type name: {s}", .{set_type_name});
+
+        // First create an Array from the __ManagedArray (Set's init takes Array, not __ManagedArray)
+        const array_init_name = "Array$init";
+        const array_func_info = self.func_map.get(array_init_name) orelse {
+            self.reportInternalError("Array$init not found for Set from");
+            return error.UnknownFunction;
+        };
+
+        if (!array_func_info.ir_generated) {
+            try self.ensureMethodGenerated(array_init_name);
+        }
+
+        // Get Array type info for size
+        const array_type_info = self.type_map.get("Array") orelse {
+            self.reportError(.E006, "Array");
+            return error.UnknownType;
+        };
+
+        const array_size = array_type_info.struct_type.size;
+        const array_ptr = try self.func().emitAllocaSized(array_size);
+
+        var array_args = try self.allocator.alloc(ir.Value, 2);
+        array_args[0] = array_ptr;
+        array_args[1] = managed_ptr;
+        _ = try self.func().emitCall(array_init_name, array_args, array_func_info.return_type);
+
+        // Build init function name: Set$Element$init (static init from InitableFromArrayLiteral interface)
+        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{set_type_name});
+        try self.module.trackString(init_func_name);
+
+        // Look up function and type info
+        const func_info = self.func_map.get(init_func_name) orelse {
+            const msg = std.fmt.allocPrint(self.allocator, "Set type '{s}' missing init method for InitableFromArrayLiteral", .{set_type_name}) catch "missing init method";
+            self.reportInternalError(msg);
+            return error.UnknownFunction;
+        };
+
+        // Trigger lazy generation if needed
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
+        const type_info = self.type_map.get(set_type_name) orelse {
+            self.reportError(.E006, set_type_name);
+            return error.UnknownType;
+        };
+
+        // Set$init returns a struct, so use sret calling convention
+        const struct_size = type_info.struct_type.size;
+        const result_ptr = try self.func().emitAllocaSized(struct_size);
+
+        // Build args: [sret_ptr, array_ptr]
+        var args = try self.allocator.alloc(ir.Value, 2);
+        args[0] = result_ptr;
+        args[1] = array_ptr;
+
+        // Call init with sret
+        _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+        return .{
+            .value = result_ptr,
+            .ty = .{ .struct_type = set_type_name },
+        };
+    }
+
     fn convertIndex(self: *AstToIr, idx: ast.IndexExpr) ConvertError!TypedValue {
         const base_typed = try self.convertExpression(idx.base.*);
 
@@ -8245,6 +9198,7 @@ pub const AstToIr = struct {
                 .field_access,
                 .array_literal,
                 .map_literal,
+                .set_from,
                 .index,
                 .array_type,
                 .method_call,
@@ -8438,6 +9392,16 @@ pub const AstToIr = struct {
             return error.SemanticError;
         };
 
+        // Validate argument count
+        {
+            const is_instance_method = self_value != null;
+            const expected_args = if (is_instance_method) func_info.param_types.len - 1 else func_info.param_types.len;
+            if (call_args.len() != expected_args) {
+                self.reportError(.E011, method_name);
+                return error.WrongArgumentCount;
+            }
+        }
+
         // Trigger lazy generation if method IR hasn't been generated yet
         if (!func_info.ir_generated) {
             try self.ensureMethodGenerated(mangled_name);
@@ -8485,11 +9449,63 @@ pub const AstToIr = struct {
                 for (exprs, 0..) |arg_expr, i| {
                     const arg = try self.convertExpression(arg_expr);
                     var arg_value = arg.value;
+                    var arg_ty = arg.ty;
+
+                    const param_index = i + self_offset; // Account for self parameter
+
+                    // Implicit optional wrap: if arg is non-optional but param expects optional
+                    if (param_index < func_info.param_types.len) {
+                        const param_ty = func_info.param_types[param_index].ty;
+                        if (arg_ty != .optional_type and param_ty == .optional_type) {
+                            const opt_info = param_ty.optional_type;
+                            // Check if arg type matches the optional's wrapped type
+                            const type_matches = blk: {
+                                if (arg_ty == .struct_type) {
+                                    if (opt_info.wrapped_struct_type) |wrapped_name| {
+                                        break :blk std.mem.eql(u8, arg_ty.struct_type, wrapped_name);
+                                    }
+                                }
+                                if (arg_ty == .primitive) {
+                                    break :blk std.mem.eql(u8, arg_ty.primitive, opt_info.wrapped.toMaxonName());
+                                }
+                                break :blk false;
+                            };
+                            if (type_matches) {
+                                // Allocate optional struct buffer
+                                const opt_size = self.getOptionalSize(opt_info);
+                                const opt_buffer = try self.func().emitAllocaSized(opt_size);
+                                // Store tag = 1 (has value)
+                                const one = try self.func().emitConstI64(1);
+                                try self.func().emitStore(opt_buffer, one);
+                                // Store value at offset 8
+                                const value_ptr = try self.func().emitGetFieldPtr(opt_buffer, 8);
+                                if (arg_ty == .struct_type) {
+                                    // For struct types, need to memcpy
+                                    if (opt_info.wrapped_struct_type) |struct_name| {
+                                        if (self.type_map.get(struct_name)) |type_info| {
+                                            if (type_info == .struct_type) {
+                                                try self.func().emitMemcpy(value_ptr, arg_value, type_info.struct_type.size);
+                                            } else {
+                                                try self.func().emitStore(value_ptr, arg_value);
+                                            }
+                                        } else {
+                                            try self.func().emitStore(value_ptr, arg_value);
+                                        }
+                                    } else {
+                                        try self.func().emitStore(value_ptr, arg_value);
+                                    }
+                                } else {
+                                    try self.func().emitStore(value_ptr, arg_value);
+                                }
+                                arg_value = opt_buffer;
+                                arg_ty = param_ty;
+                            }
+                        }
+                    }
 
                     // Implicit int→float promotion: if parameter expects float but arg is int
-                    const param_index = i + self_offset; // Account for self parameter
                     if (param_index < func_info.param_types.len) {
-                        arg_value = try self.applyIntToFloatPromotion(arg_value, arg.ty, func_info.param_types[param_index].ty);
+                        arg_value = try self.applyIntToFloatPromotion(arg_value, arg_ty, func_info.param_types[param_index].ty);
                     }
 
                     args[arg_idx] = arg_value;
@@ -8534,6 +9550,55 @@ pub const AstToIr = struct {
         return self.emitMethodCallImpl(type_name, method_name, .{ .ir_values = arg_values }, self_value);
     }
 
+    /// Emit a method call with support for named arguments and default values.
+    fn emitMethodCallWithNamedArgs(
+        self: *AstToIr,
+        type_name: []const u8,
+        method_name: []const u8,
+        positional_args: []const ast.Expression,
+        named_args: []const ast.NamedArg,
+        self_value: ?ir.Value,
+    ) ConvertError!TypedValue {
+        // If no named args and no need for default value resolution, use simple path
+        if (named_args.len == 0) {
+            return self.emitMethodCall(type_name, method_name, positional_args, self_value);
+        }
+
+        // Look up method info to get parameter info
+        const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method_name });
+        try self.module.trackString(mangled_name);
+
+        const func_info = self.func_map.get(mangled_name) orelse {
+            debug.astToIr("error: unknown method '{s}' on type '{s}'", .{ method_name, type_name });
+            self.reportError(.E003, mangled_name);
+            return error.SemanticError;
+        };
+
+        // Resolve named arguments
+        const has_self = self_value != null;
+        const resolved_args = try self.resolveCallArguments(
+            mangled_name,
+            positional_args,
+            named_args,
+            func_info.param_types,
+            has_self, // skip self parameter for instance methods
+        );
+        defer self.allocator.free(resolved_args);
+
+        // Convert resolved args to a slice of expressions
+        var final_exprs = try self.allocator.alloc(ast.Expression, resolved_args.len);
+        defer self.allocator.free(final_exprs);
+
+        for (resolved_args, 0..) |resolved, i| {
+            final_exprs[i] = switch (resolved) {
+                .expr => |e| e,
+                .default => |d| d.*,
+            };
+        }
+
+        return self.emitMethodCall(type_name, method_name, final_exprs, self_value);
+    }
+
     /// Call a method on an already-converted TypedValue (used for for-in loop desugaring)
     fn convertMethodCallOnTyped(self: *AstToIr, base_typed: TypedValue, method_name: []const u8, arg_exprs: []const ast.Expression) ConvertError!TypedValue {
         // Get the type name from the TypedValue
@@ -8570,7 +9635,7 @@ pub const AstToIr = struct {
                     }
                 }
                 // Regular static method call
-                return self.emitMethodCall(base_name, mcall.method_name, mcall.args, null);
+                return self.emitMethodCallWithNamedArgs(base_name, mcall.method_name, mcall.args, mcall.named_args, null);
             }
         }
 
@@ -8579,7 +9644,7 @@ pub const AstToIr = struct {
 
         // Check if this is a struct type with methods
         if (base_typed.ty == .struct_type) {
-            return self.emitMethodCall(base_typed.ty.struct_type, mcall.method_name, mcall.args, base_typed.value);
+            return self.emitMethodCallWithNamedArgs(base_typed.ty.struct_type, mcall.method_name, mcall.args, mcall.named_args, base_typed.value);
         }
 
         // Check if this is a primitive type with hash/equals methods
@@ -8590,7 +9655,7 @@ pub const AstToIr = struct {
         // Check if this is an enum type with methods
         if (base_typed.ty == .enum_type) {
             const enum_name = base_typed.ty.enum_type;
-            return self.emitMethodCall(enum_name, mcall.method_name, mcall.args, base_typed.value);
+            return self.emitMethodCallWithNamedArgs(enum_name, mcall.method_name, mcall.args, mcall.named_args, base_typed.value);
         }
 
         // Check if this is an array type - route to Array$ElementType methods
@@ -8605,7 +9670,7 @@ pub const AstToIr = struct {
             _ = self.getOrCreateMonomorphizedType("Array", &[_][]const u8{elem_name}) catch |e| {
                 debug.astToIr("note: could not monomorphize Array${s}: {}", .{ elem_name, e });
             };
-            return self.emitMethodCall(array_type_name, mcall.method_name, mcall.args, base_typed.value);
+            return self.emitMethodCallWithNamedArgs(array_type_name, mcall.method_name, mcall.args, mcall.named_args, base_typed.value);
         }
 
         debug.astToIr("error: method call on non-struct type", .{});
@@ -8863,11 +9928,13 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
         else
             null;
 
-        // Extract parameter types
+        // Extract parameter types (including names and default values for named args)
         const param_types = try allocator.alloc(ParamType, func.params.len);
         for (func.params, 0..) |param, i| {
             param_types[i] = .{
                 .ty = getValueTypeFromTypeExprForParam(param.type_expr),
+                .name = param.name,
+                .default_value = param.default_value,
             };
         }
 
@@ -8912,11 +9979,18 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             else
                 null;
 
-            // Extract parameter types for methods
-            const param_types = try allocator.alloc(ParamType, method.params.len);
+            // Extract parameter types for methods (including names and default values for named args)
+            // For instance methods, include the implicit self parameter to match buildMethodFuncInfo
+            const extra_params: usize = if (method.is_static) 0 else 1;
+            const param_types = try allocator.alloc(ParamType, method.params.len + extra_params);
+            if (!method.is_static) {
+                param_types[0] = .{ .ty = .{ .struct_type = type_decl.name }, .name = "self" };
+            }
             for (method.params, 0..) |param, i| {
-                param_types[i] = .{
+                param_types[i + extra_params] = .{
                     .ty = getValueTypeFromTypeExprForParam(param.type_expr),
+                    .name = param.name,
+                    .default_value = param.default_value,
                 };
             }
 

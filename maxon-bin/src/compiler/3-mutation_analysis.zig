@@ -124,6 +124,12 @@ pub const MutationAnalyzer = struct {
                     self.checkStatementForMutation(body_stmt, param_indices, mutated);
                 }
             },
+            .guard_let_decl => |guard| {
+                // Check mutations inside guard-let nil body
+                for (guard.nil_body) |body_stmt| {
+                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                }
+            },
             .throw_stmt => {
                 // Throw statements don't mutate parameters
             },
@@ -218,7 +224,7 @@ pub const MutationAnalyzer = struct {
             },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
-            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .array_type, .interpolated_string => {},
+            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .set_from, .array_type, .interpolated_string => {},
         }
     }
 

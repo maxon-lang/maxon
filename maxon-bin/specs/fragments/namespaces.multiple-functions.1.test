@@ -1,0 +1,48 @@
+// Test: namespaces.multiple-functions.1
+export function double(x int) returns int
+    return x * 2
+end 'double'
+
+export function triple(x int) returns int
+    return x * 3
+end 'triple'
+
+function main() returns int
+    return double(5) + triple(4)
+end 'main'
+---
+ExitCode: 22
+---
+function double() -> i64 {
+entry:
+    %x = param i64 0
+    %x.1 = alloca ptr
+    store %x.1 %x
+    %tmp_load = load i64 %x.1
+    %tmp_const = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_load %tmp_const
+    ret %tmp_mul
+}
+
+function triple() -> i64 {
+entry:
+    %x = param i64 0
+    %x.1 = alloca ptr
+    store %x.1 %x
+    %tmp_load = load i64 %x.1
+    %tmp_const = const.i64 i64 3
+    %tmp_mul = mul i64 %tmp_load %tmp_const
+    ret %tmp_mul
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 5
+    %tmp_call = call i64 @double(%tmp_const)
+    %tmp_const.1 = const.i64 i64 4
+    %tmp_call.1 = call i64 @triple(%tmp_const.1)
+    %tmp_add = add i64 %tmp_call %tmp_call.1
+    ret %tmp_add
+}
+
+---

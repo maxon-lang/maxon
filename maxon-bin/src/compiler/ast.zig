@@ -1,10 +1,20 @@
 const std = @import("std");
 
+/// A top-level constant declaration: let NAME = expression
+pub const GlobalConstant = struct {
+    name: []const u8,
+    is_export: bool,
+    value: Expression,
+    line: u32,
+    column: u32,
+};
+
 pub const Program = struct {
     types: []TypeDecl,
     enums: []EnumDecl,
     interfaces: []InterfaceDecl,
     functions: []FunctionDecl,
+    global_constants: []GlobalConstant,
 };
 
 pub const InterfaceMethod = struct {
@@ -70,6 +80,7 @@ pub const FieldDecl = struct {
     name: []const u8,
     type_expr: TypeExpr,
     is_mutable: bool,
+    default_value: ?*const Expression = null, // Optional default value for field
 };
 
 pub const GenericTypeExpr = struct {
@@ -99,6 +110,15 @@ pub const TypeExpr = union(enum) {
 pub const ParamDecl = struct {
     name: []const u8,
     type_expr: TypeExpr,
+    default_value: ?*const Expression = null, // Optional default value for parameter
+};
+
+/// A named argument at a call site: name = value
+pub const NamedArg = struct {
+    name: []const u8, // parameter name
+    value: *const Expression, // argument value
+    line: u32 = 0,
+    column: u32 = 0,
 };
 
 pub const FunctionDecl = struct {
@@ -163,6 +183,15 @@ pub const ElseUnwrapDecl = struct {
     var_name: []const u8,
     optional_expr: *const Expression,
     default_body: []Statement,
+    label: []const u8,
+};
+
+// Guard-let: let x = opt or 'label' ... end 'label'
+// Body must contain exit (return/break/continue), x is unwrapped if optional has value
+pub const GuardLetDecl = struct {
+    var_name: []const u8,
+    optional_expr: *const Expression,
+    nil_body: []Statement, // Body executed when optional is nil (must exit)
     label: []const u8,
 };
 
@@ -236,6 +265,7 @@ pub const StatementKind = union(enum) {
     break_stmt: BreakStmt,
     continue_stmt: ContinueStmt,
     else_unwrap_decl: ElseUnwrapDecl,
+    guard_let_decl: GuardLetDecl,
     // Error handling
     throw_stmt: ThrowStmt,
     do_catch_stmt: DoCatchStmt,
@@ -317,6 +347,7 @@ pub const CompareExpr = struct {
 pub const CallExpr = struct {
     func_name: []const u8,
     args: []const Expression,
+    named_args: []const NamedArg = &.{}, // Named arguments (name = value)
 };
 
 pub const FieldInit = struct {
@@ -369,6 +400,7 @@ pub const MethodCallExpr = struct {
     base: *const Expression,
     method_name: []const u8,
     args: []const Expression,
+    named_args: []const NamedArg = &.{}, // Named arguments (name = value)
 };
 
 pub const NilCoalesceExpr = struct {
@@ -400,6 +432,13 @@ pub const ClosureParam = struct {
 pub const ClosureExpr = struct {
     params: []const ClosureParam,
     body: *const Expression,
+};
+
+// Set from array literal: Set from [1, 2, 3]
+pub const SetFromExpr = struct {
+    type_name: []const u8, // "Set" or other InitableFromArrayLiteral conforming type
+    type_args: []const []const u8, // Generic type arguments ["int"] for Set of int
+    elements: *const Expression, // The array literal expression
 };
 
 // Error handling: try expression modes
@@ -438,6 +477,8 @@ pub const Expression = union(enum) {
     nil_coalesce: NilCoalesceExpr,
     cast: CastExpr,
     closure: ClosureExpr,
+    // Set/collection from array literal: Set from [1, 2, 3]
+    set_from: SetFromExpr,
     // Error handling
     try_expr: TryExpr,
     // Match expressions

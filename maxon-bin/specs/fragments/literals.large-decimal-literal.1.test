@@ -1,0 +1,30 @@
+// Test: literals.large-decimal-literal.1
+// Test decimal literal above 32-bit range
+function main() returns int
+    var x = 5368709120
+    if x == 0x140000000 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+---
+ExitCode: 0
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 5368709120
+    %x = alloca ptr
+    store %x %tmp_const
+    %tmp_load = load i64 %x
+    %tmp_const.1 = const.i64 i64 5368709120
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.1
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.2 = const.i64 i64 0
+    ret %tmp_const.2
+end:
+    %tmp_const.3 = const.i64 i64 1
+    ret %tmp_const.3
+}
+
+---

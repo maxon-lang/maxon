@@ -1,0 +1,49 @@
+// Test: nil-coalescing.nil-default-param-with-value.1
+function test(x int or nil = nil) returns int
+    return x or 0
+end 'test'
+
+function main() returns int
+    return test(x = 42)
+end 'main'
+---
+ExitCode: 42
+---
+function test() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %x = alloca ptr
+    store %x %tmp_param
+    %tmp_load = load ptr %x
+    %tmp_const = const.i64 i64 0
+    %tmp_alloca.1 = alloca ptr
+    %tmp_load.1 = load i64 %tmp_load
+    %tmp_const.1 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.1
+    br.cond %tmp_icmp @block1 @block2
+or_has_value:
+    %tmp_fieldptr = getfieldptr ptr %tmp_load 8
+    %tmp_load.2 = load i64 %tmp_fieldptr
+    store %tmp_alloca.1 %tmp_load.2
+    br @block3
+or_default:
+    store %tmp_alloca.1 %tmp_const
+    br @block3
+or_merge:
+    %tmp_load.3 = load i64 %tmp_alloca.1
+    ret %tmp_load.3
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 42
+    %tmp_alloca = alloca.sized ptr 16
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_alloca %tmp_const.1
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call i64 @test(%tmp_alloca)
+    ret %tmp_call
+}
+
+---

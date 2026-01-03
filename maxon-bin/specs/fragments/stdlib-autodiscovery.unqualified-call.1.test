@@ -1,0 +1,20 @@
+// Test: stdlib-autodiscovery.unqualified-call.1
+function main() returns int
+    var result = sqrt(16.0)
+    return trunc(result)
+end 'main'
+---
+ExitCode: 4
+---
+function main() -> i64 {
+entry:
+    %tmp_fconst = const.f64 f64 16
+    %tmp_fsqrt = fsqrt f64 %tmp_fconst
+    %result = alloca ptr
+    store %result %tmp_fsqrt
+    %tmp_load = load f64 %result
+    %tmp_fptosi = fptosi i64 %tmp_load
+    ret %tmp_fptosi
+}
+
+---

@@ -1,0 +1,56 @@
+// Test: nil-optional-types.implicit-wrapping.1
+function makeOptional(x int) returns int or nil
+	return x
+end 'makeOptional'
+
+function main() returns int
+	var opt = makeOptional(33)
+	if let val = opt 'check'
+		return val
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 33
+---
+function makeOptional() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %x = param i64 1
+    %x.1 = alloca ptr
+    store %x.1 %x
+    %tmp_load = load i64 %x.1
+    %tmp_const = const.i64 i64 1
+    store %tmp_param %tmp_const
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr %tmp_load
+    ret %tmp_param
+}
+
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 16
+    %tmp_const = const.i64 i64 33
+    %tmp_call = call ptr @makeOptional(%tmp_alloca, %tmp_const)
+    %opt = alloca ptr
+    store %opt %tmp_alloca
+    %tmp_load = load ptr %opt
+    %tmp_load.1 = load i64 %tmp_load
+    %tmp_const.1 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.1
+    br.cond %tmp_icmp @block1 @block2
+if_let_then:
+    %tmp_fieldptr = getfieldptr ptr %tmp_load 8
+    %tmp_load.2 = load i64 %tmp_fieldptr
+    %val = alloca ptr
+    store %val %tmp_load.2
+    %tmp_load.3 = load i64 %val
+    ret %tmp_load.3
+if_let_else:
+    br @block3
+if_let_end:
+    %tmp_const.2 = const.i64 i64 0
+    ret %tmp_const.2
+}
+
+---
