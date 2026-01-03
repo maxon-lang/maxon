@@ -305,6 +305,8 @@ pub const AstToIr = struct {
     do_catch_error_type: ?[]const u8 = null,
     // Pending try error branches to patch (used when catch_dispatch index is determined late)
     pending_try_branches: ?*std.ArrayListUnmanaged(TryBranchInfo) = null,
+    // Scope label tracking: stack of sets for each scope level (to detect duplicate block identifiers)
+    scope_labels: std.ArrayListUnmanaged(std.StringHashMapUnmanaged(void)) = .{},
 
     /// Info about a branch instruction that needs to be patched to point to catch_dispatch
     const TryBranchInfo = struct {
@@ -931,6 +933,12 @@ pub const AstToIr = struct {
         // Clean up labeled loops stack
         self.labeled_loops.deinit(self.allocator);
 
+        // Clean up scope labels stack
+        for (self.scope_labels.items) |*scope_set| {
+            scope_set.deinit(self.allocator);
+        }
+        self.scope_labels.deinit(self.allocator);
+
         // Clean up pending_methods generic_bindings (shared across methods of same type)
         var freed_bindings = std.AutoHashMapUnmanaged([*]const PendingMethod.GenericBinding, void){};
         defer freed_bindings.deinit(self.allocator);
@@ -960,6 +968,39 @@ pub const AstToIr = struct {
 
         // Pending conformance checks list doesn't own its data (references AST nodes)
         self.pending_conformance_checks.deinit(self.allocator);
+    }
+
+    // ------------------------------------------------------------------------
+    // Scope Label Tracking (for duplicate block identifier detection)
+    // ------------------------------------------------------------------------
+
+    /// Push a new scope level for tracking block labels
+    fn pushLabelScope(self: *AstToIr) !void {
+        var new_scope = std.StringHashMapUnmanaged(void){};
+        try self.scope_labels.append(self.allocator, new_scope);
+        _ = &new_scope; // Avoid unused variable warning
+    }
+
+    /// Pop the current scope level
+    fn popLabelScope(self: *AstToIr) void {
+        if (self.scope_labels.items.len > 0) {
+            var scope = self.scope_labels.pop().?;
+            scope.deinit(self.allocator);
+        }
+    }
+
+    /// Check if a label is already used at the current scope level.
+    /// If not, register it. If duplicate, report error and return error.
+    fn checkAndRegisterLabel(self: *AstToIr, label: []const u8) !void {
+        if (self.scope_labels.items.len == 0) return;
+
+        var current_scope = &self.scope_labels.items[self.scope_labels.items.len - 1];
+        if (current_scope.get(label) != null) {
+            // Duplicate label at same scope level
+            self.reportError(.E036, label);
+            return error.SemanticError;
+        }
+        try current_scope.put(self.allocator, label, {});
     }
 
     // ------------------------------------------------------------------------
@@ -1426,8 +1467,41 @@ pub const AstToIr = struct {
             .name = iface.name,
             .methods = iface.methods,
             .associated_types = iface.generic_params,
+            .extends = iface.extends,
         });
-        debug.astToIr("Registered interface '{s}' with {d} methods, {d} associated types", .{ iface.name, iface.methods.len, iface.generic_params.len });
+        debug.astToIr("Registered interface '{s}' with {d} methods, {d} associated types, extends {d} interfaces", .{ iface.name, iface.methods.len, iface.generic_params.len, iface.extends.len });
+    }
+
+    /// Collect all methods from an interface including methods from transitively extended interfaces.
+    /// Returns a list of (interface_name, method) pairs to track which interface requires each method.
+    fn collectAllInterfaceMethods(self: *AstToIr, interface_name: []const u8, visited: *std.StringHashMapUnmanaged(void)) !std.ArrayListUnmanaged(types.InterfaceMethodInfo) {
+        var all_methods: std.ArrayListUnmanaged(types.InterfaceMethodInfo) = .empty;
+
+        // Avoid infinite loops from circular extends (shouldn't happen but be safe)
+        if (visited.contains(interface_name)) {
+            return all_methods;
+        }
+        try visited.put(self.allocator, interface_name, {});
+
+        const iface = self.interface_map.get(interface_name) orelse {
+            // Unknown interface - skip
+            debug.astToIr("Skipping unknown interface '{s}' in transitive resolution", .{interface_name});
+            return all_methods;
+        };
+
+        // Add methods from extended interfaces first (base methods before derived)
+        for (iface.extends) |extended_name| {
+            var extended_methods = try self.collectAllInterfaceMethods(extended_name, visited);
+            defer extended_methods.deinit(self.allocator);
+            try all_methods.appendSlice(self.allocator, extended_methods.items);
+        }
+
+        // Add methods from this interface
+        for (iface.methods) |method| {
+            try all_methods.append(self.allocator, .{ .interface_name = interface_name, .method = method });
+        }
+
+        return all_methods;
     }
 
     fn checkInterfaceConformance(self: *AstToIr, type_decl: ast.TypeDecl) !void {
@@ -1494,11 +1568,20 @@ pub const AstToIr = struct {
                 }
             }
 
+            // Collect all methods including those from extended interfaces (transitive)
+            var visited = std.StringHashMapUnmanaged(void){};
+            defer visited.deinit(self.allocator);
+            var all_interface_methods = try self.collectAllInterfaceMethods(conformance.interface_name, &visited);
+            defer all_interface_methods.deinit(self.allocator);
+
             // Check that all required interface methods are implemented
             var missing_methods = std.ArrayListUnmanaged([]const u8){};
             defer missing_methods.deinit(self.allocator);
 
-            for (iface.methods) |iface_method| {
+            for (all_interface_methods.items) |method_info| {
+                const iface_method = method_info.method;
+                const source_interface = method_info.interface_name;
+
                 // Skip methods with default implementations (they're optional to override)
                 if (iface_method.has_default_impl) continue;
 
@@ -1522,7 +1605,7 @@ pub const AstToIr = struct {
                                     type_decl.name,
                                     iface_method.name,
                                     actual,
-                                    conformance.interface_name,
+                                    source_interface,
                                     expected,
                                 }) catch {
                                     self.reportError(.E015, iface_method.name);
@@ -1554,7 +1637,7 @@ pub const AstToIr = struct {
                                     iface_method.name,
                                     i + 1,
                                     actual,
-                                    conformance.interface_name,
+                                    source_interface,
                                     expected,
                                 }) catch {
                                     self.reportError(.E015, iface_method.name);
@@ -1575,15 +1658,22 @@ pub const AstToIr = struct {
                         }
                     }
                 } else {
-                    // Missing method - collect for aggregate error
+                    // Missing method - collect for aggregate error, noting which interface requires it
                     const resolved_ret = if (iface_method.return_type) |rt|
                         self.resolveAssociatedTypeWithSelf(rt, type_bindings, type_decl.name)
                     else
                         "void";
-                    const method_sig = std.fmt.allocPrint(self.allocator, "{s}() returns {s}", .{
-                        iface_method.name,
-                        resolved_ret,
-                    }) catch continue;
+                    const method_sig = if (std.mem.eql(u8, source_interface, conformance.interface_name))
+                        std.fmt.allocPrint(self.allocator, "{s}() returns {s}", .{
+                            iface_method.name,
+                            resolved_ret,
+                        }) catch continue
+                    else
+                        std.fmt.allocPrint(self.allocator, "{s}() returns {s} (from {s})", .{
+                            iface_method.name,
+                            resolved_ret,
+                            source_interface,
+                        }) catch continue;
                     try missing_methods.append(self.allocator, method_sig);
                 }
             }
@@ -2487,9 +2577,16 @@ pub const AstToIr = struct {
 
     /// Convert function body and add implicit return for void functions
     fn convertBodyAndFinalize(self: *AstToIr, body: []const ast.Statement, ret_type: ir.Type) !void {
+        // Push a new label scope for the function body
+        try self.pushLabelScope();
+        errdefer self.popLabelScope();
+
         for (body) |stmt| {
             try self.convertStatement(stmt);
         }
+
+        // Pop the label scope
+        self.popLabelScope();
 
         // For void functions, add implicit return if needed
         if (ret_type == .void) {
@@ -3411,6 +3508,9 @@ pub const AstToIr = struct {
     }
 
     fn convertIfStmt(self: *AstToIr, if_stmt: ast.IfStmt) ConvertError!void {
+        // Check for duplicate block identifier at this scope level
+        try self.checkAndRegisterLabel(if_stmt.label);
+
         // Convert condition expression
         const cond_typed = try self.convertExpression(if_stmt.condition);
 
@@ -3478,10 +3578,12 @@ pub const AstToIr = struct {
             }
         }
 
-        // Convert then body statements
+        // Convert then body statements (push new scope for nested labels)
+        try self.pushLabelScope();
         for (if_stmt.body) |stmt| {
             try self.convertStatement(stmt);
         }
+        self.popLabelScope();
 
         // Remove binding from var_map after then body
         if (if_stmt.binding_name) |binding_name| {
@@ -3508,9 +3610,12 @@ pub const AstToIr = struct {
             if (if_stmt.else_if) |else_if| {
                 try self.convertIfStmt(else_if.*);
             } else if (if_stmt.else_body) |else_body| {
+                // Push new scope for else body labels
+                try self.pushLabelScope();
                 for (else_body) |stmt| {
                     try self.convertStatement(stmt);
                 }
+                self.popLabelScope();
             }
 
             // Track the block that needs a branch to end
@@ -3551,6 +3656,9 @@ pub const AstToIr = struct {
     }
 
     fn convertWhileStmt(self: *AstToIr, while_stmt: ast.WhileStmt) ConvertError!void {
+        // Check for duplicate block identifier at this scope level
+        try self.checkAndRegisterLabel(while_stmt.label);
+
         // Create condition block - this will be the current block after creation
         const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("whilecond");
@@ -3594,10 +3702,12 @@ pub const AstToIr = struct {
             try pre_loop_vars.put(self.allocator, entry.key_ptr.*, entry.value_ptr.state);
         }
 
-        // Convert body statements (body block is current)
+        // Convert body statements (body block is current, with new label scope)
+        try self.pushLabelScope();
         for (while_stmt.body) |stmt| {
             try self.convertStatement(stmt);
         }
+        self.popLabelScope();
 
         // Check for variables moved inside loop body - they would be invalid on next iteration
         // Only flag an error if the variable was OWNED before the loop and is now MOVED
@@ -3682,6 +3792,9 @@ pub const AstToIr = struct {
     ///     body
     /// end 'loop'
     fn convertForStmt(self: *AstToIr, for_stmt: ast.ForStmt) ConvertError!void {
+        // Check for duplicate block identifier at this scope level
+        try self.checkAndRegisterLabel(for_stmt.label);
+
         // Convert the iterable expression ONCE, before the loop
         // This is crucial for iterators like ByteView that have mutable state (_pos)
         const iterable_typed = try self.convertExpression(for_stmt.iterable);
@@ -3777,10 +3890,12 @@ pub const AstToIr = struct {
 
         try self.var_map.put(self.allocator, for_stmt.var_name, VarInfo.init(var_slot, var_type, false, false));
 
-        // Convert body statements
+        // Convert body statements (with new label scope)
+        try self.pushLabelScope();
         for (for_stmt.body) |stmt| {
             try self.convertStatement(stmt);
         }
+        self.popLabelScope();
 
         // Check for variables moved inside loop body
         // Only flag an error if the variable was OWNED before the loop and is now MOVED
@@ -4219,6 +4334,9 @@ pub const AstToIr = struct {
     /// Creates a chain of conditional checks for each case, with pattern matching
     /// Uses DeferredBlocks pattern with interleaved block creation for correct indexing
     fn convertMatchStmt(self: *AstToIr, match_stmt: ast.MatchStmt) ConvertError!void {
+        // Check for duplicate block identifier at this scope level
+        try self.checkAndRegisterLabel(match_stmt.label);
+
         // Perform semantic validations before converting
         try self.validateMatchStmt(match_stmt);
 
@@ -4785,6 +4903,9 @@ pub const AstToIr = struct {
     }
 
     fn convertDoCatchStmt(self: *AstToIr, do_catch: ast.DoCatchStmt) ConvertError!void {
+        // Check for duplicate block identifier at this scope level
+        try self.checkAndRegisterLabel(do_catch.label);
+
         // Save the outer do-catch context (for nested do-catch blocks)
         const outer_error_buffer = self.do_catch_error_buffer;
         const outer_catch_block = self.do_catch_catch_block;
@@ -4819,9 +4940,12 @@ pub const AstToIr = struct {
             self.pending_try_branches = outer_try_branches;
         }
 
+        // Convert do body (with new label scope)
+        try self.pushLabelScope();
         for (do_catch.body) |stmt| {
             try self.convertStatement(stmt);
         }
+        self.popLabelScope();
 
         // Create catch_dispatch block - now we know the actual index
         const catch_dispatch_idx: u32 = @intCast(self.func().blocks.items.len);
@@ -4899,10 +5023,12 @@ pub const AstToIr = struct {
             try self.var_map.put(self.allocator, catch_clause.binding_name, VarInfo.init(error_value_ptr, error_ty, false, false));
             defer _ = self.var_map.remove(catch_clause.binding_name);
 
-            // Process catch body
+            // Process catch body (with new label scope)
+            try self.pushLabelScope();
             for (catch_clause.body) |stmt| {
                 try self.convertStatement(stmt);
             }
+            self.popLabelScope();
 
             // Jump to end block after catch body
             try self.func().currentBlock().?.instructions.append(self.allocator, .{
@@ -4917,6 +5043,9 @@ pub const AstToIr = struct {
     }
 
     fn convertElseUnwrapDecl(self: *AstToIr, unwrap: ast.ElseUnwrapDecl) ConvertError!void {
+        // Check for duplicate block identifier at this scope level
+        try self.checkAndRegisterLabel(unwrap.label);
+
         // Convert the optional expression
         const opt_typed = try self.convertExpression(unwrap.optional_expr.*);
 
@@ -4982,9 +5111,12 @@ pub const AstToIr = struct {
         try branch.switchToElse(true);
 
         // Else block ("nil"): execute default body (which should assign to var_name)
+        // (with new label scope for the else body)
+        try self.pushLabelScope();
         for (unwrap.default_body) |stmt| {
             try self.convertStatement(stmt);
         }
+        self.popLabelScope();
 
         // Branch to end only if the block doesn't already have a terminator
         const needs_branch = if (self.func().currentBlock()) |block|

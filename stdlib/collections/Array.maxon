@@ -60,23 +60,23 @@ export type Array uses Element is Collection with Element
 	/// Get element at index, or nil if out of bounds
 	export function Collection.get(index int) returns Element or nil
 		var len = __managed_array_len(managed)
-		if index < 0 'bounds'
+		if index < 0 'lower'
 			return nil
-		end 'bounds'
-		if index >= len 'bounds'
+		end 'lower'
+		if index >= len 'upper'
 			return nil
-		end 'bounds'
+		end 'upper'
 		return managed[index]
 	end 'get'
 
 	/// Set element at index (no-op if index out of bounds)
 	export function Collection.set(index int, value Element) returns Self
 		var len = __managed_array_len(managed)
-		if index >= 0 'bounds'
-			if index < len 'bounds'
+		if index >= 0 'lower'
+			if index < len 'upper'
 				__managed_array_set_at(managed, index, value)
-			end 'bounds'
-		end 'bounds'
+			end 'upper'
+		end 'lower'
 		return self
 	end 'set'
 
@@ -160,12 +160,12 @@ export type Array uses Element is Collection with Element
 		var index = at
 
 		// Clamp index to valid range
-		if index < 0 'clamp'
+		if index < 0 'clamp_low'
 			index = 0
-		end 'clamp'
-		if index > len 'clamp'
+		end 'clamp_low'
+		if index > len 'clamp_high'
 			index = len
-		end 'clamp'
+		end 'clamp_high'
 
 		// Ensure capacity
 		ensureCapacity(len + 1)
@@ -186,12 +186,12 @@ export type Array uses Element is Collection with Element
 		var len = __managed_array_len(managed)
 
 		// Check bounds
-		if at < 0 'bounds'
+		if at < 0 'lower'
 			return nil
-		end 'bounds'
-		if at >= len 'bounds'
+		end 'lower'
+		if at >= len 'upper'
 			return nil
-		end 'bounds'
+		end 'upper'
 
 		// Save element before shifting
 		var value = managed[at]

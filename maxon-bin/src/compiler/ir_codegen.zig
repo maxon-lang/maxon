@@ -382,7 +382,7 @@ pub const IrCodegen = struct {
                 debug.codegen("    loadValue: val=%{d}, stack offset={d}, target={s}", .{ val, offset, @tagName(target) });
                 switch (target) {
                     .rax => try self.enc.movRaxRbpOffset(offset),
-                    .xmm => |xmm| if (xmm == .xmm0) try self.enc.movsdXmm0RbpOffset(offset) else try self.enc.movsdXmm1RbpOffset(offset),
+                    .xmm => |xmm| try self.enc.movsdXmmRbpOffset(xmm, offset),
                 }
             },
             .register => |reg| switch (target) {

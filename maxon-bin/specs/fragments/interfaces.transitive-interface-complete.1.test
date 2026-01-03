@@ -1,0 +1,61 @@
+// Test: interfaces.transitive-interface-complete.1
+interface BaseInterface
+    function baseMethod() returns int
+end 'BaseInterface'
+
+interface DerivedInterface extends BaseInterface
+    function derivedMethod() returns int
+end 'DerivedInterface'
+
+// CompleteType implements all methods from both interfaces
+type CompleteType is DerivedInterface
+    var value int
+
+    function BaseInterface.baseMethod() returns int
+        return value
+    end 'baseMethod'
+
+    function DerivedInterface.derivedMethod() returns int
+        return value * 2
+    end 'derivedMethod'
+end 'CompleteType'
+
+function main() returns int
+    var t = CompleteType{value: 21}
+    return t.baseMethod() + t.derivedMethod()
+end 'main'
+---
+ExitCode: 63
+---
+function main() -> i64 {
+entry:
+    %t = alloca.sized ptr 8
+    memset %t 0 8
+    %tmp_fieldptr = getfieldptr ptr %t 0
+    %tmp_const = const.i64 i64 21
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call i64 @CompleteType$baseMethod(%t)
+    %tmp_call.1 = call i64 @CompleteType$derivedMethod(%t)
+    %tmp_add = add i64 %tmp_call %tmp_call.1
+    ret %tmp_add
+}
+
+function CompleteType$baseMethod() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+function CompleteType$derivedMethod() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_const = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_load %tmp_const
+    ret %tmp_mul
+}
+
+---

@@ -37,6 +37,7 @@ pub const ErrorCode = enum {
     E033, // rawValue on simple enum
     E034, // unknown enum case
     E035, // wrong binding count in match
+    E036, // duplicate block identifier
 
     const Info = struct {
         code: []const u8,
@@ -79,6 +80,7 @@ pub const ErrorCode = enum {
         .{ .code = "E033", .message = "rawValue requires raw value enum" },
         .{ .code = "E034", .message = "unknown enum case" },
         .{ .code = "E035", .message = "wrong binding count" },
+        .{ .code = "E036", .message = "duplicate block identifier" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

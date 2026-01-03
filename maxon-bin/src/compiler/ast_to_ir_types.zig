@@ -343,4 +343,11 @@ pub const InterfaceInfo = struct {
     name: []const u8,
     methods: []const ast.InterfaceMethod,
     associated_types: []const []const u8, // ["Element", "Key", "Value"] from `uses Element, Key, Value`
+    extends: []const []const u8, // ["BaseInterface", "OtherInterface"] from `extends BaseInterface, OtherInterface`
+};
+
+/// Method info with source interface - used for transitive interface conformance checking
+pub const InterfaceMethodInfo = struct {
+    interface_name: []const u8, // The interface that originally defined this method
+    method: ast.InterfaceMethod,
 };

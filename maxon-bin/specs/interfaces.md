@@ -418,6 +418,65 @@ end 'main'
 ```
 
 
-Note: Transitive interface requirements (methods from extended interfaces like Collection extending Iterable) are not currently validated at compile time. This is a known limitation.
+<!-- test: transitive-interface-validation -->
+```maxon
+interface BaseInterface
+    function baseMethod() returns int
+end 'BaseInterface'
+
+interface DerivedInterface extends BaseInterface
+    function derivedMethod() returns int
+end 'DerivedInterface'
+
+// IncompleteType is missing baseMethod from BaseInterface
+type IncompleteType is DerivedInterface
+    var value int
+
+    function DerivedInterface.derivedMethod() returns int
+        return value
+    end 'derivedMethod'
+end 'IncompleteType'
+
+function main() returns int
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E015: specs/fragments/interfaces.transitive-interface-validation.1.test:1:1: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
+  - baseMethod() returns int (from BaseInterface)
+```
+
+
+<!-- test: transitive-interface-complete -->
+```maxon
+interface BaseInterface
+    function baseMethod() returns int
+end 'BaseInterface'
+
+interface DerivedInterface extends BaseInterface
+    function derivedMethod() returns int
+end 'DerivedInterface'
+
+// CompleteType implements all methods from both interfaces
+type CompleteType is DerivedInterface
+    var value int
+
+    function BaseInterface.baseMethod() returns int
+        return value
+    end 'baseMethod'
+
+    function DerivedInterface.derivedMethod() returns int
+        return value * 2
+    end 'derivedMethod'
+end 'CompleteType'
+
+function main() returns int
+    var t = CompleteType{value: 21}
+    return t.baseMethod() + t.derivedMethod()
+end 'main'
+```
+```exitcode
+63
+```
 
 
