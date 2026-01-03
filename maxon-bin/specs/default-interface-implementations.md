@@ -53,9 +53,8 @@ type IntList is Collection with int
         return __managed_array_get_at(self.data, index)
     end 'get'
 
-    function Collection.set(index int, value int) IntList
+    function Collection.set(index int, value int)
         __managed_array_set_at(self.data, index, value)
-        return self
     end 'set'
 
     // Note: No map() implementation - uses Collection's default

@@ -8390,22 +8390,14 @@ pub const AstToIr = struct {
             try self.ensureMethodGenerated(mangled_name);
         }
 
-        // The set method returns Self (the array), which is a struct
-        // Args: sret_ptr, self_ptr, index, value
-        const sret_buffer = try self.func().emitAllocaSized(32); // Array struct size (managed: 24 + iterIndex: 8)
-
-        var args = try self.allocator.alloc(ir.Value, 4);
-        args[0] = sret_buffer;
-        args[1] = base_typed.value;
-        args[2] = idx_typed.value;
-        args[3] = val_typed.value;
+        // The set method returns void (mutates in place)
+        // Args: self_ptr, index, value
+        var args = try self.allocator.alloc(ir.Value, 3);
+        args[0] = base_typed.value;
+        args[1] = idx_typed.value;
+        args[2] = val_typed.value;
 
         _ = try self.func().emitCall(mangled_name, args, func_info.return_type);
-
-        // Copy the returned array back to the original location
-        // The set method returns Self (the modified array), and since arrays are value types
-        // with internal mutation, we need to copy the result back to update the source
-        try self.func().emitMemcpy(base_typed.value, sret_buffer, 32);
     }
 
     // ------------------------------------------------------------------------

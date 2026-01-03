@@ -118,24 +118,22 @@ entry:
     %tmp_call = call ptr @Array$int$init(%arr, %tmp_alloca)
     %tmp_const.2 = const.i64 i64 0
     %tmp_const.3 = const.i64 i64 42
-    %tmp_alloca.2 = alloca.sized ptr 32
-    %tmp_call.1 = call ptr @Array$int$set(%tmp_alloca.2, %arr, %tmp_const.2, %tmp_const.3)
-    memcpy %arr %tmp_alloca.2 32
-    %tmp_call.2 = call i64 @readFirst(%arr)
+    call @Array$int$set(%arr, %tmp_const.2, %tmp_const.3)
+    %tmp_call.1 = call i64 @readFirst(%arr)
     %result = alloca ptr
-    store %result %tmp_call.2
+    store %result %tmp_call.1
     %tmp_const.4 = const.i64 i64 0
     %val = alloca ptr
     store %val %tmp_const.4
     %tmp_const.5 = const.i64 i64 0
-    %tmp_alloca.5 = alloca.sized ptr 16
-    %tmp_call.3 = call ptr @Array$int$get(%tmp_alloca.5, %arr, %tmp_const.5)
-    %tmp_load = load i64 %tmp_alloca.5
+    %tmp_alloca.4 = alloca.sized ptr 16
+    %tmp_call.2 = call ptr @Array$int$get(%tmp_alloca.4, %arr, %tmp_const.5)
+    %tmp_load = load i64 %tmp_alloca.4
     %tmp_const.6 = const.i64 i64 1
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.6
     br.cond %tmp_icmp @block1 @block2
 if_let_then:
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.5 8
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.4 8
     %tmp_load.1 = load i64 %tmp_fieldptr.2
     %v = alloca ptr
     store %v %tmp_load.1
@@ -166,14 +164,13 @@ entry:
     ret %tmp_param
 }
 
-function Array$int$set() -> ptr {
+function Array$int$set() -> void {
 entry:
-    %tmp_param = param ptr 0
-    %self = param ptr 1
-    %index = param i64 2
+    %self = param ptr 0
+    %index = param i64 1
     %index.1 = alloca ptr
     store %index.1 %index
-    %value = param i64 3
+    %value = param i64 2
     %value.1 = alloca ptr
     store %value.1 %value
     %tmp_fieldptr = getfieldptr ptr %self 0
@@ -195,14 +192,13 @@ then:
     %tmp_load.4 = load i64 %index.1
     %tmp_load.5 = load i64 %value.1
     %tmp_load.6 = load ptr %tmp_fieldptr.2
-    %20 = getelemptr ptr %tmp_load.6 %tmp_load.4 elemsize=8
-    store %20 %tmp_load.5
+    %19 = getelemptr ptr %tmp_load.6 %tmp_load.4 elemsize=8
+    store %19 %tmp_load.5
     br @block3
 end:
     br @block4
 end:
-    memcpy %tmp_param %self 32
-    ret %tmp_param
+    ret
 }
 
 ---

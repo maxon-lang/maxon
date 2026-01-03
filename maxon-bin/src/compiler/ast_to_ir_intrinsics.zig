@@ -245,14 +245,29 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const index = try self.convertExpression(call.args[1]);
     const value = try self.convertExpression(call.args[2]);
 
+    // Determine element size based on value type
+    // For struct types, use the struct's actual size; otherwise use 8 bytes
+    const elem_size: i32 = if (value.ty == .struct_type) blk: {
+        if (self.type_map.get(value.ty.struct_type)) |type_info| {
+            if (type_info == .struct_type) {
+                break :blk @intCast(type_info.struct_type.size);
+            }
+        }
+        break :blk 8;
+    } else 8;
+
     // Load buffer pointer (offset 0)
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
-    // Calculate element address: buf_ptr + index * 8
-    const elem_ptr = try self.func().emitGetElemPtr(buf_ptr, index.value, 8);
+    // Calculate element address: buf_ptr + index * elem_size
+    const elem_ptr = try self.func().emitGetElemPtr(buf_ptr, index.value, elem_size);
 
-    // Store value
-    try self.func().emitStore(elem_ptr, value.value);
+    // Store value - for structs, use memcpy; for primitives, use store
+    if (value.ty == .struct_type and elem_size > 8) {
+        try self.func().emitMemcpy(elem_ptr, value.value, @intCast(elem_size));
+    } else {
+        try self.func().emitStore(elem_ptr, value.value);
+    }
 
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
