@@ -13,14 +13,6 @@ category: interfaces
 
 The `Parsable` interface provides a standardized way for types to be constructed from string input. Types implementing `Parsable` provide a static `fromString` method that can throw parsing errors.
 
-### Defining the Interface
-
-```maxon
-interface Parsable
-    static function fromString(input String) returns Self throws Error
-end 'Parsable'
-```
-
 ### Implementing Parsable
 
 Types implement `Parsable` by providing a static `fromString` method that:
@@ -34,7 +26,7 @@ enum MoneyParseError int is Error
     NegativeValue = 2
 end 'MoneyParseError'
 
-type Money
+type Money is Parsable
     var cents int
 
     static function Parsable.fromString(input String) returns Self throws MoneyParseError
@@ -69,10 +61,6 @@ end 'err'
 <!-- test: parsable.interface-definition -->
 ```maxon
 // Parsable interface can be defined
-interface Parsable
-    static function fromString(input String) returns Self throws Error
-end 'Parsable'
-
 function main() returns int
     return 0
 end 'main'
@@ -84,15 +72,11 @@ end 'main'
 <!-- test: parsable.type-implements-parsable -->
 ```maxon
 // Type can implement Parsable with throwing static method
-interface Parsable
-    static function fromString(input String) returns Self throws Error
-end 'Parsable'
-
 enum ParseError int is Error
     Invalid = 1
 end 'ParseError'
 
-type Value
+type Value is Parsable
     var n int
 
     static function Parsable.fromString(input String) returns Self throws ParseError
@@ -111,15 +95,11 @@ end 'main'
 <!-- test: parsable.successful-parse -->
 ```maxon
 // Parsable.fromString returns struct on success
-interface Parsable
-    static function fromString(input String) returns Self throws Error
-end 'Parsable'
-
 enum ParseError int is Error
     Invalid = 1
 end 'ParseError'
 
-type Value
+type Value is Parsable
     export var n int
 
     static function Parsable.fromString(input String) returns Self throws ParseError
@@ -143,15 +123,11 @@ end 'main'
 <!-- test: parsable.throws-on-invalid-input -->
 ```maxon
 // Parsable.fromString throws error on invalid input
-interface Parsable
-    static function fromString(input String) returns Self throws Error
-end 'Parsable'
-
 enum ParseError int is Error
     Empty = 1
 end 'ParseError'
 
-type Value
+type Value is Parsable
     export var n int
 
     static function Parsable.fromString(input String) returns Self throws ParseError
@@ -178,16 +154,12 @@ end 'main'
 <!-- test: parsable.multiple-error-conditions -->
 ```maxon
 // Parsable can throw different errors for different conditions
-interface Parsable
-    static function fromString(input String) returns Self throws Error
-end 'Parsable'
-
 enum MoneyParseError int is Error
     InvalidFormat = 1
     NegativeValue = 2
 end 'MoneyParseError'
 
-type Money
+type Money is Parsable
     export var cents int
 
     static function Parsable.fromString(input String) returns Self throws MoneyParseError
@@ -219,15 +191,11 @@ end 'main'
 <!-- test: parsable.do-catch-fallthrough -->
 ```maxon
 // do-catch blocks fall through correctly without explicit return
-interface Parsable
-    static function fromString(input String) returns Self throws Error
-end 'Parsable'
-
 enum ParseError int is Error
     Invalid = 1
 end 'ParseError'
 
-type Value
+type Value is Parsable
     export var n int
 
     static function Parsable.fromString(input String) returns Self throws ParseError
@@ -272,4 +240,46 @@ end 'main'
 20
 ```
 ```stdout
+```
+
+<!-- test: error.missing-throws -->
+```maxon
+// Implementation must throw if interface requires it
+type Value is Parsable
+    var n int
+
+    static function Parsable.fromString(input String) returns Self
+        return Value{n: input.byteLength()}
+    end 'fromString'
+end 'Value'
+
+function main() returns int
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E015: specs/fragments/parsable-interface.error.missing-throws.1.test:1:1: Method 'Value.fromString' must throw 'Error' as required by interface 'Parsable'
+```
+
+<!-- test: error.throws-non-error-type -->
+```maxon
+// Implementation must throw a type that conforms to Error
+enum NotAnError int
+    Bad = 1
+end 'NotAnError'
+
+type Value is Parsable
+    var n int
+
+    static function Parsable.fromString(input String) returns Self throws NotAnError
+        return Value{n: input.byteLength()}
+    end 'fromString'
+end 'Value'
+
+function main() returns int
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E015: specs/fragments/parsable-interface.error.throws-non-error-type.1.test:1:1: Method 'Value.fromString' throws 'NotAnError' which does not conform to Error
 ```

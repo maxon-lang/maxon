@@ -278,11 +278,11 @@ type Point is Hashable, Equatable
         return x + y
     end 'hash'
 
-    function Equatable.equals(other Point) returns int
+    function Equatable.equals(other Point) returns bool
         if x == other.x and y == other.y 'c1'
-            return 1
+            return true
         end 'c1'
-        return 0
+        return false
     end 'equals'
 end 'Point'
 

@@ -56,6 +56,7 @@ const PipelineOptions = struct {
     emit_ir: bool = false,
     external_funcs: ?[]const ast_to_ir.ExternalFuncSignature = null,
     external_types: ?[]const ast_to_ir.ExternalTypeInfo = null,
+    external_interfaces: ?[]const ast_to_ir.ExternalInterfaceInfo = null,
 };
 
 /// Intermediate result from frontend compilation (lexing, parsing, analysis, IR generation)
@@ -125,7 +126,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
 
     // 4 - AST to IR
     var ir_error: ?compile_error.CompileError = null;
-    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, &ir_error) catch |e| {
+    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, options.external_interfaces, &ir_error) catch |e| {
         debug.astToIr("AST to IR error: {}\n", .{e});
         if (options.result) |result| {
             result.error_info = ir_error;
@@ -216,6 +217,9 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
         all_funcs.deinit(allocator);
     }
 
+    var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
+    defer all_interfaces.deinit(allocator);
+
     for (sources) |source| {
         var lexer = Lexer.init(source.content);
         const tokens = lexer.tokenize(phase1_allocator) catch continue;
@@ -269,6 +273,13 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
             }
         }
         allocator.free(func_sigs);
+
+        // Extract interface info
+        const iface_info = ast_to_ir.extractInterfaceInfo(program, allocator) catch continue;
+        for (iface_info) |iface| {
+            try all_interfaces.append(allocator, iface);
+        }
+        allocator.free(iface_info);
     }
 
     // Phase 2: Compile the last source (user code) with all types/funcs available
@@ -278,6 +289,7 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
         .result = result,
         .external_funcs = all_funcs.items,
         .external_types = all_types.items,
+        .external_interfaces = all_interfaces.items,
     }) catch {
         return error.IrError;
     };
@@ -374,6 +386,9 @@ pub fn compileMultiple(
         all_funcs.deinit(allocator);
     }
 
+    var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
+    defer all_interfaces.deinit(allocator);
+
     for (sources) |source| {
         // Lex and parse using phase1_allocator (but don't compile yet)
         var lexer = Lexer.init(source.content);
@@ -404,6 +419,13 @@ pub fn compileMultiple(
             try all_funcs.append(allocator, sig_with_path);
         }
         allocator.free(func_sigs); // Free the slice but keep the items
+
+        // Extract interface info from parsed AST
+        const iface_info = ast_to_ir.extractInterfaceInfo(program, allocator) catch continue;
+        for (iface_info) |iface| {
+            try all_interfaces.append(allocator, iface);
+        }
+        allocator.free(iface_info); // Free the slice but keep the items
     }
 
     // Phase 2: Compile and merge all sources with collected type info and function signatures
@@ -433,6 +455,7 @@ pub fn compileMultiple(
             .result = result,
             .external_funcs = exported_funcs.items,
             .external_types = exported_types.items,
+            .external_interfaces = all_interfaces.items,
         });
 
         if (merged) |*m| {

@@ -258,6 +258,12 @@ pub const ExternalFieldInfo = struct {
     type_name: []const u8, // "int", "float", "bool", "ptr", or struct name
 };
 
+/// External interface info - for cross-module compilation
+pub const ExternalInterfaceInfo = struct {
+    /// Original interface declaration (needed for method signatures)
+    interface_decl: *const ast.InterfaceDecl,
+};
+
 /// Parameter type info
 pub const ParamType = struct {
     ty: ValueType,

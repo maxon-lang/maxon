@@ -23,6 +23,7 @@ pub const FuncInfo = types.FuncInfo;
 pub const ExternalFuncSignature = types.ExternalFuncSignature;
 pub const ExternalTypeInfo = types.ExternalTypeInfo;
 pub const ExternalFieldInfo = types.ExternalFieldInfo;
+pub const ExternalInterfaceInfo = types.ExternalInterfaceInfo;
 pub const ParamType = types.ParamType;
 pub const OwnershipState = types.OwnershipState;
 pub const VarInfo = types.VarInfo;
@@ -2159,6 +2160,90 @@ pub const AstToIr = struct {
                             }
                         }
                     }
+
+                    // Check throws_type conformance
+                    if (iface_method.throws_type) |iface_throws| {
+                        if (type_method.throws_type) |impl_throws| {
+                            // Interface specifies Error: implementation must throw a type that conforms to Error
+                            if (std.mem.eql(u8, iface_throws, "Error")) {
+                                // Check if impl_throws conforms to Error
+                                if (!self.typeConformsTo(impl_throws, "Error")) {
+                                    const msg = std.fmt.allocPrint(self.allocator, "Method '{s}.{s}' throws '{s}' which does not conform to Error", .{
+                                        type_decl.name,
+                                        iface_method.name,
+                                        impl_throws,
+                                    }) catch {
+                                        self.reportError(.E015, iface_method.name);
+                                        return error.SemanticError;
+                                    };
+                                    self.last_error = .{
+                                        .code = .E015,
+                                        .message = msg,
+                                        .location = .{
+                                            .file = self.source_file,
+                                            .line = 1,
+                                            .column = 1,
+                                        },
+                                        .message_allocated = true,
+                                    };
+                                    return error.SemanticError;
+                                }
+                            } else {
+                                // Interface specifies a specific error type: implementation must match exactly
+                                if (!std.mem.eql(u8, iface_throws, impl_throws)) {
+                                    const msg = std.fmt.allocPrint(self.allocator, "Method '{s}.{s}' throws '{s}' but interface '{s}' requires throws '{s}'", .{
+                                        type_decl.name,
+                                        iface_method.name,
+                                        impl_throws,
+                                        source_interface,
+                                        iface_throws,
+                                    }) catch {
+                                        self.reportError(.E015, iface_method.name);
+                                        return error.SemanticError;
+                                    };
+                                    self.last_error = .{
+                                        .code = .E015,
+                                        .message = msg,
+                                        .location = .{
+                                            .file = self.source_file,
+                                            .line = 1,
+                                            .column = 1,
+                                        },
+                                        .message_allocated = true,
+                                    };
+                                    return error.SemanticError;
+                                }
+                            }
+                        } else {
+                            // Interface method throws but implementation doesn't
+                            const msg = std.fmt.allocPrint(self.allocator, "Method '{s}.{s}' must throw '{s}' as required by interface '{s}'", .{
+                                type_decl.name,
+                                iface_method.name,
+                                iface_throws,
+                                source_interface,
+                            }) catch {
+                                self.reportError(.E015, iface_method.name);
+                                return error.SemanticError;
+                            };
+                            self.last_error = .{
+                                .code = .E015,
+                                .message = msg,
+                                .location = .{
+                                    .file = self.source_file,
+                                    .line = 1,
+                                    .column = 1,
+                                },
+                                .message_allocated = true,
+                            };
+                            return error.SemanticError;
+                        }
+                    } else if (type_method.throws_type) |impl_throws| {
+                        // Implementation throws but interface doesn't require it
+                        // This is actually OK - a method can throw even if interface doesn't require it
+                        // However, for strict conformance we might want to disallow this
+                        // For now, allow it (implementation can be more restrictive)
+                        _ = impl_throws;
+                    }
                 } else {
                     // Missing method - collect for aggregate error, noting which interface requires it
                     const resolved_ret = if (iface_method.return_type) |rt|
@@ -2205,43 +2290,46 @@ pub const AstToIr = struct {
             }
 
             // Check that methods with qualified names (e.g., Collection.map) actually exist in the interface
-            for (type_decl.methods) |type_method| {
-                if (type_method.qualified_name) |qualified| {
-                    // Parse "Interface.method" format
-                    if (std.mem.indexOf(u8, qualified, ".")) |dot_pos| {
-                        const iface_name = qualified[0..dot_pos];
-                        const method_name = qualified[dot_pos + 1 ..];
+            // Skip this check for marker interfaces (interfaces with no methods like Builtin, Error)
+            if (iface.methods.len > 0) {
+                for (type_decl.methods) |type_method| {
+                    if (type_method.qualified_name) |qualified| {
+                        // Parse "Interface.method" format
+                        if (std.mem.indexOf(u8, qualified, ".")) |dot_pos| {
+                            const iface_name = qualified[0..dot_pos];
+                            const method_name = qualified[dot_pos + 1 ..];
 
-                        // Only validate for the current interface being checked
-                        if (std.mem.eql(u8, iface_name, conformance.interface_name)) {
-                            // Check if this method exists in the interface
-                            var method_exists = false;
-                            for (iface.methods) |iface_method| {
-                                if (std.mem.eql(u8, iface_method.name, method_name)) {
-                                    method_exists = true;
-                                    break;
+                            // Only validate for the current interface being checked
+                            if (std.mem.eql(u8, iface_name, conformance.interface_name)) {
+                                // Check if this method exists in the interface
+                                var method_exists = false;
+                                for (iface.methods) |iface_method| {
+                                    if (std.mem.eql(u8, iface_method.name, method_name)) {
+                                        method_exists = true;
+                                        break;
+                                    }
                                 }
-                            }
 
-                            if (!method_exists) {
-                                const msg = std.fmt.allocPrint(self.allocator, "Method '{s}' is not defined in interface '{s}'", .{
-                                    method_name,
-                                    iface_name,
-                                }) catch {
-                                    self.reportError(.E015, method_name);
+                                if (!method_exists) {
+                                    const msg = std.fmt.allocPrint(self.allocator, "Method '{s}' is not defined in interface '{s}'", .{
+                                        method_name,
+                                        iface_name,
+                                    }) catch {
+                                        self.reportError(.E015, method_name);
+                                        return error.SemanticError;
+                                    };
+                                    self.last_error = .{
+                                        .code = .E015,
+                                        .message = msg,
+                                        .location = .{
+                                            .file = self.source_file,
+                                            .line = 1,
+                                            .column = 1,
+                                        },
+                                        .message_allocated = true,
+                                    };
                                     return error.SemanticError;
-                                };
-                                self.last_error = .{
-                                    .code = .E015,
-                                    .message = msg,
-                                    .location = .{
-                                        .file = self.source_file,
-                                        .line = 1,
-                                        .column = 1,
-                                    },
-                                    .message_allocated = true,
-                                };
-                                return error.SemanticError;
+                                }
                             }
                         }
                     }
@@ -2276,13 +2364,19 @@ pub const AstToIr = struct {
         };
     }
 
-    /// Check if a type conforms to a specific interface by name
+    /// Check if a type conforms to a specific interface by name.
+    /// This includes transitive conformance through interface inheritance.
     fn typeConformsTo(self: *AstToIr, type_name: []const u8, interface_name: []const u8) bool {
+        // Collect all interfaces the type directly declares conformance to
+        var direct_conformances: [32][]const u8 = undefined;
+        var num_conformances: usize = 0;
+
         // Check struct types
         if (self.type_decl_map.get(type_name)) |type_decl| {
             for (type_decl.conformances) |conformance| {
-                if (std.mem.eql(u8, conformance.interface_name, interface_name)) {
-                    return true;
+                if (num_conformances < 32) {
+                    direct_conformances[num_conformances] = conformance.interface_name;
+                    num_conformances += 1;
                 }
             }
         }
@@ -2290,9 +2384,45 @@ pub const AstToIr = struct {
         // Check enum types
         if (self.enum_decl_map.get(type_name)) |enum_decl| {
             for (enum_decl.conformances) |conformance| {
-                if (std.mem.eql(u8, conformance.interface_name, interface_name)) {
-                    return true;
+                if (num_conformances < 32) {
+                    direct_conformances[num_conformances] = conformance.interface_name;
+                    num_conformances += 1;
                 }
+            }
+        }
+
+        // Debug: log conformance check
+        if (std.mem.eql(u8, type_name, "ParseError") or std.mem.eql(u8, type_name, "MoneyParseError")) {
+            std.debug.print("typeConformsTo: checking if '{s}' conforms to '{s}', found {d} direct conformances\n", .{ type_name, interface_name, num_conformances });
+            std.debug.print("  enum_decl_map has key: {}\n", .{self.enum_decl_map.contains(type_name)});
+            std.debug.print("  enum_decl_map size: {d}\n", .{self.enum_decl_map.count()});
+            for (direct_conformances[0..num_conformances]) |conf| {
+                std.debug.print("  - direct conformance: '{s}'\n", .{conf});
+            }
+        }
+
+        // Check each direct conformance
+        for (direct_conformances[0..num_conformances]) |conf_name| {
+            if (self.interfaceConformsTo(conf_name, interface_name)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// Check if interface_name conforms to target_interface (directly or transitively).
+    fn interfaceConformsTo(self: *AstToIr, interface_name: []const u8, target_interface: []const u8) bool {
+        // Direct match
+        if (std.mem.eql(u8, interface_name, target_interface)) {
+            return true;
+        }
+
+        // Check if interface_name extends target_interface (transitively)
+        const iface = self.interface_map.get(interface_name) orelse return false;
+        for (iface.extends) |extended_name| {
+            if (self.interfaceConformsTo(extended_name, target_interface)) {
+                return true;
             }
         }
 
@@ -2748,6 +2878,36 @@ pub const AstToIr = struct {
         const saved_type = self.current_type_name;
         self.current_type_name = type_name;
         defer self.current_type_name = saved_type;
+
+        // If method has a qualified name (Interface.methodName), verify the type declares conformance
+        if (method.qualified_name) |qualified| {
+            if (std.mem.indexOf(u8, qualified, ".")) |dot_pos| {
+                const interface_name = qualified[0..dot_pos];
+                // Check if type conforms to this interface (directly or transitively via extends)
+                if (!self.typeConformsTo(type_name, interface_name)) {
+                    const msg = std.fmt.allocPrint(self.allocator, "Type '{s}' implements '{s}.{s}' but does not declare conformance to '{s}'", .{
+                        type_name,
+                        interface_name,
+                        method.name,
+                        interface_name,
+                    }) catch {
+                        self.reportError(.E015, method.name);
+                        return error.SemanticError;
+                    };
+                    self.last_error = .{
+                        .code = .E015,
+                        .message = msg,
+                        .location = .{
+                            .file = self.source_file,
+                            .line = 1,
+                            .column = 1,
+                        },
+                        .message_allocated = true,
+                    };
+                    return error.SemanticError;
+                }
+            }
+        }
 
         const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
         try self.module.trackString(mangled_name);
@@ -10053,7 +10213,7 @@ pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_anal
 }
 
 pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) ConvertError!ir.Module {
-    return convertWithExternals(program, allocator, mutation_analyzer, source_file, null, out_error);
+    return convertWithExternals(program, allocator, mutation_analyzer, source_file, null, null, null, out_error);
 }
 
 /// Convert AST to IR with external function signatures from other modules
@@ -10064,11 +10224,19 @@ pub fn convertWithExternals(
     source_file: ?[]const u8,
     external_funcs: ?[]const ExternalFuncSignature,
     external_types: ?[]const ExternalTypeInfo,
+    external_interfaces: ?[]const ExternalInterfaceInfo,
     out_error: *?err.CompileError,
 ) ConvertError!ir.Module {
     var converter = AstToIr.init(allocator, mutation_analyzer);
     converter.source_file = source_file;
     defer converter.deinit();
+
+    // Register external interfaces before types (needed for conformance checking)
+    if (external_interfaces) |ext_ifaces| {
+        for (ext_ifaces) |ext_iface| {
+            try converter.registerInterface(ext_iface.interface_decl.*);
+        }
+    }
 
     // Register external types before conversion
     if (external_types) |ext_types| {
@@ -10171,6 +10339,23 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
     }
 
     return type_infos.toOwnedSlice(allocator);
+}
+
+/// Extract interface info from a parsed program (for cross-module compilation)
+pub fn extractInterfaceInfo(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalInterfaceInfo {
+    var iface_infos = std.ArrayListUnmanaged(ExternalInterfaceInfo){};
+    errdefer iface_infos.deinit(allocator);
+
+    for (program.interfaces) |*iface_decl| {
+        // Only include exported interfaces
+        if (iface_decl.is_export) {
+            try iface_infos.append(allocator, .{
+                .interface_decl = iface_decl,
+            });
+        }
+    }
+
+    return iface_infos.toOwnedSlice(allocator);
 }
 
 /// Extract function signatures from a parsed program (for cross-module compilation)

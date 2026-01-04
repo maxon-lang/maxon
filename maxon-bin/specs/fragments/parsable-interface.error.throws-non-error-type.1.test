@@ -1,0 +1,24 @@
+// Test: parsable-interface.error.throws-non-error-type.1
+// Implementation must throw a type that conforms to Error
+enum NotAnError int
+    Bad = 1
+end 'NotAnError'
+
+type Value is Parsable
+    var n int
+
+    static function Parsable.fromString(input String) returns Self throws NotAnError
+        return Value{n: input.byteLength()}
+    end 'fromString'
+end 'Value'
+
+function main() returns int
+    return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E015: specs/fragments/parsable-interface.error.throws-non-error-type.1.test:1:1: Method 'Value.fromString' throws 'NotAnError' which does not conform to Error
+```
+---
+// IR: N/A (compiler error test)
+---
