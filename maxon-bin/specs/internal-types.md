@@ -46,7 +46,7 @@ end 'main'
 <!-- test: array-literal-works -->
 ```maxon
 function main() returns int
-    var arr Array of int = [1, 2, 3, 4, 5]
+    var arr = [1, 2, 3, 4, 5]
     return arr.count()
 end 'main'
 ```

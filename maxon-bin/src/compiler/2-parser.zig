@@ -932,38 +932,6 @@ pub const Parser = struct {
         _ = self.advance(); // consume let/var
         const name_token = try self.expect(.identifier);
 
-        // Check for optional type annotation: var name Type = value
-        // Or default-initialized typed variable: var name Type (creates empty/default value)
-        var type_annotation: ?ast.TypeExpr = null;
-        if (!self.check(.equals)) {
-            // Parse type annotation
-            type_annotation = try self.parseTypeExpr();
-        }
-
-        // If we have a type annotation and no equals sign, this is a default-initialized declaration
-        if (type_annotation != null and !self.check(.equals)) {
-            // Create a default struct initialization expression (empty fields)
-            const type_name = switch (type_annotation.?) {
-                .simple => |name| name,
-                .generic => |gen| gen.base_type,
-                else => "unknown",
-            };
-            const type_args: []const []const u8 = switch (type_annotation.?) {
-                .generic => |gen| gen.type_args,
-                else => &.{},
-            };
-            const default_init: ast.Expression = .{ .struct_init = .{
-                .type_name = type_name,
-                .type_args = type_args,
-                .fields = &.{},
-            } };
-            if (is_var) {
-                return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } }, start_line, start_column);
-            } else {
-                return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = default_init } }, start_line, start_column);
-            }
-        }
-
         _ = try self.expect(.equals);
         const value = try self.parseExpression();
         if (value) |expr| {
@@ -1046,9 +1014,9 @@ pub const Parser = struct {
             }
 
             if (is_var) {
-                return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } }, start_line, start_column);
+                return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = null, .value = expr } }, start_line, start_column);
             } else {
-                return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = type_annotation, .value = expr } }, start_line, start_column);
+                return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = null, .value = expr } }, start_line, start_column);
             }
         }
         self.reportError(.E003);

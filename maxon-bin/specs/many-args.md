@@ -73,8 +73,8 @@ end 'main'
 <!-- test: mixed-computation-many-args -->
 ```maxon
 function compute(a int, b int, c int, d int, e int, f int) returns int
-    let reg_sum int = a + b + c + d
-    let stack_sum int = e + f
+    let reg_sum = a + b + c + d
+    let stack_sum = e + f
     return reg_sum * stack_sum
 end 'compute'
 
@@ -93,8 +93,8 @@ function add5(a int, b int, c int, d int, e int) returns int
 end 'add5'
 
 function main() returns int
-    let x int = add5(1, 2, 3, 4, 5)
-    let y int = add5(10, 20, 30, 40, 50)
+    let x = add5(1, 2, 3, 4, 5)
+    let y = add5(10, 20, 30, 40, 50)
     return x + y
 end 'main'
 ```

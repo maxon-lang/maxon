@@ -20,9 +20,9 @@ Create an empty array:
 var arr = Array of int{}
 ```
 
-Create an array from a literal (requires type annotation):
+Create an array from a literal:
 ```text
-var arr Array of int = [1, 2, 3]
+var arr = [1, 2, 3]
 ```
 
 ### Adding Elements
@@ -295,11 +295,11 @@ end 'main'
 ```
 
 <!-- test: array-literal -->
-Initialize from array literal with explicit type.
+Initialize from array literal.
 
 ```maxon
 function main() returns int
-    var arr Array of int = [1, 2, 3]
+    var arr = [1, 2, 3]
     
     if arr.count() != 3 'cnt'
         return 1

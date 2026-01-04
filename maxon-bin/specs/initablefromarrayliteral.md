@@ -14,7 +14,7 @@ category: type-system
 The stdlib `Array` type implements `InitableFromArrayLiteral`, allowing initialization from array literals:
 
 ```text
-var arr Array of int = [1, 2, 3]
+var arr = [1, 2, 3]
 ```
 
 This creates an Array containing the elements 1, 2, and 3.
@@ -24,7 +24,7 @@ This creates an Array containing the elements 1, 2, and 3.
 <!-- test: array-from-literal -->
 ```maxon
 function main() returns int
-    var arr Array of int = [10, 20, 30]
+    var arr = [10, 20, 30]
     return arr.count()
 end 'main'
 ```
@@ -35,7 +35,7 @@ end 'main'
 <!-- test: array-from-literal-access -->
 ```maxon
 function main() returns int
-    var arr Array of int = [10, 20, 30]
+    var arr = [10, 20, 30]
     var val = arr.get(1)
     if let v = val 'check'
         return v
@@ -50,7 +50,7 @@ end 'main'
 <!-- test: array-from-literal-first -->
 ```maxon
 function main() returns int
-    var arr Array of int = [42, 2, 3]
+    var arr = [42, 2, 3]
     var val = arr.first()
     if let v = val 'check'
         return v
@@ -65,7 +65,7 @@ end 'main'
 <!-- test: array-from-literal-last -->
 ```maxon
 function main() returns int
-    var arr Array of int = [1, 2, 99]
+    var arr = [1, 2, 99]
     var val = arr.last()
     if let v = val 'check'
         return v

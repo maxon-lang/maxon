@@ -19,7 +19,7 @@ var x = optionalValue or defaultValue
 
 This is equivalent to:
 ```maxon
-var x int = 0
+var x = 0
 if let unwrapped = optionalValue 'check'
     x = unwrapped
 end 'check' else 'default'

@@ -20,9 +20,9 @@ Create an empty set:
 var s = Set of int{}
 ```
 
-Create a set from literals (requires type annotation):
+Create a set from an array literal:
 ```text
-var s Set of int = [1, 2, 3]
+var s = Set from [1, 2, 3]
 ```
 
 ### Adding Elements
@@ -216,7 +216,7 @@ Initialize set from array literal.
 
 ```maxon
 function main() returns int
-    var s Set of int = [1, 2, 3]
+    var s = Set from [1, 2, 3]
     if s.count() != 3 'count'
         return 1
     end 'count'

@@ -15,7 +15,7 @@ The `float` type stores 64-bit double-precision floating-point numbers.
 
 ```maxon
 var pi = 3.14159
-let ratio float = 2.5
+let ratio = 2.5
 ```
 Float literals must include a decimal point:
 - Valid: `3.14`, `2.0`, `0.5`

@@ -14,7 +14,7 @@ The `int` type stores 32-bit signed integers ranging from -2,147,483,648 to 2,14
 ### Syntax
 
 ```maxon
-var count int = 42
+var count = 42
 let total = 100
 ```
 ### Example

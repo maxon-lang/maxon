@@ -48,3 +48,27 @@ end 'main'
 ```exitcode
 30
 ```
+
+<!-- test: var-explicit-type-error -->
+Explicit type annotations are not allowed on var declarations.
+```maxon
+function main() returns int
+    var x int = 0
+    return x
+end 'main'
+```
+```error
+E002
+```
+
+<!-- test: let-explicit-type-error -->
+Explicit type annotations are not allowed on let declarations.
+```maxon
+function main() returns int
+    let x int = 0
+    return x
+end 'main'
+```
+```error
+E002
+```

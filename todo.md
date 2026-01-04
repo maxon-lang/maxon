@@ -13,7 +13,6 @@ StringProtocol: Extends BidirectionalCollection. This is the specific protocol t
 Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
 
 ## Priorities
-- var x int = 0 should not be allowed
 - implement map() for Set which should be a generic implementation that also replaces code in Map
 - self hosting features
 - debugging (speed up the dev process)
