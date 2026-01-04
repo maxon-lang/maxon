@@ -220,7 +220,10 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
     defer all_interfaces.deinit(allocator);
 
-    for (sources) |source| {
+    // Phase 1: Parse all sources EXCEPT the last one (user code) to collect type info
+    // The last source will be compiled directly in Phase 2, so we don't need its types as externals
+    const stdlib_sources = sources[0 .. sources.len - 1];
+    for (stdlib_sources) |source| {
         var lexer = Lexer.init(source.content);
         const tokens = lexer.tokenize(phase1_allocator) catch continue;
 

@@ -1098,7 +1098,9 @@ pub const AstToIr = struct {
 
         // Register declarations
         for (program.types) |type_decl| try self.registerType(type_decl);
-        for (program.enums) |enum_decl| try self.registerEnum(enum_decl);
+        for (program.enums) |enum_decl| {
+            try self.registerEnum(enum_decl);
+        }
         for (program.functions) |fn_decl| try self.registerFunction(fn_decl);
 
         // Register methods from types
@@ -1977,11 +1979,29 @@ pub const AstToIr = struct {
             }
 
             const iface = self.interface_map.get(conformance.interface_name) orelse {
-                // Unknown interface - skip conformance check
-                // This allows stdlib types to declare conformance to interfaces
-                // that may not be loaded yet (e.g., Collection, InitableFromArrayLiteral)
-                debug.astToIr("Skipping unknown interface '{s}'", .{conformance.interface_name});
-                continue;
+                // Unknown interface - only allow in stdlib code where interfaces may not be loaded yet
+                if (intrinsics.isStdlibFile(self)) {
+                    debug.astToIr("Skipping unknown interface '{s}' in stdlib", .{conformance.interface_name});
+                    continue;
+                }
+                // Report error for non-stdlib code trying to implement unknown interface
+                const msg = std.fmt.allocPrint(self.allocator, "Unknown interface '{s}' - interface may not be exported or does not exist", .{
+                    conformance.interface_name,
+                }) catch {
+                    self.reportError(.E051, conformance.interface_name);
+                    return error.SemanticError;
+                };
+                self.last_error = .{
+                    .code = .E051,
+                    .message = msg,
+                    .location = .{
+                        .file = self.source_file,
+                        .line = 1,
+                        .column = 1,
+                    },
+                    .message_allocated = true,
+                };
+                return error.SemanticError;
             };
 
             // Build a map of associated type name -> bound type
@@ -2388,16 +2408,6 @@ pub const AstToIr = struct {
                     direct_conformances[num_conformances] = conformance.interface_name;
                     num_conformances += 1;
                 }
-            }
-        }
-
-        // Debug: log conformance check
-        if (std.mem.eql(u8, type_name, "ParseError") or std.mem.eql(u8, type_name, "MoneyParseError")) {
-            std.debug.print("typeConformsTo: checking if '{s}' conforms to '{s}', found {d} direct conformances\n", .{ type_name, interface_name, num_conformances });
-            std.debug.print("  enum_decl_map has key: {}\n", .{self.enum_decl_map.contains(type_name)});
-            std.debug.print("  enum_decl_map size: {d}\n", .{self.enum_decl_map.count()});
-            for (direct_conformances[0..num_conformances]) |conf| {
-                std.debug.print("  - direct conformance: '{s}'\n", .{conf});
             }
         }
 
@@ -5738,6 +5748,15 @@ pub const AstToIr = struct {
             self.pending_try_branches = outer_try_branches;
         }
 
+        // Save var_map state before do body to restore for catch blocks
+        // (catch blocks should not see variables declared in the do body)
+        var pre_do_vars = std.StringHashMapUnmanaged(VarInfo){};
+        defer pre_do_vars.deinit(self.allocator);
+        var var_iter = self.var_map.iterator();
+        while (var_iter.next()) |entry| {
+            try pre_do_vars.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+        }
+
         // Convert do body (with new label scope)
         try self.pushLabelScope();
         for (do_catch.body) |stmt| {
@@ -5784,8 +5803,7 @@ pub const AstToIr = struct {
 
         for (do_catch.catches, 0..) |_, i| {
             const catch_block_idx: u32 = @intCast(self.func().blocks.items.len);
-            var name_buf: [32]u8 = undefined;
-            const catch_name = std.fmt.bufPrint(&name_buf, "catch_{d}", .{i}) catch "catch";
+            const catch_name = std.fmt.allocPrint(self.allocator, "catch_{d}", .{i}) catch "catch";
             _ = try self.func().addBlock(catch_name);
             try catch_blocks.append(self.allocator, catch_block_idx);
         }
@@ -5815,6 +5833,20 @@ pub const AstToIr = struct {
             // Restore this catch block as current
             const idx = deferred_catch_blocks.items.len - 1 - i;
             try self.func().blocks.append(self.allocator, deferred_catch_blocks.items[idx]);
+
+            // Remove do-body-scoped variables from var_map before processing catch block
+            // (catch blocks should not see/cleanup variables declared in the do body)
+            var to_remove = std.ArrayListUnmanaged([]const u8){};
+            defer to_remove.deinit(self.allocator);
+            var remove_iter = self.var_map.keyIterator();
+            while (remove_iter.next()) |key| {
+                if (!pre_do_vars.contains(key.*)) {
+                    try to_remove.append(self.allocator, key.*);
+                }
+            }
+            for (to_remove.items) |key| {
+                _ = self.var_map.remove(key);
+            }
 
             // Get error value pointer (at offset 8 in error_buffer)
             const error_value_ptr = try self.func().emitGetFieldPtr(error_buffer, 8);
