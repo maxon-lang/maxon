@@ -320,6 +320,11 @@ fn writeFragment(
                     try content.appendSlice(allocator, stdout_line);
                 }
             }
+            if (s.expected_ir) |expected_ir| {
+                try content.appendSlice(allocator, "ExpectedIR: ```\n");
+                try content.appendSlice(allocator, expected_ir);
+                try content.appendSlice(allocator, "\n```\n");
+            }
         },
         .compiler_error => |err| {
             try content.appendSlice(allocator, "MaxoncStderr: ```\n");

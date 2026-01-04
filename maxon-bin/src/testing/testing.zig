@@ -41,6 +41,7 @@ pub const TestCase = struct {
         switch (self.expected) {
             .success => |s| {
                 if (s.stdout) |stdout| allocator.free(stdout);
+                if (s.expected_ir) |ir| allocator.free(ir);
                 if (s.run_args) |args| allocator.free(args);
             },
             .compiler_error => |err| allocator.free(err),
@@ -56,7 +57,8 @@ pub const TestExpectation = union(enum) {
 
 pub const SuccessExpectation = struct {
     exit_code: u8,
-    stdout: ?[]const u8, // Optional expected stdout
+    stdout: ?[]const u8 = null, // Optional expected stdout
+    expected_ir: ?[]const u8 = null, // Optional expected IR (for optimization tests)
     track_allocs: bool = false, // Enable allocation tracking
     run_args: ?[]const u8 = null, // Command-line arguments to pass to the test executable
 };

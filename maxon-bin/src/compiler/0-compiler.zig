@@ -298,6 +298,11 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     };
     defer frontend.deinit();
 
+    // Run dead function elimination on the user's module
+    optimizer.eliminateDeadFunctions(&frontend.ir_module, allocator) catch {
+        return error.IrError;
+    };
+
     return frontend.ir_module.printToString(allocator) catch {
         return error.WriteError;
     };
@@ -472,6 +477,12 @@ pub fn compileMultiple(
     }
 
     const final_module = &merged.?.ir_module;
+
+    // Run dead function elimination on the merged module
+    // (this must happen after merging, not during per-module optimization)
+    optimizer.eliminateDeadFunctions(final_module, allocator) catch {
+        return error.IrError;
+    };
 
     // Emit IR to file if requested
     if (options.emit_ir) {

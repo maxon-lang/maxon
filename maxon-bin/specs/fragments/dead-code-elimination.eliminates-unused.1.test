@@ -1,0 +1,52 @@
+// Test: dead-code-elimination.eliminates-unused.1
+function used_function() returns int
+    return 42
+end 'used_function'
+
+function unused_function() returns int
+    return 999
+end 'unused_function'
+
+function another_unused_function() returns int
+    return 123
+end 'another_unused_function'
+
+function main() returns int
+    var result = used_function()
+    return result
+end 'main'
+---
+ExitCode: 42
+ExpectedIR: ```
+function used_function() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 42
+    ret %tmp_const
+}
+
+function main() -> i64 {
+entry:
+    %tmp_call = call i64 @used_function()
+    %result = alloca ptr
+    store %result %tmp_call
+    %tmp_load = load i64 %result
+    ret %tmp_load
+}
+```
+---
+function used_function() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 42
+    ret %tmp_const
+}
+
+function main() -> i64 {
+entry:
+    %tmp_call = call i64 @used_function()
+    %result = alloca ptr
+    store %result %tmp_call
+    %tmp_load = load i64 %result
+    ret %tmp_load
+}
+
+---

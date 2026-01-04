@@ -1,0 +1,28 @@
+// Test: dead-code-elimination.doc-example-1.1
+function used() returns int
+    return 42
+end 'used'
+
+function unused() returns int
+    return 999  // This function is eliminated
+end 'unused'
+
+function main() returns int
+    return used()  // Only this is kept
+end 'main'
+---
+ExitCode: 42
+---
+function used() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 42
+    ret %tmp_const
+}
+
+function main() -> i64 {
+entry:
+    %tmp_call = call i64 @used()
+    ret %tmp_call
+}
+
+---

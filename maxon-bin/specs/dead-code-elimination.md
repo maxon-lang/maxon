@@ -61,6 +61,22 @@ end 'main'
 ```exitcode
 42
 ```
+```ir
+function used_function() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 42
+    ret %tmp_const
+}
+
+function main() -> i64 {
+entry:
+    %tmp_call = call i64 @used_function()
+    %result = alloca ptr
+    store %result %tmp_call
+    %tmp_load = load i64 %result
+    ret %tmp_load
+}
+```
 
 
 <!-- test: keeps-transitive-calls -->
@@ -83,5 +99,24 @@ end 'main'
 ```
 ```exitcode
 10
+```
+```ir
+function helper() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 10
+    ret %tmp_const
+}
+
+function used() -> i64 {
+entry:
+    %tmp_call = call i64 @helper()
+    ret %tmp_call
+}
+
+function main() -> i64 {
+entry:
+    %tmp_call = call i64 @used()
+    ret %tmp_call
+}
 ```
 

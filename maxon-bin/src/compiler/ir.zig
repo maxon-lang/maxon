@@ -618,6 +618,12 @@ pub const Module = struct {
             if (std.mem.eql(u8, func.name, name)) {
                 return func;
             }
+            // Also check alias (used for interface method qualified names)
+            if (func.alias) |alias| {
+                if (std.mem.eql(u8, alias, name)) {
+                    return func;
+                }
+            }
         }
         return null;
     }

@@ -72,6 +72,37 @@ end 'main'
 42
 ```
 
+### IR Verification (Optimization Tests)
+
+For tests that verify compiler optimizations (like dead code elimination), you can include an expected IR block. The test will fail if the generated IR doesn't match exactly:
+
+```maxon
+function used() returns int
+    return 42
+end 'used'
+
+function unused() returns int
+    return 999  // This should be eliminated
+end 'unused'
+
+function main() returns int
+    return used()
+end 'main'
+```
+```exitcode
+42
+```
+```ir
+; Function: used
+; ... IR for used function ...
+
+; Function: main
+; ... IR for main function ...
+; (unused function should not appear)
+```
+
+The IR block is optional and should only be used when testing optimization behavior.
+
 ### Executable Examples (Compile Errors)
 
 For code that demonstrates compile/parse errors:
@@ -236,6 +267,9 @@ The Zig compiler has its own spec system in `maxon-bin/specs/` with fragments in
 ---
 ExitCode: N
 Stdout: optional
+ExpectedIR: ```
+<expected IR for optimization tests>
+```
 ---
 <generated IR for reference>
 ---

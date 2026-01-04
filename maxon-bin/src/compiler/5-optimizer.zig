@@ -41,6 +41,78 @@ pub fn optimize(module: *ir.Module, allocator: std.mem.Allocator) !void {
 }
 
 // ============================================================================
+// Dead Function Elimination
+// ============================================================================
+
+/// Remove functions that are never called (directly or indirectly) from main.
+/// This should be called AFTER all modules are merged, not during per-module optimization.
+pub fn eliminateDeadFunctions(module: *ir.Module, allocator: std.mem.Allocator) !void {
+    const initial_count = module.functions.items.len;
+
+    // Find all reachable functions starting from main and exported functions
+    var reachable = std.StringHashMap(void).init(allocator);
+    defer reachable.deinit();
+
+    // Start with main and all exported functions as roots
+    for (module.functions.items) |func| {
+        if (std.mem.eql(u8, func.name, "main") or func.is_exported) {
+            try markFunctionReachable(module, func.name, &reachable);
+        }
+    }
+
+    // Remove unreachable functions
+    var i: usize = 0;
+    while (i < module.functions.items.len) {
+        const func = &module.functions.items[i];
+        if (!reachable.contains(func.name)) {
+            debug.log("Eliminating unused function: {s}", .{func.name});
+            // Deinit the function before removing
+            func.deinit();
+            _ = module.functions.orderedRemove(i);
+        } else {
+            i += 1;
+        }
+    }
+
+    const final_count = module.functions.items.len;
+    if (final_count < initial_count) {
+        debug.log("Dead function elimination: {d} -> {d} functions", .{ initial_count, final_count });
+    }
+}
+
+/// Recursively mark a function and all functions it calls as reachable
+fn markFunctionReachable(module: *ir.Module, func_name: []const u8, reachable: *std.StringHashMap(void)) !void {
+    // Skip if already marked
+    if (reachable.contains(func_name)) return;
+
+    // Find the function in the module
+    const func = module.getFunction(func_name) orelse {
+        // Function not in this module (external call) - that's OK
+        return;
+    };
+
+    // Mark as reachable
+    try reachable.put(func.name, {});
+    debug.log("  Marking reachable: {s}", .{func.name});
+
+    // Find all functions called by this function
+    for (func.blocks.items) |block| {
+        for (block.instructions.items) |inst| {
+            switch (inst.op) {
+                .call, .func_addr => {
+                    // Get the called function name
+                    if (inst.operands[0] == .func_name) {
+                        const called_name = inst.operands[0].func_name;
+                        try markFunctionReachable(module, called_name, reachable);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Constant Folding
 // ============================================================================
 

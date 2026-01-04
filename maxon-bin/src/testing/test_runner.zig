@@ -130,6 +130,7 @@ pub const Fragment = struct {
         switch (self.expected) {
             .success => |s| {
                 if (s.stdout) |stdout| allocator.free(stdout);
+                if (s.expected_ir) |ir| allocator.free(ir);
                 if (s.run_args) |args| allocator.free(args);
             },
             .compiler_error => |err| allocator.free(err),
@@ -568,6 +569,7 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8, file_path: 
     // Success test
     var exit_code: u8 = 0;
     var stdout: ?[]const u8 = null;
+    var expected_ir: ?[]const u8 = null;
     var track_allocs: bool = false;
     var run_args: ?[]const u8 = null;
 
@@ -603,6 +605,28 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8, file_path: 
             } else {
                 stdout = try allocator.dupe(u8, value);
             }
+        } else if (std.mem.startsWith(u8, trimmed, "ExpectedIR:")) {
+            const value = std.mem.trim(u8, trimmed[11..], " \t");
+            // Check for multiline block format: ExpectedIR: ```
+            if (std.mem.eql(u8, value, "```")) {
+                // Collect lines until closing ```
+                var content_builder: std.ArrayListUnmanaged(u8) = .empty;
+                errdefer content_builder.deinit(allocator);
+
+                while (lines.next()) |content_line| {
+                    const content_trimmed = std.mem.trimRight(u8, content_line, "\r");
+                    if (std.mem.eql(u8, content_trimmed, "```")) {
+                        break;
+                    }
+                    if (content_builder.items.len > 0) {
+                        try content_builder.append(allocator, '\n');
+                    }
+                    try content_builder.appendSlice(allocator, content_trimmed);
+                }
+                expected_ir = try content_builder.toOwnedSlice(allocator);
+            } else {
+                expected_ir = try allocator.dupe(u8, value);
+            }
         } else if (std.mem.startsWith(u8, trimmed, "TrackAllocs:")) {
             const value = std.mem.trim(u8, trimmed[12..], " \t");
             track_allocs = std.mem.eql(u8, value, "true");
@@ -617,6 +641,7 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8, file_path: 
     return .{ .success = .{
         .exit_code = exit_code,
         .stdout = stdout,
+        .expected_ir = expected_ir,
         .track_allocs = track_allocs,
         .run_args = run_args,
     } };
@@ -786,6 +811,31 @@ fn runTest(
                 const actual_stdout = std.mem.trim(u8, run_result.stdout, " \t\r\n");
                 if (!std.mem.eql(u8, actual_stdout, exp_stdout)) {
                     const msg = std.fmt.allocPrint(allocator, "Expected stdout '{s}', got '{s}'", .{ exp_stdout, actual_stdout }) catch "Stdout mismatch";
+                    return .{ .name = fragment.name, .status = .failed, .message = msg };
+                }
+            }
+
+            // Check IR if expected_ir is specified (for optimization tests)
+            if (expected.expected_ir) |exp_ir| {
+                // Generate IR for comparison
+                var ir_compile_result: compiler.CompileResult = .{ .error_info = null };
+                defer ir_compile_result.deinit(compile_allocator);
+
+                const actual_ir = compiler.compileToIrWithResult(
+                    fragment.source,
+                    compile_allocator,
+                    &ir_compile_result,
+                    fragment.file_path,
+                ) catch {
+                    return .{ .name = fragment.name, .status = .failed, .message = "Failed to generate IR for comparison" };
+                };
+
+                // Trim both expected and actual IR for comparison
+                const trimmed_expected = std.mem.trim(u8, exp_ir, " \t\r\n");
+                const trimmed_actual = std.mem.trim(u8, actual_ir, " \t\r\n");
+
+                if (!std.mem.eql(u8, trimmed_actual, trimmed_expected)) {
+                    const msg = std.fmt.allocPrint(allocator, "IR mismatch.\nExpected IR:\n{s}\n\nActual IR:\n{s}", .{ trimmed_expected, trimmed_actual }) catch "IR mismatch";
                     return .{ .name = fragment.name, .status = .failed, .message = msg };
                 }
             }

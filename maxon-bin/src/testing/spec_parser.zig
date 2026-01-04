@@ -314,8 +314,9 @@ fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_
         const stdout_content_start = line_end + 1;
         const stdout_block_end = std.mem.indexOfPos(u8, content, stdout_content_start, "```") orelse return null;
         const stdout_text = try allocator.dupe(u8, std.mem.trim(u8, content[stdout_content_start..stdout_block_end], "\r\n"));
+        errdefer allocator.free(stdout_text);
 
-        const end_pos = stdout_block_end + 3;
+        var end_pos = stdout_block_end + 3;
 
         // Now look for the required exitcode block
         if (findCodeBlock(content, end_pos, "exitcode") catch null) |exitcode_block| {
@@ -327,12 +328,26 @@ fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_
                     std.debug.print("InvalidExitCode in {s}: could not parse '{s}' as exit code\n", .{ spec_name, exit_code_str });
                     return ParseError.InvalidExitCode;
                 };
+
+                end_pos = exitcode_block.end;
+
+                // Check for optional ir block
+                var expected_ir: ?[]const u8 = null;
+                if (findCodeBlock(content, end_pos, "ir") catch null) |ir_block| {
+                    const ir_marker = std.mem.indexOfPos(u8, content, end_pos, "```ir");
+                    if (ir_marker != null and ir_marker.? - end_pos <= 20) {
+                        expected_ir = try allocator.dupe(u8, ir_block.content);
+                        end_pos = ir_block.end;
+                    }
+                }
+
                 return ExpectedOutput{
                     .expectation = .{ .success = .{
                         .exit_code = exit_code,
                         .stdout = stdout_text,
+                        .expected_ir = expected_ir,
                     } },
-                    .end_pos = exitcode_block.end,
+                    .end_pos = end_pos,
                 };
             }
         }
@@ -340,7 +355,7 @@ fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_
         allocator.free(stdout_text);
         return null;
     } else if (std.mem.eql(u8, block_type, "exitcode")) {
-        // Success test (exitcode then optional stdout order)
+        // Success test (exitcode then optional stdout/ir order)
         const content_start = line_end + 1;
         const block_end = std.mem.indexOfPos(u8, content, content_start, "```") orelse return null;
 
@@ -368,10 +383,21 @@ fn parseExpectedOutput(allocator: std.mem.Allocator, content: []const u8, start_
             }
         }
 
+        // Check for optional ir block - must be immediately after previous block (within 20 chars)
+        var expected_ir: ?[]const u8 = null;
+        if (findCodeBlock(content, end_pos, "ir") catch null) |ir_block| {
+            const ir_marker = std.mem.indexOfPos(u8, content, end_pos, "```ir");
+            if (ir_marker != null and ir_marker.? - end_pos <= 20) {
+                expected_ir = try allocator.dupe(u8, ir_block.content);
+                end_pos = ir_block.end;
+            }
+        }
+
         return ExpectedOutput{
             .expectation = .{ .success = .{
                 .exit_code = exit_code,
                 .stdout = stdout,
+                .expected_ir = expected_ir,
             } },
             .end_pos = end_pos,
         };

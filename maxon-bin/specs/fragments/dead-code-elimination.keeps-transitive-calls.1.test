@@ -1,0 +1,57 @@
+// Test: dead-code-elimination.keeps-transitive-calls.1
+function helper() returns int
+    return 10
+end 'helper'
+
+function used() returns int
+    return helper()
+end 'used'
+
+function unused() returns int
+    return 999
+end 'unused'
+
+function main() returns int
+    return used()
+end 'main'
+---
+ExitCode: 10
+ExpectedIR: ```
+function helper() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 10
+    ret %tmp_const
+}
+
+function used() -> i64 {
+entry:
+    %tmp_call = call i64 @helper()
+    ret %tmp_call
+}
+
+function main() -> i64 {
+entry:
+    %tmp_call = call i64 @used()
+    ret %tmp_call
+}
+```
+---
+function helper() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 10
+    ret %tmp_const
+}
+
+function used() -> i64 {
+entry:
+    %tmp_call = call i64 @helper()
+    ret %tmp_call
+}
+
+function main() -> i64 {
+entry:
+    %tmp_call = call i64 @used()
+    ret %tmp_call
+}
+
+---
