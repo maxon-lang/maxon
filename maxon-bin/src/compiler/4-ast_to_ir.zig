@@ -3689,9 +3689,9 @@ pub const AstToIr = struct {
                     }
                 }
 
-                // Check for InitableFromMapLiteral transformation
+                // Check for InitableFromDictionaryLiteral transformation
                 // Syntax: var m Map from K to V = ["a": 1, "b": 2] (generic) or var m StringIntMap = [...] (simple)
-                if (self.typeConformsTo(t_name, "InitableFromMapLiteral")) {
+                if (self.typeConformsTo(t_name, "InitableFromDictionaryLiteral")) {
                     if (decl.value == .map_literal) {
                         // For generic types, get the monomorphized type name
                         const resolved_type_name: []const u8 = switch (type_ann) {
@@ -3706,7 +3706,7 @@ pub const AstToIr = struct {
                             .simple => |name| name,
                             .optional, .error_union, .function_type => unreachable,
                         };
-                        try self.convertInitableFromMapLiteralSimple(decl, resolved_type_name);
+                        try self.convertInitableFromDictionaryLiteralSimple(decl, resolved_type_name);
                         return;
                     }
                 }
@@ -8769,14 +8769,14 @@ pub const AstToIr = struct {
         }
     }
 
-    /// Convert InitableFromMapLiteral with type annotation: var m Map from K to V = ["a": 1, "b": 2]
+    /// Convert InitableFromDictionaryLiteral with type annotation: var m Map from K to V = ["a": 1, "b": 2]
     /// Map is special-cased: receives __ManagedArrays directly.
     /// Other types receive two Arrays (following Swift's ExpressibleByDictionaryLiteral pattern).
-    fn convertInitableFromMapLiteralSimple(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
+    fn convertInitableFromDictionaryLiteralSimple(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
         const map_lit = decl.value.map_literal;
         const entries = map_lit.entries;
 
-        debug.astToIr("InitableFromMapLiteral: {s} with {d} entries", .{ type_name, entries.len });
+        debug.astToIr("InitableFromDictionaryLiteral: {s} with {d} entries", .{ type_name, entries.len });
 
         var keys_managed_ptr: ir.Value = undefined;
         var values_managed_ptr: ir.Value = undefined;
@@ -8824,7 +8824,7 @@ pub const AstToIr = struct {
             // Create Arrays by calling Array$init(__ManagedArray)
             const array_init_name = "Array$init";
             const array_func_info = self.func_map.get(array_init_name) orelse {
-                self.reportInternalError("Array$init not found for InitableFromMapLiteral");
+                self.reportInternalError("Array$init not found for InitableFromDictionaryLiteral");
                 return error.UnknownFunction;
             };
 
@@ -8858,13 +8858,13 @@ pub const AstToIr = struct {
             values_arg = values_array_ptr;
         }
 
-        // Call Type$init(keys, values) - the static init method from InitableFromMapLiteral interface
+        // Call Type$init(keys, values) - the static init method from InitableFromDictionaryLiteral interface
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
         try self.module.trackString(init_func_name);
 
         // Look up the function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
-            const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method for InitableFromMapLiteral", .{type_name}) catch "missing init method";
+            const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method for InitableFromDictionaryLiteral", .{type_name}) catch "missing init method";
             self.reportInternalError(msg);
             return error.UnknownFunction;
         };
@@ -8905,7 +8905,7 @@ pub const AstToIr = struct {
                 false,
             ));
         } else {
-            // Non-struct return type (unlikely for InitableFromMapLiteral)
+            // Non-struct return type (unlikely for InitableFromDictionaryLiteral)
             var args = try self.func().allocator.alloc(ir.Value, 2);
             args[0] = keys_arg;
             args[1] = values_arg;
@@ -9355,13 +9355,13 @@ pub const AstToIr = struct {
         const keys_managed_ptr = try self.emitManagedArray(keys_buffer, elem_count, elem_count);
         const values_managed_ptr = try self.emitManagedArray(values_buffer, elem_count, elem_count);
 
-        // Build init function name: Map$K$V$init (static init from InitableFromMapLiteral interface)
+        // Build init function name: Map$K$V$init (static init from InitableFromDictionaryLiteral interface)
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{map_type_name});
         try self.module.trackString(init_func_name);
 
         // Look up function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
-            const msg = std.fmt.allocPrint(self.allocator, "Map type '{s}' missing init method for InitableFromMapLiteral", .{map_type_name}) catch "missing init method";
+            const msg = std.fmt.allocPrint(self.allocator, "Map type '{s}' missing init method for InitableFromDictionaryLiteral", .{map_type_name}) catch "missing init method";
             self.reportInternalError(msg);
             return error.UnknownFunction;
         };
