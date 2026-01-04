@@ -5570,10 +5570,8 @@ pub const AstToIr = struct {
         _ = try self.func().addBlock("catch_dispatch");
         self.do_catch_catch_block = catch_dispatch_idx;
 
-        // Create do_end block
-        const do_end_idx: u32 = @intCast(self.func().blocks.items.len);
+        // Create do_end block (final index calculated later after catch blocks are added)
         _ = try self.func().addBlock("do_end");
-        self.do_catch_end_block = do_end_idx;
 
         // Pop both blocks for later restoration
         const do_end_block = self.func().blocks.pop().?;
@@ -5585,10 +5583,14 @@ pub const AstToIr = struct {
             block.instructions.items[branch_info.instr_idx].operands[0] = .{ .block_ref = catch_dispatch_idx };
         }
 
-        // Add branch from end of do body to do_end block
+        // Track the instruction index for the do body's branch to do_end (we'll patch it later)
+        const do_body_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+        const do_body_branch_instr_idx: u32 = @intCast(self.func().currentBlock().?.instructions.items.len);
+
+        // Add branch from end of do body to do_end block (placeholder, will be patched)
         try self.func().currentBlock().?.instructions.append(self.allocator, .{
             .op = .br,
-            .operands = .{ .{ .block_ref = do_end_idx }, .none, .none },
+            .operands = .{ .{ .block_ref = 0xFFFFFFFF }, .none, .none }, // Placeholder
             .result = null,
         });
 
@@ -5624,6 +5626,10 @@ pub const AstToIr = struct {
             .result = null,
         });
 
+        // Track catch block branch instructions that need patching to point to do_end
+        var catch_branch_infos = try std.ArrayList(struct { block_idx: u32, instr_idx: u32 }).initCapacity(self.allocator, do_catch.catches.len);
+        defer catch_branch_infos.deinit(self.allocator);
+
         // Restore and process each catch block
         for (do_catch.catches, 0..) |catch_clause, i| {
             // Restore this catch block as current
@@ -5648,12 +5654,29 @@ pub const AstToIr = struct {
             }
             self.popLabelScope();
 
-            // Jump to end block after catch body
+            // Track where we'll add the branch to do_end
+            const current_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+            const branch_instr_idx: u32 = @intCast(self.func().currentBlock().?.instructions.items.len);
+            try catch_branch_infos.append(self.allocator, .{ .block_idx = current_block_idx, .instr_idx = branch_instr_idx });
+
+            // Jump to end block after catch body (placeholder, will be patched)
             try self.func().currentBlock().?.instructions.append(self.allocator, .{
                 .op = .br,
-                .operands = .{ .{ .block_ref = do_end_idx }, .none, .none },
+                .operands = .{ .{ .block_ref = 0xFFFFFFFF }, .none, .none }, // Placeholder
                 .result = null,
             });
+        }
+
+        // Now we know the actual do_end index - it's the next block to be added
+        const do_end_idx: u32 = @intCast(self.func().blocks.items.len);
+        self.do_catch_end_block = do_end_idx;
+
+        // Patch the do body's branch to point to the correct do_end index
+        self.func().blocks.items[do_body_block_idx].instructions.items[do_body_branch_instr_idx].operands[0] = .{ .block_ref = do_end_idx };
+
+        // Patch all catch block branches to point to the correct do_end index
+        for (catch_branch_infos.items) |info| {
+            self.func().blocks.items[info.block_idx].instructions.items[info.instr_idx].operands[0] = .{ .block_ref = do_end_idx };
         }
 
         // Restore end block
