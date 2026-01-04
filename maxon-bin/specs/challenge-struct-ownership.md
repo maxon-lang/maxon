@@ -17,7 +17,7 @@ Structs follow the same ownership rules as other values: borrow for read-only ac
 <!-- test: struct-borrow-semantics -->
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function readOnly(d Data) returns int
@@ -37,7 +37,7 @@ end 'main'
 <!-- test: struct-move-semantics -->
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function takeOwnership(d Data) returns int
@@ -59,7 +59,7 @@ Using a struct after it has been moved should be a compile-time error.
 
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function takeOwnership(d Data) returns int
@@ -82,7 +82,7 @@ Using a moved variable in a subsequent expression should fail.
 
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function consume(d Data)
@@ -105,7 +105,7 @@ Multiple borrows of the same variable should be allowed.
 
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function readOnly(d Data) returns int
@@ -129,7 +129,7 @@ After moving a variable, reassigning it should allow using it again.
 
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function consume(d Data) returns int
@@ -154,7 +154,7 @@ Immutable struct can be borrowed multiple times.
 
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function readOnly(d Data) returns int
@@ -177,7 +177,7 @@ Immutable struct cannot be passed to function that mutates it.
 
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function mutate(d Data) returns int
@@ -199,7 +199,7 @@ Immutable struct can still be used after being borrowed.
 
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function readOnly(d Data) returns int
@@ -221,7 +221,7 @@ Immutable variable cannot be reassigned.
 
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function main() returns int
@@ -239,7 +239,7 @@ Copying from let to var allows the var to be moved.
 
 ```maxon
 type Data
-    var value int
+    export var value int
 end 'Data'
 
 function consume(d Data) returns int

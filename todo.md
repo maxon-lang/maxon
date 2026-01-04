@@ -20,6 +20,7 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - parser needs to be strict about new lines
 
 ## TODO
+- // Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
 - implement swift inspired stdlib File support
 - see if we can/should get rid of MIR arrays, and also strings use StaticArray
 - platform specific optimization for runtime

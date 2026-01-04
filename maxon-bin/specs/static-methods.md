@@ -40,7 +40,7 @@ Static methods are commonly used for:
 <!-- test: static-method-basic -->
 ```maxon
 type Box
-    var value int
+    export var value int
 
     static function make(v int) returns Box
         return Box{value: v}
@@ -77,7 +77,7 @@ end 'main'
 <!-- test: export-static-method -->
 ```maxon
 type Factory
-    var id int
+    export var id int
 
     export static function create(val int) returns Factory
         return Factory{id: val}

@@ -1,0 +1,38 @@
+// Test: export-var-fields.export-var-write.1
+type Value
+    export var n int
+
+    static function create() returns Self
+        return Value{n: 10}
+    end 'create'
+end 'Value'
+
+function main() returns int
+    var v = Value.create()
+    v.n = 42
+    return v.n
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %v = alloca.sized ptr 8
+    %tmp_call = call ptr @Value$create(%v)
+    %tmp_fieldptr = getfieldptr ptr %v 0
+    %tmp_const = const.i64 i64 42
+    store %tmp_fieldptr %tmp_const
+    ret %tmp_const
+}
+
+function Value$create() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    memset %tmp_param 0 8
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_const = const.i64 i64 10
+    store %tmp_fieldptr %tmp_const
+    ret %tmp_param
+}
+
+---

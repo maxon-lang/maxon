@@ -17,13 +17,13 @@ Structs can contain other structs as fields. The compiler must correctly compute
 <!-- test: nested-struct-simple -->
 ```maxon
 type Inner
-    var x int
-    var y int
+    export var x int
+    export var y int
 end 'Inner'
 
 type Outer
-    var inner Inner
-    var z int
+    export var inner Inner
+    export var z int
 end 'Outer'
 
 function main() returns int
@@ -39,11 +39,11 @@ end 'main'
 <!-- test: nested-struct-returned -->
 ```maxon
 type Inner
-    var value int
+    export var value int
 end 'Inner'
 
 type Outer
-    var inner Inner
+    export var inner Inner
 end 'Outer'
 
 function makeOuter() returns Outer
@@ -63,15 +63,15 @@ end 'main'
 <!-- test: deeply-nested-struct -->
 ```maxon
 type Level1
-    var value int
+    export var value int
 end 'Level1'
 
 type Level2
-    var inner Level1
+    export var inner Level1
 end 'Level2'
 
 type Level3
-    var inner Level2
+    export var inner Level2
 end 'Level3'
 
 function main() returns int
@@ -88,13 +88,13 @@ end 'main'
 <!-- test: struct-with-multiple-nested-fields -->
 ```maxon
 type Point
-    var x int
-    var y int
+    export var x int
+    export var y int
 end 'Point'
 
 type Line
-    var start Point
-    var finish Point
+    export var start Point
+    export var finish Point
 end 'Line'
 
 function main() returns int

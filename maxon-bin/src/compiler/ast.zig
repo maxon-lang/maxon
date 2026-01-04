@@ -80,6 +80,7 @@ pub const FieldDecl = struct {
     name: []const u8,
     type_expr: TypeExpr,
     is_mutable: bool,
+    is_export: bool = false, // Whether field is accessible outside the type
     default_value: ?*const Expression = null, // Optional default value for field
 };
 

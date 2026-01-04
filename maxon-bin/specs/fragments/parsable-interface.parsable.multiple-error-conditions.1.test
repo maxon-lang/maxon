@@ -1,0 +1,169 @@
+// Test: parsable-interface.parsable.multiple-error-conditions.1
+// Parsable can throw different errors for different conditions
+interface Parsable
+    static function fromString(input String) returns Self throws Error
+end 'Parsable'
+
+enum MoneyParseError int is Error
+    InvalidFormat = 1
+    NegativeValue = 2
+end 'MoneyParseError'
+
+type Money
+    export var cents int
+
+    static function Parsable.fromString(input String) returns Self throws MoneyParseError
+        if input.byteLength() == 0 'empty'
+            throw MoneyParseError.InvalidFormat
+        end 'empty'
+
+        if input.startsWith("-") 'negative'
+            throw MoneyParseError.NegativeValue
+        end 'negative'
+
+        return Money{cents: input.byteLength()}
+    end 'fromString'
+end 'Money'
+
+function main() returns int
+    do 'parse'
+        var price = try Money.fromString("-50")
+        return price.cents
+    end 'parse' catch (e MoneyParseError) 'err'
+        return 99
+    end 'err'
+end 'main'
+---
+ExitCode: 99
+---
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 64
+    %tmp_alloca.1 = alloca.sized ptr 16
+    %tmp_alloca.2 = alloca.sized ptr 24
+    %tmp_const = const.i64 i64 4
+    %tmp_heap = heap.alloc ptr %tmp_const tag="string buffer"
+    %tmp_const.1 = const.i64 i64 0
+    %6 = getelemptr ptr %tmp_heap %tmp_const.1 elemsize=1
+    %tmp_const.2 = const.i8 i8 45
+    store.i8 %6 %tmp_const.2
+    %tmp_const.3 = const.i64 i64 1
+    %9 = getelemptr ptr %tmp_heap %tmp_const.3 elemsize=1
+    %tmp_const.4 = const.i8 i8 53
+    store.i8 %9 %tmp_const.4
+    %tmp_const.5 = const.i64 i64 2
+    %12 = getelemptr ptr %tmp_heap %tmp_const.5 elemsize=1
+    %tmp_const.6 = const.i8 i8 48
+    store.i8 %12 %tmp_const.6
+    %tmp_const.7 = const.i64 i64 3
+    %15 = getelemptr ptr %tmp_heap %tmp_const.7 elemsize=1
+    %tmp_const.8 = const.i8 i8 0
+    store.i8 %15 %tmp_const.8
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 0
+    store %tmp_fieldptr %tmp_heap
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 8
+    %tmp_const.9 = const.i32 i32 3
+    store.i32 %tmp_fieldptr.1 %tmp_const.9
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.2 12
+    %tmp_const.10 = const.i32 i32 13
+    store.i32 %tmp_fieldptr.2 %tmp_const.10
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.2 16
+    %tmp_const.11 = const.i32 i32 0
+    store.i32 %tmp_fieldptr.3 %tmp_const.11
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 20
+    %tmp_const.12 = const.i32 i32 0
+    store.i32 %tmp_fieldptr.4 %tmp_const.12
+    %tmp_alloca.3 = alloca.sized ptr 32
+    %tmp_call = call ptr @String$init(%tmp_alloca.3, %tmp_alloca.2)
+    %tmp_call.1 = call ptr @Money$fromString(%tmp_alloca.1, %tmp_alloca.3)
+    %tmp_load = load i64 %tmp_alloca.1
+    %tmp_const.13 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.13
+    br.cond %tmp_icmp @block1 @block2
+try_success:
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.1 8
+    %tmp_alloca.4 = alloca ptr
+    store %tmp_alloca.4 %tmp_fieldptr.5
+    br @block3
+try_propagate:
+    memcpy %tmp_alloca %tmp_alloca.1 64
+    br @block4
+try_merge:
+    %price = load ptr %tmp_alloca.4
+    %tmp_fieldptr.6 = getfieldptr ptr %price 0
+    %tmp_load.2 = load i64 %tmp_fieldptr.6
+    ret %tmp_load.2
+    br @block6
+catch_dispatch:
+    br @block5
+;“r?¥Ä:
+    %tmp_const.14 = const.i64 i64 99
+    ret %tmp_const.14
+    br @block6
+do_end:
+}
+
+function Money$fromString() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %input = param ptr 1
+    %tmp_call = call i64 @String$byteLength(%input)
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_call %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 1
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr %tmp_const.1
+    ret %tmp_param
+end:
+    %tmp_alloca = alloca.sized ptr 24
+    %tmp_const.3 = const.i64 i64 2
+    %tmp_heap = heap.alloc ptr %tmp_const.3 tag="string buffer"
+    %tmp_const.4 = const.i64 i64 0
+    %12 = getelemptr ptr %tmp_heap %tmp_const.4 elemsize=1
+    %tmp_const.5 = const.i8 i8 45
+    store.i8 %12 %tmp_const.5
+    %tmp_const.6 = const.i64 i64 1
+    %15 = getelemptr ptr %tmp_heap %tmp_const.6 elemsize=1
+    %tmp_const.7 = const.i8 i8 0
+    store.i8 %15 %tmp_const.7
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 0
+    store %tmp_fieldptr.1 %tmp_heap
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca 8
+    %tmp_const.8 = const.i32 i32 1
+    store.i32 %tmp_fieldptr.2 %tmp_const.8
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca 12
+    %tmp_const.9 = const.i32 i32 5
+    store.i32 %tmp_fieldptr.3 %tmp_const.9
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca 16
+    %tmp_const.10 = const.i32 i32 0
+    store.i32 %tmp_fieldptr.4 %tmp_const.10
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca 20
+    %tmp_const.11 = const.i32 i32 0
+    store.i32 %tmp_fieldptr.5 %tmp_const.11
+    %tmp_alloca.1 = alloca.sized ptr 32
+    %tmp_call.1 = call ptr @String$init(%tmp_alloca.1, %tmp_alloca)
+    %tmp_call.2 = call i64 @String$startsWith(%input, %tmp_alloca.1)
+    br.cond %tmp_call.2 @block3 @block4
+then:
+    %tmp_const.12 = const.i64 i64 2
+    %tmp_const.13 = const.i64 i64 1
+    store %tmp_param %tmp_const.13
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.6 %tmp_const.12
+    ret %tmp_param
+end:
+    %tmp_const.14 = const.i64 i64 0
+    store %tmp_param %tmp_const.14
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_param 8
+    memset %tmp_fieldptr.7 0 8
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_fieldptr.7 0
+    %tmp_call.3 = call i64 @String$byteLength(%input)
+    store %tmp_fieldptr.8 %tmp_call.3
+    ret %tmp_param
+}
+
+---

@@ -10,6 +10,10 @@ export type StringIndex is Equatable, Comparable
 		return _charIndex
 	end 'charIndex'
 
+	export function bytePos() returns int
+		return _bytePos
+	end 'bytePos'
+
 	function Equatable.equals(other StringIndex) returns bool
 		return _charIndex == other._charIndex
 	end 'equals'
@@ -127,13 +131,13 @@ export type String is Hashable, Equatable, Iterable with Character
 	// Use end_= for end position, or length= for character count
 	export function slice(start StringIndex, end_ StringIndex or nil = nil, length int or nil = nil) returns String
 		if let len = length 'has_length'
-			var endBytePos = graphemeOffsetToBytePos(_managed, start._bytePos, len)
-			return __string_slice(_managed, start._bytePos, endBytePos)
+			var endBytePos = graphemeOffsetToBytePos(_managed, start.bytePos(), len)
+			return __string_slice(_managed, start.bytePos(), endBytePos)
 		end 'has_length'
 		if let endIdx = end_ 'has_end'
-			return __string_slice(_managed, start._bytePos, endIdx._bytePos)
+			return __string_slice(_managed, start.bytePos(), endIdx.bytePos())
 		end 'has_end'
-		return __string_slice(_managed, start._bytePos, __string_len(_managed))
+		return __string_slice(_managed, start.bytePos(), __string_len(_managed))
 	end 'slice'
 
 	// View methods

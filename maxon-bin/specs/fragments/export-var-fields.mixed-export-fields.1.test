@@ -1,0 +1,62 @@
+// Test: export-var-fields.mixed-export-fields.1
+type Box
+    export var value int
+    var secret int
+
+    static function create(v int, s int) returns Self
+        return Box{value: v, secret: s}
+    end 'create'
+
+    function getSecret() returns int
+        return secret
+    end 'getSecret'
+end 'Box'
+
+function main() returns int
+    var b = Box.create(20, 22)
+    return b.value + b.getSecret()
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %b = alloca.sized ptr 16
+    %tmp_const = const.i64 i64 20
+    %tmp_const.1 = const.i64 i64 22
+    %tmp_call = call ptr @Box$create(%b, %tmp_const, %tmp_const.1)
+    %tmp_fieldptr = getfieldptr ptr %b 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_call.1 = call i64 @Box$getSecret(%b)
+    %tmp_add = add i64 %tmp_load %tmp_call.1
+    ret %tmp_add
+}
+
+function Box$create() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %v = param i64 1
+    %v.1 = alloca ptr
+    store %v.1 %v
+    %s = param i64 2
+    %s.1 = alloca ptr
+    store %s.1 %s
+    memset %tmp_param 0 16
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_load = load i64 %v.1
+    store %tmp_fieldptr %tmp_load
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
+    %tmp_load.1 = load i64 %s.1
+    store %tmp_fieldptr.1 %tmp_load.1
+    ret %tmp_param
+}
+
+function Box$getSecret() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+---

@@ -1,0 +1,45 @@
+// Test: parsable-interface.parsable.type-implements-parsable.1
+// Type can implement Parsable with throwing static method
+interface Parsable
+    static function fromString(input String) returns Self throws Error
+end 'Parsable'
+
+enum ParseError int is Error
+    Invalid = 1
+end 'ParseError'
+
+type Value
+    var n int
+
+    static function Parsable.fromString(input String) returns Self throws ParseError
+        return Value{n: input.byteLength()}
+    end 'fromString'
+end 'Value'
+
+function main() returns int
+    return 0
+end 'main'
+---
+ExitCode: 0
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    ret %tmp_const
+}
+
+function Value$fromString() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %input = param ptr 1
+    %tmp_const = const.i64 i64 0
+    store %tmp_param %tmp_const
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
+    memset %tmp_fieldptr 0 8
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 0
+    %tmp_call = call i64 @String$byteLength(%input)
+    store %tmp_fieldptr.1 %tmp_call
+    ret %tmp_param
+}
+
+---

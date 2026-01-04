@@ -144,7 +144,7 @@ end 'main'
 <!-- test: method-named-arg -->
 ```maxon
 type Counter
-    var value int
+    export var value int
 
     function add(amount int) returns Counter
         return Counter{value: value + amount}

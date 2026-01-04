@@ -124,6 +124,7 @@ pub const FieldInfo = struct {
     size: i32,
     value_type: ValueType,
     is_mutable: bool = true,
+    is_export: bool = false, // Whether field is accessible outside the type
 
     pub fn irType(self: FieldInfo) ir.Type {
         return self.value_type.toPrimitiveType();

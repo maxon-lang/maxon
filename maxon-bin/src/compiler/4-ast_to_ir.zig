@@ -2431,6 +2431,7 @@ pub const AstToIr = struct {
                 .size = field_size,
                 .value_type = value_type,
                 .is_mutable = field.is_mutable,
+                .is_export = field.is_export,
             };
             offset += field_size;
         }
@@ -3713,6 +3714,14 @@ pub const AstToIr = struct {
                         // Initialize struct at offset 8 (after the tag)
                         const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
                         try self.initStructInto(expr.struct_init, value_ptr);
+                    } else if (self.current_func_throws_type != null) {
+                        // Returning struct init from throwing function - wrap in success result
+                        // Write tag = 0 (success) first
+                        const zero = try self.func().emitConstI64(0);
+                        try self.func().emitStore(sret, zero);
+                        // Initialize struct at offset 8 (after the tag)
+                        const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
+                        try self.initStructInto(expr.struct_init, value_ptr);
                     } else {
                         // Initialize struct directly into sret buffer (no intermediate copy)
                         try self.initStructInto(expr.struct_init, sret);
@@ -4045,6 +4054,17 @@ pub const AstToIr = struct {
 
         const struct_info = try self.lookupStructInfo(type_name);
         const field_info = try self.lookupField(struct_info, assign.field_name);
+
+        // Check field visibility: unexported fields can only be accessed within the type's methods
+        const is_inside_type = self.current_type_name != null and std.mem.eql(u8, self.current_type_name.?, type_name);
+        if (!field_info.is_export and !is_inside_type) {
+            const msg = std.fmt.allocPrint(self.allocator, "{s}' outside of type '{s}", .{ assign.field_name, type_name }) catch {
+                self.reportError(.E050, assign.field_name);
+                return error.SemanticError;
+            };
+            self.reportError(.E050, msg);
+            return error.SemanticError;
+        }
 
         // Check if field is mutable
         if (!field_info.is_mutable) {
@@ -7473,11 +7493,43 @@ pub const AstToIr = struct {
         defer deferred.deinit();
         deferred.deferBlocks(self, 2);
 
+        // Get success type info from error union
+        const success_type: types.ValueType = if (result_typed.ty == .error_union_type) blk: {
+            const eu_info = result_typed.ty.error_union_type;
+            if (eu_info.success_struct_type) |struct_name| {
+                break :blk .{ .struct_type = struct_name };
+            } else {
+                // Primitive success type - infer from IR type
+                const prim_name: []const u8 = switch (eu_info.success_type) {
+                    .i64, .i32 => "int",
+                    .i8 => "byte",
+                    .f64 => "float",
+                    .ptr => "ptr",
+                    .void => "void",
+                };
+                break :blk .{ .primitive = prim_name };
+            }
+        } else .{ .primitive = "int" };
+
         // Success block: extract value and store for later use
-        const result_ptr = try self.func().emitAlloca(.i64);
         const value_ptr = try self.func().emitGetFieldPtr(result_typed.value, 8);
-        const success_value = try self.func().emitLoad(value_ptr, .i64);
-        try self.func().emitStore(result_ptr, success_value);
+        const is_struct_type = success_type == .struct_type;
+
+        // For struct types, we return the pointer directly (data is embedded in error union)
+        // For primitives, we load the value and store in a result alloca
+        const result_ptr = if (is_struct_type)
+            try self.func().emitAlloca(.ptr)
+        else
+            try self.func().emitAlloca(.i64);
+
+        if (is_struct_type) {
+            // Store pointer to embedded struct data
+            try self.func().emitStore(result_ptr, value_ptr);
+        } else {
+            // Load primitive value
+            const success_value = try self.func().emitLoad(value_ptr, .i64);
+            try self.func().emitStore(result_ptr, success_value);
+        }
 
         try self.func().currentBlock().?.instructions.append(self.allocator, .{
             .op = .br,
@@ -7537,11 +7589,14 @@ pub const AstToIr = struct {
 
         // Merge block: load the success value
         try deferred.restore(self, 0);
-        const final_value = try self.func().emitLoad(result_ptr, .i64);
+        const final_value = if (is_struct_type)
+            try self.func().emitLoad(result_ptr, .ptr)
+        else
+            try self.func().emitLoad(result_ptr, .i64);
 
         return .{
             .value = final_value,
-            .ty = .{ .primitive = "int" }, // TODO: Get actual success type
+            .ty = success_type,
         };
     }
 
@@ -7722,6 +7777,18 @@ pub const AstToIr = struct {
 
         const struct_info = try self.lookupStructInfo(type_name);
         const field_info = try self.lookupField(struct_info, faccess.field_name);
+
+        // Check field visibility: unexported fields can only be accessed within the type's methods
+        const is_inside_type = self.current_type_name != null and std.mem.eql(u8, self.current_type_name.?, type_name);
+        if (!field_info.is_export and !is_inside_type) {
+            const msg = std.fmt.allocPrint(self.allocator, "{s}' outside of type '{s}", .{ faccess.field_name, type_name }) catch {
+                self.reportError(.E050, faccess.field_name);
+                return error.SemanticError;
+            };
+            self.reportError(.E050, msg);
+            return error.SemanticError;
+        }
+
         const field_ptr = try self.func().emitGetFieldPtr(base.value, field_info.offset);
 
         // Struct fields and optional fields are embedded (return ptr directly); others are loaded
@@ -9604,9 +9671,14 @@ pub const AstToIr = struct {
             vt == .optional_type
         else
             false;
+        // Check if return type is error union (needs sret for error union wrapper)
+        const returns_error_union = if (func_info.return_value_type) |vt|
+            vt == .error_union_type
+        else
+            false;
 
         // Determine argument layout
-        const returns_struct = func_info.return_type_name != null or returns_optional;
+        const returns_struct = func_info.return_type_name != null or returns_optional or returns_error_union;
         const has_self = self_value != null;
         const sret_offset: usize = if (returns_struct) 1 else 0;
         const self_offset: usize = if (has_self) 1 else 0;
@@ -9615,12 +9687,22 @@ pub const AstToIr = struct {
         const args = try self.allocator.alloc(ir.Value, num_args);
         var arg_idx: usize = 0;
 
-        // Sret buffer as first arg if returning struct or optional
+        // Sret buffer as first arg if returning struct, optional, or error union
         var sret_buffer: ?ir.Value = null;
         if (returns_struct) {
             if (returns_optional) {
                 const opt_info = func_info.return_value_type.?.optional_type;
                 sret_buffer = try self.func().emitAllocaSized(self.getOptionalSize(opt_info));
+            } else if (returns_error_union) {
+                // Error union size = 8 (tag) + max(success_size, error_size)
+                const eu_info = func_info.return_value_type.?.error_union_type;
+                const success_size: i32 = if (eu_info.success_struct_type) |sn|
+                    if (self.type_map.get(sn)) |ti| if (ti == .struct_type) ti.struct_type.size else 8 else 8
+                else
+                    8;
+                // Error enums are always 8 bytes (i64 ordinal)
+                const error_size: i32 = 8;
+                sret_buffer = try self.func().emitAllocaSized(8 + @max(success_size, error_size));
             } else {
                 const struct_info = try self.lookupStructInfo(func_info.return_type_name.?);
                 sret_buffer = try self.func().emitAllocaSized(struct_info.size);
@@ -9717,6 +9799,9 @@ pub const AstToIr = struct {
         // Return appropriate value
         if (sret_buffer) |buf| {
             if (returns_optional) {
+                return .{ .value = buf, .ty = func_info.return_value_type.? };
+            }
+            if (returns_error_union) {
                 return .{ .value = buf, .ty = func_info.return_value_type.? };
             }
             return .{ .value = buf, .ty = .{ .struct_type = func_info.return_type_name.? } };
@@ -10166,10 +10251,23 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 }
             }
 
-            const return_value_type: ?ValueType = if (method.return_type) |rt|
+            // Calculate return_value_type, accounting for throws
+            var return_value_type: ?ValueType = if (method.return_type) |rt|
                 getValueTypeFromTypeExpr(rt)
             else
                 null;
+
+            // If method throws, wrap return type in error_union_type
+            if (method.throws_type) |error_type| {
+                const success_ir_type: ir.Type = if (method.return_type) |rt| getIrTypeFromTypeExpr(rt) else .void;
+                return_value_type = .{
+                    .error_union_type = .{
+                        .success_type = success_ir_type,
+                        .success_struct_type = return_type_name,
+                        .error_enum_type = error_type,
+                    },
+                };
+            }
 
             // Extract parameter types for methods (including names and default values for named args)
             // For instance methods, include the implicit self parameter to match buildMethodFuncInfo
@@ -10186,10 +10284,13 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 };
             }
 
+            // For throwing methods, update return_type to ptr (sret)
+            const effective_return_type: ir.Type = if (method.throws_type != null) .ptr else return_type;
+
             // Methods inherit export status from their containing type
             try signatures.append(allocator, .{
                 .name = mangled_name,
-                .return_type = return_type,
+                .return_type = effective_return_type,
                 .return_type_name = return_type_name,
                 .return_value_type = return_value_type,
                 .is_exported = type_decl.is_export or method.is_export,

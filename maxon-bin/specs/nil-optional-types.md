@@ -384,8 +384,8 @@ end 'main'
 <!-- test: optional-struct-field-nil -->
 ```maxon
 type Person
-	var name String
-	var age int or nil
+	export var name String
+	export var age int or nil
 end 'Person'
 
 function main() returns int
@@ -404,8 +404,8 @@ end 'main'
 <!-- test: optional-struct-field-value -->
 ```maxon
 type Person
-	var name String
-	var age int or nil
+	export var name String
+	export var age int or nil
 end 'Person'
 
 function main() returns int
@@ -424,8 +424,8 @@ end 'main'
 <!-- test: optional-struct-field-implicit-wrap -->
 ```maxon
 type Point
-	var x int
-	var y int or nil
+	export var x int
+	export var y int or nil
 end 'Point'
 
 function main() returns int

@@ -1,0 +1,40 @@
+// Test: export-var-fields.export-var-basic.1
+type Value
+    export var n int
+    var private int
+
+    static function create() returns Self
+        return Value{n: 42, private: 100}
+    end 'create'
+end 'Value'
+
+function main() returns int
+    var v = Value.create()
+    return v.n
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %v = alloca.sized ptr 16
+    %tmp_call = call ptr @Value$create(%v)
+    %tmp_fieldptr = getfieldptr ptr %v 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+function Value$create() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    memset %tmp_param 0 16
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_const = const.i64 i64 42
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
+    %tmp_const.1 = const.i64 i64 100
+    store %tmp_fieldptr.1 %tmp_const.1
+    ret %tmp_param
+}
+
+---

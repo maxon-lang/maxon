@@ -17,8 +17,8 @@ Arrays can contain struct values. Each element is a complete copy of the struct.
 <!-- test: array-of-structs-literal -->
 ```maxon
 type Point
-    var x int
-    var y int
+    export var x int
+    export var y int
 end 'Point'
 
 function main() returns int
@@ -42,8 +42,8 @@ end 'main'
 <!-- test: array-of-structs-indexed-access -->
 ```maxon
 type Pair
-    var first int
-    var second int
+    export var first int
+    export var second int
 end 'Pair'
 
 function main() returns int

@@ -251,12 +251,25 @@ pub const Parser = struct {
             }
 
             // Check for method: export? static? function ...
-            if (self.check(.@"export") or self.check(.static) or self.check(.function)) {
+            // export followed by static or function is a method
+            // export followed by var or let is an exported field
+            if (self.check(.@"export")) {
+                if (self.peek(1)) |next| {
+                    if (next.type == .static or next.type == .function) {
+                        try methods.append(self.allocator, try self.parseMethodDecl());
+                        continue;
+                    }
+                    // Otherwise fall through to field parsing (export var/let)
+                }
+            } else if (self.check(.static) or self.check(.function)) {
                 try methods.append(self.allocator, try self.parseMethodDecl());
                 continue;
             }
 
-            // Parse field: let/var name [type] [= default_value]
+            // Parse field: export? let/var name [type] [= default_value]
+            const field_is_export = self.check(.@"export");
+            if (field_is_export) _ = self.advance();
+
             const is_mutable = self.check(.@"var");
             if (!is_mutable and !self.check(.let)) {
                 self.reportErrorWithDetails(.E002, self.current().text);
@@ -299,6 +312,7 @@ pub const Parser = struct {
                 .name = field_name.text,
                 .type_expr = field_type,
                 .is_mutable = is_mutable,
+                .is_export = field_is_export,
                 .default_value = default_value,
             });
 

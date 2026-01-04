@@ -51,6 +51,7 @@ pub const ErrorCode = enum {
     E047, // duplicate argument
     E048, // positional argument after named argument
     E049, // missing required argument
+    E050, // unexported field access
 
     const Info = struct {
         code: []const u8,
@@ -107,6 +108,7 @@ pub const ErrorCode = enum {
         .{ .code = "E047", .message = "duplicate argument" },
         .{ .code = "E048", .message = "All positional arguments must come before named arguments" },
         .{ .code = "E049", .message = "missing required argument" },
+        .{ .code = "E050", .message = "cannot access unexported field" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

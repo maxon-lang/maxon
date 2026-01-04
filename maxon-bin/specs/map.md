@@ -336,7 +336,7 @@ end 'main'
 <!-- test: map-type-in-field -->
 ```maxon
 type Container
-    var data Map from int to int
+    export var data Map from int to int
 end 'Container'
 
 function main() returns int

@@ -17,8 +17,8 @@ Structs returned from functions must have their data survive beyond the function
 <!-- test: return-struct-with-computed-fields -->
 ```maxon
 type Result
-    var sum int
-    var product int
+    export var sum int
+    export var product int
 end 'Result'
 
 function compute(a int, b int) returns Result
@@ -37,7 +37,7 @@ end 'main'
 <!-- test: pass-struct-to-function-and-return -->
 ```maxon
 type Counter
-    var value int
+    export var value int
 end 'Counter'
 
 function increment(c Counter) returns Counter
@@ -57,7 +57,7 @@ end 'main'
 <!-- test: multiple-struct-returns -->
 ```maxon
 type Value
-    var n int
+    export var n int
 end 'Value'
 
 function step1() returns Value
