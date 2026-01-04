@@ -21,11 +21,12 @@
 // end 'check'
 // ```
 
-export type Set uses Element is InitableFromArrayLiteral with Element
+export type Set uses Element is Sized, InitableFromArrayLiteral with Element, Iterable with Element, Unique with Element
 	var elements Array of Element   // Element storage
 	var states Array of int         // Slot states: 0=empty, 1=occupied, 2=deleted
 	var count int                   // Number of occupied entries
 	var capacity int                // Total slots
+	var iterIndex int               // Current iteration position
 
 	// InitableFromArrayLiteral conformance - initialize Set from array literal
 	// Called by the compiler for `Set from [1, 2, 3]` syntax
@@ -57,7 +58,7 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 	/// Insert an element into the set
 	/// If the element already exists, this is a no-op
 	/// Automatically resizes the set when load factor exceeds 75%
-	export function insert(element Element)
+	export function Unique.insert(element Element)
 		// Initialize if empty struct was created with zero capacity
 		if capacity == 0 'init_empty'
 			var newElements = Array of 16 Element
@@ -129,7 +130,7 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 	end 'insert'
 
 	/// Check if element exists in the set
-	export function contains(element Element) returns bool
+	export function Unique.contains(element Element) returns bool
 		// Empty set contains nothing
 		if capacity == 0 'empty_check'
 			return false
@@ -168,7 +169,7 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 	end 'contains'
 
 	/// Remove element from set, returns true if element was present
-	export function remove(element Element) returns bool
+	export function Unique.remove(element Element) returns bool
 		// Empty set has nothing to remove
 		if capacity == 0 'empty_check'
 			return false
@@ -209,9 +210,25 @@ export type Set uses Element is InitableFromArrayLiteral with Element
 	end 'remove'
 
 	/// Get number of elements in the set
-	export function count() returns int
+	export function Sized.count() returns int
 		return count
 	end 'count'
+
+	/// Iterate to the next element in the set
+	function Iterable.next() returns Element or nil
+		while iterIndex < capacity 'scan'
+			var state = 0
+			if let s = states[iterIndex] 'unwrap'
+				state = s
+			end 'unwrap'
+			var idx = iterIndex
+			iterIndex = iterIndex + 1
+			if state == 1 'occupied'
+				return elements[idx]
+			end 'occupied'
+		end 'scan'
+		return nil
+	end 'next'
 
 	/// Get current capacity (total number of slots)
 	export function capacity() returns int

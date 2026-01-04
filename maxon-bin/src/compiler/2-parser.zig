@@ -360,29 +360,47 @@ pub const Parser = struct {
         var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
         errdefer type_args.deinit(self.allocator);
 
-        // Parse optional: with TypeArg, TypeArg2, ...
+        // Parse optional: with TypeArg or with (TypeArg1, TypeArg2)
         if (self.check(.with)) {
             _ = self.advance();
-            const first_arg = try self.expectTypeName();
-            try type_args.append(self.allocator, first_arg);
 
-            // Additional type args separated by commas (stop at newline or next conformance)
-            while (self.check(.comma)) {
-                // Peek to check if this comma separates type args or conformances
-                if (self.peek(1)) |next| {
-                    // If next is an identifier or type keyword, check if after that is 'with' (new conformance)
-                    if (next.type == .identifier or self.isTypeKeyword(next.type)) {
-                        if (self.peek(2)) |after_ident| {
-                            if (after_ident.type == .with) {
-                                // This comma separates conformances, not type args
-                                break;
+            // Check for parenthesized type args: with (X, Y)
+            if (self.check(.lparen)) {
+                _ = self.advance(); // consume '('
+                const first_arg = try self.parseConformanceTypeArg();
+                try type_args.append(self.allocator, first_arg);
+
+                while (self.check(.comma)) {
+                    _ = self.advance(); // consume comma
+                    const arg = try self.parseConformanceTypeArg();
+                    try type_args.append(self.allocator, arg);
+                }
+
+                _ = try self.expect(.rparen); // consume ')'
+            } else {
+                // Non-parenthesized: with TypeArg, TypeArg2, ...
+                // Duplicate the string so all type_args are consistently allocated
+                const first_arg = try self.expectTypeName();
+                try type_args.append(self.allocator, try self.allocator.dupe(u8, first_arg));
+
+                // Additional type args separated by commas (stop at newline or next conformance)
+                while (self.check(.comma)) {
+                    // Peek to check if this comma separates type args or conformances
+                    if (self.peek(1)) |next| {
+                        // If next is an identifier or type keyword, check if after that is 'with' (new conformance)
+                        if (next.type == .identifier or self.isTypeKeyword(next.type)) {
+                            if (self.peek(2)) |after_ident| {
+                                if (after_ident.type == .with) {
+                                    // This comma separates conformances, not type args
+                                    break;
+                                }
                             }
                         }
                     }
+                    _ = self.advance(); // consume comma
+                    const arg = try self.expectTypeName();
+                    try type_args.append(self.allocator, try self.allocator.dupe(u8, arg));
                 }
-                _ = self.advance(); // consume comma
-                const arg = try self.expectTypeName();
-                try type_args.append(self.allocator, arg);
             }
         }
 
@@ -390,6 +408,50 @@ pub const Parser = struct {
             .interface_name = interface_name.text,
             .type_args = try type_args.toOwnedSlice(self.allocator),
         };
+    }
+
+    /// Parse a type argument in a conformance clause, supporting nested generics like "Pair with (Key, Value)"
+    fn parseConformanceTypeArg(self: *Parser) ![]const u8 {
+        var result: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer result.deinit(self.allocator);
+
+        // Parse first type name
+        const first = try self.expectTypeName();
+        try result.appendSlice(self.allocator, first);
+
+        // Check for nested "with" which indicates a generic type like "Pair with (Key, Value)"
+        if (self.check(.with)) {
+            _ = self.advance();
+            try result.appendSlice(self.allocator, " with ");
+
+            if (self.check(.lparen)) {
+                _ = self.advance();
+                try result.append(self.allocator, '(');
+
+                // Parse first nested type arg
+                const nested1 = try self.parseConformanceTypeArg();
+                defer self.allocator.free(nested1);
+                try result.appendSlice(self.allocator, nested1);
+
+                // Parse additional nested type args
+                while (self.check(.comma)) {
+                    _ = self.advance();
+                    try result.appendSlice(self.allocator, ", ");
+                    const nested = try self.parseConformanceTypeArg();
+                    defer self.allocator.free(nested);
+                    try result.appendSlice(self.allocator, nested);
+                }
+
+                _ = try self.expect(.rparen);
+                try result.append(self.allocator, ')');
+            } else {
+                // Single type arg without parens
+                const nested = try self.expectTypeName();
+                try result.appendSlice(self.allocator, nested);
+            }
+        }
+
+        return try result.toOwnedSlice(self.allocator);
     }
 
     /// Check if token type is a primitive type keyword

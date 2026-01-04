@@ -292,6 +292,8 @@ pub const AstToIr = struct {
     anon_closure_counter: u32 = 0,
     // Track function type allocations for cleanup (param_types slices and return_type pointers)
     function_type_allocs: std.ArrayListUnmanaged(FunctionTypeAlloc) = .{},
+    // Track temporary string allocations during type checking (freed in deinit)
+    allocated_type_strings: std.ArrayListUnmanaged([]const u8) = .{},
     // External type declarations pending conformance check (checked after interfaces are registered)
     pending_conformance_checks: std.ArrayListUnmanaged(*const ast.TypeDecl) = .{},
     // Error handling: the error type the current function throws (null if non-throwing)
@@ -912,6 +914,12 @@ pub const AstToIr = struct {
 
         self.temporary_strings.deinit(self.allocator);
         self.var_map.deinit(self.allocator);
+
+        // Free temporary type strings allocated during type checking
+        for (self.allocated_type_strings.items) |str| {
+            self.allocator.free(str);
+        }
+        self.allocated_type_strings.deinit(self.allocator);
 
         var type_iter = self.type_map.iterator();
         while (type_iter.next()) |entry| {
@@ -2011,7 +2019,9 @@ pub const AstToIr = struct {
             // Check that all required associated types are bound
             for (iface.associated_types, 0..) |assoc_type, i| {
                 if (i < conformance.type_args.len) {
-                    try type_bindings.put(self.allocator, assoc_type, conformance.type_args[i]);
+                    // Normalize "with" syntax to "of" syntax for type comparison
+                    const normalized = self.normalizeConformanceTypeArg(conformance.type_args[i]);
+                    try type_bindings.put(self.allocator, assoc_type, normalized);
                 } else {
                     // Missing type binding
                     const msg = std.fmt.allocPrint(self.allocator, "Type '{s}' does not define required associated type '{s}' from interface '{s}'", .{
@@ -2358,9 +2368,49 @@ pub const AstToIr = struct {
         }
     }
 
+    /// Normalize a conformance type arg string from "with" syntax to "of" syntax
+    /// e.g., "Pair with (Key, Value)" -> "Pair of Key Value"
+    fn normalizeConformanceTypeArg(self: *AstToIr, type_arg: []const u8) []const u8 {
+        // Find " with " in the string
+        if (std.mem.indexOf(u8, type_arg, " with ")) |with_pos| {
+            var result: std.ArrayListUnmanaged(u8) = .empty;
+            // Add base type
+            result.appendSlice(self.allocator, type_arg[0..with_pos]) catch return type_arg;
+            result.appendSlice(self.allocator, " of ") catch return type_arg;
+
+            // Parse the rest after " with "
+            var rest = type_arg[with_pos + 6 ..]; // skip " with "
+
+            // Remove parentheses and convert commas to spaces
+            if (rest.len > 0 and rest[0] == '(') {
+                rest = rest[1..];
+            }
+            if (rest.len > 0 and rest[rest.len - 1] == ')') {
+                rest = rest[0 .. rest.len - 1];
+            }
+
+            // Replace ", " with " "
+            var i: usize = 0;
+            while (i < rest.len) {
+                if (i + 1 < rest.len and rest[i] == ',' and rest[i + 1] == ' ') {
+                    result.append(self.allocator, ' ') catch return type_arg;
+                    i += 2;
+                } else {
+                    result.append(self.allocator, rest[i]) catch return type_arg;
+                    i += 1;
+                }
+            }
+
+            const owned = result.toOwnedSlice(self.allocator) catch return type_arg;
+            // Track allocation for cleanup in deinit
+            self.allocated_type_strings.append(self.allocator, owned) catch {};
+            return owned;
+        }
+        return type_arg;
+    }
+
     /// Resolve a type expression by substituting associated types and Self with their bound types
     fn resolveAssociatedTypeWithSelf(self: *AstToIr, type_expr: ast.TypeExpr, bindings: std.StringHashMapUnmanaged([]const u8), self_type: []const u8) []const u8 {
-        _ = self;
         return switch (type_expr) {
             .simple => |name| {
                 // Handle Self specially
@@ -2370,11 +2420,47 @@ pub const AstToIr = struct {
             },
             .generic => |g| {
                 if (std.mem.eql(u8, g.base_type, "Self")) return self_type;
-                return bindings.get(g.base_type) orelse g.base_type;
+                // Check if it's an associated type
+                if (bindings.get(g.base_type)) |bound| return bound;
+                // Build the full generic type string: "Base of Param1 Param2..."
+                var result: std.ArrayListUnmanaged(u8) = .empty;
+                result.appendSlice(self.allocator, g.base_type) catch return g.base_type;
+                if (g.type_args.len > 0) {
+                    result.appendSlice(self.allocator, " of ") catch return g.base_type;
+                    for (g.type_args, 0..) |param, i| {
+                        if (i > 0) result.append(self.allocator, ' ') catch return g.base_type;
+                        // Resolve each parameter (may be associated type like Key, Value)
+                        const resolved = bindings.get(param) orelse param;
+                        result.appendSlice(self.allocator, resolved) catch return g.base_type;
+                    }
+                }
+                const owned = result.toOwnedSlice(self.allocator) catch return g.base_type;
+                // Track allocation for cleanup in deinit
+                self.allocated_type_strings.append(self.allocator, owned) catch {};
+                return owned;
             },
             .optional => |wrapped| switch (wrapped.*) {
                 .simple => |name| if (std.mem.eql(u8, name, "Self")) self_type else bindings.get(name) orelse name,
-                .generic => |g| if (std.mem.eql(u8, g.base_type, "Self")) self_type else bindings.get(g.base_type) orelse g.base_type,
+                .generic => |g| {
+                    if (std.mem.eql(u8, g.base_type, "Self")) return self_type;
+                    // Check if it's an associated type
+                    if (bindings.get(g.base_type)) |bound| return bound;
+                    // Build the full generic type string for optional wrapped type
+                    var result: std.ArrayListUnmanaged(u8) = .empty;
+                    result.appendSlice(self.allocator, g.base_type) catch return g.base_type;
+                    if (g.type_args.len > 0) {
+                        result.appendSlice(self.allocator, " of ") catch return g.base_type;
+                        for (g.type_args, 0..) |param, i| {
+                            if (i > 0) result.append(self.allocator, ' ') catch return g.base_type;
+                            const resolved = bindings.get(param) orelse param;
+                            result.appendSlice(self.allocator, resolved) catch return g.base_type;
+                        }
+                    }
+                    const owned = result.toOwnedSlice(self.allocator) catch return g.base_type;
+                    // Track allocation for cleanup in deinit
+                    self.allocated_type_strings.append(self.allocator, owned) catch {};
+                    return owned;
+                },
                 .optional => "?",
                 .error_union => "error_union",
                 .function_type => "(fn)",

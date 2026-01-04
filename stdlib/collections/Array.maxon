@@ -2,7 +2,7 @@
 
 // Array is special-cased by the compiler for array literal initialization.
 // It receives __ManagedArray directly rather than going through InitableFromArrayLiteral.
-export type Array uses Element is Builtin, Collection with Element
+export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed with Element
 	var managed __ManagedArray  // Compiler-managed opaque array storage
 	var iterIndex int          // Current iteration position
 
@@ -22,7 +22,7 @@ export type Array uses Element is Builtin, Collection with Element
 	// =========================================================================
 
 	/// Get the number of elements in the array
-	export function Collection.count() returns int
+	export function Sized.count() returns int
 		return __managed_array_len(managed)
 	end 'count'
 
@@ -58,7 +58,7 @@ export type Array uses Element is Builtin, Collection with Element
 	// =========================================================================
 
 	/// Get element at index, or nil if out of bounds
-	export function Collection.get(index int) returns Element or nil
+	export function Indexed.get(index int) returns Element or nil
 		var len = __managed_array_len(managed)
 		if index < 0 'lower'
 			return nil
@@ -70,7 +70,7 @@ export type Array uses Element is Builtin, Collection with Element
 	end 'get'
 
 	/// Set element at index (no-op if index out of bounds)
-	export function Collection.set(index int, value Element)
+	export function Indexed.set(index int, value Element)
 		var len = __managed_array_len(managed)
 		if index >= 0 'lower'
 			if index < len 'upper'
@@ -80,7 +80,7 @@ export type Array uses Element is Builtin, Collection with Element
 	end 'set'
 
 	/// Transform each element with the given function
-	export function Collection.map(transform (Element) returns Element) returns Self
+	export function map(transform (Element) returns Element) returns Self
 		var len = __managed_array_len(managed)
 		var result = __managed_array_create(len)
 		var i = 0

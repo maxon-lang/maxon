@@ -233,12 +233,12 @@ pub fn runAllTests(
     // Test compile stdlib before running any tests to catch errors early
     std.debug.print("Validating stdlib compilation...\n", .{});
     blk: {
-        var temp_dir = std.fs.cwd().openDir("temp", .{}) catch |err| {
+        var temp_dir = std.fs.cwd().openDir("../temp", .{}) catch |err| {
             std.debug.print("Warning: Could not open temp directory: {}\n", .{err});
             break :blk;
         };
         defer temp_dir.close();
-        const temp_exe = "temp/stdlib_test.exe";
+        const temp_exe = "../temp/stdlib_test.exe";
 
         // Create a minimal test program that imports stdlib
         const test_source =
@@ -253,7 +253,7 @@ pub fn runAllTests(
         for (stdlib_modules, 0..) |mod, i| {
             sources[i] = mod;
         }
-        sources[stdlib_modules.len] = .{ .path = "temp/stdlib_test.maxon", .content = test_source };
+        sources[stdlib_modules.len] = .{ .path = "../temp/stdlib_test.maxon", .content = test_source };
 
         var compile_result: compiler.CompileResult = .{ .error_info = null };
         defer compile_result.deinit(allocator);

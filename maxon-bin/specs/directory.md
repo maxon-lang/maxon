@@ -69,10 +69,10 @@ Check if a path exists and is a directory.
 
 ```maxon
 function main() returns int
-    if Directory.exists("temp") 'check'
-        print("temp is a directory")
+    if Directory.exists("bin") 'check'
+        print("bin is a directory")
     end 'check' else 'nodir'
-        print("temp is not a directory")
+        print("bin is not a directory")
     end 'nodir'
     return 0
 end 'main'
@@ -95,7 +95,7 @@ Check if a path is a directory. Alias for `exists`.
 ```maxon
 function main() returns int
     do 'list'
-        let files = try Directory.list("temp")
+        let files = try Directory.list("bin")
         return files.count()
     end 'list' catch (e DirectoryError) 'err'
         return 0
@@ -130,7 +130,7 @@ Directory not found
 <!-- test: directory-exists -->
 ```maxon
 function main() returns int
-    if Directory.exists("temp") 'check'
+    if Directory.exists("bin") 'check'
         return 42
     end 'check'
     return 0
@@ -143,7 +143,7 @@ end 'main'
 <!-- test: directory-is-directory -->
 ```maxon
 function main() returns int
-    if Directory.isDirectory("temp") 'check'
+    if Directory.isDirectory("bin") 'check'
         return 42
     end 'check'
     return 0

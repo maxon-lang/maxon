@@ -989,6 +989,10 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
         allocator.free(type_decl.methods);
         // Free conformances and their type_args
         for (type_decl.conformances) |conformance| {
+            // Free each individual type_arg string (allocated by parseConformanceTypeArg)
+            for (conformance.type_args) |type_arg| {
+                allocator.free(type_arg);
+            }
             allocator.free(conformance.type_args);
         }
         allocator.free(type_decl.conformances);
@@ -997,9 +1001,33 @@ fn freeProgram(program: ast.Program, allocator: std.mem.Allocator) void {
     allocator.free(program.types);
 
     for (program.enums) |enum_decl| {
+        // Free enum members and their associated values
+        for (enum_decl.members) |member| {
+            allocator.free(member.associated_values);
+        }
         allocator.free(enum_decl.members);
+        // Free methods
+        for (enum_decl.methods) |method| {
+            for (method.params) |param| {
+                freeTypeExpr(param.type_expr, allocator);
+            }
+            allocator.free(method.params);
+            for (method.body) |stmt| {
+                freeStatementArgs(stmt, allocator);
+            }
+            allocator.free(method.body);
+            if (method.qualified_name) |qn| {
+                allocator.free(qn);
+            }
+            freeTypeExpr(method.return_type, allocator);
+        }
+        allocator.free(enum_decl.methods);
         // Free conformances and their type_args
         for (enum_decl.conformances) |conformance| {
+            // Free each individual type_arg string (allocated by parseConformanceTypeArg)
+            for (conformance.type_args) |type_arg| {
+                allocator.free(type_arg);
+            }
             allocator.free(conformance.type_args);
         }
         allocator.free(enum_decl.conformances);

@@ -52,6 +52,24 @@ export interface Iterable uses Element
 	function next() returns Element or nil
 end 'Iterable'
 
+// Sized - types that have a count/length
+export interface Sized
+    function count() returns int
+end 'Sized'
+
+// Indexed - types with integer-based positional access
+export interface Indexed uses Element
+    function get(index int) returns Element or nil
+    function set(index int, value Element)
+end 'Indexed'
+
+// Unique - set-like types that store unique elements
+export interface Unique uses Element
+    function insert(element Element)
+    function contains(element Element) returns bool
+    function remove(element Element) returns bool
+end 'Unique'
+
 // Stringable - enables custom types to participate in string interpolation
 // Built-in types (int, float, bool, byte, character, string) are handled by the
 // compiler directly and do not need to implement this interface.
@@ -67,18 +85,6 @@ export interface Subscriptable
 	function subscript(startIndex int, endIndex int) returns Self
 end 'Subscriptable'
 
-// Collection - types that support indexed access and functional operations
-// Extends Iterable to provide for-in loop support
-// Use get(index) and set(index, value) for element access
-// set() triggers copy-on-write for shared backing storage
-// map() transforms elements using a closure
-export interface Collection uses Element extends Iterable
-	function count() returns int
-	function get(index int) returns Element or nil
-	function set(index int, value Element)
-	function map(transform (Element) returns Element) returns Self
-end 'Collection'
-
 // Dictionary - types that map keys to values
 // Keys must implement Hashable and Equatable for lookup
 // Uses associated types for Key and Value
@@ -87,7 +93,6 @@ export interface Dictionary uses Key, Value
 	function get(key Key) returns Value or nil
 	function contains(key Key) returns bool
 	function remove(key Key) returns bool
-	function count() returns int
 end 'Dictionary'
 
 // InitableFromStringLiteral - types that can be initialized from string literals
