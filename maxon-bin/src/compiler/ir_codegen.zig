@@ -441,9 +441,6 @@ pub const IrCodegen = struct {
         // Generate main function first (entry point)
         if (module.getFunction("main")) |func| {
             try self.func_offsets.put(self.allocator, func.name, self.code.items.len);
-            if (func.alias) |alias| {
-                try self.func_offsets.put(self.allocator, alias, self.code.items.len);
-            }
             try self.generateFunction(func);
         }
 
@@ -451,9 +448,6 @@ pub const IrCodegen = struct {
         for (module.functions.items) |*func| {
             if (!std.mem.eql(u8, func.name, "main")) {
                 try self.func_offsets.put(self.allocator, func.name, self.code.items.len);
-                if (func.alias) |alias| {
-                    try self.func_offsets.put(self.allocator, alias, self.code.items.len);
-                }
                 try self.generateFunction(func);
             }
         }

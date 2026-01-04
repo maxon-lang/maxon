@@ -2947,16 +2947,7 @@ pub const AstToIr = struct {
         }
 
         try self.func_map.put(self.allocator, mangled_name, func_info);
-
-        // For interface methods, also register under qualified name (e.g., TypeName$Stringable.toString)
-        if (method.qualified_name) |qualified| {
-            const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
-            try self.module.trackString(qualified_mangled);
-            try self.func_map.put(self.allocator, qualified_mangled, func_info);
-            debug.astToIr("Registered interface method '{s}' as '{s}' and '{s}'", .{ method.name, mangled_name, qualified_mangled });
-        } else {
-            debug.astToIr("Registered method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, func_info.return_type.toIrName() });
-        }
+        debug.astToIr("Registered method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, func_info.return_type.toIrName() });
     }
 
     /// Register method signature only (for lazy generation of monomorphized types).
@@ -2977,23 +2968,6 @@ pub const AstToIr = struct {
 
         // Check if method is already registered
         if (self.func_map.contains(mangled_name)) {
-            // Still need to check if interface qualified name needs registering
-            if (method.qualified_name) |qualified| {
-                const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
-                try self.module.trackString(qualified_mangled);
-                if (!self.func_map.contains(qualified_mangled)) {
-                    const func_info = self.func_map.get(mangled_name).?;
-                    try self.func_map.put(self.allocator, qualified_mangled, func_info);
-                    // Also add to pending_methods if original is pending
-                    if (!func_info.ir_generated) {
-                        try self.pending_methods.put(self.allocator, qualified_mangled, .{
-                            .type_name = type_name,
-                            .method = method,
-                            .generic_bindings = bindings,
-                        });
-                    }
-                }
-            }
             return;
         }
 
@@ -3007,21 +2981,7 @@ pub const AstToIr = struct {
             .method = method,
             .generic_bindings = bindings,
         });
-
-        // For interface methods, also register under qualified name
-        if (method.qualified_name) |qualified| {
-            const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
-            try self.module.trackString(qualified_mangled);
-            try self.func_map.put(self.allocator, qualified_mangled, func_info);
-            try self.pending_methods.put(self.allocator, qualified_mangled, .{
-                .type_name = type_name,
-                .method = method,
-                .generic_bindings = bindings,
-            });
-            debug.astToIr("Registered lazy method '{s}' as '{s}' and '{s}'", .{ method.name, mangled_name, qualified_mangled });
-        } else {
-            debug.astToIr("Registered lazy method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, func_info.return_type.toIrName() });
-        }
+        debug.astToIr("Registered lazy method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, func_info.return_type.toIrName() });
     }
 
     // ------------------------------------------------------------------------
@@ -3156,16 +3116,6 @@ pub const AstToIr = struct {
 
         // Remove from pending
         _ = self.pending_methods.remove(mangled_name);
-
-        // Also handle qualified name variant if present
-        if (pending.method.qualified_name) |qualified| {
-            const qualified_mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ pending.type_name, qualified });
-            defer self.allocator.free(qualified_mangled);
-            _ = self.pending_methods.remove(qualified_mangled);
-            if (self.func_map.getPtr(qualified_mangled)) |info_ptr| {
-                info_ptr.ir_generated = true;
-            }
-        }
 
         debug.astToIr("Lazily generated method '{s}'", .{mangled_name});
     }
@@ -3406,12 +3356,6 @@ pub const AstToIr = struct {
         }
 
         const ir_func = try self.module.addFunctionWithExport(mangled_name, sret_info.ir_type, method.is_export);
-        // Set alias for interface methods (e.g., Type$Interface.method)
-        if (method.qualified_name) |qualified| {
-            const alias = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, qualified });
-            try self.module.trackString(alias);
-            ir_func.alias = alias;
-        }
 
         self.self_ptr = null;
         var param_offset = try self.setupFunctionState(ir_func, mangled_name, sret_info);
@@ -6747,8 +6691,8 @@ pub const AstToIr = struct {
     /// Call Stringable.toString() on a type that conforms to Stringable
     /// Returns a pointer to the resulting String
     fn callStringableToString(self: *AstToIr, type_name: []const u8, value_ptr: ir.Value, format_spec: ?[]const u8) ConvertError!ir.Value {
-        // Build the method name: TypeName$Stringable.toString
-        const method_name = try std.fmt.allocPrint(self.allocator, "{s}$Stringable.toString", .{type_name});
+        // Build the method name: TypeName$toString
+        const method_name = try std.fmt.allocPrint(self.allocator, "{s}$toString", .{type_name});
         try self.module.trackString(method_name);
 
         const func_info = self.func_map.get(method_name) orelse {

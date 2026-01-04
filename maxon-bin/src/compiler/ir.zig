@@ -244,7 +244,6 @@ pub const BasicBlock = struct {
 
 /// IR Function
 pub const Function = struct {
-    alias: ?[]const u8 = null, // Alternate name for interface methods
     name: []const u8,
     return_type: Type,
     is_exported: bool,
@@ -617,12 +616,6 @@ pub const Module = struct {
         for (self.functions.items) |*func| {
             if (std.mem.eql(u8, func.name, name)) {
                 return func;
-            }
-            // Also check alias (used for interface method qualified names)
-            if (func.alias) |alias| {
-                if (std.mem.eql(u8, alias, name)) {
-                    return func;
-                }
             }
         }
         return null;
