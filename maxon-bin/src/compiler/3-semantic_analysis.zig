@@ -387,13 +387,16 @@ pub const SemanticAnalyzer = struct {
             }
         }
 
-        // 8. Mutation analysis
+        // 8. Discover and register monomorphized types
+        try self.discoverMonomorphizedTypes(program);
+
+        // 9. Mutation analysis
         try self.mutation_analyzer.analyze(program);
 
-        // 9. Collect variables from function and method bodies
+        // 10. Collect variables from function and method bodies
         try self.collectAllVariables(program);
 
-        // 10. Build and return SemanticInfo
+        // 11. Build and return SemanticInfo
         return self.buildSemanticInfo();
     }
 
@@ -711,6 +714,342 @@ pub const SemanticAnalyzer = struct {
         }
         // Default to primitive for unknown types
         return ValueType{ .primitive = name };
+    }
+
+    // ------------------------------------------------------------------------
+    // Monomorphization Discovery
+    // ------------------------------------------------------------------------
+
+    /// Walk the AST to discover all generic type instantiations and register them.
+    fn discoverMonomorphizedTypes(self: *SemanticAnalyzer, program: ast.Program) !void {
+        // Walk function bodies
+        for (program.functions) |fn_decl| {
+            try self.discoverInStatements(fn_decl.body);
+        }
+
+        // Walk type method bodies
+        for (program.types) |type_decl| {
+            // Set up generic params for the type context
+            for (type_decl.generic_params) |param| {
+                try self.generic_params.put(self.allocator, param, "int");
+            }
+            for (type_decl.methods) |method| {
+                try self.discoverInStatements(method.body);
+            }
+            for (type_decl.generic_params) |param| {
+                _ = self.generic_params.remove(param);
+            }
+        }
+
+        // Walk enum method bodies
+        for (program.enums) |enum_decl| {
+            for (enum_decl.methods) |method| {
+                try self.discoverInStatements(method.body);
+            }
+        }
+    }
+
+    fn discoverInStatements(self: *SemanticAnalyzer, stmts: []const ast.Statement) !void {
+        for (stmts) |stmt| {
+            switch (stmt.kind) {
+                .var_decl, .let_decl => |decl| {
+                    try self.discoverInExpression(decl.value);
+                },
+                .assign => |assign| {
+                    try self.discoverInExpression(assign.value);
+                },
+                .index_assign => |idx_assign| {
+                    try self.discoverInExpression(idx_assign.base.*);
+                    try self.discoverInExpression(idx_assign.index.*);
+                    try self.discoverInExpression(idx_assign.value);
+                },
+                .field_assign => |fa| {
+                    try self.discoverInExpression(fa.base.*);
+                    try self.discoverInExpression(fa.value);
+                },
+                .@"return" => |ret| {
+                    if (ret.value) |val| {
+                        try self.discoverInExpression(val);
+                    }
+                },
+                .call => |call| {
+                    for (call.args) |arg| {
+                        try self.discoverInExpression(arg);
+                    }
+                },
+                .method_call => |mcall| {
+                    try self.discoverInExpression(mcall.base.*);
+                    for (mcall.args) |arg| {
+                        try self.discoverInExpression(arg);
+                    }
+                },
+                .if_stmt => |if_s| {
+                    try self.discoverInExpression(if_s.condition);
+                    try self.discoverInStatements(if_s.body);
+                    if (if_s.else_body) |else_body| {
+                        try self.discoverInStatements(else_body);
+                    }
+                    var else_if = if_s.else_if;
+                    while (else_if) |eif| {
+                        try self.discoverInExpression(eif.condition);
+                        try self.discoverInStatements(eif.body);
+                        else_if = eif.else_if;
+                    }
+                },
+                .while_stmt => |while_s| {
+                    try self.discoverInExpression(while_s.condition);
+                    try self.discoverInStatements(while_s.body);
+                },
+                .for_stmt => |for_s| {
+                    try self.discoverInExpression(for_s.iterable);
+                    try self.discoverInStatements(for_s.body);
+                },
+                .do_catch_stmt => |dc| {
+                    try self.discoverInStatements(dc.body);
+                    for (dc.catches) |catch_clause| {
+                        try self.discoverInStatements(catch_clause.body);
+                    }
+                },
+                .match_stmt => |ms| {
+                    try self.discoverInExpression(ms.scrutinee);
+                    for (ms.cases) |case| {
+                        try self.discoverInStatements(&[_]ast.Statement{case.body.*});
+                    }
+                    if (ms.default_case) |dc| {
+                        try self.discoverInStatements(&[_]ast.Statement{dc.*});
+                    }
+                },
+                .throw_stmt => |throw_s| {
+                    try self.discoverInExpression(throw_s.error_expr);
+                },
+                .else_unwrap_decl => |unwrap| {
+                    try self.discoverInExpression(unwrap.optional_expr.*);
+                    try self.discoverInStatements(unwrap.default_body);
+                },
+                .guard_let_decl => |guard| {
+                    try self.discoverInExpression(guard.optional_expr.*);
+                    try self.discoverInStatements(guard.nil_body);
+                },
+                .break_stmt, .continue_stmt => {},
+            }
+        }
+    }
+
+    fn discoverInExpression(self: *SemanticAnalyzer, expr: ast.Expression) !void {
+        switch (expr) {
+            .struct_init => |sinit| {
+                // This is the main monomorphization trigger
+                if (sinit.type_args.len > 0) {
+                    _ = try self.getOrCreateMonomorphizedType(sinit.type_name, sinit.type_args);
+                }
+                for (sinit.fields) |field| {
+                    try self.discoverInExpression(field.value.*);
+                }
+            },
+            .array_literal => |arr| {
+                // Array literals create Array$ElementType
+                if (arr.elements.len > 0) {
+                    const elem_type = self.inferExpressionType(arr.elements[0]);
+                    if (elem_type) |et| {
+                        if (et.getTypeName()) |elem_name| {
+                            var type_args = [_][]const u8{elem_name};
+                            _ = try self.getOrCreateMonomorphizedType("Array", &type_args);
+                        }
+                    }
+                }
+                for (arr.elements) |elem| {
+                    try self.discoverInExpression(elem);
+                }
+            },
+            .map_literal => |map| {
+                // Map literals create Map$KeyType$ValueType
+                if (map.entries.len > 0) {
+                    const key_type = self.inferExpressionType(map.entries[0].key.*);
+                    const value_type = self.inferExpressionType(map.entries[0].value.*);
+                    if (key_type) |kt| {
+                        if (value_type) |vt| {
+                            if (kt.getTypeName()) |key_name| {
+                                if (vt.getTypeName()) |val_name| {
+                                    var type_args = [_][]const u8{ key_name, val_name };
+                                    _ = try self.getOrCreateMonomorphizedType("Map", &type_args);
+                                }
+                            }
+                        }
+                    }
+                }
+                for (map.entries) |entry| {
+                    try self.discoverInExpression(entry.key.*);
+                    try self.discoverInExpression(entry.value.*);
+                }
+            },
+            .set_from => |sf| {
+                // Set literals create Set$ElementType
+                if (sf.type_name.len > 0) {
+                    // Type is explicit: Set from [elements]
+                    const elem_type = self.inferExpressionType(sf.elements.*);
+                    if (elem_type) |et| {
+                        if (et == .array_type) {
+                            const elem_name = if (et.array_type.element_struct_type) |st| st else @tagName(et.array_type.element_type);
+                            var type_args = [_][]const u8{elem_name};
+                            _ = try self.getOrCreateMonomorphizedType(sf.type_name, &type_args);
+                        }
+                    }
+                }
+                try self.discoverInExpression(sf.elements.*);
+            },
+            .binary => |bin| {
+                try self.discoverInExpression(bin.left.*);
+                try self.discoverInExpression(bin.right.*);
+            },
+            .compare => |cmp| {
+                try self.discoverInExpression(cmp.left.*);
+                try self.discoverInExpression(cmp.right.*);
+            },
+            .logical => |log| {
+                try self.discoverInExpression(log.left.*);
+                try self.discoverInExpression(log.right.*);
+            },
+            .unary => |un| {
+                try self.discoverInExpression(un.operand.*);
+            },
+            .call => |call| {
+                for (call.args) |arg| {
+                    try self.discoverInExpression(arg);
+                }
+            },
+            .method_call => |mcall| {
+                try self.discoverInExpression(mcall.base.*);
+                for (mcall.args) |arg| {
+                    try self.discoverInExpression(arg);
+                }
+            },
+            .field_access => |fa| {
+                try self.discoverInExpression(fa.base.*);
+            },
+            .index => |idx| {
+                try self.discoverInExpression(idx.base.*);
+                try self.discoverInExpression(idx.index.*);
+            },
+            .cast => |c| {
+                try self.discoverInExpression(c.expr.*);
+            },
+            .nil_coalesce => |nc| {
+                try self.discoverInExpression(nc.optional.*);
+                try self.discoverInExpression(nc.default.*);
+            },
+            .try_expr => |te| {
+                try self.discoverInExpression(te.expr.*);
+            },
+            .closure => |clos| {
+                try self.discoverInExpression(clos.body.*);
+            },
+            .match_expr => |me| {
+                try self.discoverInExpression(me.scrutinee.*);
+                for (me.cases) |case| {
+                    try self.discoverInExpression(case.result);
+                }
+                if (me.default_expr) |de| {
+                    try self.discoverInExpression(de.*);
+                }
+            },
+            .interpolated_string => |interp| {
+                for (interp.parts) |part| {
+                    if (part.expr) |e| {
+                        try self.discoverInExpression(e.*);
+                    }
+                }
+            },
+            .enum_case => |ec| {
+                for (ec.args) |arg| {
+                    try self.discoverInExpression(arg);
+                }
+            },
+            // Literals and simple expressions don't trigger monomorphization
+            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal,
+            .char_literal, .identifier, .self_expr, .array_type => {},
+        }
+    }
+
+    /// Get or create a monomorphized version of a generic type.
+    /// Returns the monomorphized type name (e.g., "Array$int").
+    fn getOrCreateMonomorphizedType(self: *SemanticAnalyzer, base_type: []const u8, type_args: []const []const u8) ![]const u8 {
+        // Build the monomorphized name: TypeName$Arg1$Arg2
+        var name_parts: std.ArrayListUnmanaged(u8) = .empty;
+        defer name_parts.deinit(self.allocator);
+
+        try name_parts.appendSlice(self.allocator, base_type);
+        for (type_args) |arg| {
+            // Resolve generic parameter if needed
+            const resolved = self.generic_params.get(arg) orelse arg;
+            try name_parts.append(self.allocator, '$');
+            try name_parts.appendSlice(self.allocator, resolved);
+        }
+
+        const mono_name = try self.allocator.dupe(u8, name_parts.items);
+        errdefer self.allocator.free(mono_name);
+
+        // Check if already registered
+        if (self.type_map.contains(mono_name)) {
+            self.allocator.free(mono_name);
+            // Return the existing name from the map
+            var iter = self.type_map.iterator();
+            while (iter.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*, name_parts.items)) {
+                    return entry.key_ptr.*;
+                }
+            }
+            unreachable;
+        }
+
+        // Track the allocated name
+        try self.allocated_type_strings.append(self.allocator, mono_name);
+
+        // Get the original generic type declaration
+        const type_decl = self.type_decl_map.get(base_type) orelse {
+            // Type not found - might be a stdlib type not yet loaded
+            return mono_name;
+        };
+
+        // Verify we have the right number of type arguments
+        if (type_decl.generic_params.len != type_args.len) {
+            return mono_name;
+        }
+
+        // Set up generic parameter mappings
+        var saved_params = try self.allocator.alloc(?[]const u8, type_decl.generic_params.len);
+        defer self.allocator.free(saved_params);
+        for (type_decl.generic_params, 0..) |param, i| {
+            saved_params[i] = self.generic_params.get(param);
+            const resolved = self.generic_params.get(type_args[i]) orelse type_args[i];
+            try self.generic_params.put(self.allocator, param, resolved);
+        }
+
+        // Register the monomorphized type
+        const fields = try self.buildFieldInfos(type_decl.fields);
+        const size = self.calculateStructSize(fields);
+
+        try self.type_map.put(self.allocator, mono_name, .{
+            .struct_type = .{ .name = mono_name, .fields = fields, .size = size },
+        });
+
+        // Also store the type_decl for the monomorphized type (needed for method lookup)
+        try self.type_decl_map.put(self.allocator, mono_name, type_decl);
+
+        // Register method signatures for the monomorphized type
+        for (type_decl.methods) |method| {
+            try self.registerMethod(mono_name, method);
+        }
+
+        // Restore generic params
+        for (type_decl.generic_params, 0..) |param, i| {
+            if (saved_params[i]) |prev_value| {
+                try self.generic_params.put(self.allocator, param, prev_value);
+            } else {
+                _ = self.generic_params.remove(param);
+            }
+        }
+
+        return mono_name;
     }
 
     // ------------------------------------------------------------------------
