@@ -4,7 +4,7 @@ const Parser = @import("2-parser.zig").Parser;
 const ast = @import("ast.zig");
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const ir = @import("ir.zig");
-const mutation_analysis = @import("3-mutation_analysis.zig");
+const semantic_analysis = @import("3-semantic_analysis.zig");
 const optimizer = @import("5-optimizer.zig");
 const ir_codegen = @import("ir_codegen.zig");
 const disasm = @import("disasm.zig");
@@ -118,7 +118,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
     defer freeProgram(program, allocator);
 
     // 3 - Mutation analysis
-    var mutation_analyzer = mutation_analysis.MutationAnalyzer.init(allocator);
+    var mutation_analyzer = semantic_analysis.MutationAnalyzer.init(allocator);
     defer mutation_analyzer.deinit();
     mutation_analyzer.analyze(program) catch {
         return error.IrError;
@@ -509,6 +509,187 @@ pub fn compileMultiple(
     if (options.emit_asm) {
         try writeAsmFileFromPE(output_path, allocator);
     }
+}
+
+// ============================================================================
+// Semantic Analysis (for LSP)
+// ============================================================================
+
+/// Analyze a source file for semantic information (LSP use).
+/// Runs the frontend pipeline (lex, parse, type registration, type inference)
+/// but doesn't generate IR or machine code.
+pub fn analyzeForLSP(
+    source: []const u8,
+    source_file: ?[]const u8,
+    allocator: std.mem.Allocator,
+) !semantic_analysis.SemanticInfo {
+    // Load stdlib for type/function info
+    const stdlib_path = findStdlibPath(allocator) catch {
+        // Continue without stdlib - will have limited type info
+        return analyzeSourceForLSP(source, source_file, &.{}, &.{}, &.{}, &.{}, allocator);
+    };
+    defer allocator.free(stdlib_path);
+
+    const stdlib_modules = loadAllStdlibModules(stdlib_path, allocator) catch {
+        return analyzeSourceForLSP(source, source_file, &.{}, &.{}, &.{}, &.{}, allocator);
+    };
+    // Don't defer free - we'll transfer ownership to SemanticInfo
+
+    // Collect stdlib source content strings (these need to stay alive for string references)
+    var stdlib_sources = try allocator.alloc([]const u8, stdlib_modules.len);
+    errdefer {
+        // Free both the content strings and the slice itself on error
+        for (stdlib_sources) |content| {
+            allocator.free(content);
+        }
+        allocator.free(stdlib_sources);
+    }
+    for (stdlib_modules, 0..) |mod, i| {
+        stdlib_sources[i] = mod.content;
+    }
+    // Free the paths but not the content
+    for (stdlib_modules) |mod| {
+        allocator.free(mod.path);
+    }
+    allocator.free(stdlib_modules);
+
+    // Parse stdlib and extract type info (same as compileMultiple phase 1)
+    var phase1_arena = std.heap.ArenaAllocator.init(allocator);
+    defer phase1_arena.deinit();
+    const phase1_allocator = phase1_arena.allocator();
+
+    var all_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
+    defer {
+        for (all_types.items) |t| allocator.free(t.fields);
+        all_types.deinit(allocator);
+    }
+
+    var all_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
+    defer {
+        for (all_funcs.items) |sig| {
+            allocator.free(sig.name);
+            if (sig.param_types.len > 0) allocator.free(sig.param_types);
+        }
+        all_funcs.deinit(allocator);
+    }
+
+    var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
+    defer all_interfaces.deinit(allocator);
+
+    for (stdlib_sources) |content| {
+        var lexer = Lexer.init(content);
+        const tokens = lexer.tokenize(phase1_allocator) catch continue;
+        var parser = Parser.init(tokens, phase1_allocator);
+        const program = parser.parse() catch continue;
+
+        // Extract type info
+        const type_info = ast_to_ir.extractTypeInfo(program, allocator) catch continue;
+        for (type_info) |t| {
+            all_types.append(allocator, t) catch continue;
+        }
+        allocator.free(type_info);
+
+        // Extract function signatures
+        const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
+        for (func_sigs) |sig| {
+            const param_types_copy = allocator.dupe(ast_to_ir.ParamType, sig.param_types) catch continue;
+            var sig_copy = sig;
+            sig_copy.param_types = param_types_copy;
+            all_funcs.append(allocator, sig_copy) catch {
+                allocator.free(param_types_copy);
+                continue;
+            };
+        }
+        for (func_sigs) |sig| {
+            if (sig.param_types.len > 0) allocator.free(sig.param_types);
+        }
+        allocator.free(func_sigs);
+
+        // Extract interface info
+        const iface_info = ast_to_ir.extractInterfaceInfo(program, allocator) catch continue;
+        for (iface_info) |iface| {
+            all_interfaces.append(allocator, iface) catch continue;
+        }
+        allocator.free(iface_info);
+    }
+
+    return analyzeSourceForLSP(
+        source,
+        source_file,
+        all_types.items,
+        all_funcs.items,
+        all_interfaces.items,
+        stdlib_sources,
+        allocator,
+    );
+}
+
+fn analyzeSourceForLSP(
+    source: []const u8,
+    source_file: ?[]const u8,
+    external_types: []const ast_to_ir.ExternalTypeInfo,
+    external_funcs: []const ast_to_ir.ExternalFuncSignature,
+    external_interfaces: []const ast_to_ir.ExternalInterfaceInfo,
+    stdlib_sources: []const []const u8,
+    allocator: std.mem.Allocator,
+) !semantic_analysis.SemanticInfo {
+    _ = source_file; // Not needed in new approach
+    // Duplicate user source - SemanticVarInfo.name will be slices into this
+    const user_source = try allocator.dupe(u8, source);
+    errdefer allocator.free(user_source);
+
+    // Lex and parse using the duplicated source
+    var lexer = Lexer.init(user_source);
+    const tokens = lexer.tokenize(allocator) catch return error.LexerError;
+    defer allocator.free(tokens);
+
+    var parser = Parser.init(tokens, allocator);
+    defer parser.deinit();
+
+    const program = parser.parse() catch return error.ParserError;
+    defer freeProgram(program, allocator);
+
+    // Use the new SemanticAnalyzer
+    var analyzer = semantic_analysis.SemanticAnalyzer.init(allocator);
+    errdefer analyzer.deinit();
+
+    // Duplicate external function names (they'll be freed after this call)
+    var func_name_copies: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer {
+        for (func_name_copies.items) |name| allocator.free(name);
+        func_name_copies.deinit(allocator);
+    }
+
+    // Build list of external funcs with duplicated names
+    var ext_funcs_copy = try allocator.alloc(semantic_analysis.ExternalFuncSignature, external_funcs.len);
+    defer allocator.free(ext_funcs_copy);
+    for (external_funcs, 0..) |ext_func, i| {
+        const name_copy = allocator.dupe(u8, ext_func.name) catch continue;
+        const param_types_copy = allocator.dupe(semantic_analysis.ParamType, ext_func.param_types) catch {
+            allocator.free(name_copy);
+            continue;
+        };
+        ext_funcs_copy[i] = .{
+            .name = name_copy,
+            .return_type = ext_func.return_type,
+            .return_type_name = ext_func.return_type_name,
+            .return_value_type = ext_func.return_value_type,
+            .param_types = param_types_copy,
+        };
+        func_name_copies.append(allocator, name_copy) catch {};
+    }
+
+    var result = try analyzer.analyze(program, external_types, ext_funcs_copy, external_interfaces);
+    result.stdlib_sources = stdlib_sources;
+    result.user_source = user_source;
+    result.allocated_func_names = func_name_copies;
+
+    // Free param_types copies (they're duplicated again inside analyze)
+    for (ext_funcs_copy) |ext_func| {
+        if (ext_func.param_types.len > 0) allocator.free(ext_func.param_types);
+    }
+
+    return result;
 }
 
 /// Find stdlib directory relative to the executable.

@@ -286,7 +286,8 @@ pub const BorrowState = enum {
 
 /// Variable info - tracks allocation, type, and ownership
 pub const VarInfo = struct {
-    ptr: ir.Value,
+    /// IR value pointer (null in type-only mode when skip_ir is true)
+    ptr: ?ir.Value,
     ty: ValueType,
     used: bool,
     is_mutable: bool,
@@ -302,7 +303,7 @@ pub const VarInfo = struct {
     /// Current borrow state
     borrow_state: BorrowState = .none,
 
-    pub fn init(ptr: ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
+    pub fn init(ptr: ?ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
         return .{
             .ptr = ptr,
             .ty = ty,
@@ -316,7 +317,7 @@ pub const VarInfo = struct {
         };
     }
 
-    pub fn initParam(ptr: ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
+    pub fn initParam(ptr: ?ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
         return .{
             .ptr = ptr,
             .ty = ty,
@@ -377,4 +378,122 @@ pub const InterfaceInfo = struct {
 pub const InterfaceMethodInfo = struct {
     interface_name: []const u8, // The interface that originally defined this method
     method: ast.InterfaceMethod,
+};
+
+// ============================================================================
+// Semantic Analysis Types (for LSP)
+// ============================================================================
+
+/// Variable info for LSP - position-aware, without IR values
+pub const SemanticVarInfo = struct {
+    name: []const u8,
+    ty: ValueType,
+    is_mutable: bool,
+    is_parameter: bool,
+    borrow_state: BorrowState,
+    borrowed_from: ?[]const u8,
+    decl_line: u32,
+    decl_column: u32,
+    function_name: []const u8,
+    type_name: ?[]const u8, // If in a method, the type name
+};
+
+/// Result of semantic analysis for LSP
+pub const SemanticInfo = struct {
+    allocator: std.mem.Allocator,
+    variables: []const SemanticVarInfo,
+    functions: std.StringHashMapUnmanaged(FuncInfo),
+    types: std.StringHashMapUnmanaged(TypeInfo),
+    interfaces: std.StringHashMapUnmanaged(InterfaceInfo),
+    allocated_type_strings: std.ArrayListUnmanaged([]const u8) = .{},
+    // Allocated function name strings (for registered external functions)
+    allocated_func_names: std.ArrayListUnmanaged([]const u8) = .{},
+    // Keep stdlib source strings alive (they're referenced by type/func names)
+    stdlib_sources: []const []const u8 = &.{},
+    // Keep user source string alive (variable names are slices into this)
+    user_source: ?[]const u8 = null,
+
+    pub fn deinit(self: *SemanticInfo) void {
+        self.allocator.free(self.variables);
+
+        // Free user source string
+        if (self.user_source) |src| {
+            self.allocator.free(src);
+        }
+
+        // Free stdlib source strings
+        for (self.stdlib_sources) |src| {
+            self.allocator.free(src);
+        }
+        if (self.stdlib_sources.len > 0) {
+            self.allocator.free(self.stdlib_sources);
+        }
+
+        // Free allocated type name strings (e.g., "Array$int")
+        for (self.allocated_type_strings.items) |str| {
+            self.allocator.free(str);
+        }
+        self.allocated_type_strings.deinit(self.allocator);
+
+        // Free allocated function name strings
+        for (self.allocated_func_names.items) |str| {
+            self.allocator.free(str);
+        }
+        self.allocated_func_names.deinit(self.allocator);
+
+        // Free type_map data (struct fields, enum members)
+        var type_iter = self.types.iterator();
+        while (type_iter.next()) |entry| {
+            switch (entry.value_ptr.*) {
+                .struct_type => |s| self.allocator.free(s.fields),
+                .enum_type => |*e| {
+                    e.members.deinit(self.allocator);
+                    // Free associated_values slices inside case_info entries
+                    var case_iter = e.case_info.iterator();
+                    while (case_iter.next()) |case_entry| {
+                        if (case_entry.value_ptr.associated_values.len > 0) {
+                            self.allocator.free(case_entry.value_ptr.associated_values);
+                        }
+                    }
+                    e.case_info.deinit(self.allocator);
+                    e.string_values.deinit(self.allocator);
+                },
+                .primitive => {},
+            }
+        }
+        self.types.deinit(self.allocator);
+
+        // Free func_map param_types (avoiding double-free for shared pointers)
+        var freed_ptrs = std.AutoHashMapUnmanaged(*const ParamType, void){};
+        defer freed_ptrs.deinit(self.allocator);
+        var func_iter = self.functions.iterator();
+        while (func_iter.next()) |entry| {
+            if (entry.value_ptr.param_types.len > 0) {
+                const ptr = &entry.value_ptr.param_types[0];
+                if (freed_ptrs.get(ptr) == null) {
+                    freed_ptrs.put(self.allocator, ptr, {}) catch {};
+                    self.allocator.free(entry.value_ptr.param_types);
+                }
+            }
+        }
+        self.functions.deinit(self.allocator);
+
+        // Interface map doesn't own its data (references AST nodes)
+        self.interfaces.deinit(self.allocator);
+    }
+
+    /// Find a variable by name
+    pub fn findVariable(self: SemanticInfo, var_name: []const u8) ?SemanticVarInfo {
+        for (self.variables) |v| {
+            if (std.mem.eql(u8, v.name, var_name)) {
+                return v;
+            }
+        }
+        return null;
+    }
+
+    /// Get type info by name
+    pub fn getType(self: SemanticInfo, type_name: []const u8) ?TypeInfo {
+        return self.types.get(type_name);
+    }
 };

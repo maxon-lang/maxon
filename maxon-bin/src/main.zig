@@ -2,6 +2,7 @@ const std = @import("std");
 const compiler = @import("compiler/0-compiler.zig");
 const test_runner = @import("testing/test_runner.zig");
 const testing = @import("testing/testing.zig");
+const lsp = @import("lsp/lsp.zig");
 
 const version = "0.1.0";
 
@@ -43,6 +44,8 @@ pub fn main() !void {
         runBuild(args, allocator);
     } else if (std.mem.eql(u8, command, "test")) {
         runTest(args, allocator);
+    } else if (std.mem.eql(u8, command, "lsp-server")) {
+        runLspServer(allocator);
     } else {
         std.debug.print("Unknown command: {s}\n", .{command});
         printUsage();
@@ -59,6 +62,7 @@ fn printUsage() void {
     std.debug.print("  compile <source.maxon>  Compile a single source file\n", .{});
     std.debug.print("  build                   Build project from current directory\n", .{});
     std.debug.print("  test                    Run spec fragment tests\n", .{});
+    std.debug.print("  lsp-server              Start LSP server for IDE integration\n", .{});
     std.debug.print("\nCompile Options:\n", .{});
     std.debug.print("  -v                      Enable verbose/debug output\n", .{});
     std.debug.print("  --track-allocs          Enable runtime allocation tracking\n", .{});
@@ -412,4 +416,11 @@ fn runTest(args: [][:0]u8, allocator: std.mem.Allocator) void {
     if (summary.failed > 0) {
         std.process.exit(1);
     }
+}
+
+fn runLspServer(allocator: std.mem.Allocator) void {
+    lsp.run(allocator) catch |err| {
+        std.debug.print("LSP server error: {}\n", .{err});
+        std.process.exit(1);
+    };
 }

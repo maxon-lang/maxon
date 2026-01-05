@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ir = @import("ir.zig");
 const debug = @import("debug.zig");
-const mutation_analysis = @import("3-mutation_analysis.zig");
+const semantic_analysis = @import("3-semantic_analysis.zig");
 const err = @import("error.zig");
 
 // Import types from dedicated types module
@@ -30,6 +30,8 @@ pub const VarInfo = types.VarInfo;
 pub const ConvertError = types.ConvertError;
 pub const InterfaceInfo = types.InterfaceInfo;
 pub const PendingMethod = types.PendingMethod;
+pub const SemanticInfo = types.SemanticInfo;
+pub const SemanticVarInfo = types.SemanticVarInfo;
 
 /// Helper for managing intrinsic loop blocks (cond/body/end pattern).
 /// Ensures correct block ordering and branch emission to avoid infinite loops.
@@ -254,7 +256,7 @@ pub const AstToIr = struct {
     type_decl_map: std.StringHashMapUnmanaged(ast.TypeDecl), // Type declarations for conformance lookup
     enum_decl_map: std.StringHashMapUnmanaged(ast.EnumDecl), // Enum declarations for conformance lookup
     current_decl_is_mutable: bool,
-    mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
+    mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer,
     current_line: usize,
     current_column: usize,
     // For struct returns: pointer passed by caller for return value
@@ -350,7 +352,7 @@ pub const AstToIr = struct {
     // Initialization / Cleanup
     // ------------------------------------------------------------------------
 
-    pub fn init(allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer) AstToIr {
+    pub fn init(allocator: std.mem.Allocator, mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer) AstToIr {
         return .{
             .allocator = allocator,
             .module = ir.Module.init(allocator),
@@ -1740,7 +1742,7 @@ pub const AstToIr = struct {
     }
 
     /// Register an external type (from stdlib or other modules)
-    fn registerExternalType(self: *AstToIr, ext_type: ExternalTypeInfo) !void {
+    pub fn registerExternalType(self: *AstToIr, ext_type: ExternalTypeInfo) !void {
         // Skip if already registered (avoid duplicate allocations)
         if (self.type_map.contains(ext_type.name)) return;
 
@@ -1920,7 +1922,7 @@ pub const AstToIr = struct {
         debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {}, has_assoc: {})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type), is_error, has_associated_values });
     }
 
-    fn registerInterface(self: *AstToIr, iface: ast.InterfaceDecl) !void {
+    pub fn registerInterface(self: *AstToIr, iface: ast.InterfaceDecl) !void {
         try self.interface_map.put(self.allocator, iface.name, .{
             .name = iface.name,
             .methods = iface.methods,
@@ -2402,8 +2404,7 @@ pub const AstToIr = struct {
             }
 
             const owned = result.toOwnedSlice(self.allocator) catch return type_arg;
-            // Track allocation for cleanup in deinit
-            self.allocated_type_strings.append(self.allocator, owned) catch {};
+            self.module.trackString(owned) catch {};
             return owned;
         }
         return type_arg;
@@ -2435,8 +2436,7 @@ pub const AstToIr = struct {
                     }
                 }
                 const owned = result.toOwnedSlice(self.allocator) catch return g.base_type;
-                // Track allocation for cleanup in deinit
-                self.allocated_type_strings.append(self.allocator, owned) catch {};
+                self.module.trackString(owned) catch {};
                 return owned;
             },
             .optional => |wrapped| switch (wrapped.*) {
@@ -2457,8 +2457,7 @@ pub const AstToIr = struct {
                         }
                     }
                     const owned = result.toOwnedSlice(self.allocator) catch return g.base_type;
-                    // Track allocation for cleanup in deinit
-                    self.allocated_type_strings.append(self.allocator, owned) catch {};
+                    self.module.trackString(owned) catch {};
                     return owned;
                 },
                 .optional => "?",
@@ -3644,6 +3643,7 @@ pub const AstToIr = struct {
                 ));
             },
         }
+
     }
 
     /// Check if a type expression is "array of String" (the type for main's args parameter)
@@ -4045,7 +4045,7 @@ pub const AstToIr = struct {
             if (arr_info.storage == .heap) {
                 // var_info.ptr points to a stack slot holding a ptr to __ManagedArray
                 // __ManagedArray layout: [buffer_ptr, len, capacity] at offsets [0, 8, 16]
-                const managed_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                const managed_ptr = try self.func().emitLoad(var_info.ptr.?, .ptr);
                 const buffer_ptr = try self.func().emitLoad(managed_ptr, .ptr);
                 try self.func().emitHeapFree(buffer_ptr, "array cleanup");
             }
@@ -4058,20 +4058,20 @@ pub const AstToIr = struct {
             if (std.mem.startsWith(u8, struct_name, "Array$")) {
                 if (skip_if_parameter and var_info.is_parameter) return;
                 // Buffer pointer is at offset 0 within the inlined __ManagedArray
-                const buf_ptr = try self.func().emitLoad(var_info.ptr, .ptr);
+                const buf_ptr = try self.func().emitLoad(var_info.ptr.?, .ptr);
                 try self.func().emitHeapFree(buf_ptr, "array cleanup");
             }
 
             // Handle String type with COW semantics
             if (self.isStringType(var_info.ty)) {
                 if (skip_if_parameter and var_info.is_parameter) return;
-                try self.emitStringDecref(var_info.ptr);
+                try self.emitStringDecref(var_info.ptr.?);
             }
 
             // Handle cstring type cleanup
             if (std.mem.eql(u8, struct_name, "cstring")) {
                 if (skip_if_parameter and var_info.is_parameter) return;
-                try self.emitCstringCleanup(var_info.ptr);
+                try self.emitCstringCleanup(var_info.ptr.?);
             }
         }
     }
@@ -4146,12 +4146,12 @@ pub const AstToIr = struct {
                         return error.UnknownType;
                     };
                     const size = struct_info.struct_type.size;
-                    try self.func().emitMemcpy(var_info.ptr, value_typed.value, size);
+                    try self.func().emitMemcpy(var_info.ptr.?, value_typed.value, size);
                     // Handle String refcount - the new value's refcount is already correct from expression evaluation
                     // but we need to incref if copying from another variable
                     if (assign.value == .identifier or assign.value == .field_access) {
                         if (std.mem.eql(u8, struct_name, "String") or std.mem.eql(u8, struct_name, "__ManagedString")) {
-                            try self.emitStringIncref(var_info.ptr);
+                            try self.emitStringIncref(var_info.ptr.?);
                         }
                     }
                     // For String assignment from a temporary (literal/interpolation/etc),
@@ -4163,7 +4163,7 @@ pub const AstToIr = struct {
                     var_info.ptr = value_typed.value;
                 }
             } else {
-                try self.func().emitStore(var_info.ptr, value_typed.value);
+                try self.func().emitStore(var_info.ptr.?, value_typed.value);
             }
             if (is_reference) {
                 var_info.ty = value_typed.ty;
@@ -4171,7 +4171,7 @@ pub const AstToIr = struct {
 
             // COW: If assigning a String from another variable/field, incref the new value
             if (self.isStringType(value_typed.ty) and (assign.value == .identifier or assign.value == .field_access)) {
-                try self.emitStringIncref(var_info.ptr);
+                try self.emitStringIncref(var_info.ptr.?);
             }
             var_info.resetOwnership();
             return;
@@ -7054,9 +7054,9 @@ pub const AstToIr = struct {
 
         // Reference types may use a slot indirection; value types always load
         const value = if (info.ty == .struct_type or info.ty == .array_type or info.ty == .optional_type)
-            if (info.uses_slot) try self.func().emitLoad(info.ptr, .ptr) else info.ptr
+            if (info.uses_slot) try self.func().emitLoad(info.ptr.?, .ptr) else info.ptr.?
         else
-            try self.func().emitLoad(info.ptr, info.ty.toPrimitiveType());
+            try self.func().emitLoad(info.ptr.?, info.ty.toPrimitiveType());
 
         return .{ .value = value, .ty = info.ty };
     }
@@ -8463,9 +8463,9 @@ pub const AstToIr = struct {
 
         // Load the function pointer from the variable
         const func_ptr = if (var_info.uses_slot)
-            try self.func().emitLoad(var_info.ptr, .ptr)
+            try self.func().emitLoad(var_info.ptr.?, .ptr)
         else
-            var_info.ptr;
+            var_info.ptr.?;
 
         // Mark variable as used
         if (self.var_map.getPtr(call.func_name)) |info| {
@@ -9700,7 +9700,7 @@ pub const AstToIr = struct {
                 }
             };
             size_var_entry.used = true;
-            break :blk try self.func().emitLoad(size_var_entry.ptr, .i64);
+            break :blk try self.func().emitLoad(size_var_entry.ptr.?, .i64);
         };
 
         // Allocate the result optional: 8 bytes tag + element size
@@ -10268,13 +10268,13 @@ pub const AstToIr = struct {
 // Public API
 // ============================================================================
 
-pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer) !ir.Module {
+pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer) !ir.Module {
     var converter = AstToIr.init(allocator, mutation_analyzer);
     defer converter.deinit();
     return try converter.convert(program);
 }
 
-pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) ConvertError!ir.Module {
+pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) ConvertError!ir.Module {
     return convertWithExternals(program, allocator, mutation_analyzer, source_file, null, null, null, out_error);
 }
 
@@ -10282,7 +10282,7 @@ pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutat
 pub fn convertWithExternals(
     program: ast.Program,
     allocator: std.mem.Allocator,
-    mutation_analyzer: ?*const mutation_analysis.MutationAnalyzer,
+    mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer,
     source_file: ?[]const u8,
     external_funcs: ?[]const ExternalFuncSignature,
     external_types: ?[]const ExternalTypeInfo,
