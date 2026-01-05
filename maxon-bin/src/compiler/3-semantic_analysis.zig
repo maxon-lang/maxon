@@ -338,7 +338,10 @@ pub const SemanticAnalyzer = struct {
         // 2. Register compiler-internal types
         try self.registerCompilerInternalTypes();
 
-        // 3. Register externals (stdlib)
+        // 3. Register compiler-internal intrinsics (for LSP hover)
+        try self.registerIntrinsics();
+
+        // 4. Register externals (stdlib)
         for (external_types) |ext_type| {
             try self.registerExternalType(ext_type);
         }
@@ -440,6 +443,113 @@ pub const SemanticAnalyzer = struct {
         cstring_fields[2] = .{ .name = "managed", .offset = 16, .size = 8, .value_type = .{ .primitive = "ptr" } };
         try self.type_map.put(self.allocator, "cstring", .{
             .struct_type = .{ .name = "cstring", .fields = cstring_fields, .size = 24 },
+        });
+    }
+
+    fn registerIntrinsics(self: *SemanticAnalyzer) !void {
+        // Helper to allocate a single-param float intrinsic
+        const float_param = try self.allocator.alloc(ParamType, 1);
+        float_param[0] = .{ .name = "value", .ty = .{ .primitive = "float" } };
+
+        // Math builtins accessible from user code
+        try self.func_map.put(self.allocator, "trunc", .{
+            .return_type = .i64,
+            .return_type_name = "int",
+            .return_value_type = null,
+            .param_types = float_param,
+        });
+
+        const float_param2 = try self.allocator.alloc(ParamType, 1);
+        float_param2[0] = .{ .name = "value", .ty = .{ .primitive = "float" } };
+        try self.func_map.put(self.allocator, "abs", .{
+            .return_type = .f64,
+            .return_type_name = "float",
+            .return_value_type = null,
+            .param_types = float_param2,
+        });
+
+        const float_param3 = try self.allocator.alloc(ParamType, 1);
+        float_param3[0] = .{ .name = "value", .ty = .{ .primitive = "float" } };
+        try self.func_map.put(self.allocator, "sqrt", .{
+            .return_type = .f64,
+            .return_type_name = "float",
+            .return_value_type = null,
+            .param_types = float_param3,
+        });
+
+        const float_param4 = try self.allocator.alloc(ParamType, 1);
+        float_param4[0] = .{ .name = "value", .ty = .{ .primitive = "float" } };
+        try self.func_map.put(self.allocator, "ceil", .{
+            .return_type = .i64,
+            .return_type_name = "int",
+            .return_value_type = null,
+            .param_types = float_param4,
+        });
+
+        const float_param5 = try self.allocator.alloc(ParamType, 1);
+        float_param5[0] = .{ .name = "value", .ty = .{ .primitive = "float" } };
+        try self.func_map.put(self.allocator, "floor", .{
+            .return_type = .i64,
+            .return_type_name = "int",
+            .return_value_type = null,
+            .param_types = float_param5,
+        });
+
+        const float_param6 = try self.allocator.alloc(ParamType, 1);
+        float_param6[0] = .{ .name = "value", .ty = .{ .primitive = "float" } };
+        try self.func_map.put(self.allocator, "round", .{
+            .return_type = .i64,
+            .return_type_name = "int",
+            .return_value_type = null,
+            .param_types = float_param6,
+        });
+
+        // File I/O intrinsics (available via stdlib wrappers but registered for LSP)
+        const read_file_params = try self.allocator.alloc(ParamType, 1);
+        read_file_params[0] = .{ .name = "path", .ty = .{ .primitive = "cstring" } };
+        try self.func_map.put(self.allocator, "__read_file", .{
+            .return_type = .ptr,
+            .return_type_name = "string?",
+            .return_value_type = null,
+            .param_types = read_file_params,
+        });
+
+        const write_file_params = try self.allocator.alloc(ParamType, 2);
+        write_file_params[0] = .{ .name = "path", .ty = .{ .primitive = "cstring" } };
+        write_file_params[1] = .{ .name = "data", .ty = .{ .primitive = "array" } };
+        try self.func_map.put(self.allocator, "__write_file", .{
+            .return_type = .i64,
+            .return_type_name = "int",
+            .return_value_type = null,
+            .param_types = write_file_params,
+        });
+
+        const write_file_binary_params = try self.allocator.alloc(ParamType, 2);
+        write_file_binary_params[0] = .{ .name = "path", .ty = .{ .primitive = "cstring" } };
+        write_file_binary_params[1] = .{ .name = "data", .ty = .{ .primitive = "array" } };
+        try self.func_map.put(self.allocator, "__write_file_binary", .{
+            .return_type = .i64,
+            .return_type_name = "int",
+            .return_value_type = null,
+            .param_types = write_file_binary_params,
+        });
+
+        const list_dir_params = try self.allocator.alloc(ParamType, 1);
+        list_dir_params[0] = .{ .name = "path", .ty = .{ .primitive = "cstring" } };
+        try self.func_map.put(self.allocator, "__list_directory", .{
+            .return_type = .ptr,
+            .return_type_name = "Array$String?",
+            .return_value_type = null,
+            .param_types = list_dir_params,
+        });
+
+        const is_dir_params = try self.allocator.alloc(ParamType, 1);
+        is_dir_params[0] = .{ .name = "path", .ty = .{ .primitive = "cstring" } };
+        try self.func_map.put(self.allocator, "__is_directory", .{
+            .return_type = .i64,
+            .return_type_name = "int",
+            .return_value_type = null,
+            .param_types = is_dir_params,
         });
     }
 

@@ -213,6 +213,126 @@ pub const Analyzer = struct {
         return items.toOwnedSlice(self.allocator);
     }
 
+    /// Get hover information for the symbol at the given position
+    /// Returns allocated markdown string that caller must free, or null if no hover info
+    pub fn getHoverInfo(self: *Analyzer, uri: []const u8, line: u32, character: u32) ?[]const u8 {
+        const doc = self.documents.get(uri) orelse return null;
+        const word = getWordAtPosition(doc.content, line, character) orelse return null;
+        const info = self.getSemanticInfo(uri) catch return null;
+
+        // 1. Check for intrinsics (functions starting with __)
+        if (std.mem.startsWith(u8, word, "__")) {
+            if (info.functions.get(word)) |func_info| {
+                return self.formatIntrinsicHover(word, func_info);
+            }
+        }
+
+        // 2. Check for variables (local vars and parameters)
+        if (info.findVariable(word)) |v| {
+            return self.formatVariableHover(v, doc.content, line);
+        }
+
+        // 3. Check for function calls
+        if (info.functions.get(word)) |func_info| {
+            return self.formatFunctionHover(word, func_info);
+        }
+
+        // 4. Check for type references
+        if (info.types.get(word)) |type_info| {
+            return self.formatTypeHover(word, type_info);
+        }
+
+        return null;
+    }
+
+    fn formatVariableHover(self: *Analyzer, v: ast_to_ir.SemanticVarInfo, content: []const u8, hover_line: u32) ?[]const u8 {
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
+        const writer = buffer.writer(self.allocator);
+
+        // For immutable variables (let), show value if on declaration line
+        if (!v.is_mutable and v.decl_line > 0 and v.decl_line - 1 == hover_line) {
+            if (extractLiteralValue(content, v.decl_line - 1)) |value| {
+                writer.print("```maxon\nlet {s} = {s}\n```", .{ v.name, value }) catch return null;
+                return buffer.toOwnedSlice(self.allocator) catch null;
+            }
+        }
+
+        // Show type info
+        const type_name = v.ty.toDisplayName();
+        const mutability = if (v.is_mutable) "var" else "let";
+        const kind = if (v.is_parameter) "(parameter)" else "(local)";
+
+        writer.print("```maxon\n{s} {s}: {s}\n```\n{s}", .{ mutability, v.name, type_name, kind }) catch return null;
+
+        return buffer.toOwnedSlice(self.allocator) catch null;
+    }
+
+    fn formatFunctionHover(self: *Analyzer, name: []const u8, func: ast_to_ir.FuncInfo) ?[]const u8 {
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
+        const writer = buffer.writer(self.allocator);
+
+        writer.writeAll("```maxon\nfunction ") catch return null;
+        writer.writeAll(name) catch return null;
+        writer.writeByte('(') catch return null;
+
+        for (func.param_types, 0..) |param, i| {
+            if (i > 0) writer.writeAll(", ") catch return null;
+            writer.writeAll(param.name) catch return null;
+            writer.writeByte(' ') catch return null;
+            writer.writeAll(param.ty.toDisplayName()) catch return null;
+        }
+
+        writer.writeByte(')') catch return null;
+
+        // Add return type if not void
+        if (func.return_type_name) |rt| {
+            writer.writeAll(" returns ") catch return null;
+            writer.writeAll(rt) catch return null;
+        } else if (func.return_type != .void) {
+            writer.writeAll(" returns ") catch return null;
+            writer.writeAll(func.return_type.toMaxonName()) catch return null;
+        }
+
+        writer.writeAll("\n```") catch return null;
+        return buffer.toOwnedSlice(self.allocator) catch null;
+    }
+
+    fn formatIntrinsicHover(self: *Analyzer, name: []const u8, func: ast_to_ir.FuncInfo) ?[]const u8 {
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
+        const writer = buffer.writer(self.allocator);
+
+        writer.writeAll("```maxon\nintrinsic ") catch return null;
+        writer.writeAll(name) catch return null;
+        writer.writeByte('(') catch return null;
+
+        for (func.param_types, 0..) |param, i| {
+            if (i > 0) writer.writeAll(", ") catch return null;
+            writer.writeAll(param.ty.toDisplayName()) catch return null;
+        }
+
+        writer.writeAll(")\n```") catch return null;
+        return buffer.toOwnedSlice(self.allocator) catch null;
+    }
+
+    fn formatTypeHover(self: *Analyzer, name: []const u8, type_info: ast_to_ir.TypeInfo) ?[]const u8 {
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
+        const writer = buffer.writer(self.allocator);
+
+        switch (type_info) {
+            .struct_type => |st| {
+                writer.print("```maxon\ntype {s}\n```\n\nStruct with {d} fields", .{ name, st.fields.len }) catch return null;
+            },
+            .enum_type => |et| {
+                writer.print("```maxon\nenum {s}\n```\n\nEnum with {d} cases", .{ name, et.members.count() }) catch return null;
+            },
+            .primitive => {
+                writer.print("```maxon\n{s}\n```\n\nPrimitive type", .{name}) catch return null;
+            },
+        }
+
+        return buffer.toOwnedSlice(self.allocator) catch null;
+    }
+
     /// Result of a definition lookup
     pub const DefinitionLocation = struct {
         uri: []const u8,
@@ -978,6 +1098,33 @@ fn formatFuncSignature(func: ast_to_ir.FuncInfo) []const u8 {
         return rt;
     }
     return func.return_type.toMaxonName();
+}
+
+/// Extract the literal value from a "let x = value" line
+fn extractLiteralValue(content: []const u8, line_num: u32) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var current_line: u32 = 0;
+
+    while (lines.next()) |line_content| : (current_line += 1) {
+        if (current_line == line_num) {
+            // Look for "= value" pattern
+            if (std.mem.indexOf(u8, line_content, "=")) |eq_pos| {
+                const after_eq = std.mem.trimLeft(u8, line_content[eq_pos + 1 ..], " \t");
+                // Find end of value (space, newline, or end of string)
+                var end: usize = 0;
+                while (end < after_eq.len) {
+                    const c = after_eq[end];
+                    if (c == ' ' or c == '\t' or c == '\r' or c == '\n') break;
+                    end += 1;
+                }
+                if (end > 0) {
+                    return after_eq[0..end];
+                }
+            }
+            return null;
+        }
+    }
+    return null;
 }
 
 /// Get the identifier word at the given position in content

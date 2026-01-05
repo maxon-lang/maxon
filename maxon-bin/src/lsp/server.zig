@@ -123,7 +123,7 @@ pub const Server = struct {
                     .triggerCharacters = &.{"."},
                     .resolveProvider = false,
                 },
-                .hoverProvider = false,
+                .hoverProvider = true,
                 .definitionProvider = true,
                 .documentSymbolProvider = true,
                 .documentFormattingProvider = true,
@@ -299,9 +299,38 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/hover request
-    fn handleHover(self: *Server, id: ?types.Request.Id, _: std.json.ObjectMap) !void {
-        // For now, return null (no hover info)
-        try self.transport.writeResult(id, null);
+    fn handleHover(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+        const params = transport.getObject(msg, "params") orelse {
+            try self.transport.writeResult(id, null);
+            return;
+        };
+
+        const text_doc = transport.getObject(params, "textDocument") orelse {
+            try self.transport.writeResult(id, null);
+            return;
+        };
+
+        const uri = transport.getString(text_doc, "uri") orelse {
+            try self.transport.writeResult(id, null);
+            return;
+        };
+
+        const position = transport.getObject(params, "position") orelse {
+            try self.transport.writeResult(id, null);
+            return;
+        };
+
+        const line = @as(u32, @intCast(transport.getInt(position, "line") orelse 0));
+        const character = @as(u32, @intCast(transport.getInt(position, "character") orelse 0));
+
+        if (self.analyzer.getHoverInfo(uri, line, character)) |hover_content| {
+            defer self.allocator.free(hover_content);
+            try self.transport.writeResult(id, types.Hover{
+                .contents = .{ .kind = "markdown", .value = hover_content },
+            });
+        } else {
+            try self.transport.writeResult(id, null);
+        }
     }
 
     /// Handle textDocument/definition request

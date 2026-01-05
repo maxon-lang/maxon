@@ -68,14 +68,27 @@ test "server handles full workflow" {
     );
     try ctx.client.changeDocument("file:///test.maxon",
         \\function main() returns int
-        \\    var x = 100
-        \\    return x
+        \\    var arr = [1, 2, 3]
+        \\    arr.push(4)
+        \\    return 0
         \\end 'main'
     , 2);
 
-    // Request completion to exercise more code paths
-    var result = try ctx.client.completionWithTrigger("file:///test.maxon", 1, 4, null);
-    result.deinit();
+    // Request completion after "arr." (line 2, column 8)
+    // This should return array methods
+    var result = try ctx.client.completionWithTrigger("file:///test.maxon", 2, 8, ".");
+    defer result.deinit();
+
+    // Should get array method completions - verify specific methods exist
+    try testing.expect(result.items.len > 0);
+    var found_push = false;
+    for (result.items) |item| {
+        if (std.mem.eql(u8, item.label, "push")) {
+            found_push = true;
+            break;
+        }
+    }
+    try testing.expect(found_push);
 
     try ctx.client.closeDocument("file:///test.maxon");
     try ctx.deinit();
@@ -85,9 +98,28 @@ test "full lifecycle with document" {
     var ctx = try TestContext.init();
     errdefer ctx.forceCleanup();
 
-    // Open, modify, and close a document
-    try ctx.client.openDocument("file:///test.maxon", "let x = 1");
-    try ctx.client.changeDocument("file:///test.maxon", "let x = 2", 2);
+    // Open, modify, and close a document - verify no errors
+    try ctx.client.openDocument("file:///test.maxon",
+        \\function main() returns int
+        \\    var x = 1
+        \\    return x
+        \\end 'main'
+    );
+
+    // Request hover on 'x' variable at line 1, character 8
+    // Line 1: "    var x = 1" - 'x' is at position 8
+    var hover_result = try ctx.client.hover("file:///test.maxon", 1, 8);
+    defer hover_result.deinit();
+    try testing.expect(hover_result.content != null);
+    // Verify hover shows the variable type (int)
+    try testing.expect(std.mem.indexOf(u8, hover_result.content.?, "int") != null);
+
+    try ctx.client.changeDocument("file:///test.maxon",
+        \\function main() returns int
+        \\    var x = 2
+        \\    return x
+        \\end 'main'
+    , 2);
     try ctx.client.closeDocument("file:///test.maxon");
 
     try ctx.deinit();
@@ -101,12 +133,18 @@ test "didOpen registers document" {
     var ctx = try TestContext.init();
     errdefer ctx.forceCleanup();
 
-    // Opening a document should not error
     try ctx.client.openDocument("file:///test.maxon",
         \\function main() returns int
         \\    return 0
         \\end 'main'
     );
+
+    // Verify document is accessible by requesting symbols
+    var result = try ctx.client.documentSymbols("file:///test.maxon");
+    defer result.deinit();
+    try testing.expectEqual(@as(usize, 1), result.symbols.len);
+    try testing.expect(std.mem.eql(u8, result.symbols[0].name, "main"));
+    try testing.expectEqual(@as(i64, 12), result.symbols[0].kind); // function = 12
 
     try ctx.deinit();
 }
@@ -115,10 +153,33 @@ test "didChange updates document content" {
     var ctx = try TestContext.init();
     errdefer ctx.forceCleanup();
 
-    try ctx.client.openDocument("file:///test.maxon", "let x = 1");
+    try ctx.client.openDocument("file:///test.maxon",
+        \\function foo() returns int
+        \\    return 1
+        \\end 'foo'
+    );
 
-    // Updating document should not error
-    try ctx.client.changeDocument("file:///test.maxon", "let x = 2\nlet y = 3", 2);
+    // Verify initial content
+    var result1 = try ctx.client.documentSymbols("file:///test.maxon");
+    defer result1.deinit();
+    try testing.expect(result1.symbols.len == 1);
+    try testing.expect(std.mem.eql(u8, result1.symbols[0].name, "foo"));
+
+    // Update to add another function
+    try ctx.client.changeDocument("file:///test.maxon",
+        \\function foo() returns int
+        \\    return 1
+        \\end 'foo'
+        \\
+        \\function bar() returns int
+        \\    return 2
+        \\end 'bar'
+    , 2);
+
+    // Verify updated content has both functions
+    var result2 = try ctx.client.documentSymbols("file:///test.maxon");
+    defer result2.deinit();
+    try testing.expectEqual(@as(usize, 2), result2.symbols.len);
 
     try ctx.deinit();
 }
@@ -127,8 +188,23 @@ test "didClose removes document" {
     var ctx = try TestContext.init();
     errdefer ctx.forceCleanup();
 
-    try ctx.client.openDocument("file:///test.maxon", "let x = 1");
+    try ctx.client.openDocument("file:///test.maxon",
+        \\function main() returns int
+        \\    return 0
+        \\end 'main'
+    );
+
+    // Verify document exists
+    var result1 = try ctx.client.documentSymbols("file:///test.maxon");
+    defer result1.deinit();
+    try testing.expect(result1.symbols.len >= 1);
+
     try ctx.client.closeDocument("file:///test.maxon");
+
+    // After close, symbols request should return empty
+    var result2 = try ctx.client.documentSymbols("file:///test.maxon");
+    defer result2.deinit();
+    try testing.expectEqual(@as(usize, 0), result2.symbols.len);
 
     try ctx.deinit();
 }
@@ -221,14 +297,16 @@ test "hover shows value for immutable variables" {
 
     try ctx.client.openDocument("file:///test.maxon", source);
 
-    // Request hover on 'PI' at line 1, character 5
-    var result = try ctx.client.hover("file:///test.maxon", 1, 5);
+    // Request hover on 'PI' at line 1, character 8 (start of "PI")
+    // Line 1: "    let PI = 3.14159"
+    //          01234567890
+    var result = try ctx.client.hover("file:///test.maxon", 1, 8);
     defer result.deinit();
 
     // The hover should contain the value for immutable variables
-    if (result.content) |content| {
-        try testing.expect(std.mem.indexOf(u8, content, "3.14159") != null);
-    }
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "3.14159") != null);
 
     try ctx.deinit();
 }
@@ -255,10 +333,10 @@ test "hover shows local function signature" {
     defer result.deinit();
 
     // The hover should show the function signature
-    if (result.content) |content| {
-        try testing.expect(std.mem.indexOf(u8, content, "function add") != null);
-        try testing.expect(std.mem.indexOf(u8, content, "a int") != null);
-    }
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "function add") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "a int") != null);
 
     try ctx.deinit();
 }
@@ -282,10 +360,10 @@ test "hover shows correct type for function parameter" {
     defer result.deinit();
 
     // The hover should show the parameter type as string
-    if (result.content) |content| {
-        try testing.expect(std.mem.indexOf(u8, content, "string") != null);
-        try testing.expect(std.mem.indexOf(u8, content, "float") == null);
-    }
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "string") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "float") == null);
 
     try ctx.deinit();
 }
@@ -309,10 +387,10 @@ test "hover shows intrinsic signature" {
     defer result.deinit();
 
     // The hover should show the intrinsic signature
-    if (result.content) |content| {
-        try testing.expect(std.mem.indexOf(u8, content, "intrinsic") != null);
-        try testing.expect(std.mem.indexOf(u8, content, "__write_file_binary") != null);
-    }
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "intrinsic") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "__write_file_binary") != null);
 
     try ctx.deinit();
 }
@@ -672,8 +750,22 @@ test "foldingRange returns ranges" {
     var result = try ctx.client.foldingRange("file:///test.maxon");
     defer result.deinit();
 
-    // Should have folding ranges for function and if block
-    try testing.expect(result.ranges.len >= 1);
+    // Should have folding ranges for function (lines 0-5) and if block (lines 1-3)
+    try testing.expectEqual(@as(usize, 2), result.ranges.len);
+
+    // Verify we have ranges for both blocks
+    var found_function = false;
+    var found_if = false;
+    for (result.ranges) |range| {
+        if (range.start_line == 0 and range.end_line == 5) {
+            found_function = true;
+        }
+        if (range.start_line == 1 and range.end_line == 3) {
+            found_if = true;
+        }
+    }
+    try testing.expect(found_function);
+    try testing.expect(found_if);
 
     try ctx.deinit();
 }
