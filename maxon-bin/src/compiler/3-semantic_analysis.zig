@@ -497,6 +497,8 @@ pub const SemanticAnalyzer = struct {
             .methods = iface.methods,
             .associated_types = iface.generic_params,
             .extends = iface.extends,
+            .decl_line = iface.line,
+            .decl_column = iface.column,
         });
     }
 
@@ -548,6 +550,8 @@ pub const SemanticAnalyzer = struct {
                 .name = enum_decl.name,
                 .members = members,
                 .is_error = is_error,
+                .decl_line = enum_decl.line,
+                .decl_column = enum_decl.column,
             },
         });
 
@@ -965,8 +969,7 @@ pub const SemanticAnalyzer = struct {
                 }
             },
             // Literals and simple expressions don't trigger monomorphization
-            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal,
-            .char_literal, .identifier, .self_expr, .array_type => {},
+            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .identifier, .self_expr, .array_type => {},
         }
     }
 

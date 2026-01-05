@@ -204,6 +204,8 @@ pub const EnumTypeInfo = struct {
     max_payload_size: i32 = 0,
     /// True if enum was declared with explicit backing type (e.g., "enum Status int")
     has_explicit_backing_type: bool = false,
+    decl_line: u32 = 0,
+    decl_column: u32 = 0,
 
     pub const BackingType = enum { int, string };
 };
@@ -398,6 +400,8 @@ pub const InterfaceInfo = struct {
     methods: []const ast.InterfaceMethod,
     associated_types: []const []const u8, // ["Element", "Key", "Value"] from `uses Element, Key, Value`
     extends: []const []const u8, // ["BaseInterface", "OtherInterface"] from `extends BaseInterface, OtherInterface`
+    decl_line: u32 = 0,
+    decl_column: u32 = 0,
 };
 
 /// Method info with source interface - used for transitive interface conformance checking

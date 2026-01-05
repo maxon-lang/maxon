@@ -524,12 +524,48 @@ test "formatting formats multiple interfaces at top level" {
 // ============================================================================
 // Document Symbols Tests
 // ============================================================================
-// NOTE: textDocument/documentSymbol is not yet implemented in the Zig LSP server.
-// These tests are ready for when it's implemented.
 
 test "documentSymbol returns symbols" {
-    // Skip: textDocument/documentSymbol not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type Point
+        \\    var x int
+        \\    var y int
+        \\end 'Point'
+        \\
+        \\function main() returns int
+        \\    return 0
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.documentSymbols("file:///test.maxon");
+    defer result.deinit();
+
+    // Should have exactly Point type and main function
+    try testing.expectEqual(@as(usize, 2), result.symbols.len);
+
+    // Verify we found both Point and main with correct kinds
+    // SymbolKind: struct = 23, function = 12
+    var found_point = false;
+    var found_main = false;
+    for (result.symbols) |sym| {
+        if (std.mem.eql(u8, sym.name, "Point")) {
+            found_point = true;
+            try testing.expectEqual(@as(i64, 23), sym.kind); // struct
+        }
+        if (std.mem.eql(u8, sym.name, "main")) {
+            found_main = true;
+            try testing.expectEqual(@as(i64, 12), sym.kind); // function
+        }
+    }
+    try testing.expect(found_point);
+    try testing.expect(found_main);
+
+    try ctx.deinit();
 }
 
 // ============================================================================

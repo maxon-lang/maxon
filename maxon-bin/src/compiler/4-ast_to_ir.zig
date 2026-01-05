@@ -1923,6 +1923,8 @@ pub const AstToIr = struct {
                 .has_associated_values = has_associated_values,
                 .max_payload_size = max_payload_size,
                 .has_explicit_backing_type = enum_decl.backing_type != null,
+                .decl_line = enum_decl.line,
+                .decl_column = enum_decl.column,
             },
         });
         debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {}, has_assoc: {})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type), is_error, has_associated_values });
@@ -1934,6 +1936,8 @@ pub const AstToIr = struct {
             .methods = iface.methods,
             .associated_types = iface.generic_params,
             .extends = iface.extends,
+            .decl_line = iface.line,
+            .decl_column = iface.column,
         });
         debug.astToIr("Registered interface '{s}' with {d} methods, {d} associated types, extends {d} interfaces", .{ iface.name, iface.methods.len, iface.generic_params.len, iface.extends.len });
     }
@@ -3653,7 +3657,6 @@ pub const AstToIr = struct {
                 ));
             },
         }
-
     }
 
     /// Check if a type expression is "array of String" (the type for main's args parameter)

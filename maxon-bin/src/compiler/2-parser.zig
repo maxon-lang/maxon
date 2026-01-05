@@ -2214,11 +2214,13 @@ pub const Parser = struct {
                 if (self.check(.lbracket)) {
                     const arr_lit = try self.parseArrayLiteral();
                     const arr_lit_ptr = try self.createExpr(arr_lit);
-                    return try self.parsePostfix(.{ .set_from = .{
-                        .type_name = token.text,
-                        .type_args = &.{}, // Element type inferred from array
-                        .elements = arr_lit_ptr,
-                    } });
+                    return try self.parsePostfix(.{
+                        .set_from = .{
+                            .type_name = token.text,
+                            .type_args = &.{}, // Element type inferred from array
+                            .elements = arr_lit_ptr,
+                        },
+                    });
                 }
 
                 // Otherwise, parse "TypeName from K to V{}" syntax for Map
@@ -2976,6 +2978,8 @@ pub const Parser = struct {
             .conformances = try conformances.toOwnedSlice(self.allocator),
             .members = try members.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),
+            .line = name_token.line,
+            .column = name_token.column,
         };
     }
 
@@ -3022,6 +3026,8 @@ pub const Parser = struct {
             .generic_params = generic_params,
             .extends = extends_list,
             .methods = try methods.toOwnedSlice(self.allocator),
+            .line = name_token.line,
+            .column = name_token.column,
         };
     }
 

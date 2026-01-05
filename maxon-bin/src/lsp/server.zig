@@ -92,6 +92,8 @@ pub const Server = struct {
             try self.handleHover(id, obj);
         } else if (std.mem.eql(u8, method, "textDocument/definition")) {
             try self.handleDefinition(id, obj);
+        } else if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
+            try self.handleDocumentSymbol(id, obj);
         } else {
             // Unknown method
             if (id != null) {
@@ -117,6 +119,7 @@ pub const Server = struct {
                 },
                 .hoverProvider = false,
                 .definitionProvider = true,
+                .documentSymbolProvider = true,
             },
         };
 
@@ -329,6 +332,29 @@ pub const Server = struct {
         } else {
             try self.transport.writeResult(id, null);
         }
+    }
+
+    /// Handle textDocument/documentSymbol request
+    fn handleDocumentSymbol(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+        const params = transport.getObject(msg, "params") orelse {
+            try self.transport.writeResult(id, @as(?[]const types.SymbolInformation, null));
+            return;
+        };
+
+        const text_doc = transport.getObject(params, "textDocument") orelse {
+            try self.transport.writeResult(id, @as(?[]const types.SymbolInformation, null));
+            return;
+        };
+
+        const uri = transport.getString(text_doc, "uri") orelse {
+            try self.transport.writeResult(id, @as(?[]const types.SymbolInformation, null));
+            return;
+        };
+
+        const symbols = try self.analyzer.getDocumentSymbols(uri);
+        defer if (symbols.len > 0) self.allocator.free(symbols);
+
+        try self.transport.writeResult(id, symbols);
     }
 };
 

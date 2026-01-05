@@ -320,6 +320,212 @@ pub const Analyzer = struct {
         }
         return items.toOwnedSlice(self.allocator);
     }
+
+    /// Get all document symbols (functions, types, etc.) for outline view
+    pub fn getDocumentSymbols(self: *Analyzer, uri: []const u8) ![]types.SymbolInformation {
+        const doc = self.documents.get(uri) orelse return &.{};
+        const info = self.getSemanticInfo(uri) catch return &.{};
+
+        var symbols: std.ArrayListUnmanaged(types.SymbolInformation) = .empty;
+        errdefer symbols.deinit(self.allocator);
+
+        // Add functions
+        var func_iter = info.functions.iterator();
+        while (func_iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const func_info = entry.value_ptr.*;
+
+            // Skip methods (contain $) and intrinsics (start with __)
+            if (std.mem.indexOf(u8, name, "$") != null) continue;
+            if (std.mem.startsWith(u8, name, "__")) continue;
+
+            // Only include if it has valid location
+            if (func_info.decl_line > 0) {
+                try symbols.append(self.allocator, .{
+                    .name = name,
+                    .kind = .function,
+                    .location = .{
+                        .uri = uri,
+                        .range = .{
+                            .start = .{
+                                .line = func_info.decl_line - 1,
+                                .character = if (func_info.decl_column > 0) func_info.decl_column - 1 else 0,
+                            },
+                            .end = .{
+                                .line = func_info.decl_line - 1,
+                                .character = if (func_info.decl_column > 0) func_info.decl_column - 1 else 0,
+                            },
+                        },
+                    },
+                });
+            }
+        }
+
+        // Add types (structs)
+        var type_iter = info.types.iterator();
+        while (type_iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const type_info = entry.value_ptr.*;
+
+            // Skip internal types and monomorphized types (contain $)
+            if (std.mem.indexOf(u8, name, "$") != null) continue;
+            if (std.mem.startsWith(u8, name, "__")) continue;
+
+            switch (type_info) {
+                .struct_type => |st| {
+                    if (st.decl_line > 0) {
+                        try symbols.append(self.allocator, .{
+                            .name = name,
+                            .kind = .@"struct",
+                            .location = .{
+                                .uri = uri,
+                                .range = .{
+                                    .start = .{
+                                        .line = st.decl_line - 1,
+                                        .character = if (st.decl_column > 0) st.decl_column - 1 else 0,
+                                    },
+                                    .end = .{
+                                        .line = st.decl_line - 1,
+                                        .character = if (st.decl_column > 0) st.decl_column - 1 else 0,
+                                    },
+                                },
+                            },
+                        });
+                    }
+                },
+                .enum_type => |et| {
+                    if (et.decl_line > 0) {
+                        try symbols.append(self.allocator, .{
+                            .name = name,
+                            .kind = .@"enum",
+                            .location = .{
+                                .uri = uri,
+                                .range = .{
+                                    .start = .{
+                                        .line = et.decl_line - 1,
+                                        .character = if (et.decl_column > 0) et.decl_column - 1 else 0,
+                                    },
+                                    .end = .{
+                                        .line = et.decl_line - 1,
+                                        .character = if (et.decl_column > 0) et.decl_column - 1 else 0,
+                                    },
+                                },
+                            },
+                        });
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // Add interfaces
+        var intf_iter = info.interfaces.iterator();
+        while (intf_iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const intf_info = entry.value_ptr.*;
+
+            if (intf_info.decl_line > 0) {
+                try symbols.append(self.allocator, .{
+                    .name = name,
+                    .kind = .interface,
+                    .location = .{
+                        .uri = uri,
+                        .range = .{
+                            .start = .{
+                                .line = intf_info.decl_line - 1,
+                                .character = if (intf_info.decl_column > 0) intf_info.decl_column - 1 else 0,
+                            },
+                            .end = .{
+                                .line = intf_info.decl_line - 1,
+                                .character = if (intf_info.decl_column > 0) intf_info.decl_column - 1 else 0,
+                            },
+                        },
+                    },
+                });
+            }
+        }
+
+        // Use a text-based fallback if no symbols from semantic info
+        if (symbols.items.len == 0) {
+            // Search for functions and types in document
+            try self.findSymbolsInDocument(doc.content, uri, &symbols);
+        }
+
+        if (symbols.items.len == 0) {
+            return &.{};
+        }
+        return symbols.toOwnedSlice(self.allocator);
+    }
+
+    fn findSymbolsInDocument(self: *Analyzer, content: []const u8, uri: []const u8, symbols: *std.ArrayListUnmanaged(types.SymbolInformation)) !void {
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        var line_num: u32 = 0;
+
+        while (lines.next()) |line_content| : (line_num += 1) {
+            const trimmed = std.mem.trimLeft(u8, line_content, " \t");
+
+            // Check for function declarations
+            if (std.mem.startsWith(u8, trimmed, "function ") or std.mem.startsWith(u8, trimmed, "export function ")) {
+                const func_start = if (std.mem.startsWith(u8, trimmed, "export function "))
+                    trimmed["export function ".len..]
+                else
+                    trimmed["function ".len..];
+
+                const paren_pos = std.mem.indexOf(u8, func_start, "(");
+                const func_name = if (paren_pos) |p| func_start[0..p] else func_start;
+                const func_name_trimmed = std.mem.trim(u8, func_name, " \t");
+
+                if (func_name_trimmed.len > 0) {
+                    const keyword_pos = std.mem.indexOf(u8, line_content, "function ") orelse 0;
+                    try symbols.append(self.allocator, .{
+                        .name = func_name_trimmed,
+                        .kind = .function,
+                        .location = .{
+                            .uri = uri,
+                            .range = .{
+                                .start = .{ .line = line_num, .character = @intCast(keyword_pos + "function ".len) },
+                                .end = .{ .line = line_num, .character = @intCast(keyword_pos + "function ".len + func_name_trimmed.len) },
+                            },
+                        },
+                    });
+                }
+            }
+            // Check for type declarations
+            else if (std.mem.startsWith(u8, trimmed, "type ") or std.mem.startsWith(u8, trimmed, "export type ")) {
+                const type_start = if (std.mem.startsWith(u8, trimmed, "export type "))
+                    trimmed["export type ".len..]
+                else
+                    trimmed["type ".len..];
+
+                var end: usize = 0;
+                while (end < type_start.len and (std.ascii.isAlphanumeric(type_start[end]) or type_start[end] == '_')) {
+                    end += 1;
+                }
+
+                if (end > 0) {
+                    const type_name = type_start[0..end];
+                    const keyword_pos = if (std.mem.indexOf(u8, line_content, "export type ")) |pos|
+                        pos + "export type ".len
+                    else if (std.mem.indexOf(u8, line_content, "type ")) |pos|
+                        pos + "type ".len
+                    else
+                        0;
+
+                    try symbols.append(self.allocator, .{
+                        .name = type_name,
+                        .kind = .@"struct",
+                        .location = .{
+                            .uri = uri,
+                            .range = .{
+                                .start = .{ .line = line_num, .character = @intCast(keyword_pos) },
+                                .end = .{ .line = line_num, .character = @intCast(keyword_pos + type_name.len) },
+                            },
+                        },
+                    });
+                }
+            }
+        }
+    }
 };
 
 fn formatFuncSignature(func: ast_to_ir.FuncInfo) []const u8 {

@@ -33,6 +33,8 @@ pub const InterfaceDecl = struct {
     generic_params: []const []const u8, // ["Element"] for `uses Element`
     extends: []const []const u8, // ["Collection", "Iterable"] for `extends Collection, Iterable`
     methods: []InterfaceMethod,
+    line: u32 = 0,
+    column: u32 = 0,
 };
 
 pub const EnumMember = struct {
@@ -49,6 +51,8 @@ pub const EnumDecl = struct {
     conformances: []const InterfaceConformance, // Interface conformances (e.g., is Error)
     members: []const EnumMember,
     methods: []MethodDecl, // Methods defined on the enum
+    line: u32 = 0,
+    column: u32 = 0,
 };
 
 pub const InterfaceConformance = struct {
