@@ -34,10 +34,15 @@ pub const Server = struct {
 
     /// Run the main server loop
     pub fn run(self: *Server) !void {
+        log("Server starting main loop", .{});
         while (!self.shutdown_requested) {
             // Read next message
             var parsed = self.transport.readMessage() catch |err| {
-                if (err == error.EndOfStream) break;
+                log("readMessage error: {}", .{err});
+                if (err == error.EndOfStream) {
+                    log("EndOfStream - exiting loop", .{});
+                    break;
+                }
                 continue;
             };
             defer parsed.deinit();
@@ -46,7 +51,14 @@ pub const Server = struct {
             self.handleMessage(parsed.value) catch |err| {
                 std.debug.print("Error handling message: {}\n", .{err});
             };
+
+            // Check if shutdown was requested during message handling
+            if (self.shutdown_requested) {
+                log("Shutdown requested - exiting loop", .{});
+                break;
+            }
         }
+        log("Server exiting main loop", .{});
     }
 
     /// Handle a single JSON-RPC message

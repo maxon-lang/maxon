@@ -59,6 +59,12 @@ pub const Parser = struct {
         self.ifstmt_ptrs.deinit(self.allocator);
         // Note: stmt_ptrs are freed by freeProgram in 0-compiler.zig
         self.stmt_ptrs.deinit(self.allocator);
+        // Free allocated error message if any
+        if (self.last_error) |*e| {
+            if (e.message_allocated) {
+                self.allocator.free(e.message);
+            }
+        }
     }
 
     pub fn parse(self: *Parser) ParseError!ast.Program {

@@ -145,11 +145,25 @@ pub const Analyzer = struct {
         var items: std.ArrayListUnmanaged(types.CompletionItem) = .empty;
 
         // Get type name for method lookup
+        // For arrays, build monomorphized name like "Array$int"
+        var type_name_buf: [256]u8 = undefined;
         const type_name: []const u8 = switch (ty) {
             .primitive => |name| name,
             .struct_type => |name| name,
             .enum_type => |name| name,
-            .array_type => "Array", // Look up Array methods
+            .array_type => |arr| blk: {
+                // Build monomorphized array type name
+                // Use Maxon type names (int, float) not IR type names (i64, f64)
+                const elem_name = arr.element_struct_type orelse switch (arr.element_type) {
+                    .i64 => "int",
+                    .i32 => "int",
+                    .i8 => "byte",
+                    .f64 => "float",
+                    .ptr => "ptr",
+                    .void => "void",
+                };
+                break :blk std.fmt.bufPrint(&type_name_buf, "Array${s}", .{elem_name}) catch "Array";
+            },
             .optional_type => return &.{}, // Optionals don't have methods
             .error_union_type => return &.{},
             .function_type => return &.{},

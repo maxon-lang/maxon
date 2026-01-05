@@ -749,7 +749,7 @@ pub const SemanticAnalyzer = struct {
         }
     }
 
-    fn discoverInStatements(self: *SemanticAnalyzer, stmts: []const ast.Statement) !void {
+    fn discoverInStatements(self: *SemanticAnalyzer, stmts: []const ast.Statement) std.mem.Allocator.Error!void {
         for (stmts) |stmt| {
             switch (stmt.kind) {
                 .var_decl, .let_decl => |decl| {
@@ -786,15 +786,7 @@ pub const SemanticAnalyzer = struct {
                 .if_stmt => |if_s| {
                     try self.discoverInExpression(if_s.condition);
                     try self.discoverInStatements(if_s.body);
-                    if (if_s.else_body) |else_body| {
-                        try self.discoverInStatements(else_body);
-                    }
-                    var else_if = if_s.else_if;
-                    while (else_if) |eif| {
-                        try self.discoverInExpression(eif.condition);
-                        try self.discoverInStatements(eif.body);
-                        else_if = eif.else_if;
-                    }
+                    try self.walkElseIfChainWithConditions(if_s.else_body, if_s.else_if);
                 },
                 .while_stmt => |while_s| {
                     try self.discoverInExpression(while_s.condition);
@@ -835,7 +827,7 @@ pub const SemanticAnalyzer = struct {
         }
     }
 
-    fn discoverInExpression(self: *SemanticAnalyzer, expr: ast.Expression) !void {
+    fn discoverInExpression(self: *SemanticAnalyzer, expr: ast.Expression) std.mem.Allocator.Error!void {
         switch (expr) {
             .struct_init => |sinit| {
                 // This is the main monomorphization trigger
@@ -1095,70 +1087,48 @@ pub const SemanticAnalyzer = struct {
     fn collectParametersAsVariables(self: *SemanticAnalyzer, params: []const ast.ParamDecl) !void {
         for (params) |param| {
             const param_type = self.typeExprToValueType(param.type_expr) catch continue;
-            try self.captured_vars.append(self.allocator, .{
-                .name = param.name,
-                .ty = param_type,
-                .is_mutable = true, // Parameters are mutable
-                .is_parameter = true,
-                .borrow_state = .none,
-                .borrowed_from = null,
-                .decl_line = 0,
-                .decl_column = 0,
-                .function_name = self.current_func_name orelse "",
-                .type_name = self.current_type_name,
-            });
+            try self.addVariableInfo(param.name, param_type, true, true, 0, 0);
         }
+    }
+
+    /// Helper to add a variable to the captured_vars list with current context
+    fn addVariableInfo(
+        self: *SemanticAnalyzer,
+        name: []const u8,
+        ty: ValueType,
+        is_mutable: bool,
+        is_parameter: bool,
+        line: u32,
+        column: u32,
+    ) !void {
+        try self.captured_vars.append(self.allocator, .{
+            .name = name,
+            .ty = ty,
+            .is_mutable = is_mutable,
+            .is_parameter = is_parameter,
+            .borrow_state = .none,
+            .borrowed_from = null,
+            .decl_line = line,
+            .decl_column = column,
+            .function_name = self.current_func_name orelse "",
+            .type_name = self.current_type_name,
+        });
     }
 
     fn collectVariablesFromBody(self: *SemanticAnalyzer, body: []const ast.Statement) !void {
         for (body) |stmt| {
             switch (stmt.kind) {
-                .var_decl => |decl| {
+                .var_decl, .let_decl => |decl| {
                     const var_type = if (decl.type_annotation) |ann|
                         self.typeExprToValueType(ann) catch continue
                     else
                         self.inferExpressionType(decl.value) orelse continue;
-                    try self.captured_vars.append(self.allocator, .{
-                        .name = decl.name,
-                        .ty = var_type,
-                        .is_mutable = true,
-                        .is_parameter = false,
-                        .borrow_state = .none,
-                        .borrowed_from = null,
-                        .decl_line = stmt.line,
-                        .decl_column = stmt.column,
-                        .function_name = self.current_func_name orelse "",
-                        .type_name = self.current_type_name,
-                    });
-                },
-                .let_decl => |decl| {
-                    const var_type = if (decl.type_annotation) |ann|
-                        self.typeExprToValueType(ann) catch continue
-                    else
-                        self.inferExpressionType(decl.value) orelse continue;
-                    try self.captured_vars.append(self.allocator, .{
-                        .name = decl.name,
-                        .ty = var_type,
-                        .is_mutable = false,
-                        .is_parameter = false,
-                        .borrow_state = .none,
-                        .borrowed_from = null,
-                        .decl_line = stmt.line,
-                        .decl_column = stmt.column,
-                        .function_name = self.current_func_name orelse "",
-                        .type_name = self.current_type_name,
-                    });
+                    const is_mutable = stmt.kind == .var_decl;
+                    try self.addVariableInfo(decl.name, var_type, is_mutable, false, stmt.line, stmt.column);
                 },
                 .if_stmt => |if_s| {
                     try self.collectVariablesFromBody(if_s.body);
-                    if (if_s.else_body) |else_body| {
-                        try self.collectVariablesFromBody(else_body);
-                    }
-                    var else_if = if_s.else_if;
-                    while (else_if) |eif| {
-                        try self.collectVariablesFromBody(eif.body);
-                        else_if = eif.else_if;
-                    }
+                    try self.walkElseIfChain(if_s.else_body, if_s.else_if, collectVariablesFromBody);
                 },
                 .while_stmt => |while_s| {
                     try self.collectVariablesFromBody(while_s.body);
@@ -1170,18 +1140,7 @@ pub const SemanticAnalyzer = struct {
                         ValueType{ .primitive = @tagName(iter_type.array_type.element_type) }
                     else
                         ValueType{ .primitive = "int" };
-                    try self.captured_vars.append(self.allocator, .{
-                        .name = for_s.var_name,
-                        .ty = elem_type,
-                        .is_mutable = false,
-                        .is_parameter = false,
-                        .borrow_state = .none,
-                        .borrowed_from = null,
-                        .decl_line = 0,
-                        .decl_column = 0,
-                        .function_name = self.current_func_name orelse "",
-                        .type_name = self.current_type_name,
-                    });
+                    try self.addVariableInfo(for_s.var_name, elem_type, false, false, 0, 0);
                     try self.collectVariablesFromBody(for_s.body);
                 },
                 .do_catch_stmt => |dc| {
@@ -1197,6 +1156,40 @@ pub const SemanticAnalyzer = struct {
                 },
                 else => {},
             }
+        }
+    }
+
+    /// Walk an else-if chain, calling the handler for each body
+    fn walkElseIfChain(
+        self: *SemanticAnalyzer,
+        else_body: ?[]const ast.Statement,
+        else_if: ?*const ast.IfStmt,
+        comptime handler: fn (*SemanticAnalyzer, []const ast.Statement) anyerror!void,
+    ) !void {
+        if (else_body) |eb| {
+            try handler(self, eb);
+        }
+        var current = else_if;
+        while (current) |eif| {
+            try handler(self, eif.body);
+            current = eif.else_if;
+        }
+    }
+
+    /// Walk else-if chain for monomorphization discovery (includes condition expressions)
+    fn walkElseIfChainWithConditions(
+        self: *SemanticAnalyzer,
+        else_body: ?[]const ast.Statement,
+        else_if: ?*const ast.IfStmt,
+    ) std.mem.Allocator.Error!void {
+        if (else_body) |eb| {
+            try self.discoverInStatements(eb);
+        }
+        var current = else_if;
+        while (current) |eif| {
+            try self.discoverInExpression(eif.condition);
+            try self.discoverInStatements(eif.body);
+            current = eif.else_if;
         }
     }
 

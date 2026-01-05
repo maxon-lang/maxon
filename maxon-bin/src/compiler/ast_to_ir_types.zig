@@ -117,6 +117,28 @@ pub const ValueType = union(enum) {
     }
 };
 
+/// Free any heap allocations inside a ValueType (for function types with nested allocations)
+pub fn freeValueTypeAllocations(allocator: std.mem.Allocator, vt: ValueType) void {
+    switch (vt) {
+        .function_type => |ft| {
+            // Recursively free nested function type allocations in param_types
+            for (ft.param_types) |param_vt| {
+                freeValueTypeAllocations(allocator, param_vt);
+            }
+            if (ft.param_types.len > 0) {
+                allocator.free(ft.param_types);
+            }
+            // Free return type pointer
+            if (ft.return_type) |rt| {
+                freeValueTypeAllocations(allocator, rt.*);
+                allocator.destroy(@constCast(rt));
+            }
+        },
+        // Other variants don't have heap allocations
+        .primitive, .struct_type, .enum_type, .array_type, .optional_type, .error_union_type => {},
+    }
+}
+
 /// Struct field info
 pub const FieldInfo = struct {
     name: []const u8,
@@ -472,6 +494,10 @@ pub const SemanticInfo = struct {
                 const ptr = &entry.value_ptr.param_types[0];
                 if (freed_ptrs.get(ptr) == null) {
                     freed_ptrs.put(self.allocator, ptr, {}) catch {};
+                    // Free nested function type allocations within param_types
+                    for (entry.value_ptr.param_types) |param| {
+                        freeValueTypeAllocations(self.allocator, param.ty);
+                    }
                     self.allocator.free(entry.value_ptr.param_types);
                 }
             }

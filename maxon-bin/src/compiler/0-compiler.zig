@@ -567,6 +567,7 @@ pub fn analyzeForLSP(
     var all_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
     defer {
         for (all_funcs.items) |sig| {
+            // Free both name and param_types - extractFunctionSignaturesFromAst allocates both
             allocator.free(sig.name);
             if (sig.param_types.len > 0) allocator.free(sig.param_types);
         }
@@ -592,11 +593,16 @@ pub fn analyzeForLSP(
         // Extract function signatures
         const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
         for (func_sigs) |sig| {
-            const param_types_copy = allocator.dupe(ast_to_ir.ParamType, sig.param_types) catch continue;
+            const param_types_copy = allocator.dupe(ast_to_ir.ParamType, sig.param_types) catch {
+                // Failed to dupe param_types - free the name we own
+                allocator.free(sig.name);
+                continue;
+            };
             var sig_copy = sig;
             sig_copy.param_types = param_types_copy;
             all_funcs.append(allocator, sig_copy) catch {
                 allocator.free(param_types_copy);
+                allocator.free(sig.name);
                 continue;
             };
         }
@@ -651,7 +657,8 @@ fn analyzeSourceForLSP(
 
     // Use the new SemanticAnalyzer
     var analyzer = semantic_analysis.SemanticAnalyzer.init(allocator);
-    errdefer analyzer.deinit();
+    // Always deinit - buildSemanticInfo() transfers ownership of some maps, deinit cleans up the rest
+    defer analyzer.deinit();
 
     // Duplicate external function names (they'll be freed after this call)
     var func_name_copies: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -684,10 +691,8 @@ fn analyzeSourceForLSP(
     result.user_source = user_source;
     result.allocated_func_names = func_name_copies;
 
-    // Free param_types copies (they're duplicated again inside analyze)
-    for (ext_funcs_copy) |ext_func| {
-        if (ext_func.param_types.len > 0) allocator.free(ext_func.param_types);
-    }
+    // Note: param_types are NOT freed here - they're stored in func_map
+    // and will be freed by SemanticInfo.deinit()
 
     return result;
 }
