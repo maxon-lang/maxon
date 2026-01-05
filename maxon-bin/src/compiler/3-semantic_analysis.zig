@@ -506,7 +506,13 @@ pub const SemanticAnalyzer = struct {
         const size = self.calculateStructSize(fields);
 
         try self.type_map.put(self.allocator, type_decl.name, .{
-            .struct_type = .{ .name = type_decl.name, .fields = fields, .size = size },
+            .struct_type = .{
+                .name = type_decl.name,
+                .fields = fields,
+                .size = size,
+                .decl_line = type_decl.line,
+                .decl_column = type_decl.column,
+            },
         });
 
         // Store for conformance checking
@@ -559,6 +565,8 @@ pub const SemanticAnalyzer = struct {
             .return_value_type = return_info.value_type,
             .param_types = param_types,
             .ir_generated = false, // Will be set true when IR is generated
+            .decl_line = decl.line,
+            .decl_column = decl.column,
         });
     }
 

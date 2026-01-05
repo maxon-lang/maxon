@@ -1730,7 +1730,13 @@ pub const AstToIr = struct {
         const field_result = try self.buildFieldInfos(type_decl.fields);
 
         try self.type_map.put(self.allocator, type_decl.name, .{
-            .struct_type = .{ .name = type_decl.name, .fields = field_result.fields, .size = field_result.size },
+            .struct_type = .{
+                .name = type_decl.name,
+                .fields = field_result.fields,
+                .size = field_result.size,
+                .decl_line = type_decl.line,
+                .decl_column = type_decl.column,
+            },
         });
 
         // Now that the new entry is in the map, free the old fields if this was a re-registration
@@ -2603,6 +2609,8 @@ pub const AstToIr = struct {
             .return_type_name = ret_type_name,
             .return_value_type = effective_ret_value_type,
             .param_types = param_types,
+            .decl_line = decl.line,
+            .decl_column = decl.column,
         });
 
         debug.astToIr("Registered function '{s}' returning {s}", .{ decl.name, ret_type.toIrName() });
@@ -2836,6 +2844,8 @@ pub const AstToIr = struct {
             .name = mono_name,
             .fields = field_result.fields,
             .size = field_result.size,
+            .decl_line = type_decl.line,
+            .decl_column = type_decl.column,
         };
 
         try self.type_map.put(self.allocator, mono_name, .{ .struct_type = struct_info });

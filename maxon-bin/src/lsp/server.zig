@@ -90,6 +90,8 @@ pub const Server = struct {
             try self.handleCompletion(id, obj);
         } else if (std.mem.eql(u8, method, "textDocument/hover")) {
             try self.handleHover(id, obj);
+        } else if (std.mem.eql(u8, method, "textDocument/definition")) {
+            try self.handleDefinition(id, obj);
         } else {
             // Unknown method
             if (id != null) {
@@ -114,7 +116,7 @@ pub const Server = struct {
                     .resolveProvider = false,
                 },
                 .hoverProvider = false,
-                .definitionProvider = false,
+                .definitionProvider = true,
             },
         };
 
@@ -288,6 +290,45 @@ pub const Server = struct {
     fn handleHover(self: *Server, id: ?types.Request.Id, _: std.json.ObjectMap) !void {
         // For now, return null (no hover info)
         try self.transport.writeResult(id, null);
+    }
+
+    /// Handle textDocument/definition request
+    fn handleDefinition(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+        const params = transport.getObject(msg, "params") orelse {
+            try self.transport.writeResult(id, null);
+            return;
+        };
+
+        const text_doc = transport.getObject(params, "textDocument") orelse {
+            try self.transport.writeResult(id, null);
+            return;
+        };
+
+        const uri = transport.getString(text_doc, "uri") orelse {
+            try self.transport.writeResult(id, null);
+            return;
+        };
+
+        const position = transport.getObject(params, "position") orelse {
+            try self.transport.writeResult(id, null);
+            return;
+        };
+
+        const line = @as(u32, @intCast(transport.getInt(position, "line") orelse 0));
+        const character = @as(u32, @intCast(transport.getInt(position, "character") orelse 0));
+
+        if (self.analyzer.findDefinition(uri, line, character)) |loc| {
+            // Return Location
+            try self.transport.writeResult(id, types.Location{
+                .uri = loc.uri,
+                .range = .{
+                    .start = .{ .line = loc.line, .character = loc.character },
+                    .end = .{ .line = loc.line, .character = loc.character },
+                },
+            });
+        } else {
+            try self.transport.writeResult(id, null);
+        }
     }
 };
 

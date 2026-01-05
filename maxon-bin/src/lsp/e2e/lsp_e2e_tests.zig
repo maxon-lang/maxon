@@ -442,12 +442,32 @@ test "hover shows intrinsic signature" {
 // ============================================================================
 // Go to Definition Tests
 // ============================================================================
-// NOTE: textDocument/definition is not yet implemented in the Zig LSP server.
-// These tests are ready for when it's implemented.
 
 test "definition returns location" {
-    // Skip: textDocument/definition not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function helper() returns int
+        \\    return 42
+        \\end 'helper'
+        \\
+        \\function main() returns int
+        \\    return helper()
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request definition on 'helper' call at line 5, character 11 (inside "helper")
+    var result = try ctx.client.definition("file:///test.maxon", 5, 11);
+    defer result.deinit();
+
+    // Should point to helper() definition at line 0
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 0), result.line.?);
+
+    try ctx.deinit();
 }
 
 // ============================================================================

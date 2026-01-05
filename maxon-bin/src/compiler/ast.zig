@@ -74,6 +74,8 @@ pub const TypeDecl = struct {
     conformances: []const InterfaceConformance,
     fields: []FieldDecl,
     methods: []MethodDecl,
+    line: u32 = 0,
+    column: u32 = 0,
 };
 
 pub const FieldDecl = struct {
@@ -129,6 +131,8 @@ pub const FunctionDecl = struct {
     return_type: ?TypeExpr, // null for void
     throws_type: ?[]const u8, // error type if function throws (must conform to Error)
     body: []Statement,
+    line: u32 = 0,
+    column: u32 = 0,
 };
 
 pub const IndexAssign = struct {

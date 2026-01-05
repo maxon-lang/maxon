@@ -213,6 +213,63 @@ pub const Analyzer = struct {
         return items.toOwnedSlice(self.allocator);
     }
 
+    /// Result of a definition lookup
+    pub const DefinitionLocation = struct {
+        uri: []const u8,
+        line: u32,
+        character: u32,
+    };
+
+    /// Find the definition of the symbol at the given position
+    pub fn findDefinition(self: *Analyzer, uri: []const u8, line: u32, character: u32) ?DefinitionLocation {
+        const doc = self.documents.get(uri) orelse return null;
+
+        // Get the identifier at position
+        const word = getWordAtPosition(doc.content, line, character) orelse return null;
+
+        // Get semantic info for AST-based lookups
+        const info = self.getSemanticInfo(uri) catch return null;
+
+        // 1. Check if it's a variable reference
+        if (info.findVariable(word)) |v| {
+            // Return definition location (convert from 1-based to 0-based)
+            return .{
+                .uri = uri,
+                .line = if (v.decl_line > 0) v.decl_line - 1 else 0,
+                .character = if (v.decl_column > 0) v.decl_column - 1 else 0,
+            };
+        }
+
+        // 2. Check if it's a function call - use AST-based lookup
+        if (info.functions.get(word)) |func_info| {
+            if (func_info.decl_line > 0) {
+                return .{
+                    .uri = uri,
+                    .line = func_info.decl_line - 1,
+                    .character = if (func_info.decl_column > 0) func_info.decl_column - 1 else 0,
+                };
+            }
+        }
+
+        // 3. Check if it's a type reference - use AST-based lookup
+        if (info.types.get(word)) |type_info| {
+            switch (type_info) {
+                .struct_type => |st| {
+                    if (st.decl_line > 0) {
+                        return .{
+                            .uri = uri,
+                            .line = st.decl_line - 1,
+                            .character = if (st.decl_column > 0) st.decl_column - 1 else 0,
+                        };
+                    }
+                },
+                else => {},
+            }
+        }
+
+        return null;
+    }
+
     pub fn getMemberCompletions(self: *Analyzer, doc_uri: []const u8, type_name: []const u8) ![]types.CompletionItem {
         const info = self.getSemanticInfo(doc_uri) catch return &.{};
 
@@ -270,4 +327,41 @@ fn formatFuncSignature(func: ast_to_ir.FuncInfo) []const u8 {
         return rt;
     }
     return func.return_type.toMaxonName();
+}
+
+/// Get the identifier word at the given position in content
+fn getWordAtPosition(content: []const u8, line: u32, character: u32) ?[]const u8 {
+    // Find the specified line
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var current_line: u32 = 0;
+
+    while (lines.next()) |line_content| : (current_line += 1) {
+        if (current_line == line) {
+            // Found the line, now extract the word at character position
+            if (character >= line_content.len) return null;
+
+            // Find the start of the identifier (scan backwards)
+            var start: usize = character;
+            while (start > 0) {
+                const c = line_content[start - 1];
+                if (!std.ascii.isAlphanumeric(c) and c != '_') break;
+                start -= 1;
+            }
+
+            // Find the end of the identifier (scan forwards)
+            var end: usize = character;
+            while (end < line_content.len) {
+                const c = line_content[end];
+                if (!std.ascii.isAlphanumeric(c) and c != '_') break;
+                end += 1;
+            }
+
+            if (start < end) {
+                return line_content[start..end];
+            }
+            return null;
+        }
+    }
+
+    return null;
 }

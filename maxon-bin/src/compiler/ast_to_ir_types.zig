@@ -169,6 +169,8 @@ pub const StructTypeInfo = struct {
     name: []const u8,
     fields: []const FieldInfo,
     size: i32,
+    decl_line: u32 = 0,
+    decl_column: u32 = 0,
 };
 
 /// Associated value info for enum cases
@@ -236,6 +238,8 @@ pub const FuncInfo = struct {
     return_value_type: ?ValueType, // Full type info for arrays
     param_types: []const ParamType,
     ir_generated: bool = true, // false for pending lazy-generated methods
+    decl_line: u32 = 0,
+    decl_column: u32 = 0,
 };
 
 /// Pending method info for lazy generation of monomorphized type methods

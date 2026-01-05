@@ -335,6 +335,8 @@ pub const Parser = struct {
             .conformances = try conformances.toOwnedSlice(self.allocator),
             .fields = try fields.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),
+            .line = name_token.line,
+            .column = name_token.column,
         };
     }
 
@@ -858,6 +860,8 @@ pub const Parser = struct {
             .return_type = return_type,
             .throws_type = throws_type,
             .body = body,
+            .line = name_token.line,
+            .column = name_token.column,
         };
     }
 
