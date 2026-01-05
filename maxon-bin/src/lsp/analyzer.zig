@@ -1,6 +1,8 @@
 const std = @import("std");
 const compiler = @import("../compiler/0-compiler.zig");
 const ast_to_ir = @import("../compiler/4-ast_to_ir.zig");
+const ast = @import("../compiler/ast.zig");
+const intrinsics_registry = @import("../compiler/intrinsics_registry.zig");
 const types = @import("types.zig");
 
 fn log(comptime fmt: []const u8, args: anytype) void {
@@ -220,16 +222,14 @@ pub const Analyzer = struct {
         const word = getWordAtPosition(doc.content, line, character) orelse return null;
         const info = self.getSemanticInfo(uri) catch return null;
 
-        // 1. Check for intrinsics (functions starting with __)
-        if (std.mem.startsWith(u8, word, "__")) {
-            if (info.functions.get(word)) |func_info| {
-                return self.formatIntrinsicHover(word, func_info);
-            }
+        // 1. Check for intrinsics from registry (includes public builtins like sqrt, trunc)
+        if (intrinsics_registry.findIntrinsic(word)) |intr| {
+            return self.formatRegistryIntrinsicHover(intr);
         }
 
         // 2. Check for variables (local vars and parameters)
         if (info.findVariable(word)) |v| {
-            return self.formatVariableHover(v, doc.content, line);
+            return self.formatVariableHover(v, info, line);
         }
 
         // 3. Check for function calls
@@ -245,15 +245,21 @@ pub const Analyzer = struct {
         return null;
     }
 
-    fn formatVariableHover(self: *Analyzer, v: ast_to_ir.SemanticVarInfo, content: []const u8, hover_line: u32) ?[]const u8 {
+    fn formatVariableHover(self: *Analyzer, v: ast_to_ir.SemanticVarInfo, info: *ast_to_ir.SemanticInfo, hover_line: u32) ?[]const u8 {
         var buffer: std.ArrayListUnmanaged(u8) = .empty;
         const writer = buffer.writer(self.allocator);
 
         // For immutable variables (let), show value if on declaration line
         if (!v.is_mutable and v.decl_line > 0 and v.decl_line - 1 == hover_line) {
-            if (extractLiteralValue(content, v.decl_line - 1)) |value| {
-                writer.print("```maxon\nlet {s} = {s}\n```", .{ v.name, value }) catch return null;
-                return buffer.toOwnedSlice(self.allocator) catch null;
+            if (info.program) |program| {
+                if (findLetDeclExpression(program, v.name, v.decl_line)) |expr| {
+                    writer.writeAll("```maxon\nlet ") catch return null;
+                    writer.writeAll(v.name) catch return null;
+                    writer.writeAll(" = ") catch return null;
+                    formatExpression(writer, expr) catch return null;
+                    writer.writeAll("\n```") catch return null;
+                    return buffer.toOwnedSlice(self.allocator) catch null;
+                }
             }
         }
 
@@ -311,6 +317,38 @@ pub const Analyzer = struct {
         }
 
         writer.writeAll(")\n```") catch return null;
+        return buffer.toOwnedSlice(self.allocator) catch null;
+    }
+
+    fn formatRegistryIntrinsicHover(self: *Analyzer, intr: *const intrinsics_registry.Intrinsic) ?[]const u8 {
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
+        const writer = buffer.writer(self.allocator);
+
+        // Format signature - use "intrinsic" for stdlib-only, "function" for public
+        const keyword = if (intr.visibility == .stdlib_only) "intrinsic" else "function";
+        writer.writeAll("```maxon\n") catch return null;
+        writer.writeAll(keyword) catch return null;
+        writer.writeByte(' ') catch return null;
+        writer.writeAll(intr.name) catch return null;
+        writer.writeByte('(') catch return null;
+
+        for (intr.params, 0..) |param, i| {
+            if (i > 0) writer.writeAll(", ") catch return null;
+            writer.writeAll(param.name) catch return null;
+            writer.writeByte(' ') catch return null;
+            writer.writeAll(param.type_name) catch return null;
+        }
+
+        writer.writeAll(") returns ") catch return null;
+        writer.writeAll(intr.return_type_name) catch return null;
+        writer.writeAll("\n```") catch return null;
+
+        // Add help text if available
+        if (intr.help_text.len > 0) {
+            writer.writeAll("\n\n") catch return null;
+            writer.writeAll(intr.help_text) catch return null;
+        }
+
         return buffer.toOwnedSlice(self.allocator) catch null;
     }
 
@@ -674,7 +712,8 @@ pub const Analyzer = struct {
     /// Get linked editing ranges for a position in a document
     pub fn getLinkedEditingRanges(self: *Analyzer, uri: []const u8, line: u32, character: u32) ?types.LinkedEditingRanges {
         const doc = self.documents.get(uri) orelse return null;
-        return findLinkedEditingRanges(self.allocator, doc.content, line, character) catch null;
+        const info = self.semantic_cache.get(uri);
+        return findLinkedEditingRanges(self.allocator, doc.content, line, character, info) catch null;
     }
 };
 
@@ -856,7 +895,7 @@ fn findFoldingRanges(content: []const u8, allocator: std.mem.Allocator, ranges: 
 // ============================================================================
 
 /// Find linked editing ranges at a position
-fn findLinkedEditingRanges(allocator: std.mem.Allocator, content: []const u8, line: u32, character: u32) !?types.LinkedEditingRanges {
+fn findLinkedEditingRanges(allocator: std.mem.Allocator, content: []const u8, line: u32, character: u32, info: ?ast_to_ir.SemanticInfo) !?types.LinkedEditingRanges {
     // Get all lines
     var lines_list: std.ArrayListUnmanaged([]const u8) = .empty;
     defer lines_list.deinit(allocator);
@@ -893,8 +932,24 @@ fn findLinkedEditingRanges(allocator: std.mem.Allocator, content: []const u8, li
                 .end = .{ .line = line, .character = @intCast(name_start + func_name.len) },
             });
 
-            // Find the matching end label
-            try findMatchingEndLabel(allocator, lines_list.items, line, func_name, &result_ranges);
+            // Find the matching end label using AST
+            if (info) |semantic_info| {
+                if (semantic_info.program) |program| {
+                    // AST uses 1-based lines
+                    if (findFunctionEndLine(program, line + 1, func_name)) |end_line| {
+                        const end_line_0 = end_line - 1;
+                        if (end_line_0 < lines_list.items.len) {
+                            const end_line_content = lines_list.items[end_line_0];
+                            if (std.mem.indexOf(u8, end_line_content, func_name)) |end_name_pos| {
+                                try result_ranges.append(allocator, .{
+                                    .start = .{ .line = end_line_0, .character = @intCast(end_name_pos) },
+                                    .end = .{ .line = end_line_0, .character = @intCast(end_name_pos + func_name.len) },
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -907,8 +962,12 @@ fn findLinkedEditingRanges(allocator: std.mem.Allocator, content: []const u8, li
                 .end = .{ .line = line, .character = @intCast(label_info.end) },
             });
 
-            // Find the matching start/end label
-            try findMatchingLabel(allocator, lines_list.items, line, label_info.label, &result_ranges);
+            // Find the matching start/end label using AST
+            if (info) |semantic_info| {
+                if (semantic_info.program) |program| {
+                    try findMatchingLabelFromAST(allocator, lines_list.items, line, label_info.label, program, &result_ranges);
+                }
+            }
         }
     }
 
@@ -931,8 +990,24 @@ fn findLinkedEditingRanges(allocator: std.mem.Allocator, content: []const u8, li
                         .end = .{ .line = line, .character = @intCast(pos_in_line + method_name.len) },
                     });
 
-                    // Find matching end label
-                    try findMatchingEndLabel(allocator, lines_list.items, line, method_name, &result_ranges);
+                    // Find matching end label using AST
+                    if (info) |semantic_info| {
+                        if (semantic_info.program) |program| {
+                            // AST uses 1-based lines
+                            if (findFunctionEndLine(program, line + 1, method_name)) |end_line| {
+                                const end_line_0 = end_line - 1;
+                                if (end_line_0 < lines_list.items.len) {
+                                    const end_line_content = lines_list.items[end_line_0];
+                                    if (std.mem.indexOf(u8, end_line_content, method_name)) |end_name_pos| {
+                                        try result_ranges.append(allocator, .{
+                                            .start = .{ .line = end_line_0, .character = @intCast(end_name_pos) },
+                                            .end = .{ .line = end_line_0, .character = @intCast(end_name_pos + method_name.len) },
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1006,85 +1081,305 @@ fn findLabelAtPosition(line: []const u8, character: u32) ?LabelInfo {
     return null;
 }
 
-fn findMatchingEndLabel(allocator: std.mem.Allocator, lines: []const []const u8, start_line: u32, label: []const u8, ranges: *std.ArrayListUnmanaged(types.Range)) !void {
-    // Search forward from start_line for "end 'label'"
-    var depth: i32 = 1;
-    var line_idx = start_line + 1;
+/// Find matching label using the AST (with end_line information)
+fn findMatchingLabelFromAST(allocator: std.mem.Allocator, lines: []const []const u8, current_line: u32, label: []const u8, program: ast.Program, ranges: *std.ArrayListUnmanaged(types.Range)) !void {
+    // AST line numbers are 1-based, current_line is 0-based
+    const ast_line = current_line + 1;
 
-    while (line_idx < lines.len) : (line_idx += 1) {
-        const trimmed = std.mem.trim(u8, lines[line_idx], " \t\r");
+    // Check if current line is an "end" line - search for block start
+    const trimmed_current = std.mem.trim(u8, lines[current_line], " \t\r");
 
-        // Track depth with block constructs
-        if (startsBlock(trimmed)) {
-            depth += 1;
-        } else if (std.mem.startsWith(u8, trimmed, "end ")) {
-            depth -= 1;
-            if (depth == 0) {
-                // This is our matching end - check if it has the right label
-                if (std.mem.indexOf(u8, trimmed, "'")) |quote_start| {
-                    const label_start = quote_start + 1;
-                    if (std.mem.indexOf(u8, trimmed[label_start..], "'")) |quote_end| {
-                        const end_label = trimmed[label_start..][0..quote_end];
-                        if (std.mem.eql(u8, end_label, label)) {
-                            // Find position in original line
-                            const orig_line = lines[line_idx];
-                            if (std.mem.indexOf(u8, orig_line, "'")) |orig_quote| {
-                                try ranges.append(allocator, .{
-                                    .start = .{ .line = line_idx, .character = @intCast(orig_quote + 1) },
-                                    .end = .{ .line = line_idx, .character = @intCast(orig_quote + 1 + label.len) },
-                                });
-                            }
-                        }
-                    }
+    if (std.mem.startsWith(u8, trimmed_current, "end ")) {
+        // We're on an end line - find the block that ends on this line
+        if (findBlockStartLineForEnd(program, ast_line, label)) |start_line| {
+            // Add the start label position (convert to 0-based)
+            const start_line_0 = start_line - 1;
+            if (start_line_0 < lines.len) {
+                const orig_line = lines[start_line_0];
+                if (std.mem.indexOf(u8, orig_line, "'")) |quote_pos| {
+                    try ranges.append(allocator, .{
+                        .start = .{ .line = start_line_0, .character = @intCast(quote_pos + 1) },
+                        .end = .{ .line = start_line_0, .character = @intCast(quote_pos + 1 + label.len) },
+                    });
                 }
-                break;
+            }
+        }
+    } else {
+        // We're on a block start - find the end line from AST
+        if (findBlockEndLineForStart(program, ast_line, label)) |end_line| {
+            // Add the end label position (convert to 0-based)
+            const end_line_0 = end_line - 1;
+            if (end_line_0 < lines.len) {
+                const orig_line = lines[end_line_0];
+                if (std.mem.indexOf(u8, orig_line, "'")) |quote_pos| {
+                    try ranges.append(allocator, .{
+                        .start = .{ .line = end_line_0, .character = @intCast(quote_pos + 1) },
+                        .end = .{ .line = end_line_0, .character = @intCast(quote_pos + 1 + label.len) },
+                    });
+                }
             }
         }
     }
 }
 
-fn findMatchingLabel(allocator: std.mem.Allocator, lines: []const []const u8, current_line: u32, label: []const u8, ranges: *std.ArrayListUnmanaged(types.Range)) !void {
-    // Check if current line is an "end" line - search backwards for start
-    const trimmed_current = std.mem.trim(u8, lines[current_line], " \t\r");
-
-    if (std.mem.startsWith(u8, trimmed_current, "end ")) {
-        // Search backwards for the matching block start
-        var depth: i32 = 1;
-        var line_idx: i32 = @as(i32, @intCast(current_line)) - 1;
-
-        while (line_idx >= 0) : (line_idx -= 1) {
-            const idx: usize = @intCast(line_idx);
-            const trimmed = std.mem.trim(u8, lines[idx], " \t\r");
-
-            if (std.mem.startsWith(u8, trimmed, "end ") or std.mem.eql(u8, trimmed, "end")) {
-                depth += 1;
-            } else if (startsBlock(trimmed)) {
-                depth -= 1;
-                if (depth == 0) {
-                    // Found our matching start - check for label
-                    if (std.mem.indexOf(u8, trimmed, "'")) |quote_start| {
-                        const label_start = quote_start + 1;
-                        if (std.mem.indexOf(u8, trimmed[label_start..], "'")) |quote_end| {
-                            const start_label = trimmed[label_start..][0..quote_end];
-                            if (std.mem.eql(u8, start_label, label)) {
-                                const orig_line = lines[idx];
-                                if (std.mem.indexOf(u8, orig_line, "'")) |orig_quote| {
-                                    try ranges.append(allocator, .{
-                                        .start = .{ .line = @intCast(idx), .character = @intCast(orig_quote + 1) },
-                                        .end = .{ .line = @intCast(idx), .character = @intCast(orig_quote + 1 + label.len) },
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
+/// Find the end line of a function or method by name and start line
+fn findFunctionEndLine(program: ast.Program, start_line: u32, name: []const u8) ?u32 {
+    // Search in functions
+    for (program.functions) |func| {
+        if (func.line == start_line and std.mem.eql(u8, func.name, name)) {
+            return func.end_line;
+        }
+    }
+    // Search in type methods
+    for (program.types) |type_decl| {
+        for (type_decl.methods) |method| {
+            if (method.line == start_line and std.mem.eql(u8, method.name, name)) {
+                return method.end_line;
             }
         }
-    } else {
-        // Current line is a block start - search forward
-        try findMatchingEndLabel(allocator, lines, current_line, label, ranges);
     }
+    // Search in enum methods
+    for (program.enums) |enum_decl| {
+        for (enum_decl.methods) |method| {
+            if (method.line == start_line and std.mem.eql(u8, method.name, name)) {
+                return method.end_line;
+            }
+        }
+    }
+    return null;
+}
+
+/// Find the start line of a block that ends on the given line with the given label
+fn findBlockStartLineForEnd(program: ast.Program, end_line: u32, label: []const u8) ?u32 {
+    // Search in functions
+    for (program.functions) |func| {
+        if (findBlockStartInStatements(func.body, end_line, label)) |line| return line;
+    }
+    // Search in type methods
+    for (program.types) |type_decl| {
+        for (type_decl.methods) |method| {
+            if (findBlockStartInStatements(method.body, end_line, label)) |line| return line;
+        }
+    }
+    // Search in enum methods
+    for (program.enums) |enum_decl| {
+        for (enum_decl.methods) |method| {
+            if (findBlockStartInStatements(method.body, end_line, label)) |line| return line;
+        }
+    }
+    return null;
+}
+
+/// Find the end line of a block that starts on the given line with the given label
+fn findBlockEndLineForStart(program: ast.Program, start_line: u32, label: []const u8) ?u32 {
+    // Search in functions
+    for (program.functions) |func| {
+        if (findBlockEndInStatements(func.body, start_line, label)) |line| return line;
+    }
+    // Search in type methods
+    for (program.types) |type_decl| {
+        for (type_decl.methods) |method| {
+            if (findBlockEndInStatements(method.body, start_line, label)) |line| return line;
+        }
+    }
+    // Search in enum methods
+    for (program.enums) |enum_decl| {
+        for (enum_decl.methods) |method| {
+            if (findBlockEndInStatements(method.body, start_line, label)) |line| return line;
+        }
+    }
+    return null;
+}
+
+fn findBlockStartInStatements(statements: []const ast.Statement, end_line: u32, label: []const u8) ?u32 {
+    for (statements) |stmt| {
+        switch (stmt.kind) {
+            .if_stmt => |if_stmt| {
+                // Check if this if statement ends on the target line
+                if (if_stmt.end_line == end_line and std.mem.eql(u8, if_stmt.label, label)) {
+                    return stmt.line;
+                }
+                // Search in body
+                if (findBlockStartInStatements(if_stmt.body, end_line, label)) |line| return line;
+                // Search in else body
+                if (if_stmt.else_body) |else_body| {
+                    if (findBlockStartInStatements(else_body, end_line, label)) |line| return line;
+                }
+            },
+            .while_stmt => |while_stmt| {
+                if (while_stmt.end_line == end_line and std.mem.eql(u8, while_stmt.label, label)) {
+                    return stmt.line;
+                }
+                if (findBlockStartInStatements(while_stmt.body, end_line, label)) |line| return line;
+            },
+            .for_stmt => |for_stmt| {
+                if (for_stmt.end_line == end_line and std.mem.eql(u8, for_stmt.label, label)) {
+                    return stmt.line;
+                }
+                if (findBlockStartInStatements(for_stmt.body, end_line, label)) |line| return line;
+            },
+            .match_stmt => |match_stmt| {
+                if (match_stmt.end_line == end_line and std.mem.eql(u8, match_stmt.label, label)) {
+                    return stmt.line;
+                }
+                for (match_stmt.cases) |case| {
+                    // MatchCase.body is a pointer to a single statement
+                    if (findBlockStartInStatement(case.body.*, end_line, label)) |line| return line;
+                }
+            },
+            .do_catch_stmt => |do_catch| {
+                if (do_catch.end_line == end_line and std.mem.eql(u8, do_catch.label, label)) {
+                    return stmt.line;
+                }
+                if (findBlockStartInStatements(do_catch.body, end_line, label)) |line| return line;
+                for (do_catch.catches) |catch_clause| {
+                    if (findBlockStartInStatements(catch_clause.body, end_line, label)) |line| return line;
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn findBlockStartInStatement(stmt: ast.Statement, end_line: u32, label: []const u8) ?u32 {
+    switch (stmt.kind) {
+        .if_stmt => |if_stmt| {
+            if (if_stmt.end_line == end_line and std.mem.eql(u8, if_stmt.label, label)) {
+                return stmt.line;
+            }
+            if (findBlockStartInStatements(if_stmt.body, end_line, label)) |line| return line;
+            if (if_stmt.else_body) |else_body| {
+                if (findBlockStartInStatements(else_body, end_line, label)) |line| return line;
+            }
+        },
+        .while_stmt => |while_stmt| {
+            if (while_stmt.end_line == end_line and std.mem.eql(u8, while_stmt.label, label)) {
+                return stmt.line;
+            }
+            if (findBlockStartInStatements(while_stmt.body, end_line, label)) |line| return line;
+        },
+        .for_stmt => |for_stmt| {
+            if (for_stmt.end_line == end_line and std.mem.eql(u8, for_stmt.label, label)) {
+                return stmt.line;
+            }
+            if (findBlockStartInStatements(for_stmt.body, end_line, label)) |line| return line;
+        },
+        .match_stmt => |match_stmt| {
+            if (match_stmt.end_line == end_line and std.mem.eql(u8, match_stmt.label, label)) {
+                return stmt.line;
+            }
+            for (match_stmt.cases) |case| {
+                if (findBlockStartInStatement(case.body.*, end_line, label)) |line| return line;
+            }
+        },
+        .do_catch_stmt => |do_catch| {
+            if (do_catch.end_line == end_line and std.mem.eql(u8, do_catch.label, label)) {
+                return stmt.line;
+            }
+            if (findBlockStartInStatements(do_catch.body, end_line, label)) |line| return line;
+            for (do_catch.catches) |catch_clause| {
+                if (findBlockStartInStatements(catch_clause.body, end_line, label)) |line| return line;
+            }
+        },
+        else => {},
+    }
+    return null;
+}
+
+fn findBlockEndInStatements(statements: []const ast.Statement, start_line: u32, label: []const u8) ?u32 {
+    for (statements) |stmt| {
+        switch (stmt.kind) {
+            .if_stmt => |if_stmt| {
+                // Check if this if statement starts on the target line
+                if (stmt.line == start_line and std.mem.eql(u8, if_stmt.label, label)) {
+                    return if_stmt.end_line;
+                }
+                // Search in body
+                if (findBlockEndInStatements(if_stmt.body, start_line, label)) |line| return line;
+                // Search in else body
+                if (if_stmt.else_body) |else_body| {
+                    if (findBlockEndInStatements(else_body, start_line, label)) |line| return line;
+                }
+            },
+            .while_stmt => |while_stmt| {
+                if (stmt.line == start_line and std.mem.eql(u8, while_stmt.label, label)) {
+                    return while_stmt.end_line;
+                }
+                if (findBlockEndInStatements(while_stmt.body, start_line, label)) |line| return line;
+            },
+            .for_stmt => |for_stmt| {
+                if (stmt.line == start_line and std.mem.eql(u8, for_stmt.label, label)) {
+                    return for_stmt.end_line;
+                }
+                if (findBlockEndInStatements(for_stmt.body, start_line, label)) |line| return line;
+            },
+            .match_stmt => |match_stmt| {
+                if (stmt.line == start_line and std.mem.eql(u8, match_stmt.label, label)) {
+                    return match_stmt.end_line;
+                }
+                for (match_stmt.cases) |case| {
+                    if (findBlockEndInStatement(case.body.*, start_line, label)) |line| return line;
+                }
+            },
+            .do_catch_stmt => |do_catch| {
+                if (stmt.line == start_line and std.mem.eql(u8, do_catch.label, label)) {
+                    return do_catch.end_line;
+                }
+                if (findBlockEndInStatements(do_catch.body, start_line, label)) |line| return line;
+                for (do_catch.catches) |catch_clause| {
+                    if (findBlockEndInStatements(catch_clause.body, start_line, label)) |line| return line;
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn findBlockEndInStatement(stmt: ast.Statement, start_line: u32, label: []const u8) ?u32 {
+    switch (stmt.kind) {
+        .if_stmt => |if_stmt| {
+            if (stmt.line == start_line and std.mem.eql(u8, if_stmt.label, label)) {
+                return if_stmt.end_line;
+            }
+            if (findBlockEndInStatements(if_stmt.body, start_line, label)) |line| return line;
+            if (if_stmt.else_body) |else_body| {
+                if (findBlockEndInStatements(else_body, start_line, label)) |line| return line;
+            }
+        },
+        .while_stmt => |while_stmt| {
+            if (stmt.line == start_line and std.mem.eql(u8, while_stmt.label, label)) {
+                return while_stmt.end_line;
+            }
+            if (findBlockEndInStatements(while_stmt.body, start_line, label)) |line| return line;
+        },
+        .for_stmt => |for_stmt| {
+            if (stmt.line == start_line and std.mem.eql(u8, for_stmt.label, label)) {
+                return for_stmt.end_line;
+            }
+            if (findBlockEndInStatements(for_stmt.body, start_line, label)) |line| return line;
+        },
+        .match_stmt => |match_stmt| {
+            if (stmt.line == start_line and std.mem.eql(u8, match_stmt.label, label)) {
+                return match_stmt.end_line;
+            }
+            for (match_stmt.cases) |case| {
+                if (findBlockEndInStatement(case.body.*, start_line, label)) |line| return line;
+            }
+        },
+        .do_catch_stmt => |do_catch| {
+            if (stmt.line == start_line and std.mem.eql(u8, do_catch.label, label)) {
+                return do_catch.end_line;
+            }
+            if (findBlockEndInStatements(do_catch.body, start_line, label)) |line| return line;
+            for (do_catch.catches) |catch_clause| {
+                if (findBlockEndInStatements(catch_clause.body, start_line, label)) |line| return line;
+            }
+        },
+        else => {},
+    }
+    return null;
 }
 
 fn findPositionInOriginal(original: []const u8, trimmed: []const u8, pos_in_trimmed: usize) usize {
@@ -1098,33 +1393,6 @@ fn formatFuncSignature(func: ast_to_ir.FuncInfo) []const u8 {
         return rt;
     }
     return func.return_type.toMaxonName();
-}
-
-/// Extract the literal value from a "let x = value" line
-fn extractLiteralValue(content: []const u8, line_num: u32) ?[]const u8 {
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    var current_line: u32 = 0;
-
-    while (lines.next()) |line_content| : (current_line += 1) {
-        if (current_line == line_num) {
-            // Look for "= value" pattern
-            if (std.mem.indexOf(u8, line_content, "=")) |eq_pos| {
-                const after_eq = std.mem.trimLeft(u8, line_content[eq_pos + 1 ..], " \t");
-                // Find end of value (space, newline, or end of string)
-                var end: usize = 0;
-                while (end < after_eq.len) {
-                    const c = after_eq[end];
-                    if (c == ' ' or c == '\t' or c == '\r' or c == '\n') break;
-                    end += 1;
-                }
-                if (end > 0) {
-                    return after_eq[0..end];
-                }
-            }
-            return null;
-        }
-    }
-    return null;
 }
 
 /// Get the identifier word at the given position in content
@@ -1162,4 +1430,218 @@ fn getWordAtPosition(content: []const u8, line: u32, character: u32) ?[]const u8
     }
 
     return null;
+}
+
+/// Find the let declaration expression for a variable by name and line number
+fn findLetDeclExpression(program: ast.Program, var_name: []const u8, decl_line: u32) ?ast.Expression {
+    // Search in functions
+    for (program.functions) |func| {
+        if (findLetInStatements(func.body, var_name, decl_line)) |expr| {
+            return expr;
+        }
+    }
+
+    // Search in type methods
+    for (program.types) |type_decl| {
+        for (type_decl.methods) |method| {
+            if (findLetInStatements(method.body, var_name, decl_line)) |expr| {
+                return expr;
+            }
+        }
+    }
+
+    // Search in enum methods
+    for (program.enums) |enum_decl| {
+        for (enum_decl.methods) |method| {
+            if (findLetInStatements(method.body, var_name, decl_line)) |expr| {
+                return expr;
+            }
+        }
+    }
+
+    return null;
+}
+
+fn findLetInStatements(stmts: []const ast.Statement, var_name: []const u8, decl_line: u32) ?ast.Expression {
+    for (stmts) |stmt| {
+        switch (stmt.kind) {
+            .let_decl => |decl| {
+                if (stmt.line == decl_line and std.mem.eql(u8, decl.name, var_name)) {
+                    return decl.value;
+                }
+            },
+            .if_stmt => |if_s| {
+                if (findLetInStatements(if_s.body, var_name, decl_line)) |expr| return expr;
+                if (if_s.else_body) |else_body| {
+                    if (findLetInStatements(else_body, var_name, decl_line)) |expr| return expr;
+                }
+                if (if_s.else_if) |else_if| {
+                    if (findLetInIfStmt(else_if.*, var_name, decl_line)) |expr| return expr;
+                }
+            },
+            .while_stmt => |while_s| {
+                if (findLetInStatements(while_s.body, var_name, decl_line)) |expr| return expr;
+            },
+            .for_stmt => |for_s| {
+                if (findLetInStatements(for_s.body, var_name, decl_line)) |expr| return expr;
+            },
+            .do_catch_stmt => |do_catch| {
+                if (findLetInStatements(do_catch.body, var_name, decl_line)) |expr| return expr;
+                for (do_catch.catches) |catch_clause| {
+                    if (findLetInStatements(catch_clause.body, var_name, decl_line)) |expr| return expr;
+                }
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn findLetInIfStmt(if_s: ast.IfStmt, var_name: []const u8, decl_line: u32) ?ast.Expression {
+    if (findLetInStatements(if_s.body, var_name, decl_line)) |expr| return expr;
+    if (if_s.else_body) |else_body| {
+        if (findLetInStatements(else_body, var_name, decl_line)) |expr| return expr;
+    }
+    if (if_s.else_if) |else_if| {
+        if (findLetInIfStmt(else_if.*, var_name, decl_line)) |expr| return expr;
+    }
+    return null;
+}
+
+fn binaryOpToSymbol(op: ast.BinaryOp) []const u8 {
+    return switch (op) {
+        .add => "+",
+        .sub => "-",
+        .mul => "*",
+        .div => "/",
+        .mod => "%",
+        .band => "&",
+        .bitor => "|",
+        .bxor => "^",
+        .shl => "<<",
+        .shr => ">>",
+    };
+}
+
+fn compareOpToSymbol(op: ast.CompareOp) []const u8 {
+    return switch (op) {
+        .eq => "==",
+        .ne => "!=",
+        .lt => "<",
+        .le => "<=",
+        .gt => ">",
+        .ge => ">=",
+    };
+}
+
+/// Format an AST expression to a string for display
+fn formatExpression(writer: anytype, expr: ast.Expression) !void {
+    switch (expr) {
+        .integer => |i| try writer.print("{d}", .{i}),
+        .float_lit => |f| try writer.print("{d}", .{f}),
+        .bool_lit => |b| try writer.print("{}", .{b}),
+        .nil_lit => try writer.writeAll("nil"),
+        .string_literal => |s| try writer.print("\"{s}\"", .{s}),
+        .char_literal => |c| try writer.print("'{s}'", .{c}),
+        .identifier => |id| try writer.writeAll(id),
+        .self_expr => try writer.writeAll("self"),
+        .unary => |un| {
+            switch (un.op) {
+                .negate => try writer.writeByte('-'),
+                .not => try writer.writeAll("not "),
+            }
+            try formatExpression(writer, un.operand.*);
+        },
+        .binary => |bin| {
+            try formatExpression(writer, bin.left.*);
+            try writer.print(" {s} ", .{binaryOpToSymbol(bin.op)});
+            try formatExpression(writer, bin.right.*);
+        },
+        .compare => |cmp| {
+            try formatExpression(writer, cmp.left.*);
+            try writer.print(" {s} ", .{compareOpToSymbol(cmp.op)});
+            try formatExpression(writer, cmp.right.*);
+        },
+        .logical => |logical| {
+            try formatExpression(writer, logical.left.*);
+            try writer.print(" {s} ", .{if (logical.op == .@"and") "and" else "or"});
+            try formatExpression(writer, logical.right.*);
+        },
+        .call => |call| {
+            try writer.writeAll(call.func_name);
+            try writer.writeByte('(');
+            for (call.args, 0..) |arg, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try formatExpression(writer, arg);
+            }
+            try writer.writeByte(')');
+        },
+        .method_call => |mcall| {
+            try formatExpression(writer, mcall.base.*);
+            try writer.writeByte('.');
+            try writer.writeAll(mcall.method_name);
+            try writer.writeByte('(');
+            for (mcall.args, 0..) |arg, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try formatExpression(writer, arg);
+            }
+            try writer.writeByte(')');
+        },
+        .field_access => |fa| {
+            try formatExpression(writer, fa.base.*);
+            try writer.writeByte('.');
+            try writer.writeAll(fa.field_name);
+        },
+        .index => |idx| {
+            try formatExpression(writer, idx.base.*);
+            try writer.writeByte('[');
+            try formatExpression(writer, idx.index.*);
+            try writer.writeByte(']');
+        },
+        .array_literal => |arr| {
+            try writer.writeByte('[');
+            for (arr.elements, 0..) |elem, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try formatExpression(writer, elem);
+            }
+            try writer.writeByte(']');
+        },
+        .struct_init => |sinit| {
+            try writer.writeAll(sinit.type_name);
+            try writer.writeAll(" { ");
+            for (sinit.fields, 0..) |field, i| {
+                if (i > 0) try writer.writeAll(", ");
+                try writer.writeAll(field.name);
+                try writer.writeAll(": ");
+                try formatExpression(writer, field.value.*);
+            }
+            try writer.writeAll(" }");
+        },
+        .nil_coalesce => |nc| {
+            try formatExpression(writer, nc.optional.*);
+            try writer.writeAll(" ?? ");
+            try formatExpression(writer, nc.default.*);
+        },
+        .cast => |c| {
+            try formatExpression(writer, c.expr.*);
+            try writer.writeAll(" as ");
+            try writer.writeAll(c.target_type);
+        },
+        .enum_case => |ec| {
+            try writer.writeByte('.');
+            try writer.writeAll(ec.case_name);
+            if (ec.args.len > 0) {
+                try writer.writeByte('(');
+                for (ec.args, 0..) |arg, i| {
+                    if (i > 0) try writer.writeAll(", ");
+                    try formatExpression(writer, arg);
+                }
+                try writer.writeByte(')');
+            }
+        },
+        // For complex expressions, just show a placeholder
+        .closure, .try_expr, .match_expr, .map_literal, .set_from, .array_type, .interpolated_string => {
+            try writer.writeAll("...");
+        },
+    }
 }

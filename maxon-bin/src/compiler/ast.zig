@@ -69,6 +69,9 @@ pub const MethodDecl = struct {
     return_type: ?TypeExpr, // null for void
     throws_type: ?[]const u8, // error type if method throws (must conform to Error)
     body: []Statement,
+    line: u32 = 0,
+    column: u32 = 0,
+    end_line: u32 = 0, // Line of the 'end' keyword
 };
 
 pub const TypeDecl = struct {
@@ -137,6 +140,7 @@ pub const FunctionDecl = struct {
     body: []Statement,
     line: u32 = 0,
     column: u32 = 0,
+    end_line: u32 = 0, // Line of the 'end' keyword
 };
 
 pub const IndexAssign = struct {
@@ -166,12 +170,14 @@ pub const IfStmt = struct {
 
     // If-let binding (optional): if let name = expr 'label'
     binding_name: ?[]const u8 = null,
+    end_line: u32 = 0, // Line of the 'end' keyword
 };
 
 pub const WhileStmt = struct {
     condition: Expression,
     body: []Statement,
     label: []const u8,
+    end_line: u32 = 0, // Line of the 'end' keyword
 };
 
 pub const ForStmt = struct {
@@ -179,6 +185,7 @@ pub const ForStmt = struct {
     iterable: Expression, // expression to iterate over
     body: []Statement,
     label: []const u8,
+    end_line: u32 = 0, // Line of the 'end' keyword
 };
 
 pub const BreakStmt = struct {
@@ -193,6 +200,7 @@ pub const ElseUnwrapDecl = struct {
     optional_expr: *const Expression,
     default_body: []Statement,
     label: []const u8,
+    end_line: u32 = 0, // Line of the 'end' keyword
 };
 
 // Guard-let: let x = opt or 'label' ... end 'label'
@@ -202,6 +210,7 @@ pub const GuardLetDecl = struct {
     optional_expr: *const Expression,
     nil_body: []Statement, // Body executed when optional is nil (must exit)
     label: []const u8,
+    end_line: u32 = 0, // Line of the 'end' keyword
 };
 
 // Error handling: throw statement
@@ -222,6 +231,7 @@ pub const DoCatchStmt = struct {
     body: []Statement,
     label: []const u8,
     catches: []const CatchClause,
+    end_line: u32 = 0, // Line of the 'end' keyword
 };
 
 // Match statements and expressions
@@ -244,6 +254,7 @@ pub const MatchStmt = struct {
     cases: []const MatchCase,
     default_case: ?*const Statement, // Pointer to break circular dep
     label: []const u8,
+    end_line: u32 = 0, // Line of the 'end' keyword
 };
 
 pub const MatchExprCase = struct {
@@ -493,3 +504,374 @@ pub const Expression = union(enum) {
     // Match expressions
     match_expr: MatchExpr,
 };
+
+// ============================================================================
+// AST Memory Management
+// ============================================================================
+
+pub fn freeProgram(program: Program, allocator: std.mem.Allocator) void {
+    for (program.types) |type_decl| {
+        for (type_decl.fields) |field| {
+            freeTypeExpr(field.type_expr, allocator);
+        }
+        allocator.free(type_decl.fields);
+        for (type_decl.methods) |method| {
+            for (method.params) |param| {
+                freeTypeExpr(param.type_expr, allocator);
+            }
+            allocator.free(method.params);
+            for (method.body) |stmt| {
+                freeStatementArgs(stmt, allocator);
+            }
+            allocator.free(method.body);
+            if (method.qualified_name) |qn| {
+                allocator.free(qn);
+            }
+            freeTypeExpr(method.return_type, allocator);
+        }
+        allocator.free(type_decl.methods);
+        for (type_decl.conformances) |conformance| {
+            for (conformance.type_args) |type_arg| {
+                allocator.free(type_arg);
+            }
+            allocator.free(conformance.type_args);
+        }
+        allocator.free(type_decl.conformances);
+        allocator.free(type_decl.generic_params);
+    }
+    allocator.free(program.types);
+
+    for (program.enums) |enum_decl| {
+        for (enum_decl.members) |member| {
+            allocator.free(member.associated_values);
+        }
+        allocator.free(enum_decl.members);
+        for (enum_decl.methods) |method| {
+            for (method.params) |param| {
+                freeTypeExpr(param.type_expr, allocator);
+            }
+            allocator.free(method.params);
+            for (method.body) |stmt| {
+                freeStatementArgs(stmt, allocator);
+            }
+            allocator.free(method.body);
+            if (method.qualified_name) |qn| {
+                allocator.free(qn);
+            }
+            freeTypeExpr(method.return_type, allocator);
+        }
+        allocator.free(enum_decl.methods);
+        for (enum_decl.conformances) |conformance| {
+            for (conformance.type_args) |type_arg| {
+                allocator.free(type_arg);
+            }
+            allocator.free(conformance.type_args);
+        }
+        allocator.free(enum_decl.conformances);
+    }
+    allocator.free(program.enums);
+
+    for (program.interfaces) |iface| {
+        for (iface.methods) |method| {
+            for (method.params) |param| {
+                freeTypeExpr(param.type_expr, allocator);
+            }
+            allocator.free(method.params);
+            freeTypeExpr(method.return_type, allocator);
+            if (method.default_body) |body| {
+                for (body) |stmt| {
+                    freeStatementArgs(stmt, allocator);
+                }
+                allocator.free(body);
+            }
+        }
+        allocator.free(iface.methods);
+        allocator.free(iface.generic_params);
+        allocator.free(iface.extends);
+    }
+    allocator.free(program.interfaces);
+
+    for (program.functions) |func| {
+        for (func.body) |stmt| {
+            freeStatementArgs(stmt, allocator);
+        }
+        allocator.free(func.body);
+        for (func.params) |param| {
+            freeTypeExpr(param.type_expr, allocator);
+        }
+        allocator.free(func.params);
+        freeTypeExpr(func.return_type, allocator);
+    }
+    allocator.free(program.functions);
+
+    for (program.global_constants) |constant| {
+        freeExpressionArgs(constant.value, allocator);
+    }
+    allocator.free(program.global_constants);
+}
+
+fn freeStatementArgs(stmt: Statement, allocator: std.mem.Allocator) void {
+    switch (stmt.kind) {
+        .let_decl, .var_decl => |decl| {
+            freeTypeExpr(decl.type_annotation, allocator);
+            freeExpressionArgs(decl.value, allocator);
+        },
+        .@"return" => |ret| {
+            if (ret.value) |expr| {
+                freeExpressionArgs(expr, allocator);
+            }
+        },
+        .index_assign => |idx_assign| {
+            freeExpressionArgs(idx_assign.base.*, allocator);
+            freeExpressionArgs(idx_assign.index.*, allocator);
+            freeExpressionArgs(idx_assign.value, allocator);
+        },
+        .assign => |assign| {
+            freeExpressionArgs(assign.value, allocator);
+        },
+        .call => |call| {
+            for (call.args) |arg| {
+                freeExpressionArgs(arg, allocator);
+            }
+            allocator.free(call.args);
+        },
+        .method_call => |mcall| {
+            freeExpressionArgs(mcall.base.*, allocator);
+            for (mcall.args) |arg| {
+                freeExpressionArgs(arg, allocator);
+            }
+            allocator.free(mcall.args);
+        },
+        .field_assign => |assign| {
+            freeExpressionArgs(assign.base.*, allocator);
+            freeExpressionArgs(assign.value, allocator);
+        },
+        .if_stmt => |if_s| {
+            freeIfStmt(if_s, allocator);
+        },
+        .while_stmt => |while_s| {
+            freeExpressionArgs(while_s.condition, allocator);
+            for (while_s.body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(while_s.body);
+        },
+        .for_stmt => |for_s| {
+            freeExpressionArgs(for_s.iterable, allocator);
+            for (for_s.body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(for_s.body);
+        },
+        .break_stmt, .continue_stmt => {},
+        .else_unwrap_decl => |unwrap| {
+            freeExpressionArgs(unwrap.optional_expr.*, allocator);
+            for (unwrap.default_body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(unwrap.default_body);
+        },
+        .guard_let_decl => |guard| {
+            freeExpressionArgs(guard.optional_expr.*, allocator);
+            for (guard.nil_body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(guard.nil_body);
+        },
+        .throw_stmt => |throw_s| {
+            freeExpressionArgs(throw_s.error_expr, allocator);
+        },
+        .do_catch_stmt => |do_catch| {
+            for (do_catch.body) |body_stmt| {
+                freeStatementArgs(body_stmt, allocator);
+            }
+            allocator.free(do_catch.body);
+            for (do_catch.catches) |catch_clause| {
+                for (catch_clause.body) |catch_stmt| {
+                    freeStatementArgs(catch_stmt, allocator);
+                }
+                allocator.free(catch_clause.body);
+            }
+            allocator.free(do_catch.catches);
+        },
+        .match_stmt => |match_s| {
+            freeExpressionArgs(match_s.scrutinee, allocator);
+            for (match_s.cases) |match_case| {
+                for (match_case.patterns) |pattern| {
+                    freeExpressionArgs(pattern, allocator);
+                }
+                allocator.free(match_case.patterns);
+                freeStatementArgs(match_case.body.*, allocator);
+                allocator.destroy(match_case.body);
+            }
+            allocator.free(match_s.cases);
+            if (match_s.default_case) |default| {
+                freeStatementArgs(default.*, allocator);
+                allocator.destroy(default);
+            }
+        },
+    }
+}
+
+fn freeIfStmt(if_s: IfStmt, allocator: std.mem.Allocator) void {
+    freeExpressionArgs(if_s.condition, allocator);
+    for (if_s.body) |body_stmt| {
+        freeStatementArgs(body_stmt, allocator);
+    }
+    allocator.free(if_s.body);
+
+    if (if_s.else_body) |else_body| {
+        for (else_body) |else_stmt| {
+            freeStatementArgs(else_stmt, allocator);
+        }
+        allocator.free(else_body);
+    }
+
+    if (if_s.else_if) |else_if| {
+        freeIfStmt(else_if.*, allocator);
+        allocator.destroy(else_if);
+    }
+}
+
+fn freeExpressionArgs(expr: Expression, allocator: std.mem.Allocator) void {
+    switch (expr) {
+        .call => |call| {
+            for (call.args) |arg| {
+                freeExpressionArgs(arg, allocator);
+            }
+            allocator.free(call.args);
+        },
+        .binary => |bin| {
+            freeExpressionArgs(bin.left.*, allocator);
+            freeExpressionArgs(bin.right.*, allocator);
+        },
+        .compare => |cmp| {
+            freeExpressionArgs(cmp.left.*, allocator);
+            freeExpressionArgs(cmp.right.*, allocator);
+        },
+        .logical => |log| {
+            freeExpressionArgs(log.left.*, allocator);
+            freeExpressionArgs(log.right.*, allocator);
+        },
+        .struct_init => |sinit| {
+            for (sinit.fields) |field| {
+                freeExpressionArgs(field.value.*, allocator);
+            }
+            allocator.free(sinit.fields);
+            if (sinit.type_args.len > 0) {
+                allocator.free(sinit.type_args);
+            }
+        },
+        .field_access => |fa| {
+            freeExpressionArgs(fa.base.*, allocator);
+        },
+        .array_literal => |arr| {
+            for (arr.elements) |elem| {
+                freeExpressionArgs(elem, allocator);
+            }
+            allocator.free(arr.elements);
+        },
+        .map_literal => |map| {
+            for (map.entries) |entry| {
+                freeExpressionArgs(entry.key.*, allocator);
+                freeExpressionArgs(entry.value.*, allocator);
+            }
+            allocator.free(map.entries);
+        },
+        .set_from => |sf| {
+            freeExpressionArgs(sf.elements.*, allocator);
+        },
+        .index => |idx| {
+            freeExpressionArgs(idx.base.*, allocator);
+            freeExpressionArgs(idx.index.*, allocator);
+        },
+        .array_type => |arr| {
+            freeExpressionArgs(arr.size.*, allocator);
+        },
+        .method_call => |mcall| {
+            freeExpressionArgs(mcall.base.*, allocator);
+            for (mcall.args) |arg| {
+                freeExpressionArgs(arg, allocator);
+            }
+            allocator.free(mcall.args);
+        },
+        .unary => |un| {
+            freeExpressionArgs(un.operand.*, allocator);
+        },
+        .nil_coalesce => {},
+        .cast => |c| {
+            freeExpressionArgs(c.expr.*, allocator);
+        },
+        .interpolated_string => |interp| {
+            for (interp.parts) |part| {
+                if (part.expr) |e| {
+                    freeExpressionArgs(e.*, allocator);
+                }
+            }
+            allocator.free(interp.parts);
+        },
+        .closure => |clos| {
+            freeExpressionArgs(clos.body.*, allocator);
+            allocator.free(clos.params);
+        },
+        .try_expr => |te| {
+            freeExpressionArgs(te.expr.*, allocator);
+        },
+        .match_expr => |me| {
+            freeExpressionArgs(me.scrutinee.*, allocator);
+            for (me.cases) |match_case| {
+                for (match_case.patterns) |pattern| {
+                    freeExpressionArgs(pattern, allocator);
+                }
+                allocator.free(match_case.patterns);
+                freeExpressionArgs(match_case.result, allocator);
+            }
+            allocator.free(me.cases);
+            if (me.default_expr) |default| {
+                freeExpressionArgs(default.*, allocator);
+            }
+        },
+        .enum_case => |ec| {
+            for (ec.args) |arg| {
+                freeExpressionArgs(arg, allocator);
+            }
+            allocator.free(ec.args);
+        },
+        .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier, .string_literal, .char_literal => {},
+    }
+}
+
+fn freeTypeExpr(type_expr: ?TypeExpr, allocator: std.mem.Allocator) void {
+    const te = type_expr orelse return;
+    switch (te) {
+        .optional => |inner| {
+            freeTypeExpr(inner.*, allocator);
+            allocator.destroy(@constCast(inner));
+        },
+        .generic => |g| {
+            if (g.type_args.len > 0) {
+                allocator.free(g.type_args);
+            }
+        },
+        .function_type => |ft| {
+            for (ft.param_types) |pt| {
+                freeTypeExpr(pt, allocator);
+            }
+            if (ft.param_types.len > 0) {
+                allocator.free(ft.param_types);
+            }
+            if (ft.param_names.len > 0) {
+                allocator.free(ft.param_names);
+            }
+            if (ft.return_type) |rt| {
+                freeTypeExpr(rt.*, allocator);
+                allocator.destroy(@constCast(rt));
+            }
+        },
+        .error_union => |eu| {
+            freeTypeExpr(eu.success_type.*, allocator);
+            allocator.destroy(@constCast(eu.success_type));
+        },
+        .simple => {},
+    }
+}

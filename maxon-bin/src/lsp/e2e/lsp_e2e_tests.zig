@@ -395,6 +395,70 @@ test "hover shows intrinsic signature" {
     try ctx.deinit();
 }
 
+test "hover shows math builtin signature and help text" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    let x = sqrt(16.0)
+        \\    return trunc(x)
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'sqrt' at line 1
+    // Line 1: "    let x = sqrt(16.0)" - 'sqrt' starts at position 12
+    var result = try ctx.client.hover("file:///test.maxon", 1, 13);
+    defer result.deinit();
+
+    // The hover should show the function signature and help text
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+
+    // Should show signature
+    try testing.expect(std.mem.indexOf(u8, content, "sqrt") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "float") != null);
+
+    // Should show help text from registry
+    try testing.expect(std.mem.indexOf(u8, content, "square root") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows trunc builtin with help text" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    return trunc(3.7)
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'trunc' at line 1
+    // Line 1: "    return trunc(3.7)" - 'trunc' starts at position 11
+    var result = try ctx.client.hover("file:///test.maxon", 1, 12);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+
+    // Should show signature with parameter name and types
+    try testing.expect(std.mem.indexOf(u8, content, "trunc") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "value") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "float") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "int") != null);
+
+    // Should show help text
+    try testing.expect(std.mem.indexOf(u8, content, "Truncates") != null);
+
+    try ctx.deinit();
+}
+
 // ============================================================================
 // Go to Definition Tests
 // ============================================================================

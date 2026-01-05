@@ -4,6 +4,7 @@ const ir = @import("ir.zig");
 const types = @import("ast_to_ir_types.zig");
 const TypedValue = types.TypedValue;
 const ConvertError = types.ConvertError;
+const intrinsics_registry = @import("intrinsics_registry.zig");
 
 // Forward reference to main AstToIr module
 const AstToIr = @import("4-ast_to_ir.zig").AstToIr;
@@ -100,22 +101,6 @@ fn wrapInOptional(self: *AstToIr, result_ptr: ir.Value, wrapped_type: []const u8
 // Built-in Functions
 // ============================================================================
 
-const Builtin = struct {
-    name: []const u8,
-    op: ir.Instruction.Op,
-    arg_type: ir.Type,
-    ret_type: ir.Type,
-};
-
-const builtins = [_]Builtin{
-    .{ .name = "trunc", .op = .fptosi, .arg_type = .f64, .ret_type = .i64 },
-    .{ .name = "abs", .op = .fabs, .arg_type = .f64, .ret_type = .f64 },
-    .{ .name = "sqrt", .op = .fsqrt, .arg_type = .f64, .ret_type = .f64 },
-    .{ .name = "ceil", .op = .fceil, .arg_type = .f64, .ret_type = .i64 },
-    .{ .name = "floor", .op = .ffloor, .arg_type = .f64, .ret_type = .i64 },
-    .{ .name = "round", .op = .fround, .arg_type = .f64, .ret_type = .i64 },
-};
-
 /// Check if current source file is part of stdlib
 /// Internal types are allowed in stdlib code and monomorphized stdlib methods
 pub fn isStdlibFile(self: *AstToIr) bool {
@@ -194,9 +179,8 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
         return convertFileIntrinsic(self, call);
     }
 
-    const builtin = for (builtins) |b| {
-        if (std.mem.eql(u8, call.func_name, b.name)) break b;
-    } else return error.NotABuiltin;
+    // Look up math builtin in registry
+    const builtin = intrinsics_registry.isMathBuiltin(call.func_name) orelse return error.NotABuiltin;
 
     if (call.args.len != 1) {
         self.reportError(.E011, call.func_name);
@@ -205,21 +189,22 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
 
     const arg = try self.convertExpression(call.args[0]);
     const arg_prim = arg.ty.toPrimitiveType();
+    const arg_ir_type = builtin.arg_ir_type.?;
 
     // Get the actual value to use, with implicit int-to-float promotion if needed
-    const actual_value = if (arg_prim != builtin.arg_type) blk: {
+    const actual_value = if (arg_prim != arg_ir_type) blk: {
         // Allow int -> float promotion for builtins expecting float
-        if (builtin.arg_type == .f64 and arg_prim == .i64) {
+        if (arg_ir_type == .f64 and arg_prim == .i64) {
             break :blk self.func().emitUnaryOp(.sitofp, arg.value, .f64) catch return error.OutOfMemory;
         }
-        const msg = std.fmt.allocPrint(self.allocator, "{s}() requires {s} argument", .{ call.func_name, builtin.arg_type.toMaxonName() }) catch call.func_name;
+        const msg = std.fmt.allocPrint(self.allocator, "{s}() requires {s} argument", .{ call.func_name, arg_ir_type.toMaxonName() }) catch call.func_name;
         self.reportError(.E022, msg);
         return error.TypeMismatch;
     } else arg.value;
 
-    const result = self.func().emitUnaryOp(builtin.op, actual_value, builtin.ret_type) catch return error.OutOfMemory;
+    const result = self.func().emitUnaryOp(builtin.ir_op.?, actual_value, builtin.return_ir_type) catch return error.OutOfMemory;
 
-    return .{ .value = result, .ty = .{ .primitive = builtin.ret_type.toMaxonName() } };
+    return .{ .value = result, .ty = .{ .primitive = builtin.return_type_name } };
 }
 
 // ============================================================================

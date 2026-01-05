@@ -325,7 +325,7 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
         }
 
-        try self.expectEndLabel(name_token.text);
+        _ = try self.expectEndLabel(name_token.text);
         try self.expectEndNewline();
 
         return .{
@@ -494,7 +494,7 @@ pub const Parser = struct {
         const return_type = try self.parseOptionalReturnType();
         const throws_type = try self.parseOptionalThrowsClause();
         _ = try self.expect(.newline);
-        const body = try self.parseBodyUntilEnd(name);
+        const body_result = try self.parseBodyUntilEnd(name);
         try self.expectEndNewline();
         if (self.check(.newline)) _ = self.advance();
 
@@ -506,7 +506,10 @@ pub const Parser = struct {
             .params = params,
             .return_type = return_type,
             .throws_type = throws_type,
-            .body = body,
+            .body = body_result.body,
+            .line = first_name.line,
+            .column = first_name.column,
+            .end_line = body_result.end_line,
         };
     }
 
@@ -596,8 +599,13 @@ pub const Parser = struct {
         return null;
     }
 
+    const BodyWithEndLine = struct {
+        body: []ast.Statement,
+        end_line: u32,
+    };
+
     /// Parse statements until `end` keyword, then consume `end 'label'`
-    fn parseBodyUntilEnd(self: *Parser, expected_label: []const u8) ![]ast.Statement {
+    fn parseBodyUntilEnd(self: *Parser, expected_label: []const u8) !BodyWithEndLine {
         var statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
         errdefer statements.deinit(self.allocator);
 
@@ -609,9 +617,12 @@ pub const Parser = struct {
             try statements.append(self.allocator, try self.parseStatement());
         }
 
-        try self.expectEndLabel(expected_label);
+        const end_line = try self.expectEndLabel(expected_label);
 
-        return statements.toOwnedSlice(self.allocator);
+        return .{
+            .body = try statements.toOwnedSlice(self.allocator),
+            .end_line = end_line,
+        };
     }
 
     /// Expect newline after end (or EOF)
@@ -850,7 +861,7 @@ pub const Parser = struct {
         const return_type = try self.parseOptionalReturnType();
         const throws_type = try self.parseOptionalThrowsClause();
         _ = try self.expect(.newline);
-        const body = try self.parseBodyUntilEnd(name_token.text);
+        const body_result = try self.parseBodyUntilEnd(name_token.text);
         try self.expectEndNewline();
 
         return .{
@@ -859,9 +870,10 @@ pub const Parser = struct {
             .params = params,
             .return_type = return_type,
             .throws_type = throws_type,
-            .body = body,
+            .body = body_result.body,
             .line = name_token.line,
             .column = name_token.column,
+            .end_line = body_result.end_line,
         };
     }
 
@@ -1029,7 +1041,7 @@ pub const Parser = struct {
                     try default_statements.append(self.allocator, try self.parseStatement());
                 }
 
-                try self.expectEndLabel(label.text);
+                const end_line = try self.expectEndLabel(label.text);
                 try self.expectTrailingNewline();
                 if (self.check(.newline)) {
                     _ = self.advance();
@@ -1041,6 +1053,7 @@ pub const Parser = struct {
                     .optional_expr = expr_ptr,
                     .default_body = try default_statements.toOwnedSlice(self.allocator),
                     .label = label.text,
+                    .end_line = end_line,
                 } }, start_line, start_column);
             }
 
@@ -1069,7 +1082,7 @@ pub const Parser = struct {
                         try nil_statements.append(self.allocator, try self.parseStatement());
                     }
 
-                    try self.expectEndLabel(label.text);
+                    const end_line = try self.expectEndLabel(label.text);
                     try self.expectTrailingNewline();
                     if (self.check(.newline)) {
                         _ = self.advance();
@@ -1081,6 +1094,7 @@ pub const Parser = struct {
                         .optional_expr = expr_ptr,
                         .nil_body = try nil_statements.toOwnedSlice(self.allocator),
                         .label = label.text,
+                        .end_line = end_line,
                     } }, start_line, start_column);
                 }
             }
@@ -1124,10 +1138,11 @@ pub const Parser = struct {
         return statements.toOwnedSlice(self.allocator);
     }
 
-    /// Parse 'end 'label'' and consume trailing newline (or EOF)
-    fn parseEndAndNewline(self: *Parser, expected_label: []const u8) ParseError!void {
-        try self.expectEndLabel(expected_label);
+    /// Parse 'end 'label'' and consume trailing newline (or EOF). Returns the line of the 'end' keyword.
+    fn parseEndAndNewline(self: *Parser, expected_label: []const u8) ParseError!u32 {
+        const end_line = try self.expectEndLabel(expected_label);
         try self.expectTrailingNewline();
+        return end_line;
     }
 
     /// Require newline after a block end (or allow EOF)
@@ -1183,7 +1198,7 @@ pub const Parser = struct {
         const else_label_tok = try self.expectBlockIdentifier();
         _ = try self.expect(.newline);
         const else_body = try self.parseBlockBody();
-        try self.expectEndLabel(else_label_tok.text);
+        _ = try self.expectEndLabel(else_label_tok.text);
 
         return .{ .body = else_body, .label = else_label_tok.text, .else_if = null };
     }
@@ -1213,7 +1228,7 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
 
             const body = try self.parseBlockBody();
-            try self.expectEndLabel(label.text);
+            const end_line = try self.expectEndLabel(label.text);
 
             const else_clause = try self.parseElseClause(false);
             try self.expectTrailingNewline();
@@ -1226,6 +1241,7 @@ pub const Parser = struct {
                 .else_label = else_clause.label,
                 .else_if = null,
                 .binding_name = name_token.text,
+                .end_line = end_line,
             } }, start_line, start_column);
         }
 
@@ -1245,7 +1261,7 @@ pub const Parser = struct {
         _ = try self.expect(.newline);
 
         const body = try self.parseBlockBody();
-        try self.expectEndLabel(label.text);
+        const end_line = try self.expectEndLabel(label.text);
 
         const else_clause = try self.parseElseClause(true);
 
@@ -1261,6 +1277,7 @@ pub const Parser = struct {
             .else_body = else_clause.body,
             .else_label = else_clause.label,
             .else_if = else_clause.else_if,
+            .end_line = end_line,
         };
     }
 
@@ -1279,12 +1296,13 @@ pub const Parser = struct {
         _ = try self.expect(.newline);
 
         const body = try self.parseBlockBody();
-        try self.parseEndAndNewline(label.text);
+        const end_line = try self.parseEndAndNewline(label.text);
 
         return stmtAt(.{ .while_stmt = .{
             .condition = condition,
             .body = body,
             .label = label.text,
+            .end_line = end_line,
         } }, start_line, start_column);
     }
 
@@ -1312,13 +1330,14 @@ pub const Parser = struct {
 
         // Parse body
         const body = try self.parseBlockBody();
-        try self.parseEndAndNewline(label.text);
+        const end_line = try self.parseEndAndNewline(label.text);
 
         return stmtAt(.{ .for_stmt = .{
             .var_name = var_name.text,
             .iterable = iterable,
             .body = body,
             .label = label.text,
+            .end_line = end_line,
         } }, start_line, start_column);
     }
 
@@ -1356,7 +1375,7 @@ pub const Parser = struct {
         _ = try self.expect(.newline);
 
         const body = try self.parseBlockBody();
-        try self.expectEndLabel(label.text);
+        const end_line = try self.expectEndLabel(label.text);
 
         // Parse catch clauses (at least one required)
         var catches: std.ArrayListUnmanaged(ast.CatchClause) = .empty;
@@ -1375,6 +1394,7 @@ pub const Parser = struct {
             .body = body,
             .label = label.text,
             .catches = try catches.toOwnedSlice(self.allocator),
+            .end_line = end_line,
         } }, start_line, start_column);
     }
 
@@ -1395,7 +1415,7 @@ pub const Parser = struct {
         _ = try self.expect(.newline);
 
         const catch_body = try self.parseBlockBody();
-        try self.expectEndLabel(label.text);
+        _ = try self.expectEndLabel(label.text);
 
         // Only expect newline if not followed by another catch
         if (!self.check(.@"catch")) {
@@ -1491,7 +1511,7 @@ pub const Parser = struct {
             });
         }
 
-        try self.expectEndLabel(label.text);
+        const end_line = try self.expectEndLabel(label.text);
         try self.expectTrailingNewline();
 
         return stmtAt(.{ .match_stmt = .{
@@ -1499,6 +1519,7 @@ pub const Parser = struct {
             .cases = try cases.toOwnedSlice(self.allocator),
             .default_case = default_case,
             .label = label.text,
+            .end_line = end_line,
         } }, start_line, start_column);
     }
 
@@ -1768,7 +1789,7 @@ pub const Parser = struct {
             });
         }
 
-        try self.expectEndLabel(label.text);
+        _ = try self.expectEndLabel(label.text);
 
         // Create the scrutinee pointer
         const scrutinee_ptr = try self.createExpr(scrutinee);
@@ -2817,14 +2838,15 @@ pub const Parser = struct {
         return error.UnexpectedToken;
     }
 
-    /// Parse 'end 'label'' and verify the label matches expected
-    fn expectEndLabel(self: *Parser, expected: []const u8) !void {
-        _ = try self.expect(.end);
+    /// Parse 'end 'label'' and verify the label matches expected. Returns the line of the 'end' keyword.
+    fn expectEndLabel(self: *Parser, expected: []const u8) !u32 {
+        const end_token = try self.expect(.end);
         const end_label = try self.expectBlockIdentifier();
         if (!std.mem.eql(u8, expected, end_label.text)) {
             self.reportBlockIdMismatch(expected, end_label.text);
             return error.UnexpectedToken;
         }
+        return end_token.line;
     }
 
     fn check(self: *Parser, token_type: TokenType) bool {
@@ -2969,7 +2991,7 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
         }
 
-        try self.expectEndLabel(name_token.text);
+        _ = try self.expectEndLabel(name_token.text);
         try self.expectTrailingNewline();
 
         return .{
@@ -3017,7 +3039,7 @@ pub const Parser = struct {
             try methods.append(self.allocator, try self.parseInterfaceMethod());
         }
 
-        try self.expectEndLabel(name_token.text);
+        _ = try self.expectEndLabel(name_token.text);
         try self.expectEndNewline();
 
         return .{
@@ -3048,10 +3070,10 @@ pub const Parser = struct {
         self.skipNewlines();
         const has_default_impl = !self.check(.end) and !self.check(.function) and !self.check(.static);
         const default_body: ?[]ast.Statement = if (has_default_impl) blk: {
-            const body = try self.parseBodyUntilEnd(name_token.text);
+            const body_result = try self.parseBodyUntilEnd(name_token.text);
             try self.expectEndNewline();
             if (self.check(.newline)) _ = self.advance();
-            break :blk body;
+            break :blk body_result.body;
         } else null;
 
         return .{

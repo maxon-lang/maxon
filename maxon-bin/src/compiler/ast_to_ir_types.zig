@@ -442,9 +442,16 @@ pub const SemanticInfo = struct {
     stdlib_sources: []const []const u8 = &.{},
     // Keep user source string alive (variable names are slices into this)
     user_source: ?[]const u8 = null,
+    // Keep AST alive for LSP features (hover, find references, etc.)
+    program: ?ast.Program = null,
 
     pub fn deinit(self: *SemanticInfo) void {
         self.allocator.free(self.variables);
+
+        // Free AST if present
+        if (self.program) |program| {
+            ast.freeProgram(program, self.allocator);
+        }
 
         // Free user source string
         if (self.user_source) |src| {

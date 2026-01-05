@@ -967,13 +967,9 @@ pub const LspClient = struct {
         const result = windows.kernel32.WaitForSingleObject(handle, timeout_ms);
 
         if (result == windows.WAIT_TIMEOUT) {
-            std.debug.print("LSP server timed out after {d}ms, killing process\n", .{timeout_ms});
             _ = self.process.kill() catch {};
             _ = self.process.wait() catch {};
-            const stderr_output = stderr_reader.join();
-            if (stderr_output.len > 0) {
-                std.debug.print("LSP server stderr (before timeout):\n{s}\n", .{stderr_output});
-            }
+            _ = stderr_reader.join();
             return error.Timeout;
         }
 
@@ -987,9 +983,6 @@ pub const LspClient = struct {
 
         // Join the stderr reader thread and get output
         const stderr_output = stderr_reader.join();
-        if (stderr_output.len > 0) {
-            std.debug.print("LSP server stderr:\n{s}\n", .{stderr_output});
-        }
 
         // Check for memory leak messages
         if (std.mem.indexOf(u8, stderr_output, "Memory leak detected!")) |_| {
@@ -1003,16 +996,13 @@ pub const LspClient = struct {
         switch (term) {
             .Exited => |code| {
                 if (code != 0) {
-                    std.debug.print("LSP server exited with code: {d}\n", .{code});
                     return error.NonZeroExitCode;
                 }
             },
-            .Signal => |sig| {
-                std.debug.print("LSP server killed by signal: {d}\n", .{sig});
+            .Signal => {
                 return error.AbnormalTermination;
             },
             else => {
-                std.debug.print("LSP server terminated abnormally\n", .{});
                 return error.AbnormalTermination;
             },
         }
