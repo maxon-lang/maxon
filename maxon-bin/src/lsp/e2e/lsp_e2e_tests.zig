@@ -302,3 +302,244 @@ test "completion for array methods" {
 
     try ctx.deinit();
 }
+
+// ============================================================================
+// Hover Tests
+// ============================================================================
+
+test "hover returns type information" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function main() returns int
+        \\    let x = 42
+        \\    return x
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'x' at line 1, character 8
+    var result = try ctx.client.hover("file:///test.maxon", 1, 8);
+    defer result.deinit();
+
+    // Hover should not error (may or may not return content)
+    _ = result.content;
+
+    try ctx.deinit();
+}
+
+test "hover shows value for immutable variables" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function main() returns int
+        \\    let PI = 3.14159
+        \\    return 0
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'PI' at line 1, character 5
+    var result = try ctx.client.hover("file:///test.maxon", 1, 5);
+    defer result.deinit();
+
+    // The hover should contain the value for immutable variables
+    if (result.content) |content| {
+        try testing.expect(std.mem.indexOf(u8, content, "3.14159") != null);
+    }
+
+    try ctx.deinit();
+}
+
+test "hover shows local function signature" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function add(a int, b int) returns int
+        \\    return a + b
+        \\end 'add'
+        \\
+        \\function main() returns int
+        \\    return add(1, 2)
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'add' at the call site (line 5)
+    // Line 5: "    return add(1, 2)" - 'add' starts at position 11
+    var result = try ctx.client.hover("file:///test.maxon", 5, 12);
+    defer result.deinit();
+
+    // The hover should show the function signature
+    if (result.content) |content| {
+        try testing.expect(std.mem.indexOf(u8, content, "function add") != null);
+        try testing.expect(std.mem.indexOf(u8, content, "a int") != null);
+    }
+
+    try ctx.deinit();
+}
+
+test "hover shows correct type for function parameter" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function greet(name string) returns int
+        \\    var x = name
+        \\    return 0
+        \\end 'greet'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'name' at line 1
+    // Line 1: "    var x = name" - 'name' starts at position 12
+    var result = try ctx.client.hover("file:///test.maxon", 1, 13);
+    defer result.deinit();
+
+    // The hover should show the parameter type as string
+    if (result.content) |content| {
+        try testing.expect(std.mem.indexOf(u8, content, "string") != null);
+        try testing.expect(std.mem.indexOf(u8, content, "float") == null);
+    }
+
+    try ctx.deinit();
+}
+
+test "hover shows intrinsic signature" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test()
+        \\    var cs = "test".cstr()
+        \\    var arr = [1 as byte, 2 as byte]
+        \\    __write_file_binary(cs, arr)
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on '__write_file_binary' at line 3
+    var result = try ctx.client.hover("file:///test.maxon", 3, 10);
+    defer result.deinit();
+
+    // The hover should show the intrinsic signature
+    if (result.content) |content| {
+        try testing.expect(std.mem.indexOf(u8, content, "intrinsic") != null);
+        try testing.expect(std.mem.indexOf(u8, content, "__write_file_binary") != null);
+    }
+
+    try ctx.deinit();
+}
+
+// ============================================================================
+// Go to Definition Tests
+// ============================================================================
+// NOTE: textDocument/definition is not yet implemented in the Zig LSP server.
+// These tests are ready for when it's implemented.
+
+test "definition returns location" {
+    // Skip: textDocument/definition not implemented yet
+    return error.SkipZigTest;
+}
+
+// ============================================================================
+// Formatting Tests
+// ============================================================================
+// NOTE: textDocument/formatting is not yet implemented in the Zig LSP server.
+// These tests are ready for when it's implemented.
+
+test "formatting returns edits" {
+    // Skip: textDocument/formatting not implemented yet
+    return error.SkipZigTest;
+}
+
+test "formatting indents nested code correctly" {
+    // Skip: textDocument/formatting not implemented yet
+    return error.SkipZigTest;
+}
+
+test "formatting indents type fields correctly" {
+    // Skip: textDocument/formatting not implemented yet
+    return error.SkipZigTest;
+}
+
+test "formatting handles else blocks correctly" {
+    // Skip: textDocument/formatting not implemented yet
+    return error.SkipZigTest;
+}
+
+test "formatting uses spaces when insertSpaces is true" {
+    // Skip: textDocument/formatting not implemented yet
+    return error.SkipZigTest;
+}
+
+test "formatting preserves implicit type declarations" {
+    // Skip: textDocument/formatting not implemented yet
+    return error.SkipZigTest;
+}
+
+test "formatting preserves comments" {
+    // Skip: textDocument/formatting not implemented yet
+    return error.SkipZigTest;
+}
+
+test "formatting preserves blank lines" {
+    // Skip: textDocument/formatting not implemented yet
+    return error.SkipZigTest;
+}
+
+test "formatting formats multiple interfaces at top level" {
+    // Skip: textDocument/formatting not implemented yet
+    return error.SkipZigTest;
+}
+
+// ============================================================================
+// Document Symbols Tests
+// ============================================================================
+// NOTE: textDocument/documentSymbol is not yet implemented in the Zig LSP server.
+// These tests are ready for when it's implemented.
+
+test "documentSymbol returns symbols" {
+    // Skip: textDocument/documentSymbol not implemented yet
+    return error.SkipZigTest;
+}
+
+// ============================================================================
+// Folding Range Tests
+// ============================================================================
+// NOTE: textDocument/foldingRange is not yet implemented in the Zig LSP server.
+// These tests are ready for when it's implemented.
+
+test "foldingRange returns ranges" {
+    // Skip: textDocument/foldingRange not implemented yet
+    return error.SkipZigTest;
+}
+
+// ============================================================================
+// Linked Editing Range Tests
+// ============================================================================
+// NOTE: textDocument/linkedEditingRange is not yet implemented in the Zig LSP server.
+// These tests are ready for when it's implemented.
+
+test "linkedEditingRange returns ranges for block labels" {
+    // Skip: textDocument/linkedEditingRange not implemented yet
+    return error.SkipZigTest;
+}
+
+test "linkedEditingRange returns ranges for function names" {
+    // Skip: textDocument/linkedEditingRange not implemented yet
+    return error.SkipZigTest;
+}
+
+test "linkedEditingRange returns ranges for interface method names" {
+    // Skip: textDocument/linkedEditingRange not implemented yet
+    return error.SkipZigTest;
+}

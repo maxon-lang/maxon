@@ -285,6 +285,450 @@ pub const LspClient = struct {
         return self.completionWithTrigger(uri, line, character, null);
     }
 
+    /// Hover result from LSP
+    pub const HoverResult = struct {
+        content: ?[]const u8,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *HoverResult) void {
+            if (self.content) |c| {
+                self.allocator.free(c);
+            }
+        }
+    };
+
+    /// Request hover at a position
+    pub fn hover(self: *LspClient, uri: []const u8, line: u32, character: u32) !HoverResult {
+        var response = try self.sendRequest("textDocument/hover", .{
+            .textDocument = .{ .uri = uri },
+            .position = .{ .line = line, .character = character },
+        });
+        defer response.deinit();
+
+        if (response.getError()) |err| {
+            std.debug.print("Hover error: {s}\n", .{err.message});
+            return error.HoverFailed;
+        }
+
+        const result = response.getResult() orelse return HoverResult{
+            .content = null,
+            .allocator = self.allocator,
+        };
+
+        // Result can be null
+        if (result == .null) {
+            return HoverResult{
+                .content = null,
+                .allocator = self.allocator,
+            };
+        }
+
+        // Parse hover content
+        if (result == .object) {
+            if (result.object.get("contents")) |contents| {
+                // MarkupContent format: { kind: "markdown", value: "..." }
+                if (contents == .object) {
+                    if (contents.object.get("value")) |val| {
+                        if (val == .string) {
+                            return HoverResult{
+                                .content = try self.allocator.dupe(u8, val.string),
+                                .allocator = self.allocator,
+                            };
+                        }
+                    }
+                } else if (contents == .string) {
+                    return HoverResult{
+                        .content = try self.allocator.dupe(u8, contents.string),
+                        .allocator = self.allocator,
+                    };
+                }
+            }
+        }
+
+        return HoverResult{
+            .content = null,
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Definition location from LSP
+    pub const DefinitionResult = struct {
+        uri: ?[]const u8,
+        line: ?u32,
+        character: ?u32,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *DefinitionResult) void {
+            if (self.uri) |u| {
+                self.allocator.free(u);
+            }
+        }
+    };
+
+    /// Request go-to-definition at a position
+    pub fn definition(self: *LspClient, uri: []const u8, line: u32, character: u32) !DefinitionResult {
+        var response = try self.sendRequest("textDocument/definition", .{
+            .textDocument = .{ .uri = uri },
+            .position = .{ .line = line, .character = character },
+        });
+        defer response.deinit();
+
+        if (response.getError()) |err| {
+            std.debug.print("Definition error: {s}\n", .{err.message});
+            return error.DefinitionFailed;
+        }
+
+        const result = response.getResult() orelse return DefinitionResult{
+            .uri = null,
+            .line = null,
+            .character = null,
+            .allocator = self.allocator,
+        };
+
+        if (result == .null) {
+            return DefinitionResult{
+                .uri = null,
+                .line = null,
+                .character = null,
+                .allocator = self.allocator,
+            };
+        }
+
+        // Result can be Location, Location[], or LocationLink[]
+        var loc: ?std.json.Value = null;
+        if (result == .array and result.array.items.len > 0) {
+            loc = result.array.items[0];
+        } else if (result == .object) {
+            loc = result;
+        }
+
+        if (loc) |location| {
+            if (location == .object) {
+                const target_uri = if (location.object.get("uri")) |u| (if (u == .string) u.string else null) else null;
+                var target_line: ?u32 = null;
+                var target_char: ?u32 = null;
+
+                if (location.object.get("range")) |range| {
+                    if (range == .object) {
+                        if (range.object.get("start")) |start| {
+                            if (start == .object) {
+                                if (start.object.get("line")) |l| {
+                                    if (l == .integer) target_line = @intCast(l.integer);
+                                }
+                                if (start.object.get("character")) |c| {
+                                    if (c == .integer) target_char = @intCast(c.integer);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return DefinitionResult{
+                    .uri = if (target_uri) |u| try self.allocator.dupe(u8, u) else null,
+                    .line = target_line,
+                    .character = target_char,
+                    .allocator = self.allocator,
+                };
+            }
+        }
+
+        return DefinitionResult{
+            .uri = null,
+            .line = null,
+            .character = null,
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Formatting result from LSP
+    pub const FormattingResult = struct {
+        new_text: ?[]const u8,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *FormattingResult) void {
+            if (self.new_text) |t| {
+                self.allocator.free(t);
+            }
+        }
+    };
+
+    /// Request document formatting
+    pub fn formatting(self: *LspClient, uri: []const u8, tab_size: u32, insert_spaces: bool) !FormattingResult {
+        var response = try self.sendRequest("textDocument/formatting", .{
+            .textDocument = .{ .uri = uri },
+            .options = .{
+                .tabSize = tab_size,
+                .insertSpaces = insert_spaces,
+            },
+        });
+        defer response.deinit();
+
+        if (response.getError()) |err| {
+            std.debug.print("Formatting error: {s}\n", .{err.message});
+            return error.FormattingFailed;
+        }
+
+        const result = response.getResult() orelse return FormattingResult{
+            .new_text = null,
+            .allocator = self.allocator,
+        };
+
+        if (result == .null) {
+            return FormattingResult{
+                .new_text = null,
+                .allocator = self.allocator,
+            };
+        }
+
+        // Result is TextEdit[] - we take the first edit's newText
+        if (result == .array and result.array.items.len > 0) {
+            const first_edit = result.array.items[0];
+            if (first_edit == .object) {
+                if (first_edit.object.get("newText")) |new_text| {
+                    if (new_text == .string) {
+                        return FormattingResult{
+                            .new_text = try self.allocator.dupe(u8, new_text.string),
+                            .allocator = self.allocator,
+                        };
+                    }
+                }
+            }
+        }
+
+        return FormattingResult{
+            .new_text = null,
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Document symbol from LSP
+    pub const DocumentSymbol = struct {
+        name: []const u8,
+        kind: i64,
+    };
+
+    /// Document symbols result
+    pub const DocumentSymbolsResult = struct {
+        symbols: []DocumentSymbol,
+        names: [][]const u8,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *DocumentSymbolsResult) void {
+            for (self.names) |name| {
+                self.allocator.free(name);
+            }
+            self.allocator.free(self.names);
+            self.allocator.free(self.symbols);
+        }
+    };
+
+    /// Request document symbols
+    pub fn documentSymbols(self: *LspClient, uri: []const u8) !DocumentSymbolsResult {
+        var response = try self.sendRequest("textDocument/documentSymbol", .{
+            .textDocument = .{ .uri = uri },
+        });
+        defer response.deinit();
+
+        if (response.getError()) |err| {
+            std.debug.print("DocumentSymbol error: {s}\n", .{err.message});
+            return error.DocumentSymbolFailed;
+        }
+
+        const result = response.getResult() orelse return DocumentSymbolsResult{
+            .symbols = &.{},
+            .names = &.{},
+            .allocator = self.allocator,
+        };
+
+        if (result == .null or result != .array) {
+            return DocumentSymbolsResult{
+                .symbols = &.{},
+                .names = &.{},
+                .allocator = self.allocator,
+            };
+        }
+
+        var symbols = try self.allocator.alloc(DocumentSymbol, result.array.items.len);
+        var names = try self.allocator.alloc([]const u8, result.array.items.len);
+        var count: usize = 0;
+
+        for (result.array.items) |item| {
+            if (item == .object) {
+                const name = if (item.object.get("name")) |n| (if (n == .string) n.string else null) else null;
+                const kind = if (item.object.get("kind")) |k| (if (k == .integer) k.integer else null) else null;
+
+                if (name != null and kind != null) {
+                    names[count] = try self.allocator.dupe(u8, name.?);
+                    symbols[count] = .{
+                        .name = names[count],
+                        .kind = kind.?,
+                    };
+                    count += 1;
+                }
+            }
+        }
+
+        return DocumentSymbolsResult{
+            .symbols = symbols[0..count],
+            .names = names[0..count],
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Linked editing range from LSP
+    pub const LinkedEditingRange = struct {
+        start_line: u32,
+        start_char: u32,
+        end_line: u32,
+        end_char: u32,
+    };
+
+    /// Linked editing ranges result
+    pub const LinkedEditingRangesResult = struct {
+        ranges: []LinkedEditingRange,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *LinkedEditingRangesResult) void {
+            self.allocator.free(self.ranges);
+        }
+    };
+
+    /// Request linked editing ranges
+    pub fn linkedEditingRange(self: *LspClient, uri: []const u8, line: u32, character: u32) !LinkedEditingRangesResult {
+        var response = try self.sendRequest("textDocument/linkedEditingRange", .{
+            .textDocument = .{ .uri = uri },
+            .position = .{ .line = line, .character = character },
+        });
+        defer response.deinit();
+
+        if (response.getError()) |err| {
+            std.debug.print("LinkedEditingRange error: {s}\n", .{err.message});
+            return error.LinkedEditingRangeFailed;
+        }
+
+        const result = response.getResult() orelse return LinkedEditingRangesResult{
+            .ranges = &.{},
+            .allocator = self.allocator,
+        };
+
+        if (result == .null) {
+            return LinkedEditingRangesResult{
+                .ranges = &.{},
+                .allocator = self.allocator,
+            };
+        }
+
+        // Result is { ranges: Range[] }
+        if (result == .object) {
+            if (result.object.get("ranges")) |ranges_val| {
+                if (ranges_val == .array) {
+                    var ranges = try self.allocator.alloc(LinkedEditingRange, ranges_val.array.items.len);
+                    var count: usize = 0;
+
+                    for (ranges_val.array.items) |range| {
+                        if (range == .object) {
+                            const start = range.object.get("start");
+                            const end = range.object.get("end");
+
+                            if (start != null and end != null and start.? == .object and end.? == .object) {
+                                const start_line = if (start.?.object.get("line")) |l| (if (l == .integer) @as(u32, @intCast(l.integer)) else null) else null;
+                                const start_char = if (start.?.object.get("character")) |c| (if (c == .integer) @as(u32, @intCast(c.integer)) else null) else null;
+                                const end_line = if (end.?.object.get("line")) |l| (if (l == .integer) @as(u32, @intCast(l.integer)) else null) else null;
+                                const end_char = if (end.?.object.get("character")) |c| (if (c == .integer) @as(u32, @intCast(c.integer)) else null) else null;
+
+                                if (start_line != null and start_char != null and end_line != null and end_char != null) {
+                                    ranges[count] = .{
+                                        .start_line = start_line.?,
+                                        .start_char = start_char.?,
+                                        .end_line = end_line.?,
+                                        .end_char = end_char.?,
+                                    };
+                                    count += 1;
+                                }
+                            }
+                        }
+                    }
+
+                    return LinkedEditingRangesResult{
+                        .ranges = ranges[0..count],
+                        .allocator = self.allocator,
+                    };
+                }
+            }
+        }
+
+        return LinkedEditingRangesResult{
+            .ranges = &.{},
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Folding range from LSP
+    pub const FoldingRange = struct {
+        start_line: u32,
+        end_line: u32,
+        kind: ?[]const u8,
+    };
+
+    /// Folding ranges result
+    pub const FoldingRangesResult = struct {
+        ranges: []FoldingRange,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *FoldingRangesResult) void {
+            self.allocator.free(self.ranges);
+        }
+    };
+
+    /// Request folding ranges
+    pub fn foldingRange(self: *LspClient, uri: []const u8) !FoldingRangesResult {
+        var response = try self.sendRequest("textDocument/foldingRange", .{
+            .textDocument = .{ .uri = uri },
+        });
+        defer response.deinit();
+
+        if (response.getError()) |err| {
+            std.debug.print("FoldingRange error: {s}\n", .{err.message});
+            return error.FoldingRangeFailed;
+        }
+
+        const result = response.getResult() orelse return FoldingRangesResult{
+            .ranges = &.{},
+            .allocator = self.allocator,
+        };
+
+        if (result == .null or result != .array) {
+            return FoldingRangesResult{
+                .ranges = &.{},
+                .allocator = self.allocator,
+            };
+        }
+
+        var ranges = try self.allocator.alloc(FoldingRange, result.array.items.len);
+        var count: usize = 0;
+
+        for (result.array.items) |item| {
+            if (item == .object) {
+                const start_line = if (item.object.get("startLine")) |l| (if (l == .integer) @as(u32, @intCast(l.integer)) else null) else null;
+                const end_line = if (item.object.get("endLine")) |l| (if (l == .integer) @as(u32, @intCast(l.integer)) else null) else null;
+
+                if (start_line != null and end_line != null) {
+                    ranges[count] = .{
+                        .start_line = start_line.?,
+                        .end_line = end_line.?,
+                        .kind = null, // We don't need kind for our tests
+                    };
+                    count += 1;
+                }
+            }
+        }
+
+        return FoldingRangesResult{
+            .ranges = ranges[0..count],
+            .allocator = self.allocator,
+        };
+    }
+
     /// Request completions at a position with a trigger character
     pub fn completionWithTrigger(self: *LspClient, uri: []const u8, line: u32, character: u32, trigger_char: ?[]const u8) !CompletionResult {
         var response: ParsedResponse = undefined;
