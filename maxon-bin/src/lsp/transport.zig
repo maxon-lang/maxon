@@ -305,3 +305,14 @@ pub fn getArray(obj: std.json.ObjectMap, key: []const u8) ?std.json.Array {
     }
     return null;
 }
+
+/// Get a boolean field from a JSON object
+pub fn getBool(obj: std.json.ObjectMap, key: []const u8) ?bool {
+    if (obj.get(key)) |val| {
+        return switch (val) {
+            .bool => |b| b,
+            else => null,
+        };
+    }
+    return null;
+}

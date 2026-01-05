@@ -526,7 +526,452 @@ pub const Analyzer = struct {
             }
         }
     }
+
+    /// Get a document by URI
+    pub fn getDocument(self: *Analyzer, uri: []const u8) ?Document {
+        return self.documents.get(uri);
+    }
+
+    /// Format a document and return the formatted text
+    pub fn formatDocument(self: *Analyzer, uri: []const u8, tab_size: u32, insert_spaces: bool) ?[]const u8 {
+        const doc = self.documents.get(uri) orelse return null;
+        return formatContent(self.allocator, doc.content, tab_size, insert_spaces) catch null;
+    }
+
+    /// Get folding ranges for a document
+    pub fn getFoldingRanges(self: *Analyzer, uri: []const u8) ![]types.FoldingRange {
+        const doc = self.documents.get(uri) orelse return &.{};
+
+        var ranges: std.ArrayListUnmanaged(types.FoldingRange) = .empty;
+        try findFoldingRanges(doc.content, self.allocator, &ranges);
+
+        if (ranges.items.len == 0) {
+            return &.{};
+        }
+        return ranges.toOwnedSlice(self.allocator);
+    }
+
+    /// Get linked editing ranges for a position in a document
+    pub fn getLinkedEditingRanges(self: *Analyzer, uri: []const u8, line: u32, character: u32) ?types.LinkedEditingRanges {
+        const doc = self.documents.get(uri) orelse return null;
+        return findLinkedEditingRanges(self.allocator, doc.content, line, character) catch null;
+    }
 };
+
+// ============================================================================
+// Formatting Implementation
+// ============================================================================
+
+/// Format document content with proper indentation
+fn formatContent(allocator: std.mem.Allocator, content: []const u8, tab_size: u32, insert_spaces: bool) ![]const u8 {
+    var result: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer result.deinit(allocator);
+
+    // Create indent string based on options
+    var indent_buf: [16]u8 = undefined;
+    const indent_str: []const u8 = if (insert_spaces) blk: {
+        const size = @min(tab_size, indent_buf.len);
+        @memset(indent_buf[0..size], ' ');
+        break :blk indent_buf[0..size];
+    } else "\t";
+
+    // Collect all lines first for lookahead
+    var all_lines: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer all_lines.deinit(allocator);
+
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        try all_lines.append(allocator, line);
+    }
+
+    var depth: u32 = 0;
+    var first_line = true;
+
+    for (all_lines.items, 0..) |line, line_idx| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+
+        // Add newline before all lines except the first
+        if (!first_line) {
+            try result.append(allocator, '\n');
+        }
+        first_line = false;
+
+        // Empty lines - just leave empty (preserves blank lines)
+        if (trimmed.len == 0) {
+            continue;
+        }
+
+        // Check for block-ending keywords that reduce indent before the line
+        const is_end_line = std.mem.startsWith(u8, trimmed, "end ") or std.mem.eql(u8, trimmed, "end");
+        const is_else_line = std.mem.startsWith(u8, trimmed, "else") and
+            (trimmed.len == 4 or trimmed[4] == ' ' or trimmed[4] == '\t');
+
+        if (is_end_line and depth > 0) {
+            depth -= 1;
+        } else if (is_else_line and depth > 0) {
+            depth -= 1; // Unindent for else, but will re-indent after
+        }
+
+        // Add indentation
+        var i: u32 = 0;
+        while (i < depth) : (i += 1) {
+            try result.appendSlice(allocator, indent_str);
+        }
+
+        // Add the trimmed content
+        try result.appendSlice(allocator, trimmed);
+
+        // Check for block-starting constructs that increase indent for next line
+        if (is_else_line) {
+            depth += 1; // Re-indent after else
+        } else if (startsBlockWithLookahead(trimmed, all_lines.items, line_idx)) {
+            depth += 1;
+        }
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
+/// Check if a line starts a block (increases indent), with lookahead to handle edge cases
+fn startsBlockWithLookahead(trimmed: []const u8, all_lines: []const []const u8, current_idx: usize) bool {
+    // Handle interface (starts block but ends with interface name)
+    if (std.mem.startsWith(u8, trimmed, "interface ")) return true;
+
+    // Handle type declarations
+    if (std.mem.startsWith(u8, trimmed, "type ")) return true;
+    if (std.mem.startsWith(u8, trimmed, "export type ")) return true;
+
+    // Handle function declarations - but NOT interface method signatures
+    // Interface method signatures are followed immediately by 'end' or another signature
+    if (std.mem.startsWith(u8, trimmed, "function ") or std.mem.startsWith(u8, trimmed, "export function ")) {
+        // Check if this is a method signature (no body) by looking at next non-empty line
+        if (current_idx + 1 < all_lines.len) {
+            // Find next non-empty line
+            var next_idx = current_idx + 1;
+            while (next_idx < all_lines.len) {
+                const next_trimmed = std.mem.trim(u8, all_lines[next_idx], " \t\r");
+                if (next_trimmed.len > 0) {
+                    // If next line is 'end' or another function signature, this is a signature without body
+                    if (std.mem.startsWith(u8, next_trimmed, "end ") or
+                        std.mem.startsWith(u8, next_trimmed, "function "))
+                    {
+                        return false; // Interface method signature, not a block
+                    }
+                    break;
+                }
+                next_idx += 1;
+            }
+        }
+        return true;
+    }
+
+    // Handle control flow with labels ('label' at end)
+    // Check for patterns like: if ... 'label', for ... 'label', while ... 'label', etc.
+    if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '\'') {
+        // This line ends with a label, likely a block start
+        if (std.mem.startsWith(u8, trimmed, "if ")) return true;
+        if (std.mem.startsWith(u8, trimmed, "for ")) return true;
+        if (std.mem.startsWith(u8, trimmed, "while ")) return true;
+        if (std.mem.startsWith(u8, trimmed, "match ")) return true;
+    }
+
+    return false;
+}
+
+/// Simple block detection for folding ranges (doesn't need lookahead)
+fn startsBlock(trimmed: []const u8) bool {
+    if (std.mem.startsWith(u8, trimmed, "interface ")) return true;
+    if (std.mem.startsWith(u8, trimmed, "type ")) return true;
+    if (std.mem.startsWith(u8, trimmed, "export type ")) return true;
+    if (std.mem.startsWith(u8, trimmed, "function ")) return true;
+    if (std.mem.startsWith(u8, trimmed, "export function ")) return true;
+
+    if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '\'') {
+        if (std.mem.startsWith(u8, trimmed, "if ")) return true;
+        if (std.mem.startsWith(u8, trimmed, "for ")) return true;
+        if (std.mem.startsWith(u8, trimmed, "while ")) return true;
+        if (std.mem.startsWith(u8, trimmed, "match ")) return true;
+    }
+
+    return false;
+}
+
+// ============================================================================
+// Folding Range Implementation
+// ============================================================================
+
+/// Find folding ranges in document content
+fn findFoldingRanges(content: []const u8, allocator: std.mem.Allocator, ranges: *std.ArrayListUnmanaged(types.FoldingRange)) !void {
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var line_num: u32 = 0;
+
+    // Stack to track block starts
+    var block_stack: std.ArrayListUnmanaged(u32) = .empty;
+    defer block_stack.deinit(allocator);
+
+    while (lines.next()) |line| : (line_num += 1) {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        // Check for block starts
+        if (startsBlock(trimmed)) {
+            try block_stack.append(allocator, line_num);
+        }
+        // Check for block ends
+        else if (std.mem.startsWith(u8, trimmed, "end ") or std.mem.eql(u8, trimmed, "end")) {
+            if (block_stack.items.len > 0) {
+                const start_line = block_stack.items[block_stack.items.len - 1];
+                block_stack.items.len -= 1;
+                try ranges.append(allocator, .{
+                    .startLine = start_line,
+                    .endLine = line_num,
+                });
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Linked Editing Range Implementation
+// ============================================================================
+
+/// Find linked editing ranges at a position
+fn findLinkedEditingRanges(allocator: std.mem.Allocator, content: []const u8, line: u32, character: u32) !?types.LinkedEditingRanges {
+    // Get all lines
+    var lines_list: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer lines_list.deinit(allocator);
+
+    var lines_iter = std.mem.splitScalar(u8, content, '\n');
+    while (lines_iter.next()) |l| {
+        try lines_list.append(allocator, l);
+    }
+
+    if (line >= lines_list.items.len) return null;
+
+    const current_line = lines_list.items[line];
+
+    // Get the word at the cursor position
+    const word = getWordAtPositionInLine(current_line, character) orelse return null;
+
+    // Determine context: are we in a function name, block label, or method name?
+    var result_ranges: std.ArrayListUnmanaged(types.Range) = .empty;
+    errdefer result_ranges.deinit(allocator);
+
+    // Case 1: Check if we're on a function declaration line
+    const trimmed_current = std.mem.trim(u8, current_line, " \t\r");
+    if (std.mem.startsWith(u8, trimmed_current, "function ") or std.mem.startsWith(u8, trimmed_current, "export function ")) {
+        // Extract function name
+        const func_start_idx = std.mem.indexOf(u8, trimmed_current, "function ").? + "function ".len;
+        const func_name_end = std.mem.indexOfAny(u8, trimmed_current[func_start_idx..], "(") orelse (trimmed_current.len - func_start_idx);
+        const func_name = std.mem.trim(u8, trimmed_current[func_start_idx..][0..func_name_end], " \t");
+
+        if (std.mem.eql(u8, word, func_name)) {
+            // Find function name position in original line
+            const name_start = std.mem.indexOf(u8, current_line, func_name).?;
+            try result_ranges.append(allocator, .{
+                .start = .{ .line = line, .character = @intCast(name_start) },
+                .end = .{ .line = line, .character = @intCast(name_start + func_name.len) },
+            });
+
+            // Find the matching end label
+            try findMatchingEndLabel(allocator, lines_list.items, line, func_name, &result_ranges);
+        }
+    }
+
+    // Case 2: Check if we're in a block label (like 'loop' at end of for/if/etc.)
+    if (result_ranges.items.len == 0) {
+        // Check if cursor is in a label (inside quotes at end of line)
+        if (findLabelAtPosition(current_line, character)) |label_info| {
+            try result_ranges.append(allocator, .{
+                .start = .{ .line = line, .character = @intCast(label_info.start) },
+                .end = .{ .line = line, .character = @intCast(label_info.end) },
+            });
+
+            // Find the matching start/end label
+            try findMatchingLabel(allocator, lines_list.items, line, label_info.label, &result_ranges);
+        }
+    }
+
+    // Case 3: Check if we're in a method implementation (Interface.method)
+    if (result_ranges.items.len == 0) {
+        if (std.mem.indexOf(u8, trimmed_current, "function ")) |func_idx| {
+            const after_func = trimmed_current[func_idx + "function ".len ..];
+            if (std.mem.indexOf(u8, after_func, ".")) |dot_idx| {
+                const method_start = dot_idx + 1;
+                const method_end = std.mem.indexOfAny(u8, after_func[method_start..], "(") orelse (after_func.len - method_start);
+                const method_name = after_func[method_start..][0..method_end];
+
+                if (std.mem.eql(u8, word, method_name)) {
+                    // Find method name position in trimmed then convert to original
+                    const pos_in_trimmed = func_idx + "function ".len + method_start;
+                    const pos_in_line = findPositionInOriginal(current_line, trimmed_current, pos_in_trimmed);
+
+                    try result_ranges.append(allocator, .{
+                        .start = .{ .line = line, .character = @intCast(pos_in_line) },
+                        .end = .{ .line = line, .character = @intCast(pos_in_line + method_name.len) },
+                    });
+
+                    // Find matching end label
+                    try findMatchingEndLabel(allocator, lines_list.items, line, method_name, &result_ranges);
+                }
+            }
+        }
+    }
+
+    if (result_ranges.items.len < 2) {
+        result_ranges.deinit(allocator);
+        return null;
+    }
+
+    return types.LinkedEditingRanges{
+        .ranges = try result_ranges.toOwnedSlice(allocator),
+    };
+}
+
+fn getWordAtPositionInLine(line: []const u8, character: u32) ?[]const u8 {
+    if (character >= line.len) return null;
+
+    var start: usize = character;
+    while (start > 0) {
+        const c = line[start - 1];
+        if (!std.ascii.isAlphanumeric(c) and c != '_') break;
+        start -= 1;
+    }
+
+    var end: usize = character;
+    while (end < line.len) {
+        const c = line[end];
+        if (!std.ascii.isAlphanumeric(c) and c != '_') break;
+        end += 1;
+    }
+
+    if (start < end) {
+        return line[start..end];
+    }
+    return null;
+}
+
+const LabelInfo = struct {
+    label: []const u8,
+    start: usize,
+    end: usize,
+};
+
+fn findLabelAtPosition(line: []const u8, character: u32) ?LabelInfo {
+    // Look for 'label' pattern - find quote before and after cursor
+    var idx: usize = 0;
+    while (idx < line.len) {
+        if (line[idx] == '\'') {
+            const label_start = idx + 1;
+            // Find closing quote
+            var end_idx = label_start;
+            while (end_idx < line.len and line[end_idx] != '\'') {
+                end_idx += 1;
+            }
+            if (end_idx < line.len and end_idx > label_start) {
+                // Check if cursor is within this label
+                if (character >= label_start and character <= end_idx) {
+                    return .{
+                        .label = line[label_start..end_idx],
+                        .start = label_start,
+                        .end = end_idx,
+                    };
+                }
+            }
+            idx = end_idx + 1;
+        } else {
+            idx += 1;
+        }
+    }
+    return null;
+}
+
+fn findMatchingEndLabel(allocator: std.mem.Allocator, lines: []const []const u8, start_line: u32, label: []const u8, ranges: *std.ArrayListUnmanaged(types.Range)) !void {
+    // Search forward from start_line for "end 'label'"
+    var depth: i32 = 1;
+    var line_idx = start_line + 1;
+
+    while (line_idx < lines.len) : (line_idx += 1) {
+        const trimmed = std.mem.trim(u8, lines[line_idx], " \t\r");
+
+        // Track depth with block constructs
+        if (startsBlock(trimmed)) {
+            depth += 1;
+        } else if (std.mem.startsWith(u8, trimmed, "end ")) {
+            depth -= 1;
+            if (depth == 0) {
+                // This is our matching end - check if it has the right label
+                if (std.mem.indexOf(u8, trimmed, "'")) |quote_start| {
+                    const label_start = quote_start + 1;
+                    if (std.mem.indexOf(u8, trimmed[label_start..], "'")) |quote_end| {
+                        const end_label = trimmed[label_start..][0..quote_end];
+                        if (std.mem.eql(u8, end_label, label)) {
+                            // Find position in original line
+                            const orig_line = lines[line_idx];
+                            if (std.mem.indexOf(u8, orig_line, "'")) |orig_quote| {
+                                try ranges.append(allocator, .{
+                                    .start = .{ .line = line_idx, .character = @intCast(orig_quote + 1) },
+                                    .end = .{ .line = line_idx, .character = @intCast(orig_quote + 1 + label.len) },
+                                });
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
+fn findMatchingLabel(allocator: std.mem.Allocator, lines: []const []const u8, current_line: u32, label: []const u8, ranges: *std.ArrayListUnmanaged(types.Range)) !void {
+    // Check if current line is an "end" line - search backwards for start
+    const trimmed_current = std.mem.trim(u8, lines[current_line], " \t\r");
+
+    if (std.mem.startsWith(u8, trimmed_current, "end ")) {
+        // Search backwards for the matching block start
+        var depth: i32 = 1;
+        var line_idx: i32 = @as(i32, @intCast(current_line)) - 1;
+
+        while (line_idx >= 0) : (line_idx -= 1) {
+            const idx: usize = @intCast(line_idx);
+            const trimmed = std.mem.trim(u8, lines[idx], " \t\r");
+
+            if (std.mem.startsWith(u8, trimmed, "end ") or std.mem.eql(u8, trimmed, "end")) {
+                depth += 1;
+            } else if (startsBlock(trimmed)) {
+                depth -= 1;
+                if (depth == 0) {
+                    // Found our matching start - check for label
+                    if (std.mem.indexOf(u8, trimmed, "'")) |quote_start| {
+                        const label_start = quote_start + 1;
+                        if (std.mem.indexOf(u8, trimmed[label_start..], "'")) |quote_end| {
+                            const start_label = trimmed[label_start..][0..quote_end];
+                            if (std.mem.eql(u8, start_label, label)) {
+                                const orig_line = lines[idx];
+                                if (std.mem.indexOf(u8, orig_line, "'")) |orig_quote| {
+                                    try ranges.append(allocator, .{
+                                        .start = .{ .line = @intCast(idx), .character = @intCast(orig_quote + 1) },
+                                        .end = .{ .line = @intCast(idx), .character = @intCast(orig_quote + 1 + label.len) },
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    } else {
+        // Current line is a block start - search forward
+        try findMatchingEndLabel(allocator, lines, current_line, label, ranges);
+    }
+}
+
+fn findPositionInOriginal(original: []const u8, trimmed: []const u8, pos_in_trimmed: usize) usize {
+    // Find where the trimmed content starts in original
+    const trim_start = std.mem.indexOf(u8, original, trimmed) orelse 0;
+    return trim_start + pos_in_trimmed;
+}
 
 fn formatFuncSignature(func: ast_to_ir.FuncInfo) []const u8 {
     if (func.return_type_name) |rt| {

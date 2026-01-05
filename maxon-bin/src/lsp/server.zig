@@ -94,6 +94,12 @@ pub const Server = struct {
             try self.handleDefinition(id, obj);
         } else if (std.mem.eql(u8, method, "textDocument/documentSymbol")) {
             try self.handleDocumentSymbol(id, obj);
+        } else if (std.mem.eql(u8, method, "textDocument/formatting")) {
+            try self.handleFormatting(id, obj);
+        } else if (std.mem.eql(u8, method, "textDocument/foldingRange")) {
+            try self.handleFoldingRange(id, obj);
+        } else if (std.mem.eql(u8, method, "textDocument/linkedEditingRange")) {
+            try self.handleLinkedEditingRange(id, obj);
         } else {
             // Unknown method
             if (id != null) {
@@ -120,6 +126,9 @@ pub const Server = struct {
                 .hoverProvider = false,
                 .definitionProvider = true,
                 .documentSymbolProvider = true,
+                .documentFormattingProvider = true,
+                .foldingRangeProvider = true,
+                .linkedEditingRangeProvider = true,
             },
         };
 
@@ -355,6 +364,125 @@ pub const Server = struct {
         defer if (symbols.len > 0) self.allocator.free(symbols);
 
         try self.transport.writeResult(id, symbols);
+    }
+
+    /// Handle textDocument/formatting request
+    fn handleFormatting(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+        const params = transport.getObject(msg, "params") orelse {
+            try self.transport.writeResult(id, @as(?[]const types.TextEdit, null));
+            return;
+        };
+
+        const text_doc = transport.getObject(params, "textDocument") orelse {
+            try self.transport.writeResult(id, @as(?[]const types.TextEdit, null));
+            return;
+        };
+
+        const uri = transport.getString(text_doc, "uri") orelse {
+            try self.transport.writeResult(id, @as(?[]const types.TextEdit, null));
+            return;
+        };
+
+        const options = transport.getObject(params, "options");
+        const tab_size: u32 = if (options) |opts| @as(u32, @intCast(transport.getInt(opts, "tabSize") orelse 4)) else 4;
+        const insert_spaces: bool = if (options) |opts| transport.getBool(opts, "insertSpaces") orelse false else false;
+
+        if (self.analyzer.formatDocument(uri, tab_size, insert_spaces)) |formatted_text| {
+            defer self.allocator.free(formatted_text);
+
+            // Get the document to determine its line count for the range
+            const doc = self.analyzer.getDocument(uri) orelse {
+                try self.transport.writeResult(id, @as(?[]const types.TextEdit, null));
+                return;
+            };
+
+            // Count lines in original document
+            var line_count: u32 = 0;
+            var last_line_len: u32 = 0;
+            for (doc.content) |c| {
+                if (c == '\n') {
+                    line_count += 1;
+                    last_line_len = 0;
+                } else {
+                    last_line_len += 1;
+                }
+            }
+
+            // Create a TextEdit that replaces the entire document
+            var edits = self.allocator.alloc(types.TextEdit, 1) catch {
+                try self.transport.writeResult(id, @as(?[]const types.TextEdit, null));
+                return;
+            };
+            defer self.allocator.free(edits);
+
+            edits[0] = types.TextEdit{
+                .range = .{
+                    .start = .{ .line = 0, .character = 0 },
+                    .end = .{ .line = line_count, .character = last_line_len },
+                },
+                .newText = formatted_text,
+            };
+
+            try self.transport.writeResult(id, edits);
+        } else {
+            try self.transport.writeResult(id, @as(?[]const types.TextEdit, null));
+        }
+    }
+
+    /// Handle textDocument/foldingRange request
+    fn handleFoldingRange(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+        const params = transport.getObject(msg, "params") orelse {
+            try self.transport.writeResult(id, @as(?[]const types.FoldingRange, null));
+            return;
+        };
+
+        const text_doc = transport.getObject(params, "textDocument") orelse {
+            try self.transport.writeResult(id, @as(?[]const types.FoldingRange, null));
+            return;
+        };
+
+        const uri = transport.getString(text_doc, "uri") orelse {
+            try self.transport.writeResult(id, @as(?[]const types.FoldingRange, null));
+            return;
+        };
+
+        const ranges = try self.analyzer.getFoldingRanges(uri);
+        defer if (ranges.len > 0) self.allocator.free(ranges);
+
+        try self.transport.writeResult(id, ranges);
+    }
+
+    /// Handle textDocument/linkedEditingRange request
+    fn handleLinkedEditingRange(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+        const params = transport.getObject(msg, "params") orelse {
+            try self.transport.writeResult(id, @as(?types.LinkedEditingRanges, null));
+            return;
+        };
+
+        const text_doc = transport.getObject(params, "textDocument") orelse {
+            try self.transport.writeResult(id, @as(?types.LinkedEditingRanges, null));
+            return;
+        };
+
+        const uri = transport.getString(text_doc, "uri") orelse {
+            try self.transport.writeResult(id, @as(?types.LinkedEditingRanges, null));
+            return;
+        };
+
+        const position = transport.getObject(params, "position") orelse {
+            try self.transport.writeResult(id, @as(?types.LinkedEditingRanges, null));
+            return;
+        };
+
+        const line = @as(u32, @intCast(transport.getInt(position, "line") orelse 0));
+        const character = @as(u32, @intCast(transport.getInt(position, "character") orelse 0));
+
+        if (self.analyzer.getLinkedEditingRanges(uri, line, character)) |result| {
+            defer self.allocator.free(result.ranges);
+            try self.transport.writeResult(id, result);
+        } else {
+            try self.transport.writeResult(id, @as(?types.LinkedEditingRanges, null));
+        }
     }
 };
 

@@ -81,6 +81,9 @@ pub const ServerCapabilities = struct {
     hoverProvider: bool = false,
     definitionProvider: bool = false,
     documentSymbolProvider: bool = false,
+    documentFormattingProvider: bool = false,
+    foldingRangeProvider: bool = false,
+    linkedEditingRangeProvider: bool = false,
 };
 
 pub const TextDocumentSyncOptions = struct {
@@ -297,4 +300,34 @@ pub const SymbolInformation = struct {
     name: []const u8,
     kind: SymbolKind,
     location: Location,
+};
+
+// ============================================================================
+// Formatting Types
+// ============================================================================
+
+pub const TextEdit = struct {
+    range: Range,
+    newText: []const u8,
+};
+
+// ============================================================================
+// Folding Range Types
+// ============================================================================
+
+pub const FoldingRange = struct {
+    startLine: u32,
+    endLine: u32,
+    startCharacter: ?u32 = null,
+    endCharacter: ?u32 = null,
+    kind: ?[]const u8 = null,
+};
+
+// ============================================================================
+// Linked Editing Range Types
+// ============================================================================
+
+pub const LinkedEditingRanges = struct {
+    ranges: []const Range,
+    wordPattern: ?[]const u8 = null,
 };

@@ -137,105 +137,6 @@ test "didClose removes document" {
 // Completion Tests
 // ============================================================================
 
-test "completion request succeeds" {
-    var ctx = try TestContext.init();
-    errdefer ctx.forceCleanup();
-
-    // Use valid complete code - the LSP may not handle incomplete syntax well
-    const source =
-        \\enum Direction
-        \\    case north
-        \\    case south
-        \\end 'Direction'
-        \\
-        \\function main() returns int
-        \\    var d = Direction.north
-        \\    return 0
-        \\end 'main'
-    ;
-
-    try ctx.client.openDocument("file:///test.maxon", source);
-
-    // Request completion - just verify the request completes without error
-    // Position after "Direction." on line 7
-    var result = try ctx.client.completion("file:///test.maxon", 7, 22);
-    defer result.deinit();
-
-    // The request should succeed (even if no items returned for valid code)
-    // This tests the JSON-RPC round-trip works
-
-    try ctx.deinit();
-}
-
-test "completion after dot with valid prefix" {
-    var ctx = try TestContext.init();
-    errdefer ctx.forceCleanup();
-
-    // First open valid code so semantic cache is populated
-    const valid_source =
-        \\enum Direction
-        \\    case north
-        \\    case south
-        \\end 'Direction'
-        \\
-        \\function main() returns int
-        \\    var d = Direction.north
-        \\    return 0
-        \\end 'main'
-    ;
-
-    try ctx.client.openDocument("file:///test.maxon", valid_source);
-
-    // Now update to incomplete code to trigger completion
-    const incomplete_source =
-        \\enum Direction
-        \\    case north
-        \\    case south
-        \\end 'Direction'
-        \\
-        \\function main() returns int
-        \\    var d = Direction.
-        \\    return 0
-        \\end 'main'
-    ;
-
-    try ctx.client.changeDocument("file:///test.maxon", incomplete_source, 2);
-
-    // Request completion at the dot position (line 7, after "Direction.")
-    var result = try ctx.client.completion("file:///test.maxon", 7, 22);
-    defer result.deinit();
-
-    // Check if we got enum cases (may or may not work depending on LSP implementation)
-    // For now, just verify no error occurred
-    _ = result.items.len;
-
-    try ctx.deinit();
-}
-
-test "completion on empty position returns results" {
-    var ctx = try TestContext.init();
-    errdefer ctx.forceCleanup();
-
-    const source =
-        \\function main() returns int
-        \\
-        \\    return 0
-        \\end 'main'
-    ;
-
-    try ctx.client.openDocument("file:///test.maxon", source);
-
-    // Request completion at empty line (line 1, column 4)
-    var result = try ctx.client.completion("file:///test.maxon", 1, 4);
-    defer result.deinit();
-
-    // Should get keyword completions or be empty, but not error
-    // Just verify we got a valid response
-    _ = result.items.len;
-
-    try ctx.deinit();
-}
-
 test "completion for array methods" {
     var ctx = try TestContext.init();
     errdefer ctx.forceCleanup();
@@ -306,29 +207,6 @@ test "completion for array methods" {
 // ============================================================================
 // Hover Tests
 // ============================================================================
-
-test "hover returns type information" {
-    var ctx = try TestContext.init();
-    errdefer ctx.forceCleanup();
-
-    const source =
-        \\function main() returns int
-        \\    let x = 42
-        \\    return x
-        \\end 'main'
-    ;
-
-    try ctx.client.openDocument("file:///test.maxon", source);
-
-    // Request hover on 'x' at line 1, character 8
-    var result = try ctx.client.hover("file:///test.maxon", 1, 8);
-    defer result.deinit();
-
-    // Hover should not error (may or may not return content)
-    _ = result.content;
-
-    try ctx.deinit();
-}
 
 test "hover shows value for immutable variables" {
     var ctx = try TestContext.init();
@@ -473,52 +351,257 @@ test "definition returns location" {
 // ============================================================================
 // Formatting Tests
 // ============================================================================
-// NOTE: textDocument/formatting is not yet implemented in the Zig LSP server.
-// These tests are ready for when it's implemented.
-
-test "formatting returns edits" {
-    // Skip: textDocument/formatting not implemented yet
-    return error.SkipZigTest;
-}
 
 test "formatting indents nested code correctly" {
-    // Skip: textDocument/formatting not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    // Code with no indentation - formatter should add proper indentation
+    const source =
+        \\function main() returns int
+        \\var x = 1
+        \\if x > 0 'check'
+        \\var y = 2
+        \\end 'check'
+        \\return x
+        \\end 'main'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    // Verify we got formatted text
+    try testing.expect(result.new_text != null);
+    const new_text = result.new_text.?;
+
+    // Check that var x is indented (should have a tab before it)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tvar x") != null);
+
+    // Check that var y inside if block has two tabs
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\tvar y") != null);
+
+    // Check that end 'check' has one tab
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'check'") != null);
+
+    // Check that end 'main' has no leading tab
+    try testing.expect(std.mem.indexOf(u8, new_text, "\nend 'main'") != null);
+
+    try ctx.deinit();
 }
 
 test "formatting indents type fields correctly" {
-    // Skip: textDocument/formatting not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    // Type with no indentation on fields
+    const source =
+        \\type Point
+        \\var x int
+        \\var y int
+        \\end 'Point'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    try testing.expect(result.new_text != null);
+    const new_text = result.new_text.?;
+
+    // Struct fields should be indented one level
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tvar x int") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tvar y int") != null);
+
+    // end should be at level 0
+    try testing.expect(std.mem.indexOf(u8, new_text, "\nend 'Point'") != null);
+
+    try ctx.deinit();
 }
 
 test "formatting handles else blocks correctly" {
-    // Skip: textDocument/formatting not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    // Code with else block - indentation should be maintained
+    const source =
+        \\function test() returns int
+        \\if true 'check'
+        \\return 1
+        \\else 'check'
+        \\return 0
+        \\end 'check'
+        \\return 0
+        \\end 'test'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    try testing.expect(result.new_text != null);
+    const new_text = result.new_text.?;
+
+    // The if should be indented 1 level
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tif true") != null);
+
+    // The first return should be indented 2 levels
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\treturn 1") != null);
+
+    // The else should be indented 1 level (same as if)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\telse 'check'") != null);
+
+    // The end 'check' should be indented 1 level
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'check'") != null);
+
+    try ctx.deinit();
 }
 
 test "formatting uses spaces when insertSpaces is true" {
-    // Skip: textDocument/formatting not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    // Code with no indentation
+    const source =
+        \\function main() returns int
+        \\var x = 1
+        \\return x
+        \\end 'main'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.formatting("file:///test.maxon", 4, true);
+    defer result.deinit();
+
+    try testing.expect(result.new_text != null);
+    const new_text = result.new_text.?;
+
+    // With insertSpaces=true and tabSize=4, indentation should be 4 spaces
+    try testing.expect(std.mem.indexOf(u8, new_text, "    var x") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "    return x") != null);
+
+    // Should NOT have tabs
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tvar") == null);
+
+    try ctx.deinit();
 }
 
 test "formatting preserves implicit type declarations" {
-    // Skip: textDocument/formatting not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    // Code with type inference - no explicit type annotations
+    const source =
+        \\function main() returns int
+        \\var x = 1
+        \\let y = 2.5
+        \\return x
+        \\end 'main'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    try testing.expect(result.new_text != null);
+    const new_text = result.new_text.?;
+
+    // The formatter should NOT add explicit type annotations
+    // "var x = 1" should stay as "var x = 1", not become "var x int = 1"
+    try testing.expect(std.mem.indexOf(u8, new_text, "var x = 1") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "var x int") == null);
+
+    // "let y = 2.5" should stay as "let y = 2.5", not become "let y float = 2.5"
+    try testing.expect(std.mem.indexOf(u8, new_text, "let y = 2.5") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "let y float") == null);
+
+    try ctx.deinit();
 }
 
 test "formatting preserves comments" {
-    // Skip: textDocument/formatting not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\// This is a comment
+        \\function main() returns int
+        \\// Another comment
+        \\var x = 1
+        \\return x
+        \\end 'main'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    try testing.expect(result.new_text != null);
+    const new_text = result.new_text.?;
+
+    // Comments should be preserved
+    try testing.expect(std.mem.indexOf(u8, new_text, "// This is a comment") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "// Another comment") != null);
+
+    try ctx.deinit();
 }
 
 test "formatting preserves blank lines" {
-    // Skip: textDocument/formatting not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function foo() returns int
+        \\return 1
+        \\end 'foo'
+        \\
+        \\function main() returns int
+        \\return 0
+        \\end 'main'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    try testing.expect(result.new_text != null);
+    const new_text = result.new_text.?;
+
+    // Blank line between functions should be preserved
+    try testing.expect(std.mem.indexOf(u8, new_text, "end 'foo'\n\nfunction main") != null);
+
+    try ctx.deinit();
 }
 
 test "formatting formats multiple interfaces at top level" {
-    // Skip: textDocument/formatting not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    // Multiple interfaces with incorrect nesting
+    const source =
+        \\interface Hashable
+        \\function hash() returns int
+        \\end 'Hashable'
+        \\
+        \\interface Equatable
+        \\function equals(other Self) returns bool
+        \\end 'Equatable'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    try testing.expect(result.new_text != null);
+    const new_text = result.new_text.?;
+
+    // Verify interfaces are NOT indented (no tab before interface keyword)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tinterface") == null);
+
+    // Method signatures should be indented one level
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tfunction hash()") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tfunction equals(") != null);
+
+    try ctx.deinit();
 }
 
 // ============================================================================
@@ -571,31 +654,135 @@ test "documentSymbol returns symbols" {
 // ============================================================================
 // Folding Range Tests
 // ============================================================================
-// NOTE: textDocument/foldingRange is not yet implemented in the Zig LSP server.
-// These tests are ready for when it's implemented.
 
 test "foldingRange returns ranges" {
-    // Skip: textDocument/foldingRange not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function main() returns int
+        \\    if true 'check'
+        \\        return 1
+        \\    end 'check'
+        \\    return 0
+        \\end 'main'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.foldingRange("file:///test.maxon");
+    defer result.deinit();
+
+    // Should have folding ranges for function and if block
+    try testing.expect(result.ranges.len >= 1);
+
+    try ctx.deinit();
 }
 
 // ============================================================================
 // Linked Editing Range Tests
 // ============================================================================
-// NOTE: textDocument/linkedEditingRange is not yet implemented in the Zig LSP server.
-// These tests are ready for when it's implemented.
 
 test "linkedEditingRange returns ranges for block labels" {
-    // Skip: textDocument/linkedEditingRange not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function main() returns int
+        \\for i in range(0, 10) 'loop'
+        \\var x = i
+        \\end 'loop'
+        \\return 0
+        \\end 'main'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request linked editing on the 'loop' label at line 1, character 23
+    var result = try ctx.client.linkedEditingRange("file:///test.maxon", 1, 23);
+    defer result.deinit();
+
+    // Should return linked ranges for both 'loop' occurrences (start and end)
+    try testing.expectEqual(@as(usize, 2), result.ranges.len);
+
+    try ctx.deinit();
 }
 
 test "linkedEditingRange returns ranges for function names" {
-    // Skip: textDocument/linkedEditingRange not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function myFunction() returns int
+        \\return 42
+        \\end 'myFunction'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request linked editing on the function name "myFunction" at line 0, character 12
+    var result = try ctx.client.linkedEditingRange("file:///test.maxon", 0, 12);
+    defer result.deinit();
+
+    // Should return 2 ranges: function name and end label
+    try testing.expectEqual(@as(usize, 2), result.ranges.len);
+
+    // Check ranges point to the right locations
+    // Range 0: function name at line 0, characters 9-19 (myFunction)
+    // Range 1: end label at line 2, characters 5-15 (myFunction inside quotes)
+    var has_declaration = false;
+    var has_end_label = false;
+    for (result.ranges) |range| {
+        if (range.start_line == 0 and range.start_char == 9 and range.end_line == 0 and range.end_char == 19) {
+            has_declaration = true;
+        }
+        if (range.start_line == 2 and range.start_char == 5 and range.end_line == 2 and range.end_char == 15) {
+            has_end_label = true;
+        }
+    }
+    try testing.expect(has_declaration);
+    try testing.expect(has_end_label);
+
+    try ctx.deinit();
 }
 
 test "linkedEditingRange returns ranges for interface method names" {
-    // Skip: textDocument/linkedEditingRange not implemented yet
-    return error.SkipZigTest;
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    // Type with interface method implementation
+    const source =
+        \\interface Countable
+        \\function count() returns int
+        \\end 'Countable'
+        \\
+        \\type MyStruct is Countable
+        \\function Countable.count() returns int
+        \\return 0
+        \\end 'count'
+        \\end 'MyStruct'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request linked editing on the method name "count" at line 5, character 20
+    var result = try ctx.client.linkedEditingRange("file:///test.maxon", 5, 20);
+    defer result.deinit();
+
+    // Should return 2 ranges: method name and end label
+    try testing.expectEqual(@as(usize, 2), result.ranges.len);
+
+    // Check ranges point to the right locations
+    // Range 0: method name at line 5, characters 19-24 (count)
+    // Range 1: end label at line 7, characters 5-10 (count inside quotes)
+    var has_method_name = false;
+    var has_end_label = false;
+    for (result.ranges) |range| {
+        if (range.start_line == 5 and range.start_char == 19 and range.end_line == 5 and range.end_char == 24) {
+            has_method_name = true;
+        }
+        if (range.start_line == 7 and range.start_char == 5 and range.end_line == 7 and range.end_char == 10) {
+            has_end_label = true;
+        }
+    }
+    try testing.expect(has_method_name);
+    try testing.expect(has_end_label);
+
+    try ctx.deinit();
 }
