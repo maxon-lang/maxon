@@ -10,6 +10,9 @@ const types = @import("ast_to_ir_types.zig");
 
 // Import intrinsics module
 const intrinsics = @import("ast_to_ir_intrinsics.zig");
+
+// Import shared struct helpers
+const struct_helpers = @import("ir_struct_helpers.zig");
 pub const TypedValue = types.TypedValue;
 pub const ArrayStorage = types.ArrayStorage;
 pub const ArrayInfo = types.ArrayInfo;
@@ -554,61 +557,36 @@ pub const AstToIr = struct {
     }
 
     // ------------------------------------------------------------------------
-    // COW String Helpers
+    // COW String Helpers (delegates to ir_struct_helpers)
     // ------------------------------------------------------------------------
 
-    /// Size of __ManagedString struct (24 bytes with COW support)
-    /// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
-    const MANAGED_STRING_SIZE: i32 = 24;
-
-    /// Size of __ManagedArray struct (24 bytes)
-    /// Layout: buffer(8) + len(8) + capacity(8)
-    const MANAGED_ARRAY_SIZE: i32 = 24;
-
-    /// Allocate a __ManagedArray on the stack and initialize it as empty (buffer=null, len=0, capacity=0).
+    /// Allocate a __ManagedArray on the stack and initialize it as empty.
     fn emitEmptyManagedArray(self: *AstToIr) !ir.Value {
-        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
-        try self.initManagedArrayEmpty(managed_ptr);
-        return managed_ptr;
+        return struct_helpers.emitEmptyManagedArray(self.func());
     }
 
-    /// Initialize an existing __ManagedArray as empty (buffer=null, len=0, capacity=0).
+    /// Initialize an existing __ManagedArray as empty.
     fn initManagedArrayEmpty(self: *AstToIr, managed_ptr: ir.Value) !void {
-        const null_ptr = try self.func().emitConstI64(0);
-        try self.func().emitStore(managed_ptr, null_ptr); // buffer at offset 0
-        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 8), null_ptr); // len
-        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 16), null_ptr); // capacity
+        return struct_helpers.initManagedArrayEmpty(self.func(), managed_ptr);
     }
 
     /// Initialize an existing __ManagedArray with buffer, length, and capacity values.
     fn initManagedArray(self: *AstToIr, managed_ptr: ir.Value, buffer: ir.Value, len: ir.Value, capacity: ir.Value) !void {
-        try self.func().emitStore(managed_ptr, buffer); // buffer at offset 0
-        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 8), len);
-        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 16), capacity);
+        return struct_helpers.initManagedArray(self.func(), managed_ptr, buffer, len, capacity);
     }
 
     /// Allocate a __ManagedArray on the stack and initialize with buffer, length, and capacity.
     fn emitManagedArray(self: *AstToIr, buffer: ir.Value, len: ir.Value, capacity: ir.Value) !ir.Value {
-        const managed_ptr = try self.func().emitAllocaSized(MANAGED_ARRAY_SIZE);
-        try self.initManagedArray(managed_ptr, buffer, len, capacity);
-        return managed_ptr;
+        return struct_helpers.emitManagedArray(self.func(), buffer, len, capacity);
     }
 
     /// Create and initialize a __ManagedString on the stack from string bytes.
     /// Returns a pointer to the allocated struct.
     fn emitManagedStringFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Value {
-        const managed_ptr = try self.func().emitAllocaSized(MANAGED_STRING_SIZE);
+        const managed_ptr = try self.func().emitAllocaSized(struct_helpers.MANAGED_STRING_SIZE);
 
         if (str_bytes.len == 0) {
-            // Empty string: SSO mode with zero length
-            const null_ptr = try self.func().emitConstI64(0);
-            const zero_i32 = try self.func().emitConstI32(0);
-
-            try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 0), null_ptr);
-            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 8), zero_i32);
-            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 12), zero_i32);
-            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 16), zero_i32);
-            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 20), zero_i32);
+            try struct_helpers.initManagedStringEmpty(self.func(), managed_ptr);
         } else {
             // Heap allocation for string data
             const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1));
@@ -624,15 +602,15 @@ pub const AstToIr = struct {
             const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
             try self.func().emitStoreI8(try self.func().emitGetElemPtr(buffer, null_idx, 1), try self.func().emitConstI8(0));
 
-            // Initialize __ManagedString fields
+            // Initialize __ManagedString fields with refcount=0
             // Note: refcount starts at 0, not 1. When this is passed to String$init,
-            // the struct copy will increment refcount to 1. This ensures proper COW semantics
-            // where the final owner has refcount=1 after initialization.
-            try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 0), buffer);
-            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 8), try self.func().emitConstI32(@intCast(str_bytes.len)));
-            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 12), try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01)));
-            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 16), try self.func().emitConstI32(0));
-            try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 20), try self.func().emitConstI32(0));
+            // the struct copy will increment refcount to 1. This ensures proper COW semantics.
+            try self.func().emitStore(managed_ptr, buffer);
+            const zero_i32 = try self.func().emitConstI32(0);
+            try struct_helpers.storeI32Field(self.func(), managed_ptr, 8, try self.func().emitConstI32(@intCast(str_bytes.len)));
+            try struct_helpers.storeI32Field(self.func(), managed_ptr, 12, try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01)));
+            try struct_helpers.storeI32Field(self.func(), managed_ptr, 16, zero_i32);
+            try struct_helpers.storeI32Field(self.func(), managed_ptr, 20, zero_i32);
         }
 
         return managed_ptr;
@@ -641,35 +619,13 @@ pub const AstToIr = struct {
     /// Create and initialize a __ManagedString from a runtime buffer pointer and length.
     /// Used for runtime string conversions (int to string, float to string, etc.)
     fn emitManagedStringFromBuffer(self: *AstToIr, buffer: ir.Value, len_i64: ir.Value) !ir.Value {
-        const managed_ptr = try self.func().emitAllocaSized(MANAGED_STRING_SIZE);
-
-        // buffer pointer at offset 0
-        try self.func().emitStore(try self.func().emitGetFieldPtr(managed_ptr, 0), buffer);
-
-        // length (i32) at offset 8
-        const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len_i64, .i32);
-        try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 8), len_i32);
-
-        // cap_flags = (len << 2) | 1 for heap mode at offset 12
-        const four = try self.func().emitConstI32(4);
-        const cap_shift = try self.func().emitBinaryOp(.mul, len_i32, four, .i32);
-        const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shift, try self.func().emitConstI32(1), .i32);
-        try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 12), cap_flags);
-
-        // refcount = 1 at offset 16
-        // Note: This starts at 1 because emitStringFromManaged does raw memcpy without incref
-        try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 16), try self.func().emitConstI32(1));
-
-        // parent_off = 0 at offset 20
-        try self.func().emitStoreI32(try self.func().emitGetFieldPtr(managed_ptr, 20), try self.func().emitConstI32(0));
-
-        return managed_ptr;
+        return struct_helpers.emitManagedString(self.func(), buffer, len_i64);
     }
 
     /// Wrap a __ManagedString pointer in a full String struct (adds iter_pos field).
     pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.Value) !ir.Value {
         const string_ptr = try self.func().emitAllocaSized(32);
-        try self.func().emitMemcpy(string_ptr, managed_ptr, MANAGED_STRING_SIZE);
+        try self.func().emitMemcpy(string_ptr, managed_ptr, struct_helpers.MANAGED_STRING_SIZE);
         const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
         try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
         return string_ptr;
@@ -4125,7 +4081,7 @@ pub const AstToIr = struct {
                     if (is_managed_string and expects_string) {
                         // Wrap __ManagedString (24 bytes) into String (32 bytes)
                         // Copy managed string to offset 0-23
-                        try self.func().emitMemcpy(sret, typed_val.value, MANAGED_STRING_SIZE);
+                        try self.func().emitMemcpy(sret, typed_val.value, struct_helpers.MANAGED_STRING_SIZE);
                         // Set _iterPos to 0 at offset 24
                         const iter_pos_ptr = try self.func().emitGetFieldPtr(sret, 24);
                         try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));

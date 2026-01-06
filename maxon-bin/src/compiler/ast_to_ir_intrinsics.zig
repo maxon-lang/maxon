@@ -5,6 +5,7 @@ const types = @import("ast_to_ir_types.zig");
 const TypedValue = types.TypedValue;
 const ConvertError = types.ConvertError;
 const intrinsics_registry = @import("intrinsics_registry.zig");
+const struct_helpers = @import("ir_struct_helpers.zig");
 
 // Forward reference to main AstToIr module
 const AstToIr = @import("4-ast_to_ir.zig").AstToIr;
@@ -25,7 +26,7 @@ fn expectArgCount(self: *AstToIr, call: ast.CallExpr, expected: usize) ConvertEr
 fn intrinsicLoadI64Field(self: *AstToIr, call: ast.CallExpr, offset: i32) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const arg = try self.convertExpression(call.args[0]);
-    const value = try loadI64Field(self, arg.value, offset);
+    const value = try struct_helpers.loadI64Field(self.func(), arg.value, offset);
     return .{ .value = value, .ty = .{ .primitive = "int" } };
 }
 
@@ -33,107 +34,36 @@ fn intrinsicLoadI64Field(self: *AstToIr, call: ast.CallExpr, offset: i32) Conver
 fn intrinsicLoadI32Field(self: *AstToIr, call: ast.CallExpr, offset: i32) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const arg = try self.convertExpression(call.args[0]);
-    const value = try loadI32AsI64(self, arg.value, offset);
+    const value = try struct_helpers.loadI32AsI64(self.func(), arg.value, offset);
     return .{ .value = value, .ty = .{ .primitive = "int" } };
 }
 
-/// Load an i32 field from a struct pointer and sign-extend to i64
-fn loadI32AsI64(self: *AstToIr, base_ptr: ir.Value, offset: i32) ConvertError!ir.Value {
-    const field_ptr = try self.func().emitGetFieldPtr(base_ptr, offset);
-    const val_i32 = try self.func().emitLoad(field_ptr, .i32);
-    return self.func().emitUnaryOp(.sext_i32_i64, val_i32, .i64);
-}
-
-/// Load an i64 field from a struct pointer
-fn loadI64Field(self: *AstToIr, base_ptr: ir.Value, offset: i32) ConvertError!ir.Value {
-    const field_ptr = try self.func().emitGetFieldPtr(base_ptr, offset);
-    return self.func().emitLoad(field_ptr, .i64);
-}
-
-/// Store an i32 value to a field
-fn storeI32Field(self: *AstToIr, base_ptr: ir.Value, offset: i32, value: ir.Value) ConvertError!void {
-    const field_ptr = try self.func().emitGetFieldPtr(base_ptr, offset);
-    try self.func().emitStoreI32(field_ptr, value);
-}
-
-/// Store an i64 value to a field
-fn storeI64Field(self: *AstToIr, base_ptr: ir.Value, offset: i32, value: ir.Value) ConvertError!void {
-    const field_ptr = try self.func().emitGetFieldPtr(base_ptr, offset);
-    try self.func().emitStore(field_ptr, value);
-}
-
-/// Initialize heap string metadata fields (cap_flags, refcount, parent_off)
-/// cap_flags = (len * 4) | 0b01 for heap mode
-fn initHeapStringFields(self: *AstToIr, result_ptr: ir.Value, len_i32: ir.Value) ConvertError!void {
-    const four = try self.func().emitConstI32(4);
-    const cap_shifted = try self.func().emitBinaryOp(.mul, len_i32, four, .i32);
-    const one = try self.func().emitConstI32(1);
-    const cap_flags = try self.func().emitBinaryOp(.bitor, cap_shifted, one, .i32);
-    try storeI32Field(self, result_ptr, 12, cap_flags);
-
-    // refcount = 1
-    try storeI32Field(self, result_ptr, 16, one);
-
-    // parent_off = 0
-    const zero = try self.func().emitConstI32(0);
-    try storeI32Field(self, result_ptr, 20, zero);
-}
-
-/// Initialize slice string metadata fields
-/// cap_flags = 0b10 (slice mode), refcount = 0, parent_off from parameter
-fn initSliceStringFields(self: *AstToIr, result_ptr: ir.Value, parent_off_i32: ir.Value) ConvertError!void {
-    // cap_flags = 0b10 (slice mode)
-    const two = try self.func().emitConstI32(2);
-    try storeI32Field(self, result_ptr, 12, two);
-
-    // refcount = 0
-    const zero = try self.func().emitConstI32(0);
-    try storeI32Field(self, result_ptr, 16, zero);
-
-    // parent_off
-    try storeI32Field(self, result_ptr, 20, parent_off_i32);
-}
-
-/// Initialize a heap-allocated string struct
-/// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4) [+ _iterPos(8) if include_iter_pos]
-/// cap_flags = alloc_size | 0x01 for heap mode
-fn initHeapStringCore(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value, alloc_size_i64: ir.Value, include_iter_pos: bool) ConvertError!void {
-    // Store buffer pointer (offset 0)
-    try self.func().emitStore(string_ptr, buffer);
-
-    // Store len (offset 8, i32)
-    const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len_i64, .i32);
-    try storeI32Field(self, string_ptr, 8, len_i32);
-
-    // Store cap_flags = alloc_size | 0x01 (offset 12, i32)
-    const one_i64 = try self.func().emitConstI64(1);
-    const cap_flags_i64 = try self.func().emitBinaryOp(.bitor, alloc_size_i64, one_i64, .i64);
-    const cap_flags_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, cap_flags_i64, .i32);
-    try storeI32Field(self, string_ptr, 12, cap_flags_i32);
-
-    // Store refcount = 1 (offset 16, i32)
-    const one_i32 = try self.func().emitConstI32(1);
-    try storeI32Field(self, string_ptr, 16, one_i32);
-
-    // Store parent_off = 0 (offset 20, i32)
-    const zero_i32 = try self.func().emitConstI32(0);
-    try storeI32Field(self, string_ptr, 20, zero_i32);
-
-    // Store _iterPos = 0 (offset 24, i64) for String (not __ManagedString)
-    if (include_iter_pos) {
-        const zero_i64 = try self.func().emitConstI64(0);
-        try storeI64Field(self, string_ptr, 24, zero_i64);
-    }
-}
-
 /// Initialize a heap-allocated String struct (32 bytes with _iterPos field)
-fn initHeapString(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value, alloc_size_i64: ir.Value) ConvertError!void {
-    return initHeapStringCore(self, string_ptr, buffer, len_i64, alloc_size_i64, true);
+fn initHeapString(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value) ConvertError!void {
+    try struct_helpers.initManagedString(self.func(), string_ptr, buffer, len_i64);
+    // Add _iterPos = 0 at offset 24
+    const zero_i64 = try self.func().emitConstI64(0);
+    try struct_helpers.storeI64Field(self.func(), string_ptr, 24, zero_i64);
 }
 
 /// Initialize a heap-allocated __ManagedString struct (24 bytes, no _iterPos)
-fn initHeapManagedString(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value, alloc_size_i64: ir.Value) ConvertError!void {
-    return initHeapStringCore(self, string_ptr, buffer, len_i64, alloc_size_i64, false);
+fn initHeapManagedString(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value) ConvertError!void {
+    return struct_helpers.initManagedString(self.func(), string_ptr, buffer, len_i64);
+}
+
+/// Initialize slice string metadata fields (cap_flags=0b10, refcount=0, parent_off)
+/// Assumes buffer and len are already set at offsets 0 and 8
+fn initSliceStringFields(self: *AstToIr, result_ptr: ir.Value, parent_off_i32: ir.Value) ConvertError!void {
+    // cap_flags = 0b10 (slice mode) at offset 12
+    const two = try self.func().emitConstI32(2);
+    try struct_helpers.storeI32Field(self.func(), result_ptr, 12, two);
+
+    // refcount = 0 at offset 16
+    const zero = try self.func().emitConstI32(0);
+    try struct_helpers.storeI32Field(self.func(), result_ptr, 16, zero);
+
+    // parent_off at offset 20
+    try struct_helpers.storeI32Field(self.func(), result_ptr, 20, parent_off_i32);
 }
 
 /// Wrap a nullable pointer result in an optional type
@@ -148,7 +78,7 @@ fn wrapInOptional(self: *AstToIr, result_ptr: ir.Value, wrapped_type: []const u8
     const tag = try self.func().emitBinaryOp(.sub, one, is_null, .i64);
     try self.func().emitStore(opt_ptr, tag);
 
-    try storeI64Field(self, opt_ptr, 8, result_ptr);
+    try struct_helpers.storeI64Field(self.func(), opt_ptr, 8, result_ptr);
 
     return .{
         .value = opt_ptr,
@@ -390,7 +320,7 @@ fn emitArrayShift(
     const elem_size_val = try self.func().emitConstI64(elem_info.size);
 
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const len = try loadI64Field(self, managed.value, 8);
+    const len = try struct_helpers.loadI64Field(self.func(), managed.value, 8);
 
     const one = try self.func().emitConstI64(1);
     const zero = try self.func().emitConstI64(0);
@@ -399,11 +329,9 @@ fn emitArrayShift(
     const i_ptr = try self.func().emitAllocaSized(8);
 
     // Direction-specific setup
-    const loop_name = if (direction == .right) "shift_right" else "shift_left";
     const cond_name = if (direction == .right) "shift_right_cond" else "shift_left_cond";
     const body_name = if (direction == .right) "shift_right_body" else "shift_left_body";
     const end_name = if (direction == .right) "shift_right_end" else "shift_left_end";
-    _ = loop_name;
 
     if (direction == .right) {
         // Right shift: start at len-1
@@ -525,8 +453,8 @@ fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const buf_ptr = try self.func().emitHeapAlloc(buf_size, "array buffer");
 
     try self.func().emitStore(managed_ptr, buf_ptr);
-    try storeI64Field(self, managed_ptr, 8, capacity.value);
-    try storeI64Field(self, managed_ptr, 16, capacity.value);
+    try struct_helpers.storeI64Field(self.func(), managed_ptr, 8, capacity.value);
+    try struct_helpers.storeI64Field(self.func(), managed_ptr, 16, capacity.value);
 
     return .{ .value = managed_ptr, .ty = .{ .primitive = "ptr" } };
 }
@@ -564,7 +492,7 @@ fn intrinsicManagedArraySetLength(self: *AstToIr, call: ast.CallExpr) ConvertErr
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);
     const new_len = try self.convertExpression(call.args[1]);
-    try storeI64Field(self, managed.value, 8, new_len.value);
+    try struct_helpers.storeI64Field(self.func(), managed.value, 8, new_len.value);
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
@@ -582,7 +510,7 @@ fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const new_buf = try self.func().emitHeapRealloc(buf_ptr, new_size, "array grow");
 
     try self.func().emitStore(managed.value, new_buf);
-    try storeI64Field(self, managed.value, 16, new_capacity.value);
+    try struct_helpers.storeI64Field(self.func(), managed.value, 16, new_capacity.value);
 
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
@@ -675,7 +603,7 @@ fn intrinsicCstringWriteStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const cstring = try self.convertExpression(call.args[0]);
 
     const data_ptr = try self.func().emitLoad(cstring.value, .ptr);
-    const length = try loadI64Field(self, cstring.value, 8);
+    const length = try struct_helpers.loadI64Field(self.func(), cstring.value, 8);
 
     const args = try self.allocator.alloc(ir.Value, 2);
     args[0] = data_ptr;
@@ -697,7 +625,7 @@ fn intrinsicCstringToManaged(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const src_ptr = try self.func().emitLoad(cstr_typed.value, .ptr);
 
     // Extract length from cstring struct (offset 8)
-    const len = try loadI64Field(self, cstr_typed.value, 8);
+    const len = try struct_helpers.loadI64Field(self.func(), cstr_typed.value, 8);
 
     // Allocate buffer (len + 1 for null terminator)
     const heap = try emitGetProcessHeap(self);
@@ -713,7 +641,7 @@ fn intrinsicCstringToManaged(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const string_ptr = try emitHeapAllocWin(self, heap, string_size);
 
     // Initialize the struct
-    try initHeapManagedString(self, string_ptr, buffer, len, alloc_size);
+    try initHeapManagedString(self, string_ptr, buffer, len);
 
     return .{ .value = string_ptr, .ty = .{ .struct_type = "__ManagedString" } };
 }
@@ -743,7 +671,7 @@ fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!T
 
     // Store len (offset 8, i32)
     const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len.value, .i32);
-    try storeI32Field(self, char_ptr, 8, len_i32);
+    try struct_helpers.storeI32Field(self.func(), char_ptr, 8, len_i32);
 
     // Initialize slice metadata fields
     const pos_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, pos.value, .i32);
@@ -805,7 +733,7 @@ fn intrinsicStringSlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
     // Store len = end - start (offset 8, i32)
     const len_i64 = try self.func().emitBinaryOp(.sub, end.value, start.value, .i64);
     const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len_i64, .i32);
-    try storeI32Field(self, slice_ptr, 8, len_i32);
+    try struct_helpers.storeI32Field(self.func(), slice_ptr, 8, len_i32);
 
     // Initialize slice metadata (cap_flags=0b10, refcount=0, parent_off=start)
     const start_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, start.value, .i32);
@@ -827,27 +755,19 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const b_buf = try self.func().emitLoad(b.value, .ptr);
 
     // Load lengths (offset 8, i32)
-    const a_len = try loadI32AsI64(self, a.value, 8);
-    const b_len = try loadI32AsI64(self, b.value, 8);
+    const a_len = try struct_helpers.loadI32AsI64(self.func(), a.value, 8);
+    const b_len = try struct_helpers.loadI32AsI64(self.func(), b.value, 8);
     const total_len = try self.func().emitBinaryOp(.add, a_len, b_len, .i64);
 
-    const result_ptr = try self.func().emitAllocaSized(24);
     const buf_ptr = try self.func().emitHeapAlloc(total_len, "string concat");
-
-    // Store buffer pointer (offset 0)
-    try self.func().emitStore(result_ptr, buf_ptr);
-
-    // Store length (offset 8, i32)
-    const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, total_len, .i32);
-    try storeI32Field(self, result_ptr, 8, len_i32);
-
-    // Initialize heap metadata (cap_flags, refcount, parent_off)
-    try initHeapStringFields(self, result_ptr, len_i32);
 
     // Copy both strings into the new buffer
     try self.func().emitMemcpyDynamic(buf_ptr, a_buf, a_len);
     const dst_offset = try self.func().emitBinaryOp(.add, buf_ptr, a_len, .ptr);
     try self.func().emitMemcpyDynamic(dst_offset, b_buf, b_len);
+
+    // Initialize __ManagedString struct
+    const result_ptr = try struct_helpers.emitManagedString(self.func(), buf_ptr, total_len);
 
     return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedString" } };
 }
@@ -859,22 +779,14 @@ fn intrinsicStringMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const managed = try self.convertExpression(call.args[0]);
 
     // Load length and original buffer
-    const len_i32 = try self.func().emitLoad(try self.func().emitGetFieldPtr(managed.value, 8), .i32);
-    const len = try self.func().emitUnaryOp(.sext_i32_i64, len_i32, .i64);
+    const len = try struct_helpers.loadI32AsI64(self.func(), managed.value, 8);
     const orig_buf = try self.func().emitLoad(managed.value, .ptr);
 
-    const result_ptr = try self.func().emitAllocaSized(24);
     const new_buf = try self.func().emitHeapAlloc(len, "string buffer");
     try self.func().emitMemcpyDynamic(new_buf, orig_buf, len);
 
-    // Store buffer pointer (offset 0)
-    try self.func().emitStore(result_ptr, new_buf);
-
-    // Store length (offset 8, i32)
-    try storeI32Field(self, result_ptr, 8, len_i32);
-
-    // Initialize heap metadata (cap_flags, refcount, parent_off)
-    try initHeapStringFields(self, result_ptr, len_i32);
+    // Initialize __ManagedString struct
+    const result_ptr = try struct_helpers.emitManagedString(self.func(), new_buf, len);
 
     return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedString" } };
 }
@@ -918,7 +830,7 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 
     // === SLICE BLOCK: Copy data to new null-terminated buffer ===
     const slice_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const slice_len = try loadI32AsI64(self, managed.value, 8);
+    const slice_len = try struct_helpers.loadI32AsI64(self.func(), managed.value, 8);
 
     const one_i64 = try self.func().emitConstI64(1);
     const alloc_size = try self.func().emitBinaryOp(.add, slice_len, one_i64, .i64);
@@ -932,8 +844,8 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 
     // Store cstring fields (data, length, managed=null)
     try self.func().emitStore(cstring_ptr, new_buf);
-    try storeI64Field(self, cstring_ptr, 8, slice_len);
-    try storeI64Field(self, cstring_ptr, 16, try self.func().emitConstI64(0));
+    try struct_helpers.storeI64Field(self.func(), cstring_ptr, 8, slice_len);
+    try struct_helpers.storeI64Field(self.func(), cstring_ptr, 16, try self.func().emitConstI64(0));
 
     // Create nonslice block
     const nonslice_block_idx: u32 = @intCast(self.func().blocks.items.len);
@@ -941,12 +853,12 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 
     // === NON-SLICE BLOCK: Share existing buffer ===
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const length = try loadI32AsI64(self, managed.value, 8);
+    const length = try struct_helpers.loadI32AsI64(self.func(), managed.value, 8);
 
     // Store cstring fields (data, length, managed)
     try self.func().emitStore(cstring_ptr, buf_ptr);
-    try storeI64Field(self, cstring_ptr, 8, length);
-    try storeI64Field(self, cstring_ptr, 16, managed.value);
+    try struct_helpers.storeI64Field(self.func(), cstring_ptr, 8, length);
+    try struct_helpers.storeI64Field(self.func(), cstring_ptr, 16, managed.value);
 
     // Check if heap mode for incref
     const one_i32 = try self.func().emitConstI32(1);
@@ -994,22 +906,14 @@ fn intrinsicStringFromCharacters(self: *AstToIr, call: ast.CallExpr) ConvertErro
     const buffer = try self.convertExpression(call.args[0]);
     const length = try self.convertExpression(call.args[1]);
 
-    const result_ptr = try self.func().emitAllocaSized(24);
     const new_buf = try self.func().emitHeapAlloc(length.value, "string buffer");
 
     // Copy data from source buffer
     const src_buf = try self.func().emitLoad(buffer.value, .ptr);
     try self.func().emitMemcpyDynamic(new_buf, src_buf, length.value);
 
-    // Store buffer pointer (offset 0)
-    try self.func().emitStore(result_ptr, new_buf);
-
-    // Store length (offset 8, i32)
-    const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, length.value, .i32);
-    try storeI32Field(self, result_ptr, 8, len_i32);
-
-    // Initialize heap metadata (cap_flags, refcount, parent_off)
-    try initHeapStringFields(self, result_ptr, len_i32);
+    // Initialize __ManagedString struct
+    const result_ptr = try struct_helpers.emitManagedString(self.func(), new_buf, length.value);
 
     return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedString" } };
 }
@@ -1066,7 +970,7 @@ fn intrinsicStringCapFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!Type
 fn emitWriteFileIR(self: *AstToIr, path_cstr: TypedValue, data_source: TypedValue) ConvertError!TypedValue {
     const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
     const data_ptr = try self.func().emitLoad(data_source.value, .ptr);
-    const data_len = try loadI64Field(self, data_source.value, 8);
+    const data_len = try struct_helpers.loadI64Field(self.func(), data_source.value, 8);
 
     // CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
     // GENERIC_WRITE = 0x40000000, CREATE_ALWAYS = 2, FILE_ATTRIBUTE_NORMAL = 0x80
@@ -1148,7 +1052,7 @@ fn emitReadFileIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     const string_size = try self.func().emitConstI64(24);
     const string_ptr = try emitHeapAllocWin(self, heap, string_size);
 
-    try initHeapManagedString(self, string_ptr, buffer, bytes_read, alloc_size);
+    try initHeapManagedString(self, string_ptr, buffer, bytes_read);
 
     // If handle was invalid, return NULL, else return string_ptr
     // result = string_ptr * (1 - is_invalid) = string_ptr if valid, 0 if invalid
@@ -1226,10 +1130,10 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     // [16] i64 capacity = argc
     // [24] i64 iterIndex = 0
     try self.func().emitStore(result_ptr, strings_buf);
-    try storeI64Field(self, result_ptr, 8, argc);
-    try storeI64Field(self, result_ptr, 16, argc);
+    try struct_helpers.storeI64Field(self.func(), result_ptr, 8, argc);
+    try struct_helpers.storeI64Field(self.func(), result_ptr, 16, argc);
     const zero_i64 = try self.func().emitConstI64(0);
-    try storeI64Field(self, result_ptr, 24, zero_i64);
+    try struct_helpers.storeI64Field(self.func(), result_ptr, 24, zero_i64);
 
     // Loop counter on stack
     const i_ptr = try self.func().emitAllocaSized(8);
@@ -1276,7 +1180,7 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     // len = utf8_size - 1 (exclude null terminator)
     const one_i64 = try self.func().emitConstI64(1);
     const len_i64 = try self.func().emitBinaryOp(.sub, utf8_size, one_i64, .i64);
-    try initHeapString(self, string_ptr, utf8_buf, len_i64, utf8_size);
+    try initHeapString(self, string_ptr, utf8_buf, len_i64);
 
     // Increment i
     const new_i = try self.func().emitBinaryOp(.add, i_body, one_i64, .i64);
