@@ -519,8 +519,8 @@ pub const SemanticAnalyzer = struct {
             .methods = iface.methods,
             .associated_types = iface.generic_params,
             .extends = iface.extends,
-            .decl_line = iface.line,
-            .decl_column = iface.column,
+            .decl_line = iface.block.start_line,
+            .decl_column = iface.block.start_column,
         });
     }
 
@@ -534,8 +534,8 @@ pub const SemanticAnalyzer = struct {
                 .name = type_decl.name,
                 .fields = fields,
                 .size = size,
-                .decl_line = type_decl.line,
-                .decl_column = type_decl.column,
+                .decl_line = type_decl.block.start_line,
+                .decl_column = type_decl.block.start_column,
             },
         });
 
@@ -572,8 +572,8 @@ pub const SemanticAnalyzer = struct {
                 .name = enum_decl.name,
                 .members = members,
                 .is_error = is_error,
-                .decl_line = enum_decl.line,
-                .decl_column = enum_decl.column,
+                .decl_line = enum_decl.block.start_line,
+                .decl_column = enum_decl.block.start_column,
             },
         });
 
@@ -591,8 +591,8 @@ pub const SemanticAnalyzer = struct {
             .return_value_type = return_info.value_type,
             .param_types = param_types,
             .ir_generated = false, // Will be set true when IR is generated
-            .decl_line = decl.line,
-            .decl_column = decl.column,
+            .decl_line = decl.block.start_line,
+            .decl_column = decl.block.start_column,
         });
     }
 

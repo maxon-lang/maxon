@@ -704,20 +704,7 @@ pub const Analyzer = struct {
         // Use AST-based folding if available
         if (self.semantic_cache.get(uri)) |info| {
             if (info.program) |program| {
-                const block_ranges = try collectBlockRanges(self.allocator, program);
-                defer self.allocator.free(block_ranges);
-
-                if (block_ranges.len == 0) return &.{};
-
-                var ranges: std.ArrayListUnmanaged(types.FoldingRange) = .empty;
-                for (block_ranges) |br| {
-                    // Convert from 1-based AST lines to 0-based LSP lines
-                    try ranges.append(self.allocator, .{
-                        .startLine = br.start_line - 1,
-                        .endLine = br.end_line - 1,
-                    });
-                }
-                return ranges.toOwnedSlice(self.allocator);
+                return collectFoldingRanges(self.allocator, program);
             }
         }
 
@@ -758,15 +745,9 @@ fn formatContent(allocator: std.mem.Allocator, content: []const u8, tab_size: u3
         try all_lines.append(allocator, line);
     }
 
-    // Get block ranges from AST if available
-    var block_ranges: ?[]BlockRange = null;
-    defer if (block_ranges) |br| allocator.free(br);
-
-    if (info) |semantic_info| {
-        if (semantic_info.program) |program| {
-            block_ranges = try collectBlockRanges(allocator, program);
-        }
-    }
+    // Get program from semantic info if available
+    const program = if (info) |semantic_info| semantic_info.program else null;
+    if (program == null) return try allocator.dupe(u8, content);
 
     var first_line = true;
 
@@ -786,16 +767,8 @@ fn formatContent(allocator: std.mem.Allocator, content: []const u8, tab_size: u3
             continue;
         }
 
-        // Calculate indentation depth from block ranges
-        const ranges = block_ranges orelse return try allocator.dupe(u8, content);
-        var depth: u32 = 0;
-        for (ranges) |br| {
-            // Line is inside block if: start_line < line < end_line
-            // (start line and end line themselves are not indented)
-            if (br.start_line < ast_line and ast_line < br.end_line) {
-                depth += 1;
-            }
-        }
+        // Calculate indentation depth directly from AST
+        const depth = calculateIndentDepth(program.?, ast_line);
 
         // Add indentation
         var i: u32 = 0;
@@ -1043,181 +1016,290 @@ fn findMatchingLabelFromAST(allocator: std.mem.Allocator, lines: []const []const
     }
 }
 
-/// A block range with start and end lines (1-based, from AST)
-const BlockRange = struct {
-    start_line: u32,
-    end_line: u32,
-    label: ?[]const u8 = null, // For labeled blocks like if/while/for
-    name: ?[]const u8 = null, // For named blocks like functions/types
-};
-
-/// Extract all block ranges from the AST for folding/formatting
-fn collectBlockRanges(allocator: std.mem.Allocator, program: ast.Program) ![]BlockRange {
-    var ranges: std.ArrayListUnmanaged(BlockRange) = .empty;
+/// Collect folding ranges directly from AST (converts to 0-based LSP lines)
+fn collectFoldingRanges(allocator: std.mem.Allocator, program: ast.Program) ![]types.FoldingRange {
+    var ranges: std.ArrayListUnmanaged(types.FoldingRange) = .empty;
     errdefer ranges.deinit(allocator);
 
     // Collect from types
     for (program.types) |type_decl| {
-        if (ast.getDeclBlockInfo(ast.TypeDecl, type_decl)) |info| {
+        if (type_decl.block.end_line > 0) {
             try ranges.append(allocator, .{
-                .start_line = type_decl.line,
-                .end_line = info.end_line,
-                .name = info.identifier,
+                .startLine = type_decl.block.start_line - 1,
+                .endLine = type_decl.block.end_line - 1,
             });
         }
         for (type_decl.methods) |method| {
-            try collectFromMethod(allocator, method, &ranges);
+            try collectFoldingFromMethod(allocator, method, &ranges);
         }
     }
 
     // Collect from enums
     for (program.enums) |enum_decl| {
-        if (ast.getDeclBlockInfo(ast.EnumDecl, enum_decl)) |info| {
+        if (enum_decl.block.end_line > 0) {
             try ranges.append(allocator, .{
-                .start_line = enum_decl.line,
-                .end_line = info.end_line,
-                .name = info.identifier,
+                .startLine = enum_decl.block.start_line - 1,
+                .endLine = enum_decl.block.end_line - 1,
             });
         }
         for (enum_decl.methods) |method| {
-            try collectFromMethod(allocator, method, &ranges);
+            try collectFoldingFromMethod(allocator, method, &ranges);
         }
     }
 
     // Collect from interfaces
     for (program.interfaces) |interface_decl| {
-        if (ast.getDeclBlockInfo(ast.InterfaceDecl, interface_decl)) |info| {
+        if (interface_decl.block.end_line > 0) {
             try ranges.append(allocator, .{
-                .start_line = interface_decl.line,
-                .end_line = info.end_line,
-                .name = info.identifier,
+                .startLine = interface_decl.block.start_line - 1,
+                .endLine = interface_decl.block.end_line - 1,
             });
         }
     }
 
     // Collect from functions
     for (program.functions) |func| {
-        if (ast.getDeclBlockInfo(ast.FunctionDecl, func)) |info| {
+        if (func.block.end_line > 0) {
             try ranges.append(allocator, .{
-                .start_line = func.line,
-                .end_line = info.end_line,
-                .name = info.identifier,
+                .startLine = func.block.start_line - 1,
+                .endLine = func.block.end_line - 1,
             });
         }
-        try collectBlockRangesFromStatements(allocator, func.body, &ranges);
+        try collectFoldingFromStatements(allocator, func.body, &ranges);
     }
 
     return ranges.toOwnedSlice(allocator);
 }
 
-fn collectFromMethod(allocator: std.mem.Allocator, method: ast.MethodDecl, ranges: *std.ArrayListUnmanaged(BlockRange)) !void {
-    if (ast.getDeclBlockInfo(ast.MethodDecl, method)) |info| {
+fn collectFoldingFromMethod(allocator: std.mem.Allocator, method: ast.MethodDecl, ranges: *std.ArrayListUnmanaged(types.FoldingRange)) !void {
+    if (method.block.end_line > 0) {
         try ranges.append(allocator, .{
-            .start_line = method.line,
-            .end_line = info.end_line,
-            .name = info.identifier,
+            .startLine = method.block.start_line - 1,
+            .endLine = method.block.end_line - 1,
         });
     }
-    try collectBlockRangesFromStatements(allocator, method.body, ranges);
+    try collectFoldingFromStatements(allocator, method.body, ranges);
 }
 
-fn collectBlockRangesFromStatements(allocator: std.mem.Allocator, statements: []const ast.Statement, ranges: *std.ArrayListUnmanaged(BlockRange)) std.mem.Allocator.Error!void {
+fn collectFoldingFromStatements(allocator: std.mem.Allocator, statements: []const ast.Statement, ranges: *std.ArrayListUnmanaged(types.FoldingRange)) std.mem.Allocator.Error!void {
     for (statements) |stmt| {
-        try collectBlockRangesFromStatement(allocator, stmt, ranges);
+        try collectFoldingFromStatement(allocator, stmt, ranges);
     }
 }
 
-fn collectBlockRangesFromStatement(allocator: std.mem.Allocator, stmt: ast.Statement, ranges: *std.ArrayListUnmanaged(BlockRange)) std.mem.Allocator.Error!void {
-    // Add block range for this statement if it has one
+fn collectFoldingFromStatement(allocator: std.mem.Allocator, stmt: ast.Statement, ranges: *std.ArrayListUnmanaged(types.FoldingRange)) std.mem.Allocator.Error!void {
+    // Add folding range for this statement if it has a block
     if (stmt.kind.getBlockInfo()) |info| {
         try ranges.append(allocator, .{
-            .start_line = stmt.line,
-            .end_line = info.end_line,
-            .label = info.identifier,
+            .startLine = info.start_line - 1,
+            .endLine = info.end_line - 1,
         });
 
         // Handle secondary block (e.g., else clause)
         if (info.secondary) |sec| {
             try ranges.append(allocator, .{
-                .start_line = sec.start_line,
-                .end_line = sec.end_line,
-                .label = sec.identifier,
+                .startLine = sec.start_line - 1,
+                .endLine = sec.end_line - 1,
             });
         }
     }
 
     // Recurse into child bodies
     const children = stmt.kind.getChildBodies();
-    try collectBlockRangesFromStatements(allocator, children.primary, ranges);
+    try collectFoldingFromStatements(allocator, children.primary, ranges);
     if (children.secondary) |sec| {
-        try collectBlockRangesFromStatements(allocator, sec, ranges);
+        try collectFoldingFromStatements(allocator, sec, ranges);
     }
     if (children.else_if) |else_if| {
-        try collectBlockRangesFromIfStmt(allocator, else_if.*, ranges);
+        try collectFoldingFromIfStmt(allocator, else_if.*, ranges);
     }
     for (children.match_cases) |case| {
-        try collectBlockRangesFromStatement(allocator, case.body.*, ranges);
+        try collectFoldingFromStatement(allocator, case.body.*, ranges);
     }
     if (children.default_case) |dc| {
-        try collectBlockRangesFromStatement(allocator, dc.*, ranges);
+        try collectFoldingFromStatement(allocator, dc.*, ranges);
     }
     for (children.catch_clauses) |cc| {
-        try collectBlockRangesFromStatements(allocator, cc.body, ranges);
+        try collectFoldingFromStatements(allocator, cc.body, ranges);
     }
 }
 
-fn collectBlockRangesFromIfStmt(allocator: std.mem.Allocator, if_stmt: ast.IfStmt, ranges: *std.ArrayListUnmanaged(BlockRange)) std.mem.Allocator.Error!void {
-    // Add block range for this if statement
-    if (if_stmt.end_line > 0) {
+fn collectFoldingFromIfStmt(allocator: std.mem.Allocator, if_stmt: ast.IfStmt, ranges: *std.ArrayListUnmanaged(types.FoldingRange)) std.mem.Allocator.Error!void {
+    // Add folding range for this if statement
+    if (if_stmt.block.end_line > 0) {
         try ranges.append(allocator, .{
-            .start_line = if_stmt.end_line, // For else-if, we use end_line as start (it chains)
-            .end_line = if_stmt.end_line,
-            .label = if (if_stmt.label.len > 0) if_stmt.label else null,
+            .startLine = if_stmt.block.start_line - 1,
+            .endLine = if_stmt.block.end_line - 1,
         });
     }
 
     // Recurse into body
-    try collectBlockRangesFromStatements(allocator, if_stmt.body, ranges);
+    try collectFoldingFromStatements(allocator, if_stmt.body, ranges);
 
     // Handle else body
     if (if_stmt.else_body) |else_body| {
-        if (if_stmt.else_end_line > 0) {
+        if (if_stmt.block.secondary) |sec| {
             try ranges.append(allocator, .{
-                .start_line = if_stmt.end_line,
-                .end_line = if_stmt.else_end_line,
-                .label = if_stmt.else_label,
+                .startLine = sec.start_line - 1,
+                .endLine = sec.end_line - 1,
             });
         }
-        try collectBlockRangesFromStatements(allocator, else_body, ranges);
+        try collectFoldingFromStatements(allocator, else_body, ranges);
     }
 
     // Handle else-if chain
     if (if_stmt.else_if) |else_if| {
-        try collectBlockRangesFromIfStmt(allocator, else_if.*, ranges);
+        try collectFoldingFromIfStmt(allocator, else_if.*, ranges);
     }
+}
+
+/// Calculate indentation depth for a line by counting containing blocks (1-based line)
+fn calculateIndentDepth(program: ast.Program, line: u32) u32 {
+    var depth: u32 = 0;
+
+    // Check types
+    for (program.types) |type_decl| {
+        if (type_decl.block.start_line < line and line < type_decl.block.end_line) {
+            depth += 1;
+        }
+        for (type_decl.methods) |method| {
+            depth += calculateDepthFromMethod(method, line);
+        }
+    }
+
+    // Check enums
+    for (program.enums) |enum_decl| {
+        if (enum_decl.block.start_line < line and line < enum_decl.block.end_line) {
+            depth += 1;
+        }
+        for (enum_decl.methods) |method| {
+            depth += calculateDepthFromMethod(method, line);
+        }
+    }
+
+    // Check interfaces
+    for (program.interfaces) |interface_decl| {
+        if (interface_decl.block.start_line < line and line < interface_decl.block.end_line) {
+            depth += 1;
+        }
+    }
+
+    // Check functions
+    for (program.functions) |func| {
+        if (func.block.start_line < line and line < func.block.end_line) {
+            depth += 1;
+        }
+        depth += calculateDepthFromStatements(func.body, line);
+    }
+
+    return depth;
+}
+
+fn calculateDepthFromMethod(method: ast.MethodDecl, line: u32) u32 {
+    var depth: u32 = 0;
+    if (method.block.start_line < line and line < method.block.end_line) {
+        depth += 1;
+    }
+    depth += calculateDepthFromStatements(method.body, line);
+    return depth;
+}
+
+fn calculateDepthFromStatements(statements: []const ast.Statement, line: u32) u32 {
+    var depth: u32 = 0;
+    for (statements) |stmt| {
+        depth += calculateDepthFromStatement(stmt, line);
+    }
+    return depth;
+}
+
+fn calculateDepthFromStatement(stmt: ast.Statement, line: u32) u32 {
+    var depth: u32 = 0;
+
+    // Check if line is inside this statement's block
+    if (stmt.kind.getBlockInfo()) |info| {
+        if (info.start_line < line and line < info.end_line) {
+            depth += 1;
+        }
+        // Check secondary block (e.g., else clause)
+        if (info.secondary) |sec| {
+            if (sec.start_line < line and line < sec.end_line) {
+                depth += 1;
+            }
+        }
+    }
+
+    // Recurse into child bodies
+    const children = stmt.kind.getChildBodies();
+    depth += calculateDepthFromStatements(children.primary, line);
+    if (children.secondary) |sec| {
+        depth += calculateDepthFromStatements(sec, line);
+    }
+    if (children.else_if) |else_if| {
+        depth += calculateDepthFromIfStmt(else_if.*, line);
+    }
+    for (children.match_cases) |case| {
+        depth += calculateDepthFromStatement(case.body.*, line);
+    }
+    if (children.default_case) |dc| {
+        depth += calculateDepthFromStatement(dc.*, line);
+    }
+    for (children.catch_clauses) |cc| {
+        depth += calculateDepthFromStatements(cc.body, line);
+    }
+
+    return depth;
+}
+
+fn calculateDepthFromIfStmt(if_stmt: ast.IfStmt, line: u32) u32 {
+    var depth: u32 = 0;
+
+    // Check if line is inside this if block
+    if (if_stmt.block.start_line < line and line < if_stmt.block.end_line) {
+        depth += 1;
+    }
+
+    // Recurse into body
+    depth += calculateDepthFromStatements(if_stmt.body, line);
+
+    // Handle else body
+    if (if_stmt.else_body) |else_body| {
+        if (if_stmt.block.secondary) |sec| {
+            if (sec.start_line < line and line < sec.end_line) {
+                depth += 1;
+            }
+        }
+        depth += calculateDepthFromStatements(else_body, line);
+    }
+
+    // Handle else-if chain
+    if (if_stmt.else_if) |else_if| {
+        depth += calculateDepthFromIfStmt(else_if.*, line);
+    }
+
+    return depth;
 }
 
 /// Find the end line of a function or method by name and start line
 fn findFunctionEndLine(program: ast.Program, start_line: u32, name: []const u8) ?u32 {
     // Search in functions
     for (program.functions) |func| {
-        if (func.line == start_line and std.mem.eql(u8, func.name, name)) {
-            return func.end_line;
+        if (func.block.start_line == start_line and std.mem.eql(u8, func.name, name)) {
+            return func.block.end_line;
         }
     }
     // Search in type methods
     for (program.types) |type_decl| {
         for (type_decl.methods) |method| {
-            if (method.line == start_line and std.mem.eql(u8, method.name, name)) {
-                return method.end_line;
+            if (method.block.start_line == start_line and std.mem.eql(u8, method.name, name)) {
+                return method.block.end_line;
             }
         }
     }
     // Search in enum methods
     for (program.enums) |enum_decl| {
         for (enum_decl.methods) |method| {
-            if (method.line == start_line and std.mem.eql(u8, method.name, name)) {
-                return method.end_line;
+            if (method.block.start_line == start_line and std.mem.eql(u8, method.name, name)) {
+                return method.block.end_line;
             }
         }
     }

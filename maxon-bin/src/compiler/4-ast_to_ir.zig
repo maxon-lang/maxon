@@ -1026,16 +1026,17 @@ pub const AstToIr = struct {
 
     /// Check if a label is already used at the current scope level.
     /// If not, register it. If duplicate, report error and return error.
-    fn checkAndRegisterLabel(self: *AstToIr, label: []const u8) !void {
+    fn checkAndRegisterLabel(self: *AstToIr, label: ?[]const u8) !void {
+        const lbl = label orelse return;
         if (self.scope_labels.items.len == 0) return;
 
         var current_scope = &self.scope_labels.items[self.scope_labels.items.len - 1];
-        if (current_scope.get(label) != null) {
+        if (current_scope.get(lbl) != null) {
             // Duplicate label at same scope level
-            self.reportError(.E036, label);
+            self.reportError(.E036, lbl);
             return error.SemanticError;
         }
-        try current_scope.put(self.allocator, label, {});
+        try current_scope.put(self.allocator, lbl, {});
     }
 
     // ------------------------------------------------------------------------
@@ -1734,8 +1735,8 @@ pub const AstToIr = struct {
                 .name = type_decl.name,
                 .fields = field_result.fields,
                 .size = field_result.size,
-                .decl_line = type_decl.line,
-                .decl_column = type_decl.column,
+                .decl_line = type_decl.block.start_line,
+                .decl_column = type_decl.block.start_column,
             },
         });
 
@@ -1923,8 +1924,8 @@ pub const AstToIr = struct {
                 .has_associated_values = has_associated_values,
                 .max_payload_size = max_payload_size,
                 .has_explicit_backing_type = enum_decl.backing_type != null,
-                .decl_line = enum_decl.line,
-                .decl_column = enum_decl.column,
+                .decl_line = enum_decl.block.start_line,
+                .decl_column = enum_decl.block.start_column,
             },
         });
         debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {}, has_assoc: {})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type), is_error, has_associated_values });
@@ -1936,8 +1937,8 @@ pub const AstToIr = struct {
             .methods = iface.methods,
             .associated_types = iface.generic_params,
             .extends = iface.extends,
-            .decl_line = iface.line,
-            .decl_column = iface.column,
+            .decl_line = iface.block.start_line,
+            .decl_column = iface.block.start_column,
         });
         debug.astToIr("Registered interface '{s}' with {d} methods, {d} associated types, extends {d} interfaces", .{ iface.name, iface.methods.len, iface.generic_params.len, iface.extends.len });
     }
@@ -2613,8 +2614,8 @@ pub const AstToIr = struct {
             .return_type_name = ret_type_name,
             .return_value_type = effective_ret_value_type,
             .param_types = param_types,
-            .decl_line = decl.line,
-            .decl_column = decl.column,
+            .decl_line = decl.block.start_line,
+            .decl_column = decl.block.start_column,
         });
 
         debug.astToIr("Registered function '{s}' returning {s}", .{ decl.name, ret_type.toIrName() });
@@ -2848,8 +2849,8 @@ pub const AstToIr = struct {
             .name = mono_name,
             .fields = field_result.fields,
             .size = field_result.size,
-            .decl_line = type_decl.line,
-            .decl_column = type_decl.column,
+            .decl_line = type_decl.block.start_line,
+            .decl_column = type_decl.block.start_column,
         };
 
         try self.type_map.put(self.allocator, mono_name, .{ .struct_type = struct_info });
@@ -4359,7 +4360,7 @@ pub const AstToIr = struct {
 
     fn convertIfStmt(self: *AstToIr, if_stmt: ast.IfStmt) ConvertError!void {
         // Check for duplicate block identifier at this scope level
-        try self.checkAndRegisterLabel(if_stmt.label);
+        try self.checkAndRegisterLabel(if_stmt.block.identifier);
 
         // Convert condition expression
         const cond_typed = try self.convertExpression(if_stmt.condition);
@@ -4512,7 +4513,7 @@ pub const AstToIr = struct {
 
     fn convertWhileStmt(self: *AstToIr, while_stmt: ast.WhileStmt) ConvertError!void {
         // Check for duplicate block identifier at this scope level
-        try self.checkAndRegisterLabel(while_stmt.label);
+        try self.checkAndRegisterLabel(while_stmt.block.identifier);
 
         // Create condition block - this will be the current block after creation
         const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
@@ -4541,9 +4542,9 @@ pub const AstToIr = struct {
         self.loop_end_block = 0xFFFFFFFF;
 
         // Register labeled loop for break/continue with labels
-        if (while_stmt.label.len > 0) {
+        if (while_stmt.block.identifier) |label| {
             try self.labeled_loops.append(self.allocator, .{
-                .label = while_stmt.label,
+                .label = label,
                 .cond_block = cond_block_idx,
                 .end_block = 0xFFFFFFFE - @as(u32, @intCast(self.labeled_loops.items.len)),
             });
@@ -4615,7 +4616,7 @@ pub const AstToIr = struct {
         }
 
         // Pop labeled loop from stack and patch its sentinel if we pushed one
-        if (while_stmt.label.len > 0) {
+        if (while_stmt.block.identifier != null) {
             const labeled_loop = self.labeled_loops.pop().?;
             // Patch any labeled break statements that targeted this loop's sentinel
             for (self.func().blocks.items[body_block_idx..cont_block_idx]) |*block| {
@@ -4648,7 +4649,7 @@ pub const AstToIr = struct {
     /// end 'loop'
     fn convertForStmt(self: *AstToIr, for_stmt: ast.ForStmt) ConvertError!void {
         // Check for duplicate block identifier at this scope level
-        try self.checkAndRegisterLabel(for_stmt.label);
+        try self.checkAndRegisterLabel(for_stmt.block.identifier);
 
         // Convert the iterable expression ONCE, before the loop
         // This is crucial for iterators like ByteView that have mutable state (_pos)
@@ -4701,9 +4702,9 @@ pub const AstToIr = struct {
         self.loop_end_block = 0xFFFFFFFF; // sentinel for patching
 
         // Register labeled loop for break/continue with labels
-        if (for_stmt.label.len > 0) {
+        if (for_stmt.block.identifier) |label| {
             try self.labeled_loops.append(self.allocator, .{
-                .label = for_stmt.label,
+                .label = label,
                 .cond_block = cond_block_idx,
                 .end_block = 0xFFFFFFFE - @as(u32, @intCast(self.labeled_loops.items.len)),
             });
@@ -4798,7 +4799,7 @@ pub const AstToIr = struct {
         }
 
         // Pop labeled loop from stack and patch its sentinel if we pushed one
-        if (for_stmt.label.len > 0) {
+        if (for_stmt.block.identifier != null) {
             const labeled_loop = self.labeled_loops.pop().?;
             // Patch any labeled break statements that targeted this loop's sentinel
             for (self.func().blocks.items[body_block_idx..cont_block_idx]) |*block| {
@@ -5186,7 +5187,7 @@ pub const AstToIr = struct {
     /// Uses DeferredBlocks pattern with interleaved block creation for correct indexing
     fn convertMatchStmt(self: *AstToIr, match_stmt: ast.MatchStmt) ConvertError!void {
         // Check for duplicate block identifier at this scope level
-        try self.checkAndRegisterLabel(match_stmt.label);
+        try self.checkAndRegisterLabel(match_stmt.block.identifier);
 
         // Perform semantic validations before converting
         try self.validateMatchStmt(match_stmt);
@@ -5755,7 +5756,7 @@ pub const AstToIr = struct {
 
     fn convertDoCatchStmt(self: *AstToIr, do_catch: ast.DoCatchStmt) ConvertError!void {
         // Check for duplicate block identifier at this scope level
-        try self.checkAndRegisterLabel(do_catch.label);
+        try self.checkAndRegisterLabel(do_catch.block.identifier);
 
         // Save the outer do-catch context (for nested do-catch blocks)
         const outer_error_buffer = self.do_catch_error_buffer;
@@ -5940,7 +5941,7 @@ pub const AstToIr = struct {
 
     fn convertElseUnwrapDecl(self: *AstToIr, unwrap: ast.ElseUnwrapDecl) ConvertError!void {
         // Check for duplicate block identifier at this scope level
-        try self.checkAndRegisterLabel(unwrap.label);
+        try self.checkAndRegisterLabel(unwrap.block.identifier);
 
         // Convert the optional expression
         const opt_typed = try self.convertExpression(unwrap.optional_expr.*);
@@ -6050,7 +6051,7 @@ pub const AstToIr = struct {
     /// If optional is nil, execute body (must exit). If has value, bind x to unwrapped.
     fn convertGuardLetDecl(self: *AstToIr, guard: ast.GuardLetDecl) ConvertError!void {
         // Check for duplicate block identifier at this scope level
-        try self.checkAndRegisterLabel(guard.label);
+        try self.checkAndRegisterLabel(guard.block.identifier);
 
         // Convert the optional expression
         const opt_typed = try self.convertExpression(guard.optional_expr.*);

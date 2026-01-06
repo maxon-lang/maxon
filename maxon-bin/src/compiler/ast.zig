@@ -2,7 +2,9 @@ const std = @import("std");
 
 /// Information about a code block's extent and identifier (for folding, formatting, etc.)
 pub const BlockInfo = struct {
-    end_line: u32,
+    start_line: u32 = 0,
+    start_column: u32 = 0,
+    end_line: u32 = 0,
     identifier: ?[]const u8 = null, // label for control flow, name for declarations
 
     /// Optional secondary block (for if-else constructs)
@@ -48,9 +50,7 @@ pub const InterfaceDecl = struct {
     generic_params: []const []const u8, // ["Element"] for `uses Element`
     extends: []const []const u8, // ["Collection", "Iterable"] for `extends Collection, Iterable`
     methods: []InterfaceMethod,
-    line: u32 = 0,
-    column: u32 = 0,
-    end_line: u32 = 0,
+    block: BlockInfo = .{},
 };
 
 pub const EnumMember = struct {
@@ -67,9 +67,7 @@ pub const EnumDecl = struct {
     conformances: []const InterfaceConformance, // Interface conformances (e.g., is Error)
     members: []const EnumMember,
     methods: []MethodDecl, // Methods defined on the enum
-    line: u32 = 0,
-    column: u32 = 0,
-    end_line: u32 = 0,
+    block: BlockInfo = .{},
 };
 
 pub const InterfaceConformance = struct {
@@ -86,9 +84,7 @@ pub const MethodDecl = struct {
     return_type: ?TypeExpr, // null for void
     throws_type: ?[]const u8, // error type if method throws (must conform to Error)
     body: []Statement,
-    line: u32 = 0,
-    column: u32 = 0,
-    end_line: u32 = 0, // Line of the 'end' keyword
+    block: BlockInfo = .{},
 };
 
 pub const TypeDecl = struct {
@@ -98,9 +94,7 @@ pub const TypeDecl = struct {
     conformances: []const InterfaceConformance,
     fields: []FieldDecl,
     methods: []MethodDecl,
-    line: u32 = 0,
-    column: u32 = 0,
-    end_line: u32 = 0,
+    block: BlockInfo = .{},
 };
 
 pub const FieldDecl = struct {
@@ -156,9 +150,7 @@ pub const FunctionDecl = struct {
     return_type: ?TypeExpr, // null for void
     throws_type: ?[]const u8, // error type if function throws (must conform to Error)
     body: []Statement,
-    line: u32 = 0,
-    column: u32 = 0,
-    end_line: u32 = 0, // Line of the 'end' keyword
+    block: BlockInfo = .{},
 };
 
 pub const IndexAssign = struct {
@@ -181,30 +173,23 @@ pub const FieldAssign = struct {
 pub const IfStmt = struct {
     condition: Expression,
     body: []Statement,
-    label: []const u8,
     else_body: ?[]Statement, // For else clause
-    else_label: ?[]const u8, // Label for else block
     else_if: ?*const IfStmt, // For else-if chain (recursive)
-
-    // If-let binding (optional): if let name = expr 'label'
-    binding_name: ?[]const u8 = null,
-    end_line: u32 = 0, // Line of the 'end' keyword for then-block
-    else_end_line: u32 = 0, // Line of the 'end' keyword for else-block (if present)
+    binding_name: ?[]const u8 = null, // If-let binding (optional): if let name = expr 'label'
+    block: BlockInfo = .{}, // label in identifier, else clause in secondary
 };
 
 pub const WhileStmt = struct {
     condition: Expression,
     body: []Statement,
-    label: []const u8,
-    end_line: u32 = 0, // Line of the 'end' keyword
+    block: BlockInfo = .{}, // label in identifier
 };
 
 pub const ForStmt = struct {
     var_name: []const u8, // loop variable name
     iterable: Expression, // expression to iterate over
     body: []Statement,
-    label: []const u8,
-    end_line: u32 = 0, // Line of the 'end' keyword
+    block: BlockInfo = .{}, // label in identifier
 };
 
 pub const BreakStmt = struct {
@@ -218,8 +203,7 @@ pub const ElseUnwrapDecl = struct {
     var_name: []const u8,
     optional_expr: *const Expression,
     default_body: []Statement,
-    label: []const u8,
-    end_line: u32 = 0, // Line of the 'end' keyword
+    block: BlockInfo = .{}, // label in identifier
 };
 
 // Guard-let: let x = opt or 'label' ... end 'label'
@@ -228,8 +212,7 @@ pub const GuardLetDecl = struct {
     var_name: []const u8,
     optional_expr: *const Expression,
     nil_body: []Statement, // Body executed when optional is nil (must exit)
-    label: []const u8,
-    end_line: u32 = 0, // Line of the 'end' keyword
+    block: BlockInfo = .{}, // label in identifier
 };
 
 // Error handling: throw statement
@@ -248,9 +231,8 @@ pub const CatchClause = struct {
 // Error handling: do-catch block
 pub const DoCatchStmt = struct {
     body: []Statement,
-    label: []const u8,
     catches: []const CatchClause,
-    end_line: u32 = 0, // Line of the 'end' keyword
+    block: BlockInfo = .{}, // label in identifier
 };
 
 // Match statements and expressions
@@ -272,8 +254,7 @@ pub const MatchStmt = struct {
     scrutinee: Expression,
     cases: []const MatchCase,
     default_case: ?*const Statement, // Pointer to break circular dep
-    label: []const u8,
-    end_line: u32 = 0, // Line of the 'end' keyword
+    block: BlockInfo = .{}, // label in identifier
 };
 
 pub const MatchExprCase = struct {
@@ -314,42 +295,13 @@ pub const StatementKind = union(enum) {
     /// Returns block information if this statement kind contains a block
     pub fn getBlockInfo(self: StatementKind) ?BlockInfo {
         return switch (self) {
-            .if_stmt => |if_s| if (if_s.end_line > 0) BlockInfo{
-                .end_line = if_s.end_line,
-                .identifier = if (if_s.label.len > 0) if_s.label else null,
-                .secondary = if (if_s.else_body != null and if_s.else_end_line > 0)
-                    BlockInfo.SecondaryBlock{
-                        .start_line = if_s.end_line,
-                        .end_line = if_s.else_end_line,
-                        .identifier = if_s.else_label,
-                    }
-                else
-                    null,
-            } else null,
-            .while_stmt => |w| if (w.end_line > 0) BlockInfo{
-                .end_line = w.end_line,
-                .identifier = if (w.label.len > 0) w.label else null,
-            } else null,
-            .for_stmt => |f| if (f.end_line > 0) BlockInfo{
-                .end_line = f.end_line,
-                .identifier = if (f.label.len > 0) f.label else null,
-            } else null,
-            .match_stmt => |m| if (m.end_line > 0) BlockInfo{
-                .end_line = m.end_line,
-                .identifier = if (m.label.len > 0) m.label else null,
-            } else null,
-            .do_catch_stmt => |d| if (d.end_line > 0) BlockInfo{
-                .end_line = d.end_line,
-                .identifier = if (d.label.len > 0) d.label else null,
-            } else null,
-            .else_unwrap_decl => |e| if (e.end_line > 0) BlockInfo{
-                .end_line = e.end_line,
-                .identifier = if (e.label.len > 0) e.label else null,
-            } else null,
-            .guard_let_decl => |g| if (g.end_line > 0) BlockInfo{
-                .end_line = g.end_line,
-                .identifier = if (g.label.len > 0) g.label else null,
-            } else null,
+            .if_stmt => |s| if (s.block.end_line > 0) s.block else null,
+            .while_stmt => |s| if (s.block.end_line > 0) s.block else null,
+            .for_stmt => |s| if (s.block.end_line > 0) s.block else null,
+            .match_stmt => |s| if (s.block.end_line > 0) s.block else null,
+            .do_catch_stmt => |s| if (s.block.end_line > 0) s.block else null,
+            .else_unwrap_decl => |s| if (s.block.end_line > 0) s.block else null,
+            .guard_let_decl => |s| if (s.block.end_line > 0) s.block else null,
             else => null,
         };
     }
@@ -381,20 +333,6 @@ pub const StatementKind = union(enum) {
         catch_clauses: []const CatchClause = &.{},
     };
 };
-
-/// Helper to get block info from any declaration type that has line/end_line/name fields
-pub fn getDeclBlockInfo(comptime T: type, decl: T) ?BlockInfo {
-    if (@hasField(T, "end_line") and @hasField(T, "line")) {
-        if (decl.end_line > 0) {
-            const identifier = if (@hasField(T, "name")) decl.name else null;
-            return BlockInfo{
-                .end_line = decl.end_line,
-                .identifier = identifier,
-            };
-        }
-    }
-    return null;
-}
 
 pub const Statement = struct {
     kind: StatementKind,

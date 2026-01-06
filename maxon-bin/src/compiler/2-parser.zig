@@ -335,9 +335,12 @@ pub const Parser = struct {
             .conformances = try conformances.toOwnedSlice(self.allocator),
             .fields = try fields.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),
-            .line = name_token.line,
-            .column = name_token.column,
-            .end_line = end_line,
+            .block = .{
+                .start_line = name_token.line,
+                .start_column = name_token.column,
+                .end_line = end_line,
+                .identifier = name_token.text,
+            },
         };
     }
 
@@ -508,9 +511,12 @@ pub const Parser = struct {
             .return_type = return_type,
             .throws_type = throws_type,
             .body = body_result.body,
-            .line = first_name.line,
-            .column = first_name.column,
-            .end_line = body_result.end_line,
+            .block = .{
+                .start_line = first_name.line,
+                .start_column = first_name.column,
+                .end_line = body_result.end_line,
+                .identifier = name,
+            },
         };
     }
 
@@ -872,9 +878,12 @@ pub const Parser = struct {
             .return_type = return_type,
             .throws_type = throws_type,
             .body = body_result.body,
-            .line = name_token.line,
-            .column = name_token.column,
-            .end_line = body_result.end_line,
+            .block = .{
+                .start_line = name_token.line,
+                .start_column = name_token.column,
+                .end_line = body_result.end_line,
+                .identifier = name_token.text,
+            },
         };
     }
 
@@ -1053,8 +1062,12 @@ pub const Parser = struct {
                     .var_name = name_token.text,
                     .optional_expr = expr_ptr,
                     .default_body = try default_statements.toOwnedSlice(self.allocator),
-                    .label = label.text,
-                    .end_line = end_line,
+                    .block = .{
+                        .start_line = start_line,
+                        .start_column = start_column,
+                        .end_line = end_line,
+                        .identifier = label.text,
+                    },
                 } }, start_line, start_column);
             }
 
@@ -1094,8 +1107,12 @@ pub const Parser = struct {
                         .var_name = name_token.text,
                         .optional_expr = expr_ptr,
                         .nil_body = try nil_statements.toOwnedSlice(self.allocator),
-                        .label = label.text,
-                        .end_line = end_line,
+                        .block = .{
+                            .start_line = start_line,
+                            .start_column = start_column,
+                            .end_line = end_line,
+                            .identifier = label.text,
+                        },
                     } }, start_line, start_column);
                 }
             }
@@ -1184,12 +1201,13 @@ pub const Parser = struct {
             return .{ .body = null, .label = null, .else_if = null, .else_end_line = 0 };
         }
 
-        _ = self.advance(); // consume 'else'
+        const else_token = self.advance(); // consume 'else'
 
         // Check for else-if chain
         if (allow_else_if and self.check(.@"if")) {
             _ = self.advance(); // consume 'if'
-            const else_if_stmt = try self.parseIfConditionAndBody();
+            // Use else token position as start for the else-if block
+            const else_if_stmt = try self.parseIfConditionAndBody(else_token.line, else_token.column);
             const ptr = try self.allocator.create(ast.IfStmt);
             ptr.* = else_if_stmt;
             try self.ifstmt_ptrs.append(self.allocator, ptr);
@@ -1238,23 +1256,33 @@ pub const Parser = struct {
             return stmtAt(.{ .if_stmt = .{
                 .condition = condition,
                 .body = body,
-                .label = label.text,
                 .else_body = else_clause.body,
-                .else_label = else_clause.label,
                 .else_if = null,
                 .binding_name = name_token.text,
-                .end_line = end_line,
-                .else_end_line = else_clause.else_end_line,
+                .block = .{
+                    .start_line = start_line,
+                    .start_column = start_column,
+                    .end_line = end_line,
+                    .identifier = label.text,
+                    .secondary = if (else_clause.body != null and else_clause.else_end_line > 0)
+                        .{
+                            .start_line = end_line,
+                            .end_line = else_clause.else_end_line,
+                            .identifier = else_clause.label,
+                        }
+                    else
+                        null,
+                },
             } }, start_line, start_column);
         }
 
         // Regular if statement (if already consumed)
-        return stmtAt(.{ .if_stmt = try self.parseIfConditionAndBody() }, start_line, start_column);
+        return stmtAt(.{ .if_stmt = try self.parseIfConditionAndBody(start_line, start_column) }, start_line, start_column);
     }
 
     /// Parse if statement after 'if' has been consumed. Used by parseIfStatement
     /// and parseElseClause for else-if chains.
-    fn parseIfConditionAndBody(self: *Parser) ParseError!ast.IfStmt {
+    fn parseIfConditionAndBody(self: *Parser, start_line: u32, start_column: u32) ParseError!ast.IfStmt {
         const condition = try self.parseExpression() orelse {
             self.reportError(.E003);
             return error.ExpectedExpression;
@@ -1276,12 +1304,22 @@ pub const Parser = struct {
         return .{
             .condition = condition,
             .body = body,
-            .label = label.text,
             .else_body = else_clause.body,
-            .else_label = else_clause.label,
             .else_if = else_clause.else_if,
-            .end_line = end_line,
-            .else_end_line = else_clause.else_end_line,
+            .block = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+                .secondary = if (else_clause.body != null and else_clause.else_end_line > 0)
+                    .{
+                        .start_line = end_line,
+                        .end_line = else_clause.else_end_line,
+                        .identifier = else_clause.label,
+                    }
+                else
+                    null,
+            },
         };
     }
 
@@ -1305,8 +1343,12 @@ pub const Parser = struct {
         return stmtAt(.{ .while_stmt = .{
             .condition = condition,
             .body = body,
-            .label = label.text,
-            .end_line = end_line,
+            .block = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
         } }, start_line, start_column);
     }
 
@@ -1340,8 +1382,12 @@ pub const Parser = struct {
             .var_name = var_name.text,
             .iterable = iterable,
             .body = body,
-            .label = label.text,
-            .end_line = end_line,
+            .block = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
         } }, start_line, start_column);
     }
 
@@ -1396,9 +1442,13 @@ pub const Parser = struct {
 
         return stmtAt(.{ .do_catch_stmt = .{
             .body = body,
-            .label = label.text,
             .catches = try catches.toOwnedSlice(self.allocator),
-            .end_line = end_line,
+            .block = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
         } }, start_line, start_column);
     }
 
@@ -1522,8 +1572,12 @@ pub const Parser = struct {
             .scrutinee = scrutinee,
             .cases = try cases.toOwnedSlice(self.allocator),
             .default_case = default_case,
-            .label = label.text,
-            .end_line = end_line,
+            .block = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
         } }, start_line, start_column);
     }
 
@@ -3004,9 +3058,12 @@ pub const Parser = struct {
             .conformances = try conformances.toOwnedSlice(self.allocator),
             .members = try members.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),
-            .line = name_token.line,
-            .column = name_token.column,
-            .end_line = end_line,
+            .block = .{
+                .start_line = name_token.line,
+                .start_column = name_token.column,
+                .end_line = end_line,
+                .identifier = name_token.text,
+            },
         };
     }
 
@@ -3053,9 +3110,12 @@ pub const Parser = struct {
             .generic_params = generic_params,
             .extends = extends_list,
             .methods = try methods.toOwnedSlice(self.allocator),
-            .line = name_token.line,
-            .column = name_token.column,
-            .end_line = end_line,
+            .block = .{
+                .start_line = name_token.line,
+                .start_column = name_token.column,
+                .end_line = end_line,
+                .identifier = name_token.text,
+            },
         };
     }
 
