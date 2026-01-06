@@ -28,6 +28,16 @@ pub const IntrinsicCodegen = enum {
     unary_op,
     /// Custom code generation handler required
     custom,
+    /// Managed array intrinsics (__managed_array_*)
+    managed_array,
+    /// String intrinsics (__string_*)
+    string,
+    /// C-string intrinsics (__cstring_*)
+    cstring,
+    /// Character creation intrinsics (__make_char_*)
+    make_char,
+    /// File I/O intrinsics (__read_file, __write_file, etc.)
+    file_io,
 };
 
 /// Intrinsic definition
@@ -159,25 +169,36 @@ pub const file_intrinsics = [_]Intrinsic{
         .codegen = .custom,
         .help_text = "Writes binary data to a file. Returns 0 on success, -1 on failure.",
     },
-    .{
-        .name = "__list_directory",
-        .params = &cstring_param,
-        .return_type_name = "Array$String?",
-        .return_ir_type = .ptr,
-        .visibility = .stdlib_only,
-        .codegen = .custom,
-        .help_text = "Lists files and directories in a directory. Returns nil if the directory cannot be read.",
-    },
-    .{
-        .name = "__is_directory",
-        .params = &cstring_param,
-        .return_type_name = "int",
-        .return_ir_type = .i64,
-        .visibility = .stdlib_only,
-        .codegen = .custom,
-        .help_text = "Checks if a path is a directory. Returns 1 if true, 0 if false.",
-    },
 };
+
+// ============================================================================
+// Intrinsic Categories (prefix-based dispatch)
+// ============================================================================
+
+/// Category for prefix-based intrinsic lookup
+pub const IntrinsicCategory = struct {
+    prefix: []const u8,
+    visibility: IntrinsicVisibility,
+    codegen: IntrinsicCodegen,
+};
+
+/// All intrinsic categories - used for dispatch in convertBuiltin
+pub const intrinsic_categories = [_]IntrinsicCategory{
+    .{ .prefix = "__managed_array_", .visibility = .stdlib_only, .codegen = .managed_array },
+    .{ .prefix = "__string_", .visibility = .stdlib_only, .codegen = .string },
+    .{ .prefix = "__cstring_", .visibility = .stdlib_only, .codegen = .cstring },
+    .{ .prefix = "__make_char_", .visibility = .stdlib_only, .codegen = .make_char },
+    .{ .prefix = "__read_file", .visibility = .stdlib_only, .codegen = .file_io },
+    .{ .prefix = "__write_file", .visibility = .stdlib_only, .codegen = .file_io },
+};
+
+/// Find a category by name prefix
+pub fn findCategory(name: []const u8) ?*const IntrinsicCategory {
+    for (&intrinsic_categories) |*cat| {
+        if (std.mem.startsWith(u8, name, cat.prefix)) return cat;
+    }
+    return null;
+}
 
 // ============================================================================
 // All Intrinsics
@@ -212,12 +233,8 @@ pub fn isMathBuiltin(name: []const u8) ?*const Intrinsic {
 
 /// Check if a function name starts with a known stdlib intrinsic prefix
 pub fn isStdlibIntrinsicPrefix(name: []const u8) bool {
-    return std.mem.startsWith(u8, name, "__managed_array_") or
-        std.mem.startsWith(u8, name, "__string_") or
-        std.mem.startsWith(u8, name, "__cstring_") or
-        std.mem.startsWith(u8, name, "__make_char_") or
-        std.mem.startsWith(u8, name, "__read_file") or
-        std.mem.startsWith(u8, name, "__write_file") or
-        std.mem.startsWith(u8, name, "__list_directory") or
-        std.mem.startsWith(u8, name, "__is_directory");
+    if (findCategory(name)) |cat| {
+        return cat.visibility == .stdlib_only;
+    }
+    return false;
 }

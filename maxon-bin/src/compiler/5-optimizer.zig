@@ -221,6 +221,7 @@ fn tryFoldConstant(inst: ir.Instruction, constants: *std.AutoHashMapUnmanaged(ir
         .fcmp_ge,
         .call,
         .call_indirect,
+        .extern_call,
         .func_addr,
         .param,
         .memcpy,
@@ -427,9 +428,9 @@ fn handleOther(
                     op.* = .{ .call_args = new_args };
                 }
             },
-            // none, immediate_*, block_ref, func_name, elem_size, string_data:
+            // none, immediate_*, block_ref, func_name, elem_size, string_data, extern_func:
             // These don't contain ir.Value references, so no propagation needed
-            .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag => {},
+            .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .extern_func => {},
         }
     }
 
@@ -638,6 +639,7 @@ fn collectPointerMappings(func: *ir.Function, ctx: *DseContext) !void {
                     .fcmp_ge,
                     .call,
                     .call_indirect,
+                    .extern_call,
                     .func_addr,
                     .param,
                     .memcpy,
@@ -682,7 +684,7 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                         try ctx.loaded_fields.append(ctx.allocator, field_key);
                     }
                 },
-                .call, .call_indirect => {
+                .call, .call_indirect, .extern_call => {
                     // Pointers passed to calls may be read
                     for (inst.operands) |op| {
                         if (op == .call_args) {
@@ -851,9 +853,9 @@ fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
                             try used.put(allocator, arg, {});
                         }
                     },
-                    // none, immediate_*, block_ref, func_name, elem_size, string_data:
+                    // none, immediate_*, block_ref, func_name, elem_size, string_data, extern_func:
                     // These don't reference ir.Value, so nothing to mark as used
-                    .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag => {},
+                    .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .extern_func => {},
                 }
             }
         }
@@ -885,6 +887,7 @@ fn isDeadInstruction(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Va
         .br_cond,
         .call,
         .call_indirect,
+        .extern_call,
         .memcpy,
         .memcpy_dyn,
         .memset,

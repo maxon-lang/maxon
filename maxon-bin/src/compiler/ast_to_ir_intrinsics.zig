@@ -21,6 +21,22 @@ fn expectArgCount(self: *AstToIr, call: ast.CallExpr, expected: usize) ConvertEr
     }
 }
 
+/// Common pattern for intrinsics that load a single i64 field and return int
+fn intrinsicLoadI64Field(self: *AstToIr, call: ast.CallExpr, offset: i32) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const arg = try self.convertExpression(call.args[0]);
+    const value = try loadI64Field(self, arg.value, offset);
+    return .{ .value = value, .ty = .{ .primitive = "int" } };
+}
+
+/// Common pattern for intrinsics that load a single i32 field (sign-extended) and return int
+fn intrinsicLoadI32Field(self: *AstToIr, call: ast.CallExpr, offset: i32) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const arg = try self.convertExpression(call.args[0]);
+    const value = try loadI32AsI64(self, arg.value, offset);
+    return .{ .value = value, .ty = .{ .primitive = "int" } };
+}
+
 /// Load an i32 field from a struct pointer and sign-extend to i64
 fn loadI32AsI64(self: *AstToIr, base_ptr: ir.Value, offset: i32) ConvertError!ir.Value {
     const field_ptr = try self.func().emitGetFieldPtr(base_ptr, offset);
@@ -78,7 +94,50 @@ fn initSliceStringFields(self: *AstToIr, result_ptr: ir.Value, parent_off_i32: i
     try storeI32Field(self, result_ptr, 20, parent_off_i32);
 }
 
+/// Initialize a heap-allocated string struct
+/// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4) [+ _iterPos(8) if include_iter_pos]
+/// cap_flags = alloc_size | 0x01 for heap mode
+fn initHeapStringCore(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value, alloc_size_i64: ir.Value, include_iter_pos: bool) ConvertError!void {
+    // Store buffer pointer (offset 0)
+    try self.func().emitStore(string_ptr, buffer);
+
+    // Store len (offset 8, i32)
+    const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len_i64, .i32);
+    try storeI32Field(self, string_ptr, 8, len_i32);
+
+    // Store cap_flags = alloc_size | 0x01 (offset 12, i32)
+    const one_i64 = try self.func().emitConstI64(1);
+    const cap_flags_i64 = try self.func().emitBinaryOp(.bitor, alloc_size_i64, one_i64, .i64);
+    const cap_flags_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, cap_flags_i64, .i32);
+    try storeI32Field(self, string_ptr, 12, cap_flags_i32);
+
+    // Store refcount = 1 (offset 16, i32)
+    const one_i32 = try self.func().emitConstI32(1);
+    try storeI32Field(self, string_ptr, 16, one_i32);
+
+    // Store parent_off = 0 (offset 20, i32)
+    const zero_i32 = try self.func().emitConstI32(0);
+    try storeI32Field(self, string_ptr, 20, zero_i32);
+
+    // Store _iterPos = 0 (offset 24, i64) for String (not __ManagedString)
+    if (include_iter_pos) {
+        const zero_i64 = try self.func().emitConstI64(0);
+        try storeI64Field(self, string_ptr, 24, zero_i64);
+    }
+}
+
+/// Initialize a heap-allocated String struct (32 bytes with _iterPos field)
+fn initHeapString(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value, alloc_size_i64: ir.Value) ConvertError!void {
+    return initHeapStringCore(self, string_ptr, buffer, len_i64, alloc_size_i64, true);
+}
+
+/// Initialize a heap-allocated __ManagedString struct (24 bytes, no _iterPos)
+fn initHeapManagedString(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value, alloc_size_i64: ir.Value) ConvertError!void {
+    return initHeapStringCore(self, string_ptr, buffer, len_i64, alloc_size_i64, false);
+}
+
 /// Wrap a nullable pointer result in an optional type
+/// Layout: [tag: 8 bytes][ptr: 8 bytes] - stores pointer, not inline data
 fn wrapInOptional(self: *AstToIr, result_ptr: ir.Value, wrapped_type: []const u8) ConvertError!TypedValue {
     const opt_ptr = try self.func().emitAllocaSized(16);
 
@@ -95,6 +154,93 @@ fn wrapInOptional(self: *AstToIr, result_ptr: ir.Value, wrapped_type: []const u8
         .value = opt_ptr,
         .ty = .{ .optional_type = .{ .wrapped = .ptr, .wrapped_struct_type = wrapped_type } },
     };
+}
+
+// ============================================================================
+// Windows API Helpers (for intrinsics that need direct DLL calls)
+// ============================================================================
+
+/// Generic helper for extern calls that return a value
+fn externCall(self: *AstToIr, dll: []const u8, func_name: []const u8, args: []const ir.Value, ret_type: ir.Type) ConvertError!ir.Value {
+    const args_copy = try self.allocator.alloc(ir.Value, args.len);
+    @memcpy(args_copy, args);
+    const result = try self.func().emitExternCall(dll, func_name, args_copy, ret_type);
+    return result orelse try self.func().emitConstI64(0);
+}
+
+/// Generic helper for extern calls that return void
+fn externCallVoid(self: *AstToIr, dll: []const u8, func_name: []const u8, args: []const ir.Value, ret_type: ir.Type) ConvertError!void {
+    const args_copy = try self.allocator.alloc(ir.Value, args.len);
+    @memcpy(args_copy, args);
+    _ = try self.func().emitExternCall(dll, func_name, args_copy, ret_type);
+}
+
+fn emitGetProcessHeap(self: *AstToIr) ConvertError!ir.Value {
+    return externCall(self, "kernel32.dll", "GetProcessHeap", &.{}, .ptr);
+}
+
+fn emitHeapAllocWin(self: *AstToIr, heap: ir.Value, size: ir.Value) ConvertError!ir.Value {
+    const zero = try self.func().emitConstI64(0);
+    return externCall(self, "kernel32.dll", "HeapAlloc", &.{ heap, zero, size }, .ptr);
+}
+
+fn emitGetCommandLineW(self: *AstToIr) ConvertError!ir.Value {
+    return externCall(self, "kernel32.dll", "GetCommandLineW", &.{}, .ptr);
+}
+
+fn emitCommandLineToArgvW(self: *AstToIr, cmdline: ir.Value, argc_ptr: ir.Value) ConvertError!ir.Value {
+    return externCall(self, "shell32.dll", "CommandLineToArgvW", &.{ cmdline, argc_ptr }, .ptr);
+}
+
+fn emitWideCharToMultiByte(self: *AstToIr, src: ir.Value, dest: ir.Value, dest_size: ir.Value) ConvertError!ir.Value {
+    const cp_utf8 = try self.func().emitConstI64(65001);
+    const zero = try self.func().emitConstI64(0);
+    const neg_one = try self.func().emitConstI64(@bitCast(@as(i64, -1)));
+    return externCall(self, "kernel32.dll", "WideCharToMultiByte", &.{ cp_utf8, zero, src, neg_one, dest, dest_size, zero, zero }, .i64);
+}
+
+fn emitLocalFree(self: *AstToIr, ptr: ir.Value) ConvertError!void {
+    return externCallVoid(self, "kernel32.dll", "LocalFree", &.{ptr}, .ptr);
+}
+
+fn emitCreateFileA(self: *AstToIr, path: ir.Value, access: u32, share_mode: u32, disposition: u32, flags: u32) ConvertError!ir.Value {
+    const zero = try self.func().emitConstI64(0);
+    return externCall(self, "kernel32.dll", "CreateFileA", &.{
+        path,
+        try self.func().emitConstI64(access),
+        try self.func().emitConstI64(share_mode),
+        zero, // lpSecurityAttributes = NULL
+        try self.func().emitConstI64(disposition),
+        try self.func().emitConstI64(flags),
+        zero, // hTemplateFile = NULL
+    }, .ptr);
+}
+
+fn emitGetFileSize(self: *AstToIr, handle: ir.Value) ConvertError!ir.Value {
+    const zero = try self.func().emitConstI64(0);
+    return externCall(self, "kernel32.dll", "GetFileSize", &.{ handle, zero }, .i64);
+}
+
+fn emitReadFile(self: *AstToIr, handle: ir.Value, buffer: ir.Value, size: ir.Value, bytes_read_ptr: ir.Value) ConvertError!ir.Value {
+    const zero = try self.func().emitConstI64(0);
+    return externCall(self, "kernel32.dll", "ReadFile", &.{ handle, buffer, size, bytes_read_ptr, zero }, .i64);
+}
+
+fn emitWriteFileWin(self: *AstToIr, handle: ir.Value, buffer: ir.Value, size: ir.Value, bytes_written_ptr: ir.Value) ConvertError!ir.Value {
+    const zero = try self.func().emitConstI64(0);
+    return externCall(self, "kernel32.dll", "WriteFile", &.{ handle, buffer, size, bytes_written_ptr, zero }, .i64);
+}
+
+fn emitCloseHandle(self: *AstToIr, handle: ir.Value) ConvertError!void {
+    return externCallVoid(self, "kernel32.dll", "CloseHandle", &.{handle}, .i64);
+}
+
+fn emitStrlen(self: *AstToIr, str: ir.Value) ConvertError!ir.Value {
+    return externCall(self, "ntdll.dll", "strlen", &.{str}, .i64);
+}
+
+fn emitMemcpyWin(self: *AstToIr, dest: ir.Value, src: ir.Value, size: ir.Value) ConvertError!void {
+    return externCallVoid(self, "ntdll.dll", "memcpy", &.{ dest, src, size }, .ptr);
 }
 
 // ============================================================================
@@ -130,56 +276,26 @@ pub fn checkInternalTypeAccess(self: *AstToIr, type_name: []const u8) ConvertErr
 }
 
 pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    // Check for __managed_array_* intrinsics (stdlib-only)
-    if (std.mem.startsWith(u8, call.func_name, "__managed_array_")) {
-        if (!isStdlibFile(self)) {
+    // Check category-based intrinsics first (prefix matching)
+    if (intrinsics_registry.findCategory(call.func_name)) |category| {
+        // Enforce visibility
+        if (category.visibility == .stdlib_only and !isStdlibFile(self)) {
             self.reportError(.E016, call.func_name);
             return error.SemanticError;
         }
-        return convertManagedArrayIntrinsic(self, call);
+
+        // Dispatch based on codegen strategy
+        return switch (category.codegen) {
+            .managed_array => convertManagedArrayIntrinsic(self, call),
+            .string => convertStringIntrinsic(self, call),
+            .cstring => convertCstringIntrinsic(self, call),
+            .make_char => convertMakeCharIntrinsic(self, call),
+            .file_io => convertFileIntrinsic(self, call),
+            .unary_op, .custom => unreachable, // These use individual lookup below
+        };
     }
 
-    // Check for __string_* intrinsics (stdlib-only)
-    if (std.mem.startsWith(u8, call.func_name, "__string_")) {
-        if (!isStdlibFile(self)) {
-            self.reportError(.E016, call.func_name);
-            return error.SemanticError;
-        }
-        return convertStringIntrinsic(self, call);
-    }
-
-    // Check for __cstring_* intrinsics (stdlib-only)
-    if (std.mem.startsWith(u8, call.func_name, "__cstring_")) {
-        if (!isStdlibFile(self)) {
-            self.reportError(.E016, call.func_name);
-            return error.SemanticError;
-        }
-        return convertCstringIntrinsic(self, call);
-    }
-
-    // Check for __make_char_* intrinsics (stdlib-only)
-    if (std.mem.startsWith(u8, call.func_name, "__make_char_")) {
-        if (!isStdlibFile(self)) {
-            self.reportError(.E016, call.func_name);
-            return error.SemanticError;
-        }
-        return convertMakeCharIntrinsic(self, call);
-    }
-
-    // Check for file I/O intrinsics (stdlib-only)
-    if (std.mem.startsWith(u8, call.func_name, "__read_file") or
-        std.mem.startsWith(u8, call.func_name, "__write_file") or
-        std.mem.startsWith(u8, call.func_name, "__list_directory") or
-        std.mem.startsWith(u8, call.func_name, "__is_directory"))
-    {
-        if (!isStdlibFile(self)) {
-            self.reportError(.E016, call.func_name);
-            return error.SemanticError;
-        }
-        return convertFileIntrinsic(self, call);
-    }
-
-    // Look up math builtin in registry
+    // Look up individual intrinsics (math builtins)
     const builtin = intrinsics_registry.isMathBuiltin(call.func_name) orelse return error.NotABuiltin;
 
     if (call.args.len != 1) {
@@ -357,47 +473,42 @@ fn emitArrayShift(
     try self.finishLoop(&loop);
 }
 
-fn convertManagedArrayIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    const name = call.func_name;
+const IntrinsicHandler = *const fn (*AstToIr, ast.CallExpr) ConvertError!TypedValue;
 
-    if (std.mem.eql(u8, name, "__managed_array_len")) {
-        return intrinsicManagedArrayLen(self, call);
-    } else if (std.mem.eql(u8, name, "__managed_array_capacity")) {
-        return intrinsicManagedArrayCapacity(self, call);
-    } else if (std.mem.eql(u8, name, "__managed_array_create")) {
-        return intrinsicManagedArrayCreate(self, call);
-    } else if (std.mem.eql(u8, name, "__managed_array_set_at")) {
-        return intrinsicManagedArraySetAt(self, call);
-    } else if (std.mem.eql(u8, name, "__managed_array_set_length")) {
-        return intrinsicManagedArraySetLength(self, call);
-    } else if (std.mem.eql(u8, name, "__managed_array_grow")) {
-        return intrinsicManagedArrayGrow(self, call);
-    } else if (std.mem.eql(u8, name, "__managed_array_shift_right")) {
-        return intrinsicManagedArrayShiftRight(self, call);
-    } else if (std.mem.eql(u8, name, "__managed_array_shift_left")) {
-        return intrinsicManagedArrayShiftLeft(self, call);
-    } else if (std.mem.eql(u8, name, "__managed_array_get_unchecked")) {
-        return intrinsicManagedArrayGetUnchecked(self, call);
-    } else {
-        self.reportError(.E019, name);
-        return error.SemanticError;
+fn dispatchIntrinsic(self: *AstToIr, call: ast.CallExpr, comptime table: anytype) ConvertError!TypedValue {
+    inline for (table) |entry| {
+        if (std.mem.eql(u8, call.func_name, entry[0])) {
+            return entry[1](self, call);
+        }
     }
+    self.reportError(.E019, call.func_name);
+    return error.SemanticError;
+}
+
+const managed_array_intrinsics = .{
+    .{ "__managed_array_len", intrinsicManagedArrayLen },
+    .{ "__managed_array_capacity", intrinsicManagedArrayCapacity },
+    .{ "__managed_array_create", intrinsicManagedArrayCreate },
+    .{ "__managed_array_set_at", intrinsicManagedArraySetAt },
+    .{ "__managed_array_set_length", intrinsicManagedArraySetLength },
+    .{ "__managed_array_grow", intrinsicManagedArrayGrow },
+    .{ "__managed_array_shift_right", intrinsicManagedArrayShiftRight },
+    .{ "__managed_array_shift_left", intrinsicManagedArrayShiftLeft },
+    .{ "__managed_array_get_unchecked", intrinsicManagedArrayGetUnchecked },
+};
+
+fn convertManagedArrayIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    return dispatchIntrinsic(self, call, managed_array_intrinsics);
 }
 
 /// __managed_array_len(managed) -> int
 fn intrinsicManagedArrayLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const managed = try self.convertExpression(call.args[0]);
-    const len = try loadI64Field(self, managed.value, 8);
-    return .{ .value = len, .ty = .{ .primitive = "int" } };
+    return intrinsicLoadI64Field(self, call, 8);
 }
 
 /// __managed_array_capacity(managed) -> int
 fn intrinsicManagedArrayCapacity(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const managed = try self.convertExpression(call.args[0]);
-    const cap = try loadI64Field(self, managed.value, 16);
-    return .{ .value = cap, .ty = .{ .primitive = "int" } };
+    return intrinsicLoadI64Field(self, call, 16);
 }
 
 /// __managed_array_create(capacity) -> __ManagedArray
@@ -530,49 +641,32 @@ fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) Convert
 //   [refcount:i32][capacity:i32][...data bytes...]
 //        -8           -4            0+
 
-fn convertStringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    const name = call.func_name;
+const string_intrinsics = .{
+    .{ "__string_len", intrinsicStringLen },
+    .{ "__string_byte_at", intrinsicStringByteAt },
+    .{ "__string_slice", intrinsicStringSlice },
+    .{ "__string_concat", intrinsicStringConcat },
+    .{ "__string_make_unique", intrinsicStringMakeUnique },
+    .{ "__string_set_byte", intrinsicStringSetByte },
+    .{ "__string_to_cstring", intrinsicStringToCstring },
+    .{ "__string_from_characters", intrinsicStringFromCharacters },
+    .{ "__string_incref", intrinsicStringIncref },
+    .{ "__string_refcount", intrinsicStringRefcount },
+    .{ "__string_is_heap", intrinsicStringIsHeap },
+    .{ "__string_cap_flags", intrinsicStringCapFlags },
+};
 
-    if (std.mem.eql(u8, name, "__string_len")) {
-        return intrinsicStringLen(self, call);
-    } else if (std.mem.eql(u8, name, "__string_byte_at")) {
-        return intrinsicStringByteAt(self, call);
-    } else if (std.mem.eql(u8, name, "__string_slice")) {
-        return intrinsicStringSlice(self, call);
-    } else if (std.mem.eql(u8, name, "__string_concat")) {
-        return intrinsicStringConcat(self, call);
-    } else if (std.mem.eql(u8, name, "__string_make_unique")) {
-        return intrinsicStringMakeUnique(self, call);
-    } else if (std.mem.eql(u8, name, "__string_set_byte")) {
-        return intrinsicStringSetByte(self, call);
-    } else if (std.mem.eql(u8, name, "__string_to_cstring")) {
-        return intrinsicStringToCstring(self, call);
-    } else if (std.mem.eql(u8, name, "__string_from_characters")) {
-        return intrinsicStringFromCharacters(self, call);
-    } else if (std.mem.eql(u8, name, "__string_incref")) {
-        return intrinsicStringIncref(self, call);
-    } else if (std.mem.eql(u8, name, "__string_refcount")) {
-        return intrinsicStringRefcount(self, call);
-    } else if (std.mem.eql(u8, name, "__string_is_heap")) {
-        return intrinsicStringIsHeap(self, call);
-    } else if (std.mem.eql(u8, name, "__string_cap_flags")) {
-        return intrinsicStringCapFlags(self, call);
-    } else {
-        self.reportError(.E019, name);
-        return error.SemanticError;
-    }
+fn convertStringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    return dispatchIntrinsic(self, call, string_intrinsics);
 }
 
-/// Dispatch __cstring_* intrinsics
-fn convertCstringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    const name = call.func_name;
+const cstring_intrinsics = .{
+    .{ "__cstring_write_stdout", intrinsicCstringWriteStdout },
+    .{ "__cstring_to_managed", intrinsicCstringToManaged },
+};
 
-    if (std.mem.eql(u8, name, "__cstring_write_stdout")) {
-        return intrinsicCstringWriteStdout(self, call);
-    } else {
-        self.reportError(.E019, name);
-        return error.SemanticError;
-    }
+fn convertCstringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    return dispatchIntrinsic(self, call, cstring_intrinsics);
 }
 
 /// __cstring_write_stdout(cs) -> int
@@ -591,16 +685,45 @@ fn intrinsicCstringWriteStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!
     return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
 }
 
-/// Dispatch __make_char_* intrinsics
-fn convertMakeCharIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    const name = call.func_name;
+/// __cstring_to_managed(cstr) -> __ManagedString
+/// Converts a cstring struct to a __ManagedString
+/// The string data is copied to a new heap buffer
+/// cstring struct layout: data(8) + length(8) + managed(8)
+fn intrinsicCstringToManaged(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const cstr_typed = try self.convertExpression(call.args[0]);
 
-    if (std.mem.eql(u8, name, "__make_char_from_bytes")) {
-        return intrinsicMakeCharFromBytes(self, call);
-    } else {
-        self.reportError(.E019, name);
-        return error.SemanticError;
-    }
+    // Extract data pointer from cstring struct (offset 0)
+    const src_ptr = try self.func().emitLoad(cstr_typed.value, .ptr);
+
+    // Extract length from cstring struct (offset 8)
+    const len = try loadI64Field(self, cstr_typed.value, 8);
+
+    // Allocate buffer (len + 1 for null terminator)
+    const heap = try emitGetProcessHeap(self);
+    const one = try self.func().emitConstI64(1);
+    const alloc_size = try self.func().emitBinaryOp(.add, len, one, .i64);
+    const buffer = try emitHeapAllocWin(self, heap, alloc_size);
+
+    // Copy string to buffer (include null terminator)
+    try emitMemcpyWin(self, buffer, src_ptr, alloc_size);
+
+    // Allocate __ManagedString struct (24 bytes)
+    const string_size = try self.func().emitConstI64(24);
+    const string_ptr = try emitHeapAllocWin(self, heap, string_size);
+
+    // Initialize the struct
+    try initHeapManagedString(self, string_ptr, buffer, len, alloc_size);
+
+    return .{ .value = string_ptr, .ty = .{ .struct_type = "__ManagedString" } };
+}
+
+const make_char_intrinsics = .{
+    .{ "__make_char_from_bytes", intrinsicMakeCharFromBytes },
+};
+
+fn convertMakeCharIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    return dispatchIntrinsic(self, call, make_char_intrinsics);
 }
 
 /// __make_char_from_bytes(managed, pos, len) -> Character
@@ -632,10 +755,7 @@ fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!T
 /// __string_len(managed) -> int
 /// Returns the byte length of the __ManagedString (offset 8, i32)
 fn intrinsicStringLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const managed = try self.convertExpression(call.args[0]);
-    const len = try loadI32AsI64(self, managed.value, 8);
-    return .{ .value = len, .ty = .{ .primitive = "int" } };
+    return intrinsicLoadI32Field(self, call, 8);
 }
 
 /// __string_byte_at(managed, index) -> byte
@@ -915,10 +1035,7 @@ fn intrinsicStringIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 
 /// __string_refcount(managed) -> int
 fn intrinsicStringRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const managed = try self.convertExpression(call.args[0]);
-    const ref = try loadI32AsI64(self, managed.value, 16);
-    return .{ .value = ref, .ty = .{ .primitive = "int" } };
+    return intrinsicLoadI32Field(self, call, 16);
 }
 
 /// __string_is_heap(managed) -> bool
@@ -936,93 +1053,250 @@ fn intrinsicStringIsHeap(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 
 /// __string_cap_flags(managed) -> int
 fn intrinsicStringCapFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const managed = try self.convertExpression(call.args[0]);
-    const cap = try loadI32AsI64(self, managed.value, 12);
-    return .{ .value = cap, .ty = .{ .primitive = "int" } };
+    return intrinsicLoadI32Field(self, call, 12);
 }
 
 // ============================================================================
 // File I/O Intrinsics (stdlib-only)
 // ============================================================================
 
-/// Helper for intrinsics that take a single cstring arg and return an optional pointer
-/// Used by __read_file and __list_directory
-fn emitCstringToOptional(
-    self: *AstToIr,
-    call: ast.CallExpr,
-    func_name: []const u8,
-    wrapped_type: []const u8,
-) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const path_cstr = try self.convertExpression(call.args[0]);
-    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
-
-    const args = try self.allocator.alloc(ir.Value, 1);
-    args[0] = path_ptr;
-
-    const raw_result = try self.func().emitCall(func_name, args, .ptr);
-    const result_ptr = raw_result orelse try self.func().emitConstI64(0);
-
-    return wrapInOptional(self, result_ptr, wrapped_type);
-}
-
-/// Helper for intrinsics that take a cstring path and return int
-/// Used by __is_directory
-fn emitCstringToInt(
-    self: *AstToIr,
-    call: ast.CallExpr,
-    func_name: []const u8,
-) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const path_cstr = try self.convertExpression(call.args[0]);
-    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
-
-    const args = try self.allocator.alloc(ir.Value, 1);
-    args[0] = path_ptr;
-
-    const result = try self.func().emitCall(func_name, args, .i64);
-    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
-}
-
-/// Helper for write intrinsics that take path + data buffer and return int
-/// Used by __write_file and __write_file_binary
-fn emitWriteFile(
-    self: *AstToIr,
-    path_cstr: TypedValue,
-    data_source: TypedValue,
-) ConvertError!TypedValue {
+/// Generate IR to write data to a file
+/// Calls CreateFileA, WriteFile, CloseHandle
+/// Returns 0 on success, non-zero on failure
+fn emitWriteFileIR(self: *AstToIr, path_cstr: TypedValue, data_source: TypedValue) ConvertError!TypedValue {
     const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
     const data_ptr = try self.func().emitLoad(data_source.value, .ptr);
     const data_len = try loadI64Field(self, data_source.value, 8);
 
-    const args = try self.allocator.alloc(ir.Value, 3);
-    args[0] = path_ptr;
-    args[1] = data_ptr;
-    args[2] = data_len;
+    // CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
+    // GENERIC_WRITE = 0x40000000, CREATE_ALWAYS = 2, FILE_ATTRIBUTE_NORMAL = 0x80
+    const handle = try emitCreateFileA(self, path_ptr, 0x40000000, 0, 2, 0x80);
 
-    const result = try self.func().emitCall("__file_write", args, .i64);
-    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
+    // Check for INVALID_HANDLE_VALUE (-1)
+    const invalid_handle = try self.func().emitConstI64(@as(i64, @bitCast(@as(u64, 0xFFFFFFFFFFFFFFFF))));
+    const is_invalid = try self.func().emitBinaryOp(.icmp_eq, handle, invalid_handle, .i64);
+
+    // Allocate bytes_written on stack
+    const bytes_written_ptr = try self.func().emitAllocaSized(8);
+    const zero = try self.func().emitConstI64(0);
+    try self.func().emitStore(bytes_written_ptr, zero);
+
+    // WriteFile(handle, buffer, length, &bytesWritten, NULL)
+    const write_result = try emitWriteFileWin(self, handle, data_ptr, data_len, bytes_written_ptr);
+
+    // Close handle
+    try emitCloseHandle(self, handle);
+
+    // Return 0 on success (write_result != 0 AND handle was valid), 1 on failure
+    // write_result is BOOL (non-zero = success)
+    const write_success = try self.func().emitBinaryOp(.icmp_ne, write_result, zero, .i64);
+    const one = try self.func().emitConstI64(1);
+    const not_invalid = try self.func().emitBinaryOp(.sub, one, is_invalid, .i64);
+    const success = try self.func().emitBinaryOp(.mul, not_invalid, write_success, .i64);
+
+    // Return 0 on success, 1 on failure
+    const result = try self.func().emitBinaryOp(.sub, one, success, .i64);
+
+    return .{ .value = result, .ty = .{ .primitive = "int" } };
 }
 
-/// Dispatch __read_file, __write_file*, __list_directory, __is_directory intrinsics
-fn convertFileIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    const name = call.func_name;
+/// Generate IR to read a file into a __ManagedString
+/// Calls CreateFileA, GetFileSize, HeapAlloc, ReadFile, CloseHandle
+/// Returns pointer to __ManagedString or NULL on failure
+fn emitReadFileIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
 
-    if (std.mem.eql(u8, name, "__read_file")) {
-        return emitCstringToOptional(self, call, "__file_read", "__ManagedString");
-    } else if (std.mem.eql(u8, name, "__write_file") or std.mem.eql(u8, name, "__write_file_binary")) {
-        // Both write intrinsics work the same: path + data buffer -> int
-        try expectArgCount(self, call, 2);
-        const path_cstr = try self.convertExpression(call.args[0]);
-        const data = try self.convertExpression(call.args[1]);
-        return emitWriteFile(self, path_cstr, data);
-    } else if (std.mem.eql(u8, name, "__list_directory")) {
-        return emitCstringToOptional(self, call, "__dir_list", "Array$String");
-    } else if (std.mem.eql(u8, name, "__is_directory")) {
-        return emitCstringToInt(self, call, "__dir_is_directory");
-    } else {
-        self.reportError(.E019, name);
-        return error.SemanticError;
-    }
+    // CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
+    // GENERIC_READ = 0x80000000, FILE_SHARE_READ = 1, OPEN_EXISTING = 3
+    const handle = try emitCreateFileA(self, path_ptr, 0x80000000, 1, 3, 0);
+
+    // Check for INVALID_HANDLE_VALUE (-1)
+    const invalid_handle = try self.func().emitConstI64(@as(i64, @bitCast(@as(u64, 0xFFFFFFFFFFFFFFFF))));
+    const is_invalid = try self.func().emitBinaryOp(.icmp_eq, handle, invalid_handle, .i64);
+
+    // Get file size
+    const file_size = try emitGetFileSize(self, handle);
+
+    // Allocate buffer (size + 1 for null terminator)
+    const heap = try emitGetProcessHeap(self);
+    const one_i64 = try self.func().emitConstI64(1);
+    const alloc_size = try self.func().emitBinaryOp(.add, file_size, one_i64, .i64);
+    const buffer = try emitHeapAllocWin(self, heap, alloc_size);
+
+    // Allocate bytes_read on stack
+    const bytes_read_ptr = try self.func().emitAllocaSized(8);
+    const zero = try self.func().emitConstI64(0);
+    try self.func().emitStore(bytes_read_ptr, zero);
+
+    // ReadFile(handle, buffer, size, &bytesRead, NULL)
+    _ = try emitReadFile(self, handle, buffer, file_size, bytes_read_ptr);
+
+    // Load bytes_read
+    const bytes_read = try self.func().emitLoad(bytes_read_ptr, .i64);
+
+    // Null-terminate the buffer
+    const null_pos = try self.func().emitBinaryOp(.add, buffer, bytes_read, .ptr);
+    try self.func().emitStoreI8(null_pos, try self.func().emitConstI64(0));
+
+    // Close handle
+    try emitCloseHandle(self, handle);
+
+    // Allocate __ManagedString struct (24 bytes) if handle was valid
+    // For simplicity, we always allocate but return NULL if invalid
+    const string_size = try self.func().emitConstI64(24);
+    const string_ptr = try emitHeapAllocWin(self, heap, string_size);
+
+    try initHeapManagedString(self, string_ptr, buffer, bytes_read, alloc_size);
+
+    // If handle was invalid, return NULL, else return string_ptr
+    // result = string_ptr * (1 - is_invalid) = string_ptr if valid, 0 if invalid
+    const not_invalid = try self.func().emitBinaryOp(.sub, one_i64, is_invalid, .i64);
+    const result_ptr = try self.func().emitBinaryOp(.mul, string_ptr, not_invalid, .ptr);
+
+    return wrapInOptional(self, result_ptr, "__ManagedString");
+}
+
+fn intrinsicWriteFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 2);
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const data = try self.convertExpression(call.args[1]);
+    return emitWriteFileIR(self, path_cstr, data);
+}
+
+const file_intrinsics = .{
+    .{ "__read_file", emitReadFileIR },
+    .{ "__write_file", intrinsicWriteFile },
+    .{ "__write_file_binary", intrinsicWriteFile },
+};
+
+fn convertFileIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    return dispatchIntrinsic(self, call, file_intrinsics);
+}
+
+// ============================================================================
+// Command Line Arguments (generates IR instead of calling x86-64 runtime)
+// ============================================================================
+
+/// Generate IR to get command line arguments as Array$String
+/// This replaces the old __get_command_args x86-64 runtime function
+///
+/// Array$String layout (32 bytes):
+///   [0]  __ManagedArray managed (24 bytes: ptr + len + cap)
+///   [24] int iterIndex (8 bytes)
+///
+/// String layout (32 bytes):
+///   [0]  __ManagedString _managed (24 bytes)
+///   [24] int _iterPos (8 bytes)
+///
+/// __ManagedString layout (24 bytes):
+///   [0]  ptr buffer (8 bytes)
+///   [8]  i32 len    (4 bytes)
+///   [12] i32 cap_flags (4 bytes) - capacity with mode flags in low 2 bits (0b01 = heap)
+///   [16] i32 refcount (4 bytes)
+///   [20] i32 parent_off (4 bytes)
+pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
+    // Get process heap (needed for allocations)
+    const heap = try emitGetProcessHeap(self);
+
+    // Allocate argc storage on stack (8 bytes for i32 result, aligned)
+    const argc_ptr = try self.func().emitAllocaSized(8);
+
+    // Get command line and parse to argv
+    const cmdline_w = try emitGetCommandLineW(self);
+    const argv_w = try emitCommandLineToArgvW(self, cmdline_w, argc_ptr);
+
+    // Load argc (it's stored as i32 but we need i64)
+    const argc_i32 = try self.func().emitLoad(argc_ptr, .i32);
+    const argc = try self.func().emitUnaryOp(.sext_i32_i64, argc_i32, .i64);
+
+    // Allocate Array$String struct (32 bytes)
+    const array_size = try self.func().emitConstI64(32);
+    const result_ptr = try emitHeapAllocWin(self, heap, array_size);
+
+    // Allocate strings array: argc * 32 bytes (each String is 32 bytes)
+    const string_size = try self.func().emitConstI64(32);
+    const strings_alloc_size = try self.func().emitBinaryOp(.mul, argc, string_size, .i64);
+    const strings_buf = try emitHeapAllocWin(self, heap, strings_alloc_size);
+
+    // Initialize Array$String:
+    // [0]  ptr buffer = strings_buf
+    // [8]  i64 length = argc
+    // [16] i64 capacity = argc
+    // [24] i64 iterIndex = 0
+    try self.func().emitStore(result_ptr, strings_buf);
+    try storeI64Field(self, result_ptr, 8, argc);
+    try storeI64Field(self, result_ptr, 16, argc);
+    const zero_i64 = try self.func().emitConstI64(0);
+    try storeI64Field(self, result_ptr, 24, zero_i64);
+
+    // Loop counter on stack
+    const i_ptr = try self.func().emitAllocaSized(8);
+    try self.func().emitStore(i_ptr, zero_i64);
+
+    // Create condition block - get its index before creating
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cmd_args_cond");
+
+    // Emit branch from entry to cond
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br,
+        .operands = .{ .{ .block_ref = cond_block_idx }, .none, .none },
+    });
+
+    // Now in cond block - emit condition check
+    const i_val = try self.func().emitLoad(i_ptr, .i64);
+    const cond = try self.func().emitBinaryOp(.icmp_lt, i_val, argc, .i64);
+
+    // Create body block
+    const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cmd_args_body");
+
+    // Now in body block - convert argv_w[i] to UTF-8 String
+    const i_body = try self.func().emitLoad(i_ptr, .i64);
+
+    // Get argv_w[i] pointer (each pointer is 8 bytes)
+    const argv_i_ptr_ptr = try self.func().emitGetElemPtr(argv_w, i_body, 8);
+    const wide_str = try self.func().emitLoad(argv_i_ptr_ptr, .ptr);
+
+    // Get required UTF-8 buffer size (pass 0 for dest and size to query)
+    const utf8_size = try emitWideCharToMultiByte(self, wide_str, zero_i64, zero_i64);
+
+    // Allocate UTF-8 buffer
+    const utf8_buf = try emitHeapAllocWin(self, heap, utf8_size);
+
+    // Convert to UTF-8
+    _ = try emitWideCharToMultiByte(self, wide_str, utf8_buf, utf8_size);
+
+    // Calculate String element address: strings_buf + i * 32
+    const string_ptr = try self.func().emitGetElemPtr(strings_buf, i_body, 32);
+
+    // len = utf8_size - 1 (exclude null terminator)
+    const one_i64 = try self.func().emitConstI64(1);
+    const len_i64 = try self.func().emitBinaryOp(.sub, utf8_size, one_i64, .i64);
+    try initHeapString(self, string_ptr, utf8_buf, len_i64, utf8_size);
+
+    // Increment i
+    const new_i = try self.func().emitBinaryOp(.add, i_body, one_i64, .i64);
+    try self.func().emitStore(i_ptr, new_i);
+
+    // Branch back to cond
+    try self.func().emitBr(cond_block_idx);
+
+    // Create end block - now we know the final index
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cmd_args_end");
+
+    // Emit conditional branch in cond block now that we know end_block_idx
+    try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = cond }, .{ .block_ref = body_block_idx }, .{ .block_ref = end_block_idx } },
+    });
+
+    // Now in end block - free argv_w and return result
+    try emitLocalFree(self, argv_w);
+
+    return result_ptr;
 }

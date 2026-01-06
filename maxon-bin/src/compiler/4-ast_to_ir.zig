@@ -3787,12 +3787,10 @@ pub const AstToIr = struct {
     }
 
     /// Register the args parameter for main(args array of String)
-    /// Calls __get_command_args() to get the command line arguments
+    /// Generates IR to get command line arguments via Windows APIs
     fn registerMainArgsParameter(self: *AstToIr, param: ast.ParamDecl) !void {
-        // Call __get_command_args() to get the array pointer
-        const args = try self.allocator.alloc(ir.Value, 0);
-        const result_ptr = try self.func().emitCall("__get_command_args", args, .ptr);
-        const array_ptr = result_ptr orelse return error.SemanticError;
+        // Generate IR to get the array pointer (uses extern_call to Windows APIs)
+        const array_ptr = try intrinsics.emitGetCommandArgs(self);
 
         // Store the pointer in a stack slot for the args variable
         const slot_ptr = try self.func().emitAlloca(.ptr);
@@ -7118,6 +7116,7 @@ pub const AstToIr = struct {
     }
 
     /// Emit code to convert a float to a String
+    /// For now, keep calling the runtime function since the inline version is complex
     fn emitFloatToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Allocate buffer (32 bytes should be enough for most floats)
         const buffer_size = try self.func().emitConstI64(32);

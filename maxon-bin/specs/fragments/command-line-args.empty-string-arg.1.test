@@ -12,41 +12,108 @@ Args: ""
 ---
 function main() -> i64 {
 entry:
-    %tmp_call = call ptr @__get_command_args()
-    %args = alloca ptr
-    store %args %tmp_call
-    %tmp_load = load ptr %args
-    %tmp_const = const.i64 i64 1
-    %tmp_alloca.1 = alloca.sized ptr 40
-    %tmp_call.1 = call ptr @Array$String$get(%tmp_alloca.1, %tmp_load, %tmp_const)
-    %tmp_alloca.2 = alloca.sized ptr 24
+    %tmp_extern = extern.call ptr @"kernel32.dll:GetProcessHeap"()
+    %tmp_alloca = alloca.sized ptr 8
+    %tmp_extern.1 = extern.call ptr @"kernel32.dll:GetCommandLineW"()
+    %tmp_extern.2 = extern.call ptr @"shell32.dll:CommandLineToArgvW"(%tmp_extern.1, %tmp_alloca)
+    %tmp_load = load i32 %tmp_alloca
+    %tmp_sext = sext.i32.i64 i64 %tmp_load
+    %tmp_const = const.i64 i64 32
     %tmp_const.1 = const.i64 i64 0
-    %tmp_const.2 = const.i32 i32 0
-    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 0
-    store %tmp_fieldptr %tmp_const.1
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 8
-    store.i32 %tmp_fieldptr.1 %tmp_const.2
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.2 12
-    store.i32 %tmp_fieldptr.2 %tmp_const.2
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.2 16
-    store.i32 %tmp_fieldptr.3 %tmp_const.2
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 20
-    store.i32 %tmp_fieldptr.4 %tmp_const.2
-    %tmp_alloca.3 = alloca.sized ptr 32
-    %tmp_call.2 = call ptr @String$init(%tmp_alloca.3, %tmp_alloca.2)
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.1 8
-    %tmp_call.3 = call i64 @String$equals(%tmp_fieldptr.5, %tmp_alloca.3)
-    br.cond %tmp_call.3 @block1 @block2
-then:
+    %tmp_extern.3 = extern.call ptr @"kernel32.dll:HeapAlloc"(%tmp_extern, %tmp_const.1, %tmp_const)
+    %tmp_const.2 = const.i64 i64 32
+    %tmp_mul = mul i64 %tmp_sext %tmp_const.2
     %tmp_const.3 = const.i64 i64 0
-    %tmp_load.1 = load ptr %args
-    heap.free %tmp_load.1 tag="array cleanup"
-    ret %tmp_const.3
+    %tmp_extern.4 = extern.call ptr @"kernel32.dll:HeapAlloc"(%tmp_extern, %tmp_const.3, %tmp_mul)
+    store %tmp_extern.3 %tmp_extern.4
+    %tmp_fieldptr = getfieldptr ptr %tmp_extern.3 8
+    store %tmp_fieldptr %tmp_sext
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_extern.3 16
+    store %tmp_fieldptr.1 %tmp_sext
+    %tmp_const.4 = const.i64 i64 0
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_extern.3 24
+    store %tmp_fieldptr.2 %tmp_const.4
+    %tmp_alloca.1 = alloca.sized ptr 8
+    store %tmp_alloca.1 %tmp_const.4
+    br @block1
+cmd_args_cond:
+    %tmp_load.1 = load i64 %tmp_alloca.1
+    %tmp_icmp = icmp.lt i64 %tmp_load.1 %tmp_sext
+    br.cond %tmp_icmp @block2 @block3
+cmd_args_body:
+    %tmp_load.2 = load i64 %tmp_alloca.1
+    %21 = getelemptr ptr %tmp_extern.2 %tmp_load.2 elemsize=8
+    %tmp_load.3 = load ptr %21
+    %tmp_const.5 = const.i64 i64 65001
+    %tmp_const.6 = const.i64 i64 0
+    %tmp_const.7 = const.i64 i64 -1
+    %tmp_extern.5 = extern.call i64 @"kernel32.dll:WideCharToMultiByte"(%tmp_const.5, %tmp_const.6, %tmp_load.3, %tmp_const.7, %tmp_const.4, %tmp_const.4, %tmp_const.6, %tmp_const.6)
+    %tmp_const.8 = const.i64 i64 0
+    %tmp_extern.6 = extern.call ptr @"kernel32.dll:HeapAlloc"(%tmp_extern, %tmp_const.8, %tmp_extern.5)
+    %tmp_const.9 = const.i64 i64 65001
+    %tmp_const.10 = const.i64 i64 0
+    %tmp_const.11 = const.i64 i64 -1
+    %tmp_extern.7 = extern.call i64 @"kernel32.dll:WideCharToMultiByte"(%tmp_const.9, %tmp_const.10, %tmp_load.3, %tmp_const.11, %tmp_extern.6, %tmp_extern.5, %tmp_const.10, %tmp_const.10)
+    %33 = getelemptr ptr %tmp_extern.4 %tmp_load.2 elemsize=32
+    %tmp_const.12 = const.i64 i64 1
+    %tmp_sub = sub i64 %tmp_extern.5 %tmp_const.12
+    store %33 %tmp_extern.6
+    %tmp_trunc = trunc.i64.i32 i32 %tmp_sub
+    %tmp_fieldptr.3 = getfieldptr ptr %33 8
+    store.i32 %tmp_fieldptr.3 %tmp_trunc
+    %tmp_const.13 = const.i64 i64 1
+    %tmp_bitor = bitor i64 %tmp_extern.5 %tmp_const.13
+    %tmp_trunc.1 = trunc.i64.i32 i32 %tmp_bitor
+    %tmp_fieldptr.4 = getfieldptr ptr %33 12
+    store.i32 %tmp_fieldptr.4 %tmp_trunc.1
+    %tmp_const.14 = const.i32 i32 1
+    %tmp_fieldptr.5 = getfieldptr ptr %33 16
+    store.i32 %tmp_fieldptr.5 %tmp_const.14
+    %tmp_const.15 = const.i32 i32 0
+    %tmp_fieldptr.6 = getfieldptr ptr %33 20
+    store.i32 %tmp_fieldptr.6 %tmp_const.15
+    %tmp_const.16 = const.i64 i64 0
+    %tmp_fieldptr.7 = getfieldptr ptr %33 24
+    store %tmp_fieldptr.7 %tmp_const.16
+    %tmp_add = add i64 %tmp_load.2 %tmp_const.12
+    store %tmp_alloca.1 %tmp_add
+    br @block1
+cmd_args_end:
+    %tmp_extern.8 = extern.call ptr @"kernel32.dll:LocalFree"(%tmp_extern.2)
+    %args = alloca ptr
+    store %args %tmp_extern.3
+    %tmp_load.4 = load ptr %args
+    %tmp_const.17 = const.i64 i64 1
+    %tmp_alloca.3 = alloca.sized ptr 40
+    %tmp_call = call ptr @Array$String$get(%tmp_alloca.3, %tmp_load.4, %tmp_const.17)
+    %tmp_alloca.4 = alloca.sized ptr 24
+    %tmp_const.18 = const.i64 i64 0
+    %tmp_const.19 = const.i32 i32 0
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.4 0
+    store %tmp_fieldptr.8 %tmp_const.18
+    %tmp_fieldptr.9 = getfieldptr ptr %tmp_alloca.4 8
+    store.i32 %tmp_fieldptr.9 %tmp_const.19
+    %tmp_fieldptr.10 = getfieldptr ptr %tmp_alloca.4 12
+    store.i32 %tmp_fieldptr.10 %tmp_const.19
+    %tmp_fieldptr.11 = getfieldptr ptr %tmp_alloca.4 16
+    store.i32 %tmp_fieldptr.11 %tmp_const.19
+    %tmp_fieldptr.12 = getfieldptr ptr %tmp_alloca.4 20
+    store.i32 %tmp_fieldptr.12 %tmp_const.19
+    %tmp_alloca.5 = alloca.sized ptr 32
+    %tmp_call.1 = call ptr @String$init(%tmp_alloca.5, %tmp_alloca.4)
+    %tmp_fieldptr.13 = getfieldptr ptr %tmp_alloca.3 8
+    %tmp_call.2 = call i64 @String$equals(%tmp_fieldptr.13, %tmp_alloca.5)
+    br.cond %tmp_call.2 @block4 @block5
+then:
+    %tmp_const.20 = const.i64 i64 0
+    %tmp_load.5 = load ptr %args
+    heap.free %tmp_load.5 tag="array cleanup"
+    ret %tmp_const.20
 end:
-    %tmp_const.4 = const.i64 i64 1
-    %tmp_load.2 = load ptr %args
-    heap.free %tmp_load.2 tag="array cleanup"
-    ret %tmp_const.4
+    %tmp_const.21 = const.i64 i64 1
+    %tmp_load.6 = load ptr %args
+    heap.free %tmp_load.6 tag="array cleanup"
+    ret %tmp_const.21
 }
 
 function Array$String$get() -> ptr {

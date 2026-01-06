@@ -139,6 +139,9 @@ pub const Instruction = struct {
         heap_free, // Free heap memory
         heap_realloc, // Reallocate heap memory: old_ptr, new_size -> new_ptr
 
+        // External DLL calls
+        extern_call, // Call external DLL function: dll_name:func_name, args -> result
+
         pub fn format(self: Op) []const u8 {
             return switch (self) {
                 .const_i8 => "const.i8",
@@ -206,6 +209,7 @@ pub const Instruction = struct {
                 .heap_alloc => "heap.alloc",
                 .heap_free => "heap.free",
                 .heap_realloc => "heap.realloc",
+                .extern_call => "extern.call",
             };
         }
     };
@@ -222,6 +226,10 @@ pub const Instruction = struct {
         elem_size: i32, // Element size for getelemptr
         string_data: []const u8, // String constant data
         alloc_tag: []const u8, // Tag for heap allocations (for tracking)
+        extern_func: struct { // External DLL function reference
+            dll_name: []const u8,
+            func_name: []const u8,
+        },
     };
 };
 
@@ -383,6 +391,7 @@ pub const Function = struct {
             .fcmp_eq, .fcmp_ne, .fcmp_lt, .fcmp_le, .fcmp_gt, .fcmp_ge => "tmp_fcmp",
             .call => "tmp_call",
             .call_indirect => "tmp_call_ind",
+            .extern_call => "tmp_extern",
             .func_addr => "tmp_funcaddr",
             .param => "tmp_param",
             .getelemptr => "tmp_elemptr",
@@ -519,6 +528,16 @@ pub const Function = struct {
             return null;
         }
         return try self.emitWithResult(.call_indirect, ret_type, .{ .{ .value = func_ptr }, .{ .call_args = args }, .none });
+    }
+
+    // External DLL function call
+    pub fn emitExternCall(self: *Function, dll_name: []const u8, func_name: []const u8, args: []const Value, ret_type: Type) !?Value {
+        const extern_func = Instruction.Operand{ .extern_func = .{ .dll_name = dll_name, .func_name = func_name } };
+        if (ret_type == .void) {
+            try self.emit(.{ .op = .extern_call, .operands = .{ extern_func, .{ .call_args = args }, .none } });
+            return null;
+        }
+        return try self.emitWithResult(.extern_call, ret_type, .{ extern_func, .{ .call_args = args }, .none });
     }
 
     // Get address of a named function
@@ -746,6 +765,7 @@ fn printInstruction(writer: anytype, inst: Instruction, func: *const Function) !
             .elem_size => |size| try writer.print(" elemsize={d}", .{size}),
             .string_data => |str| try writer.print(" \"{s}\"", .{str}),
             .alloc_tag => |tag| try writer.print(" tag=\"{s}\"", .{tag}),
+            .extern_func => |ef| try writer.print(" @\"{s}:{s}\"", .{ ef.dll_name, ef.func_name }),
         }
     }
 }
