@@ -100,6 +100,12 @@ pub const Server = struct {
             try self.handleFoldingRange(id, obj);
         } else if (std.mem.eql(u8, method, "textDocument/linkedEditingRange")) {
             try self.handleLinkedEditingRange(id, obj);
+        } else if (std.mem.eql(u8, method, "textDocument/rename")) {
+            try self.handleRename(id, obj);
+        } else if (std.mem.eql(u8, method, "textDocument/codeAction")) {
+            try self.handleCodeAction(id, obj);
+        } else if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
+            try self.handleSemanticTokensFull(id, obj);
         } else {
             // Unknown method
             if (id != null) {
@@ -129,6 +135,16 @@ pub const Server = struct {
                 .documentFormattingProvider = true,
                 .foldingRangeProvider = true,
                 .linkedEditingRangeProvider = true,
+                .renameProvider = true,
+                .codeActionProvider = true,
+                .semanticTokensProvider = .{
+                    .legend = .{
+                        .tokenTypes = &.{ "keyword", "function", "variable", "type", "string", "number", "comment", "operator" },
+                        .tokenModifiers = &.{ "declaration", "definition", "readonly" },
+                    },
+                    .full = true,
+                    .range = false,
+                },
             },
         };
 
@@ -511,6 +527,119 @@ pub const Server = struct {
             try self.transport.writeResult(id, result);
         } else {
             try self.transport.writeResult(id, @as(?types.LinkedEditingRanges, null));
+        }
+    }
+
+    /// Handle textDocument/rename request
+    fn handleRename(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+        const params = transport.getObject(msg, "params") orelse {
+            try self.transport.writeResult(id, @as(?types.WorkspaceEdit, null));
+            return;
+        };
+
+        const text_doc = transport.getObject(params, "textDocument") orelse {
+            try self.transport.writeResult(id, @as(?types.WorkspaceEdit, null));
+            return;
+        };
+
+        const uri = transport.getString(text_doc, "uri") orelse {
+            try self.transport.writeResult(id, @as(?types.WorkspaceEdit, null));
+            return;
+        };
+
+        const position = transport.getObject(params, "position") orelse {
+            try self.transport.writeResult(id, @as(?types.WorkspaceEdit, null));
+            return;
+        };
+
+        const new_name = transport.getString(params, "newName") orelse {
+            try self.transport.writeResult(id, @as(?types.WorkspaceEdit, null));
+            return;
+        };
+
+        const line = @as(u32, @intCast(transport.getInt(position, "line") orelse 0));
+        const character = @as(u32, @intCast(transport.getInt(position, "character") orelse 0));
+
+        if (self.analyzer.getRenameEdits(uri, line, character, new_name)) |edits| {
+            defer self.allocator.free(edits);
+            // Build workspace edit with the text edits
+            var changes = std.json.ArrayHashMap([]const types.TextEdit){};
+            defer changes.map.deinit(self.allocator);
+            changes.map.put(self.allocator, uri, edits) catch {
+                try self.transport.writeResult(id, @as(?types.WorkspaceEdit, null));
+                return;
+            };
+            const result = types.WorkspaceEdit{
+                .changes = changes,
+            };
+            try self.transport.writeResult(id, result);
+        } else {
+            try self.transport.writeResult(id, @as(?types.WorkspaceEdit, null));
+        }
+    }
+
+    /// Handle textDocument/codeAction request
+    fn handleCodeAction(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+        const params = transport.getObject(msg, "params") orelse {
+            try self.transport.writeResult(id, @as([]const types.CodeAction, &.{}));
+            return;
+        };
+
+        const text_doc = transport.getObject(params, "textDocument") orelse {
+            try self.transport.writeResult(id, @as([]const types.CodeAction, &.{}));
+            return;
+        };
+
+        const uri = transport.getString(text_doc, "uri") orelse {
+            try self.transport.writeResult(id, @as([]const types.CodeAction, &.{}));
+            return;
+        };
+
+        const range = transport.getObject(params, "range") orelse {
+            try self.transport.writeResult(id, @as([]const types.CodeAction, &.{}));
+            return;
+        };
+
+        const start = transport.getObject(range, "start") orelse {
+            try self.transport.writeResult(id, @as([]const types.CodeAction, &.{}));
+            return;
+        };
+
+        const start_line = @as(u32, @intCast(transport.getInt(start, "line") orelse 0));
+
+        if (self.analyzer.getCodeActions(uri, start_line)) |actions| {
+            defer self.allocator.free(actions);
+            try self.transport.writeResult(id, actions);
+        } else {
+            try self.transport.writeResult(id, @as([]const types.CodeAction, &.{}));
+        }
+    }
+
+    /// Handle textDocument/semanticTokens/full request
+    fn handleSemanticTokensFull(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+        const params = transport.getObject(msg, "params") orelse {
+            try self.transport.writeResult(id, @as(?types.SemanticTokens, null));
+            return;
+        };
+
+        const text_doc = transport.getObject(params, "textDocument") orelse {
+            try self.transport.writeResult(id, @as(?types.SemanticTokens, null));
+            return;
+        };
+
+        const uri = transport.getString(text_doc, "uri") orelse {
+            try self.transport.writeResult(id, @as(?types.SemanticTokens, null));
+            return;
+        };
+
+        if (self.analyzer.getSemanticTokens(uri)) |tokens| {
+            defer self.allocator.free(tokens);
+            const result = types.SemanticTokens{
+                .data = tokens,
+            };
+            try self.transport.writeResult(id, result);
+        } else {
+            try self.transport.writeResult(id, @as(?types.SemanticTokens, null));
         }
     }
 };

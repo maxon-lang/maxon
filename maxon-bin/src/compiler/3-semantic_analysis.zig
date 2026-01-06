@@ -470,6 +470,7 @@ pub const SemanticAnalyzer = struct {
                 .return_type_name = intr.return_type_name,
                 .return_value_type = null,
                 .param_types = param_types,
+                .doc_comment = if (intr.help_text.len > 0) intr.help_text else null,
             });
         }
     }
@@ -505,6 +506,7 @@ pub const SemanticAnalyzer = struct {
             .return_type_name = ext_func.return_type_name,
             .return_value_type = ext_func.return_value_type,
             .param_types = ext_func.param_types,
+            .doc_comment = ext_func.doc_comment,
             .ir_generated = true,
         });
     }
@@ -599,6 +601,7 @@ pub const SemanticAnalyzer = struct {
             .return_type_name = return_info.type_name,
             .return_value_type = return_info.value_type,
             .param_types = param_types,
+            .doc_comment = decl.doc_comment,
             .ir_generated = false, // Will be set true when IR is generated
             .decl_line = decl.block.start_line,
             .decl_column = decl.block.start_column,
@@ -618,6 +621,7 @@ pub const SemanticAnalyzer = struct {
             .return_type_name = return_info.type_name,
             .return_value_type = return_info.value_type,
             .param_types = param_types,
+            .doc_comment = method.doc_comment,
             .ir_generated = false,
         });
     }
@@ -632,6 +636,7 @@ pub const SemanticAnalyzer = struct {
 
         for (fields, 0..) |field, i| {
             const value_type = try self.typeExprToValueType(field.type_expr);
+            const display_name = self.typeExprToDisplayName(field.type_expr);
             const size: i32 = 8; // All types are 8 bytes (pointers or i64/f64)
 
             result[i] = .{
@@ -639,6 +644,7 @@ pub const SemanticAnalyzer = struct {
                 .offset = offset,
                 .size = size,
                 .value_type = value_type,
+                .display_name = display_name,
                 .is_mutable = field.is_mutable,
                 .is_export = field.is_export,
             };
@@ -661,6 +667,7 @@ pub const SemanticAnalyzer = struct {
             result[i] = .{
                 .ty = try self.typeExprToValueType(param.type_expr),
                 .name = param.name,
+                .display_name = self.typeExprToDisplayName(param.type_expr),
                 .default_value = param.default_value,
             };
         }
@@ -757,6 +764,50 @@ pub const SemanticAnalyzer = struct {
         }
         // Default to primitive for unknown types
         return ValueType{ .primitive = name };
+    }
+
+    /// Convert a TypeExpr to a human-readable display string (e.g., "Array of Point")
+    fn typeExprToDisplayName(self: *SemanticAnalyzer, type_expr: ast.TypeExpr) ?[]const u8 {
+        return switch (type_expr) {
+            .simple => |name| name,
+            .generic => |gen| {
+                // Format as "BaseType of Arg1, Arg2"
+                var buf: std.ArrayListUnmanaged(u8) = .empty;
+                buf.appendSlice(self.allocator, gen.base_type) catch return null;
+                if (gen.type_args.len > 0) {
+                    buf.appendSlice(self.allocator, " of ") catch return null;
+                    for (gen.type_args, 0..) |arg, i| {
+                        if (i > 0) buf.appendSlice(self.allocator, ", ") catch return null;
+                        buf.appendSlice(self.allocator, arg) catch return null;
+                    }
+                }
+                const result = buf.toOwnedSlice(self.allocator) catch return null;
+                self.allocated_type_strings.append(self.allocator, result) catch {
+                    self.allocator.free(result);
+                    return null;
+                };
+                return result;
+            },
+            .optional => |opt| {
+                const inner = self.typeExprToDisplayName(opt.*) orelse return null;
+                const result = std.fmt.allocPrint(self.allocator, "{s}?", .{inner}) catch return null;
+                self.allocated_type_strings.append(self.allocator, result) catch {
+                    self.allocator.free(result);
+                    return null;
+                };
+                return result;
+            },
+            .error_union => |eu| {
+                const success = self.typeExprToDisplayName(eu.success_type.*) orelse return null;
+                const result = std.fmt.allocPrint(self.allocator, "{s} or {s}", .{ success, eu.error_type }) catch return null;
+                self.allocated_type_strings.append(self.allocator, result) catch {
+                    self.allocator.free(result);
+                    return null;
+                };
+                return result;
+            },
+            .function_type => "function",
+        };
     }
 
     // ------------------------------------------------------------------------
@@ -1166,7 +1217,8 @@ pub const SemanticAnalyzer = struct {
     fn collectParametersAsVariables(self: *SemanticAnalyzer, params: []const ast.ParamDecl) !void {
         for (params) |param| {
             const param_type = self.typeExprToValueType(param.type_expr) catch continue;
-            try self.addVariableInfo(param.name, param_type, true, true, 0, 0);
+            const display_name = self.typeExprToDisplayName(param.type_expr);
+            try self.addVariableInfo(param.name, param_type, display_name, true, true, 0, 0);
         }
     }
 
@@ -1175,6 +1227,7 @@ pub const SemanticAnalyzer = struct {
         self: *SemanticAnalyzer,
         name: []const u8,
         ty: ValueType,
+        display_name: ?[]const u8,
         is_mutable: bool,
         is_parameter: bool,
         line: u32,
@@ -1183,6 +1236,7 @@ pub const SemanticAnalyzer = struct {
         try self.captured_vars.append(self.allocator, .{
             .name = name,
             .ty = ty,
+            .display_name = display_name,
             .is_mutable = is_mutable,
             .is_parameter = is_parameter,
             .borrow_state = .none,
@@ -1198,12 +1252,16 @@ pub const SemanticAnalyzer = struct {
         for (body) |stmt| {
             switch (stmt.kind) {
                 .var_decl, .let_decl => |decl| {
-                    const var_type = if (decl.type_annotation) |ann|
-                        self.typeExprToValueType(ann) catch continue
-                    else
-                        self.inferExpressionType(decl.value) orelse continue;
+                    const var_type, const display_name = if (decl.type_annotation) |ann| blk: {
+                        break :blk .{ self.typeExprToValueType(ann) catch continue, self.typeExprToDisplayName(ann) };
+                    } else blk: {
+                        const vt = self.inferExpressionType(decl.value) orelse continue;
+                        // Infer display name from the expression type
+                        const dn = self.inferDisplayName(decl.value);
+                        break :blk .{ vt, dn };
+                    };
                     const is_mutable = stmt.kind == .var_decl;
-                    try self.addVariableInfo(decl.name, var_type, is_mutable, false, stmt.line, stmt.column);
+                    try self.addVariableInfo(decl.name, var_type, display_name, is_mutable, false, stmt.line, stmt.column);
                 },
                 .if_stmt => |if_s| {
                     try self.collectVariablesFromIfChildren(if_s.children);
@@ -1214,13 +1272,15 @@ pub const SemanticAnalyzer = struct {
                     }
                 },
                 .for_stmt => |for_s| {
-                    // For loop variable
+                    // For loop variable - get element type from the iterable
                     const iter_type = self.inferExpressionType(for_s.iterable) orelse ValueType{ .primitive = "int" };
-                    const elem_type: ValueType = if (iter_type == .array_type)
-                        ValueType{ .primitive = @tagName(iter_type.array_type.element_type) }
-                    else
-                        ValueType{ .primitive = "int" };
-                    try self.addVariableInfo(for_s.var_name, elem_type, false, false, 0, 0);
+                    const elem_type: ValueType, const elem_display: ?[]const u8 = if (iter_type == .array_type) blk: {
+                        const arr = iter_type.array_type;
+                        // Use element_struct_type if available, otherwise use IR type name
+                        const display = arr.element_struct_type orelse @tagName(arr.element_type);
+                        break :blk .{ ValueType{ .primitive = @tagName(arr.element_type) }, display };
+                    } else .{ ValueType{ .primitive = "int" }, "int" };
+                    try self.addVariableInfo(for_s.var_name, elem_type, elem_display, false, false, 0, 0);
                     for (for_s.children) |child| {
                         try self.collectVariablesFromBody(child.statements);
                     }
@@ -1307,6 +1367,50 @@ pub const SemanticAnalyzer = struct {
             .call => |call| blk: {
                 const func_info = self.func_map.get(call.func_name) orelse break :blk null;
                 break :blk func_info.return_value_type;
+            },
+            else => null,
+        };
+    }
+
+    /// Infer a human-readable display name from an expression
+    fn inferDisplayName(self: *SemanticAnalyzer, expr: ast.Expression) ?[]const u8 {
+        return switch (expr) {
+            .integer => "int",
+            .float_lit => "float",
+            .bool_lit => "bool",
+            .nil_lit => null,
+            .string_literal => "String",
+            .char_literal => "Character",
+            .identifier => |name| name,
+            .array_literal => |arr| blk: {
+                // Format as "Array of ElementType"
+                if (arr.elements.len > 0) {
+                    const elem_display = self.inferDisplayName(arr.elements[0]) orelse "int";
+                    const result = std.fmt.allocPrint(self.allocator, "Array of {s}", .{elem_display}) catch break :blk null;
+                    self.allocated_type_strings.append(self.allocator, result) catch {
+                        self.allocator.free(result);
+                        break :blk null;
+                    };
+                    break :blk result;
+                }
+                break :blk "Array of int";
+            },
+            .struct_init => |sinit| sinit.type_name,
+            .binary => |bin| self.inferDisplayName(bin.left.*),
+            .unary => |un| self.inferDisplayName(un.operand.*),
+            .compare => "bool",
+            .logical => "bool",
+            .method_call => |mc| blk: {
+                const base_ty = self.inferExpressionType(mc.base.*) orelse break :blk null;
+                const type_name = base_ty.getTypeName() orelse break :blk null;
+                const mangled = std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, mc.method_name }) catch break :blk null;
+                defer self.allocator.free(mangled);
+                const func_info = self.func_map.get(mangled) orelse break :blk null;
+                break :blk func_info.return_type_name;
+            },
+            .call => |call| blk: {
+                const func_info = self.func_map.get(call.func_name) orelse break :blk null;
+                break :blk func_info.return_type_name;
             },
             else => null,
         };

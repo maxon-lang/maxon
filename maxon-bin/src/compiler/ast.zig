@@ -104,6 +104,7 @@ pub const MethodDecl = struct {
     throws_type: ?[]const u8, // error type if method throws (must conform to Error)
     body: []Statement,
     block: BlockInfo = .{},
+    doc_comment: ?[]const u8 = null, // Doc comment (/// or /** */) preceding the method
 };
 
 pub const TypeDecl = struct {
@@ -170,6 +171,7 @@ pub const FunctionDecl = struct {
     throws_type: ?[]const u8, // error type if function throws (must conform to Error)
     body: []Statement,
     block: BlockInfo = .{},
+    doc_comment: ?[]const u8 = null, // Doc comment (/// or /** */) preceding the function
 };
 
 pub const IndexAssign = struct {

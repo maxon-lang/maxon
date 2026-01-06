@@ -691,6 +691,7 @@ fn analyzeSourceForLSP(
             .return_type_name = ext_func.return_type_name,
             .return_value_type = ext_func.return_value_type,
             .param_types = param_types_copy,
+            .doc_comment = ext_func.doc_comment,
         };
         func_name_copies.append(allocator, name_copy) catch {};
     }
@@ -1155,4 +1156,3 @@ fn writeAsmFileFromPE(output_path: []const u8, allocator: std.mem.Allocator) !vo
         return error.WriteError;
     };
 }
-

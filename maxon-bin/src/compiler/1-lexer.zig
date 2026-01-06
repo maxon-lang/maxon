@@ -95,6 +95,7 @@ pub const TokenType = enum {
     newline,
 
     // Special
+    doc_comment, // /// or /** */ doc comments
     eof,
 };
 
@@ -146,13 +147,19 @@ pub const Lexer = struct {
                 break;
             }
 
-            // Skip comments
+            // Skip comments (but NOT doc comments - those are handled in '/' section)
             if (c == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') {
-                while (self.pos < self.source.len and self.source[self.pos] != '\n') {
-                    self.pos += 1;
-                    self.column += 1;
+                // Check if this is a doc comment (///) - if so, don't skip it here
+                if (self.pos + 2 < self.source.len and self.source[self.pos + 2] == '/') {
+                    // Fall through to '/' handling below which produces doc_comment tokens
+                } else {
+                    // Regular comment - skip
+                    while (self.pos < self.source.len and self.source[self.pos] != '\n') {
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                    continue;
                 }
-                continue;
             }
 
             // Single character tokens
@@ -244,8 +251,31 @@ pub const Lexer = struct {
                 continue;
             }
             if (c == '/') {
-                // Check if it's a comment (already handled above, but double-check)
+                // Check if it's a comment
                 if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') {
+                    // Check if it's a doc comment (///)
+                    if (self.pos + 2 < self.source.len and self.source[self.pos + 2] == '/') {
+                        const start_line = self.line;
+                        const start_col = self.column;
+                        // Skip the ///
+                        self.pos += 3;
+                        self.column += 3;
+                        // Skip leading space if present
+                        if (self.pos < self.source.len and self.source[self.pos] == ' ') {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
+                        const text_start = self.pos;
+                        // Collect the comment text until end of line
+                        while (self.pos < self.source.len and self.source[self.pos] != '\n') {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
+                        const text = self.source[text_start..self.pos];
+                        try tokens.append(allocator, .{ .type = .doc_comment, .text = text, .line = start_line, .column = start_col });
+                        continue;
+                    }
+                    // Regular comment - skip
                     while (self.pos < self.source.len and self.source[self.pos] != '\n') {
                         self.pos += 1;
                         self.column += 1;

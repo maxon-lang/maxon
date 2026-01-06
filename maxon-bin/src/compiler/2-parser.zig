@@ -27,6 +27,8 @@ pub const Parser = struct {
     source_file: ?[]const u8,
     /// Last error with location info
     last_error: ?err.CompileError,
+    /// Pending doc comment to attach to next declaration
+    pending_doc_comment: ?[]const u8 = null,
 
     pub fn init(tokens: []const Token, allocator: std.mem.Allocator) Parser {
         return initWithFile(tokens, allocator, null);
@@ -42,6 +44,7 @@ pub const Parser = struct {
             .stmt_ptrs = .empty,
             .source_file = source_file,
             .last_error = null,
+            .pending_doc_comment = null,
         };
     }
 
@@ -253,6 +256,13 @@ pub const Parser = struct {
         while (!self.check(.end) and !self.isAtEnd()) {
             if (self.check(.newline)) {
                 _ = self.advance();
+                continue;
+            }
+
+            // Collect doc comments for the next declaration
+            if (self.check(.doc_comment)) {
+                const doc_text = self.advance().text;
+                self.pending_doc_comment = doc_text;
                 continue;
             }
 
@@ -473,6 +483,10 @@ pub const Parser = struct {
     }
 
     fn parseMethodDecl(self: *Parser) !ast.MethodDecl {
+        // Capture and clear pending doc comment
+        const doc_comment = self.pending_doc_comment;
+        self.pending_doc_comment = null;
+
         // Parse optional modifiers
         const method_is_export = self.check(.@"export");
         if (method_is_export) _ = self.advance();
@@ -517,6 +531,7 @@ pub const Parser = struct {
                 .end_line = body_result.end_line,
                 .identifier = name,
             },
+            .doc_comment = doc_comment,
         };
     }
 
@@ -861,6 +876,10 @@ pub const Parser = struct {
     }
 
     fn parseFunctionWithExport(self: *Parser, is_export: bool) !ast.FunctionDecl {
+        // Capture and clear pending doc comment
+        const doc_comment = self.pending_doc_comment;
+        self.pending_doc_comment = null;
+
         _ = try self.expect(.function);
         const name_token = try self.expect(.identifier);
         _ = try self.expect(.lparen);
@@ -884,6 +903,7 @@ pub const Parser = struct {
                 .end_line = body_result.end_line,
                 .identifier = name_token.text,
             },
+            .doc_comment = doc_comment,
         };
     }
 
@@ -3028,8 +3048,14 @@ pub const Parser = struct {
     }
 
     fn skipNewlines(self: *Parser) void {
-        while (self.check(.newline)) {
-            _ = self.advance();
+        while (self.check(.newline) or self.check(.doc_comment)) {
+            if (self.check(.doc_comment)) {
+                // Store doc comment for the next declaration
+                const doc_text = self.advance().text;
+                self.pending_doc_comment = doc_text;
+            } else {
+                _ = self.advance();
+            }
         }
     }
 
@@ -3078,6 +3104,12 @@ pub const Parser = struct {
             // Skip blank lines
             if (self.check(.newline)) {
                 _ = self.advance();
+                continue;
+            }
+
+            // Collect doc comments for the next declaration
+            if (self.check(.doc_comment)) {
+                self.pending_doc_comment = self.advance().text;
                 continue;
             }
 

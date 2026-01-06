@@ -84,6 +84,9 @@ pub const ServerCapabilities = struct {
     documentFormattingProvider: bool = false,
     foldingRangeProvider: bool = false,
     linkedEditingRangeProvider: bool = false,
+    renameProvider: bool = false,
+    codeActionProvider: bool = false,
+    semanticTokensProvider: ?SemanticTokensOptions = null,
 };
 
 pub const TextDocumentSyncOptions = struct {
@@ -330,4 +333,64 @@ pub const FoldingRange = struct {
 pub const LinkedEditingRanges = struct {
     ranges: []const Range,
     wordPattern: ?[]const u8 = null,
+};
+
+// ============================================================================
+// Rename Types
+// ============================================================================
+
+pub const WorkspaceEdit = struct {
+    changes: ?std.json.ArrayHashMap([]const TextEdit) = null,
+    documentChanges: ?[]const TextDocumentEdit = null,
+};
+
+pub const TextDocumentEdit = struct {
+    textDocument: VersionedTextDocumentIdentifier,
+    edits: []const TextEdit,
+};
+
+// ============================================================================
+// Code Action Types
+// ============================================================================
+
+pub const CodeAction = struct {
+    title: []const u8,
+    kind: ?[]const u8 = null,
+    diagnostics: ?[]const Diagnostic = null,
+    edit: ?WorkspaceEdit = null,
+    command: ?Command = null,
+};
+
+pub const Diagnostic = struct {
+    range: Range,
+    severity: ?u8 = null,
+    code: ?[]const u8 = null,
+    source: ?[]const u8 = null,
+    message: []const u8,
+};
+
+pub const Command = struct {
+    title: []const u8,
+    command: []const u8,
+    arguments: ?[]const std.json.Value = null,
+};
+
+// ============================================================================
+// Semantic Tokens Types
+// ============================================================================
+
+pub const SemanticTokensLegend = struct {
+    tokenTypes: []const []const u8,
+    tokenModifiers: []const []const u8,
+};
+
+pub const SemanticTokens = struct {
+    resultId: ?[]const u8 = null,
+    data: []const u32,
+};
+
+pub const SemanticTokensOptions = struct {
+    legend: SemanticTokensLegend,
+    full: bool = true,
+    range: bool = false,
 };

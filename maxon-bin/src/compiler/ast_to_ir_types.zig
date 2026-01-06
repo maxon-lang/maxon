@@ -102,19 +102,6 @@ pub const ValueType = union(enum) {
     pub fn isFunctionType(self: ValueType) bool {
         return self == .function_type;
     }
-
-    /// Get a user-friendly display name for any ValueType
-    pub fn toDisplayName(self: ValueType) []const u8 {
-        return switch (self) {
-            .primitive => |name| name,
-            .struct_type => |name| name,
-            .enum_type => |name| name,
-            .array_type => "array",
-            .optional_type => "optional",
-            .error_union_type => "error union",
-            .function_type => "function",
-        };
-    }
 };
 
 /// Free any heap allocations inside a ValueType (for function types with nested allocations)
@@ -145,6 +132,7 @@ pub const FieldInfo = struct {
     offset: i32,
     size: i32,
     value_type: ValueType,
+    display_name: ?[]const u8 = null, // Human-readable type name (e.g., "Array of Point")
     is_mutable: bool = true,
     is_export: bool = false, // Whether field is accessible outside the type
 
@@ -239,6 +227,7 @@ pub const FuncInfo = struct {
     return_type_name: ?[]const u8,
     return_value_type: ?ValueType, // Full type info for arrays
     param_types: []const ParamType,
+    doc_comment: ?[]const u8 = null, // Doc comment (/// or /** */) from source
     ir_generated: bool = true, // false for pending lazy-generated methods
     decl_line: u32 = 0,
     decl_column: u32 = 0,
@@ -265,6 +254,7 @@ pub const ExternalFuncSignature = struct {
     is_exported: bool = false, // Whether this function is exported from its module
     source_path: ?[]const u8 = null, // Source file path (to distinguish stdlib vs user)
     param_types: []const ParamType = &.{}, // Parameter types for type checking
+    doc_comment: ?[]const u8 = null, // Doc comment (/// or /** */) from source
 };
 
 /// External type info - for cross-module compilation
@@ -296,6 +286,7 @@ pub const ExternalInterfaceInfo = struct {
 pub const ParamType = struct {
     ty: ValueType,
     name: []const u8 = "", // Parameter name for named argument resolution
+    display_name: ?[]const u8 = null, // Human-readable type name (e.g., "Array of Point")
     default_value: ?*const ast.Expression = null, // Default value expression
 };
 
@@ -418,6 +409,7 @@ pub const InterfaceMethodInfo = struct {
 pub const SemanticVarInfo = struct {
     name: []const u8,
     ty: ValueType,
+    display_name: ?[]const u8, // Human-readable type name from AST (e.g., "Array of Point")
     is_mutable: bool,
     is_parameter: bool,
     borrow_state: BorrowState,

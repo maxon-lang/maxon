@@ -2,7 +2,6 @@ const std = @import("std");
 const compiler = @import("../compiler/0-compiler.zig");
 const ast_to_ir = @import("../compiler/4-ast_to_ir.zig");
 const ast = @import("../compiler/ast.zig");
-const intrinsics_registry = @import("../compiler/intrinsics_registry.zig");
 const types = @import("types.zig");
 
 fn log(comptime fmt: []const u8, args: anytype) void {
@@ -127,7 +126,7 @@ pub const Analyzer = struct {
 
         // Find the variable by name
         if (info.findVariable(var_name)) |v| {
-            return v.ty.getTypeName() orelse v.ty.toDisplayName();
+            return v.display_name orelse v.ty.getTypeName();
         }
         return null;
     }
@@ -181,7 +180,7 @@ pub const Analyzer = struct {
                             try items.append(self.allocator, .{
                                 .label = field.name,
                                 .kind = .field,
-                                .detail = field.value_type.toDisplayName(),
+                                .detail = field.display_name orelse field.value_type.getTypeName(),
                             });
                         }
                     }
@@ -219,13 +218,21 @@ pub const Analyzer = struct {
     /// Returns allocated markdown string that caller must free, or null if no hover info
     pub fn getHoverInfo(self: *Analyzer, uri: []const u8, line: u32, character: u32) ?[]const u8 {
         const doc = self.documents.get(uri) orelse return null;
-        const word = getWordAtPosition(doc.content, line, character) orelse return null;
-        const info = self.getSemanticInfo(uri) catch return null;
 
-        // 1. Check for intrinsics from registry (includes public builtins like sqrt, trunc)
-        if (intrinsics_registry.findIntrinsic(word)) |intr| {
-            return self.formatRegistryIntrinsicHover(intr);
+        // Check if the position is inside a comment - if so, return null
+        if (isPositionInComment(doc.content, line, character)) {
+            return null;
         }
+
+        const word = getWordAtPosition(doc.content, line, character) orelse return null;
+
+        // 1. Check for keywords - doesn't require semantic analysis
+        if (getKeywordHover(word)) |hover_text| {
+            return self.allocator.dupe(u8, hover_text) catch null;
+        }
+
+        // Get semantic info for remaining checks
+        const info = self.getSemanticInfo(uri) catch return null;
 
         // 2. Check for variables (local vars and parameters)
         if (info.findVariable(word)) |v| {
@@ -237,12 +244,93 @@ pub const Analyzer = struct {
             return self.formatFunctionHover(word, func_info);
         }
 
-        // 4. Check for type references
+        // 3b. Check for method calls - look up mangled name based on receiver type
+        if (self.findMethodCallHover(doc.content, info, line, character, word)) |hover| {
+            return hover;
+        }
+
+        // 4. Check for type references (structs, enums)
         if (info.types.get(word)) |type_info| {
             return self.formatTypeHover(word, type_info);
         }
 
+        // 5. Check for interface references
+        if (info.interfaces.get(word)) |intf_info| {
+            return self.formatInterfaceHover(word, intf_info);
+        }
+
+        // 6. Check for struct field declarations (when cursor is on a field in a type definition)
+        if (self.getStructFieldAtPosition(info, line, word)) |field_info| {
+            return self.formatFieldHover(field_info);
+        }
+
         return null;
+    }
+
+    /// Find method call hover by detecting receiver.method pattern and looking up mangled name
+    fn findMethodCallHover(self: *Analyzer, content: []const u8, info: *ast_to_ir.SemanticInfo, line: u32, _: u32, method_name: []const u8) ?[]const u8 {
+        // Get the line content
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        var current_line: u32 = 0;
+        while (lines.next()) |line_content| : (current_line += 1) {
+            if (current_line == line) {
+                // Find the start of the method name
+                const method_start = std.mem.indexOf(u8, line_content, method_name) orelse return null;
+
+                // Check if there's a '.' before the method name
+                if (method_start == 0) return null;
+                var dot_pos: usize = method_start - 1;
+
+                // Skip whitespace before the method name
+                while (dot_pos > 0 and line_content[dot_pos] == ' ') {
+                    dot_pos -= 1;
+                }
+
+                if (line_content[dot_pos] != '.') return null;
+
+                // Extract the receiver identifier (scan backwards from the dot)
+                if (dot_pos == 0) return null;
+                const receiver_end = dot_pos;
+                var receiver_start = dot_pos - 1;
+                while (receiver_start > 0) {
+                    const c = line_content[receiver_start - 1];
+                    if (!std.ascii.isAlphanumeric(c) and c != '_') break;
+                    receiver_start -= 1;
+                }
+
+                const receiver_name = line_content[receiver_start..receiver_end];
+                if (receiver_name.len == 0) return null;
+
+                // Look up the receiver's type
+                const receiver_var = info.findVariable(receiver_name) orelse return null;
+
+                // Get the type name for method lookup
+                const type_name = self.getTypeNameForMethodLookup(receiver_var.ty) orelse return null;
+
+                // Construct mangled method name and look it up
+                var mangled_buf: [512]u8 = undefined;
+                const mangled_name = std.fmt.bufPrint(&mangled_buf, "{s}${s}", .{ type_name, method_name }) catch return null;
+
+                if (info.functions.get(mangled_name)) |func_info| {
+                    return self.formatFunctionHover(method_name, func_info);
+                }
+
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /// Get the type name suitable for method lookup (handles arrays, structs, etc.)
+    fn getTypeNameForMethodLookup(self: *Analyzer, ty: ast_to_ir.ValueType) ?[]const u8 {
+        _ = self;
+        return switch (ty) {
+            .primitive => |name| name,
+            .struct_type => |name| name,
+            .enum_type => |name| name,
+            .array_type => "Array", // Array methods are on the generic Array type
+            .optional_type, .error_union_type, .function_type => null,
+        };
     }
 
     fn formatVariableHover(self: *Analyzer, v: ast_to_ir.SemanticVarInfo, info: *ast_to_ir.SemanticInfo, hover_line: u32) ?[]const u8 {
@@ -263,8 +351,8 @@ pub const Analyzer = struct {
             }
         }
 
-        // Show type info
-        const type_name = v.ty.toDisplayName();
+        // Show type info - prefer display_name from AST, fall back to type name
+        const type_name = v.display_name orelse v.ty.getTypeName() orelse "unknown";
         const mutability = if (v.is_mutable) "var" else "let";
         const kind = if (v.is_parameter) "(parameter)" else "(local)";
 
@@ -285,7 +373,7 @@ pub const Analyzer = struct {
             if (i > 0) writer.writeAll(", ") catch return null;
             writer.writeAll(param.name) catch return null;
             writer.writeByte(' ') catch return null;
-            writer.writeAll(param.ty.toDisplayName()) catch return null;
+            writer.writeAll(param.display_name orelse param.ty.getTypeName() orelse "unknown") catch return null;
         }
 
         writer.writeByte(')') catch return null;
@@ -300,53 +388,11 @@ pub const Analyzer = struct {
         }
 
         writer.writeAll("\n```") catch return null;
-        return buffer.toOwnedSlice(self.allocator) catch null;
-    }
 
-    fn formatIntrinsicHover(self: *Analyzer, name: []const u8, func: ast_to_ir.FuncInfo) ?[]const u8 {
-        var buffer: std.ArrayListUnmanaged(u8) = .empty;
-        const writer = buffer.writer(self.allocator);
-
-        writer.writeAll("```maxon\nintrinsic ") catch return null;
-        writer.writeAll(name) catch return null;
-        writer.writeByte('(') catch return null;
-
-        for (func.param_types, 0..) |param, i| {
-            if (i > 0) writer.writeAll(", ") catch return null;
-            writer.writeAll(param.ty.toDisplayName()) catch return null;
-        }
-
-        writer.writeAll(")\n```") catch return null;
-        return buffer.toOwnedSlice(self.allocator) catch null;
-    }
-
-    fn formatRegistryIntrinsicHover(self: *Analyzer, intr: *const intrinsics_registry.Intrinsic) ?[]const u8 {
-        var buffer: std.ArrayListUnmanaged(u8) = .empty;
-        const writer = buffer.writer(self.allocator);
-
-        // Format signature - use "intrinsic" for stdlib-only, "function" for public
-        const keyword = if (intr.visibility == .stdlib_only) "intrinsic" else "function";
-        writer.writeAll("```maxon\n") catch return null;
-        writer.writeAll(keyword) catch return null;
-        writer.writeByte(' ') catch return null;
-        writer.writeAll(intr.name) catch return null;
-        writer.writeByte('(') catch return null;
-
-        for (intr.params, 0..) |param, i| {
-            if (i > 0) writer.writeAll(", ") catch return null;
-            writer.writeAll(param.name) catch return null;
-            writer.writeByte(' ') catch return null;
-            writer.writeAll(param.type_name) catch return null;
-        }
-
-        writer.writeAll(") returns ") catch return null;
-        writer.writeAll(intr.return_type_name) catch return null;
-        writer.writeAll("\n```") catch return null;
-
-        // Add help text if available
-        if (intr.help_text.len > 0) {
+        // Add doc comment if present
+        if (func.doc_comment) |doc| {
             writer.writeAll("\n\n") catch return null;
-            writer.writeAll(intr.help_text) catch return null;
+            writer.writeAll(doc) catch return null;
         }
 
         return buffer.toOwnedSlice(self.allocator) catch null;
@@ -367,6 +413,51 @@ pub const Analyzer = struct {
                 writer.print("```maxon\n{s}\n```\n\nPrimitive type", .{name}) catch return null;
             },
         }
+
+        return buffer.toOwnedSlice(self.allocator) catch null;
+    }
+
+    fn formatInterfaceHover(self: *Analyzer, name: []const u8, intf_info: ast_to_ir.InterfaceInfo) ?[]const u8 {
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
+        const writer = buffer.writer(self.allocator);
+
+        writer.print("```maxon\ninterface {s}\n```\n\nInterface with {d} methods", .{ name, intf_info.methods.len }) catch return null;
+
+        return buffer.toOwnedSlice(self.allocator) catch null;
+    }
+
+    fn getStructFieldAtPosition(self: *Analyzer, info: *ast_to_ir.SemanticInfo, line: u32, field_name: []const u8) ?ast_to_ir.FieldInfo {
+        _ = self;
+        // Convert 0-based line to 1-based for AST
+        const ast_line = line + 1;
+
+        // Search through all struct types to find if field_name is declared on this line
+        var type_iter = info.types.iterator();
+        while (type_iter.next()) |entry| {
+            switch (entry.value_ptr.*) {
+                .struct_type => |st| {
+                    // Check if the line is within the struct definition
+                    if (ast_line > st.decl_line) {
+                        for (st.fields) |field| {
+                            if (std.mem.eql(u8, field.name, field_name)) {
+                                return field;
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+        return null;
+    }
+
+    fn formatFieldHover(self: *Analyzer, field: ast_to_ir.FieldInfo) ?[]const u8 {
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
+        const writer = buffer.writer(self.allocator);
+
+        const mutability = if (field.is_mutable) "var" else "let";
+        const type_name = field.display_name orelse field.value_type.getTypeName() orelse "unknown";
+        writer.print("```maxon\n{s} {s}: {s}\n```\n\n(field)", .{ mutability, field.name, type_name }) catch return null;
 
         return buffer.toOwnedSlice(self.allocator) catch null;
     }
@@ -421,10 +512,116 @@ pub const Analyzer = struct {
                         };
                     }
                 },
+                .enum_type => |et| {
+                    if (et.decl_line > 0) {
+                        return .{
+                            .uri = uri,
+                            .line = et.decl_line - 1,
+                            .character = if (et.decl_column > 0) et.decl_column - 1 else 0,
+                        };
+                    }
+                },
                 else => {},
             }
         }
 
+        // 4. Check if it's an interface reference
+        if (info.interfaces.get(word)) |intf_info| {
+            if (intf_info.decl_line > 0) {
+                return .{
+                    .uri = uri,
+                    .line = intf_info.decl_line - 1,
+                    .character = if (intf_info.decl_column > 0) intf_info.decl_column - 1 else 0,
+                };
+            }
+        }
+
+        // 5. Check if it's a struct field access (e.g., p.x where p is a struct)
+        // Look at the context to see if there's a dot before the word
+        if (self.getFieldAccessContext(doc.content, line, character, word)) |ctx| {
+            // ctx.type_name is the type being accessed, word is the field name
+            if (info.types.get(ctx.type_name)) |type_info| {
+                switch (type_info) {
+                    .struct_type => |st| {
+                        // Find the field in the struct
+                        for (st.fields) |field| {
+                            if (std.mem.eql(u8, field.name, word)) {
+                                // Return field definition - field is on line after struct declaration
+                                // We don't have exact field lines, so approximate based on field index
+                                return .{
+                                    .uri = uri,
+                                    .line = st.decl_line, // Field is on line after struct decl
+                                    .character = 4, // Typical field indentation
+                                };
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// Context for field access (var.field)
+    const FieldAccessContext = struct {
+        type_name: []const u8,
+    };
+
+    /// Check if position is accessing a field (e.g., p.x) and return the type being accessed
+    fn getFieldAccessContext(self: *Analyzer, content: []const u8, line: u32, character: u32, field_name: []const u8) ?FieldAccessContext {
+        _ = field_name;
+        // Find the line
+        var lines = std.mem.splitScalar(u8, content, '\n');
+        var current_line: u32 = 0;
+        while (lines.next()) |line_content| : (current_line += 1) {
+            if (current_line == line) {
+                // Look for pattern: identifier.word at position
+                // Walk backwards from character to find the dot
+                if (character > 0 and character <= line_content.len) {
+                    var i = character - 1;
+                    // Skip the word we're on
+                    while (i > 0 and (std.ascii.isAlphanumeric(line_content[i]) or line_content[i] == '_')) {
+                        i -= 1;
+                    }
+                    // Check if there's a dot
+                    if (i < line_content.len and line_content[i] == '.') {
+                        i -= 1;
+                        // Now find the identifier before the dot
+                        const end_pos = i + 1;
+                        while (i > 0 and (std.ascii.isAlphanumeric(line_content[i - 1]) or line_content[i - 1] == '_')) {
+                            i -= 1;
+                        }
+                        const var_name = line_content[i..end_pos];
+                        if (var_name.len > 0) {
+                            // Get the type of this variable from semantic info
+                            const uri = self.getUriFromContent(content);
+                            if (uri) |u| {
+                                const info = self.getSemanticInfo(u) catch return null;
+                                if (info.findVariable(var_name)) |v| {
+                                    if (v.ty.getTypeName()) |type_name| {
+                                        return .{ .type_name = type_name };
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        return null;
+    }
+
+    /// Get the URI for a given content string (reverse lookup from documents)
+    fn getUriFromContent(self: *Analyzer, content: []const u8) ?[]const u8 {
+        var iter = self.documents.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.content.ptr == content.ptr) {
+                return entry.key_ptr.*;
+            }
+        }
         return null;
     }
 
@@ -446,9 +643,20 @@ pub const Analyzer = struct {
                         try items.append(self.allocator, .{
                             .label = field.name,
                             .kind = .field,
-                            .detail = field.value_type.toDisplayName(),
+                            .detail = field.display_name orelse field.value_type.getTypeName(),
                         });
                     }
+                }
+            },
+            .enum_type => |et| {
+                // Add enum members as completions
+                var member_iter = et.members.iterator();
+                while (member_iter.next()) |entry| {
+                    try items.append(self.allocator, .{
+                        .label = entry.key_ptr.*,
+                        .kind = .enum_member,
+                        .detail = type_name,
+                    });
                 }
             },
             else => {},
@@ -716,6 +924,164 @@ pub const Analyzer = struct {
         const doc = self.documents.get(uri) orelse return null;
         const info = self.semantic_cache.get(uri);
         return findLinkedEditingRanges(self.allocator, doc.content, line, character, info) catch null;
+    }
+
+    /// Get rename edits for a symbol at the given position
+    pub fn getRenameEdits(self: *Analyzer, uri: []const u8, line: u32, character: u32, new_name: []const u8) ?[]types.TextEdit {
+        const doc = self.documents.get(uri) orelse return null;
+        const word = getWordAtPosition(doc.content, line, character) orelse return null;
+
+        // Find all occurrences of this word and create edits
+        var edits: std.ArrayListUnmanaged(types.TextEdit) = .empty;
+        errdefer edits.deinit(self.allocator);
+
+        var current_line: u32 = 0;
+        var lines = std.mem.splitScalar(u8, doc.content, '\n');
+
+        while (lines.next()) |line_content| : (current_line += 1) {
+            var col: u32 = 0;
+            while (col < line_content.len) {
+                // Look for word at this position
+                if (findWordAt(line_content, col, word)) |range| {
+                    edits.append(self.allocator, .{
+                        .range = .{
+                            .start = .{ .line = current_line, .character = range.start },
+                            .end = .{ .line = current_line, .character = range.end },
+                        },
+                        .newText = new_name,
+                    }) catch return null;
+                    col = range.end;
+                } else {
+                    col += 1;
+                }
+            }
+        }
+
+        if (edits.items.len == 0) {
+            edits.deinit(self.allocator);
+            return null;
+        }
+        return edits.toOwnedSlice(self.allocator) catch null;
+    }
+
+    /// Get code actions for a given line (e.g., quick fixes for diagnostics)
+    /// Returns a simple code action without edit (client must implement the command)
+    pub fn getCodeActions(self: *Analyzer, uri: []const u8, line: u32) ?[]types.CodeAction {
+        const info = self.getSemanticInfo(uri) catch return null;
+
+        var actions: std.ArrayListUnmanaged(types.CodeAction) = .empty;
+        errdefer actions.deinit(self.allocator);
+
+        // Check for unused variable warnings on this line
+        for (info.variables) |v| {
+            // Convert 1-based to 0-based line
+            if (v.decl_line > 0 and v.decl_line - 1 == line) {
+                // Check if variable name doesn't start with underscore
+                const name = v.name;
+                if (!std.mem.startsWith(u8, name, "_")) {
+                    // Create a simple code action (without edit to avoid allocation issues)
+                    actions.append(self.allocator, .{
+                        .title = "Prefix unused variable with _",
+                        .kind = "quickfix",
+                    }) catch continue;
+                }
+            }
+        }
+
+        if (actions.items.len == 0) {
+            actions.deinit(self.allocator);
+            return null;
+        }
+        return actions.toOwnedSlice(self.allocator) catch null;
+    }
+
+    /// Get semantic tokens for a document
+    pub fn getSemanticTokens(self: *Analyzer, uri: []const u8) ?[]u32 {
+        const doc = self.documents.get(uri) orelse return null;
+
+        var tokens: std.ArrayListUnmanaged(u32) = .empty;
+        errdefer tokens.deinit(self.allocator);
+
+        var prev_line: u32 = 0;
+        var prev_char: u32 = 0;
+        var current_line: u32 = 0;
+
+        var lines = std.mem.splitScalar(u8, doc.content, '\n');
+        while (lines.next()) |line_content| : (current_line += 1) {
+            var col: u32 = 0;
+            while (col < line_content.len) {
+                // Skip whitespace
+                if (std.ascii.isWhitespace(line_content[col])) {
+                    col += 1;
+                    continue;
+                }
+
+                // Check for comments
+                if (col + 1 < line_content.len and line_content[col] == '/' and line_content[col + 1] == '/') {
+                    // Line comment - rest of line
+                    const start = col;
+                    const len = @as(u32, @intCast(line_content.len - col));
+                    addSemanticToken(&tokens, self.allocator, current_line, start, len, 6, 0, &prev_line, &prev_char) catch break;
+                    break;
+                }
+
+                // Check for strings
+                if (line_content[col] == '"' or line_content[col] == '\'') {
+                    const quote = line_content[col];
+                    const start = col;
+                    col += 1;
+                    while (col < line_content.len and line_content[col] != quote) {
+                        if (line_content[col] == '\\' and col + 1 < line_content.len) {
+                            col += 2;
+                        } else {
+                            col += 1;
+                        }
+                    }
+                    if (col < line_content.len) col += 1; // closing quote
+                    const len = col - start;
+                    addSemanticToken(&tokens, self.allocator, current_line, start, len, 4, 0, &prev_line, &prev_char) catch break;
+                    continue;
+                }
+
+                // Check for numbers
+                if (std.ascii.isDigit(line_content[col])) {
+                    const start = col;
+                    while (col < line_content.len and (std.ascii.isDigit(line_content[col]) or line_content[col] == '.' or line_content[col] == '_')) {
+                        col += 1;
+                    }
+                    const len = col - start;
+                    addSemanticToken(&tokens, self.allocator, current_line, start, len, 5, 0, &prev_line, &prev_char) catch break;
+                    continue;
+                }
+
+                // Check for identifiers and keywords
+                if (std.ascii.isAlphabetic(line_content[col]) or line_content[col] == '_') {
+                    const start = col;
+                    while (col < line_content.len and (std.ascii.isAlphanumeric(line_content[col]) or line_content[col] == '_')) {
+                        col += 1;
+                    }
+                    const word = line_content[start..col];
+                    const len = @as(u32, @intCast(word.len));
+
+                    // Determine token type
+                    const token_type: u32 = if (isKeyword(word)) 0 // keyword
+                        else if (std.ascii.isUpper(word[0])) 3 // type
+                        else if (col < line_content.len and line_content[col] == '(') 1 // function
+                        else 2; // variable
+
+                    addSemanticToken(&tokens, self.allocator, current_line, start, len, token_type, 0, &prev_line, &prev_char) catch break;
+                    continue;
+                }
+
+                col += 1;
+            }
+        }
+
+        if (tokens.items.len == 0) {
+            tokens.deinit(self.allocator);
+            return null;
+        }
+        return tokens.toOwnedSlice(self.allocator) catch null;
     }
 };
 
@@ -1548,4 +1914,332 @@ fn formatExpression(writer: anytype, expr: ast.Expression) !void {
             try writer.writeAll("...");
         },
     }
+}
+
+// ============================================================================
+// Comment Detection
+// ============================================================================
+
+/// Check if a position is inside a comment (line or block comment)
+fn isPositionInComment(content: []const u8, line: u32, character: u32) bool {
+    // Get absolute position from line and character
+    var abs_pos: usize = 0;
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var current_line: u32 = 0;
+
+    while (lines.next()) |line_content| : (current_line += 1) {
+        if (current_line == line) {
+            abs_pos += @min(character, line_content.len);
+            break;
+        }
+        abs_pos += line_content.len + 1; // +1 for newline
+    }
+
+    // Scan through content tracking comment state
+    var i: usize = 0;
+    var in_block_comment = false;
+
+    while (i < content.len) {
+        if (in_block_comment) {
+            // Look for end of block comment
+            if (i + 1 < content.len and content[i] == '*' and content[i + 1] == '/') {
+                // Position inside comment if before the closing */
+                if (abs_pos < i + 2) {
+                    return true;
+                }
+                in_block_comment = false;
+                i += 2;
+                continue;
+            }
+        } else {
+            // Check for line comment
+            if (i + 1 < content.len and content[i] == '/' and content[i + 1] == '/') {
+                // Find end of line
+                var end_of_line = i;
+                while (end_of_line < content.len and content[end_of_line] != '\n') {
+                    end_of_line += 1;
+                }
+                if (abs_pos >= i and abs_pos < end_of_line) {
+                    return true;
+                }
+                i = end_of_line;
+                continue;
+            }
+            // Check for block comment start
+            if (i + 1 < content.len and content[i] == '/' and content[i + 1] == '*') {
+                in_block_comment = true;
+                // If position is at start of block comment, it's in comment
+                if (abs_pos >= i) {
+                    // But we need to find end first
+                    var j = i + 2;
+                    while (j + 1 < content.len) {
+                        if (content[j] == '*' and content[j + 1] == '/') {
+                            // Block comment ends at j+2
+                            if (abs_pos < j + 2) {
+                                return true;
+                            }
+                            break;
+                        }
+                        j += 1;
+                    }
+                    // If no closing found, position after start is in comment
+                    if (j + 1 >= content.len and abs_pos >= i) {
+                        return true;
+                    }
+                }
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    // If still in block comment at end of content
+    if (in_block_comment and abs_pos >= i) {
+        return true;
+    }
+
+    return false;
+}
+
+// ============================================================================
+// Keyword Hover
+// ============================================================================
+
+/// Get hover text for a keyword
+fn getKeywordHover(word: []const u8) ?[]const u8 {
+    const keywords = .{
+        .{ "function", "```maxon\nfunction\n```\n\nDeclares a function. Functions contain executable code and can return values.\n\nExample:\n```maxon\nfunction add(a int, b int) returns int\n    return a + b\nend 'add'\n```" },
+        .{ "returns", "```maxon\nreturns\n```\n\nSpecifies the return type of a function." },
+        .{ "return", "```maxon\nreturn\n```\n\nReturns a value from a function and exits the function." },
+        .{ "end", "```maxon\nend\n```\n\nEnds a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes." },
+        .{ "let", "```maxon\nlet\n```\n\nDeclares an immutable variable. The value cannot be changed after initialization." },
+        .{ "var", "```maxon\nvar\n```\n\nDeclares a mutable variable. The value can be changed after initialization." },
+        .{ "type", "```maxon\ntype\n```\n\nDeclares a struct type with fields and methods.\n\nExample:\n```maxon\ntype Point\n    var x int\n    var y int\nend 'Point'\n```" },
+        .{ "enum", "```maxon\nenum\n```\n\nDeclares an enumeration type with a fixed set of cases.\n\nExample:\n```maxon\nenum Color\n    red\n    green\n    blue\nend 'Color'\n```" },
+        .{ "interface", "```maxon\ninterface\n```\n\nDeclares an interface that types can conform to.\n\nExample:\n```maxon\ninterface Printable\n    function print() returns int\nend 'Printable'\n```" },
+        .{ "if", "```maxon\nif\n```\n\nConditional statement. Executes code if the condition is true." },
+        .{ "else", "```maxon\nelse\n```\n\nAlternative branch in an if statement. Executed when the condition is false." },
+        .{ "while", "```maxon\nwhile\n```\n\nLoop that continues while the condition is true." },
+        .{ "for", "```maxon\nfor\n```\n\nLoop that iterates over a range or collection." },
+        .{ "in", "```maxon\nin\n```\n\nUsed in for loops to specify the range or collection to iterate over." },
+        .{ "break", "```maxon\nbreak\n```\n\nExits the current loop immediately." },
+        .{ "continue", "```maxon\ncontinue\n```\n\nSkips the rest of the current loop iteration and continues with the next iteration." },
+        .{ "true", "```maxon\ntrue\n```\n\nBoolean literal representing true." },
+        .{ "false", "```maxon\nfalse\n```\n\nBoolean literal representing false." },
+        .{ "and", "```maxon\nand\n```\n\nLogical AND operator. Returns true if both operands are true." },
+        .{ "or", "```maxon\nor\n```\n\nLogical OR operator. Returns true if either operand is true." },
+        .{ "not", "```maxon\nnot\n```\n\nLogical NOT operator. Negates a boolean value." },
+        .{ "nil", "```maxon\nnil\n```\n\nRepresents the absence of a value for optional types." },
+        .{ "self", "```maxon\nself\n```\n\nRefers to the current instance in a method." },
+        .{ "Self", "```maxon\nSelf\n```\n\nRefers to the current type in a method signature." },
+        .{ "is", "```maxon\nis\n```\n\nSpecifies that a type conforms to an interface." },
+        .{ "as", "```maxon\nas\n```\n\nType cast operator. Converts a value to a different type." },
+        .{ "match", "```maxon\nmatch\n```\n\nPattern matching statement for enums and values." },
+        .{ "try", "```maxon\ntry\n```\n\nAttempts an operation that may throw an error." },
+        .{ "catch", "```maxon\ncatch\n```\n\nHandles errors thrown in a try block." },
+        .{ "throw", "```maxon\nthrow\n```\n\nThrows an error that can be caught by a try-catch block." },
+        .{ "throws", "```maxon\nthrows\n```\n\nIndicates that a function may throw an error." },
+        .{ "export", "```maxon\nexport\n```\n\nMakes a function or type visible to other modules." },
+        .{ "static", "```maxon\nstatic\n```\n\nDeclares a static method that doesn't require an instance." },
+        .{ "uses", "```maxon\nuses\n```\n\nDeclares associated types in an interface." },
+        .{ "extends", "```maxon\nextends\n```\n\nIndicates interface inheritance." },
+        .{ "from", "```maxon\nfrom\n```\n\nUsed in range expressions (from X to Y)." },
+        .{ "to", "```maxon\nto\n```\n\nUsed in range expressions (from X to Y)." },
+        .{ "gives", "```maxon\ngives\n```\n\nUsed in iterator expressions." },
+        .{ "do", "```maxon\ndo\n```\n\nUsed in do-while loops or do-catch blocks." },
+        .{ "default", "```maxon\ndefault\n```\n\nDefault case in a match statement." },
+        .{ "fallthrough", "```maxon\nfallthrough\n```\n\nFalls through to the next case in a match statement." },
+        .{ "int", "```maxon\nint\n```\n\nPrimitive integer type (64-bit signed)." },
+        .{ "float", "```maxon\nfloat\n```\n\nPrimitive floating-point type (64-bit double precision)." },
+        .{ "bool", "```maxon\nbool\n```\n\nPrimitive boolean type (true or false)." },
+        .{ "byte", "```maxon\nbyte\n```\n\nPrimitive byte type (8-bit unsigned integer)." },
+        .{ "string", "```maxon\nstring\n```\n\nManaged string type with automatic memory management." },
+    };
+
+    inline for (keywords) |kw| {
+        if (std.mem.eql(u8, word, kw[0])) {
+            return kw[1];
+        }
+    }
+    return null;
+}
+
+// ============================================================================
+// Word Finding
+// ============================================================================
+
+const WordRange = struct {
+    start: u32,
+    end: u32,
+};
+
+/// Find a specific word at or after the given column position
+/// Returns the range if found at exactly that position
+fn findWordAt(line: []const u8, col: u32, word: []const u8) ?WordRange {
+    if (col >= line.len) return null;
+
+    // Check if we're at the start of an identifier
+    const c = line[col];
+    if (!std.ascii.isAlphabetic(c) and c != '_') return null;
+
+    // Find the full word at this position
+    const start = col;
+    var end = col;
+
+    // Extend to end of word
+    while (end < line.len and (std.ascii.isAlphanumeric(line[end]) or line[end] == '_')) {
+        end += 1;
+    }
+
+    // Check if it matches
+    const found_word = line[start..end];
+    if (std.mem.eql(u8, found_word, word)) {
+        return .{ .start = start, .end = @intCast(end) };
+    }
+    return null;
+}
+
+/// Check if a word is a Maxon keyword
+fn isKeyword(word: []const u8) bool {
+    const keywords = [_][]const u8{
+        "function",    "returns", "return",  "end",   "let",   "var",    "type",   "enum",
+        "interface",   "if",      "else",    "while", "for",   "in",     "break",  "continue",
+        "true",        "false",   "and",     "or",    "not",   "nil",    "self",   "Self",
+        "is",          "as",      "match",   "try",   "catch", "throw",  "throws", "export",
+        "static",      "uses",    "extends", "from",  "to",    "gives",  "do",     "default",
+        "fallthrough", "int",     "float",   "bool",  "byte",  "string",
+    };
+    for (keywords) |kw| {
+        if (std.mem.eql(u8, word, kw)) return true;
+    }
+    return false;
+}
+
+/// Add a semantic token to the tokens array (LSP delta encoding)
+fn addSemanticToken(
+    tokens: *std.ArrayListUnmanaged(u32),
+    allocator: std.mem.Allocator,
+    line: u32,
+    char: u32,
+    length: u32,
+    token_type: u32,
+    modifiers: u32,
+    prev_line: *u32,
+    prev_char: *u32,
+) !void {
+    const delta_line = line - prev_line.*;
+    const delta_char = if (delta_line == 0) char - prev_char.* else char;
+
+    try tokens.append(allocator, delta_line);
+    try tokens.append(allocator, delta_char);
+    try tokens.append(allocator, length);
+    try tokens.append(allocator, token_type);
+    try tokens.append(allocator, modifiers);
+
+    prev_line.* = line;
+    prev_char.* = char;
+}
+
+test "analyzer hover shows doc comment for function" {
+    const allocator = std.testing.allocator;
+    var analyzer = Analyzer.init(allocator);
+    defer analyzer.deinit();
+
+    const source =
+        \\/// Multiplies two numbers together
+        \\function multiply(x int, y int) returns int
+        \\    return x * y
+        \\end 'multiply'
+        \\
+        \\function main() returns int
+        \\    return multiply(3, 4)
+        \\end 'main'
+    ;
+
+    try analyzer.openDocument("file:///test.maxon", source, 1);
+
+    // Verify doc_comment is stored in FuncInfo
+    const info = try analyzer.getSemanticInfo("file:///test.maxon");
+    const func_info = info.functions.get("multiply").?;
+    try std.testing.expect(func_info.doc_comment != null);
+    try std.testing.expectEqualStrings("Multiplies two numbers together", func_info.doc_comment.?);
+
+    // Verify hover returns doc comment
+    const hover = analyzer.getHoverInfo("file:///test.maxon", 6, 11);
+    defer if (hover) |h| allocator.free(h);
+
+    try std.testing.expect(hover != null);
+    const content = hover.?;
+    try std.testing.expect(std.mem.indexOf(u8, content, "function") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "multiply") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "Multiplies two numbers together") != null);
+}
+
+test "analyzer hover shows method with doc comment" {
+    const allocator = std.testing.allocator;
+    var analyzer = Analyzer.init(allocator);
+    defer analyzer.deinit();
+
+    const source =
+        \\type Counter
+        \\    var count int
+        \\
+        \\    /// Increments the counter by one
+        \\    method increment()
+        \\        self.count = self.count + 1
+        \\    end 'increment'
+        \\end 'Counter'
+        \\
+        \\function main() returns int
+        \\    var c = Counter{count: 0}
+        \\    c.increment()
+        \\    return c.count
+        \\end 'main'
+    ;
+
+    try analyzer.openDocument("file:///test.maxon", source, 1);
+
+    // line 11 is "    c.increment()" (0-indexed)
+    // "increment" starts at column 6
+    const hover = analyzer.getHoverInfo("file:///test.maxon", 11, 6);
+    defer if (hover) |h| allocator.free(h);
+
+    try std.testing.expect(hover != null);
+    const content = hover.?;
+    try std.testing.expect(std.mem.indexOf(u8, content, "increment") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "Increments the counter by one") != null);
+}
+
+test "analyzer hover shows stdlib Array.push with doc comment" {
+    const allocator = std.testing.allocator;
+    var analyzer = Analyzer.init(allocator);
+    defer analyzer.deinit();
+
+    const source =
+        \\function main() returns int
+        \\    var arr = [1, 2, 3]
+        \\    arr.push(4)
+        \\    return 0
+        \\end 'main'
+    ;
+
+    try analyzer.openDocument("file:///test.maxon", source, 1);
+
+    // line 2 is "    arr.push(4)" (0-indexed)
+    // "push" starts at column 8
+    const hover = analyzer.getHoverInfo("file:///test.maxon", 2, 8);
+    defer if (hover) |h| allocator.free(h);
+
+    std.debug.print("\n[UNIT_TEST] hover for stdlib Array.push: {s}\n", .{hover orelse "(null)"});
+
+    try std.testing.expect(hover != null);
+    const content = hover.?;
+    try std.testing.expect(std.mem.indexOf(u8, content, "push") != null);
+    // This should show the doc comment from stdlib Array.maxon
+    const has_doc = std.mem.indexOf(u8, content, "Append element to end") != null;
+    if (!has_doc) {
+        std.debug.print("\n[FAIL] Expected doc comment 'Append element to end' but got:\n{s}\n", .{content});
+    }
+    try std.testing.expect(has_doc);
 }

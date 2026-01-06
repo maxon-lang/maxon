@@ -28,7 +28,16 @@ const TestContext = struct {
     fn forceCleanup(self: *TestContext) void {
         if (self.cleaned_up) return;
         self.cleaned_up = true;
-        self.client.deinit();
+        // Still try to capture debug output even on failure
+        if (self.client.debug_output) {
+            self.client.shutdown() catch {};
+            self.client.exit() catch {};
+            self.client.deinitAndCheckLeaks() catch |err| {
+                std.debug.print("[forceCleanup] deinitAndCheckLeaks error: {}\n", .{err});
+            };
+        } else {
+            self.client.deinit();
+        }
     }
 };
 
@@ -498,10 +507,10 @@ test "hover shows intrinsic signature" {
     var result = try ctx.client.hover("file:///test.maxon", 3, 10);
     defer result.deinit();
 
-    // The hover should show the intrinsic signature
+    // The hover should show the function signature
     try testing.expect(result.content != null);
     const content = result.content.?;
-    try testing.expect(std.mem.indexOf(u8, content, "intrinsic") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "function") != null);
     try testing.expect(std.mem.indexOf(u8, content, "__write_file_binary") != null);
 
     try ctx.deinit();
@@ -775,6 +784,65 @@ test "hover shows variable type inside interface implementation method" {
     try ctx.deinit();
 }
 
+test "hover shows array type" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function main() returns int
+        \\    var arr = [1, 2, 3]
+        \\    arr.push(4)
+        \\    return 0
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'arr' at line 1 (var arr = [1, 2, 3])
+    var result = try ctx.client.hover("file:///test.maxon", 1, 8);
+    defer result.deinit();
+
+    // The hover should show the array type with element type
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "arr") != null);
+    // Should show "Array of int" for the element type
+    try testing.expect(std.mem.indexOf(u8, content, "Array of int") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows array of struct type" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type Point
+        \\    var x int
+        \\    var y int
+        \\end 'Point'
+        \\
+        \\function main() returns int
+        \\    var points = [Point{x: 1, y: 2}, Point{x: 3, y: 4}]
+        \\    return 0
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'points' at line 6 (var points = ...)
+    var result = try ctx.client.hover("file:///test.maxon", 6, 8);
+    defer result.deinit();
+
+    // The hover should show "Array of Point"
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "points") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "Array of Point") != null);
+
+    try ctx.deinit();
+}
+
 test "hover shows struct definition" {
     var ctx = try TestContext.init();
     errdefer ctx.forceCleanup();
@@ -786,15 +854,15 @@ test "hover shows struct definition" {
         \\end 'Point'
         \\
         \\function test() returns int
-        \\    var p Point
+        \\    var p = Point{x: 0, y: 0}
         \\    return 0
         \\end 'test'
     ;
 
     try ctx.client.openDocument("file:///test.maxon", source);
 
-    // Request hover on 'Point' in the var declaration (line 6, col 10)
-    var result = try ctx.client.hover("file:///test.maxon", 6, 10);
+    // Request hover on 'Point' in the struct literal (line 6, col 12)
+    var result = try ctx.client.hover("file:///test.maxon", 6, 12);
     defer result.deinit();
 
     try testing.expect(result.content != null);
@@ -830,6 +898,106 @@ test "hover shows user function signature" {
     try testing.expect(std.mem.indexOf(u8, content, "multiply") != null);
     try testing.expect(std.mem.indexOf(u8, content, "x") != null);
     try testing.expect(std.mem.indexOf(u8, content, "y") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows doc comment for function" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\/// Adds two numbers together
+        \\function add(x int, y int) returns int
+        \\    return x + y
+        \\end 'add'
+        \\
+        \\function main() returns int
+        \\    return add(1, 2)
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'add' call (line 6: "    return add(1, 2)")
+    // "add" starts at column 11
+    var result = try ctx.client.hover("file:///test.maxon", 6, 11);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    // Should show the function signature
+    try testing.expect(std.mem.indexOf(u8, content, "function") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "add") != null);
+    // Should show the doc comment
+    try testing.expect(std.mem.indexOf(u8, content, "Adds two numbers together") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows doc comment for method" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type Counter
+        \\    var count int
+        \\
+        \\    /// Increments the counter by one
+        \\    function increment()
+        \\        self.count = self.count + 1
+        \\    end 'increment'
+        \\end 'Counter'
+        \\
+        \\function main() returns int
+        \\    var c = Counter{count: 0}
+        \\    c.increment()
+        \\    return c.count
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'increment' method call (line 11: "    c.increment()")
+    // "increment" starts at column 6
+    var result = try ctx.client.hover("file:///test.maxon", 11, 6);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    // Should show the method signature
+    try testing.expect(std.mem.indexOf(u8, content, "increment") != null);
+    // Should show the doc comment
+    try testing.expect(std.mem.indexOf(u8, content, "Increments the counter by one") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows array push method with doc comment" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function main() returns int
+        \\    var arr = [1, 2, 3]
+        \\    arr.push(4)
+        \\    return 0
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'push' method call (line 2: "    arr.push(4)")
+    // "push" starts at column 8
+    var result = try ctx.client.hover("file:///test.maxon", 2, 8);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    // Should show the method signature for push
+    try testing.expect(std.mem.indexOf(u8, content, "push") != null);
+    // Should show the doc comment from stdlib Array.maxon
+    try testing.expect(std.mem.indexOf(u8, content, "Append element to end") != null);
 
     try ctx.deinit();
 }

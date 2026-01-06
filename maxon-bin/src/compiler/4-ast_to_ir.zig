@@ -4517,7 +4517,7 @@ pub const AstToIr = struct {
                     if_stmt.condition.identifier
                 else
                     "expression";
-                const type_name = cond_typed.ty.toDisplayName();
+                const type_name = cond_typed.ty.getTypeName() orelse @tagName(cond_typed.ty);
                 const msg = std.fmt.allocPrint(self.allocator, "'{s}' has type '{s}', not optional", .{ expr_name, type_name }) catch expr_name;
                 self.reportError(.E039, msg);
                 return error.TypeMismatch;
@@ -6154,7 +6154,7 @@ pub const AstToIr = struct {
                 unwrap.optional_expr.identifier
             else
                 "expression";
-            const type_name = opt_typed.ty.toDisplayName();
+            const type_name = opt_typed.ty.getTypeName() orelse @tagName(opt_typed.ty);
             const msg = std.fmt.allocPrint(self.allocator, "'{s}' has type '{s}', not optional", .{ expr_name, type_name }) catch expr_name;
             self.reportError(.E040, msg);
             return error.TypeMismatch;
@@ -10688,6 +10688,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             .return_value_type = return_value_type,
             .is_exported = func.is_export,
             .param_types = param_types,
+            .doc_comment = func.doc_comment,
         });
     }
 
@@ -10758,6 +10759,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 .return_value_type = return_value_type,
                 .is_exported = type_decl.is_export or method.is_export,
                 .param_types = param_types,
+                .doc_comment = method.doc_comment,
             });
         }
     }

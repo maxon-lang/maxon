@@ -136,6 +136,7 @@ pub const LspClient = struct {
     process: std.process.Child,
     next_id: i64,
     exe_path_buf: []u8,
+    debug_output: bool = false,
 
     /// Initialize the LSP client by spawning the server process
     pub fn init(allocator: std.mem.Allocator) !LspClient {
@@ -1170,6 +1171,11 @@ pub const LspClient = struct {
 
         // Join the stderr reader thread and get output
         const stderr_output = stderr_reader.join();
+
+        // Print debug output if enabled
+        if (self.debug_output and stderr_output.len > 0) {
+            std.debug.print("\n=== LSP Server Debug Output ===\n{s}\n=== End Debug Output ===\n", .{stderr_output});
+        }
 
         // Check for memory leak messages
         if (std.mem.indexOf(u8, stderr_output, "Memory leak detected!")) |_| {

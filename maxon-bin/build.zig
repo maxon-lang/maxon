@@ -100,6 +100,18 @@ pub fn build(b: *std.Build) void {
     const coverage_step = b.step("coverage", "Run tests with code coverage (requires OpenCppCoverage)");
     coverage_step.dependOn(&coverage_cmd.step);
 
+    // Unit tests for compiler/lsp modules (run via zig test)
+    const unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_unit_tests = b.addRunArtifact(unit_tests);
+    const unit_test_step = b.step("unit-test", "Run zig unit tests");
+    unit_test_step.dependOn(&run_unit_tests.step);
+
     // LSP E2E tests - spawn server as child process and communicate via JSON-RPC
     const lsp_e2e_tests = b.addTest(.{
         .root_module = b.createModule(.{
