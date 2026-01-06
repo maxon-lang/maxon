@@ -1058,65 +1058,50 @@ fn collectBlockRanges(allocator: std.mem.Allocator, program: ast.Program) ![]Blo
 
     // Collect from types
     for (program.types) |type_decl| {
-        if (type_decl.end_line > 0) {
+        if (ast.getDeclBlockInfo(ast.TypeDecl, type_decl)) |info| {
             try ranges.append(allocator, .{
                 .start_line = type_decl.line,
-                .end_line = type_decl.end_line,
-                .name = type_decl.name,
+                .end_line = info.end_line,
+                .name = info.identifier,
             });
         }
-        // Methods within types
         for (type_decl.methods) |method| {
-            if (method.end_line > 0) {
-                try ranges.append(allocator, .{
-                    .start_line = method.line,
-                    .end_line = method.end_line,
-                    .name = method.name,
-                });
-            }
-            try collectBlockRangesFromStatements(allocator, method.body, &ranges);
+            try collectFromMethod(allocator, method, &ranges);
         }
     }
 
     // Collect from enums
     for (program.enums) |enum_decl| {
-        if (enum_decl.end_line > 0) {
+        if (ast.getDeclBlockInfo(ast.EnumDecl, enum_decl)) |info| {
             try ranges.append(allocator, .{
                 .start_line = enum_decl.line,
-                .end_line = enum_decl.end_line,
-                .name = enum_decl.name,
+                .end_line = info.end_line,
+                .name = info.identifier,
             });
         }
         for (enum_decl.methods) |method| {
-            if (method.end_line > 0) {
-                try ranges.append(allocator, .{
-                    .start_line = method.line,
-                    .end_line = method.end_line,
-                    .name = method.name,
-                });
-            }
-            try collectBlockRangesFromStatements(allocator, method.body, &ranges);
+            try collectFromMethod(allocator, method, &ranges);
         }
     }
 
     // Collect from interfaces
     for (program.interfaces) |interface_decl| {
-        if (interface_decl.end_line > 0) {
+        if (ast.getDeclBlockInfo(ast.InterfaceDecl, interface_decl)) |info| {
             try ranges.append(allocator, .{
                 .start_line = interface_decl.line,
-                .end_line = interface_decl.end_line,
-                .name = interface_decl.name,
+                .end_line = info.end_line,
+                .name = info.identifier,
             });
         }
     }
 
     // Collect from functions
     for (program.functions) |func| {
-        if (func.end_line > 0) {
+        if (ast.getDeclBlockInfo(ast.FunctionDecl, func)) |info| {
             try ranges.append(allocator, .{
                 .start_line = func.line,
-                .end_line = func.end_line,
-                .name = func.name,
+                .end_line = info.end_line,
+                .name = info.identifier,
             });
         }
         try collectBlockRangesFromStatements(allocator, func.body, &ranges);
@@ -1125,149 +1110,90 @@ fn collectBlockRanges(allocator: std.mem.Allocator, program: ast.Program) ![]Blo
     return ranges.toOwnedSlice(allocator);
 }
 
+fn collectFromMethod(allocator: std.mem.Allocator, method: ast.MethodDecl, ranges: *std.ArrayListUnmanaged(BlockRange)) !void {
+    if (ast.getDeclBlockInfo(ast.MethodDecl, method)) |info| {
+        try ranges.append(allocator, .{
+            .start_line = method.line,
+            .end_line = info.end_line,
+            .name = info.identifier,
+        });
+    }
+    try collectBlockRangesFromStatements(allocator, method.body, ranges);
+}
+
 fn collectBlockRangesFromStatements(allocator: std.mem.Allocator, statements: []const ast.Statement, ranges: *std.ArrayListUnmanaged(BlockRange)) std.mem.Allocator.Error!void {
     for (statements) |stmt| {
-        switch (stmt.kind) {
-            .if_stmt => |if_stmt| {
-                if (if_stmt.end_line > 0) {
-                    try ranges.append(allocator, .{
-                        .start_line = stmt.line,
-                        .end_line = if_stmt.end_line,
-                        .label = if_stmt.label,
-                    });
-                }
-                try collectBlockRangesFromStatements(allocator, if_stmt.body, ranges);
-                if (if_stmt.else_body) |else_body| {
-                    // Add a separate block range for the else clause
-                    if (if_stmt.else_end_line > 0) {
-                        try ranges.append(allocator, .{
-                            .start_line = if_stmt.end_line, // else starts at the "end ... else ..." line
-                            .end_line = if_stmt.else_end_line,
-                            .label = if_stmt.else_label,
-                        });
-                    }
-                    try collectBlockRangesFromStatements(allocator, else_body, ranges);
-                }
-            },
-            .while_stmt => |while_stmt| {
-                if (while_stmt.end_line > 0) {
-                    try ranges.append(allocator, .{
-                        .start_line = stmt.line,
-                        .end_line = while_stmt.end_line,
-                        .label = while_stmt.label,
-                    });
-                }
-                try collectBlockRangesFromStatements(allocator, while_stmt.body, ranges);
-            },
-            .for_stmt => |for_stmt| {
-                if (for_stmt.end_line > 0) {
-                    try ranges.append(allocator, .{
-                        .start_line = stmt.line,
-                        .end_line = for_stmt.end_line,
-                        .label = for_stmt.label,
-                    });
-                }
-                try collectBlockRangesFromStatements(allocator, for_stmt.body, ranges);
-            },
-            .match_stmt => |match_stmt| {
-                if (match_stmt.end_line > 0) {
-                    try ranges.append(allocator, .{
-                        .start_line = stmt.line,
-                        .end_line = match_stmt.end_line,
-                        .label = match_stmt.label,
-                    });
-                }
-                for (match_stmt.cases) |case| {
-                    try collectBlockRangesFromStatement(allocator, case.body.*, ranges);
-                }
-            },
-            .do_catch_stmt => |do_catch| {
-                if (do_catch.end_line > 0) {
-                    try ranges.append(allocator, .{
-                        .start_line = stmt.line,
-                        .end_line = do_catch.end_line,
-                        .label = do_catch.label,
-                    });
-                }
-                try collectBlockRangesFromStatements(allocator, do_catch.body, ranges);
-                for (do_catch.catches) |catch_clause| {
-                    try collectBlockRangesFromStatements(allocator, catch_clause.body, ranges);
-                }
-            },
-            else => {},
-        }
+        try collectBlockRangesFromStatement(allocator, stmt, ranges);
     }
 }
 
 fn collectBlockRangesFromStatement(allocator: std.mem.Allocator, stmt: ast.Statement, ranges: *std.ArrayListUnmanaged(BlockRange)) std.mem.Allocator.Error!void {
-    switch (stmt.kind) {
-        .if_stmt => |if_stmt| {
-            if (if_stmt.end_line > 0) {
-                try ranges.append(allocator, .{
-                    .start_line = stmt.line,
-                    .end_line = if_stmt.end_line,
-                    .label = if_stmt.label,
-                });
-            }
-            try collectBlockRangesFromStatements(allocator, if_stmt.body, ranges);
-            if (if_stmt.else_body) |else_body| {
-                // Add a separate block range for the else clause
-                if (if_stmt.else_end_line > 0) {
-                    try ranges.append(allocator, .{
-                        .start_line = if_stmt.end_line, // else starts at the "end ... else ..." line
-                        .end_line = if_stmt.else_end_line,
-                        .label = if_stmt.else_label,
-                    });
-                }
-                try collectBlockRangesFromStatements(allocator, else_body, ranges);
-            }
-        },
-        .while_stmt => |while_stmt| {
-            if (while_stmt.end_line > 0) {
-                try ranges.append(allocator, .{
-                    .start_line = stmt.line,
-                    .end_line = while_stmt.end_line,
-                    .label = while_stmt.label,
-                });
-            }
-            try collectBlockRangesFromStatements(allocator, while_stmt.body, ranges);
-        },
-        .for_stmt => |for_stmt| {
-            if (for_stmt.end_line > 0) {
-                try ranges.append(allocator, .{
-                    .start_line = stmt.line,
-                    .end_line = for_stmt.end_line,
-                    .label = for_stmt.label,
-                });
-            }
-            try collectBlockRangesFromStatements(allocator, for_stmt.body, ranges);
-        },
-        .match_stmt => |match_stmt| {
-            if (match_stmt.end_line > 0) {
-                try ranges.append(allocator, .{
-                    .start_line = stmt.line,
-                    .end_line = match_stmt.end_line,
-                    .label = match_stmt.label,
-                });
-            }
-            for (match_stmt.cases) |case| {
-                try collectBlockRangesFromStatement(allocator, case.body.*, ranges);
-            }
-        },
-        .do_catch_stmt => |do_catch| {
-            if (do_catch.end_line > 0) {
-                try ranges.append(allocator, .{
-                    .start_line = stmt.line,
-                    .end_line = do_catch.end_line,
-                    .label = do_catch.label,
-                });
-            }
-            try collectBlockRangesFromStatements(allocator, do_catch.body, ranges);
-            for (do_catch.catches) |catch_clause| {
-                try collectBlockRangesFromStatements(allocator, catch_clause.body, ranges);
-            }
-        },
-        else => {},
+    // Add block range for this statement if it has one
+    if (stmt.kind.getBlockInfo()) |info| {
+        try ranges.append(allocator, .{
+            .start_line = stmt.line,
+            .end_line = info.end_line,
+            .label = info.identifier,
+        });
+
+        // Handle secondary block (e.g., else clause)
+        if (info.secondary) |sec| {
+            try ranges.append(allocator, .{
+                .start_line = sec.start_line,
+                .end_line = sec.end_line,
+                .label = sec.identifier,
+            });
+        }
+    }
+
+    // Recurse into child bodies
+    const children = stmt.kind.getChildBodies();
+    try collectBlockRangesFromStatements(allocator, children.primary, ranges);
+    if (children.secondary) |sec| {
+        try collectBlockRangesFromStatements(allocator, sec, ranges);
+    }
+    if (children.else_if) |else_if| {
+        try collectBlockRangesFromIfStmt(allocator, else_if.*, ranges);
+    }
+    for (children.match_cases) |case| {
+        try collectBlockRangesFromStatement(allocator, case.body.*, ranges);
+    }
+    if (children.default_case) |dc| {
+        try collectBlockRangesFromStatement(allocator, dc.*, ranges);
+    }
+    for (children.catch_clauses) |cc| {
+        try collectBlockRangesFromStatements(allocator, cc.body, ranges);
+    }
+}
+
+fn collectBlockRangesFromIfStmt(allocator: std.mem.Allocator, if_stmt: ast.IfStmt, ranges: *std.ArrayListUnmanaged(BlockRange)) std.mem.Allocator.Error!void {
+    // Add block range for this if statement
+    if (if_stmt.end_line > 0) {
+        try ranges.append(allocator, .{
+            .start_line = if_stmt.end_line, // For else-if, we use end_line as start (it chains)
+            .end_line = if_stmt.end_line,
+            .label = if (if_stmt.label.len > 0) if_stmt.label else null,
+        });
+    }
+
+    // Recurse into body
+    try collectBlockRangesFromStatements(allocator, if_stmt.body, ranges);
+
+    // Handle else body
+    if (if_stmt.else_body) |else_body| {
+        if (if_stmt.else_end_line > 0) {
+            try ranges.append(allocator, .{
+                .start_line = if_stmt.end_line,
+                .end_line = if_stmt.else_end_line,
+                .label = if_stmt.else_label,
+            });
+        }
+        try collectBlockRangesFromStatements(allocator, else_body, ranges);
+    }
+
+    // Handle else-if chain
+    if (if_stmt.else_if) |else_if| {
+        try collectBlockRangesFromIfStmt(allocator, else_if.*, ranges);
     }
 }
 
@@ -1342,191 +1268,74 @@ fn findBlockEndLineForStart(program: ast.Program, start_line: u32, label: []cons
 
 fn findBlockStartInStatements(statements: []const ast.Statement, end_line: u32, label: []const u8) ?u32 {
     for (statements) |stmt| {
-        switch (stmt.kind) {
-            .if_stmt => |if_stmt| {
-                // Check if this if statement ends on the target line
-                if (if_stmt.end_line == end_line and std.mem.eql(u8, if_stmt.label, label)) {
-                    return stmt.line;
-                }
-                // Search in body
-                if (findBlockStartInStatements(if_stmt.body, end_line, label)) |line| return line;
-                // Search in else body
-                if (if_stmt.else_body) |else_body| {
-                    if (findBlockStartInStatements(else_body, end_line, label)) |line| return line;
-                }
-            },
-            .while_stmt => |while_stmt| {
-                if (while_stmt.end_line == end_line and std.mem.eql(u8, while_stmt.label, label)) {
-                    return stmt.line;
-                }
-                if (findBlockStartInStatements(while_stmt.body, end_line, label)) |line| return line;
-            },
-            .for_stmt => |for_stmt| {
-                if (for_stmt.end_line == end_line and std.mem.eql(u8, for_stmt.label, label)) {
-                    return stmt.line;
-                }
-                if (findBlockStartInStatements(for_stmt.body, end_line, label)) |line| return line;
-            },
-            .match_stmt => |match_stmt| {
-                if (match_stmt.end_line == end_line and std.mem.eql(u8, match_stmt.label, label)) {
-                    return stmt.line;
-                }
-                for (match_stmt.cases) |case| {
-                    // MatchCase.body is a pointer to a single statement
-                    if (findBlockStartInStatement(case.body.*, end_line, label)) |line| return line;
-                }
-            },
-            .do_catch_stmt => |do_catch| {
-                if (do_catch.end_line == end_line and std.mem.eql(u8, do_catch.label, label)) {
-                    return stmt.line;
-                }
-                if (findBlockStartInStatements(do_catch.body, end_line, label)) |line| return line;
-                for (do_catch.catches) |catch_clause| {
-                    if (findBlockStartInStatements(catch_clause.body, end_line, label)) |line| return line;
-                }
-            },
-            else => {},
-        }
+        if (findBlockStartInStatement(stmt, end_line, label)) |line| return line;
     }
     return null;
 }
 
 fn findBlockStartInStatement(stmt: ast.Statement, end_line: u32, label: []const u8) ?u32 {
-    switch (stmt.kind) {
-        .if_stmt => |if_stmt| {
-            if (if_stmt.end_line == end_line and std.mem.eql(u8, if_stmt.label, label)) {
+    // Check if this statement's block ends on the target line with matching label
+    if (stmt.kind.getBlockInfo()) |info| {
+        if (info.end_line == end_line) {
+            if (info.identifier) |id| {
+                if (std.mem.eql(u8, id, label)) return stmt.line;
+            } else if (label.len == 0) {
                 return stmt.line;
             }
-            if (findBlockStartInStatements(if_stmt.body, end_line, label)) |line| return line;
-            if (if_stmt.else_body) |else_body| {
-                if (findBlockStartInStatements(else_body, end_line, label)) |line| return line;
-            }
-        },
-        .while_stmt => |while_stmt| {
-            if (while_stmt.end_line == end_line and std.mem.eql(u8, while_stmt.label, label)) {
-                return stmt.line;
-            }
-            if (findBlockStartInStatements(while_stmt.body, end_line, label)) |line| return line;
-        },
-        .for_stmt => |for_stmt| {
-            if (for_stmt.end_line == end_line and std.mem.eql(u8, for_stmt.label, label)) {
-                return stmt.line;
-            }
-            if (findBlockStartInStatements(for_stmt.body, end_line, label)) |line| return line;
-        },
-        .match_stmt => |match_stmt| {
-            if (match_stmt.end_line == end_line and std.mem.eql(u8, match_stmt.label, label)) {
-                return stmt.line;
-            }
-            for (match_stmt.cases) |case| {
-                if (findBlockStartInStatement(case.body.*, end_line, label)) |line| return line;
-            }
-        },
-        .do_catch_stmt => |do_catch| {
-            if (do_catch.end_line == end_line and std.mem.eql(u8, do_catch.label, label)) {
-                return stmt.line;
-            }
-            if (findBlockStartInStatements(do_catch.body, end_line, label)) |line| return line;
-            for (do_catch.catches) |catch_clause| {
-                if (findBlockStartInStatements(catch_clause.body, end_line, label)) |line| return line;
-            }
-        },
-        else => {},
+        }
+    }
+
+    // Recurse into child bodies
+    const children = stmt.kind.getChildBodies();
+    if (findBlockStartInStatements(children.primary, end_line, label)) |line| return line;
+    if (children.secondary) |sec| {
+        if (findBlockStartInStatements(sec, end_line, label)) |line| return line;
+    }
+    for (children.match_cases) |case| {
+        if (findBlockStartInStatement(case.body.*, end_line, label)) |line| return line;
+    }
+    if (children.default_case) |dc| {
+        if (findBlockStartInStatement(dc.*, end_line, label)) |line| return line;
+    }
+    for (children.catch_clauses) |cc| {
+        if (findBlockStartInStatements(cc.body, end_line, label)) |line| return line;
     }
     return null;
 }
 
 fn findBlockEndInStatements(statements: []const ast.Statement, start_line: u32, label: []const u8) ?u32 {
     for (statements) |stmt| {
-        switch (stmt.kind) {
-            .if_stmt => |if_stmt| {
-                // Check if this if statement starts on the target line
-                if (stmt.line == start_line and std.mem.eql(u8, if_stmt.label, label)) {
-                    return if_stmt.end_line;
-                }
-                // Search in body
-                if (findBlockEndInStatements(if_stmt.body, start_line, label)) |line| return line;
-                // Search in else body
-                if (if_stmt.else_body) |else_body| {
-                    if (findBlockEndInStatements(else_body, start_line, label)) |line| return line;
-                }
-            },
-            .while_stmt => |while_stmt| {
-                if (stmt.line == start_line and std.mem.eql(u8, while_stmt.label, label)) {
-                    return while_stmt.end_line;
-                }
-                if (findBlockEndInStatements(while_stmt.body, start_line, label)) |line| return line;
-            },
-            .for_stmt => |for_stmt| {
-                if (stmt.line == start_line and std.mem.eql(u8, for_stmt.label, label)) {
-                    return for_stmt.end_line;
-                }
-                if (findBlockEndInStatements(for_stmt.body, start_line, label)) |line| return line;
-            },
-            .match_stmt => |match_stmt| {
-                if (stmt.line == start_line and std.mem.eql(u8, match_stmt.label, label)) {
-                    return match_stmt.end_line;
-                }
-                for (match_stmt.cases) |case| {
-                    if (findBlockEndInStatement(case.body.*, start_line, label)) |line| return line;
-                }
-            },
-            .do_catch_stmt => |do_catch| {
-                if (stmt.line == start_line and std.mem.eql(u8, do_catch.label, label)) {
-                    return do_catch.end_line;
-                }
-                if (findBlockEndInStatements(do_catch.body, start_line, label)) |line| return line;
-                for (do_catch.catches) |catch_clause| {
-                    if (findBlockEndInStatements(catch_clause.body, start_line, label)) |line| return line;
-                }
-            },
-            else => {},
-        }
+        if (findBlockEndInStatement(stmt, start_line, label)) |line| return line;
     }
     return null;
 }
 
 fn findBlockEndInStatement(stmt: ast.Statement, start_line: u32, label: []const u8) ?u32 {
-    switch (stmt.kind) {
-        .if_stmt => |if_stmt| {
-            if (stmt.line == start_line and std.mem.eql(u8, if_stmt.label, label)) {
-                return if_stmt.end_line;
+    // Check if this statement's block starts on the target line with matching label
+    if (stmt.kind.getBlockInfo()) |info| {
+        if (stmt.line == start_line) {
+            if (info.identifier) |id| {
+                if (std.mem.eql(u8, id, label)) return info.end_line;
+            } else if (label.len == 0) {
+                return info.end_line;
             }
-            if (findBlockEndInStatements(if_stmt.body, start_line, label)) |line| return line;
-            if (if_stmt.else_body) |else_body| {
-                if (findBlockEndInStatements(else_body, start_line, label)) |line| return line;
-            }
-        },
-        .while_stmt => |while_stmt| {
-            if (stmt.line == start_line and std.mem.eql(u8, while_stmt.label, label)) {
-                return while_stmt.end_line;
-            }
-            if (findBlockEndInStatements(while_stmt.body, start_line, label)) |line| return line;
-        },
-        .for_stmt => |for_stmt| {
-            if (stmt.line == start_line and std.mem.eql(u8, for_stmt.label, label)) {
-                return for_stmt.end_line;
-            }
-            if (findBlockEndInStatements(for_stmt.body, start_line, label)) |line| return line;
-        },
-        .match_stmt => |match_stmt| {
-            if (stmt.line == start_line and std.mem.eql(u8, match_stmt.label, label)) {
-                return match_stmt.end_line;
-            }
-            for (match_stmt.cases) |case| {
-                if (findBlockEndInStatement(case.body.*, start_line, label)) |line| return line;
-            }
-        },
-        .do_catch_stmt => |do_catch| {
-            if (stmt.line == start_line and std.mem.eql(u8, do_catch.label, label)) {
-                return do_catch.end_line;
-            }
-            if (findBlockEndInStatements(do_catch.body, start_line, label)) |line| return line;
-            for (do_catch.catches) |catch_clause| {
-                if (findBlockEndInStatements(catch_clause.body, start_line, label)) |line| return line;
-            }
-        },
-        else => {},
+        }
+    }
+
+    // Recurse into child bodies
+    const children = stmt.kind.getChildBodies();
+    if (findBlockEndInStatements(children.primary, start_line, label)) |line| return line;
+    if (children.secondary) |sec| {
+        if (findBlockEndInStatements(sec, start_line, label)) |line| return line;
+    }
+    for (children.match_cases) |case| {
+        if (findBlockEndInStatement(case.body.*, start_line, label)) |line| return line;
+    }
+    if (children.default_case) |dc| {
+        if (findBlockEndInStatement(dc.*, start_line, label)) |line| return line;
+    }
+    for (children.catch_clauses) |cc| {
+        if (findBlockEndInStatements(cc.body, start_line, label)) |line| return line;
     }
     return null;
 }

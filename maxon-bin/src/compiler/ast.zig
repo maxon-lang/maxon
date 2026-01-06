@@ -1,5 +1,20 @@
 const std = @import("std");
 
+/// Information about a code block's extent and identifier (for folding, formatting, etc.)
+pub const BlockInfo = struct {
+    end_line: u32,
+    identifier: ?[]const u8 = null, // label for control flow, name for declarations
+
+    /// Optional secondary block (for if-else constructs)
+    secondary: ?SecondaryBlock = null,
+
+    pub const SecondaryBlock = struct {
+        start_line: u32,
+        end_line: u32,
+        identifier: ?[]const u8 = null,
+    };
+};
+
 /// A top-level constant declaration: let NAME = expression
 pub const GlobalConstant = struct {
     name: []const u8,
@@ -295,7 +310,91 @@ pub const StatementKind = union(enum) {
     do_catch_stmt: DoCatchStmt,
     // Match statements
     match_stmt: MatchStmt,
+
+    /// Returns block information if this statement kind contains a block
+    pub fn getBlockInfo(self: StatementKind) ?BlockInfo {
+        return switch (self) {
+            .if_stmt => |if_s| if (if_s.end_line > 0) BlockInfo{
+                .end_line = if_s.end_line,
+                .identifier = if (if_s.label.len > 0) if_s.label else null,
+                .secondary = if (if_s.else_body != null and if_s.else_end_line > 0)
+                    BlockInfo.SecondaryBlock{
+                        .start_line = if_s.end_line,
+                        .end_line = if_s.else_end_line,
+                        .identifier = if_s.else_label,
+                    }
+                else
+                    null,
+            } else null,
+            .while_stmt => |w| if (w.end_line > 0) BlockInfo{
+                .end_line = w.end_line,
+                .identifier = if (w.label.len > 0) w.label else null,
+            } else null,
+            .for_stmt => |f| if (f.end_line > 0) BlockInfo{
+                .end_line = f.end_line,
+                .identifier = if (f.label.len > 0) f.label else null,
+            } else null,
+            .match_stmt => |m| if (m.end_line > 0) BlockInfo{
+                .end_line = m.end_line,
+                .identifier = if (m.label.len > 0) m.label else null,
+            } else null,
+            .do_catch_stmt => |d| if (d.end_line > 0) BlockInfo{
+                .end_line = d.end_line,
+                .identifier = if (d.label.len > 0) d.label else null,
+            } else null,
+            .else_unwrap_decl => |e| if (e.end_line > 0) BlockInfo{
+                .end_line = e.end_line,
+                .identifier = if (e.label.len > 0) e.label else null,
+            } else null,
+            .guard_let_decl => |g| if (g.end_line > 0) BlockInfo{
+                .end_line = g.end_line,
+                .identifier = if (g.label.len > 0) g.label else null,
+            } else null,
+            else => null,
+        };
+    }
+
+    /// Returns child statement bodies for recursive block traversal
+    pub fn getChildBodies(self: StatementKind) ChildBodies {
+        return switch (self) {
+            .if_stmt => |if_s| .{
+                .primary = if_s.body,
+                .secondary = if_s.else_body,
+                .else_if = if_s.else_if,
+            },
+            .while_stmt => |w| .{ .primary = w.body },
+            .for_stmt => |f| .{ .primary = f.body },
+            .match_stmt => |m| .{ .match_cases = m.cases, .default_case = m.default_case },
+            .do_catch_stmt => |d| .{ .primary = d.body, .catch_clauses = d.catches },
+            .else_unwrap_decl => |e| .{ .primary = e.default_body },
+            .guard_let_decl => |g| .{ .primary = g.nil_body },
+            else => .{},
+        };
+    }
+
+    pub const ChildBodies = struct {
+        primary: []const Statement = &.{},
+        secondary: ?[]const Statement = null,
+        else_if: ?*const IfStmt = null,
+        match_cases: []const MatchCase = &.{},
+        default_case: ?*const Statement = null,
+        catch_clauses: []const CatchClause = &.{},
+    };
 };
+
+/// Helper to get block info from any declaration type that has line/end_line/name fields
+pub fn getDeclBlockInfo(comptime T: type, decl: T) ?BlockInfo {
+    if (@hasField(T, "end_line") and @hasField(T, "line")) {
+        if (decl.end_line > 0) {
+            const identifier = if (@hasField(T, "name")) decl.name else null;
+            return BlockInfo{
+                .end_line = decl.end_line,
+                .identifier = identifier,
+            };
+        }
+    }
+    return null;
+}
 
 pub const Statement = struct {
     kind: StatementKind,
