@@ -828,6 +828,193 @@ pub const LspClient = struct {
         };
     }
 
+    // ========================================================================
+    // TDD Methods - for features not yet implemented in server
+    // ========================================================================
+
+    /// Rename result from LSP
+    pub const RenameResult = struct {
+        has_edits: bool,
+        edit_count: usize,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *RenameResult) void {
+            _ = self;
+            // Nothing to free
+        }
+    };
+
+    /// Request rename at a position
+    pub fn rename(self: *LspClient, uri: []const u8, line: u32, character: u32, new_name: []const u8) !RenameResult {
+        var response = try self.sendRequest("textDocument/rename", .{
+            .textDocument = .{ .uri = uri },
+            .position = .{ .line = line, .character = character },
+            .newName = new_name,
+        });
+        defer response.deinit();
+
+        if (response.getError()) |_| {
+            // Server may return MethodNotFound if not implemented
+            return RenameResult{
+                .has_edits = false,
+                .edit_count = 0,
+                .allocator = self.allocator,
+            };
+        }
+
+        const result = response.getResult() orelse return RenameResult{
+            .has_edits = false,
+            .edit_count = 0,
+            .allocator = self.allocator,
+        };
+
+        if (result == .null) {
+            return RenameResult{
+                .has_edits = false,
+                .edit_count = 0,
+                .allocator = self.allocator,
+            };
+        }
+
+        // Result is WorkspaceEdit: { changes: { [uri]: TextEdit[] } } or { documentChanges: [...] }
+        var edit_count: usize = 0;
+        if (result == .object) {
+            if (result.object.get("changes")) |changes| {
+                if (changes == .object) {
+                    var it = changes.object.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* == .array) {
+                            edit_count += entry.value_ptr.array.items.len;
+                        }
+                    }
+                }
+            }
+        }
+
+        return RenameResult{
+            .has_edits = edit_count > 0,
+            .edit_count = edit_count,
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Code action result from LSP
+    pub const CodeActionResult = struct {
+        action_count: usize,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *CodeActionResult) void {
+            _ = self;
+        }
+    };
+
+    /// Request code actions at a position
+    pub fn codeAction(self: *LspClient, uri: []const u8, start_line: u32, start_char: u32, end_line: u32, end_char: u32) !CodeActionResult {
+        var response = try self.sendRequest("textDocument/codeAction", .{
+            .textDocument = .{ .uri = uri },
+            .range = .{
+                .start = .{ .line = start_line, .character = start_char },
+                .end = .{ .line = end_line, .character = end_char },
+            },
+            .context = .{
+                .diagnostics = &[_]struct{}{},
+            },
+        });
+        defer response.deinit();
+
+        if (response.getError()) |_| {
+            return CodeActionResult{
+                .action_count = 0,
+                .allocator = self.allocator,
+            };
+        }
+
+        const result = response.getResult() orelse return CodeActionResult{
+            .action_count = 0,
+            .allocator = self.allocator,
+        };
+
+        if (result == .null) {
+            return CodeActionResult{
+                .action_count = 0,
+                .allocator = self.allocator,
+            };
+        }
+
+        // Result is (Command | CodeAction)[]
+        if (result == .array) {
+            return CodeActionResult{
+                .action_count = result.array.items.len,
+                .allocator = self.allocator,
+            };
+        }
+
+        return CodeActionResult{
+            .action_count = 0,
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Semantic tokens result from LSP
+    pub const SemanticTokensResult = struct {
+        has_data: bool,
+        data_length: usize,
+        allocator: std.mem.Allocator,
+
+        pub fn deinit(self: *SemanticTokensResult) void {
+            _ = self;
+        }
+    };
+
+    /// Request semantic tokens for a document
+    pub fn semanticTokensFull(self: *LspClient, uri: []const u8) !SemanticTokensResult {
+        var response = try self.sendRequest("textDocument/semanticTokens/full", .{
+            .textDocument = .{ .uri = uri },
+        });
+        defer response.deinit();
+
+        if (response.getError()) |_| {
+            return SemanticTokensResult{
+                .has_data = false,
+                .data_length = 0,
+                .allocator = self.allocator,
+            };
+        }
+
+        const result = response.getResult() orelse return SemanticTokensResult{
+            .has_data = false,
+            .data_length = 0,
+            .allocator = self.allocator,
+        };
+
+        if (result == .null) {
+            return SemanticTokensResult{
+                .has_data = false,
+                .data_length = 0,
+                .allocator = self.allocator,
+            };
+        }
+
+        // Result is { data: number[] }
+        if (result == .object) {
+            if (result.object.get("data")) |data| {
+                if (data == .array) {
+                    return SemanticTokensResult{
+                        .has_data = data.array.items.len > 0,
+                        .data_length = data.array.items.len,
+                        .allocator = self.allocator,
+                    };
+                }
+            }
+        }
+
+        return SemanticTokensResult{
+            .has_data = false,
+            .data_length = 0,
+            .allocator = self.allocator,
+        };
+    }
+
     /// Send a JSON-RPC request and wait for response
     fn sendRequest(self: *LspClient, method: []const u8, params: anytype) !ParsedResponse {
         const id = self.next_id;

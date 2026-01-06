@@ -280,6 +280,118 @@ test "completion for array methods" {
     try ctx.deinit();
 }
 
+test "completion for string methods" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function main() returns int
+        \\    var s = "hello"
+        \\    return s.count
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request completion after "s." (line 2, column 13)
+    var result = try ctx.client.completionWithTrigger("file:///test.maxon", 2, 13, ".");
+    defer result.deinit();
+
+    // Check we got some string completions
+    try testing.expect(result.items.len > 0);
+
+    // Verify count is in the completions
+    var found_count = false;
+    for (result.items) |item| {
+        if (std.mem.eql(u8, item.label, "count")) {
+            found_count = true;
+            break;
+        }
+    }
+    try testing.expect(found_count);
+
+    try ctx.deinit();
+}
+
+test "completion for struct fields" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type Point
+        \\    var x int
+        \\    var y int
+        \\end 'Point'
+        \\
+        \\function test() returns int
+        \\    var p = Point{x: 0, y: 0}
+        \\    return p.x
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request completion after "p." (line 7, column 13)
+    var result = try ctx.client.completionWithTrigger("file:///test.maxon", 7, 13, ".");
+    defer result.deinit();
+
+    // Check we got some completions
+    try testing.expect(result.items.len > 0);
+
+    // Verify x and y are in the completions
+    var found_x = false;
+    var found_y = false;
+    for (result.items) |item| {
+        if (std.mem.eql(u8, item.label, "x")) found_x = true;
+        if (std.mem.eql(u8, item.label, "y")) found_y = true;
+    }
+    try testing.expect(found_x);
+    try testing.expect(found_y);
+
+    try ctx.deinit();
+}
+
+test "completion for enum members" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\enum Color
+        \\    red
+        \\    green
+        \\    blue
+        \\end 'Color'
+        \\
+        \\function test() returns Color
+        \\    return Color.red
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request completion after "Color." (line 7, column 17)
+    var result = try ctx.client.completionWithTrigger("file:///test.maxon", 7, 17, ".");
+    defer result.deinit();
+
+    // Check we got some completions for enum members
+    try testing.expect(result.items.len > 0);
+
+    // Verify enum members are in the completions
+    var found_red = false;
+    var found_green = false;
+    var found_blue = false;
+    for (result.items) |item| {
+        if (std.mem.eql(u8, item.label, "red")) found_red = true;
+        if (std.mem.eql(u8, item.label, "green")) found_green = true;
+        if (std.mem.eql(u8, item.label, "blue")) found_blue = true;
+    }
+    try testing.expect(found_red);
+    try testing.expect(found_green);
+    try testing.expect(found_blue);
+
+    try ctx.deinit();
+}
+
 // ============================================================================
 // Hover Tests
 // ============================================================================
@@ -459,6 +571,269 @@ test "hover shows trunc builtin with help text" {
     try ctx.deinit();
 }
 
+test "hover shows keyword info" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    return 42
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'return' keyword at line 1, character 4
+    var result = try ctx.client.hover("file:///test.maxon", 1, 4);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "return") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows type keyword info" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type MyStruct
+        \\    var value int
+        \\end 'MyStruct'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'type' keyword at line 0, character 2
+    var result = try ctx.client.hover("file:///test.maxon", 0, 2);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "type") != null);
+
+    try ctx.deinit();
+}
+
+test "hover excludes text in line comments" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\// This function uses for loops and if statements
+        \\function test() returns int
+        \\    return 42
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'for' inside the line comment (line 0, col 24)
+    var result = try ctx.client.hover("file:///test.maxon", 0, 24);
+    defer result.deinit();
+
+    // Should have no hover for text inside comments
+    try testing.expect(result.content == null);
+
+    try ctx.deinit();
+}
+
+test "hover excludes text in block comments" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\/* This is a block comment
+        \\   that mentions for loops
+        \\   and if statements */
+        \\function test() returns int
+        \\    return 42
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'for' in the block comment (line 1, col 17)
+    var result = try ctx.client.hover("file:///test.maxon", 1, 17);
+    defer result.deinit();
+
+    // Should have no hover for text inside comments
+    try testing.expect(result.content == null);
+
+    try ctx.deinit();
+}
+
+test "hover works after block comment ends" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\/* comment */ function test() returns int
+        \\    return 42
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'function' keyword after the block comment (line 0, col 18)
+    var result = try ctx.client.hover("file:///test.maxon", 0, 18);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "function") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows struct field info" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type MyStruct
+        \\    var count int
+        \\    var capacity int
+        \\end 'MyStruct'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'capacity' field declaration (line 2, col 8)
+    var result = try ctx.client.hover("file:///test.maxon", 2, 8);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    // Should show field info, not array.capacity() function
+    try testing.expect(std.mem.indexOf(u8, content, "capacity") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "function capacity(self array)") == null);
+
+    try ctx.deinit();
+}
+
+test "hover shows variable type inside struct method" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type MyType
+        \\    var value int
+        \\
+        \\    function doSomething() returns int
+        \\        var count = 42
+        \\        return count
+        \\    end 'doSomething'
+        \\end 'MyType'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'count' in the return statement (line 5, col 15)
+    var result = try ctx.client.hover("file:///test.maxon", 5, 15);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "count") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "int") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows variable type inside interface implementation method" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\interface TestInterface
+        \\    function doSomething() returns int
+        \\end 'TestInterface'
+        \\
+        \\type MyType is TestInterface
+        \\    var value int
+        \\    function TestInterface.doSomething() returns int
+        \\        var count = 42
+        \\        return count
+        \\    end 'doSomething'
+        \\end 'MyType'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'count' in the return statement (line 8, col 15)
+    var result = try ctx.client.hover("file:///test.maxon", 8, 15);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "count") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "int") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows struct definition" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type Point
+        \\    var x int
+        \\    var y int
+        \\end 'Point'
+        \\
+        \\function test() returns int
+        \\    var p Point
+        \\    return 0
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'Point' in the var declaration (line 6, col 10)
+    var result = try ctx.client.hover("file:///test.maxon", 6, 10);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "Point") != null);
+
+    try ctx.deinit();
+}
+
+test "hover shows user function signature" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function multiply(x int, y int) returns int
+        \\    return x * y
+        \\end 'multiply'
+        \\
+        \\function main() returns int
+        \\    return multiply(3, 4)
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'multiply' call (line 5, col 11)
+    var result = try ctx.client.hover("file:///test.maxon", 5, 11);
+    defer result.deinit();
+
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    try testing.expect(std.mem.indexOf(u8, content, "function") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "multiply") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "x") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "y") != null);
+
+    try ctx.deinit();
+}
+
 // ============================================================================
 // Go to Definition Tests
 // ============================================================================
@@ -484,6 +859,310 @@ test "definition returns location" {
     defer result.deinit();
 
     // Should point to helper() definition at line 0
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 0), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition for var variable" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    var counter = 0
+        \\    counter = counter + 1
+        \\    return counter
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on 'counter' usage in assignment (line 2, col 4)
+    var result = try ctx.client.definition("file:///test.maxon", 2, 4);
+    defer result.deinit();
+
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 1), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition for let variable" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    let value = 42
+        \\    return value
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on 'value' usage in return (line 2, col 11)
+    var result = try ctx.client.definition("file:///test.maxon", 2, 11);
+    defer result.deinit();
+
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 1), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition for function parameter" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function add(a int, b int) returns int
+        \\    return a + b
+        \\end 'add'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on 'a' usage in return (line 1, col 11)
+    var result = try ctx.client.definition("file:///test.maxon", 1, 11);
+    defer result.deinit();
+
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 0), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition for struct type" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type Point
+        \\    var x int
+        \\    var y int
+        \\end 'Point'
+        \\
+        \\function test() returns int
+        \\    var p = Point{x: 0, y: 0}
+        \\    return 0
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on 'Point' type in struct literal (line 6, col 12)
+    var result = try ctx.client.definition("file:///test.maxon", 6, 12);
+    defer result.deinit();
+
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 0), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition for struct field" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type Point
+        \\    var x int
+        \\    var y int
+        \\end 'Point'
+        \\
+        \\function test() returns int
+        \\    var p = Point{x: 0, y: 0}
+        \\    p.x = 10
+        \\    return p.x
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on 'x' field access (line 7, col 6)
+    var result = try ctx.client.definition("file:///test.maxon", 7, 6);
+    defer result.deinit();
+
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 1), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition for interface type" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\interface Printable
+        \\    function print() returns int
+        \\end 'Printable'
+        \\
+        \\type Message is Printable
+        \\    var text string
+        \\
+        \\    function Printable.print() returns int
+        \\        return 42
+        \\    end 'print'
+        \\end 'Message'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on 'Printable' in conformance (line 4, col 18)
+    var result = try ctx.client.definition("file:///test.maxon", 4, 18);
+    defer result.deinit();
+
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 0), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition for variable in nested scope" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    var outer = 1
+        \\    if outer == 1 'check'
+        \\        var inner = 2
+        \\        return inner + outer
+        \\    end 'check'
+        \\    return outer
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on 'inner' usage (line 4, col 15)
+    var result = try ctx.client.definition("file:///test.maxon", 4, 15);
+    defer result.deinit();
+
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 3), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition on keyword returns nothing" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    return 42
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Try go to definition on 'return' keyword (line 1, col 4)
+    var result = try ctx.client.definition("file:///test.maxon", 1, 4);
+    defer result.deinit();
+
+    try testing.expect(result.uri == null);
+
+    try ctx.deinit();
+}
+
+test "definition on number literal returns nothing" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    return 42
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Try go to definition on '42' literal (line 1, col 11)
+    var result = try ctx.client.definition("file:///test.maxon", 1, 11);
+    defer result.deinit();
+
+    try testing.expect(result.uri == null);
+
+    try ctx.deinit();
+}
+
+test "definition for recursive function call" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function factorial(n int) returns int
+        \\    if n <= 1 'base'
+        \\        return 1
+        \\    end 'base'
+        \\    return n * factorial(n - 1)
+        \\end 'factorial'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on recursive 'factorial' call (line 4, col 16)
+    var result = try ctx.client.definition("file:///test.maxon", 4, 16);
+    defer result.deinit();
+
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 0), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition for struct in return type" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type Point
+        \\    var x int
+        \\    var y int
+        \\end 'Point'
+        \\
+        \\function createPoint() returns Point
+        \\    return Point{x: 0, y: 0}
+        \\end 'createPoint'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on 'Point' return type (line 5, col 31)
+    var result = try ctx.client.definition("file:///test.maxon", 5, 31);
+    defer result.deinit();
+
+    try testing.expect(result.uri != null);
+    try testing.expectEqual(@as(u32, 0), result.line.?);
+
+    try ctx.deinit();
+}
+
+test "definition for struct literal type" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\type Point
+        \\    var x int
+        \\    var y int
+        \\end 'Point'
+        \\
+        \\function test() returns Point
+        \\    return Point{x: 0, y: 0}
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Go to definition on 'Point' in struct literal (line 6, col 11)
+    var result = try ctx.client.definition("file:///test.maxon", 6, 11);
+    defer result.deinit();
+
     try testing.expect(result.uri != null);
     try testing.expectEqual(@as(u32, 0), result.line.?);
 
@@ -939,6 +1618,114 @@ test "linkedEditingRange returns ranges for interface method names" {
     }
     try testing.expect(has_method_name);
     try testing.expect(has_end_label);
+
+    try ctx.deinit();
+}
+
+// ============================================================================
+// TDD: Rename Tests (server does not implement textDocument/rename yet)
+// These tests will fail until the feature is implemented
+// ============================================================================
+
+test "rename block identifier updates all occurrences" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    if true 'myBlock'
+        \\        return 1
+        \\    end 'myBlock'
+        \\    return 0
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request rename on 'myBlock' (line 1, col 14)
+    var result = try ctx.client.rename("file:///test.maxon", 1, 14, "newBlock");
+    defer result.deinit();
+
+    // Should have edits for both occurrences
+    try testing.expect(result.has_edits);
+    try testing.expectEqual(@as(usize, 2), result.edit_count);
+
+    try ctx.deinit();
+}
+
+test "rename function updates function name and end label" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function oldName() returns int
+        \\    return 42
+        \\end 'oldName'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request rename on 'oldName' (line 0, col 12)
+    var result = try ctx.client.rename("file:///test.maxon", 0, 12, "newName");
+    defer result.deinit();
+
+    // Should have edits for function name and end label
+    try testing.expect(result.has_edits);
+    try testing.expectEqual(@as(usize, 2), result.edit_count);
+
+    try ctx.deinit();
+}
+
+// ============================================================================
+// TDD: Code Action Tests (server does not implement textDocument/codeAction yet)
+// ============================================================================
+
+test "code action offers fix for unused variable" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    var unused = 42
+        \\    return 0
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request code actions on the unused variable line
+    var result = try ctx.client.codeAction("file:///test.maxon", 1, 4, 1, 19);
+    defer result.deinit();
+
+    // Should have at least one code action (e.g., remove unused variable)
+    try testing.expect(result.action_count > 0);
+
+    try ctx.deinit();
+}
+
+// ============================================================================
+// TDD: Semantic Tokens Tests (server does not implement semanticTokens yet)
+// ============================================================================
+
+test "semantic tokens returns token data" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function test() returns int
+        \\    var x = 42
+        \\    return x
+        \\end 'test'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.semanticTokensFull("file:///test.maxon");
+    defer result.deinit();
+
+    // Should have semantic token data
+    try testing.expect(result.has_data);
+    try testing.expect(result.data_length > 0);
 
     try ctx.deinit();
 }
