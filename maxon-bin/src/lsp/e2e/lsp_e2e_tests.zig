@@ -565,14 +565,14 @@ test "formatting handles else blocks correctly" {
     var ctx = try TestContext.init();
     errdefer ctx.forceCleanup();
 
-    // Code with else block - indentation should be maintained
+    // Code with else block - uses correct Maxon syntax: end 'label' else 'else_label'
     const source =
         \\function test() returns int
         \\if true 'check'
         \\return 1
-        \\else 'check'
+        \\end 'check' else 'other'
         \\return 0
-        \\end 'check'
+        \\end 'other'
         \\return 0
         \\end 'test'
     ;
@@ -590,11 +590,11 @@ test "formatting handles else blocks correctly" {
     // The first return should be indented 2 levels
     try testing.expect(std.mem.indexOf(u8, new_text, "\t\treturn 1") != null);
 
-    // The else should be indented 1 level (same as if)
-    try testing.expect(std.mem.indexOf(u8, new_text, "\telse 'check'") != null);
+    // The else line should be indented 1 level (same as if)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'check' else 'other'") != null);
 
-    // The end 'check' should be indented 1 level
-    try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'check'") != null);
+    // The end 'other' should be indented 1 level
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'other'") != null);
 
     try ctx.deinit();
 }

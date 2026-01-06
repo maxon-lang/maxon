@@ -693,20 +693,35 @@ pub const Analyzer = struct {
     /// Format a document and return the formatted text
     pub fn formatDocument(self: *Analyzer, uri: []const u8, tab_size: u32, insert_spaces: bool) ?[]const u8 {
         const doc = self.documents.get(uri) orelse return null;
-        return formatContent(self.allocator, doc.content, tab_size, insert_spaces) catch null;
+        const info = self.semantic_cache.get(uri);
+        return formatContent(self.allocator, doc.content, tab_size, insert_spaces, info) catch null;
     }
 
     /// Get folding ranges for a document
     pub fn getFoldingRanges(self: *Analyzer, uri: []const u8) ![]types.FoldingRange {
-        const doc = self.documents.get(uri) orelse return &.{};
+        _ = self.documents.get(uri) orelse return &.{};
 
-        var ranges: std.ArrayListUnmanaged(types.FoldingRange) = .empty;
-        try findFoldingRanges(doc.content, self.allocator, &ranges);
+        // Use AST-based folding if available
+        if (self.semantic_cache.get(uri)) |info| {
+            if (info.program) |program| {
+                const block_ranges = try collectBlockRanges(self.allocator, program);
+                defer self.allocator.free(block_ranges);
 
-        if (ranges.items.len == 0) {
-            return &.{};
+                if (block_ranges.len == 0) return &.{};
+
+                var ranges: std.ArrayListUnmanaged(types.FoldingRange) = .empty;
+                for (block_ranges) |br| {
+                    // Convert from 1-based AST lines to 0-based LSP lines
+                    try ranges.append(self.allocator, .{
+                        .startLine = br.start_line - 1,
+                        .endLine = br.end_line - 1,
+                    });
+                }
+                return ranges.toOwnedSlice(self.allocator);
+            }
         }
-        return ranges.toOwnedSlice(self.allocator);
+
+        return &.{};
     }
 
     /// Get linked editing ranges for a position in a document
@@ -722,7 +737,7 @@ pub const Analyzer = struct {
 // ============================================================================
 
 /// Format document content with proper indentation
-fn formatContent(allocator: std.mem.Allocator, content: []const u8, tab_size: u32, insert_spaces: bool) ![]const u8 {
+fn formatContent(allocator: std.mem.Allocator, content: []const u8, tab_size: u32, insert_spaces: bool, info: ?ast_to_ir.SemanticInfo) ![]const u8 {
     var result: std.ArrayListUnmanaged(u8) = .empty;
     errdefer result.deinit(allocator);
 
@@ -734,7 +749,7 @@ fn formatContent(allocator: std.mem.Allocator, content: []const u8, tab_size: u3
         break :blk indent_buf[0..size];
     } else "\t";
 
-    // Collect all lines first for lookahead
+    // Collect all lines first
     var all_lines: std.ArrayListUnmanaged([]const u8) = .empty;
     defer all_lines.deinit(allocator);
 
@@ -743,11 +758,22 @@ fn formatContent(allocator: std.mem.Allocator, content: []const u8, tab_size: u3
         try all_lines.append(allocator, line);
     }
 
-    var depth: u32 = 0;
+    // Get block ranges from AST if available
+    var block_ranges: ?[]BlockRange = null;
+    defer if (block_ranges) |br| allocator.free(br);
+
+    if (info) |semantic_info| {
+        if (semantic_info.program) |program| {
+            block_ranges = try collectBlockRanges(allocator, program);
+        }
+    }
+
     var first_line = true;
 
     for (all_lines.items, 0..) |line, line_idx| {
         const trimmed = std.mem.trim(u8, line, " \t\r");
+        // Line numbers are 1-based in AST
+        const ast_line: u32 = @intCast(line_idx + 1);
 
         // Add newline before all lines except the first
         if (!first_line) {
@@ -760,15 +786,15 @@ fn formatContent(allocator: std.mem.Allocator, content: []const u8, tab_size: u3
             continue;
         }
 
-        // Check for block-ending keywords that reduce indent before the line
-        const is_end_line = std.mem.startsWith(u8, trimmed, "end ") or std.mem.eql(u8, trimmed, "end");
-        const is_else_line = std.mem.startsWith(u8, trimmed, "else") and
-            (trimmed.len == 4 or trimmed[4] == ' ' or trimmed[4] == '\t');
-
-        if (is_end_line and depth > 0) {
-            depth -= 1;
-        } else if (is_else_line and depth > 0) {
-            depth -= 1; // Unindent for else, but will re-indent after
+        // Calculate indentation depth from block ranges
+        const ranges = block_ranges orelse return try allocator.dupe(u8, content);
+        var depth: u32 = 0;
+        for (ranges) |br| {
+            // Line is inside block if: start_line < line < end_line
+            // (start line and end line themselves are not indented)
+            if (br.start_line < ast_line and ast_line < br.end_line) {
+                depth += 1;
+            }
         }
 
         // Add indentation
@@ -779,115 +805,9 @@ fn formatContent(allocator: std.mem.Allocator, content: []const u8, tab_size: u3
 
         // Add the trimmed content
         try result.appendSlice(allocator, trimmed);
-
-        // Check for block-starting constructs that increase indent for next line
-        if (is_else_line) {
-            depth += 1; // Re-indent after else
-        } else if (startsBlockWithLookahead(trimmed, all_lines.items, line_idx)) {
-            depth += 1;
-        }
     }
 
     return result.toOwnedSlice(allocator);
-}
-
-/// Check if a line starts a block (increases indent), with lookahead to handle edge cases
-fn startsBlockWithLookahead(trimmed: []const u8, all_lines: []const []const u8, current_idx: usize) bool {
-    // Handle interface (starts block but ends with interface name)
-    if (std.mem.startsWith(u8, trimmed, "interface ")) return true;
-
-    // Handle type declarations
-    if (std.mem.startsWith(u8, trimmed, "type ")) return true;
-    if (std.mem.startsWith(u8, trimmed, "export type ")) return true;
-
-    // Handle function declarations - but NOT interface method signatures
-    // Interface method signatures are followed immediately by 'end' or another signature
-    if (std.mem.startsWith(u8, trimmed, "function ") or std.mem.startsWith(u8, trimmed, "export function ")) {
-        // Check if this is a method signature (no body) by looking at next non-empty line
-        if (current_idx + 1 < all_lines.len) {
-            // Find next non-empty line
-            var next_idx = current_idx + 1;
-            while (next_idx < all_lines.len) {
-                const next_trimmed = std.mem.trim(u8, all_lines[next_idx], " \t\r");
-                if (next_trimmed.len > 0) {
-                    // If next line is 'end' or another function signature, this is a signature without body
-                    if (std.mem.startsWith(u8, next_trimmed, "end ") or
-                        std.mem.startsWith(u8, next_trimmed, "function "))
-                    {
-                        return false; // Interface method signature, not a block
-                    }
-                    break;
-                }
-                next_idx += 1;
-            }
-        }
-        return true;
-    }
-
-    // Handle control flow with labels ('label' at end)
-    // Check for patterns like: if ... 'label', for ... 'label', while ... 'label', etc.
-    if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '\'') {
-        // This line ends with a label, likely a block start
-        if (std.mem.startsWith(u8, trimmed, "if ")) return true;
-        if (std.mem.startsWith(u8, trimmed, "for ")) return true;
-        if (std.mem.startsWith(u8, trimmed, "while ")) return true;
-        if (std.mem.startsWith(u8, trimmed, "match ")) return true;
-    }
-
-    return false;
-}
-
-/// Simple block detection for folding ranges (doesn't need lookahead)
-fn startsBlock(trimmed: []const u8) bool {
-    if (std.mem.startsWith(u8, trimmed, "interface ")) return true;
-    if (std.mem.startsWith(u8, trimmed, "type ")) return true;
-    if (std.mem.startsWith(u8, trimmed, "export type ")) return true;
-    if (std.mem.startsWith(u8, trimmed, "function ")) return true;
-    if (std.mem.startsWith(u8, trimmed, "export function ")) return true;
-
-    if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '\'') {
-        if (std.mem.startsWith(u8, trimmed, "if ")) return true;
-        if (std.mem.startsWith(u8, trimmed, "for ")) return true;
-        if (std.mem.startsWith(u8, trimmed, "while ")) return true;
-        if (std.mem.startsWith(u8, trimmed, "match ")) return true;
-    }
-
-    return false;
-}
-
-// ============================================================================
-// Folding Range Implementation
-// ============================================================================
-
-/// Find folding ranges in document content
-fn findFoldingRanges(content: []const u8, allocator: std.mem.Allocator, ranges: *std.ArrayListUnmanaged(types.FoldingRange)) !void {
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    var line_num: u32 = 0;
-
-    // Stack to track block starts
-    var block_stack: std.ArrayListUnmanaged(u32) = .empty;
-    defer block_stack.deinit(allocator);
-
-    while (lines.next()) |line| : (line_num += 1) {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-
-        // Check for block starts
-        if (startsBlock(trimmed)) {
-            try block_stack.append(allocator, line_num);
-        }
-        // Check for block ends
-        else if (std.mem.startsWith(u8, trimmed, "end ") or std.mem.eql(u8, trimmed, "end")) {
-            if (block_stack.items.len > 0) {
-                const start_line = block_stack.items[block_stack.items.len - 1];
-                block_stack.items.len -= 1;
-                try ranges.append(allocator, .{
-                    .startLine = start_line,
-                    .endLine = line_num,
-                });
-            }
-        }
-    }
 }
 
 // ============================================================================
@@ -916,8 +836,9 @@ fn findLinkedEditingRanges(allocator: std.mem.Allocator, content: []const u8, li
     var result_ranges: std.ArrayListUnmanaged(types.Range) = .empty;
     errdefer result_ranges.deinit(allocator);
 
-    // Case 1: Check if we're on a function declaration line
     const trimmed_current = std.mem.trim(u8, current_line, " \t\r");
+
+    // Case 1: Check if we're on a function declaration line
     if (std.mem.startsWith(u8, trimmed_current, "function ") or std.mem.startsWith(u8, trimmed_current, "export function ")) {
         // Extract function name
         const func_start_idx = std.mem.indexOf(u8, trimmed_current, "function ").? + "function ".len;
@@ -1119,6 +1040,234 @@ fn findMatchingLabelFromAST(allocator: std.mem.Allocator, lines: []const []const
                 }
             }
         }
+    }
+}
+
+/// A block range with start and end lines (1-based, from AST)
+const BlockRange = struct {
+    start_line: u32,
+    end_line: u32,
+    label: ?[]const u8 = null, // For labeled blocks like if/while/for
+    name: ?[]const u8 = null, // For named blocks like functions/types
+};
+
+/// Extract all block ranges from the AST for folding/formatting
+fn collectBlockRanges(allocator: std.mem.Allocator, program: ast.Program) ![]BlockRange {
+    var ranges: std.ArrayListUnmanaged(BlockRange) = .empty;
+    errdefer ranges.deinit(allocator);
+
+    // Collect from types
+    for (program.types) |type_decl| {
+        if (type_decl.end_line > 0) {
+            try ranges.append(allocator, .{
+                .start_line = type_decl.line,
+                .end_line = type_decl.end_line,
+                .name = type_decl.name,
+            });
+        }
+        // Methods within types
+        for (type_decl.methods) |method| {
+            if (method.end_line > 0) {
+                try ranges.append(allocator, .{
+                    .start_line = method.line,
+                    .end_line = method.end_line,
+                    .name = method.name,
+                });
+            }
+            try collectBlockRangesFromStatements(allocator, method.body, &ranges);
+        }
+    }
+
+    // Collect from enums
+    for (program.enums) |enum_decl| {
+        if (enum_decl.end_line > 0) {
+            try ranges.append(allocator, .{
+                .start_line = enum_decl.line,
+                .end_line = enum_decl.end_line,
+                .name = enum_decl.name,
+            });
+        }
+        for (enum_decl.methods) |method| {
+            if (method.end_line > 0) {
+                try ranges.append(allocator, .{
+                    .start_line = method.line,
+                    .end_line = method.end_line,
+                    .name = method.name,
+                });
+            }
+            try collectBlockRangesFromStatements(allocator, method.body, &ranges);
+        }
+    }
+
+    // Collect from interfaces
+    for (program.interfaces) |interface_decl| {
+        if (interface_decl.end_line > 0) {
+            try ranges.append(allocator, .{
+                .start_line = interface_decl.line,
+                .end_line = interface_decl.end_line,
+                .name = interface_decl.name,
+            });
+        }
+    }
+
+    // Collect from functions
+    for (program.functions) |func| {
+        if (func.end_line > 0) {
+            try ranges.append(allocator, .{
+                .start_line = func.line,
+                .end_line = func.end_line,
+                .name = func.name,
+            });
+        }
+        try collectBlockRangesFromStatements(allocator, func.body, &ranges);
+    }
+
+    return ranges.toOwnedSlice(allocator);
+}
+
+fn collectBlockRangesFromStatements(allocator: std.mem.Allocator, statements: []const ast.Statement, ranges: *std.ArrayListUnmanaged(BlockRange)) std.mem.Allocator.Error!void {
+    for (statements) |stmt| {
+        switch (stmt.kind) {
+            .if_stmt => |if_stmt| {
+                if (if_stmt.end_line > 0) {
+                    try ranges.append(allocator, .{
+                        .start_line = stmt.line,
+                        .end_line = if_stmt.end_line,
+                        .label = if_stmt.label,
+                    });
+                }
+                try collectBlockRangesFromStatements(allocator, if_stmt.body, ranges);
+                if (if_stmt.else_body) |else_body| {
+                    // Add a separate block range for the else clause
+                    if (if_stmt.else_end_line > 0) {
+                        try ranges.append(allocator, .{
+                            .start_line = if_stmt.end_line, // else starts at the "end ... else ..." line
+                            .end_line = if_stmt.else_end_line,
+                            .label = if_stmt.else_label,
+                        });
+                    }
+                    try collectBlockRangesFromStatements(allocator, else_body, ranges);
+                }
+            },
+            .while_stmt => |while_stmt| {
+                if (while_stmt.end_line > 0) {
+                    try ranges.append(allocator, .{
+                        .start_line = stmt.line,
+                        .end_line = while_stmt.end_line,
+                        .label = while_stmt.label,
+                    });
+                }
+                try collectBlockRangesFromStatements(allocator, while_stmt.body, ranges);
+            },
+            .for_stmt => |for_stmt| {
+                if (for_stmt.end_line > 0) {
+                    try ranges.append(allocator, .{
+                        .start_line = stmt.line,
+                        .end_line = for_stmt.end_line,
+                        .label = for_stmt.label,
+                    });
+                }
+                try collectBlockRangesFromStatements(allocator, for_stmt.body, ranges);
+            },
+            .match_stmt => |match_stmt| {
+                if (match_stmt.end_line > 0) {
+                    try ranges.append(allocator, .{
+                        .start_line = stmt.line,
+                        .end_line = match_stmt.end_line,
+                        .label = match_stmt.label,
+                    });
+                }
+                for (match_stmt.cases) |case| {
+                    try collectBlockRangesFromStatement(allocator, case.body.*, ranges);
+                }
+            },
+            .do_catch_stmt => |do_catch| {
+                if (do_catch.end_line > 0) {
+                    try ranges.append(allocator, .{
+                        .start_line = stmt.line,
+                        .end_line = do_catch.end_line,
+                        .label = do_catch.label,
+                    });
+                }
+                try collectBlockRangesFromStatements(allocator, do_catch.body, ranges);
+                for (do_catch.catches) |catch_clause| {
+                    try collectBlockRangesFromStatements(allocator, catch_clause.body, ranges);
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn collectBlockRangesFromStatement(allocator: std.mem.Allocator, stmt: ast.Statement, ranges: *std.ArrayListUnmanaged(BlockRange)) std.mem.Allocator.Error!void {
+    switch (stmt.kind) {
+        .if_stmt => |if_stmt| {
+            if (if_stmt.end_line > 0) {
+                try ranges.append(allocator, .{
+                    .start_line = stmt.line,
+                    .end_line = if_stmt.end_line,
+                    .label = if_stmt.label,
+                });
+            }
+            try collectBlockRangesFromStatements(allocator, if_stmt.body, ranges);
+            if (if_stmt.else_body) |else_body| {
+                // Add a separate block range for the else clause
+                if (if_stmt.else_end_line > 0) {
+                    try ranges.append(allocator, .{
+                        .start_line = if_stmt.end_line, // else starts at the "end ... else ..." line
+                        .end_line = if_stmt.else_end_line,
+                        .label = if_stmt.else_label,
+                    });
+                }
+                try collectBlockRangesFromStatements(allocator, else_body, ranges);
+            }
+        },
+        .while_stmt => |while_stmt| {
+            if (while_stmt.end_line > 0) {
+                try ranges.append(allocator, .{
+                    .start_line = stmt.line,
+                    .end_line = while_stmt.end_line,
+                    .label = while_stmt.label,
+                });
+            }
+            try collectBlockRangesFromStatements(allocator, while_stmt.body, ranges);
+        },
+        .for_stmt => |for_stmt| {
+            if (for_stmt.end_line > 0) {
+                try ranges.append(allocator, .{
+                    .start_line = stmt.line,
+                    .end_line = for_stmt.end_line,
+                    .label = for_stmt.label,
+                });
+            }
+            try collectBlockRangesFromStatements(allocator, for_stmt.body, ranges);
+        },
+        .match_stmt => |match_stmt| {
+            if (match_stmt.end_line > 0) {
+                try ranges.append(allocator, .{
+                    .start_line = stmt.line,
+                    .end_line = match_stmt.end_line,
+                    .label = match_stmt.label,
+                });
+            }
+            for (match_stmt.cases) |case| {
+                try collectBlockRangesFromStatement(allocator, case.body.*, ranges);
+            }
+        },
+        .do_catch_stmt => |do_catch| {
+            if (do_catch.end_line > 0) {
+                try ranges.append(allocator, .{
+                    .start_line = stmt.line,
+                    .end_line = do_catch.end_line,
+                    .label = do_catch.label,
+                });
+            }
+            try collectBlockRangesFromStatements(allocator, do_catch.body, ranges);
+            for (do_catch.catches) |catch_clause| {
+                try collectBlockRangesFromStatements(allocator, catch_clause.body, ranges);
+            }
+        },
+        else => {},
     }
 }
 

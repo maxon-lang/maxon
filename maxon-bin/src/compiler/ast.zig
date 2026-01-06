@@ -35,6 +35,7 @@ pub const InterfaceDecl = struct {
     methods: []InterfaceMethod,
     line: u32 = 0,
     column: u32 = 0,
+    end_line: u32 = 0,
 };
 
 pub const EnumMember = struct {
@@ -53,6 +54,7 @@ pub const EnumDecl = struct {
     methods: []MethodDecl, // Methods defined on the enum
     line: u32 = 0,
     column: u32 = 0,
+    end_line: u32 = 0,
 };
 
 pub const InterfaceConformance = struct {
@@ -83,6 +85,7 @@ pub const TypeDecl = struct {
     methods: []MethodDecl,
     line: u32 = 0,
     column: u32 = 0,
+    end_line: u32 = 0,
 };
 
 pub const FieldDecl = struct {
@@ -170,7 +173,8 @@ pub const IfStmt = struct {
 
     // If-let binding (optional): if let name = expr 'label'
     binding_name: ?[]const u8 = null,
-    end_line: u32 = 0, // Line of the 'end' keyword
+    end_line: u32 = 0, // Line of the 'end' keyword for then-block
+    else_end_line: u32 = 0, // Line of the 'end' keyword for else-block (if present)
 };
 
 pub const WhileStmt = struct {

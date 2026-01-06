@@ -644,8 +644,13 @@ fn analyzeSourceForLSP(
     allocator: std.mem.Allocator,
 ) !semantic_analysis.SemanticInfo {
     _ = source_file; // Not needed in new approach
-    // Duplicate user source - SemanticVarInfo.name will be slices into this
-    const user_source = try allocator.dupe(u8, source);
+
+    // Ensure source ends with newline (parser requires it)
+    const needs_newline = source.len == 0 or source[source.len - 1] != '\n';
+    const user_source = if (needs_newline)
+        try std.mem.concat(allocator, u8, &.{ source, "\n" })
+    else
+        try allocator.dupe(u8, source);
     errdefer allocator.free(user_source);
 
     // Lex and parse using the duplicated source

@@ -325,7 +325,7 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
         }
 
-        _ = try self.expectEndLabel(name_token.text);
+        const end_line = try self.expectEndLabel(name_token.text);
         try self.expectEndNewline();
 
         return .{
@@ -337,6 +337,7 @@ pub const Parser = struct {
             .methods = try methods.toOwnedSlice(self.allocator),
             .line = name_token.line,
             .column = name_token.column,
+            .end_line = end_line,
         };
     }
 
@@ -1174,12 +1175,13 @@ pub const Parser = struct {
         body: ?[]ast.Statement,
         label: ?[]const u8,
         else_if: ?*const ast.IfStmt,
+        else_end_line: u32 = 0,
     };
 
     /// Parse optional else clause: 'else 'label' ... end 'label'' or 'else if ...'
     fn parseElseClause(self: *Parser, allow_else_if: bool) ParseError!ElseClause {
         if (!self.check(.@"else")) {
-            return .{ .body = null, .label = null, .else_if = null };
+            return .{ .body = null, .label = null, .else_if = null, .else_end_line = 0 };
         }
 
         _ = self.advance(); // consume 'else'
@@ -1191,16 +1193,16 @@ pub const Parser = struct {
             const ptr = try self.allocator.create(ast.IfStmt);
             ptr.* = else_if_stmt;
             try self.ifstmt_ptrs.append(self.allocator, ptr);
-            return .{ .body = null, .label = null, .else_if = ptr };
+            return .{ .body = null, .label = null, .else_if = ptr, .else_end_line = 0 };
         }
 
         // Parse else block: else 'label' ... end 'label'
         const else_label_tok = try self.expectBlockIdentifier();
         _ = try self.expect(.newline);
         const else_body = try self.parseBlockBody();
-        _ = try self.expectEndLabel(else_label_tok.text);
+        const else_end_line = try self.expectEndLabel(else_label_tok.text);
 
-        return .{ .body = else_body, .label = else_label_tok.text, .else_if = null };
+        return .{ .body = else_body, .label = else_label_tok.text, .else_if = null, .else_end_line = else_end_line };
     }
 
     // -------------------------------------------------------------------------
@@ -1242,6 +1244,7 @@ pub const Parser = struct {
                 .else_if = null,
                 .binding_name = name_token.text,
                 .end_line = end_line,
+                .else_end_line = else_clause.else_end_line,
             } }, start_line, start_column);
         }
 
@@ -1278,6 +1281,7 @@ pub const Parser = struct {
             .else_label = else_clause.label,
             .else_if = else_clause.else_if,
             .end_line = end_line,
+            .else_end_line = else_clause.else_end_line,
         };
     }
 
@@ -2991,7 +2995,7 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
         }
 
-        _ = try self.expectEndLabel(name_token.text);
+        const end_line = try self.expectEndLabel(name_token.text);
         try self.expectTrailingNewline();
 
         return .{
@@ -3002,6 +3006,7 @@ pub const Parser = struct {
             .methods = try methods.toOwnedSlice(self.allocator),
             .line = name_token.line,
             .column = name_token.column,
+            .end_line = end_line,
         };
     }
 
@@ -3039,7 +3044,7 @@ pub const Parser = struct {
             try methods.append(self.allocator, try self.parseInterfaceMethod());
         }
 
-        _ = try self.expectEndLabel(name_token.text);
+        const end_line = try self.expectEndLabel(name_token.text);
         try self.expectEndNewline();
 
         return .{
@@ -3050,6 +3055,7 @@ pub const Parser = struct {
             .methods = try methods.toOwnedSlice(self.allocator),
             .line = name_token.line,
             .column = name_token.column,
+            .end_line = end_line,
         };
     }
 
