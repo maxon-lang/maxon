@@ -1094,62 +1094,20 @@ fn collectFoldingFromStatement(allocator: std.mem.Allocator, stmt: ast.Statement
             .startLine = info.start_line - 1,
             .endLine = info.end_line - 1,
         });
+    }
 
-        // Handle secondary block (e.g., else clause)
-        if (info.secondary) |sec| {
+    // Recurse into child blocks
+    for (stmt.kind.getChildBlocks()) |child| {
+        // Add folding range for secondary child blocks (else clauses, catch handlers, etc.)
+        // but not for primary blocks (their range is already covered by the statement's block info)
+        if (child.role != .primary and child.info.end_line > 0) {
             try ranges.append(allocator, .{
-                .startLine = sec.start_line - 1,
-                .endLine = sec.end_line - 1,
+                .startLine = child.info.start_line - 1,
+                .endLine = child.info.end_line - 1,
             });
         }
-    }
-
-    // Recurse into child bodies
-    const children = stmt.kind.getChildBodies();
-    try collectFoldingFromStatements(allocator, children.primary, ranges);
-    if (children.secondary) |sec| {
-        try collectFoldingFromStatements(allocator, sec, ranges);
-    }
-    if (children.else_if) |else_if| {
-        try collectFoldingFromIfStmt(allocator, else_if.*, ranges);
-    }
-    for (children.match_cases) |case| {
-        try collectFoldingFromStatement(allocator, case.body.*, ranges);
-    }
-    if (children.default_case) |dc| {
-        try collectFoldingFromStatement(allocator, dc.*, ranges);
-    }
-    for (children.catch_clauses) |cc| {
-        try collectFoldingFromStatements(allocator, cc.body, ranges);
-    }
-}
-
-fn collectFoldingFromIfStmt(allocator: std.mem.Allocator, if_stmt: ast.IfStmt, ranges: *std.ArrayListUnmanaged(types.FoldingRange)) std.mem.Allocator.Error!void {
-    // Add folding range for this if statement
-    if (if_stmt.block.end_line > 0) {
-        try ranges.append(allocator, .{
-            .startLine = if_stmt.block.start_line - 1,
-            .endLine = if_stmt.block.end_line - 1,
-        });
-    }
-
-    // Recurse into body
-    try collectFoldingFromStatements(allocator, if_stmt.body, ranges);
-
-    // Handle else body
-    if (if_stmt.else_body) |else_body| {
-        if (if_stmt.block.secondary) |sec| {
-            try ranges.append(allocator, .{
-                .startLine = sec.start_line - 1,
-                .endLine = sec.end_line - 1,
-            });
-        }
-        try collectFoldingFromStatements(allocator, else_body, ranges);
-    }
-
-    // Handle else-if chain
-    if (if_stmt.else_if) |else_if| {
-        try collectFoldingFromIfStmt(allocator, else_if.*, ranges);
+        // Recurse into child statements
+        try collectFoldingFromStatements(allocator, child.statements, ranges);
     }
 }
 
@@ -1220,60 +1178,16 @@ fn calculateDepthFromStatement(stmt: ast.Statement, line: u32) u32 {
         if (info.start_line < line and line < info.end_line) {
             depth += 1;
         }
-        // Check secondary block (e.g., else clause)
-        if (info.secondary) |sec| {
-            if (sec.start_line < line and line < sec.end_line) {
-                depth += 1;
-            }
+    }
+
+    // Recurse into child blocks
+    for (stmt.kind.getChildBlocks()) |child| {
+        // Check if line is inside this child block
+        if (child.info.start_line < line and line < child.info.end_line) {
+            depth += 1;
         }
-    }
-
-    // Recurse into child bodies
-    const children = stmt.kind.getChildBodies();
-    depth += calculateDepthFromStatements(children.primary, line);
-    if (children.secondary) |sec| {
-        depth += calculateDepthFromStatements(sec, line);
-    }
-    if (children.else_if) |else_if| {
-        depth += calculateDepthFromIfStmt(else_if.*, line);
-    }
-    for (children.match_cases) |case| {
-        depth += calculateDepthFromStatement(case.body.*, line);
-    }
-    if (children.default_case) |dc| {
-        depth += calculateDepthFromStatement(dc.*, line);
-    }
-    for (children.catch_clauses) |cc| {
-        depth += calculateDepthFromStatements(cc.body, line);
-    }
-
-    return depth;
-}
-
-fn calculateDepthFromIfStmt(if_stmt: ast.IfStmt, line: u32) u32 {
-    var depth: u32 = 0;
-
-    // Check if line is inside this if block
-    if (if_stmt.block.start_line < line and line < if_stmt.block.end_line) {
-        depth += 1;
-    }
-
-    // Recurse into body
-    depth += calculateDepthFromStatements(if_stmt.body, line);
-
-    // Handle else body
-    if (if_stmt.else_body) |else_body| {
-        if (if_stmt.block.secondary) |sec| {
-            if (sec.start_line < line and line < sec.end_line) {
-                depth += 1;
-            }
-        }
-        depth += calculateDepthFromStatements(else_body, line);
-    }
-
-    // Handle else-if chain
-    if (if_stmt.else_if) |else_if| {
-        depth += calculateDepthFromIfStmt(else_if.*, line);
+        // Recurse into child statements
+        depth += calculateDepthFromStatements(child.statements, line);
     }
 
     return depth;
@@ -1367,20 +1281,9 @@ fn findBlockStartInStatement(stmt: ast.Statement, end_line: u32, label: []const 
         }
     }
 
-    // Recurse into child bodies
-    const children = stmt.kind.getChildBodies();
-    if (findBlockStartInStatements(children.primary, end_line, label)) |line| return line;
-    if (children.secondary) |sec| {
-        if (findBlockStartInStatements(sec, end_line, label)) |line| return line;
-    }
-    for (children.match_cases) |case| {
-        if (findBlockStartInStatement(case.body.*, end_line, label)) |line| return line;
-    }
-    if (children.default_case) |dc| {
-        if (findBlockStartInStatement(dc.*, end_line, label)) |line| return line;
-    }
-    for (children.catch_clauses) |cc| {
-        if (findBlockStartInStatements(cc.body, end_line, label)) |line| return line;
+    // Recurse into child blocks
+    for (stmt.kind.getChildBlocks()) |child| {
+        if (findBlockStartInStatements(child.statements, end_line, label)) |line| return line;
     }
     return null;
 }
@@ -1404,20 +1307,9 @@ fn findBlockEndInStatement(stmt: ast.Statement, start_line: u32, label: []const 
         }
     }
 
-    // Recurse into child bodies
-    const children = stmt.kind.getChildBodies();
-    if (findBlockEndInStatements(children.primary, start_line, label)) |line| return line;
-    if (children.secondary) |sec| {
-        if (findBlockEndInStatements(sec, start_line, label)) |line| return line;
-    }
-    for (children.match_cases) |case| {
-        if (findBlockEndInStatement(case.body.*, start_line, label)) |line| return line;
-    }
-    if (children.default_case) |dc| {
-        if (findBlockEndInStatement(dc.*, start_line, label)) |line| return line;
-    }
-    for (children.catch_clauses) |cc| {
-        if (findBlockEndInStatements(cc.body, start_line, label)) |line| return line;
+    // Recurse into child blocks
+    for (stmt.kind.getChildBlocks()) |child| {
+        if (findBlockEndInStatements(child.statements, start_line, label)) |line| return line;
     }
     return null;
 }
@@ -1504,46 +1396,18 @@ fn findLetDeclExpression(program: ast.Program, var_name: []const u8, decl_line: 
 
 fn findLetInStatements(stmts: []const ast.Statement, var_name: []const u8, decl_line: u32) ?ast.Expression {
     for (stmts) |stmt| {
-        switch (stmt.kind) {
-            .let_decl => |decl| {
-                if (stmt.line == decl_line and std.mem.eql(u8, decl.name, var_name)) {
-                    return decl.value;
-                }
-            },
-            .if_stmt => |if_s| {
-                if (findLetInStatements(if_s.body, var_name, decl_line)) |expr| return expr;
-                if (if_s.else_body) |else_body| {
-                    if (findLetInStatements(else_body, var_name, decl_line)) |expr| return expr;
-                }
-                if (if_s.else_if) |else_if| {
-                    if (findLetInIfStmt(else_if.*, var_name, decl_line)) |expr| return expr;
-                }
-            },
-            .while_stmt => |while_s| {
-                if (findLetInStatements(while_s.body, var_name, decl_line)) |expr| return expr;
-            },
-            .for_stmt => |for_s| {
-                if (findLetInStatements(for_s.body, var_name, decl_line)) |expr| return expr;
-            },
-            .do_catch_stmt => |do_catch| {
-                if (findLetInStatements(do_catch.body, var_name, decl_line)) |expr| return expr;
-                for (do_catch.catches) |catch_clause| {
-                    if (findLetInStatements(catch_clause.body, var_name, decl_line)) |expr| return expr;
-                }
-            },
-            else => {},
+        // Check for let declaration
+        if (stmt.kind == .let_decl) {
+            const decl = stmt.kind.let_decl;
+            if (stmt.line == decl_line and std.mem.eql(u8, decl.name, var_name)) {
+                return decl.value;
+            }
         }
-    }
-    return null;
-}
 
-fn findLetInIfStmt(if_s: ast.IfStmt, var_name: []const u8, decl_line: u32) ?ast.Expression {
-    if (findLetInStatements(if_s.body, var_name, decl_line)) |expr| return expr;
-    if (if_s.else_body) |else_body| {
-        if (findLetInStatements(else_body, var_name, decl_line)) |expr| return expr;
-    }
-    if (if_s.else_if) |else_if| {
-        if (findLetInIfStmt(else_if.*, var_name, decl_line)) |expr| return expr;
+        // Recurse into child blocks
+        for (stmt.kind.getChildBlocks()) |child| {
+            if (findLetInStatements(child.statements, var_name, decl_line)) |expr| return expr;
+        }
     }
     return null;
 }

@@ -6,15 +6,34 @@ pub const BlockInfo = struct {
     start_column: u32 = 0,
     end_line: u32 = 0,
     identifier: ?[]const u8 = null, // label for control flow, name for declarations
+};
 
-    /// Optional secondary block (for if-else constructs)
-    secondary: ?SecondaryBlock = null,
+/// Role/type of a child block within a statement
+pub const BlockRole = enum {
+    primary, // Main body (if body, while body, for body, do body)
+    else_clause, // Else body for if statements
+    else_if, // Else-if chain (contains nested IfStmt)
+    catch_handler, // Catch clause body
+    match_case, // Match case body
+    default_case, // Default case for match
+    nil_handler, // Guard-let nil body
+    default_value, // Else-unwrap default body
+};
 
-    pub const SecondaryBlock = struct {
-        start_line: u32,
-        end_line: u32,
-        identifier: ?[]const u8 = null,
-    };
+/// A child block with its role and metadata
+pub const ChildBlock = struct {
+    role: BlockRole,
+    statements: []const Statement,
+    info: BlockInfo = .{},
+
+    // For catch clauses
+    catch_binding: ?[]const u8 = null,
+    catch_error_type: ?[]const u8 = null,
+
+    // For match cases
+    match_patterns: []const Expression = &.{},
+    pattern_bindings: []const ?PatternBinding = &.{},
+    has_fallthrough: bool = false,
 };
 
 /// A top-level constant declaration: let NAME = expression
@@ -172,24 +191,22 @@ pub const FieldAssign = struct {
 
 pub const IfStmt = struct {
     condition: Expression,
-    body: []Statement,
-    else_body: ?[]Statement, // For else clause
-    else_if: ?*const IfStmt, // For else-if chain (recursive)
     binding_name: ?[]const u8 = null, // If-let binding (optional): if let name = expr 'label'
-    block: BlockInfo = .{}, // label in identifier, else clause in secondary
+    block: BlockInfo = .{},
+    children: []const ChildBlock = &.{}, // primary body + optional else_clause or else_if
 };
 
 pub const WhileStmt = struct {
     condition: Expression,
-    body: []Statement,
-    block: BlockInfo = .{}, // label in identifier
+    block: BlockInfo = .{},
+    children: []const ChildBlock = &.{}, // primary body
 };
 
 pub const ForStmt = struct {
     var_name: []const u8, // loop variable name
     iterable: Expression, // expression to iterate over
-    body: []Statement,
-    block: BlockInfo = .{}, // label in identifier
+    block: BlockInfo = .{},
+    children: []const ChildBlock = &.{}, // primary body
 };
 
 pub const BreakStmt = struct {
@@ -202,8 +219,8 @@ pub const ContinueStmt = struct {
 pub const ElseUnwrapDecl = struct {
     var_name: []const u8,
     optional_expr: *const Expression,
-    default_body: []Statement,
-    block: BlockInfo = .{}, // label in identifier
+    block: BlockInfo = .{},
+    children: []const ChildBlock = &.{}, // default_value body
 };
 
 // Guard-let: let x = opt or 'label' ... end 'label'
@@ -211,8 +228,8 @@ pub const ElseUnwrapDecl = struct {
 pub const GuardLetDecl = struct {
     var_name: []const u8,
     optional_expr: *const Expression,
-    nil_body: []Statement, // Body executed when optional is nil (must exit)
-    block: BlockInfo = .{}, // label in identifier
+    block: BlockInfo = .{},
+    children: []const ChildBlock = &.{}, // nil_handler body
 };
 
 // Error handling: throw statement
@@ -220,19 +237,10 @@ pub const ThrowStmt = struct {
     error_expr: Expression,
 };
 
-// Error handling: catch clause for do-catch blocks
-pub const CatchClause = struct {
-    binding_name: []const u8, // 'e' in 'catch e FileError'
-    error_type: ?[]const u8, // null = catch any Error
-    body: []Statement,
-    label: []const u8,
-};
-
 // Error handling: do-catch block
 pub const DoCatchStmt = struct {
-    body: []Statement,
-    catches: []const CatchClause,
-    block: BlockInfo = .{}, // label in identifier
+    block: BlockInfo = .{},
+    children: []const ChildBlock = &.{}, // primary body + catch_handlers
 };
 
 // Match statements and expressions
@@ -252,9 +260,8 @@ pub const MatchCase = struct {
 
 pub const MatchStmt = struct {
     scrutinee: Expression,
-    cases: []const MatchCase,
-    default_case: ?*const Statement, // Pointer to break circular dep
-    block: BlockInfo = .{}, // label in identifier
+    block: BlockInfo = .{},
+    children: []const ChildBlock = &.{}, // match_cases + optional default_case
 };
 
 pub const MatchExprCase = struct {
@@ -306,32 +313,19 @@ pub const StatementKind = union(enum) {
         };
     }
 
-    /// Returns child statement bodies for recursive block traversal
-    pub fn getChildBodies(self: StatementKind) ChildBodies {
+    /// Returns all child blocks for uniform iteration
+    pub fn getChildBlocks(self: StatementKind) []const ChildBlock {
         return switch (self) {
-            .if_stmt => |if_s| .{
-                .primary = if_s.body,
-                .secondary = if_s.else_body,
-                .else_if = if_s.else_if,
-            },
-            .while_stmt => |w| .{ .primary = w.body },
-            .for_stmt => |f| .{ .primary = f.body },
-            .match_stmt => |m| .{ .match_cases = m.cases, .default_case = m.default_case },
-            .do_catch_stmt => |d| .{ .primary = d.body, .catch_clauses = d.catches },
-            .else_unwrap_decl => |e| .{ .primary = e.default_body },
-            .guard_let_decl => |g| .{ .primary = g.nil_body },
-            else => .{},
+            .if_stmt => |s| s.children,
+            .while_stmt => |s| s.children,
+            .for_stmt => |s| s.children,
+            .match_stmt => |s| s.children,
+            .do_catch_stmt => |s| s.children,
+            .else_unwrap_decl => |s| s.children,
+            .guard_let_decl => |s| s.children,
+            else => &.{},
         };
     }
-
-    pub const ChildBodies = struct {
-        primary: []const Statement = &.{},
-        secondary: ?[]const Statement = null,
-        else_if: ?*const IfStmt = null,
-        match_cases: []const MatchCase = &.{},
-        default_case: ?*const Statement = null,
-        catch_clauses: []const CatchClause = &.{},
-    };
 };
 
 pub const Statement = struct {
@@ -688,90 +682,58 @@ fn freeStatementArgs(stmt: Statement, allocator: std.mem.Allocator) void {
             freeExpressionArgs(assign.value, allocator);
         },
         .if_stmt => |if_s| {
-            freeIfStmt(if_s, allocator);
+            freeExpressionArgs(if_s.condition, allocator);
+            freeChildBlocks(if_s.children, allocator);
         },
         .while_stmt => |while_s| {
             freeExpressionArgs(while_s.condition, allocator);
-            for (while_s.body) |body_stmt| {
-                freeStatementArgs(body_stmt, allocator);
-            }
-            allocator.free(while_s.body);
+            freeChildBlocks(while_s.children, allocator);
         },
         .for_stmt => |for_s| {
             freeExpressionArgs(for_s.iterable, allocator);
-            for (for_s.body) |body_stmt| {
-                freeStatementArgs(body_stmt, allocator);
-            }
-            allocator.free(for_s.body);
+            freeChildBlocks(for_s.children, allocator);
         },
         .break_stmt, .continue_stmt => {},
         .else_unwrap_decl => |unwrap| {
             freeExpressionArgs(unwrap.optional_expr.*, allocator);
-            for (unwrap.default_body) |body_stmt| {
-                freeStatementArgs(body_stmt, allocator);
-            }
-            allocator.free(unwrap.default_body);
+            freeChildBlocks(unwrap.children, allocator);
         },
         .guard_let_decl => |guard| {
             freeExpressionArgs(guard.optional_expr.*, allocator);
-            for (guard.nil_body) |body_stmt| {
-                freeStatementArgs(body_stmt, allocator);
-            }
-            allocator.free(guard.nil_body);
+            freeChildBlocks(guard.children, allocator);
         },
         .throw_stmt => |throw_s| {
             freeExpressionArgs(throw_s.error_expr, allocator);
         },
         .do_catch_stmt => |do_catch| {
-            for (do_catch.body) |body_stmt| {
-                freeStatementArgs(body_stmt, allocator);
-            }
-            allocator.free(do_catch.body);
-            for (do_catch.catches) |catch_clause| {
-                for (catch_clause.body) |catch_stmt| {
-                    freeStatementArgs(catch_stmt, allocator);
-                }
-                allocator.free(catch_clause.body);
-            }
-            allocator.free(do_catch.catches);
+            freeChildBlocks(do_catch.children, allocator);
         },
         .match_stmt => |match_s| {
             freeExpressionArgs(match_s.scrutinee, allocator);
-            for (match_s.cases) |match_case| {
-                for (match_case.patterns) |pattern| {
-                    freeExpressionArgs(pattern, allocator);
-                }
-                allocator.free(match_case.patterns);
-                freeStatementArgs(match_case.body.*, allocator);
-                allocator.destroy(match_case.body);
-            }
-            allocator.free(match_s.cases);
-            if (match_s.default_case) |default| {
-                freeStatementArgs(default.*, allocator);
-                allocator.destroy(default);
-            }
+            freeChildBlocks(match_s.children, allocator);
         },
     }
 }
 
-fn freeIfStmt(if_s: IfStmt, allocator: std.mem.Allocator) void {
-    freeExpressionArgs(if_s.condition, allocator);
-    for (if_s.body) |body_stmt| {
-        freeStatementArgs(body_stmt, allocator);
-    }
-    allocator.free(if_s.body);
-
-    if (if_s.else_body) |else_body| {
-        for (else_body) |else_stmt| {
-            freeStatementArgs(else_stmt, allocator);
+fn freeChildBlocks(children: []const ChildBlock, allocator: std.mem.Allocator) void {
+    for (children) |child| {
+        // Free match patterns if present
+        for (child.match_patterns) |pattern| {
+            freeExpressionArgs(pattern, allocator);
         }
-        allocator.free(else_body);
+        if (child.match_patterns.len > 0) {
+            allocator.free(child.match_patterns);
+        }
+        if (child.pattern_bindings.len > 0) {
+            allocator.free(child.pattern_bindings);
+        }
+        // Free statements in the block
+        for (child.statements) |stmt| {
+            freeStatementArgs(stmt, allocator);
+        }
+        allocator.free(child.statements);
     }
-
-    if (if_s.else_if) |else_if| {
-        freeIfStmt(else_if.*, allocator);
-        allocator.destroy(else_if);
-    }
+    allocator.free(children);
 }
 
 fn freeExpressionArgs(expr: Expression, allocator: std.mem.Allocator) void {

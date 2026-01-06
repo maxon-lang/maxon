@@ -106,29 +106,38 @@ pub const MutationAnalyzer = struct {
                 self.checkExpressionForParamMutation(assign.base.*, param_indices, mutated);
             },
             .if_stmt => |if_s| {
-                // Check mutations inside if/if-let body
-                for (if_s.body) |body_stmt| {
-                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
-                }
-                if (if_s.else_body) |else_body| {
-                    for (else_body) |body_stmt| {
-                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                // Check mutations inside if/if-let body and else clauses
+                for (if_s.children) |child| {
+                    switch (child.role) {
+                        .primary, .else_clause => {
+                            for (child.statements) |body_stmt| {
+                                self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                            }
+                        },
+                        .else_if => {
+                            // child.statements[0] is a nested if_stmt
+                            if (child.statements.len > 0) {
+                                self.checkStatementForMutation(child.statements[0], param_indices, mutated);
+                            }
+                        },
+                        else => {},
                     }
-                }
-                if (if_s.else_if) |else_if| {
-                    self.checkStatementForMutation(.{ .kind = .{ .if_stmt = else_if.* }, .line = stmt.line, .column = stmt.column }, param_indices, mutated);
                 }
             },
             .while_stmt => |while_s| {
                 // Check mutations inside while loop body
-                for (while_s.body) |body_stmt| {
-                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                for (while_s.children) |child| {
+                    for (child.statements) |body_stmt| {
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                    }
                 }
             },
             .for_stmt => |for_s| {
                 // Check mutations inside for loop body
-                for (for_s.body) |body_stmt| {
-                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                for (for_s.children) |child| {
+                    for (child.statements) |body_stmt| {
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                    }
                 }
             },
             .break_stmt, .continue_stmt => {
@@ -136,14 +145,18 @@ pub const MutationAnalyzer = struct {
             },
             .else_unwrap_decl => |unwrap| {
                 // Check mutations inside else-unwrap default body
-                for (unwrap.default_body) |body_stmt| {
-                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                for (unwrap.children) |child| {
+                    for (child.statements) |body_stmt| {
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                    }
                 }
             },
             .guard_let_decl => |guard| {
                 // Check mutations inside guard-let nil body
-                for (guard.nil_body) |body_stmt| {
-                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                for (guard.children) |child| {
+                    for (child.statements) |body_stmt| {
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                    }
                 }
             },
             .throw_stmt => {
@@ -151,22 +164,18 @@ pub const MutationAnalyzer = struct {
             },
             .do_catch_stmt => |do_catch| {
                 // Check mutations inside do block and catch blocks
-                for (do_catch.body) |body_stmt| {
-                    self.checkStatementForMutation(body_stmt, param_indices, mutated);
-                }
-                for (do_catch.catches) |catch_clause| {
-                    for (catch_clause.body) |catch_stmt| {
-                        self.checkStatementForMutation(catch_stmt, param_indices, mutated);
+                for (do_catch.children) |child| {
+                    for (child.statements) |body_stmt| {
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
                     }
                 }
             },
             .match_stmt => |match_s| {
                 // Check mutations inside match case bodies
-                for (match_s.cases) |match_case| {
-                    self.checkStatementForMutation(match_case.body.*, param_indices, mutated);
-                }
-                if (match_s.default_case) |default| {
-                    self.checkStatementForMutation(default.*, param_indices, mutated);
+                for (match_s.children) |child| {
+                    for (child.statements) |body_stmt| {
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                    }
                 }
             },
         }
@@ -819,30 +828,44 @@ pub const SemanticAnalyzer = struct {
                 },
                 .if_stmt => |if_s| {
                     try self.discoverInExpression(if_s.condition);
-                    try self.discoverInStatements(if_s.body);
-                    try self.walkElseIfChainWithConditions(if_s.else_body, if_s.else_if);
+                    for (if_s.children) |child| {
+                        switch (child.role) {
+                            .primary, .else_clause => try self.discoverInStatements(child.statements),
+                            .else_if => {
+                                // child.statements[0] is a nested if_stmt
+                                if (child.statements.len > 0) {
+                                    if (child.statements[0].kind == .if_stmt) {
+                                        const nested_if = child.statements[0].kind.if_stmt;
+                                        try self.discoverInExpression(nested_if.condition);
+                                        try self.discoverInIfChildren(nested_if.children);
+                                    }
+                                }
+                            },
+                            else => {},
+                        }
+                    }
                 },
                 .while_stmt => |while_s| {
                     try self.discoverInExpression(while_s.condition);
-                    try self.discoverInStatements(while_s.body);
+                    for (while_s.children) |child| {
+                        try self.discoverInStatements(child.statements);
+                    }
                 },
                 .for_stmt => |for_s| {
                     try self.discoverInExpression(for_s.iterable);
-                    try self.discoverInStatements(for_s.body);
+                    for (for_s.children) |child| {
+                        try self.discoverInStatements(child.statements);
+                    }
                 },
                 .do_catch_stmt => |dc| {
-                    try self.discoverInStatements(dc.body);
-                    for (dc.catches) |catch_clause| {
-                        try self.discoverInStatements(catch_clause.body);
+                    for (dc.children) |child| {
+                        try self.discoverInStatements(child.statements);
                     }
                 },
                 .match_stmt => |ms| {
                     try self.discoverInExpression(ms.scrutinee);
-                    for (ms.cases) |case| {
-                        try self.discoverInStatements(&[_]ast.Statement{case.body.*});
-                    }
-                    if (ms.default_case) |dc| {
-                        try self.discoverInStatements(&[_]ast.Statement{dc.*});
+                    for (ms.children) |child| {
+                        try self.discoverInStatements(child.statements);
                     }
                 },
                 .throw_stmt => |throw_s| {
@@ -850,13 +873,36 @@ pub const SemanticAnalyzer = struct {
                 },
                 .else_unwrap_decl => |unwrap| {
                     try self.discoverInExpression(unwrap.optional_expr.*);
-                    try self.discoverInStatements(unwrap.default_body);
+                    for (unwrap.children) |child| {
+                        try self.discoverInStatements(child.statements);
+                    }
                 },
                 .guard_let_decl => |guard| {
                     try self.discoverInExpression(guard.optional_expr.*);
-                    try self.discoverInStatements(guard.nil_body);
+                    for (guard.children) |child| {
+                        try self.discoverInStatements(child.statements);
+                    }
                 },
                 .break_stmt, .continue_stmt => {},
+            }
+        }
+    }
+
+    /// Helper to recursively discover in if statement children (handles else-if chains)
+    fn discoverInIfChildren(self: *SemanticAnalyzer, children: []const ast.ChildBlock) std.mem.Allocator.Error!void {
+        for (children) |child| {
+            switch (child.role) {
+                .primary, .else_clause => try self.discoverInStatements(child.statements),
+                .else_if => {
+                    if (child.statements.len > 0) {
+                        if (child.statements[0].kind == .if_stmt) {
+                            const nested_if = child.statements[0].kind.if_stmt;
+                            try self.discoverInExpression(nested_if.condition);
+                            try self.discoverInIfChildren(nested_if.children);
+                        }
+                    }
+                },
+                else => {},
             }
         }
     }
@@ -1148,7 +1194,7 @@ pub const SemanticAnalyzer = struct {
         });
     }
 
-    fn collectVariablesFromBody(self: *SemanticAnalyzer, body: []const ast.Statement) !void {
+    fn collectVariablesFromBody(self: *SemanticAnalyzer, body: []const ast.Statement) std.mem.Allocator.Error!void {
         for (body) |stmt| {
             switch (stmt.kind) {
                 .var_decl, .let_decl => |decl| {
@@ -1160,11 +1206,12 @@ pub const SemanticAnalyzer = struct {
                     try self.addVariableInfo(decl.name, var_type, is_mutable, false, stmt.line, stmt.column);
                 },
                 .if_stmt => |if_s| {
-                    try self.collectVariablesFromBody(if_s.body);
-                    try self.walkElseIfChain(if_s.else_body, if_s.else_if, collectVariablesFromBody);
+                    try self.collectVariablesFromIfChildren(if_s.children);
                 },
                 .while_stmt => |while_s| {
-                    try self.collectVariablesFromBody(while_s.body);
+                    for (while_s.children) |child| {
+                        try self.collectVariablesFromBody(child.statements);
+                    }
                 },
                 .for_stmt => |for_s| {
                     // For loop variable
@@ -1174,17 +1221,18 @@ pub const SemanticAnalyzer = struct {
                     else
                         ValueType{ .primitive = "int" };
                     try self.addVariableInfo(for_s.var_name, elem_type, false, false, 0, 0);
-                    try self.collectVariablesFromBody(for_s.body);
+                    for (for_s.children) |child| {
+                        try self.collectVariablesFromBody(child.statements);
+                    }
                 },
                 .do_catch_stmt => |dc| {
-                    try self.collectVariablesFromBody(dc.body);
-                    for (dc.catches) |catch_clause| {
-                        try self.collectVariablesFromBody(catch_clause.body);
+                    for (dc.children) |child| {
+                        try self.collectVariablesFromBody(child.statements);
                     }
                 },
                 .match_stmt => |ms| {
-                    for (ms.cases) |case| {
-                        try self.collectVariablesFromBody(&[_]ast.Statement{case.body.*});
+                    for (ms.children) |child| {
+                        try self.collectVariablesFromBody(child.statements);
                     }
                 },
                 else => {},
@@ -1192,37 +1240,21 @@ pub const SemanticAnalyzer = struct {
         }
     }
 
-    /// Walk an else-if chain, calling the handler for each body
-    fn walkElseIfChain(
-        self: *SemanticAnalyzer,
-        else_body: ?[]const ast.Statement,
-        else_if: ?*const ast.IfStmt,
-        comptime handler: fn (*SemanticAnalyzer, []const ast.Statement) anyerror!void,
-    ) !void {
-        if (else_body) |eb| {
-            try handler(self, eb);
-        }
-        var current = else_if;
-        while (current) |eif| {
-            try handler(self, eif.body);
-            current = eif.else_if;
-        }
-    }
-
-    /// Walk else-if chain for monomorphization discovery (includes condition expressions)
-    fn walkElseIfChainWithConditions(
-        self: *SemanticAnalyzer,
-        else_body: ?[]const ast.Statement,
-        else_if: ?*const ast.IfStmt,
-    ) std.mem.Allocator.Error!void {
-        if (else_body) |eb| {
-            try self.discoverInStatements(eb);
-        }
-        var current = else_if;
-        while (current) |eif| {
-            try self.discoverInExpression(eif.condition);
-            try self.discoverInStatements(eif.body);
-            current = eif.else_if;
+    /// Helper to recursively collect variables from if statement children (handles else-if chains)
+    fn collectVariablesFromIfChildren(self: *SemanticAnalyzer, children: []const ast.ChildBlock) std.mem.Allocator.Error!void {
+        for (children) |child| {
+            switch (child.role) {
+                .primary, .else_clause => try self.collectVariablesFromBody(child.statements),
+                .else_if => {
+                    if (child.statements.len > 0) {
+                        if (child.statements[0].kind == .if_stmt) {
+                            const nested_if = child.statements[0].kind.if_stmt;
+                            try self.collectVariablesFromIfChildren(nested_if.children);
+                        }
+                    }
+                },
+                else => {},
+            }
         }
     }
 

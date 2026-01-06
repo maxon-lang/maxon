@@ -1057,17 +1057,29 @@ pub const Parser = struct {
                     _ = self.advance();
                 }
 
+                const children = try self.allocator.alloc(ast.ChildBlock, 1);
+                children[0] = .{
+                    .role = .default_value,
+                    .statements = try default_statements.toOwnedSlice(self.allocator),
+                    .info = .{
+                        .start_line = start_line,
+                        .start_column = start_column,
+                        .end_line = end_line,
+                        .identifier = label.text,
+                    },
+                };
+
                 const expr_ptr = try self.createExpr(expr);
                 return stmtAt(.{ .else_unwrap_decl = .{
                     .var_name = name_token.text,
                     .optional_expr = expr_ptr,
-                    .default_body = try default_statements.toOwnedSlice(self.allocator),
                     .block = .{
                         .start_line = start_line,
                         .start_column = start_column,
                         .end_line = end_line,
                         .identifier = label.text,
                     },
+                    .children = children,
                 } }, start_line, start_column);
             }
 
@@ -1102,17 +1114,29 @@ pub const Parser = struct {
                         _ = self.advance();
                     }
 
+                    const children = try self.allocator.alloc(ast.ChildBlock, 1);
+                    children[0] = .{
+                        .role = .nil_handler,
+                        .statements = try nil_statements.toOwnedSlice(self.allocator),
+                        .info = .{
+                            .start_line = start_line,
+                            .start_column = start_column,
+                            .end_line = end_line,
+                            .identifier = label.text,
+                        },
+                    };
+
                     const expr_ptr = try self.createExpr(expr);
                     return stmtAt(.{ .guard_let_decl = .{
                         .var_name = name_token.text,
                         .optional_expr = expr_ptr,
-                        .nil_body = try nil_statements.toOwnedSlice(self.allocator),
                         .block = .{
                             .start_line = start_line,
                             .start_column = start_column,
                             .end_line = end_line,
                             .identifier = label.text,
                         },
+                        .children = children,
                     } }, start_line, start_column);
                 }
             }
@@ -1187,18 +1211,11 @@ pub const Parser = struct {
         return false;
     }
 
-    /// Result of parsing an else clause
-    const ElseClause = struct {
-        body: ?[]ast.Statement,
-        label: ?[]const u8,
-        else_if: ?*const ast.IfStmt,
-        else_end_line: u32 = 0,
-    };
-
-    /// Parse optional else clause: 'else 'label' ... end 'label'' or 'else if ...'
-    fn parseElseClause(self: *Parser, allow_else_if: bool) ParseError!ElseClause {
+    /// Parse optional else clause as ChildBlock: 'else 'label' ... end 'label'' or 'else if ...'
+    /// Returns null if no else clause, otherwise returns the ChildBlock and whether trailing newline was consumed
+    fn parseElseBlock(self: *Parser, allow_else_if: bool) ParseError!?ast.ChildBlock {
         if (!self.check(.@"else")) {
-            return .{ .body = null, .label = null, .else_if = null, .else_end_line = 0 };
+            return null;
         }
 
         const else_token = self.advance(); // consume 'else'
@@ -1206,12 +1223,20 @@ pub const Parser = struct {
         // Check for else-if chain
         if (allow_else_if and self.check(.@"if")) {
             _ = self.advance(); // consume 'if'
-            // Use else token position as start for the else-if block
+            // Parse the nested if statement
             const else_if_stmt = try self.parseIfConditionAndBody(else_token.line, else_token.column);
-            const ptr = try self.allocator.create(ast.IfStmt);
-            ptr.* = else_if_stmt;
-            try self.ifstmt_ptrs.append(self.allocator, ptr);
-            return .{ .body = null, .label = null, .else_if = ptr, .else_end_line = 0 };
+            // Wrap the IfStmt in a Statement and store in ChildBlock
+            const stmt_slice = try self.allocator.alloc(ast.Statement, 1);
+            stmt_slice[0] = .{
+                .kind = .{ .if_stmt = else_if_stmt },
+                .line = else_token.line,
+                .column = else_token.column,
+            };
+            return .{
+                .role = .else_if,
+                .statements = stmt_slice,
+                .info = else_if_stmt.block,
+            };
         }
 
         // Parse else block: else 'label' ... end 'label'
@@ -1220,7 +1245,15 @@ pub const Parser = struct {
         const else_body = try self.parseBlockBody();
         const else_end_line = try self.expectEndLabel(else_label_tok.text);
 
-        return .{ .body = else_body, .label = else_label_tok.text, .else_if = null, .else_end_line = else_end_line };
+        return .{
+            .role = .else_clause,
+            .statements = else_body,
+            .info = .{
+                .start_line = else_token.line,
+                .end_line = else_end_line,
+                .identifier = else_label_tok.text,
+            },
+        };
     }
 
     // -------------------------------------------------------------------------
@@ -1250,29 +1283,36 @@ pub const Parser = struct {
             const body = try self.parseBlockBody();
             const end_line = try self.expectEndLabel(label.text);
 
-            const else_clause = try self.parseElseClause(false);
+            const else_block = try self.parseElseBlock(false);
             try self.expectTrailingNewline();
+
+            // Build children array
+            const num_children: usize = if (else_block != null) 2 else 1;
+            const children = try self.allocator.alloc(ast.ChildBlock, num_children);
+            children[0] = .{
+                .role = .primary,
+                .statements = body,
+                .info = .{
+                    .start_line = start_line,
+                    .start_column = start_column,
+                    .end_line = end_line,
+                    .identifier = label.text,
+                },
+            };
+            if (else_block) |eb| {
+                children[1] = eb;
+            }
 
             return stmtAt(.{ .if_stmt = .{
                 .condition = condition,
-                .body = body,
-                .else_body = else_clause.body,
-                .else_if = null,
                 .binding_name = name_token.text,
                 .block = .{
                     .start_line = start_line,
                     .start_column = start_column,
                     .end_line = end_line,
                     .identifier = label.text,
-                    .secondary = if (else_clause.body != null and else_clause.else_end_line > 0)
-                        .{
-                            .start_line = end_line,
-                            .end_line = else_clause.else_end_line,
-                            .identifier = else_clause.label,
-                        }
-                    else
-                        null,
                 },
+                .children = children,
             } }, start_line, start_column);
         }
 
@@ -1281,7 +1321,7 @@ pub const Parser = struct {
     }
 
     /// Parse if statement after 'if' has been consumed. Used by parseIfStatement
-    /// and parseElseClause for else-if chains.
+    /// and parseElseBlock for else-if chains.
     fn parseIfConditionAndBody(self: *Parser, start_line: u32, start_column: u32) ParseError!ast.IfStmt {
         const condition = try self.parseExpression() orelse {
             self.reportError(.E003);
@@ -1294,32 +1334,39 @@ pub const Parser = struct {
         const body = try self.parseBlockBody();
         const end_line = try self.expectEndLabel(label.text);
 
-        const else_clause = try self.parseElseClause(true);
+        const else_block = try self.parseElseBlock(true);
 
         // Only expect trailing newline if we didn't chain to else-if
-        if (else_clause.else_if == null) {
+        if (else_block == null or else_block.?.role != .else_if) {
             try self.expectTrailingNewline();
+        }
+
+        // Build children array
+        const num_children: usize = if (else_block != null) 2 else 1;
+        const children = try self.allocator.alloc(ast.ChildBlock, num_children);
+        children[0] = .{
+            .role = .primary,
+            .statements = body,
+            .info = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
+        };
+        if (else_block) |eb| {
+            children[1] = eb;
         }
 
         return .{
             .condition = condition,
-            .body = body,
-            .else_body = else_clause.body,
-            .else_if = else_clause.else_if,
             .block = .{
                 .start_line = start_line,
                 .start_column = start_column,
                 .end_line = end_line,
                 .identifier = label.text,
-                .secondary = if (else_clause.body != null and else_clause.else_end_line > 0)
-                    .{
-                        .start_line = end_line,
-                        .end_line = else_clause.else_end_line,
-                        .identifier = else_clause.label,
-                    }
-                else
-                    null,
             },
+            .children = children,
         };
     }
 
@@ -1340,15 +1387,27 @@ pub const Parser = struct {
         const body = try self.parseBlockBody();
         const end_line = try self.parseEndAndNewline(label.text);
 
+        const children = try self.allocator.alloc(ast.ChildBlock, 1);
+        children[0] = .{
+            .role = .primary,
+            .statements = body,
+            .info = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
+        };
+
         return stmtAt(.{ .while_stmt = .{
             .condition = condition,
-            .body = body,
             .block = .{
                 .start_line = start_line,
                 .start_column = start_column,
                 .end_line = end_line,
                 .identifier = label.text,
             },
+            .children = children,
         } }, start_line, start_column);
     }
 
@@ -1378,16 +1437,28 @@ pub const Parser = struct {
         const body = try self.parseBlockBody();
         const end_line = try self.parseEndAndNewline(label.text);
 
+        const children = try self.allocator.alloc(ast.ChildBlock, 1);
+        children[0] = .{
+            .role = .primary,
+            .statements = body,
+            .info = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
+        };
+
         return stmtAt(.{ .for_stmt = .{
             .var_name = var_name.text,
             .iterable = iterable,
-            .body = body,
             .block = .{
                 .start_line = start_line,
                 .start_column = start_column,
                 .end_line = end_line,
                 .identifier = label.text,
             },
+            .children = children,
         } }, start_line, start_column);
     }
 
@@ -1428,32 +1499,44 @@ pub const Parser = struct {
         const end_line = try self.expectEndLabel(label.text);
 
         // Parse catch clauses (at least one required)
-        var catches: std.ArrayListUnmanaged(ast.CatchClause) = .empty;
-        errdefer catches.deinit(self.allocator);
+        var children: std.ArrayListUnmanaged(ast.ChildBlock) = .empty;
+        errdefer children.deinit(self.allocator);
+
+        // Add primary body as first child
+        try children.append(self.allocator, .{
+            .role = .primary,
+            .statements = body,
+            .info = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
+        });
 
         while (self.check(.@"catch")) {
-            try catches.append(self.allocator, try self.parseCatchClause());
+            try children.append(self.allocator, try self.parseCatchBlock());
         }
 
-        if (catches.items.len == 0) {
+        if (children.items.len < 2) {
             self.reportError(.E003); // Expected catch clause
             return error.ExpectedExpression;
         }
 
         return stmtAt(.{ .do_catch_stmt = .{
-            .body = body,
-            .catches = try catches.toOwnedSlice(self.allocator),
             .block = .{
                 .start_line = start_line,
                 .start_column = start_column,
                 .end_line = end_line,
                 .identifier = label.text,
             },
+            .children = try children.toOwnedSlice(self.allocator),
         } }, start_line, start_column);
     }
 
-    /// Parse a single catch clause: catch (e ErrorType) 'label' ... end 'label'
-    fn parseCatchClause(self: *Parser) ParseError!ast.CatchClause {
+    /// Parse a single catch clause as a ChildBlock: catch (e ErrorType) 'label' ... end 'label'
+    fn parseCatchBlock(self: *Parser) ParseError!ast.ChildBlock {
+        const catch_start = self.current().line;
         _ = try self.expect(.@"catch");
         _ = try self.expect(.lparen);
         const binding_name = try self.expect(.identifier);
@@ -1469,7 +1552,7 @@ pub const Parser = struct {
         _ = try self.expect(.newline);
 
         const catch_body = try self.parseBlockBody();
-        _ = try self.expectEndLabel(label.text);
+        const catch_end = try self.expectEndLabel(label.text);
 
         // Only expect newline if not followed by another catch
         if (!self.check(.@"catch")) {
@@ -1477,10 +1560,15 @@ pub const Parser = struct {
         }
 
         return .{
-            .binding_name = binding_name.text,
-            .error_type = error_type,
-            .body = catch_body,
-            .label = label.text,
+            .role = .catch_handler,
+            .statements = catch_body,
+            .info = .{
+                .start_line = catch_start,
+                .end_line = catch_end,
+                .identifier = label.text,
+            },
+            .catch_binding = binding_name.text,
+            .catch_error_type = error_type,
         };
     }
 
@@ -1502,10 +1590,9 @@ pub const Parser = struct {
         const label = try self.expectBlockIdentifier();
         _ = try self.expect(.newline);
 
-        // Parse cases
-        var cases: std.ArrayListUnmanaged(ast.MatchCase) = .empty;
-        errdefer cases.deinit(self.allocator);
-        var default_case: ?*const ast.Statement = null;
+        // Parse cases as ChildBlocks
+        var children: std.ArrayListUnmanaged(ast.ChildBlock) = .empty;
+        errdefer children.deinit(self.allocator);
         var saw_default = false;
 
         while (!self.check(.end) and !self.isAtEnd()) {
@@ -1519,7 +1606,12 @@ pub const Parser = struct {
                 _ = self.advance();
                 _ = try self.expect(.then);
                 const result = try self.parseMatchCaseBody();
-                default_case = try self.createStmt(result.stmt);
+                const stmt_slice = try self.allocator.alloc(ast.Statement, 1);
+                stmt_slice[0] = result.stmt;
+                try children.append(self.allocator, .{
+                    .role = .default_case,
+                    .statements = stmt_slice,
+                });
                 saw_default = true;
                 continue;
             }
@@ -1556,11 +1648,14 @@ pub const Parser = struct {
 
             // Parse single statement (handles newline internally)
             const result = try self.parseMatchCaseBody();
+            const stmt_slice = try self.allocator.alloc(ast.Statement, 1);
+            stmt_slice[0] = result.stmt;
 
-            try cases.append(self.allocator, .{
-                .patterns = try patterns.toOwnedSlice(self.allocator),
+            try children.append(self.allocator, .{
+                .role = .match_case,
+                .statements = stmt_slice,
+                .match_patterns = try patterns.toOwnedSlice(self.allocator),
                 .pattern_bindings = try pattern_bindings.toOwnedSlice(self.allocator),
-                .body = try self.createStmt(result.stmt),
                 .has_fallthrough = result.has_fallthrough,
             });
         }
@@ -1570,14 +1665,13 @@ pub const Parser = struct {
 
         return stmtAt(.{ .match_stmt = .{
             .scrutinee = scrutinee,
-            .cases = try cases.toOwnedSlice(self.allocator),
-            .default_case = default_case,
             .block = .{
                 .start_line = start_line,
                 .start_column = start_column,
                 .end_line = end_line,
                 .identifier = label.text,
             },
+            .children = try children.toOwnedSlice(self.allocator),
         } }, start_line, start_column);
     }
 

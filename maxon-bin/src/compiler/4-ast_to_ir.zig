@@ -33,6 +33,100 @@ pub const PendingMethod = types.PendingMethod;
 pub const SemanticInfo = types.SemanticInfo;
 pub const SemanticVarInfo = types.SemanticVarInfo;
 
+// ============================================================================
+// AST ChildBlock Helper Functions
+// ============================================================================
+
+/// Get the primary body statements from children (role = .primary)
+fn getPrimaryBody(children: []const ast.ChildBlock) []const ast.Statement {
+    for (children) |child| {
+        if (child.role == .primary) return child.statements;
+    }
+    return &.{};
+}
+
+/// Get the else body statements if present (role = .else_clause)
+fn getElseBody(children: []const ast.ChildBlock) ?[]const ast.Statement {
+    for (children) |child| {
+        if (child.role == .else_clause) return child.statements;
+    }
+    return null;
+}
+
+/// Get the else-if statement if present (role = .else_if)
+/// The else-if is stored as a single if_stmt in the child's statements
+fn getElseIf(children: []const ast.ChildBlock) ?ast.IfStmt {
+    for (children) |child| {
+        if (child.role == .else_if and child.statements.len > 0) {
+            return child.statements[0].kind.if_stmt;
+        }
+    }
+    return null;
+}
+
+/// Check if children contain an else clause or else-if
+fn hasElse(children: []const ast.ChildBlock) bool {
+    for (children) |child| {
+        if (child.role == .else_clause or child.role == .else_if) return true;
+    }
+    return false;
+}
+
+/// Get the default case statements if present (role = .default_case)
+fn getDefaultCase(children: []const ast.ChildBlock) ?[]const ast.Statement {
+    for (children) |child| {
+        if (child.role == .default_case) return child.statements;
+    }
+    return null;
+}
+
+/// Get the nil handler body (for guard-let, role = .nil_handler)
+fn getNilHandler(children: []const ast.ChildBlock) []const ast.Statement {
+    for (children) |child| {
+        if (child.role == .nil_handler) return child.statements;
+    }
+    return &.{};
+}
+
+/// Get the default value body (for else-unwrap, role = .default_value)
+fn getDefaultValueBody(children: []const ast.ChildBlock) []const ast.Statement {
+    for (children) |child| {
+        if (child.role == .default_value) return child.statements;
+    }
+    return &.{};
+}
+
+/// Check if match statement has a default case
+fn hasDefaultCase(children: []const ast.ChildBlock) bool {
+    for (children) |child| {
+        if (child.role == .default_case) return true;
+    }
+    return false;
+}
+
+/// Count the number of match cases (not including default)
+fn countMatchCases(children: []const ast.ChildBlock) usize {
+    var count: usize = 0;
+    for (children) |child| {
+        if (child.role == .match_case) count += 1;
+    }
+    return count;
+}
+
+/// Count the number of catch handlers
+fn countCatchHandlers(children: []const ast.ChildBlock) usize {
+    var count: usize = 0;
+    for (children) |child| {
+        if (child.role == .catch_handler) count += 1;
+    }
+    return count;
+}
+
+/// Get the single statement body of a ChildBlock (for match cases)
+fn getChildBody(child: ast.ChildBlock) ast.Statement {
+    return child.statements[0];
+}
+
 /// Helper for managing intrinsic loop blocks (cond/body/end pattern).
 /// Ensures correct block ordering and branch emission to avoid infinite loops.
 ///
@@ -3372,41 +3466,55 @@ pub const AstToIr = struct {
             .throw_stmt => return true, // throw also exits the function
             .if_stmt => |if_s| {
                 // Both branches must return, and there must be an else branch
-                if (if_s.else_body == null and if_s.else_if == null) return false;
+                if (!hasElse(if_s.children)) return false;
 
                 // Check then branch
-                if (!allPathsReturn(if_s.body)) return false;
+                if (!allPathsReturn(getPrimaryBody(if_s.children))) return false;
 
                 // Check else branch
-                if (if_s.else_body) |else_body| {
+                if (getElseBody(if_s.children)) |else_body| {
                     if (!allPathsReturn(else_body)) return false;
                 }
 
                 // Check else-if chain
-                if (if_s.else_if) |else_if| {
-                    if (!statementReturns(.{ .kind = .{ .if_stmt = else_if.* }, .line = 0, .column = 0 })) return false;
+                if (getElseIf(if_s.children)) |else_if| {
+                    if (!statementReturns(.{ .kind = .{ .if_stmt = else_if }, .line = 0, .column = 0 })) return false;
                 }
 
                 return true;
             },
             .match_stmt => |match_s| {
                 // All cases must return
-                for (match_s.cases) |case| {
-                    if (!statementReturns(case.body.*)) return false;
+                var case_count: usize = 0;
+                for (match_s.children) |child| {
+                    if (child.role == .match_case) {
+                        case_count += 1;
+                        // Match case body is a single statement in child.statements
+                        if (child.statements.len > 0) {
+                            if (!statementReturns(child.statements[0])) return false;
+                        } else {
+                            return false;
+                        }
+                    }
                 }
                 // If there's a default case, it must also return
-                if (match_s.default_case) |default| {
-                    return statementReturns(default.*);
+                if (getDefaultCase(match_s.children)) |default_stmts| {
+                    if (default_stmts.len > 0) {
+                        return statementReturns(default_stmts[0]);
+                    }
+                    return false;
                 }
                 // No default means we assume exhaustiveness (validated elsewhere)
                 // Return true if all explicit cases return
-                return match_s.cases.len > 0;
+                return case_count > 0;
             },
             .do_catch_stmt => |do_catch| {
                 // The do block and all catch blocks must return
-                if (!allPathsReturn(do_catch.body)) return false;
-                for (do_catch.catches) |catch_clause| {
-                    if (!allPathsReturn(catch_clause.body)) return false;
+                if (!allPathsReturn(getPrimaryBody(do_catch.children))) return false;
+                for (do_catch.children) |child| {
+                    if (child.role == .catch_handler) {
+                        if (!allPathsReturn(child.statements)) return false;
+                    }
                 }
                 return true;
             },
@@ -4373,7 +4481,7 @@ pub const AstToIr = struct {
             cond_typed.value;
 
         // Determine what blocks we need
-        const has_else = if_stmt.else_body != null or if_stmt.else_if != null;
+        const has_else_block = hasElse(if_stmt.children);
 
         // Save entry block index - we'll emit br_cond later with correct target indices
         const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
@@ -4383,7 +4491,7 @@ pub const AstToIr = struct {
         _ = try self.func().addBlock(if (is_if_let) "if_let_then" else "then");
 
         // Create else block (if needed) - actual index determined after then body
-        if (has_else or is_if_let) {
+        if (has_else_block or is_if_let) {
             _ = try self.func().addBlock(if (is_if_let) "if_let_else" else "else");
         }
 
@@ -4394,7 +4502,7 @@ pub const AstToIr = struct {
         // We'll emit it after all blocks are restored with correct indices
 
         // Defer blocks: end always, else conditionally
-        const deferred_count: usize = if (has_else or is_if_let) 2 else 1;
+        const deferred_count: usize = if (has_else_block or is_if_let) 2 else 1;
         var deferred = try DeferredBlocks.init(self.allocator, deferred_count);
         defer deferred.deinit();
         deferred.deferBlocks(self, deferred_count);
@@ -4436,7 +4544,7 @@ pub const AstToIr = struct {
 
         // Convert then body statements (push new scope for nested labels)
         try self.pushLabelScope();
-        for (if_stmt.body) |stmt| {
+        for (getPrimaryBody(if_stmt.children)) |stmt| {
             try self.convertStatement(stmt);
         }
         self.popLabelScope();
@@ -4457,15 +4565,15 @@ pub const AstToIr = struct {
         // Restore and generate else block if needed
         var else_exit_block_idx: ?u32 = null;
         var actual_else_block_idx: u32 = undefined;
-        if (has_else or is_if_let) {
+        if (has_else_block or is_if_let) {
             actual_else_block_idx = @intCast(self.func().blocks.items.len);
             // else_block is at index 1 (second popped)
             try deferred.restore(self, 1);
 
             // Check for else-if chain (not allowed for if-let)
-            if (if_stmt.else_if) |else_if| {
-                try self.convertIfStmt(else_if.*);
-            } else if (if_stmt.else_body) |else_body| {
+            if (getElseIf(if_stmt.children)) |else_if| {
+                try self.convertIfStmt(else_if);
+            } else if (getElseBody(if_stmt.children)) |else_body| {
                 // Push new scope for else body labels
                 try self.pushLabelScope();
                 for (else_body) |stmt| {
@@ -4488,7 +4596,7 @@ pub const AstToIr = struct {
         try deferred.restore(self, 0);
 
         // NOW emit br_cond with correct block indices (after nested ifs shifted things)
-        const branch_target_if_false = if (has_else or is_if_let) actual_else_block_idx else actual_end_block_idx;
+        const branch_target_if_false = if (has_else_block or is_if_let) actual_else_block_idx else actual_end_block_idx;
         try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
             .operands = .{ .{ .value = condition_value }, .{ .block_ref = then_block_idx }, .{ .block_ref = branch_target_if_false } },
@@ -4560,7 +4668,7 @@ pub const AstToIr = struct {
 
         // Convert body statements (body block is current, with new label scope)
         try self.pushLabelScope();
-        for (while_stmt.body) |stmt| {
+        for (getPrimaryBody(while_stmt.children)) |stmt| {
             try self.convertStatement(stmt);
         }
         self.popLabelScope();
@@ -4744,7 +4852,7 @@ pub const AstToIr = struct {
 
         // Convert body statements (with new label scope)
         try self.pushLabelScope();
-        for (for_stmt.body) |stmt| {
+        for (getPrimaryBody(for_stmt.children)) |stmt| {
             try self.convertStatement(stmt);
         }
         self.popLabelScope();
@@ -4828,7 +4936,7 @@ pub const AstToIr = struct {
             self.current_column = saved_column;
         }
 
-        const has_default = match_stmt.default_case != null;
+        const has_default = hasDefaultCase(match_stmt.children);
 
         // Check 1: default case must be last (if present, there should be no cases after it)
         // The parser already puts default_case in a separate field, so if default_case is set
@@ -4841,12 +4949,14 @@ pub const AstToIr = struct {
         // For now, this validation passes since the AST separates default_case.
 
         // Check 2: fallthrough cannot be combined with return
-        for (match_stmt.cases) |match_case| {
-            if (match_case.has_fallthrough) {
+        for (match_stmt.children) |child| {
+            if (child.role != .match_case) continue;
+            if (child.has_fallthrough) {
                 // Check if the body is a return statement
-                if (match_case.body.kind == .@"return") {
-                    self.current_line = match_case.body.line;
-                    self.current_column = match_case.body.column;
+                const body = getChildBody(child);
+                if (body.kind == .@"return") {
+                    self.current_line = body.line;
+                    self.current_column = body.column;
                     self.reportError(.E025, "cannot combine 'fallthrough' with 'return'");
                     return error.SemanticError;
                 }
@@ -4858,13 +4968,15 @@ pub const AstToIr = struct {
         const scrutinee_ty = scrutinee_typed.ty;
 
         // Check 3: pattern type must match scrutinee type
-        for (match_stmt.cases) |match_case| {
-            for (match_case.patterns) |pattern| {
+        for (match_stmt.children) |child| {
+            if (child.role != .match_case) continue;
+            for (child.match_patterns) |pattern| {
                 const pattern_typed = try self.convertPatternForTypeCheck(pattern, scrutinee_ty);
                 if (!self.typesAreCompatibleForMatch(scrutinee_ty, pattern_typed.ty)) {
                     // Set location to the pattern (approximate - use body line)
-                    self.current_line = match_case.body.line;
-                    self.current_column = match_case.body.column;
+                    const body = getChildBody(child);
+                    self.current_line = body.line;
+                    self.current_column = body.column;
                     const pattern_type_name = pattern_typed.ty.getTypeName() orelse "unknown";
                     const scrutinee_type_name = scrutinee_ty.getTypeName() orelse "unknown";
                     const msg = std.fmt.allocPrint(self.allocator, "pattern type '{s}' does not match scrutinee type '{s}'", .{ pattern_type_name, scrutinee_type_name }) catch {
@@ -4897,13 +5009,15 @@ pub const AstToIr = struct {
             seen_patterns.deinit(self.allocator);
         }
 
-        for (match_stmt.cases) |match_case| {
-            for (match_case.patterns) |pattern| {
+        for (match_stmt.children) |child| {
+            if (child.role != .match_case) continue;
+            for (child.match_patterns) |pattern| {
+                const body = getChildBody(child);
                 const pattern_key = self.patternToString(pattern) catch continue;
 
                 if (seen_patterns.contains(pattern_key)) {
-                    self.current_line = match_case.body.line;
-                    self.current_column = match_case.body.column;
+                    self.current_line = body.line;
+                    self.current_column = body.column;
                     self.reportError(.E027, pattern_key);
                     self.allocator.free(pattern_key);
                     return error.SemanticError;
@@ -4930,8 +5044,9 @@ pub const AstToIr = struct {
                         var member_iter = enum_info.members.keyIterator();
                         while (member_iter.next()) |member_name| {
                             var found = false;
-                            for (match_stmt.cases) |match_case| {
-                                for (match_case.patterns) |pattern| {
+                            for (match_stmt.children) |child| {
+                                if (child.role != .match_case) continue;
+                                for (child.match_patterns) |pattern| {
                                     if (self.patternMatchesEnumMember(pattern, enum_name, member_name.*)) {
                                         found = true;
                                         break;
@@ -5162,6 +5277,71 @@ pub const AstToIr = struct {
         }
     }
 
+    /// Set up pattern bindings from a ChildBlock (unified child block structure)
+    fn setupPatternBindingsFromChild(self: *AstToIr, child: ast.ChildBlock, scrutinee_value: ir.Value, scrutinee_ty: ValueType) ConvertError!void {
+        const enum_name = scrutinee_ty.enum_type;
+        const type_info = self.type_map.get(enum_name) orelse return;
+        if (type_info != .enum_type) return;
+        const enum_info = type_info.enum_type;
+
+        // For each pattern with bindings, set up local variables
+        for (child.pattern_bindings) |maybe_binding| {
+            const binding = maybe_binding orelse continue;
+
+            // Get the case info for this pattern
+            const case_info = enum_info.case_info.get(binding.case_name) orelse {
+                // Unknown case - report error
+                self.reportError(.E034, binding.case_name);
+                return error.SemanticError;
+            };
+
+            // Validate binding count matches associated values count
+            if (binding.bindings.len != case_info.associated_values.len) {
+                self.reportError(.E035, binding.case_name);
+                return error.SemanticError;
+            }
+
+            if (case_info.associated_values.len == 0) continue;
+
+            // Check if this enum has associated values (stored as pointer)
+            if (!enum_info.has_associated_values) continue;
+
+            // Extract each associated value and bind it to the local variable
+            var offset: i32 = 8; // Start after tag
+            for (case_info.associated_values, 0..) |av, ai| {
+                const binding_name = binding.bindings[ai];
+
+                // Load the associated value from scrutinee
+                const payload_ptr = try self.func().emitGetFieldPtr(scrutinee_value, offset);
+                const value = try self.func().emitLoad(payload_ptr, av.ir_type);
+
+                // Create local variable for the binding
+                const var_ptr = try self.func().emitAlloca(av.ir_type);
+                try self.func().emitStore(var_ptr, value);
+
+                // Determine the ValueType for this binding
+                const binding_ty: ValueType = if (std.mem.eql(u8, av.type_name, "int"))
+                    .{ .primitive = "int" }
+                else if (std.mem.eql(u8, av.type_name, "float"))
+                    .{ .primitive = "float" }
+                else if (std.mem.eql(u8, av.type_name, "bool"))
+                    .{ .primitive = "bool" }
+                else
+                    .{ .primitive = av.type_name };
+
+                // Register in var_map
+                try self.var_map.put(self.allocator, binding_name, types.VarInfo.init(var_ptr, binding_ty, false, false));
+
+                offset += switch (av.ir_type) {
+                    .i64, .f64, .ptr => 8,
+                    .i32 => 4,
+                    .i8 => 1,
+                    .void => 0,
+                };
+            }
+        }
+    }
+
     /// Check if a pattern matches an enum member
     fn patternMatchesEnumMember(self: *AstToIr, pattern: ast.Expression, enum_name: []const u8, member_name: []const u8) bool {
         _ = self;
@@ -5195,11 +5375,13 @@ pub const AstToIr = struct {
         const scrutinee_typed = try self.convertExpression(match_stmt.scrutinee);
         const scrutinee_value = scrutinee_typed.value;
 
-        const num_cases = match_stmt.cases.len;
-        const has_default = match_stmt.default_case != null;
+        const num_cases = countMatchCases(match_stmt.children);
+        const has_default = hasDefaultCase(match_stmt.children);
 
         if (num_cases == 0) {
-            if (match_stmt.default_case) |default| try self.convertStatement(default.*);
+            if (getDefaultCase(match_stmt.children)) |default| {
+                for (default) |stmt| try self.convertStatement(stmt);
+            }
             return;
         }
 
@@ -5258,16 +5440,25 @@ pub const AstToIr = struct {
         var actual_body_indices = try self.allocator.alloc(u32, num_cases);
         defer self.allocator.free(actual_body_indices);
 
+        // Track has_fallthrough for each case
+        var case_has_fallthrough = try self.allocator.alloc(bool, num_cases);
+        defer self.allocator.free(case_has_fallthrough);
+
         // Deferred block indices with interleaved creation:
         // Created: body[0], check[1], body[1], check[2], ..., body[n-1], [default], merge
         // Reversed: merge, [default], body[n-1], check[n-1], ..., body[1], check[1], body[0]
         // body[i]: num_deferred - 1 - (2 * i)
         // check[i] for i >= 1: num_deferred - 1 - (2 * i - 1) = num_deferred - 2 * i
 
-        for (match_stmt.cases, 0..) |match_case, i| {
+        var case_idx: usize = 0;
+        for (match_stmt.children) |child| {
+            if (child.role != .match_case) continue;
+            const i = case_idx;
+            case_idx += 1;
+
             // Emit pattern comparisons in check block
             var cmp_result: ir.Value = undefined;
-            for (match_case.patterns, 0..) |pattern, pi| {
+            for (child.match_patterns, 0..) |pattern, pi| {
                 const pattern_typed = try self.convertPatternExpression(pattern, scrutinee_typed.ty);
                 const this_cmp = try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
                 cmp_result = if (pi == 0) this_cmp else try self.func().emitBinaryOp(.bitor, cmp_result, this_cmp, .i64);
@@ -5296,11 +5487,14 @@ pub const AstToIr = struct {
 
             // Set up pattern bindings for associated value extraction
             if (scrutinee_typed.ty == .enum_type) {
-                try self.setupPatternBindings(match_case, scrutinee_value, scrutinee_typed.ty);
+                try self.setupPatternBindingsFromChild(child, scrutinee_value, scrutinee_typed.ty);
             }
 
             // Execute body statement
-            try self.convertStatement(match_case.body.*);
+            try self.convertStatement(getChildBody(child));
+
+            // Track has_fallthrough for this case
+            case_has_fallthrough[i] = child.has_fallthrough;
 
             // Track exit block for deferred branch
             if (self.func().currentBlock()) |block| {
@@ -5333,11 +5527,11 @@ pub const AstToIr = struct {
         // Handle default case
         var default_exit_idx: ?u32 = null;
         var actual_default_idx: u32 = 0;
-        if (match_stmt.default_case) |default| {
+        if (getDefaultCase(match_stmt.children)) |default| {
             try deferred.restore(self, 1); // default is at index 1
             actual_default_idx = @intCast(self.func().blocks.items.len - 1);
 
-            try self.convertStatement(default.*);
+            for (default) |stmt| try self.convertStatement(stmt);
 
             if (self.func().currentBlock()) |block| {
                 const len = block.instructions.items.len;
@@ -5374,7 +5568,7 @@ pub const AstToIr = struct {
         for (body_exit_indices, 0..) |maybe_idx, i| {
             if (maybe_idx) |idx| {
                 // For fallthrough, branch to the next body block
-                const target = if (match_stmt.cases[i].has_fallthrough) blk: {
+                const target = if (case_has_fallthrough[i]) blk: {
                     if (i + 1 < num_cases) {
                         break :blk actual_body_indices[i + 1];
                     }
@@ -5803,7 +5997,7 @@ pub const AstToIr = struct {
 
         // Convert do body (with new label scope)
         try self.pushLabelScope();
-        for (do_catch.body) |stmt| {
+        for (getPrimaryBody(do_catch.children)) |stmt| {
             try self.convertStatement(stmt);
         }
         self.popLabelScope();
@@ -5840,12 +6034,13 @@ pub const AstToIr = struct {
         // Restore catch_dispatch block
         try self.func().blocks.append(self.allocator, catch_dispatch_block);
 
-        // Create blocks for each catch clause
+        // Create blocks for each catch handler
         // Note: catches are required by the parser, so we always have at least one
-        var catch_blocks = try std.ArrayList(u32).initCapacity(self.allocator, do_catch.catches.len);
+        const catch_count = countCatchHandlers(do_catch.children);
+        var catch_blocks = try std.ArrayList(u32).initCapacity(self.allocator, catch_count);
         defer catch_blocks.deinit(self.allocator);
 
-        for (do_catch.catches, 0..) |_, i| {
+        for (0..catch_count) |i| {
             const catch_block_idx: u32 = @intCast(self.func().blocks.items.len);
             const catch_name = std.fmt.allocPrint(self.allocator, "catch_{d}", .{i}) catch "catch";
             _ = try self.func().addBlock(catch_name);
@@ -5869,13 +6064,16 @@ pub const AstToIr = struct {
         });
 
         // Track catch block branch instructions that need patching to point to do_end
-        var catch_branch_infos = try std.ArrayList(struct { block_idx: u32, instr_idx: u32 }).initCapacity(self.allocator, do_catch.catches.len);
+        var catch_branch_infos = try std.ArrayList(struct { block_idx: u32, instr_idx: u32 }).initCapacity(self.allocator, catch_count);
         defer catch_branch_infos.deinit(self.allocator);
 
         // Restore and process each catch block
-        for (do_catch.catches, 0..) |catch_clause, i| {
+        var catch_idx: usize = 0;
+        for (do_catch.children) |child| {
+            if (child.role != .catch_handler) continue;
+
             // Restore this catch block as current
-            const idx = deferred_catch_blocks.items.len - 1 - i;
+            const idx = deferred_catch_blocks.items.len - 1 - catch_idx;
             try self.func().blocks.append(self.allocator, deferred_catch_blocks.items[idx]);
 
             // Remove do-body-scoped variables from var_map before processing catch block
@@ -5896,16 +6094,17 @@ pub const AstToIr = struct {
             const error_value_ptr = try self.func().emitGetFieldPtr(error_buffer, 8);
 
             // Bind the error to a variable (errors are now enums)
-            const error_ty: ValueType = if (catch_clause.error_type) |et|
+            const binding_name = child.catch_binding orelse "error";
+            const error_ty: ValueType = if (child.catch_error_type) |et|
                 .{ .enum_type = et }
             else
                 .{ .enum_type = "Error" };
-            try self.var_map.put(self.allocator, catch_clause.binding_name, VarInfo.init(error_value_ptr, error_ty, false, false));
-            defer _ = self.var_map.remove(catch_clause.binding_name);
+            try self.var_map.put(self.allocator, binding_name, VarInfo.init(error_value_ptr, error_ty, false, false));
+            defer _ = self.var_map.remove(binding_name);
 
             // Process catch body (with new label scope)
             try self.pushLabelScope();
-            for (catch_clause.body) |stmt| {
+            for (child.statements) |stmt| {
                 try self.convertStatement(stmt);
             }
             self.popLabelScope();
@@ -5921,6 +6120,8 @@ pub const AstToIr = struct {
                 .operands = .{ .{ .block_ref = 0xFFFFFFFF }, .none, .none }, // Placeholder
                 .result = null,
             });
+
+            catch_idx += 1;
         }
 
         // Now we know the actual do_end index - it's the next block to be added
@@ -5985,7 +6186,8 @@ pub const AstToIr = struct {
         try self.var_map.put(self.allocator, unwrap.var_name, VarInfo.init(var_ptr, var_value_type, true, is_struct));
 
         // Validate that the else body contains an assignment to var_name
-        if (!elseBlockAssignsTo(unwrap.default_body, unwrap.var_name)) {
+        const default_body = getDefaultValueBody(unwrap.children);
+        if (!elseBlockAssignsTo(default_body, unwrap.var_name)) {
             self.reportError(.E044, unwrap.var_name);
             return error.SemanticError;
         }
@@ -6017,7 +6219,7 @@ pub const AstToIr = struct {
         // Else block ("nil"): execute default body (which should assign to var_name)
         // (with new label scope for the else body)
         try self.pushLabelScope();
-        for (unwrap.default_body) |stmt| {
+        for (default_body) |stmt| {
             try self.convertStatement(stmt);
         }
         self.popLabelScope();
@@ -6033,7 +6235,7 @@ pub const AstToIr = struct {
     }
 
     /// Check if a statement list contains an assignment to the given variable name
-    fn elseBlockAssignsTo(stmts: []ast.Statement, var_name: []const u8) bool {
+    fn elseBlockAssignsTo(stmts: []const ast.Statement, var_name: []const u8) bool {
         for (stmts) |stmt| {
             switch (stmt.kind) {
                 .assign => |assign| {
@@ -6105,7 +6307,7 @@ pub const AstToIr = struct {
 
         // Else block ("nil"): execute body (must contain exit statement)
         try self.pushLabelScope();
-        for (guard.nil_body) |stmt| {
+        for (getNilHandler(guard.children)) |stmt| {
             try self.convertStatement(stmt);
         }
         self.popLabelScope();
