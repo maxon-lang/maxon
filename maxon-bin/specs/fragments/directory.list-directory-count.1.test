@@ -1,0 +1,101 @@
+// Test: directory.list-directory-count.1
+function main() returns int
+    do 'list'
+        let files = try Directory.list("../bin")
+        // bin directory has at least maxon.exe and maxon.pdb
+        if files.count() >= 2 'ok'
+            return 42
+        end 'ok'
+        return files.count()
+    end 'list' catch (e DirectoryError) 'err'
+        return 99
+    end 'err'
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 64
+    %tmp_alloca.1 = alloca.sized ptr 40
+    %tmp_alloca.2 = alloca.sized ptr 24
+    %tmp_const = const.i64 i64 7
+    %tmp_heap = heap.alloc ptr %tmp_const tag="string buffer"
+    %tmp_const.1 = const.i64 i64 0
+    %6 = getelemptr ptr %tmp_heap %tmp_const.1 elemsize=1
+    %tmp_const.2 = const.i8 i8 46
+    store.i8 %6 %tmp_const.2
+    %tmp_const.3 = const.i64 i64 1
+    %9 = getelemptr ptr %tmp_heap %tmp_const.3 elemsize=1
+    %tmp_const.4 = const.i8 i8 46
+    store.i8 %9 %tmp_const.4
+    %tmp_const.5 = const.i64 i64 2
+    %12 = getelemptr ptr %tmp_heap %tmp_const.5 elemsize=1
+    %tmp_const.6 = const.i8 i8 47
+    store.i8 %12 %tmp_const.6
+    %tmp_const.7 = const.i64 i64 3
+    %15 = getelemptr ptr %tmp_heap %tmp_const.7 elemsize=1
+    %tmp_const.8 = const.i8 i8 98
+    store.i8 %15 %tmp_const.8
+    %tmp_const.9 = const.i64 i64 4
+    %18 = getelemptr ptr %tmp_heap %tmp_const.9 elemsize=1
+    %tmp_const.10 = const.i8 i8 105
+    store.i8 %18 %tmp_const.10
+    %tmp_const.11 = const.i64 i64 5
+    %21 = getelemptr ptr %tmp_heap %tmp_const.11 elemsize=1
+    %tmp_const.12 = const.i8 i8 110
+    store.i8 %21 %tmp_const.12
+    %tmp_const.13 = const.i64 i64 6
+    %24 = getelemptr ptr %tmp_heap %tmp_const.13 elemsize=1
+    %tmp_const.14 = const.i8 i8 0
+    store.i8 %24 %tmp_const.14
+    store %tmp_alloca.2 %tmp_heap
+    %tmp_const.15 = const.i32 i32 0
+    %tmp_const.16 = const.i32 i32 6
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
+    store.i32 %tmp_fieldptr %tmp_const.16
+    %tmp_const.17 = const.i32 i32 25
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 12
+    store.i32 %tmp_fieldptr.1 %tmp_const.17
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.2 16
+    store.i32 %tmp_fieldptr.2 %tmp_const.15
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.2 20
+    store.i32 %tmp_fieldptr.3 %tmp_const.15
+    %tmp_alloca.3 = alloca.sized ptr 32
+    %tmp_call = call ptr @String$init(%tmp_alloca.3, %tmp_alloca.2)
+    %tmp_call.1 = call ptr @Directory$list(%tmp_alloca.1, %tmp_alloca.3)
+    %tmp_load = load i64 %tmp_alloca.1
+    %tmp_const.18 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.18
+    br.cond %tmp_icmp @block1 @block2
+try_success:
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.1 8
+    %tmp_alloca.4 = alloca ptr
+    store %tmp_alloca.4 %tmp_fieldptr.4
+    br @block3
+try_propagate:
+    memcpy %tmp_alloca %tmp_alloca.1 64
+    br @block6
+try_merge:
+    %files = load ptr %tmp_alloca.4
+    %tmp_call.2 = call i64 @Array$count(%files)
+    %tmp_const.19 = const.i64 i64 2
+    %tmp_icmp.1 = icmp.ge i64 %tmp_call.2 %tmp_const.19
+    br.cond %tmp_icmp.1 @block4 @block5
+then:
+    %tmp_const.20 = const.i64 i64 42
+    ret %tmp_const.20
+end:
+    %tmp_call.3 = call i64 @Array$count(%files)
+    ret %tmp_call.3
+    br @block8
+catch_dispatch:
+    br @block7
+catch_0:
+    %tmp_const.21 = const.i64 i64 99
+    ret %tmp_const.21
+    br @block8
+do_end:
+}
+
+---

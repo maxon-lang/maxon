@@ -3151,6 +3151,7 @@ pub const AstToIr = struct {
         loop_end_block: ?u32,
         loop_cond_block: ?u32,
         temporary_strings: std.ArrayListUnmanaged(ir.Value),
+        current_func_throws_type: ?[]const u8,
     };
 
     /// Save current conversion context before generating a method
@@ -3176,6 +3177,7 @@ pub const AstToIr = struct {
             .loop_end_block = self.loop_end_block,
             .loop_cond_block = self.loop_cond_block,
             .temporary_strings = self.temporary_strings,
+            .current_func_throws_type = self.current_func_throws_type,
         };
 
         // Clear var_map and temporary_strings for new method
@@ -3203,6 +3205,7 @@ pub const AstToIr = struct {
         self.loop_end_block = saved.loop_end_block;
         self.loop_cond_block = saved.loop_cond_block;
         self.temporary_strings = saved.temporary_strings;
+        self.current_func_throws_type = saved.current_func_throws_type;
     }
 
     /// Ensure a method has been generated (lazy generation entry point).
@@ -4043,6 +4046,15 @@ pub const AstToIr = struct {
                     } else {
                         try self.func().emitStore(value_ptr, typed_val.value);
                     }
+                    // Mark returned variable as moved so cleanup doesn't free its heap resources
+                    if (expr == .identifier) {
+                        if (self.var_map.getPtr(expr.identifier)) |var_info| {
+                            // Only mark as moved for types with heap resources (Arrays, Strings)
+                            if (var_info.ty == .struct_type and std.mem.startsWith(u8, var_info.ty.struct_type, "Array$")) {
+                                var_info.markMoved("return", self.current_line);
+                            }
+                        }
+                    }
                     try self.freeHeapAllocations();
                     try self.func().emitRet(sret);
                     return;
@@ -4087,6 +4099,15 @@ pub const AstToIr = struct {
                         try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
                     } else {
                         try self.func().emitMemcpy(sret, typed_val.value, self.sret_size);
+                    }
+                }
+                // Mark returned variable as moved so cleanup doesn't free its heap resources
+                if (expr == .identifier) {
+                    if (self.var_map.getPtr(expr.identifier)) |var_info| {
+                        // Only mark as moved for types with heap resources (Arrays, Strings)
+                        if (var_info.ty == .struct_type and std.mem.startsWith(u8, var_info.ty.struct_type, "Array$")) {
+                            var_info.markMoved("return", self.current_line);
+                        }
                     }
                 }
                 try self.freeHeapAllocations();
@@ -5997,6 +6018,8 @@ pub const AstToIr = struct {
         for (0..catch_count) |i| {
             const catch_block_idx: u32 = @intCast(self.func().blocks.items.len);
             const catch_name = std.fmt.allocPrint(self.allocator, "catch_{d}", .{i}) catch "catch";
+            // Track allocated name for cleanup when function is destroyed
+            try self.func().allocated_names.append(self.allocator, catch_name);
             _ = try self.func().addBlock(catch_name);
             try catch_blocks.append(self.allocator, catch_block_idx);
         }

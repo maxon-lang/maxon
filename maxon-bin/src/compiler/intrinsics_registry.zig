@@ -140,6 +140,8 @@ const write_file_params = [_]IntrinsicParam{
     .{ .name = "path", .type_name = "cstring" },
     .{ .name = "data", .type_name = "array" },
 };
+const handle_param = [_]IntrinsicParam{.{ .name = "handle", .type_name = "ptr" }};
+const size_param = [_]IntrinsicParam{.{ .name = "size", .type_name = "int" }};
 
 pub const file_intrinsics = [_]Intrinsic{
     .{
@@ -169,6 +171,62 @@ pub const file_intrinsics = [_]Intrinsic{
         .codegen = .custom,
         .help_text = "Writes binary data to a file. Returns 0 on success, -1 on failure.",
     },
+    // Directory intrinsics - opaque handle API
+    // The handle contains both the Windows HANDLE and the WIN32_FIND_DATAA buffer
+    .{
+        .name = "__find_first_file",
+        .params = &cstring_param,
+        .return_type_name = "ptr",
+        .return_ir_type = .ptr,
+        .visibility = .stdlib_only,
+        .codegen = .custom,
+        .help_text = "Calls FindFirstFileA. Allocates find_data internally. Returns opaque handle or 0 on failure.",
+    },
+    .{
+        .name = "__find_next_file",
+        .params = &handle_param,
+        .return_type_name = "int",
+        .return_ir_type = .i64,
+        .visibility = .stdlib_only,
+        .codegen = .custom,
+        .help_text = "Calls FindNextFileA on the handle. Returns non-zero on success, 0 when no more files.",
+    },
+    .{
+        .name = "__find_close",
+        .params = &handle_param,
+        .return_type_name = "int",
+        .return_ir_type = .i64,
+        .visibility = .stdlib_only,
+        .codegen = .custom,
+        .help_text = "Calls FindClose and frees the handle.",
+    },
+    .{
+        .name = "__find_filename",
+        .params = &handle_param,
+        .return_type_name = "cstring",
+        .return_ir_type = .ptr,
+        .visibility = .stdlib_only,
+        .codegen = .custom,
+        .help_text = "Gets current filename (cFileName) from the handle.",
+    },
+    .{
+        .name = "__get_file_attributes",
+        .params = &cstring_param,
+        .return_type_name = "int",
+        .return_ir_type = .i64,
+        .visibility = .stdlib_only,
+        .codegen = .custom,
+        .help_text = "Calls GetFileAttributesA. Returns attributes or -1 (INVALID_FILE_ATTRIBUTES) on failure.",
+    },
+    .{
+        .name = "__directory_exists",
+        .params = &cstring_param,
+        .return_type_name = "bool",
+        .return_ir_type = .i64,
+        .visibility = .stdlib_only,
+        .codegen = .custom,
+        .help_text = "Returns true if path exists and is a directory.",
+    },
 };
 
 // ============================================================================
@@ -190,6 +248,12 @@ pub const intrinsic_categories = [_]IntrinsicCategory{
     .{ .prefix = "__make_char_", .visibility = .stdlib_only, .codegen = .make_char },
     .{ .prefix = "__read_file", .visibility = .stdlib_only, .codegen = .file_io },
     .{ .prefix = "__write_file", .visibility = .stdlib_only, .codegen = .file_io },
+    .{ .prefix = "__find_first_file", .visibility = .stdlib_only, .codegen = .file_io },
+    .{ .prefix = "__find_next_file", .visibility = .stdlib_only, .codegen = .file_io },
+    .{ .prefix = "__find_close", .visibility = .stdlib_only, .codegen = .file_io },
+    .{ .prefix = "__find_filename", .visibility = .stdlib_only, .codegen = .file_io },
+    .{ .prefix = "__get_file_attributes", .visibility = .stdlib_only, .codegen = .file_io },
+    .{ .prefix = "__directory_exists", .visibility = .stdlib_only, .codegen = .file_io },
 };
 
 /// Find a category by name prefix

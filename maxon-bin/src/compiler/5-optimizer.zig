@@ -693,6 +693,15 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                             }
                         }
                     }
+                    // Pointers returned from extern calls (e.g., HeapAlloc) are external
+                    // and stores to them must be preserved since they may be read elsewhere
+                    if (inst.op == .extern_call) {
+                        if (inst.result) |result| {
+                            if (inst.result_type == .ptr) {
+                                try ctx.loaded_bases.put(ctx.allocator, result, {});
+                            }
+                        }
+                    }
                 },
                 .memcpy => {
                     // memcpy reads from source pointer - mark it as loaded

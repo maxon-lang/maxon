@@ -1,6 +1,6 @@
 ---
 feature: directory
-status: draft
+status: stable
 keywords: [directory, folder, list, filesystem]
 category: stdlib
 ---
@@ -95,7 +95,7 @@ Check if a path is a directory. Alias for `exists`.
 ```maxon
 function main() returns int
     do 'list'
-        let files = try Directory.list("bin")
+        let files = try Directory.list("../bin")
         // bin directory should contain maxon.exe
         var foundMaxon = false
         for f in files 'loop'
@@ -120,7 +120,7 @@ end 'main'
 ```maxon
 function main() returns int
     do 'list'
-        let files = try Directory.list("bin")
+        let files = try Directory.list("../bin")
         // bin directory has at least maxon.exe and maxon.pdb
         if files.count() >= 2 'ok'
             return 42
@@ -159,7 +159,7 @@ Directory not found
 <!-- test: directory-exists -->
 ```maxon
 function main() returns int
-    if Directory.exists("bin") 'check'
+    if Directory.exists("../bin") 'check'
         return 42
     end 'check'
     return 0
@@ -172,7 +172,7 @@ end 'main'
 <!-- test: directory-is-directory -->
 ```maxon
 function main() returns int
-    if Directory.isDirectory("bin") 'check'
+    if Directory.isDirectory("../bin") 'check'
         return 42
     end 'check'
     return 0

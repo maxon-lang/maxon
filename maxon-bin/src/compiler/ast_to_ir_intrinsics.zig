@@ -1073,10 +1073,181 @@ const file_intrinsics = .{
     .{ "__read_file", emitReadFileIR },
     .{ "__write_file", intrinsicWriteFile },
     .{ "__write_file_binary", intrinsicWriteFile },
+    .{ "__find_first_file", intrinsicFindFirstFile },
+    .{ "__find_next_file", intrinsicFindNextFile },
+    .{ "__find_close", intrinsicFindClose },
+    .{ "__find_filename", intrinsicFindFilename },
+    .{ "__get_file_attributes", intrinsicGetFileAttributes },
+    .{ "__directory_exists", emitDirectoryExistsIR },
 };
 
 fn convertFileIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     return dispatchIntrinsic(self, call, file_intrinsics);
+}
+
+// ============================================================================
+// Directory Intrinsics - Opaque Handle API
+// ============================================================================
+//
+// The opaque handle layout (328 bytes total):
+//   Offset 0: Windows HANDLE from FindFirstFileA (8 bytes)
+//   Offset 8: WIN32_FIND_DATAA struct (320 bytes)
+//
+// This allows the stdlib to use a simple handle without managing the find_data buffer.
+
+const FIND_HANDLE_SIZE: i64 = 328;
+const FIND_DATA_OFFSET: i64 = 8;
+const FILENAME_OFFSET: i64 = 8 + 44; // find_data offset + cFileName offset
+
+/// __find_first_file(pattern cstring) returns ptr
+/// Allocates handle, calls FindFirstFileA. Returns handle or 0 on failure.
+fn intrinsicFindFirstFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const pattern_arg = try self.convertExpression(call.args[0]);
+    const pattern_ptr = try self.func().emitLoad(pattern_arg.value, .ptr);
+
+    // Allocate handle struct on heap (328 bytes)
+    const heap = try emitGetProcessHeap(self);
+    const size = try self.func().emitConstI64(FIND_HANDLE_SIZE);
+    const handle_ptr = try emitHeapAllocWin(self, heap, size);
+
+    // Get pointer to find_data at offset 8
+    const find_data_offset = try self.func().emitConstI64(FIND_DATA_OFFSET);
+    const find_data_ptr = try self.func().emitBinaryOp(.add, handle_ptr, find_data_offset, .ptr);
+
+    // Call FindFirstFileA
+    const win_handle = try externCall(self, "kernel32.dll", "FindFirstFileA", &.{ pattern_ptr, find_data_ptr }, .ptr);
+
+    // Store Windows handle at offset 0
+    try self.func().emitStore(handle_ptr, win_handle);
+
+    // Check for INVALID_HANDLE_VALUE (-1) and return 0 if invalid
+    const invalid_handle = try self.func().emitConstI64(-1);
+    const is_valid = try self.func().emitBinaryOp(.icmp_ne, win_handle, invalid_handle, .i64);
+
+    // Multiply handle_ptr by is_valid (0 or 1) to get result
+    const result = try self.func().emitBinaryOp(.mul, handle_ptr, is_valid, .i64);
+
+    return .{ .value = result, .ty = .{ .primitive = "ptr" } };
+}
+
+/// __find_next_file(handle ptr) returns int
+/// Calls FindNextFileA using the handle. Returns non-zero on success, 0 when no more files.
+fn intrinsicFindNextFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const handle_arg = try self.convertExpression(call.args[0]);
+    const handle_local = handle_arg.value;
+
+    // Load the opaque handle pointer (heap-allocated struct)
+    const handle_struct = try self.func().emitLoad(handle_local, .ptr);
+
+    // Load Windows handle from offset 0 of the handle struct
+    const win_handle = try self.func().emitLoad(handle_struct, .ptr);
+
+    // Get pointer to find_data at offset 8 of the handle struct
+    const find_data_offset = try self.func().emitConstI64(FIND_DATA_OFFSET);
+    const find_data_ptr = try self.func().emitBinaryOp(.add, handle_struct, find_data_offset, .ptr);
+
+    // Call FindNextFileA (returns BOOL which is i32, sign-extend to i64)
+    const result_i32 = try externCall(self, "kernel32.dll", "FindNextFileA", &.{ win_handle, find_data_ptr }, .i32);
+    const result = try self.func().emitUnaryOp(.sext_i32_i64, result_i32, .i64);
+
+    return .{ .value = result, .ty = .{ .primitive = "int" } };
+}
+
+/// __find_close(handle ptr) returns int
+/// Calls FindClose and frees the handle memory.
+fn intrinsicFindClose(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const handle_arg = try self.convertExpression(call.args[0]);
+    const handle_local = handle_arg.value;
+
+    // Load the opaque handle pointer (heap-allocated struct)
+    const handle_struct = try self.func().emitLoad(handle_local, .ptr);
+
+    // Load Windows handle from offset 0 of the handle struct
+    const win_handle = try self.func().emitLoad(handle_struct, .ptr);
+
+    // Call FindClose
+    const close_result = try externCall(self, "kernel32.dll", "FindClose", &.{win_handle}, .i64);
+
+    // Free the handle struct memory
+    const heap = try emitGetProcessHeap(self);
+    const zero = try self.func().emitConstI64(0);
+    _ = try externCall(self, "kernel32.dll", "HeapFree", &.{ heap, zero, handle_struct }, .i64);
+
+    return .{ .value = close_result, .ty = .{ .primitive = "int" } };
+}
+
+/// __find_filename(handle ptr) returns cstring
+/// Gets current filename (cFileName) from the handle's find_data.
+/// Returns a cstring struct (data_ptr + length + managed)
+fn intrinsicFindFilename(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const handle_arg = try self.convertExpression(call.args[0]);
+    const handle_local = handle_arg.value;
+
+    // Load the opaque handle pointer (heap-allocated struct)
+    const handle_struct = try self.func().emitLoad(handle_local, .ptr);
+
+    // cFileName is at offset 8 (find_data) + 44 (cFileName in WIN32_FIND_DATAA) = 52
+    const offset = try self.func().emitConstI64(FILENAME_OFFSET);
+    const filename_ptr = try self.func().emitBinaryOp(.add, handle_struct, offset, .ptr);
+
+    // Compute string length using lstrlenA (returns i32, we sign-extend to i64)
+    const strlen_i32 = try externCall(self, "kernel32.dll", "lstrlenA", &.{filename_ptr}, .i32);
+    const strlen = try self.func().emitUnaryOp(.sext_i32_i64, strlen_i32, .i64);
+
+    // Allocate cstring struct on stack (24 bytes: data_ptr + length + managed)
+    const cstr = try self.func().emitAllocaSized(24);
+
+    // Store data pointer at offset 0
+    try self.func().emitStore(cstr, filename_ptr);
+
+    // Store length at offset 8
+    try struct_helpers.storeI64Field(self.func(), cstr, 8, strlen);
+
+    // Store null managed pointer at offset 16 (we don't own this memory)
+    const null_ptr = try self.func().emitConstI64(0);
+    try struct_helpers.storeI64Field(self.func(), cstr, 16, null_ptr);
+
+    return .{ .value = cstr, .ty = .{ .primitive = "cstring" } };
+}
+
+/// __get_file_attributes(path cstring) returns int
+/// Calls GetFileAttributesA. Returns attributes or -1 on failure.
+fn intrinsicGetFileAttributes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const path_arg = try self.convertExpression(call.args[0]);
+    const path_ptr = try self.func().emitLoad(path_arg.value, .ptr);
+
+    const result = try externCall(self, "kernel32.dll", "GetFileAttributesA", &.{path_ptr}, .i64);
+    return .{ .value = result, .ty = .{ .primitive = "int" } };
+}
+
+/// Generate IR to check if path is a directory
+/// Uses GetFileAttributesA
+fn emitDirectoryExistsIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
+    // GetFileAttributesA returns DWORD, INVALID_FILE_ATTRIBUTES (0xFFFFFFFF) on failure
+    const attrs = try externCall(self, "kernel32.dll", "GetFileAttributesA", &.{path_ptr}, .i64);
+
+    // Check if not INVALID_FILE_ATTRIBUTES
+    const invalid_attrs = try self.func().emitConstI64(@as(i64, @bitCast(@as(u64, 0xFFFFFFFF))));
+    const is_valid = try self.func().emitBinaryOp(.icmp_ne, attrs, invalid_attrs, .i64);
+
+    // Check if FILE_ATTRIBUTE_DIRECTORY bit (0x10) is set
+    const dir_flag = try self.func().emitConstI64(0x10);
+    const masked = try self.func().emitBinaryOp(.band, attrs, dir_flag, .i64);
+    const is_dir = try self.func().emitBinaryOp(.icmp_ne, masked, try self.func().emitConstI64(0), .i64);
+
+    // Result: valid AND is_directory
+    const result = try self.func().emitBinaryOp(.mul, is_valid, is_dir, .i64);
+
+    return .{ .value = result, .ty = .{ .primitive = "bool" } };
 }
 
 // ============================================================================
