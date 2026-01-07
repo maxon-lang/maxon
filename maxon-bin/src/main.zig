@@ -174,7 +174,7 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     compiler.compileMultiple(
         sources.items,
         output_path,
-        .{ .track_allocs = track_memory, .emit_ir = emit_ir, .emit_asm = emit_asm },
+        .{ .track_memory = track_memory, .emit_ir = emit_ir, .emit_asm = emit_asm },
         allocator,
         &result,
     ) catch |err| {
@@ -321,7 +321,7 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
     compiler.compileMultiple(
         all_sources.items,
         output_path,
-        .{ .track_allocs = track_memory, .emit_ir = emit_ir, .emit_asm = emit_asm },
+        .{ .track_memory = track_memory, .emit_ir = emit_ir, .emit_asm = emit_asm },
         allocator,
         &result,
     ) catch |err| {

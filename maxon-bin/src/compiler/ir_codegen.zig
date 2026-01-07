@@ -61,7 +61,7 @@ const StringConstantPatch = struct {
 
 /// Code generation options
 pub const CodegenOptions = struct {
-    track_allocs: bool = false,
+    track_memory: bool = false,
 };
 
 /// Register allocation information for a function
@@ -252,7 +252,7 @@ pub const IrCodegen = struct {
     block_offsets: std.ArrayListUnmanaged(usize),
     jump_patches: std.ArrayListUnmanaged(JumpPatch),
     // Allocation tracking
-    track_allocs: bool,
+    track_memory: bool,
     // Offsets to tracking data (set after all code is generated)
     tracking_data_offset: ?usize = null,
     // Patches for RIP-relative tracking data access
@@ -293,7 +293,7 @@ pub const IrCodegen = struct {
             .external_patches = .{},
             .block_offsets = .{},
             .jump_patches = .{},
-            .track_allocs = options.track_allocs,
+            .track_memory = options.track_memory,
             .tracking_data_patches = .{},
             .func_return_types = .{},
             .stored_types = .{},
@@ -437,7 +437,7 @@ pub const IrCodegen = struct {
         }
 
         // Generate _start wrapper if tracking is enabled
-        if (self.track_allocs) {
+        if (self.track_memory) {
             try self.generateStartWrapper();
         }
 
@@ -467,7 +467,7 @@ pub const IrCodegen = struct {
         try self.generateRuntimeBoolToString();
 
         // Generate tracking support functions if enabled
-        if (self.track_allocs) {
+        if (self.track_memory) {
             try self.generateTrackingFunctions();
             // Generate tracking data section at the end
             try self.generateTrackingData();
@@ -3075,7 +3075,7 @@ pub const IrCodegen = struct {
         // XMMs are loaded from stack, GPRs are popped in reverse order
         try self.emitCalleeSavedRestores();
 
-        if (std.mem.eql(u8, self.current_func_name, "main") and !self.track_allocs) {
+        if (std.mem.eql(u8, self.current_func_name, "main") and !self.track_memory) {
             // Exit code in RCX for ExitProcess (when not using _start wrapper)
             try self.enc.movRcxRax();
             // call [rip+0] - patched by PE writer for ExitProcess
@@ -3574,7 +3574,7 @@ pub const IrCodegen = struct {
         try self.emitExternalCall("kernel32.dll", "HeapAlloc");
 
         // If tracking enabled, call __track_alloc(ptr=RCX, size=RDX, tag_ptr=R8, tag_len=R9)
-        if (self.track_allocs) {
+        if (self.track_memory) {
             // Save ptr to R13 across the tracking call
             try self.enc.emit(&.{ 0x49, 0x89, 0xC5 }); // mov r13, rax
 
@@ -3644,7 +3644,7 @@ pub const IrCodegen = struct {
         self.code.items[null_check_jnz + 3] = @truncate(@as(u32, @bitCast(null_check_rel)) >> 24);
 
         // If tracking enabled, get size via HeapSize and call __track_free
-        if (self.track_allocs) {
+        if (self.track_memory) {
             // Get heap handle first
             try self.emitExternalCall("kernel32.dll", "GetProcessHeap");
             try self.enc.emit(&.{ 0x49, 0x89, 0xC5 }); // mov r13, rax (heap handle)
@@ -3731,7 +3731,7 @@ pub const IrCodegen = struct {
         // RAX = new_ptr, R13 = new_size
 
         // If tracking enabled, call __track_alloc for this new allocation
-        if (self.track_allocs) {
+        if (self.track_memory) {
             // Save ptr to R12 across the tracking call
             try self.enc.movR12Rax();
 
@@ -3777,7 +3777,7 @@ pub const IrCodegen = struct {
 
         // === REALLOC PATH: old_ptr is not NULL ===
         // If tracking, get old_size first (before realloc invalidates old_ptr)
-        if (self.track_allocs) {
+        if (self.track_memory) {
             // Get heap handle
             try self.emitExternalCall("kernel32.dll", "GetProcessHeap");
             try self.enc.emit(&.{ 0x49, 0x89, 0xC6 }); // mov r14, rax (save heap handle)
@@ -3809,7 +3809,7 @@ pub const IrCodegen = struct {
 
         // If tracking, call __track_realloc(old_ptr, old_size, new_ptr, new_size, tag_ptr, tag_len)
         // R12 = old_ptr, R15 = old_size, R14 = new_ptr, R13 = new_size
-        if (self.track_allocs) {
+        if (self.track_memory) {
             // Get tag from IR instruction
             const tag = inst.operands[2].alloc_tag;
             const jmp_offset = try self.enc.jmpRel32();
@@ -3867,7 +3867,7 @@ pub const IrCodegen = struct {
     }
 
     fn genTrackMove(self: *IrCodegen, inst: ir.Instruction) !void {
-        if (!self.track_allocs) return;
+        if (!self.track_memory) return;
 
         const tag = inst.operands[0].alloc_tag;
         debug.codegen("  TrackMove: tag={s}", .{tag});
@@ -3911,7 +3911,7 @@ pub const IrCodegen = struct {
     }
 
     fn genTrackIncref(self: *IrCodegen, inst: ir.Instruction) !void {
-        if (!self.track_allocs) return;
+        if (!self.track_memory) return;
 
         const tag = inst.operands[0].alloc_tag;
         const new_refcount = inst.operands[1].value;
@@ -3951,7 +3951,7 @@ pub const IrCodegen = struct {
     }
 
     fn genTrackDecref(self: *IrCodegen, inst: ir.Instruction) !void {
-        if (!self.track_allocs) return;
+        if (!self.track_memory) return;
 
         const tag = inst.operands[0].alloc_tag;
         const new_refcount = inst.operands[1].value;

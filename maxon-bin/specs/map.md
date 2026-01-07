@@ -353,7 +353,7 @@ end 'main'
 42
 ```
 <!-- test: string-keys-basic -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var m = ["a": 1, "b": 2]
@@ -406,7 +406,7 @@ Decrefs:   0
 ```
 
 <!-- test: string-keys-get-multiple -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var m = ["hello": 10, "world": 20, "foo": 30]
@@ -469,7 +469,7 @@ Decrefs:   0
 ```
 
 <!-- test: string-keys-contains -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var m = ["key1": 100, "key2": 200]
@@ -522,7 +522,7 @@ Decrefs:   0
 ```
 
 <!-- test: string-keys-insert-update -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var m = ["x": 10]
@@ -577,7 +577,7 @@ Decrefs:   1
 ```
 
 <!-- test: string-keys-remove -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var m = ["alpha": 1, "beta": 2, "gamma": 3]
@@ -639,7 +639,7 @@ Decrefs:   1
 ```
 
 <!-- test: string-keys-early-return -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var m = ["test": 42]

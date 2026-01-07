@@ -11,17 +11,22 @@ function main() returns int
 end 'main'
 ---
 ExitCode: 0
-TrackAllocs: true
+TrackMemory: true
 Stdout: ```
 ALLOC #1: 32 bytes (array grow)
 REALLOC #1: 32 -> 64 bytes (array grow)
 REALLOC #1: 64 -> 128 bytes (array grow)
 ALLOC #2: 22 bytes (int.toString)
 ALLOC #3: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #4: 4 bytes (string concat)
 10
+DECREF: <temp> -> rc=0
 FREE #2: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #3: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #4: 4 bytes (string cleanup)
 FREE #1: 128 bytes (array cleanup)
 
@@ -29,6 +34,9 @@ FREE #1: 128 bytes (array cleanup)
 Allocated: 252 bytes
 Freed:     252 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   1
+Decrefs:   3
 ```
 ---
 function main() -> i64 {

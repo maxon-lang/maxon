@@ -41,7 +41,7 @@ Leaked:    0 bytes
 ## Tests
 
 <!-- test: dynamic-array-no-leak -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     let size = 10
@@ -59,16 +59,20 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 80 bytes (array buffer)
+MOVE: managed
 FREE #1: 80 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 80 bytes
 Freed:     80 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: no-alloc-empty-program -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     return 42
@@ -83,10 +87,13 @@ end 'main'
 Allocated: 0 bytes
 Freed:     0 bytes
 Leaked:    0 bytes
+Moves:     0
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: multiple-arrays -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     let size1 = 5
@@ -110,7 +117,9 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
 ALLOC #2: 80 bytes (array buffer)
+MOVE: managed
 FREE #1: 40 bytes (array cleanup)
 FREE #2: 80 bytes (array cleanup)
 
@@ -118,10 +127,13 @@ FREE #2: 80 bytes (array cleanup)
 Allocated: 120 bytes
 Freed:     120 bytes
 Leaked:    0 bytes
+Moves:     2
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-early-return-true -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     let size = 5
@@ -142,16 +154,20 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
 FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-early-return-false -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     let size = 5
@@ -172,16 +188,20 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
 FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-passed-to-function -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function sum_first(arr Array of int) returns int
     if let val = arr[0] 'get'
@@ -203,16 +223,20 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
 FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-computed-size -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     let a = 2
@@ -231,16 +255,20 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 80 bytes (array buffer)
+MOVE: managed
 FREE #1: 80 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 80 bytes
 Freed:     80 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-borrow-no-leak -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function readFirst(arr Array of int) returns int
     if let val = arr[0] 'get'
@@ -267,16 +295,20 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
 FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-borrow-multiple-times -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function getElement(arr Array of int, idx int) returns int
     if let val = arr[idx] 'get'
@@ -303,16 +335,20 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
 FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-in-loop -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var i = 0
@@ -334,20 +370,26 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
 FREE #1: 40 bytes (array cleanup)
 ALLOC #2: 40 bytes (array buffer)
+MOVE: managed
 FREE #2: 40 bytes (array cleanup)
 ALLOC #3: 40 bytes (array buffer)
+MOVE: managed
 FREE #3: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 120 bytes
 Freed:     120 bytes
 Leaked:    0 bytes
+Moves:     3
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-move-no-leak -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function mutateFirst(arr Array of int) returns int
     arr[0] = 100
@@ -370,16 +412,21 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
+MOVE: arr
 FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
+Moves:     2
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-move-chain -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function addTen(arr Array of int) returns int
     var val = 0
@@ -415,16 +462,22 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
+MOVE: arr
+MOVE: arr
 FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
+Moves:     3
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: two-arrays-one-moved-one-borrowed -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function readIt(arr Array of int) returns int
     if let val = arr[0] 'get'
@@ -459,7 +512,10 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
 ALLOC #2: 40 bytes (array buffer)
+MOVE: managed
+MOVE: arr2
 FREE #2: 40 bytes (array cleanup)
 FREE #1: 40 bytes (array cleanup)
 
@@ -467,10 +523,13 @@ FREE #1: 40 bytes (array cleanup)
 Allocated: 80 bytes
 Freed:     80 bytes
 Leaked:    0 bytes
+Moves:     3
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: array-zero-size-no-alloc -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 Zero-size arrays do not allocate memory.
 
 ```maxon
@@ -487,15 +546,19 @@ end 'main'
 42
 ```
 ```stdout
+MOVE: managed
 
 === MEMORY STATS ===
 Allocated: 0 bytes
 Freed:     0 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: heap-array-reassign -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 Reassigning a heap array frees the old memory and allocates new memory.
 
 ```maxon
@@ -517,7 +580,9 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 40 bytes (array buffer)
+MOVE: managed
 ALLOC #2: 40 bytes (array buffer)
+MOVE: managed
 FREE #1: 40 bytes (array cleanup)
 FREE #2: 40 bytes (array cleanup)
 
@@ -525,5 +590,8 @@ FREE #2: 40 bytes (array cleanup)
 Allocated: 80 bytes
 Freed:     80 bytes
 Leaked:    0 bytes
+Moves:     2
+Increfs:   0
+Decrefs:   0
 ```
 

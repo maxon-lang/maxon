@@ -440,7 +440,7 @@ end 'main'
 30
 ```
 <!-- test: iflet-array-access-borrowed -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var arr = [10, 20, 30]
@@ -467,7 +467,7 @@ Decrefs:   0
 ```
 
 <!-- test: iflet-array-string-borrowed -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var arr = ["hello", "world"]
@@ -503,7 +503,7 @@ Decrefs:   0
 ```
 
 <!-- test: iflet-map-get-borrowed -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var m = ["key": 42]
@@ -552,7 +552,7 @@ Decrefs:   0
 ```
 
 <!-- test: iflet-map-string-value-borrowed -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var m = [1: "hello", 2: "world"]
@@ -600,7 +600,7 @@ Decrefs:   0
 ```
 
 <!-- test: iflet-nested-array-access -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var arr = [10, 20, 30]
@@ -634,7 +634,7 @@ Decrefs:   0
 ```
 
 <!-- test: iflet-early-return-from-map -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function lookup(m Map from String to int, key String) returns int
     if let val = m.get(key) 'found'

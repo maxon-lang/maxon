@@ -43,7 +43,7 @@ pub const CompileResult = struct {
 
 /// Public compile options exposed to CLI
 pub const CompileOptions = struct {
-    track_allocs: bool = false,
+    track_memory: bool = false,
     emit_ir: bool = false,
     emit_asm: bool = false,
 };
@@ -52,7 +52,7 @@ pub const CompileOptions = struct {
 const PipelineOptions = struct {
     source_file: ?[]const u8 = null,
     result: ?*CompileResult = null,
-    track_allocs: bool = false,
+    track_memory: bool = false,
     emit_ir: bool = false,
     external_funcs: ?[]const ast_to_ir.ExternalFuncSignature = null,
     external_types: ?[]const ast_to_ir.ExternalTypeInfo = null,
@@ -136,7 +136,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
 
     // 4 - AST to IR
     var ir_error: ?compile_error.CompileError = null;
-    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, options.external_interfaces, .{ .track_allocs = options.track_allocs }, &ir_error) catch |e| {
+    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, options.external_interfaces, .{ .track_memory = options.track_memory }, &ir_error) catch |e| {
         debug.astToIr("AST to IR error: {}\n", .{e});
         if (options.result) |result| {
             result.error_info = ir_error;
@@ -331,7 +331,7 @@ pub fn compileWithFile(source: []const u8, output_path: []const u8, source_file:
 }
 
 pub fn compileWithOptions(source: []const u8, output_path: []const u8, source_file: []const u8, options: CompileOptions, allocator: std.mem.Allocator, result: *CompileResult) !void {
-    return compileWithInfo(source, output_path, source_file, .{ .track_allocs = options.track_allocs, .emit_ir = options.emit_ir }, allocator, result);
+    return compileWithInfo(source, output_path, source_file, .{ .track_memory = options.track_memory, .emit_ir = options.emit_ir }, allocator, result);
 }
 
 fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]const u8, pipeline_opts: PipelineOptions, allocator: std.mem.Allocator, result: *CompileResult) !void {
@@ -339,7 +339,7 @@ fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]
     var frontend = try runFrontend(source, allocator, .{
         .source_file = source_file,
         .result = result,
-        .track_allocs = pipeline_opts.track_allocs,
+        .track_memory = pipeline_opts.track_memory,
     });
     defer frontend.deinit();
 
@@ -351,7 +351,7 @@ fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]
     // 6 - Generate x86-64 code
     debug.log("Generating x86-64 code from IR", .{});
     const codegen_result = ir_codegen.generate(frontend.ir_module, allocator, .{
-        .track_allocs = pipeline_opts.track_allocs,
+        .track_memory = pipeline_opts.track_memory,
     }) catch |err| {
         debug.log("IR codegen error: {}", .{err});
         return error.CodegenError;
@@ -491,7 +491,7 @@ pub fn compileMultiple(
             .external_funcs = exported_funcs.items,
             .external_types = exported_types.items,
             .external_interfaces = all_interfaces.items,
-            .track_allocs = options.track_allocs,
+            .track_memory = options.track_memory,
         });
 
         if (merged) |*m| {
@@ -520,7 +520,7 @@ pub fn compileMultiple(
     // Generate x86-64 code
     debug.log("Generating x86-64 code from merged IR", .{});
     const codegen_result = ir_codegen.generate(final_module.*, allocator, .{
-        .track_allocs = options.track_allocs,
+        .track_memory = options.track_memory,
     }) catch |err| {
         debug.log("IR codegen error: {}", .{err});
         return error.CodegenError;

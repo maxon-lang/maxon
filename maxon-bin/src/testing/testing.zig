@@ -59,7 +59,7 @@ pub const SuccessExpectation = struct {
     exit_code: u8,
     stdout: ?[]const u8 = null, // Optional expected stdout
     expected_ir: ?[]const u8 = null, // Optional expected IR (for optimization tests)
-    track_allocs: bool = false, // Enable allocation tracking
+    track_memory: bool = false, // Enable allocation tracking
     run_args: ?[]const u8 = null, // Command-line arguments to pass to the test executable
 };
 

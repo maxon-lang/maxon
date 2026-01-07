@@ -257,7 +257,7 @@ pub fn runAllTests(
 
         var compile_result: compiler.CompileResult = .{ .error_info = null };
         defer compile_result.deinit(allocator);
-        const compile_options = compiler.CompileOptions{ .track_allocs = false };
+        const compile_options = compiler.CompileOptions{ .track_memory = false };
 
         const stdlib_ok = if (compiler.compileMultiple(
             sources,
@@ -570,7 +570,7 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8, file_path: 
     var exit_code: u8 = 0;
     var stdout: ?[]const u8 = null;
     var expected_ir: ?[]const u8 = null;
-    var track_allocs: bool = false;
+    var track_memory: bool = false;
     var run_args: ?[]const u8 = null;
 
     var lines = std.mem.splitScalar(u8, metadata, '\n');
@@ -627,9 +627,9 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8, file_path: 
             } else {
                 expected_ir = try allocator.dupe(u8, value);
             }
-        } else if (std.mem.startsWith(u8, trimmed, "TrackAllocs:")) {
+        } else if (std.mem.startsWith(u8, trimmed, "TrackMemory:")) {
             const value = std.mem.trim(u8, trimmed[12..], " \t");
-            track_allocs = std.mem.eql(u8, value, "true");
+            track_memory = std.mem.eql(u8, value, "true");
         } else if (std.mem.startsWith(u8, trimmed, "Args:")) {
             const value = std.mem.trim(u8, trimmed[5..], " \t");
             if (value.len > 0) {
@@ -642,7 +642,7 @@ fn parseExpected(allocator: std.mem.Allocator, metadata: []const u8, file_path: 
         .exit_code = exit_code,
         .stdout = stdout,
         .expected_ir = expected_ir,
-        .track_allocs = track_allocs,
+        .track_memory = track_memory,
         .run_args = run_args,
     } };
 }
@@ -671,9 +671,9 @@ fn runTest(
     };
     defer allocator.free(temp_exe);
 
-    // Get track_allocs option from expected result
-    const track_allocs = switch (fragment.expected) {
-        .success => |s| s.track_allocs,
+    // Get track_memory option from expected result
+    const track_memory = switch (fragment.expected) {
+        .success => |s| s.track_memory,
         .compiler_error => false,
     };
 
@@ -698,7 +698,7 @@ fn runTest(
 
     var compile_result: compiler.CompileResult = .{ .error_info = null };
     defer compile_result.deinit(compile_allocator);
-    const compile_options = compiler.CompileOptions{ .track_allocs = track_allocs };
+    const compile_options = compiler.CompileOptions{ .track_memory = track_memory };
 
     const compile_success = if (compiler.compileMultiple(
         sources,

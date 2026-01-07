@@ -42,7 +42,7 @@ end 'scope'
 ### Heap Allocation Tests
 
 <!-- test: heap-array-push -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 Arrays that grow via push() should allocate on heap and free properly.
 ```maxon
 function main() returns int
@@ -61,10 +61,15 @@ end 'main'
 ALLOC #1: 32 bytes (array grow)
 ALLOC #2: 22 bytes (int.toString)
 ALLOC #3: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #4: 3 bytes (string concat)
 3
+DECREF: <temp> -> rc=0
 FREE #2: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #3: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #4: 3 bytes (string cleanup)
 FREE #1: 32 bytes (array cleanup)
 
@@ -72,10 +77,13 @@ FREE #1: 32 bytes (array cleanup)
 Allocated: 59 bytes
 Freed:     59 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   1
+Decrefs:   3
 ```
 
 <!-- test: heap-array-scope-cleanup -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 Heap arrays in inner scopes should be cleaned up on scope exit.
 ```maxon
 function main() returns int
@@ -100,17 +108,27 @@ ALLOC #1: 32 bytes (array grow)
 ALLOC #2: 32 bytes (array grow)
 ALLOC #3: 22 bytes (int.toString)
 ALLOC #4: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #5: 5 bytes (string concat)
 200
+DECREF: <temp> -> rc=0
 FREE #3: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #4: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #5: 5 bytes (string cleanup)
 ALLOC #6: 22 bytes (int.toString)
 ALLOC #7: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #8: 5 bytes (string concat)
 100
+DECREF: <temp> -> rc=0
 FREE #6: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #7: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #8: 5 bytes (string cleanup)
 FREE #1: 32 bytes (array cleanup)
 FREE #2: 32 bytes (array cleanup)
@@ -119,12 +137,15 @@ FREE #2: 32 bytes (array cleanup)
 Allocated: 122 bytes
 Freed:     122 bytes
 Leaked:    0 bytes
+Moves:     2
+Increfs:   2
+Decrefs:   6
 ```
 
 ### Stack Array Tests
 
 <!-- test: stack-array-no-alloc -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 Fixed-size stack arrays should not allocate on heap.
 Note: print with interpolation allocates for the string conversion.
 ```maxon
@@ -141,10 +162,15 @@ end 'main'
 ALLOC #1: 24 bytes (set buffer)
 ALLOC #2: 22 bytes (int.toString)
 ALLOC #3: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #4: 4 bytes (string concat)
 20
+DECREF: <temp> -> rc=0
 FREE #2: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #3: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #4: 4 bytes (string cleanup)
 FREE #1: 24 bytes (array cleanup)
 
@@ -152,12 +178,15 @@ FREE #1: 24 bytes (array cleanup)
 Allocated: 52 bytes
 Freed:     52 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   1
+Decrefs:   3
 ```
 
 ### Loop Growth Tests
 
 <!-- test: loop-array-growth -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 Growing an array in a loop should release old buffers properly.
 ```maxon
 function main() returns int
@@ -180,10 +209,15 @@ REALLOC #1: 32 -> 64 bytes (array grow)
 REALLOC #1: 64 -> 128 bytes (array grow)
 ALLOC #2: 22 bytes (int.toString)
 ALLOC #3: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #4: 4 bytes (string concat)
 10
+DECREF: <temp> -> rc=0
 FREE #2: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #3: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #4: 4 bytes (string cleanup)
 FREE #1: 128 bytes (array cleanup)
 
@@ -191,6 +225,9 @@ FREE #1: 128 bytes (array cleanup)
 Allocated: 252 bytes
 Freed:     252 bytes
 Leaked:    0 bytes
+Moves:     1
+Increfs:   1
+Decrefs:   3
 ```
 ### Struct Field Array Method Call
 

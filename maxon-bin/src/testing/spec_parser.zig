@@ -125,15 +125,15 @@ fn extractTestsFromSection(
 
         pos = marker_end + 3;
 
-        // Check for optional TrackAllocs marker before the code block
-        var track_allocs = false;
-        if (std.mem.indexOfPos(u8, section, pos, "<!-- TrackAllocs:")) |track_start| {
+        // Check for optional TrackMemory marker before the code block
+        var track_memory = false;
+        if (std.mem.indexOfPos(u8, section, pos, "<!-- TrackMemory:")) |track_start| {
             // Only if it's before the code block
             if (std.mem.indexOfPos(u8, section, pos, "```maxon")) |code_start| {
                 if (track_start < code_start) {
                     if (std.mem.indexOfPos(u8, section, track_start, "-->")) |track_end| {
                         const track_content = section[track_start + 17 .. track_end];
-                        track_allocs = std.mem.indexOf(u8, track_content, "true") != null;
+                        track_memory = std.mem.indexOf(u8, track_content, "true") != null;
                     }
                 }
             }
@@ -179,11 +179,11 @@ fn extractTestsFromSection(
         };
         pos = expected.end_pos;
 
-        // Apply track_allocs and run_args to success expectations
+        // Apply track_memory and run_args to success expectations
         var final_expectation = expected.expectation;
         switch (final_expectation) {
             .success => |*s| {
-                if (track_allocs) s.track_allocs = true;
+                if (track_memory) s.track_memory = true;
                 if (run_args) |args| s.run_args = args;
             },
             .compiler_error => {

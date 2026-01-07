@@ -302,8 +302,8 @@ fn writeFragment(
         .success => |s| {
             const exit_line = try std.fmt.allocPrint(allocator, "ExitCode: {d}\n", .{s.exit_code});
             try content.appendSlice(allocator, exit_line);
-            if (s.track_allocs) {
-                try content.appendSlice(allocator, "TrackAllocs: true\n");
+            if (s.track_memory) {
+                try content.appendSlice(allocator, "TrackMemory: true\n");
             }
             if (s.run_args) |run_args| {
                 const args_line = try std.fmt.allocPrint(allocator, "Args: {s}\n", .{run_args});

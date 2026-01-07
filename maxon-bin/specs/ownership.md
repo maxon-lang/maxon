@@ -252,7 +252,7 @@ end 'main'
 ### Double-Free Prevention
 
 <!-- test: moved-array-not-double-freed -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 Moved arrays are not freed by the original owner, preventing double-free.
 The caller allocates, the callee (mutateFirst) takes ownership and frees.
 ```maxon
@@ -277,10 +277,15 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 24 bytes (array buffer)
+MOVE: managed
+MOVE: arr
 FREE #1: 24 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 24 bytes
 Freed:     24 bytes
 Leaked:    0 bytes
+Moves:     2
+Increfs:   0
+Decrefs:   0
 ```

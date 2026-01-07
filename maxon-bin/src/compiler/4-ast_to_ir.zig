@@ -440,7 +440,7 @@ pub const AstToIr = struct {
     // IR values for runtime-initialized constants (created once per function)
     converted_runtime_constants: std.StringHashMapUnmanaged(TypedValue) = .{},
     // Memory tracking option: emit track.move/track.incref/track.decref instructions
-    track_allocs: bool = false,
+    track_memory: bool = false,
 
     /// A compile-time constant value
     pub const ConstantValue = union(enum) {
@@ -718,7 +718,7 @@ pub const AstToIr = struct {
         try self.func().emitStoreI32(ref_ptr, new_ref);
 
         // Emit tracking call for incref (new_ref is the refcount after increment)
-        if (self.track_allocs) {
+        if (self.track_memory) {
             try self.func().emitTrackIncref(tag, new_ref);
         }
 
@@ -766,7 +766,7 @@ pub const AstToIr = struct {
         try self.func().emitStoreI32(ref_ptr, new_ref);
 
         // Emit tracking call for decref (new_ref is the refcount after decrement)
-        if (self.track_allocs) {
+        if (self.track_memory) {
             try self.func().emitTrackDecref(tag, new_ref);
         }
 
@@ -4300,13 +4300,13 @@ pub const AstToIr = struct {
                                     std.mem.eql(u8, struct_name, "Array"))
                                 {
                                     var_info.markMoved("return", self.current_line);
-                                    if (self.track_allocs) {
+                                    if (self.track_memory) {
                                         try self.func().emitTrackMove(expr.identifier);
                                     }
                                 }
                             } else if (var_info.ty == .array_type) {
                                 var_info.markMoved("return", self.current_line);
-                                if (self.track_allocs) {
+                                if (self.track_memory) {
                                     try self.func().emitTrackMove(expr.identifier);
                                 }
                             }
@@ -4370,14 +4370,14 @@ pub const AstToIr = struct {
                                 std.mem.eql(u8, struct_name, "Map"))
                             {
                                 var_info.markMoved("return", self.current_line);
-                                if (self.track_allocs) {
+                                if (self.track_memory) {
                                     try self.func().emitTrackMove(expr.identifier);
                                 }
                             }
                         } else if (var_info.ty == .array_type) {
                             // Also track moves for internal array types (heap arrays without type annotation)
                             var_info.markMoved("return", self.current_line);
-                            if (self.track_allocs) {
+                            if (self.track_memory) {
                                 try self.func().emitTrackMove(expr.identifier);
                             }
                         }
@@ -8623,7 +8623,7 @@ pub const AstToIr = struct {
             return error.ImmutableMove;
         }
         var_info.markMoved(target_type, self.current_line);
-        if (self.track_allocs) {
+        if (self.track_memory) {
             try self.func().emitTrackMove(var_name);
         }
     }
@@ -9241,7 +9241,7 @@ pub const AstToIr = struct {
         }
 
         var_info.markMoved(func_name, self.current_line);
-        if (self.track_allocs) {
+        if (self.track_memory) {
             try self.func().emitTrackMove(var_name);
         }
     }
@@ -11057,7 +11057,7 @@ pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutat
 
 /// Options for AST-to-IR conversion
 pub const ConvertOptions = struct {
-    track_allocs: bool = false,
+    track_memory: bool = false,
 };
 
 /// Convert AST to IR with external function signatures from other modules
@@ -11074,7 +11074,7 @@ pub fn convertWithExternals(
 ) ConvertError!ir.Module {
     var converter = AstToIr.init(allocator, mutation_analyzer);
     converter.source_file = source_file;
-    converter.track_allocs = options.track_allocs;
+    converter.track_memory = options.track_memory;
     defer converter.deinit();
 
     // Register external interfaces before types (needed for conformance checking)

@@ -1110,7 +1110,7 @@ end 'main'
 ```
 
 <!-- test: memory-tracking-simple-interp -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     var a = "hello"
@@ -1125,27 +1125,42 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #2: 7 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #3: 12 bytes (string concat)
 ALLOC #4: 22 bytes (int.toString)
 ALLOC #5: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #6: 4 bytes (string concat)
 11
+DECREF: <temp> -> rc=0
 FREE #4: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #5: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #6: 4 bytes (string cleanup)
+DECREF: b -> rc=0
 FREE #2: 7 bytes (string cleanup)
+DECREF: a -> rc=0
 FREE #1: 6 bytes (string cleanup)
+DECREF: s -> rc=0
 FREE #3: 12 bytes (string cleanup)
 
 === MEMORY STATS ===
 Allocated: 53 bytes
 Freed:     53 bytes
 Leaked:    0 bytes
+Moves:     3
+Increfs:   3
+Decrefs:   6
 ```
 
 <!-- test: memory-tracking-chained-interp -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 String interpolation with multiple parts creates intermediate concat results.
 Each intermediate result is properly cleaned up at scope exit.
 ```maxon
@@ -1164,35 +1179,58 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #2: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #3: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #4: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #5: 3 bytes (string concat)
 ALLOC #6: 4 bytes (string concat)
 ALLOC #7: 5 bytes (string concat)
 ALLOC #8: 22 bytes (int.toString)
 ALLOC #9: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #10: 3 bytes (string concat)
 4
+DECREF: <temp> -> rc=0
 FREE #5: 3 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #6: 4 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #8: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #9: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #10: 3 bytes (string cleanup)
+DECREF: b -> rc=0
 FREE #2: 2 bytes (string cleanup)
+DECREF: a -> rc=0
 FREE #1: 2 bytes (string cleanup)
+DECREF: c -> rc=0
 FREE #3: 2 bytes (string cleanup)
+DECREF: s -> rc=0
 FREE #7: 5 bytes (string cleanup)
+DECREF: d -> rc=0
 FREE #4: 2 bytes (string cleanup)
 
 === MEMORY STATS ===
 Allocated: 47 bytes
 Freed:     47 bytes
 Leaked:    0 bytes
+Moves:     5
+Increfs:   5
+Decrefs:   10
 ```
 
 <!-- test: memory-tracking-loop-interp -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 String accumulation in loop properly releases old values on reassignment.
 The final value is released at scope exit.
 ```maxon
@@ -1212,30 +1250,45 @@ end 'main'
 0
 ```
 ```stdout
+MOVE: managed
 ALLOC #1: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #2: 2 bytes (string concat)
 ALLOC #3: 3 bytes (string concat)
+DECREF: s -> rc=0
 FREE #2: 2 bytes (string cleanup)
 ALLOC #4: 4 bytes (string concat)
+DECREF: s -> rc=0
 FREE #3: 3 bytes (string cleanup)
 ALLOC #5: 22 bytes (int.toString)
 ALLOC #6: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #7: 3 bytes (string concat)
 3
+DECREF: <temp> -> rc=0
 FREE #5: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #6: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #7: 3 bytes (string cleanup)
+DECREF: x -> rc=0
 FREE #1: 2 bytes (string cleanup)
+DECREF: s -> rc=0
 FREE #4: 4 bytes (string cleanup)
 
 === MEMORY STATS ===
 Allocated: 38 bytes
 Freed:     38 bytes
 Leaked:    0 bytes
+Moves:     3
+Increfs:   2
+Decrefs:   7
 ```
 
 <!-- test: memory-tracking-no-leak-scope-exit -->
-<!-- TrackAllocs: true -->
+<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
     if true 'scope'
@@ -1250,19 +1303,30 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 28 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #2: 22 bytes (int.toString)
 ALLOC #3: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
 ALLOC #4: 4 bytes (string concat)
 27
+DECREF: <temp> -> rc=0
 FREE #2: 22 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #3: 2 bytes (string cleanup)
+DECREF: <temp> -> rc=0
 FREE #4: 4 bytes (string cleanup)
+DECREF: temp -> rc=0
 FREE #1: 28 bytes (string cleanup)
 
 === MEMORY STATS ===
 Allocated: 56 bytes
 Freed:     56 bytes
 Leaked:    0 bytes
+Moves:     2
+Increfs:   2
+Decrefs:   4
 ```
 
 <!-- test: toLower -->
