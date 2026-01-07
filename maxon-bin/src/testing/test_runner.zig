@@ -1011,7 +1011,7 @@ fn runExecutable(allocator: std.mem.Allocator, exe_path: []const u8, run_args: ?
     si.hStdError = stdout_write; // Redirect stderr to same pipe
     si.hStdInput = null;
 
-    // Create the process (suspended)
+    // Create the process (suspended so we can add to job before running)
     var pi: windows.PROCESS_INFORMATION = undefined;
     const creation_flags: windows.CreateProcessFlags = .{ .create_suspended = true };
     if (kernel32.CreateProcessW(

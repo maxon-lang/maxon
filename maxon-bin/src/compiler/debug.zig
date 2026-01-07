@@ -39,5 +39,7 @@ pub fn ir(comptime fmt: []const u8, args: anytype) void {
 
 /// Code generation logging
 pub fn codegen(comptime fmt: []const u8, args: anytype) void {
-    logComponent("CODEGEN", fmt, args);
+    _ = fmt;
+    _ = args;
+    // logComponent("CODEGEN", fmt, args);
 }

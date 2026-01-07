@@ -12,7 +12,7 @@ rm -f temp/unoptimized.ir temp/unoptimized.asm temp/unoptimized.exe temp/optimiz
 SOURCE="$1"
 
 # Compile unoptimized with IR
-./bin/maxon compile "$SOURCE" --emit-ir --emit-asm -vvv -o "temp/unoptimized.exe" > temp/unoptimized.compiler.log 2>&1
+./bin/maxon compile "$SOURCE" --emit-ir --emit-asm --track-allocs -v > temp/unoptimized.compiler.log 2>&1
 if [ $? -ne 0 ]; then
 	echo "unopt Compilation failed"
 	exit 1

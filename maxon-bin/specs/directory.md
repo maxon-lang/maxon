@@ -140,8 +140,7 @@ end 'main'
 function main() returns int
     do 'list'
         var files = try Directory.list("nonexistent_dir_12345")
-        files = files  // Use the variable to avoid unused warning
-        print("Found files\n")
+        print("Found {files.count()} files\n")
         return 1
     end 'list' catch (e DirectoryError) 'err'
         print("Directory not found")

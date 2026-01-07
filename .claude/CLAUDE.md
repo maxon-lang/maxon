@@ -45,6 +45,7 @@ If you are implementing a plan then you must finish the plan.
 - **LF line endings** - All source files use Unix-style line endings
 - Don't create new documentation files unless instructed
 - Do not edit test fragments (in `maxon-bin/specs/fragments/`). These are generated from the spec files, edit the spec file.
+- Do not use "cmd /c" to run commands
 
 ## Development Notes
 - Build system uses Zig build. The compiler is in the maxon-bin directory.
@@ -53,3 +54,6 @@ If you are implementing a plan then you must finish the plan.
 ## Writing VSCode Extension Tests
 - Do not set timeouts
 - Do not use arbitrary delays, wait for what you are expecting
+
+## Debugging
+When debugging an issue prefer adding more debug printing so you can see what is happening instead of trying to think through it.

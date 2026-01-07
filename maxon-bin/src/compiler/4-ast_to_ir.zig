@@ -664,7 +664,7 @@ pub const AstToIr = struct {
 
     /// Emit incref for a String variable if it's in heap mode.
     /// The string_ptr should point to a String struct (with _managed at offset 0).
-    fn emitStringIncref(self: *AstToIr, string_ptr: ir.Value) !void {
+    pub fn emitStringIncref(self: *AstToIr, string_ptr: ir.Value) !void {
         const is_heap = try self.emitStringIsHeapMode(string_ptr);
 
         // Create blocks for conditional incref
@@ -713,12 +713,15 @@ pub const AstToIr = struct {
         const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("decref_end");
 
+        debug.astToIr("emitStringDecref: entry={d}, decref={d}, free={d}, end={d}", .{ entry_block_idx, decref_block_idx, free_block_idx, end_block_idx });
+
         // Defer end and free blocks (end=0, free=1 after pop order)
         var deferred = try DeferredBlocks.init(self.allocator, 2);
         defer deferred.deinit();
         deferred.deferBlocks(self, 2);
 
         // Emit conditional branch from entry block to decref or end
+        debug.astToIr("  br_cond in block {d}: if heap -> {d}, else -> {d}", .{ entry_block_idx, decref_block_idx, end_block_idx });
         try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
             .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = end_block_idx } },
@@ -739,6 +742,7 @@ pub const AstToIr = struct {
         try deferred.restore(self, 1);
 
         // Emit branch from decref block to free or end
+        debug.astToIr("  br_cond in block {d}: if zero -> {d}, else -> {d}", .{ decref_block_idx, free_block_idx, end_block_idx });
         try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
             .operands = .{ .{ .value = is_zero }, .{ .block_ref = free_block_idx }, .{ .block_ref = end_block_idx } },
@@ -749,10 +753,12 @@ pub const AstToIr = struct {
         try self.func().emitHeapFree(buf_ptr, "string cleanup");
 
         // Branch to end
+        debug.astToIr("  br in block {d}: -> {d}", .{ free_block_idx, end_block_idx });
         try self.func().emitBr(end_block_idx);
 
         // Restore end block (index 0 = first popped = end_block)
         try deferred.restore(self, 0);
+        debug.astToIr("  restored end block, current block is now {d}", .{self.func().blocks.items.len - 1});
     }
 
     /// Emit cleanup for all String elements in an Array$String.
@@ -1168,6 +1174,12 @@ pub const AstToIr = struct {
 
         // Pending conformance checks list doesn't own its data (references AST nodes)
         self.pending_conformance_checks.deinit(self.allocator);
+
+        // Clean up global constant-related maps
+        self.global_constants.deinit(self.allocator);
+        self.global_constant_asts.deinit(self.allocator);
+        self.constants_in_progress.deinit(self.allocator);
+        self.converted_runtime_constants.deinit(self.allocator);
     }
 
     // ------------------------------------------------------------------------
@@ -1762,17 +1774,56 @@ pub const AstToIr = struct {
     }
 
     fn lookupStructInfo(self: *AstToIr, type_name: []const u8) !StructTypeInfo {
-        const type_info = self.type_map.get(type_name) orelse {
-            self.reportError(.E006, type_name);
-            return error.UnknownType;
-        };
-        return switch (type_info) {
-            .struct_type => |s| s,
-            .primitive, .enum_type => {
+        // First check if type exists
+        if (self.type_map.get(type_name)) |type_info| {
+            return switch (type_info) {
+                .struct_type => |s| s,
+                .primitive, .enum_type => {
+                    self.reportError(.E006, type_name);
+                    return error.UnknownType;
+                },
+            };
+        }
+
+        // Type not found - check if it's a monomorphized generic type that needs to be created
+        // Format is BaseType$Arg1$Arg2...
+        if (std.mem.indexOf(u8, type_name, "$")) |first_dollar| {
+            const base_type = type_name[0..first_dollar];
+            // Parse type arguments from remaining string
+            var args_list = std.ArrayListUnmanaged([]const u8){};
+            defer args_list.deinit(self.allocator);
+
+            var rest = type_name[first_dollar + 1 ..];
+            while (rest.len > 0) {
+                if (std.mem.indexOf(u8, rest, "$")) |next_dollar| {
+                    try args_list.append(self.allocator, rest[0..next_dollar]);
+                    rest = rest[next_dollar + 1 ..];
+                } else {
+                    try args_list.append(self.allocator, rest);
+                    break;
+                }
+            }
+
+            // Try to create the monomorphized type
+            _ = self.getOrCreateMonomorphizedType(base_type, args_list.items) catch {
                 self.reportError(.E006, type_name);
                 return error.UnknownType;
-            },
-        };
+            };
+
+            // Now look it up again
+            if (self.type_map.get(type_name)) |type_info| {
+                return switch (type_info) {
+                    .struct_type => |s| s,
+                    .primitive, .enum_type => {
+                        self.reportError(.E006, type_name);
+                        return error.UnknownType;
+                    },
+                };
+            }
+        }
+
+        self.reportError(.E006, type_name);
+        return error.UnknownType;
     }
 
     fn lookupField(self: *AstToIr, struct_info: StructTypeInfo, field_name: []const u8) !FieldInfo {
@@ -3028,8 +3079,17 @@ pub const AstToIr = struct {
         }
 
         // Register method signatures only (lazy generation - IR generated on-demand)
+        // Track if any method stored the bindings (they share the same slice)
+        var bindings_stored = false;
         for (type_decl.methods) |*method| {
-            try self.registerMethodSignatureOnly(mono_name, method, bindings);
+            if (try self.registerMethodSignatureOnly(mono_name, method, bindings)) {
+                bindings_stored = true;
+            }
+        }
+
+        // If no method stored the bindings (all were already registered), free them
+        if (!bindings_stored) {
+            self.allocator.free(bindings);
         }
 
         // Restore in_stdlib_method flag
@@ -3062,7 +3122,7 @@ pub const AstToIr = struct {
         var ret_value_type: ?ValueType = null;
         const ret_type: ir.Type = if (m.return_type) |rt| blk: {
             switch (rt) {
-                .simple, .generic => {
+                .simple => {
                     const base_name = typeExprBaseTypeName(rt).?;
                     const resolved = self.resolveTypeName(base_name);
                     const type_info = self.type_map.get(resolved) orelse {
@@ -3071,6 +3131,17 @@ pub const AstToIr = struct {
                     };
                     if (type_info.isStruct()) ret_type_name = resolved;
                     break :blk type_info.irType();
+                },
+                .generic => |gen| {
+                    // For generic types like "Array of String", build monomorphized name
+                    const resolved_args = try self.allocator.alloc([]const u8, gen.type_args.len);
+                    defer self.allocator.free(resolved_args);
+                    for (gen.type_args, 0..) |arg, i| {
+                        resolved_args[i] = self.resolveTypeName(arg);
+                    }
+                    const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
+                    ret_type_name = mono_name;
+                    break :blk .ptr; // Generic struct types are returned as pointers
                 },
                 .optional => |wrapped| {
                     const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
@@ -3217,12 +3288,13 @@ pub const AstToIr = struct {
 
     /// Register method signature only (for lazy generation of monomorphized types).
     /// Stores the method in pending_methods for on-demand IR generation.
+    /// Returns true if bindings were stored (method was newly registered), false if already registered.
     fn registerMethodSignatureOnly(
         self: *AstToIr,
         type_name: []const u8,
         method: *const ast.MethodDecl,
         bindings: []const PendingMethod.GenericBinding,
-    ) !void {
+    ) !bool {
         // Save current type context for Self resolution
         const saved_type = self.current_type_name;
         self.current_type_name = type_name;
@@ -3233,7 +3305,7 @@ pub const AstToIr = struct {
 
         // Check if method is already registered
         if (self.func_map.contains(mangled_name)) {
-            return;
+            return false;
         }
 
         const func_info = try self.buildMethodFuncInfo(type_name, method, false);
@@ -3247,6 +3319,7 @@ pub const AstToIr = struct {
             .generic_bindings = bindings,
         });
         debug.astToIr("Registered lazy method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, func_info.return_type.toIrName() });
+        return true;
     }
 
     // ------------------------------------------------------------------------
@@ -3262,6 +3335,7 @@ pub const AstToIr = struct {
         sret_optional_info: ?OptionalInfo,
         self_ptr: ?ir.Value,
         var_map: std.StringHashMapUnmanaged(VarInfo),
+        converted_runtime_constants: std.StringHashMapUnmanaged(TypedValue),
         in_stdlib_method: bool,
         loop_end_block: ?u32,
         loop_cond_block: ?u32,
@@ -3288,6 +3362,7 @@ pub const AstToIr = struct {
             .sret_optional_info = self.sret_optional_info,
             .self_ptr = self.self_ptr,
             .var_map = self.var_map,
+            .converted_runtime_constants = self.converted_runtime_constants,
             .in_stdlib_method = self.in_stdlib_method,
             .loop_end_block = self.loop_end_block,
             .loop_cond_block = self.loop_cond_block,
@@ -3295,8 +3370,9 @@ pub const AstToIr = struct {
             .current_func_throws_type = self.current_func_throws_type,
         };
 
-        // Clear var_map and temporary_strings for new method
+        // Clear var_map, converted_runtime_constants, and temporary_strings for new method
         self.var_map = .{};
+        self.converted_runtime_constants = .{};
         self.temporary_strings = .{};
 
         return saved;
@@ -3304,8 +3380,9 @@ pub const AstToIr = struct {
 
     /// Restore conversion context after generating a method
     fn restoreConversionContext(self: *AstToIr, saved: SavedContext) void {
-        // Free the temporary var_map and temporary_strings used for method conversion
+        // Free the temporary var_map, converted_runtime_constants, and temporary_strings used for method conversion
         self.var_map.deinit(self.allocator);
+        self.converted_runtime_constants.deinit(self.allocator);
         self.temporary_strings.deinit(self.allocator);
 
         // Restore all saved state
@@ -3316,6 +3393,7 @@ pub const AstToIr = struct {
         self.sret_optional_info = saved.sret_optional_info;
         self.self_ptr = saved.self_ptr;
         self.var_map = saved.var_map;
+        self.converted_runtime_constants = saved.converted_runtime_constants;
         self.in_stdlib_method = saved.in_stdlib_method;
         self.loop_end_block = saved.loop_end_block;
         self.loop_cond_block = saved.loop_cond_block;
@@ -4219,9 +4297,14 @@ pub const AstToIr = struct {
                 // Mark returned variable as moved so cleanup doesn't free its heap resources
                 if (expr == .identifier) {
                     if (self.var_map.getPtr(expr.identifier)) |var_info| {
-                        // Only mark as moved for types with heap resources (Arrays, Strings)
-                        if (var_info.ty == .struct_type and std.mem.startsWith(u8, var_info.ty.struct_type, "Array$")) {
-                            var_info.markMoved("return", self.current_line);
+                        // Only mark as moved for types with heap resources (Arrays, Strings, Maps)
+                        if (var_info.ty == .struct_type) {
+                            const struct_name = var_info.ty.struct_type;
+                            if (std.mem.startsWith(u8, struct_name, "Array$") or
+                                std.mem.startsWith(u8, struct_name, "Map$"))
+                            {
+                                var_info.markMoved("return", self.current_line);
+                            }
                         }
                     }
                 }
@@ -4250,7 +4333,10 @@ pub const AstToIr = struct {
     /// Handles heap arrays, stdlib Array types, Strings (with COW decref), and cstrings.
     /// Set skip_if_parameter to true when cleaning up scope (parameters are caller-owned).
     fn freeHeapVar(self: *AstToIr, var_info: VarInfo, skip_if_parameter: bool) !void {
-        if (var_info.state == .moved) return;
+        if (var_info.state == .moved) {
+            debug.astToIr("freeHeapVar: skipped (moved)", .{});
+            return;
+        }
 
         if (var_info.ty == .array_type) {
             const arr_info = var_info.ty.array_type;
@@ -4265,6 +4351,7 @@ pub const AstToIr = struct {
 
         if (var_info.ty == .struct_type) {
             const struct_name = var_info.ty.struct_type;
+            debug.astToIr("freeHeapVar: struct {s}", .{struct_name});
 
             // Handle stdlib Array types (Array$int, etc.)
             if (std.mem.startsWith(u8, struct_name, "Array$")) {
@@ -4291,7 +4378,60 @@ pub const AstToIr = struct {
                 if (skip_if_parameter and var_info.is_parameter) return;
                 try self.emitCstringCleanup(var_info.ptr.?);
             }
+
+            // Handle stdlib Map types (Map$K$V)
+            // Map layout: keys(Array 32b) + values(Array 32b) + states(Array 32b) + count(8) + capacity(8) + iterIndex(8)
+            // Each Array layout: buffer_ptr(8) + len(8) + cap(8) + iterIndex(8)
+            if (std.mem.startsWith(u8, struct_name, "Map$")) {
+                debug.astToIr("freeHeapVar: emitting Map cleanup for {s}", .{struct_name});
+                if (skip_if_parameter and var_info.is_parameter) return;
+                try self.emitMapCleanup(var_info.ptr.?, struct_name);
+            }
         }
+    }
+
+    /// Emit cleanup code for Map types, freeing the three internal array buffers.
+    /// For Map$String$V, also decrefs each string key element.
+    fn emitMapCleanup(self: *AstToIr, map_ptr: ir.Value, struct_name: []const u8) !void {
+        // Map layout:
+        //   offset 0:  keys array (32 bytes) - Array$KeyType
+        //   offset 32: values array (32 bytes) - Array$ValueType
+        //   offset 64: states array (32 bytes) - Array$int
+        // Each Array: buffer_ptr(8) + len(8) + cap(8) + iterIndex(8)
+
+        // Parse key type from Map$KeyType$ValueType
+        const prefix_len = "Map$".len;
+        const key_value_part = struct_name[prefix_len..];
+        // Find the second $ to separate key and value types
+        var dollar_pos: ?usize = null;
+        for (key_value_part, 0..) |c, i| {
+            if (c == '$') {
+                dollar_pos = i;
+                break;
+            }
+        }
+        const key_type = if (dollar_pos) |pos| key_value_part[0..pos] else key_value_part;
+        const has_string_keys = std.mem.eql(u8, key_type, "String");
+
+        // Get pointer to keys array at offset 0
+        const keys_ptr = map_ptr;
+        // If keys are strings, decref each string element first
+        if (has_string_keys) {
+            try self.emitArrayStringElementsCleanup(keys_ptr);
+        }
+        // Free the keys buffer (buffer_ptr is at offset 0 of the array struct)
+        const keys_buf_ptr = try self.func().emitLoad(keys_ptr, .ptr);
+        try self.func().emitHeapFree(keys_buf_ptr, "map keys cleanup");
+
+        // Get pointer to values array at offset 32 and free its buffer
+        const values_ptr = try self.func().emitGetFieldPtr(map_ptr, 32);
+        const values_buf_ptr = try self.func().emitLoad(values_ptr, .ptr);
+        try self.func().emitHeapFree(values_buf_ptr, "map values cleanup");
+
+        // Get pointer to states array at offset 64 and free its buffer
+        const states_ptr = try self.func().emitGetFieldPtr(map_ptr, 64);
+        const states_buf_ptr = try self.func().emitLoad(states_ptr, .ptr);
+        try self.func().emitHeapFree(states_buf_ptr, "map states cleanup");
     }
 
     fn freeHeapVars(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(OwnershipState)) !void {
@@ -4303,6 +4443,7 @@ pub const AstToIr = struct {
 
         var iter = self.var_map.iterator();
         while (iter.next()) |entry| {
+            debug.astToIr("freeHeapVars: checking '{s}'", .{entry.key_ptr.*});
             if (exclude_vars) |excluded| {
                 if (excluded.contains(entry.key_ptr.*)) continue;
             }
@@ -4312,6 +4453,24 @@ pub const AstToIr = struct {
 
     fn freeHeapAllocations(self: *AstToIr) !void {
         try self.freeHeapVars(null);
+        // Also clean up runtime-initialized constants that have heap resources (Maps, Arrays, etc.)
+        try self.freeRuntimeConstants();
+    }
+
+    /// Free heap resources for runtime-initialized constants (Maps, Arrays, Strings)
+    fn freeRuntimeConstants(self: *AstToIr) !void {
+        var iter = self.converted_runtime_constants.iterator();
+        while (iter.next()) |entry| {
+            const typed_value = entry.value_ptr.*;
+            // Create a temporary VarInfo to reuse freeHeapVar logic
+            const var_info = VarInfo.init(
+                typed_value.value,
+                typed_value.ty,
+                false, // is_mutable
+                false, // uses_slot
+            );
+            try self.freeHeapVar(var_info, false);
+        }
     }
 
     fn freeLoopScopedHeapVars(self: *AstToIr, pre_loop_vars: *std.StringHashMapUnmanaged(OwnershipState)) !void {
@@ -4359,11 +4518,8 @@ pub const AstToIr = struct {
                 // Just updating var_info.ptr would cause loops to use stale data
                 if (var_info.ty == .struct_type) {
                     const struct_name = var_info.ty.struct_type;
-                    const struct_info = self.type_map.get(struct_name) orelse {
-                        self.reportError(.E006, struct_name);
-                        return error.UnknownType;
-                    };
-                    const size = struct_info.struct_type.size;
+                    const struct_info_result = try self.lookupStructInfo(struct_name);
+                    const size = struct_info_result.size;
                     try self.func().emitMemcpy(var_info.ptr.?, value_typed.value, size);
                     // Handle String refcount - the new value's refcount is already correct from expression evaluation
                     // but we need to incref if copying from another variable
@@ -5645,7 +5801,7 @@ pub const AstToIr = struct {
         const actual_merge_idx: u32 = @intCast(self.func().blocks.items.len - 1);
 
         // Patch sentinel values in the last check block's branch
-        // The last case uses sentinel 0xFFFFFFFF for default or 0xFFFFFFFE for merge
+        // The last case uses sentinel 0xFFFFFFFF - branch to default if present, otherwise merge
         if (num_cases > 0) {
             const last_check_idx = check_indices[num_cases - 1];
             const last_check_block = &self.func().blocks.items[last_check_idx];
@@ -5653,7 +5809,8 @@ pub const AstToIr = struct {
             var last_instr = &last_check_block.instructions.items[last_instr_idx];
             if (last_instr.operands[2] == .block_ref) {
                 if (last_instr.operands[2].block_ref == 0xFFFFFFFF) {
-                    last_instr.operands[2] = .{ .block_ref = actual_default_idx };
+                    // Branch to default if it exists, otherwise to merge
+                    last_instr.operands[2] = .{ .block_ref = if (has_default) actual_default_idx else actual_merge_idx };
                 } else if (last_instr.operands[2].block_ref == 0xFFFFFFFE) {
                     last_instr.operands[2] = .{ .block_ref = actual_merge_idx };
                 }
@@ -8864,17 +9021,36 @@ pub const AstToIr = struct {
 
     /// Index into a __ManagedArray: managed[i]
     /// Returns the element as an optional (bounds-checked)
-    /// Uses current_type_name to determine element type (e.g., Array$String -> String)
-    fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression) ConvertError!TypedValue {
+    /// Uses current_type_name or var_name context to determine element type
+    fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression, var_name: ?[]const u8) ConvertError!TypedValue {
         const idx_typed = try self.convertExpression(index_expr);
 
-        // Extract element type from current_type_name (e.g., "Array$String" -> "String")
-        const elem_type_name: ?[]const u8 = if (self.current_type_name) |type_name| blk: {
-            if (std.mem.startsWith(u8, type_name, "Array$")) {
-                break :blk type_name[6..]; // Skip "Array$" prefix
+        // Extract element type from context
+        // 1. First try current_type_name (e.g., "Array$String" -> "String")
+        // 2. If that fails and we're in a Map context with a known var name, use the appropriate type param
+        const elem_type_name: ?[]const u8 = blk: {
+            // Try Array$* pattern first
+            if (self.current_type_name) |type_name| {
+                if (std.mem.startsWith(u8, type_name, "Array$")) {
+                    break :blk type_name[6..]; // Skip "Array$" prefix
+                }
+            }
+            // Check for Map$K$V context with known var names
+            if (var_name) |vn| {
+                if (self.current_type_name) |type_name| {
+                    if (std.mem.startsWith(u8, type_name, "Map$")) {
+                        // In Map$Key$Value, "keys" param has Key elements, "values" param has Value elements
+                        // Use generic_params to resolve to the actual types
+                        if (std.mem.eql(u8, vn, "keys")) {
+                            break :blk self.generic_params.get("Key");
+                        } else if (std.mem.eql(u8, vn, "values")) {
+                            break :blk self.generic_params.get("Value");
+                        }
+                    }
+                }
             }
             break :blk null;
-        } else null;
+        };
 
         // Determine element size and whether it's a struct
         const ElemInfo = struct { size: i32, is_struct: bool, name: ?[]const u8 };
@@ -8946,7 +9122,7 @@ pub const AstToIr = struct {
             .value = opt_ptr,
             .ty = .{ .optional_type = .{
                 .wrapped = if (elem_info.is_struct) .ptr else .i64,
-                .wrapped_struct_type = elem_info.name,
+                .wrapped_struct_type = if (elem_info.is_struct) elem_info.name else null,
             } },
         };
     }
@@ -9732,12 +9908,16 @@ pub const AstToIr = struct {
         var type_args = [_][]const u8{ key_type_name, value_type_name };
         const map_type_name = try self.getOrCreateMonomorphizedType("Map", &type_args);
 
+        // Calculate element sizes based on actual types
+        const key_elem_size: i64 = try self.getValueTypeSize(first_key_typed.ty);
+        const value_elem_size: i64 = try self.getValueTypeSize(first_value_typed.ty);
+
         // Allocate buffers for keys and values on heap
         const elem_count = try self.func().emitConstI64(@intCast(entries.len));
-        const elem_size: i64 = 8; // All elements are 8 bytes
-        const buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(elem_size))));
-        const keys_buffer = try self.func().emitHeapAlloc(buffer_size, "map buffer");
-        const values_buffer = try self.func().emitHeapAlloc(buffer_size, "map buffer");
+        const keys_buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(key_elem_size))));
+        const values_buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(value_elem_size))));
+        const keys_buffer = try self.func().emitHeapAlloc(keys_buffer_size, "map buffer");
+        const values_buffer = try self.func().emitHeapAlloc(values_buffer_size, "map buffer");
 
         // Store entries into buffers
         for (entries, 0..) |entry, i| {
@@ -9745,11 +9925,20 @@ pub const AstToIr = struct {
             const value_typed = if (i == 0) first_value_typed else try self.convertExpression(entry.value.*);
             const idx_val = try self.func().emitConstI64(@intCast(i));
 
-            const key_ptr = try self.func().emitGetElemPtr(keys_buffer, idx_val, @intCast(elem_size));
-            try self.func().emitStore(key_ptr, key_typed.value);
+            const key_ptr = try self.func().emitGetElemPtr(keys_buffer, idx_val, @intCast(key_elem_size));
+            // For structs, memcpy the full value; for primitives, store directly
+            if (key_elem_size > 8) {
+                try self.func().emitMemcpy(key_ptr, key_typed.value, @intCast(key_elem_size));
+            } else {
+                try self.func().emitStore(key_ptr, key_typed.value);
+            }
 
-            const value_ptr = try self.func().emitGetElemPtr(values_buffer, idx_val, @intCast(elem_size));
-            try self.func().emitStore(value_ptr, value_typed.value);
+            const value_ptr = try self.func().emitGetElemPtr(values_buffer, idx_val, @intCast(value_elem_size));
+            if (value_elem_size > 8) {
+                try self.func().emitMemcpy(value_ptr, value_typed.value, @intCast(value_elem_size));
+            } else {
+                try self.func().emitStore(value_ptr, value_typed.value);
+            }
         }
 
         // Create __ManagedArrays for keys and values
@@ -9789,6 +9978,21 @@ pub const AstToIr = struct {
 
         // Call init with sret
         _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+        // NOTE: We do NOT decref the temporary string keys here.
+        // Map$init calls __managed_array_set_at which increfs each key before copying
+        // into the Map's internal array. The Map now owns those references.
+        // The temp buffer strings have had their refcounts incremented, so when we
+        // later decref them (e.g., at scope end), they'll properly decrement.
+        // The original string literals (tmp_alloca.3, tmp_alloca.5) will be cleaned
+        // up by freeHeapVars at function return.
+
+        // Free the temporary buffers used to pass keys and values to init
+        // The Map$init function copies the data into its internal hash table,
+        // so we need to clean up the temporary managed arrays
+        debug.astToIr("Map literal: emitting heap.free for temp buffers in block {d}", .{self.func().blocks.items.len - 1});
+        try self.func().emitHeapFree(keys_buffer, "map literal keys cleanup");
+        try self.func().emitHeapFree(values_buffer, "map literal values cleanup");
 
         return .{
             .value = result_ptr,
@@ -9916,7 +10120,9 @@ pub const AstToIr = struct {
         // Handle __ManagedArray indexing (stdlib only)
         if (base_typed.ty == .struct_type) {
             if (std.mem.eql(u8, base_typed.ty.struct_type, "__ManagedArray")) {
-                return self.convertManagedArrayIndex(base_typed.value, idx.index.*);
+                // Extract variable name if base is an identifier
+                const var_name: ?[]const u8 = if (idx.base.* == .identifier) idx.base.identifier else null;
+                return self.convertManagedArrayIndex(base_typed.value, idx.index.*, var_name);
             }
             // Handle stdlib Array types (Array$int, etc.) - call .get() method
             if (std.mem.startsWith(u8, base_typed.ty.struct_type, "Array$")) {
@@ -10111,7 +10317,12 @@ pub const AstToIr = struct {
 
         // Build __ManagedArray with the given capacity
         // For Array of N int, len = capacity so all elements are immediately accessible
-        const elem_size = try self.func().emitConstI64(8);
+        // Calculate actual element size from type
+        const elem_size_val: i64 = if (self.type_map.get(resolved_elem)) |ti|
+            if (ti == .struct_type) ti.struct_type.size else 8
+        else
+            8;
+        const elem_size = try self.func().emitConstI64(elem_size_val);
         const buffer_size = try self.func().emitBinaryOp(.mul, capacity_typed.value, elem_size, .i64);
         const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
         const managed_ptr = try self.emitManagedArray(buffer, capacity_typed.value, capacity_typed.value);
@@ -10166,7 +10377,14 @@ pub const AstToIr = struct {
         const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method_name });
         try self.module.trackString(mangled_name);
 
-        const func_info = self.func_map.get(mangled_name) orelse {
+        // If method not found, try to create the type on-demand (for generic types like Array$String)
+        var func_info_opt = self.func_map.get(mangled_name);
+        if (func_info_opt == null and std.mem.indexOf(u8, type_name, "$") != null) {
+            // Type name has $, might be a monomorphized type that needs to be created
+            _ = self.lookupStructInfo(type_name) catch {};
+            func_info_opt = self.func_map.get(mangled_name);
+        }
+        const func_info = func_info_opt orelse {
             debug.astToIr("error: unknown method '{s}' on type '{s}'", .{ method_name, type_name });
             self.reportError(.E003, mangled_name);
             return error.SemanticError;
@@ -10749,11 +10967,14 @@ pub fn extractInterfaceInfo(program: ast.Program, allocator: std.mem.Allocator) 
 pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalFuncSignature {
     var signatures = std.ArrayListUnmanaged(ExternalFuncSignature){};
     errdefer {
-        // Free allocated names and param_types in case of error
+        // Free allocated names, param_types, and return_type_name in case of error
         for (signatures.items) |sig| {
             allocator.free(sig.name);
             if (sig.param_types.len > 0) {
                 allocator.free(sig.param_types);
+            }
+            if (sig.return_type_name) |rtn| {
+                allocator.free(rtn);
             }
         }
         signatures.deinit(allocator);
@@ -10766,10 +10987,14 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
         else
             .void;
 
-        const return_type_name: ?[]const u8 = if (func.return_type) |rt|
-            getStructNameFromTypeExpr(rt)
-        else
-            null;
+        // Always dupe return_type_name so we can uniformly free it during cleanup
+        const return_type_name: ?[]const u8 = if (func.return_type) |rt| blk: {
+            const name = getStructNameFromTypeExpr(rt);
+            if (name) |n| {
+                break :blk try allocator.dupe(u8, n);
+            }
+            break :blk null;
+        } else null;
 
         const return_value_type: ?ValueType = if (func.return_type) |rt|
             getValueTypeFromTypeExpr(rt)
@@ -10811,15 +11036,21 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 .void;
 
             // For methods returning the containing type (like init() -> Self)
-            var return_type_name: ?[]const u8 = if (method.return_type) |rt|
-                getStructNameFromTypeExpr(rt)
-            else
-                null;
+            // Always dupe return_type_name so we can uniformly free it during cleanup
+            var return_type_name: ?[]const u8 = if (method.return_type) |rt| blk: {
+                const name = getStructNameFromTypeExpr(rt);
+                if (name) |n| {
+                    break :blk try allocator.dupe(u8, n);
+                }
+                break :blk null;
+            } else null;
 
-            // Handle "Self" return type
+            // Handle "Self" return type - replace with actual type name
             if (return_type_name) |name| {
                 if (std.mem.eql(u8, name, "Self")) {
-                    return_type_name = type_decl.name;
+                    // Free the allocated "Self" string and replace with type name
+                    allocator.free(name);
+                    return_type_name = try allocator.dupe(u8, type_decl.name);
                 }
             }
 
@@ -10925,6 +11156,10 @@ fn getValueTypeFromTypeExpr(te: ast.TypeExpr) ?ValueType {
 }
 
 /// Helper: get struct name from TypeExpr if it's a struct type
+/// Get the struct name from a type expression.
+/// For generic types like "Array of String", returns the monomorphized name "Array$String".
+/// Note: This uses a global buffer, so callers must copy the result if needed.
+var mono_name_buffer: [256]u8 = undefined;
 fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
     return switch (te) {
         .simple => |name| {
@@ -10940,7 +11175,17 @@ fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
             }
             return name;
         },
-        .generic => |gen| gen.base_type,
+        .generic => |gen| blk: {
+            // Build monomorphized name: BaseType$Arg1$Arg2...
+            var fbs = std.io.fixedBufferStream(&mono_name_buffer);
+            const writer = fbs.writer();
+            writer.writeAll(gen.base_type) catch break :blk gen.base_type;
+            for (gen.type_args) |arg| {
+                writer.writeByte('$') catch break :blk gen.base_type;
+                writer.writeAll(arg) catch break :blk gen.base_type;
+            }
+            break :blk fbs.getWritten();
+        },
         .optional, .error_union, .function_type => null,
     };
 }

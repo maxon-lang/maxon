@@ -16,20 +16,21 @@ entry:
     %tmp_const.1 = const.i64 i64 10
     %tmp_const.2 = const.i64 i64 2
     %tmp_const.3 = const.i64 i64 16
+    %tmp_const.4 = const.i64 i64 16
     %tmp_heap = heap.alloc ptr %tmp_const.3 tag="map buffer"
-    %tmp_heap.1 = heap.alloc ptr %tmp_const.3 tag="map buffer"
-    %tmp_const.4 = const.i64 i64 0
-    %7 = getelemptr ptr %tmp_heap %tmp_const.4 elemsize=8
-    store %7 %tmp_const
-    %8 = getelemptr ptr %tmp_heap.1 %tmp_const.4 elemsize=8
-    store %8 %tmp_const.1
-    %tmp_const.5 = const.i64 i64 2
-    %tmp_const.6 = const.i64 i64 20
-    %tmp_const.7 = const.i64 i64 1
-    %12 = getelemptr ptr %tmp_heap %tmp_const.7 elemsize=8
-    store %12 %tmp_const.5
-    %13 = getelemptr ptr %tmp_heap.1 %tmp_const.7 elemsize=8
+    %tmp_heap.1 = heap.alloc ptr %tmp_const.4 tag="map buffer"
+    %tmp_const.5 = const.i64 i64 0
+    %8 = getelemptr ptr %tmp_heap %tmp_const.5 elemsize=8
+    store %8 %tmp_const
+    %9 = getelemptr ptr %tmp_heap.1 %tmp_const.5 elemsize=8
+    store %9 %tmp_const.1
+    %tmp_const.6 = const.i64 i64 2
+    %tmp_const.7 = const.i64 i64 20
+    %tmp_const.8 = const.i64 i64 1
+    %13 = getelemptr ptr %tmp_heap %tmp_const.8 elemsize=8
     store %13 %tmp_const.6
+    %14 = getelemptr ptr %tmp_heap.1 %tmp_const.8 elemsize=8
+    store %14 %tmp_const.7
     %tmp_alloca = alloca.sized ptr 24
     store %tmp_alloca %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
@@ -44,15 +45,17 @@ entry:
     store %tmp_fieldptr.3 %tmp_const.2
     %m = alloca.sized ptr 120
     %tmp_call = call ptr @Map$int$int$init(%m, %tmp_alloca, %tmp_alloca.1)
-    %tmp_const.8 = const.i64 i64 1
-    %tmp_const.9 = const.i64 i64 100
-    call @Map$int$int$insert(%m, %tmp_const.8, %tmp_const.9)
+    heap.free %tmp_heap tag="map literal keys cleanup"
+    heap.free %tmp_heap.1 tag="map literal values cleanup"
+    %tmp_const.9 = const.i64 i64 1
+    %tmp_const.10 = const.i64 i64 100
+    call @Map$int$int$insert(%m, %tmp_const.9, %tmp_const.10)
     %tmp_alloca.3 = alloca.sized ptr 16
-    %tmp_const.11 = const.i64 i64 1
-    %tmp_call.1 = call ptr @Map$int$int$get(%tmp_alloca.3, %m, %tmp_const.11)
-    %tmp_load = load i64 %tmp_alloca.3
     %tmp_const.12 = const.i64 i64 1
-    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.12
+    %tmp_call.1 = call ptr @Map$int$int$get(%tmp_alloca.3, %m, %tmp_const.12)
+    %tmp_load = load i64 %tmp_alloca.3
+    %tmp_const.13 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.13
     %result = alloca ptr
     br.cond %tmp_icmp @block1 @block2
 else_unwrap_some:
@@ -61,8 +64,8 @@ else_unwrap_some:
     store %result %tmp_load.1
     br @block3
 else_unwrap_nil:
-    %tmp_const.13 = const.i64 i64 0
-    store %result %tmp_const.13
+    %tmp_const.14 = const.i64 i64 0
+    store %result %tmp_const.14
     br @block3
 else_unwrap_end:
     %tmp_load.2 = load i64 %result

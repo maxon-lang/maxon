@@ -73,6 +73,9 @@ const FrontendResult = struct {
                 if (sig.param_types.len > 0) {
                     self.allocator.free(sig.param_types);
                 }
+                if (sig.return_type_name) |rtn| {
+                    self.allocator.free(rtn);
+                }
             }
             self.allocator.free(sigs);
         }
@@ -114,6 +117,9 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
             allocator.free(sig.name);
             if (sig.param_types.len > 0) {
                 allocator.free(sig.param_types);
+            }
+            if (sig.return_type_name) |rtn| {
+                allocator.free(rtn);
             }
         }
         allocator.free(sigs);
@@ -216,6 +222,9 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
             allocator.free(sig.name);
             if (sig.param_types.len > 0) {
                 allocator.free(sig.param_types);
+            }
+            if (sig.return_type_name) |rtn| {
+                allocator.free(rtn);
             }
         }
         all_funcs.deinit(allocator);
@@ -394,6 +403,9 @@ pub fn compileMultiple(
             if (sig.param_types.len > 0) {
                 allocator.free(sig.param_types);
             }
+            if (sig.return_type_name) |rtn| {
+                allocator.free(rtn);
+            }
         }
         all_funcs.deinit(allocator);
     }
@@ -424,13 +436,23 @@ pub fn compileMultiple(
 
         // Extract function signatures from parsed AST
         const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
+        errdefer {
+            for (func_sigs) |sig| {
+                allocator.free(sig.name);
+                if (sig.param_types.len > 0) allocator.free(sig.param_types);
+                if (sig.return_type_name) |rtn| allocator.free(rtn);
+            }
+            allocator.free(func_sigs);
+        }
         for (func_sigs) |sig| {
             // Set source_path so we can distinguish stdlib from user code
             var sig_with_path = sig;
             sig_with_path.source_path = source.path;
             try all_funcs.append(allocator, sig_with_path);
         }
-        allocator.free(func_sigs); // Free the slice but keep the items
+        // Free param_types and names from func_sigs (all_funcs has shallow copies sharing the same pointers)
+        // Note: We're NOT freeing these since they're now owned by all_funcs (shallow copy shares pointers)
+        allocator.free(func_sigs); // Free only the slice
 
         // Extract interface info from parsed AST
         const iface_info = ast_to_ir.extractInterfaceInfo(program, allocator) catch continue;
@@ -571,9 +593,10 @@ pub fn analyzeForLSP(
     var all_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
     defer {
         for (all_funcs.items) |sig| {
-            // Free both name and param_types - extractFunctionSignaturesFromAst allocates both
+            // Free both name, param_types, and return_type_name - extractFunctionSignaturesFromAst allocates all
             allocator.free(sig.name);
             if (sig.param_types.len > 0) allocator.free(sig.param_types);
+            if (sig.return_type_name) |rtn| allocator.free(rtn);
         }
         all_funcs.deinit(allocator);
     }
