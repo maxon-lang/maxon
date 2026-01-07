@@ -205,3 +205,14 @@ Value: Vectors straight-line code. If you manually write x1 = a[0] + b[0]; x2 = 
 Phase 7: Interface conformance checking (verify types implement required methods)
 Phase 9: Export keyword enforcement (visibility rules)
 Phase 11: Interface declarations (parsing interface definitions)
+
+
+replace {} with ()
+use {} for type literal
+
+- extensions
+- map extension
+- remove [] indexing
+
+using arr.append(aString) compiles but crashes
+cannot convert primitive type 'ptr' to string for interpolation

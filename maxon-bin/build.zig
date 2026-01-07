@@ -28,35 +28,35 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     // Deploy maxon.exe to /bin after build
-    // On Windows, we need to: move old binary, copy new, kill running processes, remove old
+    // On Windows, we need to: kill running processes, move old binary, copy new, remove old
     const bin_path = b.path("../bin/maxon.exe").getPath(b);
     const old_bin_path = b.path("../bin/maxon.exe.old").getPath(b);
 
-    // Step 1: Move existing binary out of the way (ignore errors if it doesn't exist)
+    // Step 1: Kill any running maxon.exe processes first (so we can overwrite the file)
+    const kill_cmd = b.addSystemCommand(&.{ "cmd", "/c", "taskkill /F /IM maxon.exe >nul 2>nul || ver >nul" });
+
+    // Step 2: Move existing binary out of the way (ignore errors if it doesn't exist)
     const move_cmd_str = std.fmt.allocPrint(b.allocator, "if exist \"{s}\" move /Y \"{s}\" \"{s}\" >nul", .{ bin_path, bin_path, old_bin_path }) catch @panic("OOM");
     const move_old_cmd = b.addSystemCommand(&.{ "cmd", "/c", move_cmd_str });
+    move_old_cmd.step.dependOn(&kill_cmd.step);
 
-    // Step 2: Copy new binary to bin directory
+    // Step 3: Copy new binary to bin directory
     const copy_cmd = b.addSystemCommand(&.{ "cmd", "/c", "copy", "/Y" });
     copy_cmd.addArtifactArg(exe);
     copy_cmd.addArg(bin_path);
     copy_cmd.step.dependOn(&move_old_cmd.step);
 
-    // Step 2b: Copy PDB file for debug symbols (enables readable stack traces on Windows)
+    // Step 3b: Copy PDB file for debug symbols (enables readable stack traces on Windows)
     const pdb_path = b.path("../bin/maxon.pdb").getPath(b);
     const copy_pdb_cmd = b.addSystemCommand(&.{ "cmd", "/c", "copy", "/Y" });
     copy_pdb_cmd.addFileArg(exe.getEmittedPdb());
     copy_pdb_cmd.addArg(pdb_path);
     copy_pdb_cmd.step.dependOn(&copy_cmd.step);
 
-    // Step 3: Kill any running maxon.exe processes (so VSCode LSP restarts)
-    const kill_cmd = b.addSystemCommand(&.{ "cmd", "/c", "taskkill //F //IM maxon.exe >nul 2>nul || ver >nul" });
-    kill_cmd.step.dependOn(&copy_pdb_cmd.step);
-
     // Step 4: Remove old binary
     const remove_cmd_str = std.fmt.allocPrint(b.allocator, "del //F //Q \"{s}\" >nul 2>nul || ver >nul", .{old_bin_path}) catch @panic("OOM");
     const remove_old_cmd = b.addSystemCommand(&.{ "cmd", "/c", remove_cmd_str });
-    remove_old_cmd.step.dependOn(&kill_cmd.step);
+    remove_old_cmd.step.dependOn(&copy_pdb_cmd.step);
 
     // Make the deploy step depend on the install artifact, then hook it into install
     b.getInstallStep().dependOn(&remove_old_cmd.step);

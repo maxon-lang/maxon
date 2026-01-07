@@ -755,6 +755,120 @@ pub const AstToIr = struct {
         try deferred.restore(self, 0);
     }
 
+    /// Emit cleanup for all String elements in an Array$String.
+    /// Iterates through each element and frees its buffer if heap-allocated.
+    /// array_ptr points to an Array$String struct (with __ManagedArray at offset 0).
+    fn emitArrayStringElementsCleanup(self: *AstToIr, array_ptr: ir.Value) !void {
+        // Array$String layout: __ManagedArray (24 bytes) + iterIndex (8 bytes)
+        // __ManagedArray layout: buffer_ptr (8) + length (8) + capacity (8)
+        // String layout: __ManagedString (24 bytes) + _iterPos (8 bytes) = 32 bytes per element
+        // __ManagedString layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
+
+        // Load length first to check if empty
+        const len_ptr = try self.func().emitGetFieldPtr(array_ptr, 8);
+        const len = try self.func().emitLoad(len_ptr, .i64);
+
+        // Skip cleanup if empty
+        const zero = try self.func().emitConstI64(0);
+        const is_empty = try self.func().emitBinaryOp(.icmp_eq, len, zero, .i64);
+
+        // Allocate loop counter on stack (BEFORE creating new blocks - still in entry block)
+        const counter_ptr = try self.func().emitAlloca(.i64);
+        try self.func().emitStore(counter_ptr, zero);
+
+        // Create blocks: entry -> cond -> body -> [is_heap check] -> free -> next -> cond/end
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+        const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("arr_str_cleanup_cond");
+        const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("arr_str_cleanup_body");
+        const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("arr_str_cleanup_free");
+        const next_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("arr_str_cleanup_next");
+        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("arr_str_cleanup_end");
+
+        // Branch from entry: if empty, skip to end; otherwise go to condition
+        try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_empty }, .{ .block_ref = end_block_idx }, .{ .block_ref = cond_block_idx } },
+        });
+
+        // Defer blocks in reverse order: end(0), next(1), free(2), body(3)
+        var deferred = try DeferredBlocks.init(self.allocator, 4);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 4);
+
+        // Condition block: reload len and check if i < len
+        const cond_len_ptr = try self.func().emitGetFieldPtr(array_ptr, 8);
+        const cond_len = try self.func().emitLoad(cond_len_ptr, .i64);
+        const cond_i = try self.func().emitLoad(counter_ptr, .i64);
+        const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_len, .i64);
+
+        // Branch from cond: if done, go to end; otherwise go to body
+        try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = done }, .{ .block_ref = end_block_idx }, .{ .block_ref = body_block_idx } },
+        });
+
+        // Restore body block to emit loop body
+        try deferred.restore(self, 3);
+
+        // Body block: calculate element pointer and check if heap mode
+        const body_buf_ptr = try self.func().emitLoad(array_ptr, .ptr);
+        const body_i = try self.func().emitLoad(counter_ptr, .i64);
+
+        // Calculate element pointer: buf_ptr + i * 32 (String size)
+        const elem_size = try self.func().emitConstI64(32);
+        const offset = try self.func().emitBinaryOp(.mul, body_i, elem_size, .i64);
+        const elem_ptr = try self.func().emitBinaryOp(.add, body_buf_ptr, offset, .ptr);
+
+        // Check if heap mode: cap_flags & 3 == 1
+        // cap_flags is at offset 12 in the String (which contains __ManagedString at offset 0)
+        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, 12);
+        const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
+        const three = try self.func().emitConstI32(3);
+        const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+        const one_i32 = try self.func().emitConstI32(1);
+        const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+
+        // Branch: if heap mode, go to free block; otherwise go to next
+        try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = free_block_idx }, .{ .block_ref = next_block_idx } },
+        });
+
+        // Restore free block
+        try deferred.restore(self, 2);
+
+        // Free block: reload element ptr and free its buffer
+        const free_buf_ptr = try self.func().emitLoad(array_ptr, .ptr);
+        const free_i = try self.func().emitLoad(counter_ptr, .i64);
+        const free_offset = try self.func().emitBinaryOp(.mul, free_i, elem_size, .i64);
+        const free_elem_ptr = try self.func().emitBinaryOp(.add, free_buf_ptr, free_offset, .ptr);
+        const str_buf_ptr = try self.func().emitLoad(free_elem_ptr, .ptr);
+        try self.func().emitHeapFree(str_buf_ptr, "string cleanup");
+
+        // Branch to next
+        try self.func().emitBr(next_block_idx);
+
+        // Restore next block
+        try deferred.restore(self, 1);
+
+        // Next block: increment counter and loop back
+        const one = try self.func().emitConstI64(1);
+        const curr_i = try self.func().emitLoad(counter_ptr, .i64);
+        const next_i = try self.func().emitBinaryOp(.add, curr_i, one, .i64);
+        try self.func().emitStore(counter_ptr, next_i);
+
+        // Branch back to condition
+        try self.func().emitBr(cond_block_idx);
+
+        // Switch to end block for subsequent code
+        try deferred.restore(self, 0);
+    }
+
     /// Emit cleanup for a cstring variable.
     /// cstring struct: data(8) + length(8) + managed(8)
     /// If managed != null: decref the __ManagedString (cstring borrowed from String)
@@ -868,8 +982,9 @@ pub const AstToIr = struct {
         self.temporary_strings.clearRetainingCapacity();
     }
 
-    /// Remove a specific value from the temporary strings list (used when assigned to a variable)
-    fn removeFromTemporaries(self: *AstToIr, value: ir.Value) void {
+    /// Remove a specific value from the temporary strings list (used when assigned to a variable
+    /// or when ownership transfers to an array via __managed_array_set_at)
+    pub fn removeFromTemporaries(self: *AstToIr, value: ir.Value) void {
         var i: usize = 0;
         while (i < self.temporary_strings.items.len) {
             if (self.temporary_strings.items[i] == value) {
@@ -4154,6 +4269,12 @@ pub const AstToIr = struct {
             // Handle stdlib Array types (Array$int, etc.)
             if (std.mem.startsWith(u8, struct_name, "Array$")) {
                 if (skip_if_parameter and var_info.is_parameter) return;
+
+                // For Array$String, we need to decref each string element before freeing the buffer
+                if (std.mem.eql(u8, struct_name, "Array$String")) {
+                    try self.emitArrayStringElementsCleanup(var_info.ptr.?);
+                }
+
                 // Buffer pointer is at offset 0 within the inlined __ManagedArray
                 const buf_ptr = try self.func().emitLoad(var_info.ptr.?, .ptr);
                 try self.func().emitHeapFree(buf_ptr, "array cleanup");
@@ -10196,6 +10317,15 @@ pub const AstToIr = struct {
                     // Implicit int→float promotion: if parameter expects float but arg is int
                     if (param_index < func_info.param_types.len) {
                         arg_value = try self.applyIntToFloatPromotion(arg_value, arg_ty, func_info.param_types[param_index].ty);
+                    }
+
+                    // Ownership transfer: when a String temporary is passed to Array.push,
+                    // remove it from temporaries so it doesn't get cleaned up (array takes ownership)
+                    if (arg_ty == .struct_type and std.mem.eql(u8, arg_ty.struct_type, "String")) {
+                        // Check if this is an Array$X$push call where the String is the element being pushed
+                        if (std.mem.startsWith(u8, mangled_name, "Array$") and std.mem.endsWith(u8, mangled_name, "$push")) {
+                            self.removeFromTemporaries(arg.value);
+                        }
                     }
 
                     args[arg_idx] = arg_value;

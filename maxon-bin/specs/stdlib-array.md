@@ -1,7 +1,7 @@
 ---
 feature: stdlib-array
 status: stable
-keywords: [stdlib, Array, generic, collection, push, pop, get, set, count, capacity]
+keywords: [stdlib, Array, generic, collection, push, pop, get, set, count, capacity, String, ownership]
 category: stdlib
 ---
 
@@ -429,18 +429,158 @@ Reserve capacity for efficiency.
 function main() returns int
     var arr = Array of int{}
     arr.reserve(100)
-    
+
     if arr.capacity() < 100 'cap'
         return 1
     end 'cap'
-    
+
     if arr.count() != 0 'cnt'
         return 2
     end 'cnt'
-    
+
     return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: push-string-literals -->
+Push string literals into an array and retrieve them.
+
+```maxon
+function main() returns int
+    var arr = Array of String{}
+    arr.push("hello")
+    arr.push("world")
+
+    if arr.count() != 2 'cnt'
+        return 1
+    end 'cnt'
+
+    print(arr[0])
+    print(arr[1])
+    return 0
+end 'main'
+```
+```output
+helloworld
+```
+```exitcode
+0
+```
+
+<!-- test: push-string-literals-long -->
+Push longer string literals (heap-allocated) into an array.
+
+```maxon
+function main() returns int
+    var arr = Array of String{}
+    arr.push("hello this is a longer string")
+    arr.push("world this is also a longer string")
+
+    if arr.count() != 2 'cnt'
+        return 1
+    end 'cnt'
+
+    print(arr[0])
+    print(arr[1])
+    return 0
+end 'main'
+```
+```output
+hello this is a longer stringworld this is also a longer string
+```
+```exitcode
+0
+```
+
+<!-- test: push-string-variables -->
+Push string variables into an array.
+
+```maxon
+function main() returns int
+    var arr = Array of String{}
+    var s1 = "first"
+    var s2 = "second"
+    arr.push(s1)
+    arr.push(s2)
+
+    print(arr[0])
+    print(arr[1])
+    return 0
+end 'main'
+```
+```output
+firstsecond
+```
+```exitcode
+0
+```
+
+<!-- test: string-array-iteration -->
+Iterate over an array of strings.
+
+```maxon
+function main() returns int
+    var arr = Array of String{}
+    arr.push("a")
+    arr.push("b")
+    arr.push("c")
+
+    for item in arr 'loop'
+        print(item)
+    end 'loop'
+    return 0
+end 'main'
+```
+```output
+abc
+```
+```exitcode
+0
+```
+
+<!-- test: string-array-get -->
+Get strings from array using get method.
+
+```maxon
+function main() returns int
+    var arr = Array of String{}
+    arr.push("one")
+    arr.push("two")
+    arr.push("three")
+
+    if let val = arr.get(1) 'get'
+        print(val)
+    end 'get' else 'nil'
+        return 1
+    end 'nil'
+    return 0
+end 'main'
+```
+```output
+two
+```
+```exitcode
+0
+```
+
+<!-- test: string-array-memory TrackAllocs: true -->
+Verify string array memory is properly managed (no leaks).
+
+```maxon
+function main() returns int
+    var arr = Array of String{}
+    arr.push("test string one")
+    arr.push("test string two")
+    arr.push("test string three")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```output-contains
+Leaked:    0 bytes
 ```

@@ -484,6 +484,14 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
         try self.func().emitStore(elem_ptr, value.value);
     }
 
+    // Ownership transfer: when storing a String into an array, remove it from temporaries
+    // so it doesn't get cleaned up after the statement (the array now owns it)
+    if (value.ty == .struct_type) {
+        if (std.mem.eql(u8, value.ty.struct_type, "String")) {
+            self.removeFromTemporaries(value.value);
+        }
+    }
+
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
