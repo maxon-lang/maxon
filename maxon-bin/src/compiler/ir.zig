@@ -133,11 +133,17 @@ pub const Instruction = struct {
         memcpy, // Copy memory: dest, src, size (static i32 size in result field)
         memcpy_dyn, // Copy memory with dynamic size: dest, src, size_value
         memset, // Set memory: dest, value, size (value is typically 0)
+        memset_dyn, // Set memory with dynamic size: dest, value, size_value
 
         // Heap allocation
         heap_alloc, // Allocate heap memory, returns ptr
         heap_free, // Free heap memory
         heap_realloc, // Reallocate heap memory: old_ptr, new_size -> new_ptr
+
+        // Memory tracking (for --track-memory)
+        track_move, // Track ownership transfer: tag_ptr, tag_len
+        track_incref, // Track reference count increment: tag_ptr, tag_len, new_refcount
+        track_decref, // Track reference count decrement: tag_ptr, tag_len, new_refcount
 
         // External DLL calls
         extern_call, // Call external DLL function: dll_name:func_name, args -> result
@@ -206,9 +212,13 @@ pub const Instruction = struct {
                 .memcpy => "memcpy",
                 .memcpy_dyn => "memcpy.dyn",
                 .memset => "memset",
+                .memset_dyn => "memset.dyn",
                 .heap_alloc => "heap.alloc",
                 .heap_free => "heap.free",
                 .heap_realloc => "heap.realloc",
+                .track_move => "track.move",
+                .track_incref => "track.incref",
+                .track_decref => "track.decref",
                 .extern_call => "extern.call",
             };
         }
@@ -398,9 +408,13 @@ pub const Function = struct {
             .memcpy => "tmp_memcpy",
             .memcpy_dyn => "tmp_memcpy",
             .memset => "tmp_memset",
+            .memset_dyn => "tmp_memset",
             .heap_alloc => "tmp_heap",
             .heap_free => "tmp_free",
             .heap_realloc => "tmp_realloc",
+            .track_move => "tmp_track",
+            .track_incref => "tmp_track",
+            .track_decref => "tmp_track",
         };
     }
 
@@ -574,6 +588,14 @@ pub const Function = struct {
         });
     }
 
+    // Memory set with dynamic size
+    pub fn emitMemsetDynamic(self: *Function, dest: Value, byte_value: u8, size: Value) !void {
+        try self.emit(.{
+            .op = .memset_dyn,
+            .operands = .{ .{ .value = dest }, .{ .immediate_i32 = @intCast(byte_value) }, .{ .value = size } },
+        });
+    }
+
     // Heap allocation
     pub fn emitHeapAlloc(self: *Function, size: Value, tag: []const u8) !Value {
         return self.emitWithResult(.heap_alloc, .ptr, .{ .{ .value = size }, .{ .alloc_tag = tag }, .none });
@@ -585,6 +607,19 @@ pub const Function = struct {
 
     pub fn emitHeapRealloc(self: *Function, old_ptr: Value, new_size: Value, tag: []const u8) !Value {
         return self.emitWithResult(.heap_realloc, .ptr, .{ .{ .value = old_ptr }, .{ .value = new_size }, .{ .alloc_tag = tag } });
+    }
+
+    // Memory tracking (for --track-memory)
+    pub fn emitTrackMove(self: *Function, tag: []const u8) !void {
+        try self.emit(.{ .op = .track_move, .operands = .{ .{ .alloc_tag = tag }, .none, .none } });
+    }
+
+    pub fn emitTrackIncref(self: *Function, tag: []const u8, new_refcount: Value) !void {
+        try self.emit(.{ .op = .track_incref, .operands = .{ .{ .alloc_tag = tag }, .{ .value = new_refcount }, .none } });
+    }
+
+    pub fn emitTrackDecref(self: *Function, tag: []const u8, new_refcount: Value) !void {
+        try self.emit(.{ .op = .track_decref, .operands = .{ .{ .alloc_tag = tag }, .{ .value = new_refcount }, .none } });
     }
 };
 

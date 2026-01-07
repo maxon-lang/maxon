@@ -264,14 +264,16 @@ pub const DeferredBlocks = struct {
 pub const BranchBuilder = struct {
     deferred: DeferredBlocks,
     then_block_idx: u32,
-    else_block_idx: u32,
-    merge_block_idx: u32,
     entry_block_idx: u32,
+    condition: ir.Value,
     self_ir: *AstToIr,
+    branch_emitted: bool,
 
     /// Create a 2-way branch from the current block.
     /// Creates then, else, and merge blocks, defers else and merge.
     /// Current block becomes the then block after this call.
+    /// NOTE: The conditional branch is NOT emitted until switchToElse is called,
+    /// to allow nested code to create blocks without invalidating indices.
     pub fn init(
         self_ir: *AstToIr,
         condition: ir.Value,
@@ -282,45 +284,65 @@ pub const BranchBuilder = struct {
         const entry_block_idx: u32 = @intCast(self_ir.func().blocks.items.len - 1);
         const then_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
         _ = try self_ir.func().addBlock(then_name);
-        const else_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
         _ = try self_ir.func().addBlock(else_name);
-        const merge_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
         _ = try self_ir.func().addBlock(merge_name);
 
         // Defer merge and else blocks (merge=0, else=1 after pop order)
         var deferred = try DeferredBlocks.init(self_ir.allocator, 2);
         deferred.deferBlocks(self_ir, 2);
 
-        // Emit conditional branch from entry block
-        try self_ir.func().blocks.items[entry_block_idx].instructions.append(self_ir.allocator, .{
-            .op = .br_cond,
-            .operands = .{ .{ .value = condition }, .{ .block_ref = then_block_idx }, .{ .block_ref = else_block_idx } },
-        });
+        // NOTE: Conditional branch is deferred until switchToElse to handle nested blocks
 
         return .{
             .deferred = deferred,
             .then_block_idx = then_block_idx,
-            .else_block_idx = else_block_idx,
-            .merge_block_idx = merge_block_idx,
             .entry_block_idx = entry_block_idx,
+            .condition = condition,
             .self_ir = self_ir,
+            .branch_emitted = false,
         };
     }
 
     /// Switch to the else block. Call this after generating then block code.
     /// Optionally emits a branch to merge from the then block.
+    /// This also emits the deferred conditional branch from the entry block.
     pub fn switchToElse(self: *BranchBuilder, branch_to_merge: bool) !void {
-        if (branch_to_merge) {
-            try self.self_ir.func().emitBr(self.merge_block_idx);
-        }
+        // Get the current block index (end of then/nested code) BEFORE restoring else
+        const then_end_block_idx: u32 = @intCast(self.self_ir.func().blocks.items.len - 1);
+
+        // Restore else block so we know its actual index
         try self.deferred.restore(self.self_ir, 1);
+        const else_block_idx: u32 = @intCast(self.self_ir.func().blocks.items.len - 1);
+
+        // Merge will be at current len after we restore it
+        const merge_block_idx: u32 = @intCast(self.self_ir.func().blocks.items.len);
+
+        if (branch_to_merge) {
+            // Emit branch to merge from the end of the then block
+            try self.self_ir.func().blocks.items[then_end_block_idx].instructions.append(self.self_ir.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+            });
+        }
+
+        // Now emit the conditional branch with correct else_block_idx
+        if (!self.branch_emitted) {
+            try self.self_ir.func().blocks.items[self.entry_block_idx].instructions.append(self.self_ir.allocator, .{
+                .op = .br_cond,
+                .operands = .{ .{ .value = self.condition }, .{ .block_ref = self.then_block_idx }, .{ .block_ref = else_block_idx } },
+            });
+            self.branch_emitted = true;
+        }
     }
 
     /// Switch to the merge block. Call this after generating else block code.
     /// Optionally emits a branch to merge from the else block.
     pub fn switchToMerge(self: *BranchBuilder, branch_to_merge: bool) !void {
+        // Merge will be at blocks.items.len after restore
+        const merge_block_idx: u32 = @intCast(self.self_ir.func().blocks.items.len);
+
         if (branch_to_merge) {
-            try self.self_ir.func().emitBr(self.merge_block_idx);
+            try self.self_ir.func().emitBr(merge_block_idx);
         }
         try self.deferred.restore(self.self_ir, 0);
     }
@@ -417,6 +439,8 @@ pub const AstToIr = struct {
     constants_in_progress: std.StringHashMapUnmanaged(void) = .{},
     // IR values for runtime-initialized constants (created once per function)
     converted_runtime_constants: std.StringHashMapUnmanaged(TypedValue) = .{},
+    // Memory tracking option: emit track.move/track.incref/track.decref instructions
+    track_allocs: bool = false,
 
     /// A compile-time constant value
     pub const ConstantValue = union(enum) {
@@ -645,7 +669,7 @@ pub const AstToIr = struct {
         // Handle refcount for String types (which contain __ManagedString at offset 0)
         if (struct_name) |name| {
             if (std.mem.eql(u8, name, "String") or std.mem.eql(u8, name, "__ManagedString")) {
-                try self.emitStringIncref(dest_ptr);
+                try self.emitStringIncref(dest_ptr, "<struct copy>");
             }
         }
     }
@@ -664,7 +688,8 @@ pub const AstToIr = struct {
 
     /// Emit incref for a String variable if it's in heap mode.
     /// The string_ptr should point to a String struct (with _managed at offset 0).
-    pub fn emitStringIncref(self: *AstToIr, string_ptr: ir.Value) !void {
+    /// tag is used for memory tracking (variable name or description).
+    pub fn emitStringIncref(self: *AstToIr, string_ptr: ir.Value, tag: []const u8) !void {
         const is_heap = try self.emitStringIsHeapMode(string_ptr);
 
         // Create blocks for conditional incref
@@ -692,6 +717,11 @@ pub const AstToIr = struct {
         const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i32);
         try self.func().emitStoreI32(ref_ptr, new_ref);
 
+        // Emit tracking call for incref (new_ref is the refcount after increment)
+        if (self.track_allocs) {
+            try self.func().emitTrackIncref(tag, new_ref);
+        }
+
         // Branch to end
         try self.func().emitBr(end_block_idx);
 
@@ -701,7 +731,8 @@ pub const AstToIr = struct {
 
     /// Emit decref for a String variable with conditional free when refcount reaches 0.
     /// The string_ptr should point to a String struct (with _managed at offset 0).
-    fn emitStringDecref(self: *AstToIr, string_ptr: ir.Value) !void {
+    /// tag is used for memory tracking (variable name or description).
+    fn emitStringDecref(self: *AstToIr, string_ptr: ir.Value, tag: []const u8) !void {
         const is_heap = try self.emitStringIsHeapMode(string_ptr);
 
         // Create blocks for conditional decref
@@ -733,6 +764,11 @@ pub const AstToIr = struct {
         const one = try self.func().emitConstI32(1);
         const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i32);
         try self.func().emitStoreI32(ref_ptr, new_ref);
+
+        // Emit tracking call for decref (new_ref is the refcount after decrement)
+        if (self.track_allocs) {
+            try self.func().emitTrackDecref(tag, new_ref);
+        }
 
         // Check if refcount is now zero
         const zero = try self.func().emitConstI32(0);
@@ -983,7 +1019,7 @@ pub const AstToIr = struct {
     /// Clean up all temporary strings and clear the list
     fn cleanupTemporaryStrings(self: *AstToIr) !void {
         for (self.temporary_strings.items) |str_ptr| {
-            try self.emitStringDecref(str_ptr);
+            try self.emitStringDecref(str_ptr, "<temp>");
         }
         self.temporary_strings.clearRetainingCapacity();
     }
@@ -2762,7 +2798,8 @@ pub const AstToIr = struct {
                         self.reportError(.E006, base_name);
                         return error.UnknownType;
                     };
-                    if (type_info.isStruct()) ret_type_name = base_name;
+                    // Use full monomorphized name for generic types (e.g., "Array$int" not just "Array")
+                    if (type_info.isStruct()) ret_type_name = getStructNameFromTypeExpr(rt);
                     break :blk type_info.irType();
                 },
                 .optional => |wrapped| {
@@ -3491,10 +3528,24 @@ pub const AstToIr = struct {
         var sret_opt_info: ?OptionalInfo = null;
 
         switch (rt) {
-            .simple, .generic => {
-                const base_name = typeExprBaseTypeName(rt).?;
-                const resolved = if (resolve_names) self.resolveTypeName(base_name) else base_name;
+            .simple => |name| {
+                const resolved = if (resolve_names) self.resolveTypeName(name) else name;
                 if (self.type_map.get(resolved)) |type_info| {
+                    if (type_info == .struct_type) {
+                        uses_sret = true;
+                        sret_struct_size = type_info.struct_type.size;
+                    }
+                }
+            },
+            .generic => |gen| {
+                // For generic types like "Array of int", build the monomorphized name
+                var resolved_args: [8][]const u8 = undefined;
+                for (gen.type_args, 0..) |arg, i| {
+                    if (i >= 8) break;
+                    resolved_args[i] = if (resolve_names) self.resolveTypeName(arg) else arg;
+                }
+                const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args[0..gen.type_args.len]);
+                if (self.type_map.get(mono_name)) |type_info| {
                     if (type_info == .struct_type) {
                         uses_sret = true;
                         sret_struct_size = type_info.struct_type.size;
@@ -4243,8 +4294,21 @@ pub const AstToIr = struct {
                     if (expr == .identifier) {
                         if (self.var_map.getPtr(expr.identifier)) |var_info| {
                             // Only mark as moved for types with heap resources (Arrays, Strings)
-                            if (var_info.ty == .struct_type and std.mem.startsWith(u8, var_info.ty.struct_type, "Array$")) {
+                            if (var_info.ty == .struct_type) {
+                                const struct_name = var_info.ty.struct_type;
+                                if (std.mem.startsWith(u8, struct_name, "Array$") or
+                                    std.mem.eql(u8, struct_name, "Array"))
+                                {
+                                    var_info.markMoved("return", self.current_line);
+                                    if (self.track_allocs) {
+                                        try self.func().emitTrackMove(expr.identifier);
+                                    }
+                                }
+                            } else if (var_info.ty == .array_type) {
                                 var_info.markMoved("return", self.current_line);
+                                if (self.track_allocs) {
+                                    try self.func().emitTrackMove(expr.identifier);
+                                }
                             }
                         }
                     }
@@ -4301,9 +4365,20 @@ pub const AstToIr = struct {
                         if (var_info.ty == .struct_type) {
                             const struct_name = var_info.ty.struct_type;
                             if (std.mem.startsWith(u8, struct_name, "Array$") or
-                                std.mem.startsWith(u8, struct_name, "Map$"))
+                                std.mem.eql(u8, struct_name, "Array") or
+                                std.mem.startsWith(u8, struct_name, "Map$") or
+                                std.mem.eql(u8, struct_name, "Map"))
                             {
                                 var_info.markMoved("return", self.current_line);
+                                if (self.track_allocs) {
+                                    try self.func().emitTrackMove(expr.identifier);
+                                }
+                            }
+                        } else if (var_info.ty == .array_type) {
+                            // Also track moves for internal array types (heap arrays without type annotation)
+                            var_info.markMoved("return", self.current_line);
+                            if (self.track_allocs) {
+                                try self.func().emitTrackMove(expr.identifier);
                             }
                         }
                     }
@@ -4332,7 +4407,8 @@ pub const AstToIr = struct {
     /// Free heap memory for a single variable if it owns heap-allocated data.
     /// Handles heap arrays, stdlib Array types, Strings (with COW decref), and cstrings.
     /// Set skip_if_parameter to true when cleaning up scope (parameters are caller-owned).
-    fn freeHeapVar(self: *AstToIr, var_info: VarInfo, skip_if_parameter: bool) !void {
+    /// var_name is used for memory tracking (can be "<expr>" for unnamed temporaries).
+    fn freeHeapVar(self: *AstToIr, var_info: VarInfo, skip_if_parameter: bool, var_name: []const u8) !void {
         if (var_info.state == .moved) {
             debug.astToIr("freeHeapVar: skipped (moved)", .{});
             return;
@@ -4370,7 +4446,7 @@ pub const AstToIr = struct {
             // Handle String type with COW semantics
             if (self.isStringType(var_info.ty)) {
                 if (skip_if_parameter and var_info.is_parameter) return;
-                try self.emitStringDecref(var_info.ptr.?);
+                try self.emitStringDecref(var_info.ptr.?, var_name);
             }
 
             // Handle cstring type cleanup
@@ -4397,6 +4473,8 @@ pub const AstToIr = struct {
         //   offset 0:  keys array (32 bytes) - Array$KeyType
         //   offset 32: values array (32 bytes) - Array$ValueType
         //   offset 64: states array (32 bytes) - Array$int
+        //   offset 96: count (8 bytes)
+        //   offset 104: capacity (8 bytes)
         // Each Array: buffer_ptr(8) + len(8) + cap(8) + iterIndex(8)
 
         // Parse key type from Map$KeyType$ValueType
@@ -4415,9 +4493,9 @@ pub const AstToIr = struct {
 
         // Get pointer to keys array at offset 0
         const keys_ptr = map_ptr;
-        // If keys are strings, decref each string element first
+        // If keys are strings, cleanup occupied slots only (check states array)
         if (has_string_keys) {
-            try self.emitArrayStringElementsCleanup(keys_ptr);
+            try self.emitMapStringKeysCleanup(map_ptr);
         }
         // Free the keys buffer (buffer_ptr is at offset 0 of the array struct)
         const keys_buf_ptr = try self.func().emitLoad(keys_ptr, .ptr);
@@ -4434,6 +4512,147 @@ pub const AstToIr = struct {
         try self.func().emitHeapFree(states_buf_ptr, "map states cleanup");
     }
 
+    /// Emit cleanup code for Map string keys, checking the states array for occupied slots.
+    /// Only frees string buffers for slots where states[i] == 1 (OCCUPIED).
+    fn emitMapStringKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
+        // Map layout:
+        //   offset 0:  keys array (32 bytes) - buffer_ptr at offset 0
+        //   offset 64: states array (32 bytes) - buffer_ptr at offset 64
+        //   offset 104: capacity (8 bytes)
+
+        // Load capacity to know how many slots to iterate
+        const cap_ptr = try self.func().emitGetFieldPtr(map_ptr, 104);
+        const capacity = try self.func().emitLoad(cap_ptr, .i64);
+
+        // Skip cleanup if capacity is 0
+        const zero = try self.func().emitConstI64(0);
+        const is_empty = try self.func().emitBinaryOp(.icmp_eq, capacity, zero, .i64);
+
+        // Allocate loop counter on stack
+        const counter_ptr = try self.func().emitAlloca(.i64);
+        try self.func().emitStore(counter_ptr, zero);
+
+        // Create blocks - all created upfront to ensure stable indices
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+        const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_str_cleanup_cond");
+        const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_str_cleanup_body");
+        const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_str_cleanup_free");
+        const heap_free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_str_heap_free");
+        const next_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_str_cleanup_next");
+        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_str_cleanup_end");
+
+        // Branch from entry: if empty, skip to end; otherwise go to condition
+        try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_empty }, .{ .block_ref = end_block_idx }, .{ .block_ref = cond_block_idx } },
+        });
+
+        // Defer blocks (5 now that heap_free is included)
+        var deferred = try DeferredBlocks.init(self.allocator, 5);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 5);
+
+        // Condition block: check if i < capacity
+        const cond_cap_ptr = try self.func().emitGetFieldPtr(map_ptr, 104);
+        const cond_cap = try self.func().emitLoad(cond_cap_ptr, .i64);
+        const cond_i = try self.func().emitLoad(counter_ptr, .i64);
+        const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_cap, .i64);
+
+        try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = done }, .{ .block_ref = end_block_idx }, .{ .block_ref = body_block_idx } },
+        });
+
+        // Restore body block (deferred index 4)
+        try deferred.restore(self, 4);
+
+        // Body block: check if states[i] == 1 (OCCUPIED)
+        const body_i = try self.func().emitLoad(counter_ptr, .i64);
+
+        // Get states buffer pointer (at offset 64 of map, then offset 0 of Array)
+        const states_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 64);
+        const states_buf_ptr = try self.func().emitLoad(states_array_ptr, .ptr);
+
+        // Load states[i] - each state is 8 bytes (int)
+        const eight = try self.func().emitConstI64(8);
+        const state_offset = try self.func().emitBinaryOp(.mul, body_i, eight, .i64);
+        const state_ptr = try self.func().emitBinaryOp(.add, states_buf_ptr, state_offset, .ptr);
+        const state = try self.func().emitLoad(state_ptr, .i64);
+
+        // Check if state == 1 (OCCUPIED)
+        const one = try self.func().emitConstI64(1);
+        const is_occupied = try self.func().emitBinaryOp(.icmp_eq, state, one, .i64);
+
+        // If occupied, check string heap flag; otherwise skip to next
+        try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_occupied }, .{ .block_ref = free_block_idx }, .{ .block_ref = next_block_idx } },
+        });
+
+        // Restore free block (deferred index 3)
+        try deferred.restore(self, 3);
+
+        // Free block: get keys[i] and check if it's heap-allocated, then free
+        const free_i = try self.func().emitLoad(counter_ptr, .i64);
+
+        // Get keys buffer pointer (at offset 0 of map)
+        const keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
+
+        // Calculate element pointer: buf_ptr + i * 32 (String size)
+        const elem_size = try self.func().emitConstI64(32);
+        const offset = try self.func().emitBinaryOp(.mul, free_i, elem_size, .i64);
+        const elem_ptr = try self.func().emitBinaryOp(.add, keys_buf_ptr, offset, .ptr);
+
+        // Check if heap mode: cap_flags & 3 == 1
+        // cap_flags is at offset 12 in the String
+        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, 12);
+        const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
+        const three = try self.func().emitConstI32(3);
+        const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+        const one_i32 = try self.func().emitConstI32(1);
+        const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+
+        // If heap, free the buffer; otherwise skip to next
+        try self.func().blocks.items[free_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = heap_free_block_idx }, .{ .block_ref = next_block_idx } },
+        });
+
+        // Restore heap_free block (deferred index 2)
+        try deferred.restore(self, 2);
+
+        // Heap free block: recompute elem_ptr (can't use value from previous block)
+        const heap_i = try self.func().emitLoad(counter_ptr, .i64);
+        const heap_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
+        const heap_elem_size = try self.func().emitConstI64(32);
+        const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
+        const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_keys_buf_ptr, heap_offset, .ptr);
+
+        // Free the buffer and jump to next
+        const str_buf_ptr = try self.func().emitLoad(heap_elem_ptr, .ptr);
+        try self.func().emitHeapFree(str_buf_ptr, "map string key cleanup");
+        try self.func().emitBr(next_block_idx);
+
+        // Restore next block (deferred index 1)
+        try deferred.restore(self, 1);
+
+        // Next block: increment counter and branch to cond
+        const next_i = try self.func().emitLoad(counter_ptr, .i64);
+        const next_one = try self.func().emitConstI64(1);
+        const next_val = try self.func().emitBinaryOp(.add, next_i, next_one, .i64);
+        try self.func().emitStore(counter_ptr, next_val);
+        try self.func().emitBr(cond_block_idx);
+
+        // Restore end block
+        try deferred.restore(self, 0);
+    }
+
     fn freeHeapVars(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(OwnershipState)) !void {
         // Borrow checking: first clear borrows from slice variables that are going out of scope
         self.clearSliceBorrows(exclude_vars);
@@ -4447,7 +4666,7 @@ pub const AstToIr = struct {
             if (exclude_vars) |excluded| {
                 if (excluded.contains(entry.key_ptr.*)) continue;
             }
-            try self.freeHeapVar(entry.value_ptr.*, true);
+            try self.freeHeapVar(entry.value_ptr.*, true, entry.key_ptr.*);
         }
     }
 
@@ -4469,7 +4688,7 @@ pub const AstToIr = struct {
                 false, // is_mutable
                 false, // uses_slot
             );
-            try self.freeHeapVar(var_info, false);
+            try self.freeHeapVar(var_info, false, "<const>");
         }
     }
 
@@ -4510,7 +4729,7 @@ pub const AstToIr = struct {
             const value_typed = try self.convertExpression(assign.value);
 
             // Free old heap memory AFTER evaluating RHS
-            try self.freeHeapVar(var_info.*, false);
+            try self.freeHeapVar(var_info.*, false, assign.target);
 
             const is_reference = var_info.ty == .struct_type or var_info.ty == .array_type or var_info.ty == .optional_type;
             if (is_reference and !var_info.uses_slot) {
@@ -4525,7 +4744,7 @@ pub const AstToIr = struct {
                     // but we need to incref if copying from another variable
                     if (assign.value == .identifier or assign.value == .field_access) {
                         if (std.mem.eql(u8, struct_name, "String") or std.mem.eql(u8, struct_name, "__ManagedString")) {
-                            try self.emitStringIncref(var_info.ptr.?);
+                            try self.emitStringIncref(var_info.ptr.?, assign.target);
                         }
                     }
                     // For String assignment from a temporary (literal/interpolation/etc),
@@ -4545,7 +4764,7 @@ pub const AstToIr = struct {
 
             // COW: If assigning a String from another variable/field, incref the new value
             if (self.isStringType(value_typed.ty) and (assign.value == .identifier or assign.value == .field_access)) {
-                try self.emitStringIncref(var_info.ptr.?);
+                try self.emitStringIncref(var_info.ptr.?, assign.target);
             }
             var_info.resetOwnership();
             return;
@@ -4782,8 +5001,10 @@ pub const AstToIr = struct {
             if (opt_info.wrapped_struct_type != null) {
                 // For struct types, the struct data is stored inline after the tag (at offset 8).
                 // value_ptr already points to this inline struct data.
+                // Use initParam to mark as borrowed - we don't own this memory, the container does.
+                // This prevents cleanup from freeing/decref'ing memory we don't own (e.g., map keys).
                 try self.func().setValueName(value_ptr, binding_name);
-                try self.var_map.put(self.allocator, binding_name, VarInfo.init(value_ptr, var_value_type, true, false));
+                try self.var_map.put(self.allocator, binding_name, VarInfo.initParam(value_ptr, var_value_type, true, false));
             } else {
                 // For primitive/enum types, load the value and store in a new slot
                 const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
@@ -8402,6 +8623,9 @@ pub const AstToIr = struct {
             return error.ImmutableMove;
         }
         var_info.markMoved(target_type, self.current_line);
+        if (self.track_allocs) {
+            try self.func().emitTrackMove(var_name);
+        }
     }
 
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
@@ -9017,6 +9241,9 @@ pub const AstToIr = struct {
         }
 
         var_info.markMoved(func_name, self.current_line);
+        if (self.track_allocs) {
+            try self.func().emitTrackMove(var_name);
+        }
     }
 
     /// Index into a __ManagedArray: managed[i]
@@ -9933,6 +10160,12 @@ pub const AstToIr = struct {
                 try self.func().emitStore(key_ptr, key_typed.value);
             }
 
+            // Ownership transfer: string keys are now owned by the map
+            // Remove from temporaries so they don't get cleaned up at scope end
+            if (std.mem.eql(u8, key_type_name, "String")) {
+                self.removeFromTemporaries(key_typed.value);
+            }
+
             const value_ptr = try self.func().emitGetElemPtr(values_buffer, idx_val, @intCast(value_elem_size));
             if (value_elem_size > 8) {
                 try self.func().emitMemcpy(value_ptr, value_typed.value, @intCast(value_elem_size));
@@ -10325,6 +10558,8 @@ pub const AstToIr = struct {
         const elem_size = try self.func().emitConstI64(elem_size_val);
         const buffer_size = try self.func().emitBinaryOp(.mul, capacity_typed.value, elem_size, .i64);
         const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
+        // Zero-initialize the buffer so hash tables (Map, Set) have correct initial state
+        try self.func().emitMemsetDynamic(buffer, 0, buffer_size);
         const managed_ptr = try self.emitManagedArray(buffer, capacity_typed.value, capacity_typed.value);
 
         // Call Array$init(result_ptr, managed_ptr) via InitableFromArrayLiteral interface
@@ -10817,8 +11052,13 @@ pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_anal
 }
 
 pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) ConvertError!ir.Module {
-    return convertWithExternals(program, allocator, mutation_analyzer, source_file, null, null, null, out_error);
+    return convertWithExternals(program, allocator, mutation_analyzer, source_file, null, null, null, .{}, out_error);
 }
+
+/// Options for AST-to-IR conversion
+pub const ConvertOptions = struct {
+    track_allocs: bool = false,
+};
 
 /// Convert AST to IR with external function signatures from other modules
 pub fn convertWithExternals(
@@ -10829,10 +11069,12 @@ pub fn convertWithExternals(
     external_funcs: ?[]const ExternalFuncSignature,
     external_types: ?[]const ExternalTypeInfo,
     external_interfaces: ?[]const ExternalInterfaceInfo,
+    options: ConvertOptions,
     out_error: *?err.CompileError,
 ) ConvertError!ir.Module {
     var converter = AstToIr.init(allocator, mutation_analyzer);
     converter.source_file = source_file;
+    converter.track_allocs = options.track_allocs;
     defer converter.deinit();
 
     // Register external interfaces before types (needed for conformance checking)

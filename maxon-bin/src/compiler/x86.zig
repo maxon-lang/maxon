@@ -799,4 +799,9 @@ pub const Encoder = struct {
     pub fn repMovsb(self: *Encoder) !void {
         try self.emit(&.{ 0xF3, 0xA4 });
     }
+
+    /// REP STOSB - repeat store string (byte) - fills memory with al
+    pub fn repStosb(self: *Encoder) !void {
+        try self.emit(&.{ 0xF3, 0xAA });
+    }
 };

@@ -136,7 +136,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
 
     // 4 - AST to IR
     var ir_error: ?compile_error.CompileError = null;
-    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, options.external_interfaces, &ir_error) catch |e| {
+    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, options.external_interfaces, .{ .track_allocs = options.track_allocs }, &ir_error) catch |e| {
         debug.astToIr("AST to IR error: {}\n", .{e});
         if (options.result) |result| {
             result.error_info = ir_error;
@@ -339,6 +339,7 @@ fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]
     var frontend = try runFrontend(source, allocator, .{
         .source_file = source_file,
         .result = result,
+        .track_allocs = pipeline_opts.track_allocs,
     });
     defer frontend.deinit();
 
@@ -490,6 +491,7 @@ pub fn compileMultiple(
             .external_funcs = exported_funcs.items,
             .external_types = exported_types.items,
             .external_interfaces = all_interfaces.items,
+            .track_allocs = options.track_allocs,
         });
 
         if (merged) |*m| {

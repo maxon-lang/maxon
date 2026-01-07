@@ -1138,7 +1138,7 @@ FREE #2: 7 bytes (string cleanup)
 FREE #1: 6 bytes (string cleanup)
 FREE #3: 12 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 53 bytes
 Freed:     53 bytes
 Leaked:    0 bytes
@@ -1185,7 +1185,7 @@ FREE #3: 2 bytes (string cleanup)
 FREE #7: 5 bytes (string cleanup)
 FREE #4: 2 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 47 bytes
 Freed:     47 bytes
 Leaked:    0 bytes
@@ -1228,7 +1228,7 @@ FREE #7: 3 bytes (string cleanup)
 FREE #1: 2 bytes (string cleanup)
 FREE #4: 4 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 38 bytes
 Freed:     38 bytes
 Leaked:    0 bytes
@@ -1259,7 +1259,7 @@ FREE #3: 2 bytes (string cleanup)
 FREE #4: 4 bytes (string cleanup)
 FREE #1: 28 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 56 bytes
 Freed:     56 bytes
 Leaked:    0 bytes

@@ -68,7 +68,7 @@ FREE #3: 2 bytes (string cleanup)
 FREE #4: 4 bytes (string cleanup)
 FREE #1: 33 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 61 bytes
 Freed:     61 bytes
 Leaked:    0 bytes
@@ -101,7 +101,7 @@ FREE #4: 2 bytes (string cleanup)
 FREE #5: 4 bytes (string cleanup)
 FREE #2: 29 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 86 bytes
 Freed:     86 bytes
 Leaked:    0 bytes
@@ -134,7 +134,7 @@ FREE #3: 2 bytes (string cleanup)
 FREE #4: 3 bytes (string cleanup)
 FREE #1: 24 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 51 bytes
 Freed:     51 bytes
 Leaked:    0 bytes
@@ -159,7 +159,7 @@ end 'main'
 ALLOC #1: 29 bytes (string buffer)
 heap allocated string here!!FREE #1: 29 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 29 bytes
 Freed:     29 bytes
 Leaked:    0 bytes
@@ -192,7 +192,7 @@ FREE #3: 2 bytes (string cleanup)
 FREE #4: 3 bytes (string cleanup)
 FREE #1: 6 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 33 bytes
 Freed:     33 bytes
 Leaked:    0 bytes
@@ -241,7 +241,7 @@ FREE #9: 3 bytes (string cleanup)
 FREE #6: 6 bytes (string cleanup)
 FREE #1: 2 bytes (string cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 49 bytes
 Freed:     49 bytes
 Leaked:    0 bytes

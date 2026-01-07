@@ -352,3 +352,337 @@ end 'main'
 ```exitcode
 42
 ```
+<!-- test: string-keys-basic -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var m = ["a": 1, "b": 2]
+    var result = m.get("a") else 'default'
+        result = 0
+    end 'default'
+    return result
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+ALLOC #1: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 64 bytes (map buffer)
+ALLOC #3: 16 bytes (map buffer)
+ALLOC #4: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #5: 512 bytes (array buffer)
+MOVE: managed
+ALLOC #6: 128 bytes (array buffer)
+MOVE: managed
+ALLOC #7: 128 bytes (array buffer)
+MOVE: managed
+MOVE: ks
+MOVE: vs
+MOVE: sts
+MOVE: result
+FREE #2: 64 bytes (map literal keys cleanup)
+FREE #3: 16 bytes (map literal values cleanup)
+ALLOC #8: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+FREE #1: 2 bytes (map string key cleanup)
+FREE #4: 2 bytes (map string key cleanup)
+FREE #5: 512 bytes (map keys cleanup)
+FREE #6: 128 bytes (map values cleanup)
+FREE #7: 128 bytes (map states cleanup)
+
+=== MEMORY STATS ===
+Allocated: 854 bytes
+Freed:     852 bytes
+Leaked:    2 bytes
+Moves:     10
+Increfs:   3
+Decrefs:   0
+```
+
+<!-- test: string-keys-get-multiple -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var m = ["hello": 10, "world": 20, "foo": 30]
+    var a = m.get("hello") else 'default1'
+        a = 0
+    end 'default1'
+    var b = m.get("world") else 'default2'
+        b = 0
+    end 'default2'
+    return a + b
+end 'main'
+```
+```exitcode
+30
+```
+```stdout
+ALLOC #1: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 96 bytes (map buffer)
+ALLOC #3: 24 bytes (map buffer)
+ALLOC #4: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #5: 4 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #6: 512 bytes (array buffer)
+MOVE: managed
+ALLOC #7: 128 bytes (array buffer)
+MOVE: managed
+ALLOC #8: 128 bytes (array buffer)
+MOVE: managed
+MOVE: ks
+MOVE: vs
+MOVE: sts
+MOVE: result
+FREE #2: 96 bytes (map literal keys cleanup)
+FREE #3: 24 bytes (map literal values cleanup)
+ALLOC #9: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #10: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+FREE #1: 6 bytes (map string key cleanup)
+FREE #5: 4 bytes (map string key cleanup)
+FREE #4: 6 bytes (map string key cleanup)
+FREE #6: 512 bytes (map keys cleanup)
+FREE #7: 128 bytes (map values cleanup)
+FREE #8: 128 bytes (map states cleanup)
+
+=== MEMORY STATS ===
+Allocated: 916 bytes
+Freed:     904 bytes
+Leaked:    12 bytes
+Moves:     12
+Increfs:   5
+Decrefs:   0
+```
+
+<!-- test: string-keys-contains -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var m = ["key1": 100, "key2": 200]
+    if m.contains("key1") 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+ALLOC #1: 5 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 64 bytes (map buffer)
+ALLOC #3: 16 bytes (map buffer)
+ALLOC #4: 5 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #5: 512 bytes (array buffer)
+MOVE: managed
+ALLOC #6: 128 bytes (array buffer)
+MOVE: managed
+ALLOC #7: 128 bytes (array buffer)
+MOVE: managed
+MOVE: ks
+MOVE: vs
+MOVE: sts
+MOVE: result
+FREE #2: 64 bytes (map literal keys cleanup)
+FREE #3: 16 bytes (map literal values cleanup)
+ALLOC #8: 5 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+FREE #4: 5 bytes (map string key cleanup)
+FREE #1: 5 bytes (map string key cleanup)
+FREE #5: 512 bytes (map keys cleanup)
+FREE #6: 128 bytes (map values cleanup)
+FREE #7: 128 bytes (map states cleanup)
+
+=== MEMORY STATS ===
+Allocated: 863 bytes
+Freed:     858 bytes
+Leaked:    5 bytes
+Moves:     10
+Increfs:   3
+Decrefs:   0
+```
+
+<!-- test: string-keys-insert-update -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var m = ["x": 10]
+    m.insert("x", 99)
+    var result = m.get("x") else 'default'
+        result = 0
+    end 'default'
+    return result
+end 'main'
+```
+```exitcode
+99
+```
+```stdout
+ALLOC #1: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 32 bytes (map buffer)
+ALLOC #3: 8 bytes (map buffer)
+ALLOC #4: 512 bytes (array buffer)
+MOVE: managed
+ALLOC #5: 128 bytes (array buffer)
+MOVE: managed
+ALLOC #6: 128 bytes (array buffer)
+MOVE: managed
+MOVE: ks
+MOVE: vs
+MOVE: sts
+MOVE: result
+FREE #2: 32 bytes (map literal keys cleanup)
+FREE #3: 8 bytes (map literal values cleanup)
+ALLOC #7: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #7: 2 bytes (string cleanup)
+ALLOC #8: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+FREE #1: 2 bytes (map string key cleanup)
+FREE #4: 512 bytes (map keys cleanup)
+FREE #5: 128 bytes (map values cleanup)
+FREE #6: 128 bytes (map states cleanup)
+
+=== MEMORY STATS ===
+Allocated: 814 bytes
+Freed:     812 bytes
+Leaked:    2 bytes
+Moves:     10
+Increfs:   3
+Decrefs:   1
+```
+
+<!-- test: string-keys-remove -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var m = ["alpha": 1, "beta": 2, "gamma": 3]
+    m.remove("beta")
+    if m.contains("beta") 'check'
+        return 1
+    end 'check'
+    return m.count()
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+ALLOC #1: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 96 bytes (map buffer)
+ALLOC #3: 24 bytes (map buffer)
+ALLOC #4: 5 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #5: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #6: 512 bytes (array buffer)
+MOVE: managed
+ALLOC #7: 128 bytes (array buffer)
+MOVE: managed
+ALLOC #8: 128 bytes (array buffer)
+MOVE: managed
+MOVE: ks
+MOVE: vs
+MOVE: sts
+MOVE: result
+FREE #2: 96 bytes (map literal keys cleanup)
+FREE #3: 24 bytes (map literal values cleanup)
+ALLOC #9: 5 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #9: 5 bytes (string cleanup)
+ALLOC #10: 5 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+FREE #5: 6 bytes (map string key cleanup)
+FREE #1: 6 bytes (map string key cleanup)
+FREE #6: 512 bytes (map keys cleanup)
+FREE #7: 128 bytes (map values cleanup)
+FREE #8: 128 bytes (map states cleanup)
+
+=== MEMORY STATS ===
+Allocated: 915 bytes
+Freed:     905 bytes
+Leaked:    10 bytes
+Moves:     12
+Increfs:   5
+Decrefs:   1
+```
+
+<!-- test: string-keys-early-return -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var m = ["test": 42]
+    if let v = m.get("test") 'found'
+        return v
+    end 'found'
+    return 0
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+ALLOC #1: 5 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 32 bytes (map buffer)
+ALLOC #3: 8 bytes (map buffer)
+ALLOC #4: 512 bytes (array buffer)
+MOVE: managed
+ALLOC #5: 128 bytes (array buffer)
+MOVE: managed
+ALLOC #6: 128 bytes (array buffer)
+MOVE: managed
+MOVE: ks
+MOVE: vs
+MOVE: sts
+MOVE: result
+FREE #2: 32 bytes (map literal keys cleanup)
+FREE #3: 8 bytes (map literal values cleanup)
+ALLOC #7: 5 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+FREE #1: 5 bytes (map string key cleanup)
+FREE #4: 512 bytes (map keys cleanup)
+FREE #5: 128 bytes (map values cleanup)
+FREE #6: 128 bytes (map states cleanup)
+
+=== MEMORY STATS ===
+Allocated: 818 bytes
+Freed:     813 bytes
+Leaked:    5 bytes
+Moves:     9
+Increfs:   2
+Decrefs:   0
+```

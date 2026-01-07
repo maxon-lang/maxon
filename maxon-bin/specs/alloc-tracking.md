@@ -32,7 +32,7 @@ FREE #1: 80 bytes (array cleanup)
 
 At exit, a summary is printed:
 ```text
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 80 bytes
 Freed:     80 bytes
 Leaked:    0 bytes
@@ -61,7 +61,7 @@ end 'main'
 ALLOC #1: 80 bytes (array buffer)
 FREE #1: 80 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 80 bytes
 Freed:     80 bytes
 Leaked:    0 bytes
@@ -79,7 +79,7 @@ end 'main'
 ```
 ```stdout
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 0 bytes
 Freed:     0 bytes
 Leaked:    0 bytes
@@ -114,7 +114,7 @@ ALLOC #2: 80 bytes (array buffer)
 FREE #1: 40 bytes (array cleanup)
 FREE #2: 80 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 120 bytes
 Freed:     120 bytes
 Leaked:    0 bytes
@@ -144,7 +144,7 @@ end 'main'
 ALLOC #1: 40 bytes (array buffer)
 FREE #1: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
@@ -174,7 +174,7 @@ end 'main'
 ALLOC #1: 40 bytes (array buffer)
 FREE #1: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
@@ -205,7 +205,7 @@ end 'main'
 ALLOC #1: 40 bytes (array buffer)
 FREE #1: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
@@ -233,7 +233,7 @@ end 'main'
 ALLOC #1: 80 bytes (array buffer)
 FREE #1: 80 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 80 bytes
 Freed:     80 bytes
 Leaked:    0 bytes
@@ -269,7 +269,7 @@ end 'main'
 ALLOC #1: 40 bytes (array buffer)
 FREE #1: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
@@ -305,7 +305,7 @@ end 'main'
 ALLOC #1: 40 bytes (array buffer)
 FREE #1: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
@@ -340,7 +340,7 @@ FREE #2: 40 bytes (array cleanup)
 ALLOC #3: 40 bytes (array buffer)
 FREE #3: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 120 bytes
 Freed:     120 bytes
 Leaked:    0 bytes
@@ -372,7 +372,7 @@ end 'main'
 ALLOC #1: 40 bytes (array buffer)
 FREE #1: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
@@ -417,7 +417,7 @@ end 'main'
 ALLOC #1: 40 bytes (array buffer)
 FREE #1: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 40 bytes
 Freed:     40 bytes
 Leaked:    0 bytes
@@ -463,7 +463,7 @@ ALLOC #2: 40 bytes (array buffer)
 FREE #2: 40 bytes (array cleanup)
 FREE #1: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 80 bytes
 Freed:     80 bytes
 Leaked:    0 bytes
@@ -488,7 +488,7 @@ end 'main'
 ```
 ```stdout
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 0 bytes
 Freed:     0 bytes
 Leaked:    0 bytes
@@ -521,7 +521,7 @@ ALLOC #2: 40 bytes (array buffer)
 FREE #1: 40 bytes (array cleanup)
 FREE #2: 40 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 80 bytes
 Freed:     80 bytes
 Leaked:    0 bytes

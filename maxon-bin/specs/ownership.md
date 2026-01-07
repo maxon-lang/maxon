@@ -279,7 +279,7 @@ end 'main'
 ALLOC #1: 24 bytes (array buffer)
 FREE #1: 24 bytes (array cleanup)
 
-=== ALLOC STATS ===
+=== MEMORY STATS ===
 Allocated: 24 bytes
 Freed:     24 bytes
 Leaked:    0 bytes

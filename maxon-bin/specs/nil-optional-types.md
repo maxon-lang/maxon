@@ -439,3 +439,257 @@ end 'main'
 ```exitcode
 30
 ```
+<!-- test: iflet-array-access-borrowed -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var arr = [10, 20, 30]
+    if let val = arr[1] 'check'
+        return val
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+20
+```
+```stdout
+ALLOC #1: 24 bytes (set buffer)
+FREE #1: 24 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 24 bytes
+Freed:     24 bytes
+Leaked:    0 bytes
+Moves:     0
+Increfs:   0
+Decrefs:   0
+```
+
+<!-- test: iflet-array-string-borrowed -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var arr = ["hello", "world"]
+    if let s = arr[0] 'check'
+        return s.count()
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+5
+```
+```stdout
+ALLOC #1: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 64 bytes (set buffer)
+INCREF: <struct copy> -> rc=2
+ALLOC #3: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+INCREF: <struct copy> -> rc=2
+INCREF: <struct copy> -> rc=3
+FREE #2: 64 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 76 bytes
+Freed:     64 bytes
+Leaked:    12 bytes
+Moves:     2
+Increfs:   5
+Decrefs:   0
+```
+
+<!-- test: iflet-map-get-borrowed -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var m = ["key": 42]
+    if let val = m.get("key") 'check'
+        return val
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+ALLOC #1: 4 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 32 bytes (map buffer)
+ALLOC #3: 8 bytes (map buffer)
+ALLOC #4: 512 bytes (array buffer)
+MOVE: managed
+ALLOC #5: 128 bytes (array buffer)
+MOVE: managed
+ALLOC #6: 128 bytes (array buffer)
+MOVE: managed
+MOVE: ks
+MOVE: vs
+MOVE: sts
+MOVE: result
+FREE #2: 32 bytes (map literal keys cleanup)
+FREE #3: 8 bytes (map literal values cleanup)
+ALLOC #7: 4 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+FREE #1: 4 bytes (map string key cleanup)
+FREE #4: 512 bytes (map keys cleanup)
+FREE #5: 128 bytes (map values cleanup)
+FREE #6: 128 bytes (map states cleanup)
+
+=== MEMORY STATS ===
+Allocated: 816 bytes
+Freed:     812 bytes
+Leaked:    4 bytes
+Moves:     9
+Increfs:   2
+Decrefs:   0
+```
+
+<!-- test: iflet-map-string-value-borrowed -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var m = [1: "hello", 2: "world"]
+    if let s = m.get(1) 'check'
+        return s.count()
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+5
+```
+```stdout
+ALLOC #1: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 16 bytes (map buffer)
+ALLOC #3: 64 bytes (map buffer)
+ALLOC #4: 6 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #5: 128 bytes (array buffer)
+MOVE: managed
+ALLOC #6: 512 bytes (array buffer)
+MOVE: managed
+ALLOC #7: 128 bytes (array buffer)
+MOVE: managed
+MOVE: ks
+MOVE: vs
+MOVE: sts
+MOVE: result
+FREE #2: 16 bytes (map literal keys cleanup)
+FREE #3: 64 bytes (map literal values cleanup)
+FREE #5: 128 bytes (map keys cleanup)
+FREE #6: 512 bytes (map values cleanup)
+FREE #7: 128 bytes (map states cleanup)
+
+=== MEMORY STATS ===
+Allocated: 860 bytes
+Freed:     848 bytes
+Leaked:    12 bytes
+Moves:     9
+Increfs:   2
+Decrefs:   0
+```
+
+<!-- test: iflet-nested-array-access -->
+<!-- TrackAllocs: true -->
+```maxon
+function main() returns int
+    var arr = [10, 20, 30]
+    var sum = 0
+    if let a = arr[0] 'check1'
+        sum = sum + a
+    end 'check1'
+    if let b = arr[1] 'check2'
+        sum = sum + b
+    end 'check2'
+    if let c = arr[2] 'check3'
+        sum = sum + c
+    end 'check3'
+    return sum
+end 'main'
+```
+```exitcode
+60
+```
+```stdout
+ALLOC #1: 24 bytes (set buffer)
+FREE #1: 24 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 24 bytes
+Freed:     24 bytes
+Leaked:    0 bytes
+Moves:     0
+Increfs:   0
+Decrefs:   0
+```
+
+<!-- test: iflet-early-return-from-map -->
+<!-- TrackAllocs: true -->
+```maxon
+function lookup(m Map from String to int, key String) returns int
+    if let val = m.get(key) 'found'
+        return val
+    end 'found'
+    return 0 - 1
+end 'lookup'
+
+function main() returns int
+    var m = ["a": 10, "b": 20, "c": 30]
+    return lookup(m, "b")
+end 'main'
+```
+```exitcode
+20
+```
+```stdout
+ALLOC #1: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #2: 96 bytes (map buffer)
+ALLOC #3: 24 bytes (map buffer)
+ALLOC #4: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #5: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+ALLOC #6: 512 bytes (array buffer)
+MOVE: managed
+ALLOC #7: 128 bytes (array buffer)
+MOVE: managed
+ALLOC #8: 128 bytes (array buffer)
+MOVE: managed
+MOVE: ks
+MOVE: vs
+MOVE: sts
+MOVE: result
+FREE #2: 96 bytes (map literal keys cleanup)
+FREE #3: 24 bytes (map literal values cleanup)
+ALLOC #9: 2 bytes (string buffer)
+MOVE: managed
+INCREF: <struct copy> -> rc=1
+FREE #1: 2 bytes (map string key cleanup)
+FREE #4: 2 bytes (map string key cleanup)
+FREE #5: 2 bytes (map string key cleanup)
+FREE #6: 512 bytes (map keys cleanup)
+FREE #7: 128 bytes (map values cleanup)
+FREE #8: 128 bytes (map states cleanup)
+
+=== MEMORY STATS ===
+Allocated: 896 bytes
+Freed:     894 bytes
+Leaked:    2 bytes
+Moves:     11
+Increfs:   4
+Decrefs:   0
+```

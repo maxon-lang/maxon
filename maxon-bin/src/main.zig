@@ -65,12 +65,12 @@ fn printUsage() void {
     std.debug.print("  lsp-server              Start LSP server for IDE integration\n", .{});
     std.debug.print("\nCompile Options:\n", .{});
     std.debug.print("  -v                      Enable verbose/debug output\n", .{});
-    std.debug.print("  --track-allocs          Enable runtime allocation tracking\n", .{});
+    std.debug.print("  --track-memory          Enable runtime memory tracking (allocs, moves, refcounts)\n", .{});
     std.debug.print("  --emit-ir               Emit IR output (.ir file)\n", .{});
     std.debug.print("  --emit-asm              Emit assembly output (.asm file)\n", .{});
     std.debug.print("\nBuild Options:\n", .{});
     std.debug.print("  -v                      Enable verbose/debug output\n", .{});
-    std.debug.print("  --track-allocs          Enable runtime allocation tracking\n", .{});
+    std.debug.print("  --track-memory          Enable runtime memory tracking (allocs, moves, refcounts)\n", .{});
     std.debug.print("  --emit-ir               Emit IR output (.ir file)\n", .{});
     std.debug.print("  --emit-asm              Emit assembly output (.asm file)\n", .{});
     std.debug.print("\nTest Options:\n", .{});
@@ -80,7 +80,7 @@ fn printUsage() void {
 
 fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     var source_path: ?[:0]u8 = null;
-    var track_allocs = false;
+    var track_memory = false;
     var emit_ir = false;
     var emit_asm = false;
 
@@ -88,8 +88,8 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     for (args[2..]) |arg| {
         if (std.mem.eql(u8, arg, "-v")) {
             compiler.debug.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--track-allocs")) {
-            track_allocs = true;
+        } else if (std.mem.eql(u8, arg, "--track-memory") or std.mem.eql(u8, arg, "--track-allocs")) {
+            track_memory = true;
         } else if (std.mem.eql(u8, arg, "--emit-ir")) {
             emit_ir = true;
         } else if (std.mem.eql(u8, arg, "--emit-asm")) {
@@ -174,7 +174,7 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     compiler.compileMultiple(
         sources.items,
         output_path,
-        .{ .track_allocs = track_allocs, .emit_ir = emit_ir, .emit_asm = emit_asm },
+        .{ .track_allocs = track_memory, .emit_ir = emit_ir, .emit_asm = emit_asm },
         allocator,
         &result,
     ) catch |err| {
@@ -226,7 +226,7 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
 }
 
 fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
-    var track_allocs = false;
+    var track_memory = false;
     var emit_ir = false;
     var emit_asm = false;
 
@@ -234,8 +234,8 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
     for (args[2..]) |arg| {
         if (std.mem.eql(u8, arg, "-v")) {
             compiler.debug.enabled = true;
-        } else if (std.mem.eql(u8, arg, "--track-allocs")) {
-            track_allocs = true;
+        } else if (std.mem.eql(u8, arg, "--track-memory") or std.mem.eql(u8, arg, "--track-allocs")) {
+            track_memory = true;
         } else if (std.mem.eql(u8, arg, "--emit-ir")) {
             emit_ir = true;
         } else if (std.mem.eql(u8, arg, "--emit-asm")) {
@@ -321,7 +321,7 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
     compiler.compileMultiple(
         all_sources.items,
         output_path,
-        .{ .track_allocs = track_allocs, .emit_ir = emit_ir, .emit_asm = emit_asm },
+        .{ .track_allocs = track_memory, .emit_ir = emit_ir, .emit_asm = emit_asm },
         allocator,
         &result,
     ) catch |err| {

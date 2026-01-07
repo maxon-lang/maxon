@@ -35,7 +35,10 @@ const TrackingDataField = enum(usize) {
     total_allocated = 8, // i64: total bytes allocated
     total_freed = 16, // i64: total bytes freed
     table_count = 24, // i64: number of entries in tracking table
-    table_base = 32, // start of tracking table (256 entries * 24 bytes each)
+    move_count = 32, // i64: number of ownership moves
+    incref_count = 40, // i64: number of incref operations
+    decref_count = 48, // i64: number of decref operations
+    table_base = 56, // start of tracking table (256 entries * 24 bytes each)
 };
 
 /// Patch for RIP-relative access to tracking data
@@ -543,8 +546,11 @@ pub const IrCodegen = struct {
     ///   +0:  next_alloc_id (i64)
     ///   +8:  total_allocated (i64)
     ///   +16: total_freed (i64)
-    ///   +24: tracking_table_count (i32)
-    ///   +32: tracking_table[256] - each entry is {ptr: i64, size: i64, id: i64} = 24 bytes
+    ///   +24: tracking_table_count (i64)
+    ///   +32: move_count (i64)
+    ///   +40: incref_count (i64)
+    ///   +48: decref_count (i64)
+    ///   +56: tracking_table[256] - each entry is {ptr: i64, size: i64, id: i64} = 24 bytes
     fn generateTrackingData(self: *IrCodegen) !void {
         // Align to 8 bytes
         while (self.code.items.len % 8 != 0) {
@@ -559,6 +565,12 @@ pub const IrCodegen = struct {
         // total_freed (8 bytes)
         try self.code.appendNTimes(self.allocator, 0, 8);
         // tracking_table_count (8 bytes, though only using 4)
+        try self.code.appendNTimes(self.allocator, 0, 8);
+        // move_count (8 bytes)
+        try self.code.appendNTimes(self.allocator, 0, 8);
+        // incref_count (8 bytes)
+        try self.code.appendNTimes(self.allocator, 0, 8);
+        // decref_count (8 bytes)
         try self.code.appendNTimes(self.allocator, 0, 8);
         // tracking_table - 256 entries * 24 bytes each = 6144 bytes
         try self.code.appendNTimes(self.allocator, 0, 256 * 24);
@@ -668,6 +680,15 @@ pub const IrCodegen = struct {
 
         // __track_realloc - tracks a reallocation
         try self.generateTrackRealloc();
+
+        // __track_move - tracks ownership transfer
+        try self.generateTrackMove();
+
+        // __track_incref - tracks reference count increment
+        try self.generateTrackIncref();
+
+        // __track_decref - tracks reference count decrement
+        try self.generateTrackDecref();
     }
 
     /// Generate __enable_alloc_tracking function
@@ -682,11 +703,14 @@ pub const IrCodegen = struct {
         try self.enc.ret();
     }
 
-    /// Generate __print_alloc_summary function - prints alloc stats
+    /// Generate __print_alloc_summary function - prints memory tracking stats
     /// Stack layout:
     ///   [rbp-56] = total_allocated
     ///   [rbp-64] = total_freed
     ///   [rbp-72] = leaked (allocated - freed)
+    ///   [rbp-80] = move_count
+    ///   [rbp-88] = incref_count
+    ///   [rbp-96] = decref_count
     fn generatePrintAllocSummary(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__print_alloc_summary", self.code.items.len);
 
@@ -697,7 +721,7 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
         try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64 (for buffer + alignment)
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x60 }); // sub rsp, 96 (expanded for new counters)
 
         // Get stdout handle
         try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
@@ -709,35 +733,53 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC8 }); // mov [rbp-56], rax
         try self.emitLoadTrackingField(.total_freed);
         try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC0 }); // mov [rbp-64], rax
+        try self.emitLoadTrackingField(.move_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB0 }); // mov [rbp-80], rax
+        try self.emitLoadTrackingField(.incref_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xA8 }); // mov [rbp-88], rax
+        try self.emitLoadTrackingField(.decref_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xA0 }); // mov [rbp-96], rax
 
         // Calculate leaked = allocated - freed, store in [rbp-72]
         try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xC8 }); // mov rcx, [rbp-56] (allocated)
         try self.enc.emit(&.{ 0x48, 0x2B, 0x4D, 0xC0 }); // sub rcx, [rbp-64] (freed)
         try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xB8 }); // mov [rbp-72], rcx (leaked)
 
-        // Print "\n=== ALLOC STATS ===\nAllocated: "
-        try self.printStaticString("\n=== ALLOC STATS ===\nAllocated: ");
+        // Print "\n=== MEMORY STATS ===\n"
+        try self.printStaticString("\n=== MEMORY STATS ===\n");
 
-        // Print total_allocated from stack
+        // Print "Allocated: "
+        try self.printStaticString("Allocated: ");
         try self.printNumberFromStack(-56);
-
-        // Print " bytes\nFreed:     "
-        try self.printStaticString(" bytes\nFreed:     ");
-
-        // Print total_freed from stack
-        try self.printNumberFromStack(-64);
-
-        // Print " bytes\nLeaked:    "
-        try self.printStaticString(" bytes\nLeaked:    ");
-
-        // Print leaked from stack
-        try self.printNumberFromStack(-72);
-
-        // Print " bytes\n"
         try self.printStaticString(" bytes\n");
 
+        // Print "Freed:     "
+        try self.printStaticString("Freed:     ");
+        try self.printNumberFromStack(-64);
+        try self.printStaticString(" bytes\n");
+
+        // Print "Leaked:    "
+        try self.printStaticString("Leaked:    ");
+        try self.printNumberFromStack(-72);
+        try self.printStaticString(" bytes\n");
+
+        // Print "Moves:     "
+        try self.printStaticString("Moves:     ");
+        try self.printNumberFromStack(-80);
+        try self.printStaticString("\n");
+
+        // Print "Increfs:   "
+        try self.printStaticString("Increfs:   ");
+        try self.printNumberFromStack(-88);
+        try self.printStaticString("\n");
+
+        // Print "Decrefs:   "
+        try self.printStaticString("Decrefs:   ");
+        try self.printNumberFromStack(-96);
+        try self.printStaticString("\n");
+
         // Epilogue
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x60 }); // add rsp, 96
         try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
         try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
         try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
@@ -1079,6 +1121,183 @@ pub const IrCodegen = struct {
 
         // Epilogue
         try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x60 }); // add rsp, 96
+        try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
+        try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __track_move - tracks ownership transfer
+    /// Input: RCX = from_var_ptr, RDX = from_var_len, R8 = to_var_ptr, R9 = to_var_len
+    /// Stack layout:
+    ///   [rbp-48] = to_var_len (for printTagFromR12)
+    ///   [rbp-56] = from_var_ptr
+    ///   [rbp-64] = from_var_len
+    fn generateTrackMove(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__track_move", self.code.items.len);
+
+        // Prologue - save callee-saved registers
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
+        try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
+        try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x50 }); // sub rsp, 80
+
+        // Stack layout:
+        //   [rbp-56] = from_var_ptr (RCX)
+        //   [rbp-64] = from_var_len (RDX)
+        //   [rbp-72] = to_var_ptr (R8)
+        //   [rbp-80] = to_var_len (R9)
+        //   [rbp-48] = temp for printTagFromR12
+
+        // Save all inputs to stack immediately
+        try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xC8 }); // mov [rbp-56], rcx (from_var_ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xC0 }); // mov [rbp-64], rdx (from_var_len)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x45, 0xB8 }); // mov [rbp-72], r8 (to_var_ptr)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x4D, 0xB0 }); // mov [rbp-80], r9 (to_var_len)
+
+        // Increment move_count
+        try self.emitLoadTrackingField(.move_count);
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
+        try self.emitStoreTrackingField(.move_count);
+
+        // Get stdout handle
+        try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
+        try self.emitExternalCall("kernel32.dll", "GetStdHandle");
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (stdout handle)
+
+        // Print "MOVE: "
+        try self.printStaticString("MOVE: ");
+
+        // Print from_var (source variable name)
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x65, 0xC8 }); // mov r12, [rbp-56] (from_var_ptr)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0xC0 }); // mov rax, [rbp-64] (from_var_len)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xD0 }); // mov [rbp-48], rax
+        try self.printTagFromR12();
+
+        // Print newline
+        try self.printStaticString("\n");
+
+        // Epilogue
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x50 }); // add rsp, 80
+        try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
+        try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __track_incref - tracks reference count increment
+    /// Input: RCX = var_ptr, RDX = var_len, R8 = new_refcount
+    /// Stack layout:
+    ///   [rbp-48] = var_len (for printTagFromR12)
+    ///   [rbp-56] = new_refcount
+    fn generateTrackIncref(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__track_incref", self.code.items.len);
+
+        // Prologue - save callee-saved registers
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
+        try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
+        try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+
+        // Save inputs
+        try self.enc.emit(&.{ 0x49, 0x89, 0xCC }); // mov r12, rcx (var_ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xD0 }); // mov [rbp-48], rdx (var_len)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x45, 0xC8 }); // mov [rbp-56], r8 (new_refcount)
+
+        // Increment incref_count
+        try self.emitLoadTrackingField(.incref_count);
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
+        try self.emitStoreTrackingField(.incref_count);
+
+        // Get stdout handle
+        try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
+        try self.emitExternalCall("kernel32.dll", "GetStdHandle");
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (stdout handle)
+
+        // Print "INCREF: "
+        try self.printStaticString("INCREF: ");
+
+        // Print var name from R12
+        try self.printTagFromR12();
+
+        // Print " -> rc="
+        try self.printStaticString(" -> rc=");
+
+        // Print new refcount from stack
+        try self.printNumberFromStack(-56);
+
+        // Print newline
+        try self.printStaticString("\n");
+
+        // Epilogue
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
+        try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
+        try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __track_decref - tracks reference count decrement
+    /// Input: RCX = var_ptr, RDX = var_len, R8 = new_refcount
+    /// Stack layout:
+    ///   [rbp-48] = var_len (for printTagFromR12)
+    ///   [rbp-56] = new_refcount
+    fn generateTrackDecref(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__track_decref", self.code.items.len);
+
+        // Prologue - save callee-saved registers
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
+        try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
+        try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
+        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+
+        // Save inputs
+        try self.enc.emit(&.{ 0x49, 0x89, 0xCC }); // mov r12, rcx (var_ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xD0 }); // mov [rbp-48], rdx (var_len)
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x45, 0xC8 }); // mov [rbp-56], r8 (new_refcount)
+
+        // Increment decref_count
+        try self.emitLoadTrackingField(.decref_count);
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
+        try self.emitStoreTrackingField(.decref_count);
+
+        // Get stdout handle
+        try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
+        try self.emitExternalCall("kernel32.dll", "GetStdHandle");
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (stdout handle)
+
+        // Print "DECREF: "
+        try self.printStaticString("DECREF: ");
+
+        // Print var name from R12
+        try self.printTagFromR12();
+
+        // Print " -> rc="
+        try self.printStaticString(" -> rc=");
+
+        // Print new refcount from stack
+        try self.printNumberFromStack(-56);
+
+        // Print newline
+        try self.printStaticString("\n");
+
+        // Epilogue
+        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
         try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
         try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
         try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
@@ -2173,9 +2392,13 @@ pub const IrCodegen = struct {
             .memcpy => try self.genMemcpy(inst),
             .memcpy_dyn => try self.genMemcpyDyn(inst),
             .memset => try self.genMemset(inst),
+            .memset_dyn => try self.genMemsetDyn(inst),
             .heap_alloc => try self.genHeapAlloc(inst),
             .heap_free => try self.genHeapFree(inst),
             .heap_realloc => try self.genHeapRealloc(inst),
+            .track_move => try self.genTrackMove(inst),
+            .track_incref => try self.genTrackIncref(inst),
+            .track_decref => try self.genTrackDecref(inst),
             .extern_call => try self.genExternCall(inst),
             .fcmp_eq => try self.genFcmp(inst, .eq),
             .fcmp_ne => try self.genFcmp(inst, .ne),
@@ -2561,6 +2784,34 @@ pub const IrCodegen = struct {
         while (stored < size) : (stored += 8) {
             try self.enc.movMemR11OffsetRax(stored);
         }
+    }
+
+    fn genMemsetDyn(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Dynamic-sized memset using rep stosb
+        const dest_val = inst.operands[0].value;
+        const byte_val: u8 = @intCast(inst.operands[1].immediate_i32);
+        const size_val = inst.operands[2].value;
+
+        // Load size to rcx (rep count)
+        try self.loadToRcx(size_val);
+
+        // Load dest pointer to rdi
+        const dest_offset = try self.getStackOffset(dest_val);
+        if (self.isIndirect(dest_val)) {
+            try self.enc.movRdiRbpOffset(dest_offset);
+        } else {
+            try self.enc.leaRdiRbpOffset(dest_offset);
+        }
+
+        // Set al to the byte value
+        if (byte_val == 0) {
+            try self.enc.emit(&.{ 0x30, 0xC0 }); // xor al, al
+        } else {
+            try self.enc.emit(&.{ 0xB0, byte_val }); // mov al, byte_val
+        }
+
+        // rep stosb: store al to [rdi], rcx times
+        try self.enc.repStosb();
     }
 
     fn genLoad(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -3613,6 +3864,130 @@ pub const IrCodegen = struct {
         // Result is in RAX
         try self.storeToStack(inst.result.?, .ptr);
         try self.markIndirect(inst.result.?);
+    }
+
+    fn genTrackMove(self: *IrCodegen, inst: ir.Instruction) !void {
+        if (!self.track_allocs) return;
+
+        const tag = inst.operands[0].alloc_tag;
+        debug.codegen("  TrackMove: tag={s}", .{tag});
+
+        // Embed tag string after a jump
+        const jmp_offset = try self.enc.jmpRel32();
+        const tag_pos = self.code.items.len;
+        try self.code.appendSlice(self.allocator, tag);
+        const after_tag = self.code.items.len;
+
+        // Patch jump
+        const rel: i32 = @intCast(after_tag - jmp_offset - 4);
+        self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(rel & 0xFF)));
+        self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((rel >> 8) & 0xFF)));
+        self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((rel >> 16) & 0xFF)));
+        self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((rel >> 24) & 0xFF)));
+
+        // Call __track_move(from_var_ptr=RCX, from_var_len=RDX, to_var_ptr=R8, to_var_len=R9)
+        // For simplicity, we use the same tag for both from and to (the destination variable name)
+        // LEA RCX, [RIP - offset_to_tag]
+        const rip_offset: i32 = -@as(i32, @intCast(after_tag - tag_pos + 7));
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x0D }); // lea rcx, [rip+disp32]
+        try self.enc.emitI32(rip_offset);
+
+        // mov rdx, tag_len
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC2 }); // mov rdx, imm32
+        try self.enc.emitI32(@intCast(tag.len));
+
+        // Same tag for to_var (we could extend this later to track source->dest)
+        // lea r8, [rip+disp32] - need new lea
+        const lea2_pos = self.code.items.len;
+        const rip_offset2: i32 = @intCast(@as(i64, @intCast(tag_pos)) - @as(i64, @intCast(lea2_pos + 7)));
+        try self.enc.emit(&.{ 0x4C, 0x8D, 0x05 }); // lea r8, [rip+disp32]
+        try self.enc.emitI32(rip_offset2);
+
+        // mov r9, tag_len
+        try self.enc.emit(&.{ 0x49, 0xC7, 0xC1 }); // mov r9, imm32
+        try self.enc.emitI32(@intCast(tag.len));
+
+        try self.emitInternalCall("__track_move");
+    }
+
+    fn genTrackIncref(self: *IrCodegen, inst: ir.Instruction) !void {
+        if (!self.track_allocs) return;
+
+        const tag = inst.operands[0].alloc_tag;
+        const new_refcount = inst.operands[1].value;
+        debug.codegen("  TrackIncref: tag={s}, new_rc=%{d}", .{ tag, new_refcount });
+
+        // Save new_refcount to R12 before string embedding
+        try self.loadToRax(new_refcount);
+        try self.enc.movR12Rax();
+
+        // Embed tag string after a jump
+        const jmp_offset = try self.enc.jmpRel32();
+        const tag_pos = self.code.items.len;
+        try self.code.appendSlice(self.allocator, tag);
+        const after_tag = self.code.items.len;
+
+        // Patch jump
+        const rel: i32 = @intCast(after_tag - jmp_offset - 4);
+        self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(rel & 0xFF)));
+        self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((rel >> 8) & 0xFF)));
+        self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((rel >> 16) & 0xFF)));
+        self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((rel >> 24) & 0xFF)));
+
+        // Call __track_incref(var_ptr=RCX, var_len=RDX, new_refcount=R8)
+        // LEA RCX, [RIP - offset_to_tag]
+        const rip_offset: i32 = -@as(i32, @intCast(after_tag - tag_pos + 7));
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x0D }); // lea rcx, [rip+disp32]
+        try self.enc.emitI32(rip_offset);
+
+        // mov rdx, tag_len
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC2 }); // mov rdx, imm32
+        try self.enc.emitI32(@intCast(tag.len));
+
+        // mov r8, r12 (new_refcount)
+        try self.enc.emit(&.{ 0x4D, 0x89, 0xE0 }); // mov r8, r12
+
+        try self.emitInternalCall("__track_incref");
+    }
+
+    fn genTrackDecref(self: *IrCodegen, inst: ir.Instruction) !void {
+        if (!self.track_allocs) return;
+
+        const tag = inst.operands[0].alloc_tag;
+        const new_refcount = inst.operands[1].value;
+        debug.codegen("  TrackDecref: tag={s}, new_rc=%{d}", .{ tag, new_refcount });
+
+        // Save new_refcount to R12 before string embedding
+        try self.loadToRax(new_refcount);
+        try self.enc.movR12Rax();
+
+        // Embed tag string after a jump
+        const jmp_offset = try self.enc.jmpRel32();
+        const tag_pos = self.code.items.len;
+        try self.code.appendSlice(self.allocator, tag);
+        const after_tag = self.code.items.len;
+
+        // Patch jump
+        const rel: i32 = @intCast(after_tag - jmp_offset - 4);
+        self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(rel & 0xFF)));
+        self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((rel >> 8) & 0xFF)));
+        self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((rel >> 16) & 0xFF)));
+        self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((rel >> 24) & 0xFF)));
+
+        // Call __track_decref(var_ptr=RCX, var_len=RDX, new_refcount=R8)
+        // LEA RCX, [RIP - offset_to_tag]
+        const rip_offset: i32 = -@as(i32, @intCast(after_tag - tag_pos + 7));
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x0D }); // lea rcx, [rip+disp32]
+        try self.enc.emitI32(rip_offset);
+
+        // mov rdx, tag_len
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC2 }); // mov rdx, imm32
+        try self.enc.emitI32(@intCast(tag.len));
+
+        // mov r8, r12 (new_refcount)
+        try self.enc.emit(&.{ 0x4D, 0x89, 0xE0 }); // mov r8, r12
+
+        try self.emitInternalCall("__track_decref");
     }
 
     fn emitTrackFreeCall(self: *IrCodegen, tag: []const u8) !void {
