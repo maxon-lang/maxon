@@ -531,26 +531,30 @@ MOVE: vs
 MOVE: sts
 INCREF: <array index String> -> rc=2
 INCREF: <array_store> -> rc=3
+DECREF: k -> rc=2
 MOVE: result
 FREE #2: 32 bytes (map literal keys cleanup)
 FREE #3: 8 bytes (map literal values cleanup)
+DECREF: <temp> -> rc=1
 ALLOC #7: 12 bytes (string buffer)
 MOVE: managed
-INCREF: <array index String> -> rc=4
+INCREF: <array index String> -> rc=2
+DECREF: existing -> rc=1
 DECREF: <temp> -> rc=0
 FREE #7: 12 bytes (string cleanup)
-DECREF: <map key> -> rc=3
+DECREF: <map key> -> rc=0
+FREE #1: 12 bytes (map string key cleanup)
 FREE #4: 512 bytes (map keys cleanup)
 FREE #5: 128 bytes (map values cleanup)
 FREE #6: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
 Allocated: 832 bytes
-Freed:     820 bytes
-Leaked:    12 bytes
+Freed:     832 bytes
+Leaked:    0 bytes
 Moves:     9
 Increfs:   3
-Decrefs:   2
+Decrefs:   5
 ```
 
 <!-- test: iflet-map-string-value-borrowed -->
@@ -585,23 +589,32 @@ MOVE: vs
 MOVE: sts
 INCREF: <array index String> -> rc=2
 INCREF: <array_store> -> rc=3
+DECREF: v -> rc=2
 INCREF: <array index String> -> rc=2
 INCREF: <array_store> -> rc=3
+DECREF: v -> rc=2
 MOVE: result
 FREE #2: 16 bytes (map literal keys cleanup)
 FREE #3: 64 bytes (map literal values cleanup)
-INCREF: <array index String> -> rc=4
+DECREF: <temp> -> rc=1
+DECREF: <temp> -> rc=1
+INCREF: <array index String> -> rc=2
+DECREF: s -> rc=1
 FREE #5: 128 bytes (map keys cleanup)
+DECREF: <map value> -> rc=0
+FREE #1: 14 bytes (map string value cleanup)
+DECREF: <map value> -> rc=0
+FREE #4: 14 bytes (map string value cleanup)
 FREE #6: 512 bytes (map values cleanup)
 FREE #7: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
 Allocated: 876 bytes
-Freed:     848 bytes
-Leaked:    28 bytes
+Freed:     876 bytes
+Leaked:    0 bytes
 Moves:     9
 Increfs:   5
-Decrefs:   0
+Decrefs:   7
 ```
 
 <!-- test: iflet-nested-array-access -->
@@ -676,19 +689,29 @@ MOVE: vs
 MOVE: sts
 INCREF: <array index String> -> rc=2
 INCREF: <array_store> -> rc=3
+DECREF: k -> rc=2
 INCREF: <array index String> -> rc=2
 INCREF: <array_store> -> rc=3
+DECREF: k -> rc=2
 INCREF: <array index String> -> rc=2
 INCREF: <array_store> -> rc=3
+DECREF: k -> rc=2
 MOVE: result
 FREE #2: 96 bytes (map literal keys cleanup)
 FREE #3: 24 bytes (map literal values cleanup)
+DECREF: <temp> -> rc=1
+DECREF: <temp> -> rc=1
+DECREF: <temp> -> rc=1
 ALLOC #9: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <array index String> -> rc=4
-DECREF: <map key> -> rc=2
-DECREF: <map key> -> rc=3
-DECREF: <map key> -> rc=2
+INCREF: <array index String> -> rc=2
+DECREF: existing -> rc=1
+DECREF: <map key> -> rc=0
+FREE #1: 10 bytes (map string key cleanup)
+DECREF: <map key> -> rc=0
+FREE #4: 10 bytes (map string key cleanup)
+DECREF: <map key> -> rc=0
+FREE #5: 10 bytes (map string key cleanup)
 FREE #6: 512 bytes (map keys cleanup)
 FREE #7: 128 bytes (map values cleanup)
 FREE #8: 128 bytes (map states cleanup)
@@ -697,9 +720,9 @@ FREE #9: 10 bytes (string cleanup)
 
 === MEMORY STATS ===
 Allocated: 928 bytes
-Freed:     898 bytes
-Leaked:    30 bytes
+Freed:     928 bytes
+Leaked:    0 bytes
 Moves:     11
 Increfs:   7
-Decrefs:   4
+Decrefs:   11
 ```

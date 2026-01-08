@@ -4641,6 +4641,7 @@ pub const AstToIr = struct {
 
     /// Emit cleanup code for Map types, freeing the three internal array buffers.
     /// For Map$String$V, also decrefs each string key element.
+    /// For Map$K$String, also decrefs each string value element.
     fn emitMapCleanup(self: *AstToIr, map_ptr: ir.Value, struct_name: []const u8) !void {
         // Map layout:
         //   offset 0:  keys array (32 bytes) - Array$KeyType
@@ -4650,10 +4651,10 @@ pub const AstToIr = struct {
         //   offset 104: capacity (8 bytes)
         // Each Array: buffer_ptr(8) + len(8) + cap(8) + iterIndex(8)
 
-        // Parse key type from Map$KeyType$ValueType
+        // Parse key and value types from Map$KeyType$ValueType
         const prefix_len = "Map$".len;
         const key_value_part = struct_name[prefix_len..];
-        // Find the second $ to separate key and value types
+        // Find the $ to separate key and value types
         var dollar_pos: ?usize = null;
         for (key_value_part, 0..) |c, i| {
             if (c == '$') {
@@ -4662,7 +4663,9 @@ pub const AstToIr = struct {
             }
         }
         const key_type = if (dollar_pos) |pos| key_value_part[0..pos] else key_value_part;
+        const value_type = if (dollar_pos) |pos| key_value_part[pos + 1 ..] else "";
         const has_string_keys = std.mem.eql(u8, key_type, "String");
+        const has_string_values = std.mem.eql(u8, value_type, "String");
 
         // Get pointer to keys array at offset 0
         const keys_ptr = map_ptr;
@@ -4674,8 +4677,13 @@ pub const AstToIr = struct {
         const keys_buf_ptr = try self.func().emitLoad(keys_ptr, .ptr);
         try self.func().emitHeapFree(keys_buf_ptr, "map keys cleanup");
 
-        // Get pointer to values array at offset 32 and free its buffer
+        // Get pointer to values array at offset 32
         const values_ptr = try self.func().emitGetFieldPtr(map_ptr, 32);
+        // If values are strings, cleanup occupied slots only (check states array)
+        if (has_string_values) {
+            try self.emitMapStringValuesCleanup(map_ptr);
+        }
+        // Free the values buffer
         const values_buf_ptr = try self.func().emitLoad(values_ptr, .ptr);
         try self.func().emitHeapFree(values_buf_ptr, "map values cleanup");
 
@@ -4760,14 +4768,14 @@ pub const AstToIr = struct {
         const state_ptr = try self.func().emitBinaryOp(.add, states_buf_ptr, state_offset, .ptr);
         const state = try self.func().emitLoad(state_ptr, .i64);
 
-        // Check if state == 1 (OCCUPIED)
-        const one = try self.func().emitConstI64(1);
-        const is_occupied = try self.func().emitBinaryOp(.icmp_eq, state, one, .i64);
+        // Check if state != 0 (EMPTY) - we need to cleanup both OCCUPIED (1) and DELETED (2) slots
+        // DELETED slots may still hold string keys that haven't been cleaned up when remove() was called
+        const is_not_empty = try self.func().emitBinaryOp(.icmp_ne, state, zero, .i64);
 
-        // If occupied, go to occupied block; otherwise skip to next
+        // If not empty, go to occupied block; otherwise skip to next
         try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = is_occupied }, .{ .block_ref = occupied_block_idx }, .{ .block_ref = next_block_idx } },
+            .operands = .{ .{ .value = is_not_empty }, .{ .block_ref = occupied_block_idx }, .{ .block_ref = next_block_idx } },
         });
 
         // Restore occupied block (deferred index 4)
@@ -4847,6 +4855,187 @@ pub const AstToIr = struct {
         const eight_free = try self.func().emitConstI64(8);
         const free_header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr, eight_free, .ptr);
         try self.func().emitHeapFree(free_header_ptr, "map string key cleanup");
+        try self.func().emitBr(next_block_idx);
+
+        // Restore next block (deferred index 1)
+        try deferred.restore(self, 1);
+
+        // Next block: increment counter and branch to cond
+        const next_i = try self.func().emitLoad(counter_ptr, .i64);
+        const next_one = try self.func().emitConstI64(1);
+        const next_val = try self.func().emitBinaryOp(.add, next_i, next_one, .i64);
+        try self.func().emitStore(counter_ptr, next_val);
+        try self.func().emitBr(cond_block_idx);
+
+        // Restore end block
+        try deferred.restore(self, 0);
+    }
+
+    /// Emit cleanup code for Map string values, checking the states array for occupied slots.
+    /// Only decrefs string buffers for slots where states[i] == 1 (OCCUPIED).
+    fn emitMapStringValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
+        // Map layout:
+        //   offset 32: values array (32 bytes) - buffer_ptr at offset 0 of Array
+        //   offset 64: states array (32 bytes) - buffer_ptr at offset 0 of Array
+        //   offset 104: capacity (8 bytes)
+
+        // Load capacity to know how many slots to iterate
+        const cap_ptr = try self.func().emitGetFieldPtr(map_ptr, 104);
+        const capacity = try self.func().emitLoad(cap_ptr, .i64);
+
+        // Skip cleanup if capacity is 0
+        const zero = try self.func().emitConstI64(0);
+        const is_empty = try self.func().emitBinaryOp(.icmp_eq, capacity, zero, .i64);
+
+        // Allocate loop counter on stack
+        const counter_ptr = try self.func().emitAlloca(.i64);
+        try self.func().emitStore(counter_ptr, zero);
+
+        // Create blocks - all created upfront to ensure stable indices
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+        const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_val_cleanup_cond");
+        const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_val_cleanup_body");
+        const occupied_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_val_cleanup_occupied");
+        const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_val_cleanup_decref");
+        const heap_free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_val_heap_free");
+        const next_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_val_cleanup_next");
+        const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_val_cleanup_end");
+
+        // Branch from entry: if empty, skip to end; otherwise go to condition
+        try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_empty }, .{ .block_ref = end_block_idx }, .{ .block_ref = cond_block_idx } },
+        });
+
+        // Defer blocks (6 blocks)
+        var deferred = try DeferredBlocks.init(self.allocator, 6);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, 6);
+
+        // Condition block: check if i < capacity
+        const cond_cap_ptr = try self.func().emitGetFieldPtr(map_ptr, 104);
+        const cond_cap = try self.func().emitLoad(cond_cap_ptr, .i64);
+        const cond_i = try self.func().emitLoad(counter_ptr, .i64);
+        const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_cap, .i64);
+
+        try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = done }, .{ .block_ref = end_block_idx }, .{ .block_ref = body_block_idx } },
+        });
+
+        // Restore body block (deferred index 5)
+        try deferred.restore(self, 5);
+
+        // Body block: check if states[i] != 0 (EMPTY) - cleanup both OCCUPIED (1) and DELETED (2) slots
+        const body_i = try self.func().emitLoad(counter_ptr, .i64);
+
+        // Get states buffer pointer (at offset 64 of map, then offset 0 of Array)
+        const states_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 64);
+        const states_buf_ptr = try self.func().emitLoad(states_array_ptr, .ptr);
+
+        // Load states[i] - each state is 8 bytes (int)
+        const eight = try self.func().emitConstI64(8);
+        const state_offset = try self.func().emitBinaryOp(.mul, body_i, eight, .i64);
+        const state_ptr = try self.func().emitBinaryOp(.add, states_buf_ptr, state_offset, .ptr);
+        const state = try self.func().emitLoad(state_ptr, .i64);
+
+        // Check if state != 0 (EMPTY) - we need to cleanup both OCCUPIED (1) and DELETED (2) slots
+        // DELETED slots may still hold string values that haven't been cleaned up when remove() was called
+        const is_not_empty = try self.func().emitBinaryOp(.icmp_ne, state, zero, .i64);
+
+        // If not empty, go to occupied block; otherwise skip to next
+        try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_not_empty }, .{ .block_ref = occupied_block_idx }, .{ .block_ref = next_block_idx } },
+        });
+
+        // Restore occupied block (deferred index 4)
+        try deferred.restore(self, 4);
+
+        // Occupied block: get values[i] and check if it's heap-allocated
+        const occ_i = try self.func().emitLoad(counter_ptr, .i64);
+
+        // Get values buffer pointer (at offset 32 of map, then offset 0 of Array)
+        const values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 32);
+        const values_buf_ptr = try self.func().emitLoad(values_array_ptr, .ptr);
+
+        // Calculate element pointer: buf_ptr + i * 32 (String size)
+        const elem_size = try self.func().emitConstI64(32);
+        const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
+        const elem_ptr = try self.func().emitBinaryOp(.add, values_buf_ptr, offset, .ptr);
+
+        // Check if heap mode: cap_flags & 3 == 1
+        // cap_flags is at offset 12 in the String
+        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, 12);
+        const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
+        const three = try self.func().emitConstI32(3);
+        const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+        const one_i32 = try self.func().emitConstI32(1);
+        const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+
+        // If heap, go to decref; otherwise skip to next
+        try self.func().blocks.items[occupied_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = next_block_idx } },
+        });
+
+        // Restore decref block (deferred index 3)
+        try deferred.restore(self, 3);
+
+        // Decref block: decrement refcount in buffer header and check if zero
+        const decref_i = try self.func().emitLoad(counter_ptr, .i64);
+        const decref_values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 32);
+        const decref_values_buf_ptr = try self.func().emitLoad(decref_values_array_ptr, .ptr);
+        const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
+        const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_values_buf_ptr, decref_offset, .ptr);
+
+        // Buffer header refcount: load buf_ptr from String, subtract 8 to get header
+        const str_buf_ptr_decref = try self.func().emitLoad(decref_elem_ptr, .ptr);
+        const eight_decref = try self.func().emitConstI64(8);
+        const header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr_decref, eight_decref, .ptr);
+        const old_ref = try self.func().emitLoad(header_ptr, .i64);
+        const one_ref = try self.func().emitConstI64(1);
+        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i64);
+        try self.func().emitStore(header_ptr, new_ref);
+
+        // Emit tracking call for decref
+        if (self.track_memory) {
+            try self.func().emitTrackDecref("<map value>", new_ref);
+        }
+
+        // Check if refcount is now zero
+        const zero_ref = try self.func().emitConstI64(0);
+        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i64);
+
+        // Branch: if zero, go to heap_free; otherwise go to next
+        try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_zero }, .{ .block_ref = heap_free_block_idx }, .{ .block_ref = next_block_idx } },
+        });
+
+        // Restore heap_free block (deferred index 2)
+        try deferred.restore(self, 2);
+
+        // Heap free block: recompute elem_ptr and free buffer at header (buf_ptr - 8)
+        const heap_i = try self.func().emitLoad(counter_ptr, .i64);
+        const heap_values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 32);
+        const heap_values_buf_ptr = try self.func().emitLoad(heap_values_array_ptr, .ptr);
+        const heap_elem_size = try self.func().emitConstI64(32);
+        const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
+        const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_values_buf_ptr, heap_offset, .ptr);
+
+        // Free the buffer including header and jump to next
+        const str_buf_ptr = try self.func().emitLoad(heap_elem_ptr, .ptr);
+        const eight_free = try self.func().emitConstI64(8);
+        const free_header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr, eight_free, .ptr);
+        try self.func().emitHeapFree(free_header_ptr, "map string value cleanup");
         try self.func().emitBr(next_block_idx);
 
         // Restore next block (deferred index 1)
@@ -5214,13 +5403,52 @@ pub const AstToIr = struct {
             const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
             const var_value_type = getOptionalWrappedValueType(opt_info);
 
-            if (opt_info.wrapped_struct_type != null) {
+            if (opt_info.wrapped_struct_type) |struct_name| {
                 // For struct types, the struct data is stored inline after the tag (at offset 8).
                 // value_ptr already points to this inline struct data.
-                // Use initParam to mark as borrowed - we don't own this memory, the container does.
-                // This prevents cleanup from freeing/decref'ing memory we don't own (e.g., map keys).
                 try self.func().setValueName(value_ptr, binding_name);
-                try self.var_map.put(self.allocator, binding_name, VarInfo.initParam(value_ptr, var_value_type, true, false));
+
+                // Determine if we own this value or are borrowing it.
+                // The key distinction is whether the source expression does an incref:
+                // - Identifier access: borrowing from a variable (no incref)
+                // - Index on user arrays/sets (array_type): borrowing (no incref on read)
+                // - Index on __ManagedArray or Array$String: owned (DOES incref for String elements)
+                // - Method call (map.get(k)): owned copy that was incref'd
+                // - Other expressions: conservatively treat as owned
+                const is_borrowed = blk: {
+                    switch (if_stmt.condition) {
+                        .identifier => break :blk true, // Borrowing from variable
+                        .index => |idx| {
+                            // Check if indexing __ManagedArray or stdlib Array$String
+                            // Both do incref for String elements - caller owns the copy
+                            const base_typed = self.convertExpression(idx.base.*) catch break :blk false;
+                            if (base_typed.ty == .struct_type) {
+                                const type_name = base_typed.ty.struct_type;
+                                if (std.mem.eql(u8, type_name, "__ManagedArray")) {
+                                    // __ManagedArray indexing does incref for String - owned
+                                    break :blk false;
+                                }
+                                if (std.mem.eql(u8, type_name, "Array$String")) {
+                                    // Array$String.get() does incref internally - owned
+                                    break :blk false;
+                                }
+                            }
+                            // User arrays/sets (array_type) don't incref on read - borrowed
+                            break :blk true;
+                        },
+                        .call, .method_call => break :blk false, // Method calls return owned copies
+                        else => break :blk false, // Conservative: treat as owned
+                    }
+                };
+
+                if (is_borrowed) {
+                    // Use initParam to mark as borrowed - we don't own this memory
+                    try self.var_map.put(self.allocator, binding_name, VarInfo.initParam(value_ptr, var_value_type, true, false));
+                } else {
+                    // We own this copy - mark as regular var so it gets cleaned up
+                    // For String types, freeHeapVar will decref when we return or exit scope
+                    try self.var_map.put(self.allocator, binding_name, VarInfo.init(value_ptr, .{ .struct_type = struct_name }, false, false));
+                }
             } else {
                 // For primitive/enum types, load the value and store in a new slot
                 const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
@@ -5238,8 +5466,12 @@ pub const AstToIr = struct {
         }
         self.popLabelScope();
 
-        // Remove binding from var_map after then body
+        // Clean up and remove binding from var_map after then body
         if (if_stmt.binding_name) |binding_name| {
+            // If binding is owned (not a parameter), clean it up before removing
+            if (self.var_map.get(binding_name)) |var_info| {
+                try self.freeHeapVar(var_info, true, binding_name);
+            }
             _ = self.var_map.remove(binding_name);
         }
 
@@ -10452,11 +10684,10 @@ pub const AstToIr = struct {
                 try self.func().emitStore(key_ptr, key_typed.value);
             }
 
-            // Ownership transfer: string keys are now owned by the map
-            // Remove from temporaries so they don't get cleaned up at scope end
-            if (std.mem.eql(u8, key_type_name, "String")) {
-                self.removeFromTemporaries(key_typed.value);
-            }
+            // NOTE: Do NOT remove string keys from temporaries.
+            // Map$init COPIES keys with incref, so it creates its own references.
+            // The original temporary strings should be cleaned up normally at scope end.
+            // The map's copies will survive because they have their own refcounts.
 
             const value_ptr = try self.func().emitGetElemPtr(values_buffer, idx_val, @intCast(value_elem_size));
             if (value_elem_size > 8) {
@@ -10465,11 +10696,9 @@ pub const AstToIr = struct {
                 try self.func().emitStore(value_ptr, value_typed.value);
             }
 
-            // Ownership transfer: string values are now owned by the map
-            // Remove from temporaries so they don't get cleaned up at scope end
-            if (std.mem.eql(u8, value_type_name, "String")) {
-                self.removeFromTemporaries(value_typed.value);
-            }
+            // NOTE: Do NOT remove string values from temporaries.
+            // Map$init COPIES values with incref, so it creates its own references.
+            // The original temporary strings should be cleaned up normally at scope end.
         }
 
         // Create __ManagedArrays for keys and values
@@ -10510,13 +10739,9 @@ pub const AstToIr = struct {
         // Call init with sret
         _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
 
-        // NOTE: We do NOT decref the temporary string keys here.
-        // Map$init calls __managed_array_set_at which increfs each key before copying
-        // into the Map's internal array. The Map now owns those references.
-        // The temp buffer strings have had their refcounts incremented, so when we
-        // later decref them (e.g., at scope end), they'll properly decrement.
-        // The original string literals (tmp_alloca.3, tmp_alloca.5) will be cleaned
-        // up by freeHeapVars at function return.
+        // Map$init copies all keys/values with incref into its internal storage.
+        // The original temporary strings remain tracked and will be cleaned up
+        // normally at scope end via cleanupTemporaryStrings().
 
         // Free the temporary buffers used to pass keys and values to init
         // The Map$init function copies the data into its internal hash table,
