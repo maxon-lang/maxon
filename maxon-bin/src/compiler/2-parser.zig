@@ -2874,16 +2874,20 @@ pub const Parser = struct {
 
     fn parseStructInit(self: *Parser, type_name: []const u8, type_args: []const []const u8) ParseError!ast.Expression {
         _ = try self.expect(.lbrace);
+        self.skipNewlines();
 
         var fields: std.ArrayListUnmanaged(ast.FieldInit) = .empty;
         errdefer fields.deinit(self.allocator);
 
         if (!self.check(.rbrace)) {
             try fields.append(self.allocator, try self.parseFieldInit());
+            self.skipNewlines();
 
             while (self.check(.comma)) {
                 _ = self.advance();
+                self.skipNewlines();
                 try fields.append(self.allocator, try self.parseFieldInit());
+                self.skipNewlines();
             }
         }
 

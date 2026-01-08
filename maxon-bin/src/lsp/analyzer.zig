@@ -361,15 +361,19 @@ pub const Analyzer = struct {
     }
 
     fn formatVariableHover(self: *Analyzer, v: ast_to_ir.SemanticVarInfo, info: *ast_to_ir.SemanticInfo, hover_line: u32) ?[]const u8 {
+        _ = hover_line;
         var buffer: std.ArrayListUnmanaged(u8) = .empty;
         const writer = buffer.writer(self.allocator);
 
-        // For immutable variables (let), show value if on declaration line
-        if (!v.is_mutable and v.decl_line > 0 and v.decl_line - 1 == hover_line) {
+        // For immutable variables (let), show value
+        if (!v.is_mutable and v.decl_line > 0) {
             if (info.program) |program| {
                 if (findLetDeclExpression(program, v.name, v.decl_line)) |expr| {
                     writer.writeAll("```maxon\nlet ") catch return null;
                     writer.writeAll(v.name) catch return null;
+                    writer.writeAll(": ") catch return null;
+                    const type_name = v.display_name orelse v.ty.getTypeName() orelse "unknown";
+                    writer.writeAll(type_name) catch return null;
                     writer.writeAll(" = ") catch return null;
                     formatExpression(writer, expr) catch return null;
                     writer.writeAll("\n```") catch return null;

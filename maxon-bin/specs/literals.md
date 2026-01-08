@@ -55,6 +55,14 @@ Must include decimal point:
 -2.5
 0.0
 ```
+
+Scientific notation with `e` or `E`:
+```maxon
+1.5e10
+2.0e-3
+4.84143144246472090e+00
+6.9e+05
+```
 ### Character Literals
 Single character in single quotes:
 ```maxon
@@ -242,4 +250,48 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: scientific-notation-positive-exponent -->
+```maxon
+function main() returns int
+    var x = 1.5e2
+    return trunc(x) - 140
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: scientific-notation-negative-exponent -->
+```maxon
+function main() returns int
+    var x = 5.0e-1
+    return trunc(x * 20.0)
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: scientific-notation-explicit-positive -->
+```maxon
+function main() returns int
+    var x = 2.5e+02
+    return trunc(x) - 240
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: scientific-notation-uppercase -->
+```maxon
+function main() returns int
+    var x = 1.0E3
+    return trunc(x) - 990
+end 'main'
+```
+```exitcode
+10
 ```

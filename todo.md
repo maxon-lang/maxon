@@ -207,12 +207,15 @@ Phase 9: Export keyword enforcement (visibility rules)
 Phase 11: Interface declarations (parsing interface definitions)
 
 
-replace {} with ()
-use {} for type literal
-
 - extensions
 - map extension
 - remove [] indexing
 
 using arr.append(aString) compiles but crashes
 cannot convert primitive type 'ptr' to string for interpolation
+
+we changed the __ManagedString struct slightly and it broke all kinds of things because
+the functions in 4-ast_to_ir are not strongly typed so lots of places in the code still
+used the old structure and just caused crashes. There should be a way to catch
+these issues at compile time.
+

@@ -429,6 +429,37 @@ test "hover shows value for immutable variables" {
     try ctx.deinit();
 }
 
+test "hover shows type and value for immutable variable at usage site" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    const source =
+        \\function main() returns int
+        \\    let SOLAR_MASS = 39.478417604357432
+        \\    let mass = 9.547 * SOLAR_MASS
+        \\    return 0
+        \\end 'main'
+    ;
+
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'SOLAR_MASS' at usage site (line 2, col 21)
+    // Line 2: "    let mass = 9.547 * SOLAR_MASS"
+    //          0123456789012345678901234567890
+    var result = try ctx.client.hover("file:///test.maxon", 2, 23);
+    defer result.deinit();
+
+    // The hover should contain both the type and value for immutable variables
+    try testing.expect(result.content != null);
+    const content = result.content.?;
+    // Should show the value (may be truncated due to float formatting)
+    try testing.expect(std.mem.indexOf(u8, content, "39.478417") != null);
+    // Should show the type
+    try testing.expect(std.mem.indexOf(u8, content, "float") != null);
+
+    try ctx.deinit();
+}
+
 test "hover shows local function signature" {
     var ctx = try TestContext.init();
     errdefer ctx.forceCleanup();

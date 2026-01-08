@@ -472,13 +472,33 @@ pub const Lexer = struct {
                     self.column += 1;
                 }
                 // Check for decimal point
+                var is_float = false;
                 if (self.pos < self.source.len and self.source[self.pos] == '.') {
+                    is_float = true;
                     self.pos += 1;
                     self.column += 1;
                     while (self.pos < self.source.len and (isDecimalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
                         self.pos += 1;
                         self.column += 1;
                     }
+                }
+                // Check for scientific notation (e.g., 1.5e10, 2.0e-3, 3.0E+5)
+                if (self.pos < self.source.len and (self.source[self.pos] == 'e' or self.source[self.pos] == 'E')) {
+                    is_float = true;
+                    self.pos += 1;
+                    self.column += 1;
+                    // Optional sign
+                    if (self.pos < self.source.len and (self.source[self.pos] == '+' or self.source[self.pos] == '-')) {
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                    // Exponent digits
+                    while (self.pos < self.source.len and (isDecimalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                }
+                if (is_float) {
                     try tokens.append(allocator, .{ .type = .float_literal, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
                 } else {
                     try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
