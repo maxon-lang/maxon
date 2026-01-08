@@ -81,19 +81,40 @@ try_success:
     br @block3
 try_propagate:
     memcpy %tmp_alloca %tmp_alloca.1 64
-    br @block4
+    br @block7
 try_merge:
     %price = load ptr %tmp_alloca.4
     %tmp_fieldptr.5 = getfieldptr ptr %price 0
     %tmp_load.2 = load i64 %tmp_fieldptr.5
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_alloca.3 12
+    %tmp_load.3 = load i32 %tmp_fieldptr.6
+    %tmp_const.13 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.3 %tmp_const.13
+    %tmp_const.14 = const.i32 i32 1
+    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.14
+    br.cond %tmp_icmp.1 @block4 @block6
+decref:
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_alloca.3 16
+    %tmp_load.4 = load i32 %tmp_fieldptr.7
+    %tmp_const.15 = const.i32 i32 1
+    %tmp_sub = sub i32 %tmp_load.4 %tmp_const.15
+    store.i32 %tmp_fieldptr.7 %tmp_sub
+    %tmp_const.16 = const.i32 i32 0
+    %tmp_icmp.2 = icmp.eq i32 %tmp_sub %tmp_const.16
+    br.cond %tmp_icmp.2 @block5 @block6
+decref_free:
+    %tmp_load.5 = load ptr %tmp_alloca.3
+    heap.free %tmp_load.5 tag="string cleanup"
+    br @block6
+decref_end:
     ret %tmp_load.2
-    br @block6
+    br @block9
 catch_dispatch:
-    br @block5
+    br @block8
 catch_0:
-    %tmp_const.13 = const.i64 i64 99
-    ret %tmp_const.13
-    br @block6
+    %tmp_const.17 = const.i64 i64 99
+    ret %tmp_const.17
+    br @block9
 do_end:
 }
 
@@ -139,22 +160,43 @@ end:
     %tmp_alloca.1 = alloca.sized ptr 32
     %tmp_call.1 = call ptr @String$init(%tmp_alloca.1, %tmp_alloca)
     %tmp_call.2 = call i64 @String$startsWith(%input, %tmp_alloca.1)
-    br.cond %tmp_call.2 @block3 @block4
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.1 12
+    %tmp_load = load i32 %tmp_fieldptr.5
+    %tmp_const.11 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load %tmp_const.11
+    %tmp_const.12 = const.i32 i32 1
+    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.12
+    br.cond %tmp_icmp.1 @block3 @block5
+decref:
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_alloca.1 16
+    %tmp_load.1 = load i32 %tmp_fieldptr.6
+    %tmp_const.13 = const.i32 i32 1
+    %tmp_sub = sub i32 %tmp_load.1 %tmp_const.13
+    store.i32 %tmp_fieldptr.6 %tmp_sub
+    %tmp_const.14 = const.i32 i32 0
+    %tmp_icmp.2 = icmp.eq i32 %tmp_sub %tmp_const.14
+    br.cond %tmp_icmp.2 @block4 @block5
+decref_free:
+    %tmp_load.2 = load ptr %tmp_alloca.1
+    heap.free %tmp_load.2 tag="string cleanup"
+    br @block5
+decref_end:
+    br.cond %tmp_call.2 @block6 @block7
 then:
-    %tmp_const.11 = const.i64 i64 2
-    %tmp_const.12 = const.i64 i64 1
-    store %tmp_param %tmp_const.12
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_param 8
-    store %tmp_fieldptr.5 %tmp_const.11
+    %tmp_const.15 = const.i64 i64 2
+    %tmp_const.16 = const.i64 i64 1
+    store %tmp_param %tmp_const.16
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.7 %tmp_const.15
     ret %tmp_param
 end:
-    %tmp_const.13 = const.i64 i64 0
-    store %tmp_param %tmp_const.13
-    %tmp_fieldptr.6 = getfieldptr ptr %tmp_param 8
-    memset %tmp_fieldptr.6 0 8
-    %tmp_fieldptr.7 = getfieldptr ptr %tmp_fieldptr.6 0
+    %tmp_const.17 = const.i64 i64 0
+    store %tmp_param %tmp_const.17
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_param 8
+    memset %tmp_fieldptr.8 0 8
+    %tmp_fieldptr.9 = getfieldptr ptr %tmp_fieldptr.8 0
     %tmp_call.3 = call i64 @String$byteLength(%input)
-    store %tmp_fieldptr.7 %tmp_call.3
+    store %tmp_fieldptr.9 %tmp_call.3
     ret %tmp_param
 }
 

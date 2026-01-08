@@ -170,6 +170,24 @@ pub fn generateFragments(
     debug.enabled = false;
     defer debug.enabled = was_enabled;
 
+    // Validate stdlib first - if this fails, all fragment generation will fail
+    std.debug.print("Validating stdlib compilation before fragment generation...\n", .{});
+    const stdlib_path = try compiler.findStdlibPath(allocator);
+    defer allocator.free(stdlib_path);
+
+    const stdlib_modules = try compiler.loadAllStdlibModules(stdlib_path, allocator);
+    defer {
+        for (stdlib_modules) |mod| {
+            allocator.free(mod.path);
+            allocator.free(mod.content);
+        }
+        allocator.free(stdlib_modules);
+    }
+
+    if (!testing.validateStdlibCompilation(allocator, stdlib_modules)) {
+        return error.StdlibCompilationFailed;
+    }
+
     // Parse all specs
     const specs = try spec_parser.parseAllSpecs(allocator, specs_dir);
     defer {

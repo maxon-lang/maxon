@@ -80,19 +80,40 @@ try_success:
     br @block3
 try_propagate:
     memcpy %tmp_alloca %tmp_alloca.1 64
-    br @block4
+    br @block7
 try_merge:
     %v = load ptr %tmp_alloca.4
     %tmp_fieldptr.5 = getfieldptr ptr %v 0
     %tmp_load.2 = load i64 %tmp_fieldptr.5
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_alloca.3 12
+    %tmp_load.3 = load i32 %tmp_fieldptr.6
+    %tmp_const.17 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.3 %tmp_const.17
+    %tmp_const.18 = const.i32 i32 1
+    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.18
+    br.cond %tmp_icmp.1 @block4 @block6
+decref:
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_alloca.3 16
+    %tmp_load.4 = load i32 %tmp_fieldptr.7
+    %tmp_const.19 = const.i32 i32 1
+    %tmp_sub = sub i32 %tmp_load.4 %tmp_const.19
+    store.i32 %tmp_fieldptr.7 %tmp_sub
+    %tmp_const.20 = const.i32 i32 0
+    %tmp_icmp.2 = icmp.eq i32 %tmp_sub %tmp_const.20
+    br.cond %tmp_icmp.2 @block5 @block6
+decref_free:
+    %tmp_load.5 = load ptr %tmp_alloca.3
+    heap.free %tmp_load.5 tag="string cleanup"
+    br @block6
+decref_end:
     ret %tmp_load.2
-    br @block6
+    br @block9
 catch_dispatch:
-    br @block5
+    br @block8
 catch_0:
-    %tmp_const.17 = const.i64 i64 0
-    ret %tmp_const.17
-    br @block6
+    %tmp_const.21 = const.i64 i64 0
+    ret %tmp_const.21
+    br @block9
 do_end:
 }
 

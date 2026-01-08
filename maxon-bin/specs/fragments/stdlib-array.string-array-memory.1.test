@@ -20,8 +20,11 @@ INCREF: <struct copy> -> rc=1
 ALLOC #4: 18 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <array element> -> rc=0
 FREE #1: 16 bytes (string cleanup)
+DECREF: <array element> -> rc=0
 FREE #3: 16 bytes (string cleanup)
+DECREF: <array element> -> rc=0
 FREE #4: 18 bytes (string cleanup)
 FREE #2: 128 bytes (array cleanup)
 
@@ -31,7 +34,7 @@ Freed:     178 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   3
-Decrefs:   0
+Decrefs:   3
 ```
 ---
 function main() -> i64 {
@@ -302,13 +305,13 @@ entry:
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.113
     %tmp_alloca.10 = alloca ptr
     store %tmp_alloca.10 %tmp_const.113
-    br.cond %tmp_icmp @block5 @block1
+    br.cond %tmp_icmp @block6 @block1
 arr_str_cleanup_cond:
     %tmp_fieldptr.13 = getfieldptr ptr %arr 8
     %tmp_load.1 = load i64 %tmp_fieldptr.13
     %tmp_load.2 = load i64 %tmp_alloca.10
     %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.1
-    br.cond %tmp_icmp.1 @block5 @block2
+    br.cond %tmp_icmp.1 @block6 @block2
 arr_str_cleanup_body:
     %tmp_load.3 = load ptr %arr
     %tmp_load.4 = load i64 %tmp_alloca.10
@@ -321,24 +324,37 @@ arr_str_cleanup_body:
     %tmp_band = band i32 %tmp_load.5 %tmp_const.115
     %tmp_const.116 = const.i32 i32 1
     %tmp_icmp.2 = icmp.eq i32 %tmp_band %tmp_const.116
-    br.cond %tmp_icmp.2 @block3 @block4
-arr_str_cleanup_free:
+    br.cond %tmp_icmp.2 @block3 @block5
+arr_str_cleanup_decref:
     %tmp_load.6 = load ptr %arr
     %tmp_load.7 = load i64 %tmp_alloca.10
     %tmp_mul.1 = mul i64 %tmp_load.7 %tmp_const.114
     %tmp_add.1 = add ptr %tmp_load.6 %tmp_mul.1
-    %tmp_load.8 = load ptr %tmp_add.1
-    heap.free %tmp_load.8 tag="string cleanup"
-    br @block4
+    %tmp_fieldptr.15 = getfieldptr ptr %tmp_add.1 16
+    %tmp_load.8 = load i32 %tmp_fieldptr.15
+    %tmp_const.117 = const.i32 i32 1
+    %tmp_sub = sub i32 %tmp_load.8 %tmp_const.117
+    store.i32 %tmp_fieldptr.15 %tmp_sub
+    %tmp_const.118 = const.i32 i32 0
+    %tmp_icmp.3 = icmp.eq i32 %tmp_sub %tmp_const.118
+    br.cond %tmp_icmp.3 @block4 @block5
+arr_str_cleanup_heap_free:
+    %tmp_load.9 = load ptr %arr
+    %tmp_load.10 = load i64 %tmp_alloca.10
+    %tmp_mul.2 = mul i64 %tmp_load.10 %tmp_const.114
+    %tmp_add.2 = add ptr %tmp_load.9 %tmp_mul.2
+    %tmp_load.11 = load ptr %tmp_add.2
+    heap.free %tmp_load.11 tag="string cleanup"
+    br @block5
 arr_str_cleanup_next:
-    %tmp_const.117 = const.i64 i64 1
-    %tmp_load.9 = load i64 %tmp_alloca.10
-    %tmp_add.2 = add i64 %tmp_load.9 %tmp_const.117
-    store %tmp_alloca.10 %tmp_add.2
+    %tmp_const.119 = const.i64 i64 1
+    %tmp_load.12 = load i64 %tmp_alloca.10
+    %tmp_add.3 = add i64 %tmp_load.12 %tmp_const.119
+    store %tmp_alloca.10 %tmp_add.3
     br @block1
 arr_str_cleanup_end:
-    %tmp_load.10 = load ptr %arr
-    heap.free %tmp_load.10 tag="array cleanup"
+    %tmp_load.13 = load ptr %arr
+    heap.free %tmp_load.13 tag="array cleanup"
     ret %tmp_const.112
 }
 

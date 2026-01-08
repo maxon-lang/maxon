@@ -159,6 +159,8 @@ pub const StructTypeInfo = struct {
     size: i32,
     decl_line: u32 = 0,
     decl_column: u32 = 0,
+    source_file: ?[]const u8 = null,
+    is_export: bool = true, // false for private types
 };
 
 /// Associated value info for enum cases
@@ -194,6 +196,8 @@ pub const EnumTypeInfo = struct {
     has_explicit_backing_type: bool = false,
     decl_line: u32 = 0,
     decl_column: u32 = 0,
+    source_file: ?[]const u8 = null,
+    is_export: bool = true, // false for private enums
 
     pub const BackingType = enum { int, string };
 };

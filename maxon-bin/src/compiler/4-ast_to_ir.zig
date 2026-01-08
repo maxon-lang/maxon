@@ -798,7 +798,7 @@ pub const AstToIr = struct {
     }
 
     /// Emit cleanup for all String elements in an Array$String.
-    /// Iterates through each element and frees its buffer if heap-allocated.
+    /// Iterates through each element and decrefs its buffer using COW semantics.
     /// array_ptr points to an Array$String struct (with __ManagedArray at offset 0).
     fn emitArrayStringElementsCleanup(self: *AstToIr, array_ptr: ir.Value) !void {
         // Array$String layout: __ManagedArray (24 bytes) + iterIndex (8 bytes)
@@ -818,14 +818,16 @@ pub const AstToIr = struct {
         const counter_ptr = try self.func().emitAlloca(.i64);
         try self.func().emitStore(counter_ptr, zero);
 
-        // Create blocks: entry -> cond -> body -> [is_heap check] -> free -> next -> cond/end
+        // Create blocks: entry -> cond -> body -> decref -> heap_free -> next -> end
         const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
         const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("arr_str_cleanup_cond");
         const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("arr_str_cleanup_body");
-        const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("arr_str_cleanup_free");
+        const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("arr_str_cleanup_decref");
+        const heap_free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("arr_str_cleanup_heap_free");
         const next_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("arr_str_cleanup_next");
         const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
@@ -837,10 +839,10 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = is_empty }, .{ .block_ref = end_block_idx }, .{ .block_ref = cond_block_idx } },
         });
 
-        // Defer blocks in reverse order: end(0), next(1), free(2), body(3)
-        var deferred = try DeferredBlocks.init(self.allocator, 4);
+        // Defer blocks in reverse order: end(0), next(1), heap_free(2), decref(3), body(4)
+        var deferred = try DeferredBlocks.init(self.allocator, 5);
         defer deferred.deinit();
-        deferred.deferBlocks(self, 4);
+        deferred.deferBlocks(self, 5);
 
         // Condition block: reload len and check if i < len
         const cond_len_ptr = try self.func().emitGetFieldPtr(array_ptr, 8);
@@ -855,7 +857,7 @@ pub const AstToIr = struct {
         });
 
         // Restore body block to emit loop body
-        try deferred.restore(self, 3);
+        try deferred.restore(self, 4);
 
         // Body block: calculate element pointer and check if heap mode
         const body_buf_ptr = try self.func().emitLoad(array_ptr, .ptr);
@@ -875,16 +877,47 @@ pub const AstToIr = struct {
         const one_i32 = try self.func().emitConstI32(1);
         const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
 
-        // Branch: if heap mode, go to free block; otherwise go to next
+        // Branch: if heap mode, go to decref block; otherwise go to next
         try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = is_heap }, .{ .block_ref = free_block_idx }, .{ .block_ref = next_block_idx } },
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = next_block_idx } },
         });
 
-        // Restore free block
+        // Restore decref block
+        try deferred.restore(self, 3);
+
+        // Decref block: decrement refcount and check if zero
+        const decref_buf_ptr = try self.func().emitLoad(array_ptr, .ptr);
+        const decref_i = try self.func().emitLoad(counter_ptr, .i64);
+        const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
+        const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_buf_ptr, decref_offset, .ptr);
+
+        // Refcount is at offset 16 in the String
+        const ref_ptr = try self.func().emitGetFieldPtr(decref_elem_ptr, 16);
+        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
+        const one_ref = try self.func().emitConstI32(1);
+        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i32);
+        try self.func().emitStoreI32(ref_ptr, new_ref);
+
+        // Emit tracking call for decref
+        if (self.track_memory) {
+            try self.func().emitTrackDecref("<array element>", new_ref);
+        }
+
+        // Check if refcount is now zero
+        const zero_ref = try self.func().emitConstI32(0);
+        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i32);
+
+        // Branch: if zero, go to heap_free; otherwise go to next
+        try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_zero }, .{ .block_ref = heap_free_block_idx }, .{ .block_ref = next_block_idx } },
+        });
+
+        // Restore heap_free block
         try deferred.restore(self, 2);
 
-        // Free block: reload element ptr and free its buffer
+        // Heap free block: reload element ptr and free its buffer
         const free_buf_ptr = try self.func().emitLoad(array_ptr, .ptr);
         const free_i = try self.func().emitLoad(counter_ptr, .i64);
         const free_offset = try self.func().emitBinaryOp(.mul, free_i, elem_size, .i64);
@@ -1035,6 +1068,14 @@ pub const AstToIr = struct {
                 i += 1;
             }
         }
+    }
+
+    /// Check if a value is in the temporary strings list
+    fn isInTemporaries(self: *AstToIr, value: ir.Value) bool {
+        for (self.temporary_strings.items) |temp| {
+            if (temp == value) return true;
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------------
@@ -1321,10 +1362,10 @@ pub const AstToIr = struct {
         self.pending_conformance_checks.clearRetainingCapacity();
 
         // Register declarations
-        for (program.types) |type_decl| try self.registerType(type_decl);
         for (program.enums) |enum_decl| {
             try self.registerEnum(enum_decl);
         }
+        for (program.types) |type_decl| try self.registerType(type_decl);
         for (program.functions) |fn_decl| try self.registerFunction(fn_decl);
 
         // Register methods from types
@@ -1806,12 +1847,16 @@ pub const AstToIr = struct {
             self.reportError(.E006, name);
             return error.UnknownType;
         };
+        // Check visibility
+        try self.checkTypeVisibility(name, type_info);
         return type_info.irType();
     }
 
     fn lookupStructInfo(self: *AstToIr, type_name: []const u8) !StructTypeInfo {
         // First check if type exists
         if (self.type_map.get(type_name)) |type_info| {
+            // Check visibility
+            try self.checkTypeVisibility(type_name, type_info);
             return switch (type_info) {
                 .struct_type => |s| s,
                 .primitive, .enum_type => {
@@ -1868,6 +1913,38 @@ pub const AstToIr = struct {
         }
         self.reportError(.E007, field_name);
         return error.UnknownField;
+    }
+
+    /// Check if a type is visible from the current source file
+    fn checkTypeVisibility(self: *AstToIr, type_name: []const u8, type_info: TypeInfo) !void {
+        switch (type_info) {
+            .struct_type => |s| {
+                if (!s.is_export) {
+                    // Private type - check if we're in the same file
+                    if (s.source_file) |def_file| {
+                        if (self.source_file) |current_file| {
+                            if (!std.mem.eql(u8, def_file, current_file)) {
+                                debug.astToIr("Type visibility error: '{s}' defined in '{s}' accessed from '{s}'", .{ type_name, def_file, current_file });
+                                self.reportError(.E006, type_name);
+                                return error.UnknownType;
+                            }
+                        } else {
+                            // No current source file (shouldn't happen)
+                            debug.astToIr("Type visibility error: '{s}' - no current source file", .{type_name});
+                            self.reportError(.E006, type_name);
+                            return error.UnknownType;
+                        }
+                    }
+                }
+            },
+            .enum_type => {
+                // Enums used in struct fields are implementation details
+                // Don't enforce visibility for them - they're only accessible through the struct API
+                // If user code explicitly references the enum name, that will fail to compile
+                // because the enum won't be in scope
+            },
+            .primitive => {}, // Primitives are always visible
+        }
     }
 
     /// Get the size of a type from a TypeExpr. Primitives are 8 bytes, structs use their registered size.
@@ -1989,6 +2066,8 @@ pub const AstToIr = struct {
                 .size = field_result.size,
                 .decl_line = type_decl.block.start_line,
                 .decl_column = type_decl.block.start_column,
+                .source_file = self.source_file,
+                .is_export = type_decl.is_export,
             },
         });
 
@@ -2178,6 +2257,8 @@ pub const AstToIr = struct {
                 .has_explicit_backing_type = enum_decl.backing_type != null,
                 .decl_line = enum_decl.block.start_line,
                 .decl_column = enum_decl.block.start_column,
+                .source_file = self.source_file,
+                .is_export = enum_decl.is_export,
             },
         });
         debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {}, has_assoc: {})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type), is_error, has_associated_values });
@@ -2961,6 +3042,8 @@ pub const AstToIr = struct {
                     self.reportError(.E006, resolved);
                     return error.UnknownType;
                 };
+                // Check visibility
+                try self.checkTypeVisibility(resolved, type_info);
                 return if (type_info.isStruct())
                     .{ .struct_type = resolved }
                 else if (type_info == .enum_type)
@@ -4420,6 +4503,14 @@ pub const AstToIr = struct {
                 // var_info.ptr points to a stack slot holding a ptr to __ManagedArray
                 // __ManagedArray layout: [buffer_ptr, len, capacity] at offsets [0, 8, 16]
                 const managed_ptr = try self.func().emitLoad(var_info.ptr.?, .ptr);
+
+                // For arrays of strings, we need to decref each string element before freeing the buffer
+                if (arr_info.element_struct_type) |elem_type| {
+                    if (std.mem.eql(u8, elem_type, "String")) {
+                        try self.emitArrayStringElementsCleanup(managed_ptr);
+                    }
+                }
+
                 const buffer_ptr = try self.func().emitLoad(managed_ptr, .ptr);
                 try self.func().emitHeapFree(buffer_ptr, "array cleanup");
             }
@@ -4513,7 +4604,7 @@ pub const AstToIr = struct {
     }
 
     /// Emit cleanup code for Map string keys, checking the states array for occupied slots.
-    /// Only frees string buffers for slots where states[i] == 1 (OCCUPIED).
+    /// Only decrefs string buffers for slots where states[i] == 1 (OCCUPIED).
     fn emitMapStringKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
         // Map layout:
         //   offset 0:  keys array (32 bytes) - buffer_ptr at offset 0
@@ -4538,8 +4629,10 @@ pub const AstToIr = struct {
         _ = try self.func().addBlock("map_str_cleanup_cond");
         const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("map_str_cleanup_body");
-        const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("map_str_cleanup_free");
+        const occupied_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_str_cleanup_occupied");
+        const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("map_str_cleanup_decref");
         const heap_free_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("map_str_heap_free");
         const next_block_idx: u32 = @intCast(self.func().blocks.items.len);
@@ -4553,10 +4646,10 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = is_empty }, .{ .block_ref = end_block_idx }, .{ .block_ref = cond_block_idx } },
         });
 
-        // Defer blocks (5 now that heap_free is included)
-        var deferred = try DeferredBlocks.init(self.allocator, 5);
+        // Defer blocks (6 blocks)
+        var deferred = try DeferredBlocks.init(self.allocator, 6);
         defer deferred.deinit();
-        deferred.deferBlocks(self, 5);
+        deferred.deferBlocks(self, 6);
 
         // Condition block: check if i < capacity
         const cond_cap_ptr = try self.func().emitGetFieldPtr(map_ptr, 104);
@@ -4569,8 +4662,8 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = done }, .{ .block_ref = end_block_idx }, .{ .block_ref = body_block_idx } },
         });
 
-        // Restore body block (deferred index 4)
-        try deferred.restore(self, 4);
+        // Restore body block (deferred index 5)
+        try deferred.restore(self, 5);
 
         // Body block: check if states[i] == 1 (OCCUPIED)
         const body_i = try self.func().emitLoad(counter_ptr, .i64);
@@ -4589,24 +4682,24 @@ pub const AstToIr = struct {
         const one = try self.func().emitConstI64(1);
         const is_occupied = try self.func().emitBinaryOp(.icmp_eq, state, one, .i64);
 
-        // If occupied, check string heap flag; otherwise skip to next
+        // If occupied, go to occupied block; otherwise skip to next
         try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = is_occupied }, .{ .block_ref = free_block_idx }, .{ .block_ref = next_block_idx } },
+            .operands = .{ .{ .value = is_occupied }, .{ .block_ref = occupied_block_idx }, .{ .block_ref = next_block_idx } },
         });
 
-        // Restore free block (deferred index 3)
-        try deferred.restore(self, 3);
+        // Restore occupied block (deferred index 4)
+        try deferred.restore(self, 4);
 
-        // Free block: get keys[i] and check if it's heap-allocated, then free
-        const free_i = try self.func().emitLoad(counter_ptr, .i64);
+        // Occupied block: get keys[i] and check if it's heap-allocated
+        const occ_i = try self.func().emitLoad(counter_ptr, .i64);
 
         // Get keys buffer pointer (at offset 0 of map)
         const keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
 
         // Calculate element pointer: buf_ptr + i * 32 (String size)
         const elem_size = try self.func().emitConstI64(32);
-        const offset = try self.func().emitBinaryOp(.mul, free_i, elem_size, .i64);
+        const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
         const elem_ptr = try self.func().emitBinaryOp(.add, keys_buf_ptr, offset, .ptr);
 
         // Check if heap mode: cap_flags & 3 == 1
@@ -4618,10 +4711,41 @@ pub const AstToIr = struct {
         const one_i32 = try self.func().emitConstI32(1);
         const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
 
-        // If heap, free the buffer; otherwise skip to next
-        try self.func().blocks.items[free_block_idx].instructions.append(self.allocator, .{
+        // If heap, go to decref; otherwise skip to next
+        try self.func().blocks.items[occupied_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = is_heap }, .{ .block_ref = heap_free_block_idx }, .{ .block_ref = next_block_idx } },
+            .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = next_block_idx } },
+        });
+
+        // Restore decref block (deferred index 3)
+        try deferred.restore(self, 3);
+
+        // Decref block: decrement refcount and check if zero
+        const decref_i = try self.func().emitLoad(counter_ptr, .i64);
+        const decref_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
+        const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
+        const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_keys_buf_ptr, decref_offset, .ptr);
+
+        // Refcount is at offset 16 in the String
+        const ref_ptr = try self.func().emitGetFieldPtr(decref_elem_ptr, 16);
+        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
+        const one_ref = try self.func().emitConstI32(1);
+        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i32);
+        try self.func().emitStoreI32(ref_ptr, new_ref);
+
+        // Emit tracking call for decref
+        if (self.track_memory) {
+            try self.func().emitTrackDecref("<map key>", new_ref);
+        }
+
+        // Check if refcount is now zero
+        const zero_ref = try self.func().emitConstI32(0);
+        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i32);
+
+        // Branch: if zero, go to heap_free; otherwise go to next
+        try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+            .op = .br_cond,
+            .operands = .{ .{ .value = is_zero }, .{ .block_ref = heap_free_block_idx }, .{ .block_ref = next_block_idx } },
         });
 
         // Restore heap_free block (deferred index 2)
@@ -4672,6 +4796,8 @@ pub const AstToIr = struct {
 
     fn freeHeapAllocations(self: *AstToIr) !void {
         try self.freeHeapVars(null);
+        // Clean up any remaining temporary strings (e.g., method call arguments)
+        try self.cleanupTemporaryStrings();
         // Also clean up runtime-initialized constants that have heap resources (Maps, Arrays, etc.)
         try self.freeRuntimeConstants();
     }
@@ -4944,6 +5070,10 @@ pub const AstToIr = struct {
         // Convert condition expression
         const cond_typed = try self.convertExpression(if_stmt.condition);
 
+        // Clean up any temporary strings created during condition evaluation
+        // (e.g., lookup keys in `if let v = m.get("key")`)
+        try self.cleanupTemporaryStrings();
+
         // For if-let, we need to check the optional's tag
         const is_if_let = if_stmt.binding_name != null;
         const condition_value = if (is_if_let)
@@ -5109,6 +5239,9 @@ pub const AstToIr = struct {
 
         // Convert condition expression in condition block
         const cond_typed = try self.convertExpression(while_stmt.condition);
+
+        // Clean up any temporary strings created during condition evaluation
+        try self.cleanupTemporaryStrings();
 
         // Create body block
         const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
@@ -6623,6 +6756,10 @@ pub const AstToIr = struct {
         // Convert the optional expression
         const opt_typed = try self.convertExpression(unwrap.optional_expr.*);
 
+        // Clean up any temporary strings created during expression evaluation
+        // (e.g., lookup keys in `var x = m.get("key") else ...`)
+        try self.cleanupTemporaryStrings();
+
         // Validate that the expression is an optional type
         if (opt_typed.ty != .optional_type) {
             // Get a readable name for the expression being unwrapped
@@ -6733,6 +6870,10 @@ pub const AstToIr = struct {
 
         // Convert the optional expression
         const opt_typed = try self.convertExpression(guard.optional_expr.*);
+
+        // Clean up any temporary strings created during expression evaluation
+        // (e.g., lookup keys in `guard let v = m.get("key")`)
+        try self.cleanupTemporaryStrings();
 
         // Get the wrapped type info - must be an optional type
         const opt_info = switch (opt_typed.ty) {
@@ -10088,7 +10229,18 @@ pub const AstToIr = struct {
             const elem_ptr = try self.func().emitGetElemPtr(buffer, idx_val, @intCast(elem_size));
             if (elem_struct_type) |struct_name| {
                 // For structs, copy the struct data
-                try self.emitStructCopy(elem_ptr, typed.value, @intCast(elem_size), struct_name);
+                // Check if this is a temporary String that we're moving (not copying)
+                // In that case, we just memcpy without incref since ownership transfers
+                const is_temporary_string = std.mem.eql(u8, struct_name, "String") and
+                    self.isInTemporaries(typed.value);
+                if (is_temporary_string) {
+                    // Move semantics: just copy data, don't incref (ownership transfers to array)
+                    try self.func().emitMemcpy(elem_ptr, typed.value, @intCast(elem_size));
+                    self.removeFromTemporaries(typed.value);
+                } else {
+                    // Copy semantics: copy and incref
+                    try self.emitStructCopy(elem_ptr, typed.value, @intCast(elem_size), struct_name);
+                }
             } else {
                 // For primitives, store the value directly
                 try self.func().emitStore(elem_ptr, typed.value);
@@ -10491,13 +10643,16 @@ pub const AstToIr = struct {
         const value_slot = try self.func().emitGetFieldPtr(opt_ptr, 8);
         if (arr_info.element_struct_type) |struct_name| {
             // For structs, copy the struct data inline
+            // Use plain memcpy without incref - for read-only access (indexing), we're borrowing
+            // the data, not taking ownership. If the caller wants ownership (e.g., assigning to
+            // a variable), they will copy and incref separately.
             const struct_size: i32 = if (self.type_map.get(struct_name)) |type_info| blk: {
                 if (type_info == .struct_type) {
                     break :blk type_info.struct_type.size;
                 }
                 break :blk 8;
             } else 8;
-            try self.emitStructCopy(value_slot, elem_ptr, struct_size, struct_name);
+            try self.func().emitMemcpy(value_slot, elem_ptr, struct_size);
         } else {
             // For primitives, load the value and store it
             const val = try self.func().emitLoad(elem_ptr, arr_info.element_type);
@@ -11069,6 +11224,7 @@ pub fn convertWithExternals(
     external_funcs: ?[]const ExternalFuncSignature,
     external_types: ?[]const ExternalTypeInfo,
     external_interfaces: ?[]const ExternalInterfaceInfo,
+    external_enums: ?[]const *const ast.EnumDecl,
     options: ConvertOptions,
     out_error: *?err.CompileError,
 ) ConvertError!ir.Module {
@@ -11081,6 +11237,17 @@ pub fn convertWithExternals(
     if (external_interfaces) |ext_ifaces| {
         for (ext_ifaces) |ext_iface| {
             try converter.registerInterface(ext_iface.interface_decl.*);
+        }
+    }
+
+    // Register external enums before types (types may reference enums in their fields)
+    if (external_enums) |ext_enums| {
+        for (ext_enums) |ext_enum| {
+            // Skip if already registered (avoid duplicates from multiple source files)
+            if (converter.type_map.contains(ext_enum.name)) continue;
+
+            try converter.registerEnum(ext_enum.*);
+            debug.astToIr("Registered external enum '{s}'", .{ext_enum.name});
         }
     }
 
@@ -11185,6 +11352,19 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
     }
 
     return type_infos.toOwnedSlice(allocator);
+}
+
+/// Extract enum declarations from a parsed program (for cross-module compilation)
+/// Includes all enums (public and private) so they can be registered with proper visibility
+pub fn extractEnumDecls(program: ast.Program, allocator: std.mem.Allocator) ![]const *const ast.EnumDecl {
+    var enum_decls = std.ArrayListUnmanaged(*const ast.EnumDecl){};
+    errdefer enum_decls.deinit(allocator);
+
+    for (program.enums) |*enum_decl| {
+        try enum_decls.append(allocator, enum_decl);
+    }
+
+    return enum_decls.toOwnedSlice(allocator);
 }
 
 /// Extract interface info from a parsed program (for cross-module compilation)

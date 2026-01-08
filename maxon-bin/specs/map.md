@@ -390,7 +390,11 @@ FREE #3: 16 bytes (map literal values cleanup)
 ALLOC #8: 2 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #8: 2 bytes (string cleanup)
+DECREF: <map key> -> rc=0
 FREE #1: 2 bytes (map string key cleanup)
+DECREF: <map key> -> rc=0
 FREE #4: 2 bytes (map string key cleanup)
 FREE #5: 512 bytes (map keys cleanup)
 FREE #6: 128 bytes (map values cleanup)
@@ -398,11 +402,11 @@ FREE #7: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
 Allocated: 854 bytes
-Freed:     852 bytes
-Leaked:    2 bytes
+Freed:     854 bytes
+Leaked:    0 bytes
 Moves:     10
 Increfs:   3
-Decrefs:   0
+Decrefs:   3
 ```
 
 <!-- test: string-keys-get-multiple -->
@@ -449,11 +453,18 @@ FREE #3: 24 bytes (map literal values cleanup)
 ALLOC #9: 6 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #9: 6 bytes (string cleanup)
 ALLOC #10: 6 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #10: 6 bytes (string cleanup)
+DECREF: <map key> -> rc=0
 FREE #1: 6 bytes (map string key cleanup)
+DECREF: <map key> -> rc=0
 FREE #5: 4 bytes (map string key cleanup)
+DECREF: <map key> -> rc=0
 FREE #4: 6 bytes (map string key cleanup)
 FREE #6: 512 bytes (map keys cleanup)
 FREE #7: 128 bytes (map values cleanup)
@@ -461,11 +472,11 @@ FREE #8: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
 Allocated: 916 bytes
-Freed:     904 bytes
-Leaked:    12 bytes
+Freed:     916 bytes
+Leaked:    0 bytes
 Moves:     12
 Increfs:   5
-Decrefs:   0
+Decrefs:   5
 ```
 
 <!-- test: string-keys-contains -->
@@ -506,7 +517,11 @@ FREE #3: 16 bytes (map literal values cleanup)
 ALLOC #8: 5 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #8: 5 bytes (string cleanup)
+DECREF: <map key> -> rc=0
 FREE #4: 5 bytes (map string key cleanup)
+DECREF: <map key> -> rc=0
 FREE #1: 5 bytes (map string key cleanup)
 FREE #5: 512 bytes (map keys cleanup)
 FREE #6: 128 bytes (map values cleanup)
@@ -514,11 +529,11 @@ FREE #7: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
 Allocated: 863 bytes
-Freed:     858 bytes
-Leaked:    5 bytes
+Freed:     863 bytes
+Leaked:    0 bytes
 Moves:     10
 Increfs:   3
-Decrefs:   0
+Decrefs:   3
 ```
 
 <!-- test: string-keys-insert-update -->
@@ -562,6 +577,9 @@ FREE #7: 2 bytes (string cleanup)
 ALLOC #8: 2 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #8: 2 bytes (string cleanup)
+DECREF: <map key> -> rc=0
 FREE #1: 2 bytes (map string key cleanup)
 FREE #4: 512 bytes (map keys cleanup)
 FREE #5: 128 bytes (map values cleanup)
@@ -569,11 +587,11 @@ FREE #6: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
 Allocated: 814 bytes
-Freed:     812 bytes
-Leaked:    2 bytes
+Freed:     814 bytes
+Leaked:    0 bytes
 Moves:     10
 Increfs:   3
-Decrefs:   1
+Decrefs:   3
 ```
 
 <!-- test: string-keys-remove -->
@@ -623,7 +641,11 @@ FREE #9: 5 bytes (string cleanup)
 ALLOC #10: 5 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #10: 5 bytes (string cleanup)
+DECREF: <map key> -> rc=0
 FREE #5: 6 bytes (map string key cleanup)
+DECREF: <map key> -> rc=0
 FREE #1: 6 bytes (map string key cleanup)
 FREE #6: 512 bytes (map keys cleanup)
 FREE #7: 128 bytes (map values cleanup)
@@ -631,11 +653,11 @@ FREE #8: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
 Allocated: 915 bytes
-Freed:     905 bytes
-Leaked:    10 bytes
+Freed:     910 bytes
+Leaked:    5 bytes
 Moves:     12
 Increfs:   5
-Decrefs:   1
+Decrefs:   4
 ```
 
 <!-- test: string-keys-early-return -->
@@ -673,6 +695,9 @@ FREE #3: 8 bytes (map literal values cleanup)
 ALLOC #7: 5 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #7: 5 bytes (string cleanup)
+DECREF: <map key> -> rc=0
 FREE #1: 5 bytes (map string key cleanup)
 FREE #4: 512 bytes (map keys cleanup)
 FREE #5: 128 bytes (map values cleanup)
@@ -680,9 +705,9 @@ FREE #6: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
 Allocated: 818 bytes
-Freed:     813 bytes
-Leaked:    5 bytes
+Freed:     818 bytes
+Leaked:    0 bytes
 Moves:     9
 Increfs:   2
-Decrefs:   0
+Decrefs:   2
 ```

@@ -593,8 +593,11 @@ INCREF: <struct copy> -> rc=1
 ALLOC #4: 18 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <array element> -> rc=0
 FREE #1: 16 bytes (string cleanup)
+DECREF: <array element> -> rc=0
 FREE #3: 16 bytes (string cleanup)
+DECREF: <array element> -> rc=0
 FREE #4: 18 bytes (string cleanup)
 FREE #2: 128 bytes (array cleanup)
 
@@ -604,5 +607,5 @@ Freed:     178 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   3
-Decrefs:   0
+Decrefs:   3
 ```

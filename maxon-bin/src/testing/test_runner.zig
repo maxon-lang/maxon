@@ -232,80 +232,15 @@ pub fn runAllTests(
 
     // Test compile stdlib before running any tests to catch errors early
     std.debug.print("Validating stdlib compilation...\n", .{});
-    blk: {
-        var temp_dir = std.fs.cwd().openDir("../temp", .{}) catch |err| {
-            std.debug.print("Warning: Could not open temp directory: {}\n", .{err});
-            break :blk;
+    if (!testing.validateStdlibCompilation(allocator, stdlib_modules)) {
+        std.debug.print("\nSkipping all tests due to stdlib error.\n", .{});
+        return testing.TestSummary{
+            .total = 0,
+            .passed = 0,
+            .failed = 0,
+            .skipped = total,
+            .results = &.{},
         };
-        defer temp_dir.close();
-        const temp_exe = "../temp/stdlib_test.exe";
-
-        // Create a minimal test program that imports stdlib
-        const test_source =
-            \\function main() returns int
-            \\    return 0
-            \\end 'main'
-        ;
-
-        var sources = try allocator.alloc(compiler.Source, stdlib_modules.len + 1);
-        defer allocator.free(sources);
-
-        for (stdlib_modules, 0..) |mod, i| {
-            sources[i] = mod;
-        }
-        sources[stdlib_modules.len] = .{ .path = "../temp/stdlib_test.maxon", .content = test_source };
-
-        var compile_result: compiler.CompileResult = .{ .error_info = null };
-        defer compile_result.deinit(allocator);
-        const compile_options = compiler.CompileOptions{ .track_memory = false };
-
-        const stdlib_ok = if (compiler.compileMultiple(
-            sources,
-            temp_exe,
-            compile_options,
-            allocator,
-            &compile_result,
-        )) |_| true else |_| false;
-
-        // Clean up test executable
-        std.fs.cwd().deleteFile(temp_exe) catch {};
-
-        if (!stdlib_ok) {
-            if (compile_result.error_info) |err| {
-                const file_path = err.location.file orelse "";
-                const normalized_path = normalizePath(allocator, file_path) catch file_path;
-                defer if (normalized_path.ptr != file_path.ptr) allocator.free(normalized_path);
-
-                if (err.code) |code| {
-                    std.debug.print("\nStdlib compilation failed:\n", .{});
-                    std.debug.print("  error {s}: {s}:{d}:{d}: {s}\n", .{
-                        code.format(),
-                        normalized_path,
-                        err.location.line,
-                        err.location.column,
-                        err.message,
-                    });
-                } else {
-                    std.debug.print("\nStdlib compilation failed:\n", .{});
-                    std.debug.print("  internal error: {s}:{d}:{d}: {s}\n", .{
-                        normalized_path,
-                        err.location.line,
-                        err.location.column,
-                        err.message,
-                    });
-                }
-            } else {
-                std.debug.print("\nStdlib compilation failed with unknown error\n", .{});
-            }
-            std.debug.print("\nSkipping all tests due to stdlib error.\n", .{});
-            return testing.TestSummary{
-                .total = 0,
-                .passed = 0,
-                .failed = 0,
-                .skipped = total,
-                .results = &.{},
-            };
-        }
     }
 
     std.debug.print("Stdlib validated successfully.\n", .{});

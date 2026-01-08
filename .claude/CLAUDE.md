@@ -46,6 +46,8 @@ If you are implementing a plan then you must finish the plan.
 - Don't create new documentation files unless instructed
 - Do not edit test fragments (in `maxon-bin/specs/fragments/`). These are generated from the spec files, edit the spec file.
 - Do not use "cmd /c" to run commands
+- There are no time constraints. Complexity doesn't matter. If you are fixing an issue then
+fix it properly. No workarounds.
 
 ## Development Notes
 - Build system uses Zig build. The compiler is in the maxon-bin directory.

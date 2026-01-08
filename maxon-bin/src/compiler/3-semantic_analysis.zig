@@ -368,11 +368,11 @@ pub const SemanticAnalyzer = struct {
         }
 
         // 5. Register user types and enums
-        for (program.types) |type_decl| {
-            try self.registerType(type_decl);
-        }
         for (program.enums) |enum_decl| {
             try self.registerEnum(enum_decl);
+        }
+        for (program.types) |type_decl| {
+            try self.registerType(type_decl);
         }
 
         // 6. Register functions

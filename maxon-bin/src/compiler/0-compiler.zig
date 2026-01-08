@@ -57,6 +57,7 @@ const PipelineOptions = struct {
     external_funcs: ?[]const ast_to_ir.ExternalFuncSignature = null,
     external_types: ?[]const ast_to_ir.ExternalTypeInfo = null,
     external_interfaces: ?[]const ast_to_ir.ExternalInterfaceInfo = null,
+    external_enums: ?[]const *const ast.EnumDecl = null,
 };
 
 /// Intermediate result from frontend compilation (lexing, parsing, analysis, IR generation)
@@ -136,7 +137,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
 
     // 4 - AST to IR
     var ir_error: ?compile_error.CompileError = null;
-    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, options.external_interfaces, .{ .track_memory = options.track_memory }, &ir_error) catch |e| {
+    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, options.external_interfaces, options.external_enums, .{ .track_memory = options.track_memory }, &ir_error) catch |e| {
         debug.astToIr("AST to IR error: {}\n", .{e});
         if (options.result) |result| {
             result.error_info = ir_error;
@@ -203,8 +204,8 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     if (sources.len == 0) return error.NoSignatures;
 
     // Use an arena allocator for Phase 1 ASTs
+    // Keep it alive until after Phase 2 because we store AST pointers (e.g., enum decls)
     var phase1_arena = std.heap.ArenaAllocator.init(allocator);
-    defer phase1_arena.deinit();
     const phase1_allocator = phase1_arena.allocator();
 
     // Phase 1: Parse all sources and collect type info AND function signatures
@@ -232,6 +233,9 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
 
     var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
     defer all_interfaces.deinit(allocator);
+
+    var all_enums: std.ArrayListUnmanaged(*const ast.EnumDecl) = .empty;
+    defer all_enums.deinit(allocator);
 
     // Phase 1: Parse all sources EXCEPT the last one (user code) to collect type info
     // The last source will be compiled directly in Phase 2, so we don't need its types as externals
@@ -296,6 +300,13 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
             try all_interfaces.append(allocator, iface);
         }
         allocator.free(iface_info);
+
+        // Extract enum declarations
+        const enum_decls = ast_to_ir.extractEnumDecls(program, phase1_allocator) catch continue;
+        for (enum_decls) |enum_decl| {
+            try all_enums.append(allocator, enum_decl);
+        }
+        phase1_allocator.free(enum_decls);
     }
 
     // Phase 2: Compile the last source (user code) with all types/funcs available
@@ -306,10 +317,14 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
         .external_funcs = all_funcs.items,
         .external_types = all_types.items,
         .external_interfaces = all_interfaces.items,
+        .external_enums = all_enums.items,
     }) catch {
         return error.IrError;
     };
     defer frontend.deinit();
+
+    // Free the Phase 1 arena now that we're done with AST pointers
+    phase1_arena.deinit();
 
     // Run dead function elimination on the user's module
     optimizer.eliminateDeadFunctions(&frontend.ir_module, allocator) catch {
@@ -414,6 +429,10 @@ pub fn compileMultiple(
     var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
     defer all_interfaces.deinit(allocator);
 
+    // List to store enum declarations from all sources
+    var all_enums: std.ArrayListUnmanaged(*const ast.EnumDecl) = .empty;
+    defer all_enums.deinit(allocator);
+
     for (sources) |source| {
         // Lex and parse using phase1_allocator (but don't compile yet)
         var lexer = Lexer.init(source.content);
@@ -461,6 +480,13 @@ pub fn compileMultiple(
             try all_interfaces.append(allocator, iface);
         }
         allocator.free(iface_info); // Free the slice but keep the items
+
+        // Extract enum declarations from parsed AST
+        const enum_decls = ast_to_ir.extractEnumDecls(program, allocator) catch continue;
+        for (enum_decls) |enum_decl| {
+            try all_enums.append(allocator, enum_decl);
+        }
+        allocator.free(enum_decls); // Free the slice but keep the enum pointers
     }
 
     // Phase 2: Compile and merge all sources with collected type info and function signatures
@@ -491,6 +517,7 @@ pub fn compileMultiple(
             .external_funcs = exported_funcs.items,
             .external_types = exported_types.items,
             .external_interfaces = all_interfaces.items,
+            .external_enums = all_enums.items,
             .track_memory = options.track_memory,
         });
 

@@ -116,7 +116,8 @@ pub const Parser = struct {
                     return error.UnexpectedToken;
                 }
             } else if (self.check(.@"enum")) {
-                try enums.append(self.allocator, try self.parseEnumDecl());
+                const enum_decl = try self.parseEnumDecl();
+                try enums.append(self.allocator, enum_decl);
             } else if (self.check(.function)) {
                 try functions.append(self.allocator, try self.parseFunction());
             } else {
@@ -3060,6 +3061,9 @@ pub const Parser = struct {
     }
 
     fn parseEnumDecl(self: *Parser) ParseError!ast.EnumDecl {
+        // The caller already handled 'export' token if present
+        const is_export = false; // Enums default to private
+
         _ = try self.expect(.@"enum");
         const name_token = try self.expect(.identifier);
 
@@ -3180,6 +3184,7 @@ pub const Parser = struct {
 
         return .{
             .name = name_token.text,
+            .is_export = is_export,
             .backing_type = backing_type,
             .conformances = try conformances.toOwnedSlice(self.allocator),
             .members = try members.toOwnedSlice(self.allocator),

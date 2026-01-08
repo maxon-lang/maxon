@@ -485,21 +485,22 @@ ALLOC #1: 6 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
 ALLOC #2: 64 bytes (set buffer)
-INCREF: <struct copy> -> rc=2
 ALLOC #3: 6 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
-INCREF: <struct copy> -> rc=2
-INCREF: <struct copy> -> rc=3
+DECREF: <array element> -> rc=0
+FREE #1: 6 bytes (string cleanup)
+DECREF: <array element> -> rc=0
+FREE #3: 6 bytes (string cleanup)
 FREE #2: 64 bytes (array cleanup)
 
 === MEMORY STATS ===
 Allocated: 76 bytes
-Freed:     64 bytes
-Leaked:    12 bytes
+Freed:     76 bytes
+Leaked:    0 bytes
 Moves:     2
-Increfs:   5
-Decrefs:   0
+Increfs:   2
+Decrefs:   2
 ```
 
 <!-- test: iflet-map-get-borrowed -->
@@ -537,6 +538,9 @@ FREE #3: 8 bytes (map literal values cleanup)
 ALLOC #7: 4 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <temp> -> rc=0
+FREE #7: 4 bytes (string cleanup)
+DECREF: <map key> -> rc=0
 FREE #1: 4 bytes (map string key cleanup)
 FREE #4: 512 bytes (map keys cleanup)
 FREE #5: 128 bytes (map values cleanup)
@@ -544,11 +548,11 @@ FREE #6: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
 Allocated: 816 bytes
-Freed:     812 bytes
-Leaked:    4 bytes
+Freed:     816 bytes
+Leaked:    0 bytes
 Moves:     9
 Increfs:   2
-Decrefs:   0
+Decrefs:   2
 ```
 
 <!-- test: iflet-map-string-value-borrowed -->
@@ -678,18 +682,23 @@ FREE #3: 24 bytes (map literal values cleanup)
 ALLOC #9: 2 bytes (string buffer)
 MOVE: managed
 INCREF: <struct copy> -> rc=1
+DECREF: <map key> -> rc=0
 FREE #1: 2 bytes (map string key cleanup)
+DECREF: <map key> -> rc=0
 FREE #4: 2 bytes (map string key cleanup)
+DECREF: <map key> -> rc=0
 FREE #5: 2 bytes (map string key cleanup)
 FREE #6: 512 bytes (map keys cleanup)
 FREE #7: 128 bytes (map values cleanup)
 FREE #8: 128 bytes (map states cleanup)
+DECREF: <temp> -> rc=0
+FREE #9: 2 bytes (string cleanup)
 
 === MEMORY STATS ===
 Allocated: 896 bytes
-Freed:     894 bytes
-Leaked:    2 bytes
+Freed:     896 bytes
+Leaked:    0 bytes
 Moves:     11
 Increfs:   4
-Decrefs:   0
+Decrefs:   4
 ```
