@@ -27,39 +27,16 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    // Deploy maxon.exe to /bin after build
-    // On Windows, we need to: kill running processes, move old binary, copy new, remove old
-    const bin_path = b.path("../bin/maxon.exe").getPath(b);
-    const old_bin_path = b.path("../bin/maxon.exe.old").getPath(b);
+    // Deploy maxon.exe to /bin after build using Zig code
+    const install_artifact_step = &b.addInstallArtifact(exe, .{}).step;
+    const deploy_step = DeployStep.create(b);
+    deploy_step.step.dependOn(install_artifact_step);
+    b.getInstallStep().dependOn(&deploy_step.step);
 
-    // Step 1: Kill any running maxon.exe processes first (so we can overwrite the file)
-    const kill_cmd = b.addSystemCommand(&.{ "cmd", "/c", "taskkill /F /IM maxon.exe >nul 2>nul || ver >nul" });
-
-    // Step 2: Move existing binary out of the way (ignore errors if it doesn't exist)
-    const move_cmd_str = std.fmt.allocPrint(b.allocator, "if exist \"{s}\" move /Y \"{s}\" \"{s}\" >nul", .{ bin_path, bin_path, old_bin_path }) catch @panic("OOM");
-    const move_old_cmd = b.addSystemCommand(&.{ "cmd", "/c", move_cmd_str });
-    move_old_cmd.step.dependOn(&kill_cmd.step);
-
-    // Step 3: Copy new binary to bin directory
-    const copy_cmd = b.addSystemCommand(&.{ "cmd", "/c", "copy", "/Y" });
-    copy_cmd.addArtifactArg(exe);
-    copy_cmd.addArg(bin_path);
-    copy_cmd.step.dependOn(&move_old_cmd.step);
-
-    // Step 3b: Copy PDB file for debug symbols (enables readable stack traces on Windows)
-    const pdb_path = b.path("../bin/maxon.pdb").getPath(b);
-    const copy_pdb_cmd = b.addSystemCommand(&.{ "cmd", "/c", "copy", "/Y" });
-    copy_pdb_cmd.addFileArg(exe.getEmittedPdb());
-    copy_pdb_cmd.addArg(pdb_path);
-    copy_pdb_cmd.step.dependOn(&copy_cmd.step);
-
-    // Step 4: Remove old binary
-    const remove_cmd_str = std.fmt.allocPrint(b.allocator, "del //F //Q \"{s}\" >nul 2>nul || ver >nul", .{old_bin_path}) catch @panic("OOM");
-    const remove_old_cmd = b.addSystemCommand(&.{ "cmd", "/c", remove_cmd_str });
-    remove_old_cmd.step.dependOn(&copy_pdb_cmd.step);
-
-    // Make the deploy step depend on the install artifact, then hook it into install
-    b.getInstallStep().dependOn(&remove_old_cmd.step);
+    // Generate TextMate grammar for VS Code extension (runs after deploy)
+    const grammar_step = GrammarGenStep.create(b);
+    grammar_step.step.dependOn(&deploy_step.step);
+    b.getInstallStep().dependOn(&grammar_step.step);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -129,3 +106,158 @@ pub fn build(b: *std.Build) void {
     const lsp_e2e_test_step = b.step("test-lsp", "Run LSP E2E tests");
     lsp_e2e_test_step.dependOn(&run_lsp_e2e_tests.step);
 }
+
+const GrammarGenStep = struct {
+    step: std.Build.Step,
+    builder: *std.Build,
+
+    pub fn create(b: *std.Build) *GrammarGenStep {
+        const self = b.allocator.create(GrammarGenStep) catch @panic("OOM");
+        self.* = .{
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .name = "generate TextMate grammar",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .builder = b,
+        };
+        return self;
+    }
+
+    fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
+        const self: *GrammarGenStep = @fieldParentPtr("step", step);
+        const b = self.builder;
+        const allocator = b.allocator;
+        _ = options;
+
+        const build_root = b.build_root.path orelse ".";
+        const grammar_path = b.pathJoin(&.{ build_root, "..", "vscode-extension", "syntaxes", "maxon.tmLanguage.json" });
+
+        // Create directory if it doesn't exist
+        const grammar_dir = std.fs.path.dirname(grammar_path) orelse return error.InvalidPath;
+        std.fs.cwd().makePath(grammar_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+
+        // Open file for writing
+        const file = std.fs.createFileAbsolute(grammar_path, .{}) catch |err| {
+            std.debug.print("Error creating grammar file: {}\n", .{err});
+            return err;
+        };
+        defer file.close();
+
+        // Generate grammar
+        const grammar_generator = @import("src/grammar_generator.zig");
+        grammar_generator.generateGrammar(file, allocator) catch |err| {
+            std.debug.print("Error generating grammar: {}\n", .{err});
+            return err;
+        };
+    }
+};
+
+const DeployStep = struct {
+    step: std.Build.Step,
+    builder: *std.Build,
+
+    pub fn create(b: *std.Build) *DeployStep {
+        const self = b.allocator.create(DeployStep) catch @panic("OOM");
+        self.* = .{
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .name = "deploy maxon.exe",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .builder = b,
+        };
+        return self;
+    }
+
+    fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) anyerror!void {
+        const self: *DeployStep = @fieldParentPtr("step", step);
+        const b = self.builder;
+        const allocator = b.allocator;
+        _ = options;
+
+        const build_root = b.build_root.path orelse ".";
+        const bin_dir = b.pathJoin(&.{ build_root, "..", "bin" });
+        const zig_out_dir = b.pathJoin(&.{ build_root, "zig-out", "bin" });
+
+        const exe_path = b.pathJoin(&.{ bin_dir, "maxon.exe" });
+        const old_exe_path = b.pathJoin(&.{ bin_dir, "maxon.exe.old" });
+        const new_exe_path = b.pathJoin(&.{ zig_out_dir, "maxon.exe" });
+
+        const pdb_path = b.pathJoin(&.{ bin_dir, "maxon.pdb" });
+        const old_pdb_path = b.pathJoin(&.{ bin_dir, "maxon.pdb.old" });
+        const new_pdb_path = b.pathJoin(&.{ zig_out_dir, "maxon.pdb" });
+
+        // Step 1: Move old exe to .old (works even if in use on Windows)
+        if (@import("builtin").os.tag == .windows) {
+            // On Windows, use MoveFileEx which can move files that are in use
+            const windows = std.os.windows;
+            const exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(allocator, exe_path) catch @panic("OOM");
+            defer allocator.free(exe_path_w);
+            const old_exe_path_w = std.unicode.utf8ToUtf16LeAllocZ(allocator, old_exe_path) catch @panic("OOM");
+            defer allocator.free(old_exe_path_w);
+
+            const result = windows.kernel32.MoveFileExW(exe_path_w, old_exe_path_w, windows.MOVEFILE_REPLACE_EXISTING);
+            if (result == 0) {
+                std.debug.print("Note: Could not move old exe\n", .{});
+            }
+        } else {
+            std.fs.renameAbsolute(exe_path, old_exe_path) catch |err| {
+                if (err != error.FileNotFound) {
+                    std.debug.print("Note: Could not move old exe: {}\n", .{err});
+                }
+            };
+        }
+
+        // Step 2: Move old pdb to .old
+        if (@import("builtin").os.tag == .windows) {
+            const windows = std.os.windows;
+            const pdb_path_w = std.unicode.utf8ToUtf16LeAllocZ(allocator, pdb_path) catch @panic("OOM");
+            defer allocator.free(pdb_path_w);
+            const old_pdb_path_w = std.unicode.utf8ToUtf16LeAllocZ(allocator, old_pdb_path) catch @panic("OOM");
+            defer allocator.free(old_pdb_path_w);
+
+            const result = windows.kernel32.MoveFileExW(pdb_path_w, old_pdb_path_w, windows.MOVEFILE_REPLACE_EXISTING);
+            if (result == 0) {
+                std.debug.print("Note: Could not move old pdb\n", .{});
+            }
+        } else {
+            std.fs.renameAbsolute(pdb_path, old_pdb_path) catch |err| {
+                if (err != error.FileNotFound) {
+                    std.debug.print("Note: Could not move old pdb: {}\n", .{err});
+                }
+            };
+        }
+
+        // Step 3: Copy new exe into place
+        std.fs.copyFileAbsolute(new_exe_path, exe_path, .{}) catch |err| {
+            std.debug.print("Error copying exe: {}\n", .{err});
+            return err;
+        };
+
+        // Step 4: Copy new pdb into place
+        std.fs.copyFileAbsolute(new_pdb_path, pdb_path, .{}) catch |err| {
+            std.debug.print("Error copying pdb: {}\n", .{err});
+            return err;
+        };
+
+        // Step 5: Kill any running maxon.exe processes so LSP restarts with new version
+        if (std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &.{ "taskkill", "/F", "/IM", "maxon.exe" },
+        })) |_| {
+            // Process killed successfully
+        } else |_| {
+            // Process not running or taskkill failed - not an error
+        }
+
+        // Step 6: Remove old backups
+        std.fs.deleteFileAbsolute(old_exe_path) catch {};
+        std.fs.deleteFileAbsolute(old_pdb_path) catch {};
+    }
+};

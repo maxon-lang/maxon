@@ -55,6 +55,9 @@ pub const TokenType = enum {
     // Types
     int,
     float,
+    bool,
+    byte,
+    string,
 
     // Literals
     identifier,
@@ -544,63 +547,113 @@ pub const Lexer = struct {
         }
     }
 
+    pub const KeywordCategory = enum {
+        control,
+        other,
+        logical,
+        constant,
+        type_keyword,
+    };
+
+    // Keyword map structure: { keyword_text, TokenType, KeywordCategory, help_text, can_have_block_label }
+    pub const keyword_map = .{
+        .{ "function", TokenType.function, KeywordCategory.other, "Declares a function. Functions contain executable code and can return values.\n\nExample:\n```maxon\nfunction add(a int, b int) returns int\n    return a + b\nend 'add'\n```", false },
+        .{ "returns", TokenType.returns, KeywordCategory.other, "Specifies the return type of a function.", false },
+        .{ "return", TokenType.@"return", KeywordCategory.control, "Returns a value from a function and exits the function.", false },
+        .{ "end", TokenType.end, KeywordCategory.control, "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", true },
+        .{ "let", TokenType.let, KeywordCategory.other, "Declares an immutable variable. The value cannot be changed after initialization.", false },
+        .{ "var", TokenType.@"var", KeywordCategory.other, "Declares a mutable variable. The value can be changed after initialization.", false },
+        .{ "mod", TokenType.mod, KeywordCategory.logical, "Modulo operator. Returns the remainder of division.", false },
+        .{ "type", TokenType.type, KeywordCategory.other, "Declares a struct type with fields and methods.\n\nExample:\n```maxon\ntype Point\n    var x int\n    var y int\nend 'Point'\n```", false },
+        .{ "enum", TokenType.@"enum", KeywordCategory.other, "Declares an enumeration type with a fixed set of cases.\n\nExample:\n```maxon\nenum Color\n    red\n    green\n    blue\nend 'Color'\n```", false },
+        .{ "of", TokenType.of, KeywordCategory.type_keyword, "Used in array type declarations (array of int).", false },
+        .{ "if", TokenType.@"if", KeywordCategory.control, "Conditional statement. Executes code if the condition is true.", true },
+        .{ "else", TokenType.@"else", KeywordCategory.control, "Alternative branch in an if statement. Executed when the condition is false.", true },
+        .{ "while", TokenType.@"while", KeywordCategory.control, "Loop that continues while the condition is true.", true },
+        .{ "for", TokenType.@"for", KeywordCategory.control, "Loop that iterates over a range or collection.", true },
+        .{ "in", TokenType.in, KeywordCategory.control, "Used in for loops to specify the range or collection to iterate over.", false },
+        .{ "break", TokenType.@"break", KeywordCategory.control, "Exits the current loop immediately.", false },
+        .{ "continue", TokenType.@"continue", KeywordCategory.control, "Skips the rest of the current loop iteration and continues with the next iteration.", false },
+        .{ "true", TokenType.true, KeywordCategory.constant, "Boolean literal representing true.", false },
+        .{ "false", TokenType.false, KeywordCategory.constant, "Boolean literal representing false.", false },
+        .{ "and", TokenType.@"and", KeywordCategory.logical, "Logical AND operator. Returns true if both operands are true.", false },
+        .{ "or", TokenType.@"or", KeywordCategory.logical, "Logical OR operator. Returns true if either operand is true.", true },
+        .{ "not", TokenType.not, KeywordCategory.logical, "Logical NOT operator. Negates a boolean value.", false },
+        .{ "nil", TokenType.nil, KeywordCategory.constant, "Represents the absence of a value for optional types.", false },
+        .{ "int", TokenType.int, KeywordCategory.type_keyword, "Primitive integer type (64-bit signed).", false },
+        .{ "float", TokenType.float, KeywordCategory.type_keyword, "Primitive floating-point type (64-bit double precision).", false },
+        .{ "bool", TokenType.bool, KeywordCategory.type_keyword, "Primitive boolean type (true or false).", false },
+        .{ "byte", TokenType.byte, KeywordCategory.type_keyword, "Primitive byte type (8-bit unsigned integer).", false },
+        .{ "uses", TokenType.uses, KeywordCategory.other, "Declares associated types in an interface.", false },
+        .{ "is", TokenType.is, KeywordCategory.logical, "Specifies that a type conforms to an interface.", false },
+        .{ "with", TokenType.with, KeywordCategory.other, "Specifies interface conformance requirements.", false },
+        .{ "static", TokenType.static, KeywordCategory.other, "Declares a static method that doesn't require an instance.", false },
+        .{ "export", TokenType.@"export", KeywordCategory.other, "Makes a function or type visible to other modules.", false },
+        .{ "self", TokenType.self, KeywordCategory.other, "Refers to the current instance in a method.", false },
+        .{ "Self", TokenType.Self, KeywordCategory.other, "Refers to the current type in a method signature.", false },
+        .{ "interface", TokenType.interface, KeywordCategory.other, "Declares an interface that types can conform to.\n\nExample:\n```maxon\ninterface Printable\n    function print() returns int\nend 'Printable'\n```", false },
+        .{ "extends", TokenType.extends, KeywordCategory.other, "Indicates interface inheritance.", false },
+        .{ "from", TokenType.from, KeywordCategory.other, "Used in range expressions (from X to Y).", false },
+        .{ "to", TokenType.to, KeywordCategory.other, "Used in range expressions (from X to Y).", false },
+        .{ "as", TokenType.as, KeywordCategory.logical, "Type cast operator. Converts a value to a different type.", false },
+        .{ "gives", TokenType.gives, KeywordCategory.control, "Used in iterator expressions.", false },
+        .{ "throws", TokenType.throws, KeywordCategory.other, "Indicates that a function may throw an error.", false },
+        .{ "throw", TokenType.throw, KeywordCategory.control, "Throws an error that can be caught by a try-catch block.", false },
+        .{ "try", TokenType.@"try", KeywordCategory.control, "Attempts an operation that may throw an error.", false },
+        .{ "catch", TokenType.@"catch", KeywordCategory.control, "Handles errors thrown in a try block.", false },
+        .{ "do", TokenType.do, KeywordCategory.control, "Used in do-while loops or do-catch blocks.", false },
+        .{ "match", TokenType.match, KeywordCategory.control, "Pattern matching statement for enums and values.", false },
+        .{ "then", TokenType.then, KeywordCategory.control, "Used in match expressions to separate pattern from result.", true },
+        .{ "fallthrough", TokenType.fallthrough, KeywordCategory.control, "Falls through to the next case in a match statement.", false },
+        .{ "default", TokenType.default, KeywordCategory.control, "Default case in a match statement.", false },
+    };
+
+    pub const OperatorCategory = enum {
+        bitwise,
+        comparison,
+        arithmetic,
+        assignment,
+    };
+
+    // Operator map structure: { operator_text, TokenType, OperatorCategory, help_text }
+    pub const operator_map = .{
+        .{ "<<", TokenType.left_shift, OperatorCategory.bitwise, "Bitwise left shift operator. Shifts bits to the left." },
+        .{ ">>", TokenType.right_shift, OperatorCategory.bitwise, "Bitwise right shift operator. Shifts bits to the right." },
+        .{ "&", TokenType.ampersand, OperatorCategory.bitwise, "Bitwise AND operator. Performs bitwise AND operation." },
+        .{ "|", TokenType.pipe, OperatorCategory.bitwise, "Bitwise OR operator. Performs bitwise OR operation." },
+        .{ "^", TokenType.caret, OperatorCategory.bitwise, "Bitwise XOR operator. Performs bitwise exclusive OR operation." },
+        .{ "==", TokenType.equals_equals, OperatorCategory.comparison, "Equality operator. Returns true if operands are equal." },
+        .{ "!=", TokenType.not_equals, OperatorCategory.comparison, "Inequality operator. Returns true if operands are not equal." },
+        .{ ">=", TokenType.greater_equals, OperatorCategory.comparison, "Greater than or equal operator. Returns true if left operand is greater than or equal to right operand." },
+        .{ ">", TokenType.greater_than, OperatorCategory.comparison, "Greater than operator. Returns true if left operand is greater than right operand." },
+        .{ "<=", TokenType.less_equals, OperatorCategory.comparison, "Less than or equal operator. Returns true if left operand is less than or equal to right operand." },
+        .{ "<", TokenType.less_than, OperatorCategory.comparison, "Less than operator. Returns true if left operand is less than right operand." },
+        .{ "+", TokenType.plus, OperatorCategory.arithmetic, "Addition operator. Adds two numbers." },
+        .{ "-", TokenType.minus, OperatorCategory.arithmetic, "Subtraction operator. Subtracts right operand from left operand." },
+        .{ "*", TokenType.star, OperatorCategory.arithmetic, "Multiplication operator. Multiplies two numbers." },
+        .{ "/", TokenType.slash, OperatorCategory.arithmetic, "Division operator. Divides left operand by right operand." },
+        .{ "=", TokenType.equals, OperatorCategory.assignment, "Assignment operator. Assigns the value on the right to the variable on the left." },
+    };
+
     fn getKeyword(text: []const u8) ?TokenType {
-        const keywords = .{
-            .{ "function", TokenType.function },
-            .{ "returns", TokenType.returns },
-            .{ "return", TokenType.@"return" },
-            .{ "end", TokenType.end },
-            .{ "let", TokenType.let },
-            .{ "var", TokenType.@"var" },
-            .{ "mod", TokenType.mod },
-            .{ "type", TokenType.type },
-            .{ "enum", TokenType.@"enum" },
-            .{ "array", TokenType.array },
-            .{ "of", TokenType.of },
-            .{ "if", TokenType.@"if" },
-            .{ "else", TokenType.@"else" },
-            .{ "while", TokenType.@"while" },
-            .{ "for", TokenType.@"for" },
-            .{ "in", TokenType.in },
-            .{ "break", TokenType.@"break" },
-            .{ "continue", TokenType.@"continue" },
-            .{ "true", TokenType.true },
-            .{ "false", TokenType.false },
-            .{ "and", TokenType.@"and" },
-            .{ "or", TokenType.@"or" },
-            .{ "not", TokenType.not },
-            .{ "nil", TokenType.nil },
-            .{ "int", TokenType.int },
-            .{ "float", TokenType.float },
-            // Type system keywords
-            .{ "uses", TokenType.uses },
-            .{ "is", TokenType.is },
-            .{ "with", TokenType.with },
-            .{ "static", TokenType.static },
-            .{ "export", TokenType.@"export" },
-            .{ "self", TokenType.self },
-            .{ "Self", TokenType.Self },
-            .{ "interface", TokenType.interface },
-            .{ "extends", TokenType.extends },
-            .{ "from", TokenType.from },
-            .{ "to", TokenType.to },
-            .{ "as", TokenType.as },
-            .{ "gives", TokenType.gives },
-            // Error handling keywords
-            .{ "throws", TokenType.throws },
-            .{ "throw", TokenType.throw },
-            .{ "try", TokenType.@"try" },
-            .{ "catch", TokenType.@"catch" },
-            .{ "do", TokenType.do },
-            // Match statement keywords
-            .{ "match", TokenType.match },
-            .{ "then", TokenType.then },
-            .{ "fallthrough", TokenType.fallthrough },
-            .{ "default", TokenType.default },
-        };
+        const keywords = keyword_map;
         inline for (keywords) |kw| {
             if (std.mem.eql(u8, text, kw[0])) {
                 return kw[1];
+            }
+        }
+        return null;
+    }
+
+    fn tryMatchOperator(self: *const Lexer) ?struct { token_type: TokenType, text: []const u8 } {
+        // Try to match operators from longest to shortest
+        inline for (operator_map) |op| {
+            const op_text = op[0];
+            const token_type = op[1];
+            if (self.pos + op_text.len <= self.source.len) {
+                if (std.mem.eql(u8, self.source[self.pos .. self.pos + op_text.len], op_text)) {
+                    return .{ .token_type = token_type, .text = op_text };
+                }
             }
         }
         return null;

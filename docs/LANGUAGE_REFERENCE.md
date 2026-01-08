@@ -12,11 +12,6 @@ This reference provides complete syntax and semantics for the Maxon programming 
 1. [Program Structure](#program-structure)
 2. [Lexical Elements](#lexical-elements)
 3. [Types](#types)
-   - [Primitive Types](#primitive-types)
-   - [Character Type](#character-type)
-   - [String Types](#string-types)
-   - [Array Types](#array-types)
-   - [Map Type](#map-type)
    - [Optional Types](#optional-types)
    - [Type Conversions](#type-conversions)
 4. [Types (Composite)](#types-composite)
@@ -186,218 +181,6 @@ nil  // Represents absence of a value (for optional types)
 ---
 
 ## Types
-
-### Primitive Types
-
-| Type | Size | Description | MIR Type |
-|------|------|-------------|----------|
-| `int` | 64-bit | Signed integer | `i64` |
-| `float` | 64-bit | IEEE 754 double | `f64` |
-| `bool` | 1-bit | Boolean (true/false) | `i1` |
-| `byte` | 8-bit | Unsigned byte | `i8` |
-
-### Character Type
-
-| Type | Size | Description |
-|------|------|-------------|
-| `character` | 16-byte | Extended Grapheme Cluster (EGC) |
-
-The `character` type represents a user-perceived character, which may consist of multiple Unicode codepoints:
-- `'A'` - ASCII character (1 byte)
-- `'é'` - Latin with combining accent (2-3 bytes)
-- `'🎉'` - Emoji (4 bytes)
-- `'👨‍👩‍👧'` - Family emoji with ZWJ (up to 25 bytes)
-
-**Character Methods:**
-```maxon
-var c = 'A'
-c.bytes().count()      // Number of UTF-8 bytes (1 for ASCII)
-c.codepoints().count() // Number of Unicode codepoints
-c.equals(other)        // Equality comparison
-c.toString()           // Convert to string
-```
-
-### String Types
-
-| Type | Size | Description |
-|------|------|-------------|
-| `string` | 16-byte | UTF-8 string (owned, copy-on-write) |
-| `cstring` | 24-byte | FFI-friendly null-terminated string reference |
-
-**String Characteristics:**
-- UTF-8 encoded
-- Small String Optimization (SSO): strings ≤15 bytes stored inline
-- Large strings: heap-allocated with copy-on-write semantics
-- Reference counted for automatic memory management
-
-**String Operations:**
-```maxon
-var s = "hello"              // Small string (SSO)
-var greeting = "{s} world"   // String interpolation
-print(s)                     // Print string to stdout
-```
-
-**String Properties:**
-```maxon
-var s = "hello"
-var len = s.count()           // Grapheme count (UTF-8 aware): 5
-var bytes = s.bytes().count() // Byte count: 5
-var empty = s.isEmpty()       // Check if empty: false
-```
-
-**String Slicing:**
-```maxon
-var s = "hello world"
-var sub1 = s[0..5]           // "hello" (start..end, exclusive end)
-var sub2 = s[6..]            // "world" (from index to end)
-var sub3 = s[..5]            // "hello" (from start to index)
-```
-
-**Substring Type:**
-- Lightweight view into another string's data
-- Does not own the data (keeps parent string alive)
-- Immutable
-- Created via `s.slice(start, end_ = endIndex)` or `s.slice(start, length = count)`
-- Use `toString()` to create an owned copy
-
-**CString Type:**
-- FFI-friendly null-terminated string for interop with C APIs
-- Created via `s.cstr()` method on strings
-- Holds a reference to the parent string's buffer
-- Automatically released when out of scope
-
-### Array Types
-
-**Array Type Syntax**
-```maxon
-Array of int              // Array of integers
-Array of float            // Array of floats  
-Array of Array of int     // nested array (2D)
-```
-
-**Creating Arrays**
-```maxon
-var numbers = Array of 10 int   // Sized Array of 10 integers (zero-initialized)
-let values = [1, 2, 3]          // Immutable array from literal (stack buffer)
-var items = [1, 2, 3]           // Mutable array from literal (heap buffer)
-```
-
-**Function Parameters**
-```maxon
-function process(data Array of int) returns int
-    return data[0]
-end 'process'
-```
-
-**Array Properties**
-- Zero-based indexing: `array[0]`, `array[1]`, ...
-- `let` arrays use stack-allocated buffers (capacity = 0)
-- `var` arrays use heap-allocated buffers with automatic cleanup
-- No bounds checking (undefined behavior for out-of-bounds access)
-
-**Array Methods**
-
-| Method | Description | Return Type |
-|--------|-------------|-------------|
-| `arr.count()` | Get number of elements | int |
-| `arr.capacity()` | Get allocated capacity | int |
-| `arr.isEmpty()` | Check if array is empty | bool |
-| `arr.first()` | Get first element or nil | Element or nil |
-| `arr.last()` | Get last element or nil | Element or nil |
-| `arr.get(i)` | Get element at index or nil | Element or nil |
-| `arr.set(i, v)` | Set element at index | Self |
-| `arr.push(v)` | Append element to end | Self |
-| `arr.append(other)` | Append all elements from another array | Self |
-| `arr.pop()` | Remove and return last element | Element or nil |
-| `arr.insert(i, v)` | Insert element at index | Self |
-| `arr.remove(i)` | Remove element at index | Element or nil |
-| `arr.clear()` | Remove all elements (keeps capacity) | Self |
-| `arr.reserve(n)` | Ensure at least n capacity | Self |
-
-### Map Type
-
-Maps are hash-based key-value collections with O(1) average lookup time.
-
-**Declaration**
-```maxon
-var m = Map from KeyType to ValueType
-```
-
-**Examples**
-```maxon
-var scores = Map from int to int
-var names = Map from string to string
-```
-
-**Key Type Restrictions**
-Map keys must implement the `Hashable` interface. Supported key types:
-- `int`
-- `string`
-- `character`
-- `byte`
-
-Non-hashable types (like `float`) cannot be used as map keys and will produce a compile-time error.
-
-**Map Methods**
-
-| Method | Description | Return Type |
-|--------|-------------|-------------|
-| `m.insert(key, value)` | Insert or update a key-value pair | void |
-| `m.get(key)` | Get value for key (returns zero value if not found) | ValueType |
-| `m.contains(key)` | Check if key exists in map | bool |
-| `m.remove(key)` | Remove key-value pair from map | void |
-| `m.count()` | Return number of key-value pairs | int |
-| `m.capacity()` | Return current capacity of map | int |
-
-**Usage Examples**
-```maxon
-var m = Map from int to int
-
-// Insert key-value pairs
-m.insert(1, 100)
-m.insert(2, 200)
-m.insert(3, 300)
-
-// Get values
-var val = m.get(2)           // 200
-var missing = m.get(99)      // 0 (zero value for int)
-
-// Check existence
-if m.contains(1) 'found'
-    print("Key exists")
-end 'found'
-
-// Update existing key
-m.insert(1, 999)             // Updates value for key 1
-var updated = m.get(1)       // 999
-
-// Remove entries
-m.remove(1)
-var count = m.count()        // 2
-
-// Get capacity
-var cap = m.capacity()       // 16 (default initial capacity)
-```
-
-**Implementation Details**
-- Uses open addressing with linear probing for collision resolution
-- Default initial capacity of 16 buckets
-- Automatic resizing at 75% load factor (doubles capacity)
-- Heap-allocated with automatic cleanup at end of scope
-- `get()` returns the zero value of the value type if key is not found
-
-**Automatic Resizing**
-Maps automatically grow when the load factor exceeds 75%:
-```maxon
-var m = Map from int to int
-// Initial capacity: 16, grows at 12 entries
-var i = 0
-while i < 20 'insert'
-    m.insert(i, i * 10)  // Triggers resize around i=12
-    i = i + 1
-end 'insert'
-// Capacity is now 32
-```
 
 ### Optional Types
 
@@ -774,7 +557,7 @@ var dir = Direction.north
 
 ### Raw Value Enums
 
-Enums can have an underlying raw value type (`int` or `string`):
+Enums can have an underlying raw value type (`int` or `String`):
 
 ```maxon
 enum HttpStatus int
@@ -783,7 +566,7 @@ enum HttpStatus int
     serverError = 500
 end 'HttpStatus'
 
-enum Planet string
+enum Planet String
     earth = "Earth"
     mars = "Mars"
 end 'Planet'
@@ -803,7 +586,7 @@ Cases can carry additional data called associated values:
 ```maxon
 enum Result
     success(value int)
-    failure(code int, message string)
+    failure(code int, message String)
     pending
 end 'Result'
 ```
@@ -1005,7 +788,7 @@ add(a = 3, b = 4)   // Named arguments (optional)
 add(b = 4, a = 3)   // Named arguments in any order
 
 // Named arguments for clarity
-function connect(host string, port int) returns bool
+function connect(host String, port int) returns bool
     // ...
 end 'connect'
 
@@ -1019,7 +802,7 @@ connect("localhost", port = 8080)       // Mix positional and named
 Parameters can have default values. Parameters with defaults can **only** be provided via named arguments (not positionally):
 
 ```maxon
-function greet(name string, title string = "Mr.")
+function greet(name String, title String = "Mr.")
     print("Hello, " + title + " " + name)
 end 'greet'
 
@@ -1044,7 +827,7 @@ end 'getAnswer'
 
 **Void Return Type**
 ```maxon
-function greet(name string)
+function greet(name String)
     print("Hello, " + name)
 end 'greet'
 ```
@@ -1494,7 +1277,7 @@ enum HttpError int is Error
 end 'HttpError'
 
 // String-backed enum error (for messages)
-enum ValidationError string is Error
+enum ValidationError String is Error
     emptyField = "Field cannot be empty"
     invalidFormat = "Invalid format"
 end 'ValidationError'
@@ -1507,7 +1290,7 @@ end 'ValidationError'
 Functions that can throw errors declare the error type with `throws`:
 
 ```maxon
-function readFile(path string) returns string throws FileError
+function readFile(path String) returns String throws FileError
     if not exists(path) 'check'
         throw FileError.notFound
     end 'check'
@@ -1581,8 +1364,8 @@ end 'loadConfig'
 Functions with `throws` return an error union type internally:
 
 ```maxon
-// This function returns "string or FileError" internally
-function readFile(path string) returns string throws FileError
+// This function returns "String or FileError" internally
+function readFile(path String) returns String throws FileError
 ```
 
 **Memory Layout:**
@@ -1602,7 +1385,7 @@ enum ParseError is Error
     unexpectedEnd
 end 'ParseError'
 
-function parseNumber(s string) returns int throws ParseError
+function parseNumber(s String) returns int throws ParseError
     if s.isEmpty() 'empty'
         throw ParseError.unexpectedEnd
     end 'empty'
@@ -1668,7 +1451,7 @@ var result = format_int(42)   // Finds stdlib.fmt.format_int
 
 **I/O Functions**
 ```maxon
-print(value string)                     // Print string to stdout
+print(value String)                     // Print string to stdout
 ```
 
 **Math Functions**
@@ -1692,30 +1475,9 @@ trunc(x float) int              // Truncate toward zero
 
 **Formatting Functions**
 ```maxon
-format_int(value int) string    // Format int as string
-format_float(value float) string // Format float as string
+format_int(value int) String    // Format int as string
+format_float(value float) String // Format float as string
 ```
-
-**String Functions**
-```maxon
-// Methods
-s.count()                       // Grapheme count (UTF-8 aware)
-s.bytes().count()               // Byte count
-s.isEmpty()                     // Returns bool
-
-// Slicing (accessed as s[start..end])
-s[start..end]                   // Substring from start to end (exclusive)
-s[start..]                      // Substring from start to end of string
-s[..end]                        // Substring from beginning to end (exclusive)
-```
-
-### Standard Library Modules
-
-Located in `stdlib/` directory:
-- `stdlib/fmt/` - Formatting utilities
-- `stdlib/fs/` - File system operations
-- `stdlib/iter/` - Iterator interface
-- `stdlib/build/` - Build system utilities
 
 ---
 
@@ -1772,9 +1534,9 @@ end 'main'
 
 ```maxon
 type BuildConfig
-    var name string           // Executable name
-    var output string         // Output path (e.g., "bin/app.exe")
-    var sources Array of string  // Source files (empty = auto-discover)
+    var name String           // Executable name
+    var output String         // Output path (e.g., "bin/app.exe")
+    var sources Array of String  // Source files (empty = auto-discover)
     var optimize bool         // Enable optimizations
     var debug_info bool       // Include debug symbols
 end 'BuildConfig'
@@ -1784,7 +1546,7 @@ end 'BuildConfig'
 
 | Function | Description |
 |----------|-------------|
-| `build(name string)` | Simple build with defaults |
+| `build(name String)` | Simple build with defaults |
 | `buildWithConfig(config BuildConfig)` | Custom build with full control |
 
 ### Creating a New Project
@@ -2139,7 +1901,7 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 
 12. **Remember default params require named arguments**:
     ```maxon
-    function greet(name string, title string = "Mr.")
+    function greet(name String, title String = "Mr.")
     greet("Smith")                // Uses default
     greet("Smith", title = "Dr.") // Override with named arg
     ```

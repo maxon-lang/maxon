@@ -657,19 +657,18 @@ pub const Parser = struct {
     }
 
     fn expectTypeName(self: *Parser) ![]const u8 {
-        if (self.check(.int)) {
-            return self.advance().text;
-        }
-        if (self.check(.float)) {
-            return self.advance().text;
+        // Check all type keywords from keyword_map dynamically
+        inline for (Lexer.keyword_map) |kw| {
+            if (kw[2] == .type_keyword) {
+                const token_type = kw[1];
+                if (self.check(token_type)) {
+                    const token = self.advance();
+                    return token.text;
+                }
+            }
         }
         if (self.check(.Self)) {
             return self.advance().text;
-        }
-        if (self.check(.array)) {
-            _ = self.advance();
-            // Normalize lowercase 'array' keyword to 'Array' type name
-            return "Array";
         }
         if (self.check(.identifier)) {
             return self.advance().text;
@@ -3069,12 +3068,19 @@ pub const Parser = struct {
 
         // Parse optional backing type (e.g., "enum Color int" or "enum Status string")
         // Must check that the identifier is not "is" (start of conformance clause)
-        // Backing type can be identifier (like "string") or keywords like "int" or "float"
+        // Backing type can be type keywords (from keyword_map) or custom identifiers
         var backing_type: ?[]const u8 = null;
-        if (self.check(.int) or self.check(.float)) {
-            // int/float keywords are valid backing types
-            backing_type = self.advance().text;
-        } else if (self.check(.identifier)) {
+        // Check all type keywords from keyword_map dynamically
+        inline for (Lexer.keyword_map) |kw| {
+            if (kw[2] == .type_keyword) {
+                if (self.check(kw[1])) {
+                    backing_type = self.advance().text;
+                    break;
+                }
+            }
+        }
+        // If no type keyword matched, check for custom identifier
+        if (backing_type == null and self.check(.identifier)) {
             const next_text = self.peek(0).?.text;
             if (!std.mem.eql(u8, next_text, "is")) {
                 backing_type = self.advance().text;
