@@ -3,6 +3,7 @@ const compiler = @import("../compiler/0-compiler.zig");
 const ast_to_ir = @import("../compiler/4-ast_to_ir.zig");
 const ast = @import("../compiler/ast.zig");
 const types = @import("types.zig");
+const lexer = @import("../compiler/1-lexer.zig");
 
 fn log(comptime fmt: []const u8, args: anytype) void {
     std.debug.print("[LSP:Analyzer] " ++ fmt ++ "\n", args);
@@ -217,18 +218,35 @@ pub const Analyzer = struct {
     /// Get hover information for the symbol at the given position
     /// Returns allocated markdown string that caller must free, or null if no hover info
     pub fn getHoverInfo(self: *Analyzer, uri: []const u8, line: u32, character: u32) ?[]const u8 {
-        const doc = self.documents.get(uri) orelse return null;
+        std.debug.print("DEBUG getHoverInfo START: uri='{s}' line={d} char={d}\n", .{ uri, line, character });
+        const doc = self.documents.get(uri) orelse {
+            std.debug.print("DEBUG: document not found\n", .{});
+            return null;
+        };
 
         // Check if the position is inside a comment - if so, return null
         if (isPositionInComment(doc.content, line, character)) {
+            std.debug.print("DEBUG: position in comment\n", .{});
             return null;
         }
 
-        const word = getWordAtPosition(doc.content, line, character) orelse return null;
+        const word = getWordAtPosition(doc.content, line, character) orelse {
+            std.debug.print("DEBUG: getWordAtPosition returned null\n", .{});
+            return null;
+        };
+
+        std.debug.print("DEBUG getHoverInfo: word='{s}' line={d} char={d}\n", .{ word, line, character });
 
         // 1. Check for keywords - doesn't require semantic analysis
         if (getKeywordHover(word)) |hover_text| {
-            return self.allocator.dupe(u8, hover_text) catch null;
+            // Format as: ```maxon\nkeyword\n```\n\nDescription
+            var buffer: std.ArrayListUnmanaged(u8) = .empty;
+            const writer = buffer.writer(self.allocator);
+            writer.writeAll("```maxon\n") catch return null;
+            writer.writeAll(word) catch return null;
+            writer.writeAll("\n```\n\n") catch return null;
+            writer.writeAll(hover_text) catch return null;
+            return buffer.toOwnedSlice(self.allocator) catch null;
         }
 
         // Get semantic info for remaining checks
@@ -302,19 +320,28 @@ pub const Analyzer = struct {
                 if (receiver_name.len == 0) return null;
 
                 // Look up the receiver's type
-                const receiver_var = info.findVariable(receiver_name) orelse return null;
+                const receiver_var = info.findVariable(receiver_name) orelse {
+                    std.debug.print("DEBUG: findVariable failed for '{s}'\n", .{receiver_name});
+                    return null;
+                };
 
                 // Get the type name for method lookup
-                const type_name = self.getTypeNameForMethodLookup(receiver_var.ty) orelse return null;
+                const type_name = self.getTypeNameForMethodLookup(receiver_var.ty) orelse {
+                    std.debug.print("DEBUG: getTypeNameForMethodLookup failed for type: {any}\n", .{receiver_var.ty});
+                    return null;
+                };
 
                 // Construct mangled method name and look it up
                 var mangled_buf: [512]u8 = undefined;
                 const mangled_name = std.fmt.bufPrint(&mangled_buf, "{s}${s}", .{ type_name, method_name }) catch return null;
 
+                std.debug.print("DEBUG: Looking up mangled name '{s}'\n", .{mangled_name});
                 if (info.functions.get(mangled_name)) |func_info| {
+                    std.debug.print("DEBUG: Found function info\n", .{});
                     return self.formatFunctionHover(method_name, func_info);
                 }
 
+                std.debug.print("DEBUG: Function '{s}' not found in functions map\n", .{mangled_name});
                 return null;
             }
         }
@@ -1063,11 +1090,28 @@ pub const Analyzer = struct {
                     const word = line_content[start..col];
                     const len = @as(u32, @intCast(word.len));
 
-                    // Determine token type
-                    const token_type: u32 = if (isKeyword(word)) 0 // keyword
-                        else if (std.ascii.isUpper(word[0])) 3 // type
-                        else if (col < line_content.len and line_content[col] == '(') 1 // function
-                        else 2; // variable
+                    // Determine token type based on keyword category or context
+                    const token_type: u32 = blk: {
+                        // Check if it's a keyword and get its category
+                        inline for (lexer.Lexer.keyword_map) |entry| {
+                            const keyword_text = entry[0];
+                            const category = entry[2];
+                            if (std.mem.eql(u8, word, keyword_text)) {
+                                // Map category to token type
+                                break :blk switch (category) {
+                                    .control => 0, // keyword
+                                    .other => 9, // modifier (for function, type, enum, etc.)
+                                    .logical => 7, // operator
+                                    .constant => 0, // keyword (true, false, nil)
+                                    .type_keyword => 3, // type
+                                };
+                            }
+                        }
+                        // Not a keyword - determine by context
+                        if (std.ascii.isUpper(word[0])) break :blk 3; // type
+                        if (col < line_content.len and line_content[col] == '(') break :blk 1; // function
+                        break :blk 2; // variable
+                    };
 
                     addSemanticToken(&tokens, self.allocator, current_line, start, len, token_type, 0, &prev_line, &prev_char) catch break;
                     continue;
@@ -1701,8 +1745,12 @@ fn getWordAtPosition(content: []const u8, line: u32, character: u32) ?[]const u8
 
     while (lines.next()) |line_content| : (current_line += 1) {
         if (current_line == line) {
+            std.debug.print("DEBUG getWordAtPosition: line_content='{s}' char={d} len={d}\n", .{ line_content, character, line_content.len });
             // Found the line, now extract the word at character position
-            if (character >= line_content.len) return null;
+            if (character >= line_content.len) {
+                std.debug.print("DEBUG: character >= len\n", .{});
+                return null;
+            }
 
             // Find the start of the identifier (scan backwards)
             var start: usize = character;
@@ -2008,58 +2056,11 @@ fn isPositionInComment(content: []const u8, line: u32, character: u32) bool {
 
 /// Get hover text for a keyword
 fn getKeywordHover(word: []const u8) ?[]const u8 {
-    const keywords = .{
-        .{ "function", "```maxon\nfunction\n```\n\nDeclares a function. Functions contain executable code and can return values.\n\nExample:\n```maxon\nfunction add(a int, b int) returns int\n    return a + b\nend 'add'\n```" },
-        .{ "returns", "```maxon\nreturns\n```\n\nSpecifies the return type of a function." },
-        .{ "return", "```maxon\nreturn\n```\n\nReturns a value from a function and exits the function." },
-        .{ "end", "```maxon\nend\n```\n\nEnds a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes." },
-        .{ "let", "```maxon\nlet\n```\n\nDeclares an immutable variable. The value cannot be changed after initialization." },
-        .{ "var", "```maxon\nvar\n```\n\nDeclares a mutable variable. The value can be changed after initialization." },
-        .{ "type", "```maxon\ntype\n```\n\nDeclares a struct type with fields and methods.\n\nExample:\n```maxon\ntype Point\n    var x int\n    var y int\nend 'Point'\n```" },
-        .{ "enum", "```maxon\nenum\n```\n\nDeclares an enumeration type with a fixed set of cases.\n\nExample:\n```maxon\nenum Color\n    red\n    green\n    blue\nend 'Color'\n```" },
-        .{ "interface", "```maxon\ninterface\n```\n\nDeclares an interface that types can conform to.\n\nExample:\n```maxon\ninterface Printable\n    function print() returns int\nend 'Printable'\n```" },
-        .{ "if", "```maxon\nif\n```\n\nConditional statement. Executes code if the condition is true." },
-        .{ "else", "```maxon\nelse\n```\n\nAlternative branch in an if statement. Executed when the condition is false." },
-        .{ "while", "```maxon\nwhile\n```\n\nLoop that continues while the condition is true." },
-        .{ "for", "```maxon\nfor\n```\n\nLoop that iterates over a range or collection." },
-        .{ "in", "```maxon\nin\n```\n\nUsed in for loops to specify the range or collection to iterate over." },
-        .{ "break", "```maxon\nbreak\n```\n\nExits the current loop immediately." },
-        .{ "continue", "```maxon\ncontinue\n```\n\nSkips the rest of the current loop iteration and continues with the next iteration." },
-        .{ "true", "```maxon\ntrue\n```\n\nBoolean literal representing true." },
-        .{ "false", "```maxon\nfalse\n```\n\nBoolean literal representing false." },
-        .{ "and", "```maxon\nand\n```\n\nLogical AND operator. Returns true if both operands are true." },
-        .{ "or", "```maxon\nor\n```\n\nLogical OR operator. Returns true if either operand is true." },
-        .{ "not", "```maxon\nnot\n```\n\nLogical NOT operator. Negates a boolean value." },
-        .{ "nil", "```maxon\nnil\n```\n\nRepresents the absence of a value for optional types." },
-        .{ "self", "```maxon\nself\n```\n\nRefers to the current instance in a method." },
-        .{ "Self", "```maxon\nSelf\n```\n\nRefers to the current type in a method signature." },
-        .{ "is", "```maxon\nis\n```\n\nSpecifies that a type conforms to an interface." },
-        .{ "as", "```maxon\nas\n```\n\nType cast operator. Converts a value to a different type." },
-        .{ "match", "```maxon\nmatch\n```\n\nPattern matching statement for enums and values." },
-        .{ "try", "```maxon\ntry\n```\n\nAttempts an operation that may throw an error." },
-        .{ "catch", "```maxon\ncatch\n```\n\nHandles errors thrown in a try block." },
-        .{ "throw", "```maxon\nthrow\n```\n\nThrows an error that can be caught by a try-catch block." },
-        .{ "throws", "```maxon\nthrows\n```\n\nIndicates that a function may throw an error." },
-        .{ "export", "```maxon\nexport\n```\n\nMakes a function or type visible to other modules." },
-        .{ "static", "```maxon\nstatic\n```\n\nDeclares a static method that doesn't require an instance." },
-        .{ "uses", "```maxon\nuses\n```\n\nDeclares associated types in an interface." },
-        .{ "extends", "```maxon\nextends\n```\n\nIndicates interface inheritance." },
-        .{ "from", "```maxon\nfrom\n```\n\nUsed in range expressions (from X to Y)." },
-        .{ "to", "```maxon\nto\n```\n\nUsed in range expressions (from X to Y)." },
-        .{ "gives", "```maxon\ngives\n```\n\nUsed in iterator expressions." },
-        .{ "do", "```maxon\ndo\n```\n\nUsed in do-while loops or do-catch blocks." },
-        .{ "default", "```maxon\ndefault\n```\n\nDefault case in a match statement." },
-        .{ "fallthrough", "```maxon\nfallthrough\n```\n\nFalls through to the next case in a match statement." },
-        .{ "int", "```maxon\nint\n```\n\nPrimitive integer type (64-bit signed)." },
-        .{ "float", "```maxon\nfloat\n```\n\nPrimitive floating-point type (64-bit double precision)." },
-        .{ "bool", "```maxon\nbool\n```\n\nPrimitive boolean type (true or false)." },
-        .{ "byte", "```maxon\nbyte\n```\n\nPrimitive byte type (8-bit unsigned integer)." },
-        .{ "string", "```maxon\nstring\n```\n\nManaged string type with automatic memory management." },
-    };
-
-    inline for (keywords) |kw| {
-        if (std.mem.eql(u8, word, kw[0])) {
-            return kw[1];
+    inline for (lexer.Lexer.keyword_map) |entry| {
+        const keyword_text = entry[0];
+        const help_text = entry[3];
+        if (std.mem.eql(u8, word, keyword_text)) {
+            return help_text;
         }
     }
     return null;
@@ -2102,16 +2103,24 @@ fn findWordAt(line: []const u8, col: u32, word: []const u8) ?WordRange {
 
 /// Check if a word is a Maxon keyword
 fn isKeyword(word: []const u8) bool {
-    const keywords = [_][]const u8{
-        "function",    "returns", "return",  "end",   "let",   "var",    "type",   "enum",
-        "interface",   "if",      "else",    "while", "for",   "in",     "break",  "continue",
-        "true",        "false",   "and",     "or",    "not",   "nil",    "self",   "Self",
-        "is",          "as",      "match",   "try",   "catch", "throw",  "throws", "export",
-        "static",      "uses",    "extends", "from",  "to",    "gives",  "do",     "default",
-        "fallthrough", "int",     "float",   "bool",  "byte",  "string",
-    };
-    for (keywords) |kw| {
-        if (std.mem.eql(u8, word, kw)) return true;
+    inline for (lexer.Lexer.keyword_map) |entry| {
+        const keyword_text = entry[0];
+        const category = entry[2];
+        // Exclude type keywords - they're handled separately
+        if (category != .type_keyword) {
+            if (std.mem.eql(u8, word, keyword_text)) return true;
+        }
+    }
+    return false;
+}
+
+fn isTypeKeyword(word: []const u8) bool {
+    inline for (lexer.Lexer.keyword_map) |entry| {
+        const keyword_text = entry[0];
+        const category = entry[2];
+        if (category == .type_keyword) {
+            if (std.mem.eql(u8, word, keyword_text)) return true;
+        }
     }
     return false;
 }

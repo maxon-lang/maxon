@@ -441,6 +441,8 @@ pub const SemanticInfo = struct {
     allocated_type_strings: std.ArrayListUnmanaged([]const u8) = .{},
     // Allocated function name strings (for registered external functions)
     allocated_func_names: std.ArrayListUnmanaged([]const u8) = .{},
+    // Allocated return_type_name strings (for registered external functions)
+    allocated_return_type_names: std.ArrayListUnmanaged([]const u8) = .{},
     // Keep stdlib source strings alive (they're referenced by type/func names)
     stdlib_sources: []const []const u8 = &.{},
     // Keep user source string alive (variable names are slices into this)
@@ -480,6 +482,12 @@ pub const SemanticInfo = struct {
             self.allocator.free(str);
         }
         self.allocated_func_names.deinit(self.allocator);
+
+        // Free allocated return_type_name strings
+        for (self.allocated_return_type_names.items) |str| {
+            self.allocator.free(str);
+        }
+        self.allocated_return_type_names.deinit(self.allocator);
 
         // Free type_map data (struct fields, enum members)
         var type_iter = self.types.iterator();

@@ -28,16 +28,13 @@ const TestContext = struct {
     fn forceCleanup(self: *TestContext) void {
         if (self.cleaned_up) return;
         self.cleaned_up = true;
-        // Still try to capture debug output even on failure
-        if (self.client.debug_output) {
-            self.client.shutdown() catch {};
-            self.client.exit() catch {};
-            self.client.deinitAndCheckLeaks() catch |err| {
-                std.debug.print("[forceCleanup] deinitAndCheckLeaks error: {}\n", .{err});
-            };
-        } else {
-            self.client.deinit();
-        }
+        // Capture debug output and print it (since test failed)
+        self.client.shutdown() catch {};
+        self.client.exit() catch {};
+        self.client.deinitAndCheckLeaks() catch |err| {
+            std.debug.print("[forceCleanup] deinitAndCheckLeaks error: {}\n", .{err});
+        };
+        self.client.printDebugOutput();
     }
 };
 
@@ -992,6 +989,9 @@ test "hover shows array push method with doc comment" {
     var result = try ctx.client.hover("file:///test.maxon", 2, 8);
     defer result.deinit();
 
+    if (result.content == null) {
+        std.debug.print("ERROR: No hover content returned for 'push' method call\n", .{});
+    }
     try testing.expect(result.content != null);
     const content = result.content.?;
     // Should show the method signature for push

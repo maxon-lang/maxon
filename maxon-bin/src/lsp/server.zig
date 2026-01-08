@@ -139,7 +139,7 @@ pub const Server = struct {
                 .codeActionProvider = true,
                 .semanticTokensProvider = .{
                     .legend = .{
-                        .tokenTypes = &.{ "keyword", "function", "variable", "type", "string", "number", "comment", "operator" },
+                        .tokenTypes = &.{ "keyword", "function", "variable", "type", "string", "number", "comment", "operator", "property", "modifier" },
                         .tokenModifiers = &.{ "declaration", "definition", "readonly" },
                     },
                     .full = true,

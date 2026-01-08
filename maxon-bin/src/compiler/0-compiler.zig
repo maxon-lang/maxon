@@ -721,14 +721,17 @@ fn analyzeSourceForLSP(
     // Always deinit - buildSemanticInfo() transfers ownership of some maps, deinit cleans up the rest
     defer analyzer.deinit();
 
-    // Duplicate external function names (they'll be freed after this call)
+    // Duplicate external function names and return_type_names (they'll be freed after this call)
     var func_name_copies: std.ArrayListUnmanaged([]const u8) = .empty;
+    var return_type_name_copies: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer {
         for (func_name_copies.items) |name| allocator.free(name);
         func_name_copies.deinit(allocator);
+        for (return_type_name_copies.items) |name| allocator.free(name);
+        return_type_name_copies.deinit(allocator);
     }
 
-    // Build list of external funcs with duplicated names
+    // Build list of external funcs with duplicated names and return_type_name
     var ext_funcs_copy = try allocator.alloc(semantic_analysis.ExternalFuncSignature, external_funcs.len);
     defer allocator.free(ext_funcs_copy);
     for (external_funcs, 0..) |ext_func, i| {
@@ -737,10 +740,16 @@ fn analyzeSourceForLSP(
             allocator.free(name_copy);
             continue;
         };
+        // Must dupe return_type_name since original gets freed after this function
+        const return_type_name_copy: ?[]const u8 = if (ext_func.return_type_name) |rtn| blk: {
+            const copy = allocator.dupe(u8, rtn) catch break :blk null;
+            return_type_name_copies.append(allocator, copy) catch {};
+            break :blk copy;
+        } else null;
         ext_funcs_copy[i] = .{
             .name = name_copy,
             .return_type = ext_func.return_type,
-            .return_type_name = ext_func.return_type_name,
+            .return_type_name = return_type_name_copy,
             .return_value_type = ext_func.return_value_type,
             .param_types = param_types_copy,
             .doc_comment = ext_func.doc_comment,
@@ -752,6 +761,7 @@ fn analyzeSourceForLSP(
     result.stdlib_sources = stdlib_sources;
     result.user_source = user_source;
     result.allocated_func_names = func_name_copies;
+    result.allocated_return_type_names = return_type_name_copies;
     result.program = program;
 
     // Note: param_types are NOT freed here - they're stored in func_map

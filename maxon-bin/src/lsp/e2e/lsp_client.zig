@@ -136,7 +136,8 @@ pub const LspClient = struct {
     process: std.process.Child,
     next_id: i64,
     exe_path_buf: []u8,
-    debug_output: bool = false,
+    last_stderr: [16384]u8 = undefined,
+    last_stderr_len: usize = 0,
 
     /// Initialize the LSP client by spawning the server process
     pub fn init(allocator: std.mem.Allocator) !LspClient {
@@ -1123,6 +1124,13 @@ pub const LspClient = struct {
         return ParsedResponse{ .parsed = parsed };
     }
 
+    /// Print the stored debug output from the last server run
+    pub fn printDebugOutput(self: *LspClient) void {
+        if (self.last_stderr_len > 0) {
+            std.debug.print("\n=== LSP Server Debug Output ===\n{s}\n=== End Debug Output ===\n", .{self.last_stderr[0..self.last_stderr_len]});
+        }
+    }
+
     /// Wait for the server process to exit and return exit code
     pub fn waitForExit(self: *LspClient) !u32 {
         const term = try self.process.wait();
@@ -1172,10 +1180,10 @@ pub const LspClient = struct {
         // Join the stderr reader thread and get output
         const stderr_output = stderr_reader.join();
 
-        // Print debug output if enabled
-        if (self.debug_output and stderr_output.len > 0) {
-            std.debug.print("\n=== LSP Server Debug Output ===\n{s}\n=== End Debug Output ===\n", .{stderr_output});
-        }
+        // Store stderr output for later retrieval (e.g., on test failure)
+        const copy_len = @min(stderr_output.len, self.last_stderr.len);
+        @memcpy(self.last_stderr[0..copy_len], stderr_output[0..copy_len]);
+        self.last_stderr_len = copy_len;
 
         // Check for memory leak messages
         if (std.mem.indexOf(u8, stderr_output, "Memory leak detected!")) |_| {
