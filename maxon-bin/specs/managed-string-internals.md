@@ -58,30 +58,28 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 33 bytes (string buffer)
+ALLOC #1: 41 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #2: 22 bytes (int.toString)
-ALLOC #3: 2 bytes (string buffer)
+ALLOC #2: 30 bytes (int.toString)
+ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #4: 4 bytes (string concat)
+ALLOC #4: 12 bytes (string concat)
 32
 DECREF: <temp> -> rc=0
-FREE #2: 22 bytes (string cleanup)
+FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 2 bytes (string cleanup)
+FREE #3: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 4 bytes (string cleanup)
+FREE #4: 12 bytes (string cleanup)
 DECREF: s -> rc=0
-FREE #1: 33 bytes (string cleanup)
+FREE #1: 41 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 61 bytes
-Freed:     61 bytes
+Allocated: 93 bytes
+Freed:     93 bytes
 Leaked:    0 bytes
 Moves:     2
-Increfs:   2
+Increfs:   0
 Decrefs:   4
 ```
 
@@ -100,35 +98,32 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 29 bytes (string buffer)
+ALLOC #1: 37 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #2: 29 bytes (string buffer)
+ALLOC #2: 37 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
 DECREF: s -> rc=0
-FREE #1: 29 bytes (string cleanup)
-ALLOC #3: 22 bytes (int.toString)
-ALLOC #4: 2 bytes (string buffer)
+FREE #1: 37 bytes (string cleanup)
+ALLOC #3: 30 bytes (int.toString)
+ALLOC #4: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #5: 4 bytes (string concat)
+ALLOC #5: 12 bytes (string concat)
 28
 DECREF: <temp> -> rc=0
-FREE #3: 22 bytes (string cleanup)
+FREE #3: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 2 bytes (string cleanup)
+FREE #4: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #5: 4 bytes (string cleanup)
+FREE #5: 12 bytes (string cleanup)
 DECREF: s -> rc=0
-FREE #2: 29 bytes (string cleanup)
+FREE #2: 37 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 86 bytes
-Freed:     86 bytes
+Allocated: 126 bytes
+Freed:     126 bytes
 Leaked:    0 bytes
 Moves:     3
-Increfs:   3
+Increfs:   0
 Decrefs:   5
 ```
 
@@ -149,30 +144,28 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 24 bytes (string buffer)
+ALLOC #1: 32 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #2: 22 bytes (int.toString)
-ALLOC #3: 2 bytes (string buffer)
+ALLOC #2: 30 bytes (int.toString)
+ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #4: 3 bytes (string concat)
+ALLOC #4: 11 bytes (string concat)
 5
 DECREF: <temp> -> rc=0
-FREE #2: 22 bytes (string cleanup)
+FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 2 bytes (string cleanup)
+FREE #3: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 3 bytes (string cleanup)
+FREE #4: 11 bytes (string cleanup)
 DECREF: s -> rc=0
-FREE #1: 24 bytes (string cleanup)
+FREE #1: 32 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 51 bytes
-Freed:     51 bytes
+Allocated: 83 bytes
+Freed:     83 bytes
 Leaked:    0 bytes
 Moves:     2
-Increfs:   2
+Increfs:   0
 Decrefs:   4
 ```
 
@@ -192,18 +185,17 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 29 bytes (string buffer)
+ALLOC #1: 37 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
 heap allocated string here!!DECREF: s -> rc=0
-FREE #1: 29 bytes (string cleanup)
+FREE #1: 37 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 29 bytes
-Freed:     29 bytes
+Allocated: 37 bytes
+Freed:     37 bytes
 Leaked:    0 bytes
 Moves:     1
-Increfs:   1
+Increfs:   0
 Decrefs:   1
 ```
 
@@ -224,30 +216,28 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 6 bytes (string buffer)
+ALLOC #1: 14 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #2: 22 bytes (int.toString)
-ALLOC #3: 2 bytes (string buffer)
+ALLOC #2: 30 bytes (int.toString)
+ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #4: 3 bytes (string concat)
+ALLOC #4: 11 bytes (string concat)
 5
 DECREF: <temp> -> rc=0
-FREE #2: 22 bytes (string cleanup)
+FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 2 bytes (string cleanup)
+FREE #3: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 3 bytes (string cleanup)
+FREE #4: 11 bytes (string cleanup)
 DECREF: s -> rc=0
-FREE #1: 6 bytes (string cleanup)
+FREE #1: 14 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 33 bytes
-Freed:     33 bytes
+Allocated: 65 bytes
+Freed:     65 bytes
 Leaked:    0 bytes
 Moves:     2
-Increfs:   2
+Increfs:   0
 Decrefs:   4
 ```
 
@@ -275,44 +265,42 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
-ALLOC #1: 2 bytes (string buffer)
+ALLOC #1: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #2: 2 bytes (string concat)
-ALLOC #3: 3 bytes (string concat)
+ALLOC #2: 10 bytes (string concat)
+ALLOC #3: 11 bytes (string concat)
 DECREF: s -> rc=0
-FREE #2: 2 bytes (string cleanup)
-ALLOC #4: 4 bytes (string concat)
+FREE #2: 10 bytes (string cleanup)
+ALLOC #4: 12 bytes (string concat)
 DECREF: s -> rc=0
-FREE #3: 3 bytes (string cleanup)
-ALLOC #5: 5 bytes (string concat)
+FREE #3: 11 bytes (string cleanup)
+ALLOC #5: 13 bytes (string concat)
 DECREF: s -> rc=0
-FREE #4: 4 bytes (string cleanup)
-ALLOC #6: 6 bytes (string concat)
+FREE #4: 12 bytes (string cleanup)
+ALLOC #6: 14 bytes (string concat)
 DECREF: s -> rc=0
-FREE #5: 5 bytes (string cleanup)
-ALLOC #7: 22 bytes (int.toString)
-ALLOC #8: 2 bytes (string buffer)
+FREE #5: 13 bytes (string cleanup)
+ALLOC #7: 30 bytes (int.toString)
+ALLOC #8: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #9: 3 bytes (string concat)
+ALLOC #9: 11 bytes (string concat)
 5
 DECREF: <temp> -> rc=0
-FREE #7: 22 bytes (string cleanup)
+FREE #7: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #8: 2 bytes (string cleanup)
+FREE #8: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #9: 3 bytes (string cleanup)
+FREE #9: 11 bytes (string cleanup)
 DECREF: s -> rc=0
-FREE #6: 6 bytes (string cleanup)
+FREE #6: 14 bytes (string cleanup)
 DECREF: a -> rc=0
-FREE #1: 2 bytes (string cleanup)
+FREE #1: 10 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 49 bytes
-Freed:     49 bytes
+Allocated: 121 bytes
+Freed:     121 bytes
 Leaked:    0 bytes
 Moves:     3
-Increfs:   2
+Increfs:   0
 Decrefs:   9
 ```

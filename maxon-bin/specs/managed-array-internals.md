@@ -59,26 +59,25 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 32 bytes (array grow)
-ALLOC #2: 22 bytes (int.toString)
-ALLOC #3: 2 bytes (string buffer)
+ALLOC #2: 30 bytes (int.toString)
+ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #4: 3 bytes (string concat)
+ALLOC #4: 11 bytes (string concat)
 3
 DECREF: <temp> -> rc=0
-FREE #2: 22 bytes (string cleanup)
+FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 2 bytes (string cleanup)
+FREE #3: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 3 bytes (string cleanup)
+FREE #4: 11 bytes (string cleanup)
 FREE #1: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 59 bytes
-Freed:     59 bytes
+Allocated: 83 bytes
+Freed:     83 bytes
 Leaked:    0 bytes
 Moves:     1
-Increfs:   1
+Increfs:   0
 Decrefs:   3
 ```
 
@@ -106,39 +105,37 @@ end 'main'
 ```stdout
 ALLOC #1: 32 bytes (array grow)
 ALLOC #2: 32 bytes (array grow)
-ALLOC #3: 22 bytes (int.toString)
-ALLOC #4: 2 bytes (string buffer)
+ALLOC #3: 30 bytes (int.toString)
+ALLOC #4: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #5: 5 bytes (string concat)
+ALLOC #5: 13 bytes (string concat)
 200
 DECREF: <temp> -> rc=0
-FREE #3: 22 bytes (string cleanup)
+FREE #3: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 2 bytes (string cleanup)
+FREE #4: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #5: 5 bytes (string cleanup)
-ALLOC #6: 22 bytes (int.toString)
-ALLOC #7: 2 bytes (string buffer)
+FREE #5: 13 bytes (string cleanup)
+ALLOC #6: 30 bytes (int.toString)
+ALLOC #7: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #8: 5 bytes (string concat)
+ALLOC #8: 13 bytes (string concat)
 100
 DECREF: <temp> -> rc=0
-FREE #6: 22 bytes (string cleanup)
+FREE #6: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #7: 2 bytes (string cleanup)
+FREE #7: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #8: 5 bytes (string cleanup)
+FREE #8: 13 bytes (string cleanup)
 FREE #1: 32 bytes (array cleanup)
 FREE #2: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 122 bytes
-Freed:     122 bytes
+Allocated: 170 bytes
+Freed:     170 bytes
 Leaked:    0 bytes
 Moves:     2
-Increfs:   2
+Increfs:   0
 Decrefs:   6
 ```
 
@@ -160,26 +157,25 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 24 bytes (set buffer)
-ALLOC #2: 22 bytes (int.toString)
-ALLOC #3: 2 bytes (string buffer)
+ALLOC #2: 30 bytes (int.toString)
+ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #4: 4 bytes (string concat)
+ALLOC #4: 12 bytes (string concat)
 20
 DECREF: <temp> -> rc=0
-FREE #2: 22 bytes (string cleanup)
+FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 2 bytes (string cleanup)
+FREE #3: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 4 bytes (string cleanup)
+FREE #4: 12 bytes (string cleanup)
 FREE #1: 24 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 52 bytes
-Freed:     52 bytes
+Allocated: 76 bytes
+Freed:     76 bytes
 Leaked:    0 bytes
 Moves:     1
-Increfs:   1
+Increfs:   0
 Decrefs:   3
 ```
 
@@ -207,26 +203,25 @@ end 'main'
 ALLOC #1: 32 bytes (array grow)
 REALLOC #1: 32 -> 64 bytes (array grow)
 REALLOC #1: 64 -> 128 bytes (array grow)
-ALLOC #2: 22 bytes (int.toString)
-ALLOC #3: 2 bytes (string buffer)
+ALLOC #2: 30 bytes (int.toString)
+ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #4: 4 bytes (string concat)
+ALLOC #4: 12 bytes (string concat)
 10
 DECREF: <temp> -> rc=0
-FREE #2: 22 bytes (string cleanup)
+FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 2 bytes (string cleanup)
+FREE #3: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 4 bytes (string cleanup)
+FREE #4: 12 bytes (string cleanup)
 FREE #1: 128 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 252 bytes
-Freed:     252 bytes
+Allocated: 276 bytes
+Freed:     276 bytes
 Leaked:    0 bytes
 Moves:     1
-Increfs:   1
+Increfs:   0
 Decrefs:   3
 ```
 ### Struct Field Array Method Call

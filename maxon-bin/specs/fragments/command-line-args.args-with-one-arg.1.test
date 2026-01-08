@@ -111,31 +111,35 @@ arr_str_cleanup_decref:
     %tmp_load.12 = load i64 %tmp_alloca.3
     %tmp_mul.3 = mul i64 %tmp_load.12 %tmp_const.18
     %tmp_add.2 = add ptr %tmp_load.11 %tmp_mul.3
-    %tmp_fieldptr.11 = getfieldptr ptr %tmp_add.2 16
-    %tmp_load.13 = load i32 %tmp_fieldptr.11
-    %tmp_const.21 = const.i32 i32 1
-    %tmp_sub.1 = sub i32 %tmp_load.13 %tmp_const.21
-    store.i32 %tmp_fieldptr.11 %tmp_sub.1
-    %tmp_const.22 = const.i32 i32 0
-    %tmp_icmp.4 = icmp.eq i32 %tmp_sub.1 %tmp_const.22
+    %tmp_load.13 = load ptr %tmp_add.2
+    %tmp_const.21 = const.i64 i64 8
+    %tmp_sub.1 = sub ptr %tmp_load.13 %tmp_const.21
+    %tmp_load.14 = load i64 %tmp_sub.1
+    %tmp_const.22 = const.i64 i64 1
+    %tmp_sub.2 = sub i64 %tmp_load.14 %tmp_const.22
+    store %tmp_sub.1 %tmp_sub.2
+    %tmp_const.23 = const.i64 i64 0
+    %tmp_icmp.4 = icmp.eq i64 %tmp_sub.2 %tmp_const.23
     br.cond %tmp_icmp.4 @block7 @block8
 arr_str_cleanup_heap_free:
-    %tmp_load.14 = load ptr %args
-    %tmp_load.15 = load i64 %tmp_alloca.3
-    %tmp_mul.4 = mul i64 %tmp_load.15 %tmp_const.18
-    %tmp_add.3 = add ptr %tmp_load.14 %tmp_mul.4
-    %tmp_load.16 = load ptr %tmp_add.3
-    heap.free %tmp_load.16 tag="string cleanup"
+    %tmp_load.15 = load ptr %args
+    %tmp_load.16 = load i64 %tmp_alloca.3
+    %tmp_mul.4 = mul i64 %tmp_load.16 %tmp_const.18
+    %tmp_add.3 = add ptr %tmp_load.15 %tmp_mul.4
+    %tmp_load.17 = load ptr %tmp_add.3
+    %tmp_const.24 = const.i64 i64 8
+    %tmp_sub.3 = sub ptr %tmp_load.17 %tmp_const.24
+    heap.free %tmp_sub.3 tag="string cleanup"
     br @block8
 arr_str_cleanup_next:
-    %tmp_const.23 = const.i64 i64 1
-    %tmp_load.17 = load i64 %tmp_alloca.3
-    %tmp_add.4 = add i64 %tmp_load.17 %tmp_const.23
+    %tmp_const.25 = const.i64 i64 1
+    %tmp_load.18 = load i64 %tmp_alloca.3
+    %tmp_add.4 = add i64 %tmp_load.18 %tmp_const.25
     store %tmp_alloca.3 %tmp_add.4
     br @block4
 arr_str_cleanup_end:
-    %tmp_load.18 = load ptr %args
-    heap.free %tmp_load.18 tag="array cleanup"
+    %tmp_load.19 = load ptr %args
+    heap.free %tmp_load.19 tag="array cleanup"
     ret %tmp_call
 }
 

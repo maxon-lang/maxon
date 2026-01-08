@@ -27,6 +27,7 @@ pub const ExternalFuncSignature = types.ExternalFuncSignature;
 pub const ExternalTypeInfo = types.ExternalTypeInfo;
 pub const ExternalFieldInfo = types.ExternalFieldInfo;
 pub const ExternalInterfaceInfo = types.ExternalInterfaceInfo;
+pub const ExternalEnumInfo = types.ExternalEnumInfo;
 pub const ParamType = types.ParamType;
 pub const OwnershipState = types.OwnershipState;
 pub const VarInfo = types.VarInfo;
@@ -606,33 +607,50 @@ pub const AstToIr = struct {
 
     /// Create and initialize a __ManagedString on the stack from string bytes.
     /// Returns a pointer to the allocated struct.
+    ///
+    /// String buffer layout with header:
+    ///   [refcount: i64] [data bytes...] [null terminator]
+    ///   ^               ^
+    ///   |               +-- data_ptr (stored in struct)
+    ///   +-- allocation base (header)
+    ///
+    /// The refcount is stored at (data_ptr - 8), shared by all String copies.
     fn emitManagedStringFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Value {
         const managed_ptr = try self.func().emitAllocaSized(struct_helpers.MANAGED_STRING_SIZE);
 
         if (str_bytes.len == 0) {
             try struct_helpers.initManagedStringEmpty(self.func(), managed_ptr);
         } else {
-            // Heap allocation for string data
-            const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1));
-            const buffer = try self.func().emitHeapAlloc(buffer_size, "string buffer");
+            // Heap allocation for string data WITH 8-byte header for refcount
+            // Layout: [refcount:i64][data...][null]
+            const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1 + 8));
+            const buffer_with_header = try self.func().emitHeapAlloc(buffer_size, "string buffer");
 
-            // Store string bytes
+            // Initialize refcount in header to 1 (for the String being created)
+            const one_refcount = try self.func().emitConstI64(1);
+            if (debug.enabled) std.debug.print("[DEBUG] Emitting store 1 to header at {d}\n", .{buffer_with_header});
+            try self.func().emitStore(buffer_with_header, one_refcount);
+
+            // Data pointer is header + 8
+            const data_ptr = try self.func().emitGetElemPtr(buffer_with_header, try self.func().emitConstI64(8), 1);
+
+            // Store string bytes at data_ptr
             for (str_bytes, 0..) |byte, i| {
                 const idx_val = try self.func().emitConstI64(@intCast(i));
-                const byte_ptr = try self.func().emitGetElemPtr(buffer, idx_val, 1);
+                const byte_ptr = try self.func().emitGetElemPtr(data_ptr, idx_val, 1);
                 try self.func().emitStoreI8(byte_ptr, try self.func().emitConstI8(byte));
             }
             // Null terminate
             const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
-            try self.func().emitStoreI8(try self.func().emitGetElemPtr(buffer, null_idx, 1), try self.func().emitConstI8(0));
+            try self.func().emitStoreI8(try self.func().emitGetElemPtr(data_ptr, null_idx, 1), try self.func().emitConstI8(0));
 
-            // Initialize __ManagedString fields with refcount=0
-            // Note: refcount starts at 0, not 1. When this is passed to String$init,
-            // the struct copy will increment refcount to 1. This ensures proper COW semantics.
-            try self.func().emitStore(managed_ptr, buffer);
+            // Initialize __ManagedString fields
+            // Store data_ptr (not the allocation base with header)
+            try self.func().emitStore(managed_ptr, data_ptr);
             const zero_i32 = try self.func().emitConstI32(0);
             try struct_helpers.storeI32Field(self.func(), managed_ptr, 8, try self.func().emitConstI32(@intCast(str_bytes.len)));
             try struct_helpers.storeI32Field(self.func(), managed_ptr, 12, try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01)));
+            // Note: struct's refcount field at offset 16 is unused, kept for compatibility
             try struct_helpers.storeI32Field(self.func(), managed_ptr, 16, zero_i32);
             try struct_helpers.storeI32Field(self.func(), managed_ptr, 20, zero_i32);
         }
@@ -667,11 +685,23 @@ pub const AstToIr = struct {
         try self.func().emitMemcpy(dest_ptr, src_ptr, size);
 
         // Handle refcount for String types (which contain __ManagedString at offset 0)
+        // Only incref for String copies, not __ManagedString moves.
+        // __ManagedString is always moved (consumed), never copied.
         if (struct_name) |name| {
-            if (std.mem.eql(u8, name, "String") or std.mem.eql(u8, name, "__ManagedString")) {
+            if (std.mem.eql(u8, name, "String")) {
                 try self.emitStringIncref(dest_ptr, "<struct copy>");
             }
+            // Note: __ManagedString is intentionally NOT increffed here.
+            // When a ManagedString is moved into a String struct, it's a move, not a copy.
+            // The buffer already has refcount=1 from allocation.
         }
+    }
+
+    /// Move a struct WITHOUT incrementing refcount. Used when source is a temporary
+    /// that will be consumed (not kept alive after the move).
+    fn emitStructMove(self: *AstToIr, dest_ptr: ir.Value, src_ptr: ir.Value, size: i32) !void {
+        try self.func().emitMemcpy(dest_ptr, src_ptr, size);
+        // No incref - this is a move, not a copy
     }
 
     /// Check if a string is in heap mode by examining cap_flags.
@@ -689,6 +719,12 @@ pub const AstToIr = struct {
     /// Emit incref for a String variable if it's in heap mode.
     /// The string_ptr should point to a String struct (with _managed at offset 0).
     /// tag is used for memory tracking (variable name or description).
+    /// Emit incref for a String variable.
+    /// The string_ptr should point to a String struct (with _managed at offset 0).
+    /// tag is used for memory tracking (variable name or description).
+    ///
+    /// Refcount is stored in the buffer header at (buffer_ptr - 8).
+    /// This is shared by all String copies that reference the same buffer.
     pub fn emitStringIncref(self: *AstToIr, string_ptr: ir.Value, tag: []const u8) !void {
         const is_heap = try self.emitStringIsHeapMode(string_ptr);
 
@@ -710,16 +746,23 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = is_heap }, .{ .block_ref = incref_block_idx }, .{ .block_ref = end_block_idx } },
         });
 
-        // In incref block: increment refcount
-        const ref_ptr = try self.func().emitGetFieldPtr(string_ptr, 16);
-        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
-        const one = try self.func().emitConstI32(1);
-        const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i32);
-        try self.func().emitStoreI32(ref_ptr, new_ref);
+        // In incref block: increment refcount in buffer header (at buffer_ptr - 8)
+        // Load buffer pointer from string struct
+        const buf_ptr = try self.func().emitLoad(string_ptr, .ptr);
+        // Calculate header address: buf_ptr - 8 (use .ptr for pointer arithmetic)
+        const eight = try self.func().emitConstI64(8);
+        const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
+        // Incref the i64 refcount in the header
+        const old_ref = try self.func().emitLoad(header_ptr, .i64);
+        const one = try self.func().emitConstI64(1);
+        const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i64);
+        try self.func().emitStore(header_ptr, new_ref);
 
         // Emit tracking call for incref (new_ref is the refcount after increment)
         if (self.track_memory) {
-            try self.func().emitTrackIncref(tag, new_ref);
+            // Track call expects i32, so truncate
+            const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+            try self.func().emitTrackIncref(tag, new_ref_i32);
         }
 
         // Branch to end
@@ -732,6 +775,9 @@ pub const AstToIr = struct {
     /// Emit decref for a String variable with conditional free when refcount reaches 0.
     /// The string_ptr should point to a String struct (with _managed at offset 0).
     /// tag is used for memory tracking (variable name or description).
+    ///
+    /// Refcount is stored in the buffer header at (buffer_ptr - 8).
+    /// When refcount reaches 0, we free (buffer_ptr - 8) to include the header.
     fn emitStringDecref(self: *AstToIr, string_ptr: ir.Value, tag: []const u8) !void {
         const is_heap = try self.emitStringIsHeapMode(string_ptr);
 
@@ -758,21 +804,27 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = end_block_idx } },
         });
 
-        // In decref block: decrement refcount and check if zero
-        const ref_ptr = try self.func().emitGetFieldPtr(string_ptr, 16);
-        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
-        const one = try self.func().emitConstI32(1);
-        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i32);
-        try self.func().emitStoreI32(ref_ptr, new_ref);
+        // In decref block: load buffer pointer, compute header address, decrement refcount
+        const buf_ptr = try self.func().emitLoad(string_ptr, .ptr);
+        const eight = try self.func().emitConstI64(8);
+        const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
+
+        // Decrement the i64 refcount in the header
+        const old_ref = try self.func().emitLoad(header_ptr, .i64);
+        const one = try self.func().emitConstI64(1);
+        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i64);
+        try self.func().emitStore(header_ptr, new_ref);
 
         // Emit tracking call for decref (new_ref is the refcount after decrement)
         if (self.track_memory) {
-            try self.func().emitTrackDecref(tag, new_ref);
+            // Track call expects i32, so truncate
+            const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+            try self.func().emitTrackDecref(tag, new_ref_i32);
         }
 
         // Check if refcount is now zero
-        const zero = try self.func().emitConstI32(0);
-        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i32);
+        const zero = try self.func().emitConstI64(0);
+        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i64);
 
         // Restore free block (index 1 = second popped = free_block)
         try deferred.restore(self, 1);
@@ -784,9 +836,11 @@ pub const AstToIr = struct {
             .operands = .{ .{ .value = is_zero }, .{ .block_ref = free_block_idx }, .{ .block_ref = end_block_idx } },
         });
 
-        // In free block: load buffer pointer and free it
-        const buf_ptr = try self.func().emitLoad(string_ptr, .ptr);
-        try self.func().emitHeapFree(buf_ptr, "string cleanup");
+        // In free block: free the buffer WITH header (header_ptr, not buf_ptr)
+        // Need to reload header_ptr since we're in a different block
+        const buf_ptr2 = try self.func().emitLoad(string_ptr, .ptr);
+        const header_ptr2 = try self.func().emitBinaryOp(.sub, buf_ptr2, eight, .ptr);
+        try self.func().emitHeapFree(header_ptr2, "string cleanup");
 
         // Branch to end
         debug.astToIr("  br in block {d}: -> {d}", .{ free_block_idx, end_block_idx });
@@ -886,18 +940,20 @@ pub const AstToIr = struct {
         // Restore decref block
         try deferred.restore(self, 3);
 
-        // Decref block: decrement refcount and check if zero
+        // Decref block: decrement refcount in buffer header and check if zero
         const decref_buf_ptr = try self.func().emitLoad(array_ptr, .ptr);
         const decref_i = try self.func().emitLoad(counter_ptr, .i64);
         const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
         const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_buf_ptr, decref_offset, .ptr);
 
-        // Refcount is at offset 16 in the String
-        const ref_ptr = try self.func().emitGetFieldPtr(decref_elem_ptr, 16);
-        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
-        const one_ref = try self.func().emitConstI32(1);
-        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i32);
-        try self.func().emitStoreI32(ref_ptr, new_ref);
+        // Buffer header refcount: load buf_ptr from String, subtract 8 to get header
+        const str_buf_ptr = try self.func().emitLoad(decref_elem_ptr, .ptr);
+        const eight = try self.func().emitConstI64(8);
+        const header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr, eight, .ptr);
+        const old_ref = try self.func().emitLoad(header_ptr, .i64);
+        const one_ref = try self.func().emitConstI64(1);
+        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i64);
+        try self.func().emitStore(header_ptr, new_ref);
 
         // Emit tracking call for decref
         if (self.track_memory) {
@@ -905,8 +961,8 @@ pub const AstToIr = struct {
         }
 
         // Check if refcount is now zero
-        const zero_ref = try self.func().emitConstI32(0);
-        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i32);
+        const zero_ref = try self.func().emitConstI64(0);
+        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i64);
 
         // Branch: if zero, go to heap_free; otherwise go to next
         try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
@@ -917,13 +973,15 @@ pub const AstToIr = struct {
         // Restore heap_free block
         try deferred.restore(self, 2);
 
-        // Heap free block: reload element ptr and free its buffer
+        // Heap free block: reload element ptr and free buffer (at header, which is buf_ptr - 8)
         const free_buf_ptr = try self.func().emitLoad(array_ptr, .ptr);
         const free_i = try self.func().emitLoad(counter_ptr, .i64);
         const free_offset = try self.func().emitBinaryOp(.mul, free_i, elem_size, .i64);
         const free_elem_ptr = try self.func().emitBinaryOp(.add, free_buf_ptr, free_offset, .ptr);
-        const str_buf_ptr = try self.func().emitLoad(free_elem_ptr, .ptr);
-        try self.func().emitHeapFree(str_buf_ptr, "string cleanup");
+        const free_str_buf_ptr = try self.func().emitLoad(free_elem_ptr, .ptr);
+        const free_eight = try self.func().emitConstI64(8);
+        const free_header_ptr = try self.func().emitBinaryOp(.sub, free_str_buf_ptr, free_eight, .ptr);
+        try self.func().emitHeapFree(free_header_ptr, "string cleanup");
 
         // Branch to next
         try self.func().emitBr(next_block_idx);
@@ -974,21 +1032,25 @@ pub const AstToIr = struct {
         const do_decref_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("cstr_do_decref");
 
-        // In do_decref block: decrement refcount, free if zero
-        const ref_ptr = try self.func().emitGetFieldPtr(managed_ptr, 16);
-        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
-        const one_ref = try self.func().emitConstI32(1);
-        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i32);
-        try self.func().emitStoreI32(ref_ptr, new_ref);
-        const zero = try self.func().emitConstI32(0);
-        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i32);
+        // In do_decref block: decrement refcount in buffer header and free if zero
+        const decref_buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
+        const eight_decref = try self.func().emitConstI64(8);
+        const header_ptr = try self.func().emitBinaryOp(.sub, decref_buf_ptr, eight_decref, .ptr);
+        const old_ref = try self.func().emitLoad(header_ptr, .i64);
+        const one_ref = try self.func().emitConstI64(1);
+        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i64);
+        try self.func().emitStore(header_ptr, new_ref);
+        const zero = try self.func().emitConstI64(0);
+        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i64);
 
         const do_free_managed_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("cstr_free_managed");
 
-        // In free managed block: free the buffer
-        const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-        try self.func().emitHeapFree(buf_ptr, "string cleanup");
+        // In free managed block: free the buffer including header
+        const free_buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
+        const eight_free = try self.func().emitConstI64(8);
+        const free_header_ptr = try self.func().emitBinaryOp(.sub, free_buf_ptr, eight_free, .ptr);
+        try self.func().emitHeapFree(free_header_ptr, "string cleanup");
 
         const skip_decref_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("cstr_skip_decref");
@@ -1177,7 +1239,15 @@ pub const AstToIr = struct {
                 .struct_type => |s| self.allocator.free(s.fields),
                 .enum_type => |*e| {
                     e.members.deinit(self.allocator);
+                    // Free associated_values slices from case_info entries
+                    var case_iter = e.case_info.iterator();
+                    while (case_iter.next()) |case_entry| {
+                        if (case_entry.value_ptr.associated_values.len > 0) {
+                            self.allocator.free(case_entry.value_ptr.associated_values);
+                        }
+                    }
                     e.case_info.deinit(self.allocator);
+                    e.string_values.deinit(self.allocator);
                 },
                 .primitive => {},
             }
@@ -1363,6 +1433,8 @@ pub const AstToIr = struct {
 
         // Register declarations
         for (program.enums) |enum_decl| {
+            // Skip if already registered (e.g., from external_enums in multi-file compilation)
+            if (self.type_map.contains(enum_decl.name)) continue;
             try self.registerEnum(enum_decl);
         }
         for (program.types) |type_decl| try self.registerType(type_decl);
@@ -4106,10 +4178,15 @@ pub const AstToIr = struct {
             .let_decl => |decl| {
                 self.current_decl_is_mutable = false;
                 try self.convertVarDecl(decl);
+                // Clean up any temporary strings from the initializer expression
+                // (e.g., string arguments to function calls in the initializer)
+                try self.cleanupTemporaryStrings();
             },
             .var_decl => |decl| {
                 self.current_decl_is_mutable = true;
                 try self.convertVarDecl(decl);
+                // Clean up any temporary strings from the initializer expression
+                try self.cleanupTemporaryStrings();
             },
             .@"return" => |ret| try self.convertReturn(ret),
             .assign => |assign| try self.convertAssignment(assign),
@@ -4466,6 +4543,11 @@ pub const AstToIr = struct {
                         }
                     }
                 }
+                // If returning a String (including from interpolation), remove from temporaries
+                // since ownership transfers to caller via sret
+                if (self.isStringType(typed_val.ty)) {
+                    self.removeFromTemporaries(typed_val.value);
+                }
                 try self.freeHeapAllocations();
                 try self.func().emitRet(sret);
                 return;
@@ -4720,18 +4802,20 @@ pub const AstToIr = struct {
         // Restore decref block (deferred index 3)
         try deferred.restore(self, 3);
 
-        // Decref block: decrement refcount and check if zero
+        // Decref block: decrement refcount in buffer header and check if zero
         const decref_i = try self.func().emitLoad(counter_ptr, .i64);
         const decref_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
         const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
         const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_keys_buf_ptr, decref_offset, .ptr);
 
-        // Refcount is at offset 16 in the String
-        const ref_ptr = try self.func().emitGetFieldPtr(decref_elem_ptr, 16);
-        const old_ref = try self.func().emitLoad(ref_ptr, .i32);
-        const one_ref = try self.func().emitConstI32(1);
-        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i32);
-        try self.func().emitStoreI32(ref_ptr, new_ref);
+        // Buffer header refcount: load buf_ptr from String, subtract 8 to get header
+        const str_buf_ptr_decref = try self.func().emitLoad(decref_elem_ptr, .ptr);
+        const eight_decref = try self.func().emitConstI64(8);
+        const header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr_decref, eight_decref, .ptr);
+        const old_ref = try self.func().emitLoad(header_ptr, .i64);
+        const one_ref = try self.func().emitConstI64(1);
+        const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i64);
+        try self.func().emitStore(header_ptr, new_ref);
 
         // Emit tracking call for decref
         if (self.track_memory) {
@@ -4739,8 +4823,8 @@ pub const AstToIr = struct {
         }
 
         // Check if refcount is now zero
-        const zero_ref = try self.func().emitConstI32(0);
-        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i32);
+        const zero_ref = try self.func().emitConstI64(0);
+        const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i64);
 
         // Branch: if zero, go to heap_free; otherwise go to next
         try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
@@ -4751,16 +4835,18 @@ pub const AstToIr = struct {
         // Restore heap_free block (deferred index 2)
         try deferred.restore(self, 2);
 
-        // Heap free block: recompute elem_ptr (can't use value from previous block)
+        // Heap free block: recompute elem_ptr and free buffer at header (buf_ptr - 8)
         const heap_i = try self.func().emitLoad(counter_ptr, .i64);
         const heap_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
         const heap_elem_size = try self.func().emitConstI64(32);
         const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
         const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_keys_buf_ptr, heap_offset, .ptr);
 
-        // Free the buffer and jump to next
+        // Free the buffer including header and jump to next
         const str_buf_ptr = try self.func().emitLoad(heap_elem_ptr, .ptr);
-        try self.func().emitHeapFree(str_buf_ptr, "map string key cleanup");
+        const eight_free = try self.func().emitConstI64(8);
+        const free_header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr, eight_free, .ptr);
+        try self.func().emitHeapFree(free_header_ptr, "map string key cleanup");
         try self.func().emitBr(next_block_idx);
 
         // Restore next block (deferred index 1)
@@ -7688,10 +7774,10 @@ pub const AstToIr = struct {
         const b_len = try self.func().emitUnaryOp(.sext_i32_i64, b_len_i32, .i64);
         const total_len = try self.func().emitBinaryOp(.add, a_len, b_len, .i64);
 
-        // Allocate new buffer: total_len + 1 for null terminator
+        // Allocate new buffer with header: total_len + 1 for null terminator
         const one = try self.func().emitConstI64(1);
-        const buffer_size = try self.func().emitBinaryOp(.add, total_len, one, .i64);
-        const new_buffer = try self.func().emitHeapAlloc(buffer_size, "string concat");
+        const data_size = try self.func().emitBinaryOp(.add, total_len, one, .i64);
+        const new_buffer = try struct_helpers.emitAllocStringBuffer(self.func(), data_size, "string concat");
 
         // Copy first string
         const a_buf_ptr = try self.func().emitGetFieldPtr(a_managed, 0);
@@ -7717,9 +7803,9 @@ pub const AstToIr = struct {
 
     /// Emit code to convert an int to a String
     fn emitIntToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        // Allocate buffer on heap (22 bytes max: sign + 20 digits + null)
+        // Allocate buffer with header (22 bytes max: sign + 20 digits + null)
         const buffer_size = try self.func().emitConstI64(22);
-        const buffer = try self.func().emitHeapAlloc(buffer_size, "int.toString");
+        const buffer = try struct_helpers.emitAllocStringBuffer(self.func(), buffer_size, "int.toString");
 
         // Call __runtime_int_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -7737,9 +7823,9 @@ pub const AstToIr = struct {
     /// Emit code to convert a float to a String
     /// For now, keep calling the runtime function since the inline version is complex
     fn emitFloatToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        // Allocate buffer (32 bytes should be enough for most floats)
+        // Allocate buffer with header (32 bytes should be enough for most floats)
         const buffer_size = try self.func().emitConstI64(32);
-        const buffer = try self.func().emitHeapAlloc(buffer_size, "float.toString");
+        const buffer = try struct_helpers.emitAllocStringBuffer(self.func(), buffer_size, "float.toString");
 
         // Call __runtime_float_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -7756,9 +7842,9 @@ pub const AstToIr = struct {
 
     /// Emit code to convert a bool to a String
     fn emitBoolToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        // Create a buffer for the result (6 bytes max: "false\0")
+        // Create a buffer with header (6 bytes max: "false\0")
         const buffer_size = try self.func().emitConstI64(6);
-        const buffer = try self.func().emitHeapAlloc(buffer_size, "bool.toString");
+        const buffer = try struct_helpers.emitAllocStringBuffer(self.func(), buffer_size, "bool.toString");
 
         // Call __runtime_bool_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -8704,7 +8790,18 @@ pub const AstToIr = struct {
 
             if (field_info.isStruct()) {
                 // Struct fields are embedded inline - copy the data
-                try self.emitStructCopy(field_ptr, field_val.value, field_info.size, field_info.structName());
+                // If source is a temporary String, use move (no incref) since temp will be consumed
+                const is_temp = self.isInTemporaries(field_val.value);
+                const is_string = std.mem.eql(u8, field_info.structName() orelse "", "String") or
+                    std.mem.eql(u8, field_info.structName() orelse "", "__ManagedString");
+                if (is_temp and is_string) {
+                    // Move: temp will be removed from cleanup, no incref needed
+                    try self.emitStructMove(field_ptr, field_val.value, field_info.size);
+                    self.removeFromTemporaries(field_val.value);
+                } else {
+                    // Copy: source will remain alive, incref needed
+                    try self.emitStructCopy(field_ptr, field_val.value, field_info.size, field_info.structName());
+                }
             } else if (field_info.value_type == .optional_type) {
                 // Optional field - check if we need to wrap the value
                 const opt_info = field_info.value_type.optional_type;
@@ -9484,6 +9581,49 @@ pub const AstToIr = struct {
 
         // Switch to merge block
         try branch.switchToMerge(true);
+
+        // For String elements, we need to increment the refcount since we're copying
+        // out of the array. The array still owns its copy, and the caller will own
+        // this copy. Without this, when the array is cleaned up, it would free the
+        // buffer while the caller's copy still references it.
+        // Note: We do this AFTER the merge block so we can safely create branch blocks
+        // for the conditional incref without interfering with the BranchBuilder.
+        if (elem_info.is_struct and elem_info.name != null and std.mem.eql(u8, elem_info.name.?, "String")) {
+            // Only incref if the optional has a value (tag == 1)
+            const tag = try self.func().emitLoad(opt_ptr, .i64);
+            const one = try self.func().emitConstI64(1);
+            const has_value = try self.func().emitBinaryOp(.icmp_eq, tag, one, .i64);
+
+            // Create conditional block for incref - using simple pattern without deferred blocks
+            // since emitStringIncref will create its own blocks
+            const entry_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+            const incref_idx: u32 = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("array_get_incref");
+
+            // We'll add the end block AFTER emitStringIncref to avoid index confusion
+            // For now, emit conditional branch with placeholder (we'll fix the end index)
+            const branch_instr_idx = self.func().blocks.items[entry_idx].instructions.items.len;
+            try self.func().blocks.items[entry_idx].instructions.append(self.allocator, .{
+                .op = .br_cond,
+                .operands = .{ .{ .value = has_value }, .{ .block_ref = incref_idx }, .{ .block_ref = 0 } }, // placeholder for end
+            });
+
+            // In incref block: increment refcount of the String at value_slot
+            // emitStringIncref will create its own blocks and end up in its incref_end block
+            try self.emitStringIncref(value_slot, "<array index String>");
+
+            // After emitStringIncref, we're in its incref_end block. We need to branch
+            // to our end block, so emit the branch NOW (before adding the end block).
+            // The end block will be at the current length after we add it.
+            const end_idx: u32 = @intCast(self.func().blocks.items.len);
+            try self.func().emitBr(end_idx);
+
+            // Now add the final end block (this becomes the current block)
+            _ = try self.func().addBlock("array_get_incref_end");
+
+            // Fix up the conditional branch to point to the correct end block
+            self.func().blocks.items[entry_idx].instructions.items[branch_instr_idx].operands[2] = .{ .block_ref = end_idx };
+        }
 
         // Return the optional with proper type info
         return .{
@@ -10324,6 +10464,12 @@ pub const AstToIr = struct {
             } else {
                 try self.func().emitStore(value_ptr, value_typed.value);
             }
+
+            // Ownership transfer: string values are now owned by the map
+            // Remove from temporaries so they don't get cleaned up at scope end
+            if (std.mem.eql(u8, value_type_name, "String")) {
+                self.removeFromTemporaries(value_typed.value);
+            }
         }
 
         // Create __ManagedArrays for keys and values
@@ -10927,14 +11073,10 @@ pub const AstToIr = struct {
                         arg_value = try self.applyIntToFloatPromotion(arg_value, arg_ty, func_info.param_types[param_index].ty);
                     }
 
-                    // Ownership transfer: when a String temporary is passed to Array.push,
-                    // remove it from temporaries so it doesn't get cleaned up (array takes ownership)
-                    if (arg_ty == .struct_type and std.mem.eql(u8, arg_ty.struct_type, "String")) {
-                        // Check if this is an Array$X$push call where the String is the element being pushed
-                        if (std.mem.startsWith(u8, mangled_name, "Array$") and std.mem.endsWith(u8, mangled_name, "$push")) {
-                            self.removeFromTemporaries(arg.value);
-                        }
-                    }
+                    // NOTE: String temporaries passed to Array.push are NOT removed from temporaries here.
+                    // The intrinsic __managed_array_set_at calls emitStringIncref on the stored value,
+                    // bumping refcount to 2. The temp cleanup decrefs (to 1), and array cleanup decrefs (to 0, freed).
+                    // This ensures proper refcounting with the buffer header scheme.
 
                     args[arg_idx] = arg_value;
                     arg_idx += 1;
@@ -11224,7 +11366,7 @@ pub fn convertWithExternals(
     external_funcs: ?[]const ExternalFuncSignature,
     external_types: ?[]const ExternalTypeInfo,
     external_interfaces: ?[]const ExternalInterfaceInfo,
-    external_enums: ?[]const *const ast.EnumDecl,
+    external_enums: ?[]const ExternalEnumInfo,
     options: ConvertOptions,
     out_error: *?err.CompileError,
 ) ConvertError!ir.Module {
@@ -11244,10 +11386,21 @@ pub fn convertWithExternals(
     if (external_enums) |ext_enums| {
         for (ext_enums) |ext_enum| {
             // Skip if already registered (avoid duplicates from multiple source files)
-            if (converter.type_map.contains(ext_enum.name)) continue;
+            if (converter.type_map.contains(ext_enum.enum_decl.name)) continue;
 
-            try converter.registerEnum(ext_enum.*);
-            debug.astToIr("Registered external enum '{s}'", .{ext_enum.name});
+            // Temporarily set source_file to the enum's source for error reporting
+            const original_source_file = converter.source_file;
+            converter.source_file = ext_enum.source_path;
+
+            converter.registerEnum(ext_enum.enum_decl.*) catch |e| {
+                out_error.* = converter.last_error;
+                converter.source_file = original_source_file;
+                return e;
+            };
+
+            // Restore original source file
+            converter.source_file = original_source_file;
+            debug.astToIr("Registered external enum '{s}'", .{ext_enum.enum_decl.name});
         }
     }
 
@@ -11356,15 +11509,18 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
 
 /// Extract enum declarations from a parsed program (for cross-module compilation)
 /// Includes all enums (public and private) so they can be registered with proper visibility
-pub fn extractEnumDecls(program: ast.Program, allocator: std.mem.Allocator) ![]const *const ast.EnumDecl {
-    var enum_decls = std.ArrayListUnmanaged(*const ast.EnumDecl){};
-    errdefer enum_decls.deinit(allocator);
+pub fn extractEnumDecls(program: ast.Program, allocator: std.mem.Allocator, source_path: ?[]const u8) ![]const ExternalEnumInfo {
+    var enum_infos = std.ArrayListUnmanaged(ExternalEnumInfo){};
+    errdefer enum_infos.deinit(allocator);
 
     for (program.enums) |*enum_decl| {
-        try enum_decls.append(allocator, enum_decl);
+        try enum_infos.append(allocator, .{
+            .enum_decl = enum_decl,
+            .source_path = source_path,
+        });
     }
 
-    return enum_decls.toOwnedSlice(allocator);
+    return enum_infos.toOwnedSlice(allocator);
 }
 
 /// Extract interface info from a parsed program (for cross-module compilation)

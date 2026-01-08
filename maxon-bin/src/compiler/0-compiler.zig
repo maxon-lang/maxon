@@ -57,7 +57,7 @@ const PipelineOptions = struct {
     external_funcs: ?[]const ast_to_ir.ExternalFuncSignature = null,
     external_types: ?[]const ast_to_ir.ExternalTypeInfo = null,
     external_interfaces: ?[]const ast_to_ir.ExternalInterfaceInfo = null,
-    external_enums: ?[]const *const ast.EnumDecl = null,
+    external_enums: ?[]const ast_to_ir.ExternalEnumInfo = null,
 };
 
 /// Intermediate result from frontend compilation (lexing, parsing, analysis, IR generation)
@@ -234,7 +234,7 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
     defer all_interfaces.deinit(allocator);
 
-    var all_enums: std.ArrayListUnmanaged(*const ast.EnumDecl) = .empty;
+    var all_enums: std.ArrayListUnmanaged(ast_to_ir.ExternalEnumInfo) = .empty;
     defer all_enums.deinit(allocator);
 
     // Phase 1: Parse all sources EXCEPT the last one (user code) to collect type info
@@ -302,7 +302,7 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
         allocator.free(iface_info);
 
         // Extract enum declarations
-        const enum_decls = ast_to_ir.extractEnumDecls(program, phase1_allocator) catch continue;
+        const enum_decls = ast_to_ir.extractEnumDecls(program, phase1_allocator, source.path) catch continue;
         for (enum_decls) |enum_decl| {
             try all_enums.append(allocator, enum_decl);
         }
@@ -430,7 +430,7 @@ pub fn compileMultiple(
     defer all_interfaces.deinit(allocator);
 
     // List to store enum declarations from all sources
-    var all_enums: std.ArrayListUnmanaged(*const ast.EnumDecl) = .empty;
+    var all_enums: std.ArrayListUnmanaged(ast_to_ir.ExternalEnumInfo) = .empty;
     defer all_enums.deinit(allocator);
 
     for (sources) |source| {
@@ -482,11 +482,11 @@ pub fn compileMultiple(
         allocator.free(iface_info); // Free the slice but keep the items
 
         // Extract enum declarations from parsed AST
-        const enum_decls = ast_to_ir.extractEnumDecls(program, allocator) catch continue;
+        const enum_decls = ast_to_ir.extractEnumDecls(program, allocator, source.path) catch continue;
         for (enum_decls) |enum_decl| {
             try all_enums.append(allocator, enum_decl);
         }
-        allocator.free(enum_decls); // Free the slice but keep the enum pointers
+        allocator.free(enum_decls); // Free the slice but keep the enum infos
     }
 
     // Phase 2: Compile and merge all sources with collected type info and function signatures

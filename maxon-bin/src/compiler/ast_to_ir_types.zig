@@ -286,6 +286,13 @@ pub const ExternalInterfaceInfo = struct {
     interface_decl: *const ast.InterfaceDecl,
 };
 
+/// External enum info - for cross-module compilation
+pub const ExternalEnumInfo = struct {
+    /// Original enum declaration (needed for validation)
+    enum_decl: *const ast.EnumDecl,
+    source_path: ?[]const u8 = null, // Source file path (for error reporting)
+};
+
 /// Parameter type info
 pub const ParamType = struct {
     ty: ValueType,

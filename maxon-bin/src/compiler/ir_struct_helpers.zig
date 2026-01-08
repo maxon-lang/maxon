@@ -50,10 +50,37 @@ pub fn loadI64Field(func: *Function, ptr: Value, offset: i32) !Value {
 // __ManagedString Helpers
 // ============================================================================
 
+/// Size of string buffer header (refcount as i64)
+pub const STRING_BUFFER_HEADER_SIZE: i64 = 8;
+
+/// Allocate a string buffer with header for refcounting.
+/// Returns the DATA pointer (header is at returned_ptr - 8).
+///
+/// Buffer layout:
+///   [refcount: i64] [data bytes...]
+///   ^               ^
+///   |               +-- returned data_ptr
+///   +-- allocation base (header)
+///
+/// The refcount is initialized to 1 (for the ManagedString being created).
+pub fn emitAllocStringBuffer(func: *Function, data_size: Value, tag: []const u8) !Value {
+    // Allocate data_size + 8 for header
+    const header_size = try func.emitConstI64(STRING_BUFFER_HEADER_SIZE);
+    const total_size = try func.emitBinaryOp(.add, data_size, header_size, .i64);
+    const buffer_with_header = try func.emitHeapAlloc(total_size, tag);
+
+    // Initialize refcount in header to 1 (for the String being created)
+    try func.emitStore(buffer_with_header, try func.emitConstI64(1));
+
+    // Return data pointer (header + 8)
+    const eight = try func.emitConstI64(8);
+    return func.emitBinaryOp(.add, buffer_with_header, eight, .ptr);
+}
+
 /// Initialize __ManagedString fields for heap mode.
 /// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
 /// cap_flags = (len << 2) | 0b01 for heap mode
-/// refcount starts at 1
+/// refcount field in struct is unused (actual refcount is in buffer header)
 pub fn initManagedString(func: *Function, ptr: Value, buffer: Value, len_i64: Value) !void {
     // buffer pointer at offset 0
     try func.emitStore(ptr, buffer);

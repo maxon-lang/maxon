@@ -583,29 +583,32 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 16 bytes (string buffer)
+ALLOC #1: 24 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
 ALLOC #2: 128 bytes (array grow)
-ALLOC #3: 16 bytes (string buffer)
+INCREF: <array_store> -> rc=2
+DECREF: <temp> -> rc=1
+ALLOC #3: 24 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
-ALLOC #4: 18 bytes (string buffer)
+INCREF: <array_store> -> rc=2
+DECREF: <temp> -> rc=1
+ALLOC #4: 26 bytes (string buffer)
 MOVE: managed
-INCREF: <struct copy> -> rc=1
+INCREF: <array_store> -> rc=2
+DECREF: <temp> -> rc=1
 DECREF: <array element> -> rc=0
-FREE #1: 16 bytes (string cleanup)
+FREE #1: 24 bytes (string cleanup)
 DECREF: <array element> -> rc=0
-FREE #3: 16 bytes (string cleanup)
+FREE #3: 24 bytes (string cleanup)
 DECREF: <array element> -> rc=0
-FREE #4: 18 bytes (string cleanup)
+FREE #4: 26 bytes (string cleanup)
 FREE #2: 128 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 178 bytes
-Freed:     178 bytes
+Allocated: 202 bytes
+Freed:     202 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   3
-Decrefs:   3
+Decrefs:   6
 ```

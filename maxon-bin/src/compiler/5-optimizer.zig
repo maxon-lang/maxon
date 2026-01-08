@@ -711,6 +711,14 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                         }
                     }
                 },
+                .heap_alloc => {
+                    // Heap allocations return pointers that will be used elsewhere
+                    // (e.g., string buffers that get loaded through derived pointers)
+                    // Stores to them must be preserved
+                    if (inst.result) |result| {
+                        try ctx.loaded_bases.put(ctx.allocator, result, {});
+                    }
+                },
                 .memcpy => {
                     // memcpy reads from source pointer - mark it as loaded
                     const src_ptr = inst.operands[1].value;
@@ -791,7 +799,6 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                 .fcmp_ge,
                 .memset,
                 .memset_dyn,
-                .heap_alloc,
                 .heap_free,
                 .heap_realloc,
                 .track_move,
