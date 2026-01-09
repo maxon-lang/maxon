@@ -3,6 +3,69 @@ const ir = @import("ir.zig");
 const ast = @import("ast.zig");
 
 // ============================================================================
+// Primitive Type Metadata (Single Source of Truth)
+// ============================================================================
+
+/// Complete metadata for a Maxon primitive type
+pub const PrimitiveTypeInfo = struct {
+    /// Maxon language name ("int", "float", "bool", "byte", "void", "ptr")
+    maxon_name: []const u8,
+    /// Corresponding IR type
+    ir_type: ir.Type,
+    /// Size in bytes for stack/memory allocation
+    size: i32,
+    /// Whether this type supports arithmetic operations
+    is_numeric: bool,
+    /// Whether this type is integral (int, bool, byte)
+    is_integral: bool,
+    /// Whether this type is floating-point (float)
+    is_floating_point: bool,
+    /// Whether values of this type are signed
+    is_signed: bool,
+};
+
+/// Compile-time lookup table for all Maxon primitive types
+pub const primitive_types = [_]PrimitiveTypeInfo{
+    .{ .maxon_name = "int", .ir_type = .i64, .size = 8, .is_numeric = true, .is_integral = true, .is_floating_point = false, .is_signed = true },
+    .{ .maxon_name = "float", .ir_type = .f64, .size = 8, .is_numeric = true, .is_integral = false, .is_floating_point = true, .is_signed = true },
+    .{ .maxon_name = "bool", .ir_type = .i64, .size = 8, .is_numeric = false, .is_integral = true, .is_floating_point = false, .is_signed = false },
+    .{ .maxon_name = "byte", .ir_type = .i64, .size = 8, .is_numeric = true, .is_integral = true, .is_floating_point = false, .is_signed = false },
+    .{ .maxon_name = "void", .ir_type = .void, .size = 0, .is_numeric = false, .is_integral = false, .is_floating_point = false, .is_signed = false },
+    .{ .maxon_name = "ptr", .ir_type = .ptr, .size = 8, .is_numeric = false, .is_integral = false, .is_floating_point = false, .is_signed = false },
+};
+
+/// Canonical primitive type name constants (reference into primitive_types for consistency)
+pub const INT: []const u8 = primitive_types[0].maxon_name;
+pub const FLOAT: []const u8 = primitive_types[1].maxon_name;
+pub const BOOL: []const u8 = primitive_types[2].maxon_name;
+pub const BYTE: []const u8 = primitive_types[3].maxon_name;
+pub const VOID: []const u8 = primitive_types[4].maxon_name;
+pub const PTR: []const u8 = primitive_types[5].maxon_name;
+
+/// Look up primitive type info by Maxon name
+/// Returns null if not a primitive type
+pub fn getPrimitiveTypeInfo(name: []const u8) ?PrimitiveTypeInfo {
+    for (primitive_types) |info| {
+        if (std.mem.eql(u8, info.maxon_name, name)) {
+            return info;
+        }
+    }
+    return null;
+}
+
+// ============================================================================
+// Built-in Struct Sizes
+// ============================================================================
+
+/// Size of __ManagedString struct (24 bytes)
+/// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
+pub const MANAGED_STRING_SIZE: i32 = 24;
+
+/// Size of __ManagedArray struct (24 bytes)
+/// Layout: buffer(8) + len(8) + capacity(8)
+pub const MANAGED_ARRAY_SIZE: i32 = 24;
+
+// ============================================================================
 // Type Definitions for AST to IR Conversion
 // ============================================================================
 
@@ -49,23 +112,27 @@ pub const ErrorUnionInfo = struct {
 
 /// Check if a type name is a known primitive type
 pub fn isPrimitiveTypeName(name: []const u8) bool {
-    return std.mem.eql(u8, name, "int") or
-        std.mem.eql(u8, name, "float") or
-        std.mem.eql(u8, name, "bool") or
-        std.mem.eql(u8, name, "byte") or
-        std.mem.eql(u8, name, "ptr");
+    return getPrimitiveTypeInfo(name) != null;
 }
 
 /// Maps a Maxon type name to its IR type representation
 pub fn nameToIrType(name: []const u8) ir.Type {
-    if (std.mem.eql(u8, name, "int")) return .i64;
-    if (std.mem.eql(u8, name, "float")) return .f64;
-    if (std.mem.eql(u8, name, "bool")) return .i64;
-    if (std.mem.eql(u8, name, "byte")) return .i64;
-    if (std.mem.eql(u8, name, "void")) return .void;
-    if (std.mem.eql(u8, name, "ptr") or std.mem.eql(u8, name, "pointer")) return .ptr;
+    if (getPrimitiveTypeInfo(name)) |info| {
+        return info.ir_type;
+    }
+    // Handle alias
+    if (std.mem.eql(u8, name, "pointer")) return .ptr;
     // All other types (structs, __ManagedString, etc.) are represented as pointers
     return .ptr;
+}
+
+/// Maps an IR type back to the canonical Maxon type name (for numeric types)
+pub fn irTypeToName(ir_ty: ir.Type) []const u8 {
+    return switch (ir_ty) {
+        .f64 => FLOAT,
+        .i64 => INT,
+        else => unreachable,
+    };
 }
 
 /// Extended type info for variable tracking
@@ -95,6 +162,22 @@ pub const ValueType = union(enum) {
 
     pub fn isOptional(self: ValueType) bool {
         return self == .optional_type;
+    }
+
+    /// Returns true if this is a floating-point primitive type
+    pub fn isFloatingPoint(self: ValueType) bool {
+        return switch (self) {
+            .primitive => |name| if (getPrimitiveTypeInfo(name)) |info| info.is_floating_point else false,
+            else => false,
+        };
+    }
+
+    /// Returns true if this is an integral primitive type (int, bool, byte)
+    pub fn isIntegral(self: ValueType) bool {
+        return switch (self) {
+            .primitive => |name| if (getPrimitiveTypeInfo(name)) |info| info.is_integral else false,
+            else => false,
+        };
     }
 
     /// Get the canonical type name for this ValueType

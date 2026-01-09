@@ -36,6 +36,46 @@ pub const Type = enum {
             .void => "void",
         };
     }
+
+    /// Returns the size in bytes for this IR type
+    /// Consolidates 5+ duplicated switch statements across the codebase
+    pub fn sizeInBytes(self: Type) i32 {
+        return switch (self) {
+            .i64, .f64, .ptr => 8,
+            .i32 => 4,
+            .i8 => 1,
+            .void => 0,
+        };
+    }
+
+    /// Returns true if this is an integral type (i8, i32, i64)
+    pub fn isIntegral(self: Type) bool {
+        return switch (self) {
+            .i8, .i32, .i64 => true,
+            .f64, .void, .ptr => false,
+        };
+    }
+
+    /// Returns true if this is a floating-point type (f64)
+    pub fn isFloatingPoint(self: Type) bool {
+        return self == .f64;
+    }
+
+    /// Returns true if this is a numeric type (integral or floating-point)
+    pub fn isNumeric(self: Type) bool {
+        return self.isIntegral() or self.isFloatingPoint();
+    }
+
+    /// Returns true if this is a signed type
+    /// Note: All Maxon integral types are signed (i8, i32, i64)
+    pub fn isSigned(self: Type) bool {
+        return self.isIntegral();
+    }
+
+    /// Returns the alignment requirement in bytes
+    pub fn alignment(self: Type) i32 {
+        return self.sizeInBytes(); // Natural alignment
+    }
 };
 
 /// IR Instruction

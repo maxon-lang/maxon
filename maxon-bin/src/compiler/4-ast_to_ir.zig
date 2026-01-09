@@ -1368,19 +1368,17 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     pub fn convert(self: *AstToIr, program: ast.Program) !ir.Module {
-        // Register primitive types
-        try self.type_map.put(self.allocator, "int", .{ .primitive = .i64 });
-        try self.type_map.put(self.allocator, "float", .{ .primitive = .f64 });
-        try self.type_map.put(self.allocator, "bool", .{ .primitive = .i64 }); // bool is represented as i64
-        try self.type_map.put(self.allocator, "byte", .{ .primitive = .i64 }); // byte is stored as i64 (0-255)
-        try self.type_map.put(self.allocator, "ptr", .{ .primitive = .ptr }); // raw pointer type
+        // Register primitive types from the single source of truth
+        for (types.primitive_types) |prim| {
+            try self.type_map.put(self.allocator, prim.maxon_name, .{ .primitive = prim.ir_type });
+        }
 
         // Register __ManagedArray compiler-internal type (24 bytes: ptr + len + capacity)
         // This is a parameterized type - element type is tracked separately in ArrayInfo
         const managed_array_fields = try self.allocator.alloc(FieldInfo, 3);
-        managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = "ptr" } };
-        managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = "int" } };
-        managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = "int" } };
+        managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = types.INT } };
+        managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = types.INT } };
         self.type_map.put(self.allocator, "__ManagedArray", .{
             .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 24 },
         }) catch {
@@ -1395,11 +1393,11 @@ pub const AstToIr = struct {
         //   0b01 = Heap (owned buffer with refcount)
         //   0b10 = Slice (borrowed view into parent string)
         const managed_string_fields = try self.allocator.alloc(FieldInfo, 5);
-        managed_string_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = "ptr" } };
-        managed_string_fields[1] = .{ .name = "_len", .offset = 8, .size = 4, .value_type = .{ .primitive = "int" } };
-        managed_string_fields[2] = .{ .name = "_cap_flags", .offset = 12, .size = 4, .value_type = .{ .primitive = "int" } };
-        managed_string_fields[3] = .{ .name = "_refcount", .offset = 16, .size = 4, .value_type = .{ .primitive = "int" } };
-        managed_string_fields[4] = .{ .name = "_parent_off", .offset = 20, .size = 4, .value_type = .{ .primitive = "int" } };
+        managed_string_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        managed_string_fields[1] = .{ .name = "_len", .offset = 8, .size = 4, .value_type = .{ .primitive = types.INT } };
+        managed_string_fields[2] = .{ .name = "_cap_flags", .offset = 12, .size = 4, .value_type = .{ .primitive = types.INT } };
+        managed_string_fields[3] = .{ .name = "_refcount", .offset = 16, .size = 4, .value_type = .{ .primitive = types.INT } };
+        managed_string_fields[4] = .{ .name = "_parent_off", .offset = 20, .size = 4, .value_type = .{ .primitive = types.INT } };
         self.type_map.put(self.allocator, "__ManagedString", .{
             .struct_type = .{ .name = "__ManagedString", .fields = managed_string_fields, .size = 24 },
         }) catch {
@@ -1412,9 +1410,9 @@ pub const AstToIr = struct {
         // For non-slice strings: data points to String's buffer, managed points to __ManagedString (incref'd)
         // For slice strings: data points to newly allocated null-terminated copy, managed = null
         const cstring_fields = try self.allocator.alloc(FieldInfo, 3);
-        cstring_fields[0] = .{ .name = "data", .offset = 0, .size = 8, .value_type = .{ .primitive = "ptr" } };
-        cstring_fields[1] = .{ .name = "length", .offset = 8, .size = 8, .value_type = .{ .primitive = "int" } };
-        cstring_fields[2] = .{ .name = "managed", .offset = 16, .size = 8, .value_type = .{ .primitive = "ptr" } };
+        cstring_fields[0] = .{ .name = "data", .offset = 0, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        cstring_fields[1] = .{ .name = "length", .offset = 8, .size = 8, .value_type = .{ .primitive = types.INT } };
+        cstring_fields[2] = .{ .name = "managed", .offset = 16, .size = 8, .value_type = .{ .primitive = types.PTR } };
         self.type_map.put(self.allocator, "cstring", .{
             .struct_type = .{ .name = "cstring", .fields = cstring_fields, .size = 24 },
         }) catch {
@@ -1787,15 +1785,15 @@ pub const AstToIr = struct {
         return switch (constant) {
             .int => |v| .{
                 .value = try self.func().emitConstI64(v),
-                .ty = .{ .primitive = "int" },
+                .ty = .{ .primitive = types.INT },
             },
             .float => |v| .{
                 .value = try self.func().emitConstF64(v),
-                .ty = .{ .primitive = "float" },
+                .ty = .{ .primitive = types.FLOAT },
             },
             .bool => |v| .{
                 .value = try self.func().emitConstI64(if (v) 1 else 0),
-                .ty = .{ .primitive = "bool" },
+                .ty = .{ .primitive = types.BOOL },
             },
             .string => |s| self.convertStringLiteral(s),
             .array => |elements| {
@@ -2023,12 +2021,8 @@ pub const AstToIr = struct {
     fn getTypeSize(self: *AstToIr, te: ast.TypeExpr) i32 {
         return switch (te) {
             .simple => |name| {
-                // Check if it's a primitive type (all 8 bytes)
-                if (std.mem.eql(u8, name, "int") or
-                    std.mem.eql(u8, name, "float") or
-                    std.mem.eql(u8, name, "bool") or
-                    std.mem.eql(u8, name, "byte"))
-                {
+                // Check if it's a primitive type
+                if (types.isPrimitiveTypeName(name)) {
                     return 8;
                 }
                 // Resolve type aliases (string -> String, character -> Character)
@@ -2162,21 +2156,10 @@ pub const AstToIr = struct {
         for (ext_type.fields, 0..) |field, i| {
             const value_type: ValueType = blk: {
                 // Map type name to ValueType
-                if (std.mem.eql(u8, field.type_name, "int")) {
-                    break :blk .{ .primitive = "int" };
-                } else if (std.mem.eql(u8, field.type_name, "float")) {
-                    break :blk .{ .primitive = "float" };
-                } else if (std.mem.eql(u8, field.type_name, "bool")) {
-                    break :blk .{ .primitive = "bool" };
-                } else if (std.mem.eql(u8, field.type_name, "byte")) {
-                    break :blk .{ .primitive = "byte" };
-                } else if (std.mem.eql(u8, field.type_name, "ptr")) {
-                    break :blk .{ .primitive = "ptr" };
-                } else if (std.mem.eql(u8, field.type_name, "__ManagedArray") or std.mem.eql(u8, field.type_name, "__ManagedString")) {
-                    // Managed arrays/strings are structs, but we treat them specially
-                    break :blk .{ .struct_type = field.type_name };
+                if (types.isPrimitiveTypeName(field.type_name)) {
+                    break :blk .{ .primitive = field.type_name };
                 } else {
-                    // Assume it's a struct type
+                    // Assume it's a struct type (including __ManagedArray, __ManagedString)
                     break :blk .{ .struct_type = field.type_name };
                 }
             };
@@ -2284,12 +2267,7 @@ pub const AstToIr = struct {
                     else => "ptr", // Complex types are pointers
                 };
                 const av_ir_type = types.nameToIrType(type_name);
-                const av_size: i32 = switch (av_ir_type) {
-                    .i64, .f64, .ptr => 8,
-                    .i32 => 4,
-                    .i8 => 1,
-                    .void => 0,
-                };
+                const av_size: i32 = av_ir_type.sizeInBytes();
                 payload_size += av_size;
                 try assoc_values.append(self.allocator, .{
                     .name = av.name,
@@ -4375,14 +4353,7 @@ pub const AstToIr = struct {
         if (ret.value) |expr| {
             // Check for returning nil from non-optional function (before any other handling)
             if (expr == .nil_lit and self.sret_optional_info == null) {
-                // Get the return type name for the error message
-                const ret_type_name = if (self.func().return_type == .i64)
-                    "int"
-                else if (self.func().return_type == .f64)
-                    "float"
-                else
-                    "non-optional";
-                self.reportError(.E041, ret_type_name);
+                self.reportError(.E041, self.func().return_type.toMaxonName());
                 return error.TypeMismatch;
             }
 
@@ -6115,7 +6086,10 @@ pub const AstToIr = struct {
                 .primitive => |param_name| {
                     if (self.areTypesEquivalent(arg_name, param_name)) return true;
                     // int→float promotion is handled by applyIntToFloatPromotion before this check
-                    if (std.mem.eql(u8, arg_name, "int") and std.mem.eql(u8, param_name, "float")) return true;
+                    const arg_info = types.getPrimitiveTypeInfo(arg_name);
+                    const param_info = types.getPrimitiveTypeInfo(param_name);
+                    if (arg_info != null and param_info != null and
+                        arg_info.?.is_integral and param_info.?.is_floating_point) return true;
                     return false;
                 },
                 // cstring can be primitive or struct_type depending on context
@@ -6230,25 +6204,11 @@ pub const AstToIr = struct {
                 const var_ptr = try self.func().emitAlloca(av.ir_type);
                 try self.func().emitStore(var_ptr, value);
 
-                // Determine the ValueType for this binding
-                const binding_ty: ValueType = if (std.mem.eql(u8, av.type_name, "int"))
-                    .{ .primitive = "int" }
-                else if (std.mem.eql(u8, av.type_name, "float"))
-                    .{ .primitive = "float" }
-                else if (std.mem.eql(u8, av.type_name, "bool"))
-                    .{ .primitive = "bool" }
-                else
-                    .{ .primitive = av.type_name };
-
-                // Register in var_map
+                // Register in var_map with primitive ValueType
+                const binding_ty: ValueType = .{ .primitive = av.type_name };
                 try self.var_map.put(self.allocator, binding_name, types.VarInfo.init(var_ptr, binding_ty, false, false));
 
-                offset += switch (av.ir_type) {
-                    .i64, .f64, .ptr => 8,
-                    .i32 => 4,
-                    .i8 => 1,
-                    .void => 0,
-                };
+                offset += av.ir_type.sizeInBytes();
             }
         }
     }
@@ -6295,25 +6255,11 @@ pub const AstToIr = struct {
                 const var_ptr = try self.func().emitAlloca(av.ir_type);
                 try self.func().emitStore(var_ptr, value);
 
-                // Determine the ValueType for this binding
-                const binding_ty: ValueType = if (std.mem.eql(u8, av.type_name, "int"))
-                    .{ .primitive = "int" }
-                else if (std.mem.eql(u8, av.type_name, "float"))
-                    .{ .primitive = "float" }
-                else if (std.mem.eql(u8, av.type_name, "bool"))
-                    .{ .primitive = "bool" }
-                else
-                    .{ .primitive = av.type_name };
-
-                // Register in var_map
+                // Register in var_map with primitive ValueType
+                const binding_ty: ValueType = .{ .primitive = av.type_name };
                 try self.var_map.put(self.allocator, binding_name, types.VarInfo.init(var_ptr, binding_ty, false, false));
 
-                offset += switch (av.ir_type) {
-                    .i64, .f64, .ptr => 8,
-                    .i32 => 4,
-                    .i8 => 1,
-                    .void => 0,
-                };
+                offset += av.ir_type.sizeInBytes();
             }
         }
     }
@@ -6360,25 +6306,11 @@ pub const AstToIr = struct {
                 const var_ptr = try self.func().emitAlloca(av.ir_type);
                 try self.func().emitStore(var_ptr, value);
 
-                // Determine the ValueType for this binding
-                const binding_ty: ValueType = if (std.mem.eql(u8, av.type_name, "int"))
-                    .{ .primitive = "int" }
-                else if (std.mem.eql(u8, av.type_name, "float"))
-                    .{ .primitive = "float" }
-                else if (std.mem.eql(u8, av.type_name, "bool"))
-                    .{ .primitive = "bool" }
-                else
-                    .{ .primitive = av.type_name };
-
-                // Register in var_map
+                // Register in var_map with primitive ValueType
+                const binding_ty: ValueType = .{ .primitive = av.type_name };
                 try self.var_map.put(self.allocator, binding_name, types.VarInfo.init(var_ptr, binding_ty, false, false));
 
-                offset += switch (av.ir_type) {
-                    .i64, .f64, .ptr => 8,
-                    .i32 => 4,
-                    .i8 => 1,
-                    .void => 0,
-                };
+                offset += av.ir_type.sizeInBytes();
             }
         }
     }
@@ -6670,7 +6602,8 @@ pub const AstToIr = struct {
         // Determine comparison type based on scrutinee type
         return switch (scrutinee_ty) {
             .primitive => |name| {
-                if (std.mem.eql(u8, name, "float")) {
+                const info = types.getPrimitiveTypeInfo(name);
+                if (info != null and info.?.is_floating_point) {
                     return try self.func().emitBinaryOp(.fcmp_eq, scrutinee, pattern.value, .f64);
                 } else {
                     return try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64);
@@ -6882,7 +6815,7 @@ pub const AstToIr = struct {
 
         // Load final result
         const final_value = try self.func().emitLoad(result_ptr, .i64);
-        return .{ .value = final_value, .ty = result_ty orelse .{ .primitive = "int" } };
+        return .{ .value = final_value, .ty = result_ty orelse .{ .primitive = types.INT } };
     }
 
     fn convertBreakStmt(self: *AstToIr, brk: ast.BreakStmt) ConvertError!void {
@@ -7398,9 +7331,9 @@ pub const AstToIr = struct {
 
     pub fn convertExpression(self: *AstToIr, expr: ast.Expression) ConvertError!TypedValue {
         return switch (expr) {
-            .integer => |v| .{ .value = try self.func().emitConstI64(v), .ty = .{ .primitive = "int" } },
-            .float_lit => |v| .{ .value = try self.func().emitConstF64(v), .ty = .{ .primitive = "float" } },
-            .bool_lit => |v| .{ .value = try self.func().emitConstI64(if (v) 1 else 0), .ty = .{ .primitive = "bool" } },
+            .integer => |v| .{ .value = try self.func().emitConstI64(v), .ty = .{ .primitive = types.INT } },
+            .float_lit => |v| .{ .value = try self.func().emitConstF64(v), .ty = .{ .primitive = types.FLOAT } },
+            .bool_lit => |v| .{ .value = try self.func().emitConstI64(if (v) 1 else 0), .ty = .{ .primitive = types.BOOL } },
             .nil_lit => self.createNilOptional(.i64),
             .self_expr => self.convertSelfExpr(),
             .identifier => |name| self.convertIdentifierOrField(name),
@@ -7772,13 +7705,15 @@ pub const AstToIr = struct {
                 return error.UnknownType;
             },
             .primitive => |prim| {
-                // Check bool first since it also has ir_type == .i64
-                if (std.mem.eql(u8, prim, "bool")) {
+                // Check bool first since it needs special "true"/"false" output
+                if (std.mem.eql(u8, prim, types.BOOL)) {
                     return self.convertBoolToString(typed_val.value);
-                } else if (std.mem.eql(u8, prim, "int") or types.nameToIrType(prim) == .i64) {
-                    return self.convertIntToString(typed_val.value);
-                } else if (std.mem.eql(u8, prim, "float") or types.nameToIrType(prim) == .f64) {
+                }
+                const info = types.getPrimitiveTypeInfo(prim);
+                if (info != null and info.?.is_floating_point) {
                     return self.convertFloatToString(typed_val.value);
+                } else if (info != null and info.?.is_integral) {
+                    return self.convertIntToString(typed_val.value);
                 }
                 const msg = std.fmt.allocPrint(self.allocator, "cannot convert primitive type '{s}' to string for interpolation", .{prim}) catch "cannot convert primitive to string";
                 self.reportInternalError(msg);
@@ -8342,14 +8277,14 @@ pub const AstToIr = struct {
                 const ty: ir.Type = if (is_float) .f64 else .i64;
                 const result = try self.func().emitBinaryOp(op, zero, operand.value, ty);
                 // Preserve the operand's type name for negate
-                const type_name = if (operand.ty == .primitive) operand.ty.primitive else if (is_float) "float" else "int";
+                const type_name = if (operand.ty == .primitive) operand.ty.primitive else types.irTypeToName(ty);
                 return .{ .value = result, .ty = .{ .primitive = type_name } };
             },
             .not => {
                 // Logical not: x == 0
                 const zero = try self.func().emitConstI64(0);
                 const result = try self.func().emitBinaryOp(.icmp_eq, operand.value, zero, .i64);
-                return .{ .value = result, .ty = .{ .primitive = "bool" } };
+                return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
             },
         }
     }
@@ -8376,15 +8311,10 @@ pub const AstToIr = struct {
         const source_type = source.ty.toPrimitiveType();
 
         // Determine target IR type from type name
-        const target_ir_type: ir.Type = if (std.mem.eql(u8, target_type_name, "int"))
-            .i64
-        else if (std.mem.eql(u8, target_type_name, "byte"))
-            .i64 // byte is stored as i64 in IR, just truncated
-        else if (std.mem.eql(u8, target_type_name, "float"))
-            .f64
-        else if (std.mem.eql(u8, target_type_name, "bool"))
-            .i64 // bool is stored as i64
-        else {
+        const target_ir_type: ir.Type = blk: {
+            if (types.isPrimitiveTypeName(target_type_name)) {
+                break :blk types.nameToIrType(target_type_name);
+            }
             // Unknown cast target type
             debug.astToIr("Unknown cast target type: {s}\n", .{target_type_name});
             self.reportError(.E006, target_type_name);
@@ -8562,7 +8492,7 @@ pub const AstToIr = struct {
             try self.emitIntOp(bin.op, left_val, right_val);
 
         // Determine the result type name based on IR type
-        const type_name = if (result_ty == .f64) "float" else "int";
+        const type_name = types.irTypeToName(result_ty);
         return .{ .value = result, .ty = .{ .primitive = type_name } };
     }
 
@@ -8616,7 +8546,7 @@ pub const AstToIr = struct {
                     return error.TypeMismatch;
                 },
             };
-            return .{ .value = result, .ty = .{ .primitive = "bool" } };
+            return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
         } else if (left_is_optional) {
             // Left is optional, right is a value - unwrap left and compare
             // Get pointer to the value at offset 8 of the optional
@@ -8630,11 +8560,11 @@ pub const AstToIr = struct {
                         const equals_result = try self.emitMethodCallWithIrArgs(struct_name, "equals", &.{right.value}, value_ptr);
 
                         if (cmp.op == .eq) {
-                            return .{ .value = equals_result.value, .ty = .{ .primitive = "bool" } };
+                            return .{ .value = equals_result.value, .ty = .{ .primitive = types.BOOL } };
                         } else {
                             const zero = try self.func().emitConstI64(0);
                             const negated = try self.func().emitBinaryOp(.icmp_eq, equals_result.value, zero, .i64);
-                            return .{ .value = negated, .ty = .{ .primitive = "bool" } };
+                            return .{ .value = negated, .ty = .{ .primitive = types.BOOL } };
                         }
                     }
                 }
@@ -8652,7 +8582,7 @@ pub const AstToIr = struct {
                 .ge => .icmp_ge,
             };
             const result = try self.func().emitBinaryOp(op, left_val, right.value, .i64);
-            return .{ .value = result, .ty = .{ .primitive = "bool" } };
+            return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
         } else if (right_is_optional) {
             // Right is optional, left is a value - unwrap right and compare
             // Get pointer to the value at offset 8 of the optional
@@ -8666,11 +8596,11 @@ pub const AstToIr = struct {
                         const equals_result = try self.emitMethodCallWithIrArgs(struct_name, "equals", &.{value_ptr}, left.value);
 
                         if (cmp.op == .eq) {
-                            return .{ .value = equals_result.value, .ty = .{ .primitive = "bool" } };
+                            return .{ .value = equals_result.value, .ty = .{ .primitive = types.BOOL } };
                         } else {
                             const zero = try self.func().emitConstI64(0);
                             const negated = try self.func().emitBinaryOp(.icmp_eq, equals_result.value, zero, .i64);
-                            return .{ .value = negated, .ty = .{ .primitive = "bool" } };
+                            return .{ .value = negated, .ty = .{ .primitive = types.BOOL } };
                         }
                     }
                 }
@@ -8688,7 +8618,7 @@ pub const AstToIr = struct {
                 .ge => .icmp_ge,
             };
             const result = try self.func().emitBinaryOp(op, left.value, right_val, .i64);
-            return .{ .value = result, .ty = .{ .primitive = "bool" } };
+            return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
         }
 
         // Check if left operand is a struct type that implements Equatable
@@ -8703,12 +8633,12 @@ pub const AstToIr = struct {
 
                     // For ==, return the result directly; for !=, negate it
                     if (cmp.op == .eq) {
-                        return .{ .value = equals_result.value, .ty = .{ .primitive = "bool" } };
+                        return .{ .value = equals_result.value, .ty = .{ .primitive = types.BOOL } };
                     } else {
                         // != is the negation of equals
                         const zero = try self.func().emitConstI64(0);
                         const negated = try self.func().emitBinaryOp(.icmp_eq, equals_result.value, zero, .i64);
-                        return .{ .value = negated, .ty = .{ .primitive = "bool" } };
+                        return .{ .value = negated, .ty = .{ .primitive = types.BOOL } };
                     }
                 }
             }
@@ -8728,7 +8658,7 @@ pub const AstToIr = struct {
                         .ge => try self.func().emitBinaryOp(.icmp_ge, compare_result.value, zero, .i64),
                         else => unreachable,
                     };
-                    return .{ .value = result, .ty = .{ .primitive = "bool" } };
+                    return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
                 }
             }
         }
@@ -8738,12 +8668,12 @@ pub const AstToIr = struct {
         const right_type_name = if (right.ty == .primitive) right.ty.primitive else null;
 
         if (left_type_name != null and right_type_name != null) {
-            const left_is_int = std.mem.eql(u8, left_type_name.?, "int");
-            const left_is_float = std.mem.eql(u8, left_type_name.?, "float");
-            const left_is_byte = std.mem.eql(u8, left_type_name.?, "byte");
-            const right_is_int = std.mem.eql(u8, right_type_name.?, "int");
-            const right_is_float = std.mem.eql(u8, right_type_name.?, "float");
-            const right_is_byte = std.mem.eql(u8, right_type_name.?, "byte");
+            const left_is_int = std.mem.eql(u8, left_type_name.?, types.INT);
+            const left_is_float = std.mem.eql(u8, left_type_name.?, types.FLOAT);
+            const left_is_byte = std.mem.eql(u8, left_type_name.?, types.BYTE);
+            const right_is_int = std.mem.eql(u8, right_type_name.?, types.INT);
+            const right_is_float = std.mem.eql(u8, right_type_name.?, types.FLOAT);
+            const right_is_byte = std.mem.eql(u8, right_type_name.?, types.BYTE);
 
             // Check for int/float mismatch (either direction)
             if ((left_is_int and right_is_float) or (left_is_float and right_is_int)) {
@@ -8807,7 +8737,7 @@ pub const AstToIr = struct {
                 .ge => .fcmp_ge,
             };
             const result = try self.func().emitBinaryOp(op, left_val, right_val, .i64);
-            return .{ .value = result, .ty = .{ .primitive = "bool" } };
+            return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
         }
 
         // Integer comparison
@@ -8820,7 +8750,7 @@ pub const AstToIr = struct {
             .ge => .icmp_ge,
         };
         const result = try self.func().emitBinaryOp(op, left.value, right.value, .i64);
-        return .{ .value = result, .ty = .{ .primitive = "bool" } };
+        return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
     }
 
     fn convertLogical(self: *AstToIr, log: ast.LogicalExpr) ConvertError!TypedValue {
@@ -8837,7 +8767,7 @@ pub const AstToIr = struct {
                 const left_bool = try self.func().emitBinaryOp(.icmp_ne, left.value, zero, .i64);
                 const right_bool = try self.func().emitBinaryOp(.icmp_ne, right.value, zero, .i64);
                 const result = try self.func().emitBinaryOp(.mul, left_bool, right_bool, .i64);
-                return .{ .value = result, .ty = .{ .primitive = "bool" } };
+                return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
             },
             .@"or" => {
                 // If left is an optional type, treat as nil coalescing
@@ -8884,7 +8814,7 @@ pub const AstToIr = struct {
                 const left_bool = try self.func().emitBinaryOp(.icmp_ne, left.value, zero, .i64);
                 const right_bool = try self.func().emitBinaryOp(.icmp_ne, right.value, zero, .i64);
                 const result = try self.func().emitBinaryOp(.bitor, left_bool, right_bool, .i64);
-                return .{ .value = result, .ty = .{ .primitive = "bool" } };
+                return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
             },
         }
     }
@@ -8991,16 +8921,9 @@ pub const AstToIr = struct {
                 break :blk .{ .struct_type = struct_name };
             } else {
                 // Primitive success type - infer from IR type
-                const prim_name: []const u8 = switch (eu_info.success_type) {
-                    .i64, .i32 => "int",
-                    .i8 => "byte",
-                    .f64 => "float",
-                    .ptr => "ptr",
-                    .void => "void",
-                };
-                break :blk .{ .primitive = prim_name };
+                break :blk .{ .primitive = eu_info.success_type.toMaxonName() };
             }
-        } else .{ .primitive = "int" };
+        } else .{ .primitive = types.INT };
 
         // Success block: extract value and store for later use
         const value_ptr = try self.func().emitGetFieldPtr(result_typed.value, 8);
@@ -9258,11 +9181,11 @@ pub const AstToIr = struct {
 
                 // For int-backed enums, the enum value IS the raw value
                 if (enum_info.backing_type == .int) {
-                    return .{ .value = base.value, .ty = .{ .primitive = "int" } };
+                    return .{ .value = base.value, .ty = .{ .primitive = types.INT } };
                 } else {
                     // For string-backed enums, look up in string_values table
                     // For now, return the ordinal as int
-                    return .{ .value = base.value, .ty = .{ .primitive = "int" } };
+                    return .{ .value = base.value, .ty = .{ .primitive = types.INT } };
                 }
             }
             // Enum values don't have other fields
@@ -9379,12 +9302,7 @@ pub const AstToIr = struct {
 
             const payload_ptr = try self.func().emitGetFieldPtr(mem_ptr, offset);
             try self.func().emitStore(payload_ptr, arg_typed.value);
-            offset += switch (av.ir_type) {
-                .i64, .f64, .ptr => 8,
-                .i32 => 4,
-                .i8 => 1,
-                .void => 0,
-            };
+            offset += av.ir_type.sizeInBytes();
         }
 
         // Return the pointer to the enum storage
@@ -9398,11 +9316,7 @@ pub const AstToIr = struct {
     /// Apply implicit int→float promotion if needed
     fn applyIntToFloatPromotion(self: *AstToIr, arg_value: ir.Value, arg_type: ValueType, param_type: ValueType) !ir.Value {
         const arg_prim = arg_type.toPrimitiveType();
-        const param_expects_float = switch (param_type) {
-            .primitive => |name| std.mem.eql(u8, name, "float"),
-            else => false,
-        };
-        if (param_expects_float and arg_prim == .i64) {
+        if (param_type.isFloatingPoint() and arg_prim == .i64) {
             return self.func().emitUnaryOp(.sitofp, arg_value, .f64) catch return error.OutOfMemory;
         }
         return arg_value;
@@ -9845,7 +9759,7 @@ pub const AstToIr = struct {
             }
             return .{ .value = result orelse 0, .ty = ret_vt.* };
         }
-        return .{ .value = result orelse 0, .ty = .{ .primitive = "void" } };
+        return .{ .value = result orelse 0, .ty = .{ .primitive = types.VOID } };
     }
 
     fn checkOwnershipTransfer(self: *AstToIr, func_name: []const u8, arg_expr: ast.Expression, param_idx: usize) ConvertError!void {
@@ -11686,10 +11600,13 @@ pub const AstToIr = struct {
 
     /// Emit hash() for primitive types
     fn emitPrimitiveHash(self: *AstToIr, value: ir.Value, type_name: []const u8) ConvertError!TypedValue {
-        if (std.mem.eql(u8, type_name, "int")) {
-            // int.hash() returns the value directly
-            return .{ .value = value, .ty = .{ .primitive = "int" } };
-        } else if (std.mem.eql(u8, type_name, "float")) {
+        const info = types.getPrimitiveTypeInfo(type_name) orelse {
+            debug.astToIr("error: hash not supported for type '{s}'", .{type_name});
+            self.reportError(.E003, type_name);
+            return error.SemanticError;
+        };
+
+        if (info.is_floating_point) {
             // float.hash() - normalize -0.0 to +0.0, then bitcast to i64
             // Following Swift's approach: if isZero, use 0, else use bitPattern
             const zero = try self.func().emitConstF64(0.0);
@@ -11719,13 +11636,10 @@ pub const AstToIr = struct {
             // Load result
             const result = try self.func().emitLoad(result_ptr, .i64);
 
-            return .{ .value = result, .ty = .{ .primitive = "int" } };
-        } else if (std.mem.eql(u8, type_name, "bool")) {
-            // bool.hash() returns 1 for true, 0 for false (value is already 0 or 1)
-            return .{ .value = value, .ty = .{ .primitive = "int" } };
-        } else if (std.mem.eql(u8, type_name, "byte")) {
-            // byte.hash() returns the value directly
-            return .{ .value = value, .ty = .{ .primitive = "int" } };
+            return .{ .value = result, .ty = .{ .primitive = types.INT } };
+        } else if (info.is_integral) {
+            // int/bool/byte.hash() returns the value directly
+            return .{ .value = value, .ty = .{ .primitive = types.INT } };
         }
 
         debug.astToIr("error: hash not supported for type '{s}'", .{type_name});
@@ -11735,14 +11649,20 @@ pub const AstToIr = struct {
 
     /// Emit equals() for primitive types
     fn emitPrimitiveEquals(self: *AstToIr, left: ir.Value, right: ir.Value, type_name: []const u8) ConvertError!TypedValue {
-        if (std.mem.eql(u8, type_name, "int") or std.mem.eql(u8, type_name, "bool") or std.mem.eql(u8, type_name, "byte")) {
-            // Integer comparison
-            const result = try self.func().emitBinaryOp(.icmp_eq, left, right, .i64);
-            return .{ .value = result, .ty = .{ .primitive = "bool" } };
-        } else if (std.mem.eql(u8, type_name, "float")) {
+        const info = types.getPrimitiveTypeInfo(type_name) orelse {
+            debug.astToIr("error: equals not supported for type '{s}'", .{type_name});
+            self.reportError(.E003, type_name);
+            return error.SemanticError;
+        };
+
+        if (info.is_floating_point) {
             // Float comparison (follows IEEE semantics: NaN != NaN)
             const result = try self.func().emitBinaryOp(.fcmp_eq, left, right, .i64);
-            return .{ .value = result, .ty = .{ .primitive = "bool" } };
+            return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
+        } else if (info.is_integral) {
+            // Integer comparison
+            const result = try self.func().emitBinaryOp(.icmp_eq, left, right, .i64);
+            return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
         }
 
         debug.astToIr("error: equals not supported for type '{s}'", .{type_name});
@@ -12103,14 +12023,11 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
 fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
     return switch (te) {
         .simple => |name| {
-            if (std.mem.eql(u8, name, "int")) return .i64;
-            if (std.mem.eql(u8, name, "float")) return .f64;
-            if (std.mem.eql(u8, name, "bool")) return .i64;
+            // Handle type aliases first
             if (std.mem.eql(u8, name, "string")) return .ptr;
             if (std.mem.eql(u8, name, "character")) return .i64;
-            if (std.mem.eql(u8, name, "byte")) return .i64;
-            // Struct types return ptr
-            return .ptr;
+            // Use centralized primitive type lookup
+            return types.nameToIrType(name);
         },
         .generic => .ptr,
         .optional => .ptr,
@@ -12157,13 +12074,10 @@ var mono_name_buffer2: [256]u8 = undefined; // Separate buffer for getValueTypeF
 fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
     return switch (te) {
         .simple => |name| {
-            // Known primitives don't have struct names
-            if (std.mem.eql(u8, name, "int") or
-                std.mem.eql(u8, name, "float") or
-                std.mem.eql(u8, name, "bool") or
+            // Known primitives and type aliases don't have struct names
+            if (types.isPrimitiveTypeName(name) or
                 std.mem.eql(u8, name, "string") or
-                std.mem.eql(u8, name, "character") or
-                std.mem.eql(u8, name, "byte"))
+                std.mem.eql(u8, name, "character"))
             {
                 return null;
             }
@@ -12226,7 +12140,7 @@ fn getValueTypeFromTypeExprForParam(allocator: std.mem.Allocator, te: ast.TypeEx
                 .error_enum_type = eu.error_type,
             },
         },
-        .function_type => .{ .primitive = "ptr" }, // Function types are represented as pointers in simple contexts
+        .function_type => .{ .primitive = types.PTR }, // Function types are represented as pointers in simple contexts
     };
 }
 

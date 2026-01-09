@@ -1,5 +1,6 @@
 const std = @import("std");
 const ir = @import("ir.zig");
+const types = @import("ast_to_ir_types.zig");
 
 const Allocator = std.mem.Allocator;
 const Function = ir.Function;
@@ -11,11 +12,11 @@ const Value = ir.Value;
 
 /// Size of __ManagedString struct (24 bytes)
 /// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
-pub const MANAGED_STRING_SIZE: i32 = 24;
+pub const MANAGED_STRING_SIZE: i32 = types.MANAGED_STRING_SIZE;
 
 /// Size of __ManagedArray struct (24 bytes)
 /// Layout: buffer(8) + len(8) + capacity(8)
-pub const MANAGED_ARRAY_SIZE: i32 = 24;
+pub const MANAGED_ARRAY_SIZE: i32 = types.MANAGED_ARRAY_SIZE;
 
 // ============================================================================
 // Field Access Helpers
