@@ -4,6 +4,188 @@ const debug = @import("debug.zig");
 /// IR Value reference - %0, %1, etc.
 pub const Value = u32;
 
+// ============================================================================
+// Type-Safe Pointer Wrappers
+//
+// These provide compile-time safety for distinguishing pointer kinds.
+// All are zero-cost at runtime (same size as Value = u32).
+// ============================================================================
+
+/// Generic pointer wrapper - parameterized by a marker type for specific structs
+pub fn Ptr(comptime Tag: type) type {
+    return struct {
+        val: Value,
+
+        const Self = @This();
+
+        pub fn raw(self: Self) Value {
+            return self.val;
+        }
+
+        /// Convert to generic StructPtr when needed
+        pub fn asStructPtr(self: Self) StructPtr {
+            return .{ .val = self.val };
+        }
+
+        /// Convert to RawPtr for memcpy operations
+        pub fn asRawPtr(self: Self) RawPtr {
+            return .{ .val = self.val };
+        }
+
+        // Marker type is used only for compile-time distinction
+        pub const marker = Tag;
+    };
+}
+
+// Marker types for specific structs (zero-size, compile-time only)
+pub const StringTag = struct {};
+pub const ManagedArrayTag = struct {};
+pub const OptionalTag = struct {};
+pub const MapTag = struct {};
+pub const ErrorUnionTag = struct {};
+
+// Type aliases for common pointer types
+pub const StringPtr = Ptr(StringTag); // Pointer to String struct
+pub const ManagedArrayPtr = Ptr(ManagedArrayTag); // Pointer to __ManagedArray
+pub const OptionalPtr = Ptr(OptionalTag); // Pointer to optional wrapper
+pub const MapPtr = Ptr(MapTag); // Pointer to Map struct
+pub const ErrorUnionPtr = Ptr(ErrorUnionTag); // Pointer to error union
+
+/// Generic struct pointer (for field access on unknown struct types)
+pub const StructPtr = struct {
+    val: Value,
+
+    pub fn raw(self: StructPtr) Value {
+        return self.val;
+    }
+
+    /// Convert to RawPtr for memcpy operations
+    pub fn asRawPtr(self: StructPtr) RawPtr {
+        return .{ .val = self.val };
+    }
+};
+
+/// Pointer to raw memory buffer (no layout assumptions)
+pub const RawPtr = struct {
+    val: Value,
+
+    pub fn raw(self: RawPtr) Value {
+        return self.val;
+    }
+
+    /// Convert raw memory to struct pointer (after you've initialized it as a struct)
+    pub fn asStruct(self: RawPtr) StructPtr {
+        return .{ .val = self.val };
+    }
+
+    /// Convert to specific typed pointer
+    pub fn asStringPtr(self: RawPtr) StringPtr {
+        return .{ .val = self.val };
+    }
+
+    pub fn asManagedArrayPtr(self: RawPtr) ManagedArrayPtr {
+        return .{ .val = self.val };
+    }
+
+    pub fn asOptionalPtr(self: RawPtr) OptionalPtr {
+        return .{ .val = self.val };
+    }
+
+    pub fn asMapPtr(self: RawPtr) MapPtr {
+        return .{ .val = self.val };
+    }
+
+    pub fn asErrorUnionPtr(self: RawPtr) ErrorUnionPtr {
+        return .{ .val = self.val };
+    }
+};
+
+/// Pointer to an array element
+pub const ElemPtr = struct {
+    val: Value,
+
+    pub fn raw(self: ElemPtr) Value {
+        return self.val;
+    }
+
+    /// Convert to StructPtr (when element is a struct)
+    pub fn asStructPtr(self: ElemPtr) StructPtr {
+        return .{ .val = self.val };
+    }
+
+    /// Convert to RawPtr
+    pub fn asRawPtr(self: ElemPtr) RawPtr {
+        return .{ .val = self.val };
+    }
+};
+
+/// Pointer to a slot containing another pointer (indirection)
+pub const SlotPtr = struct {
+    val: Value,
+
+    pub fn raw(self: SlotPtr) Value {
+        return self.val;
+    }
+};
+
+/// Pointer to a function
+pub const FuncPtr = struct {
+    val: Value,
+
+    pub fn raw(self: FuncPtr) Value {
+        return self.val;
+    }
+};
+
+// ============================================================================
+// Conversion helpers - for explicit conversions when you know the pointer kind
+// ============================================================================
+
+/// Convert raw Value to StructPtr (use when you know it's a struct pointer)
+pub fn toStructPtr(val: Value) StructPtr {
+    return .{ .val = val };
+}
+
+/// Convert raw Value to RawPtr (use when you know it's a raw pointer)
+pub fn toRawPtr(val: Value) RawPtr {
+    return .{ .val = val };
+}
+
+/// Convert raw Value to ElemPtr
+pub fn toElemPtr(val: Value) ElemPtr {
+    return .{ .val = val };
+}
+
+/// Convert raw Value to StringPtr
+pub fn toStringPtr(val: Value) StringPtr {
+    return .{ .val = val };
+}
+
+/// Convert raw Value to ManagedArrayPtr
+pub fn toManagedArrayPtr(val: Value) ManagedArrayPtr {
+    return .{ .val = val };
+}
+
+/// Convert raw Value to OptionalPtr
+pub fn toOptionalPtr(val: Value) OptionalPtr {
+    return .{ .val = val };
+}
+
+/// Convert raw Value to MapPtr
+pub fn toMapPtr(val: Value) MapPtr {
+    return .{ .val = val };
+}
+
+/// Convert raw Value to ErrorUnionPtr
+pub fn toErrorUnionPtr(val: Value) ErrorUnionPtr {
+    return .{ .val = val };
+}
+
+/// Convert raw Value to FuncPtr
+pub fn toFuncPtr(val: Value) FuncPtr {
+    return .{ .val = val };
+}
+
 /// IR Type
 pub const Type = enum {
     i8, // byte type
@@ -499,26 +681,31 @@ pub const Function = struct {
     }
 
     /// Emit a string constant (pointer to data section)
-    pub fn emitStringConstant(self: *Function, str: []const u8) !Value {
-        return self.emitWithResult(.const_string, .ptr, .{ .{ .string_data = str }, .none, .none });
+    pub fn emitStringConstant(self: *Function, str: []const u8) !RawPtr {
+        const val = try self.emitWithResult(.const_string, .ptr, .{ .{ .string_data = str }, .none, .none });
+        return .{ .val = val };
     }
 
-    // Memory
-    pub fn emitAlloca(self: *Function, ty: Type) !Value {
+    // Memory - allocations return RawPtr (raw memory, no layout yet)
+    pub fn emitAlloca(self: *Function, ty: Type) !RawPtr {
         _ = ty;
-        return self.emitWithResult(.alloca, .ptr, .{ .none, .none, .none });
+        const val = try self.emitWithResult(.alloca, .ptr, .{ .none, .none, .none });
+        return .{ .val = val };
     }
 
-    pub fn emitAllocaSized(self: *Function, size_bytes: i32) !Value {
+    pub fn emitAllocaSized(self: *Function, size_bytes: i32) !RawPtr {
         if (size_bytes <= 0) return error.ZeroSizeAllocation;
-        return self.emitWithResult(.alloca_sized, .ptr, .{ .{ .immediate_i32 = size_bytes }, .none, .none });
+        const val = try self.emitWithResult(.alloca_sized, .ptr, .{ .{ .immediate_i32 = size_bytes }, .none, .none });
+        return .{ .val = val };
     }
 
-    pub fn emitAllocaDynamic(self: *Function, size_value: Value) !Value {
+    pub fn emitAllocaDynamic(self: *Function, size_value: Value) !RawPtr {
         // Note: for dynamic sizes, zero-check must happen at runtime
-        return self.emitWithResult(.alloca_dynamic, .ptr, .{ .{ .value = size_value }, .none, .none });
+        const val = try self.emitWithResult(.alloca_dynamic, .ptr, .{ .{ .value = size_value }, .none, .none });
+        return .{ .val = val };
     }
 
+    // Load/Store - work with raw Value for now (callers use .raw())
     pub fn emitLoad(self: *Function, ptr: Value, ty: Type) !Value {
         return self.emitUnaryOp(.load, ptr, ty);
     }
@@ -535,19 +722,23 @@ pub const Function = struct {
         try self.emit(.{ .op = .store_i32, .operands = .{ .{ .value = ptr }, .{ .value = value }, .none } });
     }
 
-    pub fn emitGetFieldPtr(self: *Function, base_ptr: Value, field_offset: i32) !Value {
-        return self.emitWithResult(.getfieldptr, .ptr, .{ .{ .value = base_ptr }, .{ .immediate_i32 = field_offset }, .none });
+    // Struct field access - takes StructPtr, returns StructPtr
+    pub fn emitGetFieldPtr(self: *Function, base_ptr: StructPtr, field_offset: i32) !StructPtr {
+        const val = try self.emitWithResult(.getfieldptr, .ptr, .{ .{ .value = base_ptr.val }, .{ .immediate_i32 = field_offset }, .none });
+        return .{ .val = val };
     }
 
-    pub fn emitGetElemPtr(self: *Function, base_ptr: Value, index: Value, elem_size: i32) !Value {
+    // Array element access - takes RawPtr, returns ElemPtr
+    pub fn emitGetElemPtr(self: *Function, base_ptr: RawPtr, index: Value, elem_size: i32) !ElemPtr {
         const result = self.newValue();
         try self.emit(.{
             .op = .getelemptr,
             .result = result,
             .result_type = .ptr,
-            .operands = .{ .{ .value = base_ptr }, .{ .value = index }, .{ .elem_size = elem_size } },
+            .operands = .{ .{ .value = base_ptr.val }, .{ .value = index }, .{ .elem_size = elem_size } },
         });
-        return result;
+        try self.setValueName(result, opToBaseName(.getelemptr));
+        return .{ .val = result };
     }
 
     // Control flow
@@ -576,12 +767,12 @@ pub const Function = struct {
     }
 
     // Indirect function call (through function pointer)
-    pub fn emitCallIndirect(self: *Function, func_ptr: Value, args: []const Value, ret_type: Type) !?Value {
+    pub fn emitCallIndirect(self: *Function, func_ptr: FuncPtr, args: []const Value, ret_type: Type) !?Value {
         if (ret_type == .void) {
-            try self.emit(.{ .op = .call_indirect, .operands = .{ .{ .value = func_ptr }, .{ .call_args = args }, .none } });
+            try self.emit(.{ .op = .call_indirect, .operands = .{ .{ .value = func_ptr.val }, .{ .call_args = args }, .none } });
             return null;
         }
-        return try self.emitWithResult(.call_indirect, ret_type, .{ .{ .value = func_ptr }, .{ .call_args = args }, .none });
+        return try self.emitWithResult(.call_indirect, ret_type, .{ .{ .value = func_ptr.val }, .{ .call_args = args }, .none });
     }
 
     // External DLL function call
@@ -594,9 +785,10 @@ pub const Function = struct {
         return try self.emitWithResult(.extern_call, ret_type, .{ extern_func, .{ .call_args = args }, .none });
     }
 
-    // Get address of a named function
-    pub fn emitFuncAddr(self: *Function, func_name: []const u8) !Value {
-        return self.emitWithResult(.func_addr, .ptr, .{ .{ .func_name = func_name }, .none, .none });
+    // Get address of a named function - returns FuncPtr
+    pub fn emitFuncAddr(self: *Function, func_name: []const u8) !FuncPtr {
+        const val = try self.emitWithResult(.func_addr, .ptr, .{ .{ .func_name = func_name }, .none, .none });
+        return .{ .val = val };
     }
 
     // Parameters
@@ -604,49 +796,53 @@ pub const Function = struct {
         return self.emitWithResult(.param, ty, .{ .{ .immediate_i32 = param_index }, .none, .none });
     }
 
-    // Memory copy (static size)
-    pub fn emitMemcpy(self: *Function, dest: Value, src: Value, size: i32) !void {
+    // Memory copy (static size) - takes RawPtr
+    pub fn emitMemcpy(self: *Function, dest: RawPtr, src: RawPtr, size: i32) !void {
         try self.emit(.{
             .op = .memcpy,
-            .operands = .{ .{ .value = dest }, .{ .value = src }, .{ .immediate_i32 = size } },
+            .operands = .{ .{ .value = dest.val }, .{ .value = src.val }, .{ .immediate_i32 = size } },
         });
     }
 
-    // Memory copy (dynamic size value)
-    pub fn emitMemcpyDynamic(self: *Function, dest: Value, src: Value, size: Value) !void {
+    // Memory copy (dynamic size value) - takes RawPtr
+    pub fn emitMemcpyDynamic(self: *Function, dest: RawPtr, src: RawPtr, size: Value) !void {
         try self.emit(.{
             .op = .memcpy_dyn,
-            .operands = .{ .{ .value = dest }, .{ .value = src }, .{ .value = size } },
+            .operands = .{ .{ .value = dest.val }, .{ .value = src.val }, .{ .value = size } },
         });
     }
 
-    // Memory set (typically used to zero memory)
-    pub fn emitMemset(self: *Function, dest: Value, byte_value: u8, size: i32) !void {
+    // Memory set (typically used to zero memory) - takes RawPtr
+    pub fn emitMemset(self: *Function, dest: RawPtr, byte_value: u8, size: i32) !void {
         try self.emit(.{
             .op = .memset,
-            .operands = .{ .{ .value = dest }, .{ .immediate_i32 = @intCast(byte_value) }, .{ .immediate_i32 = size } },
+            .operands = .{ .{ .value = dest.val }, .{ .immediate_i32 = @intCast(byte_value) }, .{ .immediate_i32 = size } },
         });
     }
 
-    // Memory set with dynamic size
-    pub fn emitMemsetDynamic(self: *Function, dest: Value, byte_value: u8, size: Value) !void {
+    // Memory set with dynamic size - takes RawPtr
+    pub fn emitMemsetDynamic(self: *Function, dest: RawPtr, byte_value: u8, size: Value) !void {
         try self.emit(.{
             .op = .memset_dyn,
-            .operands = .{ .{ .value = dest }, .{ .immediate_i32 = @intCast(byte_value) }, .{ .value = size } },
+            .operands = .{ .{ .value = dest.val }, .{ .immediate_i32 = @intCast(byte_value) }, .{ .value = size } },
         });
     }
 
-    // Heap allocation
-    pub fn emitHeapAlloc(self: *Function, size: Value, tag: []const u8) !Value {
-        return self.emitWithResult(.heap_alloc, .ptr, .{ .{ .value = size }, .{ .alloc_tag = tag }, .none });
+    // Heap allocation - returns RawPtr
+    pub fn emitHeapAlloc(self: *Function, size: Value, tag: []const u8) !RawPtr {
+        const val = try self.emitWithResult(.heap_alloc, .ptr, .{ .{ .value = size }, .{ .alloc_tag = tag }, .none });
+        return .{ .val = val };
     }
 
-    pub fn emitHeapFree(self: *Function, ptr: Value, tag: []const u8) !void {
-        try self.emit(.{ .op = .heap_free, .operands = .{ .{ .value = ptr }, .{ .alloc_tag = tag }, .none } });
+    // Heap free - takes RawPtr
+    pub fn emitHeapFree(self: *Function, ptr: RawPtr, tag: []const u8) !void {
+        try self.emit(.{ .op = .heap_free, .operands = .{ .{ .value = ptr.val }, .{ .alloc_tag = tag }, .none } });
     }
 
-    pub fn emitHeapRealloc(self: *Function, old_ptr: Value, new_size: Value, tag: []const u8) !Value {
-        return self.emitWithResult(.heap_realloc, .ptr, .{ .{ .value = old_ptr }, .{ .value = new_size }, .{ .alloc_tag = tag } });
+    // Heap realloc - takes and returns RawPtr
+    pub fn emitHeapRealloc(self: *Function, old_ptr: RawPtr, new_size: Value, tag: []const u8) !RawPtr {
+        const val = try self.emitWithResult(.heap_realloc, .ptr, .{ .{ .value = old_ptr.val }, .{ .value = new_size }, .{ .alloc_tag = tag } });
+        return .{ .val = val };
     }
 
     // Memory tracking (for --track-memory)

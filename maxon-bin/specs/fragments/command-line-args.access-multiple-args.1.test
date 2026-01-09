@@ -55,8 +55,8 @@ cmd_args_cond:
     br.cond %tmp_icmp @block2 @block3
 cmd_args_body:
     %tmp_load.2 = load i64 %tmp_alloca.1
-    %25 = getelemptr ptr %tmp_extern.2 %tmp_load.2 elemsize=8
-    %tmp_load.3 = load ptr %25
+    %tmp_elemptr = getelemptr ptr %tmp_extern.2 %tmp_load.2 elemsize=8
+    %tmp_load.3 = load ptr %tmp_elemptr
     %tmp_const.7 = const.i64 i64 65001
     %tmp_const.8 = const.i64 i64 0
     %tmp_const.9 = const.i64 i64 -1
@@ -72,22 +72,22 @@ cmd_args_body:
     %tmp_const.14 = const.i64 i64 0
     %tmp_const.15 = const.i64 i64 -1
     %tmp_extern.6 = extern.call i64 @"kernel32.dll:WideCharToMultiByte"(%tmp_const.13, %tmp_const.14, %tmp_load.3, %tmp_const.15, %tmp_add.1, %tmp_extern.5, %tmp_const.14, %tmp_const.14)
-    %41 = getelemptr ptr %tmp_extern.4 %tmp_load.2 elemsize=40
+    %tmp_elemptr.1 = getelemptr ptr %tmp_extern.4 %tmp_load.2 elemsize=40
     %tmp_const.16 = const.i64 i64 1
     %tmp_sub = sub i64 %tmp_extern.5 %tmp_const.16
     %tmp_const.17 = const.i32 i32 1
-    store %41 %tmp_add.1
-    %tmp_fieldptr.5 = getfieldptr ptr %41 8
+    store %tmp_elemptr.1 %tmp_add.1
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_elemptr.1 8
     store %tmp_fieldptr.5 %tmp_sub
-    %tmp_fieldptr.6 = getfieldptr ptr %41 16
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_elemptr.1 16
     store %tmp_fieldptr.6 %tmp_sub
-    %tmp_fieldptr.7 = getfieldptr ptr %41 24
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_elemptr.1 24
     store.i32 %tmp_fieldptr.7 %tmp_const.17
     %tmp_const.18 = const.i32 i32 0
-    %tmp_fieldptr.8 = getfieldptr ptr %41 28
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_elemptr.1 28
     store.i32 %tmp_fieldptr.8 %tmp_const.18
     %tmp_const.19 = const.i64 i64 0
-    %tmp_fieldptr.9 = getfieldptr ptr %41 32
+    %tmp_fieldptr.9 = getfieldptr ptr %tmp_elemptr.1 32
     store %tmp_fieldptr.9 %tmp_const.19
     %tmp_add.2 = add i64 %tmp_load.2 %tmp_const.16
     store %tmp_alloca.1 %tmp_add.2
@@ -108,16 +108,16 @@ cmd_args_end:
     %tmp_const.22 = const.i64 i64 1
     store %tmp_heap.1 %tmp_const.22
     %tmp_const.23 = const.i64 i64 8
-    %66 = getelemptr ptr %tmp_heap.1 %tmp_const.23 elemsize=1
+    %tmp_elemptr.2 = getelemptr ptr %tmp_heap.1 %tmp_const.23 elemsize=1
     %tmp_const.24 = const.i64 i64 0
-    %68 = getelemptr ptr %66 %tmp_const.24 elemsize=1
+    %tmp_elemptr.3 = getelemptr ptr %tmp_elemptr.2 %tmp_const.24 elemsize=1
     %tmp_const.25 = const.i8 i8 10
-    store.i8 %68 %tmp_const.25
+    store.i8 %tmp_elemptr.3 %tmp_const.25
     %tmp_const.26 = const.i64 i64 1
-    %71 = getelemptr ptr %66 %tmp_const.26 elemsize=1
+    %tmp_elemptr.4 = getelemptr ptr %tmp_elemptr.2 %tmp_const.26 elemsize=1
     %tmp_const.27 = const.i8 i8 0
-    store.i8 %71 %tmp_const.27
-    store %tmp_alloca.4 %66
+    store.i8 %tmp_elemptr.4 %tmp_const.27
+    store %tmp_alloca.4 %tmp_elemptr.2
     %tmp_const.28 = const.i64 i64 1
     %tmp_fieldptr.11 = getfieldptr ptr %tmp_alloca.4 8
     store %tmp_fieldptr.11 %tmp_const.28
@@ -168,16 +168,16 @@ decref_end:
     %tmp_const.38 = const.i64 i64 1
     store %tmp_heap.2 %tmp_const.38
     %tmp_const.39 = const.i64 i64 8
-    %110 = getelemptr ptr %tmp_heap.2 %tmp_const.39 elemsize=1
+    %tmp_elemptr.5 = getelemptr ptr %tmp_heap.2 %tmp_const.39 elemsize=1
     %tmp_const.40 = const.i64 i64 0
-    %112 = getelemptr ptr %110 %tmp_const.40 elemsize=1
+    %tmp_elemptr.6 = getelemptr ptr %tmp_elemptr.5 %tmp_const.40 elemsize=1
     %tmp_const.41 = const.i8 i8 10
-    store.i8 %112 %tmp_const.41
+    store.i8 %tmp_elemptr.6 %tmp_const.41
     %tmp_const.42 = const.i64 i64 1
-    %115 = getelemptr ptr %110 %tmp_const.42 elemsize=1
+    %tmp_elemptr.7 = getelemptr ptr %tmp_elemptr.5 %tmp_const.42 elemsize=1
     %tmp_const.43 = const.i8 i8 0
-    store.i8 %115 %tmp_const.43
-    store %tmp_alloca.7 %110
+    store.i8 %tmp_elemptr.7 %tmp_const.43
+    store %tmp_alloca.7 %tmp_elemptr.5
     %tmp_const.44 = const.i64 i64 1
     %tmp_fieldptr.17 = getfieldptr ptr %tmp_alloca.7 8
     store %tmp_fieldptr.17 %tmp_const.44
@@ -228,16 +228,16 @@ decref_end:
     %tmp_const.54 = const.i64 i64 1
     store %tmp_heap.3 %tmp_const.54
     %tmp_const.55 = const.i64 i64 8
-    %154 = getelemptr ptr %tmp_heap.3 %tmp_const.55 elemsize=1
+    %tmp_elemptr.8 = getelemptr ptr %tmp_heap.3 %tmp_const.55 elemsize=1
     %tmp_const.56 = const.i64 i64 0
-    %156 = getelemptr ptr %154 %tmp_const.56 elemsize=1
+    %tmp_elemptr.9 = getelemptr ptr %tmp_elemptr.8 %tmp_const.56 elemsize=1
     %tmp_const.57 = const.i8 i8 10
-    store.i8 %156 %tmp_const.57
+    store.i8 %tmp_elemptr.9 %tmp_const.57
     %tmp_const.58 = const.i64 i64 1
-    %159 = getelemptr ptr %154 %tmp_const.58 elemsize=1
+    %tmp_elemptr.10 = getelemptr ptr %tmp_elemptr.8 %tmp_const.58 elemsize=1
     %tmp_const.59 = const.i8 i8 0
-    store.i8 %159 %tmp_const.59
-    store %tmp_alloca.10 %154
+    store.i8 %tmp_elemptr.10 %tmp_const.59
+    store %tmp_alloca.10 %tmp_elemptr.8
     %tmp_const.60 = const.i64 i64 1
     %tmp_fieldptr.23 = getfieldptr ptr %tmp_alloca.10 8
     store %tmp_fieldptr.23 %tmp_const.60

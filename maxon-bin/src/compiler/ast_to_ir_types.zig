@@ -63,6 +63,50 @@ pub fn getPrimitiveTypeInfo(name: []const u8) ?PrimitiveTypeInfo {
 pub const TypedValue = struct {
     value: ir.Value,
     ty: ValueType,
+
+    // ========================================================================
+    // Typed Pointer Conversion Helpers
+    // ========================================================================
+
+    /// Convert to generic struct pointer
+    pub fn asStructPtr(self: TypedValue) ir.StructPtr {
+        return .{ .val = self.value };
+    }
+
+    /// Convert to raw pointer for buffer operations
+    pub fn asRawPtr(self: TypedValue) ir.RawPtr {
+        return .{ .val = self.value };
+    }
+
+    /// Convert to StringPtr (use when you know the type is String)
+    pub fn asStringPtr(self: TypedValue) ir.StringPtr {
+        return .{ .val = self.value };
+    }
+
+    /// Convert to ManagedArrayPtr (use when you know the type is an array)
+    pub fn asManagedArrayPtr(self: TypedValue) ir.ManagedArrayPtr {
+        return .{ .val = self.value };
+    }
+
+    /// Convert to OptionalPtr (use when you know the type is optional)
+    pub fn asOptionalPtr(self: TypedValue) ir.OptionalPtr {
+        return .{ .val = self.value };
+    }
+
+    /// Convert to MapPtr (use when you know the type is a Map)
+    pub fn asMapPtr(self: TypedValue) ir.MapPtr {
+        return .{ .val = self.value };
+    }
+
+    /// Convert to ErrorUnionPtr (use when you know the type is an error union)
+    pub fn asErrorUnionPtr(self: TypedValue) ir.ErrorUnionPtr {
+        return .{ .val = self.value };
+    }
+
+    /// Convert to FuncPtr (use when you know the type is a function pointer)
+    pub fn asFuncPtr(self: TypedValue) ir.FuncPtr {
+        return .{ .val = self.value };
+    }
 };
 
 /// Array storage kind
