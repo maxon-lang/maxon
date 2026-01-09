@@ -1,22 +1,11 @@
 const std = @import("std");
 const ir = @import("ir.zig");
 const types = @import("ast_to_ir_types.zig");
+const layouts = @import("builtin_struct_layouts.zig");
 
 const Allocator = std.mem.Allocator;
 const Function = ir.Function;
 const Value = ir.Value;
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-/// Size of __ManagedString struct (24 bytes)
-/// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
-pub const MANAGED_STRING_SIZE: i32 = types.MANAGED_STRING_SIZE;
-
-/// Size of __ManagedArray struct (24 bytes)
-/// Layout: buffer(8) + len(8) + capacity(8)
-pub const MANAGED_ARRAY_SIZE: i32 = types.MANAGED_ARRAY_SIZE;
 
 // ============================================================================
 // Field Access Helpers
@@ -88,21 +77,21 @@ pub fn initManagedString(func: *Function, ptr: Value, buffer: Value, len_i64: Va
 
     // length (i32) at offset 8
     const len_i32 = try func.emitUnaryOp(.trunc_i64_i32, len_i64, .i32);
-    try storeI32Field(func, ptr, 8, len_i32);
+    try storeI32Field(func, ptr, layouts.ManagedString.LEN_OFFSET, len_i32);
 
     // cap_flags = (len << 2) | 1 for heap mode at offset 12
     const four = try func.emitConstI32(4);
     const cap_shift = try func.emitBinaryOp(.mul, len_i32, four, .i32);
     const one_i32 = try func.emitConstI32(1);
     const cap_flags = try func.emitBinaryOp(.bitor, cap_shift, one_i32, .i32);
-    try storeI32Field(func, ptr, 12, cap_flags);
+    try storeI32Field(func, ptr, layouts.ManagedString.CAP_FLAGS_OFFSET, cap_flags);
 
     // refcount = 1 at offset 16
-    try storeI32Field(func, ptr, 16, one_i32);
+    try storeI32Field(func, ptr, layouts.ManagedString.REFCOUNT_OFFSET, one_i32);
 
     // parent_off = 0 at offset 20
     const zero_i32 = try func.emitConstI32(0);
-    try storeI32Field(func, ptr, 20, zero_i32);
+    try storeI32Field(func, ptr, layouts.ManagedString.PARENT_OFF_OFFSET, zero_i32);
 }
 
 /// Initialize __ManagedString as empty (all zeros, SSO mode)
@@ -111,10 +100,10 @@ pub fn initManagedStringEmpty(func: *Function, ptr: Value) !void {
     const zero_i32 = try func.emitConstI32(0);
 
     try func.emitStore(ptr, null_ptr);
-    try storeI32Field(func, ptr, 8, zero_i32);
-    try storeI32Field(func, ptr, 12, zero_i32);
-    try storeI32Field(func, ptr, 16, zero_i32);
-    try storeI32Field(func, ptr, 20, zero_i32);
+    try storeI32Field(func, ptr, layouts.ManagedString.LEN_OFFSET, zero_i32);
+    try storeI32Field(func, ptr, layouts.ManagedString.CAP_FLAGS_OFFSET, zero_i32);
+    try storeI32Field(func, ptr, layouts.ManagedString.REFCOUNT_OFFSET, zero_i32);
+    try storeI32Field(func, ptr, layouts.ManagedString.PARENT_OFF_OFFSET, zero_i32);
 }
 
 /// Initialize __ManagedString in slice mode.
@@ -124,23 +113,23 @@ pub fn initManagedStringSlice(func: *Function, ptr: Value, buffer: Value, len_i3
     try func.emitStore(ptr, buffer);
 
     // len at offset 8
-    try storeI32Field(func, ptr, 8, len_i32);
+    try storeI32Field(func, ptr, layouts.ManagedString.LEN_OFFSET, len_i32);
 
     // cap_flags = 0b10 (slice mode) at offset 12
     const two = try func.emitConstI32(2);
-    try storeI32Field(func, ptr, 12, two);
+    try storeI32Field(func, ptr, layouts.ManagedString.CAP_FLAGS_OFFSET, two);
 
     // refcount = 0 at offset 16
     const zero = try func.emitConstI32(0);
-    try storeI32Field(func, ptr, 16, zero);
+    try storeI32Field(func, ptr, layouts.ManagedString.REFCOUNT_OFFSET, zero);
 
     // parent_off at offset 20
-    try storeI32Field(func, ptr, 20, parent_off_i32);
+    try storeI32Field(func, ptr, layouts.ManagedString.PARENT_OFF_OFFSET, parent_off_i32);
 }
 
 /// Allocate and initialize a __ManagedString on the stack (heap mode)
 pub fn emitManagedString(func: *Function, buffer: Value, len_i64: Value) !Value {
-    const ptr = try func.emitAllocaSized(MANAGED_STRING_SIZE);
+    const ptr = try func.emitAllocaSized(layouts.ManagedString.SIZE);
     try initManagedString(func, ptr, buffer, len_i64);
     return ptr;
 }
@@ -153,28 +142,28 @@ pub fn emitManagedString(func: *Function, buffer: Value, len_i64: Value) !Value 
 /// Layout: buffer(8) + len(8) + capacity(8)
 pub fn initManagedArray(func: *Function, ptr: Value, buffer: Value, len: Value, capacity: Value) !void {
     try func.emitStore(ptr, buffer); // buffer at offset 0
-    try storeI64Field(func, ptr, 8, len);
-    try storeI64Field(func, ptr, 16, capacity);
+    try storeI64Field(func, ptr, layouts.ManagedArray.LEN_OFFSET, len);
+    try storeI64Field(func, ptr, layouts.ManagedArray.CAPACITY_OFFSET, capacity);
 }
 
 /// Initialize __ManagedArray as empty (buffer=null, len=0, capacity=0)
 pub fn initManagedArrayEmpty(func: *Function, ptr: Value) !void {
     const null_ptr = try func.emitConstI64(0);
     try func.emitStore(ptr, null_ptr); // buffer at offset 0
-    try storeI64Field(func, ptr, 8, null_ptr); // len
-    try storeI64Field(func, ptr, 16, null_ptr); // capacity
+    try storeI64Field(func, ptr, layouts.ManagedArray.LEN_OFFSET, null_ptr); // len
+    try storeI64Field(func, ptr, layouts.ManagedArray.CAPACITY_OFFSET, null_ptr); // capacity
 }
 
 /// Allocate and initialize a __ManagedArray on the stack
 pub fn emitManagedArray(func: *Function, buffer: Value, len: Value, capacity: Value) !Value {
-    const ptr = try func.emitAllocaSized(MANAGED_ARRAY_SIZE);
+    const ptr = try func.emitAllocaSized(layouts.ManagedArray.SIZE);
     try initManagedArray(func, ptr, buffer, len, capacity);
     return ptr;
 }
 
 /// Allocate and initialize an empty __ManagedArray on the stack
 pub fn emitEmptyManagedArray(func: *Function) !Value {
-    const ptr = try func.emitAllocaSized(MANAGED_ARRAY_SIZE);
+    const ptr = try func.emitAllocaSized(layouts.ManagedArray.SIZE);
     try initManagedArrayEmpty(func, ptr);
     return ptr;
 }

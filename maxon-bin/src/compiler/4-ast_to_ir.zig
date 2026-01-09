@@ -13,6 +13,9 @@ const intrinsics = @import("ast_to_ir_intrinsics.zig");
 
 // Import shared struct helpers
 const struct_helpers = @import("ir_struct_helpers.zig");
+
+// Import builtin struct layouts
+const layouts = @import("builtin_struct_layouts.zig");
 pub const TypedValue = types.TypedValue;
 pub const ArrayStorage = types.ArrayStorage;
 pub const ArrayInfo = types.ArrayInfo;
@@ -616,7 +619,7 @@ pub const AstToIr = struct {
     ///
     /// The refcount is stored at (data_ptr - 8), shared by all String copies.
     fn emitManagedStringFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Value {
-        const managed_ptr = try self.func().emitAllocaSized(struct_helpers.MANAGED_STRING_SIZE);
+        const managed_ptr = try self.func().emitAllocaSized(layouts.ManagedString.SIZE);
 
         if (str_bytes.len == 0) {
             try struct_helpers.initManagedStringEmpty(self.func(), managed_ptr);
@@ -667,8 +670,8 @@ pub const AstToIr = struct {
     /// Wrap a __ManagedString pointer in a full String struct (adds iter_pos field).
     pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.Value) !ir.Value {
         const string_ptr = try self.func().emitAllocaSized(32);
-        try self.func().emitMemcpy(string_ptr, managed_ptr, struct_helpers.MANAGED_STRING_SIZE);
-        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
+        try self.func().emitMemcpy(string_ptr, managed_ptr, layouts.ManagedString.SIZE);
+        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, layouts.String.ITER_POS_OFFSET);
         try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
         return string_ptr;
     }
@@ -708,7 +711,7 @@ pub const AstToIr = struct {
     /// Returns an IR value representing the boolean result (cap_flags & 0x3 == 1).
     /// String layout: _managed at offset 0, cap_flags at offset 12 within _managed.
     fn emitStringIsHeapMode(self: *AstToIr, string_ptr: ir.Value) !ir.Value {
-        const cap_ptr = try self.func().emitGetFieldPtr(string_ptr, 12);
+        const cap_ptr = try self.func().emitGetFieldPtr(string_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_ptr, .i32);
         const three = try self.func().emitConstI32(3);
         const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -861,7 +864,7 @@ pub const AstToIr = struct {
         // __ManagedString layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
 
         // Load length first to check if empty
-        const len_ptr = try self.func().emitGetFieldPtr(array_ptr, 8);
+        const len_ptr = try self.func().emitGetFieldPtr(array_ptr, layouts.ManagedArray.LEN_OFFSET);
         const len = try self.func().emitLoad(len_ptr, .i64);
 
         // Skip cleanup if empty
@@ -899,7 +902,7 @@ pub const AstToIr = struct {
         deferred.deferBlocks(self, 5);
 
         // Condition block: reload len and check if i < len
-        const cond_len_ptr = try self.func().emitGetFieldPtr(array_ptr, 8);
+        const cond_len_ptr = try self.func().emitGetFieldPtr(array_ptr, layouts.ManagedArray.LEN_OFFSET);
         const cond_len = try self.func().emitLoad(cond_len_ptr, .i64);
         const cond_i = try self.func().emitLoad(counter_ptr, .i64);
         const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_len, .i64);
@@ -924,7 +927,7 @@ pub const AstToIr = struct {
 
         // Check if heap mode: cap_flags & 3 == 1
         // cap_flags is at offset 12 in the String (which contains __ManagedString at offset 0)
-        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, 12);
+        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
         const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -1008,7 +1011,7 @@ pub const AstToIr = struct {
     /// If managed == null: free the data pointer (cstring owns buffer from slice copy)
     fn emitCstringCleanup(self: *AstToIr, cstring_ptr: ir.Value) !void {
         // Load managed pointer (offset 16)
-        const managed_field = try self.func().emitGetFieldPtr(cstring_ptr, 16);
+        const managed_field = try self.func().emitGetFieldPtr(cstring_ptr, layouts.CString.MANAGED_OFFSET);
         const managed_ptr = try self.func().emitLoad(managed_field, .ptr);
 
         // Check if managed != null
@@ -1022,7 +1025,7 @@ pub const AstToIr = struct {
         _ = try self.func().addBlock("cstr_decref");
 
         // === DECREF BLOCK: managed != null, decref the __ManagedString ===
-        const cap_ptr = try self.func().emitGetFieldPtr(managed_ptr, 12);
+        const cap_ptr = try self.func().emitGetFieldPtr(managed_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_ptr, .i32);
         const three = try self.func().emitConstI32(3);
         const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -3277,15 +3280,34 @@ pub const AstToIr = struct {
         return mono_name;
     }
 
-    /// Build FuncInfo from method declaration (shared by registerMethod and registerMethodSignatureOnly).
+    /// Build FuncInfo from method declaration (by value).
     fn buildMethodFuncInfo(
         self: *AstToIr,
         type_name: []const u8,
-        method: anytype, // ast.MethodDecl or *const ast.MethodDecl
+        method: ast.MethodDecl,
         ir_generated: bool,
     ) !FuncInfo {
-        // Get method fields (works for both value and pointer)
-        const m = if (@TypeOf(method) == *const ast.MethodDecl) method.* else method;
+        return self.buildMethodFuncInfoImpl(type_name, method, ir_generated);
+    }
+
+    /// Build FuncInfo from method declaration (by pointer).
+    fn buildMethodFuncInfoFromPtr(
+        self: *AstToIr,
+        type_name: []const u8,
+        method: *const ast.MethodDecl,
+        ir_generated: bool,
+    ) !FuncInfo {
+        return self.buildMethodFuncInfoImpl(type_name, method.*, ir_generated);
+    }
+
+    /// Internal implementation of buildMethodFuncInfo.
+    fn buildMethodFuncInfoImpl(
+        self: *AstToIr,
+        type_name: []const u8,
+        method: ast.MethodDecl,
+        ir_generated: bool,
+    ) !FuncInfo {
+        const m = method;
 
         // Determine return type
         var ret_type_name: ?[]const u8 = null;
@@ -3478,7 +3500,7 @@ pub const AstToIr = struct {
             return false;
         }
 
-        const func_info = try self.buildMethodFuncInfo(type_name, method, false);
+        const func_info = try self.buildMethodFuncInfoFromPtr(type_name, method, false);
 
         try self.func_map.put(self.allocator, mangled_name, func_info);
 
@@ -4366,7 +4388,7 @@ pub const AstToIr = struct {
                         const one = try self.func().emitConstI64(1);
                         try self.func().emitStore(sret, one);
                         // Initialize struct at offset 8 (after the tag)
-                        const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
+                        const value_ptr = try self.func().emitGetFieldPtr(sret, layouts.Optional.VALUE_OFFSET);
                         try self.initStructInto(expr.struct_init, value_ptr);
                     } else if (self.current_func_throws_type != null) {
                         // Returning struct init from throwing function - wrap in success result
@@ -4374,7 +4396,7 @@ pub const AstToIr = struct {
                         const zero = try self.func().emitConstI64(0);
                         try self.func().emitStore(sret, zero);
                         // Initialize struct at offset 8 (after the tag)
-                        const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
+                        const value_ptr = try self.func().emitGetFieldPtr(sret, layouts.Optional.VALUE_OFFSET);
                         try self.initStructInto(expr.struct_init, value_ptr);
                     } else {
                         // Initialize struct directly into sret buffer (no intermediate copy)
@@ -4405,7 +4427,7 @@ pub const AstToIr = struct {
                     const zero = try self.func().emitConstI64(0);
                     try self.func().emitStore(sret, zero);
                     // Write value at offset 8
-                    const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
+                    const value_ptr = try self.func().emitGetFieldPtr(sret, layouts.Optional.VALUE_OFFSET);
                     // For struct types, memcpy the contents; for primitives, store the value
                     if (typed_val.ty == .struct_type) {
                         const struct_name = typed_val.ty.struct_type;
@@ -4456,7 +4478,7 @@ pub const AstToIr = struct {
                     const one = try self.func().emitConstI64(1);
                     try self.func().emitStore(sret, one);
                     // Write value at offset 8
-                    const value_ptr = try self.func().emitGetFieldPtr(sret, 8);
+                    const value_ptr = try self.func().emitGetFieldPtr(sret, layouts.Optional.VALUE_OFFSET);
                     // For struct types, memcpy the contents; for primitives, store the value
                     if (opt_info.wrapped_struct_type) |struct_name| {
                         if (self.type_map.get(struct_name)) |type_info| {
@@ -4481,9 +4503,9 @@ pub const AstToIr = struct {
                     if (is_managed_string and expects_string) {
                         // Wrap __ManagedString (24 bytes) into String (32 bytes)
                         // Copy managed string to offset 0-23
-                        try self.func().emitMemcpy(sret, typed_val.value, struct_helpers.MANAGED_STRING_SIZE);
+                        try self.func().emitMemcpy(sret, typed_val.value, layouts.ManagedString.SIZE);
                         // Set _iterPos to 0 at offset 24
-                        const iter_pos_ptr = try self.func().emitGetFieldPtr(sret, 24);
+                        const iter_pos_ptr = try self.func().emitGetFieldPtr(sret, layouts.String.ITER_POS_OFFSET);
                         try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
                     } else {
                         try self.func().emitMemcpy(sret, typed_val.value, self.sret_size);
@@ -4649,7 +4671,7 @@ pub const AstToIr = struct {
         try self.func().emitHeapFree(keys_buf_ptr, "map keys cleanup");
 
         // Get pointer to values array at offset 32
-        const values_ptr = try self.func().emitGetFieldPtr(map_ptr, 32);
+        const values_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.VALUES_OFFSET);
         // If values are strings, cleanup occupied slots only (check states array)
         if (has_string_values) {
             try self.emitMapStringValuesCleanup(map_ptr);
@@ -4659,7 +4681,7 @@ pub const AstToIr = struct {
         try self.func().emitHeapFree(values_buf_ptr, "map values cleanup");
 
         // Get pointer to states array at offset 64 and free its buffer
-        const states_ptr = try self.func().emitGetFieldPtr(map_ptr, 64);
+        const states_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.STATES_OFFSET);
         const states_buf_ptr = try self.func().emitLoad(states_ptr, .ptr);
         try self.func().emitHeapFree(states_buf_ptr, "map states cleanup");
     }
@@ -4673,7 +4695,7 @@ pub const AstToIr = struct {
         //   offset 104: capacity (8 bytes)
 
         // Load capacity to know how many slots to iterate
-        const cap_ptr = try self.func().emitGetFieldPtr(map_ptr, 104);
+        const cap_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.CAPACITY_OFFSET);
         const capacity = try self.func().emitLoad(cap_ptr, .i64);
 
         // Skip cleanup if capacity is 0
@@ -4713,7 +4735,7 @@ pub const AstToIr = struct {
         deferred.deferBlocks(self, 6);
 
         // Condition block: check if i < capacity
-        const cond_cap_ptr = try self.func().emitGetFieldPtr(map_ptr, 104);
+        const cond_cap_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.CAPACITY_OFFSET);
         const cond_cap = try self.func().emitLoad(cond_cap_ptr, .i64);
         const cond_i = try self.func().emitLoad(counter_ptr, .i64);
         const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_cap, .i64);
@@ -4730,7 +4752,7 @@ pub const AstToIr = struct {
         const body_i = try self.func().emitLoad(counter_ptr, .i64);
 
         // Get states buffer pointer (at offset 64 of map, then offset 0 of Array)
-        const states_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 64);
+        const states_array_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.STATES_OFFSET);
         const states_buf_ptr = try self.func().emitLoad(states_array_ptr, .ptr);
 
         // Load states[i] - each state is 8 bytes (int)
@@ -4765,7 +4787,7 @@ pub const AstToIr = struct {
 
         // Check if heap mode: cap_flags & 3 == 1
         // cap_flags is at offset 12 in the String
-        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, 12);
+        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
         const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -4851,7 +4873,7 @@ pub const AstToIr = struct {
         //   offset 104: capacity (8 bytes)
 
         // Load capacity to know how many slots to iterate
-        const cap_ptr = try self.func().emitGetFieldPtr(map_ptr, 104);
+        const cap_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.CAPACITY_OFFSET);
         const capacity = try self.func().emitLoad(cap_ptr, .i64);
 
         // Skip cleanup if capacity is 0
@@ -4891,7 +4913,7 @@ pub const AstToIr = struct {
         deferred.deferBlocks(self, 6);
 
         // Condition block: check if i < capacity
-        const cond_cap_ptr = try self.func().emitGetFieldPtr(map_ptr, 104);
+        const cond_cap_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.CAPACITY_OFFSET);
         const cond_cap = try self.func().emitLoad(cond_cap_ptr, .i64);
         const cond_i = try self.func().emitLoad(counter_ptr, .i64);
         const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_cap, .i64);
@@ -4908,7 +4930,7 @@ pub const AstToIr = struct {
         const body_i = try self.func().emitLoad(counter_ptr, .i64);
 
         // Get states buffer pointer (at offset 64 of map, then offset 0 of Array)
-        const states_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 64);
+        const states_array_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.STATES_OFFSET);
         const states_buf_ptr = try self.func().emitLoad(states_array_ptr, .ptr);
 
         // Load states[i] - each state is 8 bytes (int)
@@ -4934,7 +4956,7 @@ pub const AstToIr = struct {
         const occ_i = try self.func().emitLoad(counter_ptr, .i64);
 
         // Get values buffer pointer (at offset 32 of map, then offset 0 of Array)
-        const values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 32);
+        const values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.VALUES_OFFSET);
         const values_buf_ptr = try self.func().emitLoad(values_array_ptr, .ptr);
 
         // Calculate element pointer: buf_ptr + i * 32 (String size)
@@ -4944,7 +4966,7 @@ pub const AstToIr = struct {
 
         // Check if heap mode: cap_flags & 3 == 1
         // cap_flags is at offset 12 in the String
-        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, 12);
+        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
         const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -4962,7 +4984,7 @@ pub const AstToIr = struct {
 
         // Decref block: decrement refcount in buffer header and check if zero
         const decref_i = try self.func().emitLoad(counter_ptr, .i64);
-        const decref_values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 32);
+        const decref_values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.VALUES_OFFSET);
         const decref_values_buf_ptr = try self.func().emitLoad(decref_values_array_ptr, .ptr);
         const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
         const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_values_buf_ptr, decref_offset, .ptr);
@@ -4996,7 +5018,7 @@ pub const AstToIr = struct {
 
         // Heap free block: recompute elem_ptr and free buffer at header (buf_ptr - 8)
         const heap_i = try self.func().emitLoad(counter_ptr, .i64);
-        const heap_values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, 32);
+        const heap_values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.VALUES_OFFSET);
         const heap_values_buf_ptr = try self.func().emitLoad(heap_values_array_ptr, .ptr);
         const heap_elem_size = try self.func().emitConstI64(32);
         const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
@@ -5371,7 +5393,7 @@ pub const AstToIr = struct {
             }
             const opt_info = cond_typed.ty.optional_type;
             const wrapped_type = opt_info.wrapped;
-            const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, 8);
+            const value_ptr = try self.func().emitGetFieldPtr(cond_typed.value, layouts.Optional.VALUE_OFFSET);
             const var_value_type = getOptionalWrappedValueType(opt_info);
 
             if (opt_info.wrapped_struct_type) |struct_name| {
@@ -6910,7 +6932,7 @@ pub const AstToIr = struct {
             try self.func().emitStore(sret, one);
 
             // Write enum ordinal at offset 8
-            const error_ptr = try self.func().emitGetFieldPtr(sret, 8);
+            const error_ptr = try self.func().emitGetFieldPtr(sret, layouts.Optional.VALUE_OFFSET);
             try self.func().emitStore(error_ptr, error_typed.value);
 
             // Return via sret
@@ -7068,7 +7090,7 @@ pub const AstToIr = struct {
             }
 
             // Get error value pointer (at offset 8 in error_buffer)
-            const error_value_ptr = try self.func().emitGetFieldPtr(error_buffer, 8);
+            const error_value_ptr = try self.func().emitGetFieldPtr(error_buffer, layouts.Optional.VALUE_OFFSET);
 
             // Bind the error to a variable (errors are now enums)
             const binding_name = child.catch_binding orelse "error";
@@ -7178,7 +7200,7 @@ pub const AstToIr = struct {
         defer branch.deinit();
 
         // Then block ("some"): unwrap and store value
-        const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
+        const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, layouts.Optional.VALUE_OFFSET);
         if (opt_info.wrapped_struct_type) |struct_name| {
             // For struct types, copy the struct data from the optional payload to var_ptr
             const struct_size = if (self.type_map.get(struct_name)) |type_info| blk: {
@@ -7273,7 +7295,7 @@ pub const AstToIr = struct {
         defer branch.deinit();
 
         // Then block ("some"): unwrap and store value, then jump to merge
-        const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
+        const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, layouts.Optional.VALUE_OFFSET);
         if (opt_info.wrapped_struct_type) |struct_name| {
             const struct_size = if (self.type_map.get(struct_name)) |type_info| blk: {
                 if (type_info == .struct_type) {
@@ -7515,7 +7537,7 @@ pub const AstToIr = struct {
         try self.func().emitStore(opt_ptr, one);
 
         // Store value at offset 8
-        const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, 8);
+        const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, layouts.Optional.VALUE_OFFSET);
         try self.func().emitStore(value_ptr, value);
 
         return .{
@@ -7534,7 +7556,7 @@ pub const AstToIr = struct {
         try self.func().emitStore(opt_ptr, one);
 
         // Copy struct data inline at offset 8
-        const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, 8);
+        const value_ptr = try self.func().emitGetFieldPtr(opt_ptr, layouts.Optional.VALUE_OFFSET);
         const struct_size = self.getOptionalSize(opt_info) - 8; // Total size minus tag
         try self.emitStructCopy(value_ptr, struct_ptr, struct_size, struct_type);
 
@@ -7733,7 +7755,7 @@ pub const AstToIr = struct {
             .optional_type => |opt_info| {
                 // For optional types, unwrap and convert the inner value
                 // Load the value slot (offset 8 from optional pointer)
-                const value_slot = try self.func().emitGetFieldPtr(typed_val.value, 8);
+                const value_slot = try self.func().emitGetFieldPtr(typed_val.value, layouts.Optional.VALUE_OFFSET);
                 const inner_value = try self.func().emitLoad(value_slot, opt_info.wrapped);
                 const inner_typed = TypedValue{
                     .value = inner_value,
@@ -8034,7 +8056,7 @@ pub const AstToIr = struct {
         try self.emitStructCopy(string_managed, char_managed, 24, "__ManagedString");
 
         // Set _iterPos to 0 (at offset 24)
-        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, 24);
+        const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, layouts.String.ITER_POS_OFFSET);
         const zero = try self.func().emitConstI64(0);
         try self.func().emitStore(iter_pos_ptr, zero);
 
@@ -8048,9 +8070,9 @@ pub const AstToIr = struct {
         const b_managed = try self.func().emitGetFieldPtr(b, 0);
 
         // Get lengths (stored as i32 at offset 8)
-        const a_len_ptr = try self.func().emitGetFieldPtr(a_managed, 8);
+        const a_len_ptr = try self.func().emitGetFieldPtr(a_managed, layouts.ManagedString.LEN_OFFSET);
         const a_len_i32 = try self.func().emitLoad(a_len_ptr, .i32);
-        const b_len_ptr = try self.func().emitGetFieldPtr(b_managed, 8);
+        const b_len_ptr = try self.func().emitGetFieldPtr(b_managed, layouts.ManagedString.LEN_OFFSET);
         const b_len_i32 = try self.func().emitLoad(b_len_ptr, .i32);
 
         // Sign-extend lengths to i64 for arithmetic
@@ -8550,7 +8572,7 @@ pub const AstToIr = struct {
         } else if (left_is_optional) {
             // Left is optional, right is a value - unwrap left and compare
             // Get pointer to the value at offset 8 of the optional
-            const value_ptr = try self.func().emitGetFieldPtr(left.value, 8);
+            const value_ptr = try self.func().emitGetFieldPtr(left.value, layouts.Optional.VALUE_OFFSET);
 
             // Check if the wrapped type is a struct that implements Equatable
             if (left.ty.optional_type.wrapped_struct_type) |struct_name| {
@@ -8586,7 +8608,7 @@ pub const AstToIr = struct {
         } else if (right_is_optional) {
             // Right is optional, left is a value - unwrap right and compare
             // Get pointer to the value at offset 8 of the optional
-            const value_ptr = try self.func().emitGetFieldPtr(right.value, 8);
+            const value_ptr = try self.func().emitGetFieldPtr(right.value, layouts.Optional.VALUE_OFFSET);
 
             // Check if the wrapped type is a struct that implements Equatable
             if (right.ty.optional_type.wrapped_struct_type) |struct_name| {
@@ -8786,7 +8808,7 @@ pub const AstToIr = struct {
                     defer branch.deinit();
 
                     // Then block: extract unwrapped value
-                    const value_ptr = try self.func().emitGetFieldPtr(left.value, 8);
+                    const value_ptr = try self.func().emitGetFieldPtr(left.value, layouts.Optional.VALUE_OFFSET);
                     const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
                     try self.func().emitStore(result_ptr, unwrapped_value);
 
@@ -8848,7 +8870,7 @@ pub const AstToIr = struct {
         defer branch.deinit();
 
         // Then block: extract the unwrapped value
-        const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, 8);
+        const value_ptr = try self.func().emitGetFieldPtr(opt_typed.value, layouts.Optional.VALUE_OFFSET);
         const unwrapped_value = try self.func().emitLoad(value_ptr, wrapped_type);
         try self.func().emitStore(result_ptr, unwrapped_value);
 
@@ -8926,7 +8948,7 @@ pub const AstToIr = struct {
         } else .{ .primitive = types.INT };
 
         // Success block: extract value and store for later use
-        const value_ptr = try self.func().emitGetFieldPtr(result_typed.value, 8);
+        const value_ptr = try self.func().emitGetFieldPtr(result_typed.value, layouts.Optional.VALUE_OFFSET);
         const is_struct_type = success_type == .struct_type;
 
         // For struct types, we return the pointer directly (data is embedded in error union)
@@ -9086,7 +9108,7 @@ pub const AstToIr = struct {
                     const one = try self.func().emitConstI64(1);
                     try self.func().emitStore(field_ptr, one);
                     // Store value at offset 8
-                    const value_ptr = try self.func().emitGetFieldPtr(field_ptr, 8);
+                    const value_ptr = try self.func().emitGetFieldPtr(field_ptr, layouts.Optional.VALUE_OFFSET);
                     try self.func().emitStore(value_ptr, field_val.value);
                 }
             } else {
@@ -9571,7 +9593,7 @@ pub const AstToIr = struct {
                     };
                     if (param_matches) {
                         // Unwrap optional: get pointer to value (offset 8 from optional start)
-                        arg_value = try self.func().emitGetFieldPtr(arg_value, 8);
+                        arg_value = try self.func().emitGetFieldPtr(arg_value, layouts.Optional.VALUE_OFFSET);
                         arg_ty = param_ty;
                     }
                 }
@@ -9602,7 +9624,7 @@ pub const AstToIr = struct {
                         const one = try self.func().emitConstI64(1);
                         try self.func().emitStore(opt_buffer, one);
                         // Store value at offset 8
-                        const value_ptr = try self.func().emitGetFieldPtr(opt_buffer, 8);
+                        const value_ptr = try self.func().emitGetFieldPtr(opt_buffer, layouts.Optional.VALUE_OFFSET);
                         if (arg_ty == .struct_type) {
                             // For struct types, need to memcpy
                             if (opt_info.wrapped_struct_type) |struct_name| {
@@ -9828,7 +9850,7 @@ pub const AstToIr = struct {
 
         // Load buffer pointer (offset 0) and length (offset 8)
         const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-        const len_ptr = try self.func().emitGetFieldPtr(managed_ptr, 8);
+        const len_ptr = try self.func().emitGetFieldPtr(managed_ptr, layouts.ManagedArray.LEN_OFFSET);
         const len = try self.func().emitLoad(len_ptr, .i64);
 
         // Calculate optional size: 8 (tag) + element size
@@ -9854,7 +9876,7 @@ pub const AstToIr = struct {
         const offset = try self.func().emitBinaryOp(.mul, idx_typed.value, elem_size_val, .i64);
         const elem_ptr = try self.func().emitBinaryOp(.add, buf_ptr, offset, .ptr);
 
-        const value_slot = try self.func().emitGetFieldPtr(opt_ptr, 8);
+        const value_slot = try self.func().emitGetFieldPtr(opt_ptr, layouts.Optional.VALUE_OFFSET);
 
         if (elem_info.is_struct) {
             // For struct elements, copy the struct data into the optional
@@ -11084,7 +11106,7 @@ pub const AstToIr = struct {
 
         const elem_ptr = try self.func().emitGetElemPtr(buffer_ptr, idx_typed.value, elem_size);
 
-        const value_slot = try self.func().emitGetFieldPtr(opt_ptr, 8);
+        const value_slot = try self.func().emitGetFieldPtr(opt_ptr, layouts.Optional.VALUE_OFFSET);
         if (arr_info.element_struct_type) |struct_name| {
             // For structs, copy the struct data inline
             // Use plain memcpy without incref - for read-only access (indexing), we're borrowing
@@ -11341,7 +11363,7 @@ pub const AstToIr = struct {
                                 const one = try self.func().emitConstI64(1);
                                 try self.func().emitStore(opt_buffer, one);
                                 // Store value at offset 8
-                                const value_ptr = try self.func().emitGetFieldPtr(opt_buffer, 8);
+                                const value_ptr = try self.func().emitGetFieldPtr(opt_buffer, layouts.Optional.VALUE_OFFSET);
                                 if (arg_ty == .struct_type) {
                                     // For struct types, need to memcpy
                                     if (opt_info.wrapped_struct_type) |struct_name| {

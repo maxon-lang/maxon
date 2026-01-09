@@ -6,6 +6,7 @@ const TypedValue = types.TypedValue;
 const ConvertError = types.ConvertError;
 const intrinsics_registry = @import("intrinsics_registry.zig");
 const struct_helpers = @import("ir_struct_helpers.zig");
+const layouts = @import("builtin_struct_layouts.zig");
 
 // Forward reference to main AstToIr module
 const AstToIr = @import("4-ast_to_ir.zig").AstToIr;
@@ -847,7 +848,7 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
     const cstring_ptr = try self.func().emitAllocaSized(24);
 
     // Load cap_flags (offset 12) to determine mode
-    const cap_flags = try self.func().emitLoad(try self.func().emitGetFieldPtr(managed.value, 12), .i32);
+    const cap_flags = try self.func().emitLoad(try self.func().emitGetFieldPtr(managed.value, layouts.ManagedString.CAP_FLAGS_OFFSET), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
     const two = try self.func().emitConstI32(2);
@@ -998,7 +999,7 @@ fn intrinsicStringIsHeap(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
-    const cap_flags = try self.func().emitLoad(try self.func().emitGetFieldPtr(managed.value, 12), .i32);
+    const cap_flags = try self.func().emitLoad(try self.func().emitGetFieldPtr(managed.value, layouts.ManagedString.CAP_FLAGS_OFFSET), .i32);
     const one = try self.func().emitConstI32(1);
     const is_heap = try self.func().emitBinaryOp(.band, cap_flags, one, .i32);
 

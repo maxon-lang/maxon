@@ -1,6 +1,7 @@
 const std = @import("std");
 const ir = @import("ir.zig");
 const ast = @import("ast.zig");
+const layouts = @import("builtin_struct_layouts.zig");
 
 // ============================================================================
 // Primitive Type Metadata (Single Source of Truth)
@@ -53,18 +54,6 @@ pub fn getPrimitiveTypeInfo(name: []const u8) ?PrimitiveTypeInfo {
     }
     return null;
 }
-
-// ============================================================================
-// Built-in Struct Sizes
-// ============================================================================
-
-/// Size of __ManagedString struct (24 bytes)
-/// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
-pub const MANAGED_STRING_SIZE: i32 = 24;
-
-/// Size of __ManagedArray struct (24 bytes)
-/// Layout: buffer(8) + len(8) + capacity(8)
-pub const MANAGED_ARRAY_SIZE: i32 = 24;
 
 // ============================================================================
 // Type Definitions for AST to IR Conversion
