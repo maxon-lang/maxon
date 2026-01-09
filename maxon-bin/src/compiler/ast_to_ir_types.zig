@@ -1,7 +1,6 @@
 const std = @import("std");
 const ir = @import("ir.zig");
 const ast = @import("ast.zig");
-const layouts = @import("builtin_struct_layouts.zig");
 
 // ============================================================================
 // Primitive Type Metadata (Single Source of Truth)

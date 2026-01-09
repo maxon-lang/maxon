@@ -6,7 +6,13 @@ const TypedValue = types.TypedValue;
 const ConvertError = types.ConvertError;
 const intrinsics_registry = @import("intrinsics_registry.zig");
 const struct_helpers = @import("ir_struct_helpers.zig");
-const layouts = @import("builtin_struct_layouts.zig");
+
+// Import type-specific modules for layouts
+const string = @import("ast_to_ir_string.zig");
+const array = @import("ast_to_ir_array.zig");
+const ManagedArray = string.ManagedArray;
+const String = string.String;
+const Array = array.Array;
 
 // Forward reference to main AstToIr module
 const AstToIr = @import("4-ast_to_ir.zig").AstToIr;
@@ -523,7 +529,7 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     // When the array is destroyed, it will decref each element (to 0, then free).
     if (value.ty == .struct_type) {
         if (std.mem.eql(u8, value.ty.struct_type, "String")) {
-            try self.emitStringIncref(ir.toStringPtr(value.value), "<array_store>");
+            try string.emitStringIncref(self, ir.toStringPtr(value.value), "<array_store>");
         }
     }
 
@@ -837,7 +843,7 @@ fn intrinsicManagedArrayToCstring(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const cstring_ptr = try self.func().emitAllocaSized(24);
 
     // Load flags (offset 24) to determine mode
-    const flags = try self.func().emitLoad((try self.func().emitGetFieldPtr(ir.toStructPtr(managed.value), layouts.ManagedArray.FLAGS_OFFSET)).raw(), .i32);
+    const flags = try self.func().emitLoad((try self.func().emitGetFieldPtr(ir.toStructPtr(managed.value), ManagedArray.FLAGS_OFFSET)).raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, flags, three, .i32);
     const two = try self.func().emitConstI32(2);
@@ -989,7 +995,7 @@ fn intrinsicManagedArrayIsRefcounted(self: *AstToIr, call: ast.CallExpr) Convert
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
-    const flags = try self.func().emitLoad((try self.func().emitGetFieldPtr(ir.toStructPtr(managed.value), layouts.ManagedArray.FLAGS_OFFSET)).raw(), .i32);
+    const flags = try self.func().emitLoad((try self.func().emitGetFieldPtr(ir.toStructPtr(managed.value), ManagedArray.FLAGS_OFFSET)).raw(), .i32);
     const one = try self.func().emitConstI32(1);
     const is_refcounted = try self.func().emitBinaryOp(.band, flags, one, .i32);
 
@@ -1329,11 +1335,11 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     const argc = try self.func().emitUnaryOp(.sext_i32_i64, argc_i32, .i64);
 
     // Allocate Array$String struct (40 bytes: 32 for __ManagedArray + 8 for iterIndex)
-    const array_size = try self.func().emitConstI64(layouts.Array.SIZE);
+    const array_size = try self.func().emitConstI64(Array.SIZE);
     const result_ptr = try emitHeapAllocWin(self, heap, array_size);
 
     // Allocate strings array: argc * 40 bytes (each String is 40 bytes)
-    const string_size = try self.func().emitConstI64(layouts.String.SIZE);
+    const string_size = try self.func().emitConstI64(String.SIZE);
     const strings_alloc_size = try self.func().emitBinaryOp(.mul, argc, string_size, .i64);
     const strings_buf = try emitHeapAllocWin(self, heap, strings_alloc_size);
 
@@ -1344,7 +1350,7 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
 
     // Initialize iterIndex at offset 32
     const zero_i64 = try self.func().emitConstI64(0);
-    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(result_ptr), layouts.Array.ITER_INDEX_OFFSET, zero_i64);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(result_ptr), Array.ITER_INDEX_OFFSET, zero_i64);
 
     // Loop counter on stack
     const i_ptr = try self.func().emitAllocaSized(8);
@@ -1386,7 +1392,7 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     _ = try emitWideCharToMultiByte(self, wide_str, utf8_buf.raw(), utf8_size);
 
     // Calculate String element address: strings_buf + i * 40
-    const string_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(strings_buf), i_body, layouts.String.SIZE);
+    const string_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(strings_buf), i_body, String.SIZE);
 
     // len = utf8_size - 1 (exclude null terminator)
     const one_i64 = try self.func().emitConstI64(1);

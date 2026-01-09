@@ -1,7 +1,10 @@
 const std = @import("std");
 const ir = @import("ir.zig");
 const types = @import("ast_to_ir_types.zig");
-const layouts = @import("builtin_struct_layouts.zig");
+
+// Import layout from string module
+const string = @import("ast_to_ir_string.zig");
+const ManagedArray = string.ManagedArray;
 
 const Allocator = std.mem.Allocator;
 const Function = ir.Function;
@@ -84,17 +87,17 @@ pub fn initManagedArray(func: *Function, ptr: ManagedArrayPtr, buffer: RawPtr, l
     try func.emitStore(struct_ptr.raw(), buffer.raw());
 
     // len (i64) at offset 8
-    try storeI64Field(func, struct_ptr, layouts.ManagedArray.LEN_OFFSET, len);
+    try storeI64Field(func, struct_ptr, ManagedArray.LEN_OFFSET, len);
 
     // capacity (i64) at offset 16
-    try storeI64Field(func, struct_ptr, layouts.ManagedArray.CAPACITY_OFFSET, capacity);
+    try storeI64Field(func, struct_ptr, ManagedArray.CAPACITY_OFFSET, capacity);
 
     // flags (i32) at offset 24
-    try storeI32Field(func, struct_ptr, layouts.ManagedArray.FLAGS_OFFSET, flags);
+    try storeI32Field(func, struct_ptr, ManagedArray.FLAGS_OFFSET, flags);
 
     // parent_off (i32) at offset 28 - initialized to 0
     const zero_i32 = try func.emitConstI32(0);
-    try storeI32Field(func, struct_ptr, layouts.ManagedArray.PARENT_OFF_OFFSET, zero_i32);
+    try storeI32Field(func, struct_ptr, ManagedArray.PARENT_OFF_OFFSET, zero_i32);
 }
 
 /// Initialize __ManagedArray as empty (all zeros, SSO mode)
@@ -104,10 +107,10 @@ pub fn initManagedArrayEmpty(func: *Function, ptr: ManagedArrayPtr) !void {
     const zero_i32 = try func.emitConstI32(0);
 
     try func.emitStore(struct_ptr.raw(), null_ptr); // buffer at offset 0
-    try storeI64Field(func, struct_ptr, layouts.ManagedArray.LEN_OFFSET, null_ptr); // len
-    try storeI64Field(func, struct_ptr, layouts.ManagedArray.CAPACITY_OFFSET, null_ptr); // capacity
-    try storeI32Field(func, struct_ptr, layouts.ManagedArray.FLAGS_OFFSET, zero_i32); // flags
-    try storeI32Field(func, struct_ptr, layouts.ManagedArray.PARENT_OFF_OFFSET, zero_i32); // parent_off
+    try storeI64Field(func, struct_ptr, ManagedArray.LEN_OFFSET, null_ptr); // len
+    try storeI64Field(func, struct_ptr, ManagedArray.CAPACITY_OFFSET, null_ptr); // capacity
+    try storeI32Field(func, struct_ptr, ManagedArray.FLAGS_OFFSET, zero_i32); // flags
+    try storeI32Field(func, struct_ptr, ManagedArray.PARENT_OFF_OFFSET, zero_i32); // parent_off
 }
 
 /// Initialize __ManagedArray in slice mode (mode 2).
@@ -118,23 +121,23 @@ pub fn initManagedArraySlice(func: *Function, ptr: ManagedArrayPtr, buffer: RawP
     try func.emitStore(struct_ptr.raw(), buffer.raw());
 
     // len (i64) at offset 8
-    try storeI64Field(func, struct_ptr, layouts.ManagedArray.LEN_OFFSET, len);
+    try storeI64Field(func, struct_ptr, ManagedArray.LEN_OFFSET, len);
 
     // capacity = 0 for slices at offset 16
     const zero_i64 = try func.emitConstI64(0);
-    try storeI64Field(func, struct_ptr, layouts.ManagedArray.CAPACITY_OFFSET, zero_i64);
+    try storeI64Field(func, struct_ptr, ManagedArray.CAPACITY_OFFSET, zero_i64);
 
     // flags = 2 (slice mode) at offset 24
     const two_i32 = try func.emitConstI32(2);
-    try storeI32Field(func, struct_ptr, layouts.ManagedArray.FLAGS_OFFSET, two_i32);
+    try storeI32Field(func, struct_ptr, ManagedArray.FLAGS_OFFSET, two_i32);
 
     // parent_off (i32) at offset 28
-    try storeI32Field(func, struct_ptr, layouts.ManagedArray.PARENT_OFF_OFFSET, parent_off);
+    try storeI32Field(func, struct_ptr, ManagedArray.PARENT_OFF_OFFSET, parent_off);
 }
 
 /// Allocate and initialize a __ManagedArray on the stack
 pub fn emitManagedArray(func: *Function, buffer: RawPtr, len: Value, capacity: Value, flags: Value) !ManagedArrayPtr {
-    const raw_ptr = try func.emitAllocaSized(layouts.ManagedArray.SIZE);
+    const raw_ptr = try func.emitAllocaSized(ManagedArray.SIZE);
     const ptr = raw_ptr.asManagedArrayPtr();
     try initManagedArray(func, ptr, buffer, len, capacity, flags);
     return ptr;
@@ -142,7 +145,7 @@ pub fn emitManagedArray(func: *Function, buffer: RawPtr, len: Value, capacity: V
 
 /// Allocate and initialize an empty __ManagedArray on the stack
 pub fn emitEmptyManagedArray(func: *Function) !ManagedArrayPtr {
-    const raw_ptr = try func.emitAllocaSized(layouts.ManagedArray.SIZE);
+    const raw_ptr = try func.emitAllocaSized(ManagedArray.SIZE);
     const ptr = raw_ptr.asManagedArrayPtr();
     try initManagedArrayEmpty(func, ptr);
     return ptr;

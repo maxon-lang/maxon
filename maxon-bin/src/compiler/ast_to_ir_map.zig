@@ -1,0 +1,471 @@
+/// Map IR emission helpers.
+/// Contains layout constants and cleanup operations for Map types.
+const std = @import("std");
+const ir = @import("ir.zig");
+const string = @import("ast_to_ir_string.zig");
+const ManagedArray = string.ManagedArray;
+const String = string.String;
+const ast_to_ir = @import("4-ast_to_ir.zig");
+const AstToIr = ast_to_ir.AstToIr;
+const DeferredBlocks = ast_to_ir.DeferredBlocks;
+
+// ============================================================================
+// Map Layout (144 bytes)
+// ============================================================================
+/// Map$K$V struct layout (144 bytes total)
+/// Layout: keys(40) + values(40) + states(40) + count(8) + capacity(8) + iter_index(8)
+///
+/// Fields:
+/// - keys: Array$K (40 bytes) - array of keys
+/// - values: Array$V (40 bytes) - array of values
+/// - states: Array$int (40 bytes) - array of bucket states (0=empty, 1=occupied, 2=deleted)
+/// - count: i64 (8 bytes) - number of key-value pairs
+/// - capacity: i64 (8 bytes) - capacity of the hash table
+/// - iter_index: i64 (8 bytes) - current iteration index
+pub const Map = struct {
+    pub const SIZE: i32 = 144;
+    pub const KEYS_OFFSET: i32 = 0;
+    pub const VALUES_OFFSET: i32 = 40;
+    pub const STATES_OFFSET: i32 = 80;
+    pub const COUNT_OFFSET: i32 = 120;
+    pub const CAPACITY_OFFSET: i32 = 128;
+    pub const ITER_INDEX_OFFSET: i32 = 136;
+
+    comptime {
+        if (VALUES_OFFSET != KEYS_OFFSET + 40) {
+            @compileError("Map layout mismatch: VALUES_OFFSET != KEYS_OFFSET + 40");
+        }
+        if (STATES_OFFSET != VALUES_OFFSET + 40) {
+            @compileError("Map layout mismatch: STATES_OFFSET != VALUES_OFFSET + 40");
+        }
+        if (COUNT_OFFSET != STATES_OFFSET + 40) {
+            @compileError("Map layout mismatch: COUNT_OFFSET != STATES_OFFSET + 40");
+        }
+        if (CAPACITY_OFFSET != COUNT_OFFSET + 8) {
+            @compileError("Map layout mismatch: CAPACITY_OFFSET != COUNT_OFFSET + 8");
+        }
+        if (ITER_INDEX_OFFSET != CAPACITY_OFFSET + 8) {
+            @compileError("Map layout mismatch: ITER_INDEX_OFFSET != CAPACITY_OFFSET + 8");
+        }
+        if (ITER_INDEX_OFFSET + 8 != SIZE) {
+            @compileError("Map layout mismatch: ITER_INDEX_OFFSET + 8 != SIZE");
+        }
+    }
+};
+
+// ============================================================================
+// Map Cleanup Helpers
+// ============================================================================
+
+/// Emit cleanup code for Map types, freeing the three internal array buffers.
+/// For Map$String$V, also decrefs each string key element.
+/// For Map$K$String, also decrefs each string value element.
+pub fn emitMapCleanup(self: *AstToIr, map_ptr: ir.Value, struct_name: []const u8) !void {
+    // Map layout:
+    //   offset 0:  keys array (32 bytes) - Array$KeyType
+    //   offset 32: values array (32 bytes) - Array$ValueType
+    //   offset 64: states array (32 bytes) - Array$int
+    //   offset 96: count (8 bytes)
+    //   offset 104: capacity (8 bytes)
+    // Each Array: buffer_ptr(8) + len(8) + cap(8) + iterIndex(8)
+
+    // Parse key and value types from Map$KeyType$ValueType
+    const prefix_len = "Map$".len;
+    const key_value_part = struct_name[prefix_len..];
+    // Find the $ to separate key and value types
+    var dollar_pos: ?usize = null;
+    for (key_value_part, 0..) |c, i| {
+        if (c == '$') {
+            dollar_pos = i;
+            break;
+        }
+    }
+    const key_type = if (dollar_pos) |pos| key_value_part[0..pos] else key_value_part;
+    const value_type = if (dollar_pos) |pos| key_value_part[pos + 1 ..] else "";
+    const has_string_keys = std.mem.eql(u8, key_type, "String");
+    const has_string_values = std.mem.eql(u8, value_type, "String");
+
+    // Get pointer to keys array at offset 0
+    const keys_ptr = map_ptr;
+    // If keys are strings, cleanup occupied slots only (check states array)
+    if (has_string_keys) {
+        try emitMapStringKeysCleanup(self, map_ptr);
+    }
+    // Free the keys buffer (buffer_ptr is at offset 0 of the array struct)
+    const keys_buf_ptr = try self.func().emitLoad(keys_ptr, .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(keys_buf_ptr), "map keys cleanup");
+
+    // Get pointer to values array at offset 32
+    const values_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
+    // If values are strings, cleanup occupied slots only (check states array)
+    if (has_string_values) {
+        try emitMapStringValuesCleanup(self, map_ptr);
+    }
+    // Free the values buffer
+    const values_buf_ptr = try self.func().emitLoad(values_ptr.raw(), .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(values_buf_ptr), "map values cleanup");
+
+    // Get pointer to states array at offset 64 and free its buffer
+    const states_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.STATES_OFFSET);
+    const states_buf_ptr = try self.func().emitLoad(states_ptr.raw(), .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(states_buf_ptr), "map states cleanup");
+}
+
+/// Emit cleanup code for Map string keys, checking the states array for occupied slots.
+/// Only decrefs string buffers for slots where states[i] == 1 (OCCUPIED).
+pub fn emitMapStringKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
+    // Map layout:
+    //   offset 0:  keys array (32 bytes) - buffer_ptr at offset 0
+    //   offset 64: states array (32 bytes) - buffer_ptr at offset 64
+    //   offset 104: capacity (8 bytes)
+
+    // Load capacity to know how many slots to iterate
+    const cap_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.CAPACITY_OFFSET);
+    const capacity = try self.func().emitLoad(cap_ptr.raw(), .i64);
+
+    // Skip cleanup if capacity is 0
+    const zero = try self.func().emitConstI64(0);
+    const is_empty = try self.func().emitBinaryOp(.icmp_eq, capacity, zero, .i64);
+
+    // Allocate loop counter on stack
+    const counter_ptr = try self.func().emitAlloca(.i64);
+    try self.func().emitStore(counter_ptr.raw(), zero);
+
+    // Create blocks - all created upfront to ensure stable indices
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_str_cleanup_cond");
+    const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_str_cleanup_body");
+    const occupied_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_str_cleanup_occupied");
+    const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_str_cleanup_decref");
+    const heap_free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_str_heap_free");
+    const next_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_str_cleanup_next");
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_str_cleanup_end");
+
+    // Branch from entry: if empty, skip to end; otherwise go to condition
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_empty }, .{ .block_ref = end_block_idx }, .{ .block_ref = cond_block_idx } },
+    });
+
+    // Defer blocks (6 blocks)
+    var deferred = try DeferredBlocks.init(self.allocator, 6);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 6);
+
+    // Condition block: check if i < capacity
+    const cond_cap_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.CAPACITY_OFFSET);
+    const cond_cap = try self.func().emitLoad(cond_cap_ptr.raw(), .i64);
+    const cond_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+    const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_cap, .i64);
+
+    try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = done }, .{ .block_ref = end_block_idx }, .{ .block_ref = body_block_idx } },
+    });
+
+    // Restore body block (deferred index 5)
+    try deferred.restore(self, 5);
+
+    // Body block: check if states[i] == 1 (OCCUPIED)
+    const body_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+
+    // Get states buffer pointer (at offset 64 of map, then offset 0 of Array)
+    const states_array_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.STATES_OFFSET);
+    const states_buf_ptr = try self.func().emitLoad(states_array_ptr.raw(), .ptr);
+
+    // Load states[i] - each state is 8 bytes (int)
+    const eight = try self.func().emitConstI64(8);
+    const state_offset = try self.func().emitBinaryOp(.mul, body_i, eight, .i64);
+    const state_ptr = try self.func().emitBinaryOp(.add, states_buf_ptr, state_offset, .ptr);
+    const state = try self.func().emitLoad(state_ptr, .i64);
+
+    // Check if state != 0 (EMPTY) - we need to cleanup both OCCUPIED (1) and DELETED (2) slots
+    // DELETED slots may still hold string keys that haven't been cleaned up when remove() was called
+    const is_not_empty = try self.func().emitBinaryOp(.icmp_ne, state, zero, .i64);
+
+    // If not empty, go to occupied block; otherwise skip to next
+    try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_not_empty }, .{ .block_ref = occupied_block_idx }, .{ .block_ref = next_block_idx } },
+    });
+
+    // Restore occupied block (deferred index 4)
+    try deferred.restore(self, 4);
+
+    // Occupied block: get keys[i] and check if it's heap-allocated
+    const occ_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+
+    // Get keys buffer pointer (at offset 0 of map)
+    const keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
+
+    // Calculate element pointer: buf_ptr + i * 40 (String size)
+    const elem_size = try self.func().emitConstI64(String.SIZE);
+    const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
+    const elem_ptr = try self.func().emitBinaryOp(.add, keys_buf_ptr, offset, .ptr);
+
+    // Check if heap mode: cap_flags & 3 == 1
+    // cap_flags is at offset 24 in the String
+    const cap_flags_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(elem_ptr), ManagedArray.FLAGS_OFFSET);
+    const cap_flags = try self.func().emitLoad(cap_flags_ptr.raw(), .i32);
+    const three = try self.func().emitConstI32(3);
+    const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+    const one_i32 = try self.func().emitConstI32(1);
+    const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+
+    // If heap, go to decref; otherwise skip to next
+    try self.func().blocks.items[occupied_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = next_block_idx } },
+    });
+
+    // Restore decref block (deferred index 3)
+    try deferred.restore(self, 3);
+
+    // Decref block: decrement refcount in buffer header and check if zero
+    const decref_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+    const decref_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
+    const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
+    const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_keys_buf_ptr, decref_offset, .ptr);
+
+    // Buffer header refcount: load buf_ptr from String, subtract 8 to get header
+    const str_buf_ptr_decref = try self.func().emitLoad(decref_elem_ptr, .ptr);
+    const eight_decref = try self.func().emitConstI64(8);
+    const header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr_decref, eight_decref, .ptr);
+    const old_ref = try self.func().emitLoad(header_ptr, .i64);
+    const one_ref = try self.func().emitConstI64(1);
+    const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i64);
+    try self.func().emitStore(header_ptr, new_ref);
+
+    // Emit tracking call for decref
+    if (self.track_memory) {
+        try self.func().emitTrackDecref("<map key>", new_ref);
+    }
+
+    // Check if refcount is now zero
+    const zero_ref = try self.func().emitConstI64(0);
+    const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i64);
+
+    // Branch: if zero, go to heap_free; otherwise go to next
+    try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_zero }, .{ .block_ref = heap_free_block_idx }, .{ .block_ref = next_block_idx } },
+    });
+
+    // Restore heap_free block (deferred index 2)
+    try deferred.restore(self, 2);
+
+    // Heap free block: recompute elem_ptr and free buffer at header (buf_ptr - 8)
+    const heap_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+    const heap_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
+    const heap_elem_size = try self.func().emitConstI64(String.SIZE);
+    const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
+    const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_keys_buf_ptr, heap_offset, .ptr);
+
+    // Free the buffer including header and jump to next
+    const str_buf_ptr = try self.func().emitLoad(heap_elem_ptr, .ptr);
+    const eight_free = try self.func().emitConstI64(8);
+    const free_header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr, eight_free, .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(free_header_ptr), "map string key cleanup");
+    try self.func().emitBr(next_block_idx);
+
+    // Restore next block (deferred index 1)
+    try deferred.restore(self, 1);
+
+    // Next block: increment counter and branch to cond
+    const next_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+    const next_one = try self.func().emitConstI64(1);
+    const next_val = try self.func().emitBinaryOp(.add, next_i, next_one, .i64);
+    try self.func().emitStore(counter_ptr.raw(), next_val);
+    try self.func().emitBr(cond_block_idx);
+
+    // Restore end block
+    try deferred.restore(self, 0);
+}
+
+/// Emit cleanup code for Map string values, checking the states array for occupied slots.
+/// Only decrefs string buffers for slots where states[i] == 1 (OCCUPIED).
+pub fn emitMapStringValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
+    // Map layout:
+    //   offset 32: values array (32 bytes) - buffer_ptr at offset 0 of Array
+    //   offset 64: states array (32 bytes) - buffer_ptr at offset 0 of Array
+    //   offset 104: capacity (8 bytes)
+
+    // Load capacity to know how many slots to iterate
+    const cap_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.CAPACITY_OFFSET);
+    const capacity = try self.func().emitLoad(cap_ptr.raw(), .i64);
+
+    // Skip cleanup if capacity is 0
+    const zero = try self.func().emitConstI64(0);
+    const is_empty = try self.func().emitBinaryOp(.icmp_eq, capacity, zero, .i64);
+
+    // Allocate loop counter on stack
+    const counter_ptr = try self.func().emitAlloca(.i64);
+    try self.func().emitStore(counter_ptr.raw(), zero);
+
+    // Create blocks - all created upfront to ensure stable indices
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_val_cleanup_cond");
+    const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_val_cleanup_body");
+    const occupied_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_val_cleanup_occupied");
+    const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_val_cleanup_decref");
+    const heap_free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_val_heap_free");
+    const next_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_val_cleanup_next");
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("map_val_cleanup_end");
+
+    // Branch from entry: if empty, skip to end; otherwise go to condition
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_empty }, .{ .block_ref = end_block_idx }, .{ .block_ref = cond_block_idx } },
+    });
+
+    // Defer blocks (6 blocks)
+    var deferred = try DeferredBlocks.init(self.allocator, 6);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 6);
+
+    // Condition block: check if i < capacity
+    const cond_cap_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.CAPACITY_OFFSET);
+    const cond_cap = try self.func().emitLoad(cond_cap_ptr.raw(), .i64);
+    const cond_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+    const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_cap, .i64);
+
+    try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = done }, .{ .block_ref = end_block_idx }, .{ .block_ref = body_block_idx } },
+    });
+
+    // Restore body block (deferred index 5)
+    try deferred.restore(self, 5);
+
+    // Body block: check if states[i] != 0 (EMPTY) - cleanup both OCCUPIED (1) and DELETED (2) slots
+    const body_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+
+    // Get states buffer pointer (at offset 64 of map, then offset 0 of Array)
+    const states_array_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.STATES_OFFSET);
+    const states_buf_ptr = try self.func().emitLoad(states_array_ptr.raw(), .ptr);
+
+    // Load states[i] - each state is 8 bytes (int)
+    const eight = try self.func().emitConstI64(8);
+    const state_offset = try self.func().emitBinaryOp(.mul, body_i, eight, .i64);
+    const state_ptr = try self.func().emitBinaryOp(.add, states_buf_ptr, state_offset, .ptr);
+    const state = try self.func().emitLoad(state_ptr, .i64);
+
+    // Check if state != 0 (EMPTY) - we need to cleanup both OCCUPIED (1) and DELETED (2) slots
+    // DELETED slots may still hold string values that haven't been cleaned up when remove() was called
+    const is_not_empty = try self.func().emitBinaryOp(.icmp_ne, state, zero, .i64);
+
+    // If not empty, go to occupied block; otherwise skip to next
+    try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_not_empty }, .{ .block_ref = occupied_block_idx }, .{ .block_ref = next_block_idx } },
+    });
+
+    // Restore occupied block (deferred index 4)
+    try deferred.restore(self, 4);
+
+    // Occupied block: get values[i] and check if it's heap-allocated
+    const occ_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+
+    // Get values buffer pointer (at offset 32 of map, then offset 0 of Array)
+    const values_array_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
+    const values_buf_ptr = try self.func().emitLoad(values_array_ptr.raw(), .ptr);
+
+    // Calculate element pointer: buf_ptr + i * 40 (String size)
+    const elem_size = try self.func().emitConstI64(String.SIZE);
+    const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
+    const elem_ptr = try self.func().emitBinaryOp(.add, values_buf_ptr, offset, .ptr);
+
+    // Check if heap mode: cap_flags & 3 == 1
+    // cap_flags is at offset 24 in the String
+    const cap_flags_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(elem_ptr), ManagedArray.FLAGS_OFFSET);
+    const cap_flags = try self.func().emitLoad(cap_flags_ptr.raw(), .i32);
+    const three = try self.func().emitConstI32(3);
+    const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+    const one_i32 = try self.func().emitConstI32(1);
+    const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+
+    // If heap, go to decref; otherwise skip to next
+    try self.func().blocks.items[occupied_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = next_block_idx } },
+    });
+
+    // Restore decref block (deferred index 3)
+    try deferred.restore(self, 3);
+
+    // Decref block: decrement refcount in buffer header and check if zero
+    const decref_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+    const decref_values_array_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
+    const decref_values_buf_ptr = try self.func().emitLoad(decref_values_array_ptr.raw(), .ptr);
+    const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
+    const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_values_buf_ptr, decref_offset, .ptr);
+
+    // Buffer header refcount: load buf_ptr from String, subtract 8 to get header
+    const str_buf_ptr_decref = try self.func().emitLoad(decref_elem_ptr, .ptr);
+    const eight_decref = try self.func().emitConstI64(8);
+    const header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr_decref, eight_decref, .ptr);
+    const old_ref = try self.func().emitLoad(header_ptr, .i64);
+    const one_ref = try self.func().emitConstI64(1);
+    const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i64);
+    try self.func().emitStore(header_ptr, new_ref);
+
+    // Emit tracking call for decref
+    if (self.track_memory) {
+        try self.func().emitTrackDecref("<map value>", new_ref);
+    }
+
+    // Check if refcount is now zero
+    const zero_ref = try self.func().emitConstI64(0);
+    const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i64);
+
+    // Branch: if zero, go to heap_free; otherwise go to next
+    try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_zero }, .{ .block_ref = heap_free_block_idx }, .{ .block_ref = next_block_idx } },
+    });
+
+    // Restore heap_free block (deferred index 2)
+    try deferred.restore(self, 2);
+
+    // Heap free block: recompute elem_ptr and free buffer at header (buf_ptr - 8)
+    const heap_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+    const heap_values_array_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
+    const heap_values_buf_ptr = try self.func().emitLoad(heap_values_array_ptr.raw(), .ptr);
+    const heap_elem_size = try self.func().emitConstI64(String.SIZE);
+    const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
+    const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_values_buf_ptr, heap_offset, .ptr);
+
+    // Free the buffer including header and jump to next
+    const str_buf_ptr = try self.func().emitLoad(heap_elem_ptr, .ptr);
+    const eight_free = try self.func().emitConstI64(8);
+    const free_header_ptr = try self.func().emitBinaryOp(.sub, str_buf_ptr, eight_free, .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(free_header_ptr), "map string value cleanup");
+    try self.func().emitBr(next_block_idx);
+
+    // Restore next block (deferred index 1)
+    try deferred.restore(self, 1);
+
+    // Next block: increment counter and branch to cond
+    const next_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
+    const next_one = try self.func().emitConstI64(1);
+    const next_val = try self.func().emitBinaryOp(.add, next_i, next_one, .i64);
+    try self.func().emitStore(counter_ptr.raw(), next_val);
+    try self.func().emitBr(cond_block_idx);
+
+    // Restore end block
+    try deferred.restore(self, 0);
+}

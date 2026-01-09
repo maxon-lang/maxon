@@ -1,0 +1,353 @@
+/// String and ManagedArray IR emission helpers.
+/// Contains layout constants and COW (copy-on-write) refcounting operations.
+const std = @import("std");
+const ir = @import("ir.zig");
+const debug = @import("debug.zig");
+const struct_helpers = @import("ir_struct_helpers.zig");
+const types = @import("ast_to_ir_types.zig");
+const ConvertError = types.ConvertError;
+const ValueType = types.ValueType;
+const ast_to_ir = @import("4-ast_to_ir.zig");
+const AstToIr = ast_to_ir.AstToIr;
+const DeferredBlocks = ast_to_ir.DeferredBlocks;
+
+// ============================================================================
+// ManagedArray Layout (32 bytes)
+// ============================================================================
+/// __ManagedArray struct layout (32 bytes total)
+/// Unified managed type for both strings and arrays.
+/// Layout: buffer(8) + len(8) + capacity(8) + flags(4) + parent_off(4)
+///
+/// Fields:
+/// - buffer: *T (8 bytes) - pointer to element data (for refcounted mode, refcount is at buffer - 8)
+/// - len: i64 (8 bytes) - current length
+/// - capacity: i64 (8 bytes) - allocated capacity
+/// - flags: i32 (4 bytes) - mode flags (bits 0-1: 0=SSO, 1=heap-refcounted, 2=slice)
+/// - parent_off: i32 (4 bytes) - offset from parent buffer for slice mode
+///
+/// Mode semantics:
+/// - Mode 0 (SSO): Small storage optimization (future) - inline storage in struct
+/// - Mode 1 (heap-refcounted): Ref-counted heap allocation, refcount at buffer - 8
+/// - Mode 2 (slice): Zero-copy view into parent buffer, uses parent_off
+pub const ManagedArray = struct {
+    pub const SIZE: i32 = 32;
+    pub const BUFFER_OFFSET: i32 = 0;
+    pub const LEN_OFFSET: i32 = 8;
+    pub const CAPACITY_OFFSET: i32 = 16;
+    pub const FLAGS_OFFSET: i32 = 24;
+    pub const PARENT_OFF_OFFSET: i32 = 28;
+
+    comptime {
+        if (PARENT_OFF_OFFSET + 4 != SIZE) {
+            @compileError("ManagedArray layout mismatch: PARENT_OFF_OFFSET + 4 != SIZE");
+        }
+        if (LEN_OFFSET != BUFFER_OFFSET + 8) {
+            @compileError("ManagedArray layout mismatch: LEN_OFFSET != BUFFER_OFFSET + 8");
+        }
+        if (CAPACITY_OFFSET != LEN_OFFSET + 8) {
+            @compileError("ManagedArray layout mismatch: CAPACITY_OFFSET != LEN_OFFSET + 8");
+        }
+        if (FLAGS_OFFSET != CAPACITY_OFFSET + 8) {
+            @compileError("ManagedArray layout mismatch: FLAGS_OFFSET != CAPACITY_OFFSET + 8");
+        }
+        if (PARENT_OFF_OFFSET != FLAGS_OFFSET + 4) {
+            @compileError("ManagedArray layout mismatch: PARENT_OFF_OFFSET != FLAGS_OFFSET + 4");
+        }
+    }
+};
+
+// ============================================================================
+// String Layout (40 bytes)
+// ============================================================================
+/// String struct layout (40 bytes total)
+/// This is the user-facing String type that wraps __ManagedArray
+/// Layout: __ManagedArray(32) + _iterPos(8) = 40 bytes
+pub const String = struct {
+    pub const SIZE: i32 = 40;
+    pub const MANAGED_ARRAY_OFFSET: i32 = 0;
+    pub const ITER_POS_OFFSET: i32 = 32;
+
+    comptime {
+        if (SIZE < ManagedArray.SIZE) {
+            @compileError("String layout mismatch: SIZE < ManagedArray.SIZE");
+        }
+        if (ITER_POS_OFFSET != ManagedArray.SIZE) {
+            @compileError("String layout mismatch: ITER_POS_OFFSET != ManagedArray.SIZE");
+        }
+        if (ITER_POS_OFFSET + 8 != SIZE) {
+            @compileError("String layout mismatch: ITER_POS_OFFSET + 8 != SIZE");
+        }
+    }
+};
+
+// ============================================================================
+// ManagedArray Helpers
+// ============================================================================
+
+/// Allocate a __ManagedArray on the stack and initialize it as empty.
+pub fn emitEmptyManagedArray(self: *AstToIr) !ir.ManagedArrayPtr {
+    return struct_helpers.emitEmptyManagedArray(self.func());
+}
+
+/// Initialize an existing __ManagedArray as empty.
+pub fn initManagedArrayEmpty(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !void {
+    return struct_helpers.initManagedArrayEmpty(self.func(), managed_ptr);
+}
+
+/// Initialize an existing __ManagedArray with buffer, length, and capacity values.
+pub fn initManagedArray(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !void {
+    const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
+    return struct_helpers.initManagedArray(self.func(), managed_ptr, buffer, len, capacity, zero_flags);
+}
+
+/// Allocate a __ManagedArray on the stack and initialize with buffer, length, and capacity.
+pub fn emitManagedArray(self: *AstToIr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !ir.ManagedArrayPtr {
+    const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
+    return struct_helpers.emitManagedArray(self.func(), buffer, len, capacity, zero_flags);
+}
+
+/// Create and initialize a __ManagedArray on the stack from string bytes.
+/// Returns a pointer to the allocated struct.
+///
+/// String buffer layout with header:
+///   [refcount: i64] [data bytes...] [null terminator]
+///   ^               ^
+///   |               +-- data_ptr (stored in struct)
+///   +-- allocation base (header)
+///
+/// The refcount is stored at (data_ptr - 8), shared by all String copies.
+pub fn emitManagedArrayFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.ManagedArrayPtr {
+    const managed_ptr = try self.func().emitAllocaSized(ManagedArray.SIZE);
+
+    if (str_bytes.len == 0) {
+        try struct_helpers.initManagedArrayEmpty(self.func(), managed_ptr.asManagedArrayPtr());
+    } else {
+        // Heap allocation for string data WITH 8-byte header for refcount
+        // Layout: [refcount:i64][data...][null]
+        const buffer_size = try self.func().emitConstI64(@intCast(str_bytes.len + 1 + 8));
+        const buffer_with_header = try self.func().emitHeapAlloc(buffer_size, "string buffer");
+
+        // Initialize refcount in header to 1 (for the String being created)
+        const one_refcount = try self.func().emitConstI64(1);
+        if (debug.enabled) std.debug.print("[DEBUG] Emitting store 1 to header at {d}\n", .{buffer_with_header.raw()});
+        try self.func().emitStore(buffer_with_header.raw(), one_refcount);
+
+        // Data pointer is header + 8
+        const data_ptr = try self.func().emitGetElemPtr(buffer_with_header, try self.func().emitConstI64(8), 1);
+
+        // Store string bytes at data_ptr
+        for (str_bytes, 0..) |byte, i| {
+            const idx_val = try self.func().emitConstI64(@intCast(i));
+            const byte_ptr = try self.func().emitGetElemPtr(data_ptr.asRawPtr(), idx_val, 1);
+            try self.func().emitStoreI8(byte_ptr.raw(), try self.func().emitConstI8(byte));
+        }
+        // Null terminate
+        const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
+        try self.func().emitStoreI8((try self.func().emitGetElemPtr(data_ptr.asRawPtr(), null_idx, 1)).raw(), try self.func().emitConstI8(0));
+
+        // Initialize __ManagedArray fields (mode=1 for heap-refcounted)
+        // Store data_ptr (not the allocation base with header)
+        try self.func().emitStore(managed_ptr.raw(), data_ptr.raw());
+        const len_i64 = try self.func().emitConstI64(@intCast(str_bytes.len));
+        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStruct(), 8, len_i64);
+        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStruct(), 16, len_i64); // capacity = len
+        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStruct(), 24, try self.func().emitConstI32(1)); // flags = 1 (refcounted)
+        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStruct(), 28, try self.func().emitConstI32(0)); // parent_off = 0
+    }
+
+    return managed_ptr.asManagedArrayPtr();
+}
+
+/// Create and initialize a __ManagedArray from a runtime buffer pointer and length.
+/// Used for runtime string conversions (int to string, float to string, etc.)
+pub fn emitManagedArrayFromBuffer(self: *AstToIr, buffer: ir.RawPtr, len_i64: ir.Value) !ir.ManagedArrayPtr {
+    const mode_one = try self.func().emitConstI32(1); // mode=1 for heap-refcounted
+    return struct_helpers.emitManagedArray(self.func(), buffer, len_i64, len_i64, mode_one);
+}
+
+// ============================================================================
+// String Helpers
+// ============================================================================
+
+/// Wrap a __ManagedArray pointer in a full String struct (adds _iterPos field).
+pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !ir.StringPtr {
+    const string_ptr = try self.func().emitAllocaSized(40);
+    try self.func().emitMemcpy(string_ptr, managed_ptr.asRawPtr(), ManagedArray.SIZE);
+    const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr.asStruct(), String.ITER_POS_OFFSET);
+    try self.func().emitStore(iter_pos_ptr.raw(), try self.func().emitConstI64(0));
+    return string_ptr.asStringPtr();
+}
+
+/// Check if a type is the String type (which contains __ManagedString)
+pub fn isStringType(ty: ValueType) bool {
+    return ty == .struct_type and std.mem.eql(u8, ty.struct_type, "String");
+}
+
+/// Copy a struct and handle refcount increment for String/__ManagedString types.
+/// This is the single point of truth for struct copying with COW semantics.
+pub fn emitStructCopy(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.StructPtr, size: i32, struct_name: ?[]const u8) !void {
+    try self.func().emitMemcpy(dest_ptr.asRawPtr(), src_ptr.asRawPtr(), size);
+
+    // Handle refcount for String types (which contain __ManagedString at offset 0)
+    // Only incref for String copies, not __ManagedString moves.
+    // __ManagedString is always moved (consumed), never copied.
+    if (struct_name) |name| {
+        if (std.mem.eql(u8, name, "String")) {
+            try emitStringIncref(self, ir.toStringPtr(dest_ptr.raw()), "<struct copy>");
+        }
+        // Note: __ManagedString is intentionally NOT increffed here.
+        // When a ManagedString is moved into a String struct, it's a move, not a copy.
+        // The buffer already has refcount=1 from allocation.
+    }
+}
+
+/// Move a struct WITHOUT incrementing refcount. Used when source is a temporary
+/// that will be consumed (not kept alive after the move).
+pub fn emitStructMove(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.StructPtr, size: i32) !void {
+    try self.func().emitMemcpy(dest_ptr.asRawPtr(), src_ptr.asRawPtr(), size);
+    // No incref - this is a move, not a copy
+}
+
+/// Check if a string is in heap-refcounted mode by examining flags.
+/// Returns an IR value representing the boolean result (flags & 0x3 == 1).
+/// String layout: _managed at offset 0, flags at offset 24 within _managed.
+pub fn emitStringIsHeapMode(self: *AstToIr, string_ptr: ir.StringPtr) !ir.Value {
+    const flags_ptr = try self.func().emitGetFieldPtr(string_ptr.asStructPtr(), ManagedArray.FLAGS_OFFSET);
+    const flags = try self.func().emitLoad(flags_ptr.raw(), .i32);
+    const three = try self.func().emitConstI32(3);
+    const mode = try self.func().emitBinaryOp(.band, flags, three, .i32);
+    const one_i32 = try self.func().emitConstI32(1);
+    return try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+}
+
+/// Emit incref for a String variable.
+/// The string_ptr should point to a String struct (with _managed at offset 0).
+/// tag is used for memory tracking (variable name or description).
+///
+/// Refcount is stored in the buffer header at (buffer_ptr - 8).
+/// This is shared by all String copies that reference the same buffer.
+pub fn emitStringIncref(self: *AstToIr, string_ptr: ir.StringPtr, tag: []const u8) !void {
+    const is_heap = try emitStringIsHeapMode(self, string_ptr);
+
+    // Create blocks for conditional incref
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("incref");
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("incref_end");
+
+    // Defer end block
+    var deferred = try DeferredBlocks.init(self.allocator, 1);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 1);
+
+    // Emit conditional branch from entry block
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = incref_block_idx }, .{ .block_ref = end_block_idx } },
+    });
+
+    // In incref block: increment refcount in buffer header (at buffer_ptr - 8)
+    // Load buffer pointer from string struct
+    const buf_ptr = try self.func().emitLoad(string_ptr.raw(), .ptr);
+    // Calculate header address: buf_ptr - 8 (use .ptr for pointer arithmetic)
+    const eight = try self.func().emitConstI64(8);
+    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
+    // Incref the i64 refcount in the header
+    const old_ref = try self.func().emitLoad(header_ptr, .i64);
+    const one = try self.func().emitConstI64(1);
+    const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i64);
+    try self.func().emitStore(header_ptr, new_ref);
+
+    // Emit tracking call for incref (new_ref is the refcount after increment)
+    if (self.track_memory) {
+        // Track call expects i32, so truncate
+        const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+        try self.func().emitTrackIncref(tag, new_ref_i32);
+    }
+
+    // Branch to end
+    try self.func().emitBr(end_block_idx);
+
+    // Restore end block
+    try deferred.restore(self, 0);
+}
+
+/// Emit decref for a String variable with conditional free when refcount reaches 0.
+/// The string_ptr should point to a String struct (with _managed at offset 0).
+/// tag is used for memory tracking (variable name or description).
+///
+/// Refcount is stored in the buffer header at (buffer_ptr - 8).
+/// When refcount reaches 0, we free (buffer_ptr - 8) to include the header.
+pub fn emitStringDecref(self: *AstToIr, string_ptr: ir.StringPtr, tag: []const u8) !void {
+    const is_heap = try emitStringIsHeapMode(self, string_ptr);
+
+    // Create blocks for conditional decref
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("decref");
+    const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("decref_free");
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("decref_end");
+
+    debug.astToIr("emitStringDecref: entry={d}, decref={d}, free={d}, end={d}", .{ entry_block_idx, decref_block_idx, free_block_idx, end_block_idx });
+
+    // Defer end and free blocks (end=0, free=1 after pop order)
+    var deferred = try DeferredBlocks.init(self.allocator, 2);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 2);
+
+    // Emit conditional branch from entry block to decref or end
+    debug.astToIr("  br_cond in block {d}: if heap -> {d}, else -> {d}", .{ entry_block_idx, decref_block_idx, end_block_idx });
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = end_block_idx } },
+    });
+
+    // In decref block: load buffer pointer, compute header address, decrement refcount
+    const buf_ptr = try self.func().emitLoad(string_ptr.raw(), .ptr);
+    const eight = try self.func().emitConstI64(8);
+    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
+
+    // Decrement the i64 refcount in the header
+    const old_ref = try self.func().emitLoad(header_ptr, .i64);
+    const one = try self.func().emitConstI64(1);
+    const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i64);
+    try self.func().emitStore(header_ptr, new_ref);
+
+    // Emit tracking call for decref (new_ref is the refcount after decrement)
+    if (self.track_memory) {
+        // Track call expects i32, so truncate
+        const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+        try self.func().emitTrackDecref(tag, new_ref_i32);
+    }
+
+    // Check if refcount is now zero
+    const zero = try self.func().emitConstI64(0);
+    const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i64);
+
+    // Restore free block (index 1 = second popped = free_block)
+    try deferred.restore(self, 1);
+
+    // Emit branch from decref block to free or end
+    debug.astToIr("  br_cond in block {d}: if zero -> {d}, else -> {d}", .{ decref_block_idx, free_block_idx, end_block_idx });
+    try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_zero }, .{ .block_ref = free_block_idx }, .{ .block_ref = end_block_idx } },
+    });
+
+    // In free block: free the buffer WITH header (header_ptr, not buf_ptr)
+    // Need to reload header_ptr since we're in a different block
+    const buf_ptr2 = try self.func().emitLoad(string_ptr.raw(), .ptr);
+    const header_ptr2 = try self.func().emitBinaryOp(.sub, buf_ptr2, eight, .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(header_ptr2), "string cleanup");
+
+    // Branch to end
+    debug.astToIr("  br in block {d}: -> {d}", .{ free_block_idx, end_block_idx });
+    try self.func().emitBr(end_block_idx);
+
+    // Restore end block (index 0 = first popped = end_block)
+    try deferred.restore(self, 0);
+    debug.astToIr("  restored end block, current block is now {d}", .{self.func().blocks.items.len - 1});
+}
