@@ -922,13 +922,13 @@ pub const AstToIr = struct {
         const body_buf_ptr = try self.func().emitLoad(array_ptr, .ptr);
         const body_i = try self.func().emitLoad(counter_ptr, .i64);
 
-        // Calculate element pointer: buf_ptr + i * 32 (String size)
-        const elem_size = try self.func().emitConstI64(32);
+        // Calculate element pointer: buf_ptr + i * 40 (String size)
+        const elem_size = try self.func().emitConstI64(layouts.String.SIZE);
         const offset = try self.func().emitBinaryOp(.mul, body_i, elem_size, .i64);
         const elem_ptr = try self.func().emitBinaryOp(.add, body_buf_ptr, offset, .ptr);
 
         // Check if heap mode: cap_flags & 3 == 1
-        // cap_flags is at offset 12 in the String (which contains __ManagedString at offset 0)
+        // cap_flags is at offset 24 in the String (which contains __ManagedArray at offset 0)
         const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedArray.FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
@@ -4769,13 +4769,13 @@ pub const AstToIr = struct {
         // Get keys buffer pointer (at offset 0 of map)
         const keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
 
-        // Calculate element pointer: buf_ptr + i * 32 (String size)
-        const elem_size = try self.func().emitConstI64(32);
+        // Calculate element pointer: buf_ptr + i * 40 (String size)
+        const elem_size = try self.func().emitConstI64(layouts.String.SIZE);
         const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
         const elem_ptr = try self.func().emitBinaryOp(.add, keys_buf_ptr, offset, .ptr);
 
         // Check if heap mode: cap_flags & 3 == 1
-        // cap_flags is at offset 12 in the String
+        // cap_flags is at offset 24 in the String
         const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedArray.FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
@@ -4828,7 +4828,7 @@ pub const AstToIr = struct {
         // Heap free block: recompute elem_ptr and free buffer at header (buf_ptr - 8)
         const heap_i = try self.func().emitLoad(counter_ptr, .i64);
         const heap_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
-        const heap_elem_size = try self.func().emitConstI64(32);
+        const heap_elem_size = try self.func().emitConstI64(layouts.String.SIZE);
         const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
         const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_keys_buf_ptr, heap_offset, .ptr);
 
@@ -4948,13 +4948,13 @@ pub const AstToIr = struct {
         const values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.VALUES_OFFSET);
         const values_buf_ptr = try self.func().emitLoad(values_array_ptr, .ptr);
 
-        // Calculate element pointer: buf_ptr + i * 32 (String size)
-        const elem_size = try self.func().emitConstI64(32);
+        // Calculate element pointer: buf_ptr + i * 40 (String size)
+        const elem_size = try self.func().emitConstI64(layouts.String.SIZE);
         const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
         const elem_ptr = try self.func().emitBinaryOp(.add, values_buf_ptr, offset, .ptr);
 
         // Check if heap mode: cap_flags & 3 == 1
-        // cap_flags is at offset 12 in the String
+        // cap_flags is at offset 24 in the String
         const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedArray.FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
@@ -5009,7 +5009,7 @@ pub const AstToIr = struct {
         const heap_i = try self.func().emitLoad(counter_ptr, .i64);
         const heap_values_array_ptr = try self.func().emitGetFieldPtr(map_ptr, layouts.Map.VALUES_OFFSET);
         const heap_values_buf_ptr = try self.func().emitLoad(heap_values_array_ptr, .ptr);
-        const heap_elem_size = try self.func().emitConstI64(32);
+        const heap_elem_size = try self.func().emitConstI64(layouts.String.SIZE);
         const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
         const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_values_buf_ptr, heap_offset, .ptr);
 
@@ -11817,9 +11817,16 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
             };
 
             // Most types are 8 bytes (i64, f64, ptr)
-            // __ManagedArray is a special compiler-internal type that is 32 bytes (unified for arrays and strings)
+            // Special cases:
+            // - __ManagedArray is 32 bytes (internal managed type)
+            // - Array types are 40 bytes (__ManagedArray + iterIndex)
+            // - String is 40 bytes (__ManagedArray + _iterPos)
             const field_size: i32 = if (std.mem.eql(u8, type_name, "__ManagedArray"))
                 layouts.ManagedArray.SIZE
+            else if (std.mem.eql(u8, type_name, "Array"))
+                layouts.Array.SIZE
+            else if (std.mem.eql(u8, type_name, "String"))
+                layouts.String.SIZE
             else
                 8;
 

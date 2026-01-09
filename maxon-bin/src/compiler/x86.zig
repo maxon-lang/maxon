@@ -315,6 +315,11 @@ pub const Encoder = struct {
         try self.emit(&.{ 0x48, 0x83, 0xC0, imm });
     }
 
+    pub fn addRaxImm32(self: *Encoder, imm: i32) !void {
+        try self.emit(&.{ 0x48, 0x05 });
+        try self.emitI32(imm);
+    }
+
     pub fn andRaxImm8(self: *Encoder, imm: u8) !void {
         try self.emit(&.{ 0x48, 0x83, 0xE0, imm });
     }

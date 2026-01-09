@@ -16,23 +16,29 @@ entry:
     %tmp_extern.2 = extern.call ptr @"shell32.dll:CommandLineToArgvW"(%tmp_extern.1, %tmp_alloca)
     %tmp_load = load i32 %tmp_alloca
     %tmp_sext = sext.i32.i64 i64 %tmp_load
-    %tmp_const = const.i64 i64 32
+    %tmp_const = const.i64 i64 40
     %tmp_const.1 = const.i64 i64 0
     %tmp_extern.3 = extern.call ptr @"kernel32.dll:HeapAlloc"(%tmp_extern, %tmp_const.1, %tmp_const)
-    %tmp_const.2 = const.i64 i64 32
+    %tmp_const.2 = const.i64 i64 40
     %tmp_mul = mul i64 %tmp_sext %tmp_const.2
     %tmp_const.3 = const.i64 i64 0
     %tmp_extern.4 = extern.call ptr @"kernel32.dll:HeapAlloc"(%tmp_extern, %tmp_const.3, %tmp_mul)
+    %tmp_const.4 = const.i32 i32 0
     store %tmp_extern.3 %tmp_extern.4
     %tmp_fieldptr = getfieldptr ptr %tmp_extern.3 8
     store %tmp_fieldptr %tmp_sext
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_extern.3 16
     store %tmp_fieldptr.1 %tmp_sext
-    %tmp_const.4 = const.i64 i64 0
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_extern.3 24
-    store %tmp_fieldptr.2 %tmp_const.4
+    store.i32 %tmp_fieldptr.2 %tmp_const.4
+    %tmp_const.5 = const.i32 i32 0
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_extern.3 28
+    store.i32 %tmp_fieldptr.3 %tmp_const.5
+    %tmp_const.6 = const.i64 i64 0
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_extern.3 32
+    store %tmp_fieldptr.4 %tmp_const.6
     %tmp_alloca.1 = alloca.sized ptr 8
-    store %tmp_alloca.1 %tmp_const.4
+    store %tmp_alloca.1 %tmp_const.6
     br @block1
 cmd_args_cond:
     %tmp_load.1 = load i64 %tmp_alloca.1
@@ -40,110 +46,115 @@ cmd_args_cond:
     br.cond %tmp_icmp @block2 @block3
 cmd_args_body:
     %tmp_load.2 = load i64 %tmp_alloca.1
-    %21 = getelemptr ptr %tmp_extern.2 %tmp_load.2 elemsize=8
-    %tmp_load.3 = load ptr %21
-    %tmp_const.5 = const.i64 i64 65001
-    %tmp_const.6 = const.i64 i64 0
-    %tmp_const.7 = const.i64 i64 -1
-    %tmp_extern.5 = extern.call i64 @"kernel32.dll:WideCharToMultiByte"(%tmp_const.5, %tmp_const.6, %tmp_load.3, %tmp_const.7, %tmp_const.4, %tmp_const.4, %tmp_const.6, %tmp_const.6)
+    %25 = getelemptr ptr %tmp_extern.2 %tmp_load.2 elemsize=8
+    %tmp_load.3 = load ptr %25
+    %tmp_const.7 = const.i64 i64 65001
     %tmp_const.8 = const.i64 i64 0
-    %tmp_extern.6 = extern.call ptr @"kernel32.dll:HeapAlloc"(%tmp_extern, %tmp_const.8, %tmp_extern.5)
-    %tmp_const.9 = const.i64 i64 65001
-    %tmp_const.10 = const.i64 i64 0
-    %tmp_const.11 = const.i64 i64 -1
-    %tmp_extern.7 = extern.call i64 @"kernel32.dll:WideCharToMultiByte"(%tmp_const.9, %tmp_const.10, %tmp_load.3, %tmp_const.11, %tmp_extern.6, %tmp_extern.5, %tmp_const.10, %tmp_const.10)
-    %33 = getelemptr ptr %tmp_extern.4 %tmp_load.2 elemsize=32
-    %tmp_const.12 = const.i64 i64 1
-    %tmp_sub = sub i64 %tmp_extern.5 %tmp_const.12
-    %tmp_const.13 = const.i32 i32 1
-    store %33 %tmp_extern.6
-    %tmp_fieldptr.3 = getfieldptr ptr %33 8
-    store %tmp_fieldptr.3 %tmp_sub
-    %tmp_fieldptr.4 = getfieldptr ptr %33 16
-    store %tmp_fieldptr.4 %tmp_sub
-    %tmp_fieldptr.5 = getfieldptr ptr %33 24
-    store.i32 %tmp_fieldptr.5 %tmp_const.13
-    %tmp_const.14 = const.i32 i32 0
-    %tmp_fieldptr.6 = getfieldptr ptr %33 28
-    store.i32 %tmp_fieldptr.6 %tmp_const.14
-    %tmp_const.15 = const.i64 i64 0
-    %tmp_fieldptr.7 = getfieldptr ptr %33 32
-    store %tmp_fieldptr.7 %tmp_const.15
-    %tmp_add = add i64 %tmp_load.2 %tmp_const.12
-    store %tmp_alloca.1 %tmp_add
+    %tmp_const.9 = const.i64 i64 -1
+    %tmp_extern.5 = extern.call i64 @"kernel32.dll:WideCharToMultiByte"(%tmp_const.7, %tmp_const.8, %tmp_load.3, %tmp_const.9, %tmp_const.6, %tmp_const.6, %tmp_const.8, %tmp_const.8)
+    %tmp_const.10 = const.i64 i64 8
+    %tmp_add = add i64 %tmp_extern.5 %tmp_const.10
+    %tmp_heap = heap.alloc ptr %tmp_add tag="string buffer"
+    %tmp_const.11 = const.i64 i64 1
+    store %tmp_heap %tmp_const.11
+    %tmp_const.12 = const.i64 i64 8
+    %tmp_add.1 = add ptr %tmp_heap %tmp_const.12
+    %tmp_const.13 = const.i64 i64 65001
+    %tmp_const.14 = const.i64 i64 0
+    %tmp_const.15 = const.i64 i64 -1
+    %tmp_extern.6 = extern.call i64 @"kernel32.dll:WideCharToMultiByte"(%tmp_const.13, %tmp_const.14, %tmp_load.3, %tmp_const.15, %tmp_add.1, %tmp_extern.5, %tmp_const.14, %tmp_const.14)
+    %41 = getelemptr ptr %tmp_extern.4 %tmp_load.2 elemsize=40
+    %tmp_const.16 = const.i64 i64 1
+    %tmp_sub = sub i64 %tmp_extern.5 %tmp_const.16
+    %tmp_const.17 = const.i32 i32 1
+    store %41 %tmp_add.1
+    %tmp_fieldptr.5 = getfieldptr ptr %41 8
+    store %tmp_fieldptr.5 %tmp_sub
+    %tmp_fieldptr.6 = getfieldptr ptr %41 16
+    store %tmp_fieldptr.6 %tmp_sub
+    %tmp_fieldptr.7 = getfieldptr ptr %41 24
+    store.i32 %tmp_fieldptr.7 %tmp_const.17
+    %tmp_const.18 = const.i32 i32 0
+    %tmp_fieldptr.8 = getfieldptr ptr %41 28
+    store.i32 %tmp_fieldptr.8 %tmp_const.18
+    %tmp_const.19 = const.i64 i64 0
+    %tmp_fieldptr.9 = getfieldptr ptr %41 32
+    store %tmp_fieldptr.9 %tmp_const.19
+    %tmp_add.2 = add i64 %tmp_load.2 %tmp_const.16
+    store %tmp_alloca.1 %tmp_add.2
     br @block1
 cmd_args_end:
-    %tmp_extern.8 = extern.call ptr @"kernel32.dll:LocalFree"(%tmp_extern.2)
+    %tmp_extern.7 = extern.call ptr @"kernel32.dll:LocalFree"(%tmp_extern.2)
     %args = alloca ptr
     store %args %tmp_extern.3
     %tmp_load.4 = load ptr %args
-    %tmp_const.16 = const.i64 i64 1
+    %tmp_const.20 = const.i64 i64 1
     %tmp_alloca.3 = alloca.sized ptr 48
-    %tmp_call = call ptr @Array$String$get(%tmp_alloca.3, %tmp_load.4, %tmp_const.16)
-    %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.3 8
-    %tmp_call.1 = call i64 @print(%tmp_fieldptr.8)
-    %tmp_const.17 = const.i64 i64 0
-    %tmp_fieldptr.9 = getfieldptr ptr %args 8
-    %tmp_load.5 = load i64 %tmp_fieldptr.9
-    %tmp_const.18 = const.i64 i64 0
-    %tmp_icmp.1 = icmp.eq i64 %tmp_load.5 %tmp_const.18
+    %tmp_call = call ptr @Array$String$get(%tmp_alloca.3, %tmp_load.4, %tmp_const.20)
+    %tmp_fieldptr.10 = getfieldptr ptr %tmp_alloca.3 8
+    %tmp_call.1 = call i64 @print(%tmp_fieldptr.10)
+    %tmp_const.21 = const.i64 i64 0
+    %tmp_fieldptr.11 = getfieldptr ptr %args 8
+    %tmp_load.5 = load i64 %tmp_fieldptr.11
+    %tmp_const.22 = const.i64 i64 0
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.5 %tmp_const.22
     %tmp_alloca.4 = alloca ptr
-    store %tmp_alloca.4 %tmp_const.18
+    store %tmp_alloca.4 %tmp_const.22
     br.cond %tmp_icmp.1 @block9 @block4
 arr_str_cleanup_cond:
-    %tmp_fieldptr.10 = getfieldptr ptr %args 8
-    %tmp_load.6 = load i64 %tmp_fieldptr.10
+    %tmp_fieldptr.12 = getfieldptr ptr %args 8
+    %tmp_load.6 = load i64 %tmp_fieldptr.12
     %tmp_load.7 = load i64 %tmp_alloca.4
     %tmp_icmp.2 = icmp.ge i64 %tmp_load.7 %tmp_load.6
     br.cond %tmp_icmp.2 @block9 @block5
 arr_str_cleanup_body:
     %tmp_load.8 = load ptr %args
     %tmp_load.9 = load i64 %tmp_alloca.4
-    %tmp_const.19 = const.i64 i64 32
-    %tmp_mul.1 = mul i64 %tmp_load.9 %tmp_const.19
-    %tmp_add.1 = add ptr %tmp_load.8 %tmp_mul.1
-    %tmp_fieldptr.11 = getfieldptr ptr %tmp_add.1 24
-    %tmp_load.10 = load i32 %tmp_fieldptr.11
-    %tmp_const.20 = const.i32 i32 3
-    %tmp_band = band i32 %tmp_load.10 %tmp_const.20
-    %tmp_const.21 = const.i32 i32 1
-    %tmp_icmp.3 = icmp.eq i32 %tmp_band %tmp_const.21
+    %tmp_const.23 = const.i64 i64 40
+    %tmp_mul.1 = mul i64 %tmp_load.9 %tmp_const.23
+    %tmp_add.3 = add ptr %tmp_load.8 %tmp_mul.1
+    %tmp_fieldptr.13 = getfieldptr ptr %tmp_add.3 24
+    %tmp_load.10 = load i32 %tmp_fieldptr.13
+    %tmp_const.24 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.10 %tmp_const.24
+    %tmp_const.25 = const.i32 i32 1
+    %tmp_icmp.3 = icmp.eq i32 %tmp_band %tmp_const.25
     br.cond %tmp_icmp.3 @block6 @block8
 arr_str_cleanup_decref:
     %tmp_load.11 = load ptr %args
     %tmp_load.12 = load i64 %tmp_alloca.4
-    %tmp_mul.2 = mul i64 %tmp_load.12 %tmp_const.19
-    %tmp_add.2 = add ptr %tmp_load.11 %tmp_mul.2
-    %tmp_load.13 = load ptr %tmp_add.2
-    %tmp_const.22 = const.i64 i64 8
-    %tmp_sub.1 = sub ptr %tmp_load.13 %tmp_const.22
+    %tmp_mul.2 = mul i64 %tmp_load.12 %tmp_const.23
+    %tmp_add.4 = add ptr %tmp_load.11 %tmp_mul.2
+    %tmp_load.13 = load ptr %tmp_add.4
+    %tmp_const.26 = const.i64 i64 8
+    %tmp_sub.1 = sub ptr %tmp_load.13 %tmp_const.26
     %tmp_load.14 = load i64 %tmp_sub.1
-    %tmp_const.23 = const.i64 i64 1
-    %tmp_sub.2 = sub i64 %tmp_load.14 %tmp_const.23
+    %tmp_const.27 = const.i64 i64 1
+    %tmp_sub.2 = sub i64 %tmp_load.14 %tmp_const.27
     store %tmp_sub.1 %tmp_sub.2
-    %tmp_const.24 = const.i64 i64 0
-    %tmp_icmp.4 = icmp.eq i64 %tmp_sub.2 %tmp_const.24
+    %tmp_const.28 = const.i64 i64 0
+    %tmp_icmp.4 = icmp.eq i64 %tmp_sub.2 %tmp_const.28
     br.cond %tmp_icmp.4 @block7 @block8
 arr_str_cleanup_heap_free:
     %tmp_load.15 = load ptr %args
     %tmp_load.16 = load i64 %tmp_alloca.4
-    %tmp_mul.3 = mul i64 %tmp_load.16 %tmp_const.19
-    %tmp_add.3 = add ptr %tmp_load.15 %tmp_mul.3
-    %tmp_load.17 = load ptr %tmp_add.3
-    %tmp_const.25 = const.i64 i64 8
-    %tmp_sub.3 = sub ptr %tmp_load.17 %tmp_const.25
+    %tmp_mul.3 = mul i64 %tmp_load.16 %tmp_const.23
+    %tmp_add.5 = add ptr %tmp_load.15 %tmp_mul.3
+    %tmp_load.17 = load ptr %tmp_add.5
+    %tmp_const.29 = const.i64 i64 8
+    %tmp_sub.3 = sub ptr %tmp_load.17 %tmp_const.29
     heap.free %tmp_sub.3 tag="string cleanup"
     br @block8
 arr_str_cleanup_next:
-    %tmp_const.26 = const.i64 i64 1
+    %tmp_const.30 = const.i64 i64 1
     %tmp_load.18 = load i64 %tmp_alloca.4
-    %tmp_add.4 = add i64 %tmp_load.18 %tmp_const.26
-    store %tmp_alloca.4 %tmp_add.4
+    %tmp_add.6 = add i64 %tmp_load.18 %tmp_const.30
+    store %tmp_alloca.4 %tmp_add.6
     br @block4
 arr_str_cleanup_end:
     %tmp_load.19 = load ptr %args
     heap.free %tmp_load.19 tag="array cleanup"
-    ret %tmp_const.17
+    ret %tmp_const.21
 }
 
 function Array$String$get() -> ptr {

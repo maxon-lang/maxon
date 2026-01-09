@@ -1328,25 +1328,23 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     const argc_i32 = try self.func().emitLoad(argc_ptr, .i32);
     const argc = try self.func().emitUnaryOp(.sext_i32_i64, argc_i32, .i64);
 
-    // Allocate Array$String struct (32 bytes)
-    const array_size = try self.func().emitConstI64(32);
+    // Allocate Array$String struct (40 bytes: 32 for __ManagedArray + 8 for iterIndex)
+    const array_size = try self.func().emitConstI64(layouts.Array.SIZE);
     const result_ptr = try emitHeapAllocWin(self, heap, array_size);
 
-    // Allocate strings array: argc * 32 bytes (each String is 32 bytes)
-    const string_size = try self.func().emitConstI64(32);
+    // Allocate strings array: argc * 40 bytes (each String is 40 bytes)
+    const string_size = try self.func().emitConstI64(layouts.String.SIZE);
     const strings_alloc_size = try self.func().emitBinaryOp(.mul, argc, string_size, .i64);
     const strings_buf = try emitHeapAllocWin(self, heap, strings_alloc_size);
 
-    // Initialize Array$String:
-    // [0]  ptr buffer = strings_buf
-    // [8]  i64 length = argc
-    // [16] i64 capacity = argc
-    // [24] i64 iterIndex = 0
-    try self.func().emitStore(result_ptr, strings_buf);
-    try struct_helpers.storeI64Field(self.func(), result_ptr, 8, argc);
-    try struct_helpers.storeI64Field(self.func(), result_ptr, 16, argc);
+    // Initialize Array$String's __ManagedArray part (first 32 bytes):
+    // Mode 0 for regular arrays (not refcounted)
+    const zero_i32 = try self.func().emitConstI32(0);
+    try struct_helpers.initManagedArray(self.func(), result_ptr, strings_buf, argc, argc, zero_i32);
+
+    // Initialize iterIndex at offset 32
     const zero_i64 = try self.func().emitConstI64(0);
-    try struct_helpers.storeI64Field(self.func(), result_ptr, 24, zero_i64);
+    try struct_helpers.storeI64Field(self.func(), result_ptr, layouts.Array.ITER_INDEX_OFFSET, zero_i64);
 
     // Loop counter on stack
     const i_ptr = try self.func().emitAllocaSized(8);
@@ -1381,14 +1379,14 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     // Get required UTF-8 buffer size (pass 0 for dest and size to query)
     const utf8_size = try emitWideCharToMultiByte(self, wide_str, zero_i64, zero_i64);
 
-    // Allocate UTF-8 buffer
-    const utf8_buf = try emitHeapAllocWin(self, heap, utf8_size);
+    // Allocate UTF-8 buffer with refcount header for String
+    const utf8_buf = try struct_helpers.emitAllocRefcountedBuffer(self.func(), utf8_size, "string buffer");
 
     // Convert to UTF-8
     _ = try emitWideCharToMultiByte(self, wide_str, utf8_buf, utf8_size);
 
-    // Calculate String element address: strings_buf + i * 32
-    const string_ptr = try self.func().emitGetElemPtr(strings_buf, i_body, 32);
+    // Calculate String element address: strings_buf + i * 40
+    const string_ptr = try self.func().emitGetElemPtr(strings_buf, i_body, layouts.String.SIZE);
 
     // len = utf8_size - 1 (exclude null terminator)
     const one_i64 = try self.func().emitConstI64(1);

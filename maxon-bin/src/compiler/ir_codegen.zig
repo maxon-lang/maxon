@@ -2532,7 +2532,12 @@ pub const IrCodegen = struct {
             // Base is indirect - load the pointer, add offset, store the result
             try self.enc.movRaxRbpOffset(base_stack_offset);
             if (field_offset != 0) {
-                try self.enc.addRaxImm8(@intCast(@as(u32, @bitCast(field_offset)) & 0xFF));
+                // Use imm8 for offsets in range -128..127, otherwise use imm32
+                if (field_offset >= -128 and field_offset < 128) {
+                    try self.enc.addRaxImm8(@intCast(@as(u32, @bitCast(field_offset)) & 0xFF));
+                } else {
+                    try self.enc.addRaxImm32(field_offset);
+                }
             }
             const result_offset = self.allocStackSlots(1);
             try self.enc.movRbpOffsetRax(result_offset);

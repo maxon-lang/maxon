@@ -483,18 +483,18 @@ end 'main'
 ```stdout
 ALLOC #1: 14 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 64 bytes (set buffer)
+ALLOC #2: 80 bytes (set buffer)
 ALLOC #3: 14 bytes (string buffer)
 MOVE: managed
 DECREF: <array element> -> rc=0
 FREE #1: 14 bytes (string cleanup)
 DECREF: <array element> -> rc=0
 FREE #3: 14 bytes (string cleanup)
-FREE #2: 64 bytes (array cleanup)
+FREE #2: 80 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 92 bytes
-Freed:     92 bytes
+Allocated: 108 bytes
+Freed:     108 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   0
@@ -518,9 +518,9 @@ end 'main'
 ```stdout
 ALLOC #1: 12 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 32 bytes (map buffer)
+ALLOC #2: 40 bytes (map buffer)
 ALLOC #3: 8 bytes (map buffer)
-ALLOC #4: 512 bytes (array buffer)
+ALLOC #4: 640 bytes (array buffer)
 MOVE: managed
 ALLOC #5: 128 bytes (array buffer)
 MOVE: managed
@@ -533,7 +533,7 @@ INCREF: <array index String> -> rc=2
 INCREF: <array_store> -> rc=3
 DECREF: k -> rc=2
 MOVE: result
-FREE #2: 32 bytes (map literal keys cleanup)
+FREE #2: 40 bytes (map literal keys cleanup)
 FREE #3: 8 bytes (map literal values cleanup)
 DECREF: <temp> -> rc=1
 ALLOC #7: 12 bytes (string buffer)
@@ -544,13 +544,13 @@ DECREF: <temp> -> rc=0
 FREE #7: 12 bytes (string cleanup)
 DECREF: <map key> -> rc=0
 FREE #1: 12 bytes (map string key cleanup)
-FREE #4: 512 bytes (map keys cleanup)
+FREE #4: 640 bytes (map keys cleanup)
 FREE #5: 128 bytes (map values cleanup)
 FREE #6: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
-Allocated: 832 bytes
-Freed:     832 bytes
+Allocated: 968 bytes
+Freed:     968 bytes
 Leaked:    0 bytes
 Moves:     9
 Increfs:   3
@@ -575,12 +575,12 @@ end 'main'
 ALLOC #1: 14 bytes (string buffer)
 MOVE: managed
 ALLOC #2: 16 bytes (map buffer)
-ALLOC #3: 64 bytes (map buffer)
+ALLOC #3: 80 bytes (map buffer)
 ALLOC #4: 14 bytes (string buffer)
 MOVE: managed
 ALLOC #5: 128 bytes (array buffer)
 MOVE: managed
-ALLOC #6: 512 bytes (array buffer)
+ALLOC #6: 640 bytes (array buffer)
 MOVE: managed
 ALLOC #7: 128 bytes (array buffer)
 MOVE: managed
@@ -595,7 +595,7 @@ INCREF: <array_store> -> rc=3
 DECREF: v -> rc=2
 MOVE: result
 FREE #2: 16 bytes (map literal keys cleanup)
-FREE #3: 64 bytes (map literal values cleanup)
+FREE #3: 80 bytes (map literal values cleanup)
 DECREF: <temp> -> rc=1
 DECREF: <temp> -> rc=1
 INCREF: <array index String> -> rc=2
@@ -605,12 +605,12 @@ DECREF: <map value> -> rc=0
 FREE #1: 14 bytes (map string value cleanup)
 DECREF: <map value> -> rc=0
 FREE #4: 14 bytes (map string value cleanup)
-FREE #6: 512 bytes (map values cleanup)
+FREE #6: 640 bytes (map values cleanup)
 FREE #7: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
-Allocated: 876 bytes
-Freed:     876 bytes
+Allocated: 1020 bytes
+Freed:     1020 bytes
 Leaked:    0 bytes
 Moves:     9
 Increfs:   5
@@ -672,13 +672,13 @@ end 'main'
 ```stdout
 ALLOC #1: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 96 bytes (map buffer)
+ALLOC #2: 120 bytes (map buffer)
 ALLOC #3: 24 bytes (map buffer)
 ALLOC #4: 10 bytes (string buffer)
 MOVE: managed
 ALLOC #5: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #6: 512 bytes (array buffer)
+ALLOC #6: 640 bytes (array buffer)
 MOVE: managed
 ALLOC #7: 128 bytes (array buffer)
 MOVE: managed
@@ -697,7 +697,7 @@ INCREF: <array index String> -> rc=2
 INCREF: <array_store> -> rc=3
 DECREF: k -> rc=2
 MOVE: result
-FREE #2: 96 bytes (map literal keys cleanup)
+FREE #2: 120 bytes (map literal keys cleanup)
 FREE #3: 24 bytes (map literal values cleanup)
 DECREF: <temp> -> rc=1
 DECREF: <temp> -> rc=1
@@ -712,15 +712,15 @@ DECREF: <map key> -> rc=0
 FREE #4: 10 bytes (map string key cleanup)
 DECREF: <map key> -> rc=0
 FREE #5: 10 bytes (map string key cleanup)
-FREE #6: 512 bytes (map keys cleanup)
+FREE #6: 640 bytes (map keys cleanup)
 FREE #7: 128 bytes (map values cleanup)
 FREE #8: 128 bytes (map states cleanup)
 DECREF: <temp> -> rc=0
 FREE #9: 10 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 928 bytes
-Freed:     928 bytes
+Allocated: 1080 bytes
+Freed:     1080 bytes
 Leaked:    0 bytes
 Moves:     11
 Increfs:   7
