@@ -222,3 +222,6 @@ error E022: C:\Users\Eric\Dev\maxon\maxon-bin\zig-out\bin\..\..\..\stdlib\collec
 
 
 could we remove __ManagedString and just use __ManagedArray
+
+enums should be infered and not typed
+check "BackingType"

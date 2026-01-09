@@ -24,14 +24,13 @@ pub const PrimitiveTypeInfo = struct {
     is_signed: bool,
 };
 
-/// Compile-time lookup table for all Maxon primitive types
+/// Compile-time lookup table for user-facing Maxon primitive types
+/// Note: ptr and void are intentionally excluded - they are internal types
 pub const primitive_types = [_]PrimitiveTypeInfo{
     .{ .maxon_name = "int", .ir_type = .i64, .size = 8, .is_numeric = true, .is_integral = true, .is_floating_point = false, .is_signed = true },
     .{ .maxon_name = "float", .ir_type = .f64, .size = 8, .is_numeric = true, .is_integral = false, .is_floating_point = true, .is_signed = true },
     .{ .maxon_name = "bool", .ir_type = .i64, .size = 8, .is_numeric = false, .is_integral = true, .is_floating_point = false, .is_signed = false },
     .{ .maxon_name = "byte", .ir_type = .i64, .size = 8, .is_numeric = true, .is_integral = true, .is_floating_point = false, .is_signed = false },
-    .{ .maxon_name = "void", .ir_type = .void, .size = 0, .is_numeric = false, .is_integral = false, .is_floating_point = false, .is_signed = false },
-    .{ .maxon_name = "ptr", .ir_type = .ptr, .size = 8, .is_numeric = false, .is_integral = false, .is_floating_point = false, .is_signed = false },
 };
 
 /// Canonical primitive type name constants (reference into primitive_types for consistency)
@@ -39,8 +38,10 @@ pub const INT: []const u8 = primitive_types[0].maxon_name;
 pub const FLOAT: []const u8 = primitive_types[1].maxon_name;
 pub const BOOL: []const u8 = primitive_types[2].maxon_name;
 pub const BYTE: []const u8 = primitive_types[3].maxon_name;
-pub const VOID: []const u8 = primitive_types[4].maxon_name;
-pub const PTR: []const u8 = primitive_types[5].maxon_name;
+
+/// Internal type names - NOT user-facing, used only by the compiler
+pub const VOID: []const u8 = "void";
+pub const PTR: []const u8 = "ptr";
 
 /// Look up primitive type info by Maxon name
 /// Returns null if not a primitive type
@@ -120,8 +121,8 @@ pub fn nameToIrType(name: []const u8) ir.Type {
     if (getPrimitiveTypeInfo(name)) |info| {
         return info.ir_type;
     }
-    // Handle alias
-    if (std.mem.eql(u8, name, "pointer")) return .ptr;
+    // Handle internal types not in primitive_types
+    if (std.mem.eql(u8, name, VOID)) return .void;
     // All other types (structs, __ManagedString, etc.) are represented as pointers
     return .ptr;
 }
@@ -137,7 +138,7 @@ pub fn irTypeToName(ir_ty: ir.Type) []const u8 {
 
 /// Extended type info for variable tracking
 pub const ValueType = union(enum) {
-    primitive: []const u8, // type name: "int", "float", "bool", "byte", "__ManagedString", etc.
+    primitive: []const u8,
     struct_type: []const u8,
     array_type: ArrayInfo,
     enum_type: []const u8,

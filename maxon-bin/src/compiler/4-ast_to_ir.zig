@@ -4115,8 +4115,8 @@ pub const AstToIr = struct {
                 }
                 // Must have exactly one type argument (the element type)
                 if (gen.type_args.len != 1) return false;
-                // Element type must be "String" or "string"
-                return std.mem.eql(u8, gen.type_args[0], "String") or std.mem.eql(u8, gen.type_args[0], "string");
+                // Element type must be "String"
+                return std.mem.eql(u8, gen.type_args[0], "String");
             },
             else => return false,
         }
@@ -7605,7 +7605,7 @@ pub const AstToIr = struct {
         // Fallback: store string bytes as a pointer to constant data
         // This is used when String type is not available
         const str_ptr = try self.func().emitStringConstant(processed);
-        return .{ .value = str_ptr, .ty = .{ .primitive = "string" } };
+        return .{ .value = str_ptr, .ty = .{ .struct_type = "String" } };
     }
 
     /// Emit a string literal directly into a pre-allocated String pointer.
@@ -12023,9 +12023,6 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
 fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
     return switch (te) {
         .simple => |name| {
-            // Handle type aliases first
-            if (std.mem.eql(u8, name, "string")) return .ptr;
-            if (std.mem.eql(u8, name, "character")) return .i64;
             // Use centralized primitive type lookup
             return types.nameToIrType(name);
         },
@@ -12074,11 +12071,8 @@ var mono_name_buffer2: [256]u8 = undefined; // Separate buffer for getValueTypeF
 fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
     return switch (te) {
         .simple => |name| {
-            // Known primitives and type aliases don't have struct names
-            if (types.isPrimitiveTypeName(name) or
-                std.mem.eql(u8, name, "string") or
-                std.mem.eql(u8, name, "character"))
-            {
+            // Known primitives don't have struct names
+            if (types.isPrimitiveTypeName(name)) {
                 return null;
             }
             return name;

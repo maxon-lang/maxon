@@ -422,7 +422,7 @@ pub const SemanticAnalyzer = struct {
         try self.type_map.put(self.allocator, "float", .{ .primitive = .f64 });
         try self.type_map.put(self.allocator, "bool", .{ .primitive = .i64 });
         try self.type_map.put(self.allocator, "byte", .{ .primitive = .i64 });
-        try self.type_map.put(self.allocator, "ptr", .{ .primitive = .ptr });
+        // Note: ptr is intentionally not registered - it's an internal IR type, not user-facing
     }
 
     fn registerCompilerInternalTypes(self: *SemanticAnalyzer) !void {

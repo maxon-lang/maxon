@@ -25,14 +25,14 @@ pub const Type = enum {
         };
     }
 
-    /// Returns the user-facing Maxon type name (byte, int, float, pointer, void)
+    /// Returns the user-facing Maxon type name (byte, int, float, ptr, void)
     pub fn toMaxonName(self: Type) []const u8 {
         return switch (self) {
             .i8 => "byte",
             .i32 => "int",
             .i64 => "int",
             .f64 => "float",
-            .ptr => "pointer",
+            .ptr => "ptr",
             .void => "void",
         };
     }

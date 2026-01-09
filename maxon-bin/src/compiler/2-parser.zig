@@ -860,8 +860,8 @@ pub const Parser = struct {
             .integer => .{ .simple = "int" },
             .float_lit => .{ .simple = "float" },
             .bool_lit => .{ .simple = "bool" },
-            .string_literal, .interpolated_string => .{ .simple = "string" },
-            .char_literal => .{ .simple = "character" },
+            .string_literal, .interpolated_string => .{ .simple = "String" },
+            .char_literal => .{ .simple = "Character" },
             .nil_lit => {
                 // Cannot infer type from nil alone - this is an error case
                 // but we'll let later semantic analysis catch it
@@ -2327,14 +2327,12 @@ pub const Parser = struct {
                         const next = self.peek(0);
                         if (next) |tok| {
                             // Lowercase identifier that's not a builtin type is a variable (size expr)
-                            // Type names are: int, float, bool, byte, string, character, or start uppercase
+                            // Type names are: int, float, bool, byte, or start uppercase (String, Character, etc.)
                             const first_char = tok.text[0];
                             const is_builtin_type = std.mem.eql(u8, tok.text, "int") or
                                 std.mem.eql(u8, tok.text, "float") or
                                 std.mem.eql(u8, tok.text, "bool") or
-                                std.mem.eql(u8, tok.text, "byte") or
-                                std.mem.eql(u8, tok.text, "string") or
-                                std.mem.eql(u8, tok.text, "character");
+                                std.mem.eql(u8, tok.text, "byte");
                             const starts_uppercase = first_char >= 'A' and first_char <= 'Z';
                             // If it's not a builtin type and doesn't start uppercase, it's a variable
                             break :blk !is_builtin_type and !starts_uppercase;

@@ -147,7 +147,7 @@ pub const file_intrinsics = [_]Intrinsic{
     .{
         .name = "__read_file",
         .params = &cstring_param,
-        .return_type_name = "string?",
+        .return_type_name = "String?",
         .return_ir_type = .ptr,
         .visibility = .stdlib_only,
         .codegen = .custom,
