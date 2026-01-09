@@ -34,16 +34,16 @@ var dir = Direction.north
 
 ### Raw Value Enums
 
-Enums can have an underlying raw value type (`int` or `string`):
+Enums can have raw values. The backing type is inferred from the values:
 
 ```maxon
-enum HttpStatus int
+enum HttpStatus
     ok = 200
     notFound = 404
     serverError = 500
 end 'HttpStatus'
 
-enum Planet String
+enum Planet
     earth = "Earth"
     mars = "Mars"
     venus = "Venus"
@@ -298,7 +298,7 @@ end 'main'
 
 <!-- test: raw-value-int -->
 ```maxon
-enum HttpStatus int
+enum HttpStatus
     ok = 200
     notFound = 404
     serverError = 500
@@ -318,7 +318,7 @@ end 'main'
 
 <!-- test: raw-value-int-comparison -->
 ```maxon
-enum Priority int
+enum Priority
     low = 1
     medium = 5
     high = 10
@@ -444,7 +444,7 @@ error E034: specs/fragments/enums.error.unknown-enum-case.1.test:8:5: unknown en
 
 <!-- test: error.duplicate-raw-value -->
 ```maxon
-enum Status int
+enum Status
     ok = 200
     success = 200
 end 'Status'
@@ -459,8 +459,9 @@ error E031: specs/fragments/enums.error.duplicate-raw-value.1.test:4:5: duplicat
 
 <!-- test: error.raw-value-type-mismatch -->
 ```maxon
-enum Status int
-    ok = "success"
+enum Status
+    ok = 100
+    fail = "error"
 end 'Status'
 
 function main() returns int
@@ -468,7 +469,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E032: specs/fragments/enums.error.raw-value-type-mismatch.1.test:3:5: raw value type mismatch: 'expected int, got string'
+error E032: specs/fragments/enums.error.raw-value-type-mismatch.1.test:4:5: raw value type mismatch: 'expected int, got String'
 ```
 
 <!-- test: error.rawvalue-on-simple-enum -->

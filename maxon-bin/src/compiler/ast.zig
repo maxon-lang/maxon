@@ -83,7 +83,6 @@ pub const EnumMember = struct {
 pub const EnumDecl = struct {
     name: []const u8,
     is_export: bool = false, // true if declared with 'export enum'
-    backing_type: ?[]const u8, // Optional backing type (int, string, etc.)
     conformances: []const InterfaceConformance, // Interface conformances (e.g., is Error)
     members: []const EnumMember,
     methods: []MethodDecl, // Methods defined on the enum

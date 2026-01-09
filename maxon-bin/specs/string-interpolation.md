@@ -72,8 +72,8 @@ print("Use \{expr\} syntax")  // "Use {expr} syntax"
 Enum values can be interpolated directly. For int-backed or simple enums, the numeric value is shown. For string-backed enums, the raw string value is displayed:
 
 ```maxon
-// Int-backed enum
-enum Color int
+// Int-backed enum (type inferred from values)
+enum Color
     red = 1
     green = 2
     blue = 3
@@ -82,8 +82,8 @@ end 'Color'
 var c = Color.green
 print("Color value: {c}\n")  // "Color value: 2"
 
-// String-backed enum
-enum Status string
+// String-backed enum (type inferred from values)
+enum Status
     active = "Active"
     inactive = "Inactive"
 end 'Status'
@@ -783,7 +783,7 @@ John Doe, 30 years old
 
 <!-- test: int-enum-interpolation -->
 ```maxon
-enum Color int
+enum Color
     red = 1
     green = 2
     blue = 3
@@ -830,7 +830,7 @@ Direction: 2
 
 <!-- test: string-enum-interpolation -->
 ```maxon
-enum Status string
+enum Status
     active = "Active"
     inactive = "Inactive"
     pending = "Pending"
@@ -853,7 +853,7 @@ Status: Active
 
 <!-- test: multiple-enum-interpolation -->
 ```maxon
-enum Priority int
+enum Priority
     low = 1
     medium = 2
     high = 3

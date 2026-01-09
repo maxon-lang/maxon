@@ -22,14 +22,14 @@ enum FileError is Error
 end 'FileError'
 
 // Int-backed enum error (for error codes)
-enum HttpError int is Error
+enum HttpError is Error
     badRequest = 400
     notFound = 404
     serverError = 500
 end 'HttpError'
 
 // String-backed enum error (for messages)
-enum ValidationError string is Error
+enum ValidationError is Error
     emptyField = "Field cannot be empty"
     invalidFormat = "Invalid format"
 end 'ValidationError'
@@ -95,8 +95,8 @@ end 'main'
 
 <!-- test: error.enum-int-backed-error -->
 ```maxon
-// Int-backed enum error type
-enum MyError int is Error
+// Int-backed enum error type (type inferred from values)
+enum MyError is Error
     invalidInput = 1
     notFound = 404
 end 'MyError'
@@ -111,8 +111,8 @@ end 'main'
 
 <!-- test: error.enum-string-backed-error -->
 ```maxon
-// String-backed enum error type
-enum MyError string is Error
+// String-backed enum error type (type inferred from values)
+enum MyError is Error
     invalidInput = "Invalid input"
     notFound = "Not found"
 end 'MyError'
@@ -170,7 +170,7 @@ end 'main'
 <!-- test: error.do-catch-handles-thrown-error -->
 ```maxon
 // Test do-catch catches thrown errors
-enum MyError int is Error
+enum MyError is Error
     failed = 42
 end 'MyError'
 

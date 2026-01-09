@@ -314,7 +314,8 @@ pub const EnumTypeInfo = struct {
     members: std.StringHashMapUnmanaged(i64),
     /// Extended case info including associated values
     case_info: std.StringHashMapUnmanaged(EnumCaseInfo) = .{},
-    backing_type: BackingType = .int,
+    /// Backing type inferred from raw values: null for simple enums, "int" or "String" for raw value enums
+    backing_type: ?[]const u8 = null,
     /// For string-backed enums: maps ordinal to string value
     string_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{},
     /// True if this enum conforms to the Error interface
@@ -323,14 +324,10 @@ pub const EnumTypeInfo = struct {
     has_associated_values: bool = false,
     /// Maximum payload size for associated values (used for memory layout)
     max_payload_size: i32 = 0,
-    /// True if enum was declared with explicit backing type (e.g., "enum Status int")
-    has_explicit_backing_type: bool = false,
     decl_line: u32 = 0,
     decl_column: u32 = 0,
     source_file: ?[]const u8 = null,
     is_export: bool = true, // false for private enums
-
-    pub const BackingType = enum { int, string };
 };
 
 /// Type info - primitives, structs, or enums

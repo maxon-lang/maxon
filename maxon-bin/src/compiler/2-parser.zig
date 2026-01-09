@@ -3068,27 +3068,6 @@ pub const Parser = struct {
         _ = try self.expect(.@"enum");
         const name_token = try self.expect(.identifier);
 
-        // Parse optional backing type (e.g., "enum Color int" or "enum Status string")
-        // Must check that the identifier is not "is" (start of conformance clause)
-        // Backing type can be type keywords (from keyword_map) or custom identifiers
-        var backing_type: ?[]const u8 = null;
-        // Check all type keywords from keyword_map dynamically
-        inline for (Lexer.keyword_map) |kw| {
-            if (kw[2] == .type_keyword) {
-                if (self.check(kw[1])) {
-                    backing_type = self.advance().text;
-                    break;
-                }
-            }
-        }
-        // If no type keyword matched, check for custom identifier
-        if (backing_type == null and self.check(.identifier)) {
-            const next_text = self.peek(0).?.text;
-            if (!std.mem.eql(u8, next_text, "is")) {
-                backing_type = self.advance().text;
-            }
-        }
-
         // Parse optional interface conformances: is InterfaceName, ...
         var conformances: std.ArrayListUnmanaged(ast.InterfaceConformance) = .empty;
         errdefer conformances.deinit(self.allocator);
@@ -3193,7 +3172,6 @@ pub const Parser = struct {
         return .{
             .name = name_token.text,
             .is_export = is_export,
-            .backing_type = backing_type,
             .conformances = try conformances.toOwnedSlice(self.allocator),
             .members = try members.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),

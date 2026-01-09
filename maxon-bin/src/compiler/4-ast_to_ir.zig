@@ -1560,11 +1560,8 @@ pub const AstToIr = struct {
         var case_info: std.StringHashMapUnmanaged(types.EnumCaseInfo) = .{};
         errdefer case_info.deinit(self.allocator);
 
-        // Determine backing type
-        const backing_type: types.EnumTypeInfo.BackingType = if (enum_decl.backing_type) |bt|
-            (if (std.mem.eql(u8, bt, "string")) .string else .int)
-        else
-            .int;
+        // Backing type is inferred from raw values (null for simple enums)
+        var inferred_backing_type: ?[]const u8 = null;
 
         // Check if this enum conforms to Error interface
         var is_error = false;
@@ -1595,8 +1592,15 @@ pub const AstToIr = struct {
             }
 
             if (member.value) |value_expr| {
-                // Explicit value - evaluate constant expression
+                // Explicit value - infer backing type from value
                 if (value_expr.* == .integer) {
+                    // Infer int backing type
+                    if (inferred_backing_type == null) {
+                        inferred_backing_type = "int";
+                    } else if (!std.mem.eql(u8, inferred_backing_type.?, "int")) {
+                        self.reportErrorAt(.E032, "expected String, got int", member.line, member.column);
+                        return error.SemanticError;
+                    }
                     next_value = value_expr.integer;
 
                     // Check for duplicate raw values
@@ -1606,17 +1610,16 @@ pub const AstToIr = struct {
                         self.reportErrorAt(.E031, msg, member.line, member.column);
                         return error.SemanticError;
                     }
-                } else if (value_expr.* == .string_literal and backing_type == .string) {
+                } else if (value_expr.* == .string_literal) {
+                    // Infer String backing type
+                    if (inferred_backing_type == null) {
+                        inferred_backing_type = "String";
+                    } else if (!std.mem.eql(u8, inferred_backing_type.?, "String")) {
+                        self.reportErrorAt(.E032, "expected int, got String", member.line, member.column);
+                        return error.SemanticError;
+                    }
                     // Store the string backing value for this ordinal
                     try string_values.put(self.allocator, next_value, value_expr.string_literal);
-                } else if (value_expr.* == .string_literal and backing_type == .int) {
-                    // Type mismatch: string value for int-backed enum
-                    self.reportErrorAt(.E032, "expected int, got string", member.line, member.column);
-                    return error.SemanticError;
-                } else if (value_expr.* == .integer and backing_type == .string) {
-                    // Type mismatch: int value for string-backed enum
-                    self.reportErrorAt(.E032, "expected string, got int", member.line, member.column);
-                    return error.SemanticError;
                 }
             }
 
@@ -1666,19 +1669,19 @@ pub const AstToIr = struct {
                 .name = enum_decl.name,
                 .members = members,
                 .case_info = case_info,
-                .backing_type = backing_type,
+                .backing_type = inferred_backing_type,
                 .string_values = string_values,
                 .is_error = is_error,
                 .has_associated_values = has_associated_values,
                 .max_payload_size = max_payload_size,
-                .has_explicit_backing_type = enum_decl.backing_type != null,
                 .decl_line = enum_decl.block.start_line,
                 .decl_column = enum_decl.block.start_column,
                 .source_file = self.source_file,
                 .is_export = enum_decl.is_export,
             },
         });
-        debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {}, has_assoc: {})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing_type), is_error, has_associated_values });
+        const backing_str = if (inferred_backing_type) |bt| bt else "none";
+        debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {}, has_assoc: {})", .{ enum_decl.name, enum_decl.members.len, backing_str, is_error, has_associated_values });
     }
 
     pub fn registerInterface(self: *AstToIr, iface: ast.InterfaceDecl) !void {
@@ -6566,12 +6569,12 @@ pub const AstToIr = struct {
             .enum_type => |enum_type_name| {
                 // Look up the enum type info
                 if (self.type_map.get(enum_type_name)) |type_info| {
-                    if (type_info.enum_type.backing_type == .string) {
+                    if (type_info.enum_type.string_values.count() > 0) {
                         // String-backed enum: generate switch on ordinal to select raw string value
                         return self.convertStringEnumToString(typed_val.value, type_info.enum_type);
                     }
                 }
-                // Int-backed or unknown enum: convert ordinal to string
+                // Int-backed or simple enum: convert ordinal to string
                 return self.convertIntToString(typed_val.value);
             },
             .optional_type => |opt_info| {
@@ -8017,14 +8020,14 @@ pub const AstToIr = struct {
                 }
                 const enum_info = type_info.enum_type;
 
-                // Check if enum has an explicit backing type
-                if (!enum_info.has_explicit_backing_type) {
+                // Check if enum has a backing type (inferred from raw values)
+                if (enum_info.backing_type == null) {
                     self.reportError(.E033, enum_name);
                     return error.SemanticError;
                 }
 
                 // For int-backed enums, the enum value IS the raw value
-                if (enum_info.backing_type == .int) {
+                if (std.mem.eql(u8, enum_info.backing_type.?, "int")) {
                     return .{ .value = base.value, .ty = .{ .primitive = types.INT } };
                 } else {
                     // For string-backed enums, look up in string_values table

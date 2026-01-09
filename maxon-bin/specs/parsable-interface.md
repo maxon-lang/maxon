@@ -21,7 +21,7 @@ Types implement `Parsable` by providing a static `fromString` method that:
 - Throws a specific error type on parse failure
 
 ```maxon
-enum MoneyParseError int is Error
+enum MoneyParseError is Error
     InvalidFormat = 1
     NegativeValue = 2
 end 'MoneyParseError'
@@ -72,7 +72,7 @@ end 'main'
 <!-- test: parsable.type-implements-parsable -->
 ```maxon
 // Type can implement Parsable with throwing static method
-enum ParseError int is Error
+enum ParseError is Error
     Invalid = 1
 end 'ParseError'
 
@@ -95,7 +95,7 @@ end 'main'
 <!-- test: parsable.successful-parse -->
 ```maxon
 // Parsable.fromString returns struct on success
-enum ParseError int is Error
+enum ParseError is Error
     Invalid = 1
 end 'ParseError'
 
@@ -123,7 +123,7 @@ end 'main'
 <!-- test: parsable.throws-on-invalid-input -->
 ```maxon
 // Parsable.fromString throws error on invalid input
-enum ParseError int is Error
+enum ParseError is Error
     Empty = 1
 end 'ParseError'
 
@@ -154,7 +154,7 @@ end 'main'
 <!-- test: parsable.multiple-error-conditions -->
 ```maxon
 // Parsable can throw different errors for different conditions
-enum MoneyParseError int is Error
+enum MoneyParseError is Error
     InvalidFormat = 1
     NegativeValue = 2
 end 'MoneyParseError'
@@ -191,7 +191,7 @@ end 'main'
 <!-- test: parsable.do-catch-fallthrough -->
 ```maxon
 // do-catch blocks fall through correctly without explicit return
-enum ParseError int is Error
+enum ParseError is Error
     Invalid = 1
 end 'ParseError'
 
@@ -264,7 +264,7 @@ error E015: specs/fragments/parsable-interface.error.missing-throws.1.test:1:1: 
 <!-- test: error.throws-non-error-type -->
 ```maxon
 // Implementation must throw a type that conforms to Error
-enum NotAnError int
+enum NotAnError
     Bad = 1
 end 'NotAnError'
 
