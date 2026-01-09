@@ -2,7 +2,10 @@
 /// Contains layout constants and cleanup operations for Map types.
 const std = @import("std");
 const ir = @import("ir.zig");
+const ast = @import("ast.zig");
+const debug = @import("debug.zig");
 const string = @import("ast_to_ir_string.zig");
+const array = @import("ast_to_ir_array.zig");
 const ManagedArray = string.ManagedArray;
 const String = string.String;
 const ast_to_ir = @import("4-ast_to_ir.zig");
@@ -468,4 +471,134 @@ pub fn emitMapStringValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
 
     // Restore end block
     try deferred.restore(self, 0);
+}
+/// Convert a map literal expression to IR.
+/// Creates a Map instance by allocating temporary buffers for keys and values,
+/// then calling the Map$init method with InitableFromDictionaryLiteral interface.
+pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ast_to_ir.ConvertError!ast_to_ir.TypedValue {
+    const entries = map_lit.entries;
+
+    // Empty map literals require type annotation (cannot infer types)
+    if (entries.len == 0) {
+        debug.astToIr("error: empty map literal requires type annotation", .{});
+        self.reportError(.E006, "empty map literal requires type annotation");
+        return error.UnknownType;
+    }
+
+    // Infer key and value types from the first entry
+    const first_key_typed = try self.convertExpression(entries[0].key.*);
+    const first_value_typed = try self.convertExpression(entries[0].value.*);
+
+    const key_type_name = first_key_typed.ty.getTypeName() orelse {
+        debug.astToIr("error: map key type must be a named type (primitive or struct)", .{});
+        self.reportError(.E006, "map key type must be a named type");
+        return error.UnknownType;
+    };
+    const value_type_name = first_value_typed.ty.getTypeName() orelse {
+        debug.astToIr("error: map value type must be a named type (primitive or struct)", .{});
+        self.reportError(.E006, "map value type must be a named type");
+        return error.UnknownType;
+    };
+
+    debug.astToIr("Map literal: {d} entries, key type={s}, value type={s}", .{ entries.len, key_type_name, value_type_name });
+
+    // Build the monomorphized Map type name: Map$KeyType$ValueType
+    var type_args = [_][]const u8{ key_type_name, value_type_name };
+    const map_type_name = try self.getOrCreateMonomorphizedType("Map", &type_args);
+
+    // Calculate element sizes based on actual types
+    const key_elem_size: i64 = try self.getValueTypeSize(first_key_typed.ty);
+    const value_elem_size: i64 = try self.getValueTypeSize(first_value_typed.ty);
+
+    // Allocate buffers for keys and values on heap
+    const elem_count = try self.func().emitConstI64(@intCast(entries.len));
+    const keys_buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(key_elem_size))));
+    const values_buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(value_elem_size))));
+    const keys_buffer = try self.func().emitHeapAlloc(keys_buffer_size, "map buffer");
+    const values_buffer = try self.func().emitHeapAlloc(values_buffer_size, "map buffer");
+
+    // Store entries into buffers
+    for (entries, 0..) |entry, i| {
+        const key_typed = if (i == 0) first_key_typed else try self.convertExpression(entry.key.*);
+        const value_typed = if (i == 0) first_value_typed else try self.convertExpression(entry.value.*);
+        const idx_val = try self.func().emitConstI64(@intCast(i));
+
+        const key_ptr = try self.func().emitGetElemPtr(keys_buffer, idx_val, @intCast(key_elem_size));
+        // For structs, memcpy the full value; for primitives, store directly
+        if (key_elem_size > 8) {
+            try self.func().emitMemcpy(key_ptr.asRawPtr(), ir.toRawPtr(key_typed.value), @intCast(key_elem_size));
+        } else {
+            try self.func().emitStore(key_ptr.raw(), key_typed.value);
+        }
+
+        // NOTE: Do NOT remove string keys from temporaries.
+        // Map$init COPIES keys with incref, so it creates its own references.
+        // The original temporary strings should be cleaned up normally at scope end.
+        // The map's copies will survive because they have their own refcounts.
+
+        const value_ptr = try self.func().emitGetElemPtr(values_buffer, idx_val, @intCast(value_elem_size));
+        if (value_elem_size > 8) {
+            try self.func().emitMemcpy(value_ptr.asRawPtr(), ir.toRawPtr(value_typed.value), @intCast(value_elem_size));
+        } else {
+            try self.func().emitStore(value_ptr.raw(), value_typed.value);
+        }
+
+        // NOTE: Do NOT remove string values from temporaries.
+        // Map$init COPIES values with incref, so it creates its own references.
+        // The original temporary strings should be cleaned up normally at scope end.
+    }
+
+    // Create __ManagedArrays for keys and values
+    const keys_managed_ptr = try array.emitManagedArray(self, keys_buffer, elem_count, elem_count);
+    const values_managed_ptr = try array.emitManagedArray(self, values_buffer, elem_count, elem_count);
+
+    // Build init function name: Map$K$V$init (static init from InitableFromDictionaryLiteral interface)
+    const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{map_type_name});
+    try self.module.trackString(init_func_name);
+
+    // Look up function and type info
+    const func_info = self.func_map.get(init_func_name) orelse {
+        const msg = std.fmt.allocPrint(self.allocator, "Map type '{s}' missing init method for InitableFromDictionaryLiteral", .{map_type_name}) catch "missing init method";
+        self.reportInternalError(msg);
+        return error.UnknownFunction;
+    };
+
+    // Trigger lazy generation if needed
+    if (!func_info.ir_generated) {
+        try self.ensureMethodGenerated(init_func_name);
+    }
+
+    const type_info = self.type_map.get(map_type_name) orelse {
+        self.reportError(.E006, map_type_name);
+        return error.UnknownType;
+    };
+
+    // Map$init returns a struct, so use sret calling convention
+    const struct_size = type_info.struct_type.size;
+    const result_ptr = try self.func().emitAllocaSized(struct_size);
+
+    // Build args: [sret_ptr, keys_managed_ptr, values_managed_ptr]
+    var args = try self.allocator.alloc(ir.Value, 3);
+    args[0] = result_ptr.raw();
+    args[1] = keys_managed_ptr.raw();
+    args[2] = values_managed_ptr.raw();
+
+    // Call init with sret
+    _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
+    // Map$init copies all keys/values with incref into its internal storage.
+    // The original temporary strings remain tracked and will be cleaned up
+    // normally at scope end via cleanupTemporaryStrings().
+
+    // Free the temporary buffers used to pass keys and values to init
+    // The Map$init function copies the data into its internal hash table,
+    // so we need to clean up the temporary managed arrays
+    debug.astToIr("Map literal: emitting heap.free for temp buffers in block {d}", .{self.func().blocks.items.len - 1});
+    try self.func().emitHeapFree(keys_buffer, "map literal keys cleanup");
+    try self.func().emitHeapFree(values_buffer, "map literal values cleanup");
+
+    return .{
+        .value = result_ptr.raw(),
+        .ty = .{ .struct_type = map_type_name },
+    };
 }

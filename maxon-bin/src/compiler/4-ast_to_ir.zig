@@ -23,7 +23,7 @@ const map_helpers = @import("ast_to_ir_map.zig");
 const cleanup = @import("ast_to_ir_cleanup.zig");
 
 // Re-export layouts for other modules
-pub const ManagedArray = string.ManagedArray;
+pub const ManagedArray = array.ManagedArray;
 pub const String = string.String;
 pub const CString = cstring.CString;
 pub const Array = array.Array;
@@ -597,32 +597,6 @@ pub const AstToIr = struct {
         return loop.finish(self);
     }
 
-    // ------------------------------------------------------------------------
-    // COW String Helpers (delegates to ir_struct_helpers)
-    // ------------------------------------------------------------------------
-
-    /// Allocate a __ManagedArray on the stack and initialize it as empty.
-    fn emitEmptyManagedArray(self: *AstToIr) !ir.ManagedArrayPtr {
-        return struct_helpers.emitEmptyManagedArray(self.func());
-    }
-
-    /// Initialize an existing __ManagedArray as empty.
-    fn initManagedArrayEmpty(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !void {
-        return struct_helpers.initManagedArrayEmpty(self.func(), managed_ptr);
-    }
-
-    /// Initialize an existing __ManagedArray with buffer, length, and capacity values.
-    fn initManagedArray(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !void {
-        const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
-        return struct_helpers.initManagedArray(self.func(), managed_ptr, buffer, len, capacity, zero_flags);
-    }
-
-    /// Allocate a __ManagedArray on the stack and initialize with buffer, length, and capacity.
-    fn emitManagedArray(self: *AstToIr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !ir.ManagedArrayPtr {
-        const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
-        return struct_helpers.emitManagedArray(self.func(), buffer, len, capacity, zero_flags);
-    }
-
     pub fn deinit(self: *AstToIr) void {
         // Clean up the IR module (important for error paths where convert() fails)
         // In success case, module was transferred out and replaced with empty module
@@ -1192,7 +1166,7 @@ pub const AstToIr = struct {
                 // instead of going through convertArrayLiteral which expects
                 // expressions to still be valid
                 if (elements.len == 0) {
-                    const managed_ptr = try self.emitEmptyManagedArray();
+                    const managed_ptr = try array.emitEmptyManagedArray(self, );
                     return .{
                         .value = managed_ptr.raw(),
                         .ty = .{ .array_type = .{ .element_type = .i64, .size = 0, .storage = .heap } },
@@ -1231,7 +1205,7 @@ pub const AstToIr = struct {
                 }
 
                 // Create managed array
-                const managed_ptr = try self.emitManagedArray(buffer, elem_count, elem_count);
+                const managed_ptr = try array.emitManagedArray(self, buffer, elem_count, elem_count);
 
                 return .{
                     .value = managed_ptr.raw(),
@@ -2453,7 +2427,7 @@ pub const AstToIr = struct {
     }
 
     /// Get the size in bytes for a value type
-    fn getValueTypeSize(self: *AstToIr, value_type: ValueType) !i32 {
+    pub fn getValueTypeSize(self: *AstToIr, value_type: ValueType) !i32 {
         return switch (value_type) {
             .struct_type => |name| blk: {
                 const info = self.type_map.get(name) orelse {
@@ -2567,7 +2541,7 @@ pub const AstToIr = struct {
 
     /// Get or create a monomorphized version of a generic type
     /// e.g., "Container" + ["int"] -> "Container$int"
-    fn getOrCreateMonomorphizedType(self: *AstToIr, base_type: []const u8, type_args: []const []const u8) ConvertError![]const u8 {
+    pub fn getOrCreateMonomorphizedType(self: *AstToIr, base_type: []const u8, type_args: []const []const u8) ConvertError![]const u8 {
         // Build the monomorphized name: TypeName$Arg1$Arg2
         var name_parts: std.ArrayListUnmanaged(u8) = .empty;
         defer name_parts.deinit(self.allocator);
@@ -2983,7 +2957,7 @@ pub const AstToIr = struct {
 
     /// Ensure a method has been generated (lazy generation entry point).
     /// Called when a method is about to be invoked but hasn't had its IR generated yet.
-    fn ensureMethodGenerated(self: *AstToIr, mangled_name: []const u8) ConvertError!void {
+    pub fn ensureMethodGenerated(self: *AstToIr, mangled_name: []const u8) ConvertError!void {
         // Check if already in progress (prevents infinite recursion for mutual calls)
         if (self.methods_in_progress.contains(mangled_name)) {
             return;
@@ -6215,7 +6189,7 @@ pub const AstToIr = struct {
             .struct_init => |sinit| self.convertStructInit(sinit),
             .field_access => |fa| self.convertFieldAccess(fa),
             .array_literal => |arr| self.convertArrayLiteral(arr),
-            .map_literal => |map| self.convertMapLiteral(map),
+            .map_literal => |map| map_helpers.convertMapLiteral(self, map),
             .init_from_array => |ifa| self.convertInitFromArray(ifa),
             .index => |idx| self.convertIndex(idx),
             .array_type => |arr| self.convertArrayType(arr),
@@ -8909,7 +8883,7 @@ pub const AstToIr = struct {
         debug.astToIr("InitableFromArrayLiteral: {s} with {d} elements", .{ type_name, elements.len });
 
         const managed_ptr = if (elements.len == 0)
-            try self.emitEmptyManagedArray()
+            try array.emitEmptyManagedArray(self, )
         else blk: {
             // Allocate buffer for elements (on heap for ownership)
             const elem_count = try self.func().emitConstI64(@intCast(elements.len));
@@ -8925,7 +8899,7 @@ pub const AstToIr = struct {
                 try self.func().emitStore(elem_ptr.raw(), typed.value);
             }
 
-            break :blk try self.emitManagedArray(buffer, elem_count, elem_count);
+            break :blk try array.emitManagedArray(self, buffer, elem_count, elem_count);
         };
 
         // Check if this is the Array type (special-cased: receives __ManagedArray directly)
@@ -9040,8 +9014,8 @@ pub const AstToIr = struct {
         var values_managed_ptr: ir.Value = undefined;
 
         if (entries.len == 0) {
-            keys_managed_ptr = (try self.emitEmptyManagedArray()).raw();
-            values_managed_ptr = (try self.emitEmptyManagedArray()).raw();
+            keys_managed_ptr = (try array.emitEmptyManagedArray(self, )).raw();
+            values_managed_ptr = (try array.emitEmptyManagedArray(self, )).raw();
         } else {
             // Allocate buffers for keys and values on heap
             const elem_count = try self.func().emitConstI64(@intCast(entries.len));
@@ -9063,8 +9037,8 @@ pub const AstToIr = struct {
                 try self.func().emitStore(value_ptr.raw(), value_typed.value);
             }
 
-            keys_managed_ptr = (try self.emitManagedArray(keys_buffer, elem_count, elem_count)).raw();
-            values_managed_ptr = (try self.emitManagedArray(values_buffer, elem_count, elem_count)).raw();
+            keys_managed_ptr = (try array.emitManagedArray(self, keys_buffer, elem_count, elem_count)).raw();
+            values_managed_ptr = (try array.emitManagedArray(self, values_buffer, elem_count, elem_count)).raw();
         }
 
         // Check if this is the Map type (special-cased: receives __ManagedArrays directly)
@@ -9506,7 +9480,7 @@ pub const AstToIr = struct {
         const elements = arr_lit.elements;
 
         if (elements.len == 0) {
-            const managed_ptr = try self.emitEmptyManagedArray();
+            const managed_ptr = try array.emitEmptyManagedArray(self, );
             return .{
                 .value = managed_ptr.raw(),
                 .ty = .{ .array_type = .{ .element_type = .i64, .size = 0, .storage = .heap } },
@@ -9561,139 +9535,11 @@ pub const AstToIr = struct {
         }
 
         // Initialize __ManagedArray with buffer, length, and capacity
-        const managed_ptr = try self.emitManagedArray(buffer, elem_count, elem_count);
+        const managed_ptr = try array.emitManagedArray(self, buffer, elem_count, elem_count);
 
         return .{
             .value = managed_ptr.raw(),
             .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .heap, .element_struct_type = elem_struct_type } },
-        };
-    }
-
-    fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ConvertError!TypedValue {
-        const entries = map_lit.entries;
-
-        // Empty map literals require type annotation (cannot infer types)
-        if (entries.len == 0) {
-            debug.astToIr("error: empty map literal requires type annotation", .{});
-            self.reportError(.E006, "empty map literal requires type annotation");
-            return error.UnknownType;
-        }
-
-        // Infer key and value types from the first entry
-        const first_key_typed = try self.convertExpression(entries[0].key.*);
-        const first_value_typed = try self.convertExpression(entries[0].value.*);
-
-        const key_type_name = first_key_typed.ty.getTypeName() orelse {
-            debug.astToIr("error: map key type must be a named type (primitive or struct)", .{});
-            self.reportError(.E006, "map key type must be a named type");
-            return error.UnknownType;
-        };
-        const value_type_name = first_value_typed.ty.getTypeName() orelse {
-            debug.astToIr("error: map value type must be a named type (primitive or struct)", .{});
-            self.reportError(.E006, "map value type must be a named type");
-            return error.UnknownType;
-        };
-
-        debug.astToIr("Map literal: {d} entries, key type={s}, value type={s}", .{ entries.len, key_type_name, value_type_name });
-
-        // Build the monomorphized Map type name: Map$KeyType$ValueType
-        var type_args = [_][]const u8{ key_type_name, value_type_name };
-        const map_type_name = try self.getOrCreateMonomorphizedType("Map", &type_args);
-
-        // Calculate element sizes based on actual types
-        const key_elem_size: i64 = try self.getValueTypeSize(first_key_typed.ty);
-        const value_elem_size: i64 = try self.getValueTypeSize(first_value_typed.ty);
-
-        // Allocate buffers for keys and values on heap
-        const elem_count = try self.func().emitConstI64(@intCast(entries.len));
-        const keys_buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(key_elem_size))));
-        const values_buffer_size = try self.func().emitConstI64(@intCast(entries.len * @as(usize, @intCast(value_elem_size))));
-        const keys_buffer = try self.func().emitHeapAlloc(keys_buffer_size, "map buffer");
-        const values_buffer = try self.func().emitHeapAlloc(values_buffer_size, "map buffer");
-
-        // Store entries into buffers
-        for (entries, 0..) |entry, i| {
-            const key_typed = if (i == 0) first_key_typed else try self.convertExpression(entry.key.*);
-            const value_typed = if (i == 0) first_value_typed else try self.convertExpression(entry.value.*);
-            const idx_val = try self.func().emitConstI64(@intCast(i));
-
-            const key_ptr = try self.func().emitGetElemPtr(keys_buffer, idx_val, @intCast(key_elem_size));
-            // For structs, memcpy the full value; for primitives, store directly
-            if (key_elem_size > 8) {
-                try self.func().emitMemcpy(key_ptr.asRawPtr(), ir.toRawPtr(key_typed.value), @intCast(key_elem_size));
-            } else {
-                try self.func().emitStore(key_ptr.raw(), key_typed.value);
-            }
-
-            // NOTE: Do NOT remove string keys from temporaries.
-            // Map$init COPIES keys with incref, so it creates its own references.
-            // The original temporary strings should be cleaned up normally at scope end.
-            // The map's copies will survive because they have their own refcounts.
-
-            const value_ptr = try self.func().emitGetElemPtr(values_buffer, idx_val, @intCast(value_elem_size));
-            if (value_elem_size > 8) {
-                try self.func().emitMemcpy(value_ptr.asRawPtr(), ir.toRawPtr(value_typed.value), @intCast(value_elem_size));
-            } else {
-                try self.func().emitStore(value_ptr.raw(), value_typed.value);
-            }
-
-            // NOTE: Do NOT remove string values from temporaries.
-            // Map$init COPIES values with incref, so it creates its own references.
-            // The original temporary strings should be cleaned up normally at scope end.
-        }
-
-        // Create __ManagedArrays for keys and values
-        const keys_managed_ptr = try self.emitManagedArray(keys_buffer, elem_count, elem_count);
-        const values_managed_ptr = try self.emitManagedArray(values_buffer, elem_count, elem_count);
-
-        // Build init function name: Map$K$V$init (static init from InitableFromDictionaryLiteral interface)
-        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{map_type_name});
-        try self.module.trackString(init_func_name);
-
-        // Look up function and type info
-        const func_info = self.func_map.get(init_func_name) orelse {
-            const msg = std.fmt.allocPrint(self.allocator, "Map type '{s}' missing init method for InitableFromDictionaryLiteral", .{map_type_name}) catch "missing init method";
-            self.reportInternalError(msg);
-            return error.UnknownFunction;
-        };
-
-        // Trigger lazy generation if needed
-        if (!func_info.ir_generated) {
-            try self.ensureMethodGenerated(init_func_name);
-        }
-
-        const type_info = self.type_map.get(map_type_name) orelse {
-            self.reportError(.E006, map_type_name);
-            return error.UnknownType;
-        };
-
-        // Map$init returns a struct, so use sret calling convention
-        const struct_size = type_info.struct_type.size;
-        const result_ptr = try self.func().emitAllocaSized(struct_size);
-
-        // Build args: [sret_ptr, keys_managed_ptr, values_managed_ptr]
-        var args = try self.allocator.alloc(ir.Value, 3);
-        args[0] = result_ptr.raw();
-        args[1] = keys_managed_ptr.raw();
-        args[2] = values_managed_ptr.raw();
-
-        // Call init with sret
-        _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
-
-        // Map$init copies all keys/values with incref into its internal storage.
-        // The original temporary strings remain tracked and will be cleaned up
-        // normally at scope end via cleanupTemporaryStrings().
-
-        // Free the temporary buffers used to pass keys and values to init
-        // The Map$init function copies the data into its internal hash table,
-        // so we need to clean up the temporary managed arrays
-        debug.astToIr("Map literal: emitting heap.free for temp buffers in block {d}", .{self.func().blocks.items.len - 1});
-        try self.func().emitHeapFree(keys_buffer, "map literal keys cleanup");
-        try self.func().emitHeapFree(values_buffer, "map literal values cleanup");
-
-        return .{
-            .value = result_ptr.raw(),
-            .ty = .{ .struct_type = map_type_name },
         };
     }
 
@@ -9713,7 +9559,7 @@ pub const AstToIr = struct {
         var managed_ptr: ir.Value = undefined;
 
         if (elements.len == 0) {
-            managed_ptr = (try self.emitEmptyManagedArray()).raw();
+            managed_ptr = (try array.emitEmptyManagedArray(self, )).raw();
         } else {
             // Infer element type from first element
             const first_typed = try self.convertExpression(elements[0]);
@@ -9737,7 +9583,7 @@ pub const AstToIr = struct {
                 try self.func().emitStore(elem_ptr.raw(), typed.value);
             }
 
-            managed_ptr = (try self.emitManagedArray(buffer, elem_count, elem_count)).raw();
+            managed_ptr = (try array.emitManagedArray(self, buffer, elem_count, elem_count)).raw();
         }
 
         // Build the monomorphized type name: TypeName$ElementType
@@ -10026,7 +9872,7 @@ pub const AstToIr = struct {
         const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
         // Zero-initialize the buffer so hash tables (Map, Set) have correct initial state
         try self.func().emitMemsetDynamic(buffer, 0, buffer_size);
-        const managed_ptr = try self.emitManagedArray(buffer, capacity_typed.value, capacity_typed.value);
+        const managed_ptr = try array.emitManagedArray(self, buffer, capacity_typed.value, capacity_typed.value);
 
         // Call Array$init(result_ptr, managed_ptr) via InitableFromArrayLiteral interface
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
