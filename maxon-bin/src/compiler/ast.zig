@@ -492,10 +492,11 @@ pub const ClosureExpr = struct {
     body: *const Expression,
 };
 
-// Set from array literal: Set from [1, 2, 3]
-pub const SetFromExpr = struct {
-    type_name: []const u8, // "Set" or other InitableFromArrayLiteral conforming type
-    type_args: []const []const u8, // Generic type arguments ["int"] for Set of int
+// InitableFromArrayLiteral: TypeName from [1, 2, 3]
+// Used by any type conforming to InitableFromArrayLiteral interface
+pub const InitFromArrayExpr = struct {
+    type_name: []const u8, // Type conforming to InitableFromArrayLiteral
+    type_args: []const []const u8, // Generic type arguments
     elements: *const Expression, // The array literal expression
 };
 
@@ -535,8 +536,8 @@ pub const Expression = union(enum) {
     nil_coalesce: NilCoalesceExpr,
     cast: CastExpr,
     closure: ClosureExpr,
-    // Set/collection from array literal: Set from [1, 2, 3]
-    set_from: SetFromExpr,
+    // InitableFromArrayLiteral: TypeName from [1, 2, 3]
+    init_from_array: InitFromArrayExpr,
     // Error handling
     try_expr: TryExpr,
     // Match expressions
@@ -784,8 +785,8 @@ fn freeExpressionArgs(expr: Expression, allocator: std.mem.Allocator) void {
             }
             allocator.free(map.entries);
         },
-        .set_from => |sf| {
-            freeExpressionArgs(sf.elements.*, allocator);
+        .init_from_array => |ifa| {
+            freeExpressionArgs(ifa.elements.*, allocator);
         },
         .index => |idx| {
             freeExpressionArgs(idx.base.*, allocator);

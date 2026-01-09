@@ -249,7 +249,7 @@ pub const MutationAnalyzer = struct {
             },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
-            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .set_from, .array_type, .interpolated_string => {},
+            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .init_from_array, .array_type, .interpolated_string => {},
         }
     }
 
@@ -1017,20 +1017,19 @@ pub const SemanticAnalyzer = struct {
                     try self.discoverInExpression(entry.value.*);
                 }
             },
-            .set_from => |sf| {
-                // Set literals create Set$ElementType
-                if (sf.type_name.len > 0) {
-                    // Type is explicit: Set from [elements]
-                    const elem_type = self.inferExpressionType(sf.elements.*);
+            .init_from_array => |ifa| {
+                // InitableFromArrayLiteral creates TypeName$ElementType
+                if (ifa.type_name.len > 0) {
+                    const elem_type = self.inferExpressionType(ifa.elements.*);
                     if (elem_type) |et| {
                         if (et == .array_type) {
                             const elem_name = if (et.array_type.element_struct_type) |st| st else @tagName(et.array_type.element_type);
                             var type_args = [_][]const u8{elem_name};
-                            _ = try self.getOrCreateMonomorphizedType(sf.type_name, &type_args);
+                            _ = try self.getOrCreateMonomorphizedType(ifa.type_name, &type_args);
                         }
                     }
                 }
-                try self.discoverInExpression(sf.elements.*);
+                try self.discoverInExpression(ifa.elements.*);
             },
             .binary => |bin| {
                 try self.discoverInExpression(bin.left.*);

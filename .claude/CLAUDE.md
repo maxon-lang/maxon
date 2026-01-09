@@ -52,6 +52,7 @@ fix it properly. No workarounds.
 ## Development Notes
 - Build system uses Zig build. The compiler is in the maxon-bin directory.
 - All tests must pass before commits to main
+- In zig use ArrayListUnmanaged instead of ArrayList
 
 ## Writing VSCode Extension Tests
 - Do not set timeouts

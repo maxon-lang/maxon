@@ -2396,17 +2396,17 @@ pub const Parser = struct {
             }
 
             // Check for "TypeName from ..." syntax:
-            // - "TypeName from [...]" for InitableFromArrayLiteral types like Set
+            // - "TypeName from [...]" for InitableFromArrayLiteral types
             // - "TypeName from K to V{}" for two-argument generics like Map
             if (self.check(.from)) {
                 _ = self.advance(); // consume 'from'
 
-                // Check for array literal: Set from [1, 2, 3]
+                // Check for array literal: TypeName from [1, 2, 3]
                 if (self.check(.lbracket)) {
                     const arr_lit = try self.parseArrayLiteral();
                     const arr_lit_ptr = try self.createExpr(arr_lit);
                     return try self.parsePostfix(.{
-                        .set_from = .{
+                        .init_from_array = .{
                             .type_name = token.text,
                             .type_args = &.{}, // Element type inferred from array
                             .elements = arr_lit_ptr,

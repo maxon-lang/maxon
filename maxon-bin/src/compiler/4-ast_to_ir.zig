@@ -3095,7 +3095,7 @@ pub const AstToIr = struct {
             },
             .generic => |gen| {
                 // For generic types like "Array of int", monomorphize them
-                // Resolve type arguments first (e.g., "Element" -> "int" when inside Set$int)
+                // Resolve type arguments first (e.g., "Element" -> "int" when inside a generic type)
                 const resolved_args = try self.allocator.alloc([]const u8, gen.type_args.len);
                 defer self.allocator.free(resolved_args);
                 for (gen.type_args, 0..) |arg, i| {
@@ -7360,7 +7360,7 @@ pub const AstToIr = struct {
             .field_access => |fa| self.convertFieldAccess(fa),
             .array_literal => |arr| self.convertArrayLiteral(arr),
             .map_literal => |map| self.convertMapLiteral(map),
-            .set_from => |sf| self.convertSetFrom(sf),
+            .init_from_array => |ifa| self.convertInitFromArray(ifa),
             .index => |idx| self.convertIndex(idx),
             .array_type => |arr| self.convertArrayType(arr),
             .method_call => |mcall| self.convertMethodCallExpr(mcall),
@@ -10841,17 +10841,16 @@ pub const AstToIr = struct {
         };
     }
 
-    /// Convert Set from [...] expression
-    /// Parses: Set from [1, 2, 3] -> creates Set with elements
-    fn convertSetFrom(self: *AstToIr, sf: ast.SetFromExpr) ConvertError!TypedValue {
+    /// Convert InitableFromArrayLiteral expression: TypeName from [...]
+    /// Creates an instance of the target type by calling its init(Array) method
+    fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertError!TypedValue {
         // The elements expression must be an array literal
-        const arr_lit = sf.elements.array_literal;
+        const arr_lit = ifa.elements.array_literal;
         const elements = arr_lit.elements;
 
-        debug.astToIr("Set from: type={s}, {d} elements", .{ sf.type_name, elements.len });
+        debug.astToIr("InitFromArray: type={s}, {d} elements", .{ ifa.type_name, elements.len });
 
-        // Handle empty set - still need to create it but can't infer element type
-        // For now, we'll use 'int' as default for empty sets (similar to empty arrays)
+        // Handle empty collection - use 'int' as default element type
         var elem_type_name: []const u8 = "int";
 
         // Create __ManagedArray for elements
@@ -10863,8 +10862,8 @@ pub const AstToIr = struct {
             // Infer element type from first element
             const first_typed = try self.convertExpression(elements[0]);
             elem_type_name = first_typed.ty.getTypeName() orelse {
-                debug.astToIr("error: set element type must be a named type", .{});
-                self.reportError(.E006, "set element type must be a named type");
+                debug.astToIr("error: element type must be a named type", .{});
+                self.reportError(.E006, "element type must be a named type");
                 return error.UnknownType;
             };
 
@@ -10885,16 +10884,16 @@ pub const AstToIr = struct {
             managed_ptr = (try self.emitManagedArray(buffer, elem_count, elem_count)).raw();
         }
 
-        // Build the monomorphized Set type name: Set$ElementType
+        // Build the monomorphized type name: TypeName$ElementType
         var type_args = [_][]const u8{elem_type_name};
-        const set_type_name = try self.getOrCreateMonomorphizedType(sf.type_name, &type_args);
+        const target_type_name = try self.getOrCreateMonomorphizedType(ifa.type_name, &type_args);
 
-        debug.astToIr("Set type name: {s}", .{set_type_name});
+        debug.astToIr("InitFromArray target type: {s}", .{target_type_name});
 
-        // First create an Array from the __ManagedArray (Set's init takes Array, not __ManagedArray)
+        // Create an Array from the __ManagedArray (InitableFromArrayLiteral.init takes Array)
         const array_init_name = "Array$init";
         const array_func_info = self.func_map.get(array_init_name) orelse {
-            self.reportInternalError("Array$init not found for Set from");
+            self.reportInternalError("Array$init not found for InitableFromArrayLiteral");
             return error.UnknownFunction;
         };
 
@@ -10916,13 +10915,13 @@ pub const AstToIr = struct {
         array_args[1] = managed_ptr;
         _ = try self.func().emitCall(array_init_name, array_args, array_func_info.return_type);
 
-        // Build init function name: Set$Element$init (static init from InitableFromArrayLiteral interface)
-        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{set_type_name});
+        // Build init function name: TypeName$Element$init
+        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{target_type_name});
         try self.module.trackString(init_func_name);
 
         // Look up function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
-            const msg = std.fmt.allocPrint(self.allocator, "Set type '{s}' missing init method for InitableFromArrayLiteral", .{set_type_name}) catch "missing init method";
+            const msg = std.fmt.allocPrint(self.allocator, "Type '{s}' missing init method for InitableFromArrayLiteral", .{target_type_name}) catch "missing init method";
             self.reportInternalError(msg);
             return error.UnknownFunction;
         };
@@ -10932,12 +10931,12 @@ pub const AstToIr = struct {
             try self.ensureMethodGenerated(init_func_name);
         }
 
-        const type_info = self.type_map.get(set_type_name) orelse {
-            self.reportError(.E006, set_type_name);
+        const type_info = self.type_map.get(target_type_name) orelse {
+            self.reportError(.E006, target_type_name);
             return error.UnknownType;
         };
 
-        // Set$init returns a struct, so use sret calling convention
+        // init returns a struct, so use sret calling convention
         const struct_size = type_info.struct_type.size;
         const result_ptr = try self.func().emitAllocaSized(struct_size);
 
@@ -10951,7 +10950,7 @@ pub const AstToIr = struct {
 
         return .{
             .value = result_ptr.raw(),
-            .ty = .{ .struct_type = set_type_name },
+            .ty = .{ .struct_type = target_type_name },
         };
     }
 
@@ -11025,7 +11024,7 @@ pub const AstToIr = struct {
                 .field_access,
                 .array_literal,
                 .map_literal,
-                .set_from,
+                .init_from_array,
                 .index,
                 .array_type,
                 .method_call,
@@ -11140,7 +11139,7 @@ pub const AstToIr = struct {
         const capacity_typed = try self.convertExpression(arr.size.*);
 
         // Get or create monomorphized Array type for the element type
-        // Resolve element type first (e.g., "Element" -> "int" when inside Set$int)
+        // Resolve element type first (e.g., "Element" -> "int" when inside a generic type)
         const resolved_elem = self.resolveTypeName(arr.element_type);
         var type_args = [_][]const u8{resolved_elem};
         const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
