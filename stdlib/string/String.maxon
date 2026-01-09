@@ -30,13 +30,13 @@ export type StringIndex is Equatable, Comparable
 end 'StringIndex'
 
 // String is special-cased by the compiler for string literal initialization.
-// It receives __ManagedString directly rather than going through InitableFromStringLiteral.
+// It receives __ManagedArray directly rather than going through InitableFromStringLiteral.
 export type String is Builtin, Hashable, Equatable, Iterable with Character
-	var _managed __ManagedString
+	var _managed __ManagedArray
 	var _iterPos int
 
 	// Internal init used by compiler for string literal initialization
-	static function Builtin.init(managed __ManagedString) returns String
+	static function Builtin.init(managed __ManagedArray) returns String
 		return String{_managed: managed, _iterPos: 0}
 	end 'init'
 
@@ -47,11 +47,11 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 	end 'fromCString'
 
 	export function byteLength() returns int
-		return __string_len(_managed)
+		return __managed_array_len(_managed)
 	end 'byteLength'
 
 	export function isEmpty() returns bool
-		return __string_len(_managed) == 0
+		return __managed_array_len(_managed) == 0
 	end 'isEmpty'
 
 	/// Get grapheme cluster count (number of user-perceived characters)
@@ -64,14 +64,14 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 	end 'hash'
 
 	function Equatable.equals(other String) returns bool
-		var lenA = __string_len(_managed)
-		var lenB = __string_len(other._managed)
+		var lenA = __managed_array_len(_managed)
+		var lenB = __managed_array_len(other._managed)
 		if lenA != lenB 'lenMismatch'
 			return false
 		end 'lenMismatch'
 		var i = 0
 		while i < lenA 'byteCheck'
-			if __string_byte_at(_managed, i) != __string_byte_at(other._managed, i) 'mismatch'
+			if __managed_array_byte_at(_managed, i) != __managed_array_byte_at(other._managed, i) 'mismatch'
 				return false
 			end 'mismatch'
 			i = i + 1
@@ -80,8 +80,8 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 	end 'equals'
 
 	function Iterable.next() returns Character or nil
-		if _iterPos < __string_len(_managed) 'check'
-			var len = __string_len(_managed)
+		if _iterPos < __managed_array_len(_managed) 'check'
+			var len = __managed_array_len(_managed)
 			var endPos = findGraphemeEndManaged(_managed, _iterPos, len)
 			var graphemeLen = endPos - _iterPos
 			let grapheme = _makeCharFromBytes(_iterPos, graphemeLen)
@@ -102,12 +102,12 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 
 	export function endIndex() returns StringIndex
 		var charCount = countGraphemesManaged(_managed)
-		return StringIndex{_charIndex: charCount, _bytePos: __string_len(_managed)}
+		return StringIndex{_charIndex: charCount, _bytePos: __managed_array_len(_managed)}
 	end 'endIndex'
 
 	// concat method
 	export function concat(other String) returns String
-		return __string_concat(_managed, other._managed)
+		return __managed_array_concat(_managed, other._managed)
 	end 'concat'
 
 	// Search methods
@@ -138,12 +138,12 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 	export function slice(start StringIndex, end_ StringIndex or nil = nil, length int or nil = nil) returns String
 		if let len = length 'has_length'
 			var endBytePos = graphemeOffsetToBytePos(_managed, start.bytePos(), len)
-			return __string_slice(_managed, start.bytePos(), endBytePos)
+			return __managed_array_slice(_managed, start.bytePos(), endBytePos)
 		end 'has_length'
 		if let endIdx = end_ 'has_end'
-			return __string_slice(_managed, start.bytePos(), endIdx.bytePos())
+			return __managed_array_slice(_managed, start.bytePos(), endIdx.bytePos())
 		end 'has_end'
-		return __string_slice(_managed, start.bytePos(), __string_len(_managed))
+		return __managed_array_slice(_managed, start.bytePos(), __managed_array_len(_managed))
 	end 'slice'
 
 	// View methods
@@ -163,19 +163,19 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 	/// For normal strings, shares the existing buffer (with refcount)
 	/// For slices, allocates and copies to a new null-terminated buffer
 	export function cstr() returns cstring
-		return __string_to_cstring(_managed)
+		return __managed_array_to_cstring(_managed)
 	end 'cstr'
 
 	// Replace methods
 	export function replace(old String, new_ String) returns String
-		var oldLen = __string_len(old._managed)
+		var oldLen = __managed_array_len(old._managed)
 		if oldLen == 0 'empty_old'
 			return String{_managed: _managed, _iterPos: 0}
 		end 'empty_old'
 
-		// We build the result incrementally using __ManagedString
+		// We build the result incrementally using __ManagedArray
 		var pos = 0
-		var selfLen = __string_len(_managed)
+		var selfLen = __managed_array_len(_managed)
 
 		// First pass: find all matches and count them
 		var matchCount = 0
@@ -195,7 +195,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		end 'no_matches'
 
 		// Build result by processing matches
-		var builtResult = __string_slice(_managed, 0, 0)  // Empty slice as starting point
+		var builtResult = __managed_array_slice(_managed, 0, 0)  // Empty slice as starting point
 		pos = 0
 		while pos <= selfLen - oldLen 'search'
 			var idx = findManagedRange(_managed, pos, selfLen - pos, old._managed)
@@ -206,26 +206,26 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 			var matchPos = pos + idx
 			// Append prefix (from pos to matchPos)
 			if matchPos > pos 'has_prefix'
-				var prefixSlice = __string_slice(_managed, pos, matchPos)
-				builtResult = __string_concat(builtResult, prefixSlice)
+				var prefixSlice = __managed_array_slice(_managed, pos, matchPos)
+				builtResult = __managed_array_concat(builtResult, prefixSlice)
 			end 'has_prefix'
 
 			// Append replacement
-			builtResult = __string_concat(builtResult, new_._managed)
+			builtResult = __managed_array_concat(builtResult, new_._managed)
 			pos = matchPos + oldLen
 		end 'search'
 
 		// Append remaining suffix
 		if pos < selfLen 'has_suffix'
-			var suffixSlice = __string_slice(_managed, pos, selfLen)
-			builtResult = __string_concat(builtResult, suffixSlice)
+			var suffixSlice = __managed_array_slice(_managed, pos, selfLen)
+			builtResult = __managed_array_concat(builtResult, suffixSlice)
 		end 'has_suffix'
 
 		return builtResult
 	end 'replace'
 
 	export function replaceFirst(old String, new_ String) returns String
-		var oldLen = __string_len(old._managed)
+		var oldLen = __managed_array_len(old._managed)
 		if oldLen == 0 'empty_old'
 			return String{_managed: _managed, _iterPos: 0}
 		end 'empty_old'
@@ -235,27 +235,27 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 			return String{_managed: _managed, _iterPos: 0}
 		end 'not_found'
 
-		var selfLen = __string_len(_managed)
-		var prefixSlice = __string_slice(_managed, 0, idx)
-		var suffixSlice = __string_slice(_managed, idx + oldLen, selfLen)
-		return __string_concat(__string_concat(prefixSlice, new_._managed), suffixSlice)
+		var selfLen = __managed_array_len(_managed)
+		var prefixSlice = __managed_array_slice(_managed, 0, idx)
+		var suffixSlice = __managed_array_slice(_managed, idx + oldLen, selfLen)
+		return __managed_array_concat(__managed_array_concat(prefixSlice, new_._managed), suffixSlice)
 	end 'replaceFirst'
 
 	// Case conversion
 	export function toLower() returns String
-		var len = __string_len(_managed)
+		var len = __managed_array_len(_managed)
 		if len == 0 'empty'
 			return String{_managed: _managed, _iterPos: 0}
 		end 'empty'
 
 		// Make a unique copy for mutation
-		var copy = __string_make_unique(_managed)
+		var copy = __managed_array_make_unique(_managed)
 		var i = 0
 		while i < len 'convert'
-			var b = __string_byte_at(copy, i)
+			var b = __managed_array_byte_at(copy, i)
 			// ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
 			if b >= 65 and b <= 90 'is_upper'
-				__string_set_byte(copy, i, b + 32)
+				__managed_array_set_byte(copy, i, b + 32)
 			end 'is_upper'
 			i = i + 1
 		end 'convert'

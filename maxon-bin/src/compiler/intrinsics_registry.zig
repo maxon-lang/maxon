@@ -28,10 +28,8 @@ pub const IntrinsicCodegen = enum {
     unary_op,
     /// Custom code generation handler required
     custom,
-    /// Managed array intrinsics (__managed_array_*)
+    /// Managed array intrinsics (__managed_array_*) - unified for arrays and strings
     managed_array,
-    /// String intrinsics (__string_*)
-    string,
     /// C-string intrinsics (__cstring_*)
     cstring,
     /// Character creation intrinsics (__make_char_*)
@@ -243,7 +241,6 @@ pub const IntrinsicCategory = struct {
 /// All intrinsic categories - used for dispatch in convertBuiltin
 pub const intrinsic_categories = [_]IntrinsicCategory{
     .{ .prefix = "__managed_array_", .visibility = .stdlib_only, .codegen = .managed_array },
-    .{ .prefix = "__string_", .visibility = .stdlib_only, .codegen = .string },
     .{ .prefix = "__cstring_", .visibility = .stdlib_only, .codegen = .cstring },
     .{ .prefix = "__make_char_", .visibility = .stdlib_only, .codegen = .make_char },
     .{ .prefix = "__read_file", .visibility = .stdlib_only, .codegen = .file_io },

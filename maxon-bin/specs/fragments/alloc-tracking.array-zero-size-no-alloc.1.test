@@ -32,38 +32,44 @@ entry:
     %tmp_mul = mul i64 %tmp_load %tmp_const.1
     %tmp_heap = heap.alloc ptr %tmp_mul tag="array buffer"
     memset.dyn %tmp_heap 0 %tmp_mul
-    %tmp_alloca.1 = alloca.sized ptr 24
+    %tmp_const.2 = const.i32 i32 0
+    %tmp_alloca.1 = alloca.sized ptr 32
     store %tmp_alloca.1 %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
     store %tmp_fieldptr %tmp_load
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 16
     store %tmp_fieldptr.1 %tmp_load
-    %arr = alloca.sized ptr 32
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.1 24
+    store.i32 %tmp_fieldptr.2 %tmp_const.2
+    %tmp_const.3 = const.i32 i32 0
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.1 28
+    store.i32 %tmp_fieldptr.3 %tmp_const.3
+    %arr = alloca.sized ptr 40
     %tmp_call = call ptr @Array$int$init(%arr, %tmp_alloca.1)
     %tmp_load.1 = load i64 %size
-    %tmp_const.2 = const.i64 i64 0
-    %tmp_icmp = icmp.gt i64 %tmp_load.1 %tmp_const.2
+    %tmp_const.4 = const.i64 i64 0
+    %tmp_icmp = icmp.gt i64 %tmp_load.1 %tmp_const.4
     br.cond %tmp_icmp @block1 @block2
 then:
-    %tmp_const.3 = const.i64 i64 0
-    %tmp_const.4 = const.i64 i64 1
-    call @Array$int$set(%arr, %tmp_const.3, %tmp_const.4)
+    %tmp_const.5 = const.i64 i64 0
+    %tmp_const.6 = const.i64 i64 1
+    call @Array$int$set(%arr, %tmp_const.5, %tmp_const.6)
     br @block2
 end:
-    %tmp_const.5 = const.i64 i64 42
+    %tmp_const.7 = const.i64 i64 42
     %tmp_load.2 = load ptr %arr
     heap.free %tmp_load.2 tag="array cleanup"
-    ret %tmp_const.5
+    ret %tmp_const.7
 }
 
 function Array$int$init() -> ptr {
 entry:
     %tmp_param = param ptr 0
     %managed = param ptr 1
-    memset %tmp_param 0 32
+    memset %tmp_param 0 40
     %tmp_fieldptr = getfieldptr ptr %tmp_param 0
-    memcpy %tmp_fieldptr %managed 24
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 24
+    memcpy %tmp_fieldptr %managed 32
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 32
     %tmp_const = const.i64 i64 0
     store %tmp_fieldptr.1 %tmp_const
     ret %tmp_param

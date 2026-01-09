@@ -142,12 +142,12 @@ export function utf8IsValidCodepoint(cp int) returns bool
 end 'utf8IsValidCodepoint'
 
 // ============================================
-// __ManagedString helpers (for internal use by string views)
+// __ManagedArray helpers (for internal use by string views)
 // ============================================
 
-/// Get the UTF-8 sequence length from the lead byte in a __ManagedString
-export function utf8ByteLengthAt(managed __ManagedString, pos int) returns int
-	var b0 = __string_byte_at(managed, pos) as int
+/// Get the UTF-8 sequence length from the lead byte in a __ManagedArray
+export function utf8ByteLengthAt(managed __ManagedArray, pos int) returns int
+	var b0 = __managed_array_byte_at(managed, pos) as int
 	if b0 < 128 'ascii'
 		return 1
 	end 'ascii'
@@ -160,23 +160,23 @@ export function utf8ByteLengthAt(managed __ManagedString, pos int) returns int
 	return 4
 end 'utf8ByteLengthAt'
 
-/// Decode a UTF-8 codepoint from a __ManagedString at the given position
-export function utf8DecodeAt(managed __ManagedString, pos int) returns int
-	var b0 = __string_byte_at(managed, pos) as int
+/// Decode a UTF-8 codepoint from a __ManagedArray at the given position
+export function utf8DecodeAt(managed __ManagedArray, pos int) returns int
+	var b0 = __managed_array_byte_at(managed, pos) as int
 	if b0 < 128 'ascii'
 		return b0
 	end 'ascii'
 	if b0 < 224 'two'
-		var b1 = __string_byte_at(managed, pos + 1) as int
+		var b1 = __managed_array_byte_at(managed, pos + 1) as int
 		return ((b0 mod 32) * 64) + (b1 mod 64)
 	end 'two'
 	if b0 < 240 'three'
-		var b1 = __string_byte_at(managed, pos + 1) as int
-		var b2 = __string_byte_at(managed, pos + 2) as int
+		var b1 = __managed_array_byte_at(managed, pos + 1) as int
+		var b2 = __managed_array_byte_at(managed, pos + 2) as int
 		return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
 	end 'three'
-	var b1 = __string_byte_at(managed, pos + 1) as int
-	var b2 = __string_byte_at(managed, pos + 2) as int
-	var b3 = __string_byte_at(managed, pos + 3) as int
+	var b1 = __managed_array_byte_at(managed, pos + 1) as int
+	var b2 = __managed_array_byte_at(managed, pos + 2) as int
+	var b3 = __managed_array_byte_at(managed, pos + 3) as int
 	return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
 end 'utf8DecodeAt'

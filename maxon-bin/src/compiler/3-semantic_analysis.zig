@@ -427,23 +427,16 @@ pub const SemanticAnalyzer = struct {
 
     fn registerCompilerInternalTypes(self: *SemanticAnalyzer) !void {
         // __ManagedArray
-        const managed_array_fields = try self.allocator.alloc(FieldInfo, 3);
+        // __ManagedArray (unified for both arrays and strings - 32 bytes)
+        // Layout: ptr buffer (8) + i64 len (8) + i64 capacity (8) + i32 flags (4) + i32 parent_off (4)
+        const managed_array_fields = try self.allocator.alloc(FieldInfo, 5);
         managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = "ptr" } };
         managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = "int" } };
         managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = "int" } };
+        managed_array_fields[3] = .{ .name = "_flags", .offset = 24, .size = 4, .value_type = .{ .primitive = "int" } };
+        managed_array_fields[4] = .{ .name = "_parent_off", .offset = 28, .size = 4, .value_type = .{ .primitive = "int" } };
         try self.type_map.put(self.allocator, "__ManagedArray", .{
-            .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 24 },
-        });
-
-        // __ManagedString
-        const managed_string_fields = try self.allocator.alloc(FieldInfo, 5);
-        managed_string_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = "ptr" } };
-        managed_string_fields[1] = .{ .name = "_len", .offset = 8, .size = 4, .value_type = .{ .primitive = "int" } };
-        managed_string_fields[2] = .{ .name = "_cap_flags", .offset = 12, .size = 4, .value_type = .{ .primitive = "int" } };
-        managed_string_fields[3] = .{ .name = "_refcount", .offset = 16, .size = 4, .value_type = .{ .primitive = "int" } };
-        managed_string_fields[4] = .{ .name = "_parent_off", .offset = 20, .size = 4, .value_type = .{ .primitive = "int" } };
-        try self.type_map.put(self.allocator, "__ManagedString", .{
-            .struct_type = .{ .name = "__ManagedString", .fields = managed_string_fields, .size = 24 },
+            .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 32 },
         });
 
         // cstring

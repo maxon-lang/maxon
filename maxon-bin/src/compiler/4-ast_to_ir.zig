@@ -600,15 +600,17 @@ pub const AstToIr = struct {
 
     /// Initialize an existing __ManagedArray with buffer, length, and capacity values.
     fn initManagedArray(self: *AstToIr, managed_ptr: ir.Value, buffer: ir.Value, len: ir.Value, capacity: ir.Value) !void {
-        return struct_helpers.initManagedArray(self.func(), managed_ptr, buffer, len, capacity);
+        const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
+        return struct_helpers.initManagedArray(self.func(), managed_ptr, buffer, len, capacity, zero_flags);
     }
 
     /// Allocate a __ManagedArray on the stack and initialize with buffer, length, and capacity.
     fn emitManagedArray(self: *AstToIr, buffer: ir.Value, len: ir.Value, capacity: ir.Value) !ir.Value {
-        return struct_helpers.emitManagedArray(self.func(), buffer, len, capacity);
+        const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
+        return struct_helpers.emitManagedArray(self.func(), buffer, len, capacity, zero_flags);
     }
 
-    /// Create and initialize a __ManagedString on the stack from string bytes.
+    /// Create and initialize a __ManagedArray on the stack from string bytes.
     /// Returns a pointer to the allocated struct.
     ///
     /// String buffer layout with header:
@@ -618,11 +620,11 @@ pub const AstToIr = struct {
     ///   +-- allocation base (header)
     ///
     /// The refcount is stored at (data_ptr - 8), shared by all String copies.
-    fn emitManagedStringFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Value {
-        const managed_ptr = try self.func().emitAllocaSized(layouts.ManagedString.SIZE);
+    fn emitManagedArrayFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Value {
+        const managed_ptr = try self.func().emitAllocaSized(layouts.ManagedArray.SIZE);
 
         if (str_bytes.len == 0) {
-            try struct_helpers.initManagedStringEmpty(self.func(), managed_ptr);
+            try struct_helpers.initManagedArrayEmpty(self.func(), managed_ptr);
         } else {
             // Heap allocation for string data WITH 8-byte header for refcount
             // Layout: [refcount:i64][data...][null]
@@ -647,30 +649,30 @@ pub const AstToIr = struct {
             const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
             try self.func().emitStoreI8(try self.func().emitGetElemPtr(data_ptr, null_idx, 1), try self.func().emitConstI8(0));
 
-            // Initialize __ManagedString fields
+            // Initialize __ManagedArray fields (mode=1 for heap-refcounted)
             // Store data_ptr (not the allocation base with header)
             try self.func().emitStore(managed_ptr, data_ptr);
-            const zero_i32 = try self.func().emitConstI32(0);
-            try struct_helpers.storeI32Field(self.func(), managed_ptr, 8, try self.func().emitConstI32(@intCast(str_bytes.len)));
-            try struct_helpers.storeI32Field(self.func(), managed_ptr, 12, try self.func().emitConstI32(@intCast((str_bytes.len << 2) | 0b01)));
-            // Note: struct's refcount field at offset 16 is unused, kept for compatibility
-            try struct_helpers.storeI32Field(self.func(), managed_ptr, 16, zero_i32);
-            try struct_helpers.storeI32Field(self.func(), managed_ptr, 20, zero_i32);
+            const len_i64 = try self.func().emitConstI64(@intCast(str_bytes.len));
+            try struct_helpers.storeI64Field(self.func(), managed_ptr, 8, len_i64);
+            try struct_helpers.storeI64Field(self.func(), managed_ptr, 16, len_i64); // capacity = len
+            try struct_helpers.storeI32Field(self.func(), managed_ptr, 24, try self.func().emitConstI32(1)); // flags = 1 (refcounted)
+            try struct_helpers.storeI32Field(self.func(), managed_ptr, 28, try self.func().emitConstI32(0)); // parent_off = 0
         }
 
         return managed_ptr;
     }
 
-    /// Create and initialize a __ManagedString from a runtime buffer pointer and length.
+    /// Create and initialize a __ManagedArray from a runtime buffer pointer and length.
     /// Used for runtime string conversions (int to string, float to string, etc.)
-    fn emitManagedStringFromBuffer(self: *AstToIr, buffer: ir.Value, len_i64: ir.Value) !ir.Value {
-        return struct_helpers.emitManagedString(self.func(), buffer, len_i64);
+    fn emitManagedArrayFromBuffer(self: *AstToIr, buffer: ir.Value, len_i64: ir.Value) !ir.Value {
+        const mode_one = try self.func().emitConstI32(1); // mode=1 for heap-refcounted
+        return struct_helpers.emitManagedArray(self.func(), buffer, len_i64, len_i64, mode_one);
     }
 
-    /// Wrap a __ManagedString pointer in a full String struct (adds iter_pos field).
+    /// Wrap a __ManagedArray pointer in a full String struct (adds _iterPos field).
     pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.Value) !ir.Value {
-        const string_ptr = try self.func().emitAllocaSized(32);
-        try self.func().emitMemcpy(string_ptr, managed_ptr, layouts.ManagedString.SIZE);
+        const string_ptr = try self.func().emitAllocaSized(40);
+        try self.func().emitMemcpy(string_ptr, managed_ptr, layouts.ManagedArray.SIZE);
         const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, layouts.String.ITER_POS_OFFSET);
         try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
         return string_ptr;
@@ -707,14 +709,14 @@ pub const AstToIr = struct {
         // No incref - this is a move, not a copy
     }
 
-    /// Check if a string is in heap mode by examining cap_flags.
-    /// Returns an IR value representing the boolean result (cap_flags & 0x3 == 1).
-    /// String layout: _managed at offset 0, cap_flags at offset 12 within _managed.
+    /// Check if a string is in heap-refcounted mode by examining flags.
+    /// Returns an IR value representing the boolean result (flags & 0x3 == 1).
+    /// String layout: _managed at offset 0, flags at offset 24 within _managed.
     fn emitStringIsHeapMode(self: *AstToIr, string_ptr: ir.Value) !ir.Value {
-        const cap_ptr = try self.func().emitGetFieldPtr(string_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
-        const cap_flags = try self.func().emitLoad(cap_ptr, .i32);
+        const flags_ptr = try self.func().emitGetFieldPtr(string_ptr, layouts.ManagedArray.FLAGS_OFFSET);
+        const flags = try self.func().emitLoad(flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
-        const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+        const mode = try self.func().emitBinaryOp(.band, flags, three, .i32);
         const one_i32 = try self.func().emitConstI32(1);
         return try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
     }
@@ -860,8 +862,8 @@ pub const AstToIr = struct {
     fn emitArrayStringElementsCleanup(self: *AstToIr, array_ptr: ir.Value) !void {
         // Array$String layout: __ManagedArray (24 bytes) + iterIndex (8 bytes)
         // __ManagedArray layout: buffer_ptr (8) + length (8) + capacity (8)
-        // String layout: __ManagedString (24 bytes) + _iterPos (8 bytes) = 32 bytes per element
-        // __ManagedString layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
+        // String layout: __ManagedArray (32 bytes) + _iterPos (8 bytes) = 40 bytes per element
+        // __ManagedArray layout: buffer(8) + len(8) + capacity(8) + flags(4) + parent_off(4)
 
         // Load length first to check if empty
         const len_ptr = try self.func().emitGetFieldPtr(array_ptr, layouts.ManagedArray.LEN_OFFSET);
@@ -927,7 +929,7 @@ pub const AstToIr = struct {
 
         // Check if heap mode: cap_flags & 3 == 1
         // cap_flags is at offset 12 in the String (which contains __ManagedString at offset 0)
-        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
+        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedArray.FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
         const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -1025,7 +1027,7 @@ pub const AstToIr = struct {
         _ = try self.func().addBlock("cstr_decref");
 
         // === DECREF BLOCK: managed != null, decref the __ManagedString ===
-        const cap_ptr = try self.func().emitGetFieldPtr(managed_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
+        const cap_ptr = try self.func().emitGetFieldPtr(managed_ptr, layouts.ManagedArray.FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_ptr, .i32);
         const three = try self.func().emitConstI32(3);
         const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -1376,41 +1378,28 @@ pub const AstToIr = struct {
             try self.type_map.put(self.allocator, prim.maxon_name, .{ .primitive = prim.ir_type });
         }
 
-        // Register __ManagedArray compiler-internal type (24 bytes: ptr + len + capacity)
-        // This is a parameterized type - element type is tracked separately in ArrayInfo
-        const managed_array_fields = try self.allocator.alloc(FieldInfo, 3);
+        // Register __ManagedArray compiler-internal type (32 bytes - unified for both arrays and strings)
+        // Layout: ptr buffer (8) + i64 len (8) + i64 capacity (8) + i32 flags (4) + i32 parent_off (4)
+        // Mode detection via flags & 0x3:
+        //   0 = SSO (future - inline storage)
+        //   1 = Heap-refcounted (refcount at buffer-8)
+        //   2 = Slice (borrowed view into parent)
+        const managed_array_fields = try self.allocator.alloc(FieldInfo, 5);
         managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = types.PTR } };
         managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = types.INT } };
         managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = types.INT } };
+        managed_array_fields[3] = .{ .name = "_flags", .offset = 24, .size = 4, .value_type = .{ .primitive = types.INT } };
+        managed_array_fields[4] = .{ .name = "_parent_off", .offset = 28, .size = 4, .value_type = .{ .primitive = types.INT } };
         self.type_map.put(self.allocator, "__ManagedArray", .{
-            .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 24 },
+            .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 32 },
         }) catch {
             self.allocator.free(managed_array_fields);
             return error.OutOfMemory;
         };
 
-        // Register __ManagedString compiler-internal type (24 bytes with COW support)
-        // Layout: ptr buffer (8) + i32 len (4) + i32 cap_flags (4) + i32 refcount (4) + i32 parent_off (4)
-        // Mode detection via cap_flags & 0x3:
-        //   0b00 = SSO (data inline in bytes 0-14, byte 15 = remaining capacity)
-        //   0b01 = Heap (owned buffer with refcount)
-        //   0b10 = Slice (borrowed view into parent string)
-        const managed_string_fields = try self.allocator.alloc(FieldInfo, 5);
-        managed_string_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = types.PTR } };
-        managed_string_fields[1] = .{ .name = "_len", .offset = 8, .size = 4, .value_type = .{ .primitive = types.INT } };
-        managed_string_fields[2] = .{ .name = "_cap_flags", .offset = 12, .size = 4, .value_type = .{ .primitive = types.INT } };
-        managed_string_fields[3] = .{ .name = "_refcount", .offset = 16, .size = 4, .value_type = .{ .primitive = types.INT } };
-        managed_string_fields[4] = .{ .name = "_parent_off", .offset = 20, .size = 4, .value_type = .{ .primitive = types.INT } };
-        self.type_map.put(self.allocator, "__ManagedString", .{
-            .struct_type = .{ .name = "__ManagedString", .fields = managed_string_fields, .size = 24 },
-        }) catch {
-            self.allocator.free(managed_string_fields);
-            return error.OutOfMemory;
-        };
-
         // Register cstring compiler-internal type (24 bytes)
         // Layout: data(8) + length(8) + managed(8)
-        // For non-slice strings: data points to String's buffer, managed points to __ManagedString (incref'd)
+        // For non-slice strings: data points to String's buffer, managed points to __ManagedArray (incref'd)
         // For slice strings: data points to newly allocated null-terminated copy, managed = null
         const cstring_fields = try self.allocator.alloc(FieldInfo, 3);
         cstring_fields[0] = .{ .name = "data", .offset = 0, .size = 8, .value_type = .{ .primitive = types.PTR } };
@@ -4494,16 +4483,16 @@ pub const AstToIr = struct {
                         try self.func().emitStore(value_ptr, typed_val.value);
                     }
                 } else {
-                    // Check if returning __ManagedString to a String-returning function
-                    const is_managed_string = typed_val.ty == .primitive and
-                        std.mem.eql(u8, typed_val.ty.primitive, "__ManagedString");
+                    // Check if returning __ManagedArray to a String-returning function
+                    const is_managed_array = typed_val.ty == .primitive and
+                        std.mem.eql(u8, typed_val.ty.primitive, "__ManagedArray");
                     const expects_string = self.current_func_name != null and
-                        self.type_map.get("String") != null and self.sret_size == 32;
+                        self.type_map.get("String") != null and self.sret_size == 40;
 
-                    if (is_managed_string and expects_string) {
-                        // Wrap __ManagedString (24 bytes) into String (32 bytes)
-                        // Copy managed string to offset 0-23
-                        try self.func().emitMemcpy(sret, typed_val.value, layouts.ManagedString.SIZE);
+                    if (is_managed_array and expects_string) {
+                        // Wrap __ManagedArray (32 bytes) into String (40 bytes)
+                        // Copy managed array to offset 0-31
+                        try self.func().emitMemcpy(sret, typed_val.value, layouts.ManagedArray.SIZE);
                         // Set _iterPos to 0 at offset 24
                         const iter_pos_ptr = try self.func().emitGetFieldPtr(sret, layouts.String.ITER_POS_OFFSET);
                         try self.func().emitStore(iter_pos_ptr, try self.func().emitConstI64(0));
@@ -4787,7 +4776,7 @@ pub const AstToIr = struct {
 
         // Check if heap mode: cap_flags & 3 == 1
         // cap_flags is at offset 12 in the String
-        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
+        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedArray.FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
         const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -4966,7 +4955,7 @@ pub const AstToIr = struct {
 
         // Check if heap mode: cap_flags & 3 == 1
         // cap_flags is at offset 12 in the String
-        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedString.CAP_FLAGS_OFFSET);
+        const cap_flags_ptr = try self.func().emitGetFieldPtr(elem_ptr, layouts.ManagedArray.FLAGS_OFFSET);
         const cap_flags = try self.func().emitLoad(cap_flags_ptr, .i32);
         const three = try self.func().emitConstI32(3);
         const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -7604,7 +7593,7 @@ pub const AstToIr = struct {
                         try self.ensureMethodGenerated(init_func_name);
                     }
 
-                    const managed_ptr = try self.emitManagedStringFromBytes(processed);
+                    const managed_ptr = try self.emitManagedArrayFromBytes(processed);
 
                     // Allocate result struct and call init
                     const struct_size = type_info.struct_type.size;
@@ -7639,7 +7628,7 @@ pub const AstToIr = struct {
         defer self.allocator.free(processed);
 
         // Create managed string from bytes
-        const managed_ptr = try self.emitManagedStringFromBytes(processed);
+        const managed_ptr = try self.emitManagedArrayFromBytes(processed);
 
         // Call String$init to initialize the destination pointer (Builtin.init is also registered as init)
         const init_func_name = "String$init";
@@ -8044,18 +8033,18 @@ pub const AstToIr = struct {
     }
 
     /// Convert a Character to a String
-    /// Character layout: { _managed: __ManagedString } (24 bytes)
-    /// String layout: { _managed: __ManagedString, _iterPos: int } (32 bytes)
+    /// Character layout: { _managed: __ManagedArray } (32 bytes)
+    /// String layout: { _managed: __ManagedArray, _iterPos: int } (40 bytes)
     fn convertCharacterToString(self: *AstToIr, char_ptr: ir.Value) ConvertError!ir.Value {
-        // Allocate a String struct (32 bytes)
-        const string_ptr = try self.func().emitAllocaSized(32);
+        // Allocate a String struct (40 bytes)
+        const string_ptr = try self.func().emitAllocaSized(40);
 
-        // Copy the _managed field from Character to String (24 bytes at offset 0)
+        // Copy the _managed field from Character to String (32 bytes at offset 0)
         const char_managed = try self.func().emitGetFieldPtr(char_ptr, 0);
         const string_managed = try self.func().emitGetFieldPtr(string_ptr, 0);
-        try self.emitStructCopy(string_managed, char_managed, 24, "__ManagedString");
+        try self.emitStructCopy(string_managed, char_managed, 32, "__ManagedArray");
 
-        // Set _iterPos to 0 (at offset 24)
+        // Set _iterPos to 0 (at offset 32)
         const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr, layouts.String.ITER_POS_OFFSET);
         const zero = try self.func().emitConstI64(0);
         try self.func().emitStore(iter_pos_ptr, zero);
@@ -8070,9 +8059,9 @@ pub const AstToIr = struct {
         const b_managed = try self.func().emitGetFieldPtr(b, 0);
 
         // Get lengths (stored as i32 at offset 8)
-        const a_len_ptr = try self.func().emitGetFieldPtr(a_managed, layouts.ManagedString.LEN_OFFSET);
+        const a_len_ptr = try self.func().emitGetFieldPtr(a_managed, layouts.ManagedArray.LEN_OFFSET);
         const a_len_i32 = try self.func().emitLoad(a_len_ptr, .i32);
-        const b_len_ptr = try self.func().emitGetFieldPtr(b_managed, layouts.ManagedString.LEN_OFFSET);
+        const b_len_ptr = try self.func().emitGetFieldPtr(b_managed, layouts.ManagedArray.LEN_OFFSET);
         const b_len_i32 = try self.func().emitLoad(b_len_ptr, .i32);
 
         // Sign-extend lengths to i64 for arithmetic
@@ -8083,7 +8072,7 @@ pub const AstToIr = struct {
         // Allocate new buffer with header: total_len + 1 for null terminator
         const one = try self.func().emitConstI64(1);
         const data_size = try self.func().emitBinaryOp(.add, total_len, one, .i64);
-        const new_buffer = try struct_helpers.emitAllocStringBuffer(self.func(), data_size, "string concat");
+        const new_buffer = try struct_helpers.emitAllocRefcountedBuffer(self.func(), data_size, "string concat");
 
         // Copy first string
         const a_buf_ptr = try self.func().emitGetFieldPtr(a_managed, 0);
@@ -8100,7 +8089,7 @@ pub const AstToIr = struct {
         const null_offset = try self.func().emitGetElemPtr(new_buffer, total_len, 1);
         try self.func().emitStoreI8(null_offset, try self.func().emitConstI8(0));
 
-        const result_managed = try self.emitManagedStringFromBuffer(new_buffer, total_len);
+        const result_managed = try self.emitManagedArrayFromBuffer(new_buffer, total_len);
         const string_ptr = try self.emitStringFromManaged(result_managed);
         // Track as temporary for cleanup after expression evaluation
         try self.temporary_strings.append(self.allocator, string_ptr);
@@ -8111,7 +8100,7 @@ pub const AstToIr = struct {
     fn emitIntToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Allocate buffer with header (22 bytes max: sign + 20 digits + null)
         const buffer_size = try self.func().emitConstI64(22);
-        const buffer = try struct_helpers.emitAllocStringBuffer(self.func(), buffer_size, "int.toString");
+        const buffer = try struct_helpers.emitAllocRefcountedBuffer(self.func(), buffer_size, "int.toString");
 
         // Call __runtime_int_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -8119,7 +8108,7 @@ pub const AstToIr = struct {
         args[1] = value;
         const len = (try self.func().emitCall("__runtime_int_to_string", args, .i64)).?;
 
-        const managed_ptr = try self.emitManagedStringFromBuffer(buffer, len);
+        const managed_ptr = try self.emitManagedArrayFromBuffer(buffer, len);
         const string_ptr = try self.emitStringFromManaged(managed_ptr);
         // Track as temporary for cleanup after expression evaluation
         try self.temporary_strings.append(self.allocator, string_ptr);
@@ -8131,7 +8120,7 @@ pub const AstToIr = struct {
     fn emitFloatToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Allocate buffer with header (32 bytes should be enough for most floats)
         const buffer_size = try self.func().emitConstI64(32);
-        const buffer = try struct_helpers.emitAllocStringBuffer(self.func(), buffer_size, "float.toString");
+        const buffer = try struct_helpers.emitAllocRefcountedBuffer(self.func(), buffer_size, "float.toString");
 
         // Call __runtime_float_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -8139,7 +8128,7 @@ pub const AstToIr = struct {
         args[1] = value;
         const len = (try self.func().emitCall("__runtime_float_to_string", args, .i64)).?;
 
-        const managed_ptr = try self.emitManagedStringFromBuffer(buffer, len);
+        const managed_ptr = try self.emitManagedArrayFromBuffer(buffer, len);
         const string_ptr = try self.emitStringFromManaged(managed_ptr);
         // Track as temporary for cleanup after expression evaluation
         try self.temporary_strings.append(self.allocator, string_ptr);
@@ -8150,7 +8139,7 @@ pub const AstToIr = struct {
     fn emitBoolToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Create a buffer with header (6 bytes max: "false\0")
         const buffer_size = try self.func().emitConstI64(6);
-        const buffer = try struct_helpers.emitAllocStringBuffer(self.func(), buffer_size, "bool.toString");
+        const buffer = try struct_helpers.emitAllocRefcountedBuffer(self.func(), buffer_size, "bool.toString");
 
         // Call __runtime_bool_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -8158,7 +8147,7 @@ pub const AstToIr = struct {
         args[1] = value;
         const len = (try self.func().emitCall("__runtime_bool_to_string", args, .i64)).?;
 
-        const managed_ptr = try self.emitManagedStringFromBuffer(buffer, len);
+        const managed_ptr = try self.emitManagedArrayFromBuffer(buffer, len);
         const string_ptr = try self.emitStringFromManaged(managed_ptr);
         // Track as temporary for cleanup after expression evaluation
         try self.temporary_strings.append(self.allocator, string_ptr);
@@ -8242,7 +8231,7 @@ pub const AstToIr = struct {
                         try self.ensureMethodGenerated(init_func_name);
                     }
 
-                    const managed_ptr = try self.emitManagedStringFromBytes(processed_bytes);
+                    const managed_ptr = try self.emitManagedArrayFromBytes(processed_bytes);
 
                     // Allocate result struct and call init
                     const struct_size = type_info.struct_type.size;
@@ -9087,7 +9076,7 @@ pub const AstToIr = struct {
                 // If source is a temporary String, use move (no incref) since temp will be consumed
                 const is_temp = self.isInTemporaries(field_val.value);
                 const is_string = std.mem.eql(u8, field_info.structName() orelse "", "String") or
-                    std.mem.eql(u8, field_info.structName() orelse "", "__ManagedString");
+                    std.mem.eql(u8, field_info.structName() orelse "", "__ManagedArray");
                 if (is_temp and is_string) {
                     // Move: temp will be removed from cleanup, no incref needed
                     try self.emitStructMove(field_ptr, field_val.value, field_info.size);
@@ -10340,7 +10329,7 @@ pub const AstToIr = struct {
     fn convertInitableFromBytes(self: *AstToIr, bytes: []const u8, type_name: []const u8, decl_name: []const u8) !void {
         debug.astToIr("InitableFromBytes: {s} with {d} bytes", .{ type_name, bytes.len });
 
-        const managed_ptr = try self.emitManagedStringFromBytes(bytes);
+        const managed_ptr = try self.emitManagedArrayFromBytes(bytes);
 
         // String type is special-cased: it receives __ManagedString directly
         // Other types receive a String (we create one first, then pass it to their init)
@@ -10449,7 +10438,7 @@ pub const AstToIr = struct {
         const processed = try self.processEscapeSequences(decl.value.char_literal);
         defer self.allocator.free(processed);
 
-        const managed_ptr = try self.emitManagedStringFromBytes(processed);
+        const managed_ptr = try self.emitManagedArrayFromBytes(processed);
 
         // Character type is special-cased: it receives __ManagedString directly
         // Other types receive a Character (we create one first, then pass it to their init)
@@ -10530,7 +10519,7 @@ pub const AstToIr = struct {
         const processed = try self.processEscapeSequences(str_literal);
         defer self.allocator.free(processed);
 
-        const managed_ptr = try self.emitManagedStringFromBytes(processed);
+        const managed_ptr = try self.emitManagedArrayFromBytes(processed);
 
         // Create a String by calling String$init(__ManagedString) (Builtin.init is also registered as init)
         const string_init_name = "String$init";
@@ -10596,7 +10585,7 @@ pub const AstToIr = struct {
         const processed = try self.processEscapeSequences(char_literal);
         defer self.allocator.free(processed);
 
-        const managed_ptr = try self.emitManagedStringFromBytes(processed);
+        const managed_ptr = try self.emitManagedArrayFromBytes(processed);
 
         // Create a Character by calling Character$init(__ManagedString)
         const char_init_name = "Character$init";

@@ -128,33 +128,39 @@ entry:
     %tmp_mul = mul i64 %tmp_load %tmp_const.1
     %tmp_heap = heap.alloc ptr %tmp_mul tag="array buffer"
     memset.dyn %tmp_heap 0 %tmp_mul
-    %tmp_alloca.1 = alloca.sized ptr 24
+    %tmp_const.2 = const.i32 i32 0
+    %tmp_alloca.1 = alloca.sized ptr 32
     store %tmp_alloca.1 %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
     store %tmp_fieldptr %tmp_load
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 16
     store %tmp_fieldptr.1 %tmp_load
-    %arr = alloca.sized ptr 32
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.1 24
+    store.i32 %tmp_fieldptr.2 %tmp_const.2
+    %tmp_const.3 = const.i32 i32 0
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.1 28
+    store.i32 %tmp_fieldptr.3 %tmp_const.3
+    %arr = alloca.sized ptr 40
     %tmp_call = call ptr @Array$int$init(%arr, %tmp_alloca.1)
-    %tmp_const.2 = const.i64 i64 0
-    %tmp_const.3 = const.i64 i64 42
-    call @Array$int$set(%arr, %tmp_const.2, %tmp_const.3)
+    %tmp_const.4 = const.i64 i64 0
+    %tmp_const.5 = const.i64 i64 42
+    call @Array$int$set(%arr, %tmp_const.4, %tmp_const.5)
     %tmp_call.1 = call i64 @readFirst(%arr)
     %result = alloca ptr
     store %result %tmp_call.1
-    %tmp_const.4 = const.i64 i64 0
+    %tmp_const.6 = const.i64 i64 0
     %sum = alloca ptr
-    store %sum %tmp_const.4
-    %tmp_const.5 = const.i64 i64 0
+    store %sum %tmp_const.6
+    %tmp_const.7 = const.i64 i64 0
     %tmp_alloca.5 = alloca.sized ptr 16
-    %tmp_call.2 = call ptr @Array$int$get(%tmp_alloca.5, %arr, %tmp_const.5)
+    %tmp_call.2 = call ptr @Array$int$get(%tmp_alloca.5, %arr, %tmp_const.7)
     %tmp_load.1 = load i64 %tmp_alloca.5
-    %tmp_const.6 = const.i64 i64 1
-    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.6
+    %tmp_const.8 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.8
     br.cond %tmp_icmp @block1 @block2
 if_let_then:
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.5 8
-    %tmp_load.2 = load i64 %tmp_fieldptr.2
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.5 8
+    %tmp_load.2 = load i64 %tmp_fieldptr.4
     %val = alloca ptr
     store %val %tmp_load.2
     %tmp_load.3 = load i64 %val
@@ -175,10 +181,10 @@ function Array$int$init() -> ptr {
 entry:
     %tmp_param = param ptr 0
     %managed = param ptr 1
-    memset %tmp_param 0 32
+    memset %tmp_param 0 40
     %tmp_fieldptr = getfieldptr ptr %tmp_param 0
-    memcpy %tmp_fieldptr %managed 24
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 24
+    memcpy %tmp_fieldptr %managed 32
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 32
     %tmp_const = const.i64 i64 0
     store %tmp_fieldptr.1 %tmp_const
     ret %tmp_param

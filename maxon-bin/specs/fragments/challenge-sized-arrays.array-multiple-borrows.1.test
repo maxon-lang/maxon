@@ -107,17 +107,23 @@ entry:
     %tmp_mul = const.i64 i64 24
     %tmp_heap = heap.alloc ptr %tmp_mul tag="array buffer"
     memset.dyn %tmp_heap 0 %tmp_mul
-    %tmp_alloca = alloca.sized ptr 24
+    %tmp_const.2 = const.i32 i32 0
+    %tmp_alloca = alloca.sized ptr 32
     store %tmp_alloca %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
     store %tmp_fieldptr %tmp_const
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 16
     store %tmp_fieldptr.1 %tmp_const
-    %arr = alloca.sized ptr 32
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca 24
+    store.i32 %tmp_fieldptr.2 %tmp_const.2
+    %tmp_const.3 = const.i32 i32 0
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca 28
+    store.i32 %tmp_fieldptr.3 %tmp_const.3
+    %arr = alloca.sized ptr 40
     %tmp_call = call ptr @Array$int$init(%arr, %tmp_alloca)
-    %tmp_const.2 = const.i64 i64 0
-    %tmp_const.3 = const.i64 i64 10
-    call @Array$int$set(%arr, %tmp_const.2, %tmp_const.3)
+    %tmp_const.4 = const.i64 i64 0
+    %tmp_const.5 = const.i64 i64 10
+    call @Array$int$set(%arr, %tmp_const.4, %tmp_const.5)
     %tmp_call.1 = call i64 @readFirst(%arr)
     %a = alloca ptr
     store %a %tmp_call.1
@@ -141,10 +147,10 @@ function Array$int$init() -> ptr {
 entry:
     %tmp_param = param ptr 0
     %managed = param ptr 1
-    memset %tmp_param 0 32
+    memset %tmp_param 0 40
     %tmp_fieldptr = getfieldptr ptr %tmp_param 0
-    memcpy %tmp_fieldptr %managed 24
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 24
+    memcpy %tmp_fieldptr %managed 32
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 32
     %tmp_const = const.i64 i64 0
     store %tmp_fieldptr.1 %tmp_const
     ret %tmp_param

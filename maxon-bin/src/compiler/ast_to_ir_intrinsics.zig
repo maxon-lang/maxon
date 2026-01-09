@@ -39,32 +39,35 @@ fn intrinsicLoadI32Field(self: *AstToIr, call: ast.CallExpr, offset: i32) Conver
     return .{ .value = value, .ty = .{ .primitive = "int" } };
 }
 
-/// Initialize a heap-allocated String struct (32 bytes with _iterPos field)
+/// Initialize a heap-allocated String struct (40 bytes with _iterPos field)
+/// Calls initHeapManagedArray for the __ManagedArray part
 fn initHeapString(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value) ConvertError!void {
-    try struct_helpers.initManagedString(self.func(), string_ptr, buffer, len_i64);
-    // Add _iterPos = 0 at offset 24
+    try initHeapManagedArray(self, string_ptr, buffer, len_i64);
+    // Add _iterPos = 0 at offset 32
     const zero_i64 = try self.func().emitConstI64(0);
-    try struct_helpers.storeI64Field(self.func(), string_ptr, 24, zero_i64);
+    try struct_helpers.storeI64Field(self.func(), string_ptr, 32, zero_i64);
 }
 
-/// Initialize a heap-allocated __ManagedString struct (24 bytes, no _iterPos)
-fn initHeapManagedString(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value) ConvertError!void {
-    return struct_helpers.initManagedString(self.func(), string_ptr, buffer, len_i64);
+/// Initialize a heap-allocated __ManagedArray struct (32 bytes for strings with mode=1)
+fn initHeapManagedArray(self: *AstToIr, array_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value) ConvertError!void {
+    // mode = 1 (heap-refcounted)
+    const mode_one = try self.func().emitConstI32(1);
+    return struct_helpers.initManagedArray(self.func(), array_ptr, buffer, len_i64, len_i64, mode_one);
 }
 
-/// Initialize slice string metadata fields (cap_flags=0b10, refcount=0, parent_off)
+/// Initialize slice array metadata fields (flags=2, parent_off)
 /// Assumes buffer and len are already set at offsets 0 and 8
-fn initSliceStringFields(self: *AstToIr, result_ptr: ir.Value, parent_off_i32: ir.Value) ConvertError!void {
-    // cap_flags = 0b10 (slice mode) at offset 12
-    const two = try self.func().emitConstI32(2);
-    try struct_helpers.storeI32Field(self.func(), result_ptr, 12, two);
+fn initSliceArrayFields(self: *AstToIr, result_ptr: ir.Value, parent_off_i32: ir.Value) ConvertError!void {
+    // capacity = 0 for slices at offset 16
+    const zero_i64 = try self.func().emitConstI64(0);
+    try struct_helpers.storeI64Field(self.func(), result_ptr, 16, zero_i64);
 
-    // refcount = 0 at offset 16
-    const zero = try self.func().emitConstI32(0);
-    try struct_helpers.storeI32Field(self.func(), result_ptr, 16, zero);
+    // flags = 2 (slice mode) at offset 24
+    const two_i32 = try self.func().emitConstI32(2);
+    try struct_helpers.storeI32Field(self.func(), result_ptr, 24, two_i32);
 
-    // parent_off at offset 20
-    try struct_helpers.storeI32Field(self.func(), result_ptr, 20, parent_off_i32);
+    // parent_off at offset 28
+    try struct_helpers.storeI32Field(self.func(), result_ptr, 28, parent_off_i32);
 }
 
 /// Wrap a nullable pointer result in an optional type
@@ -115,15 +118,15 @@ fn emitHeapAllocWin(self: *AstToIr, heap: ir.Value, size: ir.Value) ConvertError
     return externCall(self, "kernel32.dll", "HeapAlloc", &.{ heap, zero, size }, .ptr);
 }
 
-/// Allocate a string buffer with 8-byte header for refcounting.
+/// Allocate a refcounted buffer with 8-byte header for refcounting.
 /// Returns the DATA pointer (header is at returned_ptr - 8).
-fn emitAllocStringBufferWin(self: *AstToIr, heap: ir.Value, data_size: ir.Value) ConvertError!ir.Value {
+fn emitAllocRefcountedBufferWin(self: *AstToIr, heap: ir.Value, data_size: ir.Value) ConvertError!ir.Value {
     // Allocate data_size + 8 for header
-    const header_size = try self.func().emitConstI64(struct_helpers.STRING_BUFFER_HEADER_SIZE);
+    const header_size = try self.func().emitConstI64(struct_helpers.REFCOUNTED_BUFFER_HEADER_SIZE);
     const total_size = try self.func().emitBinaryOp(.add, data_size, header_size, .i64);
     const buffer_with_header = try emitHeapAllocWin(self, heap, total_size);
 
-    // Initialize refcount in header to 1 (for the String being created)
+    // Initialize refcount in header to 1
     try self.func().emitStore(buffer_with_header, try self.func().emitConstI64(1));
 
     // Return data pointer (header + 8)
@@ -234,7 +237,6 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
         // Dispatch based on codegen strategy
         return switch (category.codegen) {
             .managed_array => convertManagedArrayIntrinsic(self, call),
-            .string => convertStringIntrinsic(self, call),
             .cstring => convertCstringIntrinsic(self, call),
             .make_char => convertMakeCharIntrinsic(self, call),
             .file_io => convertFileIntrinsic(self, call),
@@ -440,6 +442,18 @@ const managed_array_intrinsics = .{
     .{ "__managed_array_shift_right", intrinsicManagedArrayShiftRight },
     .{ "__managed_array_shift_left", intrinsicManagedArrayShiftLeft },
     .{ "__managed_array_get_unchecked", intrinsicManagedArrayGetUnchecked },
+    // String-related intrinsics (now unified under __managed_array)
+    .{ "__managed_array_byte_at", intrinsicManagedArrayByteAt },
+    .{ "__managed_array_slice", intrinsicManagedArraySlice },
+    .{ "__managed_array_concat", intrinsicManagedArrayConcat },
+    .{ "__managed_array_make_unique", intrinsicManagedArrayMakeUnique },
+    .{ "__managed_array_set_byte", intrinsicManagedArraySetByte },
+    .{ "__managed_array_to_cstring", intrinsicManagedArrayToCstring },
+    .{ "__managed_array_from_bytes", intrinsicManagedArrayFromBytes },
+    .{ "__managed_array_incref", intrinsicManagedArrayIncref },
+    .{ "__managed_array_refcount", intrinsicManagedArrayRefcount },
+    .{ "__managed_array_is_refcounted", intrinsicManagedArrayIsRefcounted },
+    .{ "__managed_array_flags", intrinsicManagedArrayFlags },
 };
 
 fn convertManagedArrayIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -458,20 +472,21 @@ fn intrinsicManagedArrayCapacity(self: *AstToIr, call: ast.CallExpr) ConvertErro
 
 /// __managed_array_create(capacity) -> __ManagedArray
 /// Creates a new managed array with the given size/capacity (length = capacity)
+/// Mode is 0 (no refcounting) for regular arrays
 fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const capacity = try self.convertExpression(call.args[0]);
 
-    const managed_ptr = try self.func().emitAllocaSized(24);
+    const managed_ptr = try self.func().emitAllocaSized(32);
 
     const elem_info = getElementInfo(self);
     const elem_size_val = try self.func().emitConstI64(elem_info.size);
     const buf_size = try self.func().emitBinaryOp(.mul, capacity.value, elem_size_val, .i64);
     const buf_ptr = try self.func().emitHeapAlloc(buf_size, "array buffer");
 
-    try self.func().emitStore(managed_ptr, buf_ptr);
-    try struct_helpers.storeI64Field(self.func(), managed_ptr, 8, capacity.value);
-    try struct_helpers.storeI64Field(self.func(), managed_ptr, 16, capacity.value);
+    // Initialize with mode=0 (no refcounting for regular arrays)
+    const zero_i32 = try self.func().emitConstI32(0);
+    try struct_helpers.initManagedArray(self.func(), managed_ptr, buf_ptr, capacity.value, capacity.value, zero_i32);
 
     return .{ .value = managed_ptr, .ty = .{ .primitive = "ptr" } };
 }
@@ -584,37 +599,17 @@ fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) Convert
 }
 
 // ============================================================================
-// __ManagedString Intrinsics (stdlib-only)
+// __ManagedArray Intrinsics for Strings (stdlib-only)
 // ============================================================================
 //
-// __ManagedString memory layout (16 bytes):
-//   Offset 0: ptr buffer   - Pointer to UTF-8 string data (8 bytes)
-//   Offset 8: i32 len      - Byte length of string (4 bytes)
-//   Offset 12: i32 capacity - Buffer capacity (4 bytes)
+// __ManagedArray memory layout (32 bytes):
+//   Offset 0: ptr buffer      - Pointer to data (8 bytes)
+//   Offset 8: i64 len         - Length (8 bytes)
+//   Offset 16: i64 capacity   - Capacity (8 bytes)
+//   Offset 24: i32 flags      - Mode flags (4 bytes) - bits 0-1: 0=SSO, 1=refcounted, 2=slice
+//   Offset 28: i32 parent_off - Parent offset for slices (4 bytes)
 //
-// When capacity = 0, the string is a constant (no heap cleanup needed).
-// When capacity > 0, the string is heap-allocated with refcount header:
-//   [refcount:i32][capacity:i32][...data bytes...]
-//        -8           -4            0+
-
-const string_intrinsics = .{
-    .{ "__string_len", intrinsicStringLen },
-    .{ "__string_byte_at", intrinsicStringByteAt },
-    .{ "__string_slice", intrinsicStringSlice },
-    .{ "__string_concat", intrinsicStringConcat },
-    .{ "__string_make_unique", intrinsicStringMakeUnique },
-    .{ "__string_set_byte", intrinsicStringSetByte },
-    .{ "__string_to_cstring", intrinsicStringToCstring },
-    .{ "__string_from_characters", intrinsicStringFromCharacters },
-    .{ "__string_incref", intrinsicStringIncref },
-    .{ "__string_refcount", intrinsicStringRefcount },
-    .{ "__string_is_heap", intrinsicStringIsHeap },
-    .{ "__string_cap_flags", intrinsicStringCapFlags },
-};
-
-fn convertStringIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    return dispatchIntrinsic(self, call, string_intrinsics);
-}
+// For mode 1 (heap-refcounted), buffer points to data with refcount header at buffer-8:
 
 const cstring_intrinsics = .{
     .{ "__cstring_write_stdout", intrinsicCstringWriteStdout },
@@ -641,8 +636,8 @@ fn intrinsicCstringWriteStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!
     return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
 }
 
-/// __cstring_to_managed(cstr) -> __ManagedString
-/// Converts a cstring struct to a __ManagedString
+/// __cstring_to_managed(cstr) -> __ManagedArray
+/// Converts a cstring struct to a __ManagedArray (string mode)
 /// The string data is copied to a new heap buffer with header for refcounting
 /// cstring struct layout: data(8) + length(8) + managed(8)
 fn intrinsicCstringToManaged(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -659,19 +654,19 @@ fn intrinsicCstringToManaged(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const heap = try emitGetProcessHeap(self);
     const one = try self.func().emitConstI64(1);
     const alloc_size = try self.func().emitBinaryOp(.add, len, one, .i64);
-    const buffer = try emitAllocStringBufferWin(self, heap, alloc_size);
+    const buffer = try emitAllocRefcountedBufferWin(self, heap, alloc_size);
 
     // Copy string to buffer (include null terminator)
     try emitMemcpyWin(self, buffer, src_ptr, alloc_size);
 
-    // Allocate __ManagedString struct (24 bytes)
-    const string_size = try self.func().emitConstI64(24);
-    const string_ptr = try emitHeapAllocWin(self, heap, string_size);
+    // Allocate __ManagedArray struct (32 bytes)
+    const array_size = try self.func().emitConstI64(32);
+    const array_ptr = try emitHeapAllocWin(self, heap, array_size);
 
-    // Initialize the struct
-    try initHeapManagedString(self, string_ptr, buffer, len);
+    // Initialize the struct (mode=1 for heap-refcounted)
+    try initHeapManagedArray(self, array_ptr, buffer, len);
 
-    return .{ .value = string_ptr, .ty = .{ .struct_type = "__ManagedString" } };
+    return .{ .value = array_ptr, .ty = .{ .struct_type = "__ManagedArray" } };
 }
 
 const make_char_intrinsics = .{
@@ -683,40 +678,33 @@ fn convertMakeCharIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 }
 
 /// __make_char_from_bytes(managed, pos, len) -> Character
-/// Creates a slice-mode Character struct
+/// Creates a slice-mode Character struct (32 bytes)
 fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
     const managed = try self.convertExpression(call.args[0]);
     const pos = try self.convertExpression(call.args[1]);
     const len = try self.convertExpression(call.args[2]);
 
-    const char_ptr = try self.func().emitAllocaSized(24);
+    const char_ptr = try self.func().emitAllocaSized(32);
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
     // Store slice buffer pointer (offset 0)
     const slice_buf = try self.func().emitBinaryOp(.add, parent_buf_ptr, pos.value, .ptr);
     try self.func().emitStore(char_ptr, slice_buf);
 
-    // Store len (offset 8, i32)
-    const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len.value, .i32);
-    try struct_helpers.storeI32Field(self.func(), char_ptr, 8, len_i32);
+    // Store len (offset 8, i64)
+    try struct_helpers.storeI64Field(self.func(), char_ptr, 8, len.value);
 
     // Initialize slice metadata fields
     const pos_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, pos.value, .i32);
-    try initSliceStringFields(self, char_ptr, pos_i32);
+    try initSliceArrayFields(self, char_ptr, pos_i32);
 
     return .{ .value = char_ptr, .ty = .{ .struct_type = "Character" } };
 }
 
-/// __string_len(managed) -> int
-/// Returns the byte length of the __ManagedString (offset 8, i32)
-fn intrinsicStringLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    return intrinsicLoadI32Field(self, call, 8);
-}
-
-/// __string_byte_at(managed, index) -> byte
-/// Returns the byte at the given index in the string buffer
-fn intrinsicStringByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_array_byte_at(managed, index) -> byte
+/// Returns the byte at the given index in the buffer
+fn intrinsicManagedArrayByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);
     const index = try self.convertExpression(call.args[1]);
@@ -728,11 +716,11 @@ fn intrinsicStringByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     return .{ .value = byte_val, .ty = .{ .primitive = "byte" } };
 }
 
-/// __string_slice(managed, start, end) -> __ManagedString (slice mode)
-/// Creates a slice view into the managed string
-/// Returns a 24-byte __ManagedString with cap_flags = 0b10 (slice mode)
-/// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
-fn intrinsicStringSlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_array_slice(managed, start, end) -> __ManagedArray (slice mode)
+/// Creates a slice view into the managed array
+/// Returns a 32-byte __ManagedArray with flags = 2 (slice mode)
+/// Layout: buffer(8) + len(8) + capacity(8) + flags(4) + parent_off(4)
+fn intrinsicManagedArraySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
 
     // Track borrow source for compile-time borrow checking
@@ -751,28 +739,27 @@ fn intrinsicStringSlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
     const start = try self.convertExpression(call.args[1]);
     const end = try self.convertExpression(call.args[2]);
 
-    const slice_ptr = try self.func().emitAllocaSized(24);
+    const slice_ptr = try self.func().emitAllocaSized(32);
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
     // Store slice buffer = parent_buf_ptr + start (offset 0)
     const slice_buf = try self.func().emitBinaryOp(.add, parent_buf_ptr, start.value, .ptr);
     try self.func().emitStore(slice_ptr, slice_buf);
 
-    // Store len = end - start (offset 8, i32)
+    // Store len = end - start (offset 8, i64)
     const len_i64 = try self.func().emitBinaryOp(.sub, end.value, start.value, .i64);
-    const len_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, len_i64, .i32);
-    try struct_helpers.storeI32Field(self.func(), slice_ptr, 8, len_i32);
+    try struct_helpers.storeI64Field(self.func(), slice_ptr, 8, len_i64);
 
-    // Initialize slice metadata (cap_flags=0b10, refcount=0, parent_off=start)
+    // Initialize slice metadata (flags=2, parent_off=start)
     const start_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, start.value, .i32);
-    try initSliceStringFields(self, slice_ptr, start_i32);
+    try initSliceArrayFields(self, slice_ptr, start_i32);
 
-    return .{ .value = slice_ptr, .ty = .{ .primitive = "__ManagedString" } };
+    return .{ .value = slice_ptr, .ty = .{ .primitive = "__ManagedArray" } };
 }
 
-/// __string_concat(a, b) -> __ManagedString
-/// Concatenates two managed strings into a new heap-allocated string
-fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_array_concat(a, b) -> __ManagedArray
+/// Concatenates two managed arrays (strings) into a new heap-allocated array
+fn intrinsicManagedArrayConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
 
     const a = try self.convertExpression(call.args[0]);
@@ -782,48 +769,50 @@ fn intrinsicStringConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const a_buf = try self.func().emitLoad(a.value, .ptr);
     const b_buf = try self.func().emitLoad(b.value, .ptr);
 
-    // Load lengths (offset 8, i32)
-    const a_len = try struct_helpers.loadI32AsI64(self.func(), a.value, 8);
-    const b_len = try struct_helpers.loadI32AsI64(self.func(), b.value, 8);
+    // Load lengths (offset 8, i64)
+    const a_len = try struct_helpers.loadI64Field(self.func(), a.value, 8);
+    const b_len = try struct_helpers.loadI64Field(self.func(), b.value, 8);
     const total_len = try self.func().emitBinaryOp(.add, a_len, b_len, .i64);
 
     // Allocate with header for refcounting
-    const buf_ptr = try struct_helpers.emitAllocStringBuffer(self.func(), total_len, "string concat");
+    const buf_ptr = try struct_helpers.emitAllocRefcountedBuffer(self.func(), total_len, "array concat");
 
-    // Copy both strings into the new buffer
+    // Copy both arrays into the new buffer
     try self.func().emitMemcpyDynamic(buf_ptr, a_buf, a_len);
     const dst_offset = try self.func().emitBinaryOp(.add, buf_ptr, a_len, .ptr);
     try self.func().emitMemcpyDynamic(dst_offset, b_buf, b_len);
 
-    // Initialize __ManagedString struct
-    const result_ptr = try struct_helpers.emitManagedString(self.func(), buf_ptr, total_len);
+    // Initialize __ManagedArray struct (mode=1 for heap-refcounted)
+    const mode_one = try self.func().emitConstI32(1);
+    const result_ptr = try struct_helpers.emitManagedArray(self.func(), buf_ptr, total_len, total_len, mode_one);
 
-    return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedString" } };
+    return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedArray" } };
 }
 
-/// __string_make_unique(managed) -> __ManagedString
-/// Creates a mutable copy of the string (COW - copy on write)
-fn intrinsicStringMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_array_make_unique(managed) -> __ManagedArray
+/// Creates a mutable copy of the array (COW - copy on write)
+fn intrinsicManagedArrayMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
-    // Load length and original buffer
-    const len = try struct_helpers.loadI32AsI64(self.func(), managed.value, 8);
+    // Load length and original buffer (offset 8, i64)
+    const len = try struct_helpers.loadI64Field(self.func(), managed.value, 8);
     const orig_buf = try self.func().emitLoad(managed.value, .ptr);
 
     // Allocate with header for refcounting
-    const new_buf = try struct_helpers.emitAllocStringBuffer(self.func(), len, "string buffer");
+    const new_buf = try struct_helpers.emitAllocRefcountedBuffer(self.func(), len, "array buffer");
     try self.func().emitMemcpyDynamic(new_buf, orig_buf, len);
 
-    // Initialize __ManagedString struct
-    const result_ptr = try struct_helpers.emitManagedString(self.func(), new_buf, len);
+    // Initialize __ManagedArray struct (mode=1 for heap-refcounted)
+    const mode_one = try self.func().emitConstI32(1);
+    const result_ptr = try struct_helpers.emitManagedArray(self.func(), new_buf, len, len, mode_one);
 
-    return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedString" } };
+    return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedArray" } };
 }
 
-/// __string_set_byte(managed, index, byte) -> void
-/// Sets a byte at the given index (caller must ensure string is unique)
-fn intrinsicStringSetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_array_set_byte(managed, index, byte) -> void
+/// Sets a byte at the given index (caller must ensure array is unique)
+fn intrinsicManagedArraySetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
     const managed = try self.convertExpression(call.args[0]);
     const index = try self.convertExpression(call.args[1]);
@@ -837,20 +826,20 @@ fn intrinsicStringSetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
-/// __string_to_cstring(managed) -> cstring struct
-/// Creates a cstring struct from a __ManagedString.
-/// For SSO/Heap mode: shares buffer (already null-terminated), holds reference to managed string
+/// __managed_array_to_cstring(managed) -> cstring struct
+/// Creates a cstring struct from a __ManagedArray (string).
+/// For heap-refcounted mode: shares buffer (already null-terminated), holds reference to managed array
 /// For Slice mode: copies data to new null-terminated buffer (cstring owns its buffer)
-fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedArrayToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
     const cstring_ptr = try self.func().emitAllocaSized(24);
 
-    // Load cap_flags (offset 12) to determine mode
-    const cap_flags = try self.func().emitLoad(try self.func().emitGetFieldPtr(managed.value, layouts.ManagedString.CAP_FLAGS_OFFSET), .i32);
+    // Load flags (offset 24) to determine mode
+    const flags = try self.func().emitLoad(try self.func().emitGetFieldPtr(managed.value, layouts.ManagedArray.FLAGS_OFFSET), .i32);
     const three = try self.func().emitConstI32(3);
-    const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
+    const mode = try self.func().emitBinaryOp(.band, flags, three, .i32);
     const two = try self.func().emitConstI32(2);
     const is_slice = try self.func().emitBinaryOp(.icmp_eq, mode, two, .i32);
 
@@ -860,7 +849,7 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 
     // === SLICE BLOCK: Copy data to new null-terminated buffer ===
     const slice_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const slice_len = try struct_helpers.loadI32AsI64(self.func(), managed.value, 8);
+    const slice_len = try struct_helpers.loadI64Field(self.func(), managed.value, 8);
 
     const one_i64 = try self.func().emitConstI64(1);
     const alloc_size = try self.func().emitBinaryOp(.add, slice_len, one_i64, .i64);
@@ -883,16 +872,16 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 
     // === NON-SLICE BLOCK: Share existing buffer ===
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const length = try struct_helpers.loadI32AsI64(self.func(), managed.value, 8);
+    const length = try struct_helpers.loadI64Field(self.func(), managed.value, 8);
 
     // Store cstring fields (data, length, managed)
     try self.func().emitStore(cstring_ptr, buf_ptr);
     try struct_helpers.storeI64Field(self.func(), cstring_ptr, 8, length);
     try struct_helpers.storeI64Field(self.func(), cstring_ptr, 16, managed.value);
 
-    // Check if heap mode for incref
+    // Check if heap-refcounted mode for incref
     const one_i32 = try self.func().emitConstI32(1);
-    const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+    const is_refcounted = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
 
     const incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("cstr_incref");
@@ -921,7 +910,7 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
     });
     try self.func().blocks.items[nonslice_block_idx].instructions.append(self.allocator, .{
         .op = .br_cond,
-        .operands = .{ .{ .value = is_heap }, .{ .block_ref = incref_block_idx }, .{ .block_ref = end_block_idx } },
+        .operands = .{ .{ .value = is_refcounted }, .{ .block_ref = incref_block_idx }, .{ .block_ref = end_block_idx } },
     });
     try self.func().blocks.items[incref_block_idx].instructions.append(self.allocator, .{
         .op = .br,
@@ -932,33 +921,34 @@ fn intrinsicStringToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
     return .{ .value = cstring_ptr, .ty = .{ .struct_type = "cstring" } };
 }
 
-/// __string_from_characters(buffer, length) -> __ManagedString
-/// Creates a new string from a byte array buffer
-fn intrinsicStringFromCharacters(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_array_from_bytes(buffer, length) -> __ManagedArray
+/// Creates a new managed array (string) from a byte array buffer
+fn intrinsicManagedArrayFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const buffer = try self.convertExpression(call.args[0]);
     const length = try self.convertExpression(call.args[1]);
 
     // Allocate with header for refcounting
-    const new_buf = try struct_helpers.emitAllocStringBuffer(self.func(), length.value, "string buffer");
+    const new_buf = try struct_helpers.emitAllocRefcountedBuffer(self.func(), length.value, "array buffer");
 
     // Copy data from source buffer
     const src_buf = try self.func().emitLoad(buffer.value, .ptr);
     try self.func().emitMemcpyDynamic(new_buf, src_buf, length.value);
 
-    // Initialize __ManagedString struct
-    const result_ptr = try struct_helpers.emitManagedString(self.func(), new_buf, length.value);
+    // Initialize __ManagedArray struct (mode=1 for heap-refcounted)
+    const mode_one = try self.func().emitConstI32(1);
+    const result_ptr = try struct_helpers.emitManagedArray(self.func(), new_buf, length.value, length.value, mode_one);
 
-    return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedString" } };
+    return .{ .value = result_ptr, .ty = .{ .primitive = "__ManagedArray" } };
 }
 
 // ============================================================================
 // Reference Counting Intrinsics for COW Strings
 // ============================================================================
 
-/// __string_incref(managed) -> void
-/// Increments the reference count in buffer header for heap-allocated strings
-fn intrinsicStringIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_array_incref(managed) -> void
+/// Increments the reference count in buffer header for heap-refcounted arrays
+fn intrinsicManagedArrayIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
@@ -976,9 +966,9 @@ fn intrinsicStringIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     return .{ .value = 0, .ty = .{ .primitive = "void" } };
 }
 
-/// __string_refcount(managed) -> int
+/// __managed_array_refcount(managed) -> int
 /// Returns the refcount from buffer header (buf_ptr - 8)
-fn intrinsicStringRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedArrayRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
@@ -993,22 +983,23 @@ fn intrinsicStringRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!Type
     return .{ .value = refcount, .ty = .{ .primitive = "int" } };
 }
 
-/// __string_is_heap(managed) -> bool
-/// Returns true if the string is heap-allocated (cap_flags & 0x1 == 1)
-fn intrinsicStringIsHeap(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_array_is_refcounted(managed) -> bool
+/// Returns true if the array is heap-refcounted (flags & 0x1 == 1)
+fn intrinsicManagedArrayIsRefcounted(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
-    const cap_flags = try self.func().emitLoad(try self.func().emitGetFieldPtr(managed.value, layouts.ManagedString.CAP_FLAGS_OFFSET), .i32);
+    const flags = try self.func().emitLoad(try self.func().emitGetFieldPtr(managed.value, layouts.ManagedArray.FLAGS_OFFSET), .i32);
     const one = try self.func().emitConstI32(1);
-    const is_heap = try self.func().emitBinaryOp(.band, cap_flags, one, .i32);
+    const is_refcounted = try self.func().emitBinaryOp(.band, flags, one, .i32);
 
-    return .{ .value = is_heap, .ty = .{ .primitive = "bool" } };
+    return .{ .value = is_refcounted, .ty = .{ .primitive = "bool" } };
 }
 
-/// __string_cap_flags(managed) -> int
-fn intrinsicStringCapFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    return intrinsicLoadI32Field(self, call, 12);
+/// __managed_array_flags(managed) -> int
+/// Returns the flags field (offset 24, i32)
+fn intrinsicManagedArrayFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    return intrinsicLoadI32Field(self, call, 24);
 }
 
 // ============================================================================
@@ -1055,9 +1046,9 @@ fn emitWriteFileIR(self: *AstToIr, path_cstr: TypedValue, data_source: TypedValu
     return .{ .value = result, .ty = .{ .primitive = "int" } };
 }
 
-/// Generate IR to read a file into a __ManagedString
+/// Generate IR to read a file into a __ManagedArray (string)
 /// Calls CreateFileA, GetFileSize, HeapAlloc, ReadFile, CloseHandle
-/// Returns pointer to __ManagedString or NULL on failure
+/// Returns pointer to __ManagedArray or NULL on failure
 fn emitReadFileIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const path_cstr = try self.convertExpression(call.args[0]);
@@ -1078,7 +1069,7 @@ fn emitReadFileIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     const heap = try emitGetProcessHeap(self);
     const one_i64 = try self.func().emitConstI64(1);
     const alloc_size = try self.func().emitBinaryOp(.add, file_size, one_i64, .i64);
-    const buffer = try emitAllocStringBufferWin(self, heap, alloc_size);
+    const buffer = try emitAllocRefcountedBufferWin(self, heap, alloc_size);
 
     // Allocate bytes_read on stack
     const bytes_read_ptr = try self.func().emitAllocaSized(8);
@@ -1098,19 +1089,19 @@ fn emitReadFileIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     // Close handle
     try emitCloseHandle(self, handle);
 
-    // Allocate __ManagedString struct (24 bytes) if handle was valid
+    // Allocate __ManagedArray struct (32 bytes) if handle was valid
     // For simplicity, we always allocate but return NULL if invalid
-    const string_size = try self.func().emitConstI64(24);
-    const string_ptr = try emitHeapAllocWin(self, heap, string_size);
+    const array_size = try self.func().emitConstI64(32);
+    const array_ptr = try emitHeapAllocWin(self, heap, array_size);
 
-    try initHeapManagedString(self, string_ptr, buffer, bytes_read);
+    try initHeapManagedArray(self, array_ptr, buffer, bytes_read);
 
-    // If handle was invalid, return NULL, else return string_ptr
-    // result = string_ptr * (1 - is_invalid) = string_ptr if valid, 0 if invalid
+    // If handle was invalid, return NULL, else return array_ptr
+    // result = array_ptr * (1 - is_invalid) = array_ptr if valid, 0 if invalid
     const not_invalid = try self.func().emitBinaryOp(.sub, one_i64, is_invalid, .i64);
-    const result_ptr = try self.func().emitBinaryOp(.mul, string_ptr, not_invalid, .ptr);
+    const result_ptr = try self.func().emitBinaryOp(.mul, array_ptr, not_invalid, .ptr);
 
-    return wrapInOptional(self, result_ptr, "__ManagedString");
+    return wrapInOptional(self, result_ptr, "__ManagedArray");
 }
 
 fn intrinsicWriteFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -1308,20 +1299,20 @@ fn emitDirectoryExistsIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 /// Generate IR to get command line arguments as Array$String
 /// This replaces the old __get_command_args x86-64 runtime function
 ///
-/// Array$String layout (32 bytes):
-///   [0]  __ManagedArray managed (24 bytes: ptr + len + cap)
-///   [24] int iterIndex (8 bytes)
+/// Array$String layout (40 bytes):
+///   [0]  __ManagedArray managed (32 bytes)
+///   [32] int iterIndex (8 bytes)
 ///
-/// String layout (32 bytes):
-///   [0]  __ManagedString _managed (24 bytes)
-///   [24] int _iterPos (8 bytes)
+/// String layout (40 bytes):
+///   [0]  __ManagedArray _managed (32 bytes)
+///   [32] int _iterPos (8 bytes)
 ///
-/// __ManagedString layout (24 bytes):
+/// __ManagedArray layout (32 bytes):
 ///   [0]  ptr buffer (8 bytes)
-///   [8]  i32 len    (4 bytes)
-///   [12] i32 cap_flags (4 bytes) - capacity with mode flags in low 2 bits (0b01 = heap)
-///   [16] i32 refcount (4 bytes)
-///   [20] i32 parent_off (4 bytes)
+///   [8]  i64 len (8 bytes)
+///   [16] i64 capacity (8 bytes)
+///   [24] i32 flags (4 bytes) - mode flags (bits 0-1: 0=SSO, 1=refcounted, 2=slice)
+///   [28] i32 parent_off (4 bytes)
 pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     // Get process heap (needed for allocations)
     const heap = try emitGetProcessHeap(self);

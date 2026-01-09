@@ -42,27 +42,33 @@ entry:
     %tmp_mul.1 = mul i64 %tmp_mul %tmp_const.2
     %tmp_heap = heap.alloc ptr %tmp_mul.1 tag="array buffer"
     memset.dyn %tmp_heap 0 %tmp_mul.1
-    %tmp_alloca.2 = alloca.sized ptr 24
+    %tmp_const.3 = const.i32 i32 0
+    %tmp_alloca.2 = alloca.sized ptr 32
     store %tmp_alloca.2 %tmp_heap
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
     store %tmp_fieldptr %tmp_mul
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 16
     store %tmp_fieldptr.1 %tmp_mul
-    %arr = alloca.sized ptr 32
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.2 24
+    store.i32 %tmp_fieldptr.2 %tmp_const.3
+    %tmp_const.4 = const.i32 i32 0
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.2 28
+    store.i32 %tmp_fieldptr.3 %tmp_const.4
+    %arr = alloca.sized ptr 40
     %tmp_call = call ptr @Array$int$init(%arr, %tmp_alloca.2)
-    %tmp_const.3 = const.i64 i64 0
-    %tmp_const.4 = const.i64 i64 77
-    call @Array$int$set(%arr, %tmp_const.3, %tmp_const.4)
     %tmp_const.5 = const.i64 i64 0
+    %tmp_const.6 = const.i64 i64 77
+    call @Array$int$set(%arr, %tmp_const.5, %tmp_const.6)
+    %tmp_const.7 = const.i64 i64 0
     %tmp_alloca.4 = alloca.sized ptr 16
-    %tmp_call.1 = call ptr @Array$int$get(%tmp_alloca.4, %arr, %tmp_const.5)
+    %tmp_call.1 = call ptr @Array$int$get(%tmp_alloca.4, %arr, %tmp_const.7)
     %tmp_load.2 = load i64 %tmp_alloca.4
-    %tmp_const.6 = const.i64 i64 1
-    %tmp_icmp = icmp.eq i64 %tmp_load.2 %tmp_const.6
+    %tmp_const.8 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.2 %tmp_const.8
     br.cond %tmp_icmp @block1 @block2
 if_let_then:
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.4 8
-    %tmp_load.3 = load i64 %tmp_fieldptr.2
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.4 8
+    %tmp_load.3 = load i64 %tmp_fieldptr.4
     %val = alloca ptr
     store %val %tmp_load.3
     %tmp_load.4 = load i64 %val
@@ -70,10 +76,10 @@ if_let_then:
     heap.free %tmp_load.5 tag="array cleanup"
     ret %tmp_load.4
 if_let_else:
-    %tmp_const.7 = const.i64 i64 0
+    %tmp_const.9 = const.i64 i64 0
     %tmp_load.6 = load ptr %arr
     heap.free %tmp_load.6 tag="array cleanup"
-    ret %tmp_const.7
+    ret %tmp_const.9
 if_let_end:
 }
 
@@ -81,10 +87,10 @@ function Array$int$init() -> ptr {
 entry:
     %tmp_param = param ptr 0
     %managed = param ptr 1
-    memset %tmp_param 0 32
+    memset %tmp_param 0 40
     %tmp_fieldptr = getfieldptr ptr %tmp_param 0
-    memcpy %tmp_fieldptr %managed 24
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 24
+    memcpy %tmp_fieldptr %managed 32
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 32
     %tmp_const = const.i64 i64 0
     store %tmp_fieldptr.1 %tmp_const
     ret %tmp_param

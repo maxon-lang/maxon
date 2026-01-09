@@ -3,59 +3,32 @@
 ///
 /// All field offsets and sizes are validated at compile time to ensure
 /// consistency and catch layout mismatches before they cause runtime errors.
-/// __ManagedString struct layout (24 bytes total)
-/// Layout: buffer(8) + len(4) + cap_flags(4) + refcount(4) + parent_off(4)
+/// __ManagedArray struct layout (32 bytes total)
+/// Unified managed type for both strings and arrays.
+/// Layout: buffer(8) + len(8) + capacity(8) + flags(4) + parent_off(4)
 ///
 /// Fields:
-/// - buffer: *u8 (8 bytes) - pointer to string data (with -8 header for refcount)
-/// - len: i32 (4 bytes) - current string length
-/// - cap_flags: i32 (4 bytes) - capacity << 2 | mode (0=SSO, 1=heap, 2=slice)
-/// - refcount: i32 (4 bytes) - reference count (unused in heap mode, in buffer header instead)
-/// - parent_off: i32 (4 bytes) - offset from parent string (for slice mode)
-pub const ManagedString = struct {
-    pub const SIZE: i32 = 24;
-    pub const BUFFER_OFFSET: i32 = 0;
-    pub const LEN_OFFSET: i32 = 8;
-    pub const CAP_FLAGS_OFFSET: i32 = 12;
-    pub const REFCOUNT_OFFSET: i32 = 16;
-    pub const PARENT_OFF_OFFSET: i32 = 20;
-
-    comptime {
-        // Validate layout is consistent
-        if (PARENT_OFF_OFFSET + 4 != SIZE) {
-            @compileError("ManagedString layout mismatch: PARENT_OFF_OFFSET + 4 != SIZE");
-        }
-        if (LEN_OFFSET != BUFFER_OFFSET + 8) {
-            @compileError("ManagedString layout mismatch: LEN_OFFSET != BUFFER_OFFSET + 8");
-        }
-        if (CAP_FLAGS_OFFSET != LEN_OFFSET + 4) {
-            @compileError("ManagedString layout mismatch: CAP_FLAGS_OFFSET != LEN_OFFSET + 4");
-        }
-        if (REFCOUNT_OFFSET != CAP_FLAGS_OFFSET + 4) {
-            @compileError("ManagedString layout mismatch: REFCOUNT_OFFSET != CAP_FLAGS_OFFSET + 4");
-        }
-        if (PARENT_OFF_OFFSET != REFCOUNT_OFFSET + 4) {
-            @compileError("ManagedString layout mismatch: PARENT_OFF_OFFSET != REFCOUNT_OFFSET + 4");
-        }
-    }
-};
-
-/// __ManagedArray struct layout (24 bytes total)
-/// Layout: buffer(8) + len(8) + capacity(8)
-///
-/// Fields:
-/// - buffer: *T (8 bytes) - pointer to array data
-/// - len: i64 (8 bytes) - current array length
+/// - buffer: *T (8 bytes) - pointer to element data (for refcounted mode, refcount is at buffer - 8)
+/// - len: i64 (8 bytes) - current length
 /// - capacity: i64 (8 bytes) - allocated capacity
+/// - flags: i32 (4 bytes) - mode flags (bits 0-1: 0=SSO, 1=heap-refcounted, 2=slice)
+/// - parent_off: i32 (4 bytes) - offset from parent buffer for slice mode
+///
+/// Mode semantics:
+/// - Mode 0 (SSO): Small storage optimization (future) - inline storage in struct
+/// - Mode 1 (heap-refcounted): Ref-counted heap allocation, refcount at buffer - 8
+/// - Mode 2 (slice): Zero-copy view into parent buffer, uses parent_off
 pub const ManagedArray = struct {
-    pub const SIZE: i32 = 24;
+    pub const SIZE: i32 = 32;
     pub const BUFFER_OFFSET: i32 = 0;
     pub const LEN_OFFSET: i32 = 8;
     pub const CAPACITY_OFFSET: i32 = 16;
+    pub const FLAGS_OFFSET: i32 = 24;
+    pub const PARENT_OFF_OFFSET: i32 = 28;
 
     comptime {
-        if (CAPACITY_OFFSET + 8 != SIZE) {
-            @compileError("ManagedArray layout mismatch: CAPACITY_OFFSET + 8 != SIZE");
+        if (PARENT_OFF_OFFSET + 4 != SIZE) {
+            @compileError("ManagedArray layout mismatch: PARENT_OFF_OFFSET + 4 != SIZE");
         }
         if (LEN_OFFSET != BUFFER_OFFSET + 8) {
             @compileError("ManagedArray layout mismatch: LEN_OFFSET != BUFFER_OFFSET + 8");
@@ -63,23 +36,29 @@ pub const ManagedArray = struct {
         if (CAPACITY_OFFSET != LEN_OFFSET + 8) {
             @compileError("ManagedArray layout mismatch: CAPACITY_OFFSET != LEN_OFFSET + 8");
         }
+        if (FLAGS_OFFSET != CAPACITY_OFFSET + 8) {
+            @compileError("ManagedArray layout mismatch: FLAGS_OFFSET != CAPACITY_OFFSET + 8");
+        }
+        if (PARENT_OFF_OFFSET != FLAGS_OFFSET + 4) {
+            @compileError("ManagedArray layout mismatch: PARENT_OFF_OFFSET != FLAGS_OFFSET + 4");
+        }
     }
 };
 
-/// String struct layout (32 bytes total)
-/// This is the user-facing String type that wraps __ManagedString
-/// Layout: __ManagedString(24) + iter_pos(8) = 32 bytes
+/// String struct layout (40 bytes total)
+/// This is the user-facing String type that wraps __ManagedArray
+/// Layout: __ManagedArray(32) + _iterPos(8) = 40 bytes
 pub const String = struct {
-    pub const SIZE: i32 = 32;
-    pub const MANAGED_STRING_OFFSET: i32 = 0;
-    pub const ITER_POS_OFFSET: i32 = 24;
+    pub const SIZE: i32 = 40;
+    pub const MANAGED_ARRAY_OFFSET: i32 = 0;
+    pub const ITER_POS_OFFSET: i32 = 32;
 
     comptime {
-        if (SIZE < ManagedString.SIZE) {
-            @compileError("String layout mismatch: SIZE < ManagedString.SIZE");
+        if (SIZE < ManagedArray.SIZE) {
+            @compileError("String layout mismatch: SIZE < ManagedArray.SIZE");
         }
-        if (ITER_POS_OFFSET != ManagedString.SIZE) {
-            @compileError("String layout mismatch: ITER_POS_OFFSET != ManagedString.SIZE");
+        if (ITER_POS_OFFSET != ManagedArray.SIZE) {
+            @compileError("String layout mismatch: ITER_POS_OFFSET != ManagedArray.SIZE");
         }
         if (ITER_POS_OFFSET + 8 != SIZE) {
             @compileError("String layout mismatch: ITER_POS_OFFSET + 8 != SIZE");
@@ -87,13 +66,13 @@ pub const String = struct {
     }
 };
 
-/// Array struct layout (32 bytes total)
+/// Array struct layout (40 bytes total)
 /// This is the user-facing Array type that wraps __ManagedArray
-/// Layout: __ManagedArray(24) + iter_index(8) = 32 bytes
+/// Layout: __ManagedArray(32) + iterIndex(8) = 40 bytes
 pub const Array = struct {
-    pub const SIZE: i32 = 32;
+    pub const SIZE: i32 = 40;
     pub const MANAGED_ARRAY_OFFSET: i32 = 0;
-    pub const ITER_INDEX_OFFSET: i32 = 24;
+    pub const ITER_INDEX_OFFSET: i32 = 32;
 
     comptime {
         if (SIZE < ManagedArray.SIZE) {
@@ -138,7 +117,7 @@ pub const Optional = struct {
 /// Fields:
 /// - data: *u8 (8 bytes) - pointer to null-terminated C string data
 /// - length: i64 (8 bytes) - length of string (not including null terminator)
-/// - managed: *__ManagedString (8 bytes) - pointer to parent ManagedString if borrowed, null if owned
+/// - managed: *__ManagedArray (8 bytes) - pointer to parent ManagedArray if borrowed, null if owned
 pub const CString = struct {
     pub const SIZE: i32 = 24;
     pub const DATA_OFFSET: i32 = 0;

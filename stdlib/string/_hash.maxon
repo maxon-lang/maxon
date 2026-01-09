@@ -7,33 +7,33 @@
 // Hash helpers (djb2 algorithm)
 // ============================================
 
-// hashManagedStringRange - Hash a range in __ManagedString using djb2
-function hashManagedStringRange(managed __ManagedString, offset int, len int) returns int
+// hashManagedStringRange - Hash a range in __ManagedArray using djb2
+function hashManagedStringRange(managed __ManagedArray, offset int, len int) returns int
 	var h = 5381
 	var i = 0
 	while i < len 'hash_loop'
-		var b = __string_byte_at(managed, offset + i)
+		var b = __managed_array_byte_at(managed, offset + i)
 		h = h * 33 + (b as int)
 		i = i + 1
 	end 'hash_loop'
 	return h
 end 'hashManagedStringRange'
 
-/// Hash a __ManagedString using the djb2 algorithm
+/// Hash a __ManagedArray using the djb2 algorithm
 /// Returns a 32-bit hash value
-export function hashManagedString(managed __ManagedString) returns int
-	return hashManagedStringRange(managed, 0, __string_len(managed))
+export function hashManagedString(managed __ManagedArray) returns int
+	return hashManagedStringRange(managed, 0, __managed_array_len(managed))
 end 'hashManagedString'
 
 // ============================================
 // Equality helpers (byte-by-byte comparison)
 // ============================================
 
-// equalsManagedStringRange - Compare two ranges in __ManagedStrings
-function equalsManagedStringRange(a __ManagedString, aOffset int, b __ManagedString, bOffset int, len int) returns bool
+// equalsManagedStringRange - Compare two ranges in __ManagedArrays
+function equalsManagedStringRange(a __ManagedArray, aOffset int, b __ManagedArray, bOffset int, len int) returns bool
 	var i = 0
 	while i < len 'compare_loop'
-		if __string_byte_at(a, aOffset + i) != __string_byte_at(b, bOffset + i) 'byte_check'
+		if __managed_array_byte_at(a, aOffset + i) != __managed_array_byte_at(b, bOffset + i) 'byte_check'
 			return false
 		end 'byte_check'
 		i = i + 1
@@ -41,10 +41,10 @@ function equalsManagedStringRange(a __ManagedString, aOffset int, b __ManagedStr
 	return true
 end 'equalsManagedStringRange'
 
-/// Compare two __ManagedStrings for byte-by-byte equality
-export function equalsManagedString(a __ManagedString, b __ManagedString) returns bool
-	var len = __string_len(a)
-	if len != __string_len(b) 'length_check'
+/// Compare two __ManagedArrays for byte-by-byte equality
+export function equalsManagedString(a __ManagedArray, b __ManagedArray) returns bool
+	var len = __managed_array_len(a)
+	if len != __managed_array_len(b) 'length_check'
 		return false
 	end 'length_check'
 	return equalsManagedStringRange(a, 0, b, 0, len)
