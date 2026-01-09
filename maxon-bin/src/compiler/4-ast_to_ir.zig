@@ -1385,13 +1385,13 @@ pub const AstToIr = struct {
         //   1 = Heap-refcounted (refcount at buffer-8)
         //   2 = Slice (borrowed view into parent)
         const managed_array_fields = try self.allocator.alloc(FieldInfo, 5);
-        managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = types.PTR } };
-        managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = types.INT } };
-        managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = types.INT } };
-        managed_array_fields[3] = .{ .name = "_flags", .offset = 24, .size = 4, .value_type = .{ .primitive = types.INT } };
-        managed_array_fields[4] = .{ .name = "_parent_off", .offset = 28, .size = 4, .value_type = .{ .primitive = types.INT } };
+        managed_array_fields[0] = .{ .name = "_buffer", .offset = layouts.ManagedArray.BUFFER_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        managed_array_fields[1] = .{ .name = "_len", .offset = layouts.ManagedArray.LEN_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
+        managed_array_fields[2] = .{ .name = "_capacity", .offset = layouts.ManagedArray.CAPACITY_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
+        managed_array_fields[3] = .{ .name = "_flags", .offset = layouts.ManagedArray.FLAGS_OFFSET, .size = 4, .value_type = .{ .primitive = types.INT } };
+        managed_array_fields[4] = .{ .name = "_parent_off", .offset = layouts.ManagedArray.PARENT_OFF_OFFSET, .size = 4, .value_type = .{ .primitive = types.INT } };
         self.type_map.put(self.allocator, "__ManagedArray", .{
-            .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 32 },
+            .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = layouts.ManagedArray.SIZE },
         }) catch {
             self.allocator.free(managed_array_fields);
             return error.OutOfMemory;
@@ -1402,11 +1402,11 @@ pub const AstToIr = struct {
         // For non-slice strings: data points to String's buffer, managed points to __ManagedArray (incref'd)
         // For slice strings: data points to newly allocated null-terminated copy, managed = null
         const cstring_fields = try self.allocator.alloc(FieldInfo, 3);
-        cstring_fields[0] = .{ .name = "data", .offset = 0, .size = 8, .value_type = .{ .primitive = types.PTR } };
-        cstring_fields[1] = .{ .name = "length", .offset = 8, .size = 8, .value_type = .{ .primitive = types.INT } };
-        cstring_fields[2] = .{ .name = "managed", .offset = 16, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        cstring_fields[0] = .{ .name = "data", .offset = layouts.CString.DATA_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        cstring_fields[1] = .{ .name = "length", .offset = layouts.CString.LENGTH_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
+        cstring_fields[2] = .{ .name = "managed", .offset = layouts.CString.MANAGED_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
         self.type_map.put(self.allocator, "cstring", .{
-            .struct_type = .{ .name = "cstring", .fields = cstring_fields, .size = 24 },
+            .struct_type = .{ .name = "cstring", .fields = cstring_fields, .size = layouts.CString.SIZE },
         }) catch {
             self.allocator.free(cstring_fields);
             return error.OutOfMemory;
@@ -11817,12 +11817,9 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
             };
 
             // Most types are 8 bytes (i64, f64, ptr)
-            // __ManagedArray is a special compiler-internal type that is 24 bytes
-            // __ManagedString is a special compiler-internal type that is 24 bytes
+            // __ManagedArray is a special compiler-internal type that is 32 bytes (unified for arrays and strings)
             const field_size: i32 = if (std.mem.eql(u8, type_name, "__ManagedArray"))
-                24
-            else if (std.mem.eql(u8, type_name, "__ManagedString"))
-                24
+                layouts.ManagedArray.SIZE
             else
                 8;
 

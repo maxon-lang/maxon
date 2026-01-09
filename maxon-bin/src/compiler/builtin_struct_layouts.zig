@@ -140,34 +140,34 @@ pub const CString = struct {
     }
 };
 
-/// Map$K$V struct layout (120 bytes total)
-/// Layout: keys(32) + values(32) + states(32) + count(8) + capacity(8) + iter_index(8)
+/// Map$K$V struct layout (144 bytes total)
+/// Layout: keys(40) + values(40) + states(40) + count(8) + capacity(8) + iter_index(8)
 ///
 /// Fields:
-/// - keys: Array$K (32 bytes) - array of keys
-/// - values: Array$V (32 bytes) - array of values
-/// - states: Array$int (32 bytes) - array of bucket states (0=empty, 1=occupied, 2=deleted)
+/// - keys: Array$K (40 bytes) - array of keys
+/// - values: Array$V (40 bytes) - array of values
+/// - states: Array$int (40 bytes) - array of bucket states (0=empty, 1=occupied, 2=deleted)
 /// - count: i64 (8 bytes) - number of key-value pairs
 /// - capacity: i64 (8 bytes) - capacity of the hash table
 /// - iter_index: i64 (8 bytes) - current iteration index
 pub const Map = struct {
-    pub const SIZE: i32 = 120;
+    pub const SIZE: i32 = 144;
     pub const KEYS_OFFSET: i32 = 0;
-    pub const VALUES_OFFSET: i32 = 32;
-    pub const STATES_OFFSET: i32 = 64;
-    pub const COUNT_OFFSET: i32 = 96;
-    pub const CAPACITY_OFFSET: i32 = 104;
-    pub const ITER_INDEX_OFFSET: i32 = 112;
+    pub const VALUES_OFFSET: i32 = 40;
+    pub const STATES_OFFSET: i32 = 80;
+    pub const COUNT_OFFSET: i32 = 120;
+    pub const CAPACITY_OFFSET: i32 = 128;
+    pub const ITER_INDEX_OFFSET: i32 = 136;
 
     comptime {
-        if (VALUES_OFFSET != KEYS_OFFSET + 32) {
-            @compileError("Map layout mismatch: VALUES_OFFSET != KEYS_OFFSET + 32");
+        if (VALUES_OFFSET != KEYS_OFFSET + 40) {
+            @compileError("Map layout mismatch: VALUES_OFFSET != KEYS_OFFSET + 40");
         }
-        if (STATES_OFFSET != VALUES_OFFSET + 32) {
-            @compileError("Map layout mismatch: STATES_OFFSET != VALUES_OFFSET + 32");
+        if (STATES_OFFSET != VALUES_OFFSET + 40) {
+            @compileError("Map layout mismatch: STATES_OFFSET != VALUES_OFFSET + 40");
         }
-        if (COUNT_OFFSET != STATES_OFFSET + 32) {
-            @compileError("Map layout mismatch: COUNT_OFFSET != STATES_OFFSET + 32");
+        if (COUNT_OFFSET != STATES_OFFSET + 40) {
+            @compileError("Map layout mismatch: COUNT_OFFSET != STATES_OFFSET + 40");
         }
         if (CAPACITY_OFFSET != COUNT_OFFSET + 8) {
             @compileError("Map layout mismatch: CAPACITY_OFFSET != COUNT_OFFSET + 8");

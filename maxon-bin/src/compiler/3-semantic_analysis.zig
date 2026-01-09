@@ -630,7 +630,26 @@ pub const SemanticAnalyzer = struct {
         for (fields, 0..) |field, i| {
             const value_type = try self.typeExprToValueType(field.type_expr);
             const display_name = self.typeExprToDisplayName(field.type_expr);
-            const size: i32 = 8; // All types are 8 bytes (pointers or i64/f64)
+            
+            // Determine field size - check if it's a registered struct type or Array type
+            const size: i32 = switch (value_type) {
+                .struct_type => |type_name| blk: {
+                    // Look up the struct size from already-registered types
+                    if (self.type_map.get(type_name)) |type_info| {
+                        break :blk type_info.struct_type.size;
+                    }
+                    // Not registered yet, assume 8 bytes (will be corrected in second pass if needed)
+                    break :blk 8;
+                },
+                .array_type => |arr| blk: {
+                    // For Array types (which are actually struct wrappers), use hardcoded size
+                    // Array$T is always 40 bytes: __ManagedArray(32) + iterIndex(8)
+                    // This avoids circular dependency when monomorphizing Map before Array
+                    _ = arr; // unused
+                    break :blk 40;
+                },
+                else => 8, // Primitives, pointers, etc. are 8 bytes
+            };
 
             result[i] = .{
                 .name = field.name,
