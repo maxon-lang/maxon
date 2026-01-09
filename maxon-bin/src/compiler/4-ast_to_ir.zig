@@ -5144,7 +5144,7 @@ pub const AstToIr = struct {
                     // Handle String refcount - the new value's refcount is already correct from expression evaluation
                     // but we need to incref if copying from another variable
                     if (assign.value == .identifier or assign.value == .field_access) {
-                        if (std.mem.eql(u8, struct_name, "String") or std.mem.eql(u8, struct_name, "__ManagedString")) {
+                        if (self.areTypesEquivalent(struct_name, "String")) {
                             try self.emitStringIncref(var_info.ptr.?, assign.target);
                         }
                     }
@@ -6049,6 +6049,123 @@ pub const AstToIr = struct {
                 else => false,
             },
             else => false,
+        };
+    }
+
+    /// Check if two type names are equivalent (handles type aliases and internal types).
+    /// String and __ManagedString are equivalent because String's first field is __ManagedString,
+    /// allowing binary-compatible pass-by-value. This is checked via the type_map.
+    fn areTypesEquivalent(self: *AstToIr, name1: []const u8, name2: []const u8) bool {
+        if (std.mem.eql(u8, name1, name2)) return true;
+
+        // Check if one type contains the other as its first field with offset 0
+        // This handles String <-> __ManagedString equivalence
+        if (self.type_map.get(name1)) |type_info1| {
+            if (type_info1 == .struct_type) {
+                const fields = type_info1.struct_type.fields;
+                if (fields.len > 0 and fields[0].offset == 0) {
+                    if (fields[0].value_type == .primitive) {
+                        if (std.mem.eql(u8, fields[0].value_type.primitive, name2)) return true;
+                    } else if (fields[0].value_type == .struct_type) {
+                        if (std.mem.eql(u8, fields[0].value_type.struct_type, name2)) return true;
+                    }
+                }
+            }
+        }
+        if (self.type_map.get(name2)) |type_info2| {
+            if (type_info2 == .struct_type) {
+                const fields = type_info2.struct_type.fields;
+                if (fields.len > 0 and fields[0].offset == 0) {
+                    if (fields[0].value_type == .primitive) {
+                        if (std.mem.eql(u8, fields[0].value_type.primitive, name1)) return true;
+                    } else if (fields[0].value_type == .struct_type) {
+                        if (std.mem.eql(u8, fields[0].value_type.struct_type, name1)) return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// Check if an argument type is compatible with a parameter type.
+    /// Called AFTER implicit conversions (optional wrap/unwrap, int-to-float).
+    fn checkTypeCompatibility(self: *AstToIr, arg_ty: ValueType, param_ty: ValueType) bool {
+        // Handle generic type parameters - if param_ty is a struct_type that's actually
+        // a generic parameter name, resolve it to the actual type
+        var resolved_param_ty = param_ty;
+        if (param_ty == .struct_type) {
+            if (self.generic_params.get(param_ty.struct_type)) |resolved_name| {
+                // Look up the resolved name in the type_map to determine its actual type
+                if (self.type_map.get(resolved_name)) |type_info| {
+                    switch (type_info) {
+                        .primitive => resolved_param_ty = .{ .primitive = resolved_name },
+                        .enum_type => resolved_param_ty = .{ .enum_type = resolved_name },
+                        .struct_type => resolved_param_ty = .{ .struct_type = resolved_name },
+                    }
+                } else {
+                    // Not in type_map - assume it's a struct type (e.g., monomorphized generics)
+                    resolved_param_ty = .{ .struct_type = resolved_name };
+                }
+            }
+        }
+
+        return switch (arg_ty) {
+            .primitive => |arg_name| switch (resolved_param_ty) {
+                .primitive => |param_name| {
+                    if (self.areTypesEquivalent(arg_name, param_name)) return true;
+                    // int→float promotion is handled by applyIntToFloatPromotion before this check
+                    if (std.mem.eql(u8, arg_name, "int") and std.mem.eql(u8, param_name, "float")) return true;
+                    return false;
+                },
+                // cstring can be primitive or struct_type depending on context
+                .struct_type => |param_name| self.areTypesEquivalent(arg_name, param_name),
+                else => false,
+            },
+            .struct_type => |arg_name| switch (resolved_param_ty) {
+                .struct_type => |param_name| self.areTypesEquivalent(arg_name, param_name),
+                // cstring can be primitive or struct_type depending on context
+                .primitive => |param_name| self.areTypesEquivalent(arg_name, param_name),
+                else => false,
+            },
+            .enum_type => |arg_name| switch (resolved_param_ty) {
+                .enum_type => |param_name| self.areTypesEquivalent(arg_name, param_name),
+                else => false,
+            },
+            .array_type => |arg_arr| switch (resolved_param_ty) {
+                .array_type => |param_arr| {
+                    // Compare element types
+                    if (arg_arr.element_struct_type != null and param_arr.element_struct_type != null) {
+                        return std.mem.eql(u8, arg_arr.element_struct_type.?, param_arr.element_struct_type.?);
+                    }
+                    return arg_arr.element_type == param_arr.element_type;
+                },
+                // Array literals can be passed to stdlib Array types (Array$int, etc.)
+                .struct_type => |param_name| {
+                    if (std.mem.startsWith(u8, param_name, "Array$")) {
+                        const expected_elem = param_name[6..]; // Skip "Array$"
+                        if (arg_arr.element_struct_type) |elem_name| {
+                            return std.mem.eql(u8, elem_name, expected_elem);
+                        }
+                        // For primitive elements, compare IR type to Maxon name
+                        return std.mem.eql(u8, arg_arr.element_type.toMaxonName(), expected_elem);
+                    }
+                    return false;
+                },
+                else => false,
+            },
+            .optional_type => switch (resolved_param_ty) {
+                .optional_type => true, // Already handled by implicit wrap/unwrap
+                else => false,
+            },
+            .error_union_type => switch (resolved_param_ty) {
+                .error_union_type => true,
+                else => false,
+            },
+            .function_type => switch (resolved_param_ty) {
+                .function_type => true,
+                else => false,
+            },
         };
     }
 
@@ -9223,9 +9340,17 @@ pub const AstToIr = struct {
             };
         }
 
+        // Copy the associated_values data before calling convertExpression.
+        // convertExpression can trigger type_map modifications (e.g., monomorphization),
+        // which could cause reallocation and invalidate pointers into type_map.
+        const associated_values = try self.allocator.dupe(types.AssociatedValueInfo, case_info.associated_values);
+        defer self.allocator.free(associated_values);
+        const tag = case_info.tag;
+        const max_payload_size = enum_info.max_payload_size;
+
         // For enums with associated values, allocate storage for tag + payload
         // Layout: [tag: i64][payload...]
-        const total_size = 8 + enum_info.max_payload_size; // tag is i64
+        const total_size = 8 + max_payload_size; // tag is i64
         const enum_ptr = try self.func().emitAlloca(.ptr);
 
         // Allocate memory for enum storage
@@ -9234,26 +9359,21 @@ pub const AstToIr = struct {
         try self.func().emitStore(enum_ptr, mem_ptr);
 
         // Store tag
-        const tag_val = try self.func().emitConstI64(case_info.tag);
+        const tag_val = try self.func().emitConstI64(tag);
         try self.func().emitStore(mem_ptr, tag_val);
 
         // Store associated values
         var offset: i32 = 8; // Start after tag
-        for (case_info.associated_values, 0..) |av, i| {
+        for (associated_values, 0..) |av, i| {
             const arg_typed = try self.convertExpression(ec.args[i]);
 
             // Type check: verify argument type matches expected associated value type
             const expected_type = av.type_name;
             const actual_type = arg_typed.ty.getTypeName();
             if (actual_type) |actual| {
-                if (!std.mem.eql(u8, actual, expected_type)) {
-                    // Handle string compatibility
-                    const is_string_match = (std.mem.eql(u8, expected_type, "String") and std.mem.eql(u8, actual, "__ManagedString")) or
-                        (std.mem.eql(u8, expected_type, "__ManagedString") and std.mem.eql(u8, actual, "String"));
-                    if (!is_string_match) {
-                        self.reportError(.E022, av.name);
-                        return error.TypeMismatch;
-                    }
+                if (!self.areTypesEquivalent(actual, expected_type)) {
+                    self.reportError(.E022, av.name);
+                    return error.TypeMismatch;
                 }
             }
 
@@ -9529,8 +9649,11 @@ pub const AstToIr = struct {
                                 break :blk std.mem.eql(u8, param_ty.struct_type, wrapped_name);
                             }
                         }
-                        break :blk param_ty == .primitive and
-                            std.mem.eql(u8, param_ty.primitive, opt_info.wrapped.toMaxonName());
+                        if (param_ty == .primitive) {
+                            // Check if param and wrapped type have the same IR representation
+                            if (types.nameToIrType(param_ty.primitive) == opt_info.wrapped) break :blk true;
+                        }
+                        break :blk false;
                     };
                     if (param_matches) {
                         // Unwrap optional: get pointer to value (offset 8 from optional start)
@@ -9593,6 +9716,35 @@ pub const AstToIr = struct {
             // Implicit int→float promotion: if parameter expects float but arg is int
             if (i < func_info.param_types.len) {
                 arg_value = try self.applyIntToFloatPromotion(arg_value, arg_ty, func_info.param_types[i].ty);
+            }
+
+            // Type validation: verify argument type matches parameter type
+            if (i < func_info.param_types.len) {
+                const param_ty = func_info.param_types[i].ty;
+                if (!self.checkTypeCompatibility(arg_ty, param_ty)) {
+                    const expected_name = func_info.param_types[i].display_name orelse
+                        param_ty.getTypeName() orelse "unknown";
+                    const actual_name = arg_ty.getTypeName() orelse "unknown";
+                    const param_name = func_info.param_types[i].name;
+
+                    const msg = std.fmt.allocPrint(
+                        self.allocator,
+                        "argument type mismatch for '{s}': expected '{s}', got '{s}'",
+                        .{ param_name, expected_name, actual_name },
+                    ) catch "type mismatch";
+
+                    self.last_error = .{
+                        .code = .E022,
+                        .message = msg,
+                        .location = .{
+                            .file = self.source_file,
+                            .line = @intCast(self.current_line),
+                            .column = @intCast(self.current_column),
+                        },
+                        .message_allocated = true,
+                    };
+                    return error.TypeMismatch;
+                }
             }
 
             args[i + arg_offset] = arg_value;
@@ -9858,11 +10010,18 @@ pub const AstToIr = struct {
         }
 
         // Return the optional with proper type info
+        // Determine if element is an enum type
+        const is_enum = if (elem_info.name) |name|
+            if (self.type_map.get(name)) |ti| ti == .enum_type else false
+        else
+            false;
+
         return .{
             .value = opt_ptr,
             .ty = .{ .optional_type = .{
                 .wrapped = if (elem_info.is_struct) .ptr else .i64,
                 .wrapped_struct_type = if (elem_info.is_struct) elem_info.name else null,
+                .wrapped_enum_type = if (is_enum) elem_info.name else null,
             } },
         };
     }
@@ -11298,6 +11457,35 @@ pub const AstToIr = struct {
                         arg_value = try self.applyIntToFloatPromotion(arg_value, arg_ty, func_info.param_types[param_index].ty);
                     }
 
+                    // Type validation: verify argument type matches parameter type
+                    if (param_index < func_info.param_types.len) {
+                        const param_ty = func_info.param_types[param_index].ty;
+                        if (!self.checkTypeCompatibility(arg_ty, param_ty)) {
+                            const expected_name = func_info.param_types[param_index].display_name orelse
+                                param_ty.getTypeName() orelse "unknown";
+                            const actual_name = arg_ty.getTypeName() orelse "unknown";
+                            const param_name = func_info.param_types[param_index].name;
+
+                            const msg = std.fmt.allocPrint(
+                                self.allocator,
+                                "argument type mismatch for '{s}': expected '{s}', got '{s}'",
+                                .{ param_name, expected_name, actual_name },
+                            ) catch "type mismatch";
+
+                            self.last_error = .{
+                                .code = .E022,
+                                .message = msg,
+                                .location = .{
+                                    .file = self.source_file,
+                                    .line = @intCast(self.current_line),
+                                    .column = @intCast(self.current_column),
+                                },
+                                .message_allocated = true,
+                            };
+                            return error.TypeMismatch;
+                        }
+                    }
+
                     // NOTE: String temporaries passed to Array.push are NOT removed from temporaries here.
                     // The intrinsic __managed_array_set_at calls emitStringIncref on the stored value,
                     // bumping refcount to 2. The temp cleanup decrefs (to 1), and array cleanup decrefs (to 0, freed).
@@ -11770,11 +11958,11 @@ pub fn extractInterfaceInfo(program: ast.Program, allocator: std.mem.Allocator) 
 pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalFuncSignature {
     var signatures = std.ArrayListUnmanaged(ExternalFuncSignature){};
     errdefer {
-        // Free allocated names, param_types, and return_type_name in case of error
+        // Free allocated names, param_types (including struct_type strings), and return_type_name in case of error
         for (signatures.items) |sig| {
             allocator.free(sig.name);
             if (sig.param_types.len > 0) {
-                allocator.free(sig.param_types);
+                freeParamTypes(allocator, sig.param_types);
             }
             if (sig.return_type_name) |rtn| {
                 allocator.free(rtn);
@@ -11808,7 +11996,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
         const param_types = try allocator.alloc(ParamType, func.params.len);
         for (func.params, 0..) |param, i| {
             param_types[i] = .{
-                .ty = getValueTypeFromTypeExprForParam(param.type_expr),
+                .ty = getValueTypeFromTypeExprForParam(allocator, param.type_expr),
                 .name = param.name,
                 .default_value = param.default_value,
             };
@@ -11880,11 +12068,13 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             const extra_params: usize = if (method.is_static) 0 else 1;
             const param_types = try allocator.alloc(ParamType, method.params.len + extra_params);
             if (!method.is_static) {
-                param_types[0] = .{ .ty = .{ .struct_type = type_decl.name }, .name = "self" };
+                // Allocate a copy of type_decl.name for consistent ownership (freeParamTypes will free it)
+                const self_type_name = try allocator.dupe(u8, type_decl.name);
+                param_types[0] = .{ .ty = .{ .struct_type = self_type_name }, .name = "self" };
             }
             for (method.params, 0..) |param, i| {
                 param_types[i + extra_params] = .{
-                    .ty = getValueTypeFromTypeExprForParam(param.type_expr),
+                    .ty = getValueTypeFromTypeExprForParam(allocator, param.type_expr),
                     .name = param.name,
                     .default_value = param.default_value,
                 };
@@ -11963,6 +12153,7 @@ fn getValueTypeFromTypeExpr(te: ast.TypeExpr) ?ValueType {
 /// For generic types like "Array of String", returns the monomorphized name "Array$String".
 /// Note: This uses a global buffer, so callers must copy the result if needed.
 var mono_name_buffer: [256]u8 = undefined;
+var mono_name_buffer2: [256]u8 = undefined; // Separate buffer for getValueTypeFromTypeExprForParam
 fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
     return switch (te) {
         .simple => |name| {
@@ -11994,25 +12185,34 @@ fn getStructNameFromTypeExpr(te: ast.TypeExpr) ?[]const u8 {
 }
 
 /// Helper: get ValueType from TypeExpr for function parameters
-fn getValueTypeFromTypeExprForParam(te: ast.TypeExpr) ValueType {
+/// Note: For struct types (simple and generic), allocates a copy of the name for consistent ownership.
+/// Callers must free the struct_type string using freeParamTypes.
+fn getValueTypeFromTypeExprForParam(allocator: std.mem.Allocator, te: ast.TypeExpr) ValueType {
     return switch (te) {
         .simple => |name| blk: {
-            // Known primitives are primitive types
-            if (std.mem.eql(u8, name, "int") or
-                std.mem.eql(u8, name, "float") or
-                std.mem.eql(u8, name, "bool") or
-                std.mem.eql(u8, name, "byte") or
-                std.mem.eql(u8, name, "ptr") or
-                std.mem.eql(u8, name, "void") or
-                std.mem.eql(u8, name, "string") or
-                std.mem.eql(u8, name, "character"))
-            {
+            // Known primitives are primitive types (not allocated, points to static strings)
+            if (types.isPrimitiveTypeName(name)) {
                 break :blk .{ .primitive = name };
             }
             // All other simple types (including String) are struct types
-            break :blk .{ .struct_type = name };
+            // Allocate a copy for consistent ownership (so cleanup can free uniformly)
+            const name_copy = allocator.dupe(u8, name) catch break :blk .{ .struct_type = name };
+            break :blk .{ .struct_type = name_copy };
         },
-        .generic => |gen| .{ .struct_type = gen.base_type },
+        .generic => |gen| blk: {
+            // Build monomorphized name: BaseType$Arg1$Arg2...
+            // Use mono_name_buffer2 to avoid conflicts with getStructNameFromTypeExpr
+            var fbs = std.io.fixedBufferStream(&mono_name_buffer2);
+            const writer = fbs.writer();
+            writer.writeAll(gen.base_type) catch break :blk .{ .struct_type = gen.base_type };
+            for (gen.type_args) |arg| {
+                writer.writeByte('$') catch break :blk .{ .struct_type = gen.base_type };
+                writer.writeAll(arg) catch break :blk .{ .struct_type = gen.base_type };
+            }
+            // Allocate a copy to avoid buffer aliasing when called multiple times
+            const name_copy = allocator.dupe(u8, fbs.getWritten()) catch break :blk .{ .struct_type = gen.base_type };
+            break :blk .{ .struct_type = name_copy };
+        },
         .optional => |wrapped| .{
             .optional_type = .{
                 .wrapped = getIrTypeFromTypeExpr(wrapped.*),
@@ -12028,4 +12228,16 @@ fn getValueTypeFromTypeExprForParam(te: ast.TypeExpr) ValueType {
         },
         .function_type => .{ .primitive = "ptr" }, // Function types are represented as pointers in simple contexts
     };
+}
+
+/// Free a slice of ParamTypes, including any allocated struct_type strings.
+/// This properly handles the allocations made by getValueTypeFromTypeExprForParam.
+pub fn freeParamTypes(allocator: std.mem.Allocator, param_types: []const ParamType) void {
+    for (param_types) |pt| {
+        // Free allocated struct_type strings (allocated by getValueTypeFromTypeExprForParam)
+        if (pt.ty == .struct_type) {
+            allocator.free(pt.ty.struct_type);
+        }
+    }
+    allocator.free(param_types);
 }

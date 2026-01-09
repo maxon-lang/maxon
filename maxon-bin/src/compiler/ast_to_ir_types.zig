@@ -47,6 +47,15 @@ pub const ErrorUnionInfo = struct {
     error_enum_type: []const u8, // The error enum type name (must be an enum conforming to Error)
 };
 
+/// Check if a type name is a known primitive type
+pub fn isPrimitiveTypeName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "int") or
+        std.mem.eql(u8, name, "float") or
+        std.mem.eql(u8, name, "bool") or
+        std.mem.eql(u8, name, "byte") or
+        std.mem.eql(u8, name, "ptr");
+}
+
 /// Maps a Maxon type name to its IR type representation
 pub fn nameToIrType(name: []const u8) ir.Type {
     if (std.mem.eql(u8, name, "int")) return .i64;
@@ -121,8 +130,14 @@ pub fn freeValueTypeAllocations(allocator: std.mem.Allocator, vt: ValueType) voi
                 allocator.destroy(@constCast(rt));
             }
         },
+        .struct_type => |name| {
+            // Free allocated monomorphized type names (contain '$')
+            if (std.mem.indexOf(u8, name, "$")) |_| {
+                allocator.free(name);
+            }
+        },
         // Other variants don't have heap allocations
-        .primitive, .struct_type, .enum_type, .array_type, .optional_type, .error_union_type => {},
+        .primitive, .enum_type, .array_type, .optional_type, .error_union_type => {},
     }
 }
 

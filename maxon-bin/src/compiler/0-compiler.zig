@@ -72,7 +72,7 @@ const FrontendResult = struct {
             for (sigs) |sig| {
                 self.allocator.free(sig.name);
                 if (sig.param_types.len > 0) {
-                    self.allocator.free(sig.param_types);
+                    ast_to_ir.freeParamTypes(self.allocator, sig.param_types);
                 }
                 if (sig.return_type_name) |rtn| {
                     self.allocator.free(rtn);
@@ -117,7 +117,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
         for (sigs) |sig| {
             allocator.free(sig.name);
             if (sig.param_types.len > 0) {
-                allocator.free(sig.param_types);
+                ast_to_ir.freeParamTypes(allocator, sig.param_types);
             }
             if (sig.return_type_name) |rtn| {
                 allocator.free(rtn);
@@ -222,7 +222,7 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
         for (all_funcs.items) |sig| {
             allocator.free(sig.name);
             if (sig.param_types.len > 0) {
-                allocator.free(sig.param_types);
+                ast_to_ir.freeParamTypes(allocator, sig.param_types);
             }
             if (sig.return_type_name) |rtn| {
                 allocator.free(rtn);
@@ -417,7 +417,7 @@ pub fn compileMultiple(
         for (all_funcs.items) |sig| {
             allocator.free(sig.name);
             if (sig.param_types.len > 0) {
-                allocator.free(sig.param_types);
+                ast_to_ir.freeParamTypes(allocator, sig.param_types);
             }
             if (sig.return_type_name) |rtn| {
                 allocator.free(rtn);
@@ -459,7 +459,7 @@ pub fn compileMultiple(
         errdefer {
             for (func_sigs) |sig| {
                 allocator.free(sig.name);
-                if (sig.param_types.len > 0) allocator.free(sig.param_types);
+                if (sig.param_types.len > 0) ast_to_ir.freeParamTypes(allocator, sig.param_types);
                 if (sig.return_type_name) |rtn| allocator.free(rtn);
             }
             allocator.free(func_sigs);
@@ -622,9 +622,9 @@ pub fn analyzeForLSP(
     var all_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
     defer {
         for (all_funcs.items) |sig| {
-            // Free both name, param_types, and return_type_name - extractFunctionSignaturesFromAst allocates all
+            // Free name, param_types (including struct_type strings), and return_type_name
             allocator.free(sig.name);
-            if (sig.param_types.len > 0) allocator.free(sig.param_types);
+            if (sig.param_types.len > 0) ast_to_ir.freeParamTypes(allocator, sig.param_types);
             if (sig.return_type_name) |rtn| allocator.free(rtn);
         }
         all_funcs.deinit(allocator);
@@ -919,8 +919,19 @@ pub fn loadStdlibModule(
         return error.StdlibNotFound;
     };
 
+    // Canonicalize the path for display purposes
+    const resolved_path = std.fs.path.resolve(allocator, &.{full_path}) catch {
+        // If resolve fails, use the original path
+        return Source{
+            .path = full_path,
+            .content = content,
+        };
+    };
+
+    allocator.free(full_path);
+
     return Source{
-        .path = full_path,
+        .path = resolved_path,
         .content = content,
     };
 }

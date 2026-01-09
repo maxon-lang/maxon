@@ -211,7 +211,6 @@ Phase 11: Interface declarations (parsing interface definitions)
 - map extension
 - remove [] indexing
 
-using arr.append(aString) compiles but crashes
 cannot convert primitive type 'ptr' to string for interpolation
 
 we changed the __ManagedString struct slightly and it broke all kinds of things because
@@ -219,3 +218,7 @@ the functions in 4-ast_to_ir are not strongly typed so lots of places in the cod
 used the old structure and just caused crashes. There should be a way to catch
 these issues at compile time.
 
+error E022: C:\Users\Eric\Dev\maxon\maxon-bin\zig-out\bin\..\..\..\stdlib\collections\Map.maxon:65:6: argument type mismatch for 'key': expected 'Key', got 'int'
+
+
+could we remove __ManagedString and just use __ManagedArray
