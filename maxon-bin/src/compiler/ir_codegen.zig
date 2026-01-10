@@ -2394,6 +2394,7 @@ pub const IrCodegen = struct {
             .memcpy_dyn => try self.genMemcpyDyn(inst),
             .memset => try self.genMemset(inst),
             .memset_dyn => try self.genMemsetDyn(inst),
+            .cstr_len => try self.genCstrLen(inst),
             .heap_alloc => try self.genHeapAlloc(inst),
             .heap_free => try self.genHeapFree(inst),
             .heap_realloc => try self.genHeapRealloc(inst),
@@ -2826,6 +2827,38 @@ pub const IrCodegen = struct {
 
         // rep stosb: store al to [rdi], rcx times
         try self.enc.repStosb();
+    }
+
+    fn genCstrLen(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Calculate length of null-terminated C string using repne scasb
+        // Algorithm: set rcx to max, search for null byte, length = ~rcx - 1
+        const result = inst.result.?;
+        const ptr_val = inst.operands[0].value;
+
+        // Load string pointer value to rdi (always use mov, not lea - we want the pointer value)
+        const ptr_offset = try self.getStackOffset(ptr_val);
+        try self.enc.movRdiRbpOffset(ptr_offset);
+
+        // Set rcx to -1 (max count)
+        try self.enc.movRcxImm64(-1);
+
+        // Set al to 0 (null byte we're searching for)
+        try self.enc.xorAlAl();
+
+        // repne scasb: scan for null byte
+        try self.enc.repneScasb();
+
+        // NOT rcx to get length (rcx was decremented for each byte including null)
+        try self.enc.notRcx();
+
+        // DEC rcx to exclude the null terminator from the count
+        try self.enc.decRcx();
+
+        // Move result from rcx to rax
+        try self.enc.movRaxRcx();
+
+        // Store result
+        try self.storeToStack(result, .i64);
     }
 
     fn genLoad(self: *IrCodegen, inst: ir.Instruction) !void {

@@ -211,4 +211,3 @@ Phase 11: Interface declarations (parsing interface definitions)
 - map extension
 - remove [] indexing
 - type promotion
-- remove usage of ntdll

@@ -6689,12 +6689,8 @@ pub const AstToIr = struct {
         // The enum value is a pointer to null-terminated string data in the data section
         // Create a String in slice mode from this pointer
 
-        // Get string length using strlen
-        var strlen_args = try self.allocator.alloc(ir.Value, 1);
-        strlen_args[0] = enum_value;
-        const str_len = try self.func().emitExternCall("ntdll.dll", "strlen", strlen_args, .i64) orelse {
-            return self.convertIntToString(enum_value);
-        };
+        // Get string length using inline strlen
+        const str_len = try self.func().emitCstrLen(enum_value);
 
         // Create a ManagedArray with flags=0 (static data, no cleanup needed)
         const zero_i32 = try self.func().emitConstI32(0);
@@ -7874,11 +7870,8 @@ pub const AstToIr = struct {
 
     /// Emit a String or Character struct from a static data pointer using strlen
     fn emitStringOrCharFromPtr(self: *AstToIr, data_ptr: ir.Value, is_character: bool) ConvertError!TypedValue {
-        var strlen_args = try self.allocator.alloc(ir.Value, 1);
-        strlen_args[0] = data_ptr;
-        const str_len = try self.func().emitExternCall("ntdll.dll", "strlen", strlen_args, .i64) orelse {
-            return .{ .value = data_ptr, .ty = .{ .primitive = types.INT } };
-        };
+        // Get string length using inline strlen
+        const str_len = try self.func().emitCstrLen(data_ptr);
 
         const zero_i32 = try self.func().emitConstI32(0);
         const managed_ptr = try struct_helpers.emitManagedArray(

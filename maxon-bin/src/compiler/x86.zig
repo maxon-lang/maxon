@@ -815,4 +815,30 @@ pub const Encoder = struct {
     pub fn repStosb(self: *Encoder) !void {
         try self.emit(&.{ 0xF3, 0xAA });
     }
+
+    /// REPNE SCASB - scan string for byte (searches for AL in [RDI], decrements RCX, increments RDI)
+    pub fn repneScasb(self: *Encoder) !void {
+        try self.emit(&.{ 0xF2, 0xAE });
+    }
+
+    /// XOR al, al - zero al register
+    pub fn xorAlAl(self: *Encoder) !void {
+        try self.emit(&.{ 0x30, 0xC0 });
+    }
+
+    /// NOT rcx - bitwise NOT of rcx
+    pub fn notRcx(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0xF7, 0xD1 });
+    }
+
+    /// DEC rcx - decrement rcx
+    pub fn decRcx(self: *Encoder) !void {
+        try self.emit(&.{ 0x48, 0xFF, 0xC9 });
+    }
+
+    /// MOV rcx, imm64 - load 64-bit immediate to rcx
+    pub fn movRcxImm64(self: *Encoder, imm: i64) !void {
+        try self.emit(&.{ 0x48, 0xB9 });
+        try self.emit(&@as([8]u8, @bitCast(imm)));
+    }
 };

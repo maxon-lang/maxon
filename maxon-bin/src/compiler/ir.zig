@@ -357,6 +357,7 @@ pub const Instruction = struct {
         memcpy_dyn, // Copy memory with dynamic size: dest, src, size_value
         memset, // Set memory: dest, value, size (value is typically 0)
         memset_dyn, // Set memory with dynamic size: dest, value, size_value
+        cstr_len, // Get length of null-terminated C string: ptr -> i64
 
         // Heap allocation
         heap_alloc, // Allocate heap memory, returns ptr
@@ -437,6 +438,7 @@ pub const Instruction = struct {
                 .memcpy_dyn => "memcpy.dyn",
                 .memset => "memset",
                 .memset_dyn => "memset.dyn",
+                .cstr_len => "cstr.len",
                 .heap_alloc => "heap.alloc",
                 .heap_free => "heap.free",
                 .heap_realloc => "heap.realloc",
@@ -673,6 +675,7 @@ pub const Function = struct {
             .memcpy_dyn => "tmp_memcpy",
             .memset => "tmp_memset",
             .memset_dyn => "tmp_memset",
+            .cstr_len => "tmp_strlen",
             .heap_alloc => "tmp_heap",
             .heap_free => "tmp_free",
             .heap_realloc => "tmp_realloc",
@@ -852,6 +855,11 @@ pub const Function = struct {
             .op = .memcpy_dyn,
             .operands = .{ .{ .value = dest.val }, .{ .value = src.val }, .{ .value = size } },
         });
+    }
+
+    // Get length of a null-terminated C string - returns i64
+    pub fn emitCstrLen(self: *Function, ptr: Value) !Value {
+        return self.emitWithResult(.cstr_len, .i64, .{ .{ .value = ptr }, .none, .none });
     }
 
     // Memory set (typically used to zero memory) - takes RawPtr

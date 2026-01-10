@@ -192,11 +192,11 @@ fn emitCloseHandle(self: *AstToIr, handle: ir.Value) ConvertError!void {
 }
 
 fn emitStrlen(self: *AstToIr, str: ir.Value) ConvertError!ir.Value {
-    return externCall(self, "ntdll.dll", "strlen", &.{str}, .i64);
+    return self.func().emitCstrLen(str);
 }
 
 fn emitMemcpyWin(self: *AstToIr, dest: ir.Value, src: ir.Value, size: ir.Value) ConvertError!void {
-    return externCallVoid(self, "ntdll.dll", "memcpy", &.{ dest, src, size }, .ptr);
+    return self.func().emitMemcpyDynamic(ir.toRawPtr(dest), ir.toRawPtr(src), size);
 }
 
 // ============================================================================
