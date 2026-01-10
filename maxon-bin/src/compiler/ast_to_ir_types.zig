@@ -43,6 +43,10 @@ pub const BYTE: []const u8 = primitive_types[3].maxon_name;
 pub const VOID: []const u8 = "void";
 pub const PTR: []const u8 = "ptr";
 
+/// Struct type names for backing types
+pub const STRING: []const u8 = "String";
+pub const CHARACTER: []const u8 = "Character";
+
 /// Look up primitive type info by Maxon name
 /// Returns null if not a primitive type
 pub fn getPrimitiveTypeInfo(name: []const u8) ?PrimitiveTypeInfo {
@@ -307,17 +311,54 @@ pub const EnumCaseInfo = struct {
     associated_values: []const AssociatedValueInfo, // Empty for simple cases
 };
 
+/// Backing values for enums - stores the mapping from ordinal to raw value
+pub const BackingValues = union(enum) {
+    none, // Simple enum (implicit int ordinal)
+    int, // Explicit int values (stored in members map)
+    float: std.AutoHashMapUnmanaged(i64, f64),
+    string: std.AutoHashMapUnmanaged(i64, []const u8),
+    character: std.AutoHashMapUnmanaged(i64, []const u8),
+
+    pub fn toValueType(self: BackingValues) ValueType {
+        return switch (self) {
+            .none, .int => ValueType{ .primitive = INT },
+            .float => ValueType{ .primitive = FLOAT },
+            .string => ValueType{ .struct_type = STRING },
+            .character => ValueType{ .struct_type = CHARACTER },
+        };
+    }
+
+    pub fn displayName(self: BackingValues) []const u8 {
+        return switch (self) {
+            .none => "none",
+            .int => "int",
+            .float => "float",
+            .string => "String",
+            .character => "character",
+        };
+    }
+
+    /// Infer backing type from an expression (returns empty maps for semantic analysis)
+    pub fn fromExpr(expr: ast.Expression) BackingValues {
+        return switch (expr) {
+            .integer => .int,
+            .float_lit => .{ .float = .{} },
+            .string_literal => .{ .string = .{} },
+            .char_literal => .{ .character = .{} },
+            else => .none,
+        };
+    }
+};
+
 /// Enum type info - maps member names to their integer values
-/// For string-backed enums, also stores the backing string values
+/// For backed enums, also stores the backing values
 pub const EnumTypeInfo = struct {
     name: []const u8,
     members: std.StringHashMapUnmanaged(i64),
     /// Extended case info including associated values
     case_info: std.StringHashMapUnmanaged(EnumCaseInfo) = .{},
-    /// Backing type inferred from raw values: null for simple enums, "int" or "String" for raw value enums
-    backing_type: ?[]const u8 = null,
-    /// For string-backed enums: maps ordinal to string value
-    string_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{},
+    /// Backing values for raw values (includes type tag and value map)
+    backing: BackingValues = .none,
     /// True if this enum conforms to the Error interface
     is_error: bool = false,
     /// True if any case has associated values
@@ -328,6 +369,11 @@ pub const EnumTypeInfo = struct {
     decl_column: u32 = 0,
     source_file: ?[]const u8 = null,
     is_export: bool = true, // false for private enums
+
+    /// Returns the ValueType for this enum's rawValue
+    pub fn rawValueType(self: EnumTypeInfo) ValueType {
+        return self.backing.toValueType();
+    }
 };
 
 /// Type info - primitives, structs, or enums
@@ -632,7 +678,12 @@ pub const SemanticInfo = struct {
                         }
                     }
                     e.case_info.deinit(self.allocator);
-                    e.string_values.deinit(self.allocator);
+                    switch (e.backing) {
+                        .float => |*m| m.deinit(self.allocator),
+                        .string => |*m| m.deinit(self.allocator),
+                        .character => |*m| m.deinit(self.allocator),
+                        .none, .int => {},
+                    }
                 },
                 .primitive => {},
             }

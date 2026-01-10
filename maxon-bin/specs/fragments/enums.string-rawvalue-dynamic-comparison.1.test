@@ -1,0 +1,222 @@
+// Test: enums.string-rawvalue-dynamic-comparison.1
+enum Planet
+    earth = "Earth"
+    mars = "Mars"
+end 'Planet'
+
+function getName() returns String
+    return "Mars"
+end 'getName'
+
+function main() returns int
+    var p = Planet.mars
+    var name = p.rawValue
+    var expected = getName()
+    if name == expected 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function getName() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %tmp_alloca = alloca.sized ptr 32
+    %tmp_const = const.i64 i64 13
+    %tmp_heap = heap.alloc ptr %tmp_const tag="string buffer"
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_heap %tmp_const.1
+    %tmp_const.2 = const.i64 i64 8
+    %tmp_elemptr = getelemptr ptr %tmp_heap %tmp_const.2 elemsize=1
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_elemptr.1 = getelemptr ptr %tmp_elemptr %tmp_const.3 elemsize=1
+    %tmp_const.4 = const.i8 i8 77
+    store.i8 %tmp_elemptr.1 %tmp_const.4
+    %tmp_const.5 = const.i64 i64 1
+    %tmp_elemptr.2 = getelemptr ptr %tmp_elemptr %tmp_const.5 elemsize=1
+    %tmp_const.6 = const.i8 i8 97
+    store.i8 %tmp_elemptr.2 %tmp_const.6
+    %tmp_const.7 = const.i64 i64 2
+    %tmp_elemptr.3 = getelemptr ptr %tmp_elemptr %tmp_const.7 elemsize=1
+    %tmp_const.8 = const.i8 i8 114
+    store.i8 %tmp_elemptr.3 %tmp_const.8
+    %tmp_const.9 = const.i64 i64 3
+    %tmp_elemptr.4 = getelemptr ptr %tmp_elemptr %tmp_const.9 elemsize=1
+    %tmp_const.10 = const.i8 i8 115
+    store.i8 %tmp_elemptr.4 %tmp_const.10
+    %tmp_const.11 = const.i64 i64 4
+    %tmp_elemptr.5 = getelemptr ptr %tmp_elemptr %tmp_const.11 elemsize=1
+    %tmp_const.12 = const.i8 i8 0
+    store.i8 %tmp_elemptr.5 %tmp_const.12
+    store %tmp_alloca %tmp_elemptr
+    %tmp_const.13 = const.i64 i64 4
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
+    store %tmp_fieldptr %tmp_const.13
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 16
+    store %tmp_fieldptr.1 %tmp_const.13
+    %tmp_const.14 = const.i32 i32 1
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca 24
+    store.i32 %tmp_fieldptr.2 %tmp_const.14
+    %tmp_const.15 = const.i32 i32 0
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca 28
+    store.i32 %tmp_fieldptr.3 %tmp_const.15
+    %tmp_alloca.1 = alloca.sized ptr 40
+    %tmp_call = call ptr @String$init(%tmp_alloca.1, %tmp_alloca)
+    memcpy %tmp_param %tmp_alloca.1 40
+    ret %tmp_param
+}
+
+function main() -> i64 {
+entry:
+    %tmp_strconst = const.string ptr "Mars"
+    %p = alloca ptr
+    store %p %tmp_strconst
+    %tmp_load = load i64 %p
+    %tmp_extern = extern.call i64 @"ntdll.dll:strlen"(%tmp_load)
+    %tmp_const = const.i32 i32 0
+    %tmp_alloca.1 = alloca.sized ptr 32
+    store %tmp_alloca.1 %tmp_load
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
+    store %tmp_fieldptr %tmp_extern
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 16
+    store %tmp_fieldptr.1 %tmp_extern
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.1 24
+    store.i32 %tmp_fieldptr.2 %tmp_const
+    %tmp_const.1 = const.i32 i32 0
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.1 28
+    store.i32 %tmp_fieldptr.3 %tmp_const.1
+    %tmp_alloca.2 = alloca.sized ptr 40
+    memcpy %tmp_alloca.2 %tmp_alloca.1 32
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 32
+    %tmp_const.2 = const.i64 i64 0
+    store %tmp_fieldptr.4 %tmp_const.2
+    %name = alloca.sized ptr 40
+    memcpy %name %tmp_alloca.2 40
+    %tmp_fieldptr.5 = getfieldptr ptr %name 24
+    %tmp_load.1 = load i32 %tmp_fieldptr.5
+    %tmp_const.3 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.1 %tmp_const.3
+    %tmp_const.4 = const.i32 i32 1
+    %tmp_icmp = icmp.eq i32 %tmp_band %tmp_const.4
+    br.cond %tmp_icmp @block1 @block2
+incref:
+    %tmp_load.2 = load ptr %name
+    %tmp_const.5 = const.i64 i64 8
+    %tmp_sub = sub ptr %tmp_load.2 %tmp_const.5
+    %tmp_load.3 = load i64 %tmp_sub
+    %tmp_const.6 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.3 %tmp_const.6
+    store %tmp_sub %tmp_add
+    br @block2
+incref_end:
+    %expected = alloca.sized ptr 40
+    %tmp_call = call ptr @getName(%expected)
+    %tmp_call.1 = call i64 @String$equals(%name, %expected)
+    br.cond %tmp_call.1 @block3 @block10
+then:
+    %tmp_const.7 = const.i64 i64 1
+    %tmp_fieldptr.6 = getfieldptr ptr %expected 24
+    %tmp_load.4 = load i32 %tmp_fieldptr.6
+    %tmp_const.8 = const.i32 i32 3
+    %tmp_band.1 = band i32 %tmp_load.4 %tmp_const.8
+    %tmp_const.9 = const.i32 i32 1
+    %tmp_icmp.1 = icmp.eq i32 %tmp_band.1 %tmp_const.9
+    br.cond %tmp_icmp.1 @block4 @block6
+decref:
+    %tmp_load.5 = load ptr %expected
+    %tmp_const.10 = const.i64 i64 8
+    %tmp_sub.1 = sub ptr %tmp_load.5 %tmp_const.10
+    %tmp_load.6 = load i64 %tmp_sub.1
+    %tmp_const.11 = const.i64 i64 1
+    %tmp_sub.2 = sub i64 %tmp_load.6 %tmp_const.11
+    store %tmp_sub.1 %tmp_sub.2
+    %tmp_const.12 = const.i64 i64 0
+    %tmp_icmp.2 = icmp.eq i64 %tmp_sub.2 %tmp_const.12
+    br.cond %tmp_icmp.2 @block5 @block6
+decref_free:
+    %tmp_load.7 = load ptr %expected
+    %tmp_sub.3 = sub ptr %tmp_load.7 %tmp_const.10
+    heap.free %tmp_sub.3 tag="string cleanup"
+    br @block6
+decref_end:
+    %tmp_fieldptr.7 = getfieldptr ptr %name 24
+    %tmp_load.8 = load i32 %tmp_fieldptr.7
+    %tmp_const.13 = const.i32 i32 3
+    %tmp_band.2 = band i32 %tmp_load.8 %tmp_const.13
+    %tmp_const.14 = const.i32 i32 1
+    %tmp_icmp.3 = icmp.eq i32 %tmp_band.2 %tmp_const.14
+    br.cond %tmp_icmp.3 @block7 @block9
+decref:
+    %tmp_load.9 = load ptr %name
+    %tmp_const.15 = const.i64 i64 8
+    %tmp_sub.4 = sub ptr %tmp_load.9 %tmp_const.15
+    %tmp_load.10 = load i64 %tmp_sub.4
+    %tmp_const.16 = const.i64 i64 1
+    %tmp_sub.5 = sub i64 %tmp_load.10 %tmp_const.16
+    store %tmp_sub.4 %tmp_sub.5
+    %tmp_const.17 = const.i64 i64 0
+    %tmp_icmp.4 = icmp.eq i64 %tmp_sub.5 %tmp_const.17
+    br.cond %tmp_icmp.4 @block8 @block9
+decref_free:
+    %tmp_load.11 = load ptr %name
+    %tmp_sub.6 = sub ptr %tmp_load.11 %tmp_const.15
+    heap.free %tmp_sub.6 tag="string cleanup"
+    br @block9
+decref_end:
+    ret %tmp_const.7
+end:
+    %tmp_const.18 = const.i64 i64 0
+    %tmp_fieldptr.8 = getfieldptr ptr %expected 24
+    %tmp_load.12 = load i32 %tmp_fieldptr.8
+    %tmp_const.19 = const.i32 i32 3
+    %tmp_band.3 = band i32 %tmp_load.12 %tmp_const.19
+    %tmp_const.20 = const.i32 i32 1
+    %tmp_icmp.5 = icmp.eq i32 %tmp_band.3 %tmp_const.20
+    br.cond %tmp_icmp.5 @block11 @block13
+decref:
+    %tmp_load.13 = load ptr %expected
+    %tmp_const.21 = const.i64 i64 8
+    %tmp_sub.7 = sub ptr %tmp_load.13 %tmp_const.21
+    %tmp_load.14 = load i64 %tmp_sub.7
+    %tmp_const.22 = const.i64 i64 1
+    %tmp_sub.8 = sub i64 %tmp_load.14 %tmp_const.22
+    store %tmp_sub.7 %tmp_sub.8
+    %tmp_const.23 = const.i64 i64 0
+    %tmp_icmp.6 = icmp.eq i64 %tmp_sub.8 %tmp_const.23
+    br.cond %tmp_icmp.6 @block12 @block13
+decref_free:
+    %tmp_load.15 = load ptr %expected
+    %tmp_sub.9 = sub ptr %tmp_load.15 %tmp_const.21
+    heap.free %tmp_sub.9 tag="string cleanup"
+    br @block13
+decref_end:
+    %tmp_fieldptr.9 = getfieldptr ptr %name 24
+    %tmp_load.16 = load i32 %tmp_fieldptr.9
+    %tmp_const.24 = const.i32 i32 3
+    %tmp_band.4 = band i32 %tmp_load.16 %tmp_const.24
+    %tmp_const.25 = const.i32 i32 1
+    %tmp_icmp.7 = icmp.eq i32 %tmp_band.4 %tmp_const.25
+    br.cond %tmp_icmp.7 @block14 @block16
+decref:
+    %tmp_load.17 = load ptr %name
+    %tmp_const.26 = const.i64 i64 8
+    %tmp_sub.10 = sub ptr %tmp_load.17 %tmp_const.26
+    %tmp_load.18 = load i64 %tmp_sub.10
+    %tmp_const.27 = const.i64 i64 1
+    %tmp_sub.11 = sub i64 %tmp_load.18 %tmp_const.27
+    store %tmp_sub.10 %tmp_sub.11
+    %tmp_const.28 = const.i64 i64 0
+    %tmp_icmp.8 = icmp.eq i64 %tmp_sub.11 %tmp_const.28
+    br.cond %tmp_icmp.8 @block15 @block16
+decref_free:
+    %tmp_load.19 = load ptr %name
+    %tmp_sub.12 = sub ptr %tmp_load.19 %tmp_const.26
+    heap.free %tmp_sub.12 tag="string cleanup"
+    br @block16
+decref_end:
+    ret %tmp_const.18
+}
+
+---

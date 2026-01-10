@@ -78,6 +78,8 @@ pub const EnumMember = struct {
     associated_values: []const ParamDecl, // Associated values (e.g., value(n int))
     line: u32,
     column: u32,
+    name_is_string_literal: bool = false, // true if name came from "quoted" string
+    name_is_char_literal: bool = false, // true if name came from 'c' character
 };
 
 pub const EnumDecl = struct {

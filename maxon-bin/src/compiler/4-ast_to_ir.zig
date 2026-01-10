@@ -625,7 +625,13 @@ pub const AstToIr = struct {
                         }
                     }
                     e.case_info.deinit(self.allocator);
-                    e.string_values.deinit(self.allocator);
+                    // Free backing values map if present
+                    switch (e.backing) {
+                        .float => |*m| m.deinit(self.allocator),
+                        .string => |*m| m.deinit(self.allocator),
+                        .character => |*m| m.deinit(self.allocator),
+                        .none, .int => {},
+                    }
                 },
                 .primitive => {},
             }
@@ -1560,9 +1566,6 @@ pub const AstToIr = struct {
         var case_info: std.StringHashMapUnmanaged(types.EnumCaseInfo) = .{};
         errdefer case_info.deinit(self.allocator);
 
-        // Backing type is inferred from raw values (null for simple enums)
-        var inferred_backing_type: ?[]const u8 = null;
-
         // Check if this enum conforms to Error interface
         var is_error = false;
         for (enum_decl.conformances) |conformance| {
@@ -1572,9 +1575,8 @@ pub const AstToIr = struct {
             }
         }
 
-        // For string-backed enums, store the string values
-        var string_values: std.AutoHashMapUnmanaged(i64, []const u8) = .{};
-        errdefer string_values.deinit(self.allocator);
+        // Backing values - we'll initialize the appropriate variant on first value
+        var backing: types.BackingValues = .none;
 
         var has_associated_values = false;
         var max_payload_size: i32 = 0;
@@ -1591,35 +1593,95 @@ pub const AstToIr = struct {
                 return error.SemanticError;
             }
 
-            if (member.value) |value_expr| {
-                // Explicit value - infer backing type from value
-                if (value_expr.* == .integer) {
-                    // Infer int backing type
-                    if (inferred_backing_type == null) {
-                        inferred_backing_type = "int";
-                    } else if (!std.mem.eql(u8, inferred_backing_type.?, "int")) {
-                        self.reportErrorAt(.E032, "expected String, got int", member.line, member.column);
+            // Handle implicit string-backed enums (name is a string literal)
+            if (member.name_is_string_literal) {
+                switch (backing) {
+                    .none => backing = .{ .string = .{} },
+                    .string => {},
+                    else => {
+                        self.reportErrorAt(.E032, "expected String, got other type", member.line, member.column);
                         return error.SemanticError;
-                    }
-                    next_value = value_expr.integer;
+                    },
+                }
+                try backing.string.put(self.allocator, next_value, member.name);
+            }
 
-                    // Check for duplicate raw values
-                    if (seen_raw_values.get(next_value)) |_| {
-                        const msg = try std.fmt.allocPrint(self.allocator, "{d}", .{next_value});
-                        try self.module.trackString(msg);
-                        self.reportErrorAt(.E031, msg, member.line, member.column);
+            // Handle implicit character-backed enums (name is a char literal)
+            if (member.name_is_char_literal) {
+                switch (backing) {
+                    .none => backing = .{ .character = .{} },
+                    .character => {},
+                    else => {
+                        self.reportErrorAt(.E032, "expected character, got other type", member.line, member.column);
                         return error.SemanticError;
-                    }
-                } else if (value_expr.* == .string_literal) {
-                    // Infer String backing type
-                    if (inferred_backing_type == null) {
-                        inferred_backing_type = "String";
-                    } else if (!std.mem.eql(u8, inferred_backing_type.?, "String")) {
-                        self.reportErrorAt(.E032, "expected int, got String", member.line, member.column);
-                        return error.SemanticError;
-                    }
-                    // Store the string backing value for this ordinal
-                    try string_values.put(self.allocator, next_value, value_expr.string_literal);
+                    },
+                }
+                try backing.character.put(self.allocator, next_value, member.name);
+            }
+
+            if (member.value) |value_expr| {
+                // Explicit value - infer backing type from expression
+                switch (value_expr.*) {
+                    .integer => |v| {
+                        switch (backing) {
+                            .none => backing = .int,
+                            .int => {},
+                            else => {
+                                const msg = try std.fmt.allocPrint(self.allocator, "expected {s}, got int", .{backing.displayName()});
+                                try self.module.trackString(msg);
+                                self.reportErrorAt(.E032, msg, member.line, member.column);
+                                return error.SemanticError;
+                            },
+                        }
+                        next_value = v;
+                        // Check for duplicate raw values
+                        if (seen_raw_values.get(next_value)) |_| {
+                            const msg = try std.fmt.allocPrint(self.allocator, "{d}", .{next_value});
+                            try self.module.trackString(msg);
+                            self.reportErrorAt(.E031, msg, member.line, member.column);
+                            return error.SemanticError;
+                        }
+                    },
+                    .float_lit => |v| {
+                        switch (backing) {
+                            .none => backing = .{ .float = .{} },
+                            .float => {},
+                            else => {
+                                const msg = try std.fmt.allocPrint(self.allocator, "expected {s}, got float", .{backing.displayName()});
+                                try self.module.trackString(msg);
+                                self.reportErrorAt(.E032, msg, member.line, member.column);
+                                return error.SemanticError;
+                            },
+                        }
+                        try backing.float.put(self.allocator, next_value, v);
+                    },
+                    .string_literal => |v| {
+                        switch (backing) {
+                            .none => backing = .{ .string = .{} },
+                            .string => {},
+                            else => {
+                                const msg = try std.fmt.allocPrint(self.allocator, "expected {s}, got String", .{backing.displayName()});
+                                try self.module.trackString(msg);
+                                self.reportErrorAt(.E032, msg, member.line, member.column);
+                                return error.SemanticError;
+                            },
+                        }
+                        try backing.string.put(self.allocator, next_value, v);
+                    },
+                    .char_literal => |v| {
+                        switch (backing) {
+                            .none => backing = .{ .character = .{} },
+                            .character => {},
+                            else => {
+                                const msg = try std.fmt.allocPrint(self.allocator, "expected {s}, got character", .{backing.displayName()});
+                                try self.module.trackString(msg);
+                                self.reportErrorAt(.E032, msg, member.line, member.column);
+                                return error.SemanticError;
+                            },
+                        }
+                        try backing.character.put(self.allocator, next_value, v);
+                    },
+                    else => {},
                 }
             }
 
@@ -1669,8 +1731,7 @@ pub const AstToIr = struct {
                 .name = enum_decl.name,
                 .members = members,
                 .case_info = case_info,
-                .backing_type = inferred_backing_type,
-                .string_values = string_values,
+                .backing = backing,
                 .is_error = is_error,
                 .has_associated_values = has_associated_values,
                 .max_payload_size = max_payload_size,
@@ -1680,8 +1741,7 @@ pub const AstToIr = struct {
                 .is_export = enum_decl.is_export,
             },
         });
-        const backing_str = if (inferred_backing_type) |bt| bt else "none";
-        debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {}, has_assoc: {})", .{ enum_decl.name, enum_decl.members.len, backing_str, is_error, has_associated_values });
+        debug.astToIr("Registered enum '{s}' with {d} members (backing: {s}, is_error: {}, has_assoc: {})", .{ enum_decl.name, enum_decl.members.len, @tagName(backing), is_error, has_associated_values });
     }
 
     pub fn registerInterface(self: *AstToIr, iface: ast.InterfaceDecl) !void {
@@ -6569,7 +6629,7 @@ pub const AstToIr = struct {
             .enum_type => |enum_type_name| {
                 // Look up the enum type info
                 if (self.type_map.get(enum_type_name)) |type_info| {
-                    if (type_info.enum_type.string_values.count() > 0) {
+                    if (type_info.enum_type.backing == .string) {
                         // String-backed enum: generate switch on ordinal to select raw string value
                         return self.convertStringEnumToString(typed_val.value, type_info.enum_type);
                     }
@@ -6622,206 +6682,33 @@ pub const AstToIr = struct {
     }
 
     /// Convert a string-backed enum to its string value
-    /// Generates a switch-like cascade on the ordinal to select the raw string value
-    fn convertStringEnumToString(self: *AstToIr, ordinal_value: ir.Value, enum_info: types.EnumTypeInfo) ConvertError!ir.Value {
-        // Collect string values into a sorted list by ordinal
-        const num_members = enum_info.string_values.count();
-        if (num_members == 0) {
-            // No string values, fall back to int conversion
-            return self.convertIntToString(ordinal_value);
-        }
+    /// The enum value is now a pointer to constant string data, so we create a String from it
+    fn convertStringEnumToString(self: *AstToIr, enum_value: ir.Value, enum_info: types.EnumTypeInfo) ConvertError!ir.Value {
+        _ = enum_info;
 
-        // Collect entries sorted by ordinal
-        const EnumEntry = struct { ordinal: i64, string_val: []const u8 };
-        var entries = try self.allocator.alloc(EnumEntry, num_members);
-        defer self.allocator.free(entries);
+        // The enum value is a pointer to null-terminated string data in the data section
+        // Create a String in slice mode from this pointer
 
-        var iter = enum_info.string_values.iterator();
-        var idx: usize = 0;
-        while (iter.next()) |entry| {
-            entries[idx] = .{ .ordinal = entry.key_ptr.*, .string_val = entry.value_ptr.* };
-            idx += 1;
-        }
+        // Get string length using strlen
+        var strlen_args = try self.allocator.alloc(ir.Value, 1);
+        strlen_args[0] = enum_value;
+        const str_len = try self.func().emitExternCall("ntdll.dll", "strlen", strlen_args, .i64) orelse {
+            return self.convertIntToString(enum_value);
+        };
 
-        // Sort by ordinal for consistent block order
-        std.mem.sort(EnumEntry, entries, {}, struct {
-            fn lessThan(_: void, a: EnumEntry, b: EnumEntry) bool {
-                return a.ordinal < b.ordinal;
-            }
-        }.lessThan);
+        // Create a ManagedArray with flags=0 (static data, no cleanup needed)
+        const zero_i32 = try self.func().emitConstI32(0);
+        const managed_ptr = try struct_helpers.emitManagedArray(
+            self.func(),
+            ir.toRawPtr(enum_value),
+            str_len,
+            str_len,
+            zero_i32,
+        );
 
-        // Allocate a result pointer for the String (32 bytes) in entry block
-        const result_ptr = (try self.func().emitAllocaSized(32)).raw();
-
-        // For single-entry enum, just create the string directly
-        if (num_members == 1) {
-            try self.emitStringLiteralIntoPtr(result_ptr, entries[0].string_val);
-            return result_ptr;
-        }
-
-        // Track blocks that need branches to end block (we'll patch them later)
-        var case_exit_blocks = try self.allocator.alloc(u32, num_members);
-        defer self.allocator.free(case_exit_blocks);
-
-        // For N entries with N > 1:
-        // - Entry 0: compare ordinal==0, if true goto case0, else goto cmp1
-        // - Entry 1: compare ordinal==1, if true goto case1, else goto cmp2 (or case_last if N-2)
-        // - ...
-        // - Entry N-1: fallback case (no comparison needed)
-
-        // Process entry 0 in current (entry) block
-        {
-            const ord_const = try self.func().emitConstI64(entries[0].ordinal);
-            const cmp = try self.func().emitBinaryOp(.icmp_eq, ordinal_value, ord_const, .i64);
-
-            // Create case0 block
-            const case0_block_idx: u32 = @intCast(self.func().blocks.items.len);
-            _ = try self.func().addBlock("string_enum_case0");
-
-            // We need to emit branch from entry to case0 or next_cmp
-            // But we don't know next_cmp index yet - need to emit branch after creating it
-
-            // For 2-entry enum, else goes directly to case1 (fallback)
-            // For 3+ entry enum, else goes to cmp1 block
-            if (num_members == 2) {
-                // Create case1 block (fallback)
-                const case1_block_idx: u32 = @intCast(self.func().blocks.items.len);
-                _ = try self.func().addBlock("string_enum_case1");
-
-                // Create end block
-                const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-                _ = try self.func().addBlock("string_enum_end");
-
-                // Pop end and case1, keep case0 as current
-                const end_block = self.func().blocks.pop().?;
-                const case1_block = self.func().blocks.pop().?;
-
-                // Emit branch from entry (which is blocks[case0_idx - 1])
-                try self.func().blocks.items[case0_block_idx - 1].instructions.append(self.allocator, .{
-                    .op = .br_cond,
-                    .operands = .{ .{ .value = cmp }, .{ .block_ref = case0_block_idx }, .{ .block_ref = case1_block_idx } },
-                    .result = null,
-                });
-
-                // Now in case0 block - emit string and branch to end
-                try self.emitStringLiteralIntoPtr(result_ptr, entries[0].string_val);
-                try self.func().emitBr(end_block_idx);
-
-                // Restore case1 block and emit string
-                try self.func().blocks.append(self.allocator, case1_block);
-                try self.emitStringLiteralIntoPtr(result_ptr, entries[1].string_val);
-                try self.func().emitBr(end_block_idx);
-
-                // Restore end block
-                try self.func().blocks.append(self.allocator, end_block);
-
-                return result_ptr;
-            }
-
-            // For 3+ entries, we need multiple comparison blocks
-            // Create cmp1 block
-            const cmp1_block_idx: u32 = @intCast(self.func().blocks.items.len);
-            _ = try self.func().addBlock("string_enum_cmp1");
-
-            // Pop cmp1 to emit branch from entry
-            const cmp1_block = self.func().blocks.pop().?;
-
-            // Emit branch from entry
-            try self.func().blocks.items[case0_block_idx - 1].instructions.append(self.allocator, .{
-                .op = .br_cond,
-                .operands = .{ .{ .value = cmp }, .{ .block_ref = case0_block_idx }, .{ .block_ref = cmp1_block_idx } },
-                .result = null,
-            });
-
-            // Now in case0 block - emit string
-            try self.emitStringLiteralIntoPtr(result_ptr, entries[0].string_val);
-            case_exit_blocks[0] = @intCast(self.func().blocks.items.len - 1);
-            // Don't emit branch yet - we need end block index
-
-            // Restore cmp1 block
-            try self.func().blocks.append(self.allocator, cmp1_block);
-        }
-
-        // Process entries 1 through N-2 (each gets a comparison block)
-        for (1..num_members - 1) |i| {
-            // Current block is cmp[i] or we just restored it
-            const ord_const = try self.func().emitConstI64(entries[i].ordinal);
-            const cmp = try self.func().emitBinaryOp(.icmp_eq, ordinal_value, ord_const, .i64);
-
-            // Create case[i] block
-            const case_block_idx: u32 = @intCast(self.func().blocks.items.len);
-            _ = try self.func().addBlock("string_enum_case");
-
-            // Determine else target
-            if (i == num_members - 2) {
-                // Last comparison - else goes to case[last] (fallback)
-                const case_last_block_idx: u32 = @intCast(self.func().blocks.items.len);
-                _ = try self.func().addBlock("string_enum_case_last");
-
-                // Create end block
-                const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-                _ = try self.func().addBlock("string_enum_end");
-
-                // Pop end and case_last
-                const end_block = self.func().blocks.pop().?;
-                const case_last_block = self.func().blocks.pop().?;
-
-                // Emit branch from cmp[i] (which is blocks[case_block_idx - 1])
-                try self.func().blocks.items[case_block_idx - 1].instructions.append(self.allocator, .{
-                    .op = .br_cond,
-                    .operands = .{ .{ .value = cmp }, .{ .block_ref = case_block_idx }, .{ .block_ref = case_last_block_idx } },
-                    .result = null,
-                });
-
-                // Now in case[i] block - emit string
-                try self.emitStringLiteralIntoPtr(result_ptr, entries[i].string_val);
-                try self.func().emitBr(end_block_idx);
-
-                // Restore case_last and emit string
-                try self.func().blocks.append(self.allocator, case_last_block);
-                try self.emitStringLiteralIntoPtr(result_ptr, entries[num_members - 1].string_val);
-                try self.func().emitBr(end_block_idx);
-
-                // Now patch the earlier case blocks to branch to end
-                for (0..i) |j| {
-                    try self.func().blocks.items[case_exit_blocks[j]].instructions.append(self.allocator, .{
-                        .op = .br,
-                        .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
-                        .result = null,
-                    });
-                }
-
-                // Restore end block
-                try self.func().blocks.append(self.allocator, end_block);
-
-                return result_ptr;
-            } else {
-                // Not last comparison - else goes to next cmp block
-                const next_cmp_block_idx: u32 = @intCast(self.func().blocks.items.len);
-                _ = try self.func().addBlock("string_enum_cmp");
-
-                // Pop next_cmp
-                const next_cmp_block = self.func().blocks.pop().?;
-
-                // Emit branch from current cmp block
-                try self.func().blocks.items[case_block_idx - 1].instructions.append(self.allocator, .{
-                    .op = .br_cond,
-                    .operands = .{ .{ .value = cmp }, .{ .block_ref = case_block_idx }, .{ .block_ref = next_cmp_block_idx } },
-                    .result = null,
-                });
-
-                // Now in case[i] block - emit string
-                try self.emitStringLiteralIntoPtr(result_ptr, entries[i].string_val);
-                case_exit_blocks[i] = @intCast(self.func().blocks.items.len - 1);
-                // Don't emit branch yet
-
-                // Restore next_cmp block
-                try self.func().blocks.append(self.allocator, next_cmp_block);
-            }
-        }
-
-        // Should not reach here - the loop handles the last comparison
-        unreachable;
+        // Wrap in a String struct
+        const string_ptr = try string_helpers.emitStringFromManaged(self, managed_ptr);
+        return string_ptr.raw();
     }
 
     /// Call Stringable.toString() on a type that conforms to Stringable
@@ -7985,31 +7872,77 @@ pub const AstToIr = struct {
         }
     }
 
+    /// Emit a String or Character struct from a static data pointer using strlen
+    fn emitStringOrCharFromPtr(self: *AstToIr, data_ptr: ir.Value, is_character: bool) ConvertError!TypedValue {
+        var strlen_args = try self.allocator.alloc(ir.Value, 1);
+        strlen_args[0] = data_ptr;
+        const str_len = try self.func().emitExternCall("ntdll.dll", "strlen", strlen_args, .i64) orelse {
+            return .{ .value = data_ptr, .ty = .{ .primitive = types.INT } };
+        };
+
+        const zero_i32 = try self.func().emitConstI32(0);
+        const managed_ptr = try struct_helpers.emitManagedArray(
+            self.func(),
+            ir.toRawPtr(data_ptr),
+            str_len,
+            str_len,
+            zero_i32,
+        );
+
+        if (is_character) {
+            const char_ptr = try self.func().emitAllocaSized(40);
+            try self.func().emitMemcpy(char_ptr, managed_ptr.asRawPtr(), ManagedArray.SIZE);
+            const iter_pos_ptr = try self.func().emitGetFieldPtr(char_ptr.asStruct(), String.ITER_POS_OFFSET);
+            try self.func().emitStore(iter_pos_ptr.raw(), try self.func().emitConstI64(0));
+            return .{ .value = char_ptr.raw(), .ty = .{ .struct_type = types.CHARACTER } };
+        } else {
+            const string_ptr = try string_helpers.emitStringFromManaged(self, managed_ptr);
+            return .{ .value = string_ptr.raw(), .ty = .{ .struct_type = types.STRING } };
+        }
+    }
+
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
         // Check for enum member access (e.g., Colors.Green)
         if (faccess.base.* == .identifier) {
             if (self.type_map.get(faccess.base.identifier)) |type_info| {
                 if (type_info == .enum_type) {
-                    const member_value = type_info.enum_type.members.get(faccess.field_name) orelse {
+                    const enum_info = type_info.enum_type;
+                    const member_value = enum_info.members.get(faccess.field_name) orelse {
                         self.reportError(.E034, faccess.field_name);
                         return error.SemanticError;
                     };
-                    return .{
-                        .value = try self.func().emitConstI64(member_value),
-                        .ty = .{ .enum_type = faccess.base.identifier },
-                    };
+                    const enum_ty = types.ValueType{ .enum_type = faccess.base.identifier };
+
+                    switch (enum_info.backing) {
+                        .float => |float_map| {
+                            const float_val = float_map.get(member_value) orelse
+                                return .{ .value = try self.func().emitConstI64(member_value), .ty = enum_ty };
+                            const f64_val = try self.func().emitConstF64(float_val);
+                            return .{ .value = try self.func().emitUnaryOp(.bitcast_f64_to_i64, f64_val, .i64), .ty = enum_ty };
+                        },
+                        .string => |string_map| {
+                            const string_val = string_map.get(member_value) orelse
+                                return .{ .value = try self.func().emitConstI64(member_value), .ty = enum_ty };
+                            return .{ .value = (try self.func().emitStringConstant(string_val)).raw(), .ty = enum_ty };
+                        },
+                        .character => |char_map| {
+                            const char_val = char_map.get(member_value) orelse
+                                return .{ .value = try self.func().emitConstI64(member_value), .ty = enum_ty };
+                            return .{ .value = (try self.func().emitStringConstant(char_val)).raw(), .ty = enum_ty };
+                        },
+                        .none, .int => {},
+                    }
+                    return .{ .value = try self.func().emitConstI64(member_value), .ty = enum_ty };
                 }
             }
         }
 
-        // Struct field access
         const base = try self.convertExpression(faccess.base.*);
 
         // Handle .rawValue for enum types
         if (base.ty == .enum_type) {
             const enum_name = base.ty.enum_type;
             if (std.mem.eql(u8, faccess.field_name, "rawValue")) {
-                // Get enum type info
                 const type_info = self.type_map.get(enum_name) orelse {
                     self.reportError(.E006, enum_name);
                     return error.UnknownType;
@@ -8018,24 +7951,14 @@ pub const AstToIr = struct {
                     self.reportError(.E006, enum_name);
                     return error.UnknownType;
                 }
-                const enum_info = type_info.enum_type;
 
-                // Check if enum has a backing type (inferred from raw values)
-                if (enum_info.backing_type == null) {
-                    self.reportError(.E033, enum_name);
-                    return error.SemanticError;
-                }
-
-                // For int-backed enums, the enum value IS the raw value
-                if (std.mem.eql(u8, enum_info.backing_type.?, "int")) {
-                    return .{ .value = base.value, .ty = .{ .primitive = types.INT } };
-                } else {
-                    // For string-backed enums, look up in string_values table
-                    // For now, return the ordinal as int
-                    return .{ .value = base.value, .ty = .{ .primitive = types.INT } };
-                }
+                return switch (type_info.enum_type.backing) {
+                    .none, .int => .{ .value = base.value, .ty = .{ .primitive = types.INT } },
+                    .float => .{ .value = try self.func().emitUnaryOp(.bitcast_i64_to_f64, base.value, .f64), .ty = .{ .primitive = types.FLOAT } },
+                    .string => try self.emitStringOrCharFromPtr(base.value, false),
+                    .character => try self.emitStringOrCharFromPtr(base.value, true),
+                };
             }
-            // Enum values don't have other fields
             std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
             self.reportError(.E006, faccess.field_name);
             return error.UnknownType;
@@ -8103,7 +8026,25 @@ pub const AstToIr = struct {
         }
 
         if (!enum_info.has_associated_values) {
-            // Simple enum without associated values - just return the tag
+            // Simple enum without associated values
+            // For float-backed enums, store the float value as bitcast i64
+            if (enum_info.backing == .float) {
+                const float_val = enum_info.backing.float.get(case_info.tag) orelse {
+                    // Fallback to tag if no float value
+                    return .{
+                        .value = try self.func().emitConstI64(case_info.tag),
+                        .ty = .{ .enum_type = ec.enum_name },
+                    };
+                };
+                // Emit the float constant and bitcast to i64 for storage
+                const f64_val = try self.func().emitConstF64(float_val);
+                const i64_val = try self.func().emitUnaryOp(.bitcast_f64_to_i64, f64_val, .i64);
+                return .{
+                    .value = i64_val,
+                    .ty = .{ .enum_type = ec.enum_name },
+                };
+            }
+            // For other enums, just return the tag
             return .{
                 .value = try self.func().emitConstI64(case_info.tag),
                 .ty = .{ .enum_type = ec.enum_name },

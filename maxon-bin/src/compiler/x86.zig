@@ -591,6 +591,12 @@ pub const Encoder = struct {
         try self.emit(&.{ 0x66, 0x48, 0x0F, 0x7E, 0xC0 });
     }
 
+    /// Move 64 bits from rax to xmm0 (for bitcast i64 to f64)
+    /// MOVQ xmm0, rax = 66 48 0F 6E C0
+    pub fn movqXmm0Rax(self: *Encoder) !void {
+        try self.emit(&.{ 0x66, 0x48, 0x0F, 0x6E, 0xC0 });
+    }
+
     // -------------------------------------------------------------------------
     // Calls
     // -------------------------------------------------------------------------

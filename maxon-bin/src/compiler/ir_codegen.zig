@@ -2380,6 +2380,7 @@ pub const IrCodegen = struct {
             .ffloor => try self.genFfloor(inst),
             .fround => try self.genFround(inst),
             .bitcast_f64_to_i64 => try self.genBitcastF64ToI64(inst),
+            .bitcast_i64_to_f64 => try self.genBitcastI64ToF64(inst),
             .sext_i32_i64 => try self.genSextI32I64(inst),
             .trunc_i64_i32 => try self.genTruncI64I32(inst),
             .trunc_i64_i8 => try self.genTruncI64I8(inst),
@@ -2442,12 +2443,20 @@ pub const IrCodegen = struct {
         const result = inst.result.?;
         const str_data = inst.operands[0].string_data;
 
-        // Add string to constants table
-        const string_index = self.string_constants.items.len;
-        try self.string_constants.append(self.allocator, .{
-            .data = str_data,
-            .offset = 0, // Will be set after code generation
-        });
+        // Check if this string already exists (deduplication)
+        var string_index: usize = self.string_constants.items.len;
+        for (self.string_constants.items, 0..) |existing, idx| {
+            if (std.mem.eql(u8, existing.data, str_data)) {
+                string_index = idx;
+                break;
+            }
+        } else {
+            // Add new string to constants table
+            try self.string_constants.append(self.allocator, .{
+                .data = str_data,
+                .offset = 0, // Will be set after code generation
+            });
+        }
 
         // Allocate stack slot for the pointer
         const offset = self.allocStackSlots(1);
@@ -3013,6 +3022,15 @@ pub const IrCodegen = struct {
         try self.enc.movqRaxXmm0();
         // Store as i64
         try self.storeToStack(inst.result.?, .i64);
+    }
+
+    fn genBitcastI64ToF64(self: *IrCodegen, inst: ir.Instruction) !void {
+        // Load i64 value to rax
+        try self.loadToRax(inst.operands[0].value);
+        // Move bits from rax to xmm0 using movq
+        try self.enc.movqXmm0Rax();
+        // Store as f64 (storeToStack knows to use movsd for f64)
+        try self.storeToStack(inst.result.?, .f64);
     }
 
     fn genSextI32I64(self: *IrCodegen, inst: ir.Instruction) !void {

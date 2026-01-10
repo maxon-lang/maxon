@@ -3111,8 +3111,31 @@ pub const Parser = struct {
                 continue;
             }
 
-            // Parse member name
-            const member_name = try self.expect(.identifier);
+            // Parse member name - can be identifier, string literal, or char literal
+            var member_name: []const u8 = undefined;
+            var member_line: u32 = 0;
+            var member_column: u32 = 0;
+            var name_is_string_literal = false;
+            var name_is_char_literal = false;
+
+            if (self.check(.string_literal)) {
+                const token = self.advance();
+                member_name = token.text;
+                member_line = token.line;
+                member_column = token.column;
+                name_is_string_literal = true;
+            } else if (self.check(.char_literal)) {
+                const token = self.advance();
+                member_name = token.text;
+                member_line = token.line;
+                member_column = token.column;
+                name_is_char_literal = true;
+            } else {
+                const token = try self.expect(.identifier);
+                member_name = token.text;
+                member_line = token.line;
+                member_column = token.column;
+            }
 
             // Parse optional associated values (e.g., "value(n int)" or "pair(a int, b int)")
             var associated_values: std.ArrayListUnmanaged(ast.ParamDecl) = .empty;
@@ -3156,11 +3179,13 @@ pub const Parser = struct {
             }
 
             try members.append(self.allocator, .{
-                .name = member_name.text,
+                .name = member_name,
                 .value = value,
                 .associated_values = try associated_values.toOwnedSlice(self.allocator),
-                .line = member_name.line,
-                .column = member_name.column,
+                .line = member_line,
+                .column = member_column,
+                .name_is_string_literal = name_is_string_literal,
+                .name_is_char_literal = name_is_char_literal,
             });
 
             _ = try self.expect(.newline);

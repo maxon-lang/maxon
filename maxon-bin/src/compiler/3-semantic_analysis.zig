@@ -551,11 +551,33 @@ pub const SemanticAnalyzer = struct {
         var members: std.StringHashMapUnmanaged(i64) = .{};
         var tag: i64 = 0;
 
+        // Infer backing type from values or literal names
+        var inferred_backing: types.BackingValues = .none;
+
         for (enum_decl.members) |member| {
-            // If member has explicit value, use it; otherwise use auto-incrementing tag
+            // Check for implicit string-backed (name is string literal)
+            if (member.name_is_string_literal) {
+                if (inferred_backing == .none) {
+                    inferred_backing = .{ .string = .{} };
+                }
+            }
+
+            // Check for implicit character-backed (name is char literal)
+            if (member.name_is_char_literal) {
+                if (inferred_backing == .none) {
+                    inferred_backing = .{ .character = .{} };
+                }
+            }
+
+            // If member has explicit value, use it and infer backing type
             if (member.value) |value_expr| {
                 if (value_expr.* == .integer) {
                     tag = value_expr.integer;
+                    if (inferred_backing == .none) {
+                        inferred_backing = .int;
+                    }
+                } else if (inferred_backing == .none) {
+                    inferred_backing = types.BackingValues.fromExpr(value_expr.*);
                 }
             }
             try members.put(self.allocator, member.name, tag);
@@ -575,6 +597,7 @@ pub const SemanticAnalyzer = struct {
             .enum_type = .{
                 .name = enum_decl.name,
                 .members = members,
+                .backing = inferred_backing,
                 .is_error = is_error,
                 .decl_line = enum_decl.block.start_line,
                 .decl_column = enum_decl.block.start_column,
@@ -1378,6 +1401,31 @@ pub const SemanticAnalyzer = struct {
             .call => |call| blk: {
                 const func_info = self.func_map.get(call.func_name) orelse break :blk null;
                 break :blk func_info.return_value_type;
+            },
+            .field_access => |fa| blk: {
+                // Handle enum rawValue access
+                const base_ty = self.inferExpressionType(fa.base.*) orelse break :blk null;
+                if (base_ty == .enum_type) {
+                    if (std.mem.eql(u8, fa.field_name, "rawValue")) {
+                        // Get enum backing type
+                        const type_info = self.type_map.get(base_ty.enum_type) orelse break :blk null;
+                        if (type_info != .enum_type) break :blk null;
+                        const enum_info = type_info.enum_type;
+
+                        break :blk enum_info.rawValueType();
+                    }
+                }
+                // For struct field access, look up the field type
+                if (base_ty == .struct_type) {
+                    const type_info = self.type_map.get(base_ty.struct_type) orelse break :blk null;
+                    if (type_info != .struct_type) break :blk null;
+                    for (type_info.struct_type.fields) |field| {
+                        if (std.mem.eql(u8, field.name, fa.field_name)) {
+                            break :blk field.value_type;
+                        }
+                    }
+                }
+                break :blk null;
             },
             else => null,
         };

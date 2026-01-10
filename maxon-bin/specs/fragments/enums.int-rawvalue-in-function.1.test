@@ -1,0 +1,52 @@
+// Test: enums.int-rawvalue-in-function.1
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+function getCode(s HttpStatus) returns int
+    return s.rawValue
+end 'getCode'
+
+function main() returns int
+    var status = HttpStatus.notFound
+    var code = getCode(status)
+    if code == 404 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function getCode() -> i64 {
+entry:
+    %s = param i64 0
+    %s.1 = alloca ptr
+    store %s.1 %s
+    %tmp_load = load i64 %s.1
+    ret %tmp_load
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 404
+    %status = alloca ptr
+    store %status %tmp_const
+    %tmp_load = load i64 %status
+    %tmp_call = call i64 @getCode(%tmp_load)
+    %code = alloca ptr
+    store %code %tmp_call
+    %tmp_load.1 = load i64 %code
+    %tmp_const.1 = const.i64 i64 404
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.1
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.2 = const.i64 i64 1
+    ret %tmp_const.2
+end:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+}
+
+---

@@ -1,0 +1,39 @@
+// Test: enums.int-backed-rawvalue.1
+enum HttpStatus
+    ok = 200
+    notFound = 404
+    serverError = 500
+end 'HttpStatus'
+
+function main() returns int
+    var status = HttpStatus.notFound
+    var code = status.rawValue
+    if code == 404 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 404
+    %status = alloca ptr
+    store %status %tmp_const
+    %tmp_load = load i64 %status
+    %code = alloca ptr
+    store %code %tmp_load
+    %tmp_load.1 = load i64 %code
+    %tmp_const.1 = const.i64 i64 404
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.1
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.2 = const.i64 i64 1
+    ret %tmp_const.2
+end:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+}
+
+---

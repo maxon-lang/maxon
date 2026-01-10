@@ -34,7 +34,9 @@ var dir = Direction.north
 
 ### Raw Value Enums
 
-Enums can have raw values. The backing type is inferred from the values:
+All enums support `.rawValue` access. Simple enums return their ordinal (0, 1, 2...), while backed enums return their explicit value.
+
+#### Integer-backed Enums
 
 ```maxon
 enum HttpStatus
@@ -43,18 +45,78 @@ enum HttpStatus
     serverError = 500
 end 'HttpStatus'
 
+var status = HttpStatus.ok
+var code = status.rawValue    // 200
+```
+
+#### String-backed Enums
+
+Cases can have explicit string values, or use the case name as the value:
+
+```maxon
+// Explicit string values
 enum Planet
     earth = "Earth"
     mars = "Mars"
-    venus = "Venus"
 end 'Planet'
+
+// Implicit string values - case name IS the raw value
+enum Direction
+    "North"
+    "South"
+end 'Direction'
+
+var dir = Direction.North  // Access without quotes
 ```
 
-Access the raw value with `.rawValue`:
+#### Character-backed Enums
 
 ```maxon
-var status = HttpStatus.ok
-var code = status.rawValue    // 200
+// Explicit character values
+enum CardSuit
+    Hearts = 'H'
+    Diamonds = 'D'
+end 'CardSuit'
+
+// Implicit character values
+enum Compass
+    'N'
+    'S'
+    'E'
+    'W'
+end 'Compass'
+
+var c = Compass.N  // Access without quotes
+```
+
+#### Float-backed Enums
+
+```maxon
+enum Weights
+    light = 1.5
+    medium = 2.5
+    heavy = 3.5
+end 'Weights'
+
+var w = Weights.medium
+if w.rawValue > 2.0 'check'
+    // weight is above 2.0
+end 'check'
+```
+
+#### Simple Enum rawValue
+
+Simple enums (no explicit values) also support `.rawValue`, returning their ordinal:
+
+```maxon
+enum Color
+    red     // rawValue = 0
+    green   // rawValue = 1
+    blue    // rawValue = 2
+end 'Color'
+
+var c = Color.green
+var ordinal = c.rawValue  // 1
 ```
 
 ### Associated Values
@@ -472,22 +534,6 @@ end 'main'
 error E032: specs/fragments/enums.error.raw-value-type-mismatch.1.test:4:5: raw value type mismatch: 'expected int, got String'
 ```
 
-<!-- test: error.rawvalue-on-simple-enum -->
-```maxon
-enum Color
-    red
-    blue
-end 'Color'
-
-function main() returns int
-    var c = Color.red
-    return c.rawValue
-end 'main'
-```
-```maxoncstderr
-error E033: specs/fragments/enums.error.rawvalue-on-simple-enum.1.test:9:5: rawValue requires raw value enum: 'Color'
-```
-
 <!-- test: error.associated-value-wrong-count -->
 ```maxon
 enum Result
@@ -629,4 +675,386 @@ end 'main'
 ```
 ```maxoncstderr
 error E034: specs/fragments/enums.error.match-enum-unknown-case.1.test:9:5: unknown enum case: 'unknown'
+```
+
+<!-- test: simple-enum-rawvalue -->
+```maxon
+enum Direction
+    north
+    south
+    east
+end 'Direction'
+
+function main() returns int
+    var d = Direction.south
+    return d.rawValue
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: implicit-string-backed -->
+```maxon
+enum StringBacked
+    "North"
+    "South"
+    "East"
+end 'StringBacked'
+
+function main() returns int
+    var dir = StringBacked.North
+    if dir == StringBacked.South 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: implicit-char-backed -->
+```maxon
+enum CharBacked
+    'N'
+    'S'
+    'E'
+end 'CharBacked'
+
+function main() returns int
+    var dir = CharBacked.N
+    if dir == CharBacked.S 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: explicit-char-backed -->
+```maxon
+enum Direction
+    North = 'n'
+    South = 's'
+    East = 'e'
+end 'Direction'
+
+function main() returns int
+    var d = Direction.North
+    if d == Direction.South 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: float-backed -->
+```maxon
+enum FloatBacked
+    North = 1.1
+    South = 2.2
+    East = 3.3
+end 'FloatBacked'
+
+function main() returns int
+    var f = FloatBacked.North
+    if f == FloatBacked.South 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: float-backed-rawvalue -->
+```maxon
+enum Weights
+    light = 1.5
+    medium = 2.5
+    heavy = 3.5
+end 'Weights'
+
+function main() returns int
+    var w = Weights.medium
+    var rawVal = w.rawValue
+    if rawVal > 2.0 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: int-backed-rawvalue -->
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+    serverError = 500
+end 'HttpStatus'
+
+function main() returns int
+    var status = HttpStatus.notFound
+    var code = status.rawValue
+    if code == 404 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: explicit-string-backed-rawvalue -->
+```maxon
+enum Planet
+    earth = "Earth"
+    mars = "Mars"
+end 'Planet'
+
+function main() returns int
+    var p = Planet.mars
+    var name = p.rawValue
+    if name == "Mars" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: implicit-string-backed-rawvalue -->
+```maxon
+enum Direction
+    "North"
+    "South"
+    "East"
+end 'Direction'
+
+function main() returns int
+    var d = Direction.South
+    var name = d.rawValue
+    if name == "South" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: explicit-char-backed-rawvalue -->
+```maxon
+enum CardSuit
+    Hearts = 'H'
+    Diamonds = 'D'
+    Spades = 'S'
+end 'CardSuit'
+
+function main() returns int
+    var suit = CardSuit.Diamonds
+    var ch = suit.rawValue
+    if ch == 'D' 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: implicit-char-backed-rawvalue -->
+```maxon
+enum Compass
+    'N'
+    'S'
+    'E'
+    'W'
+end 'Compass'
+
+function main() returns int
+    var c = Compass.E
+    var ch = c.rawValue
+    if ch == 'E' 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: string-rawvalue-dynamic-comparison -->
+```maxon
+enum Planet
+    earth = "Earth"
+    mars = "Mars"
+end 'Planet'
+
+function getName() returns String
+    return "Mars"
+end 'getName'
+
+function main() returns int
+    var p = Planet.mars
+    var name = p.rawValue
+    var expected = getName()
+    if name == expected 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: string-rawvalue-after-reassign -->
+```maxon
+enum Planet
+    earth = "Earth"
+    mars = "Mars"
+end 'Planet'
+
+function main() returns int
+    var p = Planet.earth
+    p = Planet.mars
+    var name = p.rawValue
+    if name == "Mars" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: float-rawvalue-in-function -->
+```maxon
+enum Weights
+    light = 1.5
+    medium = 2.5
+end 'Weights'
+
+function getRaw(w Weights) returns float
+    return w.rawValue
+end 'getRaw'
+
+function main() returns int
+    var w = Weights.medium
+    var raw = getRaw(w)
+    if raw > 2.0 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: int-rawvalue-in-function -->
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+function getCode(s HttpStatus) returns int
+    return s.rawValue
+end 'getCode'
+
+function main() returns int
+    var status = HttpStatus.notFound
+    var code = getCode(status)
+    if code == 404 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: string-rawvalue-function-param -->
+```maxon
+enum Planet
+    earth = "Earth"
+    mars = "Mars"
+    venus = "Venus"
+end 'Planet'
+
+function getName(p Planet) returns String
+    return p.rawValue
+end 'getName'
+
+function main() returns int
+    var planet = Planet.mars
+    var name = getName(planet)
+    if name == "Mars" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: char-rawvalue-function-param -->
+```maxon
+enum Grade
+    excellent = 'A'
+    good = 'B'
+    average = 'C'
+end 'Grade'
+
+function getLetter(g Grade) returns Character
+    return g.rawValue
+end 'getLetter'
+
+function main() returns int
+    var grade = Grade.good
+    var letter = getLetter(grade)
+    if letter == 'B' 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.mixed-backing-types -->
+```maxon
+enum Mixed
+    first = 1
+    second = "two"
+end 'Mixed'
+
+function main() returns int
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E032: specs/fragments/enums.error.mixed-backing-types.1.test:4:5: raw value type mismatch: 'expected int, got String'
 ```

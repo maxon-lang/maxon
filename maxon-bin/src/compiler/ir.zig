@@ -314,6 +314,7 @@ pub const Instruction = struct {
         ffloor, // floor of float to int (round toward negative infinity)
         fround, // round float to nearest int (round to nearest even)
         bitcast_f64_to_i64, // reinterpret f64 bits as i64 (for hashing)
+        bitcast_i64_to_f64, // reinterpret i64 bits as f64 (for float-backed enums)
         sext_i32_i64, // sign-extend i32 to i64
         trunc_i64_i32, // truncate i64 to i32
         trunc_i64_i8, // truncate i64 to i8 (byte)
@@ -407,6 +408,7 @@ pub const Instruction = struct {
                 .ffloor => "ffloor",
                 .fround => "fround",
                 .bitcast_f64_to_i64 => "bitcast.f64.i64",
+                .bitcast_i64_to_f64 => "bitcast.i64.f64",
                 .sext_i32_i64 => "sext.i32.i64",
                 .trunc_i64_i32 => "trunc.i64.i32",
                 .trunc_i64_i8 => "trunc.i64.i8",
@@ -579,6 +581,46 @@ pub const Function = struct {
         return self.value_names.get(val);
     }
 
+    /// Try to get the constant i64 value if this Value is a const_i64 instruction.
+    /// Also traces through loads to find the stored constant value.
+    /// Returns null if the value is not a constant or cannot be determined.
+    pub fn getConstantI64(self: *const Function, val: Value) ?i64 {
+        for (self.blocks.items) |block| {
+            for (block.instructions.items) |inst| {
+                if (inst.result == val) {
+                    if (inst.op == .const_i64) {
+                        return inst.operands[0].immediate_i64;
+                    }
+                    // Trace through loads: find what was stored to this address
+                    if (inst.op == .load) {
+                        const ptr = inst.operands[0].value;
+                        // Find the most recent store to this pointer
+                        return self.getStoredConstant(ptr);
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Find the constant value stored to a pointer, if any.
+    fn getStoredConstant(self: *const Function, ptr: Value) ?i64 {
+        // Search backwards through instructions to find the store
+        var last_stored_val: ?Value = null;
+        for (self.blocks.items) |block| {
+            for (block.instructions.items) |inst| {
+                if (inst.op == .store and inst.operands[0].value == ptr) {
+                    last_stored_val = inst.operands[1].value;
+                }
+            }
+        }
+        if (last_stored_val) |stored_val| {
+            // Recursively check if the stored value is a constant
+            return self.getConstantI64(stored_val);
+        }
+        return null;
+    }
+
     /// Get a base name for an operation type (temporary values).
     fn opToBaseName(op: Instruction.Op) []const u8 {
         return switch (op) {
@@ -612,7 +654,7 @@ pub const Function = struct {
             .fceil => "tmp_fceil",
             .ffloor => "tmp_ffloor",
             .fround => "tmp_fround",
-            .bitcast_f64_to_i64 => "tmp_bitcast",
+            .bitcast_f64_to_i64, .bitcast_i64_to_f64 => "tmp_bitcast",
             .sext_i32_i64 => "tmp_sext",
             .trunc_i64_i32 => "tmp_trunc",
             .trunc_i64_i8 => "tmp_trunc_i8",
