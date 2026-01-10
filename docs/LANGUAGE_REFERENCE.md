@@ -12,7 +12,6 @@ This reference provides complete syntax and semantics for the Maxon programming 
 1. [Program Structure](#program-structure)
 2. [Lexical Elements](#lexical-elements)
 3. [Types](#types)
-   - [Optional Types](#optional-types)
    - [Type Conversions](#type-conversions)
 4. [Types (Composite)](#types-composite)
 5. [Enums](#enums)
@@ -66,8 +65,8 @@ Single-line comments only:
 ### Keywords
 ```
 and, as, associatedtype, bool, break, continue, default, else, end, enum, export, extern,
-fallthrough, false, float, for, function, gives, if, in, int, interface, is, let, match,
-nil, not, or, return, static, then, true, type, var, while
+fallthrough, false, float, for, function, gives, if, ignore, in, int, interface, is, let, match,
+not, or, otherwise, return, static, then, throws, true, try, type, var, while
 ```
 
 ### Literals
@@ -173,180 +172,9 @@ true
 false
 ```
 
-**Nil Literal**
-```maxon
-nil  // Represents absence of a value (for optional types)
-```
-
 ---
 
 ## Types
-
-### Optional Types
-
-Optional types represent values that may or may not be present. Use `T or nil` to declare an optional type, where `T` is any type.
-
-**Syntax**
-```maxon
-returns int or nil
-    if b == 0 'check'
-        return nil
-    end 'check'
-    return a / b
-end 'safeDivide'
-```
-
-**Key Features**
-- **Type Safety**: Cannot use optional values without unwrapping
-- **Nil Literal**: Use `nil` to represent absence of value
-- **If-Let Unwrapping**: Safe pattern matching to extract values
-- **Else-Unwrap**: Provide default value when optional is nil
-- **Implicit Wrapping**: Non-nil values automatically wrapped when needed
-
-**Usage Contexts**
-
-Optional types can be used in:
-- Function return types: `returns int or nil`
-- Function parameters: `function bar(x int or nil)`
-- Struct fields: `type Person { var age int or nil }`
-- Local variables: `var result int or nil`
-
-**If-Let Unwrapping**
-
-Safely unwrap optional values with `if let`:
-
-```maxon
-var result = safeDivide(10, 2)
-
-if let val = result 'valid'
-    // val is unwrapped int here
-    print("{val + 5}")  // 10
-end 'valid' else 'invalid'
-    // result was nil
-    print("Cannot divide by zero")
-end 'invalid'
-```
-
-**Else-Unwrap with Default**
-
-Provide a default value when the optional is nil:
-
-```maxon
-var result = safeDivide(10, 0) else 'default'
-    result = 1  // Must assign default value
-end 'default'
-
-// result is guaranteed to be int (non-optional) here
-print("{result}")  // 1
-```
-
-**Nil Coalescing Operator**
-
-The nil coalescing operator `or` provides a concise way to unwrap an optional with a default value:
-
-```maxon
-var x = optionalValue or defaultValue
-```
-
-This is equivalent to if-let with a default, but more concise:
-
-```maxon
-var opt = getOptional()
-var result = opt or 0  // result is unwrapped int, using 0 if opt is nil
-```
-
-The result type is always the unwrapped type (non-optional). The right operand cannot be optional (no chaining).
-
-**Guard-Let Statement**
-
-Guard-let provides early exit when an optional is nil, reducing nesting:
-
-```maxon
-function process(value int or nil) returns int
-    let x = value or 'nil_case'
-        return 0  // Must exit scope (return, break, continue)
-    end 'nil_case'
-    
-    // x is guaranteed to be unwrapped int here
-    return x * 2
-end 'process'
-```
-
-The guard body must exit the current scope, ensuring the variable is always bound after the guard block.
-
-**Nil Default Parameters**
-
-Optional parameters can use `nil` as the default value:
-
-```maxon
-function greet(name string or nil = nil)
-    let actualName = name or 'default'
-        print("Hello, stranger!")
-        return
-    end 'default'
-    print("Hello, " + actualName + "!")
-end 'greet'
-
-greet()               // Uses nil default
-greet(name = "Alice") // Uses provided value
-```
-
-**Type Safety**
-
-The compiler prevents using optional values without unwrapping:
-
-```maxon
-var x = safeDivide(10, 2)
-return x + 5  // ERROR: Cannot use optional without unwrapping
-```
-
-**Optional Parameters**
-
-Functions can accept optional parameters:
-
-```maxon
-function greet(name string or nil)
-    if let n = name 'valid'
-        print("Hello, " + n)
-    end 'valid' else 'invalid'
-        print("Hello, stranger")
-    end 'invalid'
-end 'greet'
-
-greet("Alice")  // Implicitly wraps "Alice" as Some
-greet(nil)      // Passes nil
-```
-
-**Optional Struct Fields**
-
-Structs can have optional fields:
-
-```maxon
-type Person
-    var name string
-    var age int or nil  // Optional age
-end 'Person'
-
-var p1 = Person{name: "Bob", age: nil}
-var p2 = Person{name: "Alice", age: 30}  // Implicitly wraps 30
-
-if let age = p2.age 'check'
-    print("{age}")  // 30
-end 'check'
-```
-
-**Memory Layout**
-
-Optional types use a discriminated union with an 8-bit tag:
-- Tag = 0: nil (value space unused)
-- Tag = 1: has value
-- Size: 1 byte (tag) + sizeof(T) + padding for alignment
-- Stack-allocated, no heap allocation or garbage collection
-
-Examples:
-- `int or nil`: 9 bytes (1 tag + 8 int)
-- `bool or nil`: 2 bytes (1 tag + 1 bool)
-- `ptr or nil`: 9 bytes (1 tag + 8 pointer)
 
 ### Type Conversions
 
@@ -1021,71 +849,6 @@ end 'else'
 - Condition must be `bool` type
 - Can nest arbitrarily
 
-### If-Let Statement
-
-The `if let` statement safely unwraps optional values with pattern matching.
-
-**Syntax**
-```maxon
-if let binding = optional_expression 'some'
-    // binding is unwrapped value (non-optional) here
-    statements
-end 'some' else 'none'
-    // optional was nil
-    statements
-end 'none'
-```
-
-**Example**
-```maxon
-returns int or nil
-    if b == 0 'check'
-        return nil
-    end 'check'
-    return a / b
-end 'safeDivide'
-
-var result = safeDivide(10, 2)
-if let val = result 'valid'
-    print("{val + 5}")  // val is unwrapped int
-end 'valid' else 'invalid'
-    print("Division by zero")
-end 'invalid'
-```
-
-**Notes:**
-- `binding` is only in scope within the then-block
-- Optional expression must have type `T or nil`
-- The `else` block is optional
-- Block identifier required and must match on all keywords
-
-### Else-Unwrap Statement
-
-The else-unwrap statement unwraps an optional value or provides a default.
-
-**Syntax**
-```maxon
-var name = optional_expression else 'label'
-    name = default_value  // Must assign default value
-end 'label'
-// name is guaranteed to be non-optional here
-```
-
-**Example**
-```maxon
-var result = safeDivide(10, 0) else 'default'
-    result = 1  // Provide default when nil
-end 'default'
-
-print("{result}")  // result is int, not int or nil
-```
-
-**Notes:**
-- Variable must be assigned within the else block
-- The else block only executes when the optional is nil
-- After the else block, the variable has the unwrapped type (non-optional)
-- Block identifier required and must match
-
 ### While Loop
 ```maxon
 while condition 'label'
@@ -1255,7 +1018,7 @@ Skips to next iteration of the innermost loop, or continues to a specific labele
 
 ## Error Handling
 
-Maxon provides Swift-style error handling with typed errors. Error types must be enums conforming to the `Error` interface.
+Maxon provides error handling with typed errors. Error types must be enums conforming to the `Error` interface.
 
 ### Defining Error Types
 
@@ -1316,48 +1079,106 @@ throw HttpError.serverError
 - `throw` is only valid inside functions with a `throws` declaration
 - The thrown value must match the declared error type
 
-### Do-Catch Blocks
+### Handling Errors with `otherwise`
 
-Handle errors from throwing functions with `do-catch`:
+The `otherwise` keyword provides unified error handling for throwing expressions. There are four forms:
+
+#### Default Value Form
+
+Provide a default value when an error occurs:
 
 ```maxon
-do 'io'
-    let config = try readFile("config.json")
-    let data = try readFile("data.json")
-    process(config, data)
-catch e FileError 'fileErr'
-    print("File error occurred")
-catch e 'any'
-    print("Unknown error")
-end 'io'
+let value = try mayFail() otherwise 42
 ```
 
-**Syntax:**
+If `mayFail()` throws, `value` is assigned `42`. The default expression must match the return type.
+
 ```maxon
-do 'label'
-    // statements with try expressions
-catch bindingName ErrorType 'catchLabel'
-    // handle specific error type
-catch bindingName 'catchLabel'
-    // catch-all for any error
-end 'label'
+function readConfig() returns String
+    // If readFile throws, use empty string as default
+    let contents = try readFile("config.json") otherwise ""
+    return contents
+end 'readConfig'
 ```
 
-### Try Expression
+#### Ignore Form
 
-Use `try` before calling a throwing function to propagate errors:
+Discard errors when you don't need the result:
+
+```maxon
+try mayFail() otherwise ignore
+```
+
+This silently ignores any thrown error. Use sparingly—typically for cleanup operations where errors can be safely ignored.
+
+```maxon
+function cleanup()
+    // Best-effort cleanup, ignore failures
+    try deleteFile("temp.txt") otherwise ignore
+end 'cleanup'
+```
+
+#### Block Handler Form
+
+Execute a block of code when an error occurs:
+
+```maxon
+try readFile("config.json") otherwise 'handler'
+    print("File not found, using defaults")
+    useDefaults()
+end 'handler'
+```
+
+The block executes only if an error is thrown.
+
+```maxon
+function loadData() returns int
+    var result = 0
+    try parseFile("data.txt") otherwise 'err'
+        result = -1  // Mark as failed
+        logError("Parse failed")
+    end 'err'
+    return result
+end 'loadData'
+```
+
+#### Block with Error Binding
+
+Capture the error for inspection:
+
+```maxon
+try readFile("config.json") otherwise (e) 'handler'
+    print("Error occurred")
+    logError(e)
+end 'handler'
+```
+
+The error is bound to the variable `e` within the block, allowing you to inspect or log it.
+
+```maxon
+function processFile(path String)
+    try readFile(path) otherwise (err) 'handler'
+        // err contains the FileError value
+        print("Failed to read file")
+    end 'handler'
+end 'processFile'
+```
+
+### Error Propagation
+
+Use `try` without `otherwise` to propagate errors to the caller. This is only valid inside functions declared with `throws`:
 
 ```maxon
 function loadConfig() returns Config throws FileError
+    // If readFile throws, the error propagates to our caller
     let contents = try readFile("config.json")
     return parse(contents)
 end 'loadConfig'
 ```
 
 **Rules:**
-- `try` is required when calling throwing functions inside a `do` block
-- Errors propagate to the nearest `catch` clause
-- In a throwing function, `try` propagates to the caller
+- `try` without `otherwise` is only valid in functions with `throws`
+- The error type must match or be compatible with the function's declared error type
 
 ### Error Union Types
 
@@ -1394,12 +1215,21 @@ function parseNumber(s String) returns int throws ParseError
 end 'parseNumber'
 
 function main() returns int
-    do 'parse'
-        let num = try parseNumber("42")
-        return num
-    catch e ParseError 'err'
-        return 0
-    end 'parse'
+    // Use default value on error
+    let num1 = try parseNumber("42") otherwise 0
+    
+    // Handle error in block
+    var num2 = 0
+    try parseNumber("invalid") otherwise 'err'
+        num2 = -1
+    end 'err'
+    
+    // Handle with error binding
+    try parseNumber("") otherwise (e) 'handler'
+        print("Parse error occurred")
+    end 'handler'
+    
+    return num1
 end 'main'
 ```
 
@@ -1906,19 +1736,10 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
     greet("Smith", title = "Dr.") // Override with named arg
     ```
 
-13. **Use nil coalescing for concise defaults**:
+13. **Use `try otherwise` for error handling**:
     ```maxon
-    var result = optionalValue or defaultValue  // Clean one-liner
-    ```
-
-14. **Use guard-let for early exits**:
-    ```maxon
-    function process(x int or nil) returns int
-        let value = x or 'nil_case'
-            return 0  // Early exit on nil
-        end 'nil_case'
-        return value * 2  // value is guaranteed non-nil
-    end 'process'
+    let value = try mayFail() otherwise 42  // Default value on error
+    try cleanup() otherwise ignore          // Ignore errors in cleanup
     ```
 
 ---

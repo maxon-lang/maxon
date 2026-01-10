@@ -228,9 +228,19 @@ pub const MutationAnalyzer = struct {
             .closure => |clos| {
                 self.checkExpressionForParamMutation(clos.body.*, param_indices, mutated);
             },
-            // Try expressions - check inner expression
+            // Try expressions - check inner expression and otherwise clause
             .try_expr => |te| {
                 self.checkExpressionForParamMutation(te.expr.*, param_indices, mutated);
+                // Also check mutations in otherwise clause if present
+                if (te.otherwise) |otherwise| {
+                    if (otherwise.default_expr) |default| {
+                        self.checkExpressionForParamMutation(default.*, param_indices, mutated);
+                    }
+                    // Check mutations in otherwise block body
+                    for (otherwise.body) |stmt| {
+                        self.checkStatementForMutation(stmt, param_indices, mutated);
+                    }
+                }
             },
             // Match expressions - check scrutinee, patterns and results
             .match_expr => |me| {
@@ -657,7 +667,7 @@ pub const SemanticAnalyzer = struct {
         for (fields, 0..) |field, i| {
             const value_type = try self.typeExprToValueType(field.type_expr);
             const display_name = self.typeExprToDisplayName(field.type_expr);
-            
+
             // Determine field size - check if it's a registered struct type or Array type
             const size: i32 = switch (value_type) {
                 .struct_type => |type_name| blk: {
@@ -754,6 +764,7 @@ pub const SemanticAnalyzer = struct {
                 // Other generic types treated as struct
                 return ValueType{ .struct_type = g.base_type };
             },
+            // DEPRECATED: optional types are being removed in favor of error unions
             .optional => |wrapped| {
                 const wrapped_vt = try self.typeExprToValueType(wrapped.*);
                 return ValueType{ .optional_type = .{
@@ -1103,6 +1114,14 @@ pub const SemanticAnalyzer = struct {
             },
             .try_expr => |te| {
                 try self.discoverInExpression(te.expr.*);
+                // Also discover in otherwise clause if present
+                if (te.otherwise) |otherwise| {
+                    if (otherwise.default_expr) |default| {
+                        try self.discoverInExpression(default.*);
+                    }
+                    // Discover in otherwise block body
+                    try self.discoverInStatements(otherwise.body);
+                }
             },
             .closure => |clos| {
                 try self.discoverInExpression(clos.body.*);
@@ -1364,7 +1383,7 @@ pub const SemanticAnalyzer = struct {
             .integer => ValueType{ .primitive = "int" },
             .float_lit => ValueType{ .primitive = "float" },
             .bool_lit => ValueType{ .primitive = "bool" },
-            .nil_lit => ValueType{ .optional_type = .{ .wrapped = .i64 } },
+            .nil_lit => null, // nil literals are no longer supported
             .string_literal => ValueType{ .struct_type = "String" },
             .char_literal => ValueType{ .struct_type = "Character" },
             .identifier => |name| blk: {

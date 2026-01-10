@@ -1,7 +1,7 @@
 ---
 feature: error-handling
 status: experimental
-keywords: [error, throw, try, catch, do, throws, Error]
+keywords: [error, throw, try, otherwise, throws, Error]
 category: error-handling
 ---
 
@@ -48,25 +48,59 @@ function readFile(path string) returns string throws FileError
 end 'readFile'
 ```
 
-### Handling Blocks (do-catch)
+### Error Handling with `otherwise`
 
-Use `do-catch` blocks for handling throwing calls:
+The `otherwise` keyword provides unified error handling for throwing expressions. There are four forms:
+
+#### Default Value Form
+
+Provide a default value when an error occurs:
 
 ```maxon
-do 'io'
-    let config = try readFile("config.json")
-    let data = try readFile("data.json")
-    process(config, data)
-end 'io' catch (e FileError) 'fileErr'
-    print("File error occurred")
-end 'fileErr' catch (e) 'any'
-    print("Unknown error")
-end 'any'
+let value = try mayFail() otherwise 42
 ```
+
+If `mayFail()` throws, `value` is assigned `42`. The default expression must match the return type.
+
+#### Ignore Form
+
+Discard errors when you don't need the result:
+
+```maxon
+try mayFail() otherwise ignore
+```
+
+This silently ignores any thrown error. Use sparingly.
+
+#### Block Handler Form
+
+Execute a block of code when an error occurs:
+
+```maxon
+try readFile("config.json") otherwise 'handler'
+    print("File not found, using defaults")
+    useDefaults()
+end 'handler'
+```
+
+The block executes only if an error is thrown.
+
+#### Block with Error Binding
+
+Capture the error for inspection:
+
+```maxon
+try readFile("config.json") otherwise (e) 'handler'
+    print("Error: ")
+    logError(e)
+end 'handler'
+```
+
+The error is bound to `e` within the block.
 
 ### Error Propagation
 
-Use `try` to propagate errors to the caller:
+Use `try` without `otherwise` to propagate errors to the caller (only valid in functions with `throws`):
 
 ```maxon
 function loadConfig() returns Config throws FileError
@@ -251,3 +285,137 @@ end 'main'
 99
 ```
 
+<!-- test: error.otherwise-default-value -->
+```maxon
+// Test try otherwise with default value
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+    throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+    let val = try mayFail() otherwise 42
+    return val
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.otherwise-default-success -->
+```maxon
+// Test try otherwise when no error occurs
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(shouldFail bool) returns int throws MyError
+    if shouldFail 'check'
+        throw MyError.failed
+    end 'check'
+    return 100
+end 'mayFail'
+
+function main() returns int
+    let val = try mayFail(false) otherwise 42
+    return val
+end 'main'
+```
+```exitcode
+100
+```
+
+<!-- test: error.otherwise-ignore -->
+```maxon
+// Test try otherwise ignore
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+    throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+    try mayFail() otherwise ignore
+    return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.otherwise-block -->
+```maxon
+// Test try otherwise block handler
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+    throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    try mayFail() otherwise 'err'
+        result = 42
+    end 'err'
+    return result
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.otherwise-block-success -->
+```maxon
+// Test try otherwise block when no error
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(shouldFail bool) returns int throws MyError
+    if shouldFail 'check'
+        throw MyError.failed
+    end 'check'
+    return 100
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    try mayFail(false) otherwise 'err'
+        result = 42
+    end 'err'
+    return result
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.otherwise-block-with-binding -->
+```maxon
+// Test try otherwise block with error binding
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+    throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+    var caught = 0
+    try mayFail() otherwise (e) 'handler'
+        caught = 42
+    end 'handler'
+    return caught
+end 'main'
+```
+```exitcode
+42
+```

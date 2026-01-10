@@ -502,14 +502,27 @@ pub const InitFromArrayExpr = struct {
     elements: *const Expression, // The array literal expression
 };
 
-// Error handling: try expression modes
-pub const TryMode = enum {
-    propagate, // try expr - propagates error to caller
+// Error handling: otherwise clause modes
+pub const OtherwiseMode = enum {
+    default_expr, // try expr otherwise defaultExpr
+    ignore, // try expr otherwise ignore
+    block, // try expr otherwise 'label' ... end 'label'
+    block_with_err, // try expr otherwise (err) 'label' ... end 'label'
 };
 
+// Error handling: otherwise clause for try expressions
+pub const OtherwiseClause = struct {
+    mode: OtherwiseMode,
+    default_expr: ?*const Expression = null,
+    error_binding: ?[]const u8 = null,
+    block: BlockInfo = .{},
+    body: []const Statement = &.{},
+};
+
+// Error handling: try expression
 pub const TryExpr = struct {
     expr: *const Expression,
-    mode: TryMode,
+    otherwise: ?*const OtherwiseClause = null,
 };
 
 pub const Expression = union(enum) {

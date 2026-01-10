@@ -1,5 +1,65 @@
 const std = @import("std");
 
+/// Normalize a path in-place in a buffer by resolving .. and . components.
+/// Returns a slice of the buffer containing the normalized path.
+fn normalizePath(path: []const u8, buf: []u8) []const u8 {
+    // Handle Windows absolute paths (e.g., "C:\...")
+    var start: usize = 0;
+    var root_len: usize = 0;
+    if (path.len >= 2 and path[1] == ':') {
+        if (path.len >= 3 and (path[2] == '\\' or path[2] == '/')) {
+            root_len = 3;
+        } else {
+            root_len = 2;
+        }
+        start = root_len;
+    } else if (path.len >= 1 and (path[0] == '\\' or path[0] == '/')) {
+        root_len = 1;
+        start = 1;
+    }
+
+    // Copy root prefix
+    if (root_len > buf.len) return path;
+    @memcpy(buf[0..root_len], path[0..root_len]);
+
+    // Determine separator
+    const sep: u8 = if (std.mem.indexOf(u8, path, "\\") != null) '\\' else '/';
+
+    // Process path components
+    var out_pos: usize = root_len;
+    var iter = std.mem.tokenizeAny(u8, path[start..], "\\/");
+    var first = true;
+    while (iter.next()) |component| {
+        if (std.mem.eql(u8, component, "..")) {
+            // Go up one directory - find last separator and truncate
+            if (out_pos > root_len) {
+                out_pos -= 1; // skip past trailing content
+                while (out_pos > root_len and buf[out_pos - 1] != sep) {
+                    out_pos -= 1;
+                }
+                if (out_pos > root_len) {
+                    out_pos -= 1; // remove separator too
+                }
+                first = (out_pos == root_len);
+            }
+        } else if (!std.mem.eql(u8, component, ".")) {
+            // Add separator if not first component
+            if (!first) {
+                if (out_pos >= buf.len) return path;
+                buf[out_pos] = sep;
+                out_pos += 1;
+            }
+            first = false;
+            // Copy component
+            if (out_pos + component.len > buf.len) return path;
+            @memcpy(buf[out_pos..][0..component.len], component);
+            out_pos += component.len;
+        }
+    }
+
+    return buf[0..out_pos];
+}
+
 /// Error codes for the Maxon compiler
 pub const ErrorCode = enum {
     E001,
@@ -39,13 +99,8 @@ pub const ErrorCode = enum {
     E035, // wrong binding count in match
     E036, // duplicate block identifier
     E037, // missing return statement
-    E038, // optional type used without unwrapping
-    E039, // if let requires optional type
-    E040, // else unwrap requires optional type
-    E041, // cannot return nil from non-optional
     E042, // missing block identifier
     E043, // block identifier mismatch
-    E044, // else unwrap missing assignment
     E045, // unknown parameter name
     E046, // positional argument for default parameter
     E047, // duplicate argument
@@ -97,13 +152,8 @@ pub const ErrorCode = enum {
         .{ .code = "E035", .message = "wrong binding count" },
         .{ .code = "E036", .message = "duplicate block identifier" },
         .{ .code = "E037", .message = "missing return statement" },
-        .{ .code = "E038", .message = "optional type used without unwrapping" },
-        .{ .code = "E039", .message = "if let requires optional type" },
-        .{ .code = "E040", .message = "else unwrap requires optional type" },
-        .{ .code = "E041", .message = "cannot return nil from non-optional" },
         .{ .code = "E042", .message = "missing block identifier" },
         .{ .code = "E043", .message = "block identifier mismatch" },
-        .{ .code = "E044", .message = "else unwrap missing assignment" },
         .{ .code = "E045", .message = "unknown parameter name" },
         .{ .code = "E046", .message = "positional argument for parameter with default value" },
         .{ .code = "E047", .message = "duplicate argument" },
@@ -154,7 +204,9 @@ pub const CompileError = struct {
             try writer.writeAll("internal error: ");
         }
         if (self.location.file) |file| {
-            try writer.print("{s}:", .{file});
+            var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const normalized = normalizePath(file, &path_buf);
+            try writer.print("{s}:", .{normalized});
         }
         try writer.print("{d}:{d}: {s}\n", .{ self.location.line, self.location.column, self.message });
     }
@@ -167,7 +219,9 @@ pub const CompileError = struct {
             std.debug.print("internal error: ", .{});
         }
         if (self.location.file) |file| {
-            std.debug.print("{s}:", .{file});
+            var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const normalized = normalizePath(file, &path_buf);
+            std.debug.print("{s}:", .{normalized});
         }
         std.debug.print("{d}:{d}: {s}\n", .{ self.location.line, self.location.column, self.message });
     }

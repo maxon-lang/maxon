@@ -9,9 +9,9 @@ export type ByteView is Iterable with byte
 	var _managed __ManagedArray
 	var _pos int
 
-	function Iterable.next() returns byte or nil
+	function Iterable.next() returns byte throws IterationError
 		if _pos >= __managed_array_len(_managed) 'at_end'
-			return nil
+			throw IterationError.exhausted
 		end 'at_end'
 		var b = __managed_array_byte_at(_managed, _pos)
 		_pos = _pos + 1
@@ -32,9 +32,9 @@ export type CodepointView is Iterable with int
 	var _managed __ManagedArray
 	var _pos int
 
-	function Iterable.next() returns int or nil
+	function Iterable.next() returns int throws IterationError
 		if _pos >= __managed_array_len(_managed) 'at_end'
-			return nil
+			throw IterationError.exhausted
 		end 'at_end'
 		var cp = utf8DecodeAt(_managed, _pos)
 		var len = utf8ByteLengthAt(_managed, _pos)
@@ -65,7 +65,7 @@ export type UTF16View is Iterable with int
 	var _bytePos int
 	var _pendingCodepoint int  // Codepoint pending its low surrogate (0 if none)
 
-	function Iterable.next() returns int or nil
+	function Iterable.next() returns int throws IterationError
 		// If we have a pending codepoint, return its low surrogate
 		if _pendingCodepoint != 0 'has_pending'
 			var low = utf16TrailSurrogate(_pendingCodepoint)
@@ -74,7 +74,7 @@ export type UTF16View is Iterable with int
 		end 'has_pending'
 
 		if _bytePos >= __managed_array_len(_managed) 'at_end'
-			return nil
+			throw IterationError.exhausted
 		end 'at_end'
 
 		var cp = utf8DecodeAt(_managed, _bytePos)

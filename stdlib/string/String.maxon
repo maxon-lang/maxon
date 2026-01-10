@@ -79,7 +79,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		return true
 	end 'equals'
 
-	function Iterable.next() returns Character or nil
+	function Iterable.next() returns Character throws IterationError
 		if _iterPos < __managed_array_len(_managed) 'check'
 			var len = __managed_array_len(_managed)
 			var endPos = findGraphemeEndManaged(_managed, _iterPos, len)
@@ -88,7 +88,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 			_iterPos = endPos
 			return grapheme
 		end 'check'
-		return nil
+		throw IterationError.exhausted
 	end 'next'
 
 	function _makeCharFromBytes(pos int, len int) returns Character
@@ -116,9 +116,9 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 	end 'charAt'
 
 	/// Get the index after the given position (for iteration)
-	export function indexAfter(idx StringIndex) returns StringIndex or nil
+	export function indexAfter(idx StringIndex) returns StringIndex throws StringError
 		if idx.charIndex() >= countGraphemesManaged(_managed) 'atEnd'
-			return nil
+			throw StringError.invalidIndex
 		end 'atEnd'
 		var len = __managed_array_len(_managed)
 		var byteStart = idx.bytePos()
@@ -145,10 +145,10 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		return findManaged(_managed, needle._managed) >= 0
 	end 'contains'
 
-	export function find(needle String) returns StringIndex or nil
+	export function find(needle String) returns StringIndex throws StringError
 		var byteIdx = findManaged(_managed, needle._managed)
 		if byteIdx < 0 'not_found'
-			return nil
+			throw StringError.notFound
 		end 'not_found'
 		// Convert byte index to grapheme (char) index
 		var charIdx = byteIndexToGraphemeIndex(_managed, byteIdx)
@@ -157,15 +157,13 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 
 	// Slicing - returns a new String backed by slice into this string's buffer
 	// Use end_= for end position, or length= for character count
-	export function slice(start StringIndex, end_ StringIndex or nil = nil, length int or nil = nil) returns String
-		if let len = length 'has_length'
-			var endBytePos = graphemeOffsetToBytePos(_managed, start.bytePos(), len)
-			return __managed_array_slice(_managed, start.bytePos(), endBytePos)
-		end 'has_length'
-		if let endIdx = end_ 'has_end'
-			return __managed_array_slice(_managed, start.bytePos(), endIdx.bytePos())
-		end 'has_end'
-		return __managed_array_slice(_managed, start.bytePos(), __managed_array_len(_managed))
+	export function slice(start StringIndex, end StringIndex) returns String
+		return __managed_array_slice(_managed, start.bytePos(), end.bytePos())
+	end 'slice'
+
+	export function slice(start StringIndex, length int) returns String
+		var endBytePos = graphemeOffsetToBytePos(_managed, start.bytePos(), length)
+		return __managed_array_slice(_managed, start.bytePos(), endBytePos)
 	end 'slice'
 
 	// View methods
@@ -189,7 +187,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 	end 'cstr'
 
 	// Replace methods
-	export function replace(old String, new_ String) returns String
+	export function replace(old String, new String) returns String
 		var oldLen = __managed_array_len(old._managed)
 		if oldLen == 0 'empty_old'
 			return String{_managed: _managed, _iterPos: 0}
@@ -233,7 +231,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 			end 'has_prefix'
 
 			// Append replacement
-			builtResult = __managed_array_concat(builtResult, new_._managed)
+			builtResult = __managed_array_concat(builtResult, new._managed)
 			pos = matchPos + oldLen
 		end 'search'
 
@@ -246,7 +244,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		return builtResult
 	end 'replace'
 
-	export function replaceFirst(old String, new_ String) returns String
+	export function replaceFirst(old String, new String) returns String
 		var oldLen = __managed_array_len(old._managed)
 		if oldLen == 0 'empty_old'
 			return String{_managed: _managed, _iterPos: 0}
@@ -260,7 +258,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		var selfLen = __managed_array_len(_managed)
 		var prefixSlice = __managed_array_slice(_managed, 0, idx)
 		var suffixSlice = __managed_array_slice(_managed, idx + oldLen, selfLen)
-		return __managed_array_concat(__managed_array_concat(prefixSlice, new_._managed), suffixSlice)
+		return __managed_array_concat(__managed_array_concat(prefixSlice, new._managed), suffixSlice)
 	end 'replaceFirst'
 
 	// Case conversion

@@ -89,15 +89,15 @@ export type Character is Builtin, Hashable, Equatable, Comparable
 		return h
 	end 'hash'
 
-	// Returns ASCII value (0-127) for single-byte ASCII characters, nil otherwise
-	export function asciiValue() returns int or nil
+	// Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
+	export function asciiValue() returns int throws CharacterError
 		var len = __managed_array_len(_managed)
 		if len != 1 'check_len'
-			return nil
+			throw CharacterError.notAscii
 		end 'check_len'
 		var b = __managed_array_byte_at(_managed, 0)
 		if b >= 128 'check_ascii'
-			return nil
+			throw CharacterError.notAscii
 		end 'check_ascii'
 		return b as int
 	end 'asciiValue'

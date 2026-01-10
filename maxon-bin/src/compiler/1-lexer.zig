@@ -25,7 +25,6 @@ pub const TokenType = enum {
     @"and",
     @"or",
     not,
-    nil,
     // Type system keywords
     uses,
     is,
@@ -44,8 +43,8 @@ pub const TokenType = enum {
     throws, // function throws error
     throw, // throw an error
     @"try", // try expression
-    @"catch", // catch clause
-    do, // do block for error handling
+    otherwise, // otherwise clause for try expressions
+    ignore, // ignore errors in otherwise clause
     // Match statement keywords
     match, // match statement/expression
     then, // case separator for statements
@@ -599,7 +598,6 @@ pub const Lexer = struct {
         .{ "and", TokenType.@"and", KeywordCategory.logical, "Logical AND operator. Returns true if both operands are true.", false },
         .{ "or", TokenType.@"or", KeywordCategory.logical, "Logical OR operator. Returns true if either operand is true.", true },
         .{ "not", TokenType.not, KeywordCategory.logical, "Logical NOT operator. Negates a boolean value.", false },
-        .{ "nil", TokenType.nil, KeywordCategory.constant, "Represents the absence of a value for optional types.", false },
         .{ "int", TokenType.int, KeywordCategory.type_keyword, "Primitive integer type (64-bit signed).", false },
         .{ "float", TokenType.float, KeywordCategory.type_keyword, "Primitive floating-point type (64-bit double precision).", false },
         .{ "bool", TokenType.bool, KeywordCategory.type_keyword, "Primitive boolean type (true or false).", false },
@@ -620,8 +618,8 @@ pub const Lexer = struct {
         .{ "throws", TokenType.throws, KeywordCategory.other, "Indicates that a function may throw an error.", false },
         .{ "throw", TokenType.throw, KeywordCategory.control, "Throws an error that can be caught by a try-catch block.", false },
         .{ "try", TokenType.@"try", KeywordCategory.control, "Attempts an operation that may throw an error.", false },
-        .{ "catch", TokenType.@"catch", KeywordCategory.control, "Handles errors thrown in a try block.", false },
-        .{ "do", TokenType.do, KeywordCategory.control, "Used in do-while loops or do-catch blocks.", false },
+        .{ "otherwise", TokenType.otherwise, KeywordCategory.control, "Provides a fallback for try expressions when an error occurs.", true },
+        .{ "ignore", TokenType.ignore, KeywordCategory.control, "Used with otherwise to silently ignore errors.", false },
         .{ "match", TokenType.match, KeywordCategory.control, "Pattern matching statement for enums and values.", false },
         .{ "then", TokenType.then, KeywordCategory.control, "Used in match expressions to separate pattern from result.", true },
         .{ "fallthrough", TokenType.fallthrough, KeywordCategory.control, "Falls through to the next case in a match statement.", false },

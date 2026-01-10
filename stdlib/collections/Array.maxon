@@ -36,19 +36,19 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 		return __managed_array_len(managed) == 0
 	end 'isEmpty'
 
-	/// Get first element, or nil if empty
-	export function first() returns Element or nil
+	/// Get first element, throws if empty
+	export function first() returns Element throws ArrayError
 		if __managed_array_len(managed) == 0 'empty'
-			return nil
+			throw ArrayError.indexOutOfBounds
 		end 'empty'
 		return managed[0]
 	end 'first'
 
-	/// Get last element, or nil if empty
-	export function last() returns Element or nil
+	/// Get last element, throws if empty
+	export function last() returns Element throws ArrayError
 		var len = __managed_array_len(managed)
 		if len == 0 'empty'
-			return nil
+			throw ArrayError.indexOutOfBounds
 		end 'empty'
 		return managed[len - 1]
 	end 'last'
@@ -57,14 +57,14 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 	// Element Access
 	// =========================================================================
 
-	/// Get element at index, or nil if out of bounds
-	export function Indexed.get(index int) returns Element or nil
+	/// Get element at index, throws if out of bounds
+	export function Indexed.get(index int) returns Element throws ArrayError
 		var len = __managed_array_len(managed)
 		if index < 0 'lower'
-			return nil
+			throw ArrayError.indexOutOfBounds
 		end 'lower'
 		if index >= len 'upper'
-			return nil
+			throw ArrayError.indexOutOfBounds
 		end 'upper'
 		return managed[index]
 	end 'get'
@@ -141,11 +141,11 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 		return self
 	end 'append'
 
-	/// Remove and return last element, or nil if empty
-	export function pop() returns Element or nil
+	/// Remove and return last element, throws if empty
+	export function pop() returns Element throws ArrayError
 		var len = __managed_array_len(managed)
 		if len == 0 'empty'
-			return nil
+			throw ArrayError.indexOutOfBounds
 		end 'empty'
 		var newLen = len - 1
 		var value = managed[newLen]
@@ -180,16 +180,16 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 		return self
 	end 'insert'
 
-	/// Remove and return element at index, shifting elements to the left (returns nil if out of bounds)
-	export function remove(at int) returns Element or nil
+	/// Remove and return element at index, shifting elements to the left (throws if out of bounds)
+	export function remove(at int) returns Element throws ArrayError
 		var len = __managed_array_len(managed)
 
 		// Check bounds
 		if at < 0 'lower'
-			return nil
+			throw ArrayError.indexOutOfBounds
 		end 'lower'
 		if at >= len 'upper'
-			return nil
+			throw ArrayError.indexOutOfBounds
 		end 'upper'
 
 		// Save element before shifting
@@ -227,11 +227,11 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 	// Iterable Interface
 	// =========================================================================
 
-	/// Get next element in iteration, or nil when exhausted
-	function Iterable.next() returns Element or nil
+	/// Get next element in iteration, throws when exhausted
+	function Iterable.next() returns Element throws IterationError
 		var len = __managed_array_len(managed)
 		if iterIndex >= len 'done'
-			return nil
+			throw IterationError.exhausted
 		end 'done'
 		var value = managed[iterIndex]
 		iterIndex = iterIndex + 1

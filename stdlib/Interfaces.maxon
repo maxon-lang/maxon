@@ -24,6 +24,32 @@ end 'Builtin'
 export interface Error
 end 'Error'
 
+// ArrayError - errors for indexed collection operations
+export enum ArrayError is Error
+	indexOutOfBounds
+end 'ArrayError'
+
+// MapError - errors for dictionary/map operations
+export enum MapError is Error
+	keyNotFound
+end 'MapError'
+
+// IterationError - errors for iterator exhaustion
+export enum IterationError is Error
+	exhausted
+end 'IterationError'
+
+// StringError - errors for string operations
+export enum StringError is Error
+	notFound
+	invalidIndex
+end 'StringError'
+
+// CharacterError - errors for character operations
+export enum CharacterError is Error
+	notAscii
+end 'CharacterError'
+
 // Hashable - types that can be hashed to an integer
 export interface Hashable
 	function hash() returns int
@@ -45,11 +71,11 @@ export interface Cloneable
 end 'Cloneable'
 
 // Iterable - types that can be iterated over (used by for-in loops)
-// Types conforming to Iterable return the next element or nil when exhausted.
+// Types conforming to Iterable throw IterationError.exhausted when done.
 // The next() method advances the iterator and returns the element atomically.
 // Structs provide concrete Element type via 'is Iterable with Type'.
 export interface Iterable uses Element
-	function next() returns Element or nil
+	function next() returns Element throws IterationError
 end 'Iterable'
 
 // Sized - types that have a count/length
@@ -59,7 +85,7 @@ end 'Sized'
 
 // Indexed - types with integer-based positional access
 export interface Indexed uses Element
-    function get(index int) returns Element or nil
+    function get(index int) returns Element throws ArrayError
     function set(index int, value Element)
 end 'Indexed'
 
@@ -90,7 +116,7 @@ end 'Subscriptable'
 // Uses associated types for Key and Value
 export interface Dictionary uses Key, Value
 	function insert(key Key, value Value)
-	function get(key Key) returns Value or nil
+	function get(key Key) returns Value throws MapError
 	function contains(key Key) returns bool
 	function remove(key Key) returns bool
 end 'Dictionary'

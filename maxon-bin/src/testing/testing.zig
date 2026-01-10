@@ -48,8 +48,6 @@ pub fn validateStdlibCompilation(
         if (compile_result.error_info) |err| {
             std.debug.print("\nStdlib compilation failed:\n", .{});
             err.printToStderr();
-        } else {
-            std.debug.print("\nStdlib compilation failed with unknown error\n", .{});
         }
         std.debug.print("\nCannot proceed until stdlib is fixed.\n", .{});
     }

@@ -755,14 +755,25 @@ pub const Parser = struct {
             base_type = .{ .simple = type_name };
         }
 
-        // Check for optional: T or nil
+        // Check for optional type: T or nil
         if (self.check(.@"or")) {
             _ = self.advance(); // consume 'or'
-            _ = try self.expect(.nil);
+            // Expect 'nil' keyword (parsed as identifier)
+            if (!self.check(.identifier)) {
+                self.reportErrorWithDetails(.E002, self.current().text);
+                return error.UnexpectedToken;
+            }
+            const nil_tok = self.current();
+            if (!std.mem.eql(u8, nil_tok.text, "nil")) {
+                self.reportErrorWithDetails(.E002, nil_tok.text);
+                return error.UnexpectedToken;
+            }
+            _ = self.advance(); // consume 'nil'
 
-            const wrapped = try self.allocator.create(ast.TypeExpr);
-            wrapped.* = base_type;
-            return .{ .optional = wrapped };
+            // Wrap the base type in an optional
+            const base_ptr = try self.allocator.create(ast.TypeExpr);
+            base_ptr.* = base_type;
+            return .{ .optional = base_ptr };
         }
 
         return base_type;
@@ -805,23 +816,11 @@ pub const Parser = struct {
             return_type = ret_ptr;
         }
 
-        const base_type: ast.TypeExpr = .{ .function_type = .{
+        return .{ .function_type = .{
             .param_types = try param_types.toOwnedSlice(self.allocator),
             .param_names = try param_names.toOwnedSlice(self.allocator),
             .return_type = return_type,
         } };
-
-        // Check for optional: ((int) returns int) or nil
-        if (self.check(.@"or")) {
-            _ = self.advance(); // consume 'or'
-            _ = try self.expect(.nil);
-
-            const wrapped = try self.allocator.create(ast.TypeExpr);
-            wrapped.* = base_type;
-            return .{ .optional = wrapped };
-        }
-
-        return base_type;
     }
 
     const FunctionTypeParam = struct {
@@ -927,18 +926,12 @@ pub const Parser = struct {
         }
         if (self.check(.let)) {
             const decl_stmt = try self.parseVarDecl(false);
-            // else-unwrap and guard-let handle their own newlines
-            if (decl_stmt.kind != .else_unwrap_decl and decl_stmt.kind != .guard_let_decl) {
-                _ = try self.expect(.newline);
-            }
+            _ = try self.expect(.newline);
             return decl_stmt;
         }
         if (self.check(.@"var")) {
             const decl_stmt = try self.parseVarDecl(true);
-            // else-unwrap handles its own newlines
-            if (decl_stmt.kind != .else_unwrap_decl) {
-                _ = try self.expect(.newline);
-            }
+            _ = try self.expect(.newline);
             return decl_stmt;
         }
         if (self.check(.@"if")) {
@@ -968,10 +961,6 @@ pub const Parser = struct {
         if (self.check(.throw)) {
             return try self.parseThrowStatement();
         }
-        // Error handling: do-catch block
-        if (self.check(.do)) {
-            return try self.parseDoCatchStatement();
-        }
         // Error handling: try statement (for void-returning throwing functions)
         if (self.check(.@"try")) {
             _ = self.advance(); // consume 'try'
@@ -982,7 +971,6 @@ pub const Parser = struct {
             _ = try self.expect(.newline);
             return stmtAt(.{ .try_stmt = .{
                 .expr = try self.createExpr(operand),
-                .mode = .propagate,
             } }, start_line, start_column);
         }
         // Match statement
@@ -1067,118 +1055,6 @@ pub const Parser = struct {
         _ = try self.expect(.equals);
         const value = try self.parseExpression();
         if (value) |expr| {
-            // Check for else-unwrap: var x = opt else 'label' ... end 'label'
-            if (self.check(.@"else")) {
-                _ = self.advance(); // consume 'else'
-
-                // Parse label
-                const label = try self.expectBlockIdentifier();
-
-                // Require newline
-                _ = try self.expect(.newline);
-
-                // Parse default body
-                var default_statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
-                errdefer default_statements.deinit(self.allocator);
-
-                while (!self.check(.end) and !self.isAtEnd()) {
-                    if (self.check(.newline)) {
-                        _ = self.advance();
-                        continue;
-                    }
-                    try default_statements.append(self.allocator, try self.parseStatement());
-                }
-
-                const end_line = try self.expectEndLabel(label.text);
-                try self.expectTrailingNewline();
-                if (self.check(.newline)) {
-                    _ = self.advance();
-                }
-
-                const children = try self.allocator.alloc(ast.ChildBlock, 1);
-                children[0] = .{
-                    .role = .default_value,
-                    .statements = try default_statements.toOwnedSlice(self.allocator),
-                    .info = .{
-                        .start_line = start_line,
-                        .start_column = start_column,
-                        .end_line = end_line,
-                        .identifier = label.text,
-                    },
-                };
-
-                const expr_ptr = try self.createExpr(expr);
-                return stmtAt(.{ .else_unwrap_decl = .{
-                    .var_name = name_token.text,
-                    .optional_expr = expr_ptr,
-                    .block = .{
-                        .start_line = start_line,
-                        .start_column = start_column,
-                        .end_line = end_line,
-                        .identifier = label.text,
-                    },
-                    .children = children,
-                } }, start_line, start_column);
-            }
-
-            // Check for guard-let: let x = opt or 'label' ... end 'label'
-            // Guard-let only works with 'let', not 'var'
-            if (!is_var and self.check(.@"or")) {
-                const next = self.peek(1);
-                if (next != null and next.?.type == .char_literal) {
-                    _ = self.advance(); // consume 'or'
-
-                    // Parse label
-                    const label = try self.expectBlockIdentifier();
-
-                    // Require newline
-                    _ = try self.expect(.newline);
-
-                    // Parse nil body (must contain exit statement)
-                    var nil_statements: std.ArrayListUnmanaged(ast.Statement) = .empty;
-                    errdefer nil_statements.deinit(self.allocator);
-
-                    while (!self.check(.end) and !self.isAtEnd()) {
-                        if (self.check(.newline)) {
-                            _ = self.advance();
-                            continue;
-                        }
-                        try nil_statements.append(self.allocator, try self.parseStatement());
-                    }
-
-                    const end_line = try self.expectEndLabel(label.text);
-                    try self.expectTrailingNewline();
-                    if (self.check(.newline)) {
-                        _ = self.advance();
-                    }
-
-                    const children = try self.allocator.alloc(ast.ChildBlock, 1);
-                    children[0] = .{
-                        .role = .nil_handler,
-                        .statements = try nil_statements.toOwnedSlice(self.allocator),
-                        .info = .{
-                            .start_line = start_line,
-                            .start_column = start_column,
-                            .end_line = end_line,
-                            .identifier = label.text,
-                        },
-                    };
-
-                    const expr_ptr = try self.createExpr(expr);
-                    return stmtAt(.{ .guard_let_decl = .{
-                        .var_name = name_token.text,
-                        .optional_expr = expr_ptr,
-                        .block = .{
-                            .start_line = start_line,
-                            .start_column = start_column,
-                            .end_line = end_line,
-                            .identifier = label.text,
-                        },
-                        .children = children,
-                    } }, start_line, start_column);
-                }
-            }
-
             if (is_var) {
                 return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = null, .value = expr } }, start_line, start_column);
             } else {
@@ -1303,56 +1179,6 @@ pub const Parser = struct {
         const start_line = start_token.line;
         const start_column = start_token.column;
         _ = try self.expect(.@"if");
-
-        // Check for if-let: if let name = expr 'label'
-        if (self.check(.let)) {
-            _ = self.advance();
-            const name_token = try self.expect(.identifier);
-            _ = try self.expect(.equals);
-
-            const condition = try self.parseExpression() orelse {
-                self.reportError(.E003);
-                return error.ExpectedExpression;
-            };
-
-            const label = try self.expectBlockIdentifier();
-            _ = try self.expect(.newline);
-
-            const body = try self.parseBlockBody();
-            const end_line = try self.expectEndLabel(label.text);
-
-            const else_block = try self.parseElseBlock(false);
-            try self.expectTrailingNewline();
-
-            // Build children array
-            const num_children: usize = if (else_block != null) 2 else 1;
-            const children = try self.allocator.alloc(ast.ChildBlock, num_children);
-            children[0] = .{
-                .role = .primary,
-                .statements = body,
-                .info = .{
-                    .start_line = start_line,
-                    .start_column = start_column,
-                    .end_line = end_line,
-                    .identifier = label.text,
-                },
-            };
-            if (else_block) |eb| {
-                children[1] = eb;
-            }
-
-            return stmtAt(.{ .if_stmt = .{
-                .condition = condition,
-                .binding_name = name_token.text,
-                .block = .{
-                    .start_line = start_line,
-                    .start_column = start_column,
-                    .end_line = end_line,
-                    .identifier = label.text,
-                },
-                .children = children,
-            } }, start_line, start_column);
-        }
 
         // Regular if statement (if already consumed)
         return stmtAt(.{ .if_stmt = try self.parseIfConditionAndBody(start_line, start_column) }, start_line, start_column);
@@ -1518,98 +1344,6 @@ pub const Parser = struct {
         } }, start_line, start_column);
     }
 
-    /// Parse do-catch statement:
-    /// do 'label'
-    ///     body
-    /// end 'label' catch (e ErrorType) 'catchLabel'
-    ///     catchBody
-    /// end 'catchLabel'
-    fn parseDoCatchStatement(self: *Parser) ParseError!ast.Statement {
-        const start_token = self.current();
-        const start_line = start_token.line;
-        const start_column = start_token.column;
-
-        _ = try self.expect(.do);
-        const label = try self.expectBlockIdentifier();
-        _ = try self.expect(.newline);
-
-        const body = try self.parseBlockBody();
-        const end_line = try self.expectEndLabel(label.text);
-
-        // Parse catch clauses (at least one required)
-        var children: std.ArrayListUnmanaged(ast.ChildBlock) = .empty;
-        errdefer children.deinit(self.allocator);
-
-        // Add primary body as first child
-        try children.append(self.allocator, .{
-            .role = .primary,
-            .statements = body,
-            .info = .{
-                .start_line = start_line,
-                .start_column = start_column,
-                .end_line = end_line,
-                .identifier = label.text,
-            },
-        });
-
-        while (self.check(.@"catch")) {
-            try children.append(self.allocator, try self.parseCatchBlock());
-        }
-
-        if (children.items.len < 2) {
-            self.reportError(.E003); // Expected catch clause
-            return error.ExpectedExpression;
-        }
-
-        return stmtAt(.{ .do_catch_stmt = .{
-            .block = .{
-                .start_line = start_line,
-                .start_column = start_column,
-                .end_line = end_line,
-                .identifier = label.text,
-            },
-            .children = try children.toOwnedSlice(self.allocator),
-        } }, start_line, start_column);
-    }
-
-    /// Parse a single catch clause as a ChildBlock: catch (e ErrorType) 'label' ... end 'label'
-    fn parseCatchBlock(self: *Parser) ParseError!ast.ChildBlock {
-        const catch_start = self.current().line;
-        _ = try self.expect(.@"catch");
-        _ = try self.expect(.lparen);
-        const binding_name = try self.expect(.identifier);
-
-        // Optional error type - if not present, catches any Error
-        var error_type: ?[]const u8 = null;
-        if (self.check(.identifier)) {
-            error_type = self.advance().text;
-        }
-
-        _ = try self.expect(.rparen);
-        const label = try self.expectBlockIdentifier();
-        _ = try self.expect(.newline);
-
-        const catch_body = try self.parseBlockBody();
-        const catch_end = try self.expectEndLabel(label.text);
-
-        // Only expect newline if not followed by another catch
-        if (!self.check(.@"catch")) {
-            try self.expectEndNewline();
-        }
-
-        return .{
-            .role = .catch_handler,
-            .statements = catch_body,
-            .info = .{
-                .start_line = catch_start,
-                .end_line = catch_end,
-                .identifier = label.text,
-            },
-            .catch_binding = binding_name.text,
-            .catch_error_type = error_type,
-        };
-    }
-
     /// Parse match statement: match <expr> 'label' ... end 'label'
     fn parseMatchStatement(self: *Parser) ParseError!ast.Statement {
         const start_token = self.current();
@@ -1672,10 +1406,6 @@ pub const Parser = struct {
             try pattern_bindings.append(self.allocator, first_result.binding);
 
             while (self.check(.@"or")) {
-                // Check for 'or nil' which is type annotation, not pattern
-                const next = self.peek(1);
-                if (next != null and next.?.type == .nil) break;
-
                 _ = self.advance(); // consume 'or'
                 const pattern_result = try self.parseMatchPattern();
                 try patterns.append(self.allocator, pattern_result.pattern);
@@ -1953,10 +1683,6 @@ pub const Parser = struct {
             try pattern_bindings.append(self.allocator, first_result.binding);
 
             while (self.check(.@"or")) {
-                // Check for 'or nil' which is type annotation, not pattern
-                const next = self.peek(1);
-                if (next != null and next.?.type == .nil) break;
-
                 _ = self.advance(); // consume 'or'
                 const pattern_result = try self.parseMatchPattern();
                 try patterns.append(self.allocator, pattern_result.pattern);
@@ -2006,19 +1732,6 @@ pub const Parser = struct {
         var left = try self.parseLogicalAnd() orelse return null;
 
         while (self.check(.@"or")) {
-            // Make sure 'or' is not followed by 'nil' (that's a type annotation, not expression)
-            const next = self.peek(1);
-            if (next != null and next.?.type == .nil) {
-                // This is "T or nil" type annotation, not logical or
-                break;
-            }
-
-            // Check for guard-let: 'or' followed by char_literal is guard-let syntax
-            if (next != null and next.?.type == .char_literal) {
-                // This is guard-let: `let x = opt or 'label' ... end 'label'`
-                break;
-            }
-
             _ = self.advance();
             const right = try self.parseLogicalAnd() orelse {
                 self.reportError(.E003);
@@ -2205,17 +1918,104 @@ pub const Parser = struct {
         // Check for try expression (error propagation)
         if (self.check(.@"try")) {
             _ = self.advance();
-            const mode: ast.TryMode = .propagate;
             const operand = try self.parseUnary() orelse {
                 self.reportError(.E003);
                 return error.ExpectedExpression;
             };
+
+            // Check for otherwise clause
+            const otherwise_clause = try self.parseOtherwiseClause();
+
             return .{ .try_expr = .{
                 .expr = try self.createExpr(operand),
-                .mode = mode,
+                .otherwise = otherwise_clause,
             } };
         }
         return self.parsePrimary();
+    }
+
+    /// Parse optional otherwise clause for try expressions:
+    /// - `try expr otherwise ignore` - discard mode
+    /// - `try expr otherwise defaultExpr` - single expression default
+    /// - `try expr otherwise 'label' body end 'label'` - block handler
+    /// - `try expr otherwise (err) 'label' body end 'label'` - block with error binding
+    fn parseOtherwiseClause(self: *Parser) ParseError!?*const ast.OtherwiseClause {
+        if (!self.check(.otherwise)) {
+            return null;
+        }
+        _ = self.advance(); // consume 'otherwise'
+
+        const clause = try self.allocator.create(ast.OtherwiseClause);
+
+        // Check for 'ignore' mode
+        if (self.check(.ignore)) {
+            _ = self.advance();
+            clause.* = .{
+                .mode = .ignore,
+            };
+            return clause;
+        }
+
+        // Check for block with optional error binding: (err) 'label' or just 'label'
+        if (self.check(.lparen)) {
+            // Block with error binding: (err) 'label' ... end 'label'
+            _ = self.advance(); // consume '('
+            const err_name = try self.expect(.identifier);
+            _ = try self.expect(.rparen);
+
+            const label = try self.expectBlockIdentifier();
+            _ = try self.expect(.newline);
+
+            const body = try self.parseBlockBody();
+            const end_line = try self.expectEndLabel(label.text);
+
+            clause.* = .{
+                .mode = .block_with_err,
+                .error_binding = err_name.text,
+                .block = .{
+                    .start_line = label.line,
+                    .start_column = label.column,
+                    .end_line = end_line,
+                    .identifier = label.text,
+                },
+                .body = body,
+            };
+            return clause;
+        }
+
+        if (self.check(.char_literal)) {
+            // Block without error binding: 'label' ... end 'label'
+            const label = try self.expectBlockIdentifier();
+            _ = try self.expect(.newline);
+
+            const body = try self.parseBlockBody();
+            const end_line = try self.expectEndLabel(label.text);
+
+            clause.* = .{
+                .mode = .block,
+                .block = .{
+                    .start_line = label.line,
+                    .start_column = label.column,
+                    .end_line = end_line,
+                    .identifier = label.text,
+                },
+                .body = body,
+            };
+            return clause;
+        }
+
+        // Default expression mode: otherwise defaultExpr
+        const default_expr = try self.parseExpression() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+        const expr_ptr = try self.createExpr(default_expr);
+
+        clause.* = .{
+            .mode = .default_expr,
+            .default_expr = expr_ptr,
+        };
+        return clause;
     }
 
     fn matchAdditive(self: *Parser) ?ast.BinaryOp {
@@ -2281,11 +2081,6 @@ pub const Parser = struct {
         if (self.check(.false)) {
             _ = self.advance();
             return try self.parsePostfix(.{ .bool_lit = false });
-        }
-        // Nil literal
-        if (self.check(.nil)) {
-            _ = self.advance();
-            return try self.parsePostfix(.nil_lit);
         }
         // String literal
         if (self.check(.string_literal)) {

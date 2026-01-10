@@ -166,7 +166,7 @@ pub const Analyzer = struct {
                 };
                 break :blk std.fmt.bufPrint(&type_name_buf, "Array${s}", .{elem_name}) catch "Array";
             },
-            .optional_type => return &.{}, // Optionals don't have methods
+            .optional_type => return &.{}, // Optionals don't have methods (DEPRECATED)
             .error_union_type => return &.{},
             .function_type => return &.{},
         };
@@ -356,7 +356,7 @@ pub const Analyzer = struct {
             .struct_type => |name| name,
             .enum_type => |name| name,
             .array_type => "Array", // Array methods are on the generic Array type
-            .optional_type, .error_union_type, .function_type => null,
+            .optional_type, .error_union_type, .function_type => null, // DEPRECATED: optional_type
         };
     }
 

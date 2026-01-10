@@ -274,16 +274,25 @@ const ParsedSourcesInfo = struct {
     }
 };
 
-/// Parse sources and extract type/function/interface/enum info
+/// Parse sources and extract type/function/interface/enum info.
+/// Parse errors are printed immediately. Returns ParseError if any file failed to parse.
 fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source) !void {
     const phase1_allocator = info.phase1_arena.allocator();
+    var had_parse_error = false;
 
     for (sources) |source| {
         var lexer = Lexer.init(source.content);
         const tokens = lexer.tokenize(phase1_allocator) catch continue;
 
         var parser = Parser.initWithFile(tokens, phase1_allocator, source.path);
-        const program = parser.parse() catch continue;
+        const program = parser.parse() catch {
+            // Print parse errors immediately so they're visible
+            if (parser.last_error) |err| {
+                err.printToStderr();
+            }
+            had_parse_error = true;
+            continue;
+        };
 
         // Extract type info
         const type_info = ast_to_ir.extractTypeInfo(program, info.allocator) catch continue;
@@ -316,6 +325,10 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source) !v
             try info.enums.append(info.allocator, enum_decl);
         }
         info.allocator.free(enum_decls);
+    }
+
+    if (had_parse_error) {
+        return error.ParseError;
     }
 }
 
@@ -712,57 +725,64 @@ pub fn findStdlibPath(allocator: std.mem.Allocator) ![]const u8 {
     return error.StdlibNotFound;
 }
 
-/// Normalize a path by resolving .. and . components without requiring the path to exist.
-fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
-    // Split path into components and resolve .. by removing previous component
-    var components: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer components.deinit(allocator);
-
+/// Normalize a path in-place in a buffer by resolving .. and . components.
+/// Returns a slice of the buffer containing the normalized path.
+fn normalizePathBuf(path: []const u8, buf: []u8) []const u8 {
     // Handle Windows absolute paths (e.g., "C:\...")
     var start: usize = 0;
-    var root_prefix: []const u8 = "";
+    var root_len: usize = 0;
     if (path.len >= 2 and path[1] == ':') {
-        // Windows drive letter
         if (path.len >= 3 and (path[2] == '\\' or path[2] == '/')) {
-            root_prefix = path[0..3];
-            start = 3;
+            root_len = 3;
         } else {
-            root_prefix = path[0..2];
-            start = 2;
+            root_len = 2;
         }
+        start = root_len;
     } else if (path.len >= 1 and (path[0] == '\\' or path[0] == '/')) {
-        root_prefix = path[0..1];
+        root_len = 1;
         start = 1;
     }
 
-    // Split remaining path by separators
+    // Copy root prefix
+    if (root_len > buf.len) return path;
+    @memcpy(buf[0..root_len], path[0..root_len]);
+
+    // Determine separator
+    const sep: u8 = if (std.mem.indexOf(u8, path, "\\") != null) '\\' else '/';
+
+    // Process path components
+    var out_pos: usize = root_len;
     var iter = std.mem.tokenizeAny(u8, path[start..], "\\/");
+    var first = true;
     while (iter.next()) |component| {
         if (std.mem.eql(u8, component, "..")) {
-            // Go up one directory
-            if (components.items.len > 0) {
-                _ = components.pop();
+            // Go up one directory - find last separator and truncate
+            if (out_pos > root_len) {
+                out_pos -= 1; // skip past trailing content
+                while (out_pos > root_len and buf[out_pos - 1] != sep) {
+                    out_pos -= 1;
+                }
+                if (out_pos > root_len) {
+                    out_pos -= 1; // remove separator too
+                }
+                first = (out_pos == root_len);
             }
         } else if (!std.mem.eql(u8, component, ".")) {
-            // Add normal component (skip ".")
-            try components.append(allocator, component);
+            // Add separator if not first component
+            if (!first) {
+                if (out_pos >= buf.len) return path;
+                buf[out_pos] = sep;
+                out_pos += 1;
+            }
+            first = false;
+            // Copy component
+            if (out_pos + component.len > buf.len) return path;
+            @memcpy(buf[out_pos..][0..component.len], component);
+            out_pos += component.len;
         }
     }
 
-    // Rebuild the path
-    const sep = if (std.mem.indexOf(u8, path, "\\") != null) "\\" else "/";
-    var result: std.ArrayListUnmanaged(u8) = .empty;
-    errdefer result.deinit(allocator);
-
-    try result.appendSlice(allocator, root_prefix);
-    for (components.items, 0..) |component, i| {
-        if (i > 0) {
-            try result.appendSlice(allocator, sep);
-        }
-        try result.appendSlice(allocator, component);
-    }
-
-    return result.toOwnedSlice(allocator);
+    return buf[0..out_pos];
 }
 
 /// Print a detailed error message when stdlib is not found.
@@ -798,9 +818,9 @@ pub fn printStdlibNotFoundError(allocator: std.mem.Allocator) void {
         };
         defer allocator.free(path);
 
-        // Normalize the path by resolving .. components manually
-        const normalized = normalizePath(allocator, path) catch path;
-        defer if (normalized.ptr != path.ptr) allocator.free(normalized);
+        // Normalize the path by resolving .. components
+        var norm_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const normalized = normalizePathBuf(path, &norm_buf);
         std.debug.print("  - {s}\n", .{normalized});
     }
 

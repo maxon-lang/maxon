@@ -126,7 +126,8 @@ pub const ArrayInfo = struct {
     element_struct_type: ?[]const u8 = null, // struct name if elements are structs
 };
 
-/// Optional type info
+/// Optional type info - DEPRECATED: Being removed in favor of error unions
+/// TODO: Remove after Phase 7 (AST-to-IR optional code removal) is complete
 pub const OptionalInfo = struct {
     wrapped: ir.Type, // The underlying type (i64, f64, ptr)
     wrapped_struct_type: ?[]const u8 = null, // struct name if wrapped is a struct
@@ -178,7 +179,7 @@ pub const ValueType = union(enum) {
     struct_type: []const u8,
     array_type: ArrayInfo,
     enum_type: []const u8,
-    optional_type: OptionalInfo,
+    optional_type: OptionalInfo, // DEPRECATED: Being removed in favor of error unions
     error_union_type: ErrorUnionInfo, // T or E where E conforms to Error
     function_type: FunctionTypeInfo, // First-class function types
 
@@ -187,7 +188,7 @@ pub const ValueType = union(enum) {
             .primitive => |name| nameToIrType(name),
             .enum_type => .i64,
             .struct_type, .array_type => .ptr,
-            .optional_type => .ptr, // Optionals are pointers to 16-byte structures
+            .optional_type => .ptr, // Optionals are pointers to 16-byte structures (DEPRECATED)
             .error_union_type => .ptr, // Error unions are pointers to discriminated union structures
             .function_type => .ptr, // Function pointers are always pointers
         };
@@ -197,6 +198,7 @@ pub const ValueType = union(enum) {
         return self == .struct_type;
     }
 
+    /// DEPRECATED: Being removed in favor of error unions
     pub fn isOptional(self: ValueType) bool {
         return self == .optional_type;
     }
@@ -237,7 +239,7 @@ pub const ValueType = union(enum) {
     pub fn usesSlot(self: ValueType) bool {
         return switch (self) {
             .array_type => |arr| arr.storage == .heap,
-            .optional_type => true,
+            .optional_type => true, // DEPRECATED
             .function_type => true,
             .primitive, .struct_type, .enum_type, .error_union_type => false,
         };
@@ -268,7 +270,7 @@ pub fn freeValueTypeAllocations(allocator: std.mem.Allocator, vt: ValueType) voi
             }
         },
         .optional_type => |opt| {
-            // Free allocated wrapped_struct_type names (contain '$')
+            // DEPRECATED: Free allocated wrapped_struct_type names (contain '$')
             if (opt.wrapped_struct_type) |name| {
                 if (std.mem.indexOf(u8, name, "$")) |_| {
                     allocator.free(name);
