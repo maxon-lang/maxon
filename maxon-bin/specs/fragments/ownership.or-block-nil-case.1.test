@@ -1,0 +1,48 @@
+// Test: ownership.or-block-nil-case.1
+function getValue(opt int or nil) returns int
+    let v = opt or 'empty'
+        return 0
+    end 'empty'
+    return v
+end 'getValue'
+
+function main() returns int
+    return getValue(nil)
+end 'main'
+---
+ExitCode: 0
+---
+function getValue() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %opt = alloca ptr
+    store %opt %tmp_param
+    %tmp_load = load ptr %opt
+    %tmp_load.1 = load i64 %tmp_load
+    %tmp_const = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const
+    %v = alloca ptr
+    br.cond %tmp_icmp @block1 @block2
+guard_some:
+    %tmp_fieldptr = getfieldptr ptr %tmp_load 8
+    %tmp_load.2 = load i64 %tmp_fieldptr
+    store %v %tmp_load.2
+    br @block3
+guard_nil:
+    %tmp_const.1 = const.i64 i64 0
+    ret %tmp_const.1
+guard_end:
+    %tmp_load.3 = load i64 %v
+    ret %tmp_load.3
+}
+
+function main() -> i64 {
+entry:
+    %tmp_alloca = alloca.sized ptr 16
+    %tmp_const = const.i64 i64 0
+    store %tmp_alloca %tmp_const
+    %tmp_call = call i64 @getValue(%tmp_alloca)
+    ret %tmp_call
+}
+
+---

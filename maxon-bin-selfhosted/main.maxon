@@ -9,15 +9,18 @@ function main(args Array of String) returns int
 		return 1
 	end 'noCommand'
 
-	let command = args[1]
-
-	return match command 'dispatch'
-		"compile" gives compileCommand(args)
-		"run" gives runCommand(args)
-		"version" gives versionCommand()
-		"help" gives helpCommand()
-		default gives unknownCommand(command)
-	end 'dispatch'
+	if let command = args[1] 'hasCommand'
+		return match command 'dispatch'
+			"compile" gives compileCommand(args)
+			"run" gives runCommand(args)
+			"version" gives versionCommand()
+			"help" gives helpCommand()
+			default gives unknownCommand(command)
+		end 'dispatch'
+	end 'hasCommand' else 'noCommand2'
+		printUsage()
+		return 1
+	end 'noCommand2'
 end 'main'
 
 function compileCommand(args Array of String) returns int
@@ -25,7 +28,12 @@ function compileCommand(args Array of String) returns int
 		print("Usage: maxon compile <file.maxon>")
 		return 1
 	end 'noFile'
-	return compile(args[2])
+	if let sourceFile = args[2] 'hasFile'
+		return compile(sourceFile)
+	end 'hasFile' else 'noFile2'
+		print("Usage: maxon compile <file.maxon>")
+		return 1
+	end 'noFile2'
 end 'compileCommand'
 
 function helpCommand() returns int
@@ -69,22 +77,26 @@ function runCommand(args Array of String) returns int
 		return 1
 	end 'noFile'
 
-	let sourceFile = args[2]
-	let result = compile(sourceFile)
-	if result != 0 'compileFailed'
-		return result
-	end 'compileFailed'
+	if let sourceFile = args[2] 'hasFile'
+		let result = compile(sourceFile)
+		if result != 0 'compileFailed'
+			return result
+		end 'compileFailed'
 
-	// Run the executable
-	let exeFile = sourceFile.replace(".maxon", ".exe")
-	print("")
-	print("Running {exeFile}...")
-	print("----------------------------------------")
-	let exitCode = executeProcess(exeFile)
-	print("----------------------------------------")
-	print("Exit code: {exitCode}")
+		// Run the executable
+		let exeFile = sourceFile.replace(".maxon", ".exe")
+		print("")
+		print("Running {exeFile}...")
+		print("----------------------------------------")
+		let exitCode = executeProcess(exeFile)
+		print("----------------------------------------")
+		print("Exit code: {exitCode}")
 
-	return exitCode
+		return exitCode
+	end 'hasFile' else 'noFile2'
+		print("Usage: maxon run <file.maxon>")
+		return 1
+	end 'noFile2'
 end 'runCommand'
 
 

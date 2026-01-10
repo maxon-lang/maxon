@@ -1,0 +1,79 @@
+// Test: ownership.mutually-exclusive-if-branches-with-return.1
+type Position
+    export var x int
+    export var y int
+end 'Position'
+
+function testMutuallyExclusiveMoves(choice int) returns int
+    var pos = Position{x: 10, y: 20}
+
+    if choice == 1 'first'
+        var temp = pos
+        return temp.x
+    end 'first'
+
+    if choice == 2 'second'
+        var temp = pos
+        return temp.y
+    end 'second'
+
+    return pos.x + pos.y
+end 'testMutuallyExclusiveMoves'
+
+function main() returns int
+    return testMutuallyExclusiveMoves(1)
+end 'main'
+---
+ExitCode: 10
+---
+function testMutuallyExclusiveMoves() -> i64 {
+entry:
+    %choice = param i64 0
+    %choice.1 = alloca ptr
+    store %choice.1 %choice
+    %pos = alloca.sized ptr 16
+    memset %pos 0 16
+    %tmp_fieldptr = getfieldptr ptr %pos 0
+    %tmp_const = const.i64 i64 10
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %pos 8
+    %tmp_const.1 = const.i64 i64 20
+    store %tmp_fieldptr.1 %tmp_const.1
+    %tmp_load = load i64 %choice.1
+    %tmp_const.2 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.2
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %temp = alloca.sized ptr 16
+    memcpy %temp %pos 16
+    %tmp_fieldptr.2 = getfieldptr ptr %temp 0
+    %tmp_load.1 = load i64 %tmp_fieldptr.2
+    ret %tmp_load.1
+end:
+    %tmp_load.2 = load i64 %choice.1
+    %tmp_const.3 = const.i64 i64 2
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.2 %tmp_const.3
+    br.cond %tmp_icmp.1 @block3 @block4
+then:
+    %temp.1 = alloca.sized ptr 16
+    memcpy %temp.1 %pos 16
+    %tmp_fieldptr.3 = getfieldptr ptr %temp.1 8
+    %tmp_load.3 = load i64 %tmp_fieldptr.3
+    ret %tmp_load.3
+end:
+    %tmp_fieldptr.4 = getfieldptr ptr %pos 0
+    %tmp_load.4 = load i64 %tmp_fieldptr.4
+    %tmp_fieldptr.5 = getfieldptr ptr %pos 8
+    %tmp_load.5 = load i64 %tmp_fieldptr.5
+    %tmp_add = add i64 %tmp_load.4 %tmp_load.5
+    ret %tmp_add
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 1
+    %tmp_call = call i64 @testMutuallyExclusiveMoves(%tmp_const)
+    ret %tmp_call
+}
+
+---

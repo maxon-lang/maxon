@@ -77,6 +77,9 @@ const FrontendResult = struct {
                 if (sig.return_type_name) |rtn| {
                     self.allocator.free(rtn);
                 }
+                if (sig.return_value_type) |rvt| {
+                    ast_to_ir.freeValueTypeAllocations(self.allocator, rvt);
+                }
             }
             self.allocator.free(sigs);
         }
@@ -199,134 +202,146 @@ pub fn compileToIrWithResult(source: []const u8, allocator: std.mem.Allocator, r
     return compileMultipleToIr(all_sources, allocator, result);
 }
 
-/// Compile multiple sources and return combined IR as string
-fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, result: *CompileResult) ![]const u8 {
-    if (sources.len == 0) return error.NoSignatures;
+// ============================================================================
+// Multi-file Compilation Helpers
+// ============================================================================
 
-    // Use an arena allocator for Phase 1 ASTs
-    // Keep it alive until after Phase 2 because we store AST pointers (e.g., enum decls)
-    var phase1_arena = std.heap.ArenaAllocator.init(allocator);
-    const phase1_allocator = phase1_arena.allocator();
+/// Collected metadata from parsing multiple source files
+const ParsedSourcesInfo = struct {
+    types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo),
+    funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature),
+    interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo),
+    enums: std.ArrayListUnmanaged(ast_to_ir.ExternalEnumInfo),
+    phase1_arena: std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
 
-    // Phase 1: Parse all sources and collect type info AND function signatures
-    var all_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
-    defer {
-        for (all_types.items) |t| {
-            allocator.free(t.fields);
-        }
-        all_types.deinit(allocator);
+    fn init(allocator: std.mem.Allocator) ParsedSourcesInfo {
+        return .{
+            .types = .empty,
+            .funcs = .empty,
+            .interfaces = .empty,
+            .enums = .empty,
+            .phase1_arena = std.heap.ArenaAllocator.init(allocator),
+            .allocator = allocator,
+        };
     }
 
-    var all_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
-    defer {
-        for (all_funcs.items) |sig| {
-            allocator.free(sig.name);
+    fn deinit(self: *ParsedSourcesInfo) void {
+        for (self.types.items) |t| {
+            self.allocator.free(t.fields);
+        }
+        self.types.deinit(self.allocator);
+
+        for (self.funcs.items) |sig| {
+            self.allocator.free(sig.name);
             if (sig.param_types.len > 0) {
-                ast_to_ir.freeParamTypes(allocator, sig.param_types);
+                ast_to_ir.freeParamTypes(self.allocator, sig.param_types);
             }
             if (sig.return_type_name) |rtn| {
-                allocator.free(rtn);
+                self.allocator.free(rtn);
+            }
+            if (sig.return_value_type) |rvt| {
+                ast_to_ir.freeValueTypeAllocations(self.allocator, rvt);
             }
         }
-        all_funcs.deinit(allocator);
+        self.funcs.deinit(self.allocator);
+
+        self.interfaces.deinit(self.allocator);
+        self.enums.deinit(self.allocator);
+        self.phase1_arena.deinit();
     }
 
-    var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
-    defer all_interfaces.deinit(allocator);
+    /// Filter to only exported functions
+    fn getExportedFuncs(self: *ParsedSourcesInfo) ![]const ast_to_ir.ExternalFuncSignature {
+        var exported: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
+        for (self.funcs.items) |func| {
+            if (func.is_exported) {
+                try exported.append(self.allocator, func);
+            }
+        }
+        return exported.toOwnedSlice(self.allocator);
+    }
 
-    var all_enums: std.ArrayListUnmanaged(ast_to_ir.ExternalEnumInfo) = .empty;
-    defer all_enums.deinit(allocator);
+    /// Filter to only exported types
+    fn getExportedTypes(self: *ParsedSourcesInfo) ![]const ast_to_ir.ExternalTypeInfo {
+        var exported: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
+        for (self.types.items) |t| {
+            if (t.is_exported) {
+                try exported.append(self.allocator, t);
+            }
+        }
+        return exported.toOwnedSlice(self.allocator);
+    }
+};
 
-    // Phase 1: Parse all sources EXCEPT the last one (user code) to collect type info
-    // The last source will be compiled directly in Phase 2, so we don't need its types as externals
-    const stdlib_sources = sources[0 .. sources.len - 1];
-    for (stdlib_sources) |source| {
+/// Parse sources and extract type/function/interface/enum info
+fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source) !void {
+    const phase1_allocator = info.phase1_arena.allocator();
+
+    for (sources) |source| {
         var lexer = Lexer.init(source.content);
         const tokens = lexer.tokenize(phase1_allocator) catch continue;
 
         var parser = Parser.initWithFile(tokens, phase1_allocator, source.path);
         const program = parser.parse() catch continue;
 
-        const type_info = ast_to_ir.extractTypeInfo(program, allocator) catch continue;
-        var types_appended: usize = 0;
-        errdefer {
-            // Free fields from items that weren't appended to all_types
-            for (type_info[types_appended..]) |t| {
-                allocator.free(t.fields);
-            }
-            allocator.free(type_info);
-        }
+        // Extract type info
+        const type_info = ast_to_ir.extractTypeInfo(program, info.allocator) catch continue;
         for (type_info) |t| {
             var t_with_path = t;
             t_with_path.source_path = source.path;
-            try all_types.append(allocator, t_with_path);
-            types_appended += 1;
+            try info.types.append(info.allocator, t_with_path);
         }
-        allocator.free(type_info);
+        info.allocator.free(type_info);
 
-        const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
-        var sigs_appended: usize = 0;
-        errdefer {
-            // Free names and param_types from items that weren't appended to all_funcs
-            for (func_sigs[sigs_appended..]) |sig| {
-                allocator.free(sig.name);
-                if (sig.param_types.len > 0) {
-                    allocator.free(sig.param_types);
-                }
-            }
-            allocator.free(func_sigs);
-        }
+        // Extract function signatures
+        const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, info.allocator) catch continue;
         for (func_sigs) |sig| {
-            // Make a deep copy of param_types so it outlives the AST frontend
-            const param_types_copy = try allocator.dupe(ast_to_ir.ParamType, sig.param_types);
-
             var sig_with_path = sig;
             sig_with_path.source_path = source.path;
-            sig_with_path.param_types = param_types_copy;
-            try all_funcs.append(allocator, sig_with_path);
-            sigs_appended += 1;
+            try info.funcs.append(info.allocator, sig_with_path);
         }
-        // Free the original param_types slices (we made copies)
-        for (func_sigs) |sig| {
-            if (sig.param_types.len > 0) {
-                allocator.free(sig.param_types);
-            }
-        }
-        allocator.free(func_sigs);
+        info.allocator.free(func_sigs);
 
         // Extract interface info
-        const iface_info = ast_to_ir.extractInterfaceInfo(program, allocator) catch continue;
+        const iface_info = ast_to_ir.extractInterfaceInfo(program, info.allocator) catch continue;
         for (iface_info) |iface| {
-            try all_interfaces.append(allocator, iface);
+            try info.interfaces.append(info.allocator, iface);
         }
-        allocator.free(iface_info);
+        info.allocator.free(iface_info);
 
         // Extract enum declarations
-        const enum_decls = ast_to_ir.extractEnumDecls(program, phase1_allocator, source.path) catch continue;
+        const enum_decls = ast_to_ir.extractEnumDecls(program, info.allocator, source.path) catch continue;
         for (enum_decls) |enum_decl| {
-            try all_enums.append(allocator, enum_decl);
+            try info.enums.append(info.allocator, enum_decl);
         }
-        phase1_allocator.free(enum_decls);
+        info.allocator.free(enum_decls);
     }
+}
 
-    // Phase 2: Compile the last source (user code) with all types/funcs available
+/// Compile multiple sources and return combined IR as string
+fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, result: *CompileResult) ![]const u8 {
+    if (sources.len == 0) return error.NoSignatures;
+
+    // Parse all sources except the last one (user code)
+    var info = ParsedSourcesInfo.init(allocator);
+    defer info.deinit();
+    try parseSourcesForMetadata(&info, sources[0 .. sources.len - 1]);
+
+    // Compile the last source (user code) with all types/funcs available
     const last_source = sources[sources.len - 1];
     var frontend = runFrontend(last_source.content, allocator, .{
         .source_file = last_source.path,
         .result = result,
-        .external_funcs = all_funcs.items,
-        .external_types = all_types.items,
-        .external_interfaces = all_interfaces.items,
-        .external_enums = all_enums.items,
+        .external_funcs = info.funcs.items,
+        .external_types = info.types.items,
+        .external_interfaces = info.interfaces.items,
+        .external_enums = info.enums.items,
     }) catch {
         return error.IrError;
     };
     defer frontend.deinit();
 
-    // Free the Phase 1 arena now that we're done with AST pointers
-    phase1_arena.deinit();
-
-    // Run dead function elimination on the user's module
     optimizer.eliminateDeadFunctions(&frontend.ir_module, allocator) catch {
         return error.IrError;
     };
@@ -380,10 +395,6 @@ fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]
     };
 }
 
-// ============================================================================
-// Multi-file Compilation
-// ============================================================================
-
 /// Compile multiple source files into a single executable.
 /// Sources are compiled in order and their IR is merged.
 /// Later sources can reference functions/types from earlier sources.
@@ -396,135 +407,36 @@ pub fn compileMultiple(
 ) !void {
     if (sources.len == 0) return;
 
-    // Use an arena allocator for Phase 1 ASTs to prevent Phase 2 from overwriting them
-    // (Phase 2 parsing might reuse the same memory addresses otherwise)
-    var phase1_arena = std.heap.ArenaAllocator.init(allocator);
-    defer phase1_arena.deinit();
-    const phase1_allocator = phase1_arena.allocator();
+    // Phase 1: Parse all sources and collect metadata
+    var info = ParsedSourcesInfo.init(allocator);
+    defer info.deinit();
+    try parseSourcesForMetadata(&info, sources);
 
-    // Phase 1: Parse all sources and collect type info AND function signatures
-    // We must keep ASTs alive because ExternalTypeInfo.type_decl points into them
-    var all_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
-    defer {
-        for (all_types.items) |t| {
-            allocator.free(t.fields);
-        }
-        all_types.deinit(allocator);
-    }
+    // Phase 2: Filter to exported symbols for cross-file visibility
+    const exported_funcs = try info.getExportedFuncs();
+    defer allocator.free(exported_funcs);
+    const exported_types = try info.getExportedTypes();
+    defer allocator.free(exported_types);
 
-    var all_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
-    defer {
-        for (all_funcs.items) |sig| {
-            allocator.free(sig.name);
-            if (sig.param_types.len > 0) {
-                ast_to_ir.freeParamTypes(allocator, sig.param_types);
-            }
-            if (sig.return_type_name) |rtn| {
-                allocator.free(rtn);
-            }
-        }
-        all_funcs.deinit(allocator);
-    }
-
-    var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
-    defer all_interfaces.deinit(allocator);
-
-    // List to store enum declarations from all sources
-    var all_enums: std.ArrayListUnmanaged(ast_to_ir.ExternalEnumInfo) = .empty;
-    defer all_enums.deinit(allocator);
-
-    for (sources) |source| {
-        // Lex and parse using phase1_allocator (but don't compile yet)
-        var lexer = Lexer.init(source.content);
-        const tokens = lexer.tokenize(phase1_allocator) catch continue;
-        // Don't free tokens - arena will clean up
-
-        var parser = Parser.initWithFile(tokens, phase1_allocator, source.path);
-        // Don't deinit parser - arena will clean up
-
-        const program = parser.parse() catch continue;
-        // Program is kept alive by arena until the end
-
-        // Extract type info from parsed AST
-        const type_info = ast_to_ir.extractTypeInfo(program, allocator) catch continue;
-        for (type_info) |t| {
-            var t_with_path = t;
-            t_with_path.source_path = source.path;
-            try all_types.append(allocator, t_with_path);
-        }
-        allocator.free(type_info); // Free the slice but keep the items
-
-        // Extract function signatures from parsed AST
-        const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
-        errdefer {
-            for (func_sigs) |sig| {
-                allocator.free(sig.name);
-                if (sig.param_types.len > 0) ast_to_ir.freeParamTypes(allocator, sig.param_types);
-                if (sig.return_type_name) |rtn| allocator.free(rtn);
-            }
-            allocator.free(func_sigs);
-        }
-        for (func_sigs) |sig| {
-            // Set source_path so we can distinguish stdlib from user code
-            var sig_with_path = sig;
-            sig_with_path.source_path = source.path;
-            try all_funcs.append(allocator, sig_with_path);
-        }
-        // Free param_types and names from func_sigs (all_funcs has shallow copies sharing the same pointers)
-        // Note: We're NOT freeing these since they're now owned by all_funcs (shallow copy shares pointers)
-        allocator.free(func_sigs); // Free only the slice
-
-        // Extract interface info from parsed AST
-        const iface_info = ast_to_ir.extractInterfaceInfo(program, allocator) catch continue;
-        for (iface_info) |iface| {
-            try all_interfaces.append(allocator, iface);
-        }
-        allocator.free(iface_info); // Free the slice but keep the items
-
-        // Extract enum declarations from parsed AST
-        const enum_decls = ast_to_ir.extractEnumDecls(program, allocator, source.path) catch continue;
-        for (enum_decls) |enum_decl| {
-            try all_enums.append(allocator, enum_decl);
-        }
-        allocator.free(enum_decls); // Free the slice but keep the enum infos
-    }
-
-    // Phase 2: Compile and merge all sources with collected type info and function signatures
-    // Filter external symbols to only include exported ones (unexported symbols are file-private)
-    var exported_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
-    defer exported_funcs.deinit(allocator);
-    for (all_funcs.items) |func| {
-        if (func.is_exported) {
-            try exported_funcs.append(allocator, func);
-        }
-    }
-
-    var exported_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
-    defer exported_types.deinit(allocator);
-    for (all_types.items) |t| {
-        if (t.is_exported) {
-            try exported_types.append(allocator, t);
-        }
-    }
-
+    // Phase 3: Compile and merge all sources
     var merged: ?FrontendResult = null;
     defer if (merged) |*m| m.deinit();
 
     for (sources) |source| {
+        // Pass all enums to all sources. Internal enums (like SlotState in Map.maxon)
+        // need to be visible when user code instantiates generic types that use them.
         var frontend = try runFrontend(source.content, allocator, .{
             .source_file = source.path,
             .result = result,
-            .external_funcs = exported_funcs.items,
-            .external_types = exported_types.items,
-            .external_interfaces = all_interfaces.items,
-            .external_enums = all_enums.items,
+            .external_funcs = exported_funcs,
+            .external_types = exported_types,
+            .external_interfaces = info.interfaces.items,
+            .external_enums = info.enums.items,
             .track_memory = options.track_memory,
         });
 
         if (merged) |*m| {
-            // Merge into the combined module
             try m.ir_module.merge(&frontend.ir_module);
-            // Clean up the frontend we're merging from (not keeping it)
             frontend.deinit();
         } else {
             merged = frontend;
@@ -533,18 +445,14 @@ pub fn compileMultiple(
 
     const final_module = &merged.?.ir_module;
 
-    // Run dead function elimination on the merged module
-    // (this must happen after merging, not during per-module optimization)
     optimizer.eliminateDeadFunctions(final_module, allocator) catch {
         return error.IrError;
     };
 
-    // Emit IR to file if requested
     if (options.emit_ir) {
         try writeIrFile(final_module.*, output_path, allocator);
     }
 
-    // Generate x86-64 code
     debug.log("Generating x86-64 code from merged IR", .{});
     const codegen_result = ir_codegen.generate(final_module.*, allocator, .{
         .track_memory = options.track_memory,
@@ -555,12 +463,10 @@ pub fn compileMultiple(
     defer allocator.free(codegen_result.code);
     defer allocator.free(codegen_result.external_patches);
 
-    // Write PE executable
     pe.writePE(output_path, codegen_result.code, codegen_result.external_patches) catch {
         return error.WriteError;
     };
 
-    // Emit assembly to file if requested (disassemble from final PE with patches applied)
     if (options.emit_asm) {
         try writeAsmFileFromPE(output_path, allocator);
     }
@@ -1017,6 +923,15 @@ pub fn collectProjectFiles(
     project_path: []const u8,
     allocator: std.mem.Allocator,
 ) ![]Source {
+    return collectProjectFilesExcluding(project_path, null, allocator);
+}
+
+/// Collect all .maxon files in a project directory, excluding a specific file
+pub fn collectProjectFilesExcluding(
+    project_path: []const u8,
+    exclude_file: ?[]const u8,
+    allocator: std.mem.Allocator,
+) ![]Source {
     var sources: std.ArrayListUnmanaged(Source) = .empty;
     errdefer {
         for (sources.items) |src| {
@@ -1026,13 +941,14 @@ pub fn collectProjectFiles(
         sources.deinit(allocator);
     }
 
-    try collectProjectFilesRecursive(project_path, &sources, allocator);
+    try collectProjectFilesRecursiveExcluding(project_path, exclude_file, &sources, allocator);
 
     return sources.toOwnedSlice(allocator);
 }
 
-fn collectProjectFilesRecursive(
+fn collectProjectFilesRecursiveExcluding(
     current_path: []const u8,
+    exclude_file: ?[]const u8,
     sources: *std.ArrayListUnmanaged(Source),
     allocator: std.mem.Allocator,
 ) !void {
@@ -1053,9 +969,16 @@ fn collectProjectFilesRecursive(
                 !std.mem.eql(u8, entry.name, "zig-out") and
                 !std.mem.eql(u8, entry.name, "zig-cache"))
             {
-                try collectProjectFilesRecursive(full_entry_path, sources, allocator);
+                try collectProjectFilesRecursiveExcluding(full_entry_path, exclude_file, sources, allocator);
             }
         } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".maxon")) {
+            // Skip excluded file
+            if (exclude_file) |excluded| {
+                if (std.mem.eql(u8, entry.name, excluded)) {
+                    continue;
+                }
+            }
+
             const content = std.fs.cwd().readFileAlloc(allocator, full_entry_path, 1024 * 1024) catch {
                 continue; // Skip files that can't be read
             };

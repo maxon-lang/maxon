@@ -1,0 +1,59 @@
+// Test: ownership.match-default-case.1
+function test(choice int) returns int
+    var x = 10
+
+    match choice 'select'
+        1 then return x + 1
+        2 then return x + 2
+        default then return x
+    end 'select'
+end 'test'
+
+function main() returns int
+    return test(99)
+end 'main'
+---
+ExitCode: 10
+---
+function test() -> i64 {
+entry:
+    %choice = param i64 0
+    %choice.1 = alloca ptr
+    store %choice.1 %choice
+    %tmp_const = const.i64 i64 10
+    %x = alloca ptr
+    store %x %tmp_const
+    %tmp_load.1 = load i64 %choice.1
+    br @block1
+match_check:
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.3
+    br.cond %tmp_icmp @block2 @block3
+match_body:
+    %tmp_load.2 = load i64 %x
+    %tmp_const.4 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.2 %tmp_const.4
+    ret %tmp_add
+match_check:
+    %tmp_const.5 = const.i64 i64 2
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.1 %tmp_const.5
+    br.cond %tmp_icmp.1 @block4 @block5
+match_body:
+    %tmp_load.3 = load i64 %x
+    %tmp_const.6 = const.i64 i64 2
+    %tmp_add.1 = add i64 %tmp_load.3 %tmp_const.6
+    ret %tmp_add.1
+match_default:
+    %tmp_load.4 = load i64 %x
+    ret %tmp_load.4
+match_merge:
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 99
+    %tmp_call = call i64 @test(%tmp_const)
+    ret %tmp_call
+}
+
+---

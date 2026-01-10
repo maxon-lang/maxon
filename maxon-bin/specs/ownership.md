@@ -289,3 +289,264 @@ Moves:     2
 Increfs:   0
 Decrefs:   0
 ```
+
+### Mutually Exclusive Branches
+
+<!-- test: mutually-exclusive-if-branches-with-return -->
+Moves in mutually exclusive if branches with returns should not conflict.
+When an if branch terminates with a return, the move only affects that branch.
+```maxon
+type Position
+    export var x int
+    export var y int
+end 'Position'
+
+function testMutuallyExclusiveMoves(choice int) returns int
+    var pos = Position{x: 10, y: 20}
+
+    if choice == 1 'first'
+        var temp = pos
+        return temp.x
+    end 'first'
+
+    if choice == 2 'second'
+        var temp = pos
+        return temp.y
+    end 'second'
+
+    return pos.x + pos.y
+end 'testMutuallyExclusiveMoves'
+
+function main() returns int
+    return testMutuallyExclusiveMoves(1)
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: mutually-exclusive-if-branches-choice-2 -->
+Same test, but taking the second branch.
+```maxon
+type Position
+    export var x int
+    export var y int
+end 'Position'
+
+function testMutuallyExclusiveMoves(choice int) returns int
+    var pos = Position{x: 10, y: 20}
+
+    if choice == 1 'first'
+        var temp = pos
+        return temp.x
+    end 'first'
+
+    if choice == 2 'second'
+        var temp = pos
+        return temp.y
+    end 'second'
+
+    return pos.x + pos.y
+end 'testMutuallyExclusiveMoves'
+
+function main() returns int
+    return testMutuallyExclusiveMoves(2)
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: mutually-exclusive-if-branches-fallthrough -->
+When neither branch is taken, the variable is still usable.
+```maxon
+type Position
+    export var x int
+    export var y int
+end 'Position'
+
+function testMutuallyExclusiveMoves(choice int) returns int
+    var pos = Position{x: 10, y: 20}
+
+    if choice == 1 'first'
+        var temp = pos
+        return temp.x
+    end 'first'
+
+    if choice == 2 'second'
+        var temp = pos
+        return temp.y
+    end 'second'
+
+    return pos.x + pos.y
+end 'testMutuallyExclusiveMoves'
+
+function main() returns int
+    return testMutuallyExclusiveMoves(3)
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: if-else-then-terminates -->
+When the then branch terminates with return, else branch sees original ownership.
+```maxon
+type Position
+    export var x int
+    export var y int
+end 'Position'
+
+function test(take_first bool) returns int
+    var pos = Position{x: 10, y: 20}
+
+    if take_first 'branch'
+        var temp = pos  // Move pos
+        return temp.x
+    end 'branch' else 'other'
+        // pos should still be owned here since then returned
+        return pos.y
+    end 'other'
+end 'test'
+
+function main() returns int
+    return test(false)
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: if-else-else-terminates -->
+When the else branch terminates with return, code after if-else sees then branch state.
+```maxon
+function test(take_first bool) returns int
+    var x = 10
+
+    if take_first 'branch'
+        x = x + 5
+    end 'branch' else 'other'
+        return 99
+    end 'other'
+
+    // Only reachable if take_first was true
+    return x
+end 'test'
+
+function main() returns int
+    return test(true)
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: match-mutually-exclusive-cases -->
+Match cases are mutually exclusive, returning from one case doesn't affect others.
+```maxon
+function test(choice int) returns int
+    var x = 10
+
+    match choice 'select'
+        1 then return x + 1
+        2 then return x + 2
+        default then return x
+    end 'select'
+end 'test'
+
+function main() returns int
+    return test(1)
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: match-default-case -->
+Match default case executes when no other cases match.
+```maxon
+function test(choice int) returns int
+    var x = 10
+
+    match choice 'select'
+        1 then return x + 1
+        2 then return x + 2
+        default then return x
+    end 'select'
+end 'test'
+
+function main() returns int
+    return test(99)
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: or-block-early-return -->
+Or block with early return allows variable use after guard-let.
+```maxon
+function getValue(opt int or nil) returns int
+    let v = opt or 'empty'
+        return 0
+    end 'empty'
+    return v
+end 'getValue'
+
+function main() returns int
+    return getValue(42)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: or-block-nil-case -->
+Or block nil case returns early, leaving variable unused.
+```maxon
+function getValue(opt int or nil) returns int
+    let v = opt or 'empty'
+        return 0
+    end 'empty'
+    return v
+end 'getValue'
+
+function main() returns int
+    return getValue(nil)
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: nested-if-with-returns -->
+Nested if statements with returns restore ownership correctly.
+```maxon
+type Position
+    export var x int
+    export var y int
+end 'Position'
+
+function test(a int, b int) returns int
+    var pos = Position{x: 10, y: 20}
+
+    if a == 1 'outer'
+        if b == 1 'inner'
+            var temp = pos
+            return temp.x
+        end 'inner'
+        // pos still owned here if inner didn't match
+        return pos.y
+    end 'outer'
+
+    // pos still owned here if outer didn't match
+    return pos.x + pos.y
+end 'test'
+
+function main() returns int
+    return test(2, 2)
+end 'main'
+```
+```exitcode
+30
+```

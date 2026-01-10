@@ -726,3 +726,150 @@ Moves:     11
 Increfs:   7
 Decrefs:   11
 ```
+
+## Struct Optional Parameters
+
+<!-- test: struct-optional-param-with-value -->
+Passing a struct to an optional struct parameter.
+```maxon
+type Point
+    export var x int
+    export var y int
+end 'Point'
+
+function getX(p Point or nil) returns int
+    if let pt = p 'hasPoint'
+        return pt.x
+    end 'hasPoint' else 'noPoint'
+        return 0
+    end 'noPoint'
+end 'getX'
+
+function main() returns int
+    var p = Point{x: 42, y: 10}
+    return getX(p)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: struct-optional-param-nil -->
+Passing nil to an optional struct parameter.
+```maxon
+type Point
+    export var x int
+    export var y int
+end 'Point'
+
+function getX(p Point or nil) returns int
+    if let pt = p 'hasPoint'
+        return pt.x
+    end 'hasPoint' else 'noPoint'
+        return 0
+    end 'noPoint'
+end 'getX'
+
+function main() returns int
+    return getX(nil)
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: struct-optional-param-sum -->
+Using if-let to unwrap an optional struct parameter.
+```maxon
+type Point
+    export var x int
+    export var y int
+end 'Point'
+
+function sumCoords(p Point or nil) returns int
+    if let pt = p 'hasPoint'
+        return pt.x + pt.y
+    end 'hasPoint' else 'noPoint'
+        return 0
+    end 'noPoint'
+end 'sumCoords'
+
+function main() returns int
+    var p = Point{x: 10, y: 20}
+    return sumCoords(p)
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: struct-optional-param-sum-nil -->
+Using if-let with nil optional struct parameter.
+```maxon
+type Point
+    export var x int
+    export var y int
+end 'Point'
+
+function sumCoords(p Point or nil) returns int
+    if let pt = p 'hasPoint'
+        return pt.x + pt.y
+    end 'hasPoint' else 'noPoint'
+        return 99
+    end 'noPoint'
+end 'sumCoords'
+
+function main() returns int
+    return sumCoords(nil)
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: struct-optional-guardlet-with-value -->
+Using guard-let (or block) to unwrap an optional struct parameter.
+```maxon
+type Point
+    export var x int
+    export var y int
+end 'Point'
+
+function getX(p Point or nil) returns int
+    let pt = p or 'empty'
+        return 0
+    end 'empty'
+    return pt.x
+end 'getX'
+
+function main() returns int
+    var p = Point{x: 42, y: 10}
+    return getX(p)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: struct-optional-guardlet-nil -->
+Using guard-let with nil optional struct parameter returns early.
+```maxon
+type Point
+    export var x int
+    export var y int
+end 'Point'
+
+function getX(p Point or nil) returns int
+    let pt = p or 'empty'
+        return 0
+    end 'empty'
+    return pt.x
+end 'getX'
+
+function main() returns int
+    return getX(nil)
+end 'main'
+```
+```exitcode
+0
+```

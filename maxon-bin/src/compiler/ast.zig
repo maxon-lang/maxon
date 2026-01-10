@@ -300,6 +300,7 @@ pub const StatementKind = union(enum) {
     // Error handling
     throw_stmt: ThrowStmt,
     do_catch_stmt: DoCatchStmt,
+    try_stmt: TryExpr, // try expression used as statement (for void-returning throwing functions)
     // Match statements
     match_stmt: MatchStmt,
 
@@ -709,6 +710,9 @@ fn freeStatementArgs(stmt: Statement, allocator: std.mem.Allocator) void {
         },
         .throw_stmt => |throw_s| {
             freeExpressionArgs(throw_s.error_expr, allocator);
+        },
+        .try_stmt => |try_s| {
+            freeExpressionArgs(try_s.expr.*, allocator);
         },
         .do_catch_stmt => |do_catch| {
             freeChildBlocks(do_catch.children, allocator);

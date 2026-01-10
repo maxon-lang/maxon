@@ -1,0 +1,65 @@
+// Test: nil-optional-types.struct-optional-param-sum.1
+type Point
+    export var x int
+    export var y int
+end 'Point'
+
+function sumCoords(p Point or nil) returns int
+    if let pt = p 'hasPoint'
+        return pt.x + pt.y
+    end 'hasPoint' else 'noPoint'
+        return 0
+    end 'noPoint'
+end 'sumCoords'
+
+function main() returns int
+    var p = Point{x: 10, y: 20}
+    return sumCoords(p)
+end 'main'
+---
+ExitCode: 30
+---
+function sumCoords() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %p = alloca ptr
+    store %p %tmp_param
+    %tmp_load = load ptr %p
+    %tmp_load.1 = load i64 %tmp_load
+    %tmp_const = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+if_let_then:
+    %pt = getfieldptr ptr %tmp_load 8
+    %tmp_fieldptr.1 = getfieldptr ptr %pt 0
+    %tmp_load.2 = load i64 %tmp_fieldptr.1
+    %tmp_fieldptr.2 = getfieldptr ptr %pt 8
+    %tmp_load.3 = load i64 %tmp_fieldptr.2
+    %tmp_add = add i64 %tmp_load.2 %tmp_load.3
+    ret %tmp_add
+if_let_else:
+    %tmp_const.1 = const.i64 i64 0
+    ret %tmp_const.1
+if_let_end:
+}
+
+function main() -> i64 {
+entry:
+    %p = alloca.sized ptr 16
+    memset %p 0 16
+    %tmp_fieldptr = getfieldptr ptr %p 0
+    %tmp_const = const.i64 i64 10
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %p 8
+    %tmp_const.1 = const.i64 i64 20
+    store %tmp_fieldptr.1 %tmp_const.1
+    %tmp_alloca.1 = alloca.sized ptr 24
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_alloca.1 %tmp_const.2
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.1 8
+    memcpy %tmp_fieldptr.2 %p 16
+    %tmp_call = call i64 @sumCoords(%tmp_alloca.1)
+    ret %tmp_call
+}
+
+---

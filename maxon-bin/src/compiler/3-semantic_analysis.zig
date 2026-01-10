@@ -162,6 +162,10 @@ pub const MutationAnalyzer = struct {
             .throw_stmt => {
                 // Throw statements don't mutate parameters
             },
+            .try_stmt => |try_s| {
+                // Check mutations in the try expression (e.g., method calls)
+                self.checkExpressionForParamMutation(try_s.expr.*, param_indices, mutated);
+            },
             .do_catch_stmt => |do_catch| {
                 // Check mutations inside do block and catch blocks
                 for (do_catch.children) |child| {
@@ -956,6 +960,9 @@ pub const SemanticAnalyzer = struct {
                 },
                 .throw_stmt => |throw_s| {
                     try self.discoverInExpression(throw_s.error_expr);
+                },
+                .try_stmt => |try_s| {
+                    try self.discoverInExpression(try_s.expr.*);
                 },
                 .else_unwrap_decl => |unwrap| {
                     try self.discoverInExpression(unwrap.optional_expr.*);

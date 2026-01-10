@@ -107,6 +107,11 @@ pub const Parser = struct {
                     } else if (next.type == .let) {
                         _ = self.advance(); // skip 'export'
                         try global_constants.append(self.allocator, try self.parseGlobalConstant(true));
+                    } else if (next.type == .@"enum") {
+                        _ = self.advance(); // skip 'export'
+                        var enum_decl = try self.parseEnumDecl();
+                        enum_decl.is_export = true;
+                        try enums.append(self.allocator, enum_decl);
                     } else {
                         self.reportErrorWithDetails(.E002, next.text);
                         return error.UnexpectedToken;
@@ -966,6 +971,19 @@ pub const Parser = struct {
         // Error handling: do-catch block
         if (self.check(.do)) {
             return try self.parseDoCatchStatement();
+        }
+        // Error handling: try statement (for void-returning throwing functions)
+        if (self.check(.@"try")) {
+            _ = self.advance(); // consume 'try'
+            const operand = try self.parseUnary() orelse {
+                self.reportError(.E003);
+                return error.ExpectedExpression;
+            };
+            _ = try self.expect(.newline);
+            return stmtAt(.{ .try_stmt = .{
+                .expr = try self.createExpr(operand),
+                .mode = .propagate,
+            } }, start_line, start_column);
         }
         // Match statement
         if (self.check(.match)) {

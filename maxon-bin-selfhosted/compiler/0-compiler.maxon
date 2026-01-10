@@ -1,6 +1,6 @@
 // Maxon Compiler - Main entry point
 
-export function compile(sourceFile string) returns int
+export function compile(sourceFile String) returns int
 	let outputFile = sourceFile.replace(".maxon", ".exe")
 
 	print("Source:  {sourceFile}")
@@ -8,7 +8,10 @@ export function compile(sourceFile string) returns int
 	print("")
 
 	// Read source file
-	let source = readTextFile(sourceFile) or 'noSource'
+	var source = ""
+	do 'readSource'
+		source = try File.readText(sourceFile)
+	end 'readSource' catch (err FileError) 'noSource'
 		print("Error: Could not read source file: {sourceFile}")
 		return 1
 	end 'noSource'
@@ -55,7 +58,12 @@ export function compile(sourceFile string) returns int
 	print("  Generated MIR")
 
 	let mirFile = sourceFile.replace(".maxon", ".mir")
-	writeTextFile(mirFile, codegen.output)
+	do 'writeMir'
+		try File.writeText(mirFile, codegen.output)
+	end 'writeMir' catch (err FileError) 'noMirWrite'
+		print("Error: Could not write MIR file")
+		return 1
+	end 'noMirWrite'
 	print("  Wrote {mirFile}")
 
 	// Phase 6: x86-64 Code Generation
@@ -74,7 +82,12 @@ export function compile(sourceFile string) returns int
 
 	// Phase 8: Write Output File
 	print("Phase 8: Writing {outputFile}...")
-	writeBinaryFile(outputFile, exeBytes)
+	do 'writeExe'
+		try File.writeBinary(outputFile, exeBytes)
+	end 'writeExe' catch (err FileError) 'noExeWrite'
+		print("Error: Could not write executable")
+		return 1
+	end 'noExeWrite'
 	print("  Done!")
 
 	print("")
@@ -83,6 +96,3 @@ export function compile(sourceFile string) returns int
 
 	return 0
 end 'compile'
-
-
-

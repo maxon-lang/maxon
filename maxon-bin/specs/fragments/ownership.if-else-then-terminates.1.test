@@ -1,0 +1,60 @@
+// Test: ownership.if-else-then-terminates.1
+type Position
+    export var x int
+    export var y int
+end 'Position'
+
+function test(take_first bool) returns int
+    var pos = Position{x: 10, y: 20}
+
+    if take_first 'branch'
+        var temp = pos  // Move pos
+        return temp.x
+    end 'branch' else 'other'
+        // pos should still be owned here since then returned
+        return pos.y
+    end 'other'
+end 'test'
+
+function main() returns int
+    return test(false)
+end 'main'
+---
+ExitCode: 20
+---
+function test() -> i64 {
+entry:
+    %take_first = param i64 0
+    %take_first.1 = alloca ptr
+    store %take_first.1 %take_first
+    %pos = alloca.sized ptr 16
+    memset %pos 0 16
+    %tmp_fieldptr = getfieldptr ptr %pos 0
+    %tmp_const = const.i64 i64 10
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %pos 8
+    %tmp_const.1 = const.i64 i64 20
+    store %tmp_fieldptr.1 %tmp_const.1
+    %tmp_load = load i64 %take_first.1
+    br.cond %tmp_load @block1 @block2
+then:
+    %temp = alloca.sized ptr 16
+    memcpy %temp %pos 16
+    %tmp_fieldptr.2 = getfieldptr ptr %temp 0
+    %tmp_load.1 = load i64 %tmp_fieldptr.2
+    ret %tmp_load.1
+else:
+    %tmp_fieldptr.3 = getfieldptr ptr %pos 8
+    %tmp_load.2 = load i64 %tmp_fieldptr.3
+    ret %tmp_load.2
+end:
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %tmp_call = call i64 @test(%tmp_const)
+    ret %tmp_call
+}
+
+---

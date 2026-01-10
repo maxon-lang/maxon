@@ -1,0 +1,52 @@
+// Test: ownership.if-else-else-terminates.1
+function test(take_first bool) returns int
+    var x = 10
+
+    if take_first 'branch'
+        x = x + 5
+    end 'branch' else 'other'
+        return 99
+    end 'other'
+
+    // Only reachable if take_first was true
+    return x
+end 'test'
+
+function main() returns int
+    return test(true)
+end 'main'
+---
+ExitCode: 15
+---
+function test() -> i64 {
+entry:
+    %take_first = param i64 0
+    %take_first.1 = alloca ptr
+    store %take_first.1 %take_first
+    %tmp_const = const.i64 i64 10
+    %x = alloca ptr
+    store %x %tmp_const
+    %tmp_load = load i64 %take_first.1
+    br.cond %tmp_load @block1 @block2
+then:
+    %tmp_load.1 = load i64 %x
+    %tmp_const.1 = const.i64 i64 5
+    %tmp_add = add i64 %tmp_load.1 %tmp_const.1
+    store %x %tmp_add
+    br @block3
+else:
+    %tmp_const.2 = const.i64 i64 99
+    ret %tmp_const.2
+end:
+    %tmp_load.2 = load i64 %x
+    ret %tmp_load.2
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 1
+    %tmp_call = call i64 @test(%tmp_const)
+    ret %tmp_call
+}
+
+---

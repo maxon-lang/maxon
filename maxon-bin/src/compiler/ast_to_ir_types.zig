@@ -231,6 +231,17 @@ pub const ValueType = union(enum) {
     pub fn isFunctionType(self: ValueType) bool {
         return self == .function_type;
     }
+
+    /// Returns true if this type requires slot indirection (ptr -> pointer -> data).
+    /// Heap arrays, optionals, and function types use slots; structs and primitives don't.
+    pub fn usesSlot(self: ValueType) bool {
+        return switch (self) {
+            .array_type => |arr| arr.storage == .heap,
+            .optional_type => true,
+            .function_type => true,
+            .primitive, .struct_type, .enum_type, .error_union_type => false,
+        };
+    }
 };
 
 /// Free any heap allocations inside a ValueType (for function types with nested allocations)
@@ -256,8 +267,24 @@ pub fn freeValueTypeAllocations(allocator: std.mem.Allocator, vt: ValueType) voi
                 allocator.free(name);
             }
         },
+        .optional_type => |opt| {
+            // Free allocated wrapped_struct_type names (contain '$')
+            if (opt.wrapped_struct_type) |name| {
+                if (std.mem.indexOf(u8, name, "$")) |_| {
+                    allocator.free(name);
+                }
+            }
+        },
+        .error_union_type => |eu| {
+            // Free allocated success_struct_type names (contain '$')
+            if (eu.success_struct_type) |name| {
+                if (std.mem.indexOf(u8, name, "$")) |_| {
+                    allocator.free(name);
+                }
+            }
+        },
         // Other variants don't have heap allocations
-        .primitive, .enum_type, .array_type, .optional_type, .error_union_type => {},
+        .primitive, .enum_type, .array_type => {},
     }
 }
 
@@ -452,6 +479,7 @@ pub const ExternalFieldInfo = struct {
     offset: i32,
     size: i32,
     type_name: []const u8, // "int", "float", "bool", "ptr", or struct name
+    is_export: bool = false, // Whether field is accessible outside the type
 };
 
 /// External interface info - for cross-module compilation
@@ -498,7 +526,11 @@ pub const VarInfo = struct {
     state: OwnershipState,
     moved_to: ?[]const u8,
     moved_line: usize,
-    /// If true, ptr is a slot containing a pointer that must be loaded
+    /// Storage indirection: true = ptr holds a pointer to the data (needs load before access)
+    ///                      false = ptr directly holds the data (access directly)
+    /// Examples:
+    ///   - Stack-allocated struct via alloca.sized: uses_slot = false (data is at ptr)
+    ///   - Heap-allocated array via alloca ptr: uses_slot = true (ptr -> pointer -> data)
     uses_slot: bool,
     /// If true, this is a function parameter (caller owns memory, don't free)
     is_parameter: bool,
@@ -507,6 +539,40 @@ pub const VarInfo = struct {
     /// Current borrow state
     borrow_state: BorrowState = .none,
 
+    /// Create a VarInfo for a stack-allocated value (data stored directly at ptr).
+    /// Use this for values created with alloca.sized or stack structs.
+    pub fn initStackAllocated(ptr: ?ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
+        return .{
+            .ptr = ptr,
+            .ty = ty,
+            .used = false,
+            .is_mutable = is_mutable,
+            .state = .owned,
+            .moved_to = null,
+            .moved_line = 0,
+            .uses_slot = false,
+            .is_parameter = false,
+        };
+    }
+
+    /// Create a VarInfo for a heap-allocated value (ptr holds a pointer to the data).
+    /// Use this for values where ptr points to a slot containing a pointer.
+    pub fn initHeapAllocated(ptr: ?ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
+        return .{
+            .ptr = ptr,
+            .ty = ty,
+            .used = false,
+            .is_mutable = is_mutable,
+            .state = .owned,
+            .moved_to = null,
+            .moved_line = 0,
+            .uses_slot = true,
+            .is_parameter = false,
+        };
+    }
+
+    /// Legacy init function - prefer initStackAllocated or initHeapAllocated for clarity.
+    /// uses_slot: false = stack-allocated (data at ptr), true = heap-allocated (ptr -> pointer -> data)
     pub fn init(ptr: ?ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
         return .{
             .ptr = ptr,
@@ -521,6 +587,8 @@ pub const VarInfo = struct {
         };
     }
 
+    /// Create a VarInfo for a function parameter.
+    /// uses_slot: false = passed by value on stack, true = passed by pointer
     pub fn initParam(ptr: ?ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
         return .{
             .ptr = ptr,
@@ -532,6 +600,22 @@ pub const VarInfo = struct {
             .moved_line = 0,
             .uses_slot = uses_slot,
             .is_parameter = true,
+        };
+    }
+
+    /// Create a VarInfo with uses_slot automatically determined from the type.
+    /// Heap arrays, optionals, and function types use a slot; structs and primitives don't.
+    pub fn initFromType(ptr: ?ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
+        return .{
+            .ptr = ptr,
+            .ty = ty,
+            .used = false,
+            .is_mutable = is_mutable,
+            .state = .owned,
+            .moved_to = null,
+            .moved_line = 0,
+            .uses_slot = ty.usesSlot(),
+            .is_parameter = false,
         };
     }
 

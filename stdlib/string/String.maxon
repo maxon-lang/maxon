@@ -105,6 +105,28 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		return StringIndex{_charIndex: charCount, _bytePos: __managed_array_len(_managed)}
 	end 'endIndex'
 
+	/// Get character at the given index. Returns the grapheme cluster at that position.
+	export function charAt(idx StringIndex) returns Character
+		// Calculate the byte length of this grapheme at the given byte position
+		var len = __managed_array_len(_managed)
+		var byteStart = idx.bytePos()
+		var endPos = findGraphemeEndManaged(_managed, byteStart, len)
+		var byteLen = endPos - byteStart
+		return _makeCharFromBytes(byteStart, byteLen)
+	end 'charAt'
+
+	/// Get the index after the given position (for iteration)
+	export function indexAfter(idx StringIndex) returns StringIndex or nil
+		if idx.charIndex() >= countGraphemesManaged(_managed) 'atEnd'
+			return nil
+		end 'atEnd'
+		var len = __managed_array_len(_managed)
+		var byteStart = idx.bytePos()
+		var endPos = findGraphemeEndManaged(_managed, byteStart, len)
+		var byteLen = endPos - byteStart
+		return StringIndex{_charIndex: idx.charIndex() + 1, _bytePos: byteStart + byteLen}
+	end 'indexAfter'
+
 	// concat method
 	export function concat(other String) returns String
 		return __managed_array_concat(_managed, other._managed)

@@ -3,8 +3,8 @@
 export type Parser
 	var tokens Array of Token
 	var pos int
-	var hadError bool
-	var errorMessage string
+	export var hadError bool
+	export var errorMessage String
 
 	export static function create(tokens Array of Token) returns Parser
 		let result = Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
@@ -51,7 +51,7 @@ export type Parser
 		return false
 	end 'matchToken'
 
-	export function expect(kind TokenType, message string) returns Token
+	export function expect(kind TokenType, message String) returns Token
 		if check(kind) 'check'
 			return advance()
 		end 'check'
@@ -59,7 +59,7 @@ export type Parser
 		return makeToken(TokenType.error, "", peek().line, peek().column)
 	end 'expect'
 
-	export function error(message string)
+	export function error(message String)
 		hadError = true
 		errorMessage = message
 	end 'error'
@@ -82,17 +82,27 @@ export type Parser
 		return TypeRef.makeInt()
 	end 'parseType'
 
+	// Helper to parse integer from string of digits
+	function parseIntFromString(s String) returns int
+		var result = 0
+		for c in s 'digits'
+			if c >= '0' and c <= '9' 'digit'
+				let ascii = c.asciiValue() or 'skip'
+					continue 'digits'
+				end 'skip'
+				result = result * 10 + (ascii - 48)
+			end 'digit'
+		end 'digits'
+		return result
+	end 'parseIntFromString'
+
 	export function parseExpression() returns Expr or nil
 		let loc = currentLoc()
 
 		if matchToken(TokenType.intLiteral) 'int'
 			let lexeme = previous().lexeme
-			if let value = int.parse(lexeme) 'valid_int'
-				return Expr.makeIntLiteral(value, loc)
-			end 'valid_int' else 'invalid_int'
-				error("Invalid integer literal")
-				return nil
-			end 'invalid_int'
+			let value = parseIntFromString(lexeme)
+			return Expr.makeIntLiteral(value, loc)
 		end 'int'
 
 		if matchToken(TokenType.identifier) 'ident'
@@ -150,7 +160,7 @@ export type Parser
 
 		skipNewlines()
 
-		var body = Array of Stmt
+		var body = Array of Stmt{}
 		while not check(TokenType.kwEnd) and not isAtEnd() 'body'
 			if let stmt = parseStatement() 'valid_stmt'
 				body.push(stmt)
@@ -168,7 +178,7 @@ export type Parser
 		return FunctionDecl.create(name, returnType, body, loc)
 	end 'parseFunction'
 
-	export function parseProgram(fileName string) returns Program
+	export function parseProgram(fileName String) returns Program
 		let program = Program.create(fileName)
 		skipNewlines()
 
