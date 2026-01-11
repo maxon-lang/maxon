@@ -59,6 +59,11 @@ const StringConstantPatch = struct {
     string_index: usize, // Index into string_constants array
 };
 
+/// Patch for __chkstk call in function prologues
+const ChkstkPatch = struct {
+    call_offset: usize, // Where the call rel32 displacement is in code
+};
+
 /// Code generation options
 pub const CodegenOptions = struct {
     track_memory: bool = false,
@@ -276,6 +281,8 @@ pub const IrCodegen = struct {
     string_constant_patches: std.ArrayListUnmanaged(StringConstantPatch),
     // Offset where string data section starts (set after code generation)
     string_data_offset: ?usize = null,
+    // Patches for __chkstk calls in function prologues
+    chkstk_patches: std.ArrayListUnmanaged(ChkstkPatch),
 
     pub fn init(allocator: std.mem.Allocator, code: *std.ArrayListUnmanaged(u8), options: CodegenOptions) IrCodegen {
         return .{
@@ -302,6 +309,7 @@ pub const IrCodegen = struct {
             .pending_stack_space = 0,
             .string_constants = .{},
             .string_constant_patches = .{},
+            .chkstk_patches = .{},
         };
     }
 
@@ -320,6 +328,7 @@ pub const IrCodegen = struct {
         self.reg_alloc.deinit(self.allocator);
         self.string_constants.deinit(self.allocator);
         self.string_constant_patches.deinit(self.allocator);
+        self.chkstk_patches.deinit(self.allocator);
     }
 
     /// Get external call patches for PE writer
@@ -465,6 +474,11 @@ pub const IrCodegen = struct {
         try self.generateRuntimeIntToString();
         try self.generateRuntimeFloatToString();
         try self.generateRuntimeBoolToString();
+
+        // Generate __chkstk for large stack allocations (Windows x64)
+        try self.generateChkstk();
+        // Patch all __chkstk calls now that we know its address
+        try self.patchChkstkCalls();
 
         // Generate tracking support functions if enabled
         if (self.track_memory) {
@@ -1906,6 +1920,100 @@ pub const IrCodegen = struct {
         try self.enc.ret();
     }
 
+    /// Generate __chkstk for Windows x64 stack probing
+    /// When allocating more than 4096 bytes of stack, we must probe each page
+    /// to ensure the OS commits the memory. Without this, large stack allocations
+    /// can jump over guard pages and crash.
+    ///
+    /// Input: RAX = number of bytes to allocate
+    /// This function ONLY probes pages - the caller is responsible for
+    /// doing `sub rsp, stack_size` AFTER the call returns.
+    /// Preserves all registers including RAX.
+    fn generateChkstk(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__chkstk", self.code.items.len);
+
+        // __chkstk implementation for Windows x64
+        // We need to touch each page from current RSP down to RSP - RAX
+        // to trigger the OS to commit those pages.
+        //
+        // IMPORTANT: We do NOT modify RSP here. The caller does `sub rsp, size`
+        // after we return. We just probe the pages.
+        //
+        // Algorithm:
+        //   save rcx, r10
+        //   rcx = rax (bytes to probe)
+        //   r10 = rsp (current position, adjusted for our pushes + return addr)
+        // loop:
+        //   if rcx < 4096: goto done
+        //   r10 -= 4096
+        //   touch [r10]
+        //   rcx -= 4096
+        //   goto loop
+        // done:
+        //   restore rcx, r10
+        //   ret
+
+        // Save registers we'll use
+        try self.enc.emit(&.{0x51}); // push rcx
+        try self.enc.emit(&.{ 0x41, 0x52 }); // push r10
+
+        // mov rcx, rax (rcx = bytes to probe)
+        try self.enc.emit(&.{ 0x48, 0x89, 0xC1 }); // mov rcx, rax
+
+        // lea r10, [rsp + 24] ; r10 = original RSP before call
+        // Stack layout: [return addr][saved rcx][saved r10] <- RSP
+        // So original RSP = RSP + 24 (3 * 8 bytes)
+        try self.enc.emit(&.{ 0x4C, 0x8D, 0x54, 0x24, 0x18 }); // lea r10, [rsp+24]
+
+        // loop_start:
+        const loop_start = self.code.items.len;
+
+        // cmp rcx, 0x1000
+        try self.enc.emit(&.{ 0x48, 0x81, 0xF9, 0x00, 0x10, 0x00, 0x00 }); // cmp rcx, 0x1000
+
+        // jb done (jump if below, i.e., remaining < 4096)
+        const jb_offset = self.code.items.len;
+        try self.enc.emit(&.{ 0x72, 0x00 }); // jb done (patch later)
+
+        // sub r10, 0x1000 (move probe position down one page)
+        try self.enc.emit(&.{ 0x49, 0x81, 0xEA, 0x00, 0x10, 0x00, 0x00 }); // sub r10, 0x1000
+
+        // Touch the page - use test byte [r10], 0 (non-destructive read)
+        try self.enc.emit(&.{ 0x41, 0xF6, 0x02, 0x00 }); // test byte [r10], 0
+
+        // sub rcx, 0x1000
+        try self.enc.emit(&.{ 0x48, 0x81, 0xE9, 0x00, 0x10, 0x00, 0x00 }); // sub rcx, 0x1000
+
+        // jmp loop_start
+        const jmp_back: i8 = @intCast(@as(i64, @intCast(loop_start)) - @as(i64, @intCast(self.code.items.len + 2)));
+        try self.enc.emit(&.{ 0xEB, @bitCast(jmp_back) }); // jmp loop_start
+
+        // done:
+        const done_pos = self.code.items.len;
+        self.code.items[jb_offset + 1] = @intCast(done_pos - jb_offset - 2);
+
+        // Restore registers
+        try self.enc.emit(&.{ 0x41, 0x5A }); // pop r10
+        try self.enc.emit(&.{0x59}); // pop rcx
+
+        try self.enc.ret();
+    }
+
+    /// Patch all __chkstk call sites with the actual address
+    fn patchChkstkCalls(self: *IrCodegen) !void {
+        const chkstk_addr = self.func_offsets.get("__chkstk") orelse return error.ChkstkNotFound;
+
+        for (self.chkstk_patches.items) |patch| {
+            // RIP after call instruction = call_offset + 4
+            const rel: i32 = @intCast(@as(i64, @intCast(chkstk_addr)) - @as(i64, @intCast(patch.call_offset + 4)));
+            const call_bytes: [4]u8 = @bitCast(rel);
+            self.code.items[patch.call_offset] = call_bytes[0];
+            self.code.items[patch.call_offset + 1] = call_bytes[1];
+            self.code.items[patch.call_offset + 2] = call_bytes[2];
+            self.code.items[patch.call_offset + 3] = call_bytes[3];
+        }
+    }
+
     // ========================================================================
     // String Formatting Runtime Helpers
     // ========================================================================
@@ -2279,9 +2387,9 @@ pub const IrCodegen = struct {
         const num_callee_saved_gprs = self.reg_alloc.used_callee_saved_gprs.items.len;
         const num_callee_saved_xmms = self.reg_alloc.used_callee_saved_xmms.items.len;
 
-        // Emit prologue with placeholder stack size (will be patched after)
+        // Emit prologue placeholder (17 bytes reserved, filled in after we know stack size)
         const func_start = self.code.items.len;
-        try self.enc.prologue(0);
+        try self.enc.prologuePlaceholder();
 
         // Push callee-saved GPRs after prologue but before stack frame allocation
         // Note: The stack frame size will be patched to account for these pushes
@@ -2328,14 +2436,17 @@ pub const IrCodegen = struct {
         // Store frame size in reg_alloc for use by emitCalleeSavedRestores
         self.reg_alloc.frame_size = stack_size;
 
-        // Prologue layout: push rbp (1) + mov rbp,rsp (3) + sub rsp,imm32 (3+4)
-        // The imm32 is at offset 7 from function start
-        const stack_size_offset = func_start + 7;
-        const bytes: [4]u8 = @bitCast(stack_size);
-        self.code.items[stack_size_offset] = bytes[0];
-        self.code.items[stack_size_offset + 1] = bytes[1];
-        self.code.items[stack_size_offset + 2] = bytes[2];
-        self.code.items[stack_size_offset + 3] = bytes[3];
+        // Determine if we need __chkstk (stack >= 4096 bytes)
+        const needs_chkstk = stack_size >= 4096;
+
+        // Fill in the prologue with the appropriate variant
+        x86.Encoder.fillPrologue(self.code.items, func_start, stack_size, needs_chkstk);
+
+        // If using __chkstk, record the call offset for later patching
+        if (needs_chkstk) {
+            const call_offset = func_start + 10;
+            try self.chkstk_patches.append(self.allocator, .{ .call_offset = call_offset });
+        }
     }
 
     fn patchJumps(self: *IrCodegen) !void {

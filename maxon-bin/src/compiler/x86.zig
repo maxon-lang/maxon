@@ -643,6 +643,73 @@ pub const Encoder = struct {
         try self.emitI32(stack_size);
     }
 
+    /// Reserve space for prologue - we don't know the stack size yet
+    /// Reserves 17 bytes (max prologue size) which will be filled in later
+    /// Returns the offset where the prologue starts
+    pub fn prologuePlaceholder(self: *Encoder) !void {
+        // Reserve 17 bytes (size of __chkstk prologue, the largest variant)
+        try self.emit(&.{ 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 });
+        try self.emit(&.{ 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 });
+    }
+
+    /// Fill in the prologue at func_start with the appropriate variant
+    /// For small stacks (< 4096), uses simple prologue with NOPs padding
+    /// For large stacks (>= 4096), uses __chkstk prologue
+    pub fn fillPrologue(code: []u8, func_start: usize, stack_size: i32, needs_chkstk: bool) void {
+        var pos = func_start;
+        if (needs_chkstk) {
+            // __chkstk prologue: push rbp (1) + mov rbp,rsp (3) + mov eax,imm32 (5) + call rel32 (5) + sub rsp,rax (3) = 17 bytes
+            code[pos] = 0x55; // push rbp
+            pos += 1;
+            code[pos] = 0x48;
+            code[pos + 1] = 0x89;
+            code[pos + 2] = 0xE5; // mov rbp, rsp
+            pos += 3;
+            code[pos] = 0xB8; // mov eax, imm32
+            pos += 1;
+            const size_bytes: [4]u8 = @bitCast(stack_size);
+            code[pos] = size_bytes[0];
+            code[pos + 1] = size_bytes[1];
+            code[pos + 2] = size_bytes[2];
+            code[pos + 3] = size_bytes[3];
+            pos += 4;
+            code[pos] = 0xE8; // call rel32 (placeholder, patched later)
+            code[pos + 1] = 0x00;
+            code[pos + 2] = 0x00;
+            code[pos + 3] = 0x00;
+            code[pos + 4] = 0x00;
+            pos += 5;
+            code[pos] = 0x48;
+            code[pos + 1] = 0x29;
+            code[pos + 2] = 0xC4; // sub rsp, rax
+        } else {
+            // Simple prologue: push rbp (1) + mov rbp,rsp (3) + sub rsp,imm32 (7) = 11 bytes + 6 NOPs = 17 bytes
+            code[pos] = 0x55; // push rbp
+            pos += 1;
+            code[pos] = 0x48;
+            code[pos + 1] = 0x89;
+            code[pos + 2] = 0xE5; // mov rbp, rsp
+            pos += 3;
+            code[pos] = 0x48;
+            code[pos + 1] = 0x81;
+            code[pos + 2] = 0xEC; // sub rsp, imm32
+            pos += 3;
+            const size_bytes: [4]u8 = @bitCast(stack_size);
+            code[pos] = size_bytes[0];
+            code[pos + 1] = size_bytes[1];
+            code[pos + 2] = size_bytes[2];
+            code[pos + 3] = size_bytes[3];
+            pos += 4;
+            // Pad with 6 NOPs to match __chkstk prologue size
+            code[pos] = 0x90;
+            code[pos + 1] = 0x90;
+            code[pos + 2] = 0x90;
+            code[pos + 3] = 0x90;
+            code[pos + 4] = 0x90;
+            code[pos + 5] = 0x90;
+        }
+    }
+
     pub fn epilogue(self: *Encoder) !void {
         try self.emit(&.{ 0x48, 0x89, 0xEC }); // mov rsp, rbp
         try self.popRbp();
