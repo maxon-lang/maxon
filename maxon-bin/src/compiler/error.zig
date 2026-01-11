@@ -112,6 +112,7 @@ pub const ErrorCode = enum {
     E053, // bracket indexing not supported
     E054, // main cannot throw
     E055, // if try requires throwing expression
+    E056, // generic type requires braces
 
     const Info = struct {
         code: []const u8,
@@ -169,6 +170,7 @@ pub const ErrorCode = enum {
         .{ .code = "E053", .message = "bracket indexing not supported" },
         .{ .code = "E054", .message = "main cannot throw" },
         .{ .code = "E055", .message = "if try requires a throwing function call" },
+        .{ .code = "E056", .message = "generic type instantiation requires '{}'" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

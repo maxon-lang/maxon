@@ -287,16 +287,13 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
 
         var parser = Parser.initWithFile(tokens, phase1_allocator, source.path);
         const program = parser.parse() catch {
-            // Print parse errors immediately so they're visible
+            // Capture first error for result
             if (parser.last_error) |parse_err| {
-                parse_err.printToStderr();
-                // Capture first error for result
                 if (first_error == null) {
                     first_error = parse_err;
-                    // Transfer ownership of allocated message
-                    if (parser.last_error) |*e| {
-                        e.message_allocated = false;
-                    }
+                    // Duplicate message with main allocator so it survives arena cleanup
+                    first_error.?.message = info.allocator.dupe(u8, parse_err.message) catch parse_err.message;
+                    first_error.?.message_allocated = true;
                 }
             }
             had_parse_error = true;

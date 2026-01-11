@@ -578,3 +578,16 @@ Moves:     3
 Increfs:   3
 Decrefs:   6
 ```
+
+<!-- test: error.missing-braces -->
+Generic type instantiation requires braces.
+
+```maxon
+function main() returns int
+    var arr = Array of byte
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E056: specs/fragments/stdlib-array.error.missing-braces.1.test:3:28: generic type instantiation requires '{}': 'Array of byte'
+```

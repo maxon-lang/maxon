@@ -2304,7 +2304,15 @@ pub const Parser = struct {
                 }
 
                 // Otherwise this is just a generic type used as expression (error case)
-                self.reportErrorWithDetails(.E002, self.current().text);
+                // Build type string for error message: "Array of byte" etc.
+                var type_str: std.ArrayListUnmanaged(u8) = .empty;
+                type_str.appendSlice(self.allocator, token.text) catch {};
+                type_str.appendSlice(self.allocator, " of ") catch {};
+                for (type_args.items, 0..) |arg, i| {
+                    if (i > 0) type_str.appendSlice(self.allocator, " ") catch {};
+                    type_str.appendSlice(self.allocator, arg) catch {};
+                }
+                self.reportErrorWithDetails(.E056, type_str.items);
                 return error.UnexpectedToken;
             }
 
