@@ -135,7 +135,7 @@ pub const ErrorCode = enum {
         .{ .code = "E014", .message = "unused variable" },
         .{ .code = "E015", .message = "missing interface method" },
         .{ .code = "E016", .message = "stdlib-only intrinsic called from user code" },
-        .{ .code = "E017", .message = "nil coalescing requires optional type" },
+        .{ .code = "E017", .message = "reserved" },
         .{ .code = "E018", .message = "internal type used outside stdlib" },
         .{ .code = "E019", .message = "unknown intrinsic" },
         .{ .code = "E020", .message = "cannot modify borrowed string" },

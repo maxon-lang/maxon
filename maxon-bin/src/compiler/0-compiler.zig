@@ -276,9 +276,10 @@ const ParsedSourcesInfo = struct {
 
 /// Parse sources and extract type/function/interface/enum info.
 /// Parse errors are printed immediately. Returns ParseError if any file failed to parse.
-fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source) !void {
+fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, result: ?*CompileResult) !void {
     const phase1_allocator = info.phase1_arena.allocator();
     var had_parse_error = false;
+    var first_error: ?compile_error.CompileError = null;
 
     for (sources) |source| {
         var lexer = Lexer.init(source.content);
@@ -287,8 +288,16 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source) !v
         var parser = Parser.initWithFile(tokens, phase1_allocator, source.path);
         const program = parser.parse() catch {
             // Print parse errors immediately so they're visible
-            if (parser.last_error) |err| {
-                err.printToStderr();
+            if (parser.last_error) |parse_err| {
+                parse_err.printToStderr();
+                // Capture first error for result
+                if (first_error == null) {
+                    first_error = parse_err;
+                    // Transfer ownership of allocated message
+                    if (parser.last_error) |*e| {
+                        e.message_allocated = false;
+                    }
+                }
             }
             had_parse_error = true;
             continue;
@@ -328,6 +337,10 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source) !v
     }
 
     if (had_parse_error) {
+        // Set result.error_info with the first parse error
+        if (result) |r| {
+            r.error_info = first_error;
+        }
         return error.ParseError;
     }
 }
@@ -339,7 +352,7 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     // Parse all sources except the last one (user code)
     var info = ParsedSourcesInfo.init(allocator);
     defer info.deinit();
-    try parseSourcesForMetadata(&info, sources[0 .. sources.len - 1]);
+    try parseSourcesForMetadata(&info, sources[0 .. sources.len - 1], result);
 
     // Compile the last source (user code) with all types/funcs available
     const last_source = sources[sources.len - 1];
@@ -423,7 +436,7 @@ pub fn compileMultiple(
     // Phase 1: Parse all sources and collect metadata
     var info = ParsedSourcesInfo.init(allocator);
     defer info.deinit();
-    try parseSourcesForMetadata(&info, sources);
+    try parseSourcesForMetadata(&info, sources, result);
 
     // Phase 2: Filter to exported symbols for cross-file visibility
     const exported_funcs = try info.getExportedFuncs();

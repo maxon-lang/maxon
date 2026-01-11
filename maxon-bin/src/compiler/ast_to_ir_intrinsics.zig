@@ -76,26 +76,6 @@ fn initSliceArrayFields(self: *AstToIr, result_ptr: ir.Value, parent_off_i32: ir
     try struct_helpers.storeI32Field(self.func(), ir.toStructPtr(result_ptr), 28, parent_off_i32);
 }
 
-/// Wrap a nullable pointer result in an optional type
-/// Layout: [tag: 8 bytes][ptr: 8 bytes] - stores pointer, not inline data
-fn wrapInOptional(self: *AstToIr, result_ptr: ir.Value, wrapped_type: []const u8) ConvertError!TypedValue {
-    const opt_ptr = try self.func().emitAllocaSized(16);
-
-    const zero = try self.func().emitConstI64(0);
-    const is_null = try self.func().emitBinaryOp(.icmp_eq, result_ptr, zero, .i64);
-
-    const one = try self.func().emitConstI64(1);
-    const tag = try self.func().emitBinaryOp(.sub, one, is_null, .i64);
-    try self.func().emitStore(opt_ptr.raw(), tag);
-
-    try struct_helpers.storeI64Field(self.func(), opt_ptr.asStruct(), 8, result_ptr);
-
-    return .{
-        .value = opt_ptr.raw(),
-        .ty = .{ .optional_type = .{ .wrapped = .ptr, .wrapped_struct_type = wrapped_type } },
-    };
-}
-
 // ============================================================================
 // Windows API Helpers (for intrinsics that need direct DLL calls)
 // ============================================================================

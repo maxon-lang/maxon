@@ -148,27 +148,31 @@ end 'main'
 ```stdout
 ALLOC #1: 32 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 30 bytes (int.toString)
-ALLOC #3: 10 bytes (string buffer)
+ALLOC #2: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #4: 11 bytes (string concat)
+DECREF: <temp> -> rc=0
+FREE #2: 10 bytes (string cleanup)
+ALLOC #3: 30 bytes (int.toString)
+ALLOC #4: 10 bytes (string buffer)
+MOVE: managed
+ALLOC #5: 11 bytes (string concat)
 5
 DECREF: <temp> -> rc=0
-FREE #2: 30 bytes (string cleanup)
+FREE #3: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 10 bytes (string cleanup)
+FREE #4: 10 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 11 bytes (string cleanup)
+FREE #5: 11 bytes (string cleanup)
 DECREF: s -> rc=0
 FREE #1: 32 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 83 bytes
-Freed:     83 bytes
+Allocated: 93 bytes
+Freed:     93 bytes
 Leaked:    0 bytes
-Moves:     2
+Moves:     3
 Increfs:   0
-Decrefs:   4
+Decrefs:   5
 ```
 
 ### Cstring Conversion Tests

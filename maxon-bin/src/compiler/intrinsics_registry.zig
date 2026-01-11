@@ -149,7 +149,7 @@ pub const file_intrinsics = [_]Intrinsic{
         .return_ir_type = .ptr,
         .visibility = .stdlib_only,
         .codegen = .custom,
-        .help_text = "Reads the entire contents of a file. Returns nil if the file cannot be read.",
+        .help_text = "Reads the entire contents of a file. Throws if the file cannot be read.",
     },
     .{
         .name = "__write_file",

@@ -166,7 +166,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs/fragments/challenge-sized-arrays.error.array-use-after-move.1.test:11:1
+error E008: specs/fragments/challenge-sized-arrays.error.array-use-after-move.1.test:11:5: use after move: 'arr'
 ```
 
 <!-- test: error.let-array-cannot-move -->
@@ -184,5 +184,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E010: specs/fragments/challenge-sized-arrays.error.let-array-cannot-move.1.test:9
+error E010: specs/fragments/challenge-sized-arrays.error.let-array-cannot-move.1.test:9:5: cannot move from immutable variable: 'arr'
 ```

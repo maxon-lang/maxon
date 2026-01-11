@@ -168,8 +168,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E052: specs/fragments/parameter-labels.error-missing-param-name.1.test:7:16: arguments must include parameter name
-  Use 'name: value' syntax
+error E052: specs/fragments/parameter-labels.error-missing-param-name.1.test:7:5: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 
 <!-- test: error-unknown-param-name -->

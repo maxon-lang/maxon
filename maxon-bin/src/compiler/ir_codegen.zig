@@ -215,8 +215,8 @@ fn analyzeLiveness(allocator: std.mem.Allocator, func: *const ir.Function) !Live
     return info;
 }
 
-/// Check if a return type requires hidden pointer (large struct/optional > 8 bytes)
-/// Windows x64 ABI: Large structs and optionals are returned via a hidden pointer
+/// Check if a return type requires hidden pointer (large struct/error union > 8 bytes)
+/// Windows x64 ABI: Large structs and error unions are returned via a hidden pointer
 /// passed in RCX, which shifts all other parameters right by one register.
 ///
 /// Currently ir.Type doesn't have struct size info, so this is infrastructure
@@ -229,7 +229,7 @@ fn hasHiddenReturnPointer(ret_type: ir.Type) bool {
     // - void: no return value
     //
     // Future enhancement: When struct types are added to ir.Type with size info,
-    // this should return true for structs/optionals > 8 bytes.
+    // this should return true for structs/error unions > 8 bytes.
     _ = ret_type;
     return false;
 }
@@ -2170,8 +2170,8 @@ pub const IrCodegen = struct {
         self.reg_alloc.deinit(self.allocator);
         self.reg_alloc = RegAllocInfo.init();
 
-        // Check if this function returns a large struct or Optional (> 8 bytes)
-        // Windows x64 ABI: Large structs/optionals are returned via hidden pointer in RCX
+        // Check if this function returns a large struct or error union (> 8 bytes)
+        // Windows x64 ABI: Large structs/error unions are returned via hidden pointer in RCX
         // This shifts all other parameters right by one register
         self.reg_alloc.has_hidden_ret_ptr = hasHiddenReturnPointer(func.return_type);
 

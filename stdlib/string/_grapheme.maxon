@@ -367,13 +367,11 @@ export function nextGraphemeBoundary(data Array of byte, len int, offset int) re
 			return len
 	end 'at_end'
 
-	let zeroByte = 0 as byte
-
 	// Decode first codepoint
 	var pos = offset
 	var prevCp = utf8Decode(data, offset: pos)
 	var prevGbp = graphemeBreakProperty(prevCp)
-	var leadByte = try data.get(index: pos) otherwise zeroByte
+	var leadByte = try data.get(pos) otherwise 0
 	var prevLen = utf8ByteLength(leadByte)
 	pos = pos + prevLen
 
@@ -393,7 +391,7 @@ export function nextGraphemeBoundary(data Array of byte, len int, offset int) re
 		state = graphemeStateUpdate(state, gbp: currGbp, cp: currCp)
 		prevCp = currCp
 		prevGbp = currGbp
-		leadByte = try data.get(index: pos) otherwise zeroByte
+		leadByte = try data.get(pos) otherwise 0
 		var currLen = utf8ByteLength(leadByte)
 		pos = pos + currLen
 	end 'scan'
@@ -413,11 +411,9 @@ function prevGraphemeBoundary(data Array of byte, len int, offset int) returns i
 			return 0
 	end 'at_start'
 
-	let zeroByte = 0 as byte
-
 	// Find start of current codepoint (back up past continuation bytes)
 	var pos = safeOffset - 1
-	while pos > 0 and utf8IsContinuation(try data.get(index: pos) otherwise zeroByte) 'find_start'
+	while pos > 0 and utf8IsContinuation(try data.get(pos) otherwise 0) 'find_start'
 			pos = pos - 1
 	end 'find_start'
 
@@ -432,7 +428,7 @@ function prevGraphemeBoundary(data Array of byte, len int, offset int) returns i
 	while scanPos < pos 'scan_back'
 			var currCp = utf8Decode(data, offset: scanPos)
 			var currGbp = graphemeBreakProperty(currCp)
-			var currLen = utf8ByteLength(try data.get(index: scanPos) otherwise zeroByte)
+			var currLen = utf8ByteLength(try data.get(scanPos) otherwise 0)
 
 			if not first 'check_break'
 					if isGraphemeBreak(prevGbp, currGbp: currGbp, prevCp: prevCp, currCp: currCp, state: state) 'found_prev'
@@ -456,14 +452,12 @@ function graphemeCount(data Array of byte, len int) returns int
 			return 0
 	end 'empty'
 
-	let zeroByte = 0 as byte
-
 	var count = 1  // Start with 1 (first grapheme)
 	var pos = 0
 	var state = graphemeStateInit()
 	var prevCp = utf8Decode(data, offset: pos)
 	var prevGbp = graphemeBreakProperty(prevCp)
-	var prevLen = utf8ByteLength(try data.get(index: pos) otherwise zeroByte)
+	var prevLen = utf8ByteLength(try data.get(pos) otherwise 0)
 	pos = pos + prevLen
 	state = graphemeStateUpdate(state, gbp: prevGbp, cp: prevCp)
 
@@ -478,7 +472,7 @@ function graphemeCount(data Array of byte, len int) returns int
 		state = graphemeStateUpdate(state, gbp: currGbp, cp: currCp)
 		prevCp = currCp
 		prevGbp = currGbp
-		var currLen = utf8ByteLength(try data.get(index: pos) otherwise zeroByte)
+		var currLen = utf8ByteLength(try data.get(pos) otherwise 0)
 		pos = pos + currLen
 	end 'count_loop'
 

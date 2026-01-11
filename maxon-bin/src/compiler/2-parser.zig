@@ -2285,8 +2285,7 @@ pub const Parser = struct {
                     if (next == null) break;
                     // Stop if next token is a keyword or could be part of expression
                     if (std.mem.eql(u8, next.?.text, "or") or
-                        std.mem.eql(u8, next.?.text, "and") or
-                        std.mem.eql(u8, next.?.text, "nil"))
+                        std.mem.eql(u8, next.?.text, "and"))
                     {
                         break;
                     }

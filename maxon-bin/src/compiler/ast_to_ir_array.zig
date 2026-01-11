@@ -116,9 +116,6 @@ pub fn emitManagedArray(self: *AstToIr, buffer: ir.RawPtr, len: ir.Value, capaci
 }
 
 /// Index into a __ManagedArray: managed[i]
-/// Returns the element as an optional (bounds-checked)
-/// Uses current_type_name or var_name context to determine element type
-/// Index into a __ManagedArray: managed[i]
 /// Returns the element as an error union (bounds-checked, throws ArrayError on out of bounds)
 /// Uses current_type_name or var_name context to determine element type
 pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression, var_name: ?[]const u8) ConvertError!TypedValue {

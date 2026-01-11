@@ -91,11 +91,6 @@ pub const TypedValue = struct {
         return .{ .val = self.value };
     }
 
-    /// Convert to OptionalPtr (use when you know the type is optional)
-    pub fn asOptionalPtr(self: TypedValue) ir.OptionalPtr {
-        return .{ .val = self.value };
-    }
-
     /// Convert to MapPtr (use when you know the type is a Map)
     pub fn asMapPtr(self: TypedValue) ir.MapPtr {
         return .{ .val = self.value };
@@ -433,7 +428,7 @@ pub const ExternalFuncSignature = struct {
     name: []const u8,
     return_type: ir.Type,
     return_type_name: ?[]const u8 = null, // struct type name if returning a struct
-    return_value_type: ?ValueType = null, // Full return type info (for optionals, etc.)
+    return_value_type: ?ValueType = null, // Full return type info (for error unions, etc.)
     is_exported: bool = false, // Whether this function is exported from its module
     source_path: ?[]const u8 = null, // Source file path (to distinguish stdlib vs user)
     param_types: []const ParamType = &.{}, // Parameter types for type checking
@@ -582,7 +577,7 @@ pub const VarInfo = struct {
     }
 
     /// Create a VarInfo with uses_slot automatically determined from the type.
-    /// Heap arrays, optionals, and function types use a slot; structs and primitives don't.
+    /// Heap arrays, error unions, and function types use a slot; structs and primitives don't.
     pub fn initFromType(ptr: ?ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
         return .{
             .ptr = ptr,

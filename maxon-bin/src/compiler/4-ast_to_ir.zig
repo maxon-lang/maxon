@@ -18,7 +18,7 @@ const struct_helpers = @import("ir_struct_helpers.zig");
 const string_helpers = @import("ast_to_ir_string.zig");
 const cstring_helpers = @import("ast_to_ir_cstring.zig");
 const array_helpers = @import("ast_to_ir_array.zig");
-const optional_helpers = @import("ast_to_ir_optional.zig");
+const error_union_helpers = @import("ast_to_ir_error_union.zig");
 const map_helpers = @import("ast_to_ir_map.zig");
 const cleanup_helpers = @import("ast_to_ir_cleanup.zig");
 
@@ -27,7 +27,7 @@ pub const ManagedArray = array_helpers.ManagedArray;
 pub const String = string_helpers.String;
 pub const CString = cstring_helpers.CString;
 pub const Array = array_helpers.Array;
-pub const Optional = optional_helpers.Optional;
+pub const ErrorUnion = error_union_helpers.ErrorUnion;
 pub const Map = map_helpers.Map;
 pub const TypedValue = types.TypedValue;
 pub const ArrayStorage = types.ArrayStorage;
@@ -3044,7 +3044,7 @@ pub const AstToIr = struct {
                 }
             },
             .error_union => |eu| {
-                // Error unions use sret like optionals
+                // Error unions use sret (16-byte wrapper: tag + value)
                 uses_sret = true;
                 sret_struct_size = 8 + self.getTypeSize(eu.success_type.*);
             },
@@ -3696,7 +3696,7 @@ pub const AstToIr = struct {
                         const zero = try self.func().emitConstI64(0);
                         try self.func().emitStore(sret, zero);
                         // Initialize struct at offset 8 (after the tag)
-                        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), Optional.VALUE_OFFSET);
+                        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), ErrorUnion.VALUE_OFFSET);
                         try self.initStructInto(expr.struct_init, value_ptr.raw());
                     } else {
                         // Initialize struct directly into sret buffer (no intermediate copy)
@@ -3707,7 +3707,7 @@ pub const AstToIr = struct {
                     return;
                 }
 
-                // Returning an existing struct variable or optional - copy to sret buffer
+                // Returning an existing struct variable or error union - copy to sret buffer
                 const typed_val = try self.convertExpression(expr);
 
                 // If returning from a throwing function, wrap in success result
@@ -3716,7 +3716,7 @@ pub const AstToIr = struct {
                     const zero = try self.func().emitConstI64(0);
                     try self.func().emitStore(sret, zero);
                     // Write value at offset 8
-                    const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), Optional.VALUE_OFFSET);
+                    const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), ErrorUnion.VALUE_OFFSET);
                     // For struct types, memcpy the contents; for primitives, store the value
                     if (typed_val.ty == .struct_type) {
                         const struct_name = typed_val.ty.struct_type;
@@ -4302,7 +4302,7 @@ pub const AstToIr = struct {
             const error_binding = getElseErrorBinding(if_stmt.children);
             if (error_binding) |err_name| {
                 // Extract error value from error union and bind it
-                const err_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
+                const err_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), ErrorUnion.VALUE_OFFSET);
                 const err_value = try self.func().emitLoad(err_ptr.raw(), .i64);
 
                 const err_var_ptr = try self.func().emitAlloca(.i64);
@@ -4489,9 +4489,8 @@ pub const AstToIr = struct {
     ///
     /// Desugars to:
     /// while true 'loop'
-    ///     var __next_result = collection.next()
-    ///     if __next_result == nil then break
-    ///     var item = unwrap(__next_result)
+    ///     var __next_result = try collection.next() otherwise break
+    ///     var item = __next_result
     ///     body
     /// end 'loop'
     fn convertForStmt(self: *AstToIr, for_stmt: ast.ForStmt) ConvertError!void {
@@ -4924,7 +4923,7 @@ pub const AstToIr = struct {
     }
 
     /// Check if an argument type is compatible with a parameter type.
-    /// Called AFTER implicit conversions (optional wrap/unwrap, int-to-float).
+    /// Called AFTER implicit conversions (int-to-float, etc.).
     fn checkTypeCompatibility(self: *AstToIr, arg_ty: ValueType, param_ty: ValueType) bool {
         // Handle generic type parameters - if param_ty is a struct_type that's actually
         // a generic parameter name, resolve it to the actual type
@@ -5782,7 +5781,7 @@ pub const AstToIr = struct {
             try self.func().emitStore(sret, one);
 
             // Write enum ordinal at offset 8
-            const error_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), Optional.VALUE_OFFSET);
+            const error_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), ErrorUnion.VALUE_OFFSET);
             try self.func().emitStore(error_ptr.raw(), error_typed.value);
 
             // Return via sret
@@ -6932,7 +6931,7 @@ pub const AstToIr = struct {
         } else .{ .primitive = types.INT };
 
         // Success block: extract value and store for later use
-        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
+        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), ErrorUnion.VALUE_OFFSET);
         const is_struct_type = success_type == .struct_type;
 
         // For struct types, we return the pointer directly (data is embedded in error union)
@@ -6996,6 +6995,8 @@ pub const AstToIr = struct {
         success_block_idx: u32 = 0,
         is_success_condition: ir.Value = 0,
         needs_initial_branch: bool = false,
+        // Field for deferred success-to-merge branch
+        needs_success_to_merge_branch: bool = false,
 
         /// Initialize context for try-otherwise handling.
         /// If branch_to_merge is true (default for otherwise), branches to merge after extracting success value.
@@ -7064,7 +7065,7 @@ pub const AstToIr = struct {
             deferred.deferBlocks(self_ir, 2);
 
             // Emit success block: extract value from error union
-            const value_ptr = try self_ir.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
+            const value_ptr = try self_ir.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), ErrorUnion.VALUE_OFFSET);
 
             if (is_struct_type) {
                 try self_ir.func().emitMemcpy(ir.toRawPtr(result_ptr), value_ptr.asRawPtr(), struct_size);
@@ -7077,15 +7078,15 @@ pub const AstToIr = struct {
                 try self_ir.func().emitStore(result_ptr, success_value);
             }
 
-            // For try-otherwise, branch to merge immediately after extracting value
+            // For try-otherwise, we need to branch to merge but we can't emit it yet
+            // because the error block code may add more blocks (like String cleanup).
+            // We defer the branch emission to finalize() when we know the actual merge index.
             // For if-try, stay in success block to run the if-body first
             var restores_done: u32 = 0;
+            var needs_success_to_merge_branch = false;
             if (branch_to_merge) {
-                try self_ir.func().currentBlock().?.instructions.append(self_ir.allocator, .{
-                    .op = .br,
-                    .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-                    .result = null,
-                });
+                // Don't emit the branch here - defer it to finalize()
+                needs_success_to_merge_branch = true;
 
                 // Switch to error block
                 try deferred.restore(self_ir, 1);
@@ -7104,6 +7105,7 @@ pub const AstToIr = struct {
                 .is_success_condition = is_success,
                 .needs_initial_branch = !branch_to_merge,
                 .restores_done = restores_done,
+                .needs_success_to_merge_branch = needs_success_to_merge_branch,
             };
         }
 
@@ -7145,6 +7147,18 @@ pub const AstToIr = struct {
         }
 
         fn finalize(self: *TryOtherwiseContext, self_ir: *AstToIr) ConvertError!TypedValue {
+            // If we deferred the success-to-merge branch, emit it now with the correct merge index.
+            // The merge block will be at the current length (after we restore it).
+            if (self.needs_success_to_merge_branch) {
+                const merge_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+                const success_block = &self_ir.func().blocks.items[self.success_block_idx];
+                try success_block.instructions.append(self_ir.allocator, .{
+                    .op = .br,
+                    .operands = .{ .{ .block_ref = merge_idx }, .none, .none },
+                    .result = null,
+                });
+            }
+
             try self.deferred.restore(self_ir, 0);
             const final_value = if (self.is_struct_type)
                 self.result_ptr
@@ -7210,7 +7224,7 @@ pub const AstToIr = struct {
         // If block_with_err mode, bind the error value
         if (otherwise.mode == .block_with_err) {
             if (otherwise.error_binding) |err_name| {
-                const err_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
+                const err_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), ErrorUnion.VALUE_OFFSET);
                 const err_value = try self.func().emitLoad(err_ptr.raw(), .i64);
 
                 const err_var_ptr = try self.func().emitAlloca(.i64);
@@ -8762,7 +8776,6 @@ pub const AstToIr = struct {
             try self.ensureMethodGenerated(mangled_name);
         }
 
-        // Check if return type is optional (needs sret for 16-byte struct)
         // Check if return type is error union (needs sret for error union wrapper)
         const returns_error_union = if (func_info.return_value_type) |vt|
             vt == .error_union_type
@@ -9537,7 +9550,7 @@ fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
     };
 }
 
-/// Helper: get ValueType from TypeExpr (for optional/array types)
+/// Helper: get ValueType from TypeExpr (for error union/array types)
 /// Allocations are not tracked - caller manages cleanup through freeParamTypes.
 fn getValueTypeFromTypeExpr(allocator: std.mem.Allocator, te: ast.TypeExpr) ?ValueType {
     return switch (te) {
@@ -9565,7 +9578,7 @@ fn getValueTypeFromTypeExpr(allocator: std.mem.Allocator, te: ast.TypeExpr) ?Val
 /// Helper: get struct name from TypeExpr if it's a struct type
 /// Get the struct name from a type expression.
 /// For generic types like "Array of String", returns the monomorphized name "Array$String".
-/// Returns a pointer to static string data for simple types, or null for primitives/optionals.
+/// Returns a pointer to static string data for simple types, or null for primitives.
 /// For generic types, allocates a new string. If alloc_tracker is provided, the string is
 /// added to the list for later cleanup; otherwise the caller must free it.
 fn getStructNameFromTypeExpr(

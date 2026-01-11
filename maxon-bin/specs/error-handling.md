@@ -373,5 +373,5 @@ function main() returns int throws MyError
 end 'main'
 ```
 ```maxoncstderr
-E054
+error E054: specs/fragments/error-handling.error.main-cannot-throw.1.test:7:10: main cannot throw: 'main'
 ```
