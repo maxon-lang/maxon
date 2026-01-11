@@ -1,11 +1,7 @@
 // Test: arrays.let-array-middle.1
 function main() returns int
     let arr = [10, 20, 30]
-    if let val = arr[1] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    return try arr.get(index: 1) otherwise 0
 end 'main'
 ---
 ExitCode: 20
@@ -42,49 +38,77 @@ entry:
     %arr = alloca ptr
     store %arr %tmp_alloca
     %tmp_load = load ptr %arr
-    %tmp_load.1 = load ptr %tmp_load
-    %tmp_const.10 = const.i64 i64 1
-    %tmp_const.11 = const.i64 i64 3
     %tmp_alloca.2 = alloca.sized ptr 16
-    %tmp_const.12 = const.i64 i64 0
-    %tmp_icmp = icmp.ge i64 %tmp_const.10 %tmp_const.12
-    %tmp_icmp.1 = icmp.lt i64 %tmp_const.10 %tmp_const.11
-    %tmp_mul = mul i64 %tmp_icmp %tmp_icmp.1
-    br.cond %tmp_mul @block1 @block2
-index_in_bounds:
-    %tmp_const.13 = const.i64 i64 1
-    store %tmp_alloca.2 %tmp_const.13
-    %tmp_elemptr.3 = getelemptr ptr %tmp_load.1 %tmp_const.10 elemsize=8
+    %tmp_const.10 = const.i64 i64 1
+    %tmp_call = call ptr @Array$int$get(%tmp_alloca.2, %tmp_load, %tmp_const.10)
+    %tmp_load.1 = load i64 %tmp_alloca.2
+    %tmp_const.11 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.11
+    %tmp_alloca.3 = alloca ptr
+    br.cond %tmp_icmp @block1 @block2
+try_success:
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load.2 = load i64 %tmp_elemptr.3
-    store %tmp_fieldptr.4 %tmp_load.2
+    %tmp_load.2 = load i64 %tmp_fieldptr.4
+    store %tmp_alloca.3 %tmp_load.2
     br @block3
-index_out_of_bounds:
-    %tmp_const.14 = const.i64 i64 0
-    store %tmp_alloca.2 %tmp_const.14
+try_default:
+    %tmp_const.12 = const.i64 i64 0
+    store %tmp_alloca.3 %tmp_const.12
     br @block3
-index_merge:
-    %tmp_load.3 = load i64 %tmp_alloca.2
-    %tmp_const.15 = const.i64 i64 1
-    %tmp_icmp.2 = icmp.eq i64 %tmp_load.3 %tmp_const.15
-    br.cond %tmp_icmp.2 @block4 @block5
-if_let_then:
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load.4 = load i64 %tmp_fieldptr.5
-    %val = alloca ptr
-    store %val %tmp_load.4
-    %tmp_load.5 = load i64 %val
-    %tmp_load.6 = load ptr %arr
-    %tmp_load.7 = load ptr %tmp_load.6
-    heap.free %tmp_load.7 tag="array cleanup"
-    ret %tmp_load.5
-if_let_else:
-    %tmp_const.16 = const.i64 i64 0
-    %tmp_load.8 = load ptr %arr
-    %tmp_load.9 = load ptr %tmp_load.8
-    heap.free %tmp_load.9 tag="array cleanup"
-    ret %tmp_const.16
-if_let_end:
+try_merge:
+    %tmp_load.3 = load i64 %tmp_alloca.3
+    %tmp_load.4 = load ptr %arr
+    %tmp_load.5 = load ptr %tmp_load.4
+    heap.free %tmp_load.5 tag="array cleanup"
+    ret %tmp_load.3
+}
+
+function Array$int$get() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    %index = param i64 2
+    %index.1 = alloca ptr
+    store %index.1 %index
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %len = alloca ptr
+    store %len %tmp_load
+    %tmp_load.1 = load i64 %index.1
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.lt i64 %tmp_load.1 %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.2 %tmp_const.1
+    ret %tmp_param
+end:
+    %tmp_load.2 = load i64 %index.1
+    %tmp_load.3 = load i64 %len
+    %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.3
+    br.cond %tmp_icmp.1 @block3 @block4
+then:
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_const.4 = const.i64 i64 1
+    store %tmp_param %tmp_const.4
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.3 %tmp_const.3
+    ret %tmp_param
+end:
+    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_load.4 = load i64 %index.1
+    %tmp_load.5 = load ptr %tmp_fieldptr.4
+    %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=8
+    %tmp_load.6 = load i64 %tmp_elemptr
+    %tmp_const.5 = const.i64 i64 0
+    store %tmp_param %tmp_const.5
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.5 %tmp_load.6
+    ret %tmp_param
 }
 
 ---

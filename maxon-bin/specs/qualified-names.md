@@ -26,7 +26,7 @@ export function add(a int, b int) returns int
 end 'add'
 
 function main() returns int
-    return add(10, 20)  // Unqualified call within same namespace
+    return add(10, b: 20)  // Unqualified call within same namespace
 end 'main'
 ```
 ```exitcode

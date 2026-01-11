@@ -1,0 +1,72 @@
+// Test: if-try.if-try-boolean-success.1
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    if try mayFail(true) 'check'
+        result = 1
+    end 'check'
+    return result
+end 'main'
+---
+ExitCode: 1
+---
+function mayFail() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %succeed = param i64 1
+    %succeed.1 = alloca ptr
+    store %succeed.1 %succeed
+    %tmp_load = load i64 %succeed.1
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr %tmp_const.1
+    ret %tmp_param
+end:
+    %tmp_const.3 = const.i64 i64 42
+    %tmp_const.4 = const.i64 i64 0
+    store %tmp_param %tmp_const.4
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.1 %tmp_const.3
+    ret %tmp_param
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %result = alloca ptr
+    store %result %tmp_const
+    %tmp_alloca.1 = alloca.sized ptr 16
+    %tmp_const.1 = const.i64 i64 1
+    %tmp_call = call ptr @mayFail(%tmp_alloca.1, %tmp_const.1)
+    %tmp_load = load i64 %tmp_alloca.1
+    %tmp_const.2 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.2
+    br.cond %tmp_icmp @block1 @block2
+try_success:
+    %tmp_const.3 = const.i64 i64 1
+    store %result %tmp_const.3
+    br @block3
+if_try_else:
+    br @block3
+try_merge:
+    %tmp_load.2 = load i64 %result
+    ret %tmp_load.2
+}
+
+---

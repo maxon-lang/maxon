@@ -41,7 +41,7 @@ function add(a int, b int) returns int
 end 'add'
 
 function main() returns int
-    return add(5, 10)
+    return add(5, b: 10)
 end 'main'
 ```
 ```maxoncstderr
@@ -55,7 +55,7 @@ function test(a int, b int, c int) returns int
 end 'test'
 
 function main() returns int
-    return test(1, 2, 3)
+    return test(1, b: 2, c: 3)
 end 'main'
 ```
 ```maxoncstderr
@@ -69,7 +69,7 @@ function add(a int, b int) returns int
 end 'add'
 
 function main() returns int
-    return add(5, 10)
+    return add(5, b: 10)
 end 'main'
 ```
 ```exitcode
@@ -84,7 +84,7 @@ function multiply(a int, b int) returns int
 end 'multiply'
 
 function main() returns int
-    return multiply(7, 6)
+    return multiply(7, b: 6)
 end 'main'
 ```
 ```exitcode

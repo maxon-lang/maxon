@@ -1,0 +1,54 @@
+// Test: error-handling.error.otherwise-block-with-binding.1
+// Test try otherwise block with error binding
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+    throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+    var caught = 0
+    try mayFail() otherwise 'handler'
+        caught = 42
+    end 'handler'
+    return caught
+end 'main'
+---
+ExitCode: 42
+---
+function mayFail() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %tmp_const = const.i64 i64 0
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_param %tmp_const.1
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr %tmp_const
+    ret %tmp_param
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %caught = alloca ptr
+    store %caught %tmp_const
+    %tmp_alloca.1 = alloca.sized ptr 16
+    %tmp_call = call ptr @mayFail(%tmp_alloca.1)
+    %tmp_load = load i64 %tmp_alloca.1
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.1
+    br.cond %tmp_icmp @block1 @block2
+try_success:
+    br @block3
+try_otherwise_block:
+    %tmp_const.2 = const.i64 i64 42
+    store %caught %tmp_const.2
+    br @block3
+try_merge:
+    %tmp_load.3 = load i64 %caught
+    ret %tmp_load.3
+}
+
+---

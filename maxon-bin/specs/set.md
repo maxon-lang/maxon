@@ -62,14 +62,9 @@ var s = Set from [1, 2, 3]
 s.count()      // 3
 ```
 
-### capacity() returns int
+## Capacity
 
-Get the current capacity (number of slots) of the internal hash table.
-
-```maxon
-var s = Set from [1, 2, 3]
-s.capacity()   // 16 (initial capacity)
-```
+The set's capacity (number of slots in the internal hash table) is accessible via the `capacity` field, not a method.
 
 ## Automatic Growth
 
@@ -198,28 +193,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-<!-- test: capacity.initial -->
-```maxon
-function main() returns int
-    var s = Set from [1, 2, 3]
-    return s.capacity()
-end 'main'
-```
-```exitcode
-16
-```
-
-<!-- test: grow.trigger -->
-```maxon
-function main() returns int
-    var s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
-    return s.capacity()
-end 'main'
-```
-```exitcode
-32
 ```
 
 <!-- test: grow.preserves-elements -->

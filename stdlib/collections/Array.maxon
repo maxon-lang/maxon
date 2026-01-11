@@ -41,7 +41,7 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 		if __managed_array_len(managed) == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
-		return managed[0]
+		return __managed_array_get_unchecked(managed, 0)
 	end 'first'
 
 	/// Get last element, throws if empty
@@ -50,7 +50,7 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 		if len == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
-		return managed[len - 1]
+		return __managed_array_get_unchecked(managed, len - 1)
 	end 'last'
 
 	// =========================================================================
@@ -66,7 +66,7 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 		if index >= len 'upper'
 			throw ArrayError.indexOutOfBounds
 		end 'upper'
-		return managed[index]
+		return __managed_array_get_unchecked(managed, index)
 	end 'get'
 
 	/// Set element at index (no-op if index out of bounds)
@@ -148,7 +148,7 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
 		var newLen = len - 1
-		var value = managed[newLen]
+		var value = __managed_array_get_unchecked(managed, newLen)
 		__managed_array_set_length(managed, newLen)
 		return value
 	end 'pop'
@@ -193,7 +193,7 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 		end 'upper'
 
 		// Save element before shifting
-		var value = managed[at]
+		var value = __managed_array_get_unchecked(managed, at)
 
 		// Shift elements left to fill gap
 		if at < len - 1 'shift'
@@ -233,7 +233,7 @@ export type Array uses Element is Builtin, Sized, Iterable with Element, Indexed
 		if iterIndex >= len 'done'
 			throw IterationError.exhausted
 		end 'done'
-		var value = managed[iterIndex]
+		var value = __managed_array_get_unchecked(managed, iterIndex)
 		iterIndex = iterIndex + 1
 		return value
 	end 'next'

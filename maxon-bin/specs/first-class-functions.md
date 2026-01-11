@@ -60,7 +60,7 @@ function triple(n int) returns int
 end 'triple'
 
 function main() returns int
-    return apply(triple, 10)  // returns 30
+    return apply(triple, x: 10)  // returns 30
 end 'main'
 ```
 
@@ -83,7 +83,7 @@ function apply(f (int) returns int, x int) returns int
 end 'apply'
 
 function main() returns int
-    return apply((n int) gives n + 5, 10)  // returns 15
+    return apply((n int) gives n + 5, x: 10)  // returns 15
 end 'main'
 ```
 
@@ -115,7 +115,7 @@ function triple(n int) returns int
 end 'triple'
 
 function main() returns int
-    return apply(triple, 10)
+    return apply(triple, x: 10)
 end 'main'
 ```
 ```exitcode
@@ -140,7 +140,7 @@ function apply(f (int) returns int, x int) returns int
 end 'apply'
 
 function main() returns int
-    return apply((n int) gives n + 7, 10)
+    return apply((n int) gives n + 7, x: 10)
 end 'main'
 ```
 ```exitcode
@@ -158,7 +158,7 @@ function add(x int, y int) returns int
 end 'add'
 
 function main() returns int
-    return calculate(add, 15, 27)
+    return calculate(add, a: 15, b: 27)
 end 'main'
 ```
 ```exitcode

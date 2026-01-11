@@ -201,64 +201,9 @@ end 'main'
 42
 ```
 
-<!-- test: error.do-catch-handles-thrown-error -->
-```maxon
-// Test do-catch catches thrown errors
-enum MyError is Error
-    failed = 42
-end 'MyError'
-
-function mayFail(shouldFail bool) returns int throws MyError
-    if shouldFail 'check'
-        throw MyError.failed
-    end 'check'
-    return 100
-end 'mayFail'
-
-function main() returns int
-    do 'io'
-        let x = try mayFail(true)
-        return x
-    end 'io' catch (e MyError) 'err'
-        // e is the enum ordinal (0 for first member)
-        return 42
-    end 'err'
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: error.do-catch-success-case -->
-```maxon
-// Test do-catch with no error thrown
-enum MyError is Error
-    failed
-end 'MyError'
-
-function mayFail(shouldFail bool) returns int throws MyError
-    if shouldFail 'check'
-        throw MyError.failed
-    end 'check'
-    return 100
-end 'mayFail'
-
-function main() returns int
-    do 'io'
-        let x = try mayFail(false)
-        return x
-    end 'io' catch (e MyError) 'err'
-        return 0
-    end 'err'
-end 'main'
-```
-```exitcode
-100
-```
-
 <!-- test: error.propagate-error-to-caller -->
 ```maxon
-// Test error propagation: inner function throws, middle propagates, outer catches
+// Test error propagation: inner function throws, middle propagates, outer handles with otherwise
 enum MyError is Error
     failed
 end 'MyError'
@@ -273,12 +218,8 @@ function middle() returns int throws MyError
 end 'middle'
 
 function main() returns int
-    do 'io'
-        let x = try middle()
-        return x
-    end 'io' catch (e MyError) 'err'
-        return 99
-    end 'err'
+    let x = try middle() otherwise 99
+    return x
 end 'main'
 ```
 ```exitcode
@@ -410,7 +351,7 @@ end 'mayFail'
 
 function main() returns int
     var caught = 0
-    try mayFail() otherwise (e) 'handler'
+    try mayFail() otherwise 'handler'
         caught = 42
     end 'handler'
     return caught
@@ -418,4 +359,19 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: error.main-cannot-throw -->
+```maxon
+// main cannot be declared with throws
+enum MyError is Error
+    failed
+end 'MyError'
+
+function main() returns int throws MyError
+    return 42
+end 'main'
+```
+```maxoncstderr
+E054
 ```

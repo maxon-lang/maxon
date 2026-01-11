@@ -47,7 +47,7 @@ export function multiply(x int, y int) returns int
 end 'multiply'
 
 function main() returns int
-    return add(3, 4)  // Called from within same file
+    return add(3, b: 4)  // Called from within same file
 end 'main'
 ```
 ```exitcode
@@ -64,7 +64,7 @@ export function add(a int, b int) returns int
 end 'add'
 
 function main() returns int
-    return add(10, 20)
+    return add(10, b: 20)
 end 'main'
 ```
 ```exitcode
@@ -98,11 +98,11 @@ function add(a int, b int) returns int
 end 'add'
 
 function sum_three(a int, b int, c int) returns int
-    return add(add(a, b), c)
+    return add(add(a, b: b), b: c)
 end 'sum_three'
 
 function main() returns int
-    return sum_three(1, 2, 3)
+    return sum_three(1, b: 2, c: 3)
 end 'main'
 ```
 ```exitcode

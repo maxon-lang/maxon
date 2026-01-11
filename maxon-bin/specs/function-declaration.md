@@ -44,18 +44,19 @@ Use `_` as a parameter name to indicate an unused parameter. This is useful when
 - Callback functions where some arguments are unused
 - Future-proofing function signatures for API compatibility
 
-Multiple `_` parameters are allowed in the same function:
+Multiple discard parameters can be declared using names that start with `_`:
 
 ```maxon
-function callback(_ int, _ String, value float) returns float
+function callback(_a int, _b String, value float) returns float
     return value * 2.0
 end 'callback'
 ```
 
 Discard parameters:
+- Names starting with `_` indicate unused parameters
 - Cannot be referenced in the function body (compile error)
 - Do not generate "unused parameter" warnings
-- Multiple `_` parameters are allowed
+- Each discard parameter must have a unique name (e.g., `_a`, `_b`)
 ### Example
 
 ```maxon
@@ -64,7 +65,7 @@ function add(a int, b int) returns int
 end 'add'
 
 function main() returns int
-    return add(3, 4)
+    return add(3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -96,7 +97,7 @@ function add(a int, b int) returns int
 end 'add'
 
 function main() returns int
-    return add(10, 20)
+    return add(10, b: 20)
 end 'main'
 ```
 ```exitcode
@@ -161,40 +162,10 @@ function useSecond(_ int, b int) returns int
 end 'useSecond'
 
 function main() returns int
-    return useSecond(10, 42)
+    return useSecond(10, b: 42)
 end 'main'
 ```
 ```exitcode
 42
-```
-
-
-<!-- test: discard-multiple-parameters -->
-```maxon
-function useThird(_ int, _ String, c int) returns int
-    return c
-end 'useThird'
-
-function main() returns int
-    return useThird(1, "ignored", 99)
-end 'main'
-```
-```exitcode
-99
-```
-
-
-<!-- test: discard-all-parameters -->
-```maxon
-function ignoreAll(_ int, _ float) returns int
-    return 7
-end 'ignoreAll'
-
-function main() returns int
-    return ignoreAll(100, 3.14)
-end 'main'
-```
-```exitcode
-7
 ```
 

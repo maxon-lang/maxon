@@ -12,8 +12,7 @@ function main() returns int
         return 2
     end 'e2'
     
-    if let _ = arr.pop() 'pop'
-    end 'pop'
+    var _ = try arr.pop() otherwise 0
     
     if arr.isEmpty() == false 'e3'
         return 3
@@ -54,28 +53,28 @@ end:
     %tmp_alloca.2 = alloca.sized ptr 16
     %tmp_call.3 = call ptr @Array$int$pop(%tmp_alloca.2, %arr)
     %tmp_load.2 = load i64 %tmp_alloca.2
-    %tmp_const.5 = const.i64 i64 1
+    %tmp_const.5 = const.i64 i64 0
     %tmp_icmp.2 = icmp.eq i64 %tmp_load.2 %tmp_const.5
     br.cond %tmp_icmp.2 @block5 @block6
-if_let_then:
+try_success:
     br @block7
-if_let_else:
+try_default:
     br @block7
-if_let_end:
+try_merge:
     %tmp_call.4 = call i64 @Array$int$isEmpty(%arr)
-    %tmp_const.6 = const.i64 i64 0
-    %tmp_icmp.3 = icmp.eq i64 %tmp_call.4 %tmp_const.6
+    %tmp_const.7 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.eq i64 %tmp_call.4 %tmp_const.7
     br.cond %tmp_icmp.3 @block8 @block9
 then:
-    %tmp_const.7 = const.i64 i64 3
-    %tmp_load.4 = load ptr %arr
-    heap.free %tmp_load.4 tag="array cleanup"
-    ret %tmp_const.7
-end:
-    %tmp_const.8 = const.i64 i64 0
+    %tmp_const.8 = const.i64 i64 3
     %tmp_load.5 = load ptr %arr
     heap.free %tmp_load.5 tag="array cleanup"
     ret %tmp_const.8
+end:
+    %tmp_const.9 = const.i64 i64 0
+    %tmp_load.6 = load ptr %arr
+    heap.free %tmp_load.6 tag="array cleanup"
+    ret %tmp_const.9
 }
 
 function Array$int$isEmpty() -> i64 {
@@ -176,7 +175,7 @@ end:
     ret
 }
 
-function Array$int$pop() -> ptr {
+function Array$int$pop() -> i64 {
 entry:
     %tmp_param = param ptr 0
     %self = param ptr 1
@@ -191,48 +190,33 @@ entry:
     br.cond %tmp_icmp @block1 @block2
 then:
     %tmp_const.1 = const.i64 i64 0
-    store %tmp_param %tmp_const.1
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.2 %tmp_const.1
     ret %tmp_param
 end:
     %tmp_load.2 = load i64 %len
-    %tmp_const.2 = const.i64 i64 1
-    %tmp_sub = sub i64 %tmp_load.2 %tmp_const.2
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_sub = sub i64 %tmp_load.2 %tmp_const.3
     %newLen = alloca ptr
     store %newLen %tmp_sub
-    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_fieldptr.3 = getfieldptr ptr %self 0
     %tmp_load.3 = load i64 %newLen
-    %tmp_load.4 = load ptr %tmp_fieldptr.2
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 8
-    %tmp_load.5 = load i64 %tmp_fieldptr.3
-    %tmp_alloca.2 = alloca.sized ptr 16
-    %tmp_const.3 = const.i64 i64 0
-    %tmp_icmp.1 = icmp.ge i64 %tmp_load.3 %tmp_const.3
-    %tmp_icmp.2 = icmp.lt i64 %tmp_load.3 %tmp_load.5
-    %tmp_mul = mul i64 %tmp_icmp.1 %tmp_icmp.2
-    br.cond %tmp_mul @block3 @block4
-managed_index_in_bounds:
-    %tmp_const.4 = const.i64 i64 1
-    store %tmp_alloca.2 %tmp_const.4
-    %tmp_const.5 = const.i64 i64 8
-    %tmp_mul.1 = mul i64 %tmp_load.3 %tmp_const.5
-    %tmp_add = add ptr %tmp_load.4 %tmp_mul.1
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load.6 = load i64 %tmp_add
-    store %tmp_fieldptr.4 %tmp_load.6
-    br @block5
-managed_index_out_of_bounds:
-    %tmp_const.6 = const.i64 i64 0
-    store %tmp_alloca.2 %tmp_const.6
-    br @block5
-managed_index_merge:
+    %tmp_load.4 = load ptr %tmp_fieldptr.3
+    %tmp_elemptr = getelemptr ptr %tmp_load.4 %tmp_load.3 elemsize=8
+    %tmp_load.5 = load i64 %tmp_elemptr
     %value = alloca ptr
-    store %value %tmp_alloca.2
-    %tmp_fieldptr.5 = getfieldptr ptr %self 0
-    %tmp_load.7 = load i64 %newLen
-    %tmp_fieldptr.6 = getfieldptr ptr %tmp_fieldptr.5 8
+    store %value %tmp_load.5
+    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_load.6 = load i64 %newLen
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.4 8
+    store %tmp_fieldptr.5 %tmp_load.6
+    %tmp_load.7 = load i64 %value
+    %tmp_const.4 = const.i64 i64 0
+    store %tmp_param %tmp_const.4
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_param 8
     store %tmp_fieldptr.6 %tmp_load.7
-    %tmp_load.8 = load ptr %value
-    memcpy %tmp_param %tmp_load.8 16
     ret %tmp_param
 }
 

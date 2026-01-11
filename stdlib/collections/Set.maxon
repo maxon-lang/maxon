@@ -15,8 +15,8 @@
 // **Usage**:
 // ```maxon
 // var s = Set from [1, 2, 3]
-// s.insert(4)
-// if s.contains(2) 'check'
+// s.insert(element: 4)
+// if s.contains(element: 2) 'check'
 //     print("found 2")
 // end 'check'
 // ```
@@ -49,7 +49,7 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 
 		// Insert each element from the array
 		for elem in arr 'insert_loop'
-			result.insert(elem)
+			result.insert(element: elem)
 		end 'insert_loop'
 
 		return result
@@ -84,10 +84,7 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 		var probes = 0
 
 		while probes < capacity 'probe'
-			var state = 0
-			if let s = states[index] 'unwrap_state'
-				state = s
-			end 'unwrap_state'
+			var state = try states.get(index: index) otherwise 0
 
 			if state == 0 'empty'
 				// Empty slot - insert here or at first deleted
@@ -96,8 +93,8 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 					insertIndex = firstDeleted
 				end 'use_deleted'
 
-				elements[insertIndex] = element
-				states[insertIndex] = 1
+				elements.set(index: insertIndex, value: element)
+				states.set(index: insertIndex, value: 1)
 				count = count + 1
 				return
 			end 'empty'
@@ -107,12 +104,12 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 			end 'mark_deleted'
 
 			if state == 1 'check_exists'
-				if let existing = elements[index] 'unwrap_existing'
+				if let existing = try elements.get(index: index) 'get_existing'
 					if existing == element 'exists'
 						// Element already exists - no-op for sets
 						return
 					end 'exists'
-				end 'unwrap_existing'
+				end 'get_existing'
 			end 'check_exists'
 
 			// Linear probing
@@ -123,8 +120,8 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 		// Should never reach here if load factor is maintained
 		// But if we do, insert at first deleted slot
 		if firstDeleted >= 0 'fallback'
-			elements[firstDeleted] = element
-			states[firstDeleted] = 1
+			elements.set(index: firstDeleted, value: element)
+			states.set(index: firstDeleted, value: 1)
 			count = count + 1
 		end 'fallback'
 	end 'insert'
@@ -144,21 +141,18 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 
 		var probes = 0
 		while probes < capacity 'probe'
-			var state = 0
-			if let s = states[index] 'unwrap_state'
-				state = s
-			end 'unwrap_state'
+			var state = try states.get(index: index) otherwise 0
 
 			if state == 0 'empty'
 				return false
 			end 'empty'
 
 			if state == 1 'check_found'
-				if let existing = elements[index] 'unwrap_existing'
+				if let existing = try elements.get(index: index) 'get_existing'
 					if existing == element 'found'
 						return true
 					end 'found'
-				end 'unwrap_existing'
+				end 'get_existing'
 			end 'check_found'
 
 			index = (index + 1) mod capacity
@@ -183,23 +177,20 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 
 		var probes = 0
 		while probes < capacity 'probe'
-			var state = 0
-			if let s = states[index] 'unwrap_state'
-				state = s
-			end 'unwrap_state'
+			var state = try states.get(index: index) otherwise 0
 
 			if state == 0 'empty'
 				return false
 			end 'empty'
 
 			if state == 1 'check_found'
-				if let existing = elements[index] 'unwrap_existing'
+				if let existing = try elements.get(index: index) 'get_existing'
 					if existing == element 'found'
-						states[index] = 2
+						states.set(index: index, value: 2)
 						count = count - 1
 						return true
 					end 'found'
-				end 'unwrap_existing'
+				end 'get_existing'
 			end 'check_found'
 
 			index = (index + 1) mod capacity
@@ -217,23 +208,22 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 	/// Iterate to the next element in the set
 	function Iterable.next() returns Element throws IterationError
 		while iterIndex < capacity 'scan'
-			var state = 0
-			if let s = states[iterIndex] 'unwrap'
-				state = s
-			end 'unwrap'
+			var state = try states.get(index: iterIndex) otherwise 0
 			var idx = iterIndex
 			iterIndex = iterIndex + 1
 			if state == 1 'occupied'
-				return elements[idx]
+				if let elem = try elements.get(index: idx) 'get_elem'
+					return elem
+				end 'get_elem'
 			end 'occupied'
 		end 'scan'
 		throw IterationError.exhausted
 	end 'next'
 
 	/// Get current capacity (total number of slots)
-	export function capacity() returns int
+	export function getCapacity() returns int
 		return capacity
-	end 'capacity'
+	end 'getCapacity'
 
 	// Internal: grow the table when load factor exceeds threshold
 	function grow()
@@ -260,14 +250,11 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 		// Rehash all occupied entries from old arrays
 		var i = 0
 		while i < oldCapacity 'rehash'
-			var state = 0
-			if let s = oldStates[i] 'unwrap_state'
-				state = s
-			end 'unwrap_state'
+			var state = try oldStates.get(index: i) otherwise 0
 
 			if state == 1 'occupied'
 				// Re-insert into new arrays using insert logic
-				if let element = oldElements[i] 'unwrap_element'
+				if let element = try oldElements.get(index: i) 'get_elem'
 					var hash = element.hash()
 					var index = hash mod newCapacity
 					if index < 0 'fix_negative'
@@ -275,22 +262,16 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 					end 'fix_negative'
 
 					// Find empty slot (no deleted slots in fresh array)
-					var currentState = 0
-					if let cs = states[index] 'unwrap_current'
-						currentState = cs
-					end 'unwrap_current'
+					var currentState = try states.get(index: index) otherwise 0
 					while currentState != 0 'find_slot'
 						index = (index + 1) mod newCapacity
-						currentState = 0
-						if let nextS = states[index] 'unwrap_next'
-							currentState = nextS
-						end 'unwrap_next'
+						currentState = try states.get(index: index) otherwise 0
 					end 'find_slot'
 
-					elements[index] = element
-					states[index] = 1
+					elements.set(index: index, value: element)
+					states.set(index: index, value: 1)
 					count = count + 1
-				end 'unwrap_element'
+				end 'get_elem'
 			end 'occupied'
 			i = i + 1
 		end 'rehash'

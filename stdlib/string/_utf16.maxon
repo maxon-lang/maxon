@@ -13,7 +13,7 @@
 /// Returns 1 for BMP characters, 2 for supplementary characters
 export function utf16Width(codepoint int) returns int
 	if codepoint < 65536 'bmp'
-		return 1
+			return 1
 	end 'bmp'
 	return 2
 end 'utf16Width'
@@ -76,14 +76,14 @@ export function utf16CodepointCount(data Array of int, len int) returns int
 	var count = 0
 	var i = 0
 	while i < len 'count_loop'
-		var cu = data[i]
-		if utf16IsLeadSurrogate(cu) 'surrogate'
-			// Surrogate pair - skip the trail surrogate
-			i = i + 2
-		end 'surrogate' else 'not_surrogate'
-			i = i + 1
-		end 'not_surrogate'
-		count = count + 1
+			var cu = try data.get(index: i) otherwise 0
+			if utf16IsLeadSurrogate(cu) 'surrogate'
+					// Surrogate pair - skip the trail surrogate
+					i = i + 2
+			end 'surrogate' else 'not_surrogate'
+				i = i + 1
+			end 'not_surrogate'
+			count = count + 1
 	end 'count_loop'
 	return count
 end 'utf16CodepointCount'

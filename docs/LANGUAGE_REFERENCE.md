@@ -66,7 +66,7 @@ Single-line comments only:
 ```
 and, as, associatedtype, bool, break, continue, default, else, end, enum, export, extern,
 fallthrough, false, float, for, function, gives, if, ignore, in, int, interface, is, let, match,
-not, or, otherwise, return, static, then, throws, true, try, type, var, while
+not, or, otherwise, return, static, then, throw, throws, true, try, type, var, while
 ```
 
 ### Literals
@@ -274,8 +274,7 @@ Methods are called using dot notation on instances. The receiver (`self`) is imp
 ```maxon
 var p1 = Point{x: 10, y: 20}
 var p2 = Point{x: 5, y: 10}
-var p3 = p1.add(p2)             // Positional argument
-var p4 = p1.add(other = p2)     // Named argument (optional)
+var p3 = p1.add(other: p2)          // Named argument (required)
 var mag = p1.magnitude()
 ```
 
@@ -305,7 +304,7 @@ end 'Point'
 **Calling Static Methods:**
 ```maxon
 var p1 = Point.origin()           // Static method call
-var p2 = Point.create(10, 20)     // Static method with args
+var p2 = Point.create(10, y: 20)  // First positional, second named
 var mag = p2.magnitude()          // Instance method call
 ```
 
@@ -419,11 +418,11 @@ enum Result
 end 'Result'
 ```
 
-Contype cases with associated values:
+Construct cases with associated values:
 
 ```maxon
-var r1 = Result.success(42)
-var r2 = Result.failure(404, "Not found")
+var r1 = Result.success(42)                    // Single param is positional
+var r2 = Result.failure(404, message: "Not found")  // First positional, second named
 var r3 = Result.pending
 ```
 
@@ -497,7 +496,7 @@ Call methods using type-qualified syntax:
 
 ```maxon
 var dir = Direction.north
-var opp = Direction.opposite(dir)  // Direction.south
+var opp = Direction.opposite(self: dir)  // Direction.south
 ```
 
 ### Enum as Function Parameter
@@ -596,38 +595,38 @@ end 'name'
 
 ### Named Arguments
 
-Maxon uses named arguments:
-- All parameters are **positional by default**
-- Callers can **optionally name any argument** using `name = value` syntax
-- Parameters with default values can **only be provided via named arguments** (not positionally)
-- Positional arguments must come before named arguments
-- Named arguments can appear in any order
+Maxon uses a **first-positional, rest-named** rule for function and method calls:
+- **First argument**: Always positional (no name)
+- **Subsequent arguments**: Must use `name: value` syntax
+- Named arguments (after the first) can appear in any order
+- Parameters with default values can be omitted
 
 **Examples:**
 
 ```maxon
-// All parameters are positional by default
 function add(a int, b int) returns int
     return a + b
 end 'add'
 
-add(3, 4)           // Positional arguments
-add(a = 3, b = 4)   // Named arguments (optional)
-add(b = 4, a = 3)   // Named arguments in any order
+add(3, b: 4)      // First positional, second named
 
-// Named arguments for clarity
 function connect(host String, port int) returns bool
     // ...
 end 'connect'
 
-connect("localhost", 8080)              // Positional
-connect(host = "localhost", port = 8080) // Named for clarity
-connect("localhost", port = 8080)       // Mix positional and named
+connect("localhost", port: 8080)  // First positional, second named
+
+// Single parameter functions
+function greet(name String)
+    print("Hello, " + name)
+end 'greet'
+
+greet("Alice")    // Single param is positional
 ```
 
 ### Default Values
 
-Parameters can have default values. Parameters with defaults can **only** be provided via named arguments (not positionally):
+Parameters can have default values. Parameters with defaults can be omitted at the call site:
 
 ```maxon
 function greet(name String, title String = "Mr.")
@@ -635,12 +634,11 @@ function greet(name String, title String = "Mr.")
 end 'greet'
 
 greet("Smith")                    // Uses default title
-greet("Smith", title = "Dr.")     // Override default with named argument
+greet("Smith", title: "Dr.")      // Override default
 ```
 
 **Rules:**
 - Parameters with defaults must come after required parameters
-- Parameters with defaults cannot be passed positionally - they must use named arguments
 - Default values are evaluated at call site
 - Arguments may be omitted if they have defaults
 
@@ -666,8 +664,7 @@ function add(a int, b int) returns int
     return a + b
 end 'add'
 
-var result = add(3, 4)  // Positional
-var result2 = add(a = 3, b = 4)  // Named (optional)
+var result = add(3, b: 4)
 ```
 
 **Named Arguments for Clarity**
@@ -676,8 +673,7 @@ function divide(dividend int, divisor int) returns int
     return dividend / divisor
 end 'divide'
 
-var result = divide(10, 2)  // Positional
-var result2 = divide(dividend = 10, divisor = 2)  // Named for clarity
+var result = divide(dividend: 10, divisor: 2)
 ```
 
 **Array Parameters**
@@ -693,23 +689,12 @@ end 'sum'
 
 ### Calling Functions
 
-**Positional (default):**
+**First Positional, Rest Named:**
 ```maxon
-var result = add(3, 4)
-var answer = getAnswer()
-greet("Alice")
-```
-
-**Named Arguments (optional):**
-```maxon
-greet(name = "Alice")
-divide(dividend = 100, divisor = 5)
-add(b = 4, a = 3)  // Named args can be in any order
-```
-
-**Mixed (positional first, then named):**
-```maxon
-connect("localhost", port = 8080)
+var result = add(3, b: 4)         // First positional, second named
+var answer = getAnswer()          // No parameters
+greet("Alice")                    // Single param is positional
+divide(100, divisor: 5)           // First positional, second named
 ```
 
 ### Extern Functions
@@ -732,7 +717,7 @@ extern function ExitProcess(uExitCode int) returns int
 
 ### Operator Precedence (highest to lowest)
 
-1. **Postfix**: `[]` (array indexing), `.` (member access), `as` (cast), function call `()`
+1. **Postfix**: `.` (member access), `as` (cast), function call `()`
 2. **Unary**: `-` (negation), `not` (logical not)
 3. **Multiplicative**: `*` `/` `mod`
 4. **Additive**: `+` `-`
@@ -786,11 +771,19 @@ Override precedence:
 (2 + 3) * 5    // 25, not 17
 ```
 
-### Array Indexing
+### Array Access
+
+Array elements are accessed using the `.get()` method, which throws `ArrayError.indexOutOfBounds` if the index is invalid:
 ```maxon
 var arr = [1, 2, 3, 4, 5]
-var first = arr[0]
-var last = arr[arr.count() - 1]
+var first = try arr.get(0) otherwise 0
+var last = try arr.get(arr.count() - 1) otherwise 0
+```
+
+Array elements are modified using the `.set()` method:
+```maxon
+var arr = [1, 2, 3]
+arr.set(0, value: 100)  // First positional, second named
 ```
 
 ---
@@ -800,8 +793,8 @@ var last = arr[arr.count() - 1]
 ### Expression Statement
 Any expression followed by newline:
 ```maxon
-print(x)
-add(3, 4)
+print(x)           // Single param is positional
+add(3, b: 4)       // First positional, rest named
 x = x + 1
 ```
 
@@ -820,7 +813,6 @@ let y = 20
 ### Assignment
 ```maxon
 variable = expression
-array[index] = value
 ```
 
 **Note:** Cannot assign to `let` variables (immutable).
@@ -860,7 +852,7 @@ end 'label'
 ```maxon
 var i = 0
 while i < 10 'loop'
-    print(i)
+    print("{i}")
     i = i + 1
 end 'loop'
 ```
@@ -874,8 +866,8 @@ end 'label'
 
 **Range Iteration:**
 ```maxon
-for i in range(0, 10) 'loop'
-    print(i)
+for i in range(0, end: 10) 'loop'
+    print("{i}")
 end 'loop'
 ```
 
@@ -1018,7 +1010,7 @@ Skips to next iteration of the innermost loop, or continues to a specific labele
 
 ## Error Handling
 
-Maxon provides error handling with typed errors. Error types must be enums conforming to the `Error` interface.
+Maxon uses a unified error handling system based on typed errors. Functions either return a value or throw an error—there are no optional types or null values. Error types must be enums conforming to the `Error` interface.
 
 ### Defining Error Types
 
@@ -1059,11 +1051,20 @@ function readFile(path String) returns String throws FileError
     end 'check'
     return contents
 end 'readFile'
+
+// Void function that throws
+function resetConfig() throws FileError
+    if not exists("config.json") 'check'
+        throw FileError.notFound
+    end 'check'
+    // reset logic...
+end 'resetConfig'
 ```
 
 **Syntax:**
 ```maxon
 function name(params) returns ReturnType throws ErrorType
+function name(params) throws ErrorType  // void function that throws
 ```
 
 ### Throw Statement
@@ -1078,6 +1079,20 @@ throw HttpError.serverError
 **Rules:**
 - `throw` is only valid inside functions with a `throws` declaration
 - The thrown value must match the declared error type
+
+### Calling Throwing Functions
+
+When calling a function that throws, you must use `try`:
+
+```maxon
+// Compile error - must use try
+let contents = readFile("config.json")  // ERROR
+
+// Correct - use try with otherwise
+let contents = try readFile("config.json") otherwise ""
+```
+
+The `try` keyword is always required when calling throwing functions, even when using `otherwise`.
 
 ### Handling Errors with `otherwise`
 
@@ -1179,6 +1194,92 @@ end 'loadConfig'
 **Rules:**
 - `try` without `otherwise` is only valid in functions with `throws`
 - The error type must match or be compatible with the function's declared error type
+- Using `try` without `otherwise` in a non-throwing function is a compile error
+
+### Conditional Try (if try)
+
+The `if try` construct provides conditional execution based on whether a throwing expression succeeds.
+
+#### Boolean Form
+
+Check if an expression succeeds without binding the result:
+
+```maxon
+if try mayFail() 'check'
+    print("Success!")
+end 'check'
+```
+
+The if-block executes only if the expression succeeds (doesn't throw).
+
+#### Binding Form
+
+Unwrap and bind the success value:
+
+```maxon
+if let value = try mayFail() 'check'
+    print("Got: {value}")
+end 'check'
+```
+
+If successful, the unwrapped value is bound to `value` and available within the if-block.
+
+#### With Else Clause
+
+Handle the error case:
+
+```maxon
+if try mayFail() 'check'
+    print("Success!")
+end 'check' else 'err'
+    print("Failed!")
+end 'err'
+```
+
+#### With Error Binding
+
+Capture the error value in the else block:
+
+```maxon
+if let value = try mayFail() 'check'
+    print("Got: {value}")
+end 'check' else (e) 'err'
+    print("Error occurred")
+end 'err'
+```
+
+The error is bound to `e` and available within the else-block.
+
+### Standard Library Error Types
+
+The standard library provides error types for built-in operations:
+
+```maxon
+// Array bounds checking
+enum ArrayError is Error
+    indexOutOfBounds
+end 'ArrayError'
+
+// Map key lookup
+enum MapError is Error
+    keyNotFound
+end 'MapError'
+
+// Iterator exhaustion
+enum IterationError is Error
+    exhausted
+end 'IterationError'
+```
+
+Array and Map access methods throw these errors:
+
+```maxon
+var arr = [1, 2, 3]
+let val = try arr.get(5) otherwise 0  // Returns 0 on out of bounds
+
+var map = ["key": 42]
+let result = try map.get("missing") otherwise -1  // Returns -1 if key not found
+```
 
 ### Error Union Types
 
@@ -1568,8 +1669,9 @@ end 'forever'
 ### Array Iteration
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
-for i in range(0, numbers.count()) 'iter'
-    print("{numbers[i]}")
+for i in range(start: 0, end: numbers.count()) 'iter'
+    var num = try numbers.get(index: i) otherwise 0
+    print("{num}")
 end 'iter'
 ```
 
@@ -1580,11 +1682,11 @@ function factorial(n int) returns int
     if n <= 1 'base'
         return 1
     end 'base'
-    return n * factorial(n - 1)
+    return n * factorial(n: n - 1)
 end 'factorial'
 
 function main() returns int
-    var result = factorial(5)
+    var result = factorial(n: 5)
     print("{result}")  // 120
     return 0
 end 'main'
@@ -1693,7 +1795,7 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 
 6. **Use `for` loops for ranges**:
    ```maxon
-   for i in range(0, 10) 'loop'
+   for i in range(0, end: 10) 'loop'
        // i is 0, 1, 2, ..., 9
    end 'loop'
    ```
@@ -1709,10 +1811,14 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
    returns int      // Private helper
    ```
 
-9. **Check `.count` before array access**:
+9. **Handle array access errors**:
    ```maxon
+   // Use otherwise for safe access with default
+   var val = try arr.get(index) otherwise 0
+
+   // Or check bounds first
    if index < arr.count() 'safe'
-       var val = arr[index]
+       var val = try arr.get(index) otherwise 0
    end 'safe'
    ```
 
@@ -1723,23 +1829,38 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
     end 'process'
     ```
 
-11. **Use named arguments for clarity when helpful**:
+11. **First argument positional, rest named**:
     ```maxon
-    connect("localhost", port = 8080)  // Clear what 8080 means
-    move(start, end)                    // Positional is fine for obvious args
+    greet("Alice")                        // Single param is positional
+    connect("localhost", port: 8080)      // First positional, rest named
+    move(start, end: end)                 // First positional, rest named
     ```
 
-12. **Remember default params require named arguments**:
+12. **Parameters with defaults can be omitted**:
     ```maxon
     function greet(name String, title String = "Mr.")
     greet("Smith")                // Uses default
-    greet("Smith", title = "Dr.") // Override with named arg
+    greet("Smith", title: "Dr.")  // Override default
     ```
 
 13. **Use `try otherwise` for error handling**:
     ```maxon
     let value = try mayFail() otherwise 42  // Default value on error
     try cleanup() otherwise ignore          // Ignore errors in cleanup
+
+    // Use block handler for complex error handling
+    try loadData() otherwise 'err'
+        logError("Failed to load data")
+        useDefaults()
+    end 'err'
+    ```
+
+14. **Propagate errors with `try` in throwing functions**:
+    ```maxon
+    function process() returns Result throws ProcessError
+        let data = try loadData()  // Propagates error to caller
+        return transform(data)
+    end 'process'
     ```
 
 ---

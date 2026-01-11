@@ -32,7 +32,6 @@ pub const Map = map_helpers.Map;
 pub const TypedValue = types.TypedValue;
 pub const ArrayStorage = types.ArrayStorage;
 pub const ArrayInfo = types.ArrayInfo;
-pub const OptionalInfo = types.OptionalInfo; // DEPRECATED: Being removed in favor of error unions
 pub const ValueType = types.ValueType;
 pub const freeValueTypeAllocations = types.freeValueTypeAllocations;
 pub const FieldInfo = types.FieldInfo;
@@ -367,6 +366,7 @@ pub const AstToIr = struct {
     interface_map: std.StringHashMapUnmanaged(InterfaceInfo),
     type_decl_map: std.StringHashMapUnmanaged(ast.TypeDecl), // Type declarations for conformance lookup
     enum_decl_map: std.StringHashMapUnmanaged(ast.EnumDecl), // Enum declarations for conformance lookup
+    type_source_files: std.StringHashMapUnmanaged([]const u8) = .{}, // Source file for each type (for error reporting)
     current_decl_is_mutable: bool,
     mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer,
     current_line: usize,
@@ -374,8 +374,6 @@ pub const AstToIr = struct {
     // For struct returns: pointer passed by caller for return value
     sret_ptr: ?ir.Value,
     sret_size: i32,
-    // For optional returns: info about the wrapped type (if returning optional) DEPRECATED
-    sret_optional_info: ?OptionalInfo = null,
     // Error tracking
     source_file: ?[]const u8,
     last_error: ?err.CompileError,
@@ -624,6 +622,13 @@ pub const AstToIr = struct {
         // Enum decl map doesn't own its data (references AST nodes)
         self.enum_decl_map.deinit(self.allocator);
 
+        // Type source files map owns duplicated path strings
+        var tsf_iter = self.type_source_files.iterator();
+        while (tsf_iter.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.type_source_files.deinit(self.allocator);
+
         // Generic params map doesn't own its data (references AST strings)
         self.generic_params.deinit(self.allocator);
 
@@ -636,17 +641,22 @@ pub const AstToIr = struct {
         }
         self.scope_labels.deinit(self.allocator);
 
-        // Clean up pending_methods generic_bindings (shared across methods of same type)
+        // Clean up pending_methods: generic_bindings (shared) and source_file (owned)
         var freed_bindings = std.AutoHashMapUnmanaged([*]const PendingMethod.GenericBinding, void){};
         defer freed_bindings.deinit(self.allocator);
         var pending_iter = self.pending_methods.iterator();
         while (pending_iter.next()) |entry| {
+            // Free generic bindings (may be shared across methods of same type)
             if (entry.value_ptr.generic_bindings.len > 0) {
                 const ptr = entry.value_ptr.generic_bindings.ptr;
                 if (freed_bindings.get(ptr) == null) {
                     freed_bindings.put(self.allocator, ptr, {}) catch {};
                     self.allocator.free(entry.value_ptr.generic_bindings);
                 }
+            }
+            // Free owned source_file string
+            if (entry.value_ptr.source_file) |sf| {
+                self.allocator.free(sf);
             }
         }
         self.pending_methods.deinit(self.allocator);
@@ -771,16 +781,8 @@ pub const AstToIr = struct {
 
         // Register methods from types
         for (program.types) |type_decl| {
-            // Set up generic params for this type
-            for (type_decl.generic_params) |param| {
-                try self.generic_params.put(self.allocator, param, "int");
-            }
             for (type_decl.methods) |method| {
                 try self.registerMethod(type_decl.name, method);
-            }
-            // Clean up generic params
-            for (type_decl.generic_params) |param| {
-                _ = self.generic_params.remove(param);
             }
         }
 
@@ -804,17 +806,11 @@ pub const AstToIr = struct {
         for (program.functions) |fn_decl| try self.convertFunction(fn_decl);
 
         // Convert methods from types
+        // Skip generic types - their methods are converted lazily when monomorphized
         for (program.types) |type_decl| {
-            // Set up generic params for this type
-            for (type_decl.generic_params) |param| {
-                try self.generic_params.put(self.allocator, param, "int");
-            }
+            if (type_decl.generic_params.len > 0) continue;
             for (type_decl.methods) |method| {
                 try self.convertMethod(type_decl.name, method);
-            }
-            // Clean up generic params
-            for (type_decl.generic_params) |param| {
-                _ = self.generic_params.remove(param);
             }
         }
 
@@ -1210,10 +1206,11 @@ pub const AstToIr = struct {
         var type_args = [_][]const u8{elem_type_name};
         const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
 
-        // Wrap in Array struct by calling Array$init(__ManagedArray)
-        const array_init_name = "Array$init";
+        // Wrap in Array struct by calling Array$ElementType$init(__ManagedArray)
+        const array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
+        try self.module.trackString(array_init_name);
         const array_func_info = self.func_map.get(array_init_name) orelse {
-            self.reportInternalError("Array$init not found for array constant");
+            self.reportInternalError("Array init not found for array constant");
             return error.UnknownFunction;
         };
 
@@ -1222,8 +1219,8 @@ pub const AstToIr = struct {
         }
 
         // Get Array type info for size
-        const array_type_info = self.type_map.get("Array") orelse {
-            self.reportError(.E006, "Array");
+        const array_type_info = self.type_map.get(array_type_name) orelse {
+            self.reportError(.E006, array_type_name);
             return error.UnknownType;
         };
 
@@ -1379,10 +1376,6 @@ pub const AstToIr = struct {
                 }
                 return 8;
             },
-            .optional => |wrapped| {
-                // Optional size = 8 (tag) + wrapped size
-                return 8 + self.getTypeSize(wrapped.*);
-            },
             .error_union => |eu| {
                 // Error union size = 8 (tag) + max(success size, error size)
                 return 8 + self.getTypeSize(eu.success_type.*);
@@ -1392,35 +1385,6 @@ pub const AstToIr = struct {
                 return 8;
             },
         };
-    }
-
-    /// Get the size of an optional type from its OptionalInfo.
-    /// Uses wrapped_struct_type to look up struct sizes when the wrapped type is a struct.
-    fn getOptionalSize(self: *AstToIr, opt_info: OptionalInfo) i32 {
-        // 8 bytes for the tag (discriminant)
-        const tag_size: i32 = 8;
-        // If wrapped type is a struct, look up its size
-        if (opt_info.wrapped_struct_type) |struct_name| {
-            if (self.type_map.get(struct_name)) |type_info| {
-                if (type_info == .struct_type) {
-                    return tag_size + type_info.struct_type.size;
-                }
-            }
-        }
-        // Default: primitive types are 8 bytes
-        return tag_size + 8;
-    }
-
-    /// Get the ValueType for the wrapped value inside an optional.
-    /// Handles struct, enum, and primitive types correctly.
-    fn getOptionalWrappedValueType(opt_info: OptionalInfo) ValueType {
-        if (opt_info.wrapped_struct_type) |struct_name| {
-            return .{ .struct_type = struct_name };
-        } else if (opt_info.wrapped_enum_type) |enum_name| {
-            return .{ .enum_type = enum_name };
-        } else {
-            return .{ .primitive = opt_info.wrapped.toMaxonName() };
-        }
     }
 
     pub fn func(self: *AstToIr) *ir.Function {
@@ -1515,6 +1479,12 @@ pub const AstToIr = struct {
         if (ext_type.type_decl) |type_decl| {
             try self.type_decl_map.put(self.allocator, ext_type.name, type_decl.*);
             try self.pending_conformance_checks.append(self.allocator, type_decl);
+        }
+
+        // Store source file for error reporting (duplicate the path string to own it)
+        if (ext_type.source_path) |sp| {
+            const owned_path = try self.allocator.dupe(u8, sp);
+            try self.type_source_files.put(self.allocator, ext_type.name, owned_path);
         }
 
         debug.astToIr("Registered external type '{s}' with size {d}", .{ ext_type.name, ext_type.size });
@@ -2224,31 +2194,6 @@ pub const AstToIr = struct {
                 self.module.trackString(owned) catch {};
                 return owned;
             },
-            .optional => |wrapped| switch (wrapped.*) {
-                .simple => |name| if (std.mem.eql(u8, name, "Self")) self_type else bindings.get(name) orelse name,
-                .generic => |g| {
-                    if (std.mem.eql(u8, g.base_type, "Self")) return self_type;
-                    // Check if it's an associated type
-                    if (bindings.get(g.base_type)) |bound| return bound;
-                    // Build the full generic type string for optional wrapped type
-                    var result: std.ArrayListUnmanaged(u8) = .empty;
-                    result.appendSlice(self.allocator, g.base_type) catch return g.base_type;
-                    if (g.type_args.len > 0) {
-                        result.appendSlice(self.allocator, " of ") catch return g.base_type;
-                        for (g.type_args, 0..) |param, i| {
-                            if (i > 0) result.append(self.allocator, ' ') catch return g.base_type;
-                            const resolved = bindings.get(param) orelse param;
-                            result.appendSlice(self.allocator, resolved) catch return g.base_type;
-                        }
-                    }
-                    const owned = result.toOwnedSlice(self.allocator) catch return g.base_type;
-                    self.module.trackString(owned) catch {};
-                    return owned;
-                },
-                .optional => "?",
-                .error_union => "error_union",
-                .function_type => "(fn)",
-            },
             .error_union => |eu| bindings.get(eu.error_type) orelse eu.error_type,
             .function_type => "(fn)",
         };
@@ -2311,6 +2256,7 @@ pub const AstToIr = struct {
 
     fn registerFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
         var ret_type_name: ?[]const u8 = null;
+        var ret_primitive_name: ?[]const u8 = null; // Track primitive type name (byte, int, etc.) for error unions
         var ret_value_type: ?ValueType = null;
         const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
             switch (rt) {
@@ -2321,20 +2267,12 @@ pub const AstToIr = struct {
                         return error.UnknownType;
                     };
                     // Use full monomorphized name for generic types (e.g., "Array$int" not just "Array")
-                    if (type_info.isStruct()) ret_type_name = getStructNameFromTypeExpr(self.allocator, rt, &self.allocated_type_strings);
+                    if (type_info.isStruct()) {
+                        ret_type_name = getStructNameFromTypeExpr(self.allocator, rt, &self.allocated_type_strings);
+                    } else if (type_info == .primitive) {
+                        ret_primitive_name = base_name; // Preserve primitive name like "byte"
+                    }
                     break :blk type_info.irType();
-                },
-                .optional => |wrapped| {
-                    // Optional return types are returned as pointers
-                    const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
-                    ret_value_type = .{
-                        .optional_type = .{
-                            .wrapped = wrapped_value_type.toPrimitiveType(),
-                            .wrapped_struct_type = if (wrapped_value_type == .struct_type) wrapped_value_type.struct_type else null,
-                            .wrapped_enum_type = if (wrapped_value_type == .enum_type) wrapped_value_type.enum_type else null,
-                        },
-                    };
-                    break :blk .ptr;
                 },
                 .error_union => {
                     // Error union return types are returned as pointers
@@ -2378,6 +2316,7 @@ pub const AstToIr = struct {
             effective_ret_value_type = .{
                 .error_union_type = .{
                     .success_type = success_ir_type,
+                    .success_type_name = ret_primitive_name,
                     .success_struct_type = success_struct_type,
                     .error_enum_type = decl.throws_type.?,
                 },
@@ -2401,7 +2340,7 @@ pub const AstToIr = struct {
         return switch (type_expr) {
             .simple => |name| name,
             .generic => |gen| gen.base_type,
-            .optional, .error_union, .function_type => null,
+            .error_union, .function_type => null,
         };
     }
 
@@ -2410,13 +2349,6 @@ pub const AstToIr = struct {
         return switch (type_expr) {
             .simple => |name| name,
             .generic => |gen| gen.base_type,
-            .optional => |wrapped| switch (wrapped.*) {
-                .simple => |name| name,
-                .generic => |gen| gen.base_type,
-                .optional => "?",
-                .error_union => "error_union",
-                .function_type => "(fn)",
-            },
             .error_union => |eu| eu.error_type,
             .function_type => "(fn)",
         };
@@ -2465,10 +2397,7 @@ pub const AstToIr = struct {
                     .primitive, .enum_type => 8,
                 };
             },
-            .primitive, .enum_type, .array_type => 8,
-            .optional_type => |opt_info| self.getOptionalSize(opt_info),
-            .error_union_type => 8,
-            .function_type => 8,
+            .primitive, .enum_type, .array_type, .error_union_type, .function_type => 8,
         };
     }
 
@@ -2485,12 +2414,14 @@ pub const AstToIr = struct {
                 };
                 // Check visibility
                 try self.checkTypeVisibility(resolved, type_info);
-                return if (type_info.isStruct())
+                const result: ValueType = if (type_info.isStruct())
                     .{ .struct_type = resolved }
                 else if (type_info == .enum_type)
                     .{ .enum_type = resolved }
                 else
                     .{ .primitive = resolved };
+
+                return result;
             },
             .generic => |gen| {
                 // For generic types like "Array of int", monomorphize them
@@ -2502,14 +2433,6 @@ pub const AstToIr = struct {
                 }
                 const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
                 return .{ .struct_type = mono_name };
-            },
-            .optional => |wrapped| {
-                const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
-                return .{ .optional_type = .{
-                    .wrapped = wrapped_value_type.toPrimitiveType(),
-                    .wrapped_struct_type = if (wrapped_value_type == .struct_type) wrapped_value_type.struct_type else null,
-                    .wrapped_enum_type = if (wrapped_value_type == .enum_type) wrapped_value_type.enum_type else null,
-                } };
             },
             .function_type => |ft| {
                 // Convert function type expression to ValueType
@@ -2544,9 +2467,12 @@ pub const AstToIr = struct {
                 // Convert error union type: T or E where E conforms to Error
                 const success_value_type = try self.typeExprToValueType(eu.success_type.*);
                 const resolved_error = self.resolveTypeName(eu.error_type);
+
                 return .{ .error_union_type = .{
                     .success_type = success_value_type.toPrimitiveType(),
+                    .success_type_name = if (success_value_type == .primitive) success_value_type.primitive else null,
                     .success_struct_type = if (success_value_type == .struct_type) success_value_type.struct_type else null,
+                    .success_enum_type = if (success_value_type == .enum_type) success_value_type.enum_type else null,
                     .error_enum_type = resolved_error,
                 } };
             },
@@ -2556,7 +2482,9 @@ pub const AstToIr = struct {
     /// Resolve type name, handling 'Self' substitution and generic type parameters
     pub fn resolveTypeName(self: *AstToIr, type_name: []const u8) []const u8 {
         if (std.mem.eql(u8, type_name, "Self")) {
-            return self.current_type_name orelse type_name;
+            const resolved = self.current_type_name orelse type_name;
+
+            return resolved;
         }
         // Check if this is a generic type parameter (e.g., "Element")
         if (self.generic_params.get(type_name)) |resolved| {
@@ -2699,6 +2627,8 @@ pub const AstToIr = struct {
 
         // Determine return type
         var ret_type_name: ?[]const u8 = null;
+        var ret_primitive_name: ?[]const u8 = null; // Track primitive type name (byte, int, etc.) for error unions
+        var ret_enum_name: ?[]const u8 = null; // Track enum type name for error unions
         var ret_value_type: ?ValueType = null;
         const ret_type: ir.Type = if (m.return_type) |rt| blk: {
             switch (rt) {
@@ -2709,7 +2639,13 @@ pub const AstToIr = struct {
                         self.reportError(.E006, resolved);
                         return error.UnknownType;
                     };
-                    if (type_info.isStruct()) ret_type_name = resolved;
+                    if (type_info.isStruct()) {
+                        ret_type_name = resolved;
+                    } else if (type_info == .enum_type) {
+                        ret_enum_name = resolved;
+                    } else if (type_info == .primitive) {
+                        ret_primitive_name = resolved; // Preserve primitive name like "byte"
+                    }
                     break :blk type_info.irType();
                 },
                 .generic => |gen| {
@@ -2722,25 +2658,6 @@ pub const AstToIr = struct {
                     const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
                     ret_type_name = mono_name;
                     break :blk .ptr; // Generic struct types are returned as pointers
-                },
-                .optional => |wrapped| {
-                    const wrapped_value_type = try self.typeExprToValueType(wrapped.*);
-                    const wrapped_struct_name: ?[]const u8 = if (wrapped_value_type == .struct_type)
-                        wrapped_value_type.struct_type
-                    else
-                        null;
-                    const wrapped_enum_name: ?[]const u8 = if (wrapped_value_type == .enum_type)
-                        wrapped_value_type.enum_type
-                    else
-                        null;
-                    ret_value_type = .{
-                        .optional_type = .{
-                            .wrapped = wrapped_value_type.toPrimitiveType(),
-                            .wrapped_struct_type = wrapped_struct_name,
-                            .wrapped_enum_type = wrapped_enum_name,
-                        },
-                    };
-                    break :blk .ptr;
                 },
                 .error_union => {
                     // Error union return types are returned as pointers
@@ -2765,8 +2682,10 @@ pub const AstToIr = struct {
 
         // Register explicit params
         for (m.params, 0..) |param, i| {
+            const param_vt = try self.typeExprToValueType(param.type_expr);
+
             param_types[i + extra_params] = .{
-                .ty = try self.typeExprToValueType(param.type_expr),
+                .ty = param_vt,
                 .name = param.name,
                 .default_value = param.default_value,
             };
@@ -2782,7 +2701,9 @@ pub const AstToIr = struct {
             effective_ret_value_type = .{
                 .error_union_type = .{
                     .success_type = ret_type,
+                    .success_type_name = ret_primitive_name,
                     .success_struct_type = ret_type_name,
+                    .success_enum_type = ret_enum_name,
                     .error_enum_type = error_type,
                 },
             };
@@ -2892,11 +2813,26 @@ pub const AstToIr = struct {
 
         try self.func_map.put(self.allocator, mangled_name, func_info);
 
-        // Queue for lazy generation
+        // Get source file for the base type (for error reporting)
+        // type_name might be monomorphized like "Map$String$int", so extract base type "Map"
+        const base_type = if (std.mem.indexOf(u8, type_name, "$")) |idx|
+            type_name[0..idx]
+        else
+            type_name;
+        const method_source_file = self.type_source_files.get(base_type) orelse self.source_file;
+
+        // Queue for lazy generation (duplicate source_file to own it since source can be freed)
+        const owned_source_file = if (method_source_file) |sf|
+            try self.allocator.dupe(u8, sf)
+        else
+            null;
+        errdefer if (owned_source_file) |sf| self.allocator.free(sf);
+
         try self.pending_methods.put(self.allocator, mangled_name, .{
             .type_name = type_name,
             .method = method,
             .generic_bindings = bindings,
+            .source_file = owned_source_file,
         });
         debug.astToIr("Registered lazy method '{s}' as '{s}' returning {s}", .{ method.name, mangled_name, func_info.return_type.toIrName() });
         return true;
@@ -2912,7 +2848,6 @@ pub const AstToIr = struct {
         func_name: ?[]const u8,
         sret_ptr: ?ir.Value,
         sret_size: i32,
-        sret_optional_info: ?OptionalInfo,
         self_ptr: ?ir.Value,
         var_map: std.StringHashMapUnmanaged(VarInfo),
         converted_runtime_constants: std.StringHashMapUnmanaged(TypedValue),
@@ -2939,7 +2874,6 @@ pub const AstToIr = struct {
             .func_name = self.current_func_name,
             .sret_ptr = self.sret_ptr,
             .sret_size = self.sret_size,
-            .sret_optional_info = self.sret_optional_info,
             .self_ptr = self.self_ptr,
             .var_map = self.var_map,
             .converted_runtime_constants = self.converted_runtime_constants,
@@ -2970,7 +2904,6 @@ pub const AstToIr = struct {
         self.current_func_name = saved.func_name;
         self.sret_ptr = saved.sret_ptr;
         self.sret_size = saved.sret_size;
-        self.sret_optional_info = saved.sret_optional_info;
         self.self_ptr = saved.self_ptr;
         self.var_map = saved.var_map;
         self.converted_runtime_constants = saved.converted_runtime_constants;
@@ -3002,17 +2935,25 @@ pub const AstToIr = struct {
         const saved_context = self.saveConversionContext();
 
         // Save previous generic param values (for reentrancy with nested generic types)
+
         var saved_generic_params = try self.allocator.alloc(?[]const u8, pending.generic_bindings.len);
         defer self.allocator.free(saved_generic_params);
         for (pending.generic_bindings, 0..) |binding, i| {
             saved_generic_params[i] = self.generic_params.get(binding.param);
+
             try self.generic_params.put(self.allocator, binding.param, binding.concrete);
         }
 
         // Allow stdlib builtins for stdlib types
         self.in_stdlib_method = true;
 
-        // Generate the method IR
+        // Save caller's location for error reporting (user code that triggered this method generation)
+        const caller_source_file = self.source_file;
+        const caller_line = self.current_line;
+        const caller_column = self.current_column;
+
+        // Generate the method IR (source_file stays as caller's file for error reporting)
+
         var gen_err: ?ConvertError = null;
         self.convertMethod(pending.type_name, pending.method.*) catch |e| {
             gen_err = e;
@@ -3030,8 +2971,14 @@ pub const AstToIr = struct {
         // Restore context after generation
         self.restoreConversionContext(saved_context);
 
-        // Propagate error if method generation failed
+        // Propagate error if method generation failed, with caller's location
         if (gen_err) |e| {
+            // Update error location to point to user code that triggered the method generation
+            if (self.last_error) |*le| {
+                le.location.file = caller_source_file;
+                le.location.line = @intCast(caller_line);
+                le.location.column = @intCast(caller_column);
+            }
             return e;
         }
 
@@ -3040,7 +2987,10 @@ pub const AstToIr = struct {
             info_ptr.ir_generated = true;
         }
 
-        // Remove from pending
+        // Remove from pending and free owned data
+        if (pending.source_file) |sf| {
+            self.allocator.free(sf);
+        }
         _ = self.pending_methods.remove(mangled_name);
 
         debug.astToIr("Lazily generated method '{s}'", .{mangled_name});
@@ -3054,7 +3004,6 @@ pub const AstToIr = struct {
     const SretInfo = struct {
         uses_sret: bool,
         struct_size: i32,
-        optional_info: ?OptionalInfo,
         ir_type: ir.Type,
     };
 
@@ -3062,13 +3011,12 @@ pub const AstToIr = struct {
     /// resolve_names: if true, resolves type names through generic params (for methods)
     fn analyzeReturnType(self: *AstToIr, return_type: ?ast.TypeExpr, resolve_names: bool) !SretInfo {
         if (return_type == null) {
-            return .{ .uses_sret = false, .struct_size = 0, .optional_info = null, .ir_type = .void };
+            return .{ .uses_sret = false, .struct_size = 0, .ir_type = .void };
         }
 
         const rt = return_type.?;
         var uses_sret = false;
         var sret_struct_size: i32 = 0;
-        var sret_opt_info: ?OptionalInfo = null;
 
         switch (rt) {
             .simple => |name| {
@@ -3095,15 +3043,6 @@ pub const AstToIr = struct {
                     }
                 }
             },
-            .optional => |wrapped| {
-                uses_sret = true;
-                sret_struct_size = 8 + self.getTypeSize(wrapped.*);
-                const wrapped_struct_name = getStructNameFromTypeExpr(self.allocator, wrapped.*, &self.allocated_type_strings);
-                sret_opt_info = .{
-                    .wrapped = getIrTypeFromTypeExpr(wrapped.*),
-                    .wrapped_struct_type = wrapped_struct_name,
-                };
-            },
             .error_union => |eu| {
                 // Error unions use sret like optionals
                 uses_sret = true;
@@ -3120,13 +3059,12 @@ pub const AstToIr = struct {
                 const resolved = if (resolve_names) self.resolveTypeName(base_name) else base_name;
                 break :blk try self.lookupIrType(resolved);
             },
-            .optional, .error_union, .function_type => .ptr,
+            .error_union, .function_type => .ptr,
         };
 
         return .{
             .uses_sret = uses_sret,
             .struct_size = sret_struct_size,
-            .optional_info = sret_opt_info,
             .ir_type = ir_type,
         };
     }
@@ -3142,14 +3080,12 @@ pub const AstToIr = struct {
         // Reset sret state
         self.sret_ptr = null;
         self.sret_size = 0;
-        self.sret_optional_info = null;
 
         // If returning struct, first parameter is sret pointer
         var param_offset: i32 = 0;
         if (sret_info.uses_sret) {
             self.sret_ptr = try ir_func.emitParam(0, .ptr);
             self.sret_size = sret_info.struct_size;
-            self.sret_optional_info = sret_info.optional_info;
             param_offset = 1;
         }
 
@@ -3254,16 +3190,6 @@ pub const AstToIr = struct {
                 // Return true if all explicit cases return
                 return case_count > 0;
             },
-            .do_catch_stmt => |do_catch| {
-                // The do block and all catch blocks must return
-                if (!allPathsReturn(getPrimaryBody(do_catch.children))) return false;
-                for (do_catch.children) |child| {
-                    if (child.role == .catch_handler) {
-                        if (!allPathsReturn(child.statements)) return false;
-                    }
-                }
-                return true;
-            },
             // Other statements don't guarantee a return
             else => return false,
         }
@@ -3306,7 +3232,6 @@ pub const AstToIr = struct {
             const payload_size = @max(success_size, error_size);
             sret_info.uses_sret = true;
             sret_info.struct_size = 8 + payload_size;
-            sret_info.optional_info = null; // We don't use optional_info for error unions
         }
 
         const ir_func = try self.module.addFunctionWithExport(mangled_name, sret_info.ir_type, method.is_export);
@@ -3363,6 +3288,12 @@ pub const AstToIr = struct {
             }
         }
 
+        // main cannot throw - errors must be handled within main
+        if (std.mem.eql(u8, decl.name, "main") and decl.throws_type != null) {
+            self.reportErrorAt(.E054, "main", decl.block.start_line, decl.block.start_column);
+            return error.SemanticError;
+        }
+
         // Track if this function throws (for throw statement validation)
         self.current_func_throws_type = decl.throws_type;
         defer self.current_func_throws_type = null;
@@ -3385,7 +3316,6 @@ pub const AstToIr = struct {
             const payload_size = @max(success_size, error_size);
             sret_info.uses_sret = true;
             sret_info.struct_size = 8 + payload_size;
-            sret_info.optional_info = null; // We don't use optional_info for error unions
         }
 
         const ir_func = try self.module.addFunctionWithExport(decl.name, sret_info.ir_type, decl.is_export);
@@ -3448,7 +3378,7 @@ pub const AstToIr = struct {
                 }
                 try self.var_map.put(self.allocator, param.name, var_info);
             },
-            .array_type, .optional_type, .error_union_type => {
+            .array_type, .error_union_type => {
                 // Reference types are passed as pointers - store in a stack slot
                 const param_val = try self.func().emitParam(idx, .ptr);
                 const slot_ptr = try self.func().emitAlloca(.ptr);
@@ -3496,6 +3426,7 @@ pub const AstToIr = struct {
                     true,
                     false,
                 ));
+                if (std.mem.eql(u8, param.name, "value")) {}
             },
             .function_type => {
                 // Function pointers are passed as pointers - store in a stack slot
@@ -3606,11 +3537,6 @@ pub const AstToIr = struct {
             },
             // Match statement
             .match_stmt => |match_s| try self.convertMatchStmt(match_s),
-            // Removed optional-related statement types (now handled via error unions)
-            .else_unwrap_decl, .guard_let_decl, .do_catch_stmt => {
-                self.reportError(.E001, "else-unwrap, guard-let, and do-catch are no longer supported");
-                return error.SemanticError;
-            },
         }
     }
 
@@ -3629,7 +3555,7 @@ pub const AstToIr = struct {
             const base_type_name: ?[]const u8 = switch (type_ann) {
                 .generic => |gen| gen.base_type,
                 .simple => |name| name,
-                .optional, .error_union, .function_type => null,
+                .error_union, .function_type => null,
             };
             if (base_type_name) |t_name| {
                 if (self.typeConformsTo(t_name, "InitableFromArrayLiteral")) {
@@ -3645,7 +3571,7 @@ pub const AstToIr = struct {
                                 break :blk try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
                             },
                             .simple => |name| name,
-                            .optional, .error_union, .function_type => unreachable,
+                            .error_union, .function_type => unreachable,
                         };
                         try array_helpers.convertInitableFromArrayLiteralSimple(self, decl, resolved_type_name);
                         return;
@@ -3667,7 +3593,7 @@ pub const AstToIr = struct {
                                 break :blk try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
                             },
                             .simple => |name| name,
-                            .optional, .error_union, .function_type => unreachable,
+                            .error_union, .function_type => unreachable,
                         };
                         try self.convertInitableFromDictionaryLiteralSimple(decl, resolved_type_name);
                         return;
@@ -3764,15 +3690,7 @@ pub const AstToIr = struct {
             // If using sret and returning a struct literal, write directly to sret buffer
             if (self.sret_ptr) |sret| {
                 if (expr == .struct_init) {
-                    if (self.sret_optional_info != null) {
-                        // Returning struct init from optional-returning function
-                        // Write tag = 1 (has value) first
-                        const one = try self.func().emitConstI64(1);
-                        try self.func().emitStore(sret, one);
-                        // Initialize struct at offset 8 (after the tag)
-                        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), Optional.VALUE_OFFSET);
-                        try self.initStructInto(expr.struct_init, value_ptr.raw());
-                    } else if (self.current_func_throws_type != null) {
+                    if (self.current_func_throws_type != null) {
                         // Returning struct init from throwing function - wrap in success result
                         // Write tag = 0 (success) first
                         const zero = try self.func().emitConstI64(0);
@@ -3793,7 +3711,7 @@ pub const AstToIr = struct {
                 const typed_val = try self.convertExpression(expr);
 
                 // If returning from a throwing function, wrap in success result
-                if (self.current_func_throws_type != null and self.sret_optional_info == null) {
+                if (self.current_func_throws_type != null) {
                     // Write tag = 0 (success) to sret
                     const zero = try self.func().emitConstI64(0);
                     try self.func().emitStore(sret, zero);
@@ -3805,6 +3723,11 @@ pub const AstToIr = struct {
                         if (self.type_map.get(struct_name)) |type_info| {
                             if (type_info == .struct_type) {
                                 try self.func().emitMemcpy(value_ptr.asRawPtr(), ir.toRawPtr(typed_val.value), type_info.struct_type.size);
+                                // For String returns that are NOT from a variable (e.g., from array element access),
+                                // we need to incref since we're copying from shared data
+                                if (std.mem.eql(u8, struct_name, "String") and expr != .identifier) {
+                                    try string_helpers.emitStringIncref(self, ir.toStringPtr(value_ptr.raw()), "<array index String>");
+                                }
                             } else {
                                 try self.func().emitStore(value_ptr.raw(), typed_val.value);
                             }
@@ -3841,46 +3764,21 @@ pub const AstToIr = struct {
                     return;
                 }
 
-                // If returning a non-optional value from an optional-returning function,
-                // wrap the value in a Some optional
-                if (self.sret_optional_info != null and typed_val.ty != .optional_type) {
-                    const opt_info = self.sret_optional_info.?;
-                    // Write tag = 1 (has value) to sret
-                    const one = try self.func().emitConstI64(1);
-                    try self.func().emitStore(sret, one);
-                    // Write value at offset 8
-                    const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), Optional.VALUE_OFFSET);
-                    // For struct types, memcpy the contents; for primitives, store the value
-                    if (opt_info.wrapped_struct_type) |struct_name| {
-                        if (self.type_map.get(struct_name)) |type_info| {
-                            if (type_info == .struct_type) {
-                                try self.func().emitMemcpy(value_ptr.asRawPtr(), ir.toRawPtr(typed_val.value), type_info.struct_type.size);
-                            } else {
-                                try self.func().emitStore(value_ptr.raw(), typed_val.value);
-                            }
-                        } else {
-                            try self.func().emitStore(value_ptr.raw(), typed_val.value);
-                        }
-                    } else {
-                        try self.func().emitStore(value_ptr.raw(), typed_val.value);
-                    }
-                } else {
-                    // Check if returning __ManagedArray to a String-returning function
-                    const is_managed_array = typed_val.ty == .primitive and
-                        std.mem.eql(u8, typed_val.ty.primitive, "__ManagedArray");
-                    const expects_string = self.current_func_name != null and
-                        self.type_map.get("String") != null and self.sret_size == 40;
+                // Check if returning __ManagedArray to a String-returning function
+                const is_managed_array = typed_val.ty == .primitive and
+                    std.mem.eql(u8, typed_val.ty.primitive, "__ManagedArray");
+                const expects_string = self.current_func_name != null and
+                    self.type_map.get("String") != null and self.sret_size == 40;
 
-                    if (is_managed_array and expects_string) {
-                        // Wrap __ManagedArray (32 bytes) into String (40 bytes)
-                        // Copy managed array to offset 0-31
-                        try self.func().emitMemcpy(ir.toRawPtr(sret), ir.toRawPtr(typed_val.value), ManagedArray.SIZE);
-                        // Set _iterPos to 0 at offset 24
-                        const iter_pos_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), String.ITER_POS_OFFSET);
-                        try self.func().emitStore(iter_pos_ptr.raw(), try self.func().emitConstI64(0));
-                    } else {
-                        try self.func().emitMemcpy(ir.toRawPtr(sret), ir.toRawPtr(typed_val.value), self.sret_size);
-                    }
+                if (is_managed_array and expects_string) {
+                    // Wrap __ManagedArray (32 bytes) into String (40 bytes)
+                    // Copy managed array to offset 0-31
+                    try self.func().emitMemcpy(ir.toRawPtr(sret), ir.toRawPtr(typed_val.value), ManagedArray.SIZE);
+                    // Set _iterPos to 0 at offset 24
+                    const iter_pos_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), String.ITER_POS_OFFSET);
+                    try self.func().emitStore(iter_pos_ptr.raw(), try self.func().emitConstI64(0));
+                } else {
+                    try self.func().emitMemcpy(ir.toRawPtr(sret), ir.toRawPtr(typed_val.value), self.sret_size);
                 }
                 // Mark returned variable as moved so cleanup doesn't free its heap resources
                 if (expr == .identifier) {
@@ -3953,7 +3851,7 @@ pub const AstToIr = struct {
             // Free old heap memory AFTER evaluating RHS
             try cleanup_helpers.freeHeapVar(self, var_info.*, false, assign.target);
 
-            const is_reference = var_info.ty == .struct_type or var_info.ty == .array_type or var_info.ty == .optional_type;
+            const is_reference = var_info.ty == .struct_type or var_info.ty == .array_type;
             if (is_reference and !var_info.uses_slot) {
                 // For struct reassignment, we need to copy the data to the original stack location
                 // Just updating var_info.ptr would cause loops to use stale data
@@ -4060,7 +3958,7 @@ pub const AstToIr = struct {
         const base = try self.convertExpression(assign.base.*);
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type, .error_union_type, .function_type => {
+            .primitive, .array_type, .enum_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAssign: expected struct type for field '{s}'\n", .{assign.field_name});
                 self.reportError(.E006, assign.field_name);
                 return error.UnknownType;
@@ -4163,19 +4061,18 @@ pub const AstToIr = struct {
         // Check for duplicate block identifier at this scope level
         try self.checkAndRegisterLabel(if_stmt.block.identifier);
 
+        // Check for if-try form
+        if (if_stmt.if_try) |if_try| {
+            return self.convertIfTryStmt(if_stmt, if_try);
+        }
+
         // Convert condition expression
         const cond_typed = try self.convertExpression(if_stmt.condition);
 
         // Clean up any temporary strings created during condition evaluation
-        // (e.g., lookup keys in `if let v = m.get("key")`)
         try cleanup_helpers.cleanupTemporaryStrings(self);
 
-        // For if-let, we need to check the optional's tag
-        const is_if_let = if_stmt.binding_name != null;
-        const condition_value = if (is_if_let)
-            try self.emitOptionalHasValue(cond_typed.value)
-        else
-            cond_typed.value;
+        const condition_value = cond_typed.value;
 
         // Determine what blocks we need
         const has_else_block = hasElse(if_stmt.children);
@@ -4185,100 +4082,26 @@ pub const AstToIr = struct {
 
         // Create then block
         const then_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock(if (is_if_let) "if_let_then" else "then");
+        _ = try self.func().addBlock("then");
 
         // Create else block (if needed) - actual index determined after then body
-        if (has_else_block or is_if_let) {
-            _ = try self.func().addBlock(if (is_if_let) "if_let_else" else "else");
+        if (has_else_block) {
+            _ = try self.func().addBlock("else");
         }
 
         // Create end block - actual index determined after all bodies
-        _ = try self.func().addBlock(if (is_if_let) "if_let_end" else "end");
+        _ = try self.func().addBlock("end");
 
         // DON'T emit br_cond yet - nested ifs in body will shift block indices
         // We'll emit it after all blocks are restored with correct indices
 
         // Defer blocks: end always, else conditionally
-        const deferred_count: usize = if (has_else_block or is_if_let) 2 else 1;
+        const deferred_count: usize = if (has_else_block) 2 else 1;
         var deferred = try DeferredBlocks.init(self.allocator, deferred_count);
         defer deferred.deinit();
         deferred.deferBlocks(self, deferred_count);
 
         // Now current block is "then" block
-        // For if-let, bind the unwrapped value before executing body
-        if (if_stmt.binding_name) |binding_name| {
-            // if-let requires an optional type to work with
-            if (cond_typed.ty != .optional_type) {
-                // Non-optional type in if-let - report type mismatch
-                const expr_name = if (if_stmt.condition == .identifier)
-                    if_stmt.condition.identifier
-                else
-                    "expression";
-                const type_name = cond_typed.ty.getTypeName() orelse @tagName(cond_typed.ty);
-                const msg = std.fmt.allocPrint(self.allocator, "if let requires optional type, '{s}' has type '{s}'", .{ expr_name, type_name }) catch expr_name;
-                self.reportError(.E022, msg);
-                return error.TypeMismatch;
-            }
-            const opt_info = cond_typed.ty.optional_type;
-            const wrapped_type = opt_info.wrapped;
-            const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(cond_typed.value), Optional.VALUE_OFFSET);
-            const var_value_type = getOptionalWrappedValueType(opt_info);
-
-            if (opt_info.wrapped_struct_type) |struct_name| {
-                // For struct types, the struct data is stored inline after the tag (at offset 8).
-                // value_ptr already points to this inline struct data.
-                try self.func().setValueName(value_ptr.raw(), binding_name);
-
-                // Determine if we own this value or are borrowing it.
-                // The key distinction is whether the source expression does an incref:
-                // - Identifier access: borrowing from a variable (no incref)
-                // - Index on user arrays/sets (array_type): borrowing (no incref on read)
-                // - Index on __ManagedArray or Array$String: owned (DOES incref for String elements)
-                // - Method call (map.get(k)): owned copy that was incref'd
-                // - Other expressions: conservatively treat as owned
-                const is_borrowed = blk: {
-                    switch (if_stmt.condition) {
-                        .identifier => break :blk true, // Borrowing from variable
-                        .index => |idx| {
-                            // Check if indexing __ManagedArray or stdlib Array$String
-                            // Both do incref for String elements - caller owns the copy
-                            const base_typed = self.convertExpression(idx.base.*) catch break :blk false;
-                            if (base_typed.ty == .struct_type) {
-                                const type_name = base_typed.ty.struct_type;
-                                if (std.mem.eql(u8, type_name, "__ManagedArray")) {
-                                    // __ManagedArray indexing does incref for String - owned
-                                    break :blk false;
-                                }
-                                if (std.mem.eql(u8, type_name, "Array$String")) {
-                                    // Array$String.get() does incref internally - owned
-                                    break :blk false;
-                                }
-                            }
-                            // User arrays/sets (array_type) don't incref on read - borrowed
-                            break :blk true;
-                        },
-                        .call, .method_call => break :blk false, // Method calls return owned copies
-                        else => break :blk false, // Conservative: treat as owned
-                    }
-                };
-
-                if (is_borrowed) {
-                    // Use initParam to mark as borrowed - we don't own this memory
-                    try self.var_map.put(self.allocator, binding_name, VarInfo.initParam(value_ptr.raw(), var_value_type, true, false));
-                } else {
-                    // We own this copy - mark as regular var so it gets cleaned up
-                    // For String types, freeHeapVar will decref when we return or exit scope
-                    try self.var_map.put(self.allocator, binding_name, VarInfo.initStackAllocated(value_ptr.raw(), .{ .struct_type = struct_name }, false));
-                }
-            } else {
-                // For primitive/enum types, load the value and store in a new slot
-                const unwrapped_value = try self.func().emitLoad(value_ptr.raw(), wrapped_type);
-                const binding_ptr = try self.func().emitAlloca(wrapped_type);
-                try self.func().setValueName(binding_ptr.raw(), binding_name);
-                try self.func().emitStore(binding_ptr.raw(), unwrapped_value);
-                try self.var_map.put(self.allocator, binding_name, VarInfo.initStackAllocated(binding_ptr.raw(), var_value_type, true));
-            }
-        }
 
         // Save ownership states before if body - if the body terminates (returns/breaks),
         // we need to restore states since code after the if is only reachable when condition is false
@@ -4297,15 +4120,6 @@ pub const AstToIr = struct {
             try self.convertStatement(stmt);
         }
         self.popLabelScope();
-
-        // Clean up and remove binding from var_map after then body
-        if (if_stmt.binding_name) |binding_name| {
-            // If binding is owned (not a parameter), clean it up before removing
-            if (self.var_map.get(binding_name)) |var_info| {
-                try cleanup_helpers.freeHeapVar(self, var_info, true, binding_name);
-            }
-            _ = self.var_map.remove(binding_name);
-        }
 
         // Track the block that needs a branch to end (we'll add it after restoring end block)
         var then_exit_block_idx: ?u32 = null;
@@ -4333,12 +4147,12 @@ pub const AstToIr = struct {
         // Restore and generate else block if needed
         var else_exit_block_idx: ?u32 = null;
         var actual_else_block_idx: u32 = undefined;
-        if (has_else_block or is_if_let) {
+        if (has_else_block) {
             actual_else_block_idx = @intCast(self.func().blocks.items.len);
             // else_block is at index 1 (second popped)
             try deferred.restore(self, 1);
 
-            // Check for else-if chain (not allowed for if-let)
+            // Check for else-if chain
             if (getElseIf(if_stmt.children)) |else_if| {
                 try self.convertIfStmt(else_if);
             } else if (getElseBody(if_stmt.children)) |else_body| {
@@ -4364,7 +4178,7 @@ pub const AstToIr = struct {
         try deferred.restore(self, 0);
 
         // NOW emit br_cond with correct block indices (after nested ifs shifted things)
-        const branch_target_if_false = if (has_else_block or is_if_let) actual_else_block_idx else actual_end_block_idx;
+        const branch_target_if_false = if (has_else_block) actual_else_block_idx else actual_end_block_idx;
         try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
             .operands = .{ .{ .value = condition_value }, .{ .block_ref = then_block_idx }, .{ .block_ref = branch_target_if_false } },
@@ -4385,6 +4199,160 @@ pub const AstToIr = struct {
                 .result = null,
             });
         }
+    }
+
+    /// Convert if-try statement: `if try expr` or `if let x = try expr`
+    /// Uses TryOtherwiseContext to handle proper reference counting for String types
+    fn convertIfTryStmt(self: *AstToIr, if_stmt: ast.IfStmt, if_try: *const ast.IfTryCondition) ConvertError!void {
+        // Evaluate the try expression (this calls the throwing function)
+        const result_typed = try self.convertExpression(if_try.try_expr.*);
+
+        // Validate that the expression is a throwing function (returns error union)
+        if (result_typed.ty != .error_union_type) {
+            self.reportErrorAt(.E055, "expression does not throw", if_stmt.block.start_line, if_stmt.block.start_column);
+            return error.SemanticError;
+        }
+
+        // Check the tag at offset 0: 0 = success, 1 = error
+        const tag = try self.func().emitLoad(result_typed.value, .i64);
+        const zero = try self.func().emitConstI64(0);
+        const is_success = try self.func().emitBinaryOp(.icmp_eq, tag, zero, .i64);
+
+        // Use TryOtherwiseContext for proper handling (same as `let x = try ... otherwise`)
+        // This handles String incref correctly.
+        // Pass branch_to_merge=false so we stay in success block to run the if-body
+        var ctx = try TryOtherwiseContext.initWithOptions(self, result_typed, is_success, "if_try_else", false);
+        defer ctx.deinit();
+
+        // Now we're in the success block - TryOtherwiseContext copied the value
+        // to ctx.result_ptr with proper incref for Strings, but didn't branch yet
+
+        // Determine what blocks we need
+        const has_else_block = hasElse(if_stmt.children);
+
+        // Save ownership states before if body
+        var saved_states: std.StringHashMapUnmanaged(types.OwnershipState) = .empty;
+        defer saved_states.deinit(self.allocator);
+        {
+            var it = self.var_map.iterator();
+            while (it.next()) |entry| {
+                try saved_states.put(self.allocator, entry.key_ptr.*, entry.value_ptr.state);
+            }
+        }
+
+        // If binding form, register the variable pointing to ctx.result_ptr
+        if (if_try.binding_name) |binding_name| {
+            try self.var_map.put(self.allocator, binding_name, VarInfo.init(ctx.result_ptr, ctx.success_type, false, false));
+        }
+
+        // Convert then body statements
+        try self.pushLabelScope();
+        for (getPrimaryBody(if_stmt.children)) |stmt| {
+            try self.convertStatement(stmt);
+        }
+        self.popLabelScope();
+
+        // Check if then block terminates (returns) BEFORE emitting cleanup
+        const then_terminates = if (self.func().currentBlock()) |block|
+            block.instructions.items.len > 0 and block.instructions.items[block.instructions.items.len - 1].op == .ret
+        else
+            false;
+
+        // Remove binding from scope if it was added
+        // For String bindings, emit decref before removing from scope
+        // But skip if block terminates (return cleanup already handles it)
+        if (if_try.binding_name) |binding_name| {
+            if (!then_terminates) {
+                if (self.var_map.get(binding_name)) |var_info| {
+                    if (var_info.ptr) |ptr| {
+                        if (string_helpers.isStringType(var_info.ty)) {
+                            try string_helpers.emitStringDecref(self, ir.toStringPtr(ptr), binding_name);
+                        }
+                    }
+                }
+            }
+            _ = self.var_map.remove(binding_name);
+        }
+
+        if (then_terminates) {
+            // If then block terminates, restore ownership states
+            var sit = saved_states.iterator();
+            while (sit.next()) |entry| {
+                if (self.var_map.getPtr(entry.key_ptr.*)) |var_info| {
+                    var_info.state = entry.value_ptr.*;
+                    if (entry.value_ptr.* == .owned) {
+                        var_info.moved_to = null;
+                        var_info.moved_line = 0;
+                    }
+                }
+            }
+        }
+
+        // Branch from then block to merge block (skip else)
+        if (!then_terminates) {
+            try ctx.emitBranchToMerge(self);
+        }
+
+        // Switch to error block for else handling
+        // (with branch_to_merge=false, we're still in success block)
+        try ctx.restoreBlock(self, 1);
+
+        if (has_else_block) {
+            // Check for error binding in else clause
+            const error_binding = getElseErrorBinding(if_stmt.children);
+            if (error_binding) |err_name| {
+                // Extract error value from error union and bind it
+                const err_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
+                const err_value = try self.func().emitLoad(err_ptr.raw(), .i64);
+
+                const err_var_ptr = try self.func().emitAlloca(.i64);
+                try self.func().emitStore(err_var_ptr.raw(), err_value);
+                try self.func().setValueName(err_var_ptr.raw(), err_name);
+
+                const err_type: types.ValueType = if (result_typed.ty == .error_union_type)
+                    .{ .enum_type = result_typed.ty.error_union_type.error_enum_type }
+                else
+                    .{ .primitive = types.INT };
+
+                try self.var_map.put(self.allocator, err_name, VarInfo.init(err_var_ptr.raw(), err_type, false, false));
+            }
+
+            // Convert else body
+            if (getElseBody(if_stmt.children)) |else_body| {
+                try self.pushLabelScope();
+                for (else_body) |stmt| {
+                    try self.convertStatement(stmt);
+                }
+                self.popLabelScope();
+            }
+
+            // Remove error binding from scope if it was added
+            if (error_binding) |err_name| {
+                _ = self.var_map.remove(err_name);
+            }
+        }
+
+        // Branch from else block to merge if it doesn't terminate
+        const else_terminates = if (self.func().currentBlock()) |block|
+            block.instructions.items.len > 0 and block.instructions.items[block.instructions.items.len - 1].op == .ret
+        else
+            false;
+        if (!else_terminates) {
+            try ctx.emitBranchToMerge(self);
+        }
+
+        // Restore to merge block
+        try ctx.restoreBlock(self, 0);
+    }
+
+    /// Get error binding from else clause if present (for if-try)
+    fn getElseErrorBinding(children: []const ast.ChildBlock) ?[]const u8 {
+        for (children) |child| {
+            if (child.role == .else_clause) {
+                return child.error_binding;
+            }
+        }
+        return null;
     }
 
     fn convertWhileStmt(self: *AstToIr, while_stmt: ast.WhileStmt) ConvertError!void {
@@ -4567,8 +4535,11 @@ pub const AstToIr = struct {
         // Call the next() method on the iterator
         const next_result = try self.convertMethodCallOnTyped(iterator_for_call, "next", &.{});
 
-        // Check if optional result has a value (continue loop) or is nil (exit loop)
-        const has_value = try self.emitOptionalHasValue(next_result.value);
+        // Check if error union result is success (continue loop) or error (exit loop)
+        // Error union layout: offset 0 = tag (0 = success, 1 = error), offset 8 = payload
+        const tag = try self.func().emitLoad(next_result.value, .i64);
+        const zero = try self.func().emitConstI64(0);
+        const is_success = try self.func().emitBinaryOp(.icmp_eq, tag, zero, .i64);
 
         // Create body block
         const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
@@ -4597,28 +4568,45 @@ pub const AstToIr = struct {
             try pre_loop_vars.put(self.allocator, entry.key_ptr.*, entry.value_ptr.state);
         }
 
-        // Extract the value from the optional result (offset 8)
-        const opt_info = switch (next_result.ty) {
-            .optional_type => |info| info,
-            .primitive, .struct_type, .array_type, .enum_type, .error_union_type, .function_type => OptionalInfo{ .wrapped = .i64 },
-        };
+        // Extract the value from the error union result (offset 8)
+        // Error union layout: offset 0 = tag (0 = success, 1 = error), offset 8 = payload
         const value_offset = try self.func().emitConstI64(8);
         const value_ptr = try self.func().emitBinaryOp(.add, next_result.value, value_offset, .ptr);
 
+        // Get element type from error union
+        const element_info: struct { wrapped: ir.Type, wrapped_struct_type: ?[]const u8, wrapped_enum_type: ?[]const u8 } = switch (next_result.ty) {
+            .error_union_type => |eu_info| .{
+                .wrapped = eu_info.success_type,
+                .wrapped_struct_type = eu_info.success_struct_type,
+                .wrapped_enum_type = eu_info.success_enum_type,
+            },
+            .primitive, .struct_type, .array_type, .enum_type, .function_type => .{
+                .wrapped = .i64,
+                .wrapped_struct_type = null,
+                .wrapped_enum_type = null,
+            },
+        };
+
         // Register the loop variable
-        // For struct types, use the pointer directly (struct data is inline in the optional)
+        // For struct types, use the pointer directly (struct data is inline in the error union)
         // For primitive/enum types, load the value and store in a new slot
-        const var_slot: ir.Value = if (opt_info.wrapped_struct_type != null) blk: {
+        const var_slot: ir.Value = if (element_info.wrapped_struct_type != null) blk: {
             // For struct types, the payload is the struct data inline
             break :blk value_ptr;
         } else blk: {
-            const element_value = try self.func().emitLoad(value_ptr, opt_info.wrapped);
-            const slot = try self.func().emitAlloca(opt_info.wrapped);
+            const element_value = try self.func().emitLoad(value_ptr, element_info.wrapped);
+            const slot = try self.func().emitAlloca(element_info.wrapped);
             try self.func().emitStore(slot.raw(), element_value);
             break :blk slot.raw();
         };
 
-        const var_type = getOptionalWrappedValueType(opt_info);
+        // Determine the var type from the error union element info
+        const var_type: types.ValueType = if (element_info.wrapped_struct_type) |struct_name|
+            .{ .struct_type = struct_name }
+        else if (element_info.wrapped_enum_type) |enum_name|
+            .{ .enum_type = enum_name }
+        else
+            .{ .primitive = element_info.wrapped.toMaxonName() };
         try self.var_map.put(self.allocator, for_stmt.var_name, VarInfo.initStackAllocated(var_slot, var_type, false));
 
         // Convert body statements (with new label scope)
@@ -4660,10 +4648,10 @@ pub const AstToIr = struct {
         const cont_block_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("forcont");
 
-        // Emit conditional branch in condition block: if has_value, go to body; else fall through to cont
+        // Emit conditional branch in condition block: if is_success, go to body; else fall through to cont
         try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = has_value }, .{ .block_ref = body_block_idx }, .{ .block_ref = cont_block_idx } },
+            .operands = .{ .{ .value = is_success }, .{ .block_ref = body_block_idx }, .{ .block_ref = cont_block_idx } },
         });
 
         // Patch any break statements
@@ -5013,10 +5001,6 @@ pub const AstToIr = struct {
                     }
                     return false;
                 },
-                else => false,
-            },
-            .optional_type => switch (resolved_param_ty) {
-                .optional_type => true, // Already handled by implicit wrap/unwrap
                 else => false,
             },
             .error_union_type => switch (resolved_param_ty) {
@@ -5842,11 +5826,6 @@ pub const AstToIr = struct {
             .try_expr => |try_e| self.convertTryExpr(try_e),
             .match_expr => |me| self.convertMatchExpr(me),
             .enum_case => |ec| self.convertEnumCase(ec),
-            // Removed optional-related expression types (now handled via error unions)
-            .nil_lit, .nil_coalesce => {
-                self.reportError(.E001, "nil and nil-coalesce are no longer supported");
-                return error.SemanticError;
-            },
         };
     }
 
@@ -5968,68 +5947,6 @@ pub const AstToIr = struct {
 
         // Fall back to original identifier behavior (will produce error for undefined)
         return self.convertIdentifier(name);
-    }
-
-    /// Check if an optional has a value (tag == 1).
-    /// Returns an IR value representing the boolean result.
-    fn emitOptionalHasValue(self: *AstToIr, opt_ptr: ir.Value) !ir.Value {
-        const tag = try self.func().emitLoad(opt_ptr, .i64);
-        const one = try self.func().emitConstI64(1);
-        return try self.func().emitBinaryOp(.icmp_eq, tag, one, .i64);
-    }
-
-    /// Check if an optional is nil (tag == 0).
-    /// Returns an IR value representing the boolean result.
-    fn emitOptionalIsNil(self: *AstToIr, opt_ptr: ir.Value) !ir.Value {
-        const tag = try self.func().emitLoad(opt_ptr, .i64);
-        const zero = try self.func().emitConstI64(0);
-        return try self.func().emitBinaryOp(.icmp_eq, tag, zero, .i64);
-    }
-
-    /// Allocate storage for an optional based on its OptionalInfo.
-    /// Returns the pointer to the allocated optional.
-    pub fn allocateOptional(self: *AstToIr, opt_info: OptionalInfo) ConvertError!ir.Value {
-        const size = self.getOptionalSize(opt_info);
-        return (try self.func().emitAllocaSized(size)).raw();
-    }
-
-    /// Create a "some" optional from a primitive value
-    fn createSomeOptional(self: *AstToIr, value: ir.Value, wrapped_type: ir.Type) ConvertError!TypedValue {
-        const opt_info = OptionalInfo{ .wrapped = wrapped_type };
-        const opt_ptr = try self.allocateOptional(opt_info);
-
-        // Store tag = 1 (has value)
-        const one = try self.func().emitConstI64(1);
-        try self.func().emitStore(opt_ptr, one);
-
-        // Store value at offset 8
-        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(opt_ptr), Optional.VALUE_OFFSET);
-        try self.func().emitStore(value_ptr.raw(), value);
-
-        return .{
-            .value = opt_ptr,
-            .ty = .{ .optional_type = opt_info },
-        };
-    }
-
-    /// Create a some optional with a struct pointer value (copies struct data inline)
-    fn createSomeOptionalWithStructType(self: *AstToIr, struct_ptr: ir.Value, wrapped_type: ir.Type, struct_type: ?[]const u8) ConvertError!TypedValue {
-        const opt_info = OptionalInfo{ .wrapped = wrapped_type, .wrapped_struct_type = struct_type };
-        const opt_ptr = try self.allocateOptional(opt_info);
-
-        // Store tag = 1 (has value)
-        const one = try self.func().emitConstI64(1);
-        try self.func().emitStore(opt_ptr, one);
-
-        // Copy struct data inline at offset 8
-        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(opt_ptr), Optional.VALUE_OFFSET);
-        const struct_size = self.getOptionalSize(opt_info) - 8; // Total size minus tag
-        try string_helpers.emitStructCopy(self, value_ptr, ir.toStructPtr(struct_ptr), struct_size, struct_type);
-
-        return .{
-            .value = opt_ptr,
-            .ty = .{ .optional_type = opt_info },
-        };
     }
 
     /// Convert string literal expression to a string type
@@ -6202,20 +6119,6 @@ pub const AstToIr = struct {
                 // Int-backed or simple enum: convert ordinal to string
                 return self.convertIntToString(typed_val.value);
             },
-            .optional_type => |opt_info| {
-                // For optional types, unwrap and convert the inner value
-                // Load the value slot (offset 8 from optional pointer)
-                const value_slot = try self.func().emitGetFieldPtr(ir.toStructPtr(typed_val.value), Optional.VALUE_OFFSET);
-                const inner_value = try self.func().emitLoad(value_slot.raw(), opt_info.wrapped);
-                const inner_typed = TypedValue{
-                    .value = inner_value,
-                    .ty = if (opt_info.wrapped_struct_type) |struct_name|
-                        .{ .struct_type = struct_name }
-                    else
-                        .{ .primitive = opt_info.wrapped.toMaxonName() },
-                };
-                return self.convertToString(inner_typed, format_spec);
-            },
             .array_type => {
                 self.reportInternalError("cannot convert array to string for interpolation");
                 return error.UnknownType;
@@ -6287,29 +6190,17 @@ pub const AstToIr = struct {
         // Allocate space for the return value (String is 32 bytes)
         const result_ptr = try self.func().emitAllocaSized(32);
 
-        // Prepare the format argument (optional String)
-        const format_opt_info = OptionalInfo{ .wrapped = .ptr, .wrapped_struct_type = "String" };
-        if (format_spec) |spec| {
-            const format_str = try self.convertStringLiteral(spec);
-            const format_typed = try self.createSomeOptionalWithStructType(format_str.value, .ptr, "String");
-            // Use the allocated optional directly
-            var args = try self.func().allocator.alloc(ir.Value, 3);
-            args[0] = result_ptr.raw();
-            args[1] = value_ptr;
-            args[2] = format_typed.value;
-            _ = try self.func().emitCall(method_name, args, func_info.return_type);
-            return result_ptr.raw();
-        }
-        // nil case
-        const format_opt = try self.allocateOptional(format_opt_info);
-        const zero = try self.func().emitConstI64(0);
-        try self.func().emitStore(format_opt, zero);
+        // Prepare the format argument as a String (empty string if no format spec)
+        const format_str = if (format_spec) |spec|
+            try self.convertStringLiteral(spec)
+        else
+            try self.convertStringLiteral("");
 
         // Call toString(self, format) -> result_ptr contains the String
         var args = try self.func().allocator.alloc(ir.Value, 3);
         args[0] = result_ptr.raw(); // Return slot
         args[1] = value_ptr; // self
-        args[2] = format_opt; // format argument
+        args[2] = format_str.value; // format argument (String)
 
         _ = try self.func().emitCall(method_name, args, func_info.return_type);
 
@@ -6542,6 +6433,7 @@ pub const AstToIr = struct {
             self.reportError(.E005, name);
             return error.UndefinedVariable;
         };
+        if (std.mem.eql(u8, name, "value")) {}
 
         if (info.state == .moved) {
             debug.astToIr("variable '{s}' was moved\n", .{name});
@@ -6552,7 +6444,7 @@ pub const AstToIr = struct {
         info.used = true;
 
         // Reference types may use a slot indirection; value types always load
-        const value = if (info.ty == .struct_type or info.ty == .array_type or info.ty == .optional_type)
+        const value = if (info.ty == .struct_type or info.ty == .array_type)
             if (info.uses_slot) try self.func().emitLoad(info.ptr.?, .ptr) else info.ptr.?
         else
             try self.func().emitLoad(info.ptr.?, info.ty.toPrimitiveType());
@@ -6752,20 +6644,6 @@ pub const AstToIr = struct {
         const left = try self.convertExpression(bin.left.*);
         const right = try self.convertExpression(bin.right.*);
 
-        // Check for optional types used without unwrapping
-        if (left.ty == .optional_type) {
-            const expr_name = if (bin.left.* == .identifier) bin.left.identifier else "expression";
-            const msg = std.fmt.allocPrint(self.allocator, "optional type used without unwrapping: '{s}'", .{expr_name}) catch expr_name;
-            self.reportError(.E022, msg);
-            return error.TypeMismatch;
-        }
-        if (right.ty == .optional_type) {
-            const expr_name = if (bin.right.* == .identifier) bin.right.identifier else "expression";
-            const msg = std.fmt.allocPrint(self.allocator, "optional type used without unwrapping: '{s}'", .{expr_name}) catch expr_name;
-            self.reportError(.E022, msg);
-            return error.TypeMismatch;
-        }
-
         const left_prim = left.ty.toPrimitiveType();
         const right_prim = right.ty.toPrimitiveType();
 
@@ -6821,102 +6699,6 @@ pub const AstToIr = struct {
     fn convertCompare(self: *AstToIr, cmp: ast.CompareExpr) ConvertError!TypedValue {
         const left = try self.convertExpression(cmp.left.*);
         const right = try self.convertExpression(cmp.right.*);
-
-        // Handle optional == nil or optional != nil comparisons
-        // An optional's tag is at offset 0: 0 means nil, 1 means has value
-        const left_is_optional = left.ty == .optional_type;
-        const right_is_optional = right.ty == .optional_type;
-
-        if (left_is_optional and right_is_optional) {
-            // Both are optional - comparing optional to nil (or nil to optional)
-            const is_nil = try self.emitOptionalIsNil(left.value);
-
-            const result = switch (cmp.op) {
-                .eq => is_nil,
-                .ne => blk: {
-                    const zero = try self.func().emitConstI64(0);
-                    break :blk try self.func().emitBinaryOp(.icmp_eq, is_nil, zero, .i64);
-                },
-                .lt, .le, .gt, .ge => {
-                    // < > <= >= don't make sense for optional/nil comparison
-                    self.reportError(.E003, "comparison operators < > <= >= not valid for optional/nil");
-                    return error.TypeMismatch;
-                },
-            };
-            return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
-        } else if (left_is_optional) {
-            // Left is optional, right is a value - unwrap left and compare
-            // Get pointer to the value at offset 8 of the optional
-            const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(left.value), Optional.VALUE_OFFSET);
-
-            // Check if the wrapped type is a struct that implements Equatable
-            if (left.ty.optional_type.wrapped_struct_type) |struct_name| {
-                if (self.typeConformsTo(struct_name, "Equatable")) {
-                    if (cmp.op == .eq or cmp.op == .ne) {
-                        // Call equals method: unwrapped_left.equals(right)
-                        const equals_result = try self.emitMethodCallWithIrArgs(struct_name, "equals", &.{right.value}, value_ptr.raw());
-
-                        if (cmp.op == .eq) {
-                            return .{ .value = equals_result.value, .ty = .{ .primitive = types.BOOL } };
-                        } else {
-                            const zero = try self.func().emitConstI64(0);
-                            const negated = try self.func().emitBinaryOp(.icmp_eq, equals_result.value, zero, .i64);
-                            return .{ .value = negated, .ty = .{ .primitive = types.BOOL } };
-                        }
-                    }
-                }
-            }
-
-            // Fall back to primitive comparison
-            const left_val = try self.func().emitLoad(value_ptr.raw(), left.ty.optional_type.wrapped);
-
-            const op: ir.Instruction.Op = switch (cmp.op) {
-                .eq => .icmp_eq,
-                .ne => .icmp_ne,
-                .lt => .icmp_lt,
-                .le => .icmp_le,
-                .gt => .icmp_gt,
-                .ge => .icmp_ge,
-            };
-            const result = try self.func().emitBinaryOp(op, left_val, right.value, .i64);
-            return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
-        } else if (right_is_optional) {
-            // Right is optional, left is a value - unwrap right and compare
-            // Get pointer to the value at offset 8 of the optional
-            const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(right.value), Optional.VALUE_OFFSET);
-
-            // Check if the wrapped type is a struct that implements Equatable
-            if (right.ty.optional_type.wrapped_struct_type) |struct_name| {
-                if (self.typeConformsTo(struct_name, "Equatable")) {
-                    if (cmp.op == .eq or cmp.op == .ne) {
-                        // Call equals method: left.equals(unwrapped_right)
-                        const equals_result = try self.emitMethodCallWithIrArgs(struct_name, "equals", &.{value_ptr.raw()}, left.value);
-
-                        if (cmp.op == .eq) {
-                            return .{ .value = equals_result.value, .ty = .{ .primitive = types.BOOL } };
-                        } else {
-                            const zero = try self.func().emitConstI64(0);
-                            const negated = try self.func().emitBinaryOp(.icmp_eq, equals_result.value, zero, .i64);
-                            return .{ .value = negated, .ty = .{ .primitive = types.BOOL } };
-                        }
-                    }
-                }
-            }
-
-            // Fall back to primitive comparison
-            const right_val = try self.func().emitLoad(value_ptr.raw(), right.ty.optional_type.wrapped);
-
-            const op: ir.Instruction.Op = switch (cmp.op) {
-                .eq => .icmp_eq,
-                .ne => .icmp_ne,
-                .lt => .icmp_lt,
-                .le => .icmp_le,
-                .gt => .icmp_gt,
-                .ge => .icmp_ge,
-            };
-            const result = try self.func().emitBinaryOp(op, left.value, right_val, .i64);
-            return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
-        }
 
         // Check if left operand is a struct type that implements Equatable
         // If so, use the equals() method for == and != operators
@@ -7067,43 +6849,6 @@ pub const AstToIr = struct {
                 return .{ .value = result, .ty = .{ .primitive = types.BOOL } };
             },
             .@"or" => {
-                // If left is an optional type, treat as nil coalescing
-                if (left.ty == .optional_type) {
-                    const opt_info = left.ty.optional_type;
-                    const wrapped_type = opt_info.wrapped;
-
-                    // Allocate result storage
-                    const result_ptr = try self.func().emitAlloca(wrapped_type);
-
-                    // Check if optional has a value (tag != 0)
-                    const has_value = try self.emitOptionalHasValue(left.value);
-
-                    // Create 2-way branch: has_value -> extract, else -> use default
-                    var branch = try BranchBuilder.init(self, has_value, "or_has_value", "or_default", "or_merge");
-                    defer branch.deinit();
-
-                    // Then block: extract unwrapped value
-                    const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(left.value), Optional.VALUE_OFFSET);
-                    const unwrapped_value = try self.func().emitLoad(value_ptr.raw(), wrapped_type);
-                    try self.func().emitStore(result_ptr.raw(), unwrapped_value);
-
-                    // Switch to else block
-                    try branch.switchToElse(true);
-
-                    // Else block: use right value as default
-                    try self.func().emitStore(result_ptr.raw(), right.value);
-
-                    // Switch to merge block
-                    try branch.switchToMerge(true);
-
-                    // Load result
-                    const final_value = try self.func().emitLoad(result_ptr.raw(), wrapped_type);
-
-                    // Return the unwrapped type
-                    const type_name = wrapped_type.toMaxonName();
-                    return .{ .value = final_value, .ty = .{ .primitive = type_name } };
-                }
-
                 // Logical 'or' - at least one value must be non-zero (truthy)
                 // We implement this as: (left != 0) | (right != 0)
                 // Using bitwise OR: if either is 1, result is 1
@@ -7175,6 +6920,11 @@ pub const AstToIr = struct {
             const eu_info = result_typed.ty.error_union_type;
             if (eu_info.success_struct_type) |struct_name| {
                 break :blk .{ .struct_type = struct_name };
+            } else if (eu_info.success_enum_type) |enum_name| {
+                break :blk .{ .enum_type = enum_name };
+            } else if (eu_info.success_type_name) |type_name| {
+                // Use preserved primitive type name (e.g., "byte" instead of "int")
+                break :blk .{ .primitive = type_name };
             } else {
                 // Primitive success type - infer from IR type
                 break :blk .{ .primitive = eu_info.success_type.toMaxonName() };
@@ -7232,233 +6982,241 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Common context for try-otherwise handling, encapsulating shared setup and state
+    const TryOtherwiseContext = struct {
+        success_type: types.ValueType,
+        is_struct_type: bool,
+        struct_size: i32,
+        result_ptr: ir.Value,
+        merge_block_idx: u32, // Only valid when branch_to_merge=true in init
+        deferred: DeferredBlocks,
+        restores_done: u32 = 0, // Track how many restore() calls have been made
+        // Fields for deferred branch emission (when branch_to_merge=false)
+        entry_block_idx: u32 = 0,
+        success_block_idx: u32 = 0,
+        is_success_condition: ir.Value = 0,
+        needs_initial_branch: bool = false,
+
+        /// Initialize context for try-otherwise handling.
+        /// If branch_to_merge is true (default for otherwise), branches to merge after extracting success value.
+        /// If false (for if-try), stays in success block to allow additional code before branching.
+        fn init(self_ir: *AstToIr, result_typed: TypedValue, is_success: ir.Value, error_block_name: []const u8) ConvertError!TryOtherwiseContext {
+            return initWithOptions(self_ir, result_typed, is_success, error_block_name, true);
+        }
+
+        fn initWithOptions(self_ir: *AstToIr, result_typed: TypedValue, is_success: ir.Value, error_block_name: []const u8, branch_to_merge: bool) ConvertError!TryOtherwiseContext {
+            // Extract success type from error union
+            const success_type: types.ValueType = if (result_typed.ty == .error_union_type) blk: {
+                const eu_info = result_typed.ty.error_union_type;
+                if (eu_info.success_struct_type) |struct_name| {
+                    break :blk .{ .struct_type = struct_name };
+                } else if (eu_info.success_enum_type) |enum_name| {
+                    break :blk .{ .enum_type = enum_name };
+                } else if (eu_info.success_type_name) |type_name| {
+                    break :blk .{ .primitive = type_name };
+                } else {
+                    break :blk .{ .primitive = eu_info.success_type.toMaxonName() };
+                }
+            } else .{ .primitive = types.INT };
+
+            const is_struct_type = success_type == .struct_type;
+
+            const struct_size: i32 = if (is_struct_type) blk: {
+                const struct_name = success_type.struct_type;
+                if (self_ir.type_map.get(struct_name)) |type_info| {
+                    if (type_info == .struct_type) {
+                        break :blk type_info.struct_type.size;
+                    }
+                }
+                break :blk 8;
+            } else 0;
+
+            // Allocate result buffer BEFORE creating new blocks (in current/entry block)
+            // so it's visible to both success and error paths
+            const result_ptr = if (is_struct_type)
+                (try self_ir.func().emitAllocaSized(struct_size)).raw()
+            else
+                (try self_ir.func().emitAlloca(.i64)).raw();
+
+            // Create blocks
+            const success_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+            _ = try self_ir.func().addBlock("try_success");
+            const error_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+            _ = try self_ir.func().addBlock(error_block_name);
+            const merge_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+            _ = try self_ir.func().addBlock("try_merge");
+
+            const entry_block_idx = success_block_idx - 1;
+
+            // For branch_to_merge=true, emit branch now with static indices (they won't change)
+            // For branch_to_merge=false (if-try), defer branch emission until restoreBlock is called
+            // because nested if-try may create blocks that shift the indices
+            if (branch_to_merge) {
+                const entry_block = &self_ir.func().blocks.items[entry_block_idx];
+                try entry_block.instructions.append(self_ir.allocator, .{
+                    .op = .br_cond,
+                    .operands = .{ .{ .value = is_success }, .{ .block_ref = success_block_idx }, .{ .block_ref = error_block_idx } },
+                });
+            }
+
+            // Defer merge and error blocks
+            var deferred = try DeferredBlocks.init(self_ir.allocator, 2);
+            deferred.deferBlocks(self_ir, 2);
+
+            // Emit success block: extract value from error union
+            const value_ptr = try self_ir.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
+
+            if (is_struct_type) {
+                try self_ir.func().emitMemcpy(ir.toRawPtr(result_ptr), value_ptr.asRawPtr(), struct_size);
+                // Note: We do NOT incref here because we're moving ownership from the
+                // error union buffer to result_ptr. The error union is a stack allocation
+                // that gets abandoned - there's no explicit cleanup of its String value.
+                // By not increfing, the refcount stays correct for the single remaining reference.
+            } else {
+                const success_value = try self_ir.func().emitLoad(value_ptr.raw(), .i64);
+                try self_ir.func().emitStore(result_ptr, success_value);
+            }
+
+            // For try-otherwise, branch to merge immediately after extracting value
+            // For if-try, stay in success block to run the if-body first
+            var restores_done: u32 = 0;
+            if (branch_to_merge) {
+                try self_ir.func().currentBlock().?.instructions.append(self_ir.allocator, .{
+                    .op = .br,
+                    .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+                    .result = null,
+                });
+
+                // Switch to error block
+                try deferred.restore(self_ir, 1);
+                restores_done = 1; // Track that error block has been restored
+            }
+
+            return .{
+                .success_type = success_type,
+                .is_struct_type = is_struct_type,
+                .struct_size = struct_size,
+                .result_ptr = result_ptr,
+                .merge_block_idx = merge_block_idx,
+                .deferred = deferred,
+                .entry_block_idx = entry_block_idx,
+                .success_block_idx = success_block_idx,
+                .is_success_condition = is_success,
+                .needs_initial_branch = !branch_to_merge,
+                .restores_done = restores_done,
+            };
+        }
+
+        fn deinit(self: *TryOtherwiseContext) void {
+            self.deferred.deinit();
+        }
+
+        /// Restore deferred block and track the restore count.
+        /// For the first restore (error block), also emits the deferred initial branch if needed.
+        fn restoreBlock(self: *TryOtherwiseContext, self_ir: *AstToIr, n: usize) !void {
+            // When restoring error block (n=1), emit the deferred initial branch with correct indices
+            if (n == 1 and self.needs_initial_branch) {
+                // Now we know where error block will be: current block count
+                const error_block_idx: u32 = @intCast(self_ir.func().blocks.items.len);
+                const entry_block = &self_ir.func().blocks.items[self.entry_block_idx];
+                try entry_block.instructions.append(self_ir.allocator, .{
+                    .op = .br_cond,
+                    .operands = .{ .{ .value = self.is_success_condition }, .{ .block_ref = self.success_block_idx }, .{ .block_ref = error_block_idx } },
+                });
+                self.needs_initial_branch = false;
+            }
+            try self.deferred.restore(self_ir, n);
+            self.restores_done += 1;
+        }
+
+        fn emitBranchToMerge(self: *const TryOtherwiseContext, self_ir: *AstToIr) !void {
+            // Compute merge block index dynamically.
+            // Merge block (deferred[0]) is restored last (after error block which is deferred[1]).
+            // The index depends on how many deferred blocks are still pending:
+            // - If 0 restores done (error not yet restored): merge will be at current_len + 1
+            // - If 1 restore done (error restored): merge will be at current_len
+            const pending_restores = 2 - self.restores_done;
+            const merge_idx: u32 = @intCast(self_ir.func().blocks.items.len + pending_restores - 1);
+            try self_ir.func().currentBlock().?.instructions.append(self_ir.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = merge_idx }, .none, .none },
+                .result = null,
+            });
+        }
+
+        fn finalize(self: *TryOtherwiseContext, self_ir: *AstToIr) ConvertError!TypedValue {
+            try self.deferred.restore(self_ir, 0);
+            const final_value = if (self.is_struct_type)
+                self.result_ptr
+            else
+                try self_ir.func().emitLoad(self.result_ptr, .i64);
+
+            return .{ .value = final_value, .ty = self.success_type };
+        }
+    };
+
     /// Handle `try expr otherwise ignore` - discard error, return default zero value
     fn convertTryOtherwiseIgnore(self: *AstToIr, result_typed: TypedValue, is_success: ir.Value) ConvertError!TypedValue {
-        // Get success type info from error union
-        const success_type: types.ValueType = if (result_typed.ty == .error_union_type) blk: {
-            const eu_info = result_typed.ty.error_union_type;
-            if (eu_info.success_struct_type) |struct_name| {
-                break :blk .{ .struct_type = struct_name };
-            } else {
-                break :blk .{ .primitive = eu_info.success_type.toMaxonName() };
-            }
-        } else .{ .primitive = types.INT };
+        var ctx = try TryOtherwiseContext.init(self, result_typed, is_success, "try_ignore");
+        defer ctx.deinit();
 
-        const is_struct_type = success_type == .struct_type;
-
-        // Create blocks for success and error cases
-        const success_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("try_success");
-        const error_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("try_ignore");
-        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("try_merge");
-
-        // Branch based on tag
-        const entry_block = &self.func().blocks.items[success_block_idx - 1];
-        try entry_block.instructions.append(self.allocator, .{
-            .op = .br_cond,
-            .operands = .{ .{ .value = is_success }, .{ .block_ref = success_block_idx }, .{ .block_ref = error_block_idx } },
-        });
-
-        // Defer merge and error blocks
-        var deferred = try DeferredBlocks.init(self.allocator, 2);
-        defer deferred.deinit();
-        deferred.deferBlocks(self, 2);
-
-        // Success block: extract value
-        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
-        const result_ptr = if (is_struct_type)
-            (try self.func().emitAlloca(.ptr)).raw()
-        else
-            (try self.func().emitAlloca(.i64)).raw();
-
-        if (is_struct_type) {
-            try self.func().emitStore(result_ptr, value_ptr.raw());
+        // Error block: zero-initialize result buffer
+        if (ctx.is_struct_type) {
+            try self.func().emitMemset(ir.toRawPtr(ctx.result_ptr), 0, ctx.struct_size);
         } else {
-            const success_value = try self.func().emitLoad(value_ptr.raw(), .i64);
-            try self.func().emitStore(result_ptr, success_value);
-        }
-
-        try self.func().currentBlock().?.instructions.append(self.allocator, .{
-            .op = .br,
-            .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-            .result = null,
-        });
-
-        // Error block: ignore error, store default value
-        try deferred.restore(self, 1);
-        if (is_struct_type) {
-            // For struct types, store null pointer as default
-            const null_ptr = try self.func().emitConstI64(0);
-            try self.func().emitStore(result_ptr, null_ptr);
-        } else {
-            // For primitives, store 0
             const default_val = try self.func().emitConstI64(0);
-            try self.func().emitStore(result_ptr, default_val);
+            try self.func().emitStore(ctx.result_ptr, default_val);
         }
 
-        try self.func().currentBlock().?.instructions.append(self.allocator, .{
-            .op = .br,
-            .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-            .result = null,
-        });
-
-        // Merge block: load result
-        try deferred.restore(self, 0);
-        const final_value = if (is_struct_type)
-            try self.func().emitLoad(result_ptr, .ptr)
-        else
-            try self.func().emitLoad(result_ptr, .i64);
-
-        return .{ .value = final_value, .ty = success_type };
+        try ctx.emitBranchToMerge(self);
+        return ctx.finalize(self);
     }
 
     /// Handle `try expr otherwise defaultExpr` - on error, evaluate and return default expression
     fn convertTryOtherwiseDefault(self: *AstToIr, result_typed: TypedValue, is_success: ir.Value, default_expr: ast.Expression) ConvertError!TypedValue {
-        // Get success type info from error union
-        const success_type: types.ValueType = if (result_typed.ty == .error_union_type) blk: {
-            const eu_info = result_typed.ty.error_union_type;
-            if (eu_info.success_struct_type) |struct_name| {
-                break :blk .{ .struct_type = struct_name };
-            } else {
-                break :blk .{ .primitive = eu_info.success_type.toMaxonName() };
+        var ctx = try TryOtherwiseContext.init(self, result_typed, is_success, "try_default");
+        defer ctx.deinit();
+
+        // Error block: evaluate default expression and copy to result
+        const default_typed = try self.convertExpression(default_expr);
+
+        if (ctx.is_struct_type) {
+            try self.func().emitMemcpy(ir.toRawPtr(ctx.result_ptr), ir.toRawPtr(default_typed.value), ctx.struct_size);
+            // For String defaults that are NOT temporaries (e.g., variables, parameters),
+            // we need to incref since we're creating a new reference to the same buffer.
+            // If the default is a variable/parameter, we're borrowing its data.
+            if (string_helpers.isStringType(ctx.success_type)) {
+                if (default_expr == .identifier) {
+                    // Default is a variable/parameter - need to incref the copy
+                    try string_helpers.emitStringIncref(self, ir.toStringPtr(ctx.result_ptr), "<array index String>");
+                } else {
+                    // Default is a temporary - transfer ownership, remove from temporaries
+                    cleanup_helpers.removeFromTemporaries(self, default_typed.value);
+                }
             }
-        } else .{ .primitive = types.INT };
-
-        const is_struct_type = success_type == .struct_type;
-
-        // Create blocks for success and error cases
-        const success_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("try_success");
-        const error_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("try_default");
-        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("try_merge");
-
-        // Branch based on tag
-        const entry_block = &self.func().blocks.items[success_block_idx - 1];
-        try entry_block.instructions.append(self.allocator, .{
-            .op = .br_cond,
-            .operands = .{ .{ .value = is_success }, .{ .block_ref = success_block_idx }, .{ .block_ref = error_block_idx } },
-        });
-
-        // Defer merge and error blocks
-        var deferred = try DeferredBlocks.init(self.allocator, 2);
-        defer deferred.deinit();
-        deferred.deferBlocks(self, 2);
-
-        // Success block: extract value
-        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
-        const result_ptr = if (is_struct_type)
-            (try self.func().emitAlloca(.ptr)).raw()
-        else
-            (try self.func().emitAlloca(.i64)).raw();
-
-        if (is_struct_type) {
-            try self.func().emitStore(result_ptr, value_ptr.raw());
         } else {
-            const success_value = try self.func().emitLoad(value_ptr.raw(), .i64);
-            try self.func().emitStore(result_ptr, success_value);
+            try self.func().emitStore(ctx.result_ptr, default_typed.value);
         }
 
-        try self.func().currentBlock().?.instructions.append(self.allocator, .{
-            .op = .br,
-            .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-            .result = null,
-        });
-
-        // Error block: evaluate default expression
-        try deferred.restore(self, 1);
-        const default_typed = try self.convertExpression(default_expr);
-        try self.func().emitStore(result_ptr, default_typed.value);
-
-        try self.func().currentBlock().?.instructions.append(self.allocator, .{
-            .op = .br,
-            .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-            .result = null,
-        });
-
-        // Merge block: load result
-        try deferred.restore(self, 0);
-        const final_value = if (is_struct_type)
-            try self.func().emitLoad(result_ptr, .ptr)
-        else
-            try self.func().emitLoad(result_ptr, .i64);
-
-        return .{ .value = final_value, .ty = success_type };
+        try ctx.emitBranchToMerge(self);
+        return ctx.finalize(self);
     }
 
     /// Handle `try expr otherwise 'label' ... end 'label'` or `try expr otherwise (err) 'label' ... end 'label'`
     fn convertTryOtherwiseBlock(self: *AstToIr, result_typed: TypedValue, is_success: ir.Value, otherwise: *const ast.OtherwiseClause) ConvertError!TypedValue {
-        // Get success type info from error union
-        const success_type: types.ValueType = if (result_typed.ty == .error_union_type) blk: {
-            const eu_info = result_typed.ty.error_union_type;
-            if (eu_info.success_struct_type) |struct_name| {
-                break :blk .{ .struct_type = struct_name };
-            } else {
-                break :blk .{ .primitive = eu_info.success_type.toMaxonName() };
-            }
-        } else .{ .primitive = types.INT };
-
-        const is_struct_type = success_type == .struct_type;
-
-        // Create blocks for success and error cases
-        const success_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("try_success");
-        const error_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("try_otherwise_block");
-        const merge_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("try_merge");
-
-        // Branch based on tag
-        const entry_block = &self.func().blocks.items[success_block_idx - 1];
-        try entry_block.instructions.append(self.allocator, .{
-            .op = .br_cond,
-            .operands = .{ .{ .value = is_success }, .{ .block_ref = success_block_idx }, .{ .block_ref = error_block_idx } },
-        });
-
-        // Defer merge and error blocks
-        var deferred = try DeferredBlocks.init(self.allocator, 2);
-        defer deferred.deinit();
-        deferred.deferBlocks(self, 2);
-
-        // Success block: extract value
-        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
-        const result_ptr = if (is_struct_type)
-            (try self.func().emitAlloca(.ptr)).raw()
-        else
-            (try self.func().emitAlloca(.i64)).raw();
-
-        if (is_struct_type) {
-            try self.func().emitStore(result_ptr, value_ptr.raw());
-        } else {
-            const success_value = try self.func().emitLoad(value_ptr.raw(), .i64);
-            try self.func().emitStore(result_ptr, success_value);
-        }
-
-        try self.func().currentBlock().?.instructions.append(self.allocator, .{
-            .op = .br,
-            .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-            .result = null,
-        });
-
-        // Error block: execute otherwise block body
-        try deferred.restore(self, 1);
+        var ctx = try TryOtherwiseContext.init(self, result_typed, is_success, "try_otherwise_block");
+        defer ctx.deinit();
 
         // If block_with_err mode, bind the error value
         if (otherwise.mode == .block_with_err) {
             if (otherwise.error_binding) |err_name| {
-                // Extract error tag from error union (at offset 8, after success type tag)
                 const err_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), Optional.VALUE_OFFSET);
                 const err_value = try self.func().emitLoad(err_ptr.raw(), .i64);
 
-                // Bind error value to the specified name
                 const err_var_ptr = try self.func().emitAlloca(.i64);
                 try self.func().emitStore(err_var_ptr.raw(), err_value);
                 try self.func().setValueName(err_var_ptr.raw(), err_name);
 
-                // Get the error enum type for the binding
                 const err_type: types.ValueType = if (result_typed.ty == .error_union_type)
                     .{ .enum_type = result_typed.ty.error_union_type.error_enum_type }
                 else
@@ -7475,31 +7233,18 @@ pub const AstToIr = struct {
         }
         self.popLabelScope();
 
-        // If control reaches here, branch to merge
-        // (Note: the block might have returned or broken, in which case this is unreachable)
+        // Branch to merge if no terminator
         if (self.func().currentBlock()) |current_block| {
-            // Check if block already has a terminator (ret, br, or br_cond)
             const has_terminator = current_block.instructions.items.len > 0 and blk: {
                 const last_op = current_block.instructions.items[current_block.instructions.items.len - 1].op;
                 break :blk last_op == .ret or last_op == .br or last_op == .br_cond;
             };
             if (!has_terminator) {
-                try current_block.instructions.append(self.allocator, .{
-                    .op = .br,
-                    .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
-                    .result = null,
-                });
+                try ctx.emitBranchToMerge(self);
             }
         }
 
-        // Merge block: load result
-        try deferred.restore(self, 0);
-        const final_value = if (is_struct_type)
-            try self.func().emitLoad(result_ptr, .ptr)
-        else
-            try self.func().emitLoad(result_ptr, .i64);
-
-        return .{ .value = final_value, .ty = success_type };
+        return ctx.finalize(self);
     }
 
     fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
@@ -7562,21 +7307,6 @@ pub const AstToIr = struct {
                     // Copy: source will remain alive, incref needed
                     try string_helpers.emitStructCopy(self, field_ptr, ir.toStructPtr(field_val.value), field_info.size, field_info.structName());
                 }
-            } else if (field_info.value_type == .optional_type) {
-                // Optional field - check if we need to wrap the value
-                const opt_info = field_info.value_type.optional_type;
-                if (field_val.ty == .optional_type) {
-                    // Value is already optional - copy it directly (16 bytes for primitives)
-                    try self.func().emitMemcpy(field_ptr.asRawPtr(), ir.toRawPtr(field_val.value), self.getOptionalSize(opt_info));
-                } else {
-                    // Value is not optional - wrap it as "some"
-                    // Store tag = 1 at field_ptr
-                    const one = try self.func().emitConstI64(1);
-                    try self.func().emitStore(field_ptr.raw(), one);
-                    // Store value at offset 8
-                    const value_ptr = try self.func().emitGetFieldPtr(field_ptr, Optional.VALUE_OFFSET);
-                    try self.func().emitStore(value_ptr.raw(), field_val.value);
-                }
             } else {
                 try self.func().emitStore(field_ptr.raw(), field_val.value);
             }
@@ -7612,7 +7342,7 @@ pub const AstToIr = struct {
         const var_info = self.var_map.getPtr(var_name) orelse return;
 
         // Reference types are moved, not copied
-        const is_reference = var_info.ty == .array_type or var_info.ty == .struct_type or var_info.ty == .optional_type;
+        const is_reference = var_info.ty == .array_type or var_info.ty == .struct_type;
         if (!is_reference) return;
 
         if (!var_info.is_mutable) {
@@ -7717,7 +7447,7 @@ pub const AstToIr = struct {
 
         const type_name = switch (base.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type, .error_union_type, .function_type => {
+            .primitive, .array_type, .enum_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
                 self.reportError(.E006, faccess.field_name);
                 return error.UnknownType;
@@ -7740,8 +7470,8 @@ pub const AstToIr = struct {
 
         const field_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(base.value), field_info.offset);
 
-        // Struct fields and optional fields are embedded (return ptr directly); others are loaded
-        const value = if (field_info.value_type == .struct_type or field_info.value_type == .optional_type)
+        // Struct fields are embedded (return ptr directly); others are loaded
+        const value = if (field_info.value_type == .struct_type)
             field_ptr.raw()
         else
             try self.func().emitLoad(field_ptr.raw(), field_info.value_type.toPrimitiveType());
@@ -7885,26 +7615,18 @@ pub const AstToIr = struct {
         const param_offset: usize = if (skip_self) 1 else 0;
         const explicit_params = param_types[param_offset..];
 
-        // Count required parameters (those without default values)
-        var required_count: usize = 0;
-        for (explicit_params) |param| {
-            if (param.default_value == null) {
-                required_count += 1;
-            }
-        }
-
-        // Validate: positional args can only fill required params (not those with defaults)
-        if (positional_args.len > required_count) {
-            const msg = std.fmt.allocPrint(self.allocator, "Too many positional arguments\n  Function '{s}' has {d} required parameter{s}", .{
-                func_name,
-                required_count,
-                if (required_count == 1) "" else "s",
-            }) catch {
-                self.reportError(.E046, func_name);
+        // Require named arguments for non-intrinsic function calls
+        // First argument can be positional, but subsequent arguments must be named
+        // Intrinsics (starting with __) and builtin functions are exempt
+        const is_intrinsic = func_name.len >= 2 and func_name[0] == '_' and func_name[1] == '_';
+        const is_builtin = std.mem.eql(u8, func_name, "print");
+        if (!is_intrinsic and !is_builtin and positional_args.len > 1) {
+            const msg = std.fmt.allocPrint(self.allocator, "Second and subsequent arguments must be named. Use 'name: value' syntax", .{}) catch {
+                self.reportError(.E052, func_name);
                 return error.WrongArgumentCount;
             };
             self.last_error = .{
-                .code = .E046,
+                .code = .E052,
                 .message = msg,
                 .location = .{
                     .file = self.source_file,
@@ -7916,6 +7638,14 @@ pub const AstToIr = struct {
             return error.WrongArgumentCount;
         }
 
+        // Count required parameters (those without default values)
+        var required_count: usize = 0;
+        for (explicit_params) |param| {
+            if (param.default_value == null) {
+                required_count += 1;
+            }
+        }
+
         // Allocate result array
         var resolved = try self.allocator.alloc(ResolvedArg, explicit_params.len);
         @memset(resolved, .{ .default = undefined });
@@ -7925,7 +7655,7 @@ pub const AstToIr = struct {
         defer self.allocator.free(filled);
         @memset(filled, false);
 
-        // Fill positional arguments
+        // Fill positional arguments (only used by intrinsics)
         for (positional_args, 0..) |arg, i| {
             resolved[i] = .{ .expr = arg };
             filled[i] = true;
@@ -8014,7 +7744,7 @@ pub const AstToIr = struct {
                 if (self.func_map.contains(mangled_name)) {
                     // It's a method of the current type - call via self
                     debug.astToIr("Implicit method call: {s} (self_ptr=%{d})", .{ mangled_name, self.self_ptr.? });
-                    return self.emitMethodCall(type_name, call.func_name, call.args, self.self_ptr.?);
+                    return self.emitMethodCallWithNamedArgs(type_name, call.func_name, call.args, call.named_args, self.self_ptr.?);
                 }
             } else |_| {
                 // Name too long, skip implicit method check
@@ -8037,37 +7767,29 @@ pub const AstToIr = struct {
         );
         defer self.allocator.free(resolved_args);
 
-        // Check if return type is optional or error union (needs sret)
-        const returns_optional = if (func_info.return_value_type) |vt|
-            vt == .optional_type
-        else
-            false;
+        // Check if return type is error union (needs sret)
         const returns_error_union = if (func_info.return_value_type) |vt|
             vt == .error_union_type
         else
             false;
 
-        // Check if callee returns a struct, optional, or error union (needs sret)
+        // Check if callee returns a struct or error union (needs sret)
         // Note: return_type_name may be set for enums too (from AST extraction),
         // so check type_map to verify it's actually a struct before assuming sret
         const returns_actual_struct = if (func_info.return_type_name) |name|
             if (self.type_map.get(name)) |ti| ti == .struct_type else false
         else
             false;
-        const returns_struct = returns_actual_struct or returns_optional or returns_error_union;
+        const returns_struct = returns_actual_struct or returns_error_union;
         var sret_buffer: ?ir.Value = null;
 
         // Allocate args: +1 if using sret for hidden first parameter
         const num_args = resolved_args.len + @as(usize, if (returns_struct) 1 else 0);
         const args = try self.func().allocator.alloc(ir.Value, num_args);
 
-        // If returning struct, optional, or error union, allocate buffer in caller and pass as first arg
+        // If returning struct or error union, allocate buffer in caller and pass as first arg
         if (returns_struct) {
-            if (returns_optional) {
-                // Optional size = 8 (tag) + wrapped_value_size
-                const opt_info = func_info.return_value_type.?.optional_type;
-                sret_buffer = (try self.func().emitAllocaSized(self.getOptionalSize(opt_info))).raw();
-            } else if (returns_error_union) {
+            if (returns_error_union) {
                 // Error union size = 8 (tag) + max(success_size, error_size)
                 const eu_info = func_info.return_value_type.?.error_union_type;
                 const success_size: i32 = if (eu_info.success_struct_type) |sn|
@@ -8095,82 +7817,6 @@ pub const AstToIr = struct {
             const arg = try self.convertExpression(arg_expr);
             var arg_value = arg.value;
             var arg_ty = arg.ty;
-
-            // Implicit optional unwrap: if arg is optional but param expects the wrapped type
-            if (i < func_info.param_types.len) {
-                const param_ty = func_info.param_types[i].ty;
-                if (arg_ty == .optional_type and param_ty != .optional_type) {
-                    // Check if param type matches the wrapped type
-                    const opt_info = arg_ty.optional_type;
-                    const param_matches = blk: {
-                        if (param_ty == .struct_type) {
-                            if (opt_info.wrapped_struct_type) |wrapped_name| {
-                                break :blk std.mem.eql(u8, param_ty.struct_type, wrapped_name);
-                            }
-                        }
-                        if (param_ty == .primitive) {
-                            // Check if param and wrapped type have the same IR representation
-                            if (types.nameToIrType(param_ty.primitive) == opt_info.wrapped) break :blk true;
-                        }
-                        break :blk false;
-                    };
-                    if (param_matches) {
-                        // Unwrap optional: get pointer to value (offset 8 from optional start)
-                        arg_value = (try self.func().emitGetFieldPtr(ir.toStructPtr(arg_value), Optional.VALUE_OFFSET)).raw();
-                        arg_ty = param_ty;
-                    }
-                }
-            }
-
-            // Implicit optional wrap: if arg is non-optional but param expects optional
-            if (i < func_info.param_types.len) {
-                const param_ty = func_info.param_types[i].ty;
-                if (arg_ty != .optional_type and param_ty == .optional_type) {
-                    const opt_info = param_ty.optional_type;
-                    // Check if arg type matches the optional's wrapped type
-                    const type_matches = blk: {
-                        if (arg_ty == .struct_type) {
-                            if (opt_info.wrapped_struct_type) |wrapped_name| {
-                                break :blk std.mem.eql(u8, arg_ty.struct_type, wrapped_name);
-                            }
-                        }
-                        if (arg_ty == .primitive) {
-                            break :blk std.mem.eql(u8, arg_ty.primitive, opt_info.wrapped.toMaxonName());
-                        }
-                        break :blk false;
-                    };
-                    if (type_matches) {
-                        // Allocate optional struct buffer
-                        const opt_size = self.getOptionalSize(opt_info);
-                        const opt_buffer = try self.func().emitAllocaSized(opt_size);
-                        // Store tag = 1 (has value)
-                        const one = try self.func().emitConstI64(1);
-                        try self.func().emitStore(opt_buffer.raw(), one);
-                        // Store value at offset 8
-                        const value_ptr = try self.func().emitGetFieldPtr(opt_buffer.asStruct(), Optional.VALUE_OFFSET);
-                        if (arg_ty == .struct_type) {
-                            // For struct types, need to memcpy
-                            if (opt_info.wrapped_struct_type) |struct_name| {
-                                if (self.type_map.get(struct_name)) |type_info| {
-                                    if (type_info == .struct_type) {
-                                        try self.func().emitMemcpy(value_ptr.asRawPtr(), ir.toRawPtr(arg_value), type_info.struct_type.size);
-                                    } else {
-                                        try self.func().emitStore(value_ptr.raw(), arg_value);
-                                    }
-                                } else {
-                                    try self.func().emitStore(value_ptr.raw(), arg_value);
-                                }
-                            } else {
-                                try self.func().emitStore(value_ptr.raw(), arg_value);
-                            }
-                        } else {
-                            try self.func().emitStore(value_ptr.raw(), arg_value);
-                        }
-                        arg_value = opt_buffer.raw();
-                        arg_ty = param_ty;
-                    }
-                }
-            }
 
             // Implicit int→float promotion: if parameter expects float but arg is int
             if (i < func_info.param_types.len) {
@@ -8215,11 +7861,8 @@ pub const AstToIr = struct {
 
         const result = try self.func().emitCall(call.func_name, args, func_info.return_type);
 
-        // If sret buffer was used (for actual structs, optionals, or error unions), return it
+        // If sret buffer was used (for actual structs or error unions), return it
         if (sret_buffer) |buf| {
-            if (returns_optional) {
-                return .{ .value = buf, .ty = func_info.return_value_type.? };
-            }
             if (returns_error_union) {
                 return .{ .value = buf, .ty = func_info.return_value_type.? };
             }
@@ -8265,7 +7908,7 @@ pub const AstToIr = struct {
 
         // Check if return type is a struct that needs sret
         const returns_struct = if (func_type_info.return_type) |ret_vt| blk: {
-            break :blk ret_vt.* == .struct_type or ret_vt.* == .optional_type;
+            break :blk ret_vt.* == .struct_type;
         } else false;
 
         var sret_buffer: ?ir.Value = null;
@@ -8275,10 +7918,7 @@ pub const AstToIr = struct {
         // If returning struct, allocate buffer in caller and pass as first arg
         if (returns_struct) {
             if (func_type_info.return_type) |ret_vt| {
-                if (ret_vt.* == .optional_type) {
-                    const opt_info = ret_vt.optional_type;
-                    sret_buffer = (try self.func().emitAllocaSized(self.getOptionalSize(opt_info))).raw();
-                } else if (ret_vt.* == .struct_type) {
+                if (ret_vt.* == .struct_type) {
                     const struct_name = ret_vt.struct_type;
                     const struct_info = try self.lookupStructInfo(struct_name);
                     sret_buffer = (try self.func().emitAllocaSized(struct_info.size)).raw();
@@ -8306,7 +7946,7 @@ pub const AstToIr = struct {
 
         // Return the appropriate type
         if (func_type_info.return_type) |ret_vt| {
-            if (ret_vt.* == .struct_type or ret_vt.* == .optional_type) {
+            if (ret_vt.* == .struct_type) {
                 return .{ .value = sret_buffer.?, .ty = ret_vt.* };
             }
             return .{ .value = result orelse 0, .ty = ret_vt.* };
@@ -8390,38 +8030,75 @@ pub const AstToIr = struct {
             keys_arg = keys_managed_ptr;
             values_arg = values_managed_ptr;
         } else {
-            // Create Arrays by calling Array$init(__ManagedArray)
-            const array_init_name = "Array$init";
-            const array_func_info = self.func_map.get(array_init_name) orelse {
-                self.reportInternalError("Array$init not found for InitableFromDictionaryLiteral");
+            // Extract key and value types from the monomorphized type name (e.g., "CustomMap$String$int")
+            // Format: TypeName$KeyType$ValueType
+            var key_type_name: []const u8 = "int";
+            var value_type_name: []const u8 = "int";
+            if (std.mem.indexOf(u8, type_name, "$")) |first_dollar| {
+                const after_first = type_name[first_dollar + 1 ..];
+                if (std.mem.indexOf(u8, after_first, "$")) |second_dollar| {
+                    key_type_name = after_first[0..second_dollar];
+                    value_type_name = after_first[second_dollar + 1 ..];
+                } else {
+                    // Only one type arg - use same for both (shouldn't happen for dict literal)
+                    key_type_name = after_first;
+                    value_type_name = after_first;
+                }
+            }
+
+            // Create Array$KeyType for keys
+            var key_type_args = [_][]const u8{key_type_name};
+            const keys_array_type_name = try self.getOrCreateMonomorphizedType("Array", &key_type_args);
+            const keys_array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{keys_array_type_name});
+            try self.module.trackString(keys_array_init_name);
+            const keys_array_func_info = self.func_map.get(keys_array_init_name) orelse {
+                self.reportInternalError("Array init not found for InitableFromDictionaryLiteral keys");
                 return error.UnknownFunction;
             };
 
-            if (!array_func_info.ir_generated) {
-                try self.ensureMethodGenerated(array_init_name);
+            if (!keys_array_func_info.ir_generated) {
+                try self.ensureMethodGenerated(keys_array_init_name);
             }
 
-            // Get Array type info for size
-            const array_type_info = self.type_map.get("Array") orelse {
-                self.reportError(.E006, "Array");
+            const keys_array_type_info = self.type_map.get(keys_array_type_name) orelse {
+                self.reportError(.E006, keys_array_type_name);
                 return error.UnknownType;
             };
 
-            const array_size = array_type_info.struct_type.size;
+            // Create Array$ValueType for values
+            var value_type_args = [_][]const u8{value_type_name};
+            const values_array_type_name = try self.getOrCreateMonomorphizedType("Array", &value_type_args);
+            const values_array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{values_array_type_name});
+            try self.module.trackString(values_array_init_name);
+            const values_array_func_info = self.func_map.get(values_array_init_name) orelse {
+                self.reportInternalError("Array init not found for InitableFromDictionaryLiteral values");
+                return error.UnknownFunction;
+            };
+
+            if (!values_array_func_info.ir_generated) {
+                try self.ensureMethodGenerated(values_array_init_name);
+            }
+
+            const values_array_type_info = self.type_map.get(values_array_type_name) orelse {
+                self.reportError(.E006, values_array_type_name);
+                return error.UnknownType;
+            };
 
             // Create keys Array
-            const keys_array_ptr = try self.func().emitAllocaSized(array_size);
+            const keys_array_size = keys_array_type_info.struct_type.size;
+            const keys_array_ptr = try self.func().emitAllocaSized(keys_array_size);
             var keys_array_args = try self.func().allocator.alloc(ir.Value, 2);
             keys_array_args[0] = keys_array_ptr.raw();
             keys_array_args[1] = keys_managed_ptr;
-            _ = try self.func().emitCall(array_init_name, keys_array_args, array_func_info.return_type);
+            _ = try self.func().emitCall(keys_array_init_name, keys_array_args, keys_array_func_info.return_type);
 
             // Create values Array
-            const values_array_ptr = try self.func().emitAllocaSized(array_size);
+            const values_array_size = values_array_type_info.struct_type.size;
+            const values_array_ptr = try self.func().emitAllocaSized(values_array_size);
             var values_array_args = try self.func().allocator.alloc(ir.Value, 2);
             values_array_args[0] = values_array_ptr.raw();
             values_array_args[1] = values_managed_ptr;
-            _ = try self.func().emitCall(array_init_name, values_array_args, array_func_info.return_type);
+            _ = try self.func().emitCall(values_array_init_name, values_array_args, values_array_func_info.return_type);
 
             keys_arg = keys_array_ptr.raw();
             values_arg = values_array_ptr.raw();
@@ -8831,7 +8508,7 @@ pub const AstToIr = struct {
 
         const arr_info = switch (base_typed.ty) {
             .array_type => |a| a,
-            .primitive, .struct_type, .enum_type, .optional_type, .error_union_type, .function_type => {
+            .primitive, .struct_type, .enum_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertIndexExpr: expected array type\n", .{});
                 self.reportError(.E006, "expected array type for indexing");
                 return error.UnknownType;
@@ -8866,7 +8543,7 @@ pub const AstToIr = struct {
             const arr_name = switch (idx.base.*) {
                 .identifier => |name| name,
                 // For non-identifier bases, we can't do bounds checking with dynamic size
-                // Fall back to direct access (unsafe)
+                // Fall back to direct access - return element directly wrapped in success error union
                 .integer,
                 .float_lit,
                 .bool_lit,
@@ -8892,17 +8569,29 @@ pub const AstToIr = struct {
                 .try_expr,
                 .match_expr,
                 .enum_case,
-                .nil_lit,
-                .nil_coalesce,
                 => {
                     const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buffer_ptr), idx_typed.value, elem_size);
+                    // Unchecked access - create success error union directly
+                    const eu_size: i32 = 8 + elem_size;
+                    const eu_ptr = try self.func().emitAllocaSized(eu_size);
+                    const success_tag = try self.func().emitConstI64(0);
+                    try self.func().emitStore(eu_ptr.raw(), success_tag);
+                    const value_slot = try self.func().emitGetFieldPtr(eu_ptr.asStruct(), 8);
                     if (arr_info.element_struct_type != null) {
-                        // For structs, return pointer to the struct data directly
-                        return self.createSomeOptionalWithStructType(elem_ptr.raw(), arr_info.element_type, arr_info.element_struct_type);
+                        try self.func().emitMemcpy(value_slot.asRawPtr(), elem_ptr.asRawPtr(), elem_size);
                     } else {
                         const val = try self.func().emitLoad(elem_ptr.raw(), arr_info.element_type);
-                        return self.createSomeOptional(val, arr_info.element_type);
+                        try self.func().emitStore(value_slot.raw(), val);
                     }
+                    return .{
+                        .value = eu_ptr.raw(),
+                        .ty = .{ .error_union_type = .{
+                            .success_type = arr_info.element_type,
+                            .success_type_name = null,
+                            .success_struct_type = arr_info.element_struct_type,
+                            .error_enum_type = "ArrayError",
+                        } },
+                    };
                 },
             };
             const size_var_name = try std.fmt.allocPrint(self.allocator, "{s}_size", .{arr_name});
@@ -8911,28 +8600,35 @@ pub const AstToIr = struct {
             const size_var_entry = self.var_map.getPtr(size_var_name) orelse {
                 // No size variable - can't do bounds checking, fall back to direct access
                 const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buffer_ptr), idx_typed.value, elem_size);
+                // Unchecked access - create success error union directly
+                const eu_size: i32 = 8 + elem_size;
+                const eu_ptr = try self.func().emitAllocaSized(eu_size);
+                const success_tag = try self.func().emitConstI64(0);
+                try self.func().emitStore(eu_ptr.raw(), success_tag);
+                const value_slot = try self.func().emitGetFieldPtr(eu_ptr.asStruct(), 8);
                 if (arr_info.element_struct_type != null) {
-                    // For structs, return pointer to the struct data directly
-                    return self.createSomeOptionalWithStructType(elem_ptr.raw(), arr_info.element_type, arr_info.element_struct_type);
+                    try self.func().emitMemcpy(value_slot.asRawPtr(), elem_ptr.asRawPtr(), elem_size);
                 } else {
                     const val = try self.func().emitLoad(elem_ptr.raw(), arr_info.element_type);
-                    return self.createSomeOptional(val, arr_info.element_type);
+                    try self.func().emitStore(value_slot.raw(), val);
                 }
+                return .{
+                    .value = eu_ptr.raw(),
+                    .ty = .{ .error_union_type = .{
+                        .success_type = arr_info.element_type,
+                        .success_type_name = null,
+                        .success_struct_type = arr_info.element_struct_type,
+                        .error_enum_type = "ArrayError",
+                    } },
+                };
             };
             size_var_entry.used = true;
             break :blk try self.func().emitLoad(size_var_entry.ptr.?, .i64);
         };
 
-        // Allocate the result optional: 8 bytes tag + element size
-        const opt_size: i32 = if (arr_info.element_struct_type) |struct_name| blk: {
-            if (self.type_map.get(struct_name)) |type_info| {
-                if (type_info == .struct_type) {
-                    break :blk 8 + type_info.struct_type.size;
-                }
-            }
-            break :blk 16;
-        } else 16;
-        const opt_ptr = try self.func().emitAllocaSized(opt_size);
+        // Allocate the result error union: 8 bytes tag + max(element size, error size)
+        const eu_size: i32 = 8 + @max(elem_size, 8);
+        const eu_ptr = try self.func().emitAllocaSized(eu_size);
 
         // Bounds check: index < size AND index >= 0
         // Since we use i64, negative check is: index >= 0
@@ -8944,17 +8640,17 @@ pub const AstToIr = struct {
         // Since we don't have a direct AND instruction, use multiplication (both are 0 or 1)
         const in_bounds = try self.func().emitBinaryOp(.mul, is_non_negative, is_less_than_size, .i64);
 
-        // Create 2-way branch: in_bounds -> get element, else -> return nil
+        // Create 2-way branch: in_bounds -> success, else -> error
         var branch = try BranchBuilder.init(self, in_bounds, "index_in_bounds", "index_out_of_bounds", "index_merge");
         defer branch.deinit();
 
-        // Then block: create some(element)
-        const one_val = try self.func().emitConstI64(1);
-        try self.func().emitStore(opt_ptr.raw(), one_val); // tag = 1
+        // Then block: success - store element (tag=0 means success)
+        const success_tag = try self.func().emitConstI64(0);
+        try self.func().emitStore(eu_ptr.raw(), success_tag); // tag = 0 (success)
 
         const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buffer_ptr), idx_typed.value, elem_size);
 
-        const value_slot = try self.func().emitGetFieldPtr(opt_ptr.asStruct(), Optional.VALUE_OFFSET);
+        const value_slot = try self.func().emitGetFieldPtr(eu_ptr.asStruct(), 8);
         if (arr_info.element_struct_type) |struct_name| {
             // For structs, copy the struct data inline
             // Use plain memcpy without incref - for read-only access (indexing), we're borrowing
@@ -8976,19 +8672,24 @@ pub const AstToIr = struct {
         // Switch to else block
         try branch.switchToElse(true);
 
-        // Else block: create nil
-        const zero_val = try self.func().emitConstI64(0);
-        try self.func().emitStore(opt_ptr.raw(), zero_val); // tag = 0
+        // Else block: error - store ArrayError.IndexOutOfBounds (ordinal 0)
+        const error_tag = try self.func().emitConstI64(1);
+        try self.func().emitStore(eu_ptr.raw(), error_tag); // tag = 1 (error)
+        const error_ordinal = try self.func().emitConstI64(0); // IndexOutOfBounds = 0
+        const error_slot = try self.func().emitGetFieldPtr(eu_ptr.asStruct(), 8);
+        try self.func().emitStore(error_slot.raw(), error_ordinal);
 
         // Switch to merge block
         try branch.switchToMerge(true);
 
-        // Return the optional
+        // Return the error union
         return .{
-            .value = opt_ptr.raw(),
-            .ty = .{ .optional_type = .{
-                .wrapped = arr_info.element_type,
-                .wrapped_struct_type = arr_info.element_struct_type,
+            .value = eu_ptr.raw(),
+            .ty = .{ .error_union_type = .{
+                .success_type = arr_info.element_type,
+                .success_type_name = null,
+                .success_struct_type = arr_info.element_struct_type,
+                .error_enum_type = "ArrayError",
             } },
         };
     }
@@ -9062,10 +8763,6 @@ pub const AstToIr = struct {
         }
 
         // Check if return type is optional (needs sret for 16-byte struct)
-        const returns_optional = if (func_info.return_value_type) |vt|
-            vt == .optional_type
-        else
-            false;
         // Check if return type is error union (needs sret for error union wrapper)
         const returns_error_union = if (func_info.return_value_type) |vt|
             vt == .error_union_type
@@ -9079,7 +8776,7 @@ pub const AstToIr = struct {
             if (self.type_map.get(name)) |ti| ti == .struct_type else false
         else
             false;
-        const returns_struct = returns_actual_struct or returns_optional or returns_error_union;
+        const returns_struct = returns_actual_struct or returns_error_union;
         const has_self = self_value != null;
         const sret_offset: usize = if (returns_struct) 1 else 0;
         const self_offset: usize = if (has_self) 1 else 0;
@@ -9088,13 +8785,10 @@ pub const AstToIr = struct {
         const args = try self.allocator.alloc(ir.Value, num_args);
         var arg_idx: usize = 0;
 
-        // Sret buffer as first arg if returning struct, optional, or error union
+        // Sret buffer as first arg if returning struct or error union
         var sret_buffer: ?ir.Value = null;
         if (returns_struct) {
-            if (returns_optional) {
-                const opt_info = func_info.return_value_type.?.optional_type;
-                sret_buffer = (try self.func().emitAllocaSized(self.getOptionalSize(opt_info))).raw();
-            } else if (returns_error_union) {
+            if (returns_error_union) {
                 // Error union size = 8 (tag) + max(success_size, error_size)
                 const eu_info = func_info.return_value_type.?.error_union_type;
                 const success_size: i32 = if (eu_info.success_struct_type) |sn|
@@ -9127,56 +8821,6 @@ pub const AstToIr = struct {
                     var arg_ty = arg.ty;
 
                     const param_index = i + self_offset; // Account for self parameter
-
-                    // Implicit optional wrap: if arg is non-optional but param expects optional
-                    if (param_index < func_info.param_types.len) {
-                        const param_ty = func_info.param_types[param_index].ty;
-                        if (arg_ty != .optional_type and param_ty == .optional_type) {
-                            const opt_info = param_ty.optional_type;
-                            // Check if arg type matches the optional's wrapped type
-                            const type_matches = blk: {
-                                if (arg_ty == .struct_type) {
-                                    if (opt_info.wrapped_struct_type) |wrapped_name| {
-                                        break :blk std.mem.eql(u8, arg_ty.struct_type, wrapped_name);
-                                    }
-                                }
-                                if (arg_ty == .primitive) {
-                                    break :blk std.mem.eql(u8, arg_ty.primitive, opt_info.wrapped.toMaxonName());
-                                }
-                                break :blk false;
-                            };
-                            if (type_matches) {
-                                // Allocate optional struct buffer
-                                const opt_size = self.getOptionalSize(opt_info);
-                                const opt_buffer = try self.func().emitAllocaSized(opt_size);
-                                // Store tag = 1 (has value)
-                                const one = try self.func().emitConstI64(1);
-                                try self.func().emitStore(opt_buffer.raw(), one);
-                                // Store value at offset 8
-                                const value_ptr = try self.func().emitGetFieldPtr(opt_buffer.asStruct(), Optional.VALUE_OFFSET);
-                                if (arg_ty == .struct_type) {
-                                    // For struct types, need to memcpy
-                                    if (opt_info.wrapped_struct_type) |struct_name| {
-                                        if (self.type_map.get(struct_name)) |type_info| {
-                                            if (type_info == .struct_type) {
-                                                try self.func().emitMemcpy(value_ptr.asRawPtr(), ir.toRawPtr(arg_value), type_info.struct_type.size);
-                                            } else {
-                                                try self.func().emitStore(value_ptr.raw(), arg_value);
-                                            }
-                                        } else {
-                                            try self.func().emitStore(value_ptr.raw(), arg_value);
-                                        }
-                                    } else {
-                                        try self.func().emitStore(value_ptr.raw(), arg_value);
-                                    }
-                                } else {
-                                    try self.func().emitStore(value_ptr.raw(), arg_value);
-                                }
-                                arg_value = opt_buffer.raw();
-                                arg_ty = param_ty;
-                            }
-                        }
-                    }
 
                     // Implicit int→float promotion: if parameter expects float but arg is int
                     if (param_index < func_info.param_types.len) {
@@ -9233,9 +8877,6 @@ pub const AstToIr = struct {
 
         // Return appropriate value
         if (sret_buffer) |buf| {
-            if (returns_optional) {
-                return .{ .value = buf, .ty = func_info.return_value_type.? };
-            }
             if (returns_error_union) {
                 return .{ .value = buf, .ty = func_info.return_value_type.? };
             }
@@ -9324,7 +8965,7 @@ pub const AstToIr = struct {
         // Get the type name from the TypedValue
         const type_name = switch (base_typed.ty) {
             .struct_type => |name| name,
-            .primitive, .array_type, .enum_type, .optional_type, .error_union_type, .function_type => {
+            .primitive, .array_type, .enum_type, .error_union_type, .function_type => {
                 debug.astToIr("error: method call on non-struct type", .{});
                 self.reportError(.E003, method_name);
                 return error.SemanticError;
@@ -9364,6 +9005,7 @@ pub const AstToIr = struct {
 
         // Check if this is a struct type with methods
         if (base_typed.ty == .struct_type) {
+            if (std.mem.eql(u8, mcall.method_name, "insert")) {}
             return self.emitMethodCallWithNamedArgs(base_typed.ty.struct_type, mcall.method_name, mcall.args, mcall.named_args, base_typed.value);
         }
 
@@ -9501,6 +9143,17 @@ pub fn convert(program: ast.Program, allocator: std.mem.Allocator, mutation_anal
     return try converter.convert(program);
 }
 
+/// Copy an error, duplicating the file path so it outlives the converter
+fn copyErrorWithOwnedPath(allocator: std.mem.Allocator, error_in: err.CompileError) err.CompileError {
+    var error_out = error_in;
+    // Duplicate the file path so it survives after converter is deinitialized
+    if (error_in.location.file) |file| {
+        error_out.location.file = allocator.dupe(u8, file) catch null;
+        error_out.location.file_allocated = true;
+    }
+    return error_out;
+}
+
 pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) ConvertError!ir.Module {
     return convertWithExternals(program, allocator, mutation_analyzer, source_file, null, null, null, .{}, out_error);
 }
@@ -9546,7 +9199,9 @@ pub fn convertWithExternals(
             converter.source_file = ext_enum.source_path;
 
             converter.registerEnum(ext_enum.enum_decl.*) catch |e| {
-                out_error.* = converter.last_error;
+                if (converter.last_error) |le| {
+                    out_error.* = copyErrorWithOwnedPath(allocator, le);
+                }
                 converter.source_file = original_source_file;
                 return e;
             };
@@ -9584,7 +9239,9 @@ pub fn convertWithExternals(
     }
 
     const result = converter.convert(program) catch |e| {
-        out_error.* = converter.last_error;
+        if (converter.last_error) |le| {
+            out_error.* = copyErrorWithOwnedPath(allocator, le);
+        }
         return e;
     };
     return result;
@@ -9620,7 +9277,6 @@ pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]Ex
             const type_name: []const u8 = switch (field.type_expr) {
                 .simple => |name| name,
                 .generic => |gen| gen.base_type, // Use base type for generics
-                .optional => "ptr", // Optionals stored as pointers
                 .error_union => "ptr", // Error unions stored as pointers
                 .function_type => "ptr", // Function pointers
             };
@@ -9791,6 +9447,19 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 break :blk null;
             } else null;
 
+            // Track primitive return type name (byte, int, etc.) for error unions
+            const return_primitive_name: ?[]const u8 = if (method.return_type) |rt| blk: {
+                switch (rt) {
+                    .simple => |name| {
+                        if (types.isPrimitiveTypeName(name)) {
+                            break :blk name;
+                        }
+                        break :blk null;
+                    },
+                    else => break :blk null,
+                }
+            } else null;
+
             // Handle "Self" return type - replace with actual type name
             if (return_type_name) |name| {
                 if (std.mem.eql(u8, name, "Self")) {
@@ -9812,6 +9481,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 return_value_type = .{
                     .error_union_type = .{
                         .success_type = success_ir_type,
+                        .success_type_name = return_primitive_name,
                         .success_struct_type = return_type_name,
                         .error_enum_type = error_type,
                     },
@@ -9862,7 +9532,6 @@ fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
             return types.nameToIrType(name);
         },
         .generic => .ptr,
-        .optional => .ptr,
         .error_union => .ptr,
         .function_type => .ptr,
     };
@@ -9872,23 +9541,18 @@ fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
 /// Allocations are not tracked - caller manages cleanup through freeParamTypes.
 fn getValueTypeFromTypeExpr(allocator: std.mem.Allocator, te: ast.TypeExpr) ?ValueType {
     return switch (te) {
-        // DEPRECATED: optional types are being removed in favor of error unions
-        .optional => |wrapped| {
-            const wrapped_ir_type = getIrTypeFromTypeExpr(wrapped.*);
-            const wrapped_struct_name = getStructNameFromTypeExpr(allocator, wrapped.*, null);
-            return .{
-                .optional_type = .{
-                    .wrapped = wrapped_ir_type,
-                    .wrapped_struct_type = wrapped_struct_name,
-                },
-            };
-        },
         .error_union => |eu| {
             const success_ir_type = getIrTypeFromTypeExpr(eu.success_type.*);
             const success_struct_name = getStructNameFromTypeExpr(allocator, eu.success_type.*, null);
+            // Get primitive type name if success type is a primitive (e.g., "byte")
+            const success_primitive_name: ?[]const u8 = switch (eu.success_type.*) {
+                .simple => |name| if (types.isPrimitiveTypeName(name)) name else null,
+                else => null,
+            };
             return .{
                 .error_union_type = .{
                     .success_type = success_ir_type,
+                    .success_type_name = success_primitive_name,
                     .success_struct_type = success_struct_name,
                     .error_enum_type = eu.error_type,
                 },
@@ -9940,7 +9604,7 @@ fn getStructNameFromTypeExpr(
             }
             break :blk buf;
         },
-        .optional, .error_union, .function_type => null,
+        .error_union, .function_type => null,
     };
 }
 
@@ -9965,19 +9629,20 @@ fn getValueTypeFromTypeExprForParam(allocator: std.mem.Allocator, te: ast.TypeEx
             const name = getStructNameFromTypeExpr(allocator, .{ .generic = gen }, null) orelse break :blk .{ .struct_type = gen.base_type };
             break :blk .{ .struct_type = name };
         },
-        // DEPRECATED: optional types are being removed in favor of error unions
-        .optional => |wrapped| .{
-            .optional_type = .{
-                .wrapped = getIrTypeFromTypeExpr(wrapped.*),
-                .wrapped_struct_type = getStructNameFromTypeExpr(allocator, wrapped.*, null),
-            },
-        },
-        .error_union => |eu| .{
-            .error_union_type = .{
-                .success_type = getIrTypeFromTypeExpr(eu.success_type.*),
-                .success_struct_type = getStructNameFromTypeExpr(allocator, eu.success_type.*, null),
-                .error_enum_type = eu.error_type,
-            },
+        .error_union => |eu| blk: {
+            // Get primitive type name if success type is a primitive (e.g., "byte")
+            const success_primitive_name: ?[]const u8 = switch (eu.success_type.*) {
+                .simple => |name| if (types.isPrimitiveTypeName(name)) name else null,
+                else => null,
+            };
+            break :blk .{
+                .error_union_type = .{
+                    .success_type = getIrTypeFromTypeExpr(eu.success_type.*),
+                    .success_type_name = success_primitive_name,
+                    .success_struct_type = getStructNameFromTypeExpr(allocator, eu.success_type.*, null),
+                    .error_enum_type = eu.error_type,
+                },
+            };
         },
         .function_type => .{ .primitive = types.PTR }, // Function types are represented as pointers in simple contexts
     };

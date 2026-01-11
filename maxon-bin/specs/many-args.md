@@ -21,7 +21,7 @@ function add5(a int, b int, c int, d int, e int) returns int
 end 'add5'
 
 function main() returns int
-    return add5(1, 2, 3, 4, 5)
+    return add5(1, b: 2, c: 3, d: 4, e: 5)
 end 'main'
 ```
 ```exitcode
@@ -35,7 +35,7 @@ function add6(a int, b int, c int, d int, e int, f int) returns int
 end 'add6'
 
 function main() returns int
-    return add6(10, 20, 30, 40, 50, 60)
+    return add6(10, b: 20, c: 30, d: 40, e: 50, f: 60)
 end 'main'
 ```
 ```exitcode
@@ -49,7 +49,7 @@ function sum7(a int, b int, c int, d int, e int, f int, g int) returns int
 end 'sum7'
 
 function main() returns int
-    return sum7(1, 2, 3, 4, 5, 6, 7)
+    return sum7(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7)
 end 'main'
 ```
 ```exitcode
@@ -63,7 +63,7 @@ function sum8(a int, b int, c int, d int, e int, f int, g int, h int) returns in
 end 'sum8'
 
 function main() returns int
-    return sum8(1, 2, 3, 4, 5, 6, 7, 8)
+    return sum8(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8)
 end 'main'
 ```
 ```exitcode
@@ -79,7 +79,7 @@ function compute(a int, b int, c int, d int, e int, f int) returns int
 end 'compute'
 
 function main() returns int
-    return compute(1, 2, 3, 4, 10, 5)
+    return compute(1, b: 2, c: 3, d: 4, e: 10, f: 5)
 end 'main'
 ```
 ```exitcode
@@ -93,8 +93,8 @@ function add5(a int, b int, c int, d int, e int) returns int
 end 'add5'
 
 function main() returns int
-    let x = add5(1, 2, 3, 4, 5)
-    let y = add5(10, 20, 30, 40, 50)
+    let x = add5(1, b: 2, c: 3, d: 4, e: 5)
+    let y = add5(10, b: 20, c: 30, d: 40, e: 50)
     return x + y
 end 'main'
 ```

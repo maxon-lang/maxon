@@ -15,10 +15,9 @@
 // **Usage**:
 // ```maxon
 // var m = Map from ["a": 1, "b": 2, "c": 3]
-// m.insert("d", 4)
-// if let v = m.get("b") 'check'
-//     print("found: {v}")
-// end 'check'
+// m.insert(key: "d", value: 4)
+// var v = try m.get(key: "b") otherwise 0
+// print("found: {v}")
 // ```
 
 enum SlotState
@@ -39,9 +38,10 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 
 	// Internal init used by compiler for map literal initialization
 	// Called by the compiler for `Map from ["a": 1, "b": 2]` syntax
-	static function Builtin.init(keys __ManagedArray, values __ManagedArray) returns Self
+	// The keys and values are received as raw __ManagedArray containing typed elements
+	static function Builtin.init(initKeys __ManagedArray, initValues __ManagedArray) returns Self
 		// Get number of elements in the managed arrays
-		var numElements = __managed_array_len(keys)
+		var numElements = __managed_array_len(initKeys)
 
 		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
 		var cap = 16
@@ -54,17 +54,16 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 		var vs = Array of cap Value
 		var sts = Array of cap SlotState
 
-		// Create the map type (copies array structs by value)
-		var result = Self{keys: ks, values: vs, states: sts, count: 0, capacity: cap}
+		// Create the map with arrays but zero count
+		var result = Self{keys: ks, values: vs, states: sts, count: 0, capacity: cap, iterIndex: 0}
 
-		// Insert each key-value pair from the managed arrays
+		// Insert each key-value pair from the init arrays
+		// Use __map_get_init_key/value which look up "Key"/"Value" generic params
 		var i = 0
 		while i < numElements 'insert_loop'
-			if let k = keys[i] 'get_key'
-				if let v = values[i] 'get_value'
-					result.insert(k, v)
-				end 'get_value'
-			end 'get_key'
+			var k = __map_get_init_key(initKeys, i)
+			var v = __map_get_init_value(initValues, i)
+			result.insert(key: k, value: v)
 			i = i + 1
 		end 'insert_loop'
 
@@ -102,10 +101,7 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 		var probes = 0
 
 		while probes < capacity 'probe'
-			var state = 0
-			if let s = states[index] 'unwrap_state'
-				state = s
-			end 'unwrap_state'
+			var state = try states.get(index: index) otherwise SlotState.Empty
 
 			if state == SlotState.Empty 'empty'
 				// Empty slot - insert here or at first deleted
@@ -114,9 +110,9 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 					insertIndex = firstDeleted
 				end 'use_deleted'
 
-				keys[insertIndex] = key
-				values[insertIndex] = value
-				states[insertIndex] = SlotState.Occupied
+				keys.set(index: insertIndex, value: key)
+				values.set(index: insertIndex, value: value)
+				states.set(index: insertIndex, value: SlotState.Occupied)
 				count = count + 1
 				return
 			end 'empty'
@@ -125,15 +121,15 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 				firstDeleted = index
 			end 'mark_deleted'
 
-			if state == SlotState.Occupied 'check_exists'
-				if let existing = keys[index] 'unwrap_existing'
+			if state == SlotState.Occupied 'check_key'
+				if let existing = try keys.get(index: index) 'get_existing'
 					if existing == key 'exists'
 						// Key already exists - update value
-						values[index] = value
+						values.set(index: index, value: value)
 						return
 					end 'exists'
-				end 'unwrap_existing'
-			end 'check_exists'
+				end 'get_existing'
+			end 'check_key'
 
 			// Linear probing
 			index = (index + 1) mod capacity
@@ -143,9 +139,9 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 		// Should never reach here if load factor is maintained
 		// But if we do, insert at first deleted slot
 		if firstDeleted >= 0 'fallback'
-			keys[firstDeleted] = key
-			values[firstDeleted] = value
-			states[firstDeleted] = SlotState.Occupied
+			keys.set(index: firstDeleted, value: key)
+			values.set(index: firstDeleted, value: value)
+			states.set(index: firstDeleted, value: SlotState.Occupied)
 			count = count + 1
 		end 'fallback'
 	end 'insert'
@@ -165,22 +161,21 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 
 		var probes = 0
 		while probes < capacity 'probe'
-			var state = 0
-			if let s = states[index] 'unwrap_state'
-				state = s
-			end 'unwrap_state'
+			var state = try states.get(index: index) otherwise SlotState.Empty
 
 			if state == SlotState.Empty 'empty'
 				throw MapError.keyNotFound
 			end 'empty'
 
-			if state == SlotState.Occupied 'check_found'
-				if let existing = keys[index] 'unwrap_existing'
+			if state == SlotState.Occupied 'check_key'
+				if let existing = try keys.get(index: index) 'get_existing'
 					if existing == key 'found'
-						return values[index]
+						if let v = try values.get(index: index) 'get_value'
+							return v
+						end 'get_value'
 					end 'found'
-				end 'unwrap_existing'
-			end 'check_found'
+				end 'get_existing'
+			end 'check_key'
 
 			index = (index + 1) mod capacity
 			probes = probes + 1
@@ -204,22 +199,19 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 
 		var probes = 0
 		while probes < capacity 'probe'
-			var state = 0
-			if let s = states[index] 'unwrap_state'
-				state = s
-			end 'unwrap_state'
+			var state = try states.get(index: index) otherwise SlotState.Empty
 
 			if state == SlotState.Empty 'empty'
 				return false
 			end 'empty'
 
-			if state == SlotState.Occupied 'check_found'
-				if let existing = keys[index] 'unwrap_existing'
+			if state == SlotState.Occupied 'check_key'
+				if let existing = try keys.get(index: index) 'get_existing'
 					if existing == key 'found'
 						return true
 					end 'found'
-				end 'unwrap_existing'
-			end 'check_found'
+				end 'get_existing'
+			end 'check_key'
 
 			index = (index + 1) mod capacity
 			probes = probes + 1
@@ -243,24 +235,21 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 
 		var probes = 0
 		while probes < capacity 'probe'
-			var state = 0
-			if let s = states[index] 'unwrap_state'
-				state = s
-			end 'unwrap_state'
+			var state = try states.get(index: index) otherwise SlotState.Empty
 
 			if state == SlotState.Empty 'empty'
 				return false
 			end 'empty'
 
-			if state == SlotState.Occupied 'check_found'
-				if let existing = keys[index] 'unwrap_existing'
+			if state == SlotState.Occupied 'check_key'
+				if let existing = try keys.get(index: index) 'get_existing'
 					if existing == key 'found'
-						states[index] = SlotState.Deleted
+						states.set(index: index, value: SlotState.Deleted)
 						count = count - 1
 						return true
 					end 'found'
-				end 'unwrap_existing'
-			end 'check_found'
+				end 'get_existing'
+			end 'check_key'
 
 			index = (index + 1) mod capacity
 			probes = probes + 1
@@ -277,27 +266,26 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 	/// Iterate through map entries, returning key-value pairs
 	function Iterable.next() returns Pair of Key Value throws IterationError
 		while iterIndex < capacity 'scan'
-			var state = 0
-			if let s = states[iterIndex] 'unwrap'
-				state = s
-			end 'unwrap'
+			var state = try states.get(index: iterIndex) otherwise SlotState.Empty
 			var idx = iterIndex
 			iterIndex = iterIndex + 1
 			if state == SlotState.Occupied 'occupied'
-				if let k = keys[idx] 'get_key'
-					if let v = values[idx] 'get_value'
-						return Pair{key: k, value: v}
-					end 'get_value'
-				end 'get_key'
+				var k = try keys.get(index: idx) otherwise 'get_k'
+					throw IterationError.exhausted
+				end 'get_k'
+				var v = try values.get(index: idx) otherwise 'get_v'
+					throw IterationError.exhausted
+				end 'get_v'
+				return Pair{key: k, value: v}
 			end 'occupied'
 		end 'scan'
 		throw IterationError.exhausted
 	end 'next'
 
 	/// Get current capacity (total number of slots)
-	export function capacity() returns int
+	export function getCapacity() returns int
 		return capacity
-	end 'capacity'
+	end 'getCapacity'
 
 	// Internal: grow the table when load factor exceeds threshold
 	function grow()
@@ -327,40 +315,35 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 		// Rehash all occupied entries from old arrays
 		var i = 0
 		while i < oldCapacity 'rehash'
-			var state = 0
-			if let s = oldStates[i] 'unwrap_state'
-				state = s
-			end 'unwrap_state'
+			var state = try oldStates.get(index: i) otherwise SlotState.Empty
 
 			if state == SlotState.Occupied 'occupied'
 				// Re-insert into new arrays using insert logic
-				if let key = oldKeys[i] 'unwrap_key'
-					if let value = oldValues[i] 'unwrap_value'
-						var hash = key.hash()
-						var index = hash mod newCapacity
-						if index < 0 'fix_negative'
-							index = index + newCapacity
-						end 'fix_negative'
+				var key = try oldKeys.get(index: i) otherwise 'skip_key'
+					i = i + 1
+					continue 'rehash'
+				end 'skip_key'
+				var value = try oldValues.get(index: i) otherwise 'skip_val'
+					i = i + 1
+					continue 'rehash'
+				end 'skip_val'
+				var hash = key.hash()
+				var index = hash mod newCapacity
+				if index < 0 'fix_negative'
+					index = index + newCapacity
+				end 'fix_negative'
 
-						// Find empty slot (no deleted slots in fresh array)
-						var currentState = SlotState.Empty
-						if let cs = states[index] 'unwrap_current'
-							currentState = cs
-						end 'unwrap_current'
-						while currentState != SlotState.Empty 'find_slot'
-							index = (index + 1) mod newCapacity
-							currentState = SlotState.Empty
-							if let nextS = states[index] 'unwrap_next'
-								currentState = nextS
-							end 'unwrap_next'
-						end 'find_slot'
+				// Find empty slot (no deleted slots in fresh array)
+				var currentState = try states.get(index: index) otherwise SlotState.Empty
+				while currentState != SlotState.Empty 'find_slot'
+					index = (index + 1) mod newCapacity
+					currentState = try states.get(index: index) otherwise SlotState.Empty
+				end 'find_slot'
 
-						keys[index] = key
-						values[index] = value
-						states[index] = SlotState.Occupied
-						count = count + 1
-					end 'unwrap_value'
-				end 'unwrap_key'
+				keys.set(index: index, value: key)
+				values.set(index: index, value: value)
+				states.set(index: index, value: SlotState.Occupied)
+				count = count + 1
 			end 'occupied'
 			i = i + 1
 		end 'rehash'

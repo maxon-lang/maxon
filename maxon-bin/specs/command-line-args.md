@@ -108,7 +108,8 @@ end 'main'
 <!-- Args: hello -->
 ```maxon
 function main(args Array of String) returns int
-    print(args[1])
+    var arg = try args.get(1) otherwise ""
+    print(arg)
     return 0
 end 'main'
 ```
@@ -123,11 +124,14 @@ hello
 <!-- Args: foo bar baz -->
 ```maxon
 function main(args Array of String) returns int
-    print(args[1])
+    var arg1 = try args.get(1) otherwise ""
+    var arg2 = try args.get(2) otherwise ""
+    var arg3 = try args.get(3) otherwise ""
+    print(arg1)
     print("\n")
-    print(args[2])
+    print(arg2)
     print("\n")
-    print(args[3])
+    print(arg3)
     print("\n")
     return 0
 end 'main'
@@ -147,7 +151,8 @@ baz
 function main(args Array of String) returns int
     var i = 1
     while i < args.count() 'loop'
-        print(args[i])
+        var arg = try args.get(i) otherwise ""
+        print(arg)
         print("\n")
         i = i + 1
     end 'loop'
@@ -169,7 +174,8 @@ c
 function main(args Array of String) returns int
     // Args are strings, just verify we can access them
     if args.count() == 2 'check'
-        print(args[1])
+        var arg = try args.get(1) otherwise ""
+        print(arg)
         return 0
     end 'check'
     return 1
@@ -187,7 +193,8 @@ end 'main'
 ```maxon
 function main(args Array of String) returns int
     // Empty quoted arg
-    if args[1] == "" 'check'
+    var arg = try args.get(1) otherwise "x"
+    if arg == "" 'check'
         return 0
     end 'check'
     return 1
@@ -201,7 +208,8 @@ end 'main'
 <!-- Args: --key=value -->
 ```maxon
 function main(args Array of String) returns int
-    print(args[1])
+    var arg = try args.get(1) otherwise ""
+    print(arg)
     return 0
 end 'main'
 ```

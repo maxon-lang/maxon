@@ -1,0 +1,376 @@
+---
+feature: if-try
+status: experimental
+keywords: [if, try, let, else, error, binding]
+category: error-handling
+---
+
+# If-Try Expressions
+
+## Documentation
+
+### Conditional Error Handling
+
+The `if try` construct provides conditional execution based on whether a throwing expression succeeds or fails.
+
+#### Boolean Form
+
+Check if an expression succeeds without binding the result:
+
+```maxon
+if try mayFail() 'check'
+    print("Operation succeeded!")
+end 'check'
+```
+
+The if-block executes only if the expression succeeds (doesn't throw).
+
+#### Binding Form
+
+Unwrap and bind the success value:
+
+```maxon
+if let value = try mayFail() 'check'
+    print("Got: {value}")
+end 'check'
+```
+
+If successful, the unwrapped value is bound to `value` and available within the if-block.
+
+#### With Else Clause
+
+Handle the error case:
+
+```maxon
+if try mayFail() 'check'
+    print("Success!")
+end 'check' else 'err'
+    print("Failed!")
+end 'err'
+```
+
+#### With Error Binding
+
+Capture the error value in the else block:
+
+```maxon
+if let value = try mayFail() 'check'
+    print("Got: {value}")
+end 'check' else (e) 'err'
+    print("Error occurred")
+end 'err'
+```
+
+The error is bound to `e` and available within the else-block.
+
+## Tests
+
+<!-- test: if-try-boolean-success -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    if try mayFail(true) 'check'
+        result = 1
+    end 'check'
+    return result
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: if-try-boolean-failure -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    if try mayFail(false) 'check'
+        result = 1
+    end 'check'
+    return result
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: if-try-binding-success -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    if let value = try mayFail(true) 'check'
+        return value
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: if-try-binding-failure -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    if let value = try mayFail(false) 'check'
+        return value
+    end 'check'
+    return 99
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: if-try-else-block -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    if try mayFail(false) 'check'
+        result = 1
+    end 'check' else 'err'
+        result = 2
+    end 'err'
+    return result
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: if-try-else-success -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    if try mayFail(true) 'check'
+        result = 1
+    end 'check' else 'err'
+        result = 2
+    end 'err'
+    return result
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: if-try-binding-with-else -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    if let value = try mayFail(false) 'check'
+        return value
+    end 'check' else 'err'
+        return 77
+    end 'err'
+    return 0
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- test: if-try-binding-with-else-success -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    if let value = try mayFail(true) 'check'
+        return value
+    end 'check' else 'err'
+        return 77
+    end 'err'
+    return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: if-try-else-with-error-binding -->
+```maxon
+enum MyError is Error
+    first
+    second
+end 'MyError'
+
+function mayFail(which int) returns int throws MyError
+    if which == 1 'check1'
+        throw MyError.first
+    end 'check1'
+    if which == 2 'check2'
+        throw MyError.second
+    end 'check2'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    if try mayFail(1) 'check'
+        result = 100
+    end 'check' else (e) 'err'
+        result = 50
+    end 'err'
+    return result
+end 'main'
+```
+```exitcode
+50
+```
+
+<!-- test: if-try-nested -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    return 42
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    if try mayFail(true) 'outer'
+        if try mayFail(true) 'inner'
+            result = 3
+        end 'inner'
+    end 'outer'
+    return result
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: if-try-in-loop -->
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(n int) returns int throws MyError
+    if n < 3 'check'
+        throw MyError.failed
+    end 'check'
+    return n
+end 'mayFail'
+
+function main() returns int
+    var sum = 0
+    var i = 0
+    while i < 5 'loop'
+        if let val = try mayFail(i) 'check'
+            sum = sum + val
+        end 'check'
+        i = i + 1
+    end 'loop'
+    return sum
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.if-try-non-throwing -->
+Using `if try` with a non-throwing function is a compile-time error.
+
+```maxon
+function noThrow() returns int
+    return 42
+end 'noThrow'
+
+function main() returns int
+    if try noThrow() 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E055: specs/fragments/if-try.error.if-try-non-throwing.1.test:7:5: if try requires a throwing function call: 'expression does not throw'
+```

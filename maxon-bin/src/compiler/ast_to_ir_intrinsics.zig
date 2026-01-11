@@ -286,6 +286,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
 const ElemInfo = struct {
     size: i32,
     is_struct: bool,
+    is_enum: bool,
     type_name: ?[]const u8,
 };
 
@@ -294,20 +295,29 @@ const ShiftDirection = enum { left, right };
 
 /// Get element size and type info from generic_params or current_type_name
 /// Used by managed array intrinsics to determine element size at compile time
-fn getElementInfo(self: *AstToIr) ElemInfo {
-    // Check generic_params for "Element" binding (available in monomorphized methods)
-    if (self.generic_params.get("Element")) |elem_type_name| {
+/// @param param_name: The generic param to look for ("Element", "Key", or "Value")
+fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ElemInfo {
+    // Check generic_params for the specified binding (available in monomorphized methods)
+    if (self.generic_params.get(param_name)) |elem_type_name| {
         if (self.type_map.get(elem_type_name)) |type_info| {
             if (type_info == .struct_type) {
                 return .{
                     .size = type_info.struct_type.size,
                     .is_struct = true,
+                    .is_enum = false,
+                    .type_name = elem_type_name,
+                };
+            } else if (type_info == .enum_type) {
+                return .{
+                    .size = 8,
+                    .is_struct = false,
+                    .is_enum = true,
                     .type_name = elem_type_name,
                 };
             }
         }
-        // Known type but not a struct (int, float, bool, byte)
-        return .{ .size = 8, .is_struct = false, .type_name = elem_type_name };
+        // Known type but not a struct or enum (int, float, bool, byte)
+        return .{ .size = 8, .is_struct = false, .is_enum = false, .type_name = elem_type_name };
     }
 
     // Fallback: extract from current_type_name (e.g., "Array$String")
@@ -319,16 +329,29 @@ fn getElementInfo(self: *AstToIr) ElemInfo {
                     return .{
                         .size = type_info.struct_type.size,
                         .is_struct = true,
+                        .is_enum = false,
+                        .type_name = elem_name,
+                    };
+                } else if (type_info == .enum_type) {
+                    return .{
+                        .size = 8,
+                        .is_struct = false,
+                        .is_enum = true,
                         .type_name = elem_name,
                     };
                 }
             }
-            return .{ .size = 8, .is_struct = false, .type_name = elem_name };
+            return .{ .size = 8, .is_struct = false, .is_enum = false, .type_name = elem_name };
         }
     }
 
     // Default to primitive (8 bytes)
-    return .{ .size = 8, .is_struct = false, .type_name = null };
+    return .{ .size = 8, .is_struct = false, .is_enum = false, .type_name = null };
+}
+
+/// Get element size and type info - default "Element" param
+fn getElementInfo(self: *AstToIr) ElemInfo {
+    return getElementInfoForParam(self, "Element");
 }
 
 /// Helper for shift operations - handles both left and right directions
@@ -448,6 +471,9 @@ const managed_array_intrinsics = .{
     .{ "__managed_array_shift_right", intrinsicManagedArrayShiftRight },
     .{ "__managed_array_shift_left", intrinsicManagedArrayShiftLeft },
     .{ "__managed_array_get_unchecked", intrinsicManagedArrayGetUnchecked },
+    // Map initialization intrinsics - use Key/Value generic params
+    .{ "__map_get_init_key", intrinsicMapGetInitKey },
+    .{ "__map_get_init_value", intrinsicMapGetInitValue },
     // String-related intrinsics (now unified under __managed_array)
     .{ "__managed_array_byte_at", intrinsicManagedArrayByteAt },
     .{ "__managed_array_slice", intrinsicManagedArraySlice },
@@ -598,6 +624,79 @@ fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) Convert
 
     if (elem_info.is_struct) {
         return .{ .value = elem_ptr.raw(), .ty = .{ .struct_type = elem_info.type_name.? } };
+    } else {
+        const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
+        return .{ .value = elem_val, .ty = .{ .primitive = elem_info.type_name orelse "int" } };
+    }
+}
+
+/// __map_get_init_key(managed, index) -> Key
+/// Like __managed_array_get_unchecked but uses "Key" generic param instead of "Element"
+/// For String keys: copies the struct and increfs the buffer so the caller owns the String
+fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 2);
+    const managed = try self.convertExpression(call.args[0]);
+    const index = try self.convertExpression(call.args[1]);
+
+    const elem_info = getElementInfoForParam(self, "Key");
+    const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+    const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buf_ptr), index.value, elem_info.size);
+
+    if (elem_info.is_struct) {
+        const type_name = elem_info.type_name.?;
+
+        // String keys need special handling: copy struct and incref so caller owns it
+        if (std.mem.eql(u8, type_name, "String")) {
+            // Allocate a new String struct on the stack
+            const new_string_ptr = try self.func().emitAllocaSized(String.SIZE);
+            // Copy the String struct (memcpy 16 bytes)
+            try self.func().emitMemcpy(new_string_ptr, elem_ptr.asRawPtr(), String.SIZE);
+            // Incref the buffer header so caller has their own reference
+            try string.emitStringIncref(self, ir.toStringPtr(new_string_ptr.val), "<array index String>");
+            return .{ .value = new_string_ptr.val, .ty = .{ .struct_type = type_name } };
+        }
+
+        return .{ .value = elem_ptr.raw(), .ty = .{ .struct_type = type_name } };
+    } else if (elem_info.is_enum) {
+        const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
+        return .{ .value = elem_val, .ty = .{ .enum_type = elem_info.type_name.? } };
+    } else {
+        const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
+        return .{ .value = elem_val, .ty = .{ .primitive = elem_info.type_name orelse "int" } };
+    }
+}
+
+/// __map_get_init_value(managed, index) -> Value
+/// Like __managed_array_get_unchecked but uses "Value" generic param instead of "Element"
+/// For String values: copies the struct and increfs the buffer so the caller owns the String
+fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 2);
+    const managed = try self.convertExpression(call.args[0]);
+    const index = try self.convertExpression(call.args[1]);
+
+    const elem_info = getElementInfoForParam(self, "Value");
+
+    const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+    const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buf_ptr), index.value, elem_info.size);
+
+    if (elem_info.is_struct) {
+        const type_name = elem_info.type_name.?;
+
+        // String values need special handling: copy struct and incref so caller owns it
+        if (std.mem.eql(u8, type_name, "String")) {
+            // Allocate a new String struct on the stack
+            const new_string_ptr = try self.func().emitAllocaSized(String.SIZE);
+            // Copy the String struct (memcpy 16 bytes)
+            try self.func().emitMemcpy(new_string_ptr, elem_ptr.asRawPtr(), String.SIZE);
+            // Incref the buffer header so caller has their own reference
+            try string.emitStringIncref(self, ir.toStringPtr(new_string_ptr.val), "<map_init_value>");
+            return .{ .value = new_string_ptr.val, .ty = .{ .struct_type = type_name } };
+        }
+
+        return .{ .value = elem_ptr.raw(), .ty = .{ .struct_type = type_name } };
+    } else if (elem_info.is_enum) {
+        const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
+        return .{ .value = elem_val, .ty = .{ .enum_type = elem_info.type_name.? } };
     } else {
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
         return .{ .value = elem_val, .ty = .{ .primitive = elem_info.type_name orelse "int" } };
@@ -1052,15 +1151,93 @@ fn emitWriteFileIR(self: *AstToIr, path_cstr: TypedValue, data_source: TypedValu
     return .{ .value = result, .ty = .{ .primitive = "int" } };
 }
 
-/// Generate IR to read a file into a __ManagedArray (string)
-/// Calls CreateFileA, GetFileSize, HeapAlloc, ReadFile, CloseHandle
-/// Returns pointer to __ManagedArray or NULL on failure
-fn emitReadFileIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+// ============================================================================
+// Low-level File Handle Intrinsics
+// ============================================================================
+// These expose Windows file operations directly to Maxon code.
+// File.maxon uses these to implement high-level operations with proper error handling.
+//
+// __file_open_read(cstr) -> int   : Opens file for reading, returns handle (-1 on failure)
+// __file_open_write(cstr) -> int  : Opens/creates file for writing, returns handle (-1 on failure)
+// __file_size(handle) -> int      : Gets file size in bytes
+// __file_read(handle, buffer, size) -> int : Reads into buffer, returns bytes read
+// __file_close(handle)            : Closes file handle
+// __file_read_all(cstr) -> __ManagedArray : High-level: reads entire file (null on failure)
+
+/// __file_open_read(cstr) -> int
+/// Opens a file for reading. Returns handle or -1 (INVALID_HANDLE_VALUE) on failure.
+fn intrinsicFileOpenRead(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const path_cstr = try self.convertExpression(call.args[0]);
     const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
 
-    // CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
+    // GENERIC_READ = 0x80000000, FILE_SHARE_READ = 1, OPEN_EXISTING = 3
+    const handle = try emitCreateFileA(self, path_ptr, 0x80000000, 1, 3, 0);
+    return .{ .value = handle, .ty = .{ .primitive = "int" } };
+}
+
+/// __file_open_write(cstr) -> int
+/// Opens/creates a file for writing. Returns handle or -1 on failure.
+fn intrinsicFileOpenWrite(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
+    // GENERIC_WRITE = 0x40000000, share_mode = 0, CREATE_ALWAYS = 2, FILE_ATTRIBUTE_NORMAL = 0x80
+    const handle = try emitCreateFileA(self, path_ptr, 0x40000000, 0, 2, 0x80);
+    return .{ .value = handle, .ty = .{ .primitive = "int" } };
+}
+
+/// __file_size(handle) -> int
+/// Gets the size of an open file in bytes.
+fn intrinsicFileSize(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const handle_typed = try self.convertExpression(call.args[0]);
+    const size = try emitGetFileSize(self, handle_typed.value);
+    return .{ .value = size, .ty = .{ .primitive = "int" } };
+}
+
+/// __file_read(handle, managed_array, size) -> int
+/// Reads from file into managed array's buffer. Returns bytes read.
+fn intrinsicFileRead(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 3);
+    const handle_typed = try self.convertExpression(call.args[0]);
+    const array_typed = try self.convertExpression(call.args[1]);
+    const size_typed = try self.convertExpression(call.args[2]);
+
+    // Get buffer pointer from __ManagedArray (offset 0)
+    const buffer = try self.func().emitLoad(array_typed.value, .ptr);
+
+    // Allocate bytes_read on stack
+    const bytes_read_ptr = try self.func().emitAllocaSized(8);
+    const zero = try self.func().emitConstI64(0);
+    try self.func().emitStore(bytes_read_ptr.raw(), zero);
+
+    // ReadFile(handle, buffer, size, &bytesRead, NULL)
+    _ = try emitReadFile(self, handle_typed.value, buffer, size_typed.value, bytes_read_ptr.raw());
+
+    // Return bytes read
+    const bytes_read = try self.func().emitLoad(bytes_read_ptr.raw(), .i64);
+    return .{ .value = bytes_read, .ty = .{ .primitive = "int" } };
+}
+
+/// __file_close(handle) -> int
+/// Closes a file handle. Returns 0.
+fn intrinsicFileClose(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const handle_typed = try self.convertExpression(call.args[0]);
+    try emitCloseHandle(self, handle_typed.value);
+    return .{ .value = try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
+}
+
+/// __file_read_all(cstr) -> __ManagedArray
+/// High-level intrinsic: reads entire file into a managed array.
+/// Returns null pointer on failure (caller checks with == -1 pattern or similar).
+fn intrinsicFileReadAll(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
     // GENERIC_READ = 0x80000000, FILE_SHARE_READ = 1, OPEN_EXISTING = 3
     const handle = try emitCreateFileA(self, path_ptr, 0x80000000, 1, 3, 0);
 
@@ -1095,19 +1272,21 @@ fn emitReadFileIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     // Close handle
     try emitCloseHandle(self, handle);
 
-    // Allocate __ManagedArray struct (32 bytes) if handle was valid
-    // For simplicity, we always allocate but return NULL if invalid
+    // Allocate __ManagedArray struct (32 bytes)
     const array_size = try self.func().emitConstI64(32);
     const array_ptr = try emitHeapAllocWin(self, heap, array_size);
 
     try initHeapManagedArray(self, array_ptr, buffer, bytes_read);
 
-    // If handle was invalid, return NULL, else return array_ptr
-    // result = array_ptr * (1 - is_invalid) = array_ptr if valid, 0 if invalid
+    // If handle was invalid, return -1 (as int), else return array_ptr
+    // This lets Maxon code check: if result == -1 then error
+    // Use: result = invalid_handle * is_invalid + array_ptr * (1 - is_invalid)
     const not_invalid = try self.func().emitBinaryOp(.sub, one_i64, is_invalid, .i64);
-    const result_ptr = try self.func().emitBinaryOp(.mul, array_ptr, not_invalid, .ptr);
+    const valid_result = try self.func().emitBinaryOp(.mul, array_ptr, not_invalid, .ptr);
+    const invalid_result = try self.func().emitBinaryOp(.mul, invalid_handle, is_invalid, .i64);
+    const result_ptr = try self.func().emitBinaryOp(.add, valid_result, invalid_result, .ptr);
 
-    return wrapInOptional(self, result_ptr, "__ManagedArray");
+    return .{ .value = result_ptr, .ty = .{ .struct_type = "__ManagedArray" } };
 }
 
 fn intrinsicWriteFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -1118,9 +1297,17 @@ fn intrinsicWriteFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
 }
 
 const file_intrinsics = .{
-    .{ "__read_file", emitReadFileIR },
+    // Low-level file handle operations
+    .{ "__file_open_read", intrinsicFileOpenRead },
+    .{ "__file_open_write", intrinsicFileOpenWrite },
+    .{ "__file_size", intrinsicFileSize },
+    .{ "__file_read", intrinsicFileRead },
+    .{ "__file_close", intrinsicFileClose },
+    // High-level operations (for convenience, returns -1 on failure)
+    .{ "__file_read_all", intrinsicFileReadAll },
     .{ "__write_file", intrinsicWriteFile },
     .{ "__write_file_binary", intrinsicWriteFile },
+    // Directory operations
     .{ "__find_first_file", intrinsicFindFirstFile },
     .{ "__find_next_file", intrinsicFindNextFile },
     .{ "__find_close", intrinsicFindClose },

@@ -1,12 +1,8 @@
 // Test: arrays.sized-array-write-read.1
 function main() returns int
     var arr = Array of 5 int
-    arr[0] = 42
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    arr.set(index: 0, value: 42)
+    return try arr.get(index: 0) otherwise 0
 end 'main'
 ---
 ExitCode: 42
@@ -34,28 +30,28 @@ entry:
     %tmp_const.4 = const.i64 i64 0
     %tmp_const.5 = const.i64 i64 42
     call @Array$int$set(%arr, %tmp_const.4, %tmp_const.5)
-    %tmp_const.6 = const.i64 i64 0
     %tmp_alloca.2 = alloca.sized ptr 16
-    %tmp_call.1 = call ptr @Array$int$get(%tmp_alloca.2, %arr, %tmp_const.6)
+    %tmp_const.7 = const.i64 i64 0
+    %tmp_call.1 = call ptr @Array$int$get(%tmp_alloca.2, %arr, %tmp_const.7)
     %tmp_load = load i64 %tmp_alloca.2
-    %tmp_const.7 = const.i64 i64 1
-    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.7
+    %tmp_const.8 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.8
+    %tmp_alloca.3 = alloca ptr
     br.cond %tmp_icmp @block1 @block2
-if_let_then:
+try_success:
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
     %tmp_load.1 = load i64 %tmp_fieldptr.4
-    %val = alloca ptr
-    store %val %tmp_load.1
-    %tmp_load.2 = load i64 %val
+    store %tmp_alloca.3 %tmp_load.1
+    br @block3
+try_default:
+    %tmp_const.9 = const.i64 i64 0
+    store %tmp_alloca.3 %tmp_const.9
+    br @block3
+try_merge:
+    %tmp_load.2 = load i64 %tmp_alloca.3
     %tmp_load.3 = load ptr %arr
     heap.free %tmp_load.3 tag="array cleanup"
     ret %tmp_load.2
-if_let_else:
-    %tmp_const.8 = const.i64 i64 0
-    %tmp_load.4 = load ptr %arr
-    heap.free %tmp_load.4 tag="array cleanup"
-    ret %tmp_const.8
-if_let_end:
 }
 
 function Array$int$init() -> ptr {
@@ -108,7 +104,7 @@ end:
     ret
 }
 
-function Array$int$get() -> ptr {
+function Array$int$get() -> i64 {
 entry:
     %tmp_param = param ptr 0
     %self = param ptr 1
@@ -126,7 +122,10 @@ entry:
     br.cond %tmp_icmp @block1 @block2
 then:
     %tmp_const.1 = const.i64 i64 0
-    store %tmp_param %tmp_const.1
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.2 %tmp_const.1
     ret %tmp_param
 end:
     %tmp_load.2 = load i64 %index.1
@@ -134,37 +133,22 @@ end:
     %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.3
     br.cond %tmp_icmp.1 @block3 @block4
 then:
-    %tmp_const.2 = const.i64 i64 0
-    store %tmp_param %tmp_const.2
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_const.4 = const.i64 i64 1
+    store %tmp_param %tmp_const.4
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.3 %tmp_const.3
     ret %tmp_param
 end:
-    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_fieldptr.4 = getfieldptr ptr %self 0
     %tmp_load.4 = load i64 %index.1
-    %tmp_load.5 = load ptr %tmp_fieldptr.2
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 8
-    %tmp_load.6 = load i64 %tmp_fieldptr.3
-    %tmp_alloca.2 = alloca.sized ptr 16
-    %tmp_const.3 = const.i64 i64 0
-    %tmp_icmp.2 = icmp.ge i64 %tmp_load.4 %tmp_const.3
-    %tmp_icmp.3 = icmp.lt i64 %tmp_load.4 %tmp_load.6
-    %tmp_mul = mul i64 %tmp_icmp.2 %tmp_icmp.3
-    br.cond %tmp_mul @block5 @block6
-managed_index_in_bounds:
-    %tmp_const.4 = const.i64 i64 1
-    store %tmp_alloca.2 %tmp_const.4
-    %tmp_const.5 = const.i64 i64 8
-    %tmp_mul.1 = mul i64 %tmp_load.4 %tmp_const.5
-    %tmp_add = add ptr %tmp_load.5 %tmp_mul.1
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load.7 = load i64 %tmp_add
-    store %tmp_fieldptr.4 %tmp_load.7
-    br @block7
-managed_index_out_of_bounds:
-    %tmp_const.6 = const.i64 i64 0
-    store %tmp_alloca.2 %tmp_const.6
-    br @block7
-managed_index_merge:
-    memcpy %tmp_param %tmp_alloca.2 16
+    %tmp_load.5 = load ptr %tmp_fieldptr.4
+    %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=8
+    %tmp_load.6 = load i64 %tmp_elemptr
+    %tmp_const.5 = const.i64 i64 0
+    store %tmp_param %tmp_const.5
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.5 %tmp_load.6
     ret %tmp_param
 }
 

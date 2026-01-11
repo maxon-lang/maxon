@@ -79,7 +79,7 @@ The standard library `Iterable` interface uses associated types:
 
 ```maxon
 interface Iterable uses Element
-    function next() returns Element or nil
+    function next() returns Element throws IterationError
 end 'Iterable'
 ```
 
@@ -100,10 +100,7 @@ function main() returns int
     var s = "Hi"
     for ch in s 'chars'
         // ch has type 'character' (inferred from string's Element type - grapheme cluster)
-        var cps = ch.codepoints()
-        if let cp = cps.next() 'get_cp'
-            print("{cp}\n")
-        end 'get_cp'
+        print("{ch}\n")
     end 'chars'
     return 0
 end 'main'
@@ -112,8 +109,8 @@ end 'main'
 0
 ```
 ```stdout
-72
-105
+H
+i
 ```
 
 ### Conformance Requirements

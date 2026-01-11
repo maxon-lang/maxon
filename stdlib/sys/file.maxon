@@ -11,17 +11,28 @@ enum FileError is Error
 	writeError
 end 'FileError'
 
+// INVALID_HANDLE_VALUE from Windows API
+let INVALID_HANDLE = -1
+
 export type File
 	var _unused int  // Types require at least one field
 
 	/// Read text file content as a UTF-8 string
 	export static function readText(path String) returns String throws FileError
 		var cs = path.cstr()
-		let maybeManaged = __read_file(cs)
-		if let managed = maybeManaged 'hasData'
-			return String{_managed: managed, _iterPos: 0}
-		end 'hasData'
-		throw FileError.notFound
+		let handle = __file_open_read(cs)
+		if handle == INVALID_HANDLE 'notFound'
+			throw FileError.notFound
+		end 'notFound'
+
+		let size = __file_size(handle)
+		var managed = __managed_array_create(size + 1)
+		let bytesRead = __file_read(handle, managed, size)
+		__file_close(handle)
+		__managed_array_set_length(managed, bytesRead)
+		// Null-terminate for C compatibility
+		__managed_array_set_byte(managed, bytesRead, 0)
+		return String{_managed: managed, _iterPos: 0}
 	end 'readText'
 
 	/// Write string content to a text file
@@ -46,10 +57,11 @@ export type File
 	/// Check if a file exists at the given path
 	export static function exists(path String) returns bool
 		var cs = path.cstr()
-		let maybeManaged = __read_file(cs)
-		if let managed = maybeManaged 'hasData'
-			return true
-		end 'hasData'
-		return false
+		let handle = __file_open_read(cs)
+		if handle == INVALID_HANDLE 'notFound'
+			return false
+		end 'notFound'
+		__file_close(handle)
+		return true
 	end 'exists'
 end 'File'

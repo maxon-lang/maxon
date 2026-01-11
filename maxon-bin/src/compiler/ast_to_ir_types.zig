@@ -126,14 +126,6 @@ pub const ArrayInfo = struct {
     element_struct_type: ?[]const u8 = null, // struct name if elements are structs
 };
 
-/// Optional type info - DEPRECATED: Being removed in favor of error unions
-/// TODO: Remove after Phase 7 (AST-to-IR optional code removal) is complete
-pub const OptionalInfo = struct {
-    wrapped: ir.Type, // The underlying type (i64, f64, ptr)
-    wrapped_struct_type: ?[]const u8 = null, // struct name if wrapped is a struct
-    wrapped_enum_type: ?[]const u8 = null, // enum name if wrapped is an enum
-};
-
 /// Function type info - for first-class functions
 pub const FunctionTypeInfo = struct {
     param_types: []const ValueType, // Parameter types
@@ -144,7 +136,9 @@ pub const FunctionTypeInfo = struct {
 /// Error union type info - for T or E where E conforms to Error
 pub const ErrorUnionInfo = struct {
     success_type: ir.Type, // The success type's IR type
+    success_type_name: ?[]const u8, // Maxon type name for primitives (e.g., "byte", "int") - needed to preserve byte vs int distinction
     success_struct_type: ?[]const u8, // struct name if success is a struct
+    success_enum_type: ?[]const u8 = null, // enum name if success is an enum
     error_enum_type: []const u8, // The error enum type name (must be an enum conforming to Error)
 };
 
@@ -179,7 +173,6 @@ pub const ValueType = union(enum) {
     struct_type: []const u8,
     array_type: ArrayInfo,
     enum_type: []const u8,
-    optional_type: OptionalInfo, // DEPRECATED: Being removed in favor of error unions
     error_union_type: ErrorUnionInfo, // T or E where E conforms to Error
     function_type: FunctionTypeInfo, // First-class function types
 
@@ -188,7 +181,6 @@ pub const ValueType = union(enum) {
             .primitive => |name| nameToIrType(name),
             .enum_type => .i64,
             .struct_type, .array_type => .ptr,
-            .optional_type => .ptr, // Optionals are pointers to 16-byte structures (DEPRECATED)
             .error_union_type => .ptr, // Error unions are pointers to discriminated union structures
             .function_type => .ptr, // Function pointers are always pointers
         };
@@ -196,11 +188,6 @@ pub const ValueType = union(enum) {
 
     pub fn isStruct(self: ValueType) bool {
         return self == .struct_type;
-    }
-
-    /// DEPRECATED: Being removed in favor of error unions
-    pub fn isOptional(self: ValueType) bool {
-        return self == .optional_type;
     }
 
     /// Returns true if this is a floating-point primitive type
@@ -226,7 +213,7 @@ pub const ValueType = union(enum) {
             .primitive => |name| name,
             .struct_type => |name| name,
             .enum_type => |name| name,
-            .array_type, .optional_type, .error_union_type, .function_type => null,
+            .array_type, .error_union_type, .function_type => null,
         };
     }
 
@@ -235,11 +222,10 @@ pub const ValueType = union(enum) {
     }
 
     /// Returns true if this type requires slot indirection (ptr -> pointer -> data).
-    /// Heap arrays, optionals, and function types use slots; structs and primitives don't.
+    /// Heap arrays and function types use slots; structs and primitives don't.
     pub fn usesSlot(self: ValueType) bool {
         return switch (self) {
             .array_type => |arr| arr.storage == .heap,
-            .optional_type => true, // DEPRECATED
             .function_type => true,
             .primitive, .struct_type, .enum_type, .error_union_type => false,
         };
@@ -269,21 +255,10 @@ pub fn freeValueTypeAllocations(allocator: std.mem.Allocator, vt: ValueType) voi
                 allocator.free(name);
             }
         },
-        .optional_type => |opt| {
-            // DEPRECATED: Free allocated wrapped_struct_type names (contain '$')
-            if (opt.wrapped_struct_type) |name| {
-                if (std.mem.indexOf(u8, name, "$")) |_| {
-                    allocator.free(name);
-                }
-            }
-        },
-        .error_union_type => |eu| {
-            // Free allocated success_struct_type names (contain '$')
-            if (eu.success_struct_type) |name| {
-                if (std.mem.indexOf(u8, name, "$")) |_| {
-                    allocator.free(name);
-                }
-            }
+        .error_union_type => {
+            // Note: success_struct_type is typically a reference to an existing type name,
+            // not a separately allocated string, so we don't free it here.
+            // The monomorphized type names are freed when struct_type values are processed.
         },
         // Other variants don't have heap allocations
         .primitive, .enum_type, .array_type => {},
@@ -445,6 +420,7 @@ pub const PendingMethod = struct {
     type_name: []const u8, // "Array$int" - the monomorphized type
     method: *const ast.MethodDecl, // Pointer to method AST
     generic_bindings: []const GenericBinding, // ["Element" -> "int"]
+    source_file: ?[]const u8, // Source file path for error reporting
 
     pub const GenericBinding = struct {
         param: []const u8,

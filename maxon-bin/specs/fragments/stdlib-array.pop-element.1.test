@@ -5,13 +5,10 @@ function main() returns int
     arr.push(20)
     arr.push(30)
     
-    if let val = arr.pop() 'pop'
-        if val != 30 'check'
-            return 1
-        end 'check'
-    end 'pop' else 'nil'
-        return 2
-    end 'nil'
+    var val = try arr.pop() otherwise -1
+    if val != 30 'check'
+        return 1
+    end 'check'
     
     if arr.count() != 2 'cnt'
         return 3
@@ -38,45 +35,47 @@ entry:
     %tmp_alloca.4 = alloca.sized ptr 16
     %tmp_call.3 = call ptr @Array$int$pop(%tmp_alloca.4, %arr)
     %tmp_load = load i64 %tmp_alloca.4
-    %tmp_const.3 = const.i64 i64 1
+    %tmp_const.3 = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.3
-    br.cond %tmp_icmp @block1 @block4
-if_let_then:
+    %tmp_alloca.5 = alloca ptr
+    br.cond %tmp_icmp @block1 @block2
+try_success:
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.4 8
     %tmp_load.1 = load i64 %tmp_fieldptr
+    store %tmp_alloca.5 %tmp_load.1
+    br @block3
+try_default:
+    %tmp_sub = const.i64 i64 -1
+    store %tmp_alloca.5 %tmp_sub
+    br @block3
+try_merge:
+    %tmp_load.2 = load i64 %tmp_alloca.5
     %val = alloca ptr
-    store %val %tmp_load.1
-    %tmp_load.2 = load i64 %val
-    %tmp_const.4 = const.i64 i64 30
-    %tmp_icmp.1 = icmp.ne i64 %tmp_load.2 %tmp_const.4
-    br.cond %tmp_icmp.1 @block2 @block3
+    store %val %tmp_load.2
+    %tmp_load.3 = load i64 %val
+    %tmp_const.6 = const.i64 i64 30
+    %tmp_icmp.1 = icmp.ne i64 %tmp_load.3 %tmp_const.6
+    br.cond %tmp_icmp.1 @block4 @block5
 then:
-    %tmp_const.5 = const.i64 i64 1
-    %tmp_load.3 = load ptr %arr
-    heap.free %tmp_load.3 tag="array cleanup"
-    ret %tmp_const.5
-end:
-    br @block5
-if_let_else:
-    %tmp_const.6 = const.i64 i64 2
+    %tmp_const.7 = const.i64 i64 1
     %tmp_load.4 = load ptr %arr
     heap.free %tmp_load.4 tag="array cleanup"
-    ret %tmp_const.6
-if_let_end:
+    ret %tmp_const.7
+end:
     %tmp_call.4 = call i64 @Array$int$count(%arr)
-    %tmp_const.7 = const.i64 i64 2
-    %tmp_icmp.2 = icmp.ne i64 %tmp_call.4 %tmp_const.7
+    %tmp_const.8 = const.i64 i64 2
+    %tmp_icmp.2 = icmp.ne i64 %tmp_call.4 %tmp_const.8
     br.cond %tmp_icmp.2 @block6 @block7
 then:
-    %tmp_const.8 = const.i64 i64 3
+    %tmp_const.9 = const.i64 i64 3
     %tmp_load.5 = load ptr %arr
     heap.free %tmp_load.5 tag="array cleanup"
-    ret %tmp_const.8
+    ret %tmp_const.9
 end:
-    %tmp_const.9 = const.i64 i64 0
+    %tmp_const.10 = const.i64 i64 0
     %tmp_load.6 = load ptr %arr
     heap.free %tmp_load.6 tag="array cleanup"
-    ret %tmp_const.9
+    ret %tmp_const.10
 }
 
 function Array$int$push() -> ptr {
@@ -166,7 +165,7 @@ end:
     ret
 }
 
-function Array$int$pop() -> ptr {
+function Array$int$pop() -> i64 {
 entry:
     %tmp_param = param ptr 0
     %self = param ptr 1
@@ -181,48 +180,33 @@ entry:
     br.cond %tmp_icmp @block1 @block2
 then:
     %tmp_const.1 = const.i64 i64 0
-    store %tmp_param %tmp_const.1
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.2 %tmp_const.1
     ret %tmp_param
 end:
     %tmp_load.2 = load i64 %len
-    %tmp_const.2 = const.i64 i64 1
-    %tmp_sub = sub i64 %tmp_load.2 %tmp_const.2
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_sub = sub i64 %tmp_load.2 %tmp_const.3
     %newLen = alloca ptr
     store %newLen %tmp_sub
-    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_fieldptr.3 = getfieldptr ptr %self 0
     %tmp_load.3 = load i64 %newLen
-    %tmp_load.4 = load ptr %tmp_fieldptr.2
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 8
-    %tmp_load.5 = load i64 %tmp_fieldptr.3
-    %tmp_alloca.2 = alloca.sized ptr 16
-    %tmp_const.3 = const.i64 i64 0
-    %tmp_icmp.1 = icmp.ge i64 %tmp_load.3 %tmp_const.3
-    %tmp_icmp.2 = icmp.lt i64 %tmp_load.3 %tmp_load.5
-    %tmp_mul = mul i64 %tmp_icmp.1 %tmp_icmp.2
-    br.cond %tmp_mul @block3 @block4
-managed_index_in_bounds:
-    %tmp_const.4 = const.i64 i64 1
-    store %tmp_alloca.2 %tmp_const.4
-    %tmp_const.5 = const.i64 i64 8
-    %tmp_mul.1 = mul i64 %tmp_load.3 %tmp_const.5
-    %tmp_add = add ptr %tmp_load.4 %tmp_mul.1
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load.6 = load i64 %tmp_add
-    store %tmp_fieldptr.4 %tmp_load.6
-    br @block5
-managed_index_out_of_bounds:
-    %tmp_const.6 = const.i64 i64 0
-    store %tmp_alloca.2 %tmp_const.6
-    br @block5
-managed_index_merge:
+    %tmp_load.4 = load ptr %tmp_fieldptr.3
+    %tmp_elemptr = getelemptr ptr %tmp_load.4 %tmp_load.3 elemsize=8
+    %tmp_load.5 = load i64 %tmp_elemptr
     %value = alloca ptr
-    store %value %tmp_alloca.2
-    %tmp_fieldptr.5 = getfieldptr ptr %self 0
-    %tmp_load.7 = load i64 %newLen
-    %tmp_fieldptr.6 = getfieldptr ptr %tmp_fieldptr.5 8
+    store %value %tmp_load.5
+    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_load.6 = load i64 %newLen
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.4 8
+    store %tmp_fieldptr.5 %tmp_load.6
+    %tmp_load.7 = load i64 %value
+    %tmp_const.4 = const.i64 i64 0
+    store %tmp_param %tmp_const.4
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_param 8
     store %tmp_fieldptr.6 %tmp_load.7
-    %tmp_load.8 = load ptr %value
-    memcpy %tmp_param %tmp_load.8 16
     ret %tmp_param
 }
 

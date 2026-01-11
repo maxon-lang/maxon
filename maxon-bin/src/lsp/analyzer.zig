@@ -166,7 +166,6 @@ pub const Analyzer = struct {
                 };
                 break :blk std.fmt.bufPrint(&type_name_buf, "Array${s}", .{elem_name}) catch "Array";
             },
-            .optional_type => return &.{}, // Optionals don't have methods (DEPRECATED)
             .error_union_type => return &.{},
             .function_type => return &.{},
         };
@@ -356,7 +355,7 @@ pub const Analyzer = struct {
             .struct_type => |name| name,
             .enum_type => |name| name,
             .array_type => "Array", // Array methods are on the generic Array type
-            .optional_type, .error_union_type, .function_type => null, // DEPRECATED: optional_type
+            .error_union_type, .function_type => null,
         };
     }
 
@@ -1862,7 +1861,6 @@ fn formatExpression(writer: anytype, expr: ast.Expression) !void {
         .integer => |i| try writer.print("{d}", .{i}),
         .float_lit => |f| try writer.print("{d}", .{f}),
         .bool_lit => |b| try writer.print("{}", .{b}),
-        .nil_lit => try writer.writeAll("nil"),
         .string_literal => |s| try writer.print("\"{s}\"", .{s}),
         .char_literal => |c| try writer.print("'{s}'", .{c}),
         .identifier => |id| try writer.writeAll(id),
@@ -1938,11 +1936,6 @@ fn formatExpression(writer: anytype, expr: ast.Expression) !void {
                 try formatExpression(writer, field.value.*);
             }
             try writer.writeAll(" }");
-        },
-        .nil_coalesce => |nc| {
-            try formatExpression(writer, nc.optional.*);
-            try writer.writeAll(" ?? ");
-            try formatExpression(writer, nc.default.*);
         },
         .cast => |c| {
             try formatExpression(writer, c.expr.*);

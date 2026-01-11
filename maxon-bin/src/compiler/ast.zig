@@ -16,8 +16,6 @@ pub const BlockRole = enum {
     catch_handler, // Catch clause body
     match_case, // Match case body
     default_case, // Default case for match
-    nil_handler, // Guard-let nil body
-    default_value, // Else-unwrap default body
 };
 
 /// A child block with its role and metadata
@@ -34,6 +32,9 @@ pub const ChildBlock = struct {
     match_patterns: []const Expression = &.{},
     pattern_bindings: []const ?PatternBinding = &.{},
     has_fallthrough: bool = false,
+
+    // For if-try else clauses with error binding
+    error_binding: ?[]const u8 = null,
 };
 
 /// A top-level constant declaration: let NAME = expression
@@ -146,7 +147,6 @@ pub const ErrorUnionTypeExpr = struct {
 pub const TypeExpr = union(enum) {
     simple: []const u8, // int, float, MyStruct
     generic: GenericTypeExpr, // Array of int, Map of string int
-    optional: *const TypeExpr, // T or nil
     error_union: ErrorUnionTypeExpr, // T or E (where E conforms to Error)
     function_type: FunctionTypeExpr, // (int, string) returns bool
 };
@@ -193,9 +193,15 @@ pub const FieldAssign = struct {
     value: Expression,
 };
 
+/// If-try condition: if try expr or if let x = try expr
+pub const IfTryCondition = struct {
+    try_expr: *const Expression, // The expression being tried
+    binding_name: ?[]const u8 = null, // Variable name for binding form, null for boolean form
+};
+
 pub const IfStmt = struct {
     condition: Expression,
-    binding_name: ?[]const u8 = null, // If-let binding (optional): if let name = expr 'label'
+    if_try: ?*const IfTryCondition = null, // For if-try forms (mutually exclusive with condition usage)
     block: BlockInfo = .{},
     children: []const ChildBlock = &.{}, // primary body + optional else_clause or else_if
 };
@@ -220,31 +226,9 @@ pub const ContinueStmt = struct {
     label: ?[]const u8 = null, // Optional label to continue to
 };
 
-pub const ElseUnwrapDecl = struct {
-    var_name: []const u8,
-    optional_expr: *const Expression,
-    block: BlockInfo = .{},
-    children: []const ChildBlock = &.{}, // default_value body
-};
-
-// Guard-let: let x = opt or 'label' ... end 'label'
-// Body must contain exit (return/break/continue), x is unwrapped if optional has value
-pub const GuardLetDecl = struct {
-    var_name: []const u8,
-    optional_expr: *const Expression,
-    block: BlockInfo = .{},
-    children: []const ChildBlock = &.{}, // nil_handler body
-};
-
 // Error handling: throw statement
 pub const ThrowStmt = struct {
     error_expr: Expression,
-};
-
-// Error handling: do-catch block
-pub const DoCatchStmt = struct {
-    block: BlockInfo = .{},
-    children: []const ChildBlock = &.{}, // primary body + catch_handlers
 };
 
 // Match statements and expressions
@@ -295,11 +279,8 @@ pub const StatementKind = union(enum) {
     for_stmt: ForStmt,
     break_stmt: BreakStmt,
     continue_stmt: ContinueStmt,
-    else_unwrap_decl: ElseUnwrapDecl,
-    guard_let_decl: GuardLetDecl,
     // Error handling
     throw_stmt: ThrowStmt,
-    do_catch_stmt: DoCatchStmt,
     try_stmt: TryExpr, // try expression used as statement (for void-returning throwing functions)
     // Match statements
     match_stmt: MatchStmt,
@@ -311,9 +292,6 @@ pub const StatementKind = union(enum) {
             .while_stmt => |s| if (s.block.end_line > 0) s.block else null,
             .for_stmt => |s| if (s.block.end_line > 0) s.block else null,
             .match_stmt => |s| if (s.block.end_line > 0) s.block else null,
-            .do_catch_stmt => |s| if (s.block.end_line > 0) s.block else null,
-            .else_unwrap_decl => |s| if (s.block.end_line > 0) s.block else null,
-            .guard_let_decl => |s| if (s.block.end_line > 0) s.block else null,
             else => null,
         };
     }
@@ -325,9 +303,6 @@ pub const StatementKind = union(enum) {
             .while_stmt => |s| s.children,
             .for_stmt => |s| s.children,
             .match_stmt => |s| s.children,
-            .do_catch_stmt => |s| s.children,
-            .else_unwrap_decl => |s| s.children,
-            .guard_let_decl => |s| s.children,
             else => &.{},
         };
     }
@@ -463,11 +438,6 @@ pub const MethodCallExpr = struct {
     named_args: []const NamedArg = &.{}, // Named arguments (name = value)
 };
 
-pub const NilCoalesceExpr = struct {
-    optional: *const Expression,
-    default: *const Expression,
-};
-
 pub const CastExpr = struct {
     expr: *const Expression,
     target_type: []const u8, // "int", "byte", "float", etc.
@@ -529,7 +499,6 @@ pub const Expression = union(enum) {
     integer: i64,
     float_lit: f64,
     bool_lit: bool,
-    nil_lit,
     self_expr, // reference to current instance in methods
     identifier: []const u8,
     string_literal: []const u8, // double-quoted string literal "hello"
@@ -548,7 +517,6 @@ pub const Expression = union(enum) {
     index: IndexExpr,
     array_type: ArrayTypeExpr,
     method_call: MethodCallExpr,
-    nil_coalesce: NilCoalesceExpr,
     cast: CastExpr,
     closure: ClosureExpr,
     // InitableFromArrayLiteral: TypeName from [1, 2, 3]
@@ -688,6 +656,10 @@ fn freeStatementArgs(stmt: Statement, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(arg, allocator);
             }
             allocator.free(call.args);
+            for (call.named_args) |named| {
+                freeExpressionArgs(named.value.*, allocator);
+            }
+            if (call.named_args.len > 0) allocator.free(call.named_args);
         },
         .method_call => |mcall| {
             freeExpressionArgs(mcall.base.*, allocator);
@@ -695,6 +667,10 @@ fn freeStatementArgs(stmt: Statement, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(arg, allocator);
             }
             allocator.free(mcall.args);
+            for (mcall.named_args) |named| {
+                freeExpressionArgs(named.value.*, allocator);
+            }
+            if (mcall.named_args.len > 0) allocator.free(mcall.named_args);
         },
         .field_assign => |assign| {
             freeExpressionArgs(assign.base.*, allocator);
@@ -702,6 +678,10 @@ fn freeStatementArgs(stmt: Statement, allocator: std.mem.Allocator) void {
         },
         .if_stmt => |if_s| {
             freeExpressionArgs(if_s.condition, allocator);
+            if (if_s.if_try) |if_try| {
+                freeExpressionArgs(if_try.try_expr.*, allocator);
+                allocator.destroy(if_try);
+            }
             freeChildBlocks(if_s.children, allocator);
         },
         .while_stmt => |while_s| {
@@ -713,22 +693,14 @@ fn freeStatementArgs(stmt: Statement, allocator: std.mem.Allocator) void {
             freeChildBlocks(for_s.children, allocator);
         },
         .break_stmt, .continue_stmt => {},
-        .else_unwrap_decl => |unwrap| {
-            freeExpressionArgs(unwrap.optional_expr.*, allocator);
-            freeChildBlocks(unwrap.children, allocator);
-        },
-        .guard_let_decl => |guard| {
-            freeExpressionArgs(guard.optional_expr.*, allocator);
-            freeChildBlocks(guard.children, allocator);
-        },
         .throw_stmt => |throw_s| {
             freeExpressionArgs(throw_s.error_expr, allocator);
         },
         .try_stmt => |try_s| {
             freeExpressionArgs(try_s.expr.*, allocator);
-        },
-        .do_catch_stmt => |do_catch| {
-            freeChildBlocks(do_catch.children, allocator);
+            if (try_s.otherwise) |ow| {
+                freeOtherwiseClause(ow, allocator);
+            }
         },
         .match_stmt => |match_s| {
             freeExpressionArgs(match_s.scrutinee, allocator);
@@ -765,6 +737,10 @@ fn freeExpressionArgs(expr: Expression, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(arg, allocator);
             }
             allocator.free(call.args);
+            for (call.named_args) |named| {
+                freeExpressionArgs(named.value.*, allocator);
+            }
+            if (call.named_args.len > 0) allocator.free(call.named_args);
         },
         .binary => |bin| {
             freeExpressionArgs(bin.left.*, allocator);
@@ -819,11 +795,14 @@ fn freeExpressionArgs(expr: Expression, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(arg, allocator);
             }
             allocator.free(mcall.args);
+            for (mcall.named_args) |named| {
+                freeExpressionArgs(named.value.*, allocator);
+            }
+            if (mcall.named_args.len > 0) allocator.free(mcall.named_args);
         },
         .unary => |un| {
             freeExpressionArgs(un.operand.*, allocator);
         },
-        .nil_coalesce => {},
         .cast => |c| {
             freeExpressionArgs(c.expr.*, allocator);
         },
@@ -841,6 +820,9 @@ fn freeExpressionArgs(expr: Expression, allocator: std.mem.Allocator) void {
         },
         .try_expr => |te| {
             freeExpressionArgs(te.expr.*, allocator);
+            if (te.otherwise) |ow| {
+                freeOtherwiseClause(ow, allocator);
+            }
         },
         .match_expr => |me| {
             freeExpressionArgs(me.scrutinee.*, allocator);
@@ -862,17 +844,24 @@ fn freeExpressionArgs(expr: Expression, allocator: std.mem.Allocator) void {
             }
             allocator.free(ec.args);
         },
-        .integer, .float_lit, .bool_lit, .nil_lit, .self_expr, .identifier, .string_literal, .char_literal => {},
+        .integer, .float_lit, .bool_lit, .self_expr, .identifier, .string_literal, .char_literal => {},
     }
+}
+
+fn freeOtherwiseClause(ow: *const OtherwiseClause, allocator: std.mem.Allocator) void {
+    if (ow.default_expr) |expr| {
+        freeExpressionArgs(expr.*, allocator);
+    }
+    for (ow.body) |stmt| {
+        freeStatementArgs(stmt, allocator);
+    }
+    if (ow.body.len > 0) allocator.free(ow.body);
+    allocator.destroy(@constCast(ow));
 }
 
 fn freeTypeExpr(type_expr: ?TypeExpr, allocator: std.mem.Allocator) void {
     const te = type_expr orelse return;
     switch (te) {
-        .optional => |inner| {
-            freeTypeExpr(inner.*, allocator);
-            allocator.destroy(@constCast(inner));
-        },
         .generic => |g| {
             if (g.type_args.len > 0) {
                 allocator.free(g.type_args);

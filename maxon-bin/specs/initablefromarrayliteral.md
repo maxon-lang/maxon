@@ -36,11 +36,8 @@ end 'main'
 ```maxon
 function main() returns int
     var arr = [10, 20, 30]
-    var val = arr.get(1)
-    if let v = val 'check'
-        return v
-    end 'check'
-    return 0
+    var val = try arr.get(1) otherwise 0
+    return val
 end 'main'
 ```
 ```exitcode
@@ -51,11 +48,8 @@ end 'main'
 ```maxon
 function main() returns int
     var arr = [42, 2, 3]
-    var val = arr.first()
-    if let v = val 'check'
-        return v
-    end 'check'
-    return 0
+    var val = try arr.first() otherwise 0
+    return val
 end 'main'
 ```
 ```exitcode
@@ -66,11 +60,8 @@ end 'main'
 ```maxon
 function main() returns int
     var arr = [1, 2, 99]
-    var val = arr.last()
-    if let v = val 'check'
-        return v
-    end 'check'
-    return 0
+    var val = try arr.last() otherwise 0
+    return val
 end 'main'
 ```
 ```exitcode

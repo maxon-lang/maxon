@@ -42,22 +42,15 @@ arr.insert(1, 15)  // Insert 15 at index 1
 
 ### Accessing Elements
 
-Use `get` to safely access elements (returns optional):
+Use `get` to access elements (throws on out-of-bounds):
 ```text
-if let val = arr.get(0) 'found'
-    // use val
-end 'found'
+var val = try arr.get(0) otherwise 0  // Returns 0 if out of bounds
 ```
 
 Use `first` and `last` for convenience:
 ```text
-if let first = arr.first() 'f'
-    // first element
-end 'f'
-
-if let last = arr.last() 'l'
-    // last element  
-end 'l'
+var first = try arr.first() otherwise 0  // First element or default
+var last = try arr.last() otherwise 0    // Last element or default
 ```
 
 ### Modifying Elements
@@ -71,9 +64,7 @@ arr.set(0, 100)  // Set first element to 100
 
 Use `pop` to remove and return the last element:
 ```text
-if let val = arr.pop() 'popped'
-    // val is the removed element
-end 'popped'
+var val = try arr.pop() otherwise 0  // Pop or use default if empty
 ```
 
 Use `remove` to remove at a specific index:
@@ -132,14 +123,11 @@ Push a single element and retrieve it.
 function main() returns int
     var arr = Array of int{}
     arr.push(42)
-    if let val = arr.get(0) 'get'
-        if val != 42 'check'
-            return 1
-        end 'check'
-        return 0
-    end 'get' else 'nil'
-        return 2
-    end 'nil'
+    var val = try arr.get(0) otherwise -1
+    if val != 42 'check'
+        return 1
+    end 'check'
+    return 0
 end 'main'
 ```
 ```exitcode
@@ -175,29 +163,20 @@ function main() returns int
     arr.push(20)
     arr.push(30)
     
-    if let v0 = arr.get(0) 'g0'
-        if v0 != 10 'c0'
-            return 1
-        end 'c0'
-    end 'g0' else 'e0'
-        return 10
-    end 'e0'
+    var v0 = try arr.get(0) otherwise -1
+    if v0 != 10 'c0'
+        return 1
+    end 'c0'
     
-    if let v1 = arr.get(1) 'g1'
-        if v1 != 20 'c1'
-            return 2
-        end 'c1'
-    end 'g1' else 'e1'
-        return 11
-    end 'e1'
+    var v1 = try arr.get(1) otherwise -1
+    if v1 != 20 'c1'
+        return 2
+    end 'c1'
     
-    if let v2 = arr.get(2) 'g2'
-        if v2 != 30 'c2'
-            return 3
-        end 'c2'
-    end 'g2' else 'e2'
-        return 12
-    end 'e2'
+    var v2 = try arr.get(2) otherwise -1
+    if v2 != 30 'c2'
+        return 3
+    end 'c2'
     
     return 0
 end 'main'
@@ -216,16 +195,13 @@ function main() returns int
     arr.push(20)
     arr.push(30)
     
-    arr.set(1, 99)
+    arr.set(1, value: 99)
     
-    if let val = arr.get(1) 'get'
-        if val != 99 'check'
-            return 1
-        end 'check'
-        return 0
-    end 'get' else 'nil'
-        return 2
-    end 'nil'
+    var val = try arr.get(1) otherwise -1
+    if val != 99 'check'
+        return 1
+    end 'check'
+    return 0
 end 'main'
 ```
 ```exitcode
@@ -242,21 +218,15 @@ function main() returns int
     arr.push(20)
     arr.push(30)
     
-    if let f = arr.first() 'first'
-        if f != 10 'fc'
-            return 1
-        end 'fc'
-    end 'first' else 'fe'
-        return 2
-    end 'fe'
+    var f = try arr.first() otherwise -1
+    if f != 10 'fc'
+        return 1
+    end 'fc'
     
-    if let l = arr.last() 'last'
-        if l != 30 'lc'
-            return 3
-        end 'lc'
-    end 'last' else 'le'
-        return 4
-    end 'le'
+    var l = try arr.last() otherwise -1
+    if l != 30 'lc'
+        return 3
+    end 'lc'
     
     return 0
 end 'main'
@@ -275,13 +245,10 @@ function main() returns int
     arr.push(20)
     arr.push(30)
     
-    if let val = arr.pop() 'pop'
-        if val != 30 'check'
-            return 1
-        end 'check'
-    end 'pop' else 'nil'
-        return 2
-    end 'nil'
+    var val = try arr.pop() otherwise -1
+    if val != 30 'check'
+        return 1
+    end 'check'
     
     if arr.count() != 2 'cnt'
         return 3
@@ -305,14 +272,11 @@ function main() returns int
         return 1
     end 'cnt'
     
-    if let v = arr.get(1) 'get'
-        if v != 2 'check'
-            return 2
-        end 'check'
-        return 0
-    end 'get' else 'nil'
-        return 3
-    end 'nil'
+    var v = try arr.get(1) otherwise -1
+    if v != 2 'check'
+        return 2
+    end 'check'
+    return 0
 end 'main'
 ```
 ```exitcode
@@ -362,8 +326,7 @@ function main() returns int
         return 2
     end 'e2'
     
-    if let _ = arr.pop() 'pop'
-    end 'pop'
+    var _ = try arr.pop() otherwise 0
     
     if arr.isEmpty() == false 'e3'
         return 3
@@ -404,18 +367,18 @@ end 'main'
 ```
 
 <!-- test: get-out-of-bounds -->
-Get returns nil for out of bounds index.
+Get throws error for out of bounds index.
 
 ```maxon
 function main() returns int
     var arr = Array of int{}
     arr.push(10)
     
-    if let _ = arr.get(5) 'get'
-        return 1
-    end 'get' else 'nil'
+    var val = try arr.get(5) otherwise -1
+    if val == -1 'check'
         return 0
-    end 'nil'
+    end 'check'
+    return 1
 end 'main'
 ```
 ```exitcode
@@ -458,8 +421,10 @@ function main() returns int
         return 1
     end 'cnt'
 
-    print(arr[0])
-    print(arr[1])
+    var s0 = try arr.get(0) otherwise ""
+    var s1 = try arr.get(1) otherwise ""
+    print(s0)
+    print(s1)
     return 0
 end 'main'
 ```
@@ -483,8 +448,10 @@ function main() returns int
         return 1
     end 'cnt'
 
-    print(arr[0])
-    print(arr[1])
+    var s0 = try arr.get(0) otherwise ""
+    var s1 = try arr.get(1) otherwise ""
+    print(s0)
+    print(s1)
     return 0
 end 'main'
 ```
@@ -506,8 +473,10 @@ function main() returns int
     arr.push(s1)
     arr.push(s2)
 
-    print(arr[0])
-    print(arr[1])
+    var v0 = try arr.get(0) otherwise ""
+    var v1 = try arr.get(1) otherwise ""
+    print(v0)
+    print(v1)
     return 0
 end 'main'
 ```
@@ -551,11 +520,8 @@ function main() returns int
     arr.push("two")
     arr.push("three")
 
-    if let val = arr.get(1) 'get'
-        print(val)
-    end 'get' else 'nil'
-        return 1
-    end 'nil'
+    var val = try arr.get(1) otherwise ""
+    print(val)
     return 0
 end 'main'
 ```

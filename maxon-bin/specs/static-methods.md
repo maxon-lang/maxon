@@ -67,7 +67,7 @@ type Math
 end 'Math'
 
 function main() returns int
-    return Math.add(20, 22)
+    return Math.add(20, b: 22)
 end 'main'
 ```
 ```exitcode

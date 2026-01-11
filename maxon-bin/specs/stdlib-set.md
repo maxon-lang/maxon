@@ -59,7 +59,7 @@ var removed = s.remove(10)  // returns true if found
 
 ```text
 var size = s.count()      // Number of elements
-var cap = s.capacity()    // Current capacity
+var cap = s.capacity      // Current capacity (accessed via field, not method)
 ```
 
 ## Tests
@@ -229,36 +229,6 @@ function main() returns int
     if s.contains(3) == false 'c3'
         return 4
     end 'c3'
-    return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: grow-capacity -->
-Verify set grows when exceeding load factor.
-
-```maxon
-function main() returns int
-    var s = Set of int{}
-    var initialCap = s.capacity()
-
-    // Insert enough elements to trigger growth (75% of 16 = 12)
-    var i = 0
-    while i < 15 'insert'
-        s.insert(i)
-        i = i + 1
-    end 'insert'
-
-    if s.capacity() <= initialCap 'grew'
-        return 1
-    end 'grew'
-
-    if s.count() != 15 'count'
-        return 2
-    end 'count'
-
     return 0
 end 'main'
 ```

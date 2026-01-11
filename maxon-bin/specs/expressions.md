@@ -29,7 +29,7 @@ x > 0 and y < 10  // When logical operators added
 ### Expressions with Function Calls
 
 ```maxon
-5 + add(3, 4)
+5 + add(3, b: 4)
 sqrt(x * x + y * y)
 ```
 ### Type Compatibility
@@ -57,7 +57,7 @@ end 'main'
 ```maxon
 function main() returns int
     var x = 3
-    return 5 + add(x, 4)
+    return 5 + add(x, b: 4)
 end 'main'
 
 function add(a int, b int) returns int

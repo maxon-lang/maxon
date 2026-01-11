@@ -135,7 +135,9 @@ Substrings should retain their parent string.
 ```maxon
 function main() returns int
     var s = "hello world from heap!!"
-    var sub = s.slice(s.startIndex(), length = 5)
+    var start = s.startIndex()
+    var spaceIdx = try s.find(" ") otherwise s.endIndex()
+    var sub = s.slice(start, endIndex: spaceIdx)
     print("{sub.count()}\n")
     return 0
 end 'main'

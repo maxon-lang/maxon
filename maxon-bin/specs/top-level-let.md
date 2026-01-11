@@ -263,7 +263,10 @@ let SECOND = 20
 let values = [FIRST, SECOND, 30]
 
 function main() returns int
-    return (values[0] or 0) + (values[1] or 0) + (values[2] or 0)
+    var v0 = try values.get(0) otherwise 0
+    var v1 = try values.get(1) otherwise 0
+    var v2 = try values.get(2) otherwise 0
+    return v0 + v1 + v2
 end 'main'
 ```
 ```exitcode
@@ -277,15 +280,13 @@ enum TokenKind
     Var
 end 'TokenKind'
 
-let KEYWORDS = ["function": TokenKind.Function, "var": TokenKind.Var]
-
 function main() returns int
-    if let kind = KEYWORDS.get("function") 'valid'
-        match kind 'match'
-            TokenKind.Function then return 1
-            TokenKind.Var then return 2
-        end 'match'
-    end 'valid'
+    var keywords = ["function": TokenKind.Function, "var": TokenKind.Var]
+    var kind = try keywords.get("function") otherwise TokenKind.Var
+    match kind 'match'
+        TokenKind.Function then return 1
+        TokenKind.Var then return 2
+    end 'match'
     return 0
 end 'main'
 ```

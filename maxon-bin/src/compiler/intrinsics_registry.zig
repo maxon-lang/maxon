@@ -241,9 +241,10 @@ pub const IntrinsicCategory = struct {
 /// All intrinsic categories - used for dispatch in convertBuiltin
 pub const intrinsic_categories = [_]IntrinsicCategory{
     .{ .prefix = "__managed_array_", .visibility = .stdlib_only, .codegen = .managed_array },
+    .{ .prefix = "__map_get_init_", .visibility = .stdlib_only, .codegen = .managed_array },
     .{ .prefix = "__cstring_", .visibility = .stdlib_only, .codegen = .cstring },
     .{ .prefix = "__make_char_", .visibility = .stdlib_only, .codegen = .make_char },
-    .{ .prefix = "__read_file", .visibility = .stdlib_only, .codegen = .file_io },
+    .{ .prefix = "__file_", .visibility = .stdlib_only, .codegen = .file_io },
     .{ .prefix = "__write_file", .visibility = .stdlib_only, .codegen = .file_io },
     .{ .prefix = "__find_first_file", .visibility = .stdlib_only, .codegen = .file_io },
     .{ .prefix = "__find_next_file", .visibility = .stdlib_only, .codegen = .file_io },

@@ -82,9 +82,9 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 	function Iterable.next() returns Character throws IterationError
 		if _iterPos < __managed_array_len(_managed) 'check'
 			var len = __managed_array_len(_managed)
-			var endPos = findGraphemeEndManaged(_managed, _iterPos, len)
+			var endPos = findGraphemeEndManaged(_managed, startPos: _iterPos, len: len)
 			var graphemeLen = endPos - _iterPos
-			let grapheme = _makeCharFromBytes(_iterPos, graphemeLen)
+			let grapheme = _makeCharFromBytes(_iterPos, len: graphemeLen)
 			_iterPos = endPos
 			return grapheme
 		end 'check'
@@ -110,9 +110,9 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		// Calculate the byte length of this grapheme at the given byte position
 		var len = __managed_array_len(_managed)
 		var byteStart = idx.bytePos()
-		var endPos = findGraphemeEndManaged(_managed, byteStart, len)
+		var endPos = findGraphemeEndManaged(_managed, startPos: byteStart, len: len)
 		var byteLen = endPos - byteStart
-		return _makeCharFromBytes(byteStart, byteLen)
+		return _makeCharFromBytes(byteStart, len: byteLen)
 	end 'charAt'
 
 	/// Get the index after the given position (for iteration)
@@ -122,7 +122,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		end 'atEnd'
 		var len = __managed_array_len(_managed)
 		var byteStart = idx.bytePos()
-		var endPos = findGraphemeEndManaged(_managed, byteStart, len)
+		var endPos = findGraphemeEndManaged(_managed, startPos: byteStart, len: len)
 		var byteLen = endPos - byteStart
 		return StringIndex{_charIndex: idx.charIndex() + 1, _bytePos: byteStart + byteLen}
 	end 'indexAfter'
@@ -134,35 +134,35 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 
 	// Search methods
 	export function startsWith(prefix String) returns bool
-		return startsWithManaged(_managed, prefix._managed)
+		return startsWithManaged(_managed, needle: prefix._managed)
 	end 'startsWith'
 
 	export function endsWith(suffix String) returns bool
-		return endsWithManaged(_managed, suffix._managed)
+		return endsWithManaged(_managed, needle: suffix._managed)
 	end 'endsWith'
 
 	export function contains(needle String) returns bool
-		return findManaged(_managed, needle._managed) >= 0
+		return findManaged(_managed, needle: needle._managed) >= 0
 	end 'contains'
 
 	export function find(needle String) returns StringIndex throws StringError
-		var byteIdx = findManaged(_managed, needle._managed)
+		var byteIdx = findManaged(_managed, needle: needle._managed)
 		if byteIdx < 0 'not_found'
 			throw StringError.notFound
 		end 'not_found'
 		// Convert byte index to grapheme (char) index
-		var charIdx = byteIndexToGraphemeIndex(_managed, byteIdx)
+		var charIdx = byteIndexToGraphemeIndex(_managed, byteIdx: byteIdx)
 		return StringIndex{_charIndex: charIdx, _bytePos: byteIdx}
 	end 'find'
 
 	// Slicing - returns a new String backed by slice into this string's buffer
-	// Use end_= for end position, or length= for character count
-	export function slice(start StringIndex, end StringIndex) returns String
-		return __managed_array_slice(_managed, start.bytePos(), end.bytePos())
+	// Use endIndex for end position, or length for character count
+	export function slice(start StringIndex, endIndex StringIndex) returns String
+		return __managed_array_slice(_managed, start.bytePos(), endIndex.bytePos())
 	end 'slice'
 
 	export function slice(start StringIndex, length int) returns String
-		var endBytePos = graphemeOffsetToBytePos(_managed, start.bytePos(), length)
+		var endBytePos = graphemeOffsetToBytePos(_managed, startBytePos: start.bytePos(), count: length)
 		return __managed_array_slice(_managed, start.bytePos(), endBytePos)
 	end 'slice'
 
@@ -201,7 +201,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		var matchCount = 0
 		var searchPos = 0
 		while searchPos <= selfLen - oldLen 'count_loop'
-			var idx = findManagedRange(_managed, searchPos, selfLen - searchPos, old._managed)
+			var idx = findManagedRange(_managed, offset: searchPos, len: selfLen - searchPos, needle: old._managed)
 			if idx < 0 'no_more_count'
 				break 'count_loop'
 			end 'no_more_count'
@@ -218,7 +218,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		var builtResult = __managed_array_slice(_managed, 0, 0)  // Empty slice as starting point
 		pos = 0
 		while pos <= selfLen - oldLen 'search'
-			var idx = findManagedRange(_managed, pos, selfLen - pos, old._managed)
+			var idx = findManagedRange(_managed, offset: pos, len: selfLen - pos, needle: old._managed)
 			if idx < 0 'no_more'
 				break 'search'
 			end 'no_more'
@@ -250,7 +250,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 			return String{_managed: _managed, _iterPos: 0}
 		end 'empty_old'
 
-		var idx = findManaged(_managed, old._managed)
+		var idx = findManaged(_managed, needle: old._managed)
 		if idx < 0 'not_found'
 			return String{_managed: _managed, _iterPos: 0}
 		end 'not_found'

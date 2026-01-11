@@ -92,9 +92,11 @@ function main() returns int
         if true 'inner'
             var inner_arr = Array of int{}
             inner_arr.push(200)
-            print("{inner_arr[0]}\n")
+            var inner_val = try inner_arr.get(0) otherwise 0
+            print("{inner_val}\n")
         end 'inner'
-        print("{outer_arr[0]}\n")
+        var outer_val = try outer_arr.get(0) otherwise 0
+        print("{outer_val}\n")
     end 'outer'
     return 0
 end 'main'
@@ -148,7 +150,8 @@ Note: print with interpolation allocates for the string conversion.
 ```maxon
 function main() returns int
     var arr = [10, 20, 30]
-    print("{arr[1]}\n")
+    var val = try arr.get(1) otherwise 0
+    print("{val}\n")
     return 0
 end 'main'
 ```

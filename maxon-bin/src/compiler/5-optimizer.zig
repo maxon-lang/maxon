@@ -49,16 +49,13 @@ pub fn optimize(module: *ir.Module, allocator: std.mem.Allocator) !void {
 pub fn eliminateDeadFunctions(module: *ir.Module, allocator: std.mem.Allocator) !void {
     const initial_count = module.functions.items.len;
 
-    // Find all reachable functions starting from main and exported functions
+    // Find all reachable functions starting from main
     var reachable = std.StringHashMap(void).init(allocator);
     defer reachable.deinit();
 
-    // Start with main and all exported functions as roots
-    for (module.functions.items) |func| {
-        if (std.mem.eql(u8, func.name, "main") or func.is_exported) {
-            try markFunctionReachable(module, func.name, &reachable);
-        }
-    }
+    // Only main is a root for executable compilation.
+    // Exported functions from stdlib are internal to the final executable.
+    try markFunctionReachable(module, "main", &reachable);
 
     // Remove unreachable functions
     var i: usize = 0;

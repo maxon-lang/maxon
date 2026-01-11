@@ -41,16 +41,14 @@ List files and directories in a path.
 
 ```maxon
 function main() returns int
-    do 'list'
-        let files = try Directory.list("./")
-        for f in files 'loop'
-            print("{f}\n")
-        end 'loop'
-        return 0
-    end 'list' catch (e DirectoryError) 'err'
+    let files = try Directory.list("./") otherwise 'err'
         print("Failed to list directory")
         return 1
     end 'err'
+    for f in files 'loop'
+        print("{f}\n")
+    end 'loop'
+    return 0
 end 'main'
 ```
 
@@ -94,22 +92,20 @@ Check if a path is a directory. Alias for `exists`.
 <!-- test: list-directory -->
 ```maxon
 function main() returns int
-    do 'list'
-        let files = try Directory.list("../bin")
-        // bin directory should contain maxon.exe
-        var foundMaxon = false
-        for f in files 'loop'
-            if f == "maxon.exe" 'check'
-                foundMaxon = true
-            end 'check'
-        end 'loop'
-        if foundMaxon 'result'
-            return 42
-        end 'result'
-        return 1
-    end 'list' catch (e DirectoryError) 'err'
+    let files = try Directory.list("../bin") otherwise 'err'
         return 0
     end 'err'
+    // bin directory should contain maxon.exe
+    var foundMaxon = false
+    for f in files 'loop'
+        if f == "maxon.exe" 'check'
+            foundMaxon = true
+        end 'check'
+    end 'loop'
+    if foundMaxon 'result'
+        return 42
+    end 'result'
+    return 1
 end 'main'
 ```
 ```exitcode
@@ -119,16 +115,14 @@ end 'main'
 <!-- test: list-directory-count -->
 ```maxon
 function main() returns int
-    do 'list'
-        let files = try Directory.list("../bin")
-        // bin directory has at least maxon.exe and maxon.pdb
-        if files.count() >= 2 'ok'
-            return 42
-        end 'ok'
-        return files.count()
-    end 'list' catch (e DirectoryError) 'err'
+    let files = try Directory.list("../bin") otherwise 'err'
         return 99
     end 'err'
+    // bin directory has at least maxon.exe and maxon.pdb
+    if files.count() >= 2 'ok'
+        return 42
+    end 'ok'
+    return files.count()
 end 'main'
 ```
 ```exitcode
@@ -138,14 +132,12 @@ end 'main'
 <!-- test: list-nonexistent-directory -->
 ```maxon
 function main() returns int
-    do 'list'
-        var files = try Directory.list("nonexistent_dir_12345")
-        print("Found {files.count()} files\n")
-        return 1
-    end 'list' catch (e DirectoryError) 'err'
+    var files = try Directory.list("nonexistent_dir_12345") otherwise 'err'
         print("Directory not found")
         return 0
     end 'err'
+    print("Found {files.count()} files\n")
+    return 1
 end 'main'
 ```
 ```exitcode

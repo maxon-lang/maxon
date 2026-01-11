@@ -157,7 +157,7 @@ The standard library (`stdlib/interfaces.maxon`) defines commonly used interface
 - **Cloneable** - Types that can be copied: `returns Self`
 - **Iterable** - Types that can be iterated over (used by for-in loops):
   - Uses `Element` associated type
-  - `returns Element or nil`
+  - `returns Element throws IterationError`
 
 The `Iterator` type in `stdlib/iter/iterator.maxon` conforms to `Iterable` and is used by `for` loops with `range()`.
 

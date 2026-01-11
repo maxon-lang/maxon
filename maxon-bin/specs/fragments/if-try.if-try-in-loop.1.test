@@ -1,0 +1,98 @@
+// Test: if-try.if-try-in-loop.1
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail(n int) returns int throws MyError
+    if n < 3 'check'
+        throw MyError.failed
+    end 'check'
+    return n
+end 'mayFail'
+
+function main() returns int
+    var sum = 0
+    var i = 0
+    while i < 5 'loop'
+        if let val = try mayFail(i) 'check'
+            sum = sum + val
+        end 'check'
+        i = i + 1
+    end 'loop'
+    return sum
+end 'main'
+---
+ExitCode: 7
+---
+function mayFail() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %n = param i64 1
+    %n.1 = alloca ptr
+    store %n.1 %n
+    %tmp_load = load i64 %n.1
+    %tmp_const = const.i64 i64 3
+    %tmp_icmp = icmp.lt i64 %tmp_load %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr %tmp_const.1
+    ret %tmp_param
+end:
+    %tmp_load.1 = load i64 %n.1
+    %tmp_const.3 = const.i64 i64 0
+    store %tmp_param %tmp_const.3
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.1 %tmp_load.1
+    ret %tmp_param
+}
+
+function main() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 0
+    %sum = alloca ptr
+    store %sum %tmp_const
+    %tmp_const.1 = const.i64 i64 0
+    %i = alloca ptr
+    store %i %tmp_const.1
+    br @block1
+whilecond:
+    %tmp_load = load i64 %i
+    %tmp_const.2 = const.i64 i64 5
+    %tmp_icmp = icmp.lt i64 %tmp_load %tmp_const.2
+    br.cond %tmp_icmp @block2 @block6
+whilebody:
+    %tmp_alloca.2 = alloca.sized ptr 16
+    %tmp_load.1 = load i64 %i
+    %tmp_call = call ptr @mayFail(%tmp_alloca.2, %tmp_load.1)
+    %tmp_load.2 = load i64 %tmp_alloca.2
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.2 %tmp_const.3
+    %tmp_alloca.3 = alloca ptr
+    br.cond %tmp_icmp.1 @block3 @block4
+try_success:
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
+    %tmp_load.3 = load i64 %tmp_fieldptr
+    store %tmp_alloca.3 %tmp_load.3
+    %tmp_load.4 = load i64 %sum
+    %tmp_load.5 = load i64 %tmp_alloca.3
+    %tmp_add = add i64 %tmp_load.4 %tmp_load.5
+    store %sum %tmp_add
+    br @block5
+if_try_else:
+    br @block5
+try_merge:
+    %tmp_load.6 = load i64 %i
+    %tmp_const.4 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.6 %tmp_const.4
+    store %i %tmp_add.1
+    br @block1
+whilecont:
+    %tmp_load.7 = load i64 %sum
+    ret %tmp_load.7
+}
+
+---

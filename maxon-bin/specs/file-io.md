@@ -44,14 +44,12 @@ Read the entire contents of a text file as a UTF-8 encoded string.
 
 ```maxon
 function main() returns int
-    do 'read'
-        let content = try File.readText("example.txt")
-        print("File content: {content}\n")
-        return 1
-    end 'read' catch (e FileError) 'err'
+    let content = try File.readText("example.txt") otherwise 'err'
         print("Could not read file\n")
         return 0
     end 'err'
+    print("File content: {content}\n")
+    return 1
 end 'main'
 ```
 ```exitcode
@@ -115,14 +113,12 @@ end 'main'
 ```maxon
 function main() returns int
     // Try to read a nonexistent file - this tests the error path
-    do 'read'
-        let content = try File.readText("nonexistent_file_xyz.txt")
-        print("Content:{content}\n")
-        return 0
-    end 'read' catch (e FileError) 'err'
+    let content = try File.readText("nonexistent_file_xyz.txt") otherwise 'err'
         print("File not found")
         return 42
     end 'err'
+    print("Content:{content}\n")
+    return 0
 end 'main'
 ```
 ```exitcode
@@ -135,14 +131,12 @@ File not found
 <!-- test: read-nonexistent-file -->
 ```maxon
 function main() returns int
-    do 'read'
-        let content = try File.readText("nonexistent.txt")
-        print("Unexpected: {content}\n")
-        return 1
-    end 'read' catch (e FileError) 'err'
+    let content = try File.readText("nonexistent.txt") otherwise 'err'
         print("File not found")
         return 0
     end 'err'
+    print("Unexpected: {content}\n")
+    return 1
 end 'main'
 ```
 ```exitcode

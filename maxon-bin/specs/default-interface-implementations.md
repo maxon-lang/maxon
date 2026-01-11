@@ -16,17 +16,16 @@ Interfaces can provide default implementations by including a function body. Met
 ```maxon
 interface Collection uses Element extends Iterable
     function count() returns int                           // Abstract - must be implemented
-    function get(index int) returns Element or nil         // Abstract - must be implemented
+    function get(index int) returns Element throws ArrayError  // Abstract - must be implemented
     function set(index int, value Element) returns Self    // Abstract - must be implemented
 
     // Default implementation - structs inherit this unless they override
     function map(transform (Element) Element) returns Self
         var i = 0
         while i < self.count() 'loop'
-            if let elem = self.get(i) 'get'
-                var transformed = transform(elem)
-                self = self.set(i, transformed)
-            end 'get'
+            var elem = try self.get(i) otherwise return self
+            var transformed = transform(elem)
+            self = self.set(i, value: transformed)
             i = i + 1
         end 'loop'
         return self
@@ -85,9 +84,12 @@ end 'double'
 function main() returns int
     var arr = [1, 2, 3]
     var result = arr.map(double)
-    print("{result[0]}\n")
-    print("{result[1]}\n")
-    print("{result[2]}\n")
+    var v0 = try result.get(0) otherwise 0
+    var v1 = try result.get(1) otherwise 0
+    var v2 = try result.get(2) otherwise 0
+    print("{v0}\n")
+    print("{v1}\n")
+    print("{v2}\n")
     return 0
 end 'main'
 ```
@@ -105,9 +107,12 @@ end 'main'
 function main() returns int
     var arr = [10, 20, 30]
     var squared = arr.map((x int) gives x * x)
-    print("{squared[0]}\n")
-    print("{squared[1]}\n")
-    print("{squared[2]}\n")
+    var v0 = try squared.get(0) otherwise 0
+    var v1 = try squared.get(1) otherwise 0
+    var v2 = try squared.get(2) otherwise 0
+    print("{v0}\n")
+    print("{v1}\n")
+    print("{v2}\n")
     return 0
 end 'main'
 ```

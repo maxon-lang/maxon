@@ -14,22 +14,22 @@ export function utf8ByteLength(leadByte byte) returns int
 
 	// ASCII (0xxxxxxx)
 	if b < 128 'ascii'
-		return 1
+			return 1
 	end 'ascii'
 
 	// Invalid continuation byte or overlong encoding
 	if b < 192 'invalid'
-		return 1
+			return 1
 	end 'invalid'
 
 	// 2-byte sequence (110xxxxx)
 	if b < 224 'two_byte'
-		return 2
+			return 2
 	end 'two_byte'
 
 	// 3-byte sequence (1110xxxx)
 	if b < 240 'three_byte'
-		return 3
+			return 3
 	end 'three_byte'
 
 	// 4-byte sequence (11110xxx)
@@ -60,15 +60,16 @@ export function utf8CodepointCount(data Array of byte, len int) returns int
 	var count = 0
 	var i = 0
 
+	let zeroByte = 0 as byte
 	while i < len 'count_loop'
-		var b = data[i] as int
+			var b = (try data.get(index: i) otherwise zeroByte) as int
 
-		// Only count non-continuation bytes
-		if b < 128 or b >= 192 'is_lead'
-			count = count + 1
-		end 'is_lead'
+			// Only count non-continuation bytes
+			if b < 128 or b >= 192 'is_lead'
+					count = count + 1
+			end 'is_lead'
 
-		i = i + 1
+			i = i + 1
 	end 'count_loop'
 
 	return count
@@ -78,32 +79,33 @@ end 'utf8CodepointCount'
 /// Returns the codepoint value as an integer
 /// Assumes valid UTF-8 encoding at the offset
 export function utf8Decode(data Array of byte, offset int) returns int
-	var b0 = data[offset] as int
+	let zeroByte = 0 as byte
+	var b0 = (try data.get(index: offset) otherwise zeroByte) as int
 
 	// ASCII (1 byte): 0xxxxxxx
 	if b0 < 128 'ascii'
-		return b0
+			return b0
 	end 'ascii'
 
 	// 2-byte sequence: 110xxxxx 10xxxxxx
 	if b0 < 224 'two_byte'
-		var b1 = data[offset + 1] as int
-		var cp = ((b0 mod 32) * 64) + (b1 mod 64)
-		return cp
+			var b1 = (try data.get(index: offset + 1) otherwise zeroByte) as int
+			var cp = ((b0 mod 32) * 64) + (b1 mod 64)
+			return cp
 	end 'two_byte'
 
 	// 3-byte sequence: 1110xxxx 10xxxxxx 10xxxxxx
 	if b0 < 240 'three_byte'
-		var b1 = data[offset + 1] as int
-		var b2 = data[offset + 2] as int
-		var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
-		return cp
+			var b1 = (try data.get(index: offset + 1) otherwise zeroByte) as int
+			var b2 = (try data.get(index: offset + 2) otherwise zeroByte) as int
+			var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+			return cp
 	end 'three_byte'
 
 	// 4-byte sequence: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
-	var b1 = data[offset + 1] as int
-	var b2 = data[offset + 2] as int
-	var b3 = data[offset + 3] as int
+	var b1 = (try data.get(index: offset + 1) otherwise zeroByte) as int
+	var b2 = (try data.get(index: offset + 2) otherwise zeroByte) as int
+	var b3 = (try data.get(index: offset + 3) otherwise zeroByte) as int
 	var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
 	return cp
 end 'utf8Decode'
@@ -111,15 +113,15 @@ end 'utf8Decode'
 /// Get the number of bytes needed to encode a codepoint in UTF-8
 export function utf8EncodeLength(codepoint int) returns int
 	if codepoint < 128 'ascii'
-		return 1
+			return 1
 	end 'ascii'
 
 	if codepoint < 2048 'two_byte'
-		return 2
+			return 2
 	end 'two_byte'
 
 	if codepoint < 65536 'three_byte'
-		return 3
+			return 3
 	end 'three_byte'
 
 	return 4
@@ -130,12 +132,12 @@ end 'utf8EncodeLength'
 export function utf8IsValidCodepoint(cp int) returns bool
 	// Valid range: 0x0000-0x10FFFF, excluding surrogate pairs (0xD800-0xDFFF)
 	if cp < 0 or cp > 1114111 'range_check'
-		return false
+			return false
 	end 'range_check'
 
 	// Exclude surrogate pairs
 	if cp >= 55296 and cp <= 57343 'surrogate_check'
-		return false
+			return false
 	end 'surrogate_check'
 
 	return true
@@ -149,13 +151,13 @@ end 'utf8IsValidCodepoint'
 export function utf8ByteLengthAt(managed __ManagedArray, pos int) returns int
 	var b0 = __managed_array_byte_at(managed, pos) as int
 	if b0 < 128 'ascii'
-		return 1
+			return 1
 	end 'ascii'
 	if b0 < 224 'two'
-		return 2
+			return 2
 	end 'two'
 	if b0 < 240 'three'
-		return 3
+			return 3
 	end 'three'
 	return 4
 end 'utf8ByteLengthAt'
@@ -164,16 +166,16 @@ end 'utf8ByteLengthAt'
 export function utf8DecodeAt(managed __ManagedArray, pos int) returns int
 	var b0 = __managed_array_byte_at(managed, pos) as int
 	if b0 < 128 'ascii'
-		return b0
+			return b0
 	end 'ascii'
 	if b0 < 224 'two'
-		var b1 = __managed_array_byte_at(managed, pos + 1) as int
-		return ((b0 mod 32) * 64) + (b1 mod 64)
+			var b1 = __managed_array_byte_at(managed, pos + 1) as int
+			return ((b0 mod 32) * 64) + (b1 mod 64)
 	end 'two'
 	if b0 < 240 'three'
-		var b1 = __managed_array_byte_at(managed, pos + 1) as int
-		var b2 = __managed_array_byte_at(managed, pos + 2) as int
-		return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
+			var b1 = __managed_array_byte_at(managed, pos + 1) as int
+			var b2 = __managed_array_byte_at(managed, pos + 2) as int
+			return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
 	end 'three'
 	var b1 = __managed_array_byte_at(managed, pos + 1) as int
 	var b2 = __managed_array_byte_at(managed, pos + 2) as int

@@ -108,6 +108,10 @@ pub const ErrorCode = enum {
     E049, // missing required argument
     E050, // unexported field access
     E051, // unknown interface
+    E052, // missing parameter name
+    E053, // bracket indexing not supported
+    E054, // main cannot throw
+    E055, // if try requires throwing expression
 
     const Info = struct {
         code: []const u8,
@@ -161,6 +165,10 @@ pub const ErrorCode = enum {
         .{ .code = "E049", .message = "missing required argument" },
         .{ .code = "E050", .message = "cannot access unexported field" },
         .{ .code = "E051", .message = "unknown interface" },
+        .{ .code = "E052", .message = "arguments must include parameter name" },
+        .{ .code = "E053", .message = "bracket indexing not supported" },
+        .{ .code = "E054", .message = "main cannot throw" },
+        .{ .code = "E055", .message = "if try requires a throwing function call" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {
@@ -177,6 +185,7 @@ pub const SourceLocation = struct {
     file: ?[]const u8,
     line: u32,
     column: u32,
+    file_allocated: bool = false, // Whether file was duplicated and needs to be freed
 
     pub fn init(line: u32, column: u32) SourceLocation {
         return .{ .file = null, .line = line, .column = column };

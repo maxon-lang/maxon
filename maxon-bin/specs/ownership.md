@@ -177,8 +177,9 @@ end 'Container'
 function main() returns int
     var arr = [10, 20, 30]
     var c = Container{data: arr}
-    arr[0] = 999
-    return c.data[0]
+    arr.set(0, value: 999)
+    var val = try c.data.get(0) otherwise 0
+    return val
 end 'main'
 ```
 ```maxoncstderr
@@ -257,18 +258,14 @@ Moved arrays are not freed by the original owner, preventing double-free.
 The caller allocates, the callee (mutateFirst) takes ownership and frees.
 ```maxon
 function mutateFirst(arr Array of int) returns int
-    arr[0] = 100
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    arr.set(0, value: 100)
+    return try arr.get(0) otherwise 0
 end 'mutateFirst'
 
 function main() returns int
     let size = 3
     var arr = Array of size int
-    arr[0] = 42
+    arr.set(0, value: 42)
     return mutateFirst(arr)
 end 'main'
 ```
@@ -483,42 +480,6 @@ end 'main'
 10
 ```
 
-<!-- test: or-block-early-return -->
-Or block with early return allows variable use after guard-let.
-```maxon
-function getValue(opt int or nil) returns int
-    let v = opt or 'empty'
-        return 0
-    end 'empty'
-    return v
-end 'getValue'
-
-function main() returns int
-    return getValue(42)
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: or-block-nil-case -->
-Or block nil case returns early, leaving variable unused.
-```maxon
-function getValue(opt int or nil) returns int
-    let v = opt or 'empty'
-        return 0
-    end 'empty'
-    return v
-end 'getValue'
-
-function main() returns int
-    return getValue(nil)
-end 'main'
-```
-```exitcode
-0
-```
-
 <!-- test: nested-if-with-returns -->
 Nested if statements with returns restore ownership correctly.
 ```maxon
@@ -544,7 +505,7 @@ function test(a int, b int) returns int
 end 'test'
 
 function main() returns int
-    return test(2, 2)
+    return test(2, b: 2)
 end 'main'
 ```
 ```exitcode

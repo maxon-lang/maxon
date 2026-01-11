@@ -1,30 +1,27 @@
 // Test: directory.list-directory.1
 function main() returns int
-    do 'list'
-        let files = try Directory.list("../bin")
-        // bin directory should contain maxon.exe
-        var foundMaxon = false
-        for f in files 'loop'
-            if f == "maxon.exe" 'check'
-                foundMaxon = true
-            end 'check'
-        end 'loop'
-        if foundMaxon 'result'
-            return 42
-        end 'result'
-        return 1
-    end 'list' catch (e DirectoryError) 'err'
+    let files = try Directory.list("../bin") otherwise 'err'
         return 0
     end 'err'
+    // bin directory should contain maxon.exe
+    var foundMaxon = false
+    for f in files 'loop'
+        if f == "maxon.exe" 'check'
+            foundMaxon = true
+        end 'check'
+    end 'loop'
+    if foundMaxon 'result'
+        return 42
+    end 'result'
+    return 1
 end 'main'
 ---
 ExitCode: 42
 ---
 function main() -> i64 {
 entry:
-    %tmp_alloca = alloca.sized ptr 64
-    %tmp_alloca.1 = alloca.sized ptr 16
-    %tmp_alloca.2 = alloca.sized ptr 32
+    %tmp_alloca = alloca.sized ptr 16
+    %tmp_alloca.1 = alloca.sized ptr 32
     %tmp_const = const.i64 i64 15
     %tmp_heap = heap.alloc ptr %tmp_const tag="string buffer"
     %tmp_const.1 = const.i64 i64 1
@@ -59,329 +56,320 @@ entry:
     %tmp_elemptr.7 = getelemptr ptr %tmp_elemptr %tmp_const.15 elemsize=1
     %tmp_const.16 = const.i8 i8 0
     store.i8 %tmp_elemptr.7 %tmp_const.16
-    store %tmp_alloca.2 %tmp_elemptr
+    store %tmp_alloca.1 %tmp_elemptr
     %tmp_const.17 = const.i64 i64 6
-    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
     store %tmp_fieldptr %tmp_const.17
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 16
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 16
     store %tmp_fieldptr.1 %tmp_const.17
     %tmp_const.18 = const.i32 i32 1
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.2 24
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.1 24
     store.i32 %tmp_fieldptr.2 %tmp_const.18
     %tmp_const.19 = const.i32 i32 0
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.2 28
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.1 28
     store.i32 %tmp_fieldptr.3 %tmp_const.19
-    %tmp_alloca.3 = alloca.sized ptr 40
-    %tmp_call = call ptr @String$init(%tmp_alloca.3, %tmp_alloca.2)
-    %tmp_call.1 = call ptr @Directory$list(%tmp_alloca.1, %tmp_alloca.3)
-    %tmp_load = load i64 %tmp_alloca.1
+    %tmp_alloca.2 = alloca.sized ptr 40
+    %tmp_call = call ptr @String$init(%tmp_alloca.2, %tmp_alloca.1)
+    %tmp_call.1 = call ptr @Directory$list(%tmp_alloca, %tmp_alloca.2)
+    %tmp_load = load i64 %tmp_alloca
     %tmp_const.20 = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.20
+    %files = alloca.sized ptr 8
     br.cond %tmp_icmp @block1 @block2
 try_success:
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.1 8
-    %tmp_alloca.4 = alloca ptr
-    store %tmp_alloca.4 %tmp_fieldptr.4
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca 8
+    memcpy %files %tmp_fieldptr.4 8
     br @block3
-try_propagate:
-    memcpy %tmp_alloca %tmp_alloca.1 64
-    br @block32
-try_merge:
-    %files = load ptr %tmp_alloca.4
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.3 24
-    %tmp_load.2 = load i32 %tmp_fieldptr.5
-    %tmp_const.21 = const.i32 i32 3
-    %tmp_band = band i32 %tmp_load.2 %tmp_const.21
-    %tmp_const.22 = const.i32 i32 1
-    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.22
-    br.cond %tmp_icmp.1 @block4 @block6
+try_otherwise_block:
+    %tmp_const.21 = const.i64 i64 0
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.2 24
+    %tmp_load.1 = load i32 %tmp_fieldptr.5
+    %tmp_const.22 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.1 %tmp_const.22
+    %tmp_const.23 = const.i32 i32 1
+    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.23
+    br.cond %tmp_icmp.1 @block3 @block5
 decref:
-    %tmp_load.3 = load ptr %tmp_alloca.3
-    %tmp_const.23 = const.i64 i64 8
-    %tmp_sub = sub ptr %tmp_load.3 %tmp_const.23
-    %tmp_load.4 = load i64 %tmp_sub
-    %tmp_const.24 = const.i64 i64 1
-    %tmp_sub.1 = sub i64 %tmp_load.4 %tmp_const.24
+    %tmp_load.2 = load ptr %tmp_alloca.2
+    %tmp_const.24 = const.i64 i64 8
+    %tmp_sub = sub ptr %tmp_load.2 %tmp_const.24
+    %tmp_load.3 = load i64 %tmp_sub
+    %tmp_const.25 = const.i64 i64 1
+    %tmp_sub.1 = sub i64 %tmp_load.3 %tmp_const.25
     store %tmp_sub %tmp_sub.1
-    %tmp_const.25 = const.i64 i64 0
-    %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.25
-    br.cond %tmp_icmp.2 @block5 @block6
-decref_free:
-    %tmp_load.5 = load ptr %tmp_alloca.3
-    %tmp_sub.2 = sub ptr %tmp_load.5 %tmp_const.23
-    heap.free %tmp_sub.2 tag="string cleanup"
-    br @block6
-decref_end:
     %tmp_const.26 = const.i64 i64 0
+    %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.26
+    br.cond %tmp_icmp.2 @block4 @block5
+decref_free:
+    %tmp_load.4 = load ptr %tmp_alloca.2
+    %tmp_sub.2 = sub ptr %tmp_load.4 %tmp_const.24
+    heap.free %tmp_sub.2 tag="string cleanup"
+    br @block5
+decref_end:
+    ret %tmp_const.21
+try_merge:
+    %tmp_const.27 = const.i64 i64 0
     %foundMaxon = alloca ptr
-    store %foundMaxon %tmp_const.26
-    %tmp_alloca.6 = alloca.sized ptr 40
-    memcpy %tmp_alloca.6 %files 40
+    store %foundMaxon %tmp_const.27
+    %tmp_alloca.5 = alloca.sized ptr 40
+    memcpy %tmp_alloca.5 %files 40
     br @block7
 forcond:
-    %tmp_alloca.7 = alloca.sized ptr 48
-    %tmp_call.2 = call ptr @Array$String$next(%tmp_alloca.7, %tmp_alloca.6)
-    %tmp_load.6 = load i64 %tmp_alloca.7
-    %tmp_const.27 = const.i64 i64 1
-    %tmp_icmp.3 = icmp.eq i64 %tmp_load.6 %tmp_const.27
+    %tmp_alloca.6 = alloca.sized ptr 48
+    %tmp_call.2 = call ptr @Array$String$next(%tmp_alloca.6, %tmp_alloca.5)
+    %tmp_load.5 = load i64 %tmp_alloca.6
+    %tmp_const.28 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.eq i64 %tmp_load.5 %tmp_const.28
     br.cond %tmp_icmp.3 @block8 @block17
 forbody:
-    %tmp_const.28 = const.i64 i64 8
-    %tmp_add = add ptr %tmp_alloca.7 %tmp_const.28
-    %tmp_alloca.8 = alloca.sized ptr 32
-    %tmp_const.29 = const.i64 i64 18
-    %tmp_heap.1 = heap.alloc ptr %tmp_const.29 tag="string buffer"
-    %tmp_const.30 = const.i64 i64 1
-    store %tmp_heap.1 %tmp_const.30
-    %tmp_const.31 = const.i64 i64 8
-    %tmp_elemptr.8 = getelemptr ptr %tmp_heap.1 %tmp_const.31 elemsize=1
-    %tmp_const.32 = const.i64 i64 0
-    %tmp_elemptr.9 = getelemptr ptr %tmp_elemptr.8 %tmp_const.32 elemsize=1
-    %tmp_const.33 = const.i8 i8 109
-    store.i8 %tmp_elemptr.9 %tmp_const.33
-    %tmp_const.34 = const.i64 i64 1
-    %tmp_elemptr.10 = getelemptr ptr %tmp_elemptr.8 %tmp_const.34 elemsize=1
-    %tmp_const.35 = const.i8 i8 97
-    store.i8 %tmp_elemptr.10 %tmp_const.35
-    %tmp_const.36 = const.i64 i64 2
-    %tmp_elemptr.11 = getelemptr ptr %tmp_elemptr.8 %tmp_const.36 elemsize=1
-    %tmp_const.37 = const.i8 i8 120
-    store.i8 %tmp_elemptr.11 %tmp_const.37
-    %tmp_const.38 = const.i64 i64 3
-    %tmp_elemptr.12 = getelemptr ptr %tmp_elemptr.8 %tmp_const.38 elemsize=1
-    %tmp_const.39 = const.i8 i8 111
-    store.i8 %tmp_elemptr.12 %tmp_const.39
-    %tmp_const.40 = const.i64 i64 4
-    %tmp_elemptr.13 = getelemptr ptr %tmp_elemptr.8 %tmp_const.40 elemsize=1
-    %tmp_const.41 = const.i8 i8 110
-    store.i8 %tmp_elemptr.13 %tmp_const.41
-    %tmp_const.42 = const.i64 i64 5
-    %tmp_elemptr.14 = getelemptr ptr %tmp_elemptr.8 %tmp_const.42 elemsize=1
-    %tmp_const.43 = const.i8 i8 46
-    store.i8 %tmp_elemptr.14 %tmp_const.43
-    %tmp_const.44 = const.i64 i64 6
-    %tmp_elemptr.15 = getelemptr ptr %tmp_elemptr.8 %tmp_const.44 elemsize=1
-    %tmp_const.45 = const.i8 i8 101
-    store.i8 %tmp_elemptr.15 %tmp_const.45
-    %tmp_const.46 = const.i64 i64 7
-    %tmp_elemptr.16 = getelemptr ptr %tmp_elemptr.8 %tmp_const.46 elemsize=1
-    %tmp_const.47 = const.i8 i8 120
-    store.i8 %tmp_elemptr.16 %tmp_const.47
-    %tmp_const.48 = const.i64 i64 8
-    %tmp_elemptr.17 = getelemptr ptr %tmp_elemptr.8 %tmp_const.48 elemsize=1
-    %tmp_const.49 = const.i8 i8 101
-    store.i8 %tmp_elemptr.17 %tmp_const.49
-    %tmp_const.50 = const.i64 i64 9
-    %tmp_elemptr.18 = getelemptr ptr %tmp_elemptr.8 %tmp_const.50 elemsize=1
-    %tmp_const.51 = const.i8 i8 0
-    store.i8 %tmp_elemptr.18 %tmp_const.51
-    store %tmp_alloca.8 %tmp_elemptr.8
-    %tmp_const.52 = const.i64 i64 9
-    %tmp_fieldptr.6 = getfieldptr ptr %tmp_alloca.8 8
-    store %tmp_fieldptr.6 %tmp_const.52
-    %tmp_fieldptr.7 = getfieldptr ptr %tmp_alloca.8 16
-    store %tmp_fieldptr.7 %tmp_const.52
-    %tmp_const.53 = const.i32 i32 1
-    %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.8 24
-    store.i32 %tmp_fieldptr.8 %tmp_const.53
-    %tmp_const.54 = const.i32 i32 0
-    %tmp_fieldptr.9 = getfieldptr ptr %tmp_alloca.8 28
-    store.i32 %tmp_fieldptr.9 %tmp_const.54
-    %tmp_alloca.9 = alloca.sized ptr 40
-    %tmp_call.3 = call ptr @String$init(%tmp_alloca.9, %tmp_alloca.8)
-    %tmp_call.4 = call i64 @String$equals(%tmp_add, %tmp_alloca.9)
-    %tmp_fieldptr.10 = getfieldptr ptr %tmp_alloca.9 24
-    %tmp_load.7 = load i32 %tmp_fieldptr.10
-    %tmp_const.55 = const.i32 i32 3
-    %tmp_band.1 = band i32 %tmp_load.7 %tmp_const.55
-    %tmp_const.56 = const.i32 i32 1
-    %tmp_icmp.4 = icmp.eq i32 %tmp_band.1 %tmp_const.56
+    %tmp_const.29 = const.i64 i64 8
+    %tmp_add = add ptr %tmp_alloca.6 %tmp_const.29
+    %tmp_alloca.7 = alloca.sized ptr 32
+    %tmp_const.30 = const.i64 i64 18
+    %tmp_heap.1 = heap.alloc ptr %tmp_const.30 tag="string buffer"
+    %tmp_const.31 = const.i64 i64 1
+    store %tmp_heap.1 %tmp_const.31
+    %tmp_const.32 = const.i64 i64 8
+    %tmp_elemptr.8 = getelemptr ptr %tmp_heap.1 %tmp_const.32 elemsize=1
+    %tmp_const.33 = const.i64 i64 0
+    %tmp_elemptr.9 = getelemptr ptr %tmp_elemptr.8 %tmp_const.33 elemsize=1
+    %tmp_const.34 = const.i8 i8 109
+    store.i8 %tmp_elemptr.9 %tmp_const.34
+    %tmp_const.35 = const.i64 i64 1
+    %tmp_elemptr.10 = getelemptr ptr %tmp_elemptr.8 %tmp_const.35 elemsize=1
+    %tmp_const.36 = const.i8 i8 97
+    store.i8 %tmp_elemptr.10 %tmp_const.36
+    %tmp_const.37 = const.i64 i64 2
+    %tmp_elemptr.11 = getelemptr ptr %tmp_elemptr.8 %tmp_const.37 elemsize=1
+    %tmp_const.38 = const.i8 i8 120
+    store.i8 %tmp_elemptr.11 %tmp_const.38
+    %tmp_const.39 = const.i64 i64 3
+    %tmp_elemptr.12 = getelemptr ptr %tmp_elemptr.8 %tmp_const.39 elemsize=1
+    %tmp_const.40 = const.i8 i8 111
+    store.i8 %tmp_elemptr.12 %tmp_const.40
+    %tmp_const.41 = const.i64 i64 4
+    %tmp_elemptr.13 = getelemptr ptr %tmp_elemptr.8 %tmp_const.41 elemsize=1
+    %tmp_const.42 = const.i8 i8 110
+    store.i8 %tmp_elemptr.13 %tmp_const.42
+    %tmp_const.43 = const.i64 i64 5
+    %tmp_elemptr.14 = getelemptr ptr %tmp_elemptr.8 %tmp_const.43 elemsize=1
+    %tmp_const.44 = const.i8 i8 46
+    store.i8 %tmp_elemptr.14 %tmp_const.44
+    %tmp_const.45 = const.i64 i64 6
+    %tmp_elemptr.15 = getelemptr ptr %tmp_elemptr.8 %tmp_const.45 elemsize=1
+    %tmp_const.46 = const.i8 i8 101
+    store.i8 %tmp_elemptr.15 %tmp_const.46
+    %tmp_const.47 = const.i64 i64 7
+    %tmp_elemptr.16 = getelemptr ptr %tmp_elemptr.8 %tmp_const.47 elemsize=1
+    %tmp_const.48 = const.i8 i8 120
+    store.i8 %tmp_elemptr.16 %tmp_const.48
+    %tmp_const.49 = const.i64 i64 8
+    %tmp_elemptr.17 = getelemptr ptr %tmp_elemptr.8 %tmp_const.49 elemsize=1
+    %tmp_const.50 = const.i8 i8 101
+    store.i8 %tmp_elemptr.17 %tmp_const.50
+    %tmp_const.51 = const.i64 i64 9
+    %tmp_elemptr.18 = getelemptr ptr %tmp_elemptr.8 %tmp_const.51 elemsize=1
+    %tmp_const.52 = const.i8 i8 0
+    store.i8 %tmp_elemptr.18 %tmp_const.52
+    store %tmp_alloca.7 %tmp_elemptr.8
+    %tmp_const.53 = const.i64 i64 9
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_alloca.7 8
+    store %tmp_fieldptr.6 %tmp_const.53
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_alloca.7 16
+    store %tmp_fieldptr.7 %tmp_const.53
+    %tmp_const.54 = const.i32 i32 1
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.7 24
+    store.i32 %tmp_fieldptr.8 %tmp_const.54
+    %tmp_const.55 = const.i32 i32 0
+    %tmp_fieldptr.9 = getfieldptr ptr %tmp_alloca.7 28
+    store.i32 %tmp_fieldptr.9 %tmp_const.55
+    %tmp_alloca.8 = alloca.sized ptr 40
+    %tmp_call.3 = call ptr @String$init(%tmp_alloca.8, %tmp_alloca.7)
+    %tmp_call.4 = call i64 @String$equals(%tmp_add, %tmp_alloca.8)
+    %tmp_fieldptr.10 = getfieldptr ptr %tmp_alloca.8 24
+    %tmp_load.6 = load i32 %tmp_fieldptr.10
+    %tmp_const.56 = const.i32 i32 3
+    %tmp_band.1 = band i32 %tmp_load.6 %tmp_const.56
+    %tmp_const.57 = const.i32 i32 1
+    %tmp_icmp.4 = icmp.eq i32 %tmp_band.1 %tmp_const.57
     br.cond %tmp_icmp.4 @block9 @block11
 decref:
-    %tmp_load.8 = load ptr %tmp_alloca.9
-    %tmp_const.57 = const.i64 i64 8
-    %tmp_sub.3 = sub ptr %tmp_load.8 %tmp_const.57
-    %tmp_load.9 = load i64 %tmp_sub.3
-    %tmp_const.58 = const.i64 i64 1
-    %tmp_sub.4 = sub i64 %tmp_load.9 %tmp_const.58
+    %tmp_load.7 = load ptr %tmp_alloca.8
+    %tmp_const.58 = const.i64 i64 8
+    %tmp_sub.3 = sub ptr %tmp_load.7 %tmp_const.58
+    %tmp_load.8 = load i64 %tmp_sub.3
+    %tmp_const.59 = const.i64 i64 1
+    %tmp_sub.4 = sub i64 %tmp_load.8 %tmp_const.59
     store %tmp_sub.3 %tmp_sub.4
-    %tmp_const.59 = const.i64 i64 0
-    %tmp_icmp.5 = icmp.eq i64 %tmp_sub.4 %tmp_const.59
+    %tmp_const.60 = const.i64 i64 0
+    %tmp_icmp.5 = icmp.eq i64 %tmp_sub.4 %tmp_const.60
     br.cond %tmp_icmp.5 @block10 @block11
 decref_free:
-    %tmp_load.10 = load ptr %tmp_alloca.9
-    %tmp_sub.5 = sub ptr %tmp_load.10 %tmp_const.57
+    %tmp_load.9 = load ptr %tmp_alloca.8
+    %tmp_sub.5 = sub ptr %tmp_load.9 %tmp_const.58
     heap.free %tmp_sub.5 tag="string cleanup"
     br @block11
 decref_end:
     br.cond %tmp_call.4 @block12 @block13
 then:
-    %tmp_const.60 = const.i64 i64 1
-    store %foundMaxon %tmp_const.60
+    %tmp_const.61 = const.i64 i64 1
+    store %foundMaxon %tmp_const.61
     br @block13
 end:
     %tmp_fieldptr.11 = getfieldptr ptr %tmp_add 24
-    %tmp_load.11 = load i32 %tmp_fieldptr.11
-    %tmp_const.61 = const.i32 i32 3
-    %tmp_band.2 = band i32 %tmp_load.11 %tmp_const.61
-    %tmp_const.62 = const.i32 i32 1
-    %tmp_icmp.6 = icmp.eq i32 %tmp_band.2 %tmp_const.62
+    %tmp_load.10 = load i32 %tmp_fieldptr.11
+    %tmp_const.62 = const.i32 i32 3
+    %tmp_band.2 = band i32 %tmp_load.10 %tmp_const.62
+    %tmp_const.63 = const.i32 i32 1
+    %tmp_icmp.6 = icmp.eq i32 %tmp_band.2 %tmp_const.63
     br.cond %tmp_icmp.6 @block14 @block16
 decref:
-    %tmp_load.12 = load ptr %tmp_add
-    %tmp_const.63 = const.i64 i64 8
-    %tmp_sub.6 = sub ptr %tmp_load.12 %tmp_const.63
-    %tmp_load.13 = load i64 %tmp_sub.6
-    %tmp_const.64 = const.i64 i64 1
-    %tmp_sub.7 = sub i64 %tmp_load.13 %tmp_const.64
+    %tmp_load.11 = load ptr %tmp_add
+    %tmp_const.64 = const.i64 i64 8
+    %tmp_sub.6 = sub ptr %tmp_load.11 %tmp_const.64
+    %tmp_load.12 = load i64 %tmp_sub.6
+    %tmp_const.65 = const.i64 i64 1
+    %tmp_sub.7 = sub i64 %tmp_load.12 %tmp_const.65
     store %tmp_sub.6 %tmp_sub.7
-    %tmp_const.65 = const.i64 i64 0
-    %tmp_icmp.7 = icmp.eq i64 %tmp_sub.7 %tmp_const.65
+    %tmp_const.66 = const.i64 i64 0
+    %tmp_icmp.7 = icmp.eq i64 %tmp_sub.7 %tmp_const.66
     br.cond %tmp_icmp.7 @block15 @block16
 decref_free:
-    %tmp_load.14 = load ptr %tmp_add
-    %tmp_sub.8 = sub ptr %tmp_load.14 %tmp_const.63
+    %tmp_load.13 = load ptr %tmp_add
+    %tmp_sub.8 = sub ptr %tmp_load.13 %tmp_const.64
     heap.free %tmp_sub.8 tag="string cleanup"
     br @block16
 decref_end:
     br @block7
 forcont:
-    %tmp_load.15 = load i64 %foundMaxon
-    br.cond %tmp_load.15 @block18 @block25
+    %tmp_load.14 = load i64 %foundMaxon
+    br.cond %tmp_load.14 @block18 @block25
 then:
-    %tmp_const.66 = const.i64 i64 42
+    %tmp_const.67 = const.i64 i64 42
     %tmp_fieldptr.12 = getfieldptr ptr %files 8
-    %tmp_load.16 = load i64 %tmp_fieldptr.12
-    %tmp_const.67 = const.i64 i64 0
-    %tmp_icmp.8 = icmp.eq i64 %tmp_load.16 %tmp_const.67
-    %tmp_alloca.10 = alloca ptr
-    store %tmp_alloca.10 %tmp_const.67
+    %tmp_load.15 = load i64 %tmp_fieldptr.12
+    %tmp_const.68 = const.i64 i64 0
+    %tmp_icmp.8 = icmp.eq i64 %tmp_load.15 %tmp_const.68
+    %tmp_alloca.9 = alloca ptr
+    store %tmp_alloca.9 %tmp_const.68
     br.cond %tmp_icmp.8 @block24 @block19
 arr_str_cleanup_cond:
     %tmp_fieldptr.13 = getfieldptr ptr %files 8
-    %tmp_load.17 = load i64 %tmp_fieldptr.13
-    %tmp_load.18 = load i64 %tmp_alloca.10
-    %tmp_icmp.9 = icmp.ge i64 %tmp_load.18 %tmp_load.17
+    %tmp_load.16 = load i64 %tmp_fieldptr.13
+    %tmp_load.17 = load i64 %tmp_alloca.9
+    %tmp_icmp.9 = icmp.ge i64 %tmp_load.17 %tmp_load.16
     br.cond %tmp_icmp.9 @block24 @block20
 arr_str_cleanup_body:
-    %tmp_load.19 = load ptr %files
-    %tmp_load.20 = load i64 %tmp_alloca.10
-    %tmp_const.68 = const.i64 i64 40
-    %tmp_mul = mul i64 %tmp_load.20 %tmp_const.68
-    %tmp_add.1 = add ptr %tmp_load.19 %tmp_mul
+    %tmp_load.18 = load ptr %files
+    %tmp_load.19 = load i64 %tmp_alloca.9
+    %tmp_const.69 = const.i64 i64 40
+    %tmp_mul = mul i64 %tmp_load.19 %tmp_const.69
+    %tmp_add.1 = add ptr %tmp_load.18 %tmp_mul
     %tmp_fieldptr.14 = getfieldptr ptr %tmp_add.1 24
-    %tmp_load.21 = load i32 %tmp_fieldptr.14
-    %tmp_const.69 = const.i32 i32 3
-    %tmp_band.3 = band i32 %tmp_load.21 %tmp_const.69
-    %tmp_const.70 = const.i32 i32 1
-    %tmp_icmp.10 = icmp.eq i32 %tmp_band.3 %tmp_const.70
+    %tmp_load.20 = load i32 %tmp_fieldptr.14
+    %tmp_const.70 = const.i32 i32 3
+    %tmp_band.3 = band i32 %tmp_load.20 %tmp_const.70
+    %tmp_const.71 = const.i32 i32 1
+    %tmp_icmp.10 = icmp.eq i32 %tmp_band.3 %tmp_const.71
     br.cond %tmp_icmp.10 @block21 @block23
 arr_str_cleanup_decref:
-    %tmp_load.22 = load ptr %files
-    %tmp_load.23 = load i64 %tmp_alloca.10
-    %tmp_mul.1 = mul i64 %tmp_load.23 %tmp_const.68
-    %tmp_add.2 = add ptr %tmp_load.22 %tmp_mul.1
-    %tmp_load.24 = load ptr %tmp_add.2
-    %tmp_const.71 = const.i64 i64 8
-    %tmp_sub.9 = sub ptr %tmp_load.24 %tmp_const.71
-    %tmp_load.25 = load i64 %tmp_sub.9
-    %tmp_const.72 = const.i64 i64 1
-    %tmp_sub.10 = sub i64 %tmp_load.25 %tmp_const.72
+    %tmp_load.21 = load ptr %files
+    %tmp_load.22 = load i64 %tmp_alloca.9
+    %tmp_mul.1 = mul i64 %tmp_load.22 %tmp_const.69
+    %tmp_add.2 = add ptr %tmp_load.21 %tmp_mul.1
+    %tmp_load.23 = load ptr %tmp_add.2
+    %tmp_const.72 = const.i64 i64 8
+    %tmp_sub.9 = sub ptr %tmp_load.23 %tmp_const.72
+    %tmp_load.24 = load i64 %tmp_sub.9
+    %tmp_const.73 = const.i64 i64 1
+    %tmp_sub.10 = sub i64 %tmp_load.24 %tmp_const.73
     store %tmp_sub.9 %tmp_sub.10
-    %tmp_const.73 = const.i64 i64 0
-    %tmp_icmp.11 = icmp.eq i64 %tmp_sub.10 %tmp_const.73
+    %tmp_const.74 = const.i64 i64 0
+    %tmp_icmp.11 = icmp.eq i64 %tmp_sub.10 %tmp_const.74
     br.cond %tmp_icmp.11 @block22 @block23
 arr_str_cleanup_heap_free:
-    %tmp_load.26 = load ptr %files
-    %tmp_load.27 = load i64 %tmp_alloca.10
-    %tmp_mul.2 = mul i64 %tmp_load.27 %tmp_const.68
-    %tmp_add.3 = add ptr %tmp_load.26 %tmp_mul.2
-    %tmp_load.28 = load ptr %tmp_add.3
-    %tmp_const.74 = const.i64 i64 8
-    %tmp_sub.11 = sub ptr %tmp_load.28 %tmp_const.74
+    %tmp_load.25 = load ptr %files
+    %tmp_load.26 = load i64 %tmp_alloca.9
+    %tmp_mul.2 = mul i64 %tmp_load.26 %tmp_const.69
+    %tmp_add.3 = add ptr %tmp_load.25 %tmp_mul.2
+    %tmp_load.27 = load ptr %tmp_add.3
+    %tmp_const.75 = const.i64 i64 8
+    %tmp_sub.11 = sub ptr %tmp_load.27 %tmp_const.75
     heap.free %tmp_sub.11 tag="string cleanup"
     br @block23
 arr_str_cleanup_next:
-    %tmp_const.75 = const.i64 i64 1
-    %tmp_load.29 = load i64 %tmp_alloca.10
-    %tmp_add.4 = add i64 %tmp_load.29 %tmp_const.75
-    store %tmp_alloca.10 %tmp_add.4
+    %tmp_const.76 = const.i64 i64 1
+    %tmp_load.28 = load i64 %tmp_alloca.9
+    %tmp_add.4 = add i64 %tmp_load.28 %tmp_const.76
+    store %tmp_alloca.9 %tmp_add.4
     br @block19
 arr_str_cleanup_end:
-    %tmp_load.30 = load ptr %files
-    heap.free %tmp_load.30 tag="array cleanup"
-    ret %tmp_const.66
+    %tmp_load.29 = load ptr %files
+    heap.free %tmp_load.29 tag="array cleanup"
+    ret %tmp_const.67
 end:
-    %tmp_const.76 = const.i64 i64 1
+    %tmp_const.77 = const.i64 i64 1
     %tmp_fieldptr.15 = getfieldptr ptr %files 8
-    %tmp_load.31 = load i64 %tmp_fieldptr.15
-    %tmp_const.77 = const.i64 i64 0
-    %tmp_icmp.12 = icmp.eq i64 %tmp_load.31 %tmp_const.77
-    %tmp_alloca.11 = alloca ptr
-    store %tmp_alloca.11 %tmp_const.77
+    %tmp_load.30 = load i64 %tmp_fieldptr.15
+    %tmp_const.78 = const.i64 i64 0
+    %tmp_icmp.12 = icmp.eq i64 %tmp_load.30 %tmp_const.78
+    %tmp_alloca.10 = alloca ptr
+    store %tmp_alloca.10 %tmp_const.78
     br.cond %tmp_icmp.12 @block31 @block26
 arr_str_cleanup_cond:
     %tmp_fieldptr.16 = getfieldptr ptr %files 8
-    %tmp_load.32 = load i64 %tmp_fieldptr.16
-    %tmp_load.33 = load i64 %tmp_alloca.11
-    %tmp_icmp.13 = icmp.ge i64 %tmp_load.33 %tmp_load.32
+    %tmp_load.31 = load i64 %tmp_fieldptr.16
+    %tmp_load.32 = load i64 %tmp_alloca.10
+    %tmp_icmp.13 = icmp.ge i64 %tmp_load.32 %tmp_load.31
     br.cond %tmp_icmp.13 @block31 @block27
 arr_str_cleanup_body:
-    %tmp_load.34 = load ptr %files
-    %tmp_load.35 = load i64 %tmp_alloca.11
-    %tmp_const.78 = const.i64 i64 40
-    %tmp_mul.3 = mul i64 %tmp_load.35 %tmp_const.78
-    %tmp_add.5 = add ptr %tmp_load.34 %tmp_mul.3
+    %tmp_load.33 = load ptr %files
+    %tmp_load.34 = load i64 %tmp_alloca.10
+    %tmp_const.79 = const.i64 i64 40
+    %tmp_mul.3 = mul i64 %tmp_load.34 %tmp_const.79
+    %tmp_add.5 = add ptr %tmp_load.33 %tmp_mul.3
     %tmp_fieldptr.17 = getfieldptr ptr %tmp_add.5 24
-    %tmp_load.36 = load i32 %tmp_fieldptr.17
-    %tmp_const.79 = const.i32 i32 3
-    %tmp_band.4 = band i32 %tmp_load.36 %tmp_const.79
-    %tmp_const.80 = const.i32 i32 1
-    %tmp_icmp.14 = icmp.eq i32 %tmp_band.4 %tmp_const.80
+    %tmp_load.35 = load i32 %tmp_fieldptr.17
+    %tmp_const.80 = const.i32 i32 3
+    %tmp_band.4 = band i32 %tmp_load.35 %tmp_const.80
+    %tmp_const.81 = const.i32 i32 1
+    %tmp_icmp.14 = icmp.eq i32 %tmp_band.4 %tmp_const.81
     br.cond %tmp_icmp.14 @block28 @block30
 arr_str_cleanup_decref:
-    %tmp_load.37 = load ptr %files
-    %tmp_load.38 = load i64 %tmp_alloca.11
-    %tmp_mul.4 = mul i64 %tmp_load.38 %tmp_const.78
-    %tmp_add.6 = add ptr %tmp_load.37 %tmp_mul.4
-    %tmp_load.39 = load ptr %tmp_add.6
-    %tmp_const.81 = const.i64 i64 8
-    %tmp_sub.12 = sub ptr %tmp_load.39 %tmp_const.81
-    %tmp_load.40 = load i64 %tmp_sub.12
-    %tmp_const.82 = const.i64 i64 1
-    %tmp_sub.13 = sub i64 %tmp_load.40 %tmp_const.82
+    %tmp_load.36 = load ptr %files
+    %tmp_load.37 = load i64 %tmp_alloca.10
+    %tmp_mul.4 = mul i64 %tmp_load.37 %tmp_const.79
+    %tmp_add.6 = add ptr %tmp_load.36 %tmp_mul.4
+    %tmp_load.38 = load ptr %tmp_add.6
+    %tmp_const.82 = const.i64 i64 8
+    %tmp_sub.12 = sub ptr %tmp_load.38 %tmp_const.82
+    %tmp_load.39 = load i64 %tmp_sub.12
+    %tmp_const.83 = const.i64 i64 1
+    %tmp_sub.13 = sub i64 %tmp_load.39 %tmp_const.83
     store %tmp_sub.12 %tmp_sub.13
-    %tmp_const.83 = const.i64 i64 0
-    %tmp_icmp.15 = icmp.eq i64 %tmp_sub.13 %tmp_const.83
+    %tmp_const.84 = const.i64 i64 0
+    %tmp_icmp.15 = icmp.eq i64 %tmp_sub.13 %tmp_const.84
     br.cond %tmp_icmp.15 @block29 @block30
 arr_str_cleanup_heap_free:
-    %tmp_load.41 = load ptr %files
-    %tmp_load.42 = load i64 %tmp_alloca.11
-    %tmp_mul.5 = mul i64 %tmp_load.42 %tmp_const.78
-    %tmp_add.7 = add ptr %tmp_load.41 %tmp_mul.5
-    %tmp_load.43 = load ptr %tmp_add.7
-    %tmp_const.84 = const.i64 i64 8
-    %tmp_sub.14 = sub ptr %tmp_load.43 %tmp_const.84
+    %tmp_load.40 = load ptr %files
+    %tmp_load.41 = load i64 %tmp_alloca.10
+    %tmp_mul.5 = mul i64 %tmp_load.41 %tmp_const.79
+    %tmp_add.7 = add ptr %tmp_load.40 %tmp_mul.5
+    %tmp_load.42 = load ptr %tmp_add.7
+    %tmp_const.85 = const.i64 i64 8
+    %tmp_sub.14 = sub ptr %tmp_load.42 %tmp_const.85
     heap.free %tmp_sub.14 tag="string cleanup"
     br @block30
 arr_str_cleanup_next:
-    %tmp_const.85 = const.i64 i64 1
-    %tmp_load.44 = load i64 %tmp_alloca.11
-    %tmp_add.8 = add i64 %tmp_load.44 %tmp_const.85
-    store %tmp_alloca.11 %tmp_add.8
+    %tmp_const.86 = const.i64 i64 1
+    %tmp_load.43 = load i64 %tmp_alloca.10
+    %tmp_add.8 = add i64 %tmp_load.43 %tmp_const.86
+    store %tmp_alloca.10 %tmp_add.8
     br @block26
 arr_str_cleanup_end:
-    %tmp_load.45 = load ptr %files
-    heap.free %tmp_load.45 tag="array cleanup"
-    ret %tmp_const.76
-    br @block34
-catch_dispatch:
-    br @block33
-catch_0:
-    %tmp_const.86 = const.i64 i64 0
-    ret %tmp_const.86
-    br @block34
-do_end:
+    %tmp_load.44 = load ptr %files
+    heap.free %tmp_load.44 tag="array cleanup"
+    ret %tmp_const.77
 }
 
 function Array$String$next() -> ptr {
@@ -400,69 +388,51 @@ entry:
     br.cond %tmp_icmp @block1 @block2
 then:
     %tmp_const = const.i64 i64 0
-    store %tmp_param %tmp_const
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_param %tmp_const.1
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.3 %tmp_const
     ret %tmp_param
 end:
-    %tmp_fieldptr.3 = getfieldptr ptr %self 0
-    %tmp_fieldptr.4 = getfieldptr ptr %self 32
-    %tmp_load.3 = load i64 %tmp_fieldptr.4
-    %tmp_load.4 = load ptr %tmp_fieldptr.3
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.3 8
-    %tmp_load.5 = load i64 %tmp_fieldptr.5
-    %tmp_alloca.1 = alloca.sized ptr 48
-    %tmp_const.1 = const.i64 i64 0
-    %tmp_icmp.1 = icmp.ge i64 %tmp_load.3 %tmp_const.1
-    %tmp_icmp.2 = icmp.lt i64 %tmp_load.3 %tmp_load.5
-    %tmp_mul = mul i64 %tmp_icmp.1 %tmp_icmp.2
-    br.cond %tmp_mul @block3 @block4
-managed_index_in_bounds:
+    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_fieldptr.5 = getfieldptr ptr %self 32
+    %tmp_load.3 = load i64 %tmp_fieldptr.5
+    %tmp_load.4 = load ptr %tmp_fieldptr.4
+    %value = getelemptr ptr %tmp_load.4 %tmp_load.3 elemsize=40
+    %tmp_fieldptr.6 = getfieldptr ptr %self 32
+    %tmp_load.5 = load i64 %tmp_fieldptr.6
     %tmp_const.2 = const.i64 i64 1
-    store %tmp_alloca.1 %tmp_const.2
-    %tmp_const.3 = const.i64 i64 40
-    %tmp_mul.1 = mul i64 %tmp_load.3 %tmp_const.3
-    %tmp_add = add ptr %tmp_load.4 %tmp_mul.1
-    %tmp_fieldptr.6 = getfieldptr ptr %tmp_alloca.1 8
-    memcpy %tmp_fieldptr.6 %tmp_add 40
+    %tmp_add = add i64 %tmp_load.5 %tmp_const.2
+    %tmp_fieldptr.7 = getfieldptr ptr %self 32
+    store %tmp_fieldptr.7 %tmp_add
+    %tmp_const.3 = const.i64 i64 0
+    store %tmp_param %tmp_const.3
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_param 8
+    memcpy %tmp_fieldptr.8 %value 40
+    %tmp_fieldptr.9 = getfieldptr ptr %value 24
+    %tmp_load.6 = load i32 %tmp_fieldptr.9
+    %tmp_const.4 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.6 %tmp_const.4
+    %tmp_const.5 = const.i32 i32 1
+    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.5
+    br.cond %tmp_icmp.1 @block3 @block5
+decref:
+    %tmp_load.7 = load ptr %value
+    %tmp_const.6 = const.i64 i64 8
+    %tmp_sub = sub ptr %tmp_load.7 %tmp_const.6
+    %tmp_load.8 = load i64 %tmp_sub
+    %tmp_const.7 = const.i64 i64 1
+    %tmp_sub.1 = sub i64 %tmp_load.8 %tmp_const.7
+    store %tmp_sub %tmp_sub.1
+    %tmp_const.8 = const.i64 i64 0
+    %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.8
+    br.cond %tmp_icmp.2 @block4 @block5
+decref_free:
+    %tmp_load.9 = load ptr %value
+    %tmp_sub.2 = sub ptr %tmp_load.9 %tmp_const.6
+    heap.free %tmp_sub.2 tag="string cleanup"
     br @block5
-managed_index_out_of_bounds:
-    %tmp_const.4 = const.i64 i64 0
-    store %tmp_alloca.1 %tmp_const.4
-    br @block5
-managed_index_merge:
-    %tmp_load.6 = load i64 %tmp_alloca.1
-    %tmp_const.5 = const.i64 i64 1
-    %tmp_icmp.3 = icmp.eq i64 %tmp_load.6 %tmp_const.5
-    br.cond %tmp_icmp.3 @block6 @block9
-array_get_incref:
-    %tmp_fieldptr.7 = getfieldptr ptr %tmp_fieldptr.6 24
-    %tmp_load.7 = load i32 %tmp_fieldptr.7
-    %tmp_const.6 = const.i32 i32 3
-    %tmp_band = band i32 %tmp_load.7 %tmp_const.6
-    %tmp_const.7 = const.i32 i32 1
-    %tmp_icmp.4 = icmp.eq i32 %tmp_band %tmp_const.7
-    br.cond %tmp_icmp.4 @block7 @block8
-incref:
-    %tmp_load.8 = load ptr %tmp_fieldptr.6
-    %tmp_const.8 = const.i64 i64 8
-    %tmp_sub = sub ptr %tmp_load.8 %tmp_const.8
-    %tmp_load.9 = load i64 %tmp_sub
-    %tmp_const.9 = const.i64 i64 1
-    %tmp_add.1 = add i64 %tmp_load.9 %tmp_const.9
-    store %tmp_sub %tmp_add.1
-    br @block8
-incref_end:
-    br @block9
-array_get_incref_end:
-    %value = alloca ptr
-    store %value %tmp_alloca.1
-    %tmp_fieldptr.8 = getfieldptr ptr %self 32
-    %tmp_load.10 = load i64 %tmp_fieldptr.8
-    %tmp_const.10 = const.i64 i64 1
-    %tmp_add.2 = add i64 %tmp_load.10 %tmp_const.10
-    %tmp_fieldptr.9 = getfieldptr ptr %self 32
-    store %tmp_fieldptr.9 %tmp_add.2
-    %tmp_load.11 = load ptr %value
-    memcpy %tmp_param %tmp_load.11 48
+decref_end:
     ret %tmp_param
 }
 

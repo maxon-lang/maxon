@@ -120,7 +120,7 @@ utf16LeadSurrogate(128512)   // 55357 (0xD83D)
 utf16TrailSurrogate(128512)  // 56832 (0xDE00)
 
 // Decode surrogate pair to codepoint
-utf16DecodeSurrogates(55357, 56832)  // 128512 (U+1F600)
+utf16DecodeSurrogates(55357, low: 56832)  // 128512 (U+1F600)
 ```
 
 ### String Slicing
@@ -130,10 +130,9 @@ Create a substring view that shares storage with the original string:
 ```maxon
 var s = "hello world"
 var start = s.startIndex()
-if let spaceIdx = s.find(" ") 'found'
-    var sub = s.slice(start, end_ = spaceIdx)  // "hello" - shares storage with s
-    print(sub)
-end 'found'
+var spaceIdx = try s.find(" ") otherwise return  // find throws StringError.notFound if not found
+var sub = s.slice(start, end_ = spaceIdx)  // "hello" - shares storage with s
+print(sub)
 ```
 
 Slices are immutable views into the parent string. They do not copy data, making them efficient for parsing and substring operations.
@@ -391,16 +390,12 @@ end 'main'
 ```maxon
 function main() returns int
     var s = "hello world"
-    if let idx = s.find("world") 'found'
-        print("{idx.charIndex()}\n")
-    end 'found' else 'not_found'
-        print("{0 - 1}\n")
+    var idx = try s.find("world") otherwise s.endIndex()
+    print("{idx.charIndex()}\n")
+    var idx2 = try s.find("xyz") otherwise s.endIndex()
+    if idx2 == s.endIndex() 'not_found'
+        print("-1\n")
     end 'not_found'
-    if let idx2 = s.find("xyz") 'found2'
-        print("{idx2.charIndex()}\n")
-    end 'found2' else 'not_found2'
-        print("{0 - 1}\n")
-    end 'not_found2'
     return 0
 end 'main'
 ```
@@ -794,7 +789,7 @@ end 'main'
 ```maxon
 function main() returns int
     // Decode surrogate pair back to codepoint
-    var cp = utf16DecodeSurrogates(55357, 56832)
+    var cp = utf16DecodeSurrogates(55357, low: 56832)
     print("{cp}\n")  // 128512 (U+1F600)
     return 0
 end 'main'
@@ -836,13 +831,13 @@ end 'main'
 <!-- test: utf16-valid-surrogate-pair -->
 ```maxon
 function main() returns int
-    if utf16IsValidSurrogatePair(55357, 56832) 'c14'
+    if utf16IsValidSurrogatePair(55357, low: 56832) 'c14'
         print("{1}\n")  // valid pair
     end 'c14'
-    if utf16IsValidSurrogatePair(56832, 55357) 'c15'
+    if utf16IsValidSurrogatePair(56832, low: 55357) 'c15'
         print("{0}\n")  // reversed
     end 'c15'
-    if utf16IsValidSurrogatePair(65, 66) 'c16'
+    if utf16IsValidSurrogatePair(65, low: 66) 'c16'
         print("{0}\n")        // not surrogates
     end 'c16'
     return 0
@@ -946,11 +941,9 @@ end 'main'
 function main() returns int
     var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
     var sum = 0
-    for c in s 'loop'
-        var cps = c.codepoints()
-        if let cp = cps.next() 'get_cp'
-            sum = sum + cp
-        end 'get_cp'
+    // Iterate over bytes directly to test heap string iteration
+    for b in s.bytes() 'loop'
+        sum = sum + (b as int)
     end 'loop'
     print("{sum}\n")  // 65+66+...+80 = 1160
     return 0
@@ -1070,16 +1063,12 @@ end 'main'
 ```maxon
 function main() returns int
     var s = "This is a very long string that is heap allocated"
-    if let idx = s.find("very") 'found'
-        print("{idx.charIndex()}\n")
-    end 'found' else 'not_found'
-        print("{0 - 1}\n")
+    var idx = try s.find("very") otherwise s.endIndex()
+    print("{idx.charIndex()}\n")
+    var idx2 = try s.find("missing") otherwise s.endIndex()
+    if idx2 == s.endIndex() 'not_found'
+        print("-1\n")
     end 'not_found'
-    if let idx2 = s.find("missing") 'found2'
-        print("{idx2.charIndex()}\n")
-    end 'found2' else 'not_found2'
-        print("{0 - 1}\n")
-    end 'not_found2'
     return 0
 end 'main'
 ```
@@ -1405,11 +1394,10 @@ function main() returns int
     var s = "a🎉b"
     var count = 0
     for c in s 'loop'
-        var _unused = c.bytes().count()  // Use c to avoid unused warning
-        _unused = _unused
+        print("{c}")  // Use c to avoid unused warning
         count = count + 1
     end 'loop'
-    print("{count}\n")
+    print("\n{count}\n")
     return 0
 end 'main'
 ```
@@ -1417,6 +1405,7 @@ end 'main'
 0
 ```
 ```stdout
+a🎉b
 3
 ```
 
@@ -1427,11 +1416,10 @@ function main() returns int
     var s = "🇺🇸🇬🇧"  // Two flag emojis
     var count = 0
     for c in s 'loop'
-        var _unused = c.bytes().count()  // Use c to avoid unused warning
-        _unused = _unused
+        print("{c}")  // Use c to avoid unused warning
         count = count + 1
     end 'loop'
-    print("{count}\n")
+    print("\n{count}\n")
     return 0
 end 'main'
 ```
@@ -1439,6 +1427,7 @@ end 'main'
 0
 ```
 ```stdout
+🇺🇸🇬🇧
 2
 ```
 
@@ -1449,11 +1438,10 @@ function main() returns int
     var s = "👨‍👩‍👧"  // Family emoji (1 grapheme)
     var count = 0
     for c in s 'loop'
-        var _unused = c.bytes().count()  // Use c to avoid unused warning
-        _unused = _unused
+        print("{c}")  // Use c to avoid unused warning
         count = count + 1
     end 'loop'
-    print("{count}\n")
+    print("\n{count}\n")
     return 0
 end 'main'
 ```
@@ -1461,6 +1449,7 @@ end 'main'
 0
 ```
 ```stdout
+👨‍👩‍👧
 1
 ```
 
@@ -1515,10 +1504,9 @@ end 'main'
 function main() returns int
     var s = "hello world"
     var start = s.startIndex()
-    if let spaceIdx = s.find(" ") 'found'
-        var sub = s.slice(start, end_ = spaceIdx)
-        print(sub)
-    end 'found'
+    var spaceIdx = try s.find(" ") otherwise s.endIndex()
+    var sub = s.slice(start, endIndex: spaceIdx)
+    print(sub)
     return 0
 end 'main'
 ```
@@ -1536,7 +1524,7 @@ function main() returns int
     var s = "hello"
     var start = s.startIndex()
     var endIdx = s.endIndex()
-    var sub = s.slice(start, end_ = endIdx)
+    var sub = s.slice(start, endIndex: endIdx)
     print(sub)
     return 0
 end 'main'
@@ -1554,7 +1542,7 @@ hello
 function main() returns int
     var s = "hello"
     var start = s.startIndex()
-    var sub = s.slice(start, end_ = start)
+    var sub = s.slice(start, endIndex: start)
     print("{sub.count()}\n")
     return 0
 end 'main'
@@ -1572,12 +1560,11 @@ end 'main'
 function main() returns int
     var s = "abcdef"
     var start = s.startIndex()
-    if let idx = s.find("d") 'found'
-        var sub = s.slice(start, end_ = idx)
-        for c in sub 'loop'
-            print("{c}\n")
-        end 'loop'
-    end 'found'
+    var idx = try s.find("d") otherwise s.endIndex()
+    var sub = s.slice(start, endIndex: idx)
+    for c in sub 'loop'
+        print("{c}\n")
+    end 'loop'
     return 0
 end 'main'
 ```
@@ -1640,10 +1627,9 @@ Demonstrates that sliced strings work correctly.
 function main() returns int
     var s = "hello world"
     var start = s.startIndex()
-    if let spaceIdx = s.find(" ") 'found'
-        var sub = s.slice(start, end_ = spaceIdx)
-        print("{sub}\n")
-    end 'found'
+    var spaceIdx = try s.find(" ") otherwise s.endIndex()
+    var sub = s.slice(start, endIndex: spaceIdx)
+    print("{sub}\n")
     return 0
 end 'main'
 ```

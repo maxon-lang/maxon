@@ -718,8 +718,7 @@ pub const Parser = struct {
                 if (next == null) break;
                 // Check if this could be a type name (heuristic: not 'or', 'and', etc.)
                 if (std.mem.eql(u8, next.?.text, "or") or
-                    std.mem.eql(u8, next.?.text, "and") or
-                    std.mem.eql(u8, next.?.text, "nil"))
+                    std.mem.eql(u8, next.?.text, "and"))
                 {
                     break;
                 }
@@ -753,27 +752,6 @@ pub const Parser = struct {
             } };
         } else {
             base_type = .{ .simple = type_name };
-        }
-
-        // Check for optional type: T or nil
-        if (self.check(.@"or")) {
-            _ = self.advance(); // consume 'or'
-            // Expect 'nil' keyword (parsed as identifier)
-            if (!self.check(.identifier)) {
-                self.reportErrorWithDetails(.E002, self.current().text);
-                return error.UnexpectedToken;
-            }
-            const nil_tok = self.current();
-            if (!std.mem.eql(u8, nil_tok.text, "nil")) {
-                self.reportErrorWithDetails(.E002, nil_tok.text);
-                return error.UnexpectedToken;
-            }
-            _ = self.advance(); // consume 'nil'
-
-            // Wrap the base type in an optional
-            const base_ptr = try self.allocator.create(ast.TypeExpr);
-            base_ptr.* = base_type;
-            return .{ .optional = base_ptr };
         }
 
         return base_type;
@@ -866,11 +844,6 @@ pub const Parser = struct {
             .bool_lit => .{ .simple = "bool" },
             .string_literal, .interpolated_string => .{ .simple = "String" },
             .char_literal => .{ .simple = "Character" },
-            .nil_lit => {
-                // Cannot infer type from nil alone - this is an error case
-                // but we'll let later semantic analysis catch it
-                return .{ .simple = "nil" };
-            },
             else => {
                 // For complex expressions, we cannot infer at parse time
                 // Return a placeholder and let semantic analysis handle it
@@ -968,9 +941,12 @@ pub const Parser = struct {
                 self.reportError(.E003);
                 return error.ExpectedExpression;
             };
+            // Check for otherwise clause
+            const otherwise_clause = try self.parseOtherwiseClause();
             _ = try self.expect(.newline);
             return stmtAt(.{ .try_stmt = .{
                 .expr = try self.createExpr(operand),
+                .otherwise = otherwise_clause,
             } }, start_line, start_column);
         }
         // Match statement
@@ -1180,7 +1156,34 @@ pub const Parser = struct {
         const start_column = start_token.column;
         _ = try self.expect(.@"if");
 
-        // Regular if statement (if already consumed)
+        // Check for if-try forms: "if try" or "if let x = try"
+        if (self.check(.@"try")) {
+            // Boolean form: if try expr
+            return stmtAt(.{ .if_stmt = try self.parseIfTryConditionAndBody(start_line, start_column, null) }, start_line, start_column);
+        }
+
+        if (self.check(.let)) {
+            // Peek ahead to check for binding form: if let x = try
+            if (self.peek(1)) |name_tok| {
+                if (name_tok.type == .identifier) {
+                    if (self.peek(2)) |eq_tok| {
+                        if (eq_tok.type == .equals) {
+                            if (self.peek(3)) |try_tok| {
+                                if (try_tok.type == .@"try") {
+                                    // Binding form: if let x = try expr
+                                    _ = self.advance(); // consume 'let'
+                                    const binding_name = self.advance().text; // consume identifier
+                                    _ = self.advance(); // consume '='
+                                    return stmtAt(.{ .if_stmt = try self.parseIfTryConditionAndBody(start_line, start_column, binding_name) }, start_line, start_column);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Regular if statement
         return stmtAt(.{ .if_stmt = try self.parseIfConditionAndBody(start_line, start_column) }, start_line, start_column);
     }
 
@@ -1231,6 +1234,104 @@ pub const Parser = struct {
                 .identifier = label.text,
             },
             .children = children,
+        };
+    }
+
+    /// Parse if-try statement after 'if try' or 'if let x = try' has been detected
+    /// binding_name is non-null for the binding form (if let x = try)
+    fn parseIfTryConditionAndBody(self: *Parser, start_line: u32, start_column: u32, binding_name: ?[]const u8) ParseError!ast.IfStmt {
+        // Consume 'try' keyword
+        _ = try self.expect(.@"try");
+
+        // Parse the expression being tried (the function call)
+        const try_expr = try self.parseUnary() orelse {
+            self.reportError(.E003);
+            return error.ExpectedExpression;
+        };
+
+        const label = try self.expectBlockIdentifier();
+        _ = try self.expect(.newline);
+
+        const body = try self.parseBlockBody();
+        const end_line = try self.expectEndLabel(label.text);
+
+        // Parse else block with optional error binding
+        const else_block = try self.parseIfTryElseBlock();
+
+        if (else_block == null or else_block.?.role != .else_if) {
+            try self.expectTrailingNewline();
+        }
+
+        // Build children array
+        const num_children: usize = if (else_block != null) 2 else 1;
+        const children = try self.allocator.alloc(ast.ChildBlock, num_children);
+        children[0] = .{
+            .role = .primary,
+            .statements = body,
+            .info = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
+        };
+        if (else_block) |eb| {
+            children[1] = eb;
+        }
+
+        // Create the IfTryCondition
+        const if_try_ptr = try self.allocator.create(ast.IfTryCondition);
+        if_try_ptr.* = .{
+            .try_expr = try self.createExpr(try_expr),
+            .binding_name = binding_name,
+        };
+
+        return .{
+            .condition = .{ .bool_lit = true }, // Placeholder, not used when if_try is set
+            .if_try = if_try_ptr,
+            .block = .{
+                .start_line = start_line,
+                .start_column = start_column,
+                .end_line = end_line,
+                .identifier = label.text,
+            },
+            .children = children,
+        };
+    }
+
+    /// Parse optional else clause for if-try: 'else 'label' ... end 'label'' or 'else (e) 'label' ... end 'label''
+    /// Returns null if no else clause
+    fn parseIfTryElseBlock(self: *Parser) ParseError!?ast.ChildBlock {
+        if (!self.check(.@"else")) {
+            return null;
+        }
+
+        const else_token = self.advance(); // consume 'else'
+
+        // Check for error binding: else (e) 'label'
+        var error_binding: ?[]const u8 = null;
+        if (self.check(.lparen)) {
+            _ = self.advance(); // consume '('
+            const err_name = try self.expect(.identifier);
+            error_binding = err_name.text;
+            _ = try self.expect(.rparen);
+        }
+
+        // Parse else block: 'label' ... end 'label'
+        const else_label_tok = try self.expectBlockIdentifier();
+        _ = try self.expect(.newline);
+        const else_body = try self.parseBlockBody();
+        const else_end_line = try self.expectEndLabel(else_label_tok.text);
+
+        return .{
+            .role = .else_clause,
+            .statements = else_body,
+            .info = .{
+                .start_line = else_token.line,
+                .end_line = else_end_line,
+                .identifier = else_label_tok.text,
+            },
+            .error_binding = error_binding,
         };
     }
 
@@ -2537,17 +2638,9 @@ pub const Parser = struct {
                     } };
                 }
             } else if (self.check(.lbracket)) {
-                _ = self.advance(); // consume '['
-                const index_expr = try self.parseExpression() orelse {
-                    self.reportError(.E003);
-                    return error.ExpectedExpression;
-                };
-                _ = try self.expect(.rbracket);
-                const base_ptr = try self.createExpr(expr);
-                expr = .{ .index = .{
-                    .base = base_ptr,
-                    .index = try self.createExpr(index_expr),
-                } };
+                // Bracket indexing is not supported - use .get(index: i) and .set(index: i, value: v)
+                self.reportErrorWithDetails(.E053, "Use .get(index: i) for reading and .set(index: i, value: v) for writing");
+                return error.UnexpectedToken;
             } else if (self.check(.as)) {
                 // Type cast: expr as Type
                 _ = self.advance(); // consume 'as'
@@ -2766,17 +2859,17 @@ pub const Parser = struct {
         named: ast.NamedArg,
     };
 
-    /// Parse a single call argument, detecting if it's named (identifier = expr) or positional
+    /// Parse a single call argument, detecting if it's named (identifier: expr) or positional
     fn parseCallArgument(self: *Parser) ParseError!CallArgResult {
         const start_token = self.current();
 
-        // Check if this is a named argument: identifier = expr
+        // Check if this is a named argument: identifier: expr
         if (self.check(.identifier)) {
             if (self.peek(1)) |next_tok| {
-                if (next_tok.type == .equals) {
+                if (next_tok.type == .colon) {
                     // This is a named argument
                     const name_token = self.advance(); // consume identifier
-                    _ = self.advance(); // consume '='
+                    _ = self.advance(); // consume ':'
                     const value = try self.parseExpression() orelse {
                         self.reportError(.E003);
                         return error.ExpectedExpression;

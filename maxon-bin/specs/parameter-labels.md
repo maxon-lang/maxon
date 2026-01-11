@@ -9,11 +9,11 @@ category: core
 
 ## Documentation
 
-Named arguments improve code clarity at call sites by explicitly naming parameter values.
+All function and method calls require named arguments using colon syntax. This improves code clarity at call sites by explicitly naming parameter values.
 
-### Positional Arguments
+### Named Arguments (Required)
 
-By default, all parameters accept positional arguments:
+All arguments must be named using `name: value` syntax:
 
 ```maxon
 function add(a int, b int) returns int
@@ -21,7 +21,7 @@ function add(a int, b int) returns int
 end 'add'
 
 function main() returns int
-    return add(3, 4)
+    return add(a: 3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -29,27 +29,9 @@ end 'main'
 ```
 
 
-### Named Arguments
-
-Callers can optionally name any argument using `=`:
-
-```maxon
-function multiply(x int, y int) returns int
-    return x * y
-end 'multiply'
-
-function main() returns int
-    return multiply(x = 6, y = 7)
-end 'main'
-```
-```exitcode
-42
-```
-
-
 ### Named Arguments in Any Order
 
-Named arguments can appear in any order after positional arguments:
+Named arguments can appear in any order:
 
 ```maxon
 function subtract(a int, b int) returns int
@@ -57,7 +39,7 @@ function subtract(a int, b int) returns int
 end 'subtract'
 
 function main() returns int
-    return subtract(b = 3, a = 10)
+    return subtract(b: 3, a: 10)
 end 'main'
 ```
 ```exitcode
@@ -67,7 +49,7 @@ end 'main'
 
 ### Default Parameter Values
 
-Parameters with default values must be provided via named arguments:
+Parameters with default values can be omitted:
 
 ```maxon
 function repeat(value int, times int = 1) returns int
@@ -75,7 +57,7 @@ function repeat(value int, times int = 1) returns int
 end 'repeat'
 
 function main() returns int
-    return repeat(7, times = 6)
+    return repeat(value: 7, times: 6)
 end 'main'
 ```
 ```exitcode
@@ -85,28 +67,28 @@ end 'main'
 
 ## Tests
 
-<!-- test: positional-args -->
+<!-- test: named-args -->
 ```maxon
 function add(a int, b int) returns int
     return a + b
 end 'add'
 
 function main() returns int
-    return add(3, 4)
+    return add(a: 3, b: 4)
 end 'main'
 ```
 ```exitcode
 7
 ```
 
-<!-- test: named-args -->
+<!-- test: named-args-multiply -->
 ```maxon
 function multiply(x int, y int) returns int
     return x * y
 end 'multiply'
 
 function main() returns int
-    return multiply(x = 6, y = 7)
+    return multiply(x: 6, y: 7)
 end 'main'
 ```
 ```exitcode
@@ -120,25 +102,11 @@ function subtract(a int, b int) returns int
 end 'subtract'
 
 function main() returns int
-    return subtract(b = 3, a = 10)
+    return subtract(b: 3, a: 10)
 end 'main'
 ```
 ```exitcode
 7
-```
-
-<!-- test: mixed-positional-named -->
-```maxon
-function process(value int, scale int) returns int
-    return value * scale
-end 'process'
-
-function main() returns int
-    return process(5, scale = 3)
-end 'main'
-```
-```exitcode
-15
 ```
 
 <!-- test: method-named-arg -->
@@ -153,7 +121,7 @@ end 'Counter'
 
 function main() returns int
     var c = Counter{value: 10}
-    c = c.add(amount = 5)
+    c = c.add(amount: 5)
     return c.value
 end 'main'
 ```
@@ -168,7 +136,7 @@ function repeat(value int, times int = 1) returns int
 end 'repeat'
 
 function main() returns int
-    return repeat(7, times = 6)
+    return repeat(value: 7, times: 6)
 end 'main'
 ```
 ```exitcode
@@ -182,25 +150,26 @@ function repeat(value int, times int = 2) returns int
 end 'repeat'
 
 function main() returns int
-    return repeat(21)
+    return repeat(value: 21)
 end 'main'
 ```
 ```exitcode
 42
 ```
 
-<!-- test: error-positional-after-named -->
+<!-- test: error-missing-param-name -->
 ```maxon
 function add(a int, b int) returns int
     return a + b
 end 'add'
 
 function main() returns int
-    return add(a = 3, 4)
+    return add(3, 4)
 end 'main'
 ```
 ```maxoncstderr
-error E048: specs/fragments/parameter-labels.error-positional-after-named.1.test:7:24: All positional arguments must come before named arguments
+error E052: specs/fragments/parameter-labels.error-missing-param-name.1.test:7:16: arguments must include parameter name
+  Use 'name: value' syntax
 ```
 
 <!-- test: error-unknown-param-name -->
@@ -210,25 +179,10 @@ function greet(name int) returns int
 end 'greet'
 
 function main() returns int
-    return greet(person = 42)
+    return greet(person: 42)
 end 'main'
 ```
 ```maxoncstderr
 error E045: specs/fragments/parameter-labels.error-unknown-param-name.1.test:7:5: unknown parameter name: 'person'
-```
-
-<!-- test: error-default-positional -->
-```maxon
-function repeat(value int, times int = 1) returns int
-    return value * times
-end 'repeat'
-
-function main() returns int
-    return repeat(7, 6)
-end 'main'
-```
-```maxoncstderr
-error E046: specs/fragments/parameter-labels.error-default-positional.1.test:7:5: Too many positional arguments
-  Function 'repeat' has 1 required parameter
 ```
 

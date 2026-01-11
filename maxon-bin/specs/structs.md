@@ -178,7 +178,7 @@ end 'dot'
 function main() returns int
     var v1 = Vec2 { x: 3, y: 4 }
     var v2 = Vec2 { x: 2, y: 1 }
-    return dot(v1, v2)
+    return dot(v1, b: v2)
 end 'main'
 ```
 ```exitcode
@@ -197,7 +197,7 @@ function makePair(a int, b int) returns Pair
 end 'makePair'
 
 function main() returns int
-    var p = makePair(5, 7)
+    var p = makePair(5, b: 7)
     return p.first + p.second
 end 'main'
 ```

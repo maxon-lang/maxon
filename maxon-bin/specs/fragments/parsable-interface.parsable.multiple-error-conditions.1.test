@@ -22,21 +22,18 @@ type Money is Parsable
 end 'Money'
 
 function main() returns int
-    do 'parse'
-        var price = try Money.fromString("-50")
-        return price.cents
-    end 'parse' catch (e MoneyParseError) 'err'
+    var price = try Money.fromString("-50") otherwise 'err'
         return 99
     end 'err'
+    return price.cents
 end 'main'
 ---
 ExitCode: 99
 ---
 function main() -> i64 {
 entry:
-    %tmp_alloca = alloca.sized ptr 64
-    %tmp_alloca.1 = alloca.sized ptr 16
-    %tmp_alloca.2 = alloca.sized ptr 32
+    %tmp_alloca = alloca.sized ptr 16
+    %tmp_alloca.1 = alloca.sized ptr 32
     %tmp_const = const.i64 i64 12
     %tmp_heap = heap.alloc ptr %tmp_const tag="string buffer"
     %tmp_const.1 = const.i64 i64 1
@@ -59,70 +56,61 @@ entry:
     %tmp_elemptr.4 = getelemptr ptr %tmp_elemptr %tmp_const.9 elemsize=1
     %tmp_const.10 = const.i8 i8 0
     store.i8 %tmp_elemptr.4 %tmp_const.10
-    store %tmp_alloca.2 %tmp_elemptr
+    store %tmp_alloca.1 %tmp_elemptr
     %tmp_const.11 = const.i64 i64 3
-    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.1 8
     store %tmp_fieldptr %tmp_const.11
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 16
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 16
     store %tmp_fieldptr.1 %tmp_const.11
     %tmp_const.12 = const.i32 i32 1
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.2 24
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.1 24
     store.i32 %tmp_fieldptr.2 %tmp_const.12
     %tmp_const.13 = const.i32 i32 0
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.2 28
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.1 28
     store.i32 %tmp_fieldptr.3 %tmp_const.13
-    %tmp_alloca.3 = alloca.sized ptr 40
-    %tmp_call = call ptr @String$init(%tmp_alloca.3, %tmp_alloca.2)
-    %tmp_call.1 = call ptr @Money$fromString(%tmp_alloca.1, %tmp_alloca.3)
-    %tmp_load = load i64 %tmp_alloca.1
+    %tmp_alloca.2 = alloca.sized ptr 40
+    %tmp_call = call ptr @String$init(%tmp_alloca.2, %tmp_alloca.1)
+    %tmp_call.1 = call ptr @Money$fromString(%tmp_alloca, %tmp_alloca.2)
+    %tmp_load = load i64 %tmp_alloca
     %tmp_const.14 = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.14
+    %price = alloca.sized ptr 8
     br.cond %tmp_icmp @block1 @block2
 try_success:
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.1 8
-    %tmp_alloca.4 = alloca ptr
-    store %tmp_alloca.4 %tmp_fieldptr.4
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca 8
+    memcpy %price %tmp_fieldptr.4 8
     br @block3
-try_propagate:
-    memcpy %tmp_alloca %tmp_alloca.1 64
-    br @block7
-try_merge:
-    %price = load ptr %tmp_alloca.4
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.3 24
-    %tmp_load.2 = load i32 %tmp_fieldptr.5
-    %tmp_const.15 = const.i32 i32 3
-    %tmp_band = band i32 %tmp_load.2 %tmp_const.15
-    %tmp_const.16 = const.i32 i32 1
-    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.16
-    br.cond %tmp_icmp.1 @block4 @block6
+try_otherwise_block:
+    %tmp_const.15 = const.i64 i64 99
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.2 24
+    %tmp_load.1 = load i32 %tmp_fieldptr.5
+    %tmp_const.16 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.1 %tmp_const.16
+    %tmp_const.17 = const.i32 i32 1
+    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.17
+    br.cond %tmp_icmp.1 @block3 @block5
 decref:
-    %tmp_load.3 = load ptr %tmp_alloca.3
-    %tmp_const.17 = const.i64 i64 8
-    %tmp_sub = sub ptr %tmp_load.3 %tmp_const.17
-    %tmp_load.4 = load i64 %tmp_sub
-    %tmp_const.18 = const.i64 i64 1
-    %tmp_sub.1 = sub i64 %tmp_load.4 %tmp_const.18
+    %tmp_load.2 = load ptr %tmp_alloca.2
+    %tmp_const.18 = const.i64 i64 8
+    %tmp_sub = sub ptr %tmp_load.2 %tmp_const.18
+    %tmp_load.3 = load i64 %tmp_sub
+    %tmp_const.19 = const.i64 i64 1
+    %tmp_sub.1 = sub i64 %tmp_load.3 %tmp_const.19
     store %tmp_sub %tmp_sub.1
-    %tmp_const.19 = const.i64 i64 0
-    %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.19
-    br.cond %tmp_icmp.2 @block5 @block6
+    %tmp_const.20 = const.i64 i64 0
+    %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.20
+    br.cond %tmp_icmp.2 @block4 @block5
 decref_free:
-    %tmp_load.5 = load ptr %tmp_alloca.3
-    %tmp_sub.2 = sub ptr %tmp_load.5 %tmp_const.17
+    %tmp_load.4 = load ptr %tmp_alloca.2
+    %tmp_sub.2 = sub ptr %tmp_load.4 %tmp_const.18
     heap.free %tmp_sub.2 tag="string cleanup"
-    br @block6
+    br @block5
 decref_end:
+    ret %tmp_const.15
+try_merge:
     %tmp_fieldptr.6 = getfieldptr ptr %price 0
-    %tmp_load.6 = load i64 %tmp_fieldptr.6
-    ret %tmp_load.6
-    br @block9
-catch_dispatch:
-    br @block8
-catch_0:
-    %tmp_const.20 = const.i64 i64 99
-    ret %tmp_const.20
-    br @block9
-do_end:
+    %tmp_load.5 = load i64 %tmp_fieldptr.6
+    ret %tmp_load.5
 }
 
 function Money$fromString() -> ptr {

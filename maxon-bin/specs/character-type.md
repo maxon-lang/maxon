@@ -342,9 +342,8 @@ end 'main'
 ```maxon
 function main() returns int
     var c = 'A'
-    if let val = c.asciiValue() 'unwrap'
-        print("{val}\n")
-    end 'unwrap'
+    var val = try c.asciiValue() otherwise -1
+    print("{val}\n")
     return 0
 end 'main'
 ```
@@ -361,9 +360,8 @@ end 'main'
 ```maxon
 function main() returns int
     var c = '0'
-    if let val = c.asciiValue() 'unwrap'
-        print("{val}\n")
-    end 'unwrap'
+    var val = try c.asciiValue() otherwise -1
+    print("{val}\n")
     return 0
 end 'main'
 ```
@@ -380,9 +378,8 @@ end 'main'
 ```maxon
 function main() returns int
     var c = 'a'
-    if let val = c.asciiValue() 'unwrap'
-        print("{val}\n")
-    end 'unwrap'
+    var val = try c.asciiValue() otherwise -1
+    print("{val}\n")
     return 0
 end 'main'
 ```
@@ -399,9 +396,8 @@ end 'main'
 ```maxon
 function main() returns int
     var c = ' '
-    if let val = c.asciiValue() 'unwrap'
-        print("{val}\n")
-    end 'unwrap'
+    var val = try c.asciiValue() otherwise -1
+    print("{val}\n")
     return 0
 end 'main'
 ```
@@ -418,9 +414,8 @@ end 'main'
 ```maxon
 function main() returns int
     var c = '\n'
-    if let val = c.asciiValue() 'unwrap'
-        print("{val}\n")
-    end 'unwrap'
+    var val = try c.asciiValue() otherwise -1
+    print("{val}\n")
     return 0
 end 'main'
 ```
@@ -432,16 +427,13 @@ end 'main'
 ```
 
 <!-- test: ascii-value-non-ascii -->
-### ASCII Value for Non-ASCII Returns nil
+### ASCII Value for Non-ASCII Returns Error
 
 ```maxon
 function main() returns int
     var c = 'é'
-    if let val = c.asciiValue() 'unwrap'
-        print("{val}\n")
-    end 'unwrap' else 'nil_case'
-        print("nil")
-    end 'nil_case'
+    var val = try c.asciiValue() otherwise -1
+    print("{val}")
     return 0
 end 'main'
 ```
@@ -449,20 +441,17 @@ end 'main'
 0
 ```
 ```stdout
-nil
+-1
 ```
 
 <!-- test: ascii-value-emoji -->
-### ASCII Value for Emoji Returns nil
+### ASCII Value for Emoji Returns Error
 
 ```maxon
 function main() returns int
     var c = '🎉'
-    if let val = c.asciiValue() 'unwrap'
-        print("{val}\n")
-    end 'unwrap' else 'nil_case'
-        print("nil")
-    end 'nil_case'
+    var val = try c.asciiValue() otherwise -1
+    print("{val}")
     return 0
 end 'main'
 ```
@@ -470,5 +459,5 @@ end 'main'
 0
 ```
 ```stdout
-nil
+-1
 ```

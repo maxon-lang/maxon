@@ -45,14 +45,12 @@ end 'Money'
 
 ### Using Parsable Types
 
-Use `do-catch` blocks to handle parsing errors:
+Use `otherwise` to handle parsing errors:
 
 ```maxon
-do 'parse'
-    var price = try Money.fromString("4299")
-    // use price...
-end 'parse' catch (e MoneyParseError) 'err'
+var price = try Money.fromString("4299") otherwise (e) 'err'
     print("Failed to parse\n")
+    return  // must return or assign to price
 end 'err'
 ```
 
@@ -108,12 +106,10 @@ type Value is Parsable
 end 'Value'
 
 function main() returns int
-    do 'parse'
-        var v = try Value.fromString("hello")
-        return v.n
-    end 'parse' catch (e ParseError) 'err'
+    var v = try Value.fromString("hello") otherwise 'err'
         return 0
     end 'err'
+    return v.n
 end 'main'
 ```
 ```exitcode
@@ -139,12 +135,10 @@ type Value is Parsable
 end 'Value'
 
 function main() returns int
-    do 'parse'
-        var v = try Value.fromString("")
-        return v.n
-    end 'parse' catch (e ParseError) 'err'
+    var v = try Value.fromString("") otherwise 'err'
         return 42
     end 'err'
+    return v.n
 end 'main'
 ```
 ```exitcode
@@ -176,21 +170,19 @@ type Money is Parsable
 end 'Money'
 
 function main() returns int
-    do 'parse'
-        var price = try Money.fromString("-50")
-        return price.cents
-    end 'parse' catch (e MoneyParseError) 'err'
+    var price = try Money.fromString("-50") otherwise 'err'
         return 99
     end 'err'
+    return price.cents
 end 'main'
 ```
 ```exitcode
 99
 ```
 
-<!-- test: parsable.do-catch-fallthrough -->
+<!-- test: parsable.otherwise-fallthrough -->
 ```maxon
-// do-catch blocks fall through correctly without explicit return
+// otherwise blocks execute code when error occurs, then continue execution
 enum ParseError is Error
     Invalid = 1
 end 'ParseError'
@@ -209,37 +201,23 @@ end 'Value'
 function main() returns int
     var result = 0
 
-    do 'parse1'
-        var v = try Value.fromString("hello")
-        result = result + v.n
-        v = v
-    end 'parse1' catch (e ParseError) 'err1'
-        result = result + 100
-    end 'err1'
+    // First call succeeds - handler not executed
+    var v = try Value.fromString("hello") otherwise Value{n: 0}
+    result = result + v.n  // adds 5
 
-    do 'parse2'
-        var v2 = try Value.fromString("xbad")
-        result = result + v2.n
-        v2 = v2
-    end 'parse2' catch (e ParseError) 'err2'
-        result = result + 10
-    end 'err2'
+    // Second call fails - use default value
+    var v2 = try Value.fromString("xbad") otherwise Value{n: 0}
+    result = result + v2.n  // adds 0
 
-    do 'parse3'
-        var v3 = try Value.fromString("world")
-        result = result + v3.n
-        v3 = v3
-    end 'parse3' catch (e ParseError) 'err3'
-        result = result + 1000
-    end 'err3'
+    // Third call succeeds
+    var v3 = try Value.fromString("world") otherwise Value{n: 0}
+    result = result + v3.n  // adds 5
 
     return result
 end 'main'
 ```
 ```exitcode
-20
-```
-```stdout
+10
 ```
 
 <!-- test: error.missing-throws -->

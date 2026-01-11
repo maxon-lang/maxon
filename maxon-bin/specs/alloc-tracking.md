@@ -46,12 +46,8 @@ Leaked:    0 bytes
 function main() returns int
     let size = 10
     var arr = Array of size int
-    arr[0] = 42
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    arr.set(0, value: 42)
+    return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -100,16 +96,11 @@ function main() returns int
     let size2 = 10
     var arr1 = Array of size1 int
     var arr2 = Array of size2 int
-    arr1[0] = 1
-    arr2[0] = 2
-    var sum = 0
-    if let a = arr1[0] 'g1'
-        sum = sum + a
-    end 'g1'
-    if let b = arr2[0] 'g2'
-        sum = sum + b
-    end 'g2'
-    return sum
+    arr1.set(0, value: 1)
+    arr2.set(0, value: 2)
+    var a = try arr1.get(0) otherwise 0
+    var b = try arr2.get(0) otherwise 0
+    return a + b
 end 'main'
 ```
 ```exitcode
@@ -138,13 +129,9 @@ Decrefs:   0
 function main() returns int
     let size = 5
     var arr = Array of size int
-    arr[0] = 42
+    arr.set(0, value: 42)
     if true 'check'
-        if let val = arr[0] 'get'
-            return val
-        end 'get' else 'nil'
-            return 0
-        end 'nil'
+        return try arr.get(0) otherwise 0
     end 'check'
     return 0
 end 'main'
@@ -172,15 +159,11 @@ Decrefs:   0
 function main() returns int
     let size = 5
     var arr = Array of size int
-    arr[0] = 42
+    arr.set(0, value: 42)
     if false 'check'
         return 0
     end 'check'
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -204,17 +187,13 @@ Decrefs:   0
 <!-- TrackMemory: true -->
 ```maxon
 function sum_first(arr Array of int) returns int
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    return try arr.get(0) otherwise 0
 end 'sum_first'
 
 function main() returns int
     let size = 5
     var arr = Array of size int
-    arr[0] = 99
+    arr.set(0, value: 99)
     return sum_first(arr)
 end 'main'
 ```
@@ -242,12 +221,8 @@ function main() returns int
     let a = 2
     let b = 5
     var arr = Array of (a * b) int
-    arr[0] = 77
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    arr.set(0, value: 77)
+    return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -271,22 +246,15 @@ Decrefs:   0
 <!-- TrackMemory: true -->
 ```maxon
 function readFirst(arr Array of int) returns int
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    return try arr.get(0) otherwise 0
 end 'readFirst'
 
 function main() returns int
     let size = 5
     var arr = Array of size int
-    arr[0] = 42
+    arr.set(0, value: 42)
     let result = readFirst(arr)
-    var sum = 0
-    if let val = arr[0] 'get'
-        sum = val
-    end 'get'
+    var sum = try arr.get(0) otherwise 0
     return sum + result
 end 'main'
 ```
@@ -311,22 +279,18 @@ Decrefs:   0
 <!-- TrackMemory: true -->
 ```maxon
 function getElement(arr Array of int, idx int) returns int
-    if let val = arr[idx] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    return try arr.get(idx) otherwise 0
 end 'getElement'
 
 function main() returns int
     let size = 5
     var arr = Array of size int
-    arr[0] = 10
-    arr[1] = 20
-    arr[2] = 30
-    let a = getElement(arr, 0)
-    let b = getElement(arr, 1)
-    let c = getElement(arr, 2)
+    arr.set(0, value: 10)
+    arr.set(1, value: 20)
+    arr.set(2, value: 30)
+    let a = getElement(arr, idx: 0)
+    let b = getElement(arr, idx: 1)
+    let c = getElement(arr, idx: 2)
     return a + b + c
 end 'main'
 ```
@@ -356,10 +320,9 @@ function main() returns int
     while i < 3 'loop'
         let size = 5
         var arr = Array of size int
-        arr[0] = i
-        if let val = arr[0] 'get'
-            sum = sum + val
-        end 'get'
+        arr.set(0, value: i)
+        var val = try arr.get(0) otherwise 0
+        sum = sum + val
         i = i + 1
     end 'loop'
     return sum
@@ -392,18 +355,14 @@ Decrefs:   0
 <!-- TrackMemory: true -->
 ```maxon
 function mutateFirst(arr Array of int) returns int
-    arr[0] = 100
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    arr.set(0, value: 100)
+    return try arr.get(0) otherwise 0
 end 'mutateFirst'
 
 function main() returns int
     let size = 5
     var arr = Array of size int
-    arr[0] = 42
+    arr.set(0, value: 42)
     return mutateFirst(arr)
 end 'main'
 ```
@@ -429,31 +388,21 @@ Decrefs:   0
 <!-- TrackMemory: true -->
 ```maxon
 function addTen(arr Array of int) returns int
-    var val = 0
-    if let v = arr[0] 'get'
-        val = v
-    end 'get'
-    arr[0] = val + 10
-    if let v2 = arr[0] 'get2'
-        return v2
-    end 'get2' else 'nil'
-        return 0
-    end 'nil'
+    var val = try arr.get(0) otherwise 0
+    arr.set(0, value: val + 10)
+    return try arr.get(0) otherwise 0
 end 'addTen'
 
 function doubleAddTen(arr Array of int) returns int
-    var val = 0
-    if let v = arr[0] 'get'
-        val = v
-    end 'get'
-    arr[0] = val * 2
+    var val = try arr.get(0) otherwise 0
+    arr.set(0, value: val * 2)
     return addTen(arr)
 end 'doubleAddTen'
 
 function main() returns int
     let size = 5
     var arr = Array of size int
-    arr[0] = 5
+    arr.set(0, value: 5)
     return doubleAddTen(arr)
 end 'main'
 ```
@@ -480,28 +429,20 @@ Decrefs:   0
 <!-- TrackMemory: true -->
 ```maxon
 function readIt(arr Array of int) returns int
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    return try arr.get(0) otherwise 0
 end 'readIt'
 
 function writeIt(arr Array of int) returns int
-    arr[0] = 99
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    arr.set(0, value: 99)
+    return try arr.get(0) otherwise 0
 end 'writeIt'
 
 function main() returns int
     let size = 5
     var arr1 = Array of size int
     var arr2 = Array of size int
-    arr1[0] = 10
-    arr2[0] = 20
+    arr1.set(0, value: 10)
+    arr2.set(0, value: 20)
     let borrowed = readIt(arr1)
     let moved = writeIt(arr2)
     return borrowed + moved
@@ -537,7 +478,7 @@ function main() returns int
     let size = 0
     var arr = Array of size int
     if size > 0 'check'
-        arr[0] = 1
+        arr.set(0, value: 1)
     end 'check'
     return 42
 end 'main'
@@ -565,14 +506,10 @@ Reassigning a heap array frees the old memory and allocates new memory.
 function main() returns int
     let size = 5
     var arr = Array of size int
-    arr[0] = 10
+    arr.set(0, value: 10)
     arr = Array of size int
-    arr[0] = 20
-    if let val = arr[0] 'get'
-        return val
-    end 'get' else 'nil'
-        return 0
-    end 'nil'
+    arr.set(0, value: 20)
+    return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode

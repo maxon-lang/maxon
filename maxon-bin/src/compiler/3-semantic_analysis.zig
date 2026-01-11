@@ -106,6 +106,10 @@ pub const MutationAnalyzer = struct {
                 self.checkExpressionForParamMutation(assign.base.*, param_indices, mutated);
             },
             .if_stmt => |if_s| {
+                // Check if-try expression for mutations
+                if (if_s.if_try) |if_try| {
+                    self.checkExpressionForParamMutation(if_try.try_expr.*, param_indices, mutated);
+                }
                 // Check mutations inside if/if-let body and else clauses
                 for (if_s.children) |child| {
                     switch (child.role) {
@@ -143,36 +147,12 @@ pub const MutationAnalyzer = struct {
             .break_stmt, .continue_stmt => {
                 // Control flow statements don't mutate parameters
             },
-            .else_unwrap_decl => |unwrap| {
-                // Check mutations inside else-unwrap default body
-                for (unwrap.children) |child| {
-                    for (child.statements) |body_stmt| {
-                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
-                    }
-                }
-            },
-            .guard_let_decl => |guard| {
-                // Check mutations inside guard-let nil body
-                for (guard.children) |child| {
-                    for (child.statements) |body_stmt| {
-                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
-                    }
-                }
-            },
             .throw_stmt => {
                 // Throw statements don't mutate parameters
             },
             .try_stmt => |try_s| {
                 // Check mutations in the try expression (e.g., method calls)
                 self.checkExpressionForParamMutation(try_s.expr.*, param_indices, mutated);
-            },
-            .do_catch_stmt => |do_catch| {
-                // Check mutations inside do block and catch blocks
-                for (do_catch.children) |child| {
-                    for (child.statements) |body_stmt| {
-                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
-                    }
-                }
             },
             .match_stmt => |match_s| {
                 // Check mutations inside match case bodies
@@ -215,11 +195,6 @@ pub const MutationAnalyzer = struct {
             },
             // self_expr - treat like identifier but self cannot be mutated as a whole
             .self_expr => {},
-            // nil_coalesce - check both optional and default
-            .nil_coalesce => |nc| {
-                self.checkExpressionForParamMutation(nc.optional.*, param_indices, mutated);
-                self.checkExpressionForParamMutation(nc.default.*, param_indices, mutated);
-            },
             // Cast expressions - check the inner expression
             .cast => |c| {
                 self.checkExpressionForParamMutation(c.expr.*, param_indices, mutated);
@@ -263,7 +238,7 @@ pub const MutationAnalyzer = struct {
             },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
-            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .init_from_array, .array_type, .interpolated_string => {},
+            .integer, .float_lit, .bool_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .init_from_array, .array_type, .interpolated_string => {},
         }
     }
 
@@ -764,19 +739,11 @@ pub const SemanticAnalyzer = struct {
                 // Other generic types treated as struct
                 return ValueType{ .struct_type = g.base_type };
             },
-            // DEPRECATED: optional types are being removed in favor of error unions
-            .optional => |wrapped| {
-                const wrapped_vt = try self.typeExprToValueType(wrapped.*);
-                return ValueType{ .optional_type = .{
-                    .wrapped = wrapped_vt.toPrimitiveType(),
-                    .wrapped_struct_type = if (wrapped_vt == .struct_type) wrapped_vt.struct_type else null,
-                    .wrapped_enum_type = if (wrapped_vt == .enum_type) wrapped_vt.enum_type else null,
-                } };
-            },
             .error_union => |eu| {
                 const success_vt = try self.typeExprToValueType(eu.success_type.*);
                 return ValueType{ .error_union_type = .{
                     .success_type = success_vt.toPrimitiveType(),
+                    .success_type_name = if (success_vt == .primitive) success_vt.primitive else null,
                     .success_struct_type = if (success_vt == .struct_type) success_vt.struct_type else null,
                     .error_enum_type = eu.error_type,
                 } };
@@ -832,15 +799,6 @@ pub const SemanticAnalyzer = struct {
                     }
                 }
                 const result = buf.toOwnedSlice(self.allocator) catch return null;
-                self.allocated_type_strings.append(self.allocator, result) catch {
-                    self.allocator.free(result);
-                    return null;
-                };
-                return result;
-            },
-            .optional => |opt| {
-                const inner = self.typeExprToDisplayName(opt.*) orelse return null;
-                const result = std.fmt.allocPrint(self.allocator, "{s}?", .{inner}) catch return null;
                 self.allocated_type_strings.append(self.allocator, result) catch {
                     self.allocator.free(result);
                     return null;
@@ -928,7 +886,12 @@ pub const SemanticAnalyzer = struct {
                     }
                 },
                 .if_stmt => |if_s| {
-                    try self.discoverInExpression(if_s.condition);
+                    // Handle if-try: discover in the try expression
+                    if (if_s.if_try) |if_try| {
+                        try self.discoverInExpression(if_try.try_expr.*);
+                    } else {
+                        try self.discoverInExpression(if_s.condition);
+                    }
                     for (if_s.children) |child| {
                         switch (child.role) {
                             .primary, .else_clause => try self.discoverInStatements(child.statements),
@@ -958,11 +921,6 @@ pub const SemanticAnalyzer = struct {
                         try self.discoverInStatements(child.statements);
                     }
                 },
-                .do_catch_stmt => |dc| {
-                    for (dc.children) |child| {
-                        try self.discoverInStatements(child.statements);
-                    }
-                },
                 .match_stmt => |ms| {
                     try self.discoverInExpression(ms.scrutinee);
                     for (ms.children) |child| {
@@ -974,18 +932,6 @@ pub const SemanticAnalyzer = struct {
                 },
                 .try_stmt => |try_s| {
                     try self.discoverInExpression(try_s.expr.*);
-                },
-                .else_unwrap_decl => |unwrap| {
-                    try self.discoverInExpression(unwrap.optional_expr.*);
-                    for (unwrap.children) |child| {
-                        try self.discoverInStatements(child.statements);
-                    }
-                },
-                .guard_let_decl => |guard| {
-                    try self.discoverInExpression(guard.optional_expr.*);
-                    for (guard.children) |child| {
-                        try self.discoverInStatements(child.statements);
-                    }
                 },
                 .break_stmt, .continue_stmt => {},
             }
@@ -1108,10 +1054,6 @@ pub const SemanticAnalyzer = struct {
             .cast => |c| {
                 try self.discoverInExpression(c.expr.*);
             },
-            .nil_coalesce => |nc| {
-                try self.discoverInExpression(nc.optional.*);
-                try self.discoverInExpression(nc.default.*);
-            },
             .try_expr => |te| {
                 try self.discoverInExpression(te.expr.*);
                 // Also discover in otherwise clause if present
@@ -1148,7 +1090,7 @@ pub const SemanticAnalyzer = struct {
                 }
             },
             // Literals and simple expressions don't trigger monomorphization
-            .integer, .float_lit, .bool_lit, .nil_lit, .string_literal, .char_literal, .identifier, .self_expr, .array_type => {},
+            .integer, .float_lit, .bool_lit, .string_literal, .char_literal, .identifier, .self_expr, .array_type => {},
         }
     }
 
@@ -1345,11 +1287,6 @@ pub const SemanticAnalyzer = struct {
                         try self.collectVariablesFromBody(child.statements);
                     }
                 },
-                .do_catch_stmt => |dc| {
-                    for (dc.children) |child| {
-                        try self.collectVariablesFromBody(child.statements);
-                    }
-                },
                 .match_stmt => |ms| {
                     for (ms.children) |child| {
                         try self.collectVariablesFromBody(child.statements);
@@ -1383,7 +1320,6 @@ pub const SemanticAnalyzer = struct {
             .integer => ValueType{ .primitive = "int" },
             .float_lit => ValueType{ .primitive = "float" },
             .bool_lit => ValueType{ .primitive = "bool" },
-            .nil_lit => null, // nil literals are no longer supported
             .string_literal => ValueType{ .struct_type = "String" },
             .char_literal => ValueType{ .struct_type = "Character" },
             .identifier => |name| blk: {
@@ -1463,7 +1399,6 @@ pub const SemanticAnalyzer = struct {
             .integer => "int",
             .float_lit => "float",
             .bool_lit => "bool",
-            .nil_lit => null,
             .string_literal => "String",
             .char_literal => "Character",
             .identifier => |name| name,

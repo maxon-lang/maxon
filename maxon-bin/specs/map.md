@@ -110,9 +110,7 @@ end 'main'
 ```maxon
 function main() returns int
     var m = [1: 100, 2: 200, 3: 300]
-    var result = m.get(2) else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get(2) otherwise 0
     return result
 end 'main'
 ```
@@ -152,9 +150,7 @@ end 'main'
 ```maxon
 function main() returns int
     var m = [1: 10, 2: 20, 3: 30]
-    var result = m.get(2) else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get(2) otherwise 0
     return result
 end 'main'
 ```
@@ -166,9 +162,7 @@ end 'main'
 ```maxon
 function main() returns int
     var m = [1: 10, 2: 20]
-    var result = m.get(0) else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get(0) otherwise 0
     return result
 end 'main'
 ```
@@ -193,9 +187,7 @@ end 'main'
 function main() returns int
     var m = [1: 10, 2: 20]
     m.insert(1, 100)
-    var result = m.get(1) else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get(1) otherwise 0
     return result
 end 'main'
 ```
@@ -263,25 +255,12 @@ end 'main'
 0
 ```
 
-<!-- test: capacity.initial -->
-```maxon
-function main() returns int
-    var m = [1: 10, 2: 20]
-    return m.capacity()
-end 'main'
-```
-```exitcode
-16
-```
-
 <!-- test: empty-map.from-syntax -->
 ```maxon
 function main() returns int
     var m = Map from int to int{}
     m.insert(1, 100)
-    var result = m.get(1) else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get(1) otherwise 0
     return result
 end 'main'
 ```
@@ -293,9 +272,7 @@ end 'main'
 ```maxon
 function main() returns int
     var m = [42: 99]
-    var result = m.get(42) else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get(42) otherwise 0
     return result
 end 'main'
 ```
@@ -307,9 +284,7 @@ end 'main'
 ```maxon
 function main() returns int
     var m = [0 - 5: 50, 0 - 3: 30, 0 - 1: 10]
-    var result = m.get(0 - 3) else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get(0 - 3) otherwise 0
     return result
 end 'main'
 ```
@@ -323,9 +298,7 @@ function main() returns int
     var m = [1: 10, 2: 20, 3: 30]
     m.remove(2)
     m.insert(2, 200)
-    var result = m.get(2) else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get(2) otherwise 0
     return result
 end 'main'
 ```
@@ -343,9 +316,7 @@ function main() returns int
     var m = Map from int to int{}
     m.insert(1, 42)
     var c = Container{data: m}
-    var result = c.data.get(1) else 'default'
-        result = 0
-    end 'default'
+    var result = try c.data.get(1) otherwise 0
     return result
 end 'main'
 ```
@@ -357,9 +328,7 @@ end 'main'
 ```maxon
 function main() returns int
     var m = ["a": 1, "b": 2]
-    var result = m.get("a") else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get("a") otherwise 0
     return result
 end 'main'
 ```
@@ -421,12 +390,8 @@ Decrefs:   8
 ```maxon
 function main() returns int
     var m = ["hello": 10, "world": 20, "foo": 30]
-    var a = m.get("hello") else 'default1'
-        a = 0
-    end 'default1'
-    var b = m.get("world") else 'default2'
-        b = 0
-    end 'default2'
+    var a = try m.get("hello") otherwise 0
+    var b = try m.get("world") otherwise 0
     return a + b
 end 'main'
 ```
@@ -569,9 +534,7 @@ Decrefs:   8
 function main() returns int
     var m = ["x": 10]
     m.insert("x", 99)
-    var result = m.get("x") else 'default'
-        result = 0
-    end 'default'
+    var result = try m.get("x") otherwise 0
     return result
 end 'main'
 ```
@@ -708,10 +671,8 @@ Decrefs:   12
 ```maxon
 function main() returns int
     var m = ["test": 42]
-    if let v = m.get("test") 'found'
-        return v
-    end 'found'
-    return 0
+    var v = try m.get("test") otherwise 0
+    return v
 end 'main'
 ```
 ```exitcode

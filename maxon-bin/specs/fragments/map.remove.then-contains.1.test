@@ -98,9 +98,9 @@ end:
 function Map$int$int$init() -> ptr {
 entry:
     %tmp_param = param ptr 0
-    %keys = param ptr 1
-    %values = param ptr 2
-    %tmp_fieldptr = getfieldptr ptr %keys 8
+    %initKeys = param ptr 1
+    %initValues = param ptr 2
+    %tmp_fieldptr = getfieldptr ptr %initKeys 8
     %tmp_load = load i64 %tmp_fieldptr
     %numElements = alloca ptr
     store %numElements %tmp_load
@@ -193,99 +193,38 @@ whilecont:
     %tmp_fieldptr.17 = getfieldptr ptr %result 128
     %tmp_load.7 = load i64 %cap
     store %tmp_fieldptr.17 %tmp_load.7
+    %tmp_fieldptr.18 = getfieldptr ptr %result 136
     %tmp_const.13 = const.i64 i64 0
+    store %tmp_fieldptr.18 %tmp_const.13
+    %tmp_const.14 = const.i64 i64 0
     %i = alloca ptr
-    store %i %tmp_const.13
+    store %i %tmp_const.14
     br @block4
 whilecond:
     %tmp_load.8 = load i64 %i
     %tmp_load.9 = load i64 %numElements
     %tmp_icmp.1 = icmp.lt i64 %tmp_load.8 %tmp_load.9
-    br.cond %tmp_icmp.1 @block5 @block18
+    br.cond %tmp_icmp.1 @block5 @block6
 whilebody:
     %tmp_load.10 = load i64 %i
-    %tmp_load.11 = load ptr %keys
-    %tmp_fieldptr.18 = getfieldptr ptr %keys 8
-    %tmp_load.12 = load i64 %tmp_fieldptr.18
-    %tmp_alloca.10 = alloca.sized ptr 16
-    %tmp_const.14 = const.i64 i64 0
-    %tmp_icmp.2 = icmp.ge i64 %tmp_load.10 %tmp_const.14
-    %tmp_icmp.3 = icmp.lt i64 %tmp_load.10 %tmp_load.12
-    %tmp_mul.5 = mul i64 %tmp_icmp.2 %tmp_icmp.3
-    br.cond %tmp_mul.5 @block6 @block7
-managed_index_in_bounds:
-    %tmp_const.15 = const.i64 i64 1
-    store %tmp_alloca.10 %tmp_const.15
-    %tmp_const.16 = const.i64 i64 8
-    %tmp_mul.6 = mul i64 %tmp_load.10 %tmp_const.16
-    %tmp_add = add ptr %tmp_load.11 %tmp_mul.6
-    %tmp_fieldptr.19 = getfieldptr ptr %tmp_alloca.10 8
-    %tmp_load.13 = load i64 %tmp_add
-    store %tmp_fieldptr.19 %tmp_load.13
-    br @block8
-managed_index_out_of_bounds:
-    %tmp_const.17 = const.i64 i64 0
-    store %tmp_alloca.10 %tmp_const.17
-    br @block8
-managed_index_merge:
-    %tmp_load.14 = load i64 %tmp_alloca.10
-    %tmp_const.18 = const.i64 i64 1
-    %tmp_icmp.4 = icmp.eq i64 %tmp_load.14 %tmp_const.18
-    br.cond %tmp_icmp.4 @block9 @block16
-if_let_then:
-    %tmp_fieldptr.20 = getfieldptr ptr %tmp_alloca.10 8
-    %tmp_load.15 = load i64 %tmp_fieldptr.20
+    %tmp_load.11 = load ptr %initKeys
+    %tmp_elemptr = getelemptr ptr %tmp_load.11 %tmp_load.10 elemsize=8
+    %tmp_load.12 = load i64 %tmp_elemptr
     %k = alloca ptr
-    store %k %tmp_load.15
-    %tmp_load.16 = load i64 %i
-    %tmp_load.17 = load ptr %values
-    %tmp_fieldptr.21 = getfieldptr ptr %values 8
-    %tmp_load.18 = load i64 %tmp_fieldptr.21
-    %tmp_alloca.12 = alloca.sized ptr 16
-    %tmp_const.19 = const.i64 i64 0
-    %tmp_icmp.5 = icmp.ge i64 %tmp_load.16 %tmp_const.19
-    %tmp_icmp.6 = icmp.lt i64 %tmp_load.16 %tmp_load.18
-    %tmp_mul.7 = mul i64 %tmp_icmp.5 %tmp_icmp.6
-    br.cond %tmp_mul.7 @block10 @block11
-managed_index_in_bounds:
-    %tmp_const.20 = const.i64 i64 1
-    store %tmp_alloca.12 %tmp_const.20
-    %tmp_const.21 = const.i64 i64 8
-    %tmp_mul.8 = mul i64 %tmp_load.16 %tmp_const.21
-    %tmp_add.1 = add ptr %tmp_load.17 %tmp_mul.8
-    %tmp_fieldptr.22 = getfieldptr ptr %tmp_alloca.12 8
-    %tmp_load.19 = load i64 %tmp_add.1
-    store %tmp_fieldptr.22 %tmp_load.19
-    br @block12
-managed_index_out_of_bounds:
-    %tmp_const.22 = const.i64 i64 0
-    store %tmp_alloca.12 %tmp_const.22
-    br @block12
-managed_index_merge:
-    %tmp_load.20 = load i64 %tmp_alloca.12
-    %tmp_const.23 = const.i64 i64 1
-    %tmp_icmp.7 = icmp.eq i64 %tmp_load.20 %tmp_const.23
-    br.cond %tmp_icmp.7 @block13 @block14
-if_let_then:
-    %tmp_fieldptr.23 = getfieldptr ptr %tmp_alloca.12 8
-    %tmp_load.21 = load i64 %tmp_fieldptr.23
+    store %k %tmp_load.12
+    %tmp_load.13 = load i64 %i
+    %tmp_load.14 = load ptr %initValues
+    %tmp_elemptr.1 = getelemptr ptr %tmp_load.14 %tmp_load.13 elemsize=8
+    %tmp_load.15 = load i64 %tmp_elemptr.1
     %v = alloca ptr
-    store %v %tmp_load.21
-    %tmp_load.22 = load i64 %k
-    %tmp_load.23 = load i64 %v
-    call @Map$int$int$insert(%result, %tmp_load.22, %tmp_load.23)
-    br @block15
-if_let_else:
-    br @block15
-if_let_end:
-    br @block17
-if_let_else:
-    br @block17
-if_let_end:
-    %tmp_load.24 = load i64 %i
-    %tmp_const.25 = const.i64 i64 1
-    %tmp_add.2 = add i64 %tmp_load.24 %tmp_const.25
-    store %i %tmp_add.2
+    store %v %tmp_load.15
+    %tmp_load.16 = load i64 %k
+    %tmp_load.17 = load i64 %v
+    call @Map$int$int$insert(%result, %tmp_load.16, %tmp_load.17)
+    %tmp_load.18 = load i64 %i
+    %tmp_const.16 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.18 %tmp_const.16
+    store %i %tmp_add
     br @block4
 whilecont:
     memcpy %tmp_param %result 144
@@ -453,28 +392,28 @@ whilecond:
     %tmp_icmp.3 = icmp.lt i64 %tmp_load.10 %tmp_load.11
     br.cond %tmp_icmp.3 @block8 @block25
 whilebody:
-    %tmp_const.21 = const.i64 i64 0
-    %state = alloca ptr
-    store %state %tmp_const.21
     %tmp_fieldptr.22 = getfieldptr ptr %self 80
+    %tmp_alloca.13 = alloca.sized ptr 16
     %tmp_load.12 = load i64 %index
-    %tmp_alloca.14 = alloca.sized ptr 16
-    %tmp_call.3 = call ptr @Array$SlotState$get(%tmp_alloca.14, %tmp_fieldptr.22, %tmp_load.12)
-    %tmp_load.13 = load i64 %tmp_alloca.14
-    %tmp_const.22 = const.i64 i64 1
-    %tmp_icmp.4 = icmp.eq i64 %tmp_load.13 %tmp_const.22
+    %tmp_call.3 = call ptr @Array$SlotState$get(%tmp_alloca.13, %tmp_fieldptr.22, %tmp_load.12)
+    %tmp_load.13 = load i64 %tmp_alloca.13
+    %tmp_const.21 = const.i64 i64 0
+    %tmp_icmp.4 = icmp.eq i64 %tmp_load.13 %tmp_const.21
+    %tmp_alloca.14 = alloca ptr
     br.cond %tmp_icmp.4 @block9 @block10
-if_let_then:
-    %tmp_fieldptr.23 = getfieldptr ptr %tmp_alloca.14 8
+try_success:
+    %tmp_fieldptr.23 = getfieldptr ptr %tmp_alloca.13 8
     %tmp_load.14 = load i64 %tmp_fieldptr.23
-    %s = alloca ptr
-    store %s %tmp_load.14
-    %tmp_load.15 = load i64 %s
+    store %tmp_alloca.14 %tmp_load.14
+    br @block11
+try_default:
+    %tmp_const.22 = const.i64 i64 0
+    store %tmp_alloca.14 %tmp_const.22
+    br @block11
+try_merge:
+    %tmp_load.15 = load i64 %tmp_alloca.14
+    %state = alloca ptr
     store %state %tmp_load.15
-    br @block11
-if_let_else:
-    br @block11
-if_let_end:
     %tmp_load.16 = load i64 %state
     %tmp_const.23 = const.i64 i64 0
     %tmp_icmp.5 = icmp.eq i64 %tmp_load.16 %tmp_const.23
@@ -502,25 +441,25 @@ end:
     call @Array$int$set(%tmp_fieldptr.25, %tmp_load.22, %tmp_load.23)
     %tmp_fieldptr.26 = getfieldptr ptr %self 80
     %tmp_load.24 = load i64 %insertIndex
-    %tmp_const.25 = const.i64 i64 1
-    call @Array$SlotState$set(%tmp_fieldptr.26, %tmp_load.24, %tmp_const.25)
+    %tmp_const.27 = const.i64 i64 1
+    call @Array$SlotState$set(%tmp_fieldptr.26, %tmp_load.24, %tmp_const.27)
     %tmp_fieldptr.27 = getfieldptr ptr %self 120
     %tmp_load.25 = load i64 %tmp_fieldptr.27
-    %tmp_const.26 = const.i64 i64 1
-    %tmp_add.1 = add i64 %tmp_load.25 %tmp_const.26
+    %tmp_const.29 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.25 %tmp_const.29
     %tmp_fieldptr.28 = getfieldptr ptr %self 120
     store %tmp_fieldptr.28 %tmp_add.1
     ret
 end:
     %tmp_load.26 = load i64 %state
-    %tmp_const.27 = const.i64 i64 2
-    %tmp_icmp.7 = icmp.eq i64 %tmp_load.26 %tmp_const.27
+    %tmp_const.30 = const.i64 i64 2
+    %tmp_icmp.7 = icmp.eq i64 %tmp_load.26 %tmp_const.30
     %tmp_load.27 = load i64 %firstDeleted
-    %tmp_const.28 = const.i64 i64 0
-    %tmp_icmp.8 = icmp.lt i64 %tmp_load.27 %tmp_const.28
-    %tmp_const.29 = const.i64 i64 0
-    %tmp_icmp.9 = icmp.ne i64 %tmp_icmp.7 %tmp_const.29
-    %tmp_icmp.10 = icmp.ne i64 %tmp_icmp.8 %tmp_const.29
+    %tmp_const.31 = const.i64 i64 0
+    %tmp_icmp.8 = icmp.lt i64 %tmp_load.27 %tmp_const.31
+    %tmp_const.32 = const.i64 i64 0
+    %tmp_icmp.9 = icmp.ne i64 %tmp_icmp.7 %tmp_const.32
+    %tmp_icmp.10 = icmp.ne i64 %tmp_icmp.8 %tmp_const.32
     %tmp_mul.4 = mul i64 %tmp_icmp.9 %tmp_icmp.10
     br.cond %tmp_mul.4 @block16 @block17
 then:
@@ -529,24 +468,24 @@ then:
     br @block17
 end:
     %tmp_load.29 = load i64 %state
-    %tmp_const.30 = const.i64 i64 1
-    %tmp_icmp.11 = icmp.eq i64 %tmp_load.29 %tmp_const.30
+    %tmp_const.33 = const.i64 i64 1
+    %tmp_icmp.11 = icmp.eq i64 %tmp_load.29 %tmp_const.33
     br.cond %tmp_icmp.11 @block18 @block24
 then:
     %tmp_fieldptr.29 = getfieldptr ptr %self 0
-    %tmp_load.30 = load i64 %index
     %tmp_alloca.17 = alloca.sized ptr 16
+    %tmp_load.30 = load i64 %index
     %tmp_call.4 = call ptr @Array$int$get(%tmp_alloca.17, %tmp_fieldptr.29, %tmp_load.30)
     %tmp_load.31 = load i64 %tmp_alloca.17
-    %tmp_const.31 = const.i64 i64 1
-    %tmp_icmp.12 = icmp.eq i64 %tmp_load.31 %tmp_const.31
+    %tmp_const.34 = const.i64 i64 0
+    %tmp_icmp.12 = icmp.eq i64 %tmp_load.31 %tmp_const.34
+    %tmp_alloca.18 = alloca ptr
     br.cond %tmp_icmp.12 @block19 @block22
-if_let_then:
+try_success:
     %tmp_fieldptr.30 = getfieldptr ptr %tmp_alloca.17 8
     %tmp_load.32 = load i64 %tmp_fieldptr.30
-    %existing = alloca ptr
-    store %existing %tmp_load.32
-    %tmp_load.33 = load i64 %existing
+    store %tmp_alloca.18 %tmp_load.32
+    %tmp_load.33 = load i64 %tmp_alloca.18
     %tmp_load.34 = load i64 %key.1
     %tmp_icmp.13 = icmp.eq i64 %tmp_load.33 %tmp_load.34
     br.cond %tmp_icmp.13 @block20 @block21
@@ -558,27 +497,27 @@ then:
     ret
 end:
     br @block23
-if_let_else:
+if_try_else:
     br @block23
-if_let_end:
+try_merge:
     br @block24
 end:
     %tmp_load.37 = load i64 %index
-    %tmp_const.32 = const.i64 i64 1
-    %tmp_add.2 = add i64 %tmp_load.37 %tmp_const.32
+    %tmp_const.36 = const.i64 i64 1
+    %tmp_add.2 = add i64 %tmp_load.37 %tmp_const.36
     %tmp_fieldptr.32 = getfieldptr ptr %self 128
     %tmp_load.38 = load i64 %tmp_fieldptr.32
     %tmp_mod.1 = mod i64 %tmp_add.2 %tmp_load.38
     store %index %tmp_mod.1
     %tmp_load.39 = load i64 %probes
-    %tmp_const.33 = const.i64 i64 1
-    %tmp_add.3 = add i64 %tmp_load.39 %tmp_const.33
+    %tmp_const.37 = const.i64 i64 1
+    %tmp_add.3 = add i64 %tmp_load.39 %tmp_const.37
     store %probes %tmp_add.3
     br @block7
 whilecont:
     %tmp_load.40 = load i64 %firstDeleted
-    %tmp_const.34 = const.i64 i64 0
-    %tmp_icmp.14 = icmp.ge i64 %tmp_load.40 %tmp_const.34
+    %tmp_const.38 = const.i64 i64 0
+    %tmp_icmp.14 = icmp.ge i64 %tmp_load.40 %tmp_const.38
     br.cond %tmp_icmp.14 @block26 @block27
 then:
     %tmp_fieldptr.33 = getfieldptr ptr %self 0
@@ -591,12 +530,12 @@ then:
     call @Array$int$set(%tmp_fieldptr.34, %tmp_load.43, %tmp_load.44)
     %tmp_fieldptr.35 = getfieldptr ptr %self 80
     %tmp_load.45 = load i64 %firstDeleted
-    %tmp_const.35 = const.i64 i64 1
-    call @Array$SlotState$set(%tmp_fieldptr.35, %tmp_load.45, %tmp_const.35)
+    %tmp_const.41 = const.i64 i64 1
+    call @Array$SlotState$set(%tmp_fieldptr.35, %tmp_load.45, %tmp_const.41)
     %tmp_fieldptr.36 = getfieldptr ptr %self 120
     %tmp_load.46 = load i64 %tmp_fieldptr.36
-    %tmp_const.36 = const.i64 i64 1
-    %tmp_add.4 = add i64 %tmp_load.46 %tmp_const.36
+    %tmp_const.43 = const.i64 i64 1
+    %tmp_add.4 = add i64 %tmp_load.46 %tmp_const.43
     %tmp_fieldptr.37 = getfieldptr ptr %self 120
     store %tmp_fieldptr.37 %tmp_add.4
     br @block27
@@ -713,171 +652,185 @@ whilecond:
     %tmp_icmp.1 = icmp.lt i64 %tmp_load.7 %tmp_load.8
     br.cond %tmp_icmp.1 @block4 @block27
 whilebody:
-    %tmp_const.14 = const.i64 i64 0
-    %state = alloca ptr
-    store %state %tmp_const.14
+    %tmp_alloca.12 = alloca.sized ptr 16
     %tmp_load.9 = load i64 %i
-    %tmp_alloca.13 = alloca.sized ptr 16
-    %tmp_call.3 = call ptr @Array$SlotState$get(%tmp_alloca.13, %oldStates, %tmp_load.9)
-    %tmp_load.10 = load i64 %tmp_alloca.13
-    %tmp_const.15 = const.i64 i64 1
-    %tmp_icmp.2 = icmp.eq i64 %tmp_load.10 %tmp_const.15
+    %tmp_call.3 = call ptr @Array$SlotState$get(%tmp_alloca.12, %oldStates, %tmp_load.9)
+    %tmp_load.10 = load i64 %tmp_alloca.12
+    %tmp_const.14 = const.i64 i64 0
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.10 %tmp_const.14
+    %tmp_alloca.13 = alloca ptr
     br.cond %tmp_icmp.2 @block5 @block6
-if_let_then:
-    %tmp_fieldptr.21 = getfieldptr ptr %tmp_alloca.13 8
+try_success:
+    %tmp_fieldptr.21 = getfieldptr ptr %tmp_alloca.12 8
     %tmp_load.11 = load i64 %tmp_fieldptr.21
-    %s = alloca ptr
-    store %s %tmp_load.11
-    %tmp_load.12 = load i64 %s
+    store %tmp_alloca.13 %tmp_load.11
+    br @block7
+try_default:
+    %tmp_const.15 = const.i64 i64 0
+    store %tmp_alloca.13 %tmp_const.15
+    br @block7
+try_merge:
+    %tmp_load.12 = load i64 %tmp_alloca.13
+    %state = alloca ptr
     store %state %tmp_load.12
-    br @block7
-if_let_else:
-    br @block7
-if_let_end:
     %tmp_load.13 = load i64 %state
     %tmp_const.16 = const.i64 i64 1
     %tmp_icmp.3 = icmp.eq i64 %tmp_load.13 %tmp_const.16
     br.cond %tmp_icmp.3 @block8 @block26
 then:
-    %tmp_load.14 = load i64 %i
     %tmp_alloca.15 = alloca.sized ptr 16
+    %tmp_load.14 = load i64 %i
     %tmp_call.4 = call ptr @Array$int$get(%tmp_alloca.15, %oldKeys, %tmp_load.14)
     %tmp_load.15 = load i64 %tmp_alloca.15
-    %tmp_const.17 = const.i64 i64 1
+    %tmp_const.17 = const.i64 i64 0
     %tmp_icmp.4 = icmp.eq i64 %tmp_load.15 %tmp_const.17
-    br.cond %tmp_icmp.4 @block9 @block24
-if_let_then:
+    %tmp_alloca.16 = alloca ptr
+    br.cond %tmp_icmp.4 @block9 @block10
+try_success:
     %tmp_fieldptr.22 = getfieldptr ptr %tmp_alloca.15 8
     %tmp_load.16 = load i64 %tmp_fieldptr.22
-    %key = alloca ptr
-    store %key %tmp_load.16
+    store %tmp_alloca.16 %tmp_load.16
+    br @block11
+try_otherwise_block:
     %tmp_load.17 = load i64 %i
-    %tmp_alloca.17 = alloca.sized ptr 16
-    %tmp_call.5 = call ptr @Array$int$get(%tmp_alloca.17, %oldValues, %tmp_load.17)
-    %tmp_load.18 = load i64 %tmp_alloca.17
     %tmp_const.18 = const.i64 i64 1
-    %tmp_icmp.5 = icmp.eq i64 %tmp_load.18 %tmp_const.18
-    br.cond %tmp_icmp.5 @block10 @block22
-if_let_then:
-    %tmp_fieldptr.23 = getfieldptr ptr %tmp_alloca.17 8
-    %tmp_load.19 = load i64 %tmp_fieldptr.23
+    %tmp_add = add i64 %tmp_load.17 %tmp_const.18
+    store %i %tmp_add
+    br @block3
+try_merge:
+    %tmp_load.18 = load i64 %tmp_alloca.16
+    %key = alloca ptr
+    store %key %tmp_load.18
+    %tmp_alloca.18 = alloca.sized ptr 16
+    %tmp_load.19 = load i64 %i
+    %tmp_call.5 = call ptr @Array$int$get(%tmp_alloca.18, %oldValues, %tmp_load.19)
+    %tmp_load.20 = load i64 %tmp_alloca.18
+    %tmp_const.19 = const.i64 i64 0
+    %tmp_icmp.5 = icmp.eq i64 %tmp_load.20 %tmp_const.19
+    %tmp_alloca.19 = alloca ptr
+    br.cond %tmp_icmp.5 @block12 @block13
+try_success:
+    %tmp_fieldptr.23 = getfieldptr ptr %tmp_alloca.18 8
+    %tmp_load.21 = load i64 %tmp_fieldptr.23
+    store %tmp_alloca.19 %tmp_load.21
+    br @block14
+try_otherwise_block:
+    %tmp_load.22 = load i64 %i
+    %tmp_const.20 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.22 %tmp_const.20
+    store %i %tmp_add.1
+    br @block3
+try_merge:
+    %tmp_load.23 = load i64 %tmp_alloca.19
     %value = alloca ptr
-    store %value %tmp_load.19
-    %tmp_load.20 = load i64 %key
+    store %value %tmp_load.23
+    %tmp_load.24 = load i64 %key
     %hash = alloca ptr
-    store %hash %tmp_load.20
-    %tmp_load.21 = load i64 %hash
-    %tmp_load.22 = load i64 %newCapacity
-    %tmp_mod = mod i64 %tmp_load.21 %tmp_load.22
+    store %hash %tmp_load.24
+    %tmp_load.25 = load i64 %hash
+    %tmp_load.26 = load i64 %newCapacity
+    %tmp_mod = mod i64 %tmp_load.25 %tmp_load.26
     %index = alloca ptr
     store %index %tmp_mod
-    %tmp_load.23 = load i64 %index
-    %tmp_const.19 = const.i64 i64 0
-    %tmp_icmp.6 = icmp.lt i64 %tmp_load.23 %tmp_const.19
-    br.cond %tmp_icmp.6 @block11 @block12
+    %tmp_load.27 = load i64 %index
+    %tmp_const.21 = const.i64 i64 0
+    %tmp_icmp.6 = icmp.lt i64 %tmp_load.27 %tmp_const.21
+    br.cond %tmp_icmp.6 @block15 @block16
 then:
-    %tmp_load.24 = load i64 %index
-    %tmp_load.25 = load i64 %newCapacity
-    %tmp_add = add i64 %tmp_load.24 %tmp_load.25
-    store %index %tmp_add
-    br @block12
+    %tmp_load.28 = load i64 %index
+    %tmp_load.29 = load i64 %newCapacity
+    %tmp_add.2 = add i64 %tmp_load.28 %tmp_load.29
+    store %index %tmp_add.2
+    br @block16
 end:
-    %tmp_const.20 = const.i64 i64 0
-    %currentState = alloca ptr
-    store %currentState %tmp_const.20
     %tmp_fieldptr.24 = getfieldptr ptr %self 80
-    %tmp_load.26 = load i64 %index
-    %tmp_alloca.22 = alloca.sized ptr 16
-    %tmp_call.6 = call ptr @Array$SlotState$get(%tmp_alloca.22, %tmp_fieldptr.24, %tmp_load.26)
-    %tmp_load.27 = load i64 %tmp_alloca.22
-    %tmp_const.21 = const.i64 i64 1
-    %tmp_icmp.7 = icmp.eq i64 %tmp_load.27 %tmp_const.21
-    br.cond %tmp_icmp.7 @block13 @block14
-if_let_then:
-    %tmp_fieldptr.25 = getfieldptr ptr %tmp_alloca.22 8
-    %tmp_load.28 = load i64 %tmp_fieldptr.25
-    %cs = alloca ptr
-    store %cs %tmp_load.28
-    %tmp_load.29 = load i64 %cs
-    store %currentState %tmp_load.29
-    br @block15
-if_let_else:
-    br @block15
-if_let_end:
-    br @block16
-whilecond:
-    %tmp_load.30 = load i64 %currentState
+    %tmp_alloca.23 = alloca.sized ptr 16
+    %tmp_load.30 = load i64 %index
+    %tmp_call.6 = call ptr @Array$SlotState$get(%tmp_alloca.23, %tmp_fieldptr.24, %tmp_load.30)
+    %tmp_load.31 = load i64 %tmp_alloca.23
     %tmp_const.22 = const.i64 i64 0
-    %tmp_icmp.8 = icmp.ne i64 %tmp_load.30 %tmp_const.22
-    br.cond %tmp_icmp.8 @block17 @block21
-whilebody:
-    %tmp_load.31 = load i64 %index
-    %tmp_const.23 = const.i64 i64 1
-    %tmp_add.1 = add i64 %tmp_load.31 %tmp_const.23
-    %tmp_load.32 = load i64 %newCapacity
-    %tmp_mod.1 = mod i64 %tmp_add.1 %tmp_load.32
-    store %index %tmp_mod.1
+    %tmp_icmp.7 = icmp.eq i64 %tmp_load.31 %tmp_const.22
+    %tmp_alloca.24 = alloca ptr
+    br.cond %tmp_icmp.7 @block17 @block18
+try_success:
+    %tmp_fieldptr.25 = getfieldptr ptr %tmp_alloca.23 8
+    %tmp_load.32 = load i64 %tmp_fieldptr.25
+    store %tmp_alloca.24 %tmp_load.32
+    br @block19
+try_default:
+    %tmp_const.23 = const.i64 i64 0
+    store %tmp_alloca.24 %tmp_const.23
+    br @block19
+try_merge:
+    %tmp_load.33 = load i64 %tmp_alloca.24
+    %currentState = alloca ptr
+    store %currentState %tmp_load.33
+    br @block20
+whilecond:
+    %tmp_load.34 = load i64 %currentState
     %tmp_const.24 = const.i64 i64 0
-    store %currentState %tmp_const.24
-    %tmp_fieldptr.26 = getfieldptr ptr %self 80
-    %tmp_load.33 = load i64 %index
-    %tmp_alloca.24 = alloca.sized ptr 16
-    %tmp_call.7 = call ptr @Array$SlotState$get(%tmp_alloca.24, %tmp_fieldptr.26, %tmp_load.33)
-    %tmp_load.34 = load i64 %tmp_alloca.24
+    %tmp_icmp.8 = icmp.ne i64 %tmp_load.34 %tmp_const.24
+    br.cond %tmp_icmp.8 @block21 @block25
+whilebody:
+    %tmp_load.35 = load i64 %index
     %tmp_const.25 = const.i64 i64 1
-    %tmp_icmp.9 = icmp.eq i64 %tmp_load.34 %tmp_const.25
-    br.cond %tmp_icmp.9 @block18 @block19
-if_let_then:
-    %tmp_fieldptr.27 = getfieldptr ptr %tmp_alloca.24 8
-    %tmp_load.35 = load i64 %tmp_fieldptr.27
-    %nextS = alloca ptr
-    store %nextS %tmp_load.35
-    %tmp_load.36 = load i64 %nextS
-    store %currentState %tmp_load.36
+    %tmp_add.3 = add i64 %tmp_load.35 %tmp_const.25
+    %tmp_load.36 = load i64 %newCapacity
+    %tmp_mod.1 = mod i64 %tmp_add.3 %tmp_load.36
+    store %index %tmp_mod.1
+    %tmp_fieldptr.26 = getfieldptr ptr %self 80
+    %tmp_alloca.26 = alloca.sized ptr 16
+    %tmp_load.37 = load i64 %index
+    %tmp_call.7 = call ptr @Array$SlotState$get(%tmp_alloca.26, %tmp_fieldptr.26, %tmp_load.37)
+    %tmp_load.38 = load i64 %tmp_alloca.26
+    %tmp_const.26 = const.i64 i64 0
+    %tmp_icmp.9 = icmp.eq i64 %tmp_load.38 %tmp_const.26
+    %tmp_alloca.27 = alloca ptr
+    br.cond %tmp_icmp.9 @block22 @block23
+try_success:
+    %tmp_fieldptr.27 = getfieldptr ptr %tmp_alloca.26 8
+    %tmp_load.39 = load i64 %tmp_fieldptr.27
+    store %tmp_alloca.27 %tmp_load.39
+    br @block24
+try_default:
+    %tmp_const.27 = const.i64 i64 0
+    store %tmp_alloca.27 %tmp_const.27
+    br @block24
+try_merge:
+    %tmp_load.40 = load i64 %tmp_alloca.27
+    store %currentState %tmp_load.40
     br @block20
-if_let_else:
-    br @block20
-if_let_end:
-    br @block16
 whilecont:
     %tmp_fieldptr.28 = getfieldptr ptr %self 0
-    %tmp_load.37 = load i64 %index
-    %tmp_load.38 = load i64 %key
-    call @Array$int$set(%tmp_fieldptr.28, %tmp_load.37, %tmp_load.38)
-    %tmp_fieldptr.29 = getfieldptr ptr %self 40
-    %tmp_load.39 = load i64 %index
-    %tmp_load.40 = load i64 %value
-    call @Array$int$set(%tmp_fieldptr.29, %tmp_load.39, %tmp_load.40)
-    %tmp_fieldptr.30 = getfieldptr ptr %self 80
     %tmp_load.41 = load i64 %index
-    %tmp_const.26 = const.i64 i64 1
-    call @Array$SlotState$set(%tmp_fieldptr.30, %tmp_load.41, %tmp_const.26)
+    %tmp_load.42 = load i64 %key
+    call @Array$int$set(%tmp_fieldptr.28, %tmp_load.41, %tmp_load.42)
+    %tmp_fieldptr.29 = getfieldptr ptr %self 40
+    %tmp_load.43 = load i64 %index
+    %tmp_load.44 = load i64 %value
+    call @Array$int$set(%tmp_fieldptr.29, %tmp_load.43, %tmp_load.44)
+    %tmp_fieldptr.30 = getfieldptr ptr %self 80
+    %tmp_load.45 = load i64 %index
+    %tmp_const.30 = const.i64 i64 1
+    call @Array$SlotState$set(%tmp_fieldptr.30, %tmp_load.45, %tmp_const.30)
     %tmp_fieldptr.31 = getfieldptr ptr %self 120
-    %tmp_load.42 = load i64 %tmp_fieldptr.31
-    %tmp_const.27 = const.i64 i64 1
-    %tmp_add.2 = add i64 %tmp_load.42 %tmp_const.27
+    %tmp_load.46 = load i64 %tmp_fieldptr.31
+    %tmp_const.32 = const.i64 i64 1
+    %tmp_add.4 = add i64 %tmp_load.46 %tmp_const.32
     %tmp_fieldptr.32 = getfieldptr ptr %self 120
-    store %tmp_fieldptr.32 %tmp_add.2
-    br @block23
-if_let_else:
-    br @block23
-if_let_end:
-    br @block25
-if_let_else:
-    br @block25
-if_let_end:
+    store %tmp_fieldptr.32 %tmp_add.4
     br @block26
 end:
-    %tmp_load.43 = load i64 %i
-    %tmp_const.28 = const.i64 i64 1
-    %tmp_add.3 = add i64 %tmp_load.43 %tmp_const.28
-    store %i %tmp_add.3
+    %tmp_load.47 = load i64 %i
+    %tmp_const.33 = const.i64 i64 1
+    %tmp_add.5 = add i64 %tmp_load.47 %tmp_const.33
+    store %i %tmp_add.5
     br @block3
 whilecont:
     ret
 }
 
-function Array$SlotState$get() -> ptr {
+function Array$SlotState$get() -> i64 {
 entry:
     %tmp_param = param ptr 0
     %self = param ptr 1
@@ -895,7 +848,10 @@ entry:
     br.cond %tmp_icmp @block1 @block2
 then:
     %tmp_const.1 = const.i64 i64 0
-    store %tmp_param %tmp_const.1
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.2 %tmp_const.1
     ret %tmp_param
 end:
     %tmp_load.2 = load i64 %index.1
@@ -903,41 +859,26 @@ end:
     %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.3
     br.cond %tmp_icmp.1 @block3 @block4
 then:
-    %tmp_const.2 = const.i64 i64 0
-    store %tmp_param %tmp_const.2
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_const.4 = const.i64 i64 1
+    store %tmp_param %tmp_const.4
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.3 %tmp_const.3
     ret %tmp_param
 end:
-    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_fieldptr.4 = getfieldptr ptr %self 0
     %tmp_load.4 = load i64 %index.1
-    %tmp_load.5 = load ptr %tmp_fieldptr.2
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 8
-    %tmp_load.6 = load i64 %tmp_fieldptr.3
-    %tmp_alloca.2 = alloca.sized ptr 16
-    %tmp_const.3 = const.i64 i64 0
-    %tmp_icmp.2 = icmp.ge i64 %tmp_load.4 %tmp_const.3
-    %tmp_icmp.3 = icmp.lt i64 %tmp_load.4 %tmp_load.6
-    %tmp_mul = mul i64 %tmp_icmp.2 %tmp_icmp.3
-    br.cond %tmp_mul @block5 @block6
-managed_index_in_bounds:
-    %tmp_const.4 = const.i64 i64 1
-    store %tmp_alloca.2 %tmp_const.4
-    %tmp_const.5 = const.i64 i64 8
-    %tmp_mul.1 = mul i64 %tmp_load.4 %tmp_const.5
-    %tmp_add = add ptr %tmp_load.5 %tmp_mul.1
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load.7 = load i64 %tmp_add
-    store %tmp_fieldptr.4 %tmp_load.7
-    br @block7
-managed_index_out_of_bounds:
-    %tmp_const.6 = const.i64 i64 0
-    store %tmp_alloca.2 %tmp_const.6
-    br @block7
-managed_index_merge:
-    memcpy %tmp_param %tmp_alloca.2 16
+    %tmp_load.5 = load ptr %tmp_fieldptr.4
+    %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=8
+    %tmp_load.6 = load i64 %tmp_elemptr
+    %tmp_const.5 = const.i64 i64 0
+    store %tmp_param %tmp_const.5
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.5 %tmp_load.6
     ret %tmp_param
 }
 
-function Array$int$get() -> ptr {
+function Array$int$get() -> i64 {
 entry:
     %tmp_param = param ptr 0
     %self = param ptr 1
@@ -955,7 +896,10 @@ entry:
     br.cond %tmp_icmp @block1 @block2
 then:
     %tmp_const.1 = const.i64 i64 0
-    store %tmp_param %tmp_const.1
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.2 %tmp_const.1
     ret %tmp_param
 end:
     %tmp_load.2 = load i64 %index.1
@@ -963,37 +907,22 @@ end:
     %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.3
     br.cond %tmp_icmp.1 @block3 @block4
 then:
-    %tmp_const.2 = const.i64 i64 0
-    store %tmp_param %tmp_const.2
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_const.4 = const.i64 i64 1
+    store %tmp_param %tmp_const.4
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.3 %tmp_const.3
     ret %tmp_param
 end:
-    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_fieldptr.4 = getfieldptr ptr %self 0
     %tmp_load.4 = load i64 %index.1
-    %tmp_load.5 = load ptr %tmp_fieldptr.2
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 8
-    %tmp_load.6 = load i64 %tmp_fieldptr.3
-    %tmp_alloca.2 = alloca.sized ptr 16
-    %tmp_const.3 = const.i64 i64 0
-    %tmp_icmp.2 = icmp.ge i64 %tmp_load.4 %tmp_const.3
-    %tmp_icmp.3 = icmp.lt i64 %tmp_load.4 %tmp_load.6
-    %tmp_mul = mul i64 %tmp_icmp.2 %tmp_icmp.3
-    br.cond %tmp_mul @block5 @block6
-managed_index_in_bounds:
-    %tmp_const.4 = const.i64 i64 1
-    store %tmp_alloca.2 %tmp_const.4
-    %tmp_const.5 = const.i64 i64 8
-    %tmp_mul.1 = mul i64 %tmp_load.4 %tmp_const.5
-    %tmp_add = add ptr %tmp_load.5 %tmp_mul.1
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
-    %tmp_load.7 = load i64 %tmp_add
-    store %tmp_fieldptr.4 %tmp_load.7
-    br @block7
-managed_index_out_of_bounds:
-    %tmp_const.6 = const.i64 i64 0
-    store %tmp_alloca.2 %tmp_const.6
-    br @block7
-managed_index_merge:
-    memcpy %tmp_param %tmp_alloca.2 16
+    %tmp_load.5 = load ptr %tmp_fieldptr.4
+    %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=8
+    %tmp_load.6 = load i64 %tmp_elemptr
+    %tmp_const.5 = const.i64 i64 0
+    store %tmp_param %tmp_const.5
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.5 %tmp_load.6
     ret %tmp_param
 }
 
@@ -1118,28 +1047,28 @@ whilecond:
     %tmp_icmp.2 = icmp.lt i64 %tmp_load.7 %tmp_load.8
     br.cond %tmp_icmp.2 @block6 @block19
 whilebody:
-    %tmp_const.4 = const.i64 i64 0
-    %state = alloca ptr
-    store %state %tmp_const.4
     %tmp_fieldptr.4 = getfieldptr ptr %self 80
+    %tmp_alloca.4 = alloca.sized ptr 16
     %tmp_load.9 = load i64 %index
-    %tmp_alloca.5 = alloca.sized ptr 16
-    %tmp_call = call ptr @Array$SlotState$get(%tmp_alloca.5, %tmp_fieldptr.4, %tmp_load.9)
-    %tmp_load.10 = load i64 %tmp_alloca.5
-    %tmp_const.5 = const.i64 i64 1
-    %tmp_icmp.3 = icmp.eq i64 %tmp_load.10 %tmp_const.5
+    %tmp_call = call ptr @Array$SlotState$get(%tmp_alloca.4, %tmp_fieldptr.4, %tmp_load.9)
+    %tmp_load.10 = load i64 %tmp_alloca.4
+    %tmp_const.4 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.eq i64 %tmp_load.10 %tmp_const.4
+    %tmp_alloca.5 = alloca ptr
     br.cond %tmp_icmp.3 @block7 @block8
-if_let_then:
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.5 8
+try_success:
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.4 8
     %tmp_load.11 = load i64 %tmp_fieldptr.5
-    %s = alloca ptr
-    store %s %tmp_load.11
-    %tmp_load.12 = load i64 %s
+    store %tmp_alloca.5 %tmp_load.11
+    br @block9
+try_default:
+    %tmp_const.5 = const.i64 i64 0
+    store %tmp_alloca.5 %tmp_const.5
+    br @block9
+try_merge:
+    %tmp_load.12 = load i64 %tmp_alloca.5
+    %state = alloca ptr
     store %state %tmp_load.12
-    br @block9
-if_let_else:
-    br @block9
-if_let_end:
     %tmp_load.13 = load i64 %state
     %tmp_const.6 = const.i64 i64 0
     %tmp_icmp.4 = icmp.eq i64 %tmp_load.13 %tmp_const.6
@@ -1154,19 +1083,19 @@ end:
     br.cond %tmp_icmp.5 @block12 @block18
 then:
     %tmp_fieldptr.6 = getfieldptr ptr %self 0
-    %tmp_load.15 = load i64 %index
     %tmp_alloca.7 = alloca.sized ptr 16
+    %tmp_load.15 = load i64 %index
     %tmp_call.1 = call ptr @Array$int$get(%tmp_alloca.7, %tmp_fieldptr.6, %tmp_load.15)
     %tmp_load.16 = load i64 %tmp_alloca.7
-    %tmp_const.9 = const.i64 i64 1
+    %tmp_const.9 = const.i64 i64 0
     %tmp_icmp.6 = icmp.eq i64 %tmp_load.16 %tmp_const.9
+    %tmp_alloca.8 = alloca ptr
     br.cond %tmp_icmp.6 @block13 @block16
-if_let_then:
+try_success:
     %tmp_fieldptr.7 = getfieldptr ptr %tmp_alloca.7 8
     %tmp_load.17 = load i64 %tmp_fieldptr.7
-    %existing = alloca ptr
-    store %existing %tmp_load.17
-    %tmp_load.18 = load i64 %existing
+    store %tmp_alloca.8 %tmp_load.17
+    %tmp_load.18 = load i64 %tmp_alloca.8
     %tmp_load.19 = load i64 %key.1
     %tmp_icmp.7 = icmp.eq i64 %tmp_load.18 %tmp_load.19
     br.cond %tmp_icmp.7 @block14 @block15
@@ -1177,34 +1106,34 @@ then:
     call @Array$SlotState$set(%tmp_fieldptr.8, %tmp_load.20, %tmp_const.10)
     %tmp_fieldptr.9 = getfieldptr ptr %self 120
     %tmp_load.21 = load i64 %tmp_fieldptr.9
-    %tmp_const.11 = const.i64 i64 1
-    %tmp_sub = sub i64 %tmp_load.21 %tmp_const.11
+    %tmp_const.12 = const.i64 i64 1
+    %tmp_sub = sub i64 %tmp_load.21 %tmp_const.12
     %tmp_fieldptr.10 = getfieldptr ptr %self 120
     store %tmp_fieldptr.10 %tmp_sub
-    %tmp_const.12 = const.i64 i64 1
-    ret %tmp_const.12
+    %tmp_const.13 = const.i64 i64 1
+    ret %tmp_const.13
 end:
     br @block17
-if_let_else:
+if_try_else:
     br @block17
-if_let_end:
+try_merge:
     br @block18
 end:
     %tmp_load.22 = load i64 %index
-    %tmp_const.13 = const.i64 i64 1
-    %tmp_add.1 = add i64 %tmp_load.22 %tmp_const.13
+    %tmp_const.14 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.22 %tmp_const.14
     %tmp_fieldptr.11 = getfieldptr ptr %self 128
     %tmp_load.23 = load i64 %tmp_fieldptr.11
     %tmp_mod.1 = mod i64 %tmp_add.1 %tmp_load.23
     store %index %tmp_mod.1
     %tmp_load.24 = load i64 %probes
-    %tmp_const.14 = const.i64 i64 1
-    %tmp_add.2 = add i64 %tmp_load.24 %tmp_const.14
+    %tmp_const.15 = const.i64 i64 1
+    %tmp_add.2 = add i64 %tmp_load.24 %tmp_const.15
     store %probes %tmp_add.2
     br @block5
 whilecont:
-    %tmp_const.15 = const.i64 i64 0
-    ret %tmp_const.15
+    %tmp_const.16 = const.i64 i64 0
+    ret %tmp_const.16
 }
 
 function Map$int$int$contains() -> i64 {
@@ -1254,28 +1183,28 @@ whilecond:
     %tmp_icmp.2 = icmp.lt i64 %tmp_load.7 %tmp_load.8
     br.cond %tmp_icmp.2 @block6 @block19
 whilebody:
-    %tmp_const.4 = const.i64 i64 0
-    %state = alloca ptr
-    store %state %tmp_const.4
     %tmp_fieldptr.4 = getfieldptr ptr %self 80
+    %tmp_alloca.4 = alloca.sized ptr 16
     %tmp_load.9 = load i64 %index
-    %tmp_alloca.5 = alloca.sized ptr 16
-    %tmp_call = call ptr @Array$SlotState$get(%tmp_alloca.5, %tmp_fieldptr.4, %tmp_load.9)
-    %tmp_load.10 = load i64 %tmp_alloca.5
-    %tmp_const.5 = const.i64 i64 1
-    %tmp_icmp.3 = icmp.eq i64 %tmp_load.10 %tmp_const.5
+    %tmp_call = call ptr @Array$SlotState$get(%tmp_alloca.4, %tmp_fieldptr.4, %tmp_load.9)
+    %tmp_load.10 = load i64 %tmp_alloca.4
+    %tmp_const.4 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.eq i64 %tmp_load.10 %tmp_const.4
+    %tmp_alloca.5 = alloca ptr
     br.cond %tmp_icmp.3 @block7 @block8
-if_let_then:
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.5 8
+try_success:
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.4 8
     %tmp_load.11 = load i64 %tmp_fieldptr.5
-    %s = alloca ptr
-    store %s %tmp_load.11
-    %tmp_load.12 = load i64 %s
+    store %tmp_alloca.5 %tmp_load.11
+    br @block9
+try_default:
+    %tmp_const.5 = const.i64 i64 0
+    store %tmp_alloca.5 %tmp_const.5
+    br @block9
+try_merge:
+    %tmp_load.12 = load i64 %tmp_alloca.5
+    %state = alloca ptr
     store %state %tmp_load.12
-    br @block9
-if_let_else:
-    br @block9
-if_let_end:
     %tmp_load.13 = load i64 %state
     %tmp_const.6 = const.i64 i64 0
     %tmp_icmp.4 = icmp.eq i64 %tmp_load.13 %tmp_const.6
@@ -1290,19 +1219,19 @@ end:
     br.cond %tmp_icmp.5 @block12 @block18
 then:
     %tmp_fieldptr.6 = getfieldptr ptr %self 0
-    %tmp_load.15 = load i64 %index
     %tmp_alloca.7 = alloca.sized ptr 16
+    %tmp_load.15 = load i64 %index
     %tmp_call.1 = call ptr @Array$int$get(%tmp_alloca.7, %tmp_fieldptr.6, %tmp_load.15)
     %tmp_load.16 = load i64 %tmp_alloca.7
-    %tmp_const.9 = const.i64 i64 1
+    %tmp_const.9 = const.i64 i64 0
     %tmp_icmp.6 = icmp.eq i64 %tmp_load.16 %tmp_const.9
+    %tmp_alloca.8 = alloca ptr
     br.cond %tmp_icmp.6 @block13 @block16
-if_let_then:
+try_success:
     %tmp_fieldptr.7 = getfieldptr ptr %tmp_alloca.7 8
     %tmp_load.17 = load i64 %tmp_fieldptr.7
-    %existing = alloca ptr
-    store %existing %tmp_load.17
-    %tmp_load.18 = load i64 %existing
+    store %tmp_alloca.8 %tmp_load.17
+    %tmp_load.18 = load i64 %tmp_alloca.8
     %tmp_load.19 = load i64 %key.1
     %tmp_icmp.7 = icmp.eq i64 %tmp_load.18 %tmp_load.19
     br.cond %tmp_icmp.7 @block14 @block15
@@ -1311,9 +1240,9 @@ then:
     ret %tmp_const.10
 end:
     br @block17
-if_let_else:
+if_try_else:
     br @block17
-if_let_end:
+try_merge:
     br @block18
 end:
     %tmp_load.20 = load i64 %index

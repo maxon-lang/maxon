@@ -10,14 +10,11 @@ const types = @import("ast_to_ir_types.zig");
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const string = @import("ast_to_ir_string.zig");
 const cleanup = @import("ast_to_ir_cleanup.zig");
-const optional = @import("ast_to_ir_optional.zig");
 
 const AstToIr = ast_to_ir.AstToIr;
 const BranchBuilder = ast_to_ir.BranchBuilder;
-const Optional = optional.Optional;
 const TypedValue = types.TypedValue;
 const ValueType = types.ValueType;
-const OptionalInfo = types.OptionalInfo;
 const VarInfo = types.VarInfo;
 const ConvertError = types.ConvertError;
 
@@ -121,6 +118,9 @@ pub fn emitManagedArray(self: *AstToIr, buffer: ir.RawPtr, len: ir.Value, capaci
 /// Index into a __ManagedArray: managed[i]
 /// Returns the element as an optional (bounds-checked)
 /// Uses current_type_name or var_name context to determine element type
+/// Index into a __ManagedArray: managed[i]
+/// Returns the element as an error union (bounds-checked, throws ArrayError on out of bounds)
+/// Uses current_type_name or var_name context to determine element type
 pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression, var_name: ?[]const u8) ConvertError!TypedValue {
     const idx_typed = try self.convertExpression(index_expr);
 
@@ -167,9 +167,9 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
     const len_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(managed_ptr), ManagedArray.LEN_OFFSET);
     const len = try self.func().emitLoad(len_ptr.raw(), .i64);
 
-    // Calculate optional size: 8 (tag) + element size
-    const opt_size: i32 = 8 + elem_info.size;
-    const opt_ptr = try self.func().emitAllocaSized(opt_size);
+    // Calculate error union size: 8 (tag) + max(element size, 8 for error enum)
+    const eu_size: i32 = 8 + @max(elem_info.size, 8);
+    const eu_ptr = try self.func().emitAllocaSized(eu_size);
 
     // Bounds check: index >= 0 AND index < len
     const zero = try self.func().emitConstI64(0);
@@ -177,28 +177,23 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
     const is_less_than_len = try self.func().emitBinaryOp(.icmp_lt, idx_typed.value, len, .i64);
     const in_bounds = try self.func().emitBinaryOp(.mul, is_non_negative, is_less_than_len, .i64);
 
-    // Create 2-way branch: in_bounds -> get element, else -> return nil
+    // Create 2-way branch: in_bounds -> get element (success), else -> return error
     var branch = try BranchBuilder.init(self, in_bounds, "managed_index_in_bounds", "managed_index_out_of_bounds", "managed_index_merge");
     defer branch.deinit();
 
-    // Then block: create some(element)
-    const one_val = try self.func().emitConstI64(1);
-    try self.func().emitStore(opt_ptr.raw(), one_val); // tag = 1
+    // Then block: success - store element (tag=0 means success)
+    const success_tag = try self.func().emitConstI64(0);
+    try self.func().emitStore(eu_ptr.raw(), success_tag);
 
     // Calculate element pointer: buf_ptr + index * elem_size
     const elem_size_val = try self.func().emitConstI64(elem_info.size);
     const offset = try self.func().emitBinaryOp(.mul, idx_typed.value, elem_size_val, .i64);
     const elem_ptr = try self.func().emitBinaryOp(.add, buf_ptr, offset, .ptr);
 
-    const value_slot = try self.func().emitGetFieldPtr(ir.toStructPtr(opt_ptr.raw()), Optional.VALUE_OFFSET);
+    const value_slot = try self.func().emitGetFieldPtr(ir.toStructPtr(eu_ptr.raw()), 8); // value at offset 8
 
     if (elem_info.is_struct) {
-        // For struct elements, copy the struct data into the optional
-        // Note: we use plain memcpy here, not emitStructCopy, because:
-        // 1. emitStructCopy creates branch blocks for refcount handling that would
-        //    interfere with the BranchBuilder's block management
-        // 2. For read-only access (indexing), we're borrowing the data, not taking ownership
-        // If the caller wants ownership, they will copy and incref separately.
+        // For struct elements, copy the struct data into the error union
         try self.func().emitMemcpy(value_slot.asRawPtr(), ir.toRawPtr(elem_ptr), elem_info.size);
     } else {
         // For primitive elements, load and store the value
@@ -209,24 +204,26 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
     // Switch to else block
     try branch.switchToElse(true);
 
-    // Else block: create nil
-    const zero_val = try self.func().emitConstI64(0);
-    try self.func().emitStore(opt_ptr.raw(), zero_val); // tag = 0
+    // Else block: error - store ArrayError.IndexOutOfBounds (ordinal 0, tag=1 means error)
+    const error_tag = try self.func().emitConstI64(1);
+    try self.func().emitStore(eu_ptr.raw(), error_tag);
+    const error_ordinal = try self.func().emitConstI64(0); // IndexOutOfBounds = 0
+    const error_slot = try self.func().emitGetFieldPtr(ir.toStructPtr(eu_ptr.raw()), 8);
+    try self.func().emitStore(error_slot.raw(), error_ordinal);
 
     // Switch to merge block
     try branch.switchToMerge(true);
 
     // For String elements, we need to increment the refcount since we're copying
     // out of the array. The array still owns its copy, and the caller will own
-    // this copy. Without this, when the array is cleaned up, it would free the
-    // buffer while the caller's copy still references it.
+    // this copy.
     // Note: We do this AFTER the merge block so we can safely create branch blocks
     // for the conditional incref without interfering with the BranchBuilder.
     if (elem_info.is_struct and elem_info.name != null and std.mem.eql(u8, elem_info.name.?, "String")) {
-        // Only incref if the optional has a value (tag == 1)
-        const tag = try self.func().emitLoad(opt_ptr.raw(), .i64);
-        const one = try self.func().emitConstI64(1);
-        const has_value = try self.func().emitBinaryOp(.icmp_eq, tag, one, .i64);
+        // Only incref if the error union has a success value (tag == 0)
+        const tag = try self.func().emitLoad(eu_ptr.raw(), .i64);
+        const zero_const = try self.func().emitConstI64(0);
+        const is_success = try self.func().emitBinaryOp(.icmp_eq, tag, zero_const, .i64);
 
         // Create conditional block for incref - using simple pattern without deferred blocks
         // since emitStringIncref will create its own blocks
@@ -239,7 +236,7 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
         const branch_instr_idx = self.func().blocks.items[entry_idx].instructions.items.len;
         try self.func().blocks.items[entry_idx].instructions.append(self.allocator, .{
             .op = .br_cond,
-            .operands = .{ .{ .value = has_value }, .{ .block_ref = incref_idx }, .{ .block_ref = 0 } }, // placeholder for end
+            .operands = .{ .{ .value = is_success }, .{ .block_ref = incref_idx }, .{ .block_ref = 0 } }, // placeholder for end
         });
 
         // In incref block: increment refcount of the String at value_slot
@@ -259,19 +256,14 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
         self.func().blocks.items[entry_idx].instructions.items[branch_instr_idx].operands[2] = .{ .block_ref = end_idx };
     }
 
-    // Return the optional with proper type info
-    // Determine if element is an enum type
-    const is_enum = if (elem_info.name) |name|
-        if (self.type_map.get(name)) |ti| ti == .enum_type else false
-    else
-        false;
-
+    // Return the error union with proper type info
     return .{
-        .value = opt_ptr.raw(),
-        .ty = .{ .optional_type = .{
-            .wrapped = if (elem_info.is_struct) .ptr else .i64,
-            .wrapped_struct_type = if (elem_info.is_struct) elem_info.name else null,
-            .wrapped_enum_type = if (is_enum) elem_info.name else null,
+        .value = eu_ptr.raw(),
+        .ty = .{ .error_union_type = .{
+            .success_type = if (elem_info.is_struct) .ptr else .i64,
+            .success_type_name = if (elem_info.is_struct) null else elem_info.name,
+            .success_struct_type = if (elem_info.is_struct) elem_info.name else null,
+            .error_enum_type = "ArrayError",
         } },
     };
 }
@@ -298,12 +290,25 @@ pub fn convertStdlibArrayIndex(self: *AstToIr, base_typed: TypedValue, index_exp
         try self.ensureMethodGenerated(mangled_name);
     }
 
-    // The get method returns Element or nil (an optional)
+    // The get method returns Element throws ArrayError (an error union)
     // Args: sret_ptr, self_ptr, index
-    const default_type: ValueType = .{ .optional_type = .{ .wrapped = .i64 } };
-    const return_type = func_info.return_value_type orelse default_type;
-    const opt_info = if (return_type == .optional_type) return_type.optional_type else OptionalInfo{ .wrapped = .i64 };
-    const sret_buffer = try self.allocateOptional(opt_info);
+    const return_type = func_info.return_value_type orelse {
+        self.reportInternalError("get method has no return type");
+        return error.SemanticError;
+    };
+
+    // Calculate sret buffer size for error union: 8 (tag) + max(success_size, error_size)
+    const sret_size: i32 = if (return_type == .error_union_type) blk: {
+        const eu_info = return_type.error_union_type;
+        const success_size: i32 = if (eu_info.success_struct_type) |sn|
+            if (self.type_map.get(sn)) |ti| if (ti == .struct_type) ti.struct_type.size else 8 else 8
+        else
+            8;
+        const error_size: i32 = 8; // Error enums are always 8 bytes
+        break :blk 8 + @max(success_size, error_size);
+    } else 16; // Default size if somehow not error union
+
+    const sret_buffer = (try self.func().emitAllocaSized(sret_size)).raw();
 
     var args = try self.allocator.alloc(ir.Value, 3);
     args[0] = sret_buffer;
@@ -312,7 +317,7 @@ pub fn convertStdlibArrayIndex(self: *AstToIr, base_typed: TypedValue, index_exp
 
     _ = try self.func().emitCall(mangled_name, args, .ptr);
 
-    // Return the optional
+    // Return the error union
     return .{
         .value = sret_buffer,
         .ty = return_type,
@@ -406,10 +411,19 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
     if (is_array_type) {
         init_arg = managed_ptr.raw();
     } else {
-        // Create an Array by calling Array$init(__ManagedArray)
-        const array_init_name = "Array$init";
+        // Extract element type from the monomorphized type name (e.g., "Set$int" -> "int")
+        const elem_type_name = if (std.mem.indexOf(u8, type_name, "$")) |dollar_pos|
+            type_name[dollar_pos + 1 ..]
+        else
+            "int"; // Default to int for non-generic types
+
+        // Create an Array$ElementType by calling Array$ElementType$init(__ManagedArray)
+        var type_args = [_][]const u8{elem_type_name};
+        const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
+        const array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
+        try self.module.trackString(array_init_name);
         const array_func_info = self.func_map.get(array_init_name) orelse {
-            self.reportInternalError("Array$init not found for InitableFromArrayLiteral");
+            self.reportInternalError("Array init not found for InitableFromArrayLiteral");
             return error.UnknownFunction;
         };
 
@@ -418,8 +432,8 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
         }
 
         // Get Array type info for size
-        const array_type_info = self.type_map.get("Array") orelse {
-            self.reportError(.E006, "Array");
+        const array_type_info = self.type_map.get(array_type_name) orelse {
+            self.reportError(.E006, array_type_name);
             return error.UnknownType;
         };
 
@@ -510,7 +524,7 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
     const elem_type = first_typed.ty.toPrimitiveType();
     const elem_struct_type: ?[]const u8 = switch (first_typed.ty) {
         .struct_type => |name| name,
-        .primitive, .array_type, .enum_type, .optional_type, .error_union_type, .function_type => null,
+        .primitive, .array_type, .enum_type, .error_union_type, .function_type => null,
     };
 
     // Calculate element size: structs use their actual size, primitives use 8 bytes
@@ -612,9 +626,12 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
     debug.astToIr("InitFromArray target type: {s}", .{target_type_name});
 
     // Create an Array from the __ManagedArray (InitableFromArrayLiteral.init takes Array)
-    const array_init_name = "Array$init";
+    // First create the monomorphized Array type for the element type
+    const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
+    const array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
+    try self.module.trackString(array_init_name);
     const array_func_info = self.func_map.get(array_init_name) orelse {
-        self.reportInternalError("Array$init not found for InitableFromArrayLiteral");
+        self.reportInternalError("Array init not found for InitableFromArrayLiteral");
         return error.UnknownFunction;
     };
 
@@ -623,8 +640,8 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
     }
 
     // Get Array type info for size
-    const array_type_info = self.type_map.get("Array") orelse {
-        self.reportError(.E006, "Array");
+    const array_type_info = self.type_map.get(array_type_name) orelse {
+        self.reportError(.E006, array_type_name);
         return error.UnknownType;
     };
 

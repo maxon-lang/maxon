@@ -8,14 +8,9 @@ function main() returns int
     var p1 = Point{x: 1, y: 2}
     var p2 = Point{x: 3, y: 4}
     var points = [p1, p2]
-    var sum = 0
-    if let pt0 = points[0] 'g0'
-        sum = sum + pt0.x
-    end 'g0'
-    if let pt1 = points[1] 'g1'
-        sum = sum + pt1.y
-    end 'g1'
-    return sum
+    var pt0 = try points.get(0) otherwise Point{x: 0, y: 0}
+    var pt1 = try points.get(1) otherwise Point{x: 0, y: 0}
+    return pt0.x + pt1.y
 end 'main'
 ---
 ExitCode: 5
@@ -61,88 +56,112 @@ entry:
     store.i32 %tmp_fieldptr.7 %tmp_const.9
     %points = alloca ptr
     store %points %tmp_alloca.2
-    %tmp_const.10 = const.i64 i64 0
-    %sum = alloca ptr
-    store %sum %tmp_const.10
     %tmp_load = load ptr %points
-    %tmp_load.1 = load ptr %tmp_load
+    %tmp_alloca.4 = alloca.sized ptr 24
+    %tmp_const.10 = const.i64 i64 0
+    %tmp_call = call ptr @Array$Point$get(%tmp_alloca.4, %tmp_load, %tmp_const.10)
+    %tmp_load.1 = load i64 %tmp_alloca.4
     %tmp_const.11 = const.i64 i64 0
-    %tmp_const.12 = const.i64 i64 2
-    %tmp_alloca.5 = alloca.sized ptr 24
+    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.11
+    %pt0 = alloca.sized ptr 16
+    br.cond %tmp_icmp @block1 @block2
+try_success:
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.4 8
+    memcpy %pt0 %tmp_fieldptr.8 16
+    br @block3
+try_default:
+    %tmp_alloca.6 = alloca.sized ptr 16
+    memset %tmp_alloca.6 0 16
+    %tmp_fieldptr.9 = getfieldptr ptr %tmp_alloca.6 0
+    %tmp_const.12 = const.i64 i64 0
+    store %tmp_fieldptr.9 %tmp_const.12
+    %tmp_fieldptr.10 = getfieldptr ptr %tmp_alloca.6 8
     %tmp_const.13 = const.i64 i64 0
-    %tmp_icmp = icmp.ge i64 %tmp_const.11 %tmp_const.13
-    %tmp_icmp.1 = icmp.lt i64 %tmp_const.11 %tmp_const.12
-    %tmp_mul = mul i64 %tmp_icmp %tmp_icmp.1
-    br.cond %tmp_mul @block1 @block2
-index_in_bounds:
+    store %tmp_fieldptr.10 %tmp_const.13
+    memcpy %pt0 %tmp_alloca.6 16
+    br @block3
+try_merge:
+    %tmp_load.2 = load ptr %points
+    %tmp_alloca.7 = alloca.sized ptr 24
     %tmp_const.14 = const.i64 i64 1
-    store %tmp_alloca.5 %tmp_const.14
-    %tmp_elemptr.2 = getelemptr ptr %tmp_load.1 %tmp_const.11 elemsize=16
-    %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.5 8
-    memcpy %tmp_fieldptr.8 %tmp_elemptr.2 16
-    br @block3
-index_out_of_bounds:
+    %tmp_call.1 = call ptr @Array$Point$get(%tmp_alloca.7, %tmp_load.2, %tmp_const.14)
+    %tmp_load.3 = load i64 %tmp_alloca.7
     %tmp_const.15 = const.i64 i64 0
-    store %tmp_alloca.5 %tmp_const.15
-    br @block3
-index_merge:
-    %tmp_load.2 = load i64 %tmp_alloca.5
-    %tmp_const.16 = const.i64 i64 1
-    %tmp_icmp.2 = icmp.eq i64 %tmp_load.2 %tmp_const.16
-    br.cond %tmp_icmp.2 @block4 @block5
-if_let_then:
-    %pt0 = getfieldptr ptr %tmp_alloca.5 8
-    %tmp_load.4 = load i64 %sum
-    %tmp_fieldptr.10 = getfieldptr ptr %pt0 0
-    %tmp_load.5 = load i64 %tmp_fieldptr.10
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.3 %tmp_const.15
+    %pt1 = alloca.sized ptr 16
+    br.cond %tmp_icmp.1 @block4 @block5
+try_success:
+    %tmp_fieldptr.11 = getfieldptr ptr %tmp_alloca.7 8
+    memcpy %pt1 %tmp_fieldptr.11 16
+    br @block6
+try_default:
+    %tmp_alloca.9 = alloca.sized ptr 16
+    memset %tmp_alloca.9 0 16
+    %tmp_fieldptr.12 = getfieldptr ptr %tmp_alloca.9 0
+    %tmp_const.16 = const.i64 i64 0
+    store %tmp_fieldptr.12 %tmp_const.16
+    %tmp_fieldptr.13 = getfieldptr ptr %tmp_alloca.9 8
+    %tmp_const.17 = const.i64 i64 0
+    store %tmp_fieldptr.13 %tmp_const.17
+    memcpy %pt1 %tmp_alloca.9 16
+    br @block6
+try_merge:
+    %tmp_fieldptr.14 = getfieldptr ptr %pt0 0
+    %tmp_load.4 = load i64 %tmp_fieldptr.14
+    %tmp_fieldptr.15 = getfieldptr ptr %pt1 8
+    %tmp_load.5 = load i64 %tmp_fieldptr.15
     %tmp_add = add i64 %tmp_load.4 %tmp_load.5
-    store %sum %tmp_add
-    br @block6
-if_let_else:
-    br @block6
-if_let_end:
     %tmp_load.6 = load ptr %points
     %tmp_load.7 = load ptr %tmp_load.6
-    %tmp_const.17 = const.i64 i64 1
-    %tmp_const.18 = const.i64 i64 2
-    %tmp_alloca.6 = alloca.sized ptr 24
-    %tmp_const.19 = const.i64 i64 0
-    %tmp_icmp.3 = icmp.ge i64 %tmp_const.17 %tmp_const.19
-    %tmp_icmp.4 = icmp.lt i64 %tmp_const.17 %tmp_const.18
-    %tmp_mul.1 = mul i64 %tmp_icmp.3 %tmp_icmp.4
-    br.cond %tmp_mul.1 @block7 @block8
-index_in_bounds:
-    %tmp_const.20 = const.i64 i64 1
-    store %tmp_alloca.6 %tmp_const.20
-    %tmp_elemptr.3 = getelemptr ptr %tmp_load.7 %tmp_const.17 elemsize=16
-    %tmp_fieldptr.11 = getfieldptr ptr %tmp_alloca.6 8
-    memcpy %tmp_fieldptr.11 %tmp_elemptr.3 16
-    br @block9
-index_out_of_bounds:
-    %tmp_const.21 = const.i64 i64 0
-    store %tmp_alloca.6 %tmp_const.21
-    br @block9
-index_merge:
-    %tmp_load.8 = load i64 %tmp_alloca.6
-    %tmp_const.22 = const.i64 i64 1
-    %tmp_icmp.5 = icmp.eq i64 %tmp_load.8 %tmp_const.22
-    br.cond %tmp_icmp.5 @block10 @block11
-if_let_then:
-    %pt1 = getfieldptr ptr %tmp_alloca.6 8
-    %tmp_load.10 = load i64 %sum
-    %tmp_fieldptr.13 = getfieldptr ptr %pt1 8
-    %tmp_load.11 = load i64 %tmp_fieldptr.13
-    %tmp_add.1 = add i64 %tmp_load.10 %tmp_load.11
-    store %sum %tmp_add.1
-    br @block12
-if_let_else:
-    br @block12
-if_let_end:
-    %tmp_load.12 = load i64 %sum
-    %tmp_load.13 = load ptr %points
-    %tmp_load.14 = load ptr %tmp_load.13
-    heap.free %tmp_load.14 tag="array cleanup"
-    ret %tmp_load.12
+    heap.free %tmp_load.7 tag="array cleanup"
+    ret %tmp_add
+}
+
+function Array$Point$get() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    %index = param i64 2
+    %index.1 = alloca ptr
+    store %index.1 %index
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %len = alloca ptr
+    store %len %tmp_load
+    %tmp_load.1 = load i64 %index.1
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.lt i64 %tmp_load.1 %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.2 %tmp_const.1
+    ret %tmp_param
+end:
+    %tmp_load.2 = load i64 %index.1
+    %tmp_load.3 = load i64 %len
+    %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.3
+    br.cond %tmp_icmp.1 @block3 @block4
+then:
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_const.4 = const.i64 i64 1
+    store %tmp_param %tmp_const.4
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.3 %tmp_const.3
+    ret %tmp_param
+end:
+    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_load.4 = load i64 %index.1
+    %tmp_load.5 = load ptr %tmp_fieldptr.4
+    %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=16
+    %tmp_const.5 = const.i64 i64 0
+    store %tmp_param %tmp_const.5
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_param 8
+    memcpy %tmp_fieldptr.5 %tmp_elemptr 16
+    ret %tmp_param
 }
 
 ---
