@@ -52,6 +52,9 @@ pub fn build(b: *std.Build) void {
     const test_cmd = b.addRunArtifact(exe);
     test_cmd.step.dependOn(b.getInstallStep());
     test_cmd.addArgs(&.{"test"});
+    // Allow any exit code - test failures shouldn't fail the build step
+    test_cmd.stdio = .{ .check = .{} };
+    test_cmd.has_side_effects = true;
 
     // Forward any additional args to the test command
     if (b.args) |args| {

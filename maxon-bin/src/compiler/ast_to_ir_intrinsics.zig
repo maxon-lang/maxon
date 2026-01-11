@@ -593,6 +593,9 @@ fn intrinsicManagedArrayShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertErr
 }
 
 /// __managed_array_get_unchecked(managed, index) -> Element
+/// Returns a pointer to the element in the array buffer.
+/// For struct elements (including String), returns pointer directly to array buffer.
+/// Caller is responsible for copying and incref if needed.
 fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);

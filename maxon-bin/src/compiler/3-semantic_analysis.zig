@@ -741,10 +741,22 @@ pub const SemanticAnalyzer = struct {
             },
             .error_union => |eu| {
                 const success_vt = try self.typeExprToValueType(eu.success_type.*);
+                // For array types, compute the mangled struct name (e.g., "Array$String")
+                const success_struct_name: ?[]const u8 = if (success_vt == .struct_type)
+                    success_vt.struct_type
+                else if (success_vt == .array_type) blk: {
+                    // Get element type name from the array info
+                    const arr = success_vt.array_type;
+                    const elem_name = arr.element_struct_type orelse arr.element_type.toMaxonName();
+                    // Build mangled name: Array$ElementType
+                    const mangled = std.fmt.allocPrint(self.allocator, "Array${s}", .{elem_name}) catch break :blk null;
+                    try self.allocated_type_strings.append(self.allocator, mangled);
+                    break :blk mangled;
+                } else null;
                 return ValueType{ .error_union_type = .{
                     .success_type = success_vt.toPrimitiveType(),
                     .success_type_name = if (success_vt == .primitive) success_vt.primitive else null,
-                    .success_struct_type = if (success_vt == .struct_type) success_vt.struct_type else null,
+                    .success_struct_type = success_struct_name,
                     .error_enum_type = eu.error_type,
                 } };
             },

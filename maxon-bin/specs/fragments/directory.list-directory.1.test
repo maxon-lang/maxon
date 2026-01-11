@@ -20,7 +20,7 @@ ExitCode: 42
 ---
 function main() -> i64 {
 entry:
-    %tmp_alloca = alloca.sized ptr 16
+    %tmp_alloca = alloca.sized ptr 48
     %tmp_alloca.1 = alloca.sized ptr 32
     %tmp_const = const.i64 i64 15
     %tmp_heap = heap.alloc ptr %tmp_const tag="string buffer"
@@ -74,11 +74,11 @@ entry:
     %tmp_load = load i64 %tmp_alloca
     %tmp_const.20 = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.20
-    %files = alloca.sized ptr 8
+    %files = alloca.sized ptr 40
     br.cond %tmp_icmp @block1 @block2
 try_success:
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca 8
-    memcpy %files %tmp_fieldptr.4 8
+    memcpy %files %tmp_fieldptr.4 40
     br @block6
 try_otherwise_block:
     %tmp_const.21 = const.i64 i64 0
@@ -409,30 +409,6 @@ end:
     store %tmp_param %tmp_const.3
     %tmp_fieldptr.8 = getfieldptr ptr %tmp_param 8
     memcpy %tmp_fieldptr.8 %value 40
-    %tmp_fieldptr.9 = getfieldptr ptr %value 24
-    %tmp_load.6 = load i32 %tmp_fieldptr.9
-    %tmp_const.4 = const.i32 i32 3
-    %tmp_band = band i32 %tmp_load.6 %tmp_const.4
-    %tmp_const.5 = const.i32 i32 1
-    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.5
-    br.cond %tmp_icmp.1 @block3 @block5
-decref:
-    %tmp_load.7 = load ptr %value
-    %tmp_const.6 = const.i64 i64 8
-    %tmp_sub = sub ptr %tmp_load.7 %tmp_const.6
-    %tmp_load.8 = load i64 %tmp_sub
-    %tmp_const.7 = const.i64 i64 1
-    %tmp_sub.1 = sub i64 %tmp_load.8 %tmp_const.7
-    store %tmp_sub %tmp_sub.1
-    %tmp_const.8 = const.i64 i64 0
-    %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.8
-    br.cond %tmp_icmp.2 @block4 @block5
-decref_free:
-    %tmp_load.9 = load ptr %value
-    %tmp_sub.2 = sub ptr %tmp_load.9 %tmp_const.6
-    heap.free %tmp_sub.2 tag="string cleanup"
-    br @block5
-decref_end:
     ret %tmp_param
 }
 

@@ -148,13 +148,18 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
         break :blk null;
     };
 
-    // Determine element size and whether it's a struct
+    // Determine element size and whether it's a struct (with monomorphization fallback)
     const ElemInfo = struct { size: i32, is_struct: bool, name: ?[]const u8 };
     const elem_info: ElemInfo = if (elem_type_name) |tn| blk: {
+        // First try direct lookup
         if (self.type_map.get(tn)) |type_info| {
             if (type_info == .struct_type) {
                 break :blk ElemInfo{ .size = type_info.struct_type.size, .is_struct = true, .name = tn };
             }
+        }
+        // Try with monomorphization for generic types like Array$String
+        if (self.getStructSizeWithMonomorphization(tn)) |size| {
+            break :blk ElemInfo{ .size = size, .is_struct = true, .name = tn };
         }
         break :blk ElemInfo{ .size = 8, .is_struct = false, .name = tn };
     } else ElemInfo{ .size = 8, .is_struct = false, .name = null };
@@ -297,10 +302,7 @@ pub fn convertStdlibArrayIndex(self: *AstToIr, base_typed: TypedValue, index_exp
     // Calculate sret buffer size for error union: 8 (tag) + max(success_size, error_size)
     const sret_size: i32 = if (return_type == .error_union_type) blk: {
         const eu_info = return_type.error_union_type;
-        const success_size: i32 = if (eu_info.success_struct_type) |sn|
-            if (self.type_map.get(sn)) |ti| if (ti == .struct_type) ti.struct_type.size else 8 else 8
-        else
-            8;
+        const success_size = self.getErrorUnionSuccessSize(eu_info);
         const error_size: i32 = 8; // Error enums are always 8 bytes
         break :blk 8 + @max(success_size, error_size);
     } else 16; // Default size if somehow not error union
@@ -524,12 +526,10 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
         .primitive, .array_type, .enum_type, .error_union_type, .function_type => null,
     };
 
-    // Calculate element size: structs use their actual size, primitives use 8 bytes
+    // Calculate element size: structs use their actual size (with monomorphization), primitives use 8 bytes
     const elem_size: i64 = if (elem_struct_type) |struct_name| blk: {
-        if (self.type_map.get(struct_name)) |type_info| {
-            if (type_info == .struct_type) {
-                break :blk @intCast(type_info.struct_type.size);
-            }
+        if (self.getStructSizeWithMonomorphization(struct_name)) |size| {
+            break :blk @intCast(size);
         }
         break :blk 8;
     } else 8;
@@ -715,9 +715,9 @@ pub fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!Typ
 
     // Build __ManagedArray with the given capacity
     // For Array of N int, len = capacity so all elements are immediately accessible
-    // Calculate actual element size from type
-    const elem_size_val: i64 = if (self.type_map.get(resolved_elem)) |ti|
-        if (ti == .struct_type) ti.struct_type.size else 8
+    // Calculate actual element size from type (with monomorphization fallback)
+    const elem_size_val: i64 = if (self.getStructSizeWithMonomorphization(resolved_elem)) |size|
+        size
     else
         8;
     const elem_size = try self.func().emitConstI64(elem_size_val);

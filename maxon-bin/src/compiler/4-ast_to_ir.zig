@@ -2596,6 +2596,59 @@ pub const AstToIr = struct {
         return mono_name;
     }
 
+    /// Get the size of a struct type, triggering monomorphization if needed.
+    /// For monomorphized types like "Array$String" or "Map$Key$Value", this will
+    /// ensure the type is registered before looking up its size.
+    /// Returns the struct size, or null if the type cannot be resolved.
+    pub fn getStructSizeWithMonomorphization(self: *AstToIr, struct_name: []const u8) ?i32 {
+        // First try direct lookup
+        if (self.type_map.get(struct_name)) |type_info| {
+            if (type_info == .struct_type) {
+                return type_info.struct_type.size;
+            }
+        }
+
+        // Not found - try to trigger monomorphization for generic types
+        if (std.mem.startsWith(u8, struct_name, "Array$")) {
+            const elem_type = struct_name["Array$".len..];
+            _ = self.getOrCreateMonomorphizedType("Array", &[_][]const u8{elem_type}) catch return null;
+        } else if (std.mem.startsWith(u8, struct_name, "Map$")) {
+            // Parse Map$Key$Value
+            const rest = struct_name["Map$".len..];
+            if (std.mem.indexOf(u8, rest, "$")) |sep| {
+                const key_type = rest[0..sep];
+                const val_type = rest[sep + 1 ..];
+                _ = self.getOrCreateMonomorphizedType("Map", &[_][]const u8{ key_type, val_type }) catch return null;
+            } else {
+                return null;
+            }
+        } else {
+            // Unknown monomorphized type pattern
+            return null;
+        }
+
+        // Try lookup again after monomorphization
+        if (self.type_map.get(struct_name)) |type_info| {
+            if (type_info == .struct_type) {
+                return type_info.struct_type.size;
+            }
+        }
+
+        return null;
+    }
+
+    /// Get the size of a struct type for error union success types.
+    /// This handles the common pattern of extracting success_struct_type from an ErrorUnionInfo
+    /// and computing the appropriate allocation size.
+    /// Returns 8 as fallback for primitives/enums, or the actual struct size for structs.
+    pub fn getErrorUnionSuccessSize(self: *AstToIr, eu_info: types.ErrorUnionInfo) i32 {
+        if (eu_info.success_struct_type) |struct_name| {
+            return self.getStructSizeWithMonomorphization(struct_name) orelse 8;
+        }
+        // Primitives and enums are 8 bytes
+        return 8;
+    }
+
     /// Build FuncInfo from method declaration (by value).
     fn buildMethodFuncInfo(
         self: *AstToIr,
@@ -3744,7 +3797,8 @@ pub const AstToIr = struct {
                             if (var_info.ty == .struct_type) {
                                 const struct_name = var_info.ty.struct_type;
                                 if (std.mem.startsWith(u8, struct_name, "Array$") or
-                                    std.mem.eql(u8, struct_name, "Array"))
+                                    std.mem.eql(u8, struct_name, "Array") or
+                                    std.mem.eql(u8, struct_name, "String"))
                                 {
                                     var_info.markMoved("return", self.current_line);
                                     if (self.track_memory) {
@@ -3789,7 +3843,8 @@ pub const AstToIr = struct {
                             if (std.mem.startsWith(u8, struct_name, "Array$") or
                                 std.mem.eql(u8, struct_name, "Array") or
                                 std.mem.startsWith(u8, struct_name, "Map$") or
-                                std.mem.eql(u8, struct_name, "Map"))
+                                std.mem.eql(u8, struct_name, "Map") or
+                                std.mem.eql(u8, struct_name, "String"))
                             {
                                 var_info.markMoved("return", self.current_line);
                                 if (self.track_memory) {
@@ -7022,15 +7077,11 @@ pub const AstToIr = struct {
 
             const is_struct_type = success_type == .struct_type;
 
-            const struct_size: i32 = if (is_struct_type) blk: {
-                const struct_name = success_type.struct_type;
-                if (self_ir.type_map.get(struct_name)) |type_info| {
-                    if (type_info == .struct_type) {
-                        break :blk type_info.struct_type.size;
-                    }
-                }
-                break :blk 8;
-            } else 0;
+            // Use helper to get struct size with automatic monomorphization
+            const struct_size: i32 = if (is_struct_type)
+                self_ir.getStructSizeWithMonomorphization(success_type.struct_type) orelse 8
+            else
+                0;
 
             // Allocate result buffer BEFORE creating new blocks (in current/entry block)
             // so it's visible to both success and error paths
@@ -7806,10 +7857,7 @@ pub const AstToIr = struct {
             if (returns_error_union) {
                 // Error union size = 8 (tag) + max(success_size, error_size)
                 const eu_info = func_info.return_value_type.?.error_union_type;
-                const success_size: i32 = if (eu_info.success_struct_type) |sn|
-                    if (self.type_map.get(sn)) |ti| if (ti == .struct_type) ti.struct_type.size else 8 else 8
-                else
-                    8;
+                const success_size = self.getErrorUnionSuccessSize(eu_info);
                 // Error enums are always 8 bytes (i64 ordinal)
                 const error_size: i32 = 8;
                 sret_buffer = (try self.func().emitAllocaSized(8 + @max(success_size, error_size))).raw();
@@ -8804,10 +8852,7 @@ pub const AstToIr = struct {
             if (returns_error_union) {
                 // Error union size = 8 (tag) + max(success_size, error_size)
                 const eu_info = func_info.return_value_type.?.error_union_type;
-                const success_size: i32 = if (eu_info.success_struct_type) |sn|
-                    if (self.type_map.get(sn)) |ti| if (ti == .struct_type) ti.struct_type.size else 8 else 8
-                else
-                    8;
+                const success_size = self.getErrorUnionSuccessSize(eu_info);
                 // Error enums are always 8 bytes (i64 ordinal)
                 const error_size: i32 = 8;
                 sret_buffer = (try self.func().emitAllocaSized(8 + @max(success_size, error_size))).raw();
