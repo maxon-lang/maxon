@@ -436,23 +436,13 @@ pub const ExternalFuncSignature = struct {
 };
 
 /// External type info - for cross-module compilation
+/// Size is computed during registration when all type info is available.
 pub const ExternalTypeInfo = struct {
     name: []const u8,
-    size: i32,
-    fields: []const ExternalFieldInfo,
-    /// Original type declaration for generic types (needed for monomorphization)
-    type_decl: ?*const ast.TypeDecl = null,
+    /// Original type declaration (needed for computing size and monomorphization)
+    type_decl: *const ast.TypeDecl,
     is_exported: bool = false, // Whether this type is exported from its module
     source_path: ?[]const u8 = null, // Source file path (to distinguish stdlib vs user)
-};
-
-/// External field info - for cross-module compilation
-pub const ExternalFieldInfo = struct {
-    name: []const u8,
-    offset: i32,
-    size: i32,
-    type_name: []const u8, // "int", "float", "bool", "ptr", or struct name
-    is_export: bool = false, // Whether field is accessible outside the type
 };
 
 /// External interface info - for cross-module compilation

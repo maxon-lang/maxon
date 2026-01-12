@@ -41,7 +41,6 @@ pub const TypeInfo = types.TypeInfo;
 pub const FuncInfo = types.FuncInfo;
 pub const ExternalFuncSignature = types.ExternalFuncSignature;
 pub const ExternalTypeInfo = types.ExternalTypeInfo;
-pub const ExternalFieldInfo = types.ExternalFieldInfo;
 pub const ExternalInterfaceInfo = types.ExternalInterfaceInfo;
 pub const ExternalEnumInfo = types.ExternalEnumInfo;
 pub const ParamType = types.ParamType;
@@ -504,6 +503,16 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Clear any last error, freeing allocated message if needed
+    fn clearLastError(self: *AstToIr) void {
+        if (self.last_error) |le| {
+            if (le.message_allocated) {
+                self.allocator.free(le.message);
+            }
+            self.last_error = null;
+        }
+    }
+
     /// Report an error at a specific source location
     pub fn reportErrorAt(self: *AstToIr, code: err.ErrorCode, details: []const u8, line: u32, column: u32) void {
         const base_msg = code.message();
@@ -721,10 +730,15 @@ pub const AstToIr = struct {
     // Main Entry Point
     // ------------------------------------------------------------------------
 
-    pub fn convert(self: *AstToIr, program: ast.Program) !ir.Module {
+    /// Register compiler-internal types needed before processing external types.
+    /// This includes primitives (int, float, etc.) and internal types (__ManagedArray, cstring).
+    /// Safe to call multiple times - skips already registered types.
+    fn registerBuiltinTypes(self: *AstToIr) !void {
         // Register primitive types from the single source of truth
         for (types.primitive_types) |prim| {
-            try self.type_map.put(self.allocator, prim.maxon_name, .{ .primitive = prim.ir_type });
+            if (!self.type_map.contains(prim.maxon_name)) {
+                try self.type_map.put(self.allocator, prim.maxon_name, .{ .primitive = prim.ir_type });
+            }
         }
 
         // Register __ManagedArray compiler-internal type (32 bytes - unified for both arrays and strings)
@@ -733,33 +747,34 @@ pub const AstToIr = struct {
         //   0 = SSO (future - inline storage)
         //   1 = Heap-refcounted (refcount at buffer-8)
         //   2 = Slice (borrowed view into parent)
-        const managed_array_fields = try self.allocator.alloc(FieldInfo, 5);
-        managed_array_fields[0] = .{ .name = "_buffer", .offset = ManagedArray.BUFFER_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
-        managed_array_fields[1] = .{ .name = "_len", .offset = ManagedArray.LEN_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
-        managed_array_fields[2] = .{ .name = "_capacity", .offset = ManagedArray.CAPACITY_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
-        managed_array_fields[3] = .{ .name = "_flags", .offset = ManagedArray.FLAGS_OFFSET, .size = 4, .value_type = .{ .primitive = types.INT } };
-        managed_array_fields[4] = .{ .name = "_parent_off", .offset = ManagedArray.PARENT_OFF_OFFSET, .size = 4, .value_type = .{ .primitive = types.INT } };
-        self.type_map.put(self.allocator, "__ManagedArray", .{
-            .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = ManagedArray.SIZE },
-        }) catch {
-            self.allocator.free(managed_array_fields);
-            return error.OutOfMemory;
-        };
+        if (!self.type_map.contains("__ManagedArray")) {
+            const managed_array_fields = try ManagedArray.createFieldDefs(self.allocator);
+            self.type_map.put(self.allocator, "__ManagedArray", .{
+                .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = ManagedArray.size() },
+            }) catch {
+                self.allocator.free(managed_array_fields);
+                return error.OutOfMemory;
+            };
+        }
 
         // Register cstring compiler-internal type (24 bytes)
         // Layout: data(8) + length(8) + managed(8)
         // For non-slice strings: data points to String's buffer, managed points to __ManagedArray (incref'd)
         // For slice strings: data points to newly allocated null-terminated copy, managed = null
-        const cstring_fields = try self.allocator.alloc(FieldInfo, 3);
-        cstring_fields[0] = .{ .name = "data", .offset = CString.DATA_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
-        cstring_fields[1] = .{ .name = "length", .offset = CString.LENGTH_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
-        cstring_fields[2] = .{ .name = "managed", .offset = CString.MANAGED_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
-        self.type_map.put(self.allocator, "cstring", .{
-            .struct_type = .{ .name = "cstring", .fields = cstring_fields, .size = CString.SIZE },
-        }) catch {
-            self.allocator.free(cstring_fields);
-            return error.OutOfMemory;
-        };
+        if (!self.type_map.contains("cstring")) {
+            const cstring_fields = try CString.createFieldDefs(self.allocator);
+            self.type_map.put(self.allocator, "cstring", .{
+                .struct_type = .{ .name = "cstring", .fields = cstring_fields, .size = CString.size() },
+            }) catch {
+                self.allocator.free(cstring_fields);
+                return error.OutOfMemory;
+            };
+        }
+    }
+
+    pub fn convert(self: *AstToIr, program: ast.Program) !ir.Module {
+        // Register builtin types first (primitives and internal types)
+        try self.registerBuiltinTypes();
 
         // Register interfaces first (needed for conformance checking)
         for (program.interfaces) |iface| try self.registerInterface(iface);
@@ -1442,44 +1457,45 @@ pub const AstToIr = struct {
         debug.astToIr("Registered type '{s}' with size {d}", .{ type_decl.name, field_result.size });
     }
 
-    /// Register an external type (from stdlib or other modules)
+    /// Register an external type (from stdlib or other modules).
+    /// Computes field sizes using type_map, so dependent types must be registered first.
     pub fn registerExternalType(self: *AstToIr, ext_type: ExternalTypeInfo) !void {
         // Skip if already registered (avoid duplicate allocations)
         if (self.type_map.contains(ext_type.name)) return;
 
-        var fields = try self.allocator.alloc(FieldInfo, ext_type.fields.len);
-        errdefer self.allocator.free(fields);
+        const type_decl = ext_type.type_decl;
 
-        for (ext_type.fields, 0..) |field, i| {
-            const value_type: ValueType = blk: {
-                // Map type name to ValueType
-                if (types.isPrimitiveTypeName(field.type_name)) {
-                    break :blk .{ .primitive = field.type_name };
-                } else {
-                    // Assume it's a struct type (including __ManagedArray, __ManagedString)
-                    break :blk .{ .struct_type = field.type_name };
-                }
-            };
-
-            fields[i] = .{
-                .name = field.name,
-                .offset = field.offset,
-                .size = field.size,
-                .value_type = value_type,
-                .is_export = field.is_export,
-            };
+        // Set up generic type parameters (e.g., "Element" for Array uses Element)
+        for (type_decl.generic_params) |param| {
+            try self.generic_params.put(self.allocator, param, "int");
         }
+        defer {
+            for (type_decl.generic_params) |param| {
+                _ = self.generic_params.remove(param);
+            }
+        }
+
+        // Allow access to internal types (like __ManagedArray) when registering external types
+        // since these come from stdlib and may have internal fields
+        const saved_in_stdlib = self.in_stdlib_method;
+        self.in_stdlib_method = true;
+        defer self.in_stdlib_method = saved_in_stdlib;
+
+        // Build field infos - this uses type_map to look up field type sizes
+        const field_result = try self.buildFieldInfos(type_decl.fields);
 
         try self.type_map.put(self.allocator, ext_type.name, .{
-            .struct_type = .{ .name = ext_type.name, .fields = fields, .size = ext_type.size },
+            .struct_type = .{
+                .name = ext_type.name,
+                .fields = field_result.fields,
+                .size = field_result.size,
+                .is_export = ext_type.is_exported,
+            },
         });
 
-        // Store type declaration for generic types (needed for monomorphization)
-        // Also queue for conformance check after interfaces are registered
-        if (ext_type.type_decl) |type_decl| {
-            try self.type_decl_map.put(self.allocator, ext_type.name, type_decl.*);
-            try self.pending_conformance_checks.append(self.allocator, type_decl);
-        }
+        // Store type declaration for conformance checks and monomorphization
+        try self.type_decl_map.put(self.allocator, ext_type.name, type_decl.*);
+        try self.pending_conformance_checks.append(self.allocator, type_decl);
 
         // Store source file for error reporting (duplicate the path string to own it)
         if (ext_type.source_path) |sp| {
@@ -1487,7 +1503,7 @@ pub const AstToIr = struct {
             try self.type_source_files.put(self.allocator, ext_type.name, owned_path);
         }
 
-        debug.astToIr("Registered external type '{s}' with size {d}", .{ ext_type.name, ext_type.size });
+        debug.astToIr("Registered external type '{s}' with size {d}", .{ ext_type.name, field_result.size });
     }
 
     fn registerEnum(self: *AstToIr, enum_decl: ast.EnumDecl) !void {
@@ -2640,10 +2656,10 @@ pub const AstToIr = struct {
     /// Get the size of a struct type for error union success types.
     /// This handles the common pattern of extracting success_struct_type from an ErrorUnionInfo
     /// and computing the appropriate allocation size.
-    /// Returns 8 as fallback for primitives/enums, or the actual struct size for structs.
-    pub fn getErrorUnionSuccessSize(self: *AstToIr, eu_info: types.ErrorUnionInfo) i32 {
+    /// Returns 8 for primitives/enums, the actual struct size for structs, or null if struct size is unknown.
+    pub fn getErrorUnionSuccessSize(self: *AstToIr, eu_info: types.ErrorUnionInfo) ?i32 {
         if (eu_info.success_struct_type) |struct_name| {
-            return self.getStructSizeWithMonomorphization(struct_name) orelse 8;
+            return self.getStructSizeWithMonomorphization(struct_name);
         }
         // Primitives and enums are 8 bytes
         return 8;
@@ -3749,7 +3765,7 @@ pub const AstToIr = struct {
                         const zero = try self.func().emitConstI64(0);
                         try self.func().emitStore(sret, zero);
                         // Initialize struct at offset 8 (after the tag)
-                        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), ErrorUnion.VALUE_OFFSET);
+                        const value_ptr = try ErrorUnion.getValuePtr(self.func(), sret);
                         try self.initStructInto(expr.struct_init, value_ptr.raw());
                     } else {
                         // Initialize struct directly into sret buffer (no intermediate copy)
@@ -3769,7 +3785,7 @@ pub const AstToIr = struct {
                     const zero = try self.func().emitConstI64(0);
                     try self.func().emitStore(sret, zero);
                     // Write value at offset 8
-                    const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), ErrorUnion.VALUE_OFFSET);
+                    const value_ptr = try ErrorUnion.getValuePtr(self.func(), sret);
                     // For struct types, memcpy the contents; for primitives, store the value
                     if (typed_val.ty == .struct_type) {
                         const struct_name = typed_val.ty.struct_type;
@@ -3826,11 +3842,7 @@ pub const AstToIr = struct {
 
                 if (is_managed_array and expects_string) {
                     // Wrap __ManagedArray (32 bytes) into String (40 bytes)
-                    // Copy managed array to offset 0-31
-                    try self.func().emitMemcpy(ir.toRawPtr(sret), ir.toRawPtr(typed_val.value), ManagedArray.SIZE);
-                    // Set _iterPos to 0 at offset 24
-                    const iter_pos_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), String.ITER_POS_OFFSET);
-                    try self.func().emitStore(iter_pos_ptr.raw(), try self.func().emitConstI64(0));
+                    try String.initFromManagedArray(self.func(), ir.toRawPtr(sret), ir.toManagedArrayPtr(typed_val.value));
                 } else {
                     try self.func().emitMemcpy(ir.toRawPtr(sret), ir.toRawPtr(typed_val.value), self.sret_size);
                 }
@@ -4095,13 +4107,16 @@ pub const AstToIr = struct {
             base_typed.value;
 
         const elem_size: i32 = if (arr_info.element_struct_type) |struct_name| blk: {
-            if (self.type_map.get(struct_name)) |type_info| {
-                if (type_info == .struct_type) {
-                    break :blk type_info.struct_type.size;
-                }
+            const type_info = self.type_map.get(struct_name) orelse {
+                self.reportInternalError("unknown array element struct type in index assign");
+                return error.SemanticError;
+            };
+            if (type_info != .struct_type) {
+                self.reportInternalError("array element type is not a struct in index assign");
+                return error.SemanticError;
             }
-            break :blk 8;
-        } else 8;
+            break :blk type_info.struct_type.size;
+        } else 8; // Primitives are 8 bytes
 
         const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buffer_ptr), idx_typed.value, elem_size);
         // For structs, copy the entire struct data; for primitives, store the value
@@ -4357,7 +4372,7 @@ pub const AstToIr = struct {
             const error_binding = getElseErrorBinding(if_stmt.children);
             if (error_binding) |err_name| {
                 // Extract error value from error union and bind it
-                const err_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), ErrorUnion.VALUE_OFFSET);
+                const err_ptr = try ErrorUnion.getValuePtr(self.func(), result_typed.value);
                 const err_value = try self.func().emitLoad(err_ptr.raw(), .i64);
 
                 const err_var_ptr = try self.func().emitAlloca(.i64);
@@ -5931,7 +5946,7 @@ pub const AstToIr = struct {
             try self.func().emitStore(sret, one);
 
             // Write enum ordinal at offset 8
-            const error_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(sret), ErrorUnion.VALUE_OFFSET);
+            const error_ptr = try ErrorUnion.getValuePtr(self.func(), sret);
             try self.func().emitStore(error_ptr.raw(), error_typed.value);
 
             // Return via sret
@@ -6310,14 +6325,9 @@ pub const AstToIr = struct {
         const str_len = try self.func().emitCstrLen(enum_value);
 
         // Create a ManagedArray with flags=0 (static data, no cleanup needed)
+        const managed_ptr = try ManagedArray.alloca(self.func());
         const zero_i32 = try self.func().emitConstI32(0);
-        const managed_ptr = try struct_helpers.emitManagedArray(
-            self.func(),
-            ir.toRawPtr(enum_value),
-            str_len,
-            str_len,
-            zero_i32,
-        );
+        try ManagedArray.init(self.func(), managed_ptr, ir.toRawPtr(enum_value), str_len, str_len, zero_i32);
 
         // Wrap in a String struct
         const string_ptr = try string_helpers.emitStringFromManaged(self, managed_ptr);
@@ -6369,9 +6379,7 @@ pub const AstToIr = struct {
         try string_helpers.emitStructCopy(self, string_managed, char_managed, 32, "__ManagedArray");
 
         // Set _iterPos to 0 (at offset 32)
-        const iter_pos_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(string_ptr.raw()), String.ITER_POS_OFFSET);
-        const zero = try self.func().emitConstI64(0);
-        try self.func().emitStore(iter_pos_ptr.raw(), zero);
+        try String.initIterPos(self.func(), string_ptr.raw());
 
         return string_ptr.raw();
     }
@@ -6382,21 +6390,15 @@ pub const AstToIr = struct {
         const a_managed = try self.func().emitGetFieldPtr(ir.toStructPtr(a), 0);
         const b_managed = try self.func().emitGetFieldPtr(ir.toStructPtr(b), 0);
 
-        // Get lengths (stored as i32 at offset 8)
-        const a_len_ptr = try self.func().emitGetFieldPtr(a_managed, ManagedArray.LEN_OFFSET);
-        const a_len_i32 = try self.func().emitLoad(a_len_ptr.raw(), .i32);
-        const b_len_ptr = try self.func().emitGetFieldPtr(b_managed, ManagedArray.LEN_OFFSET);
-        const b_len_i32 = try self.func().emitLoad(b_len_ptr.raw(), .i32);
-
-        // Sign-extend lengths to i64 for arithmetic
-        const a_len = try self.func().emitUnaryOp(.sext_i32_i64, a_len_i32, .i64);
-        const b_len = try self.func().emitUnaryOp(.sext_i32_i64, b_len_i32, .i64);
+        // Get lengths from ManagedArray (already i64)
+        const a_len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(a_managed.raw()));
+        const b_len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(b_managed.raw()));
         const total_len = try self.func().emitBinaryOp(.add, a_len, b_len, .i64);
 
         // Allocate new buffer with header: total_len + 1 for null terminator
         const one = try self.func().emitConstI64(1);
         const data_size = try self.func().emitBinaryOp(.add, total_len, one, .i64);
-        const new_buffer = try struct_helpers.emitAllocRefcountedBuffer(self.func(), data_size, "string concat");
+        const new_buffer = try array_helpers.emitAllocRefcountedBuffer(self,data_size, "string concat");
 
         // Copy first string
         const a_buf_ptr = try self.func().emitGetFieldPtr(a_managed, 0);
@@ -6424,7 +6426,7 @@ pub const AstToIr = struct {
     fn emitIntToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Allocate buffer with header (22 bytes max: sign + 20 digits + null)
         const buffer_size = try self.func().emitConstI64(22);
-        const buffer = try struct_helpers.emitAllocRefcountedBuffer(self.func(), buffer_size, "int.toString");
+        const buffer = try array_helpers.emitAllocRefcountedBuffer(self,buffer_size, "int.toString");
 
         // Call __runtime_int_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -6444,7 +6446,7 @@ pub const AstToIr = struct {
     fn emitFloatToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Allocate buffer with header (32 bytes should be enough for most floats)
         const buffer_size = try self.func().emitConstI64(32);
-        const buffer = try struct_helpers.emitAllocRefcountedBuffer(self.func(), buffer_size, "float.toString");
+        const buffer = try array_helpers.emitAllocRefcountedBuffer(self,buffer_size, "float.toString");
 
         // Call __runtime_float_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -6463,7 +6465,7 @@ pub const AstToIr = struct {
     fn emitBoolToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Create a buffer with header (6 bytes max: "false\0")
         const buffer_size = try self.func().emitConstI64(6);
-        const buffer = try struct_helpers.emitAllocRefcountedBuffer(self.func(), buffer_size, "bool.toString");
+        const buffer = try array_helpers.emitAllocRefcountedBuffer(self,buffer_size, "bool.toString");
 
         // Call __runtime_bool_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -7043,7 +7045,7 @@ pub const AstToIr = struct {
         } else .{ .primitive = types.INT };
 
         // Success block: extract value and store for later use
-        const value_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), ErrorUnion.VALUE_OFFSET);
+        const value_ptr = try ErrorUnion.getValuePtr(self.func(), result_typed.value);
         const is_struct_type = success_type == .struct_type;
 
         // For struct types, we return the pointer directly (data is embedded in error union)
@@ -7135,10 +7137,12 @@ pub const AstToIr = struct {
             const is_struct_type = success_type == .struct_type;
 
             // Use helper to get struct size with automatic monomorphization
-            const struct_size: i32 = if (is_struct_type)
-                self_ir.getStructSizeWithMonomorphization(success_type.struct_type) orelse 8
-            else
-                0;
+            const struct_size: i32 = if (is_struct_type) blk: {
+                break :blk self_ir.getStructSizeWithMonomorphization(success_type.struct_type) orelse {
+                    self_ir.reportInternalError("unknown struct type size in try-otherwise");
+                    return error.SemanticError;
+                };
+            } else 0;
 
             // Allocate result buffer BEFORE creating new blocks (in current/entry block)
             // so it's visible to both success and error paths
@@ -7173,7 +7177,7 @@ pub const AstToIr = struct {
             deferred.deferBlocks(self_ir, 2);
 
             // Emit success block: extract value from error union
-            const value_ptr = try self_ir.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), ErrorUnion.VALUE_OFFSET);
+            const value_ptr = try ErrorUnion.getValuePtr(self_ir.func(), result_typed.value);
 
             if (is_struct_type) {
                 try self_ir.func().emitMemcpy(ir.toRawPtr(result_ptr), value_ptr.asRawPtr(), struct_size);
@@ -7348,7 +7352,7 @@ pub const AstToIr = struct {
         // If block_with_err mode, bind the error value
         if (otherwise.mode == .block_with_err) {
             if (otherwise.error_binding) |err_name| {
-                const err_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(result_typed.value), ErrorUnion.VALUE_OFFSET);
+                const err_ptr = try ErrorUnion.getValuePtr(self.func(), result_typed.value);
                 const err_value = try self.func().emitLoad(err_ptr.raw(), .i64);
 
                 const err_var_ptr = try self.func().emitAlloca(.i64);
@@ -7499,14 +7503,9 @@ pub const AstToIr = struct {
         // Get string length using inline strlen
         const str_len = try self.func().emitCstrLen(data_ptr);
 
+        const managed_ptr = try ManagedArray.alloca(self.func());
         const zero_i32 = try self.func().emitConstI32(0);
-        const managed_ptr = try struct_helpers.emitManagedArray(
-            self.func(),
-            ir.toRawPtr(data_ptr),
-            str_len,
-            str_len,
-            zero_i32,
-        );
+        try ManagedArray.init(self.func(), managed_ptr, ir.toRawPtr(data_ptr), str_len, str_len, zero_i32);
 
         // Both Character and String use the same layout (40 bytes with _iterPos)
         const struct_ptr = try string_helpers.emitStringFromManaged(self, managed_ptr);
@@ -7928,7 +7927,10 @@ pub const AstToIr = struct {
             if (returns_error_union) {
                 // Error union size = 8 (tag) + max(success_size, error_size)
                 const eu_info = func_info.return_value_type.?.error_union_type;
-                const success_size = self.getErrorUnionSuccessSize(eu_info);
+                const success_size = self.getErrorUnionSuccessSize(eu_info) orelse {
+                    self.reportInternalError("unknown error union success type size");
+                    return error.SemanticError;
+                };
                 // Error enums are always 8 bytes (i64 ordinal)
                 const error_size: i32 = 8;
                 sret_buffer = (try self.func().emitAllocaSized(8 + @max(success_size, error_size))).raw();
@@ -8664,13 +8666,16 @@ pub const AstToIr = struct {
 
         // Calculate element size: for structs, use actual struct size; for primitives, use 8 bytes
         const elem_size: i32 = if (arr_info.element_struct_type) |struct_name| blk: {
-            if (self.type_map.get(struct_name)) |type_info| {
-                if (type_info == .struct_type) {
-                    break :blk type_info.struct_type.size;
-                }
+            const type_info = self.type_map.get(struct_name) orelse {
+                self.reportInternalError("unknown array element struct type in index");
+                return error.SemanticError;
+            };
+            if (type_info != .struct_type) {
+                self.reportInternalError("array element type is not a struct in index");
+                return error.SemanticError;
             }
-            break :blk 8;
-        } else 8;
+            break :blk type_info.struct_type.size;
+        } else 8; // Primitives are 8 bytes
 
         // Get the array size for bounds checking
         const arr_size: ir.Value = if (arr_info.size) |size|
@@ -8794,12 +8799,15 @@ pub const AstToIr = struct {
             // Use plain memcpy without incref - for read-only access (indexing), we're borrowing
             // the data, not taking ownership. If the caller wants ownership (e.g., assigning to
             // a variable), they will copy and incref separately.
-            const struct_size: i32 = if (self.type_map.get(struct_name)) |type_info| blk: {
-                if (type_info == .struct_type) {
-                    break :blk type_info.struct_type.size;
-                }
-                break :blk 8;
-            } else 8;
+            const type_info = self.type_map.get(struct_name) orelse {
+                self.reportInternalError("unknown array element struct type in index result");
+                return error.SemanticError;
+            };
+            if (type_info != .struct_type) {
+                self.reportInternalError("array element type is not a struct in index result");
+                return error.SemanticError;
+            }
+            const struct_size = type_info.struct_type.size;
             try self.func().emitMemcpy(value_slot.asRawPtr(), elem_ptr.asRawPtr(), struct_size);
         } else {
             // For primitives, load the value and store it
@@ -8928,7 +8936,10 @@ pub const AstToIr = struct {
             if (returns_error_union) {
                 // Error union size = 8 (tag) + max(success_size, error_size)
                 const eu_info = func_info.return_value_type.?.error_union_type;
-                const success_size = self.getErrorUnionSuccessSize(eu_info);
+                const success_size = self.getErrorUnionSuccessSize(eu_info) orelse {
+                    self.reportInternalError("unknown error union success type size");
+                    return error.SemanticError;
+                };
                 // Error enums are always 8 bytes (i64 ordinal)
                 const error_size: i32 = 8;
                 sret_buffer = (try self.func().emitAllocaSized(8 + @max(success_size, error_size))).raw();
@@ -9316,6 +9327,10 @@ pub fn convertWithExternals(
     converter.track_memory = options.track_memory;
     defer converter.deinit();
 
+    // Register builtin types first (primitives, __ManagedArray, cstring, etc.)
+    // External types may depend on these (e.g., Array has a __ManagedArray field)
+    try converter.registerBuiltinTypes();
+
     // Register external interfaces before types (needed for conformance checking)
     if (external_interfaces) |ext_ifaces| {
         for (ext_ifaces) |ext_iface| {
@@ -9347,10 +9362,40 @@ pub fn convertWithExternals(
         }
     }
 
-    // Register external types before conversion
+    // Register external types before conversion.
+    // Use multiple passes because types can depend on each other.
     if (external_types) |ext_types| {
-        for (ext_types) |ext_type| {
-            try converter.registerExternalType(ext_type);
+        var registered_count: usize = 0;
+        var pass: usize = 0;
+        const max_passes = ext_types.len + 1;
+
+        while (registered_count < ext_types.len and pass < max_passes) : (pass += 1) {
+            const prev_count = registered_count;
+            for (ext_types) |ext_type| {
+                // Skip if already registered
+                if (converter.type_map.contains(ext_type.name)) continue;
+
+                // Try to register - may fail if dependencies aren't ready
+                converter.registerExternalType(ext_type) catch {
+                    // Clear any error from this attempt to avoid memory leaks
+                    converter.clearLastError();
+                    continue; // Try again next pass
+                };
+                registered_count += 1;
+            }
+            // If no progress was made, we have unresolvable dependencies
+            if (registered_count == prev_count) break;
+        }
+
+        // Check if all types were registered
+        if (registered_count < ext_types.len) {
+            // Find the first unregistered type for error reporting
+            for (ext_types) |ext_type| {
+                if (!converter.type_map.contains(ext_type.name)) {
+                    debug.astToIr("Failed to register external type '{s}' after {d} passes", .{ ext_type.name, pass });
+                    return error.UnknownType;
+                }
+            }
         }
     }
 
@@ -9397,58 +9442,17 @@ pub fn extractFunctionSignatures(module: *const ir.Module, allocator: std.mem.Al
     return signatures.toOwnedSlice(allocator);
 }
 
-/// Extract type info from a parsed program (for cross-module compilation)
+/// Extract type info from a parsed program (for cross-module compilation).
+/// Only stores type declarations - sizes are computed during registration
+/// when all type information is available.
 pub fn extractTypeInfo(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalTypeInfo {
     var type_infos = std.ArrayListUnmanaged(ExternalTypeInfo){};
     errdefer type_infos.deinit(allocator);
 
     for (program.types) |*type_decl| {
-        var fields = std.ArrayListUnmanaged(ExternalFieldInfo){};
-        errdefer fields.deinit(allocator);
-
-        // Calculate fields and offsets
-        var offset: i32 = 0;
-        for (type_decl.fields) |field| {
-            const type_name: []const u8 = switch (field.type_expr) {
-                .simple => |name| name,
-                .generic => |gen| gen.base_type, // Use base type for generics
-                .error_union => "ptr", // Error unions stored as pointers
-                .function_type => "ptr", // Function pointers
-            };
-
-            // Most types are 8 bytes (i64, f64, ptr)
-            // Special cases:
-            // - __ManagedArray is 32 bytes (internal managed type)
-            // - Array types are 40 bytes (__ManagedArray + iterIndex)
-            // - String is 40 bytes (__ManagedArray + _iterPos)
-            const field_size: i32 = if (std.mem.eql(u8, type_name, "__ManagedArray"))
-                ManagedArray.SIZE
-            else if (std.mem.eql(u8, type_name, "Array"))
-                Array.SIZE
-            else if (std.mem.eql(u8, type_name, "String"))
-                String.SIZE
-            else
-                8;
-
-            try fields.append(allocator, .{
-                .name = field.name,
-                .offset = offset,
-                .size = field_size,
-                .type_name = type_name,
-                .is_export = field.is_export,
-            });
-
-            offset += field_size;
-        }
-
-        // Include type declaration for all types (needed for conformance checks and monomorphization)
-        const decl_ptr: ?*const ast.TypeDecl = type_decl;
-
         try type_infos.append(allocator, .{
             .name = type_decl.name,
-            .size = offset,
-            .fields = try fields.toOwnedSlice(allocator),
-            .type_decl = decl_ptr,
+            .type_decl = type_decl,
             .is_exported = type_decl.is_export,
         });
     }

@@ -38,12 +38,12 @@ const ConvertError = types.ConvertError;
 /// - Mode 2 (slice): Zero-copy view into parent buffer, uses parent_off
 /// - Mode 3 (static): Pointer to read-only data section, never freed
 pub const ManagedArray = struct {
-    pub const SIZE: i32 = 32;
-    pub const BUFFER_OFFSET: i32 = 0;
-    pub const LEN_OFFSET: i32 = 8;
-    pub const CAPACITY_OFFSET: i32 = 16;
-    pub const FLAGS_OFFSET: i32 = 24;
-    pub const PARENT_OFF_OFFSET: i32 = 28;
+    const SIZE: i32 = 32;
+    const BUFFER_OFFSET: i32 = 0;
+    const LEN_OFFSET: i32 = 8;
+    const CAPACITY_OFFSET: i32 = 16;
+    const FLAGS_OFFSET: i32 = 24;
+    const PARENT_OFF_OFFSET: i32 = 28;
 
     comptime {
         if (PARENT_OFF_OFFSET + 4 != SIZE) {
@@ -62,6 +62,110 @@ pub const ManagedArray = struct {
             @compileError("ManagedArray layout mismatch: PARENT_OFF_OFFSET != FLAGS_OFFSET + 4");
         }
     }
+
+    // ========================================================================
+    // Helper functions for ManagedArray layout
+    // ========================================================================
+
+    /// Returns the size of ManagedArray struct in bytes
+    pub fn size() i32 {
+        return SIZE;
+    }
+
+    /// Allocate a ManagedArray on the stack
+    pub fn alloca(func: *ir.Function) !ir.ManagedArrayPtr {
+        const raw_ptr = try func.emitAllocaSized(SIZE);
+        return raw_ptr.asManagedArrayPtr();
+    }
+
+    /// Load the buffer pointer (offset 0)
+    pub fn loadBuffer(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+        return func.emitLoad(ptr.raw(), .ptr);
+    }
+
+    /// Load the length field (offset 8)
+    pub fn loadLen(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+        const len_ptr = try func.emitGetFieldPtr(ptr.asStructPtr(), LEN_OFFSET);
+        return func.emitLoad(len_ptr.raw(), .i64);
+    }
+
+    /// Get pointer to the length field
+    pub fn getLenPtr(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.StructPtr {
+        return func.emitGetFieldPtr(ptr.asStructPtr(), LEN_OFFSET);
+    }
+
+    /// Load the capacity field (offset 16)
+    pub fn loadCapacity(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+        const cap_ptr = try func.emitGetFieldPtr(ptr.asStructPtr(), CAPACITY_OFFSET);
+        return func.emitLoad(cap_ptr.raw(), .i64);
+    }
+
+    /// Get pointer to the capacity field
+    pub fn getCapacityPtr(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.StructPtr {
+        return func.emitGetFieldPtr(ptr.asStructPtr(), CAPACITY_OFFSET);
+    }
+
+    /// Load the flags field (offset 24) as i32
+    pub fn loadFlags(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+        const flags_ptr = try func.emitGetFieldPtr(ptr.asStructPtr(), FLAGS_OFFSET);
+        return func.emitLoad(flags_ptr.raw(), .i32);
+    }
+
+    /// Get pointer to the flags field
+    pub fn getFlagsPtr(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.StructPtr {
+        return func.emitGetFieldPtr(ptr.asStructPtr(), FLAGS_OFFSET);
+    }
+
+    /// Check if the ManagedArray is in heap mode (flags & 3 == 1)
+    pub fn isHeapMode(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+        const flags = try loadFlags(func, ptr);
+        // Sign-extend flags from i32 to i64 for comparison
+        const flags_i64 = try func.emitUnaryOp(.sext_i32_i64, flags, .i64);
+        const three = try func.emitConstI64(3);
+        const masked = try func.emitBinaryOp(.band, flags_i64, three, .i64);
+        const one = try func.emitConstI64(1);
+        return func.emitBinaryOp(.icmp_eq, masked, one, .i64);
+    }
+
+    /// Initialize a ManagedArray with all fields
+    pub fn init(func: *ir.Function, ptr: ir.ManagedArrayPtr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value, flags: ir.Value) !void {
+        const struct_ptr = ptr.asStructPtr();
+        // buffer pointer at offset 0
+        try func.emitStore(struct_ptr.raw(), buffer.raw());
+        // len (i64) at offset 8
+        try struct_helpers.storeI64Field(func, struct_ptr, LEN_OFFSET, len);
+        // capacity (i64) at offset 16
+        try struct_helpers.storeI64Field(func, struct_ptr, CAPACITY_OFFSET, capacity);
+        // flags (i32) at offset 24
+        try struct_helpers.storeI32Field(func, struct_ptr, FLAGS_OFFSET, flags);
+        // parent_off (i32) at offset 28 - initialized to 0
+        const zero_i32 = try func.emitConstI32(0);
+        try struct_helpers.storeI32Field(func, struct_ptr, PARENT_OFF_OFFSET, zero_i32);
+    }
+
+    /// Initialize a ManagedArray as empty (null buffer, zero len/capacity/flags/parent_off)
+    pub fn initEmpty(func: *ir.Function, ptr: ir.ManagedArrayPtr) !void {
+        const struct_ptr = ptr.asStructPtr();
+        const null_ptr = try func.emitConstI64(0);
+        const zero_i32 = try func.emitConstI32(0);
+
+        try func.emitStore(struct_ptr.raw(), null_ptr); // buffer at offset 0
+        try struct_helpers.storeI64Field(func, struct_ptr, LEN_OFFSET, null_ptr); // len
+        try struct_helpers.storeI64Field(func, struct_ptr, CAPACITY_OFFSET, null_ptr); // capacity
+        try struct_helpers.storeI32Field(func, struct_ptr, FLAGS_OFFSET, zero_i32); // flags
+        try struct_helpers.storeI32Field(func, struct_ptr, PARENT_OFF_OFFSET, zero_i32); // parent_off
+    }
+
+    /// Create field definitions for type registration
+    pub fn createFieldDefs(allocator: std.mem.Allocator) ![]types.FieldInfo {
+        const fields = try allocator.alloc(types.FieldInfo, 5);
+        fields[0] = .{ .name = "_buffer", .offset = BUFFER_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        fields[1] = .{ .name = "_len", .offset = LEN_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
+        fields[2] = .{ .name = "_capacity", .offset = CAPACITY_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
+        fields[3] = .{ .name = "_flags", .offset = FLAGS_OFFSET, .size = 4, .value_type = .{ .primitive = types.INT } };
+        fields[4] = .{ .name = "_parent_off", .offset = PARENT_OFF_OFFSET, .size = 4, .value_type = .{ .primitive = types.INT } };
+        return fields;
+    }
 };
 
 // ============================================================================
@@ -71,9 +175,9 @@ pub const ManagedArray = struct {
 /// This is the user-facing Array type that wraps __ManagedArray
 /// Layout: __ManagedArray(32) + iterIndex(8) = 40 bytes
 pub const Array = struct {
-    pub const SIZE: i32 = 40;
-    pub const MANAGED_ARRAY_OFFSET: i32 = 0;
-    pub const ITER_INDEX_OFFSET: i32 = 32;
+    const SIZE: i32 = 40;
+    const MANAGED_ARRAY_OFFSET: i32 = 0;
+    const ITER_INDEX_OFFSET: i32 = 32;
 
     comptime {
         if (SIZE < ManagedArray.SIZE) {
@@ -86,6 +190,30 @@ pub const Array = struct {
             @compileError("Array layout mismatch: ITER_INDEX_OFFSET + 8 != SIZE");
         }
     }
+
+    // ========================================================================
+    // Helper functions for Array layout
+    // ========================================================================
+
+    /// Returns the size of Array struct in bytes
+    pub fn size() i32 {
+        return SIZE;
+    }
+
+    /// Allocate an Array on the stack
+    pub fn alloca(func: *ir.Function) !ir.RawPtr {
+        return func.emitAllocaSized(SIZE);
+    }
+
+    /// Store the iter index field (offset 32)
+    pub fn storeIterIndex(func: *ir.Function, ptr: ir.StructPtr, value: ir.Value) !void {
+        try struct_helpers.storeI64Field(func, ptr, ITER_INDEX_OFFSET, value);
+    }
+
+    /// Load the iter index field (offset 32)
+    pub fn loadIterIndex(func: *ir.Function, ptr: ir.StructPtr) !ir.Value {
+        return struct_helpers.loadI64Field(func, ptr, ITER_INDEX_OFFSET);
+    }
 };
 
 // ============================================================================
@@ -94,26 +222,59 @@ pub const Array = struct {
 
 /// Allocate a __ManagedArray on the stack and initialize it as empty.
 pub fn emitEmptyManagedArray(self: *AstToIr) !ir.ManagedArrayPtr {
-    return struct_helpers.emitEmptyManagedArray(self.func());
+    const ptr = try ManagedArray.alloca(self.func());
+    try ManagedArray.initEmpty(self.func(), ptr);
+    return ptr;
 }
 
 /// Initialize an existing __ManagedArray as empty.
 pub fn initManagedArrayEmpty(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !void {
-    return struct_helpers.initManagedArrayEmpty(self.func(), managed_ptr);
+    return ManagedArray.initEmpty(self.func(), managed_ptr);
 }
 
 /// Initialize an existing __ManagedArray with buffer, length, and capacity values.
 /// Uses mode=0 (no refcounting) for regular arrays.
 pub fn initManagedArray(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !void {
     const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
-    return struct_helpers.initManagedArray(self.func(), managed_ptr, buffer, len, capacity, zero_flags);
+    return ManagedArray.init(self.func(), managed_ptr, buffer, len, capacity, zero_flags);
 }
 
 /// Allocate a __ManagedArray on the stack and initialize with buffer, length, and capacity.
 /// Uses mode=0 (no refcounting) for regular arrays.
 pub fn emitManagedArray(self: *AstToIr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !ir.ManagedArrayPtr {
+    const ptr = try ManagedArray.alloca(self.func());
     const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
-    return struct_helpers.emitManagedArray(self.func(), buffer, len, capacity, zero_flags);
+    try ManagedArray.init(self.func(), ptr, buffer, len, capacity, zero_flags);
+    return ptr;
+}
+
+/// Size of refcounted buffer header (refcount as i64)
+pub const REFCOUNTED_BUFFER_HEADER_SIZE: i64 = 8;
+
+/// Allocate a refcounted buffer with header.
+/// Returns the DATA pointer (header is at returned_ptr - 8).
+///
+/// Buffer layout:
+///   [refcount: i64] [data bytes...]
+///   ^               ^
+///   |               +-- returned data_ptr
+///   +-- allocation base (header)
+///
+/// The refcount is initialized to 1 (for the ManagedArray being created).
+pub fn emitAllocRefcountedBuffer(self: *AstToIr, data_size: ir.Value, tag: []const u8) !ir.RawPtr {
+    const func = self.func();
+    // Allocate data_size + 8 for header
+    const header_size = try func.emitConstI64(REFCOUNTED_BUFFER_HEADER_SIZE);
+    const total_size = try func.emitBinaryOp(.add, data_size, header_size, .i64);
+    const buffer_with_header = try func.emitHeapAlloc(total_size, tag);
+
+    // Initialize refcount in header to 1 (for the ManagedArray being created)
+    try func.emitStore(buffer_with_header.raw(), try func.emitConstI64(1));
+
+    // Return data pointer (header + 8)
+    const eight = try func.emitConstI64(8);
+    const data_ptr = try func.emitBinaryOp(.add, buffer_with_header.raw(), eight, .ptr);
+    return ir.toRawPtr(data_ptr);
 }
 
 /// Index into a __ManagedArray: managed[i]
@@ -167,7 +328,7 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
 
     // Load buffer pointer (offset 0) and length (offset 8)
     const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-    const len_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(managed_ptr), ManagedArray.LEN_OFFSET);
+    const len_ptr = try ManagedArray.getLenPtr(self.func(), ir.toManagedArrayPtr(managed_ptr));
     const len = try self.func().emitLoad(len_ptr.raw(), .i64);
 
     // Calculate error union size: 8 (tag) + max(element size, 8 for error enum)
@@ -303,7 +464,10 @@ pub fn convertStdlibArrayIndex(self: *AstToIr, base_typed: TypedValue, index_exp
     // Calculate sret buffer size for error union: 8 (tag) + max(success_size, error_size)
     const sret_size: i32 = if (return_type == .error_union_type) blk: {
         const eu_info = return_type.error_union_type;
-        const success_size = self.getErrorUnionSuccessSize(eu_info);
+        const success_size = self.getErrorUnionSuccessSize(eu_info) orelse {
+            self.reportInternalError("unknown error union success type size");
+            return error.SemanticError;
+        };
         const error_size: i32 = 8; // Error enums are always 8 bytes
         break :blk 8 + @max(success_size, error_size);
     } else 16; // Default size if somehow not error union
@@ -529,11 +693,12 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
 
     // Calculate element size: structs use their actual size (with monomorphization), primitives use 8 bytes
     const elem_size: i64 = if (elem_struct_type) |struct_name| blk: {
-        if (self.getStructSizeWithMonomorphization(struct_name)) |size| {
-            break :blk @intCast(size);
-        }
-        break :blk 8;
-    } else 8;
+        const size = self.getStructSizeWithMonomorphization(struct_name) orelse {
+            self.reportInternalError("unknown struct size in array literal");
+            return error.SemanticError;
+        };
+        break :blk @intCast(size);
+    } else 8; // Primitives (int, float, bool, enums, etc.) are 8 bytes
 
     // Allocate buffer for elements on heap
     const elem_count = try self.func().emitConstI64(@intCast(elements.len));

@@ -227,9 +227,6 @@ const ParsedSourcesInfo = struct {
     }
 
     fn deinit(self: *ParsedSourcesInfo) void {
-        for (self.types.items) |t| {
-            self.allocator.free(t.fields);
-        }
         self.types.deinit(self.allocator);
 
         for (self.funcs.items) |sig| {
@@ -544,7 +541,6 @@ pub fn analyzeForLSP(
 
     var all_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
     defer {
-        for (all_types.items) |t| allocator.free(t.fields);
         all_types.deinit(allocator);
     }
 

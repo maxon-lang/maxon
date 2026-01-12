@@ -462,24 +462,18 @@ pub const SemanticAnalyzer = struct {
     // ------------------------------------------------------------------------
 
     fn registerExternalType(self: *SemanticAnalyzer, ext_type: ExternalTypeInfo) !void {
-        // Convert external fields to FieldInfo
-        const fields = try self.allocator.alloc(FieldInfo, ext_type.fields.len);
-        for (ext_type.fields, 0..) |ef, i| {
-            fields[i] = .{
-                .name = ef.name,
-                .offset = ef.offset,
-                .size = ef.size,
-                .value_type = .{ .primitive = ef.type_name },
-            };
-        }
+        const type_decl = ext_type.type_decl;
+
+        // Build field infos - this uses type_map to look up field type sizes
+        const fields = try self.buildFieldInfos(type_decl.fields);
+        const size = self.calculateStructSize(fields);
+
         try self.type_map.put(self.allocator, ext_type.name, .{
-            .struct_type = .{ .name = ext_type.name, .fields = fields, .size = ext_type.size },
+            .struct_type = .{ .name = ext_type.name, .fields = fields, .size = size },
         });
 
-        // Store type_decl if provided (for generic types)
-        if (ext_type.type_decl) |td| {
-            try self.type_decl_map.put(self.allocator, ext_type.name, td.*);
-        }
+        // Store type_decl for generic types
+        try self.type_decl_map.put(self.allocator, ext_type.name, type_decl.*);
     }
 
     fn registerExternalFunction(self: *SemanticAnalyzer, ext_func: ExternalFuncSignature) !void {

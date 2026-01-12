@@ -145,8 +145,7 @@ pub fn emitArrayStringElementsCleanup(self: *AstToIr, array_ptr: ir.Value) !void
     // __ManagedArray layout: buffer(8) + len(8) + capacity(8) + flags(4) + parent_off(4)
 
     // Load length first to check if empty
-    const len_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(array_ptr), ManagedArray.LEN_OFFSET);
-    const len = try self.func().emitLoad(len_ptr.raw(), .i64);
+    const len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(array_ptr));
 
     // Skip cleanup if empty
     const zero = try self.func().emitConstI64(0);
@@ -183,8 +182,7 @@ pub fn emitArrayStringElementsCleanup(self: *AstToIr, array_ptr: ir.Value) !void
     deferred.deferBlocks(self, 5);
 
     // Condition block: reload len and check if i < len
-    const cond_len_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(array_ptr), ManagedArray.LEN_OFFSET);
-    const cond_len = try self.func().emitLoad(cond_len_ptr.raw(), .i64);
+    const cond_len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(array_ptr));
     const cond_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_len, .i64);
 
@@ -202,18 +200,13 @@ pub fn emitArrayStringElementsCleanup(self: *AstToIr, array_ptr: ir.Value) !void
     const body_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
 
     // Calculate element pointer: buf_ptr + i * 40 (String size)
-    const elem_size = try self.func().emitConstI64(String.SIZE);
+    const elem_size = try self.func().emitConstI64(String.size());
     const offset = try self.func().emitBinaryOp(.mul, body_i, elem_size, .i64);
     const elem_ptr = try self.func().emitBinaryOp(.add, body_buf_ptr, offset, .ptr);
 
-    // Check if heap mode: cap_flags & 3 == 1
-    // cap_flags is at offset 24 in the String (which contains __ManagedArray at offset 0)
-    const cap_flags_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(elem_ptr), ManagedArray.FLAGS_OFFSET);
-    const cap_flags = try self.func().emitLoad(cap_flags_ptr.raw(), .i32);
-    const three = try self.func().emitConstI32(3);
-    const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
-    const one_i32 = try self.func().emitConstI32(1);
-    const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+    // Check if heap mode: flags & 3 == 1
+    // The String contains __ManagedArray at offset 0
+    const is_heap = try ManagedArray.isHeapMode(self.func(), ir.toManagedArrayPtr(elem_ptr));
 
     // Branch: if heap mode, go to decref block; otherwise go to next
     try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{

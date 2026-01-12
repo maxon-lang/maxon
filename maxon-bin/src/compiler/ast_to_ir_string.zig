@@ -22,20 +22,53 @@ pub const ManagedArray = array.ManagedArray;
 /// This is the user-facing String type that wraps __ManagedArray
 /// Layout: __ManagedArray(32) + _iterPos(8) = 40 bytes
 pub const String = struct {
-    pub const SIZE: i32 = 40;
-    pub const MANAGED_ARRAY_OFFSET: i32 = 0;
-    pub const ITER_POS_OFFSET: i32 = 32;
+    const SIZE: i32 = 40;
+    const MANAGED_ARRAY_OFFSET: i32 = 0;
+    const ITER_POS_OFFSET: i32 = 32;
 
     comptime {
-        if (SIZE < ManagedArray.SIZE) {
-            @compileError("String layout mismatch: SIZE < ManagedArray.SIZE");
+        if (SIZE < ManagedArray.size()) {
+            @compileError("String layout mismatch: SIZE < ManagedArray.size()");
         }
-        if (ITER_POS_OFFSET != ManagedArray.SIZE) {
-            @compileError("String layout mismatch: ITER_POS_OFFSET != ManagedArray.SIZE");
+        if (ITER_POS_OFFSET != ManagedArray.size()) {
+            @compileError("String layout mismatch: ITER_POS_OFFSET != ManagedArray.size()");
         }
         if (ITER_POS_OFFSET + 8 != SIZE) {
             @compileError("String layout mismatch: ITER_POS_OFFSET + 8 != SIZE");
         }
+    }
+
+    // ========================================================================
+    // Helper functions for String layout
+    // ========================================================================
+
+    /// Returns the size of String struct in bytes
+    pub fn size() i32 {
+        return SIZE;
+    }
+
+    /// Allocate a String on the stack
+    pub fn alloca(func: *ir.Function) !ir.RawPtr {
+        return func.emitAllocaSized(SIZE);
+    }
+
+    /// Store a value to the _iterPos field
+    pub fn storeIterPos(func: *ir.Function, ptr: ir.Value, value: ir.Value) !void {
+        const iter_pos_ptr = try func.emitGetFieldPtr(ir.toStructPtr(ptr), ITER_POS_OFFSET);
+        try func.emitStore(iter_pos_ptr.raw(), value);
+    }
+
+    /// Initialize the _iterPos field to 0
+    pub fn initIterPos(func: *ir.Function, ptr: ir.Value) !void {
+        const zero = try func.emitConstI64(0);
+        try storeIterPos(func, ptr, zero);
+    }
+
+    /// Initialize a String from a ManagedArray by copying the ManagedArray portion
+    /// and initializing _iterPos to 0
+    pub fn initFromManagedArray(func: *ir.Function, string_ptr: ir.RawPtr, managed_ptr: ir.ManagedArrayPtr) !void {
+        try func.emitMemcpy(string_ptr, managed_ptr.asRawPtr(), ManagedArray.size());
+        try initIterPos(func, string_ptr.raw());
     }
 };
 
@@ -54,10 +87,10 @@ pub const String = struct {
 ///
 /// The refcount is stored at (data_ptr - 8), shared by all String copies.
 pub fn emitManagedArrayFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.ManagedArrayPtr {
-    const managed_ptr = try self.func().emitAllocaSized(ManagedArray.SIZE);
+    const managed_ptr = try ManagedArray.alloca(self.func());
 
     if (str_bytes.len == 0) {
-        try struct_helpers.initManagedArrayEmpty(self.func(), managed_ptr.asManagedArrayPtr());
+        try ManagedArray.initEmpty(self.func(), managed_ptr);
     } else {
         // Heap allocation for string data WITH 8-byte header for refcount
         // Layout: [refcount:i64][data...][null]
@@ -86,30 +119,32 @@ pub fn emitManagedArrayFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Mana
         // Store data_ptr (not the allocation base with header)
         try self.func().emitStore(managed_ptr.raw(), data_ptr.raw());
         const len_i64 = try self.func().emitConstI64(@intCast(str_bytes.len));
-        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStruct(), 8, len_i64);
-        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStruct(), 16, len_i64); // capacity = len
-        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStruct(), 24, try self.func().emitConstI32(1)); // flags = 1 (refcounted)
-        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStruct(), 28, try self.func().emitConstI32(0)); // parent_off = 0
+        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStructPtr(), 8, len_i64);
+        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStructPtr(), 16, len_i64); // capacity = len
+        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStructPtr(), 24, try self.func().emitConstI32(1)); // flags = 1 (refcounted)
+        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStructPtr(), 28, try self.func().emitConstI32(0)); // parent_off = 0
     }
 
-    return managed_ptr.asManagedArrayPtr();
+    return managed_ptr;
 }
 
 /// Create and initialize a __ManagedArray from a runtime buffer pointer and length.
 /// Used for runtime string conversions (int to string, float to string, etc.)
 pub fn emitManagedArrayFromBuffer(self: *AstToIr, buffer: ir.RawPtr, len_i64: ir.Value) !ir.ManagedArrayPtr {
+    const ptr = try ManagedArray.alloca(self.func());
     const mode_one = try self.func().emitConstI32(1); // mode=1 for heap-refcounted
-    return struct_helpers.emitManagedArray(self.func(), buffer, len_i64, len_i64, mode_one);
+    try ManagedArray.init(self.func(), ptr, buffer, len_i64, len_i64, mode_one);
+    return ptr;
 }
 
 /// Create a __ManagedArray pointing to static data in the .rdata section.
 /// No heap allocation, no refcount. Mode=3 ensures it's never freed.
 /// The string data is stored directly in the executable's code section.
 pub fn emitManagedArrayFromStaticBytes(self: *AstToIr, str_bytes: []const u8) !ir.ManagedArrayPtr {
-    const managed_ptr = try self.func().emitAllocaSized(ManagedArray.SIZE);
+    const managed_ptr = try ManagedArray.alloca(self.func());
 
     if (str_bytes.len == 0) {
-        try struct_helpers.initManagedArrayEmpty(self.func(), managed_ptr.asManagedArrayPtr());
+        try ManagedArray.initEmpty(self.func(), managed_ptr);
     } else {
         // Allocate space for the string data plus null terminator in the static data section
         const static_bytes = try self.allocator.alloc(u8, str_bytes.len + 1);
@@ -125,15 +160,15 @@ pub fn emitManagedArrayFromStaticBytes(self: *AstToIr, str_bytes: []const u8) !i
 
         // Set length and capacity
         const len_i64 = try self.func().emitConstI64(@intCast(str_bytes.len));
-        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStruct(), 8, len_i64);
-        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStruct(), 16, len_i64);
+        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStructPtr(), 8, len_i64);
+        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStructPtr(), 16, len_i64);
 
         // Set flags = 3 (static mode)
-        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStruct(), 24, try self.func().emitConstI32(3));
-        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStruct(), 28, try self.func().emitConstI32(0));
+        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStructPtr(), 24, try self.func().emitConstI32(3));
+        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStructPtr(), 28, try self.func().emitConstI32(0));
     }
 
-    return managed_ptr.asManagedArrayPtr();
+    return managed_ptr;
 }
 
 // ============================================================================
@@ -150,7 +185,7 @@ pub fn emitStringAlloca(self: *AstToIr) !ir.RawPtr {
 /// Wrap a __ManagedArray pointer in a full String struct (adds _iterPos field).
 pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !ir.StringPtr {
     const string_ptr = try emitStringAlloca(self);
-    try self.func().emitMemcpy(string_ptr, managed_ptr.asRawPtr(), ManagedArray.SIZE);
+    try self.func().emitMemcpy(string_ptr, managed_ptr.asRawPtr(), ManagedArray.size());
     const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr.asStruct(), String.ITER_POS_OFFSET);
     try self.func().emitStore(iter_pos_ptr.raw(), try self.func().emitConstI64(0));
     return string_ptr.asStringPtr();
@@ -190,7 +225,7 @@ pub fn emitStructMove(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.Struct
 /// Returns an IR value representing the boolean result (flags & 0x3 == 1).
 /// String layout: _managed at offset 0, flags at offset 24 within _managed.
 pub fn emitStringIsHeapMode(self: *AstToIr, string_ptr: ir.StringPtr) !ir.Value {
-    const flags_ptr = try self.func().emitGetFieldPtr(string_ptr.asStructPtr(), ManagedArray.FLAGS_OFFSET);
+    const flags_ptr = try ManagedArray.getFlagsPtr(self.func(), ir.toManagedArrayPtr(string_ptr.raw()));
     const flags = try self.func().emitLoad(flags_ptr.raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, flags, three, .i32);

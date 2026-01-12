@@ -26,13 +26,13 @@ const DeferredBlocks = ast_to_ir.DeferredBlocks;
 /// - capacity: i64 (8 bytes) - capacity of the hash table
 /// - iter_index: i64 (8 bytes) - current iteration index
 pub const Map = struct {
-    pub const SIZE: i32 = 144;
-    pub const KEYS_OFFSET: i32 = 0;
-    pub const VALUES_OFFSET: i32 = 40;
-    pub const STATES_OFFSET: i32 = 80;
-    pub const COUNT_OFFSET: i32 = 120;
-    pub const CAPACITY_OFFSET: i32 = 128;
-    pub const ITER_INDEX_OFFSET: i32 = 136;
+    const SIZE: i32 = 144;
+    const KEYS_OFFSET: i32 = 0;
+    const VALUES_OFFSET: i32 = 40;
+    const STATES_OFFSET: i32 = 80;
+    const COUNT_OFFSET: i32 = 120;
+    const CAPACITY_OFFSET: i32 = 128;
+    const ITER_INDEX_OFFSET: i32 = 136;
 
     comptime {
         if (VALUES_OFFSET != KEYS_OFFSET + 40) {
@@ -53,6 +53,53 @@ pub const Map = struct {
         if (ITER_INDEX_OFFSET + 8 != SIZE) {
             @compileError("Map layout mismatch: ITER_INDEX_OFFSET + 8 != SIZE");
         }
+    }
+
+    /// Returns the size of the Map struct in bytes.
+    pub fn size() i32 {
+        return SIZE;
+    }
+
+    /// Returns a field pointer to the keys array at KEYS_OFFSET.
+    pub fn getKeysPtr(func: *ir.Function, map_ptr: ir.Value) !ir.FieldPtr {
+        return func.emitGetFieldPtr(ir.toStructPtr(map_ptr), KEYS_OFFSET);
+    }
+
+    /// Returns a field pointer to the values array at VALUES_OFFSET.
+    pub fn getValuesPtr(func: *ir.Function, map_ptr: ir.Value) !ir.FieldPtr {
+        return func.emitGetFieldPtr(ir.toStructPtr(map_ptr), VALUES_OFFSET);
+    }
+
+    /// Returns a field pointer to the states array at STATES_OFFSET.
+    pub fn getStatesPtr(func: *ir.Function, map_ptr: ir.Value) !ir.FieldPtr {
+        return func.emitGetFieldPtr(ir.toStructPtr(map_ptr), STATES_OFFSET);
+    }
+
+    /// Returns a field pointer to the count field at COUNT_OFFSET.
+    pub fn getCountPtr(func: *ir.Function, map_ptr: ir.Value) !ir.FieldPtr {
+        return func.emitGetFieldPtr(ir.toStructPtr(map_ptr), COUNT_OFFSET);
+    }
+
+    /// Returns a field pointer to the capacity field at CAPACITY_OFFSET.
+    pub fn getCapacityPtr(func: *ir.Function, map_ptr: ir.Value) !ir.FieldPtr {
+        return func.emitGetFieldPtr(ir.toStructPtr(map_ptr), CAPACITY_OFFSET);
+    }
+
+    /// Returns a field pointer to the iter_index field at ITER_INDEX_OFFSET.
+    pub fn getIterIndexPtr(func: *ir.Function, map_ptr: ir.Value) !ir.FieldPtr {
+        return func.emitGetFieldPtr(ir.toStructPtr(map_ptr), ITER_INDEX_OFFSET);
+    }
+
+    /// Loads the capacity field as i64.
+    pub fn loadCapacity(func: *ir.Function, map_ptr: ir.Value) !ir.Value {
+        const cap_ptr = try getCapacityPtr(func, map_ptr);
+        return func.emitLoad(cap_ptr.raw(), .i64);
+    }
+
+    /// Loads the count field as i64.
+    pub fn loadCount(func: *ir.Function, map_ptr: ir.Value) !ir.Value {
+        const count_ptr = try getCountPtr(func, map_ptr);
+        return func.emitLoad(count_ptr.raw(), .i64);
     }
 };
 
@@ -209,13 +256,13 @@ pub fn emitMapStringKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     const keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
 
     // Calculate element pointer: buf_ptr + i * 40 (String size)
-    const elem_size = try self.func().emitConstI64(String.SIZE);
+    const elem_size = try self.func().emitConstI64(String.size());
     const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
     const elem_ptr = try self.func().emitBinaryOp(.add, keys_buf_ptr, offset, .ptr);
 
     // Check if heap mode: cap_flags & 3 == 1
     // cap_flags is at offset 24 in the String
-    const cap_flags_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(elem_ptr), ManagedArray.FLAGS_OFFSET);
+    const cap_flags_ptr = try ManagedArray.getFlagsPtr(self.func(), ir.toManagedArrayPtr(elem_ptr));
     const cap_flags = try self.func().emitLoad(cap_flags_ptr.raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -267,7 +314,7 @@ pub fn emitMapStringKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     // Heap free block: recompute elem_ptr and free buffer at header (buf_ptr - 8)
     const heap_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const heap_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
-    const heap_elem_size = try self.func().emitConstI64(String.SIZE);
+    const heap_elem_size = try self.func().emitConstI64(String.size());
     const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
     const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_keys_buf_ptr, heap_offset, .ptr);
 
@@ -388,13 +435,13 @@ pub fn emitMapStringValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     const values_buf_ptr = try self.func().emitLoad(values_array_ptr.raw(), .ptr);
 
     // Calculate element pointer: buf_ptr + i * 40 (String size)
-    const elem_size = try self.func().emitConstI64(String.SIZE);
+    const elem_size = try self.func().emitConstI64(String.size());
     const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
     const elem_ptr = try self.func().emitBinaryOp(.add, values_buf_ptr, offset, .ptr);
 
     // Check if heap mode: cap_flags & 3 == 1
     // cap_flags is at offset 24 in the String
-    const cap_flags_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(elem_ptr), ManagedArray.FLAGS_OFFSET);
+    const cap_flags_ptr = try ManagedArray.getFlagsPtr(self.func(), ir.toManagedArrayPtr(elem_ptr));
     const cap_flags = try self.func().emitLoad(cap_flags_ptr.raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -448,7 +495,7 @@ pub fn emitMapStringValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     const heap_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const heap_values_array_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
     const heap_values_buf_ptr = try self.func().emitLoad(heap_values_array_ptr.raw(), .ptr);
-    const heap_elem_size = try self.func().emitConstI64(String.SIZE);
+    const heap_elem_size = try self.func().emitConstI64(String.size());
     const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
     const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_values_buf_ptr, heap_offset, .ptr);
 

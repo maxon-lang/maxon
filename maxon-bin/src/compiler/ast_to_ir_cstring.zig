@@ -2,6 +2,7 @@
 /// Contains layout constants and cleanup operations for C-style null-terminated strings.
 const std = @import("std");
 const ir = @import("ir.zig");
+const types = @import("ast_to_ir_types.zig");
 const string = @import("ast_to_ir_string.zig");
 const ManagedArray = string.ManagedArray;
 
@@ -18,10 +19,10 @@ const AstToIr = @import("4-ast_to_ir.zig").AstToIr;
 /// - length: i64 (8 bytes) - length of string (not including null terminator)
 /// - managed: *__ManagedArray (8 bytes) - pointer to parent ManagedArray if borrowed, null if owned
 pub const CString = struct {
-    pub const SIZE: i32 = 24;
-    pub const DATA_OFFSET: i32 = 0;
-    pub const LENGTH_OFFSET: i32 = 8;
-    pub const MANAGED_OFFSET: i32 = 16;
+    const SIZE: i32 = 24;
+    const DATA_OFFSET: i32 = 0;
+    const LENGTH_OFFSET: i32 = 8;
+    const MANAGED_OFFSET: i32 = 16;
 
     comptime {
         if (MANAGED_OFFSET + 8 != SIZE) {
@@ -36,6 +37,46 @@ pub const CString = struct {
         if (MANAGED_OFFSET != LENGTH_OFFSET + 8) {
             @compileError("CString layout mismatch: MANAGED_OFFSET != LENGTH_OFFSET + 8");
         }
+    }
+
+    // ========================================================================
+    // Helper functions for CString layout
+    // ========================================================================
+
+    /// Returns the size of CString struct in bytes
+    pub fn size() i32 {
+        return SIZE;
+    }
+
+    /// Load the data pointer (offset 0)
+    pub fn loadData(func: *ir.Function, ptr: ir.Value) !ir.Value {
+        return func.emitLoad(ptr, .ptr);
+    }
+
+    /// Load the length field (offset 8)
+    pub fn loadLength(func: *ir.Function, ptr: ir.Value) !ir.Value {
+        const len_ptr = try func.emitGetFieldPtr(ir.toStructPtr(ptr), LENGTH_OFFSET);
+        return func.emitLoad(len_ptr.raw(), .i64);
+    }
+
+    /// Load the managed pointer (offset 16)
+    pub fn loadManaged(func: *ir.Function, ptr: ir.Value) !ir.Value {
+        const managed_ptr = try func.emitGetFieldPtr(ir.toStructPtr(ptr), MANAGED_OFFSET);
+        return func.emitLoad(managed_ptr.raw(), .ptr);
+    }
+
+    /// Get pointer to the managed field
+    pub fn getManagedPtr(func: *ir.Function, ptr: ir.Value) !ir.FieldPtr {
+        return func.emitGetFieldPtr(ir.toStructPtr(ptr), MANAGED_OFFSET);
+    }
+
+    /// Create field definitions for type registration
+    pub fn createFieldDefs(allocator: std.mem.Allocator) ![]types.FieldInfo {
+        const fields = try allocator.alloc(types.FieldInfo, 3);
+        fields[0] = .{ .name = "data", .offset = DATA_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        fields[1] = .{ .name = "length", .offset = LENGTH_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
+        fields[2] = .{ .name = "managed", .offset = MANAGED_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        return fields;
     }
 };
 
@@ -63,7 +104,7 @@ pub fn emitCstringCleanup(self: *AstToIr, cstring_ptr: ir.Value) !void {
     _ = try self.func().addBlock("cstr_decref");
 
     // === DECREF BLOCK: managed != null, decref the __ManagedString ===
-    const cap_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(managed_ptr), ManagedArray.FLAGS_OFFSET);
+    const cap_ptr = try ManagedArray.getFlagsPtr(self.func(), ir.toManagedArrayPtr(managed_ptr));
     const cap_flags = try self.func().emitLoad(cap_ptr.raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
