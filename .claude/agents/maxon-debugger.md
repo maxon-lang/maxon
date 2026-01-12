@@ -58,7 +58,7 @@ When debugging issues, follow this systematic approach:
 ## Debugging Commands
 
 - Build compiler: `cd maxon-bin && zig build`
-- Run tests: `cd maxon-bin && zig build test`
+- Run tests: `cd maxon-bin && zig build spec-test`
 - Compile with IR output: `./bin/maxon compile file.maxon --emit-ir`
 - Compile with ASM output: `./bin/maxon compile file.maxon --emit-asm`
 - Compile with verbose output: `./bin/maxon compile file.maxon -v`
@@ -79,7 +79,7 @@ When reporting findings:
 - Clean up temporary files in `/temp` after debugging
 - Reference spec files in `maxon-bin/specs/` for expected behavior
 - Check `docs/LANGUAGE_REFERENCE.md` for language semantics
-- When fixing issues, ensure all tests still pass with `zig build test`
+- When fixing issues, ensure all tests still pass with `zig build spec-test`
 - Do not use git commands.
 - Assume any broken code or tests are not pre-existing issues.
 

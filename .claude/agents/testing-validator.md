@@ -57,7 +57,7 @@ You have deep knowledge of:
 
 ```bash
 # Run all tests
-cd maxon-bin && zig build test
+cd maxon-bin && zig build spec-test
 
 # Compile and run a test file
 ./bin/maxon run test.maxon
@@ -109,5 +109,5 @@ Fragments are extracted to `maxon-bin/specs/fragments/`.
 - Use descriptive test names that explain what's being tested
 - Include both positive tests (valid code) and negative tests (error cases)
 - When debugging failures, start by examining the expected vs actual output
-- Always run `zig build test` to verify tests pass after changes
+- Always run `zig build spec-test` to verify tests pass after changes
 - **NEVER use git commands** - read files directly instead

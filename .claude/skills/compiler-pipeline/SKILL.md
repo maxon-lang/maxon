@@ -77,7 +77,7 @@ Source Code (.maxon)
 | Task | Command |
 |------|---------|
 | Build compiler | `cd maxon-bin && zig build` |
-| Run all tests | `cd maxon-bin && zig build test` |
+| Run all tests | `cd maxon-bin && zig build spec-test` |
 | Compile and run | `./bin/maxon run file.maxon` |
 | Compile only | `./bin/maxon compile file.maxon` |
 | Compile with IR output | `./bin/maxon compile file.maxon --emit-ir` |

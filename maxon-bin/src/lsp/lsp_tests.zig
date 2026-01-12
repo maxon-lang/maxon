@@ -1820,4 +1820,3 @@ test "formatting indents while loop body correctly" {
     // The end 'series' should be at 1 tab
     try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'series'") != null);
 }
-

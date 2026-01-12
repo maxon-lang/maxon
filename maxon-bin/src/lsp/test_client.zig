@@ -262,7 +262,17 @@ pub const TestClient = struct {
 
         const result_obj = switch (parsed.value) {
             .object => |obj| obj,
-            .null => return error.NoDefinition,
+            .null => {
+                // No definition found (e.g., for keywords or literals)
+                return DefinitionResult{
+                    .uri = &.{},
+                    .start_line = 0,
+                    .start_char = 0,
+                    .end_line = 0,
+                    .end_char = 0,
+                    .allocator = self.allocator,
+                };
+            },
             else => return error.InvalidResponse,
         };
 

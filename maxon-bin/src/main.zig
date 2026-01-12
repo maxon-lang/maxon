@@ -42,7 +42,7 @@ pub fn main() !void {
         runCompile(args, allocator);
     } else if (std.mem.eql(u8, command, "build")) {
         runBuild(args, allocator);
-    } else if (std.mem.eql(u8, command, "test")) {
+    } else if (std.mem.eql(u8, command, "spec-test")) {
         runTest(args, allocator);
     } else if (std.mem.eql(u8, command, "lsp-server")) {
         runLspServer(allocator);
@@ -61,7 +61,7 @@ fn printUsage() void {
     std.debug.print("\nCommands:\n", .{});
     std.debug.print("  compile <source.maxon>  Compile a single source file\n", .{});
     std.debug.print("  build                   Build project from current directory\n", .{});
-    std.debug.print("  test                    Run spec fragment tests\n", .{});
+    std.debug.print("  spec-test               Run spec fragment tests\n", .{});
     std.debug.print("  lsp-server              Start LSP server for IDE integration\n", .{});
     std.debug.print("\nCompile Options:\n", .{});
     std.debug.print("  -v                      Enable verbose/debug output\n", .{});

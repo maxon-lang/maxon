@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) void {
     // Test step - runs spec fragment tests
     const test_cmd = b.addRunArtifact(exe);
     test_cmd.step.dependOn(b.getInstallStep());
-    test_cmd.addArgs(&.{"test"});
+    test_cmd.addArgs(&.{"spec-test"});
     // Allow any exit code - test failures shouldn't fail the build step
     test_cmd.stdio = .{ .check = .{} };
     test_cmd.has_side_effects = true;
@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) void {
         test_cmd.addArgs(args);
     }
 
-    const test_step = b.step("test", "Run spec fragment tests");
+    const test_step = b.step("spec-test", "Run spec fragment tests");
     test_step.dependOn(&test_cmd.step);
 
     // Coverage step - runs tests with OpenCppCoverage to generate HTML report
@@ -88,26 +88,11 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+
     const run_unit_tests = b.addRunArtifact(unit_tests);
+
     const unit_test_step = b.step("unit-test", "Run zig unit tests");
     unit_test_step.dependOn(&run_unit_tests.step);
-
-    // LSP E2E tests - spawn server as child process and communicate via JSON-RPC
-    const lsp_e2e_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/lsp/e2e/lsp_e2e_tests.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    // Tests need the compiled maxon executable to spawn
-    lsp_e2e_tests.step.dependOn(b.getInstallStep());
-
-    const run_lsp_e2e_tests = b.addRunArtifact(lsp_e2e_tests);
-    run_lsp_e2e_tests.step.dependOn(b.getInstallStep());
-
-    const lsp_e2e_test_step = b.step("test-lsp", "Run LSP E2E tests");
-    lsp_e2e_test_step.dependOn(&run_lsp_e2e_tests.step);
 }
 
 const GrammarGenStep = struct {

@@ -25,7 +25,7 @@ For every new feature, you MUST follow the spec-driven development process:
    - Never edit files in `maxon-bin/specs/fragments/` - these are auto-generated
 
 2. **Run Tests to Extract Fragments**
-   - Execute `cd maxon-bin && zig build test` to extract test fragments
+   - Execute `cd maxon-bin && zig build spec-test` to extract test fragments
    - Verify the fragments were created correctly
 
 3. **Implement the Feature**
@@ -35,7 +35,7 @@ For every new feature, you MUST follow the spec-driven development process:
    - Update `x86.zig` for new instruction encodings
 
 4. **Iterate Until Tests Pass**
-   - Run `zig build test` frequently
+   - Run `zig build spec-test` frequently
    - Fix failing tests immediately - don't leave broken tests
    - Create temp files in `/temp` and clean them up after
 
@@ -59,7 +59,7 @@ For every new feature, you MUST follow the spec-driven development process:
 ## Building and Testing Commands
 
 - Build compiler: `cd maxon-bin && zig build`
-- Run all tests: `cd maxon-bin && zig build test`
+- Run all tests: `cd maxon-bin && zig build spec-test`
 - Compile a file: `./bin/maxon compile file.maxon`
 - Compile with IR output: `./bin/maxon compile file.maxon --emit-ir`
 - Compile with ASM output: `./bin/maxon compile file.maxon --emit-asm`

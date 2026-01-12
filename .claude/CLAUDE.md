@@ -24,7 +24,7 @@ Each spec contains:
 
 Workflow for new features:
 1. Create `maxon-bin/specs/feature-name.md` with frontmatter, notes, docs, and tests
-2. Run `maxon test` to extract and run test fragments
+2. Run `zig build spec-test` (in maxon-bin/) to extract and run test fragments
 3. Implement until tests pass
 
 See `docs/SPECS.md` for the complete spec file format and detailed workflow.
@@ -53,6 +53,11 @@ fix it properly. No workarounds.
 - Build system uses Zig build. The compiler is in the maxon-bin directory.
 - All tests must pass before commits to main
 - In zig use ArrayListUnmanaged instead of ArrayList
+
+## Running Tests
+- **Spec tests**: `cd maxon-bin && zig build spec-test` - Extracts and runs tests from spec files
+- **Unit tests**: `cd maxon-bin && zig build unit-test` - Runs Zig unit tests (includes LSP tests)
+- **VSCode extension tests**: `cd vscode-extension && npm test` - Runs extension tests
 
 ## Writing VSCode Extension Tests
 - Do not set timeouts

@@ -2170,7 +2170,7 @@ test "analyzer hover shows method with doc comment" {
         \\    var count int
         \\
         \\    /// Increments the counter by one
-        \\    method increment()
+        \\    function increment()
         \\        self.count = self.count + 1
         \\    end 'increment'
         \\end 'Counter'

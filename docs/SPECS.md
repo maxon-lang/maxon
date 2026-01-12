@@ -301,7 +301,7 @@ maxon test --verbose
 maxon test --filter arithmetic
 
 # Via build system
-zig build test
+zig build spec-test
 ```
 
 #### Adding Tests

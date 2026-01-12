@@ -64,7 +64,7 @@ var x int = "hello"  // type error
 1. **DO NOT edit fragments** - Files in `maxon-bin/specs/fragments/` are auto-generated
 2. **Edit the spec file** - Make changes in `maxon-bin/specs/*.md`
 3. **Regenerate fragments** - Run `./bin/maxon regen-fragments` after spec changes
-4. **Run tests** - Use `cd maxon-bin && zig build test` to verify
+4. **Run tests** - Use `cd maxon-bin && zig build spec-test` to verify
 
 ## Test Case Guidelines
 
