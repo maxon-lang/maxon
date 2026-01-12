@@ -375,3 +375,23 @@ end 'main'
 ```maxoncstderr
 error E054: specs/fragments/error-handling.error.main-cannot-throw.1.test:7:10: main cannot throw: 'main'
 ```
+
+<!-- test: error.otherwise-type-mismatch -->
+```maxon
+// otherwise expression type must match the success type
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+    throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+    let val = try mayFail() otherwise "wrong type"
+    return val
+end 'main'
+```
+```maxoncstderr
+error E022: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test:12:5: type mismatch: 'otherwise type 'String' does not match expected type 'int''
+```

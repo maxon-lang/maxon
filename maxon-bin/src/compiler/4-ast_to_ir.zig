@@ -7245,6 +7245,25 @@ pub const AstToIr = struct {
         // Error block: evaluate default expression and copy to result
         const default_typed = try self.convertExpression(default_expr);
 
+        // Type check: otherwise expression must match the success type
+        // Allow implicit conversions between integral types (int, byte)
+        const types_compatible = self.checkTypeCompatibility(default_typed.ty, ctx.success_type) or blk: {
+            // Allow int <-> byte conversion
+            const default_info = if (default_typed.ty == .primitive) types.getPrimitiveTypeInfo(default_typed.ty.primitive) else null;
+            const success_info = if (ctx.success_type == .primitive) types.getPrimitiveTypeInfo(ctx.success_type.primitive) else null;
+            if (default_info != null and success_info != null) {
+                break :blk default_info.?.is_integral and success_info.?.is_integral;
+            }
+            break :blk false;
+        };
+        if (!types_compatible) {
+            const expected_name = ctx.success_type.getTypeName() orelse "unknown";
+            const actual_name = default_typed.ty.getTypeName() orelse "unknown";
+            const msg = std.fmt.allocPrint(self.allocator, "otherwise type '{s}' does not match expected type '{s}'", .{ actual_name, expected_name }) catch "type mismatch in otherwise";
+            self.reportError(.E022, msg);
+            return error.SemanticError;
+        }
+
         if (ctx.is_struct_type) {
             try self.func().emitMemcpy(ir.toRawPtr(ctx.result_ptr), ir.toRawPtr(default_typed.value), ctx.struct_size);
             // For String defaults that are NOT temporaries (e.g., variables, parameters),
