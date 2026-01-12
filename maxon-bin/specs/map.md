@@ -336,53 +336,34 @@ end 'main'
 1
 ```
 ```stdout
-ALLOC #1: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 80 bytes (map buffer)
-ALLOC #3: 16 bytes (map buffer)
-ALLOC #4: 10 bytes (string buffer)
+ALLOC #1: 80 bytes (map buffer)
+ALLOC #2: 16 bytes (map buffer)
 MOVE: managed
-ALLOC #5: 640 bytes (array buffer)
+ALLOC #3: 640 bytes (array buffer)
 MOVE: managed
-ALLOC #6: 128 bytes (array buffer)
+ALLOC #4: 128 bytes (array buffer)
 MOVE: managed
-ALLOC #7: 128 bytes (array buffer)
+ALLOC #5: 128 bytes (array buffer)
 MOVE: managed
 MOVE: ks
 MOVE: vs
 MOVE: sts
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
 MOVE: result
-FREE #2: 80 bytes (map literal keys cleanup)
-FREE #3: 16 bytes (map literal values cleanup)
-DECREF: <temp> -> rc=1
-DECREF: <temp> -> rc=1
-ALLOC #8: 10 bytes (string buffer)
+FREE #1: 80 bytes (map literal keys cleanup)
+FREE #2: 16 bytes (map literal values cleanup)
 MOVE: managed
-INCREF: <array index String> -> rc=2
-DECREF: existing -> rc=1
-DECREF: <temp> -> rc=0
-FREE #8: 10 bytes (string cleanup)
-DECREF: <map key> -> rc=0
-FREE #1: 10 bytes (map string key cleanup)
-DECREF: <map key> -> rc=0
-FREE #4: 10 bytes (map string key cleanup)
-FREE #5: 640 bytes (map keys cleanup)
-FREE #6: 128 bytes (map values cleanup)
-FREE #7: 128 bytes (map states cleanup)
+FREE #3: 640 bytes (map keys cleanup)
+FREE #4: 128 bytes (map values cleanup)
+FREE #5: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
-Allocated: 1022 bytes
-Freed:     1022 bytes
+Allocated: 992 bytes
+Freed:     992 bytes
 Leaked:    0 bytes
 Moves:     10
-Increfs:   5
-Decrefs:   8
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: string-keys-get-multiple -->
@@ -399,69 +380,36 @@ end 'main'
 30
 ```
 ```stdout
-ALLOC #1: 14 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 120 bytes (map buffer)
-ALLOC #3: 24 bytes (map buffer)
-ALLOC #4: 14 bytes (string buffer)
+ALLOC #1: 120 bytes (map buffer)
+ALLOC #2: 24 bytes (map buffer)
 MOVE: managed
-ALLOC #5: 12 bytes (string buffer)
 MOVE: managed
-ALLOC #6: 640 bytes (array buffer)
+ALLOC #3: 640 bytes (array buffer)
 MOVE: managed
-ALLOC #7: 128 bytes (array buffer)
+ALLOC #4: 128 bytes (array buffer)
 MOVE: managed
-ALLOC #8: 128 bytes (array buffer)
+ALLOC #5: 128 bytes (array buffer)
 MOVE: managed
 MOVE: ks
 MOVE: vs
 MOVE: sts
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
-INCREF: <array index String> -> rc=2
-INCREF: <array index String> -> rc=3
-DECREF: existing -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
 MOVE: result
-FREE #2: 120 bytes (map literal keys cleanup)
-FREE #3: 24 bytes (map literal values cleanup)
-DECREF: <temp> -> rc=1
-DECREF: <temp> -> rc=1
-DECREF: <temp> -> rc=1
-ALLOC #9: 14 bytes (string buffer)
+FREE #1: 120 bytes (map literal keys cleanup)
+FREE #2: 24 bytes (map literal values cleanup)
 MOVE: managed
-INCREF: <array index String> -> rc=2
-DECREF: existing -> rc=1
-DECREF: <temp> -> rc=0
-FREE #9: 14 bytes (string cleanup)
-ALLOC #10: 14 bytes (string buffer)
 MOVE: managed
-INCREF: <array index String> -> rc=2
-DECREF: existing -> rc=1
-DECREF: <temp> -> rc=0
-FREE #10: 14 bytes (string cleanup)
-DECREF: <map key> -> rc=0
-FREE #1: 14 bytes (map string key cleanup)
-DECREF: <map key> -> rc=0
-FREE #5: 12 bytes (map string key cleanup)
-DECREF: <map key> -> rc=0
-FREE #4: 14 bytes (map string key cleanup)
-FREE #6: 640 bytes (map keys cleanup)
-FREE #7: 128 bytes (map values cleanup)
-FREE #8: 128 bytes (map states cleanup)
+FREE #3: 640 bytes (map keys cleanup)
+FREE #4: 128 bytes (map values cleanup)
+FREE #5: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
-Allocated: 1108 bytes
-Freed:     1108 bytes
+Allocated: 1040 bytes
+Freed:     1040 bytes
 Leaked:    0 bytes
 Moves:     12
-Increfs:   9
-Decrefs:   14
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: string-keys-contains -->
@@ -479,53 +427,34 @@ end 'main'
 1
 ```
 ```stdout
-ALLOC #1: 13 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 80 bytes (map buffer)
-ALLOC #3: 16 bytes (map buffer)
-ALLOC #4: 13 bytes (string buffer)
+ALLOC #1: 80 bytes (map buffer)
+ALLOC #2: 16 bytes (map buffer)
 MOVE: managed
-ALLOC #5: 640 bytes (array buffer)
+ALLOC #3: 640 bytes (array buffer)
 MOVE: managed
-ALLOC #6: 128 bytes (array buffer)
+ALLOC #4: 128 bytes (array buffer)
 MOVE: managed
-ALLOC #7: 128 bytes (array buffer)
+ALLOC #5: 128 bytes (array buffer)
 MOVE: managed
 MOVE: ks
 MOVE: vs
 MOVE: sts
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
 MOVE: result
-FREE #2: 80 bytes (map literal keys cleanup)
-FREE #3: 16 bytes (map literal values cleanup)
-DECREF: <temp> -> rc=1
-DECREF: <temp> -> rc=1
-ALLOC #8: 13 bytes (string buffer)
+FREE #1: 80 bytes (map literal keys cleanup)
+FREE #2: 16 bytes (map literal values cleanup)
 MOVE: managed
-INCREF: <array index String> -> rc=2
-DECREF: existing -> rc=1
-DECREF: <temp> -> rc=0
-FREE #8: 13 bytes (string cleanup)
-DECREF: <map key> -> rc=0
-FREE #4: 13 bytes (map string key cleanup)
-DECREF: <map key> -> rc=0
-FREE #1: 13 bytes (map string key cleanup)
-FREE #5: 640 bytes (map keys cleanup)
-FREE #6: 128 bytes (map values cleanup)
-FREE #7: 128 bytes (map states cleanup)
+FREE #3: 640 bytes (map keys cleanup)
+FREE #4: 128 bytes (map values cleanup)
+FREE #5: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
-Allocated: 1031 bytes
-Freed:     1031 bytes
+Allocated: 992 bytes
+Freed:     992 bytes
 Leaked:    0 bytes
 Moves:     10
-Increfs:   5
-Decrefs:   8
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: string-keys-insert-update -->
@@ -542,51 +471,34 @@ end 'main'
 99
 ```
 ```stdout
-ALLOC #1: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 40 bytes (map buffer)
-ALLOC #3: 8 bytes (map buffer)
-ALLOC #4: 640 bytes (array buffer)
+ALLOC #1: 40 bytes (map buffer)
+ALLOC #2: 8 bytes (map buffer)
+ALLOC #3: 640 bytes (array buffer)
+MOVE: managed
+ALLOC #4: 128 bytes (array buffer)
 MOVE: managed
 ALLOC #5: 128 bytes (array buffer)
-MOVE: managed
-ALLOC #6: 128 bytes (array buffer)
 MOVE: managed
 MOVE: ks
 MOVE: vs
 MOVE: sts
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
 MOVE: result
-FREE #2: 40 bytes (map literal keys cleanup)
-FREE #3: 8 bytes (map literal values cleanup)
-DECREF: <temp> -> rc=1
-ALLOC #7: 10 bytes (string buffer)
+FREE #1: 40 bytes (map literal keys cleanup)
+FREE #2: 8 bytes (map literal values cleanup)
 MOVE: managed
-INCREF: <array index String> -> rc=2
-DECREF: existing -> rc=1
-DECREF: <temp> -> rc=0
-FREE #7: 10 bytes (string cleanup)
-ALLOC #8: 10 bytes (string buffer)
 MOVE: managed
-INCREF: <array index String> -> rc=2
-DECREF: existing -> rc=1
-DECREF: <temp> -> rc=0
-FREE #8: 10 bytes (string cleanup)
-DECREF: <map key> -> rc=0
-FREE #1: 10 bytes (map string key cleanup)
-FREE #4: 640 bytes (map keys cleanup)
-FREE #5: 128 bytes (map values cleanup)
-FREE #6: 128 bytes (map states cleanup)
+FREE #3: 640 bytes (map keys cleanup)
+FREE #4: 128 bytes (map values cleanup)
+FREE #5: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
-Allocated: 974 bytes
-Freed:     974 bytes
+Allocated: 944 bytes
+Freed:     944 bytes
 Leaked:    0 bytes
 Moves:     10
-Increfs:   4
-Decrefs:   7
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: string-keys-remove -->
@@ -605,65 +517,36 @@ end 'main'
 2
 ```
 ```stdout
-ALLOC #1: 14 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 120 bytes (map buffer)
-ALLOC #3: 24 bytes (map buffer)
-ALLOC #4: 13 bytes (string buffer)
+ALLOC #1: 120 bytes (map buffer)
+ALLOC #2: 24 bytes (map buffer)
 MOVE: managed
-ALLOC #5: 14 bytes (string buffer)
 MOVE: managed
-ALLOC #6: 640 bytes (array buffer)
+ALLOC #3: 640 bytes (array buffer)
 MOVE: managed
-ALLOC #7: 128 bytes (array buffer)
+ALLOC #4: 128 bytes (array buffer)
 MOVE: managed
-ALLOC #8: 128 bytes (array buffer)
+ALLOC #5: 128 bytes (array buffer)
 MOVE: managed
 MOVE: ks
 MOVE: vs
 MOVE: sts
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
 MOVE: result
-FREE #2: 120 bytes (map literal keys cleanup)
-FREE #3: 24 bytes (map literal values cleanup)
-DECREF: <temp> -> rc=1
-DECREF: <temp> -> rc=1
-DECREF: <temp> -> rc=1
-ALLOC #9: 13 bytes (string buffer)
+FREE #1: 120 bytes (map literal keys cleanup)
+FREE #2: 24 bytes (map literal values cleanup)
 MOVE: managed
-INCREF: <array index String> -> rc=2
-DECREF: existing -> rc=1
-DECREF: <temp> -> rc=0
-FREE #9: 13 bytes (string cleanup)
-ALLOC #10: 13 bytes (string buffer)
 MOVE: managed
-DECREF: <temp> -> rc=0
-FREE #10: 13 bytes (string cleanup)
-DECREF: <map key> -> rc=0
-FREE #4: 13 bytes (map string key cleanup)
-DECREF: <map key> -> rc=0
-FREE #5: 14 bytes (map string key cleanup)
-DECREF: <map key> -> rc=0
-FREE #1: 14 bytes (map string key cleanup)
-FREE #6: 640 bytes (map keys cleanup)
-FREE #7: 128 bytes (map values cleanup)
-FREE #8: 128 bytes (map states cleanup)
+FREE #3: 640 bytes (map keys cleanup)
+FREE #4: 128 bytes (map values cleanup)
+FREE #5: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
-Allocated: 1107 bytes
-Freed:     1107 bytes
+Allocated: 1040 bytes
+Freed:     1040 bytes
 Leaked:    0 bytes
 Moves:     12
-Increfs:   7
-Decrefs:   12
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: string-keys-early-return -->
@@ -679,43 +562,31 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 13 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 40 bytes (map buffer)
-ALLOC #3: 8 bytes (map buffer)
-ALLOC #4: 640 bytes (array buffer)
+ALLOC #1: 40 bytes (map buffer)
+ALLOC #2: 8 bytes (map buffer)
+ALLOC #3: 640 bytes (array buffer)
+MOVE: managed
+ALLOC #4: 128 bytes (array buffer)
 MOVE: managed
 ALLOC #5: 128 bytes (array buffer)
-MOVE: managed
-ALLOC #6: 128 bytes (array buffer)
 MOVE: managed
 MOVE: ks
 MOVE: vs
 MOVE: sts
-INCREF: <array index String> -> rc=2
-INCREF: <array_store> -> rc=3
-DECREF: k -> rc=2
 MOVE: result
-FREE #2: 40 bytes (map literal keys cleanup)
-FREE #3: 8 bytes (map literal values cleanup)
-DECREF: <temp> -> rc=1
-ALLOC #7: 13 bytes (string buffer)
+FREE #1: 40 bytes (map literal keys cleanup)
+FREE #2: 8 bytes (map literal values cleanup)
 MOVE: managed
-INCREF: <array index String> -> rc=2
-DECREF: existing -> rc=1
-DECREF: <temp> -> rc=0
-FREE #7: 13 bytes (string cleanup)
-DECREF: <map key> -> rc=0
-FREE #1: 13 bytes (map string key cleanup)
-FREE #4: 640 bytes (map keys cleanup)
-FREE #5: 128 bytes (map values cleanup)
-FREE #6: 128 bytes (map states cleanup)
+FREE #3: 640 bytes (map keys cleanup)
+FREE #4: 128 bytes (map values cleanup)
+FREE #5: 128 bytes (map states cleanup)
 
 === MEMORY STATS ===
-Allocated: 970 bytes
-Freed:     970 bytes
+Allocated: 944 bytes
+Freed:     944 bytes
 Leaked:    0 bytes
 Moves:     9
-Increfs:   3
-Decrefs:   5
+Increfs:   0
+Decrefs:   0
 ```

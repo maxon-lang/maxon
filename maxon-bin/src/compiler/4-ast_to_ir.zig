@@ -6120,7 +6120,7 @@ pub const AstToIr = struct {
                         try self.ensureMethodGenerated(init_func_name);
                     }
 
-                    const managed_ptr = try string_helpers.emitManagedArrayFromBytes(self, processed);
+                    const managed_ptr = try string_helpers.emitManagedArrayFromStaticBytes(self, processed);
 
                     // Allocate result struct and call init
                     const struct_size = type_info.struct_type.size;
@@ -6154,8 +6154,8 @@ pub const AstToIr = struct {
         const processed = try self.processEscapeSequences(str_bytes);
         defer self.allocator.free(processed);
 
-        // Create managed string from bytes
-        const managed_ptr = try string_helpers.emitManagedArrayFromBytes(self, processed);
+        // Create managed string from static bytes
+        const managed_ptr = try string_helpers.emitManagedArrayFromStaticBytes(self, processed);
 
         // Call String$init to initialize the destination pointer (Builtin.init is also registered as init)
         const init_func_name = "String$init";
@@ -6336,8 +6336,8 @@ pub const AstToIr = struct {
             return error.UndefinedVariable;
         };
 
-        // Allocate space for the return value (String is 32 bytes)
-        const result_ptr = try self.func().emitAllocaSized(32);
+        // Allocate space for the return value
+        const result_ptr = try string_helpers.emitStringAlloca(self);
 
         // Prepare the format argument as a String (empty string if no format spec)
         const format_str = if (format_spec) |spec|
@@ -6360,8 +6360,8 @@ pub const AstToIr = struct {
     /// Character layout: { _managed: __ManagedArray } (32 bytes)
     /// String layout: { _managed: __ManagedArray, _iterPos: int } (40 bytes)
     fn convertCharacterToString(self: *AstToIr, char_ptr: ir.Value) ConvertError!ir.Value {
-        // Allocate a String struct (40 bytes)
-        const string_ptr = try self.func().emitAllocaSized(40);
+        // Allocate a String struct
+        const string_ptr = try string_helpers.emitStringAlloca(self);
 
         // Copy the _managed field from Character to String (32 bytes at offset 0)
         const char_managed = try self.func().emitGetFieldPtr(ir.toStructPtr(char_ptr), 0);
@@ -7508,15 +7508,12 @@ pub const AstToIr = struct {
             zero_i32,
         );
 
+        // Both Character and String use the same layout (40 bytes with _iterPos)
+        const struct_ptr = try string_helpers.emitStringFromManaged(self, managed_ptr);
         if (is_character) {
-            const char_ptr = try self.func().emitAllocaSized(40);
-            try self.func().emitMemcpy(char_ptr, managed_ptr.asRawPtr(), ManagedArray.SIZE);
-            const iter_pos_ptr = try self.func().emitGetFieldPtr(char_ptr.asStruct(), String.ITER_POS_OFFSET);
-            try self.func().emitStore(iter_pos_ptr.raw(), try self.func().emitConstI64(0));
-            return .{ .value = char_ptr.raw(), .ty = .{ .struct_type = types.CHARACTER } };
+            return .{ .value = struct_ptr.raw(), .ty = .{ .struct_type = types.CHARACTER } };
         } else {
-            const string_ptr = try string_helpers.emitStringFromManaged(self, managed_ptr);
-            return .{ .value = string_ptr.raw(), .ty = .{ .struct_type = types.STRING } };
+            return .{ .value = struct_ptr.raw(), .ty = .{ .struct_type = types.STRING } };
         }
     }
 
@@ -7542,12 +7539,22 @@ pub const AstToIr = struct {
                         .string => |string_map| {
                             const string_val = string_map.get(member_value) orelse
                                 return .{ .value = try self.func().emitConstI64(member_value), .ty = enum_ty };
-                            return .{ .value = (try self.func().emitStringConstant(string_val)).raw(), .ty = enum_ty };
+                            // Allocate null-terminated copy for static data section
+                            const null_term_val = try self.allocator.alloc(u8, string_val.len + 1);
+                            @memcpy(null_term_val[0..string_val.len], string_val);
+                            null_term_val[string_val.len] = 0;
+                            try self.module.trackString(null_term_val);
+                            return .{ .value = (try self.func().emitStringConstant(null_term_val)).raw(), .ty = enum_ty };
                         },
                         .character => |char_map| {
                             const char_val = char_map.get(member_value) orelse
                                 return .{ .value = try self.func().emitConstI64(member_value), .ty = enum_ty };
-                            return .{ .value = (try self.func().emitStringConstant(char_val)).raw(), .ty = enum_ty };
+                            // Allocate null-terminated copy for static data section
+                            const null_term_val = try self.allocator.alloc(u8, char_val.len + 1);
+                            @memcpy(null_term_val[0..char_val.len], char_val);
+                            null_term_val[char_val.len] = 0;
+                            try self.module.trackString(null_term_val);
+                            return .{ .value = (try self.func().emitStringConstant(null_term_val)).raw(), .ty = enum_ty };
                         },
                         .none, .int => {},
                     }

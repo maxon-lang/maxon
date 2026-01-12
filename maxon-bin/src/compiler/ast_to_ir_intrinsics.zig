@@ -489,7 +489,7 @@ fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!
     try expectArgCount(self, call, 1);
     const capacity = try self.convertExpression(call.args[0]);
 
-    const managed_ptr = try self.func().emitAllocaSized(32);
+    const managed_ptr = try self.func().emitAllocaSized(ManagedArray.SIZE);
 
     const elem_info = getElementInfo(self);
     const elem_size_val = try self.func().emitConstI64(elem_info.size);
@@ -766,14 +766,14 @@ fn convertMakeCharIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 }
 
 /// __make_char_from_bytes(managed, pos, len) -> Character
-/// Creates a slice-mode Character struct (32 bytes)
+/// Creates a slice-mode Character struct (ManagedArray.SIZE bytes)
 fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
     const managed = try self.convertExpression(call.args[0]);
     const pos = try self.convertExpression(call.args[1]);
     const len = try self.convertExpression(call.args[2]);
 
-    const char_ptr = try self.func().emitAllocaSized(32);
+    const char_ptr = try self.func().emitAllocaSized(ManagedArray.SIZE);
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
     // Store slice buffer pointer (offset 0)
@@ -827,7 +827,7 @@ fn intrinsicManagedArraySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const start = try self.convertExpression(call.args[1]);
     const end = try self.convertExpression(call.args[2]);
 
-    const slice_ptr = try self.func().emitAllocaSized(32);
+    const slice_ptr = try self.func().emitAllocaSized(ManagedArray.SIZE);
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
     // Store slice buffer = parent_buf_ptr + start (offset 0)

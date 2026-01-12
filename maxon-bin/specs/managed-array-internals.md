@@ -60,25 +60,22 @@ end 'main'
 ```stdout
 ALLOC #1: 32 bytes (array grow)
 ALLOC #2: 30 bytes (int.toString)
-ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #4: 11 bytes (string concat)
+ALLOC #3: 11 bytes (string concat)
 3
 DECREF: <temp> -> rc=0
 FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #4: 11 bytes (string cleanup)
+FREE #3: 11 bytes (string cleanup)
 FREE #1: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 83 bytes
-Freed:     83 bytes
+Allocated: 73 bytes
+Freed:     73 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   3
+Decrefs:   2
 ```
 
 <!-- test: heap-array-scope-cleanup -->
@@ -108,37 +105,31 @@ end 'main'
 ALLOC #1: 32 bytes (array grow)
 ALLOC #2: 32 bytes (array grow)
 ALLOC #3: 30 bytes (int.toString)
-ALLOC #4: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #5: 13 bytes (string concat)
+ALLOC #4: 13 bytes (string concat)
 200
 DECREF: <temp> -> rc=0
 FREE #3: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #5: 13 bytes (string cleanup)
-ALLOC #6: 30 bytes (int.toString)
-ALLOC #7: 10 bytes (string buffer)
+FREE #4: 13 bytes (string cleanup)
+ALLOC #5: 30 bytes (int.toString)
 MOVE: managed
-ALLOC #8: 13 bytes (string concat)
+ALLOC #6: 13 bytes (string concat)
 100
 DECREF: <temp> -> rc=0
-FREE #6: 30 bytes (string cleanup)
+FREE #5: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #7: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #8: 13 bytes (string cleanup)
+FREE #6: 13 bytes (string cleanup)
 FREE #1: 32 bytes (array cleanup)
 FREE #2: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 170 bytes
-Freed:     170 bytes
+Allocated: 150 bytes
+Freed:     150 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   0
-Decrefs:   6
+Decrefs:   4
 ```
 
 ### Stack Array Tests
@@ -161,25 +152,22 @@ end 'main'
 ```stdout
 ALLOC #1: 24 bytes (set buffer)
 ALLOC #2: 30 bytes (int.toString)
-ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #4: 12 bytes (string concat)
+ALLOC #3: 12 bytes (string concat)
 20
 DECREF: <temp> -> rc=0
 FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #4: 12 bytes (string cleanup)
+FREE #3: 12 bytes (string cleanup)
 FREE #1: 24 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 76 bytes
-Freed:     76 bytes
+Allocated: 66 bytes
+Freed:     66 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   3
+Decrefs:   2
 ```
 
 ### Loop Growth Tests
@@ -207,25 +195,22 @@ ALLOC #1: 32 bytes (array grow)
 REALLOC #1: 32 -> 64 bytes (array grow)
 REALLOC #1: 64 -> 128 bytes (array grow)
 ALLOC #2: 30 bytes (int.toString)
-ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #4: 12 bytes (string concat)
+ALLOC #3: 12 bytes (string concat)
 10
 DECREF: <temp> -> rc=0
 FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #4: 12 bytes (string cleanup)
+FREE #3: 12 bytes (string cleanup)
 FREE #1: 128 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 276 bytes
-Freed:     276 bytes
+Allocated: 266 bytes
+Freed:     266 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   3
+Decrefs:   2
 ```
 ### Struct Field Array Method Call
 

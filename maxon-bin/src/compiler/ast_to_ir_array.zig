@@ -29,13 +29,14 @@ const ConvertError = types.ConvertError;
 /// - buffer: *T (8 bytes) - pointer to element data (for refcounted mode, refcount is at buffer - 8)
 /// - len: i64 (8 bytes) - current length
 /// - capacity: i64 (8 bytes) - allocated capacity
-/// - flags: i32 (4 bytes) - mode flags (bits 0-1: 0=SSO, 1=heap-refcounted, 2=slice)
+/// - flags: i32 (4 bytes) - mode flags (bits 0-1: 0=SSO, 1=heap-refcounted, 2=slice, 3=static)
 /// - parent_off: i32 (4 bytes) - offset from parent buffer for slice mode
 ///
 /// Mode semantics:
 /// - Mode 0 (SSO): Small storage optimization (future) - inline storage in struct
 /// - Mode 1 (heap-refcounted): Ref-counted heap allocation, refcount at buffer - 8
 /// - Mode 2 (slice): Zero-copy view into parent buffer, uses parent_off
+/// - Mode 3 (static): Pointer to read-only data section, never freed
 pub const ManagedArray = struct {
     pub const SIZE: i32 = 32;
     pub const BUFFER_OFFSET: i32 = 0;

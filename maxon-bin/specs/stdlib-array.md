@@ -549,34 +549,19 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 24 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 160 bytes (array grow)
-INCREF: <array_store> -> rc=2
-DECREF: <temp> -> rc=1
-ALLOC #3: 24 bytes (string buffer)
+ALLOC #1: 160 bytes (array grow)
 MOVE: managed
-INCREF: <array_store> -> rc=2
-DECREF: <temp> -> rc=1
-ALLOC #4: 26 bytes (string buffer)
 MOVE: managed
-INCREF: <array_store> -> rc=2
-DECREF: <temp> -> rc=1
-DECREF: <array element> -> rc=0
-FREE #1: 24 bytes (string cleanup)
-DECREF: <array element> -> rc=0
-FREE #3: 24 bytes (string cleanup)
-DECREF: <array element> -> rc=0
-FREE #4: 26 bytes (string cleanup)
-FREE #2: 160 bytes (array cleanup)
+FREE #1: 160 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 234 bytes
-Freed:     234 bytes
+Allocated: 160 bytes
+Freed:     160 bytes
 Leaked:    0 bytes
 Moves:     3
-Increfs:   3
-Decrefs:   6
+Increfs:   0
+Decrefs:   0
 ```
 
 <!-- test: error.missing-braces -->

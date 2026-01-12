@@ -58,29 +58,23 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 41 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 30 bytes (int.toString)
-ALLOC #3: 10 bytes (string buffer)
+ALLOC #1: 30 bytes (int.toString)
 MOVE: managed
-ALLOC #4: 12 bytes (string concat)
+ALLOC #2: 12 bytes (string concat)
 32
 DECREF: <temp> -> rc=0
-FREE #2: 30 bytes (string cleanup)
+FREE #1: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #4: 12 bytes (string cleanup)
-DECREF: s -> rc=0
-FREE #1: 41 bytes (string cleanup)
+FREE #2: 12 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 93 bytes
-Freed:     93 bytes
+Allocated: 42 bytes
+Freed:     42 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   0
-Decrefs:   4
+Decrefs:   2
 ```
 
 <!-- test: heap-string-reassign -->
@@ -98,33 +92,24 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 37 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 37 bytes (string buffer)
 MOVE: managed
-DECREF: s -> rc=0
-FREE #1: 37 bytes (string cleanup)
-ALLOC #3: 30 bytes (int.toString)
-ALLOC #4: 10 bytes (string buffer)
+ALLOC #1: 30 bytes (int.toString)
 MOVE: managed
-ALLOC #5: 12 bytes (string concat)
+ALLOC #2: 12 bytes (string concat)
 28
 DECREF: <temp> -> rc=0
-FREE #3: 30 bytes (string cleanup)
+FREE #1: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #5: 12 bytes (string cleanup)
-DECREF: s -> rc=0
-FREE #2: 37 bytes (string cleanup)
+FREE #2: 12 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 126 bytes
-Freed:     126 bytes
+Allocated: 42 bytes
+Freed:     42 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   0
-Decrefs:   5
+Decrefs:   2
 ```
 
 ### Substring Tests
@@ -146,33 +131,24 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 32 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 10 bytes (string buffer)
 MOVE: managed
-DECREF: <temp> -> rc=0
-FREE #2: 10 bytes (string cleanup)
-ALLOC #3: 30 bytes (int.toString)
-ALLOC #4: 10 bytes (string buffer)
+ALLOC #1: 30 bytes (int.toString)
 MOVE: managed
-ALLOC #5: 11 bytes (string concat)
+ALLOC #2: 11 bytes (string concat)
 5
 DECREF: <temp> -> rc=0
-FREE #3: 30 bytes (string cleanup)
+FREE #1: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #4: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #5: 11 bytes (string cleanup)
-DECREF: s -> rc=0
-FREE #1: 32 bytes (string cleanup)
+FREE #2: 11 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 93 bytes
-Freed:     93 bytes
+Allocated: 41 bytes
+Freed:     41 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   0
-Decrefs:   5
+Decrefs:   2
 ```
 
 ### Cstring Conversion Tests
@@ -191,18 +167,15 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 37 bytes (string buffer)
 MOVE: managed
-heap allocated string here!!DECREF: s -> rc=0
-FREE #1: 37 bytes (string cleanup)
-
+heap allocated string here!!
 === MEMORY STATS ===
-Allocated: 37 bytes
-Freed:     37 bytes
+Allocated: 0 bytes
+Freed:     0 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   1
+Decrefs:   0
 ```
 
 ### Metadata Cleanup Tests
@@ -222,29 +195,23 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 14 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 30 bytes (int.toString)
-ALLOC #3: 10 bytes (string buffer)
+ALLOC #1: 30 bytes (int.toString)
 MOVE: managed
-ALLOC #4: 11 bytes (string concat)
+ALLOC #2: 11 bytes (string concat)
 5
 DECREF: <temp> -> rc=0
-FREE #2: 30 bytes (string cleanup)
+FREE #1: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #4: 11 bytes (string cleanup)
-DECREF: s -> rc=0
-FREE #1: 14 bytes (string cleanup)
+FREE #2: 11 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 65 bytes
-Freed:     65 bytes
+Allocated: 41 bytes
+Freed:     41 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   0
-Decrefs:   4
+Decrefs:   2
 ```
 
 ### Loop Concatenation Tests
@@ -271,42 +238,58 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
-ALLOC #1: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 10 bytes (string concat)
-ALLOC #3: 11 bytes (string concat)
+ALLOC #1: 10 bytes (string concat)
+ALLOC #2: 11 bytes (string concat)
 DECREF: s -> rc=0
-FREE #2: 10 bytes (string cleanup)
-ALLOC #4: 12 bytes (string concat)
+FREE #1: 10 bytes (string cleanup)
+ALLOC #3: 12 bytes (string concat)
 DECREF: s -> rc=0
-FREE #3: 11 bytes (string cleanup)
-ALLOC #5: 13 bytes (string concat)
+FREE #2: 11 bytes (string cleanup)
+ALLOC #4: 13 bytes (string concat)
 DECREF: s -> rc=0
-FREE #4: 12 bytes (string cleanup)
-ALLOC #6: 14 bytes (string concat)
+FREE #3: 12 bytes (string cleanup)
+ALLOC #5: 14 bytes (string concat)
 DECREF: s -> rc=0
-FREE #5: 13 bytes (string cleanup)
-ALLOC #7: 30 bytes (int.toString)
-ALLOC #8: 10 bytes (string buffer)
+FREE #4: 13 bytes (string cleanup)
+ALLOC #6: 30 bytes (int.toString)
 MOVE: managed
-ALLOC #9: 11 bytes (string concat)
+ALLOC #7: 11 bytes (string concat)
 5
 DECREF: <temp> -> rc=0
-FREE #7: 30 bytes (string cleanup)
+FREE #6: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #8: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #9: 11 bytes (string cleanup)
+FREE #7: 11 bytes (string cleanup)
 DECREF: s -> rc=0
-FREE #6: 14 bytes (string cleanup)
-DECREF: a -> rc=0
-FREE #1: 10 bytes (string cleanup)
+FREE #5: 14 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 121 bytes
-Freed:     121 bytes
+Allocated: 101 bytes
+Freed:     101 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   0
-Decrefs:   9
+Decrefs:   7
+```
+
+### String Literal Deduplication Tests
+
+<!-- test: string-literal-deduplication -->
+Identical string literals share the same storage in the .rdata section.
+During code generation, duplicate string constants are deduplicated so they
+point to the same memory address.
+```maxon
+function main() returns int
+    var a = "hello world"
+    var b = "hello world"
+    print(a)
+    print(b)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello worldhello world
 ```

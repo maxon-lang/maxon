@@ -102,13 +102,54 @@ pub fn emitManagedArrayFromBuffer(self: *AstToIr, buffer: ir.RawPtr, len_i64: ir
     return struct_helpers.emitManagedArray(self.func(), buffer, len_i64, len_i64, mode_one);
 }
 
+/// Create a __ManagedArray pointing to static data in the .rdata section.
+/// No heap allocation, no refcount. Mode=3 ensures it's never freed.
+/// The string data is stored directly in the executable's code section.
+pub fn emitManagedArrayFromStaticBytes(self: *AstToIr, str_bytes: []const u8) !ir.ManagedArrayPtr {
+    const managed_ptr = try self.func().emitAllocaSized(ManagedArray.SIZE);
+
+    if (str_bytes.len == 0) {
+        try struct_helpers.initManagedArrayEmpty(self.func(), managed_ptr.asManagedArrayPtr());
+    } else {
+        // Allocate space for the string data plus null terminator in the static data section
+        const static_bytes = try self.allocator.alloc(u8, str_bytes.len + 1);
+        @memcpy(static_bytes[0..str_bytes.len], str_bytes);
+        static_bytes[str_bytes.len] = 0; // null terminator
+        try self.module.trackString(static_bytes);
+
+        // Get pointer to static string in .rdata section
+        const static_ptr = try self.func().emitStringConstant(static_bytes);
+
+        // Store static pointer as buffer
+        try self.func().emitStore(managed_ptr.raw(), static_ptr.raw());
+
+        // Set length and capacity
+        const len_i64 = try self.func().emitConstI64(@intCast(str_bytes.len));
+        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStruct(), 8, len_i64);
+        try struct_helpers.storeI64Field(self.func(), managed_ptr.asStruct(), 16, len_i64);
+
+        // Set flags = 3 (static mode)
+        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStruct(), 24, try self.func().emitConstI32(3));
+        try struct_helpers.storeI32Field(self.func(), managed_ptr.asStruct(), 28, try self.func().emitConstI32(0));
+    }
+
+    return managed_ptr.asManagedArrayPtr();
+}
+
 // ============================================================================
 // String Helpers
 // ============================================================================
 
+/// Allocate a String struct on the stack.
+/// Returns an uninitialized String pointer that can be passed to functions
+/// or initialized with emitStringFromManaged.
+pub fn emitStringAlloca(self: *AstToIr) !ir.RawPtr {
+    return self.func().emitAllocaSized(String.SIZE);
+}
+
 /// Wrap a __ManagedArray pointer in a full String struct (adds _iterPos field).
 pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !ir.StringPtr {
-    const string_ptr = try self.func().emitAllocaSized(40);
+    const string_ptr = try emitStringAlloca(self);
     try self.func().emitMemcpy(string_ptr, managed_ptr.asRawPtr(), ManagedArray.SIZE);
     const iter_pos_ptr = try self.func().emitGetFieldPtr(string_ptr.asStruct(), String.ITER_POS_OFFSET);
     try self.func().emitStore(iter_pos_ptr.raw(), try self.func().emitConstI64(0));

@@ -1113,36 +1113,27 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 14 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 15 bytes (string buffer)
 MOVE: managed
-ALLOC #3: 20 bytes (string concat)
-ALLOC #4: 30 bytes (int.toString)
-ALLOC #5: 10 bytes (string buffer)
+ALLOC #1: 20 bytes (string concat)
+ALLOC #2: 30 bytes (int.toString)
 MOVE: managed
-ALLOC #6: 12 bytes (string concat)
+ALLOC #3: 12 bytes (string concat)
 11
 DECREF: <temp> -> rc=0
-FREE #4: 30 bytes (string cleanup)
+FREE #2: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #5: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #6: 12 bytes (string cleanup)
-DECREF: b -> rc=0
-FREE #2: 15 bytes (string cleanup)
-DECREF: a -> rc=0
-FREE #1: 14 bytes (string cleanup)
+FREE #3: 12 bytes (string cleanup)
 DECREF: s -> rc=0
-FREE #3: 20 bytes (string cleanup)
+FREE #1: 20 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 101 bytes
-Freed:     101 bytes
+Allocated: 62 bytes
+Freed:     62 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   0
-Decrefs:   6
+Decrefs:   3
 ```
 
 <!-- test: memory-tracking-chained-interp -->
@@ -1164,50 +1155,35 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #3: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #4: 10 bytes (string buffer)
+MOVE: managed
+ALLOC #1: 11 bytes (string concat)
+ALLOC #2: 12 bytes (string concat)
+ALLOC #3: 13 bytes (string concat)
+DECREF: <temp> -> rc=0
+FREE #1: 11 bytes (string cleanup)
+DECREF: <temp> -> rc=0
+FREE #2: 12 bytes (string cleanup)
+ALLOC #4: 30 bytes (int.toString)
 MOVE: managed
 ALLOC #5: 11 bytes (string concat)
-ALLOC #6: 12 bytes (string concat)
-ALLOC #7: 13 bytes (string concat)
-DECREF: <temp> -> rc=0
-FREE #5: 11 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #6: 12 bytes (string cleanup)
-ALLOC #8: 30 bytes (int.toString)
-ALLOC #9: 10 bytes (string buffer)
-MOVE: managed
-ALLOC #10: 11 bytes (string concat)
 4
 DECREF: <temp> -> rc=0
-FREE #8: 30 bytes (string cleanup)
+FREE #4: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #9: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #10: 11 bytes (string cleanup)
-DECREF: b -> rc=0
-FREE #2: 10 bytes (string cleanup)
-DECREF: a -> rc=0
-FREE #1: 10 bytes (string cleanup)
-DECREF: c -> rc=0
-FREE #3: 10 bytes (string cleanup)
+FREE #5: 11 bytes (string cleanup)
 DECREF: s -> rc=0
-FREE #7: 13 bytes (string cleanup)
-DECREF: d -> rc=0
-FREE #4: 10 bytes (string cleanup)
+FREE #3: 13 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 127 bytes
-Freed:     127 bytes
+Allocated: 77 bytes
+Freed:     77 bytes
 Leaked:    0 bytes
 Moves:     5
 Increfs:   0
-Decrefs:   10
+Decrefs:   5
 ```
 
 <!-- test: memory-tracking-loop-interp -->
@@ -1232,38 +1208,32 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
-ALLOC #1: 10 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 10 bytes (string concat)
-ALLOC #3: 11 bytes (string concat)
+ALLOC #1: 10 bytes (string concat)
+ALLOC #2: 11 bytes (string concat)
 DECREF: s -> rc=0
-FREE #2: 10 bytes (string cleanup)
-ALLOC #4: 12 bytes (string concat)
+FREE #1: 10 bytes (string cleanup)
+ALLOC #3: 12 bytes (string concat)
 DECREF: s -> rc=0
-FREE #3: 11 bytes (string cleanup)
-ALLOC #5: 30 bytes (int.toString)
-ALLOC #6: 10 bytes (string buffer)
+FREE #2: 11 bytes (string cleanup)
+ALLOC #4: 30 bytes (int.toString)
 MOVE: managed
-ALLOC #7: 11 bytes (string concat)
+ALLOC #5: 11 bytes (string concat)
 3
 DECREF: <temp> -> rc=0
-FREE #5: 30 bytes (string cleanup)
+FREE #4: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #6: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #7: 11 bytes (string cleanup)
-DECREF: x -> rc=0
-FREE #1: 10 bytes (string cleanup)
+FREE #5: 11 bytes (string cleanup)
 DECREF: s -> rc=0
-FREE #4: 12 bytes (string cleanup)
+FREE #3: 12 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 94 bytes
-Freed:     94 bytes
+Allocated: 74 bytes
+Freed:     74 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   0
-Decrefs:   7
+Decrefs:   5
 ```
 
 <!-- test: memory-tracking-no-leak-scope-exit -->
@@ -1281,29 +1251,23 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 36 bytes (string buffer)
 MOVE: managed
-ALLOC #2: 30 bytes (int.toString)
-ALLOC #3: 10 bytes (string buffer)
+ALLOC #1: 30 bytes (int.toString)
 MOVE: managed
-ALLOC #4: 12 bytes (string concat)
+ALLOC #2: 12 bytes (string concat)
 27
 DECREF: <temp> -> rc=0
-FREE #2: 30 bytes (string cleanup)
+FREE #1: 30 bytes (string cleanup)
 DECREF: <temp> -> rc=0
-FREE #3: 10 bytes (string cleanup)
-DECREF: <temp> -> rc=0
-FREE #4: 12 bytes (string cleanup)
-DECREF: temp -> rc=0
-FREE #1: 36 bytes (string cleanup)
+FREE #2: 12 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 88 bytes
-Freed:     88 bytes
+Allocated: 42 bytes
+Freed:     42 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   0
-Decrefs:   4
+Decrefs:   2
 ```
 
 <!-- test: toLower -->
