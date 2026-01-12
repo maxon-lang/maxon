@@ -70,6 +70,13 @@ pub const Parser = struct {
         }
     }
 
+    /// Transfer ownership of expr_ptrs to caller, preventing deinit from freeing them
+    pub fn takeExprPtrs(self: *Parser) std.ArrayListUnmanaged(*ast.Expression) {
+        const ptrs = self.expr_ptrs;
+        self.expr_ptrs = .empty;
+        return ptrs;
+    }
+
     pub fn parse(self: *Parser) ParseError!ast.Program {
         var types: std.ArrayListUnmanaged(ast.TypeDecl) = .empty;
         errdefer types.deinit(self.allocator);

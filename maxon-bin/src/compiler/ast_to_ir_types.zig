@@ -246,6 +246,8 @@ pub fn freeValueTypeAllocations(allocator: std.mem.Allocator, vt: ValueType) voi
         },
         .struct_type => |name| {
             // Free allocated monomorphized type names (contain '$')
+            // Note: Only frees monomorphized names to avoid double-free.
+            // Simple struct names are freed by the caller when appropriate.
             if (std.mem.indexOf(u8, name, "$")) |_| {
                 allocator.free(name);
             }
@@ -408,6 +410,7 @@ pub const FuncInfo = struct {
     ir_generated: bool = true, // false for pending lazy-generated methods
     decl_line: u32 = 0,
     decl_column: u32 = 0,
+    is_external: bool = false, // true for external/stdlib functions (param type names are allocated)
 };
 
 /// Pending method info for lazy generation of monomorphized type methods
@@ -720,14 +723,50 @@ pub const SemanticInfo = struct {
         var freed_ptrs = std.AutoHashMapUnmanaged(*const ParamType, void){};
         defer freed_ptrs.deinit(self.allocator);
         var func_iter = self.functions.iterator();
+
         while (func_iter.next()) |entry| {
             if (entry.value_ptr.param_types.len > 0) {
                 const ptr = &entry.value_ptr.param_types[0];
                 if (freed_ptrs.get(ptr) == null) {
                     freed_ptrs.put(self.allocator, ptr, {}) catch {};
-                    // Free nested function type allocations within param_types
-                    for (entry.value_ptr.param_types) |param| {
-                        freeValueTypeAllocations(self.allocator, param.ty);
+
+                    // For external functions, free param type allocations including struct names
+                    if (entry.value_ptr.is_external) {
+                        for (entry.value_ptr.param_types) |param| {
+                            // Free allocated struct type names (all of them for external functions)
+                            switch (param.ty) {
+                                .struct_type => |name| {
+                                    self.allocator.free(name);
+                                },
+                                .error_union_type => |eu| {
+                                    // Free success_struct_type if allocated
+                                    if (eu.success_struct_type) |name| {
+                                        if (std.mem.indexOf(u8, name, "$")) |_| {
+                                            self.allocator.free(name);
+                                        }
+                                    }
+                                },
+                                .function_type => |ft| {
+                                    // Free nested function type allocations
+                                    for (ft.param_types) |param_vt| {
+                                        freeValueTypeAllocations(self.allocator, param_vt);
+                                    }
+                                    if (ft.param_types.len > 0) {
+                                        self.allocator.free(ft.param_types);
+                                    }
+                                    if (ft.return_type) |rt| {
+                                        freeValueTypeAllocations(self.allocator, rt.*);
+                                        self.allocator.destroy(@constCast(rt));
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                    } else {
+                        // For user functions, only free nested allocations (not struct names)
+                        for (entry.value_ptr.param_types) |param| {
+                            freeValueTypeAllocations(self.allocator, param.ty);
+                        }
                     }
                     self.allocator.free(entry.value_ptr.param_types);
                 }

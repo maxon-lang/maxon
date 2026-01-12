@@ -216,18 +216,15 @@ pub const Analyzer = struct {
     /// Returns allocated markdown string that caller must free, or null if no hover info
     pub fn getHoverInfo(self: *Analyzer, uri: []const u8, line: u32, character: u32) ?[]const u8 {
         const doc = self.documents.get(uri) orelse {
-            std.debug.print("DEBUG: document not found\n", .{});
             return null;
         };
 
         // Check if the position is inside a comment - if so, return null
         if (isPositionInComment(doc.content, line, character)) {
-            std.debug.print("DEBUG: position in comment\n", .{});
             return null;
         }
 
         const word = getWordAtPosition(doc.content, line, character) orelse {
-            std.debug.print("DEBUG: getWordAtPosition returned null\n", .{});
             return null;
         };
 
@@ -315,13 +312,11 @@ pub const Analyzer = struct {
 
                 // Look up the receiver's type
                 const receiver_var = info.findVariable(receiver_name) orelse {
-                    std.debug.print("DEBUG: findVariable failed for '{s}'\n", .{receiver_name});
                     return null;
                 };
 
                 // Get the type name for method lookup
                 const type_name = self.getTypeNameForMethodLookup(receiver_var.ty) orelse {
-                    std.debug.print("DEBUG: getTypeNameForMethodLookup failed for type: {any}\n", .{receiver_var.ty});
                     return null;
                 };
 
@@ -329,13 +324,10 @@ pub const Analyzer = struct {
                 var mangled_buf: [512]u8 = undefined;
                 const mangled_name = std.fmt.bufPrint(&mangled_buf, "{s}${s}", .{ type_name, method_name }) catch return null;
 
-                std.debug.print("DEBUG: Looking up mangled name '{s}'\n", .{mangled_name});
                 if (info.functions.get(mangled_name)) |func_info| {
-                    std.debug.print("DEBUG: Found function info\n", .{});
                     return self.formatFunctionHover(method_name, func_info);
                 }
 
-                std.debug.print("DEBUG: Function '{s}' not found in functions map\n", .{mangled_name});
                 return null;
             }
         }
@@ -1738,7 +1730,6 @@ fn getWordAtPosition(content: []const u8, line: u32, character: u32) ?[]const u8
         if (current_line == line) {
             // Found the line, now extract the word at character position
             if (character >= line_content.len) {
-                std.debug.print("DEBUG: character >= len\n", .{});
                 return null;
             }
 
@@ -2223,8 +2214,6 @@ test "analyzer hover shows stdlib Array.push with doc comment" {
     // "push" starts at column 8
     const hover = analyzer.getHoverInfo("file:///test.maxon", 2, 8);
     defer if (hover) |h| allocator.free(h);
-
-    std.debug.print("\n[UNIT_TEST] hover for stdlib Array.push: {s}\n", .{hover orelse "(null)"});
 
     try std.testing.expect(hover != null);
     const content = hover.?;

@@ -1,54 +1,59 @@
 const std = @import("std");
 const types = @import("types.zig");
 const transport = @import("transport.zig");
+const test_transport = @import("test_transport.zig");
 const analyzer = @import("analyzer.zig");
 
 // ============================================================================
 // LSP Server
 // Main server loop handling JSON-RPC messages
+// Generic over transport type to support both stdio and testing transports
 // ============================================================================
 
-pub const Server = struct {
-    allocator: std.mem.Allocator,
-    transport: transport.Transport,
-    analyzer: analyzer.Analyzer,
-    initialized: bool = false,
-    shutdown_received: bool = false, // Server received shutdown request
-    exit_received: bool = false, // Server received exit notification
+pub fn Server(comptime TransportType: type) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        transport: TransportType,
+        analyzer: analyzer.Analyzer,
+        initialized: bool = false,
+        shutdown_received: bool = false, // Server received shutdown request
+        exit_received: bool = false, // Server received exit notification
 
-    pub fn init(allocator: std.mem.Allocator) Server {
-        return .{
-            .allocator = allocator,
-            .transport = transport.Transport.init(allocator),
-            .analyzer = analyzer.Analyzer.init(allocator),
-        };
-    }
+        const Self = @This();
 
-    pub fn deinit(self: *Server) void {
-        self.analyzer.deinit();
-    }
-
-    /// Run the main server loop
-    pub fn run(self: *Server) !void {
-        while (!self.exit_received) {
-            // Read next message
-            var parsed = self.transport.readMessage() catch |err| {
-                if (err == error.EndOfStream) {
-                    break;
-                }
-                continue;
-            };
-            defer parsed.deinit();
-
-            // Handle the message
-            self.handleMessage(parsed.value) catch |err| {
-                std.debug.print("Error handling message: {}\n", .{err});
+        pub fn init(allocator: std.mem.Allocator, trans: TransportType) Self {
+            return .{
+                .allocator = allocator,
+                .transport = trans,
+                .analyzer = analyzer.Analyzer.init(allocator),
             };
         }
-    }
 
-    /// Handle a single JSON-RPC message
-    fn handleMessage(self: *Server, msg: std.json.Value) !void {
+        pub fn deinit(self: *Self) void {
+            self.analyzer.deinit();
+        }
+
+        /// Run the main server loop
+        pub fn run(self: *Self) !void {
+            while (!self.exit_received) {
+                // Read next message
+                var parsed = self.transport.readMessage() catch |err| {
+                    if (err == error.EndOfStream) {
+                        break;
+                    }
+                    continue;
+                };
+                defer parsed.deinit();
+
+                // Handle the message
+                self.handleMessage(parsed.value) catch |err| {
+                    std.debug.print("Error handling message: {}\n", .{err});
+                };
+            }
+        }
+
+        /// Handle a single JSON-RPC message
+        pub fn handleMessage(self: *Self, msg: std.json.Value) !void {
         const obj = switch (msg) {
             .object => |o| o,
             else => return,
@@ -101,7 +106,7 @@ pub const Server = struct {
     }
 
     /// Handle initialize request
-    fn handleInitialize(self: *Server, id: ?types.Request.Id, _: std.json.ObjectMap) !void {
+            fn handleInitialize(self: *Self, id: ?types.Request.Id, _: std.json.ObjectMap) !void {
         self.initialized = true;
 
         const result = types.InitializeResult{
@@ -137,13 +142,13 @@ pub const Server = struct {
     }
 
     /// Handle shutdown request
-    fn handleShutdown(self: *Server, id: ?types.Request.Id) !void {
+            fn handleShutdown(self: *Self, id: ?types.Request.Id) !void {
         self.shutdown_received = true;
         try self.transport.writeResult(id, null);
     }
 
     /// Handle textDocument/didOpen notification
-    fn handleDidOpen(self: *Server, msg: std.json.ObjectMap) !void {
+            fn handleDidOpen(self: *Self, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse return;
         const text_doc = transport.getObject(params, "textDocument") orelse return;
 
@@ -155,7 +160,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/didChange notification
-    fn handleDidChange(self: *Server, msg: std.json.ObjectMap) !void {
+    fn handleDidChange(self: *Self, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse return;
         const text_doc = transport.getObject(params, "textDocument") orelse return;
 
@@ -177,7 +182,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/didClose notification
-    fn handleDidClose(self: *Server, msg: std.json.ObjectMap) !void {
+    fn handleDidClose(self: *Self, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse return;
         const text_doc = transport.getObject(params, "textDocument") orelse return;
         const uri = transport.getString(text_doc, "uri") orelse return;
@@ -186,7 +191,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/completion request
-    fn handleCompletion(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleCompletion(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, types.CompletionList{ .items = &.{} });
             return;
@@ -231,7 +236,7 @@ pub const Server = struct {
     }
 
     /// Get completions at the given position
-    fn getCompletions(self: *Server, uri: []const u8, line: u32, character: u32, trigger_char: ?[]const u8) ![]const types.CompletionItem {
+    fn getCompletions(self: *Self, uri: []const u8, line: u32, character: u32, trigger_char: ?[]const u8) ![]const types.CompletionItem {
         // If triggered by '.', we need to find what's before the dot
         if (trigger_char != null and std.mem.eql(u8, trigger_char.?, ".")) {
             // Find the expression before the dot
@@ -263,7 +268,7 @@ pub const Server = struct {
     }
 
     /// Get the expression text before the dot at the given position
-    fn getExpressionBeforeDot(self: *Server, uri: []const u8, line: u32, character: u32) !?[]const u8 {
+    fn getExpressionBeforeDot(self: *Self, uri: []const u8, line: u32, character: u32) !?[]const u8 {
         const doc = self.analyzer.documents.get(uri) orelse return null;
 
         // Find the line
@@ -299,7 +304,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/hover request
-    fn handleHover(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleHover(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, null);
             return;
@@ -334,7 +339,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/definition request
-    fn handleDefinition(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleDefinition(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, null);
             return;
@@ -373,7 +378,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/documentSymbol request
-    fn handleDocumentSymbol(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleDocumentSymbol(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, @as(?[]const types.SymbolInformation, null));
             return;
@@ -396,7 +401,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/formatting request
-    fn handleFormatting(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleFormatting(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, @as(?[]const types.TextEdit, null));
             return;
@@ -459,7 +464,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/foldingRange request
-    fn handleFoldingRange(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleFoldingRange(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, @as(?[]const types.FoldingRange, null));
             return;
@@ -482,7 +487,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/linkedEditingRange request
-    fn handleLinkedEditingRange(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleLinkedEditingRange(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, @as(?types.LinkedEditingRanges, null));
             return;
@@ -515,7 +520,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/rename request
-    fn handleRename(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleRename(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, @as(?types.WorkspaceEdit, null));
             return;
@@ -563,7 +568,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/codeAction request
-    fn handleCodeAction(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleCodeAction(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, @as([]const types.CodeAction, &.{}));
             return;
@@ -600,7 +605,7 @@ pub const Server = struct {
     }
 
     /// Handle textDocument/semanticTokens/full request
-    fn handleSemanticTokensFull(self: *Server, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
+    fn handleSemanticTokensFull(self: *Self, id: ?types.Request.Id, msg: std.json.ObjectMap) !void {
         const params = transport.getObject(msg, "params") orelse {
             try self.transport.writeResult(id, @as(?types.SemanticTokens, null));
             return;
@@ -626,11 +631,16 @@ pub const Server = struct {
             try self.transport.writeResult(id, @as(?types.SemanticTokens, null));
         }
     }
-};
+    };
+}
 
-/// Entry point for the LSP server
+// Type aliases for convenience
+pub const StdioServer = Server(transport.Transport);
+pub const TestServer = Server(test_transport.TestTransport);
+
+/// Entry point for the LSP server (uses stdio transport)
 pub fn run(allocator: std.mem.Allocator) !void {
-    var server = Server.init(allocator);
+    var server = StdioServer.init(allocator, transport.Transport.init(allocator));
     defer server.deinit();
     try server.run();
 }

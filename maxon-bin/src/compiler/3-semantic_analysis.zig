@@ -3,6 +3,7 @@ const ast = @import("ast.zig");
 const types = @import("ast_to_ir_types.zig");
 const ir = @import("ir.zig");
 const intrinsics_registry = @import("intrinsics_registry.zig");
+const ast_to_ir = @import("4-ast_to_ir.zig");
 
 // Re-export types for external use
 pub const SemanticInfo = types.SemanticInfo;
@@ -280,6 +281,10 @@ pub const SemanticAnalyzer = struct {
 
     // Track temporary string allocations during type checking
     allocated_type_strings: std.ArrayListUnmanaged([]const u8),
+    // Track allocated external function names (need to be freed later)
+    allocated_func_names: std.ArrayListUnmanaged([]const u8),
+    // Track allocated external return type names (need to be freed later)
+    allocated_return_type_names: std.ArrayListUnmanaged([]const u8),
 
     // Current context for variable collection
     current_func_name: ?[]const u8 = null,
@@ -299,6 +304,8 @@ pub const SemanticAnalyzer = struct {
             .generic_params = .{},
             .captured_vars = .{},
             .allocated_type_strings = .{},
+            .allocated_func_names = .{},
+            .allocated_return_type_names = .{},
             .mutation_analyzer = MutationAnalyzer.init(allocator),
         };
     }
@@ -316,6 +323,14 @@ pub const SemanticAnalyzer = struct {
             self.allocator.free(str);
         }
         self.allocated_type_strings.deinit(self.allocator);
+        for (self.allocated_func_names.items) |str| {
+            self.allocator.free(str);
+        }
+        self.allocated_func_names.deinit(self.allocator);
+        for (self.allocated_return_type_names.items) |str| {
+            self.allocator.free(str);
+        }
+        self.allocated_return_type_names.deinit(self.allocator);
     }
 
     // ------------------------------------------------------------------------
@@ -477,6 +492,22 @@ pub const SemanticAnalyzer = struct {
     }
 
     fn registerExternalFunction(self: *SemanticAnalyzer, ext_func: ExternalFuncSignature) !void {
+        // Track allocated function name (will be transferred to SemanticInfo)
+        try self.allocated_func_names.append(self.allocator, ext_func.name);
+
+        // Track allocated return type name if present
+        if (ext_func.return_type_name) |rtn| {
+            try self.allocated_return_type_names.append(self.allocator, rtn);
+        }
+
+        // Check if this replaces an existing external function - if so, free the old param_types
+        if (self.func_map.fetchRemove(ext_func.name)) |kv| {
+            const old_func = kv.value;
+            if (old_func.is_external and old_func.param_types.len > 0) {
+                ast_to_ir.freeParamTypes(self.allocator, old_func.param_types);
+            }
+        }
+
         try self.func_map.put(self.allocator, ext_func.name, .{
             .return_type = ext_func.return_type,
             .return_type_name = ext_func.return_type_name,
@@ -484,6 +515,7 @@ pub const SemanticAnalyzer = struct {
             .param_types = ext_func.param_types,
             .doc_comment = ext_func.doc_comment,
             .ir_generated = true,
+            .is_external = true, // Mark as external so param type names get freed
         });
     }
 
@@ -595,6 +627,14 @@ pub const SemanticAnalyzer = struct {
         const param_types = try self.buildParamTypes(decl.params);
         const return_info: ReturnInfo = if (decl.return_type) |rt| try self.typeExprToReturnInfo(rt) else .{ .ir_type = .void, .type_name = null, .value_type = null };
 
+        // If replacing an external function, free its param type allocations
+        if (self.func_map.fetchRemove(decl.name)) |kv| {
+            const old_func = kv.value;
+            if (old_func.is_external and old_func.param_types.len > 0) {
+                ast_to_ir.freeParamTypes(self.allocator, old_func.param_types);
+            }
+        }
+
         try self.func_map.put(self.allocator, decl.name, .{
             .return_type = return_info.ir_type,
             .return_type_name = return_info.type_name,
@@ -614,6 +654,14 @@ pub const SemanticAnalyzer = struct {
         // Build mangled method name: TypeName$methodName
         const mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
         try self.allocated_type_strings.append(self.allocator, mangled);
+
+        // If replacing an external function, free its param type allocations
+        if (self.func_map.fetchRemove(mangled)) |kv| {
+            const old_func = kv.value;
+            if (old_func.is_external and old_func.param_types.len > 0) {
+                ast_to_ir.freeParamTypes(self.allocator, old_func.param_types);
+            }
+        }
 
         try self.func_map.put(self.allocator, mangled, .{
             .return_type = return_info.ir_type,
@@ -1455,6 +1503,8 @@ pub const SemanticAnalyzer = struct {
             .types = self.type_map,
             .interfaces = self.interface_map,
             .allocated_type_strings = self.allocated_type_strings,
+            .allocated_func_names = self.allocated_func_names,
+            .allocated_return_type_names = self.allocated_return_type_names,
         };
 
         // Clear our maps to prevent double-free
@@ -1462,6 +1512,8 @@ pub const SemanticAnalyzer = struct {
         self.type_map = .{};
         self.interface_map = .{};
         self.allocated_type_strings = .{};
+        self.allocated_func_names = .{};
+        self.allocated_return_type_names = .{};
 
         return result;
     }

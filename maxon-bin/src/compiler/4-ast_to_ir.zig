@@ -6398,7 +6398,7 @@ pub const AstToIr = struct {
         // Allocate new buffer with header: total_len + 1 for null terminator
         const one = try self.func().emitConstI64(1);
         const data_size = try self.func().emitBinaryOp(.add, total_len, one, .i64);
-        const new_buffer = try array_helpers.emitAllocRefcountedBuffer(self,data_size, "string concat");
+        const new_buffer = try array_helpers.emitAllocRefcountedBuffer(self, data_size, "string concat");
 
         // Copy first string
         const a_buf_ptr = try self.func().emitGetFieldPtr(a_managed, 0);
@@ -6426,7 +6426,7 @@ pub const AstToIr = struct {
     fn emitIntToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Allocate buffer with header (22 bytes max: sign + 20 digits + null)
         const buffer_size = try self.func().emitConstI64(22);
-        const buffer = try array_helpers.emitAllocRefcountedBuffer(self,buffer_size, "int.toString");
+        const buffer = try array_helpers.emitAllocRefcountedBuffer(self, buffer_size, "int.toString");
 
         // Call __runtime_int_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -6446,7 +6446,7 @@ pub const AstToIr = struct {
     fn emitFloatToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Allocate buffer with header (32 bytes should be enough for most floats)
         const buffer_size = try self.func().emitConstI64(32);
-        const buffer = try array_helpers.emitAllocRefcountedBuffer(self,buffer_size, "float.toString");
+        const buffer = try array_helpers.emitAllocRefcountedBuffer(self, buffer_size, "float.toString");
 
         // Call __runtime_float_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -6465,7 +6465,7 @@ pub const AstToIr = struct {
     fn emitBoolToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
         // Create a buffer with header (6 bytes max: "false\0")
         const buffer_size = try self.func().emitConstI64(6);
-        const buffer = try array_helpers.emitAllocRefcountedBuffer(self,buffer_size, "bool.toString");
+        const buffer = try array_helpers.emitAllocRefcountedBuffer(self, buffer_size, "bool.toString");
 
         // Call __runtime_bool_to_string(buffer, value) -> returns length
         var args = try self.allocator.alloc(ir.Value, 2);
@@ -9540,8 +9540,9 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
         // Extract parameter types (including names and default values for named args)
         const param_types = try allocator.alloc(ParamType, func.params.len);
         for (func.params, 0..) |param, i| {
+            const vt = getValueTypeFromTypeExprForParam(allocator, param.type_expr);
             param_types[i] = .{
-                .ty = getValueTypeFromTypeExprForParam(allocator, param.type_expr),
+                .ty = vt,
                 .name = param.name,
                 .default_value = param.default_value,
             };
@@ -9565,6 +9566,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
     for (program.types) |type_decl| {
         for (type_decl.methods) |method| {
             const mangled_name = try std.fmt.allocPrint(allocator, "{s}${s}", .{ type_decl.name, method.name });
+            errdefer allocator.free(mangled_name);
 
             const return_type: ir.Type = if (method.return_type) |rt|
                 getIrTypeFromTypeExpr(rt)
@@ -9637,8 +9639,9 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 param_types[0] = .{ .ty = .{ .struct_type = self_type_name }, .name = "self" };
             }
             for (method.params, 0..) |param, i| {
+                const vt = getValueTypeFromTypeExprForParam(allocator, param.type_expr);
                 param_types[i + extra_params] = .{
-                    .ty = getValueTypeFromTypeExprForParam(allocator, param.type_expr),
+                    .ty = vt,
                     .name = param.name,
                     .default_value = param.default_value,
                 };
@@ -9748,8 +9751,10 @@ fn getStructNameFromTypeExpr(
 }
 
 /// Helper: get ValueType from TypeExpr for function parameters
-/// Note: For struct types (simple and generic), allocates a copy of the name for consistent ownership.
-/// Callers must free the struct_type string using freeParamTypes.
+/// OWNERSHIP: Allocates copies of all struct type names for uniform ownership.
+///            This ensures callers can consistently free all param types.
+/// CLEANUP: Caller MUST free using freeParamTypes() or freeValueTypeAllocations()
+///          Failure to free results in memory leaks.
 fn getValueTypeFromTypeExprForParam(allocator: std.mem.Allocator, te: ast.TypeExpr) ValueType {
     return switch (te) {
         .simple => |name| blk: {

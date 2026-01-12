@@ -695,3 +695,8 @@ fn runLspServer(allocator: std.mem.Allocator) void {
     // can hang on Windows when stdout/stderr pipes are closed by the client
     std.process.exit(0);
 }
+
+// Include LSP in-process tests in unit tests
+test {
+    _ = @import("lsp/lsp_tests.zig");
+}

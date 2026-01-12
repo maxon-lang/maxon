@@ -141,6 +141,22 @@ const FrontendResult = struct {
     }
 };
 
+/// Free external function signature allocations
+fn freeExternalFuncs(allocator: std.mem.Allocator, funcs: []const ast_to_ir.ExternalFuncSignature) void {
+    for (funcs) |sig| {
+        allocator.free(sig.name);
+        if (sig.param_types.len > 0) {
+            ast_to_ir.freeParamTypes(allocator, sig.param_types);
+        }
+        if (sig.return_type_name) |rtn| {
+            allocator.free(rtn);
+        }
+        if (sig.return_value_type) |rvt| {
+            ast_to_ir.freeValueTypeAllocations(allocator, rvt);
+        }
+    }
+}
+
 /// Run the frontend pipeline: lex -> parse -> (metadata/semantic/IR based on mode)
 fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: PipelineOptions) !PipelineResult {
     // 1 - Lex
@@ -214,17 +230,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
             var external_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
             defer external_types.deinit(allocator);
             var external_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
-            defer {
-                for (external_funcs.items) |sig| {
-                    allocator.free(sig.name);
-                    if (sig.param_types.len > 0) ast_to_ir.freeParamTypes(allocator, sig.param_types);
-                    if (sig.return_type_name) |rtn| allocator.free(rtn);
-                    if (sig.return_value_type) |rvt| {
-                        ast_to_ir.freeValueTypeAllocations(allocator, rvt);
-                    }
-                }
-                external_funcs.deinit(allocator);
-            }
+            defer external_funcs.deinit(allocator);
             var external_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
             defer external_interfaces.deinit(allocator);
 
@@ -253,6 +259,9 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
             var analyzer = semantic_analysis.SemanticAnalyzer.init(allocator);
             defer analyzer.deinit();
 
+            // If analyze fails, free the external func data
+            errdefer freeExternalFuncs(allocator, external_funcs.items);
+
             var semantic_info = analyzer.analyze(
                 program,
                 external_types.items,
@@ -260,8 +269,12 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
                 external_interfaces.items,
             ) catch return error.SemanticError;
 
+            // Note: external_funcs ownership has been transferred to semantic_info
+            // SemanticInfo.deinit() will free the allocated names and param_types
+
             semantic_info.stdlib_sources = options.stdlib_sources;
             semantic_info.program = program; // Transfer ownership to SemanticInfo
+            semantic_info.expr_ptrs = parser.takeExprPtrs(); // Transfer expr ownership
 
             return .{ .semantic_only = semantic_info };
         },
@@ -375,57 +388,36 @@ pub fn compileToIrWithResult(source: []const u8, allocator: std.mem.Allocator, r
 // Multi-file Compilation Helpers
 // ============================================================================
 
-/// Collected metadata from parsing multiple source files
+/// Collected metadata from parsing multiple source files.
+/// All allocations use the provided arena allocator - no manual cleanup needed.
 const ParsedSourcesInfo = struct {
     types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo),
     funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature),
     interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo),
     enums: std.ArrayListUnmanaged(ast_to_ir.ExternalEnumInfo),
-    phase1_arena: std.heap.ArenaAllocator,
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator, // Arena allocator - caller owns the arena
 
-    fn init(allocator: std.mem.Allocator) ParsedSourcesInfo {
+    fn init(arena: std.mem.Allocator) ParsedSourcesInfo {
         return .{
             .types = .empty,
             .funcs = .empty,
             .interfaces = .empty,
             .enums = .empty,
-            .phase1_arena = std.heap.ArenaAllocator.init(allocator),
-            .allocator = allocator,
+            .arena = arena,
         };
     }
 
-    fn deinit(self: *ParsedSourcesInfo) void {
-        self.types.deinit(self.allocator);
-
-        for (self.funcs.items) |sig| {
-            self.allocator.free(sig.name);
-            if (sig.param_types.len > 0) {
-                ast_to_ir.freeParamTypes(self.allocator, sig.param_types);
-            }
-            if (sig.return_type_name) |rtn| {
-                self.allocator.free(rtn);
-            }
-            if (sig.return_value_type) |rvt| {
-                ast_to_ir.freeValueTypeAllocations(self.allocator, rvt);
-            }
-        }
-        self.funcs.deinit(self.allocator);
-
-        self.interfaces.deinit(self.allocator);
-        self.enums.deinit(self.allocator);
-        self.phase1_arena.deinit();
-    }
+    // No deinit needed - arena handles all cleanup
 
     /// Filter to only exported functions
     fn getExportedFuncs(self: *ParsedSourcesInfo) ![]const ast_to_ir.ExternalFuncSignature {
         var exported: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
         for (self.funcs.items) |func| {
             if (func.is_exported) {
-                try exported.append(self.allocator, func);
+                try exported.append(self.arena, func);
             }
         }
-        return exported.toOwnedSlice(self.allocator);
+        return exported.toOwnedSlice(self.arena);
     }
 
     /// Filter to only exported types
@@ -433,28 +425,29 @@ const ParsedSourcesInfo = struct {
         var exported: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
         for (self.types.items) |t| {
             if (t.is_exported) {
-                try exported.append(self.allocator, t);
+                try exported.append(self.arena, t);
             }
         }
-        return exported.toOwnedSlice(self.allocator);
+        return exported.toOwnedSlice(self.arena);
     }
 };
 
 /// Parse sources and extract type/function/interface/enum info.
+/// All allocations use the arena in ParsedSourcesInfo.
 /// Parse errors are printed immediately. Returns ParseError if any file failed to parse.
 fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, result: ?*CompileResult) !void {
-    const phase1_allocator = info.phase1_arena.allocator();
+    const arena = info.arena;
     var had_parse_error = false;
 
     for (sources) |source| {
-        // Parse using phase1_arena so AST stays alive (interfaces need AST pointers)
+        // Parse using arena so AST stays alive (interfaces need AST pointers)
         var lexer = Lexer.init(source.content);
-        const tokens = lexer.tokenize(phase1_allocator) catch {
+        const tokens = lexer.tokenize(arena) catch {
             had_parse_error = true;
             continue;
         };
 
-        var parser = Parser.initWithFile(tokens, phase1_allocator, source.path);
+        var parser = Parser.initWithFile(tokens, arena, source.path);
         const program = parser.parse() catch {
             // Capture error info for last parse error
             if (result) |res| {
@@ -467,34 +460,34 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
             continue;
         };
 
-        // Extract metadata using main allocator
-        const type_info = ast_to_ir.extractTypeInfo(program, info.allocator) catch continue;
+        // Extract metadata using arena - no need to free intermediate slices
+        const type_info = ast_to_ir.extractTypeInfo(program, arena) catch continue;
         for (type_info) |t| {
             var t_with_path = t;
             t_with_path.source_path = source.path;
-            try info.types.append(info.allocator, t_with_path);
+            try info.types.append(arena, t_with_path);
         }
-        info.allocator.free(type_info);
+        // No free needed - arena handles it
 
-        const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, info.allocator) catch continue;
+        const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, arena) catch continue;
         for (func_sigs) |sig| {
             var sig_with_path = sig;
             sig_with_path.source_path = source.path;
-            try info.funcs.append(info.allocator, sig_with_path);
+            try info.funcs.append(arena, sig_with_path);
         }
-        info.allocator.free(func_sigs);
+        // No free needed - arena handles it
 
-        const iface_info = ast_to_ir.extractInterfaceInfo(program, info.allocator) catch continue;
+        const iface_info = ast_to_ir.extractInterfaceInfo(program, arena) catch continue;
         for (iface_info) |iface| {
-            try info.interfaces.append(info.allocator, iface);
+            try info.interfaces.append(arena, iface);
         }
-        info.allocator.free(iface_info);
+        // No free needed - arena handles it
 
-        const enum_decls = ast_to_ir.extractEnumDecls(program, info.allocator, source.path) catch continue;
+        const enum_decls = ast_to_ir.extractEnumDecls(program, arena, source.path) catch continue;
         for (enum_decls) |enum_decl| {
-            try info.enums.append(info.allocator, enum_decl);
+            try info.enums.append(arena, enum_decl);
         }
-        info.allocator.free(enum_decls);
+        // No free needed - arena handles it
     }
 
     if (had_parse_error) {
@@ -506,14 +499,19 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
 fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, result: *CompileResult) ![]const u8 {
     if (sources.len == 0) return error.NoSignatures;
 
+    // Per-compilation arena for all intermediate data
+    var compile_arena = std.heap.ArenaAllocator.init(allocator);
+    defer compile_arena.deinit();
+    const arena = compile_arena.allocator();
+
     // Parse all sources except the last one (user code)
-    var info = ParsedSourcesInfo.init(allocator);
-    defer info.deinit();
+    var info = ParsedSourcesInfo.init(arena);
+    // No defer info.deinit() needed - arena handles cleanup
     try parseSourcesForMetadata(&info, sources[0 .. sources.len - 1], null);
 
     // Compile the last source (user code) with all types/funcs available
     const last_source = sources[sources.len - 1];
-    var pipeline_result = runFrontend(last_source.content, allocator, .{
+    var pipeline_result = runFrontend(last_source.content, arena, .{
         .mode = .full_ir,
         .source_file = last_source.path,
         .result = result,
@@ -524,12 +522,13 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     }) catch {
         return error.IrError;
     };
-    defer pipeline_result.deinit();
+    // No defer pipeline_result.deinit() needed - arena handles cleanup
 
-    optimizer.eliminateDeadFunctions(&pipeline_result.full_ir.ir_module, allocator) catch {
+    optimizer.eliminateDeadFunctions(&pipeline_result.full_ir.ir_module, arena) catch {
         return error.IrError;
     };
 
+    // IR string must use parent allocator since it's returned
     const ir_string = pipeline_result.full_ir.ir_module.printToString(allocator) catch {
         return error.WriteError;
     };
@@ -597,25 +596,32 @@ pub fn compileMultiple(
 ) !void {
     if (sources.len == 0) return;
 
-    // Phase 1: Parse all sources and collect metadata
-    var info = ParsedSourcesInfo.init(allocator);
-    defer info.deinit();
+    // Per-compilation arena for all intermediate data (metadata, func signatures, etc.)
+    // This eliminates complex manual cleanup and prevents leaks on error paths.
+    var compile_arena = std.heap.ArenaAllocator.init(allocator);
+    defer compile_arena.deinit();
+    const arena = compile_arena.allocator();
+
+    // Phase 1: Parse all sources and collect metadata (uses arena)
+    var info = ParsedSourcesInfo.init(arena);
+    // No defer info.deinit() needed - arena handles all cleanup
     try parseSourcesForMetadata(&info, sources, result);
 
     // Phase 2: Filter to exported symbols for cross-file visibility
     const exported_funcs = try info.getExportedFuncs();
-    defer allocator.free(exported_funcs);
+    // No defer free needed - arena handles it
     const exported_types = try info.getExportedTypes();
-    defer allocator.free(exported_types);
+    // No defer free needed - arena handles it
 
     // Phase 3: Compile and merge all sources
-    var merged: ?FrontendResult = null;
-    defer if (merged) |*m| m.deinit();
+    // IR modules use arena - merged at the end, then codegen uses parent allocator for output
+    var merged_module: ?ir.Module = null;
+    // No defer needed - arena handles IR module cleanup
 
     for (sources) |source| {
         // Pass all enums to all sources. Internal enums (like SlotState in Map.maxon)
         // need to be visible when user code instantiates generic types that use them.
-        const pipeline_result = try runFrontend(source.content, allocator, .{
+        const pipeline_result = try runFrontend(source.content, arena, .{
             .mode = .full_ir,
             .source_file = source.path,
             .result = result,
@@ -628,17 +634,17 @@ pub fn compileMultiple(
 
         var frontend = pipeline_result.full_ir;
 
-        if (merged) |*m| {
-            try m.ir_module.merge(&frontend.ir_module);
-            frontend.deinit();
+        if (merged_module) |*m| {
+            try m.merge(&frontend.ir_module);
+            // No frontend.deinit() needed - arena handles cleanup
         } else {
-            merged = frontend;
+            merged_module = frontend.ir_module;
         }
     }
 
-    const final_module = &merged.?.ir_module;
+    const final_module = &merged_module.?;
 
-    optimizer.eliminateDeadFunctions(final_module, allocator) catch {
+    optimizer.eliminateDeadFunctions(final_module, arena) catch {
         return error.IrError;
     };
 
@@ -647,6 +653,7 @@ pub fn compileMultiple(
     }
 
     debug.log("Generating x86-64 code from merged IR", .{});
+    // Codegen output uses parent allocator since it's passed to PE writer
     const codegen_result = ir_codegen.generate(final_module.*, allocator, .{
         .track_memory = options.track_memory,
     }) catch |err| {
@@ -695,6 +702,13 @@ pub fn analyzeForLSP(
 
     // Collect stdlib source content (ownership transfers to runFrontend)
     var stdlib_sources = try allocator.alloc([]const u8, stdlib_modules.len);
+    errdefer {
+        // If runFrontendForSemanticOnly fails, free the stdlib sources we collected
+        for (stdlib_sources) |src| {
+            allocator.free(src);
+        }
+        allocator.free(stdlib_sources);
+    }
     for (stdlib_modules, 0..) |mod, i| {
         stdlib_sources[i] = mod.content;
     }
@@ -722,7 +736,7 @@ fn runFrontendForSemanticOnly(
         try std.mem.concat(allocator, u8, &.{ source, "\n" })
     else
         try allocator.dupe(u8, source);
-    // Don't defer free - ownership transfers to SemanticInfo
+    errdefer allocator.free(user_source);
 
     // Call runFrontend in semantic_only mode - it handles all stdlib parsing internally
     var result = try runFrontend(user_source, allocator, .{
@@ -747,26 +761,34 @@ pub fn findStdlibPath(allocator: std.mem.Allocator) ![]const u8 {
     const exe_dir = std.fs.path.dirname(exe_path) orelse return error.StdlibNotFound;
 
     // Try paths in order of preference
-    const paths_to_try = [_][]const []const u8{
-        // Development layout: exe is at maxon-bin/zig-out/bin/, stdlib at maxon/stdlib
-        &.{ exe_dir, "..", "..", "..", "stdlib" },
-        // Alternative dev layout: exe is at zig-out/bin/, stdlib at ../stdlib
-        &.{ exe_dir, "..", "..", "stdlib" },
-        // Alternative dev layout: exe is at bin/, stdlib at ../stdlib
-        &.{ exe_dir, "..", "stdlib" },
-        // Installed layout: stdlib next to executable
-        &.{ exe_dir, "stdlib" },
-    };
+    const up_levels = [_]usize{ 4, 3, 2, 1, 0 }; // Number of levels to go up from exe_dir
 
-    for (paths_to_try) |path_parts| {
-        const path = std.fs.path.join(allocator, path_parts) catch continue;
-        // Check if directory exists by trying to open it
-        var dir = std.fs.cwd().openDir(path, .{}) catch {
-            allocator.free(path);
-            continue;
-        };
+    for (up_levels) |levels| {
+        // Build path by going up 'levels' directories, then down into stdlib
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&path_buf);
+        const writer = fbs.writer();
+
+        // Start with exe_dir
+        writer.writeAll(exe_dir) catch continue;
+
+        // Go up 'levels' directories
+        var i: usize = 0;
+        while (i < levels) : (i += 1) {
+            writer.writeAll(std.fs.path.sep_str) catch continue;
+            writer.writeAll("..") catch continue;
+        }
+
+        // Add stdlib
+        writer.writeAll(std.fs.path.sep_str) catch continue;
+        writer.writeAll("stdlib") catch continue;
+
+        const path = fbs.getWritten();
+
+        // Try to open the directory
+        var dir = std.fs.cwd().openDir(path, .{}) catch continue;
         dir.close();
-        return path;
+        return allocator.dupe(u8, path);
     }
 
     return error.StdlibNotFound;
