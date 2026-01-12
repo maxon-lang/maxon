@@ -699,4 +699,5 @@ fn runLspServer(allocator: std.mem.Allocator) void {
 // Include LSP in-process tests in unit tests
 test {
     _ = @import("lsp/lsp_tests.zig");
+    _ = @import("compiler/optimizer_tests.zig");
 }

@@ -89,6 +89,14 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Add Zydis C library for disassembly (same as main exe)
+    unit_tests.addCSourceFile(.{
+        .file = b.path("src/vendor/zydis/Zydis.c"),
+        .flags = &.{"-DZYDIS_STATIC_BUILD"},
+    });
+    unit_tests.addIncludePath(b.path("src/vendor/zydis"));
+    unit_tests.linkLibC();
+
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     const unit_test_step = b.step("unit-test", "Run zig unit tests");

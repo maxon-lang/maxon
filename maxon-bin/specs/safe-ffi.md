@@ -1,6 +1,6 @@
 ---
 feature: safe-ffi
-status: experimental
+status: draft
 keywords: [extern, ffi, foreign-function, subprocess, isolation, safe]
 category: interop
 ---
