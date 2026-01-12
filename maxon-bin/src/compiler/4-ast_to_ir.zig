@@ -4978,7 +4978,7 @@ pub const AstToIr = struct {
     }
 
     /// Check if an argument type is compatible with a parameter type.
-    /// Called AFTER implicit conversions (int-to-float, etc.).
+    /// Also handles int→float implicit compatibility for backward compatibility.
     fn checkTypeCompatibility(self: *AstToIr, arg_ty: ValueType, param_ty: ValueType) bool {
         // Handle generic type parameters - if param_ty is a struct_type that's actually
         // a generic parameter name, resolve it to the actual type
@@ -5003,7 +5003,7 @@ pub const AstToIr = struct {
             .primitive => |arg_name| switch (resolved_param_ty) {
                 .primitive => |param_name| {
                     if (self.areTypesEquivalent(arg_name, param_name)) return true;
-                    // int→float promotion is handled by applyIntToFloatPromotion before this check
+                    // int→float promotion: int args are compatible with float params
                     const arg_info = types.getPrimitiveTypeInfo(arg_name);
                     const param_info = types.getPrimitiveTypeInfo(param_name);
                     if (arg_info != null and param_info != null and
@@ -5066,6 +5066,101 @@ pub const AstToIr = struct {
                 else => false,
             },
         };
+    }
+
+    /// Check if a type conversion from source to target is possible.
+    /// Used by both implicit conversions and explicit 'as' casts.
+    fn canConvert(self: *AstToIr, source_ty: ValueType, target_ty: ValueType) bool {
+        if (self.checkTypeCompatibility(source_ty, target_ty)) return true;
+
+        const src_info = if (source_ty == .primitive) types.getPrimitiveTypeInfo(source_ty.primitive) else null;
+        const tgt_info = if (target_ty == .primitive) types.getPrimitiveTypeInfo(target_ty.primitive) else null;
+
+        // Numeric conversions: int<->float, int<->byte, float->byte
+        if (src_info != null and tgt_info != null) {
+            if (src_info.?.is_numeric and tgt_info.?.is_numeric) return true;
+        }
+
+        // Stringable -> String (custom types only, NOT primitives)
+        if (target_ty == .struct_type and std.mem.eql(u8, target_ty.struct_type, "String")) {
+            if (source_ty == .struct_type and self.typeConformsTo(source_ty.struct_type, "Stringable")) return true;
+        }
+
+        return false;
+    }
+
+    /// Perform type conversion, returns converted value or original if no conversion needed.
+    /// Used by BOTH implicit conversions AND explicit 'as' operator.
+    fn convertType(self: *AstToIr, value: ir.Value, source_ty: ValueType, target_ty: ValueType) ConvertError!TypedValue {
+        const src_name = source_ty.getTypeName();
+        const tgt_name = target_ty.getTypeName();
+
+        // Check for actual type equivalence (same type, no conversion needed)
+        if (src_name != null and tgt_name != null) {
+            if (std.mem.eql(u8, src_name.?, tgt_name.?)) {
+                return .{ .value = value, .ty = target_ty };
+            }
+        }
+
+        // Get type info for numeric conversions
+        const src_info = if (src_name) |n| types.getPrimitiveTypeInfo(n) else null;
+        const tgt_info = if (tgt_name) |n| types.getPrimitiveTypeInfo(n) else null;
+
+        // int -> float
+        if (src_info != null and tgt_info != null and src_info.?.is_integral and tgt_info.?.is_floating_point) {
+            const result = try self.func().emitUnaryOp(.sitofp, value, .f64);
+            return .{ .value = result, .ty = .{ .primitive = types.FLOAT } };
+        }
+
+        // float -> int
+        if (src_info != null and tgt_info != null and src_info.?.is_floating_point and tgt_info.?.is_integral) {
+            if (tgt_name != null and !std.mem.eql(u8, tgt_name.?, types.BYTE)) {
+                const result = try self.func().emitUnaryOp(.fptosi, value, .i64);
+                return .{ .value = result, .ty = .{ .primitive = types.INT } };
+            }
+        }
+
+        // int -> byte (truncate)
+        if (src_name != null and tgt_name != null and
+            std.mem.eql(u8, src_name.?, types.INT) and std.mem.eql(u8, tgt_name.?, types.BYTE))
+        {
+            const mask = try self.func().emitConstI64(0xFF);
+            const result = try self.func().emitBinaryOp(.band, value, mask, .i64);
+            return .{ .value = result, .ty = .{ .primitive = types.BYTE } };
+        }
+
+        // float -> byte (truncate to int, then to byte)
+        if (src_info != null and tgt_name != null and
+            src_info.?.is_floating_point and std.mem.eql(u8, tgt_name.?, types.BYTE))
+        {
+            const int_val = try self.func().emitUnaryOp(.fptosi, value, .i64);
+            const mask = try self.func().emitConstI64(0xFF);
+            const result = try self.func().emitBinaryOp(.band, int_val, mask, .i64);
+            return .{ .value = result, .ty = .{ .primitive = types.BYTE } };
+        }
+
+        // byte -> int (identity, already i64)
+        if (src_name != null and tgt_name != null and
+            std.mem.eql(u8, src_name.?, types.BYTE) and std.mem.eql(u8, tgt_name.?, types.INT))
+        {
+            return .{ .value = value, .ty = .{ .primitive = types.INT } };
+        }
+
+        // Stringable -> String (custom types only)
+        if (target_ty == .struct_type and std.mem.eql(u8, target_ty.struct_type, "String")) {
+            if (source_ty == .struct_type and self.typeConformsTo(source_ty.struct_type, "Stringable")) {
+                const str_val = try self.callStringableToString(source_ty.struct_type, value, null);
+                return .{ .value = str_val, .ty = .{ .struct_type = "String" } };
+            }
+        }
+
+        // Check if types are compatible without conversion
+        if (self.checkTypeCompatibility(source_ty, target_ty)) {
+            return .{ .value = value, .ty = target_ty };
+        }
+
+        // No conversion possible
+        return error.TypeMismatch;
     }
 
     /// Convert a pattern expression to a string key for duplicate detection
@@ -6549,56 +6644,18 @@ pub const AstToIr = struct {
         }
 
         const source = try self.convertExpression(cast.expr.*);
-        const source_type = source.ty.toPrimitiveType();
 
-        // Determine target IR type from type name
-        const target_ir_type: ir.Type = blk: {
-            if (types.isPrimitiveTypeName(target_type_name)) {
-                break :blk types.nameToIrType(target_type_name);
-            }
+        // Determine target type
+        if (!types.isPrimitiveTypeName(target_type_name)) {
             // Unknown cast target type
             debug.astToIr("Unknown cast target type: {s}\n", .{target_type_name});
             self.reportError(.E006, target_type_name);
             return error.TypeMismatch;
-        };
+        }
+        const target_ty: ValueType = .{ .primitive = target_type_name };
 
-        // Perform the actual conversion
-        const result = blk: {
-            // Same type - no-op
-            if (source_type == target_ir_type and !std.mem.eql(u8, target_type_name, "byte")) {
-                break :blk source.value;
-            }
-
-            // Float to int: fptosi
-            if (source_type == .f64 and target_ir_type == .i64) {
-                break :blk try self.func().emitUnaryOp(.fptosi, source.value, .i64);
-            }
-
-            // Int to float: sitofp
-            if (source_type == .i64 and target_ir_type == .f64) {
-                break :blk try self.func().emitUnaryOp(.sitofp, source.value, .f64);
-            }
-
-            // Byte cast (truncate to 8 bits by masking with 0xFF)
-            if (std.mem.eql(u8, target_type_name, "byte")) {
-                // If source is float, convert to int first
-                const int_val = if (source_type == .f64)
-                    try self.func().emitUnaryOp(.fptosi, source.value, .i64)
-                else
-                    source.value;
-                // Mask with 0xFF to truncate to byte
-                const mask = try self.func().emitConstI64(0xFF);
-                break :blk try self.func().emitBinaryOp(.band, int_val, mask, .i64);
-            }
-
-            // Default: same IR type, just use the value
-            break :blk source.value;
-        };
-
-        return .{
-            .value = result,
-            .ty = .{ .primitive = target_type_name },
-        };
+        // Use unified conversion system
+        return self.convertType(source.value, source.ty, target_ty);
     }
 
     /// Convert a closure expression to a function pointer
@@ -7243,25 +7300,22 @@ pub const AstToIr = struct {
         defer ctx.deinit();
 
         // Error block: evaluate default expression and copy to result
-        const default_typed = try self.convertExpression(default_expr);
+        var default_typed = try self.convertExpression(default_expr);
 
-        // Type check: otherwise expression must match the success type
-        // Allow implicit conversions between integral types (int, byte)
-        const types_compatible = self.checkTypeCompatibility(default_typed.ty, ctx.success_type) or blk: {
-            // Allow int <-> byte conversion
-            const default_info = if (default_typed.ty == .primitive) types.getPrimitiveTypeInfo(default_typed.ty.primitive) else null;
-            const success_info = if (ctx.success_type == .primitive) types.getPrimitiveTypeInfo(ctx.success_type.primitive) else null;
-            if (default_info != null and success_info != null) {
-                break :blk default_info.?.is_integral and success_info.?.is_integral;
-            }
-            break :blk false;
-        };
+        // Type check: use unified canConvert for compatibility
+        const types_compatible = self.checkTypeCompatibility(default_typed.ty, ctx.success_type) or
+            self.canConvert(default_typed.ty, ctx.success_type);
         if (!types_compatible) {
             const expected_name = ctx.success_type.getTypeName() orelse "unknown";
             const actual_name = default_typed.ty.getTypeName() orelse "unknown";
             const msg = std.fmt.allocPrint(self.allocator, "otherwise type '{s}' does not match expected type '{s}'", .{ actual_name, expected_name }) catch "type mismatch in otherwise";
             self.reportError(.E022, msg);
             return error.SemanticError;
+        }
+
+        // Apply implicit conversion if needed
+        if (!self.checkTypeCompatibility(default_typed.ty, ctx.success_type)) {
+            default_typed = try self.convertType(default_typed.value, default_typed.ty, ctx.success_type);
         }
 
         if (ctx.is_struct_type) {
@@ -7666,15 +7720,6 @@ pub const AstToIr = struct {
         };
     }
 
-    /// Apply implicit int→float promotion if needed
-    fn applyIntToFloatPromotion(self: *AstToIr, arg_value: ir.Value, arg_type: ValueType, param_type: ValueType) !ir.Value {
-        const arg_prim = arg_type.toPrimitiveType();
-        if (param_type.isFloatingPoint() and arg_prim == .i64) {
-            return self.func().emitUnaryOp(.sitofp, arg_value, .f64) catch return error.OutOfMemory;
-        }
-        return arg_value;
-    }
-
     /// Resolved argument: either a provided expression or a default value
     const ResolvedArg = union(enum) {
         expr: ast.Expression,
@@ -7899,14 +7944,15 @@ pub const AstToIr = struct {
             var arg_value = arg.value;
             var arg_ty = arg.ty;
 
-            // Implicit int→float promotion: if parameter expects float but arg is int
-            if (i < func_info.param_types.len) {
-                arg_value = try self.applyIntToFloatPromotion(arg_value, arg_ty, func_info.param_types[i].ty);
-            }
-
-            // Type validation: verify argument type matches parameter type
+            // Type validation and implicit conversions
             if (i < func_info.param_types.len) {
                 const param_ty = func_info.param_types[i].ty;
+                // Try implicit conversion if conversion is possible
+                if (self.canConvert(arg_ty, param_ty)) {
+                    const converted = try self.convertType(arg_value, arg_ty, param_ty);
+                    arg_value = converted.value;
+                    arg_ty = converted.ty;
+                }
                 if (!self.checkTypeCompatibility(arg_ty, param_ty)) {
                     const expected_name = func_info.param_types[i].display_name orelse
                         param_ty.getTypeName() orelse "unknown";
@@ -8015,9 +8061,13 @@ pub const AstToIr = struct {
             const arg = try self.convertExpression(arg_expr);
             var arg_value = arg.value;
 
-            // Implicit int→float promotion
+            // Implicit type conversions
             if (i < func_type_info.param_types.len) {
-                arg_value = try self.applyIntToFloatPromotion(arg_value, arg.ty, func_type_info.param_types[i]);
+                const param_ty = func_type_info.param_types[i];
+                if (self.canConvert(arg.ty, param_ty)) {
+                    const converted = try self.convertType(arg_value, arg.ty, param_ty);
+                    arg_value = converted.value;
+                }
             }
 
             args[i + arg_offset] = arg_value;
@@ -8899,14 +8949,15 @@ pub const AstToIr = struct {
 
                     const param_index = i + self_offset; // Account for self parameter
 
-                    // Implicit int→float promotion: if parameter expects float but arg is int
-                    if (param_index < func_info.param_types.len) {
-                        arg_value = try self.applyIntToFloatPromotion(arg_value, arg_ty, func_info.param_types[param_index].ty);
-                    }
-
-                    // Type validation: verify argument type matches parameter type
+                    // Type validation and implicit conversions
                     if (param_index < func_info.param_types.len) {
                         const param_ty = func_info.param_types[param_index].ty;
+                        // Try implicit conversion if conversion is possible
+                        if (self.canConvert(arg_ty, param_ty)) {
+                            const converted = try self.convertType(arg_value, arg_ty, param_ty);
+                            arg_value = converted.value;
+                            arg_ty = converted.ty;
+                        }
                         if (!self.checkTypeCompatibility(arg_ty, param_ty)) {
                             const expected_name = func_info.param_types[param_index].display_name orelse
                                 param_ty.getTypeName() orelse "unknown";
