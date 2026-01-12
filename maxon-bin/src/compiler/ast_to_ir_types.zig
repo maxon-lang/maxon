@@ -670,6 +670,8 @@ pub const SemanticInfo = struct {
     user_source: ?[]const u8 = null,
     // Keep AST alive for LSP features (hover, find references, etc.)
     program: ?ast.Program = null,
+    // Keep parser allocations alive (freed by freeProgram or deinit)
+    expr_ptrs: std.ArrayListUnmanaged(*ast.Expression) = .{},
 
     pub fn deinit(self: *SemanticInfo) void {
         self.allocator.free(self.variables);
@@ -679,42 +681,19 @@ pub const SemanticInfo = struct {
             ast.freeProgram(program, self.allocator);
         }
 
-        // Free user source string
-        if (self.user_source) |src| {
-            self.allocator.free(src);
+        // Free parser-allocated expression pointers
+        for (self.expr_ptrs.items) |ptr| {
+            self.allocator.destroy(ptr);
         }
-
-        // Free stdlib source strings
-        for (self.stdlib_sources) |src| {
-            self.allocator.free(src);
-        }
-        if (self.stdlib_sources.len > 0) {
-            self.allocator.free(self.stdlib_sources);
-        }
-
-        // Free allocated type name strings (e.g., "Array$int")
-        for (self.allocated_type_strings.items) |str| {
-            self.allocator.free(str);
-        }
-        self.allocated_type_strings.deinit(self.allocator);
-
-        // Free allocated function name strings
-        for (self.allocated_func_names.items) |str| {
-            self.allocator.free(str);
-        }
-        self.allocated_func_names.deinit(self.allocator);
-
-        // Free allocated return_type_name strings
-        for (self.allocated_return_type_names.items) |str| {
-            self.allocator.free(str);
-        }
-        self.allocated_return_type_names.deinit(self.allocator);
+        self.expr_ptrs.deinit(self.allocator);
 
         // Free type_map data (struct fields, enum members)
         var type_iter = self.types.iterator();
         while (type_iter.next()) |entry| {
             switch (entry.value_ptr.*) {
-                .struct_type => |s| self.allocator.free(s.fields),
+                .struct_type => |s| {
+                    self.allocator.free(s.fields);
+                },
                 .enum_type => |*e| {
                     e.members.deinit(self.allocator);
                     // Free associated_values slices inside case_info entries
@@ -758,6 +737,39 @@ pub const SemanticInfo = struct {
 
         // Interface map doesn't own its data (references AST nodes)
         self.interfaces.deinit(self.allocator);
+
+        // Now safe to free the source strings that type/func names point into
+
+        // Free user source string
+        if (self.user_source) |src| {
+            self.allocator.free(src);
+        }
+
+        // Free stdlib source strings
+        for (self.stdlib_sources) |src| {
+            self.allocator.free(src);
+        }
+        if (self.stdlib_sources.len > 0) {
+            self.allocator.free(self.stdlib_sources);
+        }
+
+        // Free allocated type name strings (e.g., "Array$int")
+        for (self.allocated_type_strings.items) |str| {
+            self.allocator.free(str);
+        }
+        self.allocated_type_strings.deinit(self.allocator);
+
+        // Free allocated function name strings
+        for (self.allocated_func_names.items) |str| {
+            self.allocator.free(str);
+        }
+        self.allocated_func_names.deinit(self.allocator);
+
+        // Free allocated return_type_name strings
+        for (self.allocated_return_type_names.items) |str| {
+            self.allocator.free(str);
+        }
+        self.allocated_return_type_names.deinit(self.allocator);
     }
 
     /// Find a variable by name

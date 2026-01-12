@@ -15,6 +15,7 @@ pub const compile_error = @import("error.zig");
 pub const CompileError = error{
     LexerError,
     ParserError,
+    SemanticError,
     IrError,
     CodegenError,
     WriteError,
@@ -48,16 +49,70 @@ pub const CompileOptions = struct {
     emit_asm: bool = false,
 };
 
+/// Pipeline mode determines what the frontend produces
+const PipelineMode = enum {
+    metadata_only, // For parseSourcesForMetadata
+    semantic_only, // For LSP analysis
+    full_ir, // For compilation (current behavior)
+};
+
+/// Result from metadata-only mode
+const MetadataResult = struct {
+    types: []ast_to_ir.ExternalTypeInfo,
+    funcs: []ast_to_ir.ExternalFuncSignature,
+    interfaces: []ast_to_ir.ExternalInterfaceInfo,
+    enums: []const ast_to_ir.ExternalEnumInfo,
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *MetadataResult) void {
+        for (self.funcs) |sig| {
+            self.allocator.free(sig.name);
+            if (sig.param_types.len > 0) {
+                ast_to_ir.freeParamTypes(self.allocator, sig.param_types);
+            }
+            if (sig.return_type_name) |rtn| self.allocator.free(rtn);
+            if (sig.return_value_type) |rvt| {
+                ast_to_ir.freeValueTypeAllocations(self.allocator, rvt);
+            }
+        }
+        self.allocator.free(self.types);
+        self.allocator.free(self.funcs);
+        self.allocator.free(self.interfaces);
+        self.allocator.free(self.enums);
+    }
+};
+
+/// Unified result from runFrontend that varies based on mode
+const PipelineResult = union(PipelineMode) {
+    metadata_only: MetadataResult,
+    semantic_only: semantic_analysis.SemanticInfo,
+    full_ir: FrontendResult,
+
+    pub fn deinit(self: *PipelineResult) void {
+        switch (self.*) {
+            .metadata_only => |*m| m.deinit(),
+            .semantic_only => |*s| s.deinit(),
+            .full_ir => |*f| f.deinit(),
+        }
+    }
+};
+
 /// Options for the compilation pipeline
 const PipelineOptions = struct {
+    mode: PipelineMode = .full_ir,
     source_file: ?[]const u8 = null,
     result: ?*CompileResult = null,
+
+    // For full_ir mode only:
+    external_funcs: []const ast_to_ir.ExternalFuncSignature = &.{},
+    external_types: []const ast_to_ir.ExternalTypeInfo = &.{},
+    external_interfaces: []const ast_to_ir.ExternalInterfaceInfo = &.{},
+    external_enums: []const ast_to_ir.ExternalEnumInfo = &.{},
     track_memory: bool = false,
     emit_ir: bool = false,
-    external_funcs: ?[]const ast_to_ir.ExternalFuncSignature = null,
-    external_types: ?[]const ast_to_ir.ExternalTypeInfo = null,
-    external_interfaces: ?[]const ast_to_ir.ExternalInterfaceInfo = null,
-    external_enums: ?[]const ast_to_ir.ExternalEnumInfo = null,
+
+    // For semantic_only mode:
+    stdlib_sources: []const []const u8 = &.{}, // Owned sources to transfer
 };
 
 /// Intermediate result from frontend compilation (lexing, parsing, analysis, IR generation)
@@ -86,13 +141,11 @@ const FrontendResult = struct {
     }
 };
 
-/// Run the frontend pipeline: lex -> parse -> analyze -> IR -> optimize
-fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: PipelineOptions) !FrontendResult {
+/// Run the frontend pipeline: lex -> parse -> (metadata/semantic/IR based on mode)
+fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: PipelineOptions) !PipelineResult {
     // 1 - Lex
     var lexer = Lexer.init(source);
-    const tokens = lexer.tokenize(allocator) catch {
-        return error.LexerError;
-    };
+    const tokens = lexer.tokenize(allocator) catch return error.LexerError;
     defer allocator.free(tokens);
 
     // 2 - Parse
@@ -102,59 +155,175 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
         Parser.init(tokens, allocator);
     defer parser.deinit();
 
-    const program = parser.parse() catch {
+    const program = parser.parse() catch |err| {
         if (options.result) |result| {
             result.error_info = parser.last_error;
-            // Transfer ownership of allocated message to result
             if (parser.last_error) |*e| {
                 e.message_allocated = false;
             }
         }
-        return error.ParserError;
+        return err;
     };
+    // Only free program for metadata_only and full_ir modes
+    // semantic_only transfers ownership to SemanticInfo
+    const should_free_program = options.mode != .semantic_only;
+    defer if (should_free_program) ast.freeProgram(program, allocator);
 
-    // Extract function signatures from AST before freeing
-    // (needed for cross-module compilation with full type info)
-    const func_signatures = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch null;
-    errdefer if (func_signatures) |sigs| {
-        for (sigs) |sig| {
-            allocator.free(sig.name);
-            if (sig.param_types.len > 0) {
-                ast_to_ir.freeParamTypes(allocator, sig.param_types);
+    // Branch based on mode
+    switch (options.mode) {
+        .metadata_only => {
+            // Extract and return metadata only
+            const types = try ast_to_ir.extractTypeInfo(program, allocator);
+            errdefer allocator.free(types);
+
+            const funcs = try ast_to_ir.extractFunctionSignaturesFromAst(program, allocator);
+            errdefer {
+                for (funcs) |sig| {
+                    allocator.free(sig.name);
+                    if (sig.param_types.len > 0) ast_to_ir.freeParamTypes(allocator, sig.param_types);
+                    if (sig.return_type_name) |rtn| allocator.free(rtn);
+                    if (sig.return_value_type) |rvt| {
+                        ast_to_ir.freeValueTypeAllocations(allocator, rvt);
+                    }
+                }
+                allocator.free(funcs);
             }
-            if (sig.return_type_name) |rtn| {
-                allocator.free(rtn);
+
+            const interfaces = try ast_to_ir.extractInterfaceInfo(program, allocator);
+            errdefer allocator.free(interfaces);
+
+            const enums = try ast_to_ir.extractEnumDecls(program, allocator, options.source_file);
+            errdefer allocator.free(enums);
+
+            return .{ .metadata_only = .{
+                .types = types,
+                .funcs = funcs,
+                .interfaces = interfaces,
+                .enums = enums,
+                .allocator = allocator,
+            } };
+        },
+
+        .semantic_only => {
+            // Build external metadata from stdlib_sources
+            // Use an arena for parsing stdlib so AST pointers remain valid
+            var phase1_arena = std.heap.ArenaAllocator.init(allocator);
+            defer phase1_arena.deinit();
+            const phase1_allocator = phase1_arena.allocator();
+
+            var external_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
+            defer external_types.deinit(allocator);
+            var external_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
+            defer {
+                for (external_funcs.items) |sig| {
+                    allocator.free(sig.name);
+                    if (sig.param_types.len > 0) ast_to_ir.freeParamTypes(allocator, sig.param_types);
+                    if (sig.return_type_name) |rtn| allocator.free(rtn);
+                    if (sig.return_value_type) |rvt| {
+                        ast_to_ir.freeValueTypeAllocations(allocator, rvt);
+                    }
+                }
+                external_funcs.deinit(allocator);
             }
-        }
-        allocator.free(sigs);
-    };
+            var external_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
+            defer external_interfaces.deinit(allocator);
 
-    defer ast.freeProgram(program, allocator);
+            // Parse stdlib sources (same pattern as original analyzeForLSP)
+            for (options.stdlib_sources) |stdlib_content| {
+                var stdlib_lexer = Lexer.init(stdlib_content);
+                const stdlib_tokens = stdlib_lexer.tokenize(phase1_allocator) catch continue;
+                var stdlib_parser = Parser.init(stdlib_tokens, phase1_allocator);
+                const stdlib_program = stdlib_parser.parse() catch continue;
 
-    // 3 - Mutation analysis
-    var mutation_analyzer = semantic_analysis.MutationAnalyzer.init(allocator);
-    defer mutation_analyzer.deinit();
-    mutation_analyzer.analyze(program) catch {
-        return error.IrError;
-    };
+                // Extract metadata using main allocator (will be freed later)
+                const type_info = ast_to_ir.extractTypeInfo(stdlib_program, allocator) catch continue;
+                for (type_info) |t| try external_types.append(allocator, t);
+                allocator.free(type_info);
 
-    // 4 - AST to IR
-    var ir_error: ?compile_error.CompileError = null;
-    var ir_module = ast_to_ir.convertWithExternals(program, allocator, &mutation_analyzer, options.source_file, options.external_funcs, options.external_types, options.external_interfaces, options.external_enums, .{ .track_memory = options.track_memory }, &ir_error) catch |e| {
-        debug.astToIr("AST to IR error: {}\n", .{e});
-        if (options.result) |result| {
-            result.error_info = ir_error;
-        }
-        return error.IrError;
-    };
+                const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(stdlib_program, allocator) catch continue;
+                for (func_sigs) |sig| try external_funcs.append(allocator, sig);
+                allocator.free(func_sigs);
 
-    // 5 - Optimize
-    optimizer.optimize(&ir_module, allocator) catch {
-        ir_module.deinit();
-        return error.IrError;
-    };
+                const iface_info = ast_to_ir.extractInterfaceInfo(stdlib_program, allocator) catch continue;
+                for (iface_info) |iface| try external_interfaces.append(allocator, iface);
+                allocator.free(iface_info);
+            }
 
-    return .{ .ir_module = ir_module, .func_signatures = func_signatures, .allocator = allocator };
+            // Run semantic analysis
+            var analyzer = semantic_analysis.SemanticAnalyzer.init(allocator);
+            defer analyzer.deinit();
+
+            var semantic_info = analyzer.analyze(
+                program,
+                external_types.items,
+                external_funcs.items,
+                external_interfaces.items,
+            ) catch return error.SemanticError;
+
+            semantic_info.stdlib_sources = options.stdlib_sources;
+            semantic_info.program = program; // Transfer ownership to SemanticInfo
+
+            return .{ .semantic_only = semantic_info };
+        },
+
+        .full_ir => {
+            // Extract function signatures (needed for cross-module compilation)
+            const func_signatures = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch null;
+            errdefer if (func_signatures) |sigs| {
+                for (sigs) |sig| {
+                    allocator.free(sig.name);
+                    if (sig.param_types.len > 0) {
+                        ast_to_ir.freeParamTypes(allocator, sig.param_types);
+                    }
+                    if (sig.return_type_name) |rtn| {
+                        allocator.free(rtn);
+                    }
+                    if (sig.return_value_type) |rvt| {
+                        ast_to_ir.freeValueTypeAllocations(allocator, rvt);
+                    }
+                }
+                allocator.free(sigs);
+            };
+
+            // 3 - Mutation analysis
+            var mutation_analyzer = semantic_analysis.MutationAnalyzer.init(allocator);
+            defer mutation_analyzer.deinit();
+            mutation_analyzer.analyze(program) catch return error.IrError;
+
+            // 4 - AST to IR
+            var ir_error: ?compile_error.CompileError = null;
+            var ir_module = ast_to_ir.convertWithExternals(
+                program,
+                allocator,
+                &mutation_analyzer,
+                options.source_file,
+                options.external_funcs,
+                options.external_types,
+                options.external_interfaces,
+                options.external_enums,
+                .{ .track_memory = options.track_memory },
+                &ir_error,
+            ) catch |e| {
+                debug.astToIr("AST to IR error: {}\n", .{e});
+                if (options.result) |result| {
+                    result.error_info = ir_error;
+                }
+                return error.IrError;
+            };
+
+            // 5 - Optimize
+            optimizer.optimize(&ir_module, allocator) catch {
+                ir_module.deinit();
+                return error.IrError;
+            };
+
+            return .{ .full_ir = .{
+                .ir_module = ir_module,
+                .func_signatures = func_signatures,
+                .allocator = allocator,
+            } };
+        },
+    }
 }
 
 /// Compile source and return the IR as a string (for fragment generation)
@@ -276,28 +445,29 @@ const ParsedSourcesInfo = struct {
 fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, result: ?*CompileResult) !void {
     const phase1_allocator = info.phase1_arena.allocator();
     var had_parse_error = false;
-    var first_error: ?compile_error.CompileError = null;
 
     for (sources) |source| {
+        // Parse using phase1_arena so AST stays alive (interfaces need AST pointers)
         var lexer = Lexer.init(source.content);
-        const tokens = lexer.tokenize(phase1_allocator) catch continue;
+        const tokens = lexer.tokenize(phase1_allocator) catch {
+            had_parse_error = true;
+            continue;
+        };
 
         var parser = Parser.initWithFile(tokens, phase1_allocator, source.path);
         const program = parser.parse() catch {
-            // Capture first error for result
-            if (parser.last_error) |parse_err| {
-                if (first_error == null) {
-                    first_error = parse_err;
-                    // Duplicate message with main allocator so it survives arena cleanup
-                    first_error.?.message = info.allocator.dupe(u8, parse_err.message) catch parse_err.message;
-                    first_error.?.message_allocated = true;
+            // Capture error info for last parse error
+            if (result) |res| {
+                res.error_info = parser.last_error;
+                if (parser.last_error) |*e| {
+                    e.message_allocated = false;
                 }
             }
             had_parse_error = true;
             continue;
         };
 
-        // Extract type info
+        // Extract metadata using main allocator
         const type_info = ast_to_ir.extractTypeInfo(program, info.allocator) catch continue;
         for (type_info) |t| {
             var t_with_path = t;
@@ -306,7 +476,6 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
         }
         info.allocator.free(type_info);
 
-        // Extract function signatures
         const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, info.allocator) catch continue;
         for (func_sigs) |sig| {
             var sig_with_path = sig;
@@ -315,14 +484,12 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
         }
         info.allocator.free(func_sigs);
 
-        // Extract interface info
         const iface_info = ast_to_ir.extractInterfaceInfo(program, info.allocator) catch continue;
         for (iface_info) |iface| {
             try info.interfaces.append(info.allocator, iface);
         }
         info.allocator.free(iface_info);
 
-        // Extract enum declarations
         const enum_decls = ast_to_ir.extractEnumDecls(program, info.allocator, source.path) catch continue;
         for (enum_decls) |enum_decl| {
             try info.enums.append(info.allocator, enum_decl);
@@ -331,10 +498,6 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
     }
 
     if (had_parse_error) {
-        // Set result.error_info with the first parse error
-        if (result) |r| {
-            r.error_info = first_error;
-        }
         return error.ParseError;
     }
 }
@@ -346,11 +509,12 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     // Parse all sources except the last one (user code)
     var info = ParsedSourcesInfo.init(allocator);
     defer info.deinit();
-    try parseSourcesForMetadata(&info, sources[0 .. sources.len - 1], result);
+    try parseSourcesForMetadata(&info, sources[0 .. sources.len - 1], null);
 
     // Compile the last source (user code) with all types/funcs available
     const last_source = sources[sources.len - 1];
-    var frontend = runFrontend(last_source.content, allocator, .{
+    var pipeline_result = runFrontend(last_source.content, allocator, .{
+        .mode = .full_ir,
         .source_file = last_source.path,
         .result = result,
         .external_funcs = info.funcs.items,
@@ -360,15 +524,17 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     }) catch {
         return error.IrError;
     };
-    defer frontend.deinit();
+    defer pipeline_result.deinit();
 
-    optimizer.eliminateDeadFunctions(&frontend.ir_module, allocator) catch {
+    optimizer.eliminateDeadFunctions(&pipeline_result.full_ir.ir_module, allocator) catch {
         return error.IrError;
     };
 
-    return frontend.ir_module.printToString(allocator) catch {
+    const ir_string = pipeline_result.full_ir.ir_module.printToString(allocator) catch {
         return error.WriteError;
     };
+
+    return ir_string;
 }
 
 pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.Allocator) !void {
@@ -386,12 +552,16 @@ pub fn compileWithOptions(source: []const u8, output_path: []const u8, source_fi
 
 fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]const u8, pipeline_opts: PipelineOptions, allocator: std.mem.Allocator, result: *CompileResult) !void {
     // Run frontend pipeline
-    var frontend = try runFrontend(source, allocator, .{
+    var pipeline_result = try runFrontend(source, allocator, .{
+        .mode = .full_ir,
         .source_file = source_file,
         .result = result,
         .track_memory = pipeline_opts.track_memory,
+        .emit_ir = pipeline_opts.emit_ir,
     });
-    defer frontend.deinit();
+    defer pipeline_result.deinit();
+
+    const frontend = pipeline_result.full_ir;
 
     // Emit IR to file if requested
     if (pipeline_opts.emit_ir) {
@@ -445,7 +615,8 @@ pub fn compileMultiple(
     for (sources) |source| {
         // Pass all enums to all sources. Internal enums (like SlotState in Map.maxon)
         // need to be visible when user code instantiates generic types that use them.
-        var frontend = try runFrontend(source.content, allocator, .{
+        const pipeline_result = try runFrontend(source.content, allocator, .{
+            .mode = .full_ir,
             .source_file = source.path,
             .result = result,
             .external_funcs = exported_funcs,
@@ -454,6 +625,8 @@ pub fn compileMultiple(
             .external_enums = info.enums.items,
             .track_memory = options.track_memory,
         });
+
+        var frontend = pipeline_result.full_ir;
 
         if (merged) |*m| {
             try m.ir_module.merge(&frontend.ir_module);
@@ -504,27 +677,24 @@ pub fn analyzeForLSP(
     source_file: ?[]const u8,
     allocator: std.mem.Allocator,
 ) !semantic_analysis.SemanticInfo {
+    debug.log("[analyzeForLSP] Starting analysis for source length: {d}", .{source.len});
     // Load stdlib for type/function info
     const stdlib_path = findStdlibPath(allocator) catch {
         // Continue without stdlib - will have limited type info
-        return analyzeSourceForLSP(source, source_file, &.{}, &.{}, &.{}, &.{}, allocator);
+        debug.log("[analyzeForLSP] No stdlib found, analyzing without it", .{});
+        return runFrontendForSemanticOnly(source, source_file, &.{}, allocator);
     };
+    debug.log("[analyzeForLSP] Found stdlib at: {s}", .{stdlib_path});
     defer allocator.free(stdlib_path);
 
     const stdlib_modules = loadAllStdlibModules(stdlib_path, allocator) catch {
-        return analyzeSourceForLSP(source, source_file, &.{}, &.{}, &.{}, &.{}, allocator);
+        debug.log("[analyzeForLSP] Failed to load stdlib modules", .{});
+        return runFrontendForSemanticOnly(source, source_file, &.{}, allocator);
     };
-    // Don't defer free - we'll transfer ownership to SemanticInfo
+    debug.log("[analyzeForLSP] Loaded {d} stdlib modules", .{stdlib_modules.len});
 
-    // Collect stdlib source content strings (these need to stay alive for string references)
+    // Collect stdlib source content (ownership transfers to runFrontend)
     var stdlib_sources = try allocator.alloc([]const u8, stdlib_modules.len);
-    errdefer {
-        // Free both the content strings and the slice itself on error
-        for (stdlib_sources) |content| {
-            allocator.free(content);
-        }
-        allocator.free(stdlib_sources);
-    }
     for (stdlib_modules, 0..) |mod, i| {
         stdlib_sources[i] = mod.content;
     }
@@ -534,165 +704,36 @@ pub fn analyzeForLSP(
     }
     allocator.free(stdlib_modules);
 
-    // Parse stdlib and extract type info (same as compileMultiple phase 1)
-    var phase1_arena = std.heap.ArenaAllocator.init(allocator);
-    defer phase1_arena.deinit();
-    const phase1_allocator = phase1_arena.allocator();
-
-    var all_types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo) = .empty;
-    defer {
-        all_types.deinit(allocator);
-    }
-
-    var all_funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature) = .empty;
-    defer {
-        for (all_funcs.items) |sig| {
-            // Free name, param_types (including struct_type strings), and return_type_name
-            allocator.free(sig.name);
-            if (sig.param_types.len > 0) ast_to_ir.freeParamTypes(allocator, sig.param_types);
-            if (sig.return_type_name) |rtn| allocator.free(rtn);
-        }
-        all_funcs.deinit(allocator);
-    }
-
-    var all_interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo) = .empty;
-    defer all_interfaces.deinit(allocator);
-
-    for (stdlib_sources) |content| {
-        var lexer = Lexer.init(content);
-        const tokens = lexer.tokenize(phase1_allocator) catch continue;
-        var parser = Parser.init(tokens, phase1_allocator);
-        const program = parser.parse() catch continue;
-
-        // Extract type info
-        const type_info = ast_to_ir.extractTypeInfo(program, allocator) catch continue;
-        for (type_info) |t| {
-            all_types.append(allocator, t) catch continue;
-        }
-        allocator.free(type_info);
-
-        // Extract function signatures
-        const func_sigs = ast_to_ir.extractFunctionSignaturesFromAst(program, allocator) catch continue;
-        for (func_sigs) |sig| {
-            const param_types_copy = allocator.dupe(ast_to_ir.ParamType, sig.param_types) catch {
-                // Failed to dupe param_types - free the name we own
-                allocator.free(sig.name);
-                continue;
-            };
-            var sig_copy = sig;
-            sig_copy.param_types = param_types_copy;
-            all_funcs.append(allocator, sig_copy) catch {
-                allocator.free(param_types_copy);
-                allocator.free(sig.name);
-                continue;
-            };
-        }
-        for (func_sigs) |sig| {
-            if (sig.param_types.len > 0) allocator.free(sig.param_types);
-        }
-        allocator.free(func_sigs);
-
-        // Extract interface info
-        const iface_info = ast_to_ir.extractInterfaceInfo(program, allocator) catch continue;
-        for (iface_info) |iface| {
-            all_interfaces.append(allocator, iface) catch continue;
-        }
-        allocator.free(iface_info);
-    }
-
-    return analyzeSourceForLSP(
-        source,
-        source_file,
-        all_types.items,
-        all_funcs.items,
-        all_interfaces.items,
-        stdlib_sources,
-        allocator,
-    );
+    debug.log("[analyzeForLSP] Calling runFrontendForSemanticOnly", .{});
+    const result = runFrontendForSemanticOnly(source, source_file, stdlib_sources, allocator);
+    debug.log("[analyzeForLSP] Analysis complete", .{});
+    return result;
 }
 
-fn analyzeSourceForLSP(
+fn runFrontendForSemanticOnly(
     source: []const u8,
     source_file: ?[]const u8,
-    external_types: []const ast_to_ir.ExternalTypeInfo,
-    external_funcs: []const ast_to_ir.ExternalFuncSignature,
-    external_interfaces: []const ast_to_ir.ExternalInterfaceInfo,
     stdlib_sources: []const []const u8,
     allocator: std.mem.Allocator,
 ) !semantic_analysis.SemanticInfo {
-    _ = source_file; // Not needed in new approach
-
-    // Ensure source ends with newline (parser requires it)
+    // Ensure source ends with newline
     const needs_newline = source.len == 0 or source[source.len - 1] != '\n';
     const user_source = if (needs_newline)
         try std.mem.concat(allocator, u8, &.{ source, "\n" })
     else
         try allocator.dupe(u8, source);
-    errdefer allocator.free(user_source);
+    // Don't defer free - ownership transfers to SemanticInfo
 
-    // Lex and parse using the duplicated source
-    var lexer = Lexer.init(user_source);
-    const tokens = lexer.tokenize(allocator) catch return error.LexerError;
-    defer allocator.free(tokens);
+    // Call runFrontend in semantic_only mode - it handles all stdlib parsing internally
+    var result = try runFrontend(user_source, allocator, .{
+        .mode = .semantic_only,
+        .source_file = source_file,
+        .stdlib_sources = stdlib_sources, // Transfer ownership
+    });
 
-    var parser = Parser.init(tokens, allocator);
-    defer parser.deinit();
-
-    const program = parser.parse() catch return error.ParserError;
-    errdefer ast.freeProgram(program, allocator);
-
-    // Use the new SemanticAnalyzer
-    var analyzer = semantic_analysis.SemanticAnalyzer.init(allocator);
-    // Always deinit - buildSemanticInfo() transfers ownership of some maps, deinit cleans up the rest
-    defer analyzer.deinit();
-
-    // Duplicate external function names and return_type_names (they'll be freed after this call)
-    var func_name_copies: std.ArrayListUnmanaged([]const u8) = .empty;
-    var return_type_name_copies: std.ArrayListUnmanaged([]const u8) = .empty;
-    errdefer {
-        for (func_name_copies.items) |name| allocator.free(name);
-        func_name_copies.deinit(allocator);
-        for (return_type_name_copies.items) |name| allocator.free(name);
-        return_type_name_copies.deinit(allocator);
-    }
-
-    // Build list of external funcs with duplicated names and return_type_name
-    var ext_funcs_copy = try allocator.alloc(semantic_analysis.ExternalFuncSignature, external_funcs.len);
-    defer allocator.free(ext_funcs_copy);
-    for (external_funcs, 0..) |ext_func, i| {
-        const name_copy = allocator.dupe(u8, ext_func.name) catch continue;
-        const param_types_copy = allocator.dupe(semantic_analysis.ParamType, ext_func.param_types) catch {
-            allocator.free(name_copy);
-            continue;
-        };
-        // Must dupe return_type_name since original gets freed after this function
-        const return_type_name_copy: ?[]const u8 = if (ext_func.return_type_name) |rtn| blk: {
-            const copy = allocator.dupe(u8, rtn) catch break :blk null;
-            return_type_name_copies.append(allocator, copy) catch {};
-            break :blk copy;
-        } else null;
-        ext_funcs_copy[i] = .{
-            .name = name_copy,
-            .return_type = ext_func.return_type,
-            .return_type_name = return_type_name_copy,
-            .return_value_type = ext_func.return_value_type,
-            .param_types = param_types_copy,
-            .doc_comment = ext_func.doc_comment,
-        };
-        func_name_copies.append(allocator, name_copy) catch {};
-    }
-
-    var result = try analyzer.analyze(program, external_types, ext_funcs_copy, external_interfaces);
-    result.stdlib_sources = stdlib_sources;
-    result.user_source = user_source;
-    result.allocated_func_names = func_name_copies;
-    result.allocated_return_type_names = return_type_name_copies;
-    result.program = program;
-
-    // Note: param_types are NOT freed here - they're stored in func_map
-    // and will be freed by SemanticInfo.deinit()
-
-    return result;
+    // Set user_source (transfers ownership to SemanticInfo)
+    result.semantic_only.user_source = user_source;
+    return result.semantic_only;
 }
 
 /// Find stdlib directory relative to the executable.

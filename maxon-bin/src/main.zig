@@ -691,4 +691,7 @@ fn runLspServer(allocator: std.mem.Allocator) void {
         std.debug.print("LSP server error: {}\n", .{err});
         std.process.exit(1);
     };
+    // Exit immediately after LSP server completes - the GPA deinit in main
+    // can hang on Windows when stdout/stderr pipes are closed by the client
+    std.process.exit(0);
 }

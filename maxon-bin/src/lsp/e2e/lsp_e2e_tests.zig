@@ -44,6 +44,12 @@ const TestContext = struct {
 
 test "initialize returns capabilities" {
     var client = try LspClient.init(testing.allocator);
+    errdefer {
+        client.shutdown() catch {};
+        client.exit() catch {};
+        client.deinitAndCheckLeaks() catch {};
+        client.printDebugOutput();
+    }
 
     const result = try client.initialize();
 
@@ -1925,6 +1931,48 @@ test "semantic tokens returns token data" {
     // Should have semantic token data
     try testing.expect(result.has_data);
     try testing.expect(result.data_length > 0);
+
+    try ctx.deinit();
+}
+
+test "formatting indents while loop body correctly" {
+    var ctx = try TestContext.init();
+    errdefer ctx.forceCleanup();
+
+    // This test reproduces the issue where while loop body was being
+    // indented with double the expected tabs (4 instead of 2)
+    const source =
+        \\function log(x float) returns float
+        \\var k = 1
+        \\while k < 20 'series'
+        \\term = term * z_squared
+        \\k = k + 1
+        \\end 'series'
+        \\return 0.0
+        \\end 'log'
+    ;
+    try ctx.client.openDocument("file:///test.maxon", source);
+
+    var result = try ctx.client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    try testing.expect(result.new_text != null);
+    const new_text = result.new_text.?;
+
+    // The while statement should be at 1 tab (inside function)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\twhile k < 20 'series'") != null);
+
+    // Code inside while should be at 2 tabs (inside function + inside while)
+    // NOT 4 tabs which was the bug
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\tterm = term * z_squared") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\tk = k + 1") != null);
+
+    // Verify it's NOT using 3 or 4 tabs (the bug)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\t\tterm") == null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\t\t\tterm") == null);
+
+    // The end 'series' should be at 1 tab
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'series'") != null);
 
     try ctx.deinit();
 }

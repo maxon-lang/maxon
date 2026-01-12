@@ -9798,3 +9798,31 @@ pub fn freeParamTypes(allocator: std.mem.Allocator, param_types: []const ParamTy
     }
     allocator.free(param_types);
 }
+
+/// Deep-copy a slice of ParamTypes, including the struct_type strings inside ValueTypes.
+/// The caller must free the result with freeParamTypes.
+pub fn dupeParamTypes(allocator: std.mem.Allocator, param_types: []const ParamType) ![]ParamType {
+    const result = try allocator.alloc(ParamType, param_types.len);
+    errdefer allocator.free(result);
+
+    var copied: usize = 0;
+    errdefer {
+        // On error, free the struct_type strings we've already copied
+        for (result[0..copied]) |pt| {
+            if (pt.ty == .struct_type) {
+                allocator.free(pt.ty.struct_type);
+            }
+        }
+    }
+
+    for (param_types, 0..) |pt, i| {
+        result[i] = pt;
+        // Deep-copy struct_type string if present
+        if (pt.ty == .struct_type) {
+            result[i].ty = .{ .struct_type = try allocator.dupe(u8, pt.ty.struct_type) };
+        }
+        copied = i + 1;
+    }
+
+    return result;
+}

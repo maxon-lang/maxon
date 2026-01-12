@@ -3,7 +3,11 @@ const windows = std.os.windows;
 
 /// Default timeout for waiting on the LSP server (in milliseconds)
 /// Needs to be long enough to allow GPA leak reporting to complete
-const DEFAULT_TIMEOUT_MS: u32 = 500;
+const DEFAULT_TIMEOUT_MS: u32 = 5000;
+
+/// Timeout for read operations (in milliseconds)
+/// If the server crashes, reads will hang forever without this
+const READ_TIMEOUT_MS: u32 = 30000; // 30 seconds for debugging
 
 /// Reads stderr in a background thread to prevent deadlock when the server
 /// writes large amounts of output (e.g., GPA leak reports with stack traces)
@@ -919,7 +923,7 @@ pub const LspClient = struct {
                 .end = .{ .line = end_line, .character = end_char },
             },
             .context = .{
-                .diagnostics = &[_]struct{}{},
+                .diagnostics = &[_]struct {}{},
             },
         });
         defer response.deinit();
@@ -1053,6 +1057,8 @@ pub const LspClient = struct {
 
         try jsonStringify(self.allocator, message, &buffer);
 
+        std.debug.print("[LSP Client] Sending: {s}\n", .{buffer.items});
+
         // Write Content-Length header and content
         var header_buf: [64]u8 = undefined;
         const header = try std.fmt.bufPrint(&header_buf, "Content-Length: {d}\r\n\r\n", .{buffer.items.len});
@@ -1061,63 +1067,157 @@ pub const LspClient = struct {
         _ = try stdin.write(buffer.items);
     }
 
-    /// Read a JSON-RPC response from the server
+    /// Background reader that reads a complete LSP response in a separate thread
+    const ResponseReader = struct {
+        thread: ?std.Thread = null,
+        stdout: ?std.fs.File = null,
+        allocator: std.mem.Allocator,
+        result_buffer: [65536]u8 = undefined,
+        result_len: usize = 0,
+        read_error: bool = false,
+        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+        fn start(self: *ResponseReader, stdout: std.fs.File) void {
+            self.stdout = stdout;
+            self.done.store(false, .seq_cst);
+            self.read_error = false;
+            self.result_len = 0;
+            self.thread = std.Thread.spawn(.{}, readInBackground, .{self}) catch null;
+        }
+
+        fn readInBackground(self: *ResponseReader) void {
+            const stdout = self.stdout orelse return;
+
+            // Read headers until we find Content-Length
+            var content_length: ?usize = null;
+            var line_buf: [1024]u8 = undefined;
+            var line_pos: usize = 0;
+
+            while (true) {
+                var byte_buf: [1]u8 = undefined;
+                const bytes_read = stdout.read(&byte_buf) catch {
+                    self.read_error = true;
+                    self.done.store(true, .seq_cst);
+                    return;
+                };
+                if (bytes_read == 0) {
+                    self.read_error = true;
+                    self.done.store(true, .seq_cst);
+                    return;
+                }
+
+                const byte = byte_buf[0];
+
+                if (byte == '\n') {
+                    const line_end = if (line_pos > 0 and line_buf[line_pos - 1] == '\r')
+                        line_pos - 1
+                    else
+                        line_pos;
+
+                    const line = line_buf[0..line_end];
+
+                    // Empty line signals end of headers
+                    if (line.len == 0) break;
+
+                    // Parse Content-Length header
+                    if (std.mem.startsWith(u8, line, "Content-Length: ")) {
+                        const len_str = line["Content-Length: ".len..];
+                        content_length = std.fmt.parseInt(usize, len_str, 10) catch continue;
+                    }
+
+                    line_pos = 0;
+                } else {
+                    if (line_pos < line_buf.len) {
+                        line_buf[line_pos] = byte;
+                        line_pos += 1;
+                    }
+                }
+            }
+
+            const len = content_length orelse {
+                self.read_error = true;
+                self.done.store(true, .seq_cst);
+                return;
+            };
+
+            if (len > self.result_buffer.len) {
+                self.read_error = true;
+                self.done.store(true, .seq_cst);
+                return;
+            }
+
+            // Read the JSON content
+            var total_read: usize = 0;
+            while (total_read < len) {
+                const bytes_read = stdout.read(self.result_buffer[total_read..len]) catch {
+                    self.read_error = true;
+                    self.done.store(true, .seq_cst);
+                    return;
+                };
+                if (bytes_read == 0) {
+                    self.read_error = true;
+                    self.done.store(true, .seq_cst);
+                    return;
+                }
+                total_read += bytes_read;
+            }
+
+            self.result_len = len;
+            self.done.store(true, .seq_cst);
+        }
+
+        /// Wait for completion with timeout. Returns false on timeout.
+        fn waitWithTimeout(self: *ResponseReader, timeout_ms: u32) bool {
+            const start_time = std.time.milliTimestamp();
+            const timeout_i64: i64 = @intCast(timeout_ms);
+
+            while (!self.done.load(.seq_cst)) {
+                const elapsed = std.time.milliTimestamp() - start_time;
+                if (elapsed >= timeout_i64) {
+                    return false;
+                }
+                std.Thread.sleep(1 * std.time.ns_per_ms);
+            }
+            return true;
+        }
+
+        fn join(self: *ResponseReader) void {
+            if (self.thread) |t| {
+                t.join();
+                self.thread = null;
+            }
+        }
+    };
+
+    /// Read a JSON-RPC response from the server with timeout
     fn readResponse(self: *LspClient) !ParsedResponse {
         const stdout = self.process.stdout orelse return error.NoStdout;
 
-        // Read headers until we find Content-Length
-        var content_length: ?usize = null;
-        var line_buf: [1024]u8 = undefined;
-        var line_pos: usize = 0;
+        std.debug.print("[LSP Client] Waiting for response...\n", .{});
 
-        while (true) {
-            var byte_buf: [1]u8 = undefined;
-            const bytes_read = try stdout.read(&byte_buf);
-            if (bytes_read == 0) return error.EndOfStream;
+        var reader = ResponseReader{ .allocator = self.allocator };
+        reader.start(stdout);
 
-            const byte = byte_buf[0];
-
-            if (byte == '\n') {
-                const line_end = if (line_pos > 0 and line_buf[line_pos - 1] == '\r')
-                    line_pos - 1
-                else
-                    line_pos;
-
-                const line = line_buf[0..line_end];
-
-                // Empty line signals end of headers
-                if (line.len == 0) break;
-
-                // Parse Content-Length header
-                if (std.mem.startsWith(u8, line, "Content-Length: ")) {
-                    const len_str = line["Content-Length: ".len..];
-                    content_length = std.fmt.parseInt(usize, len_str, 10) catch continue;
-                }
-
-                line_pos = 0;
-            } else {
-                if (line_pos < line_buf.len) {
-                    line_buf[line_pos] = byte;
-                    line_pos += 1;
-                }
-            }
+        // Wait for read to complete with timeout
+        if (!reader.waitWithTimeout(READ_TIMEOUT_MS)) {
+            // Kill the server process to unblock the reader thread
+            _ = self.process.kill() catch {};
+            reader.join();
+            std.debug.print("[LSP Client] Read timeout!\n", .{});
+            return error.ReadTimeout;
         }
 
-        const len = content_length orelse return error.MissingContentLength;
+        reader.join();
 
-        // Read the JSON content
-        const content = try self.allocator.alloc(u8, len);
-        defer self.allocator.free(content);
-
-        var total_read: usize = 0;
-        while (total_read < len) {
-            const bytes_read = try stdout.read(content[total_read..]);
-            if (bytes_read == 0) return error.UnexpectedEndOfStream;
-            total_read += bytes_read;
+        if (reader.read_error) {
+            std.debug.print("[LSP Client] Read error (EOF)\n", .{});
+            return error.EndOfStream;
         }
+
+        std.debug.print("[LSP Client] Received: {s}\n", .{reader.result_buffer[0..reader.result_len]});
 
         // Parse JSON response - caller owns the memory
-        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, content, .{
+        const parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, reader.result_buffer[0..reader.result_len], .{
             .allocate = .alloc_always,
         });
 

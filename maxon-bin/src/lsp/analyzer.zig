@@ -5,10 +5,6 @@ const ast = @import("../compiler/ast.zig");
 const types = @import("types.zig");
 const lexer = @import("../compiler/1-lexer.zig");
 
-fn log(comptime fmt: []const u8, args: anytype) void {
-    std.debug.print("[LSP:Analyzer] " ++ fmt ++ "\n", args);
-}
-
 pub const Document = struct {
     uri: []const u8,
     content: []const u8,
@@ -56,38 +52,39 @@ pub const Analyzer = struct {
         try self.documents.put(self.allocator, uri_copy, doc);
 
         // Eagerly analyze to populate cache
-        _ = self.getSemanticInfo(uri_copy) catch |err| {
-            log("Semantic analysis failed: {}", .{err});
-        };
+        _ = self.getSemanticInfo(uri_copy) catch {};
     }
 
     pub fn updateDocument(self: *Analyzer, uri: []const u8, content: []const u8, version: i64) !void {
-        if (self.documents.getPtr(uri)) |doc| {
-            // Store old content in case analysis fails
-            const old_content = doc.content;
-            doc.content = try self.allocator.dupe(u8, content);
-            doc.version = version;
+        // Get entry to access the owned key for cache operations
+        const entry = self.documents.getEntry(uri) orelse return;
+        const owned_uri = entry.key_ptr.*;
+        const doc = entry.value_ptr;
 
-            // Try to re-analyze - if successful, invalidate old cache
-            const new_info = compiler.analyzeForLSP(doc.content, null, self.allocator) catch |err| {
-                log("Semantic analysis failed: {} (keeping previous cache)", .{err});
-                // Keep old cache, just free old content
-                self.allocator.free(old_content);
-                return;
-            };
+        // Store old content in case analysis fails
+        const old_content = doc.content;
+        doc.content = try self.allocator.dupe(u8, content);
+        doc.version = version;
 
-            // Analysis succeeded - replace old cache with new
-            if (self.semantic_cache.fetchRemove(uri)) |kv| {
-                var old_info = kv.value;
-                old_info.deinit();
-            }
-            self.semantic_cache.put(self.allocator, uri, new_info) catch {
-                // If we fail to cache the new info, clean it up
-                var info_to_free = new_info;
-                info_to_free.deinit();
-            };
+        // Try to re-analyze - if successful, invalidate old cache
+        const new_info = compiler.analyzeForLSP(doc.content, null, self.allocator) catch {
+            // Keep old cache, just free old content
             self.allocator.free(old_content);
+            return;
+        };
+
+        // Analysis succeeded - replace old cache with new
+        // Use owned_uri since uri may be from parsed JSON that gets freed
+        if (self.semantic_cache.fetchRemove(owned_uri)) |kv| {
+            var old_info = kv.value;
+            old_info.deinit();
         }
+        self.semantic_cache.put(self.allocator, owned_uri, new_info) catch {
+            // If we fail to cache the new info, clean it up
+            var info_to_free = new_info;
+            info_to_free.deinit();
+        };
+        self.allocator.free(old_content);
     }
 
     pub fn closeDocument(self: *Analyzer, uri: []const u8) void {
@@ -108,18 +105,19 @@ pub const Analyzer = struct {
             return cached;
         }
 
-        const doc = self.documents.get(uri) orelse return error.DocumentNotFound;
-        log("Running semantic analysis for {s}...", .{uri});
+        // Get the document - we need to use doc.uri as the cache key since it's
+        // owned by the documents map. The passed-in uri may be from parsed JSON
+        // that gets freed after the message handler returns.
+        const doc_entry = self.documents.getEntry(uri) orelse return error.DocumentNotFound;
+        const owned_uri = doc_entry.key_ptr.*;
 
-        var info = compiler.analyzeForLSP(doc.content, null, self.allocator) catch |err| {
-            log("Semantic analysis error: {}", .{err});
+        var info = compiler.analyzeForLSP(doc_entry.value_ptr.content, null, self.allocator) catch |err| {
             return err;
         };
         errdefer info.deinit();
 
-        try self.semantic_cache.put(self.allocator, uri, info);
-        log("Semantic analysis complete: {d} variables", .{info.variables.len});
-        return self.semantic_cache.getPtr(uri).?;
+        try self.semantic_cache.put(self.allocator, owned_uri, info);
+        return self.semantic_cache.getPtr(owned_uri).?;
     }
 
     pub fn inferTypeAtPosition(self: *Analyzer, doc_uri: []const u8, _: u32, _: u32, var_name: []const u8) ?[]const u8 {
@@ -217,7 +215,6 @@ pub const Analyzer = struct {
     /// Get hover information for the symbol at the given position
     /// Returns allocated markdown string that caller must free, or null if no hover info
     pub fn getHoverInfo(self: *Analyzer, uri: []const u8, line: u32, character: u32) ?[]const u8 {
-        std.debug.print("DEBUG getHoverInfo START: uri='{s}' line={d} char={d}\n", .{ uri, line, character });
         const doc = self.documents.get(uri) orelse {
             std.debug.print("DEBUG: document not found\n", .{});
             return null;
@@ -233,8 +230,6 @@ pub const Analyzer = struct {
             std.debug.print("DEBUG: getWordAtPosition returned null\n", .{});
             return null;
         };
-
-        std.debug.print("DEBUG getHoverInfo: word='{s}' line={d} char={d}\n", .{ word, line, character });
 
         // 1. Check for keywords - doesn't require semantic analysis
         if (getKeywordHover(word)) |hover_text| {
@@ -658,10 +653,7 @@ pub const Analyzer = struct {
     pub fn getMemberCompletions(self: *Analyzer, doc_uri: []const u8, type_name: []const u8) ![]types.CompletionItem {
         const info = self.getSemanticInfo(doc_uri) catch return &.{};
 
-        const type_info = info.getType(type_name) orelse {
-            log("Type not found: {s}", .{type_name});
-            return &.{};
-        };
+        const type_info = info.getType(type_name) orelse return &.{};
 
         var items: std.ArrayListUnmanaged(types.CompletionItem) = .empty;
 
@@ -1586,14 +1578,10 @@ fn calculateDepthFromStatements(statements: []const ast.Statement, line: u32) u3
 fn calculateDepthFromStatement(stmt: ast.Statement, line: u32) u32 {
     var depth: u32 = 0;
 
-    // Check if line is inside this statement's block
-    if (stmt.kind.getBlockInfo()) |info| {
-        if (info.start_line < line and line < info.end_line) {
-            depth += 1;
-        }
-    }
-
     // Recurse into child blocks
+    // Note: We only check child blocks, not getBlockInfo(), because for statements
+    // like while/for/if, the block info has the same line range as the primary
+    // child block. Checking both would result in double-counting the indentation.
     for (stmt.kind.getChildBlocks()) |child| {
         // Check if line is inside this child block
         if (child.info.start_line < line and line < child.info.end_line) {
@@ -1748,7 +1736,6 @@ fn getWordAtPosition(content: []const u8, line: u32, character: u32) ?[]const u8
 
     while (lines.next()) |line_content| : (current_line += 1) {
         if (current_line == line) {
-            std.debug.print("DEBUG getWordAtPosition: line_content='{s}' char={d} len={d}\n", .{ line_content, character, line_content.len });
             // Found the line, now extract the word at character position
             if (character >= line_content.len) {
                 std.debug.print("DEBUG: character >= len\n", .{});

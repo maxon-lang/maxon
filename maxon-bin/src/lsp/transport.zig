@@ -55,6 +55,15 @@ pub const Transport = struct {
     /// Read the next JSON-RPC message from stdin
     /// Returns the parsed JSON value, caller owns the memory
     pub fn readMessage(self: *Transport) !std.json.Parsed(std.json.Value) {
+        // Debug log to file
+        {
+            const file = std.fs.cwd().createFile("lsp_debug.log", .{ .truncate = false }) catch null;
+            if (file) |f| {
+                defer f.close();
+                f.seekFromEnd(0) catch {};
+                _ = f.write("[LSP:Transport] readMessage called\n") catch {};
+            }
+        }
         // Read headers until we find Content-Length
         var content_length: ?usize = null;
 
@@ -109,6 +118,18 @@ pub const Transport = struct {
             const bytes_read = try self.stdin.read(content[total_read..]);
             if (bytes_read == 0) return error.UnexpectedEndOfStream;
             total_read += bytes_read;
+        }
+
+        // Debug: log what we read to file
+        {
+            const file = std.fs.cwd().createFile("lsp_debug.log", .{ .truncate = false }) catch null;
+            if (file) |f| {
+                defer f.close();
+                f.seekFromEnd(0) catch {};
+                var buf: [1024]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "[LSP:Transport] Read {d} bytes, expected {d}\n", .{ total_read, len }) catch "[error formatting]\n";
+                _ = f.write(msg) catch {};
+            }
         }
 
         // Parse JSON

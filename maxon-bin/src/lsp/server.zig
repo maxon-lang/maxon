@@ -8,17 +8,13 @@ const analyzer = @import("analyzer.zig");
 // Main server loop handling JSON-RPC messages
 // ============================================================================
 
-/// Log a debug message to stderr (visible in VS Code output panel)
-fn log(comptime fmt: []const u8, args: anytype) void {
-    std.debug.print("[LSP] " ++ fmt ++ "\n", args);
-}
-
 pub const Server = struct {
     allocator: std.mem.Allocator,
     transport: transport.Transport,
     analyzer: analyzer.Analyzer,
     initialized: bool = false,
-    shutdown_requested: bool = false,
+    shutdown_received: bool = false, // Server received shutdown request
+    exit_received: bool = false, // Server received exit notification
 
     pub fn init(allocator: std.mem.Allocator) Server {
         return .{
@@ -34,13 +30,10 @@ pub const Server = struct {
 
     /// Run the main server loop
     pub fn run(self: *Server) !void {
-        log("Server starting main loop", .{});
-        while (!self.shutdown_requested) {
+        while (!self.exit_received) {
             // Read next message
             var parsed = self.transport.readMessage() catch |err| {
-                log("readMessage error: {}", .{err});
                 if (err == error.EndOfStream) {
-                    log("EndOfStream - exiting loop", .{});
                     break;
                 }
                 continue;
@@ -51,14 +44,7 @@ pub const Server = struct {
             self.handleMessage(parsed.value) catch |err| {
                 std.debug.print("Error handling message: {}\n", .{err});
             };
-
-            // Check if shutdown was requested during message handling
-            if (self.shutdown_requested) {
-                log("Shutdown requested - exiting loop", .{});
-                break;
-            }
         }
-        log("Server exiting main loop", .{});
     }
 
     /// Handle a single JSON-RPC message
@@ -79,7 +65,7 @@ pub const Server = struct {
         } else if (std.mem.eql(u8, method, "shutdown")) {
             try self.handleShutdown(id);
         } else if (std.mem.eql(u8, method, "exit")) {
-            self.shutdown_requested = true;
+            self.exit_received = true;
         } else if (std.mem.eql(u8, method, "textDocument/didOpen")) {
             try self.handleDidOpen(obj);
         } else if (std.mem.eql(u8, method, "textDocument/didChange")) {
@@ -116,7 +102,6 @@ pub const Server = struct {
 
     /// Handle initialize request
     fn handleInitialize(self: *Server, id: ?types.Request.Id, _: std.json.ObjectMap) !void {
-        log("Initializing server...", .{});
         self.initialized = true;
 
         const result = types.InitializeResult{
@@ -153,7 +138,7 @@ pub const Server = struct {
 
     /// Handle shutdown request
     fn handleShutdown(self: *Server, id: ?types.Request.Id) !void {
-        self.shutdown_requested = true;
+        self.shutdown_received = true;
         try self.transport.writeResult(id, null);
     }
 
@@ -166,7 +151,6 @@ pub const Server = struct {
         const text = transport.getString(text_doc, "text") orelse return;
         const version = transport.getInt(text_doc, "version") orelse 0;
 
-        log("Document opened: {s} (version {d}, {d} bytes)", .{ uri, version, text.len });
         try self.analyzer.openDocument(uri, text, version);
     }
 
