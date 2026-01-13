@@ -34,7 +34,7 @@ fn intrinsicLoadI64Field(self: *AstToIr, call: ast.CallExpr, offset: i32) Conver
     try expectArgCount(self, call, 1);
     const arg = try self.convertExpression(call.args[0]);
     const value = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(arg.value), offset);
-    return .{ .value = value, .ty = .{ .primitive = "int" } };
+    return .{ .value = value, .ty = .{ .primitive = .int } };
 }
 
 /// Common pattern for intrinsics that load a single i32 field (sign-extended) and return int
@@ -42,7 +42,7 @@ fn intrinsicLoadI32Field(self: *AstToIr, call: ast.CallExpr, offset: i32) Conver
     try expectArgCount(self, call, 1);
     const arg = try self.convertExpression(call.args[0]);
     const value = try struct_helpers.loadI32AsI64(self.func(), ir.toStructPtr(arg.value), offset);
-    return .{ .value = value, .ty = .{ .primitive = "int" } };
+    return .{ .value = value, .ty = .{ .primitive = .int } };
 }
 
 /// Initialize a heap-allocated String struct (40 bytes with _iterPos field)
@@ -240,7 +240,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     }
 
     const arg = try self.convertExpression(call.args[0]);
-    const arg_prim = arg.ty.toPrimitiveType();
+    const arg_prim = arg.ty.toIrType();
     const arg_ir_type = builtin.arg_ir_type.?;
 
     // Get the actual value to use, with implicit int-to-float promotion if needed
@@ -256,7 +256,10 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
 
     const result = self.func().emitUnaryOp(builtin.ir_op.?, actual_value, builtin.return_ir_type) catch return error.OutOfMemory;
 
-    return .{ .value = result, .ty = .{ .primitive = builtin.return_type_name } };
+    return .{ .value = result, .ty = if (types.Primitive.fromString(builtin.return_type_name)) |prim|
+        .{ .primitive = prim }
+    else
+        .{ .struct_type = builtin.return_type_name } };
 }
 
 // ============================================================================
@@ -551,7 +554,7 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
         }
     }
 
-    return .{ .value = 0, .ty = .{ .primitive = "void" } };
+    return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
 /// __managed_array_set_length(managed, new_len) -> void
@@ -560,7 +563,7 @@ fn intrinsicManagedArraySetLength(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const managed = try self.convertExpression(call.args[0]);
     const new_len = try self.convertExpression(call.args[1]);
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(managed.value), 8, new_len.value);
-    return .{ .value = 0, .ty = .{ .primitive = "void" } };
+    return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
 /// __managed_array_grow(managed, new_capacity) -> void
@@ -579,7 +582,7 @@ fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     try self.func().emitStore(managed.value, new_buf.raw());
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(managed.value), 16, new_capacity.value);
 
-    return .{ .value = 0, .ty = .{ .primitive = "void" } };
+    return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
 /// __managed_array_shift_right(managed, start_index, count) -> void
@@ -590,7 +593,7 @@ fn intrinsicManagedArrayShiftRight(self: *AstToIr, call: ast.CallExpr) ConvertEr
     const start_index = try self.convertExpression(call.args[1]);
     const count = try self.convertExpression(call.args[2]);
     try emitArrayShift(self, managed, start_index, count, .right);
-    return .{ .value = 0, .ty = .{ .primitive = "void" } };
+    return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
 /// __managed_array_shift_left(managed, start_index, count) -> void
@@ -601,7 +604,7 @@ fn intrinsicManagedArrayShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const start_index = try self.convertExpression(call.args[1]);
     const count = try self.convertExpression(call.args[2]);
     try emitArrayShift(self, managed, start_index, count, .left);
-    return .{ .value = 0, .ty = .{ .primitive = "void" } };
+    return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
 /// __managed_array_get_unchecked(managed, index) -> Element
@@ -630,11 +633,11 @@ fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) Convert
     } else if (elem_info.size == 1) {
         // Byte elements: load as i8 (will be auto zero-extended by codegen)
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i8);
-        return .{ .value = elem_val, .ty = .{ .primitive = type_name } };
+        return .{ .value = elem_val, .ty = .{ .primitive = types.Primitive.fromString(type_name) orelse .byte } };
     } else if (elem_info.size == 8) {
         // 8-byte primitives (int, float, bool)
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
-        return .{ .value = elem_val, .ty = .{ .primitive = type_name } };
+        return .{ .value = elem_val, .ty = .{ .primitive = types.Primitive.fromString(type_name) orelse .int } };
     } else {
         self.reportInternalError("unsupported element size in array get intrinsic");
         return error.SemanticError;
@@ -648,7 +651,7 @@ fn intrinsicElementSize(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
     try expectArgCount(self, call, 0);
     const elem_info = try getElementInfo(self);
     const size_val = try self.func().emitConstI64(elem_info.size);
-    return .{ .value = size_val, .ty = .{ .primitive = "int" } };
+    return .{ .value = size_val, .ty = .{ .primitive = .int } };
 }
 
 /// __map_get_init_key(managed, index) -> Key
@@ -683,7 +686,7 @@ fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
         return .{ .value = elem_val, .ty = .{ .enum_type = elem_info.type_name.? } };
     } else {
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
-        return .{ .value = elem_val, .ty = .{ .primitive = elem_info.type_name orelse "int" } };
+        return .{ .value = elem_val, .ty = .{ .primitive = if (elem_info.type_name) |tn| types.Primitive.fromString(tn) orelse .int else .int } };
     }
 }
 
@@ -720,7 +723,7 @@ fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
         return .{ .value = elem_val, .ty = .{ .enum_type = elem_info.type_name.? } };
     } else {
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
-        return .{ .value = elem_val, .ty = .{ .primitive = elem_info.type_name orelse "int" } };
+        return .{ .value = elem_val, .ty = .{ .primitive = if (elem_info.type_name) |tn| types.Primitive.fromString(tn) orelse .int else .int } };
     }
 }
 
@@ -759,7 +762,7 @@ fn intrinsicCstringWriteStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!
     args[1] = length;
 
     const result = try self.func().emitCall("__write_stdout", args, .i64);
-    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
+    return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = .int } };
 }
 
 /// __cstring_to_managed(cstr) -> __ManagedArray
@@ -839,7 +842,7 @@ fn intrinsicManagedArrayByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const byte_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buf_ptr), index.value, 1);
     const byte_val = try self.func().emitLoad(byte_ptr.raw(), .i8);
 
-    return .{ .value = byte_val, .ty = .{ .primitive = "byte" } };
+    return .{ .value = byte_val, .ty = .{ .primitive = .byte } };
 }
 
 /// __managed_array_slice(managed, start, end) -> __ManagedArray (slice mode)
@@ -951,7 +954,7 @@ fn intrinsicManagedArraySetByte(self: *AstToIr, call: ast.CallExpr) ConvertError
     const byte_i8 = try self.func().emitUnaryOp(.trunc_i64_i8, byte_val.value, .i8);
     try self.func().emitStoreI8(byte_ptr.raw(), byte_i8);
 
-    return .{ .value = 0, .ty = .{ .primitive = "void" } };
+    return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
 /// __managed_array_to_cstring(managed) -> cstring struct
@@ -1092,7 +1095,7 @@ fn intrinsicManagedArrayIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i64);
     try self.func().emitStore(header_ptr, new_ref);
 
-    return .{ .value = 0, .ty = .{ .primitive = "void" } };
+    return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
 /// __managed_array_refcount(managed) -> int
@@ -1109,7 +1112,7 @@ fn intrinsicManagedArrayRefcount(self: *AstToIr, call: ast.CallExpr) ConvertErro
     // Load refcount from header
     const refcount = try self.func().emitLoad(header_ptr, .i64);
 
-    return .{ .value = refcount, .ty = .{ .primitive = "int" } };
+    return .{ .value = refcount, .ty = .{ .primitive = .int } };
 }
 
 /// __managed_array_is_refcounted(managed) -> bool
@@ -1122,7 +1125,7 @@ fn intrinsicManagedArrayIsRefcounted(self: *AstToIr, call: ast.CallExpr) Convert
     const one = try self.func().emitConstI32(1);
     const is_refcounted = try self.func().emitBinaryOp(.band, flags, one, .i32);
 
-    return .{ .value = is_refcounted, .ty = .{ .primitive = "bool" } };
+    return .{ .value = is_refcounted, .ty = .{ .primitive = .bool } };
 }
 
 /// __managed_array_flags(managed) -> int
@@ -1172,7 +1175,7 @@ fn emitWriteFileIR(self: *AstToIr, path_cstr: TypedValue, data_source: TypedValu
     // Return 0 on success, 1 on failure
     const result = try self.func().emitBinaryOp(.sub, one, success, .i64);
 
-    return .{ .value = result, .ty = .{ .primitive = "int" } };
+    return .{ .value = result, .ty = .{ .primitive = .int } };
 }
 
 // ============================================================================
@@ -1197,7 +1200,7 @@ fn intrinsicFileOpenRead(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 
     // GENERIC_READ = 0x80000000, FILE_SHARE_READ = 1, OPEN_EXISTING = 3
     const handle = try emitCreateFileA(self, path_ptr, 0x80000000, 1, 3, 0);
-    return .{ .value = handle, .ty = .{ .primitive = "int" } };
+    return .{ .value = handle, .ty = .{ .primitive = .int } };
 }
 
 /// __file_open_write(cstr) -> int
@@ -1209,7 +1212,7 @@ fn intrinsicFileOpenWrite(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
 
     // GENERIC_WRITE = 0x40000000, share_mode = 0, CREATE_ALWAYS = 2, FILE_ATTRIBUTE_NORMAL = 0x80
     const handle = try emitCreateFileA(self, path_ptr, 0x40000000, 0, 2, 0x80);
-    return .{ .value = handle, .ty = .{ .primitive = "int" } };
+    return .{ .value = handle, .ty = .{ .primitive = .int } };
 }
 
 /// __file_size(handle) -> int
@@ -1218,7 +1221,7 @@ fn intrinsicFileSize(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue
     try expectArgCount(self, call, 1);
     const handle_typed = try self.convertExpression(call.args[0]);
     const size = try emitGetFileSize(self, handle_typed.value);
-    return .{ .value = size, .ty = .{ .primitive = "int" } };
+    return .{ .value = size, .ty = .{ .primitive = .int } };
 }
 
 /// __file_read(handle, managed_array, size) -> int
@@ -1242,7 +1245,7 @@ fn intrinsicFileRead(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue
 
     // Return bytes read
     const bytes_read = try self.func().emitLoad(bytes_read_ptr.raw(), .i64);
-    return .{ .value = bytes_read, .ty = .{ .primitive = "int" } };
+    return .{ .value = bytes_read, .ty = .{ .primitive = .int } };
 }
 
 /// __file_close(handle) -> int
@@ -1251,7 +1254,7 @@ fn intrinsicFileClose(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     try expectArgCount(self, call, 1);
     const handle_typed = try self.convertExpression(call.args[0]);
     try emitCloseHandle(self, handle_typed.value);
-    return .{ .value = try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
+    return .{ .value = try self.func().emitConstI64(0), .ty = .{ .primitive = .int } };
 }
 
 /// __file_delete(cstr) -> int
@@ -1271,7 +1274,7 @@ fn intrinsicFileDelete(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVal
     const neg_one = try self.func().emitConstI64(-1);
     // Return: is_failure * (-1) + (1 - is_failure) * 0 = is_failure * (-1)
     const return_val = try self.func().emitBinaryOp(.mul, is_failure, neg_one, .i64);
-    return .{ .value = return_val, .ty = .{ .primitive = "int" } };
+    return .{ .value = return_val, .ty = .{ .primitive = .int } };
 }
 
 /// __file_read_all(cstr) -> __ManagedArray
@@ -1408,7 +1411,7 @@ fn intrinsicFindFirstFile(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     // Multiply handle_ptr by is_valid (0 or 1) to get result
     const result = try self.func().emitBinaryOp(.mul, handle_ptr, is_valid, .i64);
 
-    return .{ .value = result, .ty = .{ .primitive = "ptr" } };
+    return .{ .value = result, .ty = .{ .primitive = .ptr } };
 }
 
 /// __find_next_file(handle ptr) returns int
@@ -1432,7 +1435,7 @@ fn intrinsicFindNextFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const result_i32 = try externCall(self, "kernel32.dll", "FindNextFileA", &.{ win_handle, find_data_ptr }, .i32);
     const result = try self.func().emitUnaryOp(.sext_i32_i64, result_i32, .i64);
 
-    return .{ .value = result, .ty = .{ .primitive = "int" } };
+    return .{ .value = result, .ty = .{ .primitive = .int } };
 }
 
 /// __find_close(handle ptr) returns int
@@ -1456,7 +1459,7 @@ fn intrinsicFindClose(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     const zero = try self.func().emitConstI64(0);
     _ = try externCall(self, "kernel32.dll", "HeapFree", &.{ heap, zero, handle_struct }, .i64);
 
-    return .{ .value = close_result, .ty = .{ .primitive = "int" } };
+    return .{ .value = close_result, .ty = .{ .primitive = .int } };
 }
 
 /// __find_filename(handle ptr) returns cstring
@@ -1516,7 +1519,7 @@ fn intrinsicGetFileAttributes(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const path_ptr = try self.func().emitLoad(path_arg.value, .ptr);
 
     const result = try externCall(self, "kernel32.dll", "GetFileAttributesA", &.{path_ptr}, .i64);
-    return .{ .value = result, .ty = .{ .primitive = "int" } };
+    return .{ .value = result, .ty = .{ .primitive = .int } };
 }
 
 /// Generate IR to check if path is a directory
@@ -1541,7 +1544,7 @@ fn emitDirectoryExistsIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     // Result: valid AND is_directory
     const result = try self.func().emitBinaryOp(.mul, is_valid, is_dir, .i64);
 
-    return .{ .value = result, .ty = .{ .primitive = "bool" } };
+    return .{ .value = result, .ty = .{ .primitive = .bool } };
 }
 
 // ============================================================================
@@ -1794,7 +1797,7 @@ fn intrinsicProcessCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_RESERVED, create_result);
 
     // Always return handle_ptr - caller checks hProcess field for 0 to detect failure
-    return .{ .value = handle_ptr, .ty = .{ .primitive = "int" } };
+    return .{ .value = handle_ptr, .ty = .{ .primitive = .int } };
 }
 
 /// __process_wait(handle int, timeoutMs int) returns int
@@ -1834,7 +1837,7 @@ fn intrinsicProcessWait(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HAS_EXITED, one);
 
     // Return wait_result for debugging: WAIT_OBJECT_0 (0) = completed, WAIT_TIMEOUT (258) = timeout
-    return .{ .value = wait_result, .ty = .{ .primitive = "int" } };
+    return .{ .value = wait_result, .ty = .{ .primitive = .int } };
 }
 
 /// Helper to read from a pipe handle and return a String
@@ -1923,7 +1926,7 @@ fn intrinsicProcessGetExitCode(self: *AstToIr, call: ast.CallExpr) ConvertError!
     // Load exit code from handle
     const exit_code = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_EXIT_CODE);
 
-    return .{ .value = exit_code, .ty = .{ .primitive = "int" } };
+    return .{ .value = exit_code, .ty = .{ .primitive = .int } };
 }
 
 /// __process_close(handle int) returns void
@@ -1951,5 +1954,5 @@ fn intrinsicProcessClose(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const zero = try self.func().emitConstI64(0);
     _ = try externCall(self, "kernel32.dll", "HeapFree", &.{ heap, zero, handle_ptr }, .i64);
 
-    return .{ .value = zero, .ty = .{ .primitive = "void" } };
+    return .{ .value = zero, .ty = .{ .primitive = .void } };
 }

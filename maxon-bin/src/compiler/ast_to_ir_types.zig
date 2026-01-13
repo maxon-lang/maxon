@@ -45,6 +45,94 @@ pub const BYTE: []const u8 = primitive_types[3].maxon_name;
 pub const VOID: []const u8 = "void";
 pub const PTR: []const u8 = "ptr";
 
+/// Primitive type enum - type-safe representation of Maxon primitive types.
+/// Using an enum instead of a string prevents bugs like `.primitive = "cstring"`
+/// when cstring is actually a struct type.
+pub const Primitive = enum {
+    int,
+    float,
+    bool,
+    byte,
+    ptr, // internal type
+    void, // internal type
+
+    /// Convert to IR type
+    pub fn toIrType(self: Primitive) ir.Type {
+        return switch (self) {
+            .int, .bool => .i64,
+            .float => .f64,
+            .byte => .i64, // Stored as i64 in registers, but 1 byte in arrays
+            .ptr => .ptr,
+            .void => .void,
+        };
+    }
+
+    /// Get the Maxon language name for this primitive
+    pub fn toMaxonName(self: Primitive) []const u8 {
+        return switch (self) {
+            .int => INT,
+            .float => FLOAT,
+            .bool => BOOL,
+            .byte => BYTE,
+            .ptr => PTR,
+            .void => VOID,
+        };
+    }
+
+    /// Parse a string into a Primitive, returns null if not a valid primitive
+    pub fn fromString(name: []const u8) ?Primitive {
+        if (std.mem.eql(u8, name, "int")) return .int;
+        if (std.mem.eql(u8, name, "float")) return .float;
+        if (std.mem.eql(u8, name, "bool")) return .bool;
+        if (std.mem.eql(u8, name, "byte")) return .byte;
+        if (std.mem.eql(u8, name, "ptr")) return .ptr;
+        if (std.mem.eql(u8, name, "void")) return .void;
+        return null;
+    }
+
+    /// Convert from IR type to Primitive (best effort - i64 maps to int, not bool)
+    pub fn fromIrType(ir_ty: ir.Type) Primitive {
+        return switch (ir_ty) {
+            .i64 => .int,
+            .f64 => .float,
+            .i8 => .byte,
+            .i32 => .int,
+            .ptr => .ptr,
+            .void => .void,
+        };
+    }
+
+    /// Returns true if this is a floating-point type
+    pub fn isFloatingPoint(self: Primitive) bool {
+        return self == .float;
+    }
+
+    /// Returns true if this is an integral type (int, bool, byte)
+    pub fn isIntegral(self: Primitive) bool {
+        return switch (self) {
+            .int, .bool, .byte => true,
+            .float, .ptr, .void => false,
+        };
+    }
+
+    /// Returns true if this is a numeric type (can do arithmetic)
+    pub fn isNumeric(self: Primitive) bool {
+        return switch (self) {
+            .int, .float, .byte => true,
+            .bool, .ptr, .void => false,
+        };
+    }
+
+    /// Get the element size when stored in an array
+    pub fn arrayElementSize(self: Primitive) i32 {
+        return switch (self) {
+            .byte => 1,
+            .int, .float, .bool, .ptr => 8,
+            .void => 0,
+        };
+    }
+};
+
 /// Struct type names for backing types
 pub const STRING: []const u8 = "String";
 pub const CHARACTER: []const u8 = "Character";
@@ -121,7 +209,7 @@ pub const ArrayInfo = struct {
     size: ?usize, // null for dynamic size
     storage: ArrayStorage,
     element_struct_type: ?[]const u8 = null, // struct name if elements are structs
-    element_primitive_type: ?[]const u8 = null, // primitive type name if elements are primitives (e.g., "byte")
+    element_primitive_type: ?Primitive = null, // primitive type if elements are primitives (e.g., .byte)
 
     /// Get the element size in bytes for array indexing.
     /// For structs, looks up the size from type_map.
@@ -137,10 +225,8 @@ pub const ArrayInfo = struct {
             }
         }
         // Then check for primitive types
-        if (self.element_primitive_type) |prim_name| {
-            if (getPrimitiveTypeInfo(prim_name)) |info| {
-                return info.array_element_size;
-            }
+        if (self.element_primitive_type) |prim| {
+            return prim.arrayElementSize();
         }
         // Cannot determine element size - this is a compiler error
         return null;
@@ -157,8 +243,8 @@ pub const FunctionTypeInfo = struct {
 /// Error union type info - for T or E where E conforms to Error
 pub const ErrorUnionInfo = struct {
     success_type: ir.Type, // The success type's IR type
-    success_type_name: ?[]const u8, // Maxon type name for primitives (e.g., "byte", "int") - needed to preserve byte vs int distinction
-    success_struct_type: ?[]const u8, // struct name if success is a struct
+    success_primitive_type: ?Primitive = null, // Primitive type if success is a primitive (preserves byte vs int distinction)
+    success_struct_type: ?[]const u8 = null, // struct name if success is a struct
     success_enum_type: ?[]const u8 = null, // enum name if success is an enum
     error_enum_type: []const u8, // The error enum type name (must be an enum conforming to Error)
 };
@@ -190,16 +276,16 @@ pub fn irTypeToName(ir_ty: ir.Type) []const u8 {
 
 /// Extended type info for variable tracking
 pub const ValueType = union(enum) {
-    primitive: []const u8,
+    primitive: Primitive,
     struct_type: []const u8,
     array_type: ArrayInfo,
     enum_type: []const u8,
     error_union_type: ErrorUnionInfo, // T or E where E conforms to Error
     function_type: FunctionTypeInfo, // First-class function types
 
-    pub fn toPrimitiveType(self: ValueType) ir.Type {
+    pub fn toIrType(self: ValueType) ir.Type {
         return switch (self) {
-            .primitive => |name| nameToIrType(name),
+            .primitive => |p| p.toIrType(),
             .enum_type => .i64,
             .struct_type, .array_type => .ptr,
             .error_union_type => .ptr, // Error unions are pointers to discriminated union structures
@@ -214,7 +300,7 @@ pub const ValueType = union(enum) {
     /// Returns true if this is a floating-point primitive type
     pub fn isFloatingPoint(self: ValueType) bool {
         return switch (self) {
-            .primitive => |name| if (getPrimitiveTypeInfo(name)) |info| info.is_floating_point else false,
+            .primitive => |p| p.isFloatingPoint(),
             else => false,
         };
     }
@@ -222,7 +308,7 @@ pub const ValueType = union(enum) {
     /// Returns true if this is an integral primitive type (int, bool, byte)
     pub fn isIntegral(self: ValueType) bool {
         return switch (self) {
-            .primitive => |name| if (getPrimitiveTypeInfo(name)) |info| info.is_integral else false,
+            .primitive => |p| p.isIntegral(),
             else => false,
         };
     }
@@ -231,7 +317,7 @@ pub const ValueType = union(enum) {
     /// Returns the primitive name ("int", "float", etc.) or struct type name
     pub fn getTypeName(self: ValueType) ?[]const u8 {
         return switch (self) {
-            .primitive => |name| name,
+            .primitive => |p| p.toMaxonName(),
             .struct_type => |name| name,
             .enum_type => |name| name,
             .array_type, .error_union_type, .function_type => null,
@@ -299,7 +385,7 @@ pub const FieldInfo = struct {
     is_export: bool = false, // Whether field is accessible outside the type
 
     pub fn irType(self: FieldInfo) ir.Type {
-        return self.value_type.toPrimitiveType();
+        return self.value_type.toIrType();
     }
 
     pub fn isStruct(self: FieldInfo) bool {
@@ -348,8 +434,8 @@ pub const BackingValues = union(enum) {
 
     pub fn toValueType(self: BackingValues) ValueType {
         return switch (self) {
-            .none, .int => ValueType{ .primitive = INT },
-            .float => ValueType{ .primitive = FLOAT },
+            .none, .int => ValueType{ .primitive = .int },
+            .float => ValueType{ .primitive = .float },
             .string => ValueType{ .struct_type = STRING },
             .character => ValueType{ .struct_type = CHARACTER },
         };

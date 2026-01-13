@@ -148,7 +148,7 @@ pub const Analyzer = struct {
         // For arrays, build monomorphized name like "Array$int"
         var type_name_buf: [256]u8 = undefined;
         const type_name: []const u8 = switch (ty) {
-            .primitive => |name| name,
+            .primitive => |p| p.toMaxonName(),
             .struct_type => |name| name,
             .enum_type => |name| name,
             .array_type => |arr| blk: {
@@ -338,7 +338,7 @@ pub const Analyzer = struct {
     fn getTypeNameForMethodLookup(self: *Analyzer, ty: ast_to_ir.ValueType) ?[]const u8 {
         _ = self;
         return switch (ty) {
-            .primitive => |name| name,
+            .primitive => |p| p.toMaxonName(),
             .struct_type => |name| name,
             .enum_type => |name| name,
             .array_type => "Array", // Array methods are on the generic Array type

@@ -73,9 +73,9 @@ pub const CString = struct {
     /// Create field definitions for type registration
     pub fn createFieldDefs(allocator: std.mem.Allocator) ![]types.FieldInfo {
         const fields = try allocator.alloc(types.FieldInfo, 3);
-        fields[0] = .{ .name = "data", .offset = DATA_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
-        fields[1] = .{ .name = "length", .offset = LENGTH_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
-        fields[2] = .{ .name = "managed", .offset = MANAGED_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
+        fields[0] = .{ .name = "data", .offset = DATA_OFFSET, .size = 8, .value_type = .{ .primitive = .ptr } };
+        fields[1] = .{ .name = "length", .offset = LENGTH_OFFSET, .size = 8, .value_type = .{ .primitive = .int } };
+        fields[2] = .{ .name = "managed", .offset = MANAGED_OFFSET, .size = 8, .value_type = .{ .primitive = .ptr } };
         return fields;
     }
 };

@@ -159,11 +159,11 @@ pub const ManagedArray = struct {
     /// Create field definitions for type registration
     pub fn createFieldDefs(allocator: std.mem.Allocator) ![]types.FieldInfo {
         const fields = try allocator.alloc(types.FieldInfo, 5);
-        fields[0] = .{ .name = "_buffer", .offset = BUFFER_OFFSET, .size = 8, .value_type = .{ .primitive = types.PTR } };
-        fields[1] = .{ .name = "_len", .offset = LEN_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
-        fields[2] = .{ .name = "_capacity", .offset = CAPACITY_OFFSET, .size = 8, .value_type = .{ .primitive = types.INT } };
-        fields[3] = .{ .name = "_flags", .offset = FLAGS_OFFSET, .size = 4, .value_type = .{ .primitive = types.INT } };
-        fields[4] = .{ .name = "_parent_off", .offset = PARENT_OFF_OFFSET, .size = 4, .value_type = .{ .primitive = types.INT } };
+        fields[0] = .{ .name = "_buffer", .offset = BUFFER_OFFSET, .size = 8, .value_type = .{ .primitive = .ptr } };
+        fields[1] = .{ .name = "_len", .offset = LEN_OFFSET, .size = 8, .value_type = .{ .primitive = .int } };
+        fields[2] = .{ .name = "_capacity", .offset = CAPACITY_OFFSET, .size = 8, .value_type = .{ .primitive = .int } };
+        fields[3] = .{ .name = "_flags", .offset = FLAGS_OFFSET, .size = 4, .value_type = .{ .primitive = .int } };
+        fields[4] = .{ .name = "_parent_off", .offset = PARENT_OFF_OFFSET, .size = 4, .value_type = .{ .primitive = .int } };
         return fields;
     }
 };
@@ -433,7 +433,7 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
         .value = eu_ptr.raw(),
         .ty = .{ .error_union_type = .{
             .success_type = if (elem_info.is_struct) .ptr else .i64,
-            .success_type_name = if (elem_info.is_struct) null else elem_info.name,
+            .success_primitive_type = if (elem_info.is_struct) null else if (elem_info.name) |n| types.Primitive.fromString(n) else null,
             .success_struct_type = if (elem_info.is_struct) elem_info.name else null,
             .error_enum_type = "ArrayError",
         } },
@@ -674,7 +674,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
         try self.func().setValueName(result_ptr.raw(), decl.name);
         try self.var_map.put(self.allocator, decl.name, VarInfo.init(
             result_ptr.raw(),
-            .{ .primitive = func_info.return_type.toMaxonName() },
+            .{ .primitive = types.Primitive.fromIrType(func_info.return_type) },
             self.current_decl_is_mutable,
             false,
         ));
@@ -693,13 +693,13 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
     }
 
     const first_typed = try self.convertExpression(elements[0]);
-    const elem_type = first_typed.ty.toPrimitiveType();
+    const elem_type = first_typed.ty.toIrType();
     const elem_struct_type: ?[]const u8 = switch (first_typed.ty) {
         .struct_type => |name| name,
         .primitive, .array_type, .enum_type, .error_union_type, .function_type => null,
     };
-    const elem_primitive_type: ?[]const u8 = switch (first_typed.ty) {
-        .primitive => |name| name,
+    const elem_primitive_type: ?types.Primitive = switch (first_typed.ty) {
+        .primitive => |prim| prim,
         else => null,
     };
 
@@ -712,16 +712,12 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
         };
         break :blk @intCast(size);
     } else blk: {
-        // Must have a primitive type name
-        const prim_name = elem_primitive_type orelse {
+        // Must have a primitive type
+        const prim = elem_primitive_type orelse {
             self.reportInternalError("cannot determine element type in array literal");
             return error.SemanticError;
         };
-        const prim_info = types.getPrimitiveTypeInfo(prim_name) orelse {
-            self.reportInternalError("unknown primitive type in array literal");
-            return error.SemanticError;
-        };
-        break :blk prim_info.array_element_size;
+        break :blk prim.arrayElementSize();
     };
 
     // Allocate buffer for elements on heap

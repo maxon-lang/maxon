@@ -434,20 +434,20 @@ pub const SemanticAnalyzer = struct {
         // __ManagedArray (unified for both arrays and strings - 32 bytes)
         // Layout: ptr buffer (8) + i64 len (8) + i64 capacity (8) + i32 flags (4) + i32 parent_off (4)
         const managed_array_fields = try self.allocator.alloc(FieldInfo, 5);
-        managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = "ptr" } };
-        managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = "int" } };
-        managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = "int" } };
-        managed_array_fields[3] = .{ .name = "_flags", .offset = 24, .size = 4, .value_type = .{ .primitive = "int" } };
-        managed_array_fields[4] = .{ .name = "_parent_off", .offset = 28, .size = 4, .value_type = .{ .primitive = "int" } };
+        managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = .ptr } };
+        managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = .int } };
+        managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = .int } };
+        managed_array_fields[3] = .{ .name = "_flags", .offset = 24, .size = 4, .value_type = .{ .primitive = .int } };
+        managed_array_fields[4] = .{ .name = "_parent_off", .offset = 28, .size = 4, .value_type = .{ .primitive = .int } };
         try self.type_map.put(self.allocator, "__ManagedArray", .{
             .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 32 },
         });
 
         // cstring
         const cstring_fields = try self.allocator.alloc(FieldInfo, 3);
-        cstring_fields[0] = .{ .name = "data", .offset = 0, .size = 8, .value_type = .{ .primitive = "ptr" } };
-        cstring_fields[1] = .{ .name = "length", .offset = 8, .size = 8, .value_type = .{ .primitive = "int" } };
-        cstring_fields[2] = .{ .name = "managed", .offset = 16, .size = 8, .value_type = .{ .primitive = "ptr" } };
+        cstring_fields[0] = .{ .name = "data", .offset = 0, .size = 8, .value_type = .{ .primitive = .ptr } };
+        cstring_fields[1] = .{ .name = "length", .offset = 8, .size = 8, .value_type = .{ .primitive = .int } };
+        cstring_fields[2] = .{ .name = "managed", .offset = 16, .size = 8, .value_type = .{ .primitive = .ptr } };
         try self.type_map.put(self.allocator, "cstring", .{
             .struct_type = .{ .name = "cstring", .fields = cstring_fields, .size = 24 },
         });
@@ -459,7 +459,13 @@ pub const SemanticAnalyzer = struct {
             // Convert registry params to ParamType slice
             const param_types = try self.allocator.alloc(ParamType, intr.params.len);
             for (intr.params, 0..) |param, i| {
-                param_types[i] = .{ .name = param.name, .ty = .{ .primitive = param.type_name } };
+                param_types[i] = .{
+                    .name = param.name,
+                    .ty = if (types.Primitive.fromString(param.type_name)) |p|
+                        .{ .primitive = p }
+                    else
+                        .{ .struct_type = param.type_name },
+                };
             }
 
             try self.func_map.put(self.allocator, intr.name, .{
@@ -749,7 +755,7 @@ pub const SemanticAnalyzer = struct {
     fn typeExprToReturnInfo(self: *SemanticAnalyzer, type_expr: ast.TypeExpr) !ReturnInfo {
         const vt = try self.typeExprToValueType(type_expr);
         return .{
-            .ir_type = vt.toPrimitiveType(),
+            .ir_type = vt.toIrType(),
             .type_name = vt.getTypeName(),
             .value_type = vt,
         };
@@ -796,8 +802,8 @@ pub const SemanticAnalyzer = struct {
                     break :blk mangled;
                 } else null;
                 return ValueType{ .error_union_type = .{
-                    .success_type = success_vt.toPrimitiveType(),
-                    .success_type_name = if (success_vt == .primitive) success_vt.primitive else null,
+                    .success_type = success_vt.toIrType(),
+                    .success_primitive_type = if (success_vt == .primitive) success_vt.primitive else null,
                     .success_struct_type = success_struct_name,
                     .error_enum_type = eu.error_type,
                 } };
@@ -813,7 +819,7 @@ pub const SemanticAnalyzer = struct {
                     const rt_ptr = try self.allocator.create(ValueType);
                     rt_ptr.* = try self.typeExprToValueType(rt.*);
                     return_type = rt_ptr;
-                    return_ir_type = rt_ptr.toPrimitiveType();
+                    return_ir_type = rt_ptr.toIrType();
                 }
                 return ValueType{ .function_type = .{
                     .param_types = param_types,
@@ -828,13 +834,16 @@ pub const SemanticAnalyzer = struct {
         // Check if it's a known type
         if (self.type_map.get(name)) |type_info| {
             return switch (type_info) {
-                .primitive => ValueType{ .primitive = name },
+                .primitive => |p| ValueType{ .primitive = types.Primitive.fromIrType(p) },
                 .struct_type => ValueType{ .struct_type = name },
                 .enum_type => ValueType{ .enum_type = name },
             };
         }
-        // Default to primitive for unknown types
-        return ValueType{ .primitive = name };
+        // Default to struct for unknown types (primitives are always in type_map)
+        if (types.Primitive.fromString(name)) |p| {
+            return ValueType{ .primitive = p };
+        }
+        return ValueType{ .struct_type = name };
     }
 
     /// Convert a TypeExpr to a human-readable display string (e.g., "Array of Point")
@@ -1329,13 +1338,13 @@ pub const SemanticAnalyzer = struct {
                 },
                 .for_stmt => |for_s| {
                     // For loop variable - get element type from the iterable
-                    const iter_type = self.inferExpressionType(for_s.iterable) orelse ValueType{ .primitive = "int" };
+                    const iter_type = self.inferExpressionType(for_s.iterable) orelse ValueType{ .primitive = .int };
                     const elem_type: ValueType, const elem_display: ?[]const u8 = if (iter_type == .array_type) blk: {
                         const arr = iter_type.array_type;
                         // Use element_struct_type if available, otherwise use IR type name
-                        const display = arr.element_struct_type orelse @tagName(arr.element_type);
-                        break :blk .{ ValueType{ .primitive = @tagName(arr.element_type) }, display };
-                    } else .{ ValueType{ .primitive = "int" }, "int" };
+                        const display = arr.element_struct_type orelse types.Primitive.fromIrType(arr.element_type).toMaxonName();
+                        break :blk .{ ValueType{ .primitive = types.Primitive.fromIrType(arr.element_type) }, display };
+                    } else .{ ValueType{ .primitive = .int }, "int" };
                     try self.addVariableInfo(for_s.var_name, elem_type, elem_display, false, false, 0, 0);
                     for (for_s.children) |child| {
                         try self.collectVariablesFromBody(child.statements);
@@ -1371,16 +1380,16 @@ pub const SemanticAnalyzer = struct {
 
     fn inferExpressionType(self: *SemanticAnalyzer, expr: ast.Expression) ?ValueType {
         return switch (expr) {
-            .integer => ValueType{ .primitive = "int" },
-            .float_lit => ValueType{ .primitive = "float" },
-            .bool_lit => ValueType{ .primitive = "bool" },
+            .integer => ValueType{ .primitive = .int },
+            .float_lit => ValueType{ .primitive = .float },
+            .bool_lit => ValueType{ .primitive = .bool },
             .string_literal => ValueType{ .struct_type = "String" },
             .char_literal => ValueType{ .struct_type = "Character" },
             .identifier => |name| blk: {
                 // Check if it's a known type or enum
                 if (self.type_map.get(name)) |ti| {
                     break :blk switch (ti) {
-                        .primitive => ValueType{ .primitive = name },
+                        .primitive => |p| ValueType{ .primitive = types.Primitive.fromIrType(p) },
                         .struct_type => ValueType{ .struct_type = name },
                         .enum_type => ValueType{ .enum_type = name },
                     };
@@ -1391,7 +1400,7 @@ pub const SemanticAnalyzer = struct {
                 if (arr.elements.len > 0) {
                     if (self.inferExpressionType(arr.elements[0])) |elem_ty| {
                         break :blk ValueType{ .array_type = .{
-                            .element_type = elem_ty.toPrimitiveType(),
+                            .element_type = elem_ty.toIrType(),
                             .size = null,
                             .element_struct_type = if (elem_ty == .struct_type) elem_ty.struct_type else null,
                             .storage = .heap,
@@ -1403,8 +1412,8 @@ pub const SemanticAnalyzer = struct {
             .struct_init => |sinit| ValueType{ .struct_type = sinit.type_name },
             .binary => |bin| self.inferExpressionType(bin.left.*),
             .unary => |un| self.inferExpressionType(un.operand.*),
-            .compare => ValueType{ .primitive = "bool" },
-            .logical => ValueType{ .primitive = "bool" },
+            .compare => ValueType{ .primitive = .bool },
+            .logical => ValueType{ .primitive = .bool },
             .method_call => |mc| blk: {
                 // Get base type and look up method return type
                 const base_ty = self.inferExpressionType(mc.base.*) orelse break :blk null;
