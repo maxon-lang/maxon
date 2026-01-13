@@ -1,0 +1,49 @@
+/// Process execution errors
+export enum ProcessError is Error
+	commandNotFound
+	executionFailed
+	timeout
+	invalidArgument
+end 'ProcessError'
+
+/// Result of process execution
+export type ProcessResult
+	var exitCode int
+	var stdout String
+	var stderr String
+
+	/// Check if the process exited successfully (exit code 0)
+	export function succeeded() returns bool
+		return exitCode == 0
+	end 'succeeded'
+end 'ProcessResult'
+
+export enum ProcessTimeout
+	None
+	Value(timeoutMs int)
+end 'ProcessTimeout'
+
+/// Execute external processes and capture their output
+export type Process
+	var _unused int  // Types require at least one field
+
+	/// Execute a command and return exit code.
+	/// Currently does not capture stdout/stderr.
+	/// @param command The command to execute (will be passed to cmd.exe on Windows)
+	/// @param timeoutMs Timeout in milliseconds (0 = wait forever)
+	/// @returns The process exit code, or -1 on error
+	export static function execute(command String, timeoutMs int) returns int
+		var cmdCstr = command.cstr()
+		var cwdCstr = "".cstr()
+		let handle = __process_create(cmdCstr, cwdCstr)
+		let waitResult = __process_wait(handle, timeoutMs)
+		// waitResult: 0 = completed, 1 = timeout, -1 = error
+		if waitResult != 0 'check'
+			__process_close(handle)
+			return -1
+		end 'check'
+		let exitCode = __process_get_exit_code(handle)
+		__process_close(handle)
+		return exitCode
+	end 'execute'
+end 'Process'

@@ -226,6 +226,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
             .cstring => convertCstringIntrinsic(self, call),
             .make_char => convertMakeCharIntrinsic(self, call),
             .file_io => convertFileIntrinsic(self, call),
+            .process => convertProcessIntrinsic(self, call),
             .unary_op, .custom => unreachable, // These use individual lookup below
         };
     }
@@ -866,7 +867,7 @@ fn intrinsicManagedArrayConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const total_len = try self.func().emitBinaryOp(.add, a_len, b_len, .i64);
 
     // Allocate with header for refcounting
-    const buf_ptr = try array.emitAllocRefcountedBuffer(self,total_len, "array concat");
+    const buf_ptr = try array.emitAllocRefcountedBuffer(self, total_len, "array concat");
 
     // Copy both arrays into the new buffer
     try self.func().emitMemcpyDynamic(buf_ptr, ir.toRawPtr(a_buf), a_len);
@@ -892,7 +893,7 @@ fn intrinsicManagedArrayMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertEr
     const orig_buf = try self.func().emitLoad(managed.value, .ptr);
 
     // Allocate with header for refcounting
-    const new_buf = try array.emitAllocRefcountedBuffer(self,len, "array buffer");
+    const new_buf = try array.emitAllocRefcountedBuffer(self, len, "array buffer");
     try self.func().emitMemcpyDynamic(new_buf, ir.toRawPtr(orig_buf), len);
 
     // Initialize __ManagedArray struct (mode=1 for heap-refcounted)
@@ -1022,7 +1023,7 @@ fn intrinsicManagedArrayFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const length = try self.convertExpression(call.args[1]);
 
     // Allocate with header for refcounting
-    const new_buf = try array.emitAllocRefcountedBuffer(self,length.value, "array buffer");
+    const new_buf = try array.emitAllocRefcountedBuffer(self, length.value, "array buffer");
 
     // Copy data from source buffer
     const src_buf = try self.func().emitLoad(buffer.value, .ptr);
@@ -1562,7 +1563,7 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     const utf8_size = try emitWideCharToMultiByte(self, wide_str, zero_i64, zero_i64);
 
     // Allocate UTF-8 buffer with refcount header for String
-    const utf8_buf = try array.emitAllocRefcountedBuffer(self,utf8_size, "string buffer");
+    const utf8_buf = try array.emitAllocRefcountedBuffer(self, utf8_size, "string buffer");
 
     // Convert to UTF-8
     _ = try emitWideCharToMultiByte(self, wide_str, utf8_buf.raw(), utf8_size);
@@ -1596,4 +1597,290 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     try emitLocalFree(self, argv_w);
 
     return result_ptr;
+}
+
+// ============================================================================
+// Process Intrinsics (stdlib-only)
+// ============================================================================
+//
+// Opaque process handle layout (64 bytes total):
+//   Offset  0: hProcess (8 bytes)
+//   Offset  8: hThread (8 bytes)
+//   Offset 16: hJob (8 bytes)
+//   Offset 24: hStdoutRead (8 bytes)
+//   Offset 32: hStderrRead (8 bytes)
+//   Offset 40: exitCode (8 bytes)
+//   Offset 48: hasExited flag (8 bytes)
+//   Offset 56: reserved (8 bytes)
+
+const PROCESS_HANDLE_SIZE: i64 = 64;
+const PROCESS_HANDLE_HPROCESS: i32 = 0;
+const PROCESS_HANDLE_HTHREAD: i32 = 8;
+const PROCESS_HANDLE_HJOB: i32 = 16;
+const PROCESS_HANDLE_HSTDOUT_READ: i32 = 24;
+const PROCESS_HANDLE_HSTDERR_READ: i32 = 32;
+const PROCESS_HANDLE_EXIT_CODE: i32 = 40;
+const PROCESS_HANDLE_HAS_EXITED: i32 = 48;
+const PROCESS_HANDLE_RESERVED: i32 = 56;
+
+// Windows constants
+const STARTF_USESTDHANDLES: u32 = 0x00000100;
+const GENERIC_READ: u32 = 0x80000000;
+const GENERIC_WRITE: u32 = 0x40000000;
+const FILE_SHARE_READ: u32 = 0x00000001;
+const FILE_SHARE_WRITE: u32 = 0x00000002;
+const CREATE_SUSPENDED: u32 = 0x00000004;
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x00002000;
+const WAIT_OBJECT_0: u32 = 0;
+const WAIT_TIMEOUT: u32 = 258;
+const INFINITE: u32 = 0xFFFFFFFF;
+
+// STARTUPINFOA size: 68 bytes on x64
+const STARTUPINFOA_SIZE: i64 = 104; // cb(4) + reserved(4) + desktop(8) + title(8) + pos(16) + size(16) + counters(16) + flags(4) + show(2) + reserved2(2) + reserved3(8) + stdin(8) + stdout(8) + stderr(8)
+// PROCESS_INFORMATION size: 24 bytes
+const PROCESS_INFORMATION_SIZE: i64 = 24;
+// SECURITY_ATTRIBUTES size: 24 bytes
+const SECURITY_ATTRIBUTES_SIZE: i64 = 24;
+// JOBOBJECT_EXTENDED_LIMIT_INFORMATION size: 48 bytes (BasicLimitInformation is 48 bytes, we only need first 48)
+const JOBOBJECT_BASIC_LIMIT_INFORMATION_SIZE: i64 = 48;
+
+const process_intrinsics = .{
+    .{ "__process_create", intrinsicProcessCreate },
+    .{ "__process_wait", intrinsicProcessWait },
+    .{ "__process_read_stdout", intrinsicProcessReadStdout },
+    .{ "__process_read_stderr", intrinsicProcessReadStderr },
+    .{ "__process_get_exit_code", intrinsicProcessGetExitCode },
+    .{ "__process_close", intrinsicProcessClose },
+};
+
+fn convertProcessIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    return dispatchIntrinsic(self, call, process_intrinsics);
+}
+
+/// __process_create(cmdLine cstring, cwd cstring) returns int
+/// Creates a process with stdout/stderr capture. Returns opaque handle or 0 on failure.
+fn intrinsicProcessCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 2);
+    const cmdline_arg = try self.convertExpression(call.args[0]);
+    _ = try self.convertExpression(call.args[1]);
+
+    // Load the cstring data pointer
+    const cmdline_ptr = try self.func().emitLoad(cmdline_arg.value, .ptr);
+
+    // Allocate process handle struct
+    const heap = try emitGetProcessHeap(self);
+    const handle_size = try self.func().emitConstI64(PROCESS_HANDLE_SIZE);
+    const handle_ptr = try emitHeapAllocWin(self, heap, handle_size);
+
+    // Zero-initialize the handle struct
+    const zero = try self.func().emitConstI64(0);
+    var i: i32 = 0;
+    while (i < 8) : (i += 1) {
+        try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(handle_ptr), i * 8, zero);
+    }
+
+    // Allocate STARTUPINFOA (104 bytes) - simple version without pipes
+    const si = try self.func().emitAllocaSized(STARTUPINFOA_SIZE);
+    // Zero initialize
+    var k: i32 = 0;
+    while (k < 13) : (k += 1) {
+        try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(si.raw()), k * 8, zero);
+    }
+    // cb = sizeof(STARTUPINFOA) = 104 (store as i32 at offset 0)
+    const si_size_i32 = try self.func().emitConstI32(@intCast(STARTUPINFOA_SIZE));
+    try struct_helpers.storeI32Field(self.func(), ir.toStructPtr(si.raw()), 0, si_size_i32);
+
+    // Allocate PROCESS_INFORMATION (24 bytes)
+    const pi = try self.func().emitAllocaSized(PROCESS_INFORMATION_SIZE);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(pi.raw()), 0, zero);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(pi.raw()), 8, zero);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(pi.raw()), 16, zero);
+
+    // CreateProcessA(NULL, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)
+    const create_result = try externCall(self, "kernel32.dll", "CreateProcessA", &.{
+        zero, // lpApplicationName = NULL
+        cmdline_ptr, // lpCommandLine
+        zero, // lpProcessAttributes = NULL
+        zero, // lpThreadAttributes = NULL
+        zero, // bInheritHandles = FALSE
+        zero, // dwCreationFlags = 0
+        zero, // lpEnvironment = NULL
+        zero, // lpCurrentDirectory = NULL
+        si.raw(), // lpStartupInfo
+        pi.raw(), // lpProcessInformation
+    }, .i64);
+
+    // Load process and thread handles from PROCESS_INFORMATION
+    const h_process = try self.func().emitLoad(pi.raw(), .ptr);
+    const h_thread_ptr = try self.func().emitConstI64(8);
+    const h_thread_addr = try self.func().emitBinaryOp(.add, pi.raw(), h_thread_ptr, .ptr);
+    const h_thread = try self.func().emitLoad(h_thread_addr, .ptr);
+
+    // Store in handle struct
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HPROCESS, h_process);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HTHREAD, h_thread);
+
+    // Store create_result (0 on failure) in a reserved field so caller can check
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_RESERVED, create_result);
+
+    // Always return handle_ptr - caller checks hProcess field for 0 to detect failure
+    return .{ .value = handle_ptr, .ty = .{ .primitive = "int" } };
+}
+
+/// __process_wait(handle int, timeoutMs int) returns int
+/// Waits for process. Returns: 0=completed, 1=timeout, -1=error
+fn intrinsicProcessWait(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 2);
+    const handle_arg = try self.convertExpression(call.args[0]);
+    const timeout_arg = try self.convertExpression(call.args[1]);
+
+    const handle_ptr = handle_arg.value;
+    const timeout_ms = timeout_arg.value;
+
+    // Load hProcess from handle
+    const h_process = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HPROCESS);
+
+    // Convert timeout: 0 means INFINITE
+    const zero = try self.func().emitConstI64(0);
+    const infinite = try self.func().emitConstI64(INFINITE);
+    const timeout_is_zero = try self.func().emitBinaryOp(.icmp_eq, timeout_ms, zero, .i64);
+    const not_zero = try self.func().emitBinaryOp(.icmp_ne, timeout_ms, zero, .i64);
+    const timeout_part = try self.func().emitBinaryOp(.mul, timeout_ms, not_zero, .i64);
+    const infinite_part = try self.func().emitBinaryOp(.mul, infinite, timeout_is_zero, .i64);
+    const actual_timeout = try self.func().emitBinaryOp(.bitor, timeout_part, infinite_part, .i64);
+
+    // WaitForSingleObject(hProcess, timeout)
+    const wait_result = try externCall(self, "kernel32.dll", "WaitForSingleObject", &.{ h_process, actual_timeout }, .i64);
+
+    // If completed, get exit code and store it
+    const exit_code_ptr = try self.func().emitAllocaSized(8);
+    try self.func().emitStore(exit_code_ptr.raw(), zero);
+    _ = try externCall(self, "kernel32.dll", "GetExitCodeProcess", &.{ h_process, exit_code_ptr.raw() }, .i64);
+    const exit_code = try self.func().emitLoad(exit_code_ptr.raw(), .i64);
+
+    // Store exit code in handle
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_EXIT_CODE, exit_code);
+    const one = try self.func().emitConstI64(1);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HAS_EXITED, one);
+
+    // Return wait_result for debugging: WAIT_OBJECT_0 (0) = completed, WAIT_TIMEOUT (258) = timeout
+    return .{ .value = wait_result, .ty = .{ .primitive = "int" } };
+}
+
+/// Helper to read from a pipe handle and return a String
+/// Simplified version: reads up to 64KB in a single call
+fn emitReadPipeToString(self: *AstToIr, pipe_handle: ir.Value) ConvertError!ir.Value {
+    const heap = try emitGetProcessHeap(self);
+    const zero = try self.func().emitConstI64(0);
+
+    // Allocate buffer (64KB max)
+    const buffer_size = try self.func().emitConstI64(65536);
+    const buffer = try emitHeapAllocWin(self, heap, buffer_size);
+
+    // bytes_read storage
+    const bytes_read_ptr = try self.func().emitAllocaSized(8);
+    try self.func().emitStore(bytes_read_ptr.raw(), zero);
+
+    // ReadFile(handle, buffer, size, &bytes_read, NULL)
+    _ = try externCall(self, "kernel32.dll", "ReadFile", &.{
+        pipe_handle,
+        buffer,
+        buffer_size,
+        bytes_read_ptr.raw(),
+        zero,
+    }, .i64);
+
+    const bytes_read = try self.func().emitLoad(bytes_read_ptr.raw(), .i64);
+
+    // Allocate refcounted buffer and copy data
+    const one = try self.func().emitConstI64(1);
+    const alloc_size = try self.func().emitBinaryOp(.add, bytes_read, one, .i64); // +1 for null terminator
+    const string_buffer = try array.emitAllocRefcountedBuffer(self, alloc_size, "string buffer");
+
+    // Copy data: use RtlMoveMemory
+    _ = try externCall(self, "kernel32.dll", "RtlMoveMemory", &.{ string_buffer.raw(), buffer, bytes_read }, .ptr);
+
+    // Null terminate
+    const term_pos = try self.func().emitBinaryOp(.add, string_buffer.raw(), bytes_read, .ptr);
+    const zero_byte = try self.func().emitConstI8(0);
+    try self.func().emitStoreI8(term_pos, zero_byte);
+
+    // Free temp buffer
+    _ = try externCall(self, "kernel32.dll", "HeapFree", &.{ heap, zero, buffer }, .i64);
+
+    // Allocate String struct (40 bytes)
+    const string_struct_size = try self.func().emitConstI64(String.size());
+    const string_ptr = try emitHeapAllocWin(self, heap, string_struct_size);
+
+    // Initialize String struct
+    try initHeapString(self, string_ptr, string_buffer.raw(), bytes_read);
+
+    return string_ptr;
+}
+
+/// __process_read_stdout(handle int) returns String
+fn intrinsicProcessReadStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const handle_arg = try self.convertExpression(call.args[0]);
+    const handle_ptr = handle_arg.value;
+
+    // Load stdout pipe handle
+    const stdout_pipe = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HSTDOUT_READ);
+
+    const result = try emitReadPipeToString(self, stdout_pipe);
+    return .{ .value = result, .ty = .{ .struct_type = "String" } };
+}
+
+/// __process_read_stderr(handle int) returns String
+fn intrinsicProcessReadStderr(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const handle_arg = try self.convertExpression(call.args[0]);
+    const handle_ptr = handle_arg.value;
+
+    // Load stderr pipe handle
+    const stderr_pipe = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HSTDERR_READ);
+
+    const result = try emitReadPipeToString(self, stderr_pipe);
+    return .{ .value = result, .ty = .{ .struct_type = "String" } };
+}
+
+/// __process_get_exit_code(handle int) returns int
+fn intrinsicProcessGetExitCode(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const handle_arg = try self.convertExpression(call.args[0]);
+    const handle_ptr = handle_arg.value;
+
+    // Load exit code from handle
+    const exit_code = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_EXIT_CODE);
+
+    return .{ .value = exit_code, .ty = .{ .primitive = "int" } };
+}
+
+/// __process_close(handle int) returns void
+fn intrinsicProcessClose(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const handle_arg = try self.convertExpression(call.args[0]);
+    const handle_ptr = handle_arg.value;
+
+    // Load all handles
+    const h_process = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HPROCESS);
+    const h_thread = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HTHREAD);
+    const h_job = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HJOB);
+    const h_stdout = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HSTDOUT_READ);
+    const h_stderr = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HSTDERR_READ);
+
+    // Close all handles
+    _ = try externCall(self, "kernel32.dll", "CloseHandle", &.{h_stdout}, .i64);
+    _ = try externCall(self, "kernel32.dll", "CloseHandle", &.{h_stderr}, .i64);
+    _ = try externCall(self, "kernel32.dll", "CloseHandle", &.{h_thread}, .i64);
+    _ = try externCall(self, "kernel32.dll", "CloseHandle", &.{h_process}, .i64);
+    _ = try externCall(self, "kernel32.dll", "CloseHandle", &.{h_job}, .i64);
+
+    // Free handle struct
+    const heap = try emitGetProcessHeap(self);
+    const zero = try self.func().emitConstI64(0);
+    _ = try externCall(self, "kernel32.dll", "HeapFree", &.{ heap, zero, handle_ptr }, .i64);
+
+    return .{ .value = zero, .ty = .{ .primitive = "void" } };
 }

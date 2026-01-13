@@ -36,6 +36,8 @@ pub const IntrinsicCodegen = enum {
     make_char,
     /// File I/O intrinsics (__read_file, __write_file, etc.)
     file_io,
+    /// Process execution intrinsics (__process_*)
+    process,
 };
 
 /// Intrinsic definition
@@ -252,6 +254,7 @@ pub const intrinsic_categories = [_]IntrinsicCategory{
     .{ .prefix = "__find_filename", .visibility = .stdlib_only, .codegen = .file_io },
     .{ .prefix = "__get_file_attributes", .visibility = .stdlib_only, .codegen = .file_io },
     .{ .prefix = "__directory_exists", .visibility = .stdlib_only, .codegen = .file_io },
+    .{ .prefix = "__process_", .visibility = .stdlib_only, .codegen = .process },
 };
 
 /// Find a category by name prefix
