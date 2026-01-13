@@ -9,13 +9,13 @@ export function compile(sourceFile String) returns int
 
 	// Read source file
 	let source = try File.readText(sourceFile) otherwise 'noSource'
-		print("Error: Could not read source file: {sourceFile}")
-		return 1
+	print("Error: Could not read source file: {sourceFile}")
+	return 1
 	end 'noSource'
 
 	// Phase 1: Lexical Analysis
 	print("Phase 1: Lexing...")
-	let lexer = Lexer.create(source)
+	let lexer = Lexer.init(source)
 	let tokens = lexer.tokenize()
 	print("  Found {tokens.count()} tokens")
 
@@ -23,8 +23,8 @@ export function compile(sourceFile String) returns int
 	print("Phase 2: Parsing...")
 	let parser = Parser.create(tokens)
 	let program = try parser.parseProgram(sourceFile) otherwise (e) 'parseError'
-		print("Parse error: {e}")
-		return 1
+	print("Parse error: {e}")
+	return 1
 	end 'parseError'
 
 	print("  Parsed functions")
@@ -33,8 +33,8 @@ export function compile(sourceFile String) returns int
 	print("Phase 3: Semantic Analysis...")
 	let analyzer = SemanticAnalyzer.create()
 	try analyzer.analyze(program) otherwise (e) 'semanticError'
-		print("Semantic error: {e}")
-		return 1
+	print("Semantic error: {e}")
+	return 1
 	end 'semanticError'
 	print("  OK")
 
@@ -48,15 +48,15 @@ export function compile(sourceFile String) returns int
 	print("Phase 5: Code Generation (MIR)...")
 	let codegen = CodeGen.create()
 	try codegen.generate(program) otherwise (e) 'irError'
-		print("IR generation error: {e}")
-		return 1
+	print("IR generation error: {e}")
+	return 1
 	end 'irError'
 	print("  Generated MIR")
 
 	let mirFile = sourceFile.replace(".maxon", ".mir")
 	try File.writeText(mirFile, codegen.output) otherwise 'noMirWrite'
-		print("Error: Could not write MIR file")
-		return 1
+	print("Error: Could not write MIR file")
+	return 1
 	end 'noMirWrite'
 	print("  Wrote {mirFile}")
 
@@ -64,8 +64,8 @@ export function compile(sourceFile String) returns int
 	print("Phase 6: Code Generation (x86-64)...")
 	let x86gen = X86Gen.create()
 	try x86gen.generate(program) otherwise (e) 'codegenError'
-		print("Code generation error: {e}")
-		return 1
+	print("Code generation error: {e}")
+	return 1
 	end 'codegenError'
 	print("  Generated machine code")
 
@@ -80,8 +80,8 @@ export function compile(sourceFile String) returns int
 	// Phase 8: Write Output File
 	print("Phase 8: Writing {outputFile}...")
 	try File.writeBinary(outputFile, exeBytes) otherwise 'noExeWrite'
-		print("Error: Could not write executable")
-		return 1
+	print("Error: Could not write executable")
+	return 1
 	end 'noExeWrite'
 	print("  Done!")
 

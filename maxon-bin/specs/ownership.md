@@ -186,6 +186,111 @@ end 'main'
 error E008: specs/fragments/ownership.struct-array-field-moved-into-type.1.test:9:5: use after move: 'arr'
 ```
 
+<!-- test: struct-literal-deferred-ownership -->
+Ownership transfers are deferred until after all struct literal fields are evaluated,
+allowing a variable to be used multiple times within the same struct initialization.
+```maxon
+type Wrapper
+    var data String
+    export var len int
+end 'Wrapper'
+
+function main() returns int
+    var s = "hello"
+    var w = Wrapper{data: s, len: s.byteLength()}
+    return w.len
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: struct-literal-moved-after-init -->
+After a struct literal completes, moved variables cannot be used.
+```maxon
+type Wrapper
+    var data String
+    export var len int
+end 'Wrapper'
+
+function main() returns int
+    var s = "hello"
+    var w = Wrapper{data: s, len: s.byteLength()}
+    return s.byteLength()
+end 'main'
+```
+```maxoncstderr
+error E008: specs/fragments/ownership.struct-literal-moved-after-init.1.test:10:5: use after move: 's'
+```
+
+<!-- test: immutable-to-let-field-allowed -->
+Moving an immutable value into an immutable field is allowed.
+```maxon
+type Token
+    export let text String
+end 'Token'
+
+function main() returns int
+    let s = "hello"
+    let t = Token{text: s}
+    return t.text.byteLength()
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: mutable-to-let-field-allowed -->
+Moving a mutable value into an immutable field is allowed.
+```maxon
+type Token
+    export let text String
+end 'Token'
+
+function main() returns int
+    var s = "hello"
+    let t = Token{text: s}
+    return t.text.byteLength()
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: mutable-to-var-field-allowed -->
+Moving a mutable value into a mutable field is allowed.
+```maxon
+type Wrapper
+    export var data String
+end 'Wrapper'
+
+function main() returns int
+    var s = "hello"
+    let w = Wrapper{data: s}
+    return w.data.byteLength()
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.immutable-to-var-field -->
+Moving an immutable value into a mutable field is not allowed.
+```maxon
+type Wrapper
+    var data String
+end 'Wrapper'
+
+function main() returns int
+    let s = "hello"
+    var w = Wrapper{data: s}
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E010: specs/fragments/ownership.error.immutable-to-var-field.1.test:8:5: cannot move from immutable variable: 's'
+```
+
 ## Memory Safety Tests
 
 These tests verify that the borrow checker prevents use-after-free and double-free issues.

@@ -3984,7 +3984,7 @@ pub const AstToIr = struct {
                             const field_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(self_val), field.offset);
 
                             // Track ownership transfer: source variable is moved to field
-                            try self.trackFieldOwnershipTransfer(assign.value, type_name);
+                            try self.trackFieldOwnershipTransfer(assign.value, type_name, field.is_mutable);
 
                             if (field.isStruct()) {
                                 // Struct fields are embedded inline - copy the full data
@@ -7447,6 +7447,12 @@ pub const AstToIr = struct {
         var provided_fields = std.StringHashMap(void).init(self.allocator);
         defer provided_fields.deinit();
 
+        // Collect pending ownership transfers - defer until all field expressions are evaluated
+        // so that a variable can be used multiple times within the same struct literal
+        const PendingTransfer = struct { expr: ast.Expression, dest_is_mutable: bool };
+        var pending_transfers: [64]PendingTransfer = undefined;
+        var pending_count: usize = 0;
+
         // Initialize fields from struct init expression
         for (sinit.fields) |field_init| {
             try provided_fields.put(field_init.name, {});
@@ -7454,8 +7460,11 @@ pub const AstToIr = struct {
             const field_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(dest_ptr), field_info.offset);
             const field_val = try self.convertExpression(field_init.value.*);
 
-            // Track ownership transfer for array/struct fields
-            try self.trackFieldOwnershipTransfer(field_init.value.*, type_name);
+            // Collect ownership transfer to apply after all fields are evaluated
+            if (pending_count < pending_transfers.len) {
+                pending_transfers[pending_count] = .{ .expr = field_init.value.*, .dest_is_mutable = field_info.is_mutable };
+                pending_count += 1;
+            }
 
             if (field_info.isStruct()) {
                 // Struct fields are embedded inline - copy the data
@@ -7474,6 +7483,11 @@ pub const AstToIr = struct {
             } else {
                 try self.func().emitStore(field_ptr.raw(), field_val.value);
             }
+        }
+
+        // Apply deferred ownership transfers now that all field expressions are evaluated
+        for (pending_transfers[0..pending_count]) |transfer| {
+            try self.trackFieldOwnershipTransfer(transfer.expr, type_name, transfer.dest_is_mutable);
         }
 
         // Apply default values for fields not provided in struct init
@@ -7499,7 +7513,7 @@ pub const AstToIr = struct {
     }
 
     /// Track ownership when a variable is moved into a struct field
-    fn trackFieldOwnershipTransfer(self: *AstToIr, expr: ast.Expression, target_type: []const u8) ConvertError!void {
+    fn trackFieldOwnershipTransfer(self: *AstToIr, expr: ast.Expression, target_type: []const u8, dest_is_mutable: bool) ConvertError!void {
         if (expr != .identifier) return;
 
         const var_name = expr.identifier;
@@ -7509,8 +7523,9 @@ pub const AstToIr = struct {
         const is_reference = var_info.ty == .array_type or var_info.ty == .struct_type;
         if (!is_reference) return;
 
-        if (!var_info.is_mutable) {
-            debug.astToIr("cannot move immutable variable '{s}' into struct\n", .{var_name});
+        // Only error if moving immutable value into mutable field
+        if (!var_info.is_mutable and dest_is_mutable) {
+            debug.astToIr("cannot move immutable variable '{s}' into mutable field\n", .{var_name});
             self.reportError(.E010, var_name);
             return error.ImmutableMove;
         }
