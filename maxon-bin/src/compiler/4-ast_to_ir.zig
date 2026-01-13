@@ -3853,8 +3853,10 @@ pub const AstToIr = struct {
                 }
 
                 // Check if returning __ManagedArray to a String-returning function
-                const is_managed_array = typed_val.ty == .primitive and
-                    std.mem.eql(u8, typed_val.ty.primitive, "__ManagedArray");
+                const is_managed_array = (typed_val.ty == .primitive and
+                    std.mem.eql(u8, typed_val.ty.primitive, "__ManagedArray")) or
+                    (typed_val.ty == .struct_type and
+                    std.mem.eql(u8, typed_val.ty.struct_type, "__ManagedArray"));
                 const expects_string = self.current_func_name != null and
                     self.type_map.get("String") != null and self.sret_size == 40;
 
@@ -7916,17 +7918,24 @@ pub const AstToIr = struct {
             }
         }
 
-        // If inside a method body, check if calling a method of the current type (implicit self)
+        // If inside a method body, check if calling a method of the current type
+        // This handles both instance methods (with self_ptr) and static methods (without self_ptr)
         // Only do this if we have an active function (not during registration)
-        if (self.self_ptr != null and self.current_type_name != null and self.current_func != null) {
+        if (self.current_type_name != null and self.current_func != null) {
             const type_name = self.current_type_name.?;
             // Build mangled name on stack to avoid allocation
             var mangled_buf: [256]u8 = undefined;
             if (std.fmt.bufPrint(&mangled_buf, "{s}${s}", .{ type_name, call.func_name })) |mangled_name| {
                 if (self.func_map.contains(mangled_name)) {
-                    // It's a method of the current type - call via self
-                    debug.astToIr("Implicit method call: {s} (self_ptr=%{d})", .{ mangled_name, self.self_ptr.? });
-                    return self.emitMethodCallWithNamedArgs(type_name, call.func_name, call.args, call.named_args, self.self_ptr.?);
+                    // It's a method of the current type - call with self if available (instance method)
+                    // or with null (static method)
+                    if (self.self_ptr) |self_val| {
+                        debug.astToIr("Implicit instance method call: {s} (self_ptr=%{d})", .{ mangled_name, self_val });
+                        return self.emitMethodCallWithNamedArgs(type_name, call.func_name, call.args, call.named_args, self_val);
+                    } else {
+                        debug.astToIr("Implicit static method call: {s}", .{mangled_name});
+                        return self.emitMethodCallWithNamedArgs(type_name, call.func_name, call.args, call.named_args, null);
+                    }
                 }
             } else |_| {
                 // Name too long, skip implicit method check

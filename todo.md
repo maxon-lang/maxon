@@ -211,3 +211,4 @@ Phase 11: Interface declarations (parsing interface definitions)
 - map extension
 - add ArrayIndex
 - semantic error if function is declared as 'throws' but does nothing that might throw
+- File.maxon FileError is too general

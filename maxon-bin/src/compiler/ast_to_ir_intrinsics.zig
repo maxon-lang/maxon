@@ -516,7 +516,8 @@ fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const zero_i32 = try self.func().emitConstI32(0);
     try ManagedArray.init(self.func(), managed_ptr, buf_ptr, capacity.value, capacity.value, zero_i32);
 
-    return .{ .value = managed_ptr.raw(), .ty = .{ .primitive = "ptr" } };
+    // Return as struct type so memcpy works correctly when returning from functions
+    return .{ .value = managed_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
 }
 
 /// __managed_array_set_at(managed, index, value) -> void
@@ -879,7 +880,7 @@ fn intrinsicManagedArraySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const start_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, start.value, .i32);
     try initSliceArrayFields(self, slice_ptr.raw(), start_i32);
 
-    return .{ .value = slice_ptr.raw(), .ty = .{ .primitive = "__ManagedArray" } };
+    return .{ .value = slice_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
 }
 
 /// __managed_array_concat(a, b) -> __ManagedArray
@@ -912,7 +913,7 @@ fn intrinsicManagedArrayConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const mode_one = try self.func().emitConstI32(1);
     try ManagedArray.init(self.func(), result_ptr, buf_ptr, total_len, total_len, mode_one);
 
-    return .{ .value = result_ptr.raw(), .ty = .{ .primitive = "__ManagedArray" } };
+    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
 }
 
 /// __managed_array_make_unique(managed) -> __ManagedArray
@@ -934,7 +935,7 @@ fn intrinsicManagedArrayMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertEr
     const mode_one2 = try self.func().emitConstI32(1);
     try ManagedArray.init(self.func(), result_ptr, new_buf, len, len, mode_one2);
 
-    return .{ .value = result_ptr.raw(), .ty = .{ .primitive = "__ManagedArray" } };
+    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
 }
 
 /// __managed_array_set_byte(managed, index, byte) -> void
@@ -1067,7 +1068,7 @@ fn intrinsicManagedArrayFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const mode_one = try self.func().emitConstI32(1);
     try ManagedArray.init(self.func(), result_ptr, new_buf, length.value, length.value, mode_one);
 
-    return .{ .value = result_ptr.raw(), .ty = .{ .primitive = "__ManagedArray" } };
+    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
 }
 
 // ============================================================================
@@ -1461,6 +1462,7 @@ fn intrinsicFindClose(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
 /// __find_filename(handle ptr) returns cstring
 /// Gets current filename (cFileName) from the handle's find_data.
 /// Returns a cstring struct (data_ptr + length + managed)
+/// The filename is copied to heap memory so the cstring owns its buffer.
 fn intrinsicFindFilename(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const handle_arg = try self.convertExpression(call.args[0]);
@@ -1477,20 +1479,33 @@ fn intrinsicFindFilename(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const strlen_i32 = try externCall(self, "kernel32.dll", "lstrlenA", &.{filename_ptr}, .i32);
     const strlen = try self.func().emitUnaryOp(.sext_i32_i64, strlen_i32, .i64);
 
+    // Allocate heap buffer for the filename copy (strlen + 1 for null terminator)
+    const one = try self.func().emitConstI64(1);
+    const alloc_size = try self.func().emitBinaryOp(.add, strlen, one, .i64);
+    const heap_buf = try self.func().emitHeapAlloc(alloc_size, "filename copy");
+
+    // Copy the filename to heap buffer
+    try self.func().emitMemcpyDynamic(heap_buf, ir.toRawPtr(filename_ptr), strlen);
+
+    // Null-terminate the copy
+    const end_ptr = try self.func().emitBinaryOp(.add, heap_buf.raw(), strlen, .ptr);
+    const zero_byte = try self.func().emitConstI8(0);
+    try self.func().emitStoreI8(end_ptr, zero_byte);
+
     // Allocate cstring struct on stack (24 bytes: data_ptr + length + managed)
     const cstr = try self.func().emitAllocaSized(24);
 
-    // Store data pointer at offset 0
-    try self.func().emitStore(cstr.raw(), filename_ptr);
+    // Store heap buffer pointer at offset 0
+    try self.func().emitStore(cstr.raw(), heap_buf.raw());
 
     // Store length at offset 8
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(cstr.raw()), 8, strlen);
 
-    // Store null managed pointer at offset 16 (we don't own this memory)
+    // Store null managed pointer at offset 16 (cstring owns its heap buffer)
     const null_ptr = try self.func().emitConstI64(0);
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(cstr.raw()), 16, null_ptr);
 
-    return .{ .value = cstr.raw(), .ty = .{ .primitive = "cstring" } };
+    return .{ .value = cstr.raw(), .ty = .{ .struct_type = "cstring" } };
 }
 
 /// __get_file_attributes(path cstring) returns int

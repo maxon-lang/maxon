@@ -1,4 +1,5 @@
-enum FileError is Error
+/// Errors that can occur during file operations
+export enum FileError is Error
 	notFound
 	permissionDenied
 	alreadyExists
@@ -8,51 +9,51 @@ enum FileError is Error
 	writeError
 end 'FileError'
 
-// INVALID_HANDLE_VALUE from Windows API
 let INVALID_HANDLE = -1
 
 export type File
-	var _unused int  // Types require at least one field
+	/// Open a file for reading, returning INVALID_HANDLE if it doesn't exist
+	static function tryOpen(path String) returns int
+		return __file_open_read(path.cstr())
+	end 'tryOpen'
 
-	/// Read text file content as a UTF-8 string
-	export static function readText(path String) returns String throws FileError
-		var cs = path.cstr()
-		let handle = __file_open_read(cs)
+	/// Open file for reading, throwing if not found
+	static function openForRead(path String) returns int throws FileError
+		let handle = tryOpen(path)
 		if handle == INVALID_HANDLE 'notFound'
 			throw FileError.notFound
 		end 'notFound'
+		return handle
+	end 'openForRead'
 
+	/// Read file into a managed array
+	static function readFileData(path String, extraBytes int) returns __ManagedArray throws FileError
+		let handle = try openForRead(path)
 		let size = __file_size(handle)
-		var managed = __managed_array_create(size + 1, 1)
+		var managed = __managed_array_create(size + extraBytes, 1)
 		let bytesRead = __file_read(handle, managed, size)
 		__file_close(handle)
 		__managed_array_set_length(managed, bytesRead)
-		// Null-terminate for C compatibility
-		__managed_array_set_byte(managed, bytesRead, 0)
+		return managed
+	end 'readFileData'
+
+	/// Read text file content as a UTF-8 string
+	export static function readText(path String) returns String throws FileError
+		var managed = try readFileData(path, extraBytes: 1)
+		let len = __managed_array_len(managed)
+		__managed_array_set_byte(managed, len, 0)
 		return String{_managed: managed, _iterPos: 0}
 	end 'readText'
 
 	/// Read file content as raw bytes
 	export static function readBinary(path String) returns Array of byte throws FileError
-		var cs = path.cstr()
-		let handle = __file_open_read(cs)
-		if handle == INVALID_HANDLE 'notFound'
-			throw FileError.notFound
-		end 'notFound'
-
-		let size = __file_size(handle)
-		var managed = __managed_array_create(size, 1)
-		let bytesRead = __file_read(handle, managed, size)
-		__file_close(handle)
-		__managed_array_set_length(managed, bytesRead)
+		var managed = try readFileData(path, extraBytes: 0)
 		return Array of byte{managed: managed, iterIndex: 0}
 	end 'readBinary'
 
 	/// Write string content to a text file
 	export static function writeText(path String, content String) throws FileError
-		var cs = path.cstr()
-		var contentCs = content.cstr()
-		let res = __write_file(cs, contentCs)
+		let res = __write_file(path.cstr(), content.cstr())
 		if res != 0 'failed'
 			throw FileError.writeError
 		end 'failed'
@@ -60,8 +61,7 @@ export type File
 
 	/// Write binary content to a file
 	export static function writeBinary(path String, content Array of byte) throws FileError
-		var cs = path.cstr()
-		let res = __write_file_binary(cs, content)
+		let res = __write_file_binary(path.cstr(), content)
 		if res != 0 'failed'
 			throw FileError.writeError
 		end 'failed'
@@ -69,8 +69,7 @@ export type File
 
 	/// Check if a file exists at the given path
 	export static function exists(path String) returns bool
-		var cs = path.cstr()
-		let handle = __file_open_read(cs)
+		let handle = tryOpen(path)
 		if handle == INVALID_HANDLE 'notFound'
 			return false
 		end 'notFound'
@@ -80,8 +79,7 @@ export type File
 
 	/// Delete a file at the given path
 	export static function delete(path String) throws FileError
-		var cs = path.cstr()
-		let res = __file_delete(cs)
+		let res = __file_delete(path.cstr())
 		if res != 0 'failed'
 			throw FileError.notFound
 		end 'failed'
