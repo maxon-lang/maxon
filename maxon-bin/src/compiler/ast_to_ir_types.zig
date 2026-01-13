@@ -205,6 +205,7 @@ pub const ArrayStorage = enum {
 
 /// Array type info
 pub const ArrayInfo = struct {
+    name: []const u8 = "", // type name like "Array$int", "Array$Point"
     element_type: ir.Type,
     size: ?usize, // null for dynamic size
     storage: ArrayStorage,
@@ -277,9 +278,9 @@ pub fn irTypeToName(ir_ty: ir.Type) []const u8 {
 /// Extended type info for variable tracking
 pub const ValueType = union(enum) {
     primitive: Primitive,
-    struct_type: []const u8,
-    array_type: ArrayInfo,
-    enum_type: []const u8,
+    struct_type: *const StructTypeInfo,
+    array_type: *const ArrayInfo,
+    enum_type: *const EnumTypeInfo,
     error_union_type: ErrorUnionInfo, // T or E where E conforms to Error
     function_type: FunctionTypeInfo, // First-class function types
 
@@ -314,13 +315,14 @@ pub const ValueType = union(enum) {
     }
 
     /// Get the canonical type name for this ValueType
-    /// Returns the primitive name ("int", "float", etc.) or struct type name
+    /// Returns the primitive name ("int", "float", etc.) or struct/enum/array type name
     pub fn getTypeName(self: ValueType) ?[]const u8 {
         return switch (self) {
             .primitive => |p| p.toMaxonName(),
-            .struct_type => |name| name,
-            .enum_type => |name| name,
-            .array_type, .error_union_type, .function_type => null,
+            .struct_type => |info| info.name,
+            .enum_type => |info| info.name,
+            .array_type => |info| info.name,
+            .error_union_type, .function_type => null,
         };
     }
 
@@ -356,21 +358,13 @@ pub fn freeValueTypeAllocations(allocator: std.mem.Allocator, vt: ValueType) voi
                 allocator.destroy(@constCast(rt));
             }
         },
-        .struct_type => |name| {
-            // Free allocated monomorphized type names (contain '$')
-            // Note: Only frees monomorphized names to avoid double-free.
-            // Simple struct names are freed by the caller when appropriate.
-            if (std.mem.indexOf(u8, name, "$")) |_| {
-                allocator.free(name);
-            }
-        },
         .error_union_type => {
             // Note: success_struct_type is typically a reference to an existing type name,
             // not a separately allocated string, so we don't free it here.
             // The monomorphized type names are freed when struct_type values are processed.
         },
-        // Other variants don't have heap allocations
-        .primitive, .enum_type, .array_type => {},
+        // Pointer variants point into type_map, no allocations to free here
+        .primitive, .struct_type, .enum_type, .array_type => {},
     }
 }
 
@@ -394,7 +388,7 @@ pub const FieldInfo = struct {
 
     pub fn structName(self: FieldInfo) ?[]const u8 {
         return switch (self.value_type) {
-            .struct_type => |name| name,
+            .struct_type => |info| info.name,
             else => null,
         };
     }
@@ -436,8 +430,8 @@ pub const BackingValues = union(enum) {
         return switch (self) {
             .none, .int => ValueType{ .primitive = .int },
             .float => ValueType{ .primitive = .float },
-            .string => ValueType{ .struct_type = STRING },
-            .character => ValueType{ .struct_type = CHARACTER },
+            // String and Character backing values are pointers at runtime
+            .string, .character => ValueType{ .primitive = .ptr },
         };
     }
 
@@ -500,16 +494,17 @@ pub const EnumTypeInfo = struct {
     }
 };
 
-/// Type info - primitives, structs, or enums
+/// Type info - primitives, structs, enums, or arrays
 pub const TypeInfo = union(enum) {
     primitive: ir.Type,
     struct_type: StructTypeInfo,
     enum_type: EnumTypeInfo,
+    array_type: ArrayInfo,
 
     pub fn irType(self: TypeInfo) ir.Type {
         return switch (self) {
             .primitive => |t| t,
-            .struct_type => .ptr,
+            .struct_type, .array_type => .ptr,
             .enum_type => .i64,
         };
     }
@@ -520,6 +515,10 @@ pub const TypeInfo = union(enum) {
 
     pub fn isEnum(self: TypeInfo) bool {
         return self == .enum_type;
+    }
+
+    pub fn isArray(self: TypeInfo) bool {
+        return self == .array_type;
     }
 };
 
@@ -550,14 +549,15 @@ pub const PendingMethod = struct {
 };
 
 /// External function signature - for cross-module compilation
+/// Uses ExternalParamType with string-based type names (resolved to pointers during registration)
 pub const ExternalFuncSignature = struct {
     name: []const u8,
     return_type: ir.Type,
     return_type_name: ?[]const u8 = null, // struct type name if returning a struct
-    return_value_type: ?ValueType = null, // Full return type info (for error unions, etc.)
+    return_value_type: ?ExternalValueType = null, // Full return type info (for error unions, etc.)
     is_exported: bool = false, // Whether this function is exported from its module
     source_path: ?[]const u8 = null, // Source file path (to distinguish stdlib vs user)
-    param_types: []const ParamType = &.{}, // Parameter types for type checking
+    param_types: []const ExternalParamType = &.{}, // Parameter types for type checking
     doc_comment: ?[]const u8 = null, // Doc comment (/// or /** */) from source
 };
 
@@ -590,6 +590,25 @@ pub const ParamType = struct {
     name: []const u8 = "", // Parameter name for named argument resolution
     display_name: ?[]const u8 = null, // Human-readable type name (e.g., "Array of Point")
     default_value: ?*const ast.Expression = null, // Default value expression
+};
+
+/// External value type representation - uses strings instead of pointers
+/// Used for cross-module type info before type_map is populated
+pub const ExternalValueType = union(enum) {
+    primitive: Primitive,
+    struct_type: []const u8, // Type name (resolved to pointer during registration)
+    array_type: []const u8, // Type name
+    enum_type: []const u8, // Type name
+    error_union_type: ErrorUnionInfo,
+    function_type_marker, // Placeholder for function types (represented as ptr)
+};
+
+/// External parameter type info - uses ExternalValueType for cross-module signatures
+pub const ExternalParamType = struct {
+    ty: ExternalValueType,
+    name: []const u8 = "",
+    display_name: ?[]const u8 = null,
+    default_value: ?*const ast.Expression = null,
 };
 
 /// Ownership state of a variable
@@ -813,7 +832,7 @@ pub const SemanticInfo = struct {
         }
         self.expr_ptrs.deinit(self.allocator);
 
-        // Free type_map data (struct fields, enum members)
+        // Free type_map data (struct fields, enum members, array type names)
         var type_iter = self.types.iterator();
         while (type_iter.next()) |entry| {
             switch (entry.value_ptr.*) {
@@ -837,6 +856,12 @@ pub const SemanticInfo = struct {
                         .none, .int => {},
                     }
                 },
+                .array_type => |a| {
+                    // Free the allocated array type name if non-empty
+                    if (a.name.len > 0) {
+                        self.allocator.free(a.name);
+                    }
+                },
                 .primitive => {},
             }
         }
@@ -853,42 +878,32 @@ pub const SemanticInfo = struct {
                 if (freed_ptrs.get(ptr) == null) {
                     freed_ptrs.put(self.allocator, ptr, {}) catch {};
 
-                    // For external functions, free param type allocations including struct names
-                    if (entry.value_ptr.is_external) {
-                        for (entry.value_ptr.param_types) |param| {
-                            // Free allocated struct type names (all of them for external functions)
-                            switch (param.ty) {
-                                .struct_type => |name| {
-                                    self.allocator.free(name);
-                                },
-                                .error_union_type => |eu| {
-                                    // Free success_struct_type if allocated
-                                    if (eu.success_struct_type) |name| {
-                                        if (std.mem.indexOf(u8, name, "$")) |_| {
-                                            self.allocator.free(name);
-                                        }
+                    // Free param type allocations (function types have nested allocations)
+                    for (entry.value_ptr.param_types) |param| {
+                        switch (param.ty) {
+                            .error_union_type => |eu| {
+                                // Free success_struct_type if allocated (monomorphized names)
+                                if (eu.success_struct_type) |name| {
+                                    if (std.mem.indexOf(u8, name, "$")) |_| {
+                                        self.allocator.free(name);
                                     }
-                                },
-                                .function_type => |ft| {
-                                    // Free nested function type allocations
-                                    for (ft.param_types) |param_vt| {
-                                        freeValueTypeAllocations(self.allocator, param_vt);
-                                    }
-                                    if (ft.param_types.len > 0) {
-                                        self.allocator.free(ft.param_types);
-                                    }
-                                    if (ft.return_type) |rt| {
-                                        freeValueTypeAllocations(self.allocator, rt.*);
-                                        self.allocator.destroy(@constCast(rt));
-                                    }
-                                },
-                                else => {},
-                            }
-                        }
-                    } else {
-                        // For user functions, only free nested allocations (not struct names)
-                        for (entry.value_ptr.param_types) |param| {
-                            freeValueTypeAllocations(self.allocator, param.ty);
+                                }
+                            },
+                            .function_type => |ft| {
+                                // Free nested function type allocations
+                                for (ft.param_types) |param_vt| {
+                                    freeValueTypeAllocations(self.allocator, param_vt);
+                                }
+                                if (ft.param_types.len > 0) {
+                                    self.allocator.free(ft.param_types);
+                                }
+                                if (ft.return_type) |rt| {
+                                    freeValueTypeAllocations(self.allocator, rt.*);
+                                    self.allocator.destroy(@constCast(rt));
+                                }
+                            },
+                            // struct_type, enum_type, array_type are pointers into type_map, freed there
+                            else => {},
                         }
                     }
                     self.allocator.free(entry.value_ptr.param_types);

@@ -193,7 +193,7 @@ pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !i
 
 /// Check if a type is the String type (which contains __ManagedString)
 pub fn isStringType(ty: ValueType) bool {
-    return ty == .struct_type and std.mem.eql(u8, ty.struct_type, "String");
+    return ty == .struct_type and std.mem.eql(u8, ty.struct_type.name, "String");
 }
 
 /// Copy a struct and handle refcount increment for String/__ManagedString types.

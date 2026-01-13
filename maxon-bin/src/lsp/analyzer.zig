@@ -145,25 +145,12 @@ pub const Analyzer = struct {
         var items: std.ArrayListUnmanaged(types.CompletionItem) = .empty;
 
         // Get type name for method lookup
-        // For arrays, build monomorphized name like "Array$int"
-        var type_name_buf: [256]u8 = undefined;
+        // Now that struct_type, enum_type, array_type are pointers, access .name directly
         const type_name: []const u8 = switch (ty) {
             .primitive => |p| p.toMaxonName(),
-            .struct_type => |name| name,
-            .enum_type => |name| name,
-            .array_type => |arr| blk: {
-                // Build monomorphized array type name
-                // Use Maxon type names (int, float) not IR type names (i64, f64)
-                const elem_name = arr.element_struct_type orelse switch (arr.element_type) {
-                    .i64 => "int",
-                    .i32 => "int",
-                    .i8 => "byte",
-                    .f64 => "float",
-                    .ptr => "ptr",
-                    .void => "void",
-                };
-                break :blk std.fmt.bufPrint(&type_name_buf, "Array${s}", .{elem_name}) catch "Array";
-            },
+            .struct_type => |s| s.name,
+            .enum_type => |e| e.name,
+            .array_type => |a| a.name,
             .error_union_type => return &.{},
             .function_type => return &.{},
         };
@@ -339,8 +326,8 @@ pub const Analyzer = struct {
         _ = self;
         return switch (ty) {
             .primitive => |p| p.toMaxonName(),
-            .struct_type => |name| name,
-            .enum_type => |name| name,
+            .struct_type => |s| s.name,
+            .enum_type => |e| e.name,
             .array_type => "Array", // Array methods are on the generic Array type
             .error_union_type, .function_type => null,
         };
@@ -425,6 +412,9 @@ pub const Analyzer = struct {
             },
             .enum_type => |et| {
                 writer.print("```maxon\nenum {s}\n```\n\nEnum with {d} cases", .{ name, et.members.count() }) catch return null;
+            },
+            .array_type => |at| {
+                writer.print("```maxon\n{s}\n```\n\nArray type with element type {s}", .{ name, at.element_type.toMaxonName() }) catch return null;
             },
             .primitive => {
                 writer.print("```maxon\n{s}\n```\n\nPrimitive type", .{name}) catch return null;

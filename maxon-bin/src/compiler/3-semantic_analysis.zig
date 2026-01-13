@@ -333,6 +333,123 @@ pub const SemanticAnalyzer = struct {
         self.allocated_return_type_names.deinit(self.allocator);
     }
 
+    /// Convert a type name to a ValueType with pointer to type_map entry.
+    /// Returns null if type is not found in type_map.
+    fn typeNameToValueType(self: *SemanticAnalyzer, type_name: []const u8) ?ValueType {
+        const type_info_ptr = self.type_map.getPtr(type_name) orelse return null;
+        return switch (type_info_ptr.*) {
+            .struct_type => |*s| .{ .struct_type = s },
+            .enum_type => |*e| .{ .enum_type = e },
+            .array_type => |*a| .{ .array_type = a },
+            .primitive => if (types.Primitive.fromString(type_name)) |prim|
+                .{ .primitive = prim }
+            else
+                null,
+        };
+    }
+
+    /// Get a struct type pointer from type_map, returns null if not found or not a struct.
+    fn getStructTypePtr(self: *SemanticAnalyzer, type_name: []const u8) ?*const types.StructTypeInfo {
+        const type_info_ptr = self.type_map.getPtr(type_name) orelse return null;
+        return switch (type_info_ptr.*) {
+            .struct_type => |*s| s,
+            else => null,
+        };
+    }
+
+    /// Get an enum type pointer from type_map, returns null if not found or not an enum.
+    fn getEnumTypePtr(self: *SemanticAnalyzer, type_name: []const u8) ?*const types.EnumTypeInfo {
+        const type_info_ptr = self.type_map.getPtr(type_name) orelse return null;
+        return switch (type_info_ptr.*) {
+            .enum_type => |*e| e,
+            else => null,
+        };
+    }
+
+    /// Convert ExternalValueType to ValueType by resolving type names to pointers.
+    fn convertExternalValueType(self: *SemanticAnalyzer, evt: types.ExternalValueType) ?ValueType {
+        return switch (evt) {
+            .primitive => |p| .{ .primitive = p },
+            .struct_type => |name| blk: {
+                // Check if this is an array type like "Array$byte" that needs to be created
+                if (std.mem.startsWith(u8, name, "Array$")) {
+                    const element_name = name["Array$".len..];
+                    if (self.getOrCreateArrayType(element_name)) |arr_ptr| {
+                        break :blk .{ .array_type = arr_ptr };
+                    } else |_| {
+                        break :blk null;
+                    }
+                }
+                break :blk self.typeNameToValueType(name);
+            },
+            .enum_type => |name| self.typeNameToValueType(name),
+            .array_type => |name| blk: {
+                // Array type names are like "Array$byte" - need to create on-demand
+                if (std.mem.startsWith(u8, name, "Array$")) {
+                    const element_name = name["Array$".len..];
+                    if (self.getOrCreateArrayType(element_name)) |arr_ptr| {
+                        break :blk .{ .array_type = arr_ptr };
+                    } else |_| {
+                        break :blk null;
+                    }
+                }
+                break :blk self.typeNameToValueType(name);
+            },
+            .error_union_type => |eu| .{ .error_union_type = eu },
+            .function_type_marker => .{ .primitive = .ptr },
+        };
+    }
+
+    /// Convert ExternalParamType slice to ParamType slice.
+    fn convertExternalParamTypes(self: *SemanticAnalyzer, ext_params: []const types.ExternalParamType) ![]ParamType {
+        const result = try self.allocator.alloc(ParamType, ext_params.len);
+        for (ext_params, 0..) |ep, i| {
+            result[i] = .{
+                .ty = self.convertExternalValueType(ep.ty) orelse .{ .primitive = .ptr },
+                .name = ep.name,
+                .display_name = ep.display_name,
+                .default_value = ep.default_value,
+            };
+        }
+        return result;
+    }
+
+    /// Get or create an array type in type_map, returning a pointer to it.
+    fn getOrCreateArrayType(self: *SemanticAnalyzer, element_name: []const u8) !*const types.ArrayInfo {
+        // Build array type name: Array$ElementType
+        const array_name = try std.fmt.allocPrint(self.allocator, "Array${s}", .{element_name});
+        errdefer self.allocator.free(array_name);
+
+        // Check if already exists
+        if (self.type_map.getPtr(array_name)) |type_info_ptr| {
+            self.allocator.free(array_name); // Don't need the name, already exists
+            return switch (type_info_ptr.*) {
+                .array_type => |*a| a,
+                else => unreachable,
+            };
+        }
+
+        // Track the allocated name
+        try self.allocated_type_strings.append(self.allocator, array_name);
+
+        // Determine element type info
+        const elem_is_struct = if (self.type_map.get(element_name)) |ti| ti == .struct_type else false;
+
+        // Register new array type
+        try self.type_map.put(self.allocator, array_name, .{
+            .array_type = .{
+                .name = array_name,
+                .element_type = types.nameToIrType(element_name),
+                .size = null,
+                .storage = .heap,
+                .element_struct_type = if (elem_is_struct) element_name else null,
+                .element_primitive_type = types.Primitive.fromString(element_name),
+            },
+        });
+
+        return &self.type_map.getPtr(array_name).?.array_type;
+    }
+
     // ------------------------------------------------------------------------
     // Main Analysis Entry Point
     // ------------------------------------------------------------------------
@@ -464,7 +581,8 @@ pub const SemanticAnalyzer = struct {
                     .ty = if (types.Primitive.fromString(param.type_name)) |p|
                         .{ .primitive = p }
                     else
-                        .{ .struct_type = param.type_name },
+                        // Look up type pointer; if not found use primitive ptr as fallback
+                        self.typeNameToValueType(param.type_name) orelse .{ .primitive = .ptr },
                 };
             }
 
@@ -510,18 +628,27 @@ pub const SemanticAnalyzer = struct {
         if (self.func_map.fetchRemove(ext_func.name)) |kv| {
             const old_func = kv.value;
             if (old_func.is_external and old_func.param_types.len > 0) {
-                ast_to_ir.freeParamTypes(self.allocator, old_func.param_types);
+                self.allocator.free(old_func.param_types);
             }
         }
+
+        // Convert ExternalParamTypes to ParamTypes
+        const param_types = try self.convertExternalParamTypes(ext_func.param_types);
+
+        // Convert ExternalValueType to ValueType for return type
+        const return_value_type: ?ValueType = if (ext_func.return_value_type) |evt|
+            self.convertExternalValueType(evt)
+        else
+            null;
 
         try self.func_map.put(self.allocator, ext_func.name, .{
             .return_type = ext_func.return_type,
             .return_type_name = ext_func.return_type_name,
-            .return_value_type = ext_func.return_value_type,
-            .param_types = ext_func.param_types,
+            .return_value_type = return_value_type,
+            .param_types = param_types,
             .doc_comment = ext_func.doc_comment,
             .ir_generated = true,
-            .is_external = true, // Mark as external so param type names get freed
+            .is_external = true,
         });
     }
 
@@ -693,21 +820,8 @@ pub const SemanticAnalyzer = struct {
 
             // Determine field size - check if it's a registered struct type or Array type
             const size: i32 = switch (value_type) {
-                .struct_type => |type_name| blk: {
-                    // Look up the struct size from already-registered types
-                    if (self.type_map.get(type_name)) |type_info| {
-                        break :blk type_info.struct_type.size;
-                    }
-                    // Not registered yet, assume 8 bytes (will be corrected in second pass if needed)
-                    break :blk 8;
-                },
-                .array_type => |arr| blk: {
-                    // For Array types (which are actually struct wrappers), use hardcoded size
-                    // Array$T is always 40 bytes: __ManagedArray(32) + iterIndex(8)
-                    // This avoids circular dependency when monomorphizing Map before Array
-                    _ = arr; // unused
-                    break :blk 40;
-                },
+                .struct_type => |info| info.size,
+                .array_type => 40, // Array$T is always 40 bytes: __ManagedArray(32) + iterIndex(8)
                 else => 8, // Primitives, pointers, etc. are 8 bytes
             };
 
@@ -776,31 +890,22 @@ pub const SemanticAnalyzer = struct {
                     if (g.type_args.len > 0) {
                         const elem_name = g.type_args[0];
                         const resolved = self.generic_params.get(elem_name) orelse elem_name;
-                        return ValueType{ .array_type = .{
-                            .element_type = types.nameToIrType(resolved),
-                            .size = null,
-                            .storage = .heap,
-                            .element_struct_type = if (self.type_map.get(resolved)) |ti| if (ti == .struct_type) resolved else null else null,
-                        } };
+                        const array_ptr = try self.getOrCreateArrayType(resolved);
+                        return ValueType{ .array_type = array_ptr };
                     }
                 }
-                // Other generic types treated as struct
-                return ValueType{ .struct_type = g.base_type };
+                // Other generic types - look up in type_map or fallback to ptr
+                return self.typeNameToValueType(g.base_type) orelse .{ .primitive = .ptr };
             },
             .error_union => |eu| {
                 const success_vt = try self.typeExprToValueType(eu.success_type.*);
-                // For array types, compute the mangled struct name (e.g., "Array$String")
+                // For array/struct types, get the name for success_struct_type
                 const success_struct_name: ?[]const u8 = if (success_vt == .struct_type)
-                    success_vt.struct_type
-                else if (success_vt == .array_type) blk: {
-                    // Get element type name from the array info
-                    const arr = success_vt.array_type;
-                    const elem_name = arr.element_struct_type orelse arr.element_type.toMaxonName();
-                    // Build mangled name: Array$ElementType
-                    const mangled = std.fmt.allocPrint(self.allocator, "Array${s}", .{elem_name}) catch break :blk null;
-                    try self.allocated_type_strings.append(self.allocator, mangled);
-                    break :blk mangled;
-                } else null;
+                    success_vt.struct_type.name
+                else if (success_vt == .array_type)
+                    success_vt.array_type.name
+                else
+                    null;
                 return ValueType{ .error_union_type = .{
                     .success_type = success_vt.toIrType(),
                     .success_primitive_type = if (success_vt == .primitive) success_vt.primitive else null,
@@ -832,18 +937,20 @@ pub const SemanticAnalyzer = struct {
 
     fn simpleNameToValueType(self: *SemanticAnalyzer, name: []const u8) ValueType {
         // Check if it's a known type
-        if (self.type_map.get(name)) |type_info| {
-            return switch (type_info) {
+        if (self.type_map.getPtr(name)) |type_info_ptr| {
+            return switch (type_info_ptr.*) {
                 .primitive => |p| ValueType{ .primitive = types.Primitive.fromIrType(p) },
-                .struct_type => ValueType{ .struct_type = name },
-                .enum_type => ValueType{ .enum_type = name },
+                .struct_type => |*s| ValueType{ .struct_type = s },
+                .enum_type => |*e| ValueType{ .enum_type = e },
+                .array_type => |*a| ValueType{ .array_type = a },
             };
         }
-        // Default to struct for unknown types (primitives are always in type_map)
+        // Default to primitive for unknown types (using ptr as fallback)
         if (types.Primitive.fromString(name)) |p| {
             return ValueType{ .primitive = p };
         }
-        return ValueType{ .struct_type = name };
+        // Unknown type - return ptr as fallback (semantic analysis can't resolve all types)
+        return ValueType{ .primitive = .ptr };
     }
 
     /// Convert a TypeExpr to a human-readable display string (e.g., "Array of Point")
@@ -1383,33 +1490,21 @@ pub const SemanticAnalyzer = struct {
             .integer => ValueType{ .primitive = .int },
             .float_lit => ValueType{ .primitive = .float },
             .bool_lit => ValueType{ .primitive = .bool },
-            .string_literal => ValueType{ .struct_type = "String" },
-            .char_literal => ValueType{ .struct_type = "Character" },
-            .identifier => |name| blk: {
-                // Check if it's a known type or enum
-                if (self.type_map.get(name)) |ti| {
-                    break :blk switch (ti) {
-                        .primitive => |p| ValueType{ .primitive = types.Primitive.fromIrType(p) },
-                        .struct_type => ValueType{ .struct_type = name },
-                        .enum_type => ValueType{ .enum_type = name },
-                    };
-                }
-                break :blk null;
-            },
+            .string_literal => self.typeNameToValueType("String") orelse .{ .primitive = .ptr },
+            .char_literal => self.typeNameToValueType("Character") orelse .{ .primitive = .ptr },
+            .identifier => |name| self.typeNameToValueType(name),
             .array_literal => |arr| blk: {
                 if (arr.elements.len > 0) {
                     if (self.inferExpressionType(arr.elements[0])) |elem_ty| {
-                        break :blk ValueType{ .array_type = .{
-                            .element_type = elem_ty.toIrType(),
-                            .size = null,
-                            .element_struct_type = if (elem_ty == .struct_type) elem_ty.struct_type else null,
-                            .storage = .heap,
-                        } };
+                        const elem_name = elem_ty.getTypeName() orelse "int";
+                        const arr_ptr = self.getOrCreateArrayType(elem_name) catch break :blk null;
+                        break :blk ValueType{ .array_type = arr_ptr };
                     }
                 }
-                break :blk ValueType{ .array_type = .{ .element_type = .i64, .size = null, .element_struct_type = null, .storage = .heap } };
+                const arr_ptr = self.getOrCreateArrayType("int") catch break :blk null;
+                break :blk ValueType{ .array_type = arr_ptr };
             },
-            .struct_init => |sinit| ValueType{ .struct_type = sinit.type_name },
+            .struct_init => |sinit| self.typeNameToValueType(sinit.type_name),
             .binary => |bin| self.inferExpressionType(bin.left.*),
             .unary => |un| self.inferExpressionType(un.operand.*),
             .compare => ValueType{ .primitive = .bool },
@@ -1432,19 +1527,13 @@ pub const SemanticAnalyzer = struct {
                 const base_ty = self.inferExpressionType(fa.base.*) orelse break :blk null;
                 if (base_ty == .enum_type) {
                     if (std.mem.eql(u8, fa.field_name, "rawValue")) {
-                        // Get enum backing type
-                        const type_info = self.type_map.get(base_ty.enum_type) orelse break :blk null;
-                        if (type_info != .enum_type) break :blk null;
-                        const enum_info = type_info.enum_type;
-
-                        break :blk enum_info.rawValueType();
+                        // Get enum backing type directly from pointer
+                        break :blk base_ty.enum_type.rawValueType();
                     }
                 }
-                // For struct field access, look up the field type
+                // For struct field access, look up the field type directly from pointer
                 if (base_ty == .struct_type) {
-                    const type_info = self.type_map.get(base_ty.struct_type) orelse break :blk null;
-                    if (type_info != .struct_type) break :blk null;
-                    for (type_info.struct_type.fields) |field| {
+                    for (base_ty.struct_type.fields) |field| {
                         if (std.mem.eql(u8, field.name, fa.field_name)) {
                             break :blk field.value_type;
                         }

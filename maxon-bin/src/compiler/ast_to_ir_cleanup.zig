@@ -311,7 +311,7 @@ pub fn freeHeapVar(self: *AstToIr, var_info: VarInfo, skip_if_parameter: bool, v
     }
 
     if (var_info.ty == .struct_type) {
-        const struct_name = var_info.ty.struct_type;
+        const struct_name = var_info.ty.struct_type.name;
         debug.astToIr("freeHeapVar: struct {s}", .{struct_name});
 
         // Handle stdlib Array types (Array$int, etc.)

@@ -602,6 +602,12 @@ pub const AstToIr = struct {
                         .none, .int => {},
                     }
                 },
+                .array_type => |a| {
+                    // Free the allocated array type name
+                    if (a.name.len > 0) {
+                        self.allocator.free(a.name);
+                    }
+                },
                 .primitive => {},
             }
         }
@@ -1148,9 +1154,10 @@ pub const AstToIr = struct {
                     const managed_ptr = try array_helpers.emitEmptyManagedArray(
                         self,
                     );
+                    const arr_ptr = try self.getOrCreateArrayType(.{ .element_type = .i64, .size = 0, .storage = .heap, .element_primitive_type = .int });
                     return .{
                         .value = managed_ptr.raw(),
-                        .ty = .{ .array_type = .{ .element_type = .i64, .size = 0, .storage = .heap } },
+                        .ty = .{ .array_type = arr_ptr },
                     };
                 }
 
@@ -1161,6 +1168,12 @@ pub const AstToIr = struct {
                     .float => .f64,
                     .bool => .i64,
                     else => .i64,
+                };
+                const elem_prim: ?types.Primitive = switch (first_elem) {
+                    .int => .int,
+                    .float => .float,
+                    .bool => .bool,
+                    else => .int,
                 };
 
                 // Allocate buffer for elements on heap
@@ -1187,15 +1200,16 @@ pub const AstToIr = struct {
 
                 // Create managed array
                 const managed_ptr = try array_helpers.emitManagedArray(self, buffer, elem_count, elem_count);
+                const arr_ptr = try self.getOrCreateArrayType(.{ .element_type = elem_type, .size = elements.len, .storage = .heap, .element_primitive_type = elem_prim });
 
                 return .{
                     .value = managed_ptr.raw(),
-                    .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .heap } },
+                    .ty = .{ .array_type = arr_ptr },
                 };
             },
             .enum_member => |em| .{
                 .value = try self.func().emitConstI64(em.value),
-                .ty = .{ .enum_type = em.enum_name },
+                .ty = try self.typeNameToValueType(em.enum_name),
             },
             .runtime_expr => |expr| {
                 // For runtime-initialized constants, convert the expression
@@ -1251,7 +1265,7 @@ pub const AstToIr = struct {
 
         return .{
             .value = array_ptr.raw(),
-            .ty = .{ .struct_type = array_type_name },
+            .ty = try self.typeNameToValueType(array_type_name),
         };
     }
 
@@ -1276,7 +1290,7 @@ pub const AstToIr = struct {
             try self.checkTypeVisibility(type_name, type_info);
             return switch (type_info) {
                 .struct_type => |s| s,
-                .primitive, .enum_type => {
+                .primitive, .enum_type, .array_type => {
                     self.reportError(.E006, type_name);
                     return error.UnknownType;
                 },
@@ -1312,7 +1326,7 @@ pub const AstToIr = struct {
             if (self.type_map.get(type_name)) |type_info| {
                 return switch (type_info) {
                     .struct_type => |s| s,
-                    .primitive, .enum_type => {
+                    .primitive, .enum_type, .array_type => {
                         self.reportError(.E006, type_name);
                         return error.UnknownType;
                     },
@@ -1360,6 +1374,7 @@ pub const AstToIr = struct {
                 // If user code explicitly references the enum name, that will fail to compile
                 // because the enum won't be in scope
             },
+            .array_type => {}, // Array types are always visible (derived from element type)
             .primitive => {}, // Primitives are always visible
         }
     }
@@ -1432,7 +1447,7 @@ pub const AstToIr = struct {
         const old_fields: ?[]const FieldInfo = if (self.type_map.get(type_decl.name)) |existing|
             switch (existing) {
                 .struct_type => |s| s.fields,
-                .primitive, .enum_type => null,
+                .primitive, .enum_type, .array_type => null,
             }
         else
             null;
@@ -2404,19 +2419,159 @@ pub const AstToIr = struct {
 
     /// Get the size in bytes for a value type
     pub fn getValueTypeSize(self: *AstToIr, value_type: ValueType) !i32 {
+        _ = self;
         return switch (value_type) {
-            .struct_type => |name| blk: {
-                const info = self.type_map.get(name) orelse {
-                    self.reportError(.E006, name);
-                    return error.UnknownType;
-                };
-                break :blk switch (info) {
-                    .struct_type => |s| s.size,
-                    .primitive, .enum_type => 8,
-                };
-            },
+            .struct_type => |info| info.size,
             .primitive, .enum_type, .array_type, .error_union_type, .function_type => 8,
         };
+    }
+
+    /// Convert a resolved type name to a ValueType with pointer to type_map entry
+    pub fn typeNameToValueType(self: *AstToIr, type_name: []const u8) !ValueType {
+        // Handle primitives first - they may not be in type_map
+        if (types.Primitive.fromString(type_name)) |prim| {
+            return .{ .primitive = prim };
+        }
+        const type_info_ptr = self.type_map.getPtr(type_name) orelse {
+            self.reportError(.E006, type_name);
+            return error.UnknownType;
+        };
+        return switch (type_info_ptr.*) {
+            .struct_type => |*s| .{ .struct_type = s },
+            .enum_type => |*e| .{ .enum_type = e },
+            .array_type => |*a| .{ .array_type = a },
+            .primitive => |ir_ty| .{ .primitive = types.Primitive.fromIrType(ir_ty) },
+        };
+    }
+
+    /// Non-erroring version of typeNameToValueType - returns null for unknown types
+    fn typeNameToValueTypeOpt(self: *AstToIr, type_name: []const u8) ?ValueType {
+        // Handle primitives first - they may not be in type_map
+        if (types.Primitive.fromString(type_name)) |prim| {
+            return .{ .primitive = prim };
+        }
+        const type_info_ptr = self.type_map.getPtr(type_name) orelse return null;
+        return switch (type_info_ptr.*) {
+            .struct_type => |*s| .{ .struct_type = s },
+            .enum_type => |*e| .{ .enum_type = e },
+            .array_type => |*a| .{ .array_type = a },
+            .primitive => |ir_ty| .{ .primitive = types.Primitive.fromIrType(ir_ty) },
+        };
+    }
+
+    /// Convert an ExternalValueType (string-based) to ValueType (pointer-based)
+    fn convertExternalValueType(self: *AstToIr, evt: types.ExternalValueType) ?ValueType {
+        return switch (evt) {
+            .primitive => |p| .{ .primitive = p },
+            .struct_type => |name| self.typeNameToValueTypeOpt(name),
+            .enum_type => |name| self.typeNameToValueTypeOpt(name),
+            .array_type => |name| if (self.getOrCreateArrayTypeByName(name)) |a| .{ .array_type = a } else null,
+            .error_union_type => |eu| .{ .error_union_type = eu },
+            .function_type_marker => .{ .primitive = .ptr },
+        };
+    }
+
+    /// Convert a slice of ExternalParamTypes to ParamTypes
+    fn convertExternalParamTypes(self: *AstToIr, ext_params: []const types.ExternalParamType) ![]ParamType {
+        const result = try self.allocator.alloc(ParamType, ext_params.len);
+        errdefer self.allocator.free(result);
+
+        for (ext_params, 0..) |ep, i| {
+            result[i] = .{
+                .ty = self.convertExternalValueType(ep.ty) orelse .{ .primitive = .ptr },
+                .name = ep.name,
+                .display_name = ep.display_name,
+                .default_value = ep.default_value,
+            };
+        }
+        return result;
+    }
+
+    /// Get or create an array type in the type_map and return a pointer to its ArrayInfo
+    pub fn getOrCreateArrayType(self: *AstToIr, info: types.ArrayInfo) !*const types.ArrayInfo {
+        // Generate a name for this array type based on element type
+        const elem_name = if (info.element_struct_type) |sn|
+            sn
+        else if (info.element_primitive_type) |pt|
+            pt.toMaxonName()
+        else
+            info.element_type.toMaxonName();
+
+        const array_name = try std.fmt.allocPrint(self.allocator, "Array${s}", .{elem_name});
+
+        // Check if it already exists
+        if (self.type_map.getPtr(array_name)) |entry| {
+            self.allocator.free(array_name);
+            return &entry.array_type;
+        }
+
+        // Create new entry
+        var new_info = info;
+        new_info.name = array_name;
+        try self.type_map.put(self.allocator, array_name, .{ .array_type = new_info });
+        return &self.type_map.getPtr(array_name).?.array_type;
+    }
+
+    /// Get or create an array type with modified storage
+    fn getOrCreateArrayTypeWithStorage(self: *AstToIr, base_info: *const types.ArrayInfo, storage: types.ArrayStorage) !*const types.ArrayInfo {
+        if (base_info.storage == storage) {
+            return base_info;
+        }
+        var modified = base_info.*;
+        modified.storage = storage;
+        return self.getOrCreateArrayType(modified);
+    }
+
+    /// Get or create an array type by its string name (e.g., "Array$byte")
+    /// Used when external function signatures reference array types that may not exist yet
+    fn getOrCreateArrayTypeByName(self: *AstToIr, array_type_name: []const u8) ?*const types.ArrayInfo {
+        debug.astToIr("getOrCreateArrayTypeByName: '{s}'", .{array_type_name});
+        // Check if it already exists
+        if (self.type_map.getPtr(array_type_name)) |entry| {
+            if (entry.* == .array_type) {
+                debug.astToIr("  -> found existing", .{});
+                return &entry.array_type;
+            }
+            debug.astToIr("  -> exists but not array_type", .{});
+            return null;
+        }
+
+        // Parse "Array$X" to extract element type name
+        if (!std.mem.startsWith(u8, array_type_name, "Array$")) {
+            debug.astToIr("  -> doesn't start with Array$", .{});
+            return null;
+        }
+        const element_name = array_type_name["Array$".len..];
+        debug.astToIr("  -> element_name='{s}'", .{element_name});
+
+        // Determine element type info
+        var element_type: ir.Type = .ptr;
+        var element_primitive_type: ?types.Primitive = null;
+        var element_struct_type: ?[]const u8 = null;
+
+        if (types.Primitive.fromString(element_name)) |prim| {
+            element_type = prim.toIrType();
+            element_primitive_type = prim;
+            debug.astToIr("  -> primitive type", .{});
+        } else {
+            // Assume it's a struct type
+            element_struct_type = element_name;
+            debug.astToIr("  -> struct type", .{});
+        }
+
+        // Create the array type entry
+        const new_info = types.ArrayInfo{
+            .name = array_type_name,
+            .element_type = element_type,
+            .size = null, // dynamic
+            .storage = .heap,
+            .element_struct_type = element_struct_type,
+            .element_primitive_type = element_primitive_type,
+        };
+
+        self.type_map.put(self.allocator, array_type_name, .{ .array_type = new_info }) catch return null;
+        debug.astToIr("  -> created new array type", .{});
+        return &self.type_map.getPtr(array_type_name).?.array_type;
     }
 
     fn typeExprToValueType(self: *AstToIr, type_expr: ast.TypeExpr) !ValueType {
@@ -2426,24 +2581,23 @@ pub const AstToIr = struct {
                 const resolved = self.resolveTypeName(base_name);
                 // Check for internal type access
                 try intrinsics.checkInternalTypeAccess(self, resolved);
-                const type_info = self.type_map.get(resolved) orelse {
+                const type_info_ptr = self.type_map.getPtr(resolved) orelse {
                     self.reportError(.E006, resolved);
                     return error.UnknownType;
                 };
                 // Check visibility
-                try self.checkTypeVisibility(resolved, type_info);
-                const result: ValueType = if (type_info.isStruct())
-                    .{ .struct_type = resolved }
-                else if (type_info == .enum_type)
-                    .{ .enum_type = resolved }
-                else if (types.Primitive.fromString(resolved)) |prim|
-                    .{ .primitive = prim }
-                else {
-                    self.reportError(.E006, resolved);
-                    return error.UnknownType;
+                try self.checkTypeVisibility(resolved, type_info_ptr.*);
+                return switch (type_info_ptr.*) {
+                    .struct_type => |*s| .{ .struct_type = s },
+                    .enum_type => |*e| .{ .enum_type = e },
+                    .array_type => |*a| .{ .array_type = a },
+                    .primitive => if (types.Primitive.fromString(resolved)) |prim|
+                        .{ .primitive = prim }
+                    else {
+                        self.reportError(.E006, resolved);
+                        return error.UnknownType;
+                    },
                 };
-
-                return result;
             },
             .generic => |gen| {
                 // For generic types like "Array of int", monomorphize them
@@ -2454,7 +2608,7 @@ pub const AstToIr = struct {
                     resolved_args[i] = self.resolveTypeName(arg);
                 }
                 const mono_name = try self.getOrCreateMonomorphizedType(gen.base_type, resolved_args);
-                return .{ .struct_type = mono_name };
+                return try self.typeNameToValueType(mono_name);
             },
             .function_type => |ft| {
                 // Convert function type expression to ValueType
@@ -2493,8 +2647,8 @@ pub const AstToIr = struct {
                 return .{ .error_union_type = .{
                     .success_type = success_value_type.toIrType(),
                     .success_primitive_type = if (success_value_type == .primitive) success_value_type.primitive else null,
-                    .success_struct_type = if (success_value_type == .struct_type) success_value_type.struct_type else null,
-                    .success_enum_type = if (success_value_type == .enum_type) success_value_type.enum_type else null,
+                    .success_struct_type = if (success_value_type == .struct_type) success_value_type.struct_type.name else null,
+                    .success_enum_type = if (success_value_type == .enum_type) success_value_type.enum_type.name else null,
                     .error_enum_type = resolved_error,
                 } };
             },
@@ -2752,7 +2906,7 @@ pub const AstToIr = struct {
 
         // First param is self (pointer to type instance) for instance methods
         if (!m.is_static) {
-            param_types[0] = .{ .ty = .{ .struct_type = type_name }, .name = "self" };
+            param_types[0] = .{ .ty = try self.typeNameToValueType(type_name), .name = "self" };
         }
 
         // Register explicit params
@@ -3338,7 +3492,7 @@ pub const AstToIr = struct {
             // Register self as a variable for explicit self.field access
             try self.var_map.put(self.allocator, "self", VarInfo.initParam(
                 self_val,
-                .{ .struct_type = type_name },
+                try self.typeNameToValueType(type_name),
                 false, // self is immutable
                 false,
             ));
@@ -3437,13 +3591,13 @@ pub const AstToIr = struct {
         const value_type = try self.typeExprToValueType(param.type_expr);
 
         switch (value_type) {
-            .struct_type => |struct_name| {
+            .struct_type => |struct_info| {
                 const param_val = try self.func().emitParam(idx, .ptr);
                 try self.func().setValueName(param_val, param.name);
 
                 // For stdlib Array parameters, check if mutation transfers ownership
                 var owns_memory = false;
-                if (std.mem.startsWith(u8, struct_name, "Array$")) {
+                if (std.mem.startsWith(u8, struct_info.name, "Array$")) {
                     if (self.mutation_analyzer) |analyzer| {
                         if (self.current_func_name) |func_name| {
                             const source_param_idx: usize = if (self.sret_ptr != null)
@@ -3460,7 +3614,7 @@ pub const AstToIr = struct {
                 // Use initParam unless ownership was transferred via mutation
                 var var_info = VarInfo.initParam(
                     param_val,
-                    .{ .struct_type = struct_name },
+                    .{ .struct_type = struct_info },
                     true,
                     false,
                 );
@@ -3488,9 +3642,9 @@ pub const AstToIr = struct {
                                 else
                                     @intCast(idx);
                                 if (analyzer.doesMutateParam(func_name, source_param_idx)) {
-                                    var modified = arr_info;
-                                    modified.storage = .heap;
-                                    final_type = .{ .array_type = modified };
+                                    // Get or create a heap-storage version of this array type
+                                    const heap_arr_info = self.getOrCreateArrayTypeWithStorage(arr_info, .heap) catch arr_info;
+                                    final_type = .{ .array_type = heap_arr_info };
                                 }
                             }
                         }
@@ -3566,7 +3720,7 @@ pub const AstToIr = struct {
         try self.func().emitStore(slot_ptr.raw(), array_ptr);
 
         // Register the variable with Array$String type info
-        const value_type = ValueType{ .struct_type = "Array$String" };
+        const value_type = try self.typeNameToValueType("Array$String");
         try self.var_map.put(self.allocator, param.name, VarInfo.init(
             slot_ptr.raw(),
             value_type,
@@ -3725,15 +3879,11 @@ pub const AstToIr = struct {
 
         const ptr = if (needs_struct_copy) blk: {
             // Allocate new memory for the struct and copy data
-            const struct_name = init_typed.ty.struct_type;
-            const struct_info = self.type_map.get(struct_name) orelse {
-                self.reportError(.E006, struct_name);
-                return error.UnknownType;
-            };
-            const size = struct_info.struct_type.size;
+            const struct_info = init_typed.ty.struct_type;
+            const size = struct_info.size;
             const p = try self.func().emitAllocaSized(size);
             try self.func().setValueName(p.raw(), decl.name);
-            try string_helpers.emitStructCopy(self, p.asStruct(), ir.toStructPtr(init_typed.value), size, struct_name);
+            try string_helpers.emitStructCopy(self, p.asStruct(), ir.toStructPtr(init_typed.value), size, struct_info.name);
             break :blk p.raw();
         } else if (needs_alloca) blk: {
             const alloca_type = if (init_typed.ty.usesSlot()) .ptr else init_typed.ty.toIrType();
@@ -3810,20 +3960,12 @@ pub const AstToIr = struct {
                     const value_ptr = try ErrorUnion.getValuePtr(self.func(), sret);
                     // For struct types, memcpy the contents; for primitives, store the value
                     if (typed_val.ty == .struct_type) {
-                        const struct_name = typed_val.ty.struct_type;
-                        if (self.type_map.get(struct_name)) |type_info| {
-                            if (type_info == .struct_type) {
-                                try self.func().emitMemcpy(value_ptr.asRawPtr(), ir.toRawPtr(typed_val.value), type_info.struct_type.size);
-                                // For String returns that are NOT from a variable (e.g., from array element access),
-                                // we need to incref since we're copying from shared data
-                                if (std.mem.eql(u8, struct_name, "String") and expr != .identifier) {
-                                    try string_helpers.emitStringIncref(self, ir.toStringPtr(value_ptr.raw()), "<array index String>");
-                                }
-                            } else {
-                                try self.func().emitStore(value_ptr.raw(), typed_val.value);
-                            }
-                        } else {
-                            try self.func().emitStore(value_ptr.raw(), typed_val.value);
+                        const struct_info = typed_val.ty.struct_type;
+                        try self.func().emitMemcpy(value_ptr.asRawPtr(), ir.toRawPtr(typed_val.value), struct_info.size);
+                        // For String returns that are NOT from a variable (e.g., from array element access),
+                        // we need to incref since we're copying from shared data
+                        if (std.mem.eql(u8, struct_info.name, "String") and expr != .identifier) {
+                            try string_helpers.emitStringIncref(self, ir.toStringPtr(value_ptr.raw()), "<array index String>");
                         }
                     } else {
                         try self.func().emitStore(value_ptr.raw(), typed_val.value);
@@ -3833,7 +3975,7 @@ pub const AstToIr = struct {
                         if (self.var_map.getPtr(expr.identifier)) |var_info| {
                             // Only mark as moved for types with heap resources (Arrays, Strings)
                             if (var_info.ty == .struct_type) {
-                                const struct_name = var_info.ty.struct_type;
+                                const struct_name = var_info.ty.struct_type.name;
                                 if (std.mem.startsWith(u8, struct_name, "Array$") or
                                     std.mem.eql(u8, struct_name, "Array") or
                                     std.mem.eql(u8, struct_name, "String"))
@@ -3858,7 +4000,7 @@ pub const AstToIr = struct {
 
                 // Check if returning __ManagedArray to a String-returning function
                 const is_managed_array = typed_val.ty == .struct_type and
-                    std.mem.eql(u8, typed_val.ty.struct_type, "__ManagedArray");
+                    std.mem.eql(u8, typed_val.ty.struct_type.name, "__ManagedArray");
                 const expects_string = self.current_func_name != null and
                     self.type_map.get("String") != null and self.sret_size == 40;
 
@@ -3873,7 +4015,7 @@ pub const AstToIr = struct {
                     if (self.var_map.getPtr(expr.identifier)) |var_info| {
                         // Only mark as moved for types with heap resources (Arrays, Strings, Maps)
                         if (var_info.ty == .struct_type) {
-                            const struct_name = var_info.ty.struct_type;
+                            const struct_name = var_info.ty.struct_type.name;
                             if (std.mem.startsWith(u8, struct_name, "Array$") or
                                 std.mem.eql(u8, struct_name, "Array") or
                                 std.mem.startsWith(u8, struct_name, "Map$") or
@@ -3945,7 +4087,7 @@ pub const AstToIr = struct {
                 // For struct reassignment, we need to copy the data to the original stack location
                 // Just updating var_info.ptr would cause loops to use stale data
                 if (var_info.ty == .struct_type) {
-                    const struct_name = var_info.ty.struct_type;
+                    const struct_name = var_info.ty.struct_type.name;
                     const struct_info_result = try self.lookupStructInfo(struct_name);
                     const size = struct_info_result.size;
                     try self.func().emitMemcpy(ir.toRawPtr(var_info.ptr.?), ir.toRawPtr(value_typed.value), size);
@@ -4046,7 +4188,7 @@ pub const AstToIr = struct {
 
         const base = try self.convertExpression(assign.base.*);
         const type_name = switch (base.ty) {
-            .struct_type => |name| name,
+            .struct_type => |struct_info| struct_info.name,
             .primitive, .array_type, .enum_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAssign: expected struct type for field '{s}'\n", .{assign.field_name});
                 self.reportError(.E006, assign.field_name);
@@ -4101,7 +4243,7 @@ pub const AstToIr = struct {
 
         // Handle stdlib Array types (Array$int, etc.) - call .set() method
         if (base_typed.ty == .struct_type) {
-            if (std.mem.startsWith(u8, base_typed.ty.struct_type, "Array$")) {
+            if (std.mem.startsWith(u8, base_typed.ty.struct_type.name, "Array$")) {
                 try array_helpers.convertStdlibArrayIndexAssign(self, base_typed, assign.index.*, assign.value);
                 return;
             }
@@ -4401,7 +4543,7 @@ pub const AstToIr = struct {
                 try self.func().setValueName(err_var_ptr.raw(), err_name);
 
                 const err_type: types.ValueType = if (result_typed.ty == .error_union_type)
-                    .{ .enum_type = result_typed.ty.error_union_type.error_enum_type }
+                    self.typeNameToValueType(result_typed.ty.error_union_type.error_enum_type) catch .{ .primitive = .int }
                 else
                     .{ .primitive = .int };
 
@@ -4596,12 +4738,11 @@ pub const AstToIr = struct {
         // so that mutations to _pos persist across iterations
         // We use stack allocation since the iterator lives only for the loop duration
         const iterator_slot: ir.Value = switch (iterable_typed.ty) {
-            .struct_type => |struct_name| blk: {
-                const struct_info = try self.lookupStructInfo(struct_name);
+            .struct_type => |struct_info| blk: {
                 // Allocate space for the struct on the stack
                 const slot = try self.func().emitAllocaSized(@intCast(struct_info.size));
                 // Copy the struct data into our slot
-                try string_helpers.emitStructCopy(self, slot.asStruct(), ir.toStructPtr(iterable_typed.value), @intCast(struct_info.size), struct_name);
+                try string_helpers.emitStructCopy(self, slot.asStruct(), ir.toStructPtr(iterable_typed.value), @intCast(struct_info.size), struct_info.name);
                 break :blk slot.raw();
             },
             else => iterable_typed.value,
@@ -4695,10 +4836,10 @@ pub const AstToIr = struct {
         };
 
         // Determine the var type from the error union element info
-        const var_type: types.ValueType = if (element_info.wrapped_struct_type) |struct_name|
-            .{ .struct_type = struct_name }
-        else if (element_info.wrapped_enum_type) |enum_name|
-            .{ .enum_type = enum_name }
+        const var_type: types.ValueType = if (element_info.wrapped_struct_type) |wrapped_struct_name|
+            try self.typeNameToValueType(wrapped_struct_name)
+        else if (element_info.wrapped_enum_type) |wrapped_enum_name|
+            try self.typeNameToValueType(wrapped_enum_name)
         else
             .{ .primitive = types.Primitive.fromIrType(element_info.wrapped) };
         try self.var_map.put(self.allocator, for_stmt.var_name, VarInfo.initStackAllocated(var_slot, var_type, false));
@@ -4886,7 +5027,7 @@ pub const AstToIr = struct {
         // Check 5: enum exhaustiveness (only if no default case)
         if (!has_default) {
             if (scrutinee_ty == .enum_type) {
-                const enum_name = scrutinee_ty.enum_type;
+                const enum_name = scrutinee_ty.enum_type.name;
                 if (self.type_map.get(enum_name)) |type_info| {
                     if (type_info == .enum_type) {
                         const enum_info = type_info.enum_type;
@@ -4969,12 +5110,12 @@ pub const AstToIr = struct {
                 .primitive => |p_prim| s_prim == p_prim,
                 else => false,
             },
-            .enum_type => |s_name| switch (pattern_ty) {
-                .enum_type => |p_name| std.mem.eql(u8, s_name, p_name),
+            .enum_type => |s_info| switch (pattern_ty) {
+                .enum_type => |p_info| std.mem.eql(u8, s_info.name, p_info.name),
                 else => false,
             },
-            .struct_type => |s_name| switch (pattern_ty) {
-                .struct_type => |p_name| std.mem.eql(u8, s_name, p_name),
+            .struct_type => |s_info| switch (pattern_ty) {
+                .struct_type => |p_info| std.mem.eql(u8, s_info.name, p_info.name),
                 else => false,
             },
             else => false,
@@ -4996,7 +5137,7 @@ pub const AstToIr = struct {
                     if (fields[0].value_type == .primitive) {
                         if (std.mem.eql(u8, fields[0].value_type.primitive.toMaxonName(), name2)) return true;
                     } else if (fields[0].value_type == .struct_type) {
-                        if (std.mem.eql(u8, fields[0].value_type.struct_type, name2)) return true;
+                        if (std.mem.eql(u8, fields[0].value_type.struct_type.name, name2)) return true;
                     }
                 }
             }
@@ -5008,7 +5149,7 @@ pub const AstToIr = struct {
                     if (fields[0].value_type == .primitive) {
                         if (std.mem.eql(u8, fields[0].value_type.primitive.toMaxonName(), name1)) return true;
                     } else if (fields[0].value_type == .struct_type) {
-                        if (std.mem.eql(u8, fields[0].value_type.struct_type, name1)) return true;
+                        if (std.mem.eql(u8, fields[0].value_type.struct_type.name, name1)) return true;
                     }
                 }
             }
@@ -5024,20 +5165,22 @@ pub const AstToIr = struct {
         // a generic parameter name, resolve it to the actual type
         var resolved_param_ty = param_ty;
         if (param_ty == .struct_type) {
-            if (self.generic_params.get(param_ty.struct_type)) |resolved_name| {
+            if (self.generic_params.get(param_ty.struct_type.name)) |resolved_name| {
                 // Look up the resolved name in the type_map to determine its actual type
-                if (self.type_map.get(resolved_name)) |type_info| {
-                    switch (type_info) {
+                if (self.type_map.getPtr(resolved_name)) |type_info_ptr| {
+                    switch (type_info_ptr.*) {
                         .primitive => resolved_param_ty = if (types.Primitive.fromString(resolved_name)) |prim|
                             .{ .primitive = prim }
                         else
-                            .{ .struct_type = resolved_name },
-                        .enum_type => resolved_param_ty = .{ .enum_type = resolved_name },
-                        .struct_type => resolved_param_ty = .{ .struct_type = resolved_name },
+                            .{ .struct_type = &type_info_ptr.struct_type },
+                        .enum_type => |*e| resolved_param_ty = .{ .enum_type = e },
+                        .struct_type => |*s| resolved_param_ty = .{ .struct_type = s },
+                        .array_type => |*a| resolved_param_ty = .{ .array_type = a },
                     }
                 } else {
                     // Not in type_map - assume it's a struct type (e.g., monomorphized generics)
-                    resolved_param_ty = .{ .struct_type = resolved_name };
+                    // This case shouldn't happen often with pointer-based types
+                    return false;
                 }
             }
         }
@@ -5051,24 +5194,24 @@ pub const AstToIr = struct {
                     return false;
                 },
                 // cstring can be primitive or struct_type depending on context
-                .struct_type => |param_name| self.areTypesEquivalent(arg_prim.toMaxonName(), param_name),
+                .struct_type => |param_info| self.areTypesEquivalent(arg_prim.toMaxonName(), param_info.name),
                 else => false,
             },
-            .struct_type => |arg_name| switch (resolved_param_ty) {
-                .struct_type => |param_name| self.areTypesEquivalent(arg_name, param_name),
+            .struct_type => |arg_info| switch (resolved_param_ty) {
+                .struct_type => |param_info| self.areTypesEquivalent(arg_info.name, param_info.name),
                 // cstring can be primitive or struct_type depending on context
-                .primitive => |param_prim| self.areTypesEquivalent(arg_name, param_prim.toMaxonName()),
+                .primitive => |param_prim| self.areTypesEquivalent(arg_info.name, param_prim.toMaxonName()),
                 else => false,
             },
-            .enum_type => |arg_name| switch (resolved_param_ty) {
-                .enum_type => |param_name| self.areTypesEquivalent(arg_name, param_name),
+            .enum_type => |arg_info| switch (resolved_param_ty) {
+                .enum_type => |param_info| self.areTypesEquivalent(arg_info.name, param_info.name),
                 // Handle case where param_ty was marked as struct_type but is actually an enum
                 // (this happens with external function signatures extracted from AST before type info is available)
-                .struct_type => |param_name| blk: {
+                .struct_type => |param_info| blk: {
                     // Check if param_name is actually an enum type
-                    if (self.type_map.get(param_name)) |ti| {
+                    if (self.type_map.get(param_info.name)) |ti| {
                         if (ti == .enum_type) {
-                            break :blk self.areTypesEquivalent(arg_name, param_name);
+                            break :blk self.areTypesEquivalent(arg_info.name, param_info.name);
                         }
                     }
                     break :blk false;
@@ -5084,9 +5227,9 @@ pub const AstToIr = struct {
                     return arg_arr.element_type == param_arr.element_type;
                 },
                 // Array literals can be passed to stdlib Array types (Array$int, etc.)
-                .struct_type => |param_name| {
-                    if (std.mem.startsWith(u8, param_name, "Array$")) {
-                        const expected_elem = param_name[6..]; // Skip "Array$"
+                .struct_type => |param_info| {
+                    if (std.mem.startsWith(u8, param_info.name, "Array$")) {
+                        const expected_elem = param_info.name[6..]; // Skip "Array$"
                         if (arg_arr.element_struct_type) |elem_name| {
                             return std.mem.eql(u8, elem_name, expected_elem);
                         }
@@ -5119,8 +5262,8 @@ pub const AstToIr = struct {
         }
 
         // Stringable -> String (custom types only, NOT primitives)
-        if (target_ty == .struct_type and std.mem.eql(u8, target_ty.struct_type, "String")) {
-            if (source_ty == .struct_type and self.typeConformsTo(source_ty.struct_type, "Stringable")) return true;
+        if (target_ty == .struct_type and std.mem.eql(u8, target_ty.struct_type.name, "String")) {
+            if (source_ty == .struct_type and self.typeConformsTo(source_ty.struct_type.name, "Stringable")) return true;
         }
 
         return false;
@@ -5184,10 +5327,10 @@ pub const AstToIr = struct {
         }
 
         // Stringable -> String (custom types only)
-        if (target_ty == .struct_type and std.mem.eql(u8, target_ty.struct_type, "String")) {
-            if (source_ty == .struct_type and self.typeConformsTo(source_ty.struct_type, "Stringable")) {
-                const str_val = try self.callStringableToString(source_ty.struct_type, value, null);
-                return .{ .value = str_val, .ty = .{ .struct_type = "String" } };
+        if (target_ty == .struct_type and std.mem.eql(u8, target_ty.struct_type.name, "String")) {
+            if (source_ty == .struct_type and self.typeConformsTo(source_ty.struct_type.name, "Stringable")) {
+                const str_val = try self.callStringableToString(source_ty.struct_type.name, value, null);
+                return .{ .value = str_val, .ty = target_ty };
             }
         }
 
@@ -5275,10 +5418,7 @@ pub const AstToIr = struct {
 
     /// Set up pattern bindings for match expressions (similar to setupPatternBindings but for MatchExprCase)
     fn setupPatternBindingsExpr(self: *AstToIr, match_case: ast.MatchExprCase, scrutinee_value: ir.Value, scrutinee_ty: ValueType) ConvertError!void {
-        const enum_name = scrutinee_ty.enum_type;
-        const type_info = self.type_map.get(enum_name) orelse return;
-        if (type_info != .enum_type) return;
-        const enum_info = type_info.enum_type;
+        const enum_info = scrutinee_ty.enum_type;
 
         // For each pattern with bindings, set up local variables
         for (match_case.pattern_bindings) |maybe_binding| {
@@ -5319,7 +5459,7 @@ pub const AstToIr = struct {
                 const binding_ty: ValueType = if (types.Primitive.fromString(av.type_name)) |prim|
                     .{ .primitive = prim }
                 else
-                    .{ .struct_type = av.type_name };
+                    try self.typeNameToValueType(av.type_name);
                 try self.var_map.put(self.allocator, binding_name, types.VarInfo.initStackAllocated(var_ptr.raw(), binding_ty, false));
 
                 offset += av.ir_type.sizeInBytes();
@@ -5329,10 +5469,7 @@ pub const AstToIr = struct {
 
     /// Set up pattern bindings from a ChildBlock (unified child block structure)
     fn setupPatternBindingsFromChild(self: *AstToIr, child: ast.ChildBlock, scrutinee_value: ir.Value, scrutinee_ty: ValueType) ConvertError!void {
-        const enum_name = scrutinee_ty.enum_type;
-        const type_info = self.type_map.get(enum_name) orelse return;
-        if (type_info != .enum_type) return;
-        const enum_info = type_info.enum_type;
+        const enum_info = scrutinee_ty.enum_type;
 
         // For each pattern with bindings, set up local variables
         for (child.pattern_bindings) |maybe_binding| {
@@ -5370,10 +5507,7 @@ pub const AstToIr = struct {
                 try self.func().emitStore(var_ptr.raw(), value);
 
                 // Register in var_map with primitive ValueType
-                const binding_ty: ValueType = if (types.Primitive.fromString(av.type_name)) |prim|
-                    .{ .primitive = prim }
-                else
-                    .{ .struct_type = av.type_name };
+                const binding_ty: ValueType = try self.typeNameToValueType(av.type_name);
                 try self.var_map.put(self.allocator, binding_name, types.VarInfo.initStackAllocated(var_ptr.raw(), binding_ty, false));
 
                 offset += av.ir_type.sizeInBytes();
@@ -5638,24 +5772,19 @@ pub const AstToIr = struct {
     fn convertPatternExpression(self: *AstToIr, pattern: ast.Expression, scrutinee_ty: ValueType) ConvertError!TypedValue {
         // If scrutinee is an enum and pattern is a bare identifier, try to resolve as enum case
         if (scrutinee_ty == .enum_type) {
-            const enum_name = scrutinee_ty.enum_type;
+            const enum_info = scrutinee_ty.enum_type;
             if (pattern == .identifier) {
                 const case_name = pattern.identifier;
-                // Look up enum type
-                if (self.type_map.get(enum_name)) |type_info| {
-                    if (type_info == .enum_type) {
-                        // Try to find this case in the enum
-                        if (type_info.enum_type.members.get(case_name)) |member_value| {
-                            return .{
-                                .value = try self.func().emitConstI64(member_value),
-                                .ty = .{ .enum_type = enum_name },
-                            };
-                        } else {
-                            // Unknown case - report error
-                            self.reportError(.E034, case_name);
-                            return error.SemanticError;
-                        }
-                    }
+                // Try to find this case in the enum
+                if (enum_info.members.get(case_name)) |member_value| {
+                    return .{
+                        .value = try self.func().emitConstI64(member_value),
+                        .ty = scrutinee_ty,
+                    };
+                } else {
+                    // Unknown case - report error
+                    self.reportError(.E034, case_name);
+                    return error.SemanticError;
                 }
             }
         }
@@ -5674,12 +5803,9 @@ pub const AstToIr = struct {
                     return try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64);
                 }
             },
-            .enum_type => |enum_name| {
+            .enum_type => |enum_info| {
                 // For enums with associated values, scrutinee is a pointer - extract the tag first
-                const type_info = self.type_map.get(enum_name) orelse {
-                    return try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64);
-                };
-                if (type_info == .enum_type and type_info.enum_type.has_associated_values) {
+                if (enum_info.has_associated_values) {
                     // Load tag from offset 0 of the scrutinee pointer
                     const tag = try self.func().emitLoad(scrutinee, .i64);
                     return try self.func().emitBinaryOp(.icmp_eq, tag, pattern.value, .i64);
@@ -5687,10 +5813,10 @@ pub const AstToIr = struct {
                 // Simple enum - scrutinee is the tag directly
                 return try self.func().emitBinaryOp(.icmp_eq, scrutinee, pattern.value, .i64);
             },
-            .struct_type => |name| {
+            .struct_type => |struct_info| {
                 // For struct types that implement Equatable, use the equals method
-                if (self.typeConformsTo(name, "Equatable")) {
-                    const equals_result = try self.emitMethodCallWithIrArgs(name, "equals", &.{pattern.value}, scrutinee);
+                if (self.typeConformsTo(struct_info.name, "Equatable")) {
+                    const equals_result = try self.emitMethodCallWithIrArgs(struct_info.name, "equals", &.{pattern.value}, scrutinee);
                     return equals_result.value;
                 }
                 return error.TypeMismatch;
@@ -5949,10 +6075,10 @@ pub const AstToIr = struct {
 
         // Verify the error type is an enum (errors must be enums)
         const error_type_name = switch (error_typed.ty) {
-            .enum_type => |name| name,
-            .struct_type => |name| {
+            .enum_type => |enum_info| enum_info.name,
+            .struct_type => |struct_info| {
                 // Struct errors are no longer allowed
-                self.reportError(.E023, name);
+                self.reportError(.E023, struct_info.name);
                 return error.SemanticError;
             },
             else => {
@@ -6037,7 +6163,7 @@ pub const AstToIr = struct {
         if (self.var_map.getPtr("self")) |info| {
             info.used = true;
         }
-        return .{ .value = self_val, .ty = .{ .struct_type = type_name } };
+        return .{ .value = self_val, .ty = try self.typeNameToValueType(type_name) };
     }
 
     /// Convert identifier, with implicit self field resolution for methods
@@ -6111,20 +6237,21 @@ pub const AstToIr = struct {
                 return_type = ret_ptr;
             } else if (func_info.return_type_name) |ret_name| {
                 const ret_ptr = try self.allocator.create(ValueType);
-                if (self.type_map.get(ret_name)) |type_info| {
-                    if (type_info == .struct_type) {
-                        ret_ptr.* = .{ .struct_type = ret_name };
-                    } else if (type_info == .enum_type) {
-                        ret_ptr.* = .{ .enum_type = ret_name };
-                    } else if (types.Primitive.fromString(ret_name)) |prim| {
-                        ret_ptr.* = .{ .primitive = prim };
-                    } else {
-                        ret_ptr.* = .{ .struct_type = ret_name };
+                if (self.type_map.getPtr(ret_name)) |type_info_ptr| {
+                    switch (type_info_ptr.*) {
+                        .struct_type => |*s| ret_ptr.* = .{ .struct_type = s },
+                        .enum_type => |*e| ret_ptr.* = .{ .enum_type = e },
+                        .array_type => |*a| ret_ptr.* = .{ .array_type = a },
+                        .primitive => ret_ptr.* = if (types.Primitive.fromString(ret_name)) |prim|
+                            .{ .primitive = prim }
+                        else
+                            .{ .struct_type = &type_info_ptr.struct_type },
                     }
                 } else if (types.Primitive.fromString(ret_name)) |prim| {
                     ret_ptr.* = .{ .primitive = prim };
                 } else {
-                    ret_ptr.* = .{ .struct_type = ret_name };
+                    self.reportError(.E006, ret_name);
+                    return error.UnknownType;
                 }
                 return_type = ret_ptr;
             } else if (func_info.return_type != .void) {
@@ -6158,8 +6285,8 @@ pub const AstToIr = struct {
         const type_name = "String";
 
         // If the String type exists, create a managed string and call init
-        if (self.type_map.get(type_name)) |type_info| {
-            if (type_info == .struct_type) {
+        if (self.type_map.getPtr(type_name)) |type_info_ptr| {
+            if (type_info_ptr.* == .struct_type) {
                 const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
                 try self.module.trackString(init_func_name);
 
@@ -6172,7 +6299,7 @@ pub const AstToIr = struct {
                     const managed_ptr = try string_helpers.emitManagedArrayFromStaticBytes(self, processed);
 
                     // Allocate result struct and call init
-                    const struct_size = type_info.struct_type.size;
+                    const struct_size = type_info_ptr.struct_type.size;
                     const result_ptr = try self.func().emitAllocaSized(struct_size);
 
                     var args = try self.func().allocator.alloc(ir.Value, 2);
@@ -6184,7 +6311,7 @@ pub const AstToIr = struct {
                     // Track this as a temporary String that may need cleanup
                     try self.temporary_strings.append(self.allocator, result_ptr.raw());
 
-                    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = type_name } };
+                    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = &type_info_ptr.struct_type } };
                 }
             }
         }
@@ -6192,7 +6319,7 @@ pub const AstToIr = struct {
         // Fallback: store string bytes as a pointer to constant data
         // This is used when String type is not available
         const str_ptr = try self.func().emitStringConstant(processed);
-        return .{ .value = str_ptr.raw(), .ty = .{ .struct_type = "String" } };
+        return .{ .value = str_ptr.raw(), .ty = try self.typeNameToValueType("String") };
     }
 
     /// Emit a string literal directly into a pre-allocated String pointer.
@@ -6258,7 +6385,7 @@ pub const AstToIr = struct {
         }
 
         if (string_parts.items.len == 1) {
-            return .{ .value = string_parts.items[0], .ty = .{ .struct_type = "String" } };
+            return .{ .value = string_parts.items[0], .ty = try self.typeNameToValueType("String") };
         }
 
         // Concatenate all parts: result = concat(concat(a, b), c)...
@@ -6267,27 +6394,27 @@ pub const AstToIr = struct {
             result = try self.emitStringConcatCall(result, next_val);
         }
 
-        return .{ .value = result, .ty = .{ .struct_type = "String" } };
+        return .{ .value = result, .ty = try self.typeNameToValueType("String") };
     }
 
     /// Convert a TypedValue to a String pointer
     /// Handles different types: String (passthrough), int, float, bool
     fn convertToString(self: *AstToIr, typed_val: TypedValue, format_spec: ?[]const u8) ConvertError!ir.Value {
         switch (typed_val.ty) {
-            .struct_type => |type_name| {
-                if (std.mem.eql(u8, type_name, "String")) {
+            .struct_type => |struct_info| {
+                if (std.mem.eql(u8, struct_info.name, "String")) {
                     // Already a String, just return it
                     return typed_val.value;
                 }
-                if (std.mem.eql(u8, type_name, "Character")) {
+                if (std.mem.eql(u8, struct_info.name, "Character")) {
                     // Convert Character to String by copying its _managed field
                     return self.convertCharacterToString(typed_val.value);
                 }
                 // Check for Stringable interface conformance
-                if (self.typeConformsTo(type_name, "Stringable")) {
-                    return self.callStringableToString(type_name, typed_val.value, format_spec);
+                if (self.typeConformsTo(struct_info.name, "Stringable")) {
+                    return self.callStringableToString(struct_info.name, typed_val.value, format_spec);
                 }
-                const msg = std.fmt.allocPrint(self.allocator, "cannot convert type '{s}' to string for interpolation", .{type_name}) catch "cannot convert type to string";
+                const msg = std.fmt.allocPrint(self.allocator, "cannot convert type '{s}' to string for interpolation", .{struct_info.name}) catch "cannot convert type to string";
                 self.reportInternalError(msg);
                 return error.UnknownType;
             },
@@ -6305,13 +6432,11 @@ pub const AstToIr = struct {
                 self.reportInternalError(msg);
                 return error.UnknownType;
             },
-            .enum_type => |enum_type_name| {
-                // Look up the enum type info
-                if (self.type_map.get(enum_type_name)) |type_info| {
-                    if (type_info.enum_type.backing == .string) {
-                        // String-backed enum: generate switch on ordinal to select raw string value
-                        return self.convertStringEnumToString(typed_val.value, type_info.enum_type);
-                    }
+            .enum_type => |enum_info| {
+                // Check if string-backed enum
+                if (enum_info.backing == .string) {
+                    // String-backed enum: generate switch on ordinal to select raw string value
+                    return self.convertStringEnumToString(typed_val.value, enum_info.*);
                 }
                 // Int-backed or simple enum: convert ordinal to string
                 return self.convertIntToString(typed_val.value);
@@ -6579,8 +6704,8 @@ pub const AstToIr = struct {
         const processed_bytes = try self.processEscapeSequences(char_bytes);
 
         // If the Character type exists, create a managed string and call init
-        if (self.type_map.get(type_name)) |type_info| {
-            if (type_info == .struct_type) {
+        if (self.type_map.getPtr(type_name)) |type_info_ptr| {
+            if (type_info_ptr.* == .struct_type) {
                 const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
                 try self.module.trackString(init_func_name);
 
@@ -6593,7 +6718,7 @@ pub const AstToIr = struct {
                     const managed_ptr = try string_helpers.emitManagedArrayFromBytes(self, processed_bytes);
 
                     // Allocate result struct and call init
-                    const struct_size = type_info.struct_type.size;
+                    const struct_size = type_info_ptr.struct_type.size;
                     const result_ptr = try self.func().emitAllocaSized(struct_size);
 
                     var args = try self.func().allocator.alloc(ir.Value, 2);
@@ -6602,14 +6727,14 @@ pub const AstToIr = struct {
 
                     _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
 
-                    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = type_name } };
+                    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = &type_info_ptr.struct_type } };
                 }
             }
         }
 
         // Fallback: store char bytes as constant data pointer
         const char_ptr = try self.func().emitStringConstant(processed_bytes);
-        return .{ .value = char_ptr.raw(), .ty = .{ .struct_type = "Character" } };
+        return .{ .value = char_ptr.raw(), .ty = try self.typeNameToValueType("Character") };
     }
 
     fn convertIdentifier(self: *AstToIr, name: []const u8) ConvertError!TypedValue {
@@ -6692,7 +6817,7 @@ pub const AstToIr = struct {
         const target_ty: ValueType = if (types.Primitive.fromString(target_type_name)) |prim|
             .{ .primitive = prim }
         else
-            .{ .struct_type = target_type_name };
+            try self.typeNameToValueType(target_type_name);
 
         // Use unified conversion system
         return self.convertType(source.value, source.ty, target_ty);
@@ -6714,7 +6839,7 @@ pub const AstToIr = struct {
             func_param_types[i] = .{ .ty = if (types.Primitive.fromString(param.type_name)) |prim|
                 .{ .primitive = prim }
             else
-                .{ .struct_type = param.type_name } };
+                try self.typeNameToValueType(param.type_name) };
         }
 
         // Determine return type from the body expression type
@@ -6747,7 +6872,7 @@ pub const AstToIr = struct {
                 if (types.Primitive.fromString(param.type_name)) |prim|
                     .{ .primitive = prim }
                 else
-                    .{ .struct_type = param.type_name },
+                    try self.typeNameToValueType(param.type_name),
                 false, // immutable
                 false, // doesn't use slot
             ));
@@ -6781,7 +6906,7 @@ pub const AstToIr = struct {
             closure_param_types[i] = if (types.Primitive.fromString(param.type_name)) |prim|
                 .{ .primitive = prim }
             else
-                .{ .struct_type = param.type_name };
+                try self.typeNameToValueType(param.type_name);
         }
 
         // Build return type pointer
@@ -6862,7 +6987,7 @@ pub const AstToIr = struct {
         // Check if left operand is a struct type that implements Equatable
         // If so, use the equals() method for == and != operators
         if (left.ty == .struct_type) {
-            const type_name = left.ty.struct_type;
+            const type_name = left.ty.struct_type.name;
             if (self.typeConformsTo(type_name, "Equatable")) {
                 // Only handle == and != for Equatable
                 if (cmp.op == .eq or cmp.op == .ne) {
@@ -7089,9 +7214,9 @@ pub const AstToIr = struct {
         const success_type: types.ValueType = if (result_typed.ty == .error_union_type) blk: {
             const eu_info = result_typed.ty.error_union_type;
             if (eu_info.success_struct_type) |struct_name| {
-                break :blk .{ .struct_type = struct_name };
+                break :blk self.typeNameToValueType(struct_name) catch .{ .primitive = .int };
             } else if (eu_info.success_enum_type) |enum_name| {
-                break :blk .{ .enum_type = enum_name };
+                break :blk self.typeNameToValueType(enum_name) catch .{ .primitive = .int };
             } else if (eu_info.success_primitive_type) |prim| {
                 break :blk .{ .primitive = prim };
             } else {
@@ -7180,9 +7305,9 @@ pub const AstToIr = struct {
             const success_type: types.ValueType = if (result_typed.ty == .error_union_type) blk: {
                 const eu_info = result_typed.ty.error_union_type;
                 if (eu_info.success_struct_type) |struct_name| {
-                    break :blk .{ .struct_type = struct_name };
+                    break :blk self_ir.typeNameToValueType(struct_name) catch .{ .primitive = .int };
                 } else if (eu_info.success_enum_type) |enum_name| {
-                    break :blk .{ .enum_type = enum_name };
+                    break :blk self_ir.typeNameToValueType(enum_name) catch .{ .primitive = .int };
                 } else if (eu_info.success_primitive_type) |prim| {
                     break :blk .{ .primitive = prim };
                 } else {
@@ -7194,7 +7319,7 @@ pub const AstToIr = struct {
 
             // Use helper to get struct size with automatic monomorphization
             const struct_size: i32 = if (is_struct_type) blk: {
-                break :blk self_ir.getStructSizeWithMonomorphization(success_type.struct_type) orelse {
+                break :blk self_ir.getStructSizeWithMonomorphization(success_type.struct_type.name) orelse {
                     self_ir.reportInternalError("unknown struct type size in try-otherwise");
                     return error.SemanticError;
                 };
@@ -7416,7 +7541,7 @@ pub const AstToIr = struct {
                 try self.func().setValueName(err_var_ptr.raw(), err_name);
 
                 const err_type: types.ValueType = if (result_typed.ty == .error_union_type)
-                    .{ .enum_type = result_typed.ty.error_union_type.error_enum_type }
+                    self.typeNameToValueType(result_typed.ty.error_union_type.error_enum_type) catch .{ .primitive = .int }
                 else
                     .{ .primitive = .int };
 
@@ -7456,7 +7581,7 @@ pub const AstToIr = struct {
         const struct_info = try self.lookupStructInfo(type_name);
         const struct_ptr = try self.func().emitAllocaSized(struct_info.size);
         try self.initStructIntoResolved(sinit, struct_ptr.raw(), type_name);
-        return .{ .value = struct_ptr.raw(), .ty = .{ .struct_type = type_name } };
+        return .{ .value = struct_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
     }
 
     /// Initialize struct fields into an existing pointer (used for sret returns)
@@ -7581,23 +7706,23 @@ pub const AstToIr = struct {
         // Both Character and String use the same layout (40 bytes with _iterPos)
         const struct_ptr = try string_helpers.emitStringFromManaged(self, managed_ptr);
         if (is_character) {
-            return .{ .value = struct_ptr.raw(), .ty = .{ .struct_type = types.CHARACTER } };
+            return .{ .value = struct_ptr.raw(), .ty = try self.typeNameToValueType(types.CHARACTER) };
         } else {
-            return .{ .value = struct_ptr.raw(), .ty = .{ .struct_type = types.STRING } };
+            return .{ .value = struct_ptr.raw(), .ty = try self.typeNameToValueType(types.STRING) };
         }
     }
 
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
         // Check for enum member access (e.g., Colors.Green)
         if (faccess.base.* == .identifier) {
-            if (self.type_map.get(faccess.base.identifier)) |type_info| {
-                if (type_info == .enum_type) {
-                    const enum_info = type_info.enum_type;
+            if (self.type_map.getPtr(faccess.base.identifier)) |type_info_ptr| {
+                if (type_info_ptr.* == .enum_type) {
+                    const enum_info = &type_info_ptr.enum_type;
                     const member_value = enum_info.members.get(faccess.field_name) orelse {
                         self.reportError(.E034, faccess.field_name);
                         return error.SemanticError;
                     };
-                    const enum_ty = types.ValueType{ .enum_type = faccess.base.identifier };
+                    const enum_ty = types.ValueType{ .enum_type = enum_info };
 
                     switch (enum_info.backing) {
                         .float => |float_map| {
@@ -7637,18 +7762,9 @@ pub const AstToIr = struct {
 
         // Handle .rawValue for enum types
         if (base.ty == .enum_type) {
-            const enum_name = base.ty.enum_type;
+            const enum_info = base.ty.enum_type;
             if (std.mem.eql(u8, faccess.field_name, "rawValue")) {
-                const type_info = self.type_map.get(enum_name) orelse {
-                    self.reportError(.E006, enum_name);
-                    return error.UnknownType;
-                };
-                if (type_info != .enum_type) {
-                    self.reportError(.E006, enum_name);
-                    return error.UnknownType;
-                }
-
-                return switch (type_info.enum_type.backing) {
+                return switch (enum_info.backing) {
                     .none, .int => .{ .value = base.value, .ty = .{ .primitive = .int } },
                     .float => .{ .value = try self.func().emitUnaryOp(.bitcast_i64_to_f64, base.value, .f64), .ty = .{ .primitive = .float } },
                     .string => try self.emitStringOrCharFromPtr(base.value, false),
@@ -7661,7 +7777,7 @@ pub const AstToIr = struct {
         }
 
         const type_name = switch (base.ty) {
-            .struct_type => |name| name,
+            .struct_type => |struct_info| struct_info.name,
             .primitive, .array_type, .enum_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
                 self.reportError(.E006, faccess.field_name);
@@ -7697,17 +7813,18 @@ pub const AstToIr = struct {
     /// Convert enum case construction with associated values (e.g., Result.success(42))
     fn convertEnumCase(self: *AstToIr, ec: ast.EnumCaseExpr) ConvertError!TypedValue {
         // Look up enum type
-        const type_info = self.type_map.get(ec.enum_name) orelse {
+        const type_info_ptr = self.type_map.getPtr(ec.enum_name) orelse {
             self.reportError(.E006, ec.enum_name);
             return error.UnknownType;
         };
 
-        if (type_info != .enum_type) {
+        if (type_info_ptr.* != .enum_type) {
             self.reportError(.E006, ec.enum_name);
             return error.UnknownType;
         }
 
-        const enum_info = type_info.enum_type;
+        const enum_info = &type_info_ptr.enum_type;
+        const enum_ty = types.ValueType{ .enum_type = enum_info };
 
         // Get case info
         const case_info = enum_info.case_info.get(ec.case_name) orelse {
@@ -7729,7 +7846,7 @@ pub const AstToIr = struct {
                     // Fallback to tag if no float value
                     return .{
                         .value = try self.func().emitConstI64(case_info.tag),
-                        .ty = .{ .enum_type = ec.enum_name },
+                        .ty = enum_ty,
                     };
                 };
                 // Emit the float constant and bitcast to i64 for storage
@@ -7737,13 +7854,13 @@ pub const AstToIr = struct {
                 const i64_val = try self.func().emitUnaryOp(.bitcast_f64_to_i64, f64_val, .i64);
                 return .{
                     .value = i64_val,
-                    .ty = .{ .enum_type = ec.enum_name },
+                    .ty = enum_ty,
                 };
             }
             // For other enums, just return the tag
             return .{
                 .value = try self.func().emitConstI64(case_info.tag),
-                .ty = .{ .enum_type = ec.enum_name },
+                .ty = enum_ty,
             };
         }
 
@@ -7793,7 +7910,7 @@ pub const AstToIr = struct {
         const loaded_ptr = try self.func().emitLoad(enum_ptr.raw(), .ptr);
         return .{
             .value = loaded_ptr,
-            .ty = .{ .enum_type = ec.enum_name },
+            .ty = enum_ty,
         };
     }
 
@@ -8087,7 +8204,7 @@ pub const AstToIr = struct {
                 return .{ .value = buf, .ty = func_info.return_value_type.? };
             }
             // Must be a struct
-            return .{ .value = buf, .ty = .{ .struct_type = func_info.return_type_name.? } };
+            return .{ .value = buf, .ty = try self.typeNameToValueType(func_info.return_type_name.?) };
         }
         // If the function returns an array, use the full array type info
         if (func_info.return_value_type) |vtype| {
@@ -8095,9 +8212,9 @@ pub const AstToIr = struct {
         }
         // Check if return_type_name is an enum (not a struct that would have used sret)
         if (func_info.return_type_name) |name| {
-            if (self.type_map.get(name)) |ti| {
-                if (ti == .enum_type) {
-                    return .{ .value = result orelse 0, .ty = .{ .enum_type = name } };
+            if (self.type_map.getPtr(name)) |ti_ptr| {
+                if (ti_ptr.* == .enum_type) {
+                    return .{ .value = result orelse 0, .ty = .{ .enum_type = &ti_ptr.enum_type } };
                 }
             }
         }
@@ -8139,8 +8256,7 @@ pub const AstToIr = struct {
         if (returns_struct) {
             if (func_type_info.return_type) |ret_vt| {
                 if (ret_vt.* == .struct_type) {
-                    const struct_name = ret_vt.struct_type;
-                    const struct_info = try self.lookupStructInfo(struct_name);
+                    const struct_info = ret_vt.struct_type;
                     sret_buffer = (try self.func().emitAllocaSized(struct_info.size)).raw();
                 }
             }
@@ -8368,7 +8484,7 @@ pub const AstToIr = struct {
 
             // Store result in var_map
             try self.func().setValueName(result_ptr.raw(), decl.name);
-            const var_type: ValueType = .{ .struct_type = type_name };
+            const var_type: ValueType = try self.typeNameToValueType(type_name);
             try self.var_map.put(self.allocator, decl.name, VarInfo.initFromType(
                 result_ptr.raw(),
                 var_type,
@@ -8471,7 +8587,7 @@ pub const AstToIr = struct {
             _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
 
             try self.func().setValueName(result_ptr.raw(), decl_name);
-            const var_type: ValueType = .{ .struct_type = type_name };
+            const var_type: ValueType = try self.typeNameToValueType(type_name);
             try self.var_map.put(self.allocator, decl_name, VarInfo.initFromType(
                 result_ptr.raw(),
                 var_type,
@@ -8574,7 +8690,7 @@ pub const AstToIr = struct {
         _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
 
         try self.func().setValueName(result_ptr.raw(), decl.name);
-        const var_type: ValueType = .{ .struct_type = type_name };
+        const var_type: ValueType = try self.typeNameToValueType(type_name);
         try self.var_map.put(self.allocator, decl.name, VarInfo.initFromType(
             result_ptr.raw(),
             var_type,
@@ -8629,12 +8745,12 @@ pub const AstToIr = struct {
             try self.ensureMethodGenerated(init_func_name);
         }
 
-        const type_info = self.type_map.get(type_name) orelse {
+        const type_info_ptr = self.type_map.getPtr(type_name) orelse {
             self.reportError(.E006, type_name);
             return error.UnknownType;
         };
 
-        const struct_size = type_info.struct_type.size;
+        const struct_size = type_info_ptr.struct_type.size;
         const result_ptr = try self.func().emitAllocaSized(struct_size);
 
         var args = try self.func().allocator.alloc(ir.Value, 2);
@@ -8644,7 +8760,7 @@ pub const AstToIr = struct {
 
         return .{
             .value = result_ptr.raw(),
-            .ty = .{ .struct_type = type_name },
+            .ty = .{ .struct_type = &type_info_ptr.struct_type },
         };
     }
 
@@ -8695,12 +8811,12 @@ pub const AstToIr = struct {
             try self.ensureMethodGenerated(init_func_name);
         }
 
-        const type_info = self.type_map.get(type_name) orelse {
+        const type_info_ptr = self.type_map.getPtr(type_name) orelse {
             self.reportError(.E006, type_name);
             return error.UnknownType;
         };
 
-        const struct_size = type_info.struct_type.size;
+        const struct_size = type_info_ptr.struct_type.size;
         const result_ptr = try self.func().emitAllocaSized(struct_size);
 
         var args = try self.func().allocator.alloc(ir.Value, 2);
@@ -8710,7 +8826,7 @@ pub const AstToIr = struct {
 
         return .{
             .value = result_ptr.raw(),
-            .ty = .{ .struct_type = type_name },
+            .ty = .{ .struct_type = &type_info_ptr.struct_type },
         };
     }
 
@@ -8719,13 +8835,13 @@ pub const AstToIr = struct {
 
         // Handle __ManagedArray indexing (stdlib only)
         if (base_typed.ty == .struct_type) {
-            if (std.mem.eql(u8, base_typed.ty.struct_type, "__ManagedArray")) {
+            if (std.mem.eql(u8, base_typed.ty.struct_type.name, "__ManagedArray")) {
                 // Extract variable name if base is an identifier
                 const var_name: ?[]const u8 = if (idx.base.* == .identifier) idx.base.identifier else null;
                 return array_helpers.convertManagedArrayIndex(self, base_typed.value, idx.index.*, var_name);
             }
             // Handle stdlib Array types (Array$int, etc.) - call .get() method
-            if (std.mem.startsWith(u8, base_typed.ty.struct_type, "Array$")) {
+            if (std.mem.startsWith(u8, base_typed.ty.struct_type.name, "Array$")) {
                 return array_helpers.convertStdlibArrayIndex(self, base_typed, idx.index.*);
             }
         }
@@ -9109,21 +9225,21 @@ pub const AstToIr = struct {
             if (returns_error_union) {
                 return .{ .value = buf, .ty = func_info.return_value_type.? };
             }
-            return .{ .value = buf, .ty = .{ .struct_type = func_info.return_type_name.? } };
+            return .{ .value = buf, .ty = try self.typeNameToValueType(func_info.return_type_name.?) };
         }
         const ret_ty: ValueType = if (func_info.return_value_type) |vt|
             vt
         else if (func_info.return_type_name) |name| blk: {
             // Check if it's actually a struct or an enum
-            if (self.type_map.get(name)) |ti| {
-                break :blk if (ti == .struct_type)
-                    .{ .struct_type = name }
-                else if (ti == .enum_type)
-                    .{ .enum_type = name }
+            if (self.type_map.getPtr(name)) |ti_ptr| {
+                break :blk if (ti_ptr.* == .struct_type)
+                    .{ .struct_type = &ti_ptr.struct_type }
+                else if (ti_ptr.* == .enum_type)
+                    .{ .enum_type = &ti_ptr.enum_type }
                 else
                     .{ .primitive = types.Primitive.fromIrType(func_info.return_type) };
             }
-            break :blk .{ .struct_type = name };
+            break :blk self.typeNameToValueType(name) catch .{ .primitive = types.Primitive.fromIrType(func_info.return_type) };
         } else .{ .primitive = types.Primitive.fromIrType(func_info.return_type) };
 
         return .{ .value = result orelse try self.func().emitConstI64(0), .ty = ret_ty };
@@ -9193,7 +9309,7 @@ pub const AstToIr = struct {
     fn convertMethodCallOnTyped(self: *AstToIr, base_typed: TypedValue, method_name: []const u8, arg_exprs: []const ast.Expression) ConvertError!TypedValue {
         // Get the type name from the TypedValue
         const type_name = switch (base_typed.ty) {
-            .struct_type => |name| name,
+            .struct_type => |struct_info| struct_info.name,
             .primitive, .array_type, .enum_type, .error_union_type, .function_type => {
                 debug.astToIr("error: method call on non-struct type", .{});
                 self.reportError(.E003, method_name);
@@ -9235,7 +9351,7 @@ pub const AstToIr = struct {
         // Check if this is a struct type with methods
         if (base_typed.ty == .struct_type) {
             if (std.mem.eql(u8, mcall.method_name, "insert")) {}
-            return self.emitMethodCallWithNamedArgs(base_typed.ty.struct_type, mcall.method_name, mcall.args, mcall.named_args, base_typed.value);
+            return self.emitMethodCallWithNamedArgs(base_typed.ty.struct_type.name, mcall.method_name, mcall.args, mcall.named_args, base_typed.value);
         }
 
         // Check if this is a primitive type with hash/equals methods
@@ -9245,7 +9361,7 @@ pub const AstToIr = struct {
 
         // Check if this is an enum type with methods
         if (base_typed.ty == .enum_type) {
-            const enum_name = base_typed.ty.enum_type;
+            const enum_name = base_typed.ty.enum_type.name;
             return self.emitMethodCallWithNamedArgs(enum_name, mcall.method_name, mcall.args, mcall.named_args, base_typed.value);
         }
 
@@ -9476,14 +9592,20 @@ pub fn convertWithExternals(
             // Skip if already registered (avoid duplicates from multiple source files)
             if (converter.func_map.contains(ext_func.name)) continue;
 
-            // Make our own copy of param_types so AstToIr owns all param_types in func_map
-            const param_types_copy = try allocator.dupe(ParamType, ext_func.param_types);
+            // Convert ExternalParamTypes to ParamTypes by resolving type names to pointers
+            const param_types = try converter.convertExternalParamTypes(ext_func.param_types);
+
+            // Convert ExternalValueType to ValueType for return type
+            const return_value_type: ?ValueType = if (ext_func.return_value_type) |evt|
+                converter.convertExternalValueType(evt)
+            else
+                null;
 
             try converter.func_map.put(allocator, ext_func.name, .{
                 .return_type = ext_func.return_type,
                 .return_type_name = ext_func.return_type_name,
-                .return_value_type = ext_func.return_value_type,
-                .param_types = param_types_copy,
+                .return_value_type = return_value_type,
+                .param_types = param_types,
             });
             debug.astToIr("Registered external function '{s}' returning {s}", .{ ext_func.name, ext_func.return_type.toIrName() });
         }
@@ -9573,7 +9695,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
         for (signatures.items) |sig| {
             allocator.free(sig.name);
             if (sig.param_types.len > 0) {
-                freeParamTypes(allocator, sig.param_types);
+                freeExternalParamTypes(allocator, sig.param_types);
             }
             if (sig.return_type_name) |rtn| {
                 allocator.free(rtn);
@@ -9603,15 +9725,15 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             break :blk null;
         } else null;
 
-        const return_value_type: ?ValueType = if (func.return_type) |rt|
-            getValueTypeFromTypeExpr(allocator, rt)
+        const return_value_type: ?types.ExternalValueType = if (func.return_type) |rt|
+            getExternalValueTypeForReturn(allocator, rt)
         else
             null;
 
         // Extract parameter types (including names and default values for named args)
-        const param_types = try allocator.alloc(ParamType, func.params.len);
+        const param_types = try allocator.alloc(types.ExternalParamType, func.params.len);
         for (func.params, 0..) |param, i| {
-            const vt = getValueTypeFromTypeExprForParam(allocator, param.type_expr);
+            const vt = getExternalValueTypeFromTypeExpr(allocator, param.type_expr);
             param_types[i] = .{
                 .ty = vt,
                 .name = param.name,
@@ -9677,8 +9799,8 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             }
 
             // Calculate return_value_type, accounting for throws
-            var return_value_type: ?ValueType = if (method.return_type) |rt|
-                getValueTypeFromTypeExpr(allocator, rt)
+            var return_value_type: ?types.ExternalValueType = if (method.return_type) |rt|
+                getExternalValueTypeForReturn(allocator, rt)
             else
                 null;
 
@@ -9698,14 +9820,14 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             // Extract parameter types for methods (including names and default values for named args)
             // For instance methods, include the implicit self parameter to match buildMethodFuncInfo
             const extra_params: usize = if (method.is_static) 0 else 1;
-            const param_types = try allocator.alloc(ParamType, method.params.len + extra_params);
+            const param_types = try allocator.alloc(types.ExternalParamType, method.params.len + extra_params);
             if (!method.is_static) {
-                // Allocate a copy of type_decl.name for consistent ownership (freeParamTypes will free it)
+                // Allocate a copy of type_decl.name for consistent ownership
                 const self_type_name = try allocator.dupe(u8, type_decl.name);
                 param_types[0] = .{ .ty = .{ .struct_type = self_type_name }, .name = "self" };
             }
             for (method.params, 0..) |param, i| {
-                const vt = getValueTypeFromTypeExprForParam(allocator, param.type_expr);
+                const vt = getExternalValueTypeFromTypeExpr(allocator, param.type_expr);
                 param_types[i + extra_params] = .{
                     .ty = vt,
                     .name = param.name,
@@ -9745,9 +9867,9 @@ fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
     };
 }
 
-/// Helper: get ValueType from TypeExpr (for error union/array types)
-/// Allocations are not tracked - caller manages cleanup through freeParamTypes.
-fn getValueTypeFromTypeExpr(allocator: std.mem.Allocator, te: ast.TypeExpr) ?ValueType {
+/// Helper: get ExternalValueType from TypeExpr (for error union/array types)
+/// Returns null for simple types that don't need special tracking.
+fn getExternalValueTypeForReturn(allocator: std.mem.Allocator, te: ast.TypeExpr) ?types.ExternalValueType {
     return switch (te) {
         .error_union => |eu| {
             const success_ir_type = getIrTypeFromTypeExpr(eu.success_type.*);
@@ -9817,11 +9939,10 @@ fn getStructNameFromTypeExpr(
 }
 
 /// Helper: get ValueType from TypeExpr for function parameters
-/// OWNERSHIP: Allocates copies of all struct type names for uniform ownership.
-///            This ensures callers can consistently free all param types.
-/// CLEANUP: Caller MUST free using freeParamTypes() or freeValueTypeAllocations()
-///          Failure to free results in memory leaks.
-fn getValueTypeFromTypeExprForParam(allocator: std.mem.Allocator, te: ast.TypeExpr) ValueType {
+/// Convert TypeExpr to ExternalValueType (uses strings, not pointers)
+/// OWNERSHIP: Allocates copies of all type names for uniform ownership.
+/// CLEANUP: Caller MUST free using freeExternalParamTypes()
+fn getExternalValueTypeFromTypeExpr(allocator: std.mem.Allocator, te: ast.TypeExpr) types.ExternalValueType {
     return switch (te) {
         .simple => |name| blk: {
             // Known primitives are primitive types
@@ -9829,14 +9950,17 @@ fn getValueTypeFromTypeExprForParam(allocator: std.mem.Allocator, te: ast.TypeEx
                 break :blk .{ .primitive = p };
             }
             // All other simple types (including String) are struct types
-            // Allocate a copy for consistent ownership (so cleanup can free uniformly)
+            // Allocate a copy for consistent ownership
             const name_copy = allocator.dupe(u8, name) catch break :blk .{ .struct_type = name };
             break :blk .{ .struct_type = name_copy };
         },
         .generic => |gen| blk: {
             // Build monomorphized name: BaseType$Arg1$Arg2...
-            // null tracker - caller manages cleanup through freeParamTypes
             const name = getStructNameFromTypeExpr(allocator, .{ .generic = gen }, null) orelse break :blk .{ .struct_type = gen.base_type };
+            // Array types should be tagged as array_type, not struct_type
+            if (std.mem.eql(u8, gen.base_type, "Array") or std.mem.eql(u8, gen.base_type, "array")) {
+                break :blk .{ .array_type = name };
+            }
             break :blk .{ .struct_type = name };
         },
         .error_union => |eu| blk: {
@@ -9854,46 +9978,36 @@ fn getValueTypeFromTypeExprForParam(allocator: std.mem.Allocator, te: ast.TypeEx
                 },
             };
         },
-        .function_type => .{ .primitive = .ptr }, // Function types are represented as pointers in simple contexts
+        .function_type => .function_type_marker, // Function types are represented as pointers
     };
 }
 
-/// Free a slice of ParamTypes, including any allocated struct_type strings.
-/// This properly handles the allocations made by getValueTypeFromTypeExprForParam.
-pub fn freeParamTypes(allocator: std.mem.Allocator, param_types: []const ParamType) void {
+/// Free a slice of ExternalParamTypes, including any allocated type name strings.
+/// This properly handles the allocations made by getExternalValueTypeFromTypeExpr.
+pub fn freeExternalParamTypes(allocator: std.mem.Allocator, param_types: []const types.ExternalParamType) void {
     for (param_types) |pt| {
-        // Free allocated struct_type strings (allocated by getValueTypeFromTypeExprForParam)
-        if (pt.ty == .struct_type) {
-            allocator.free(pt.ty.struct_type);
+        // Free allocated type name strings
+        switch (pt.ty) {
+            .struct_type => |name| allocator.free(name),
+            .array_type => |name| allocator.free(name),
+            .enum_type => |name| allocator.free(name),
+            .primitive, .error_union_type, .function_type_marker => {},
         }
     }
     allocator.free(param_types);
 }
 
-/// Deep-copy a slice of ParamTypes, including the struct_type strings inside ValueTypes.
-/// The caller must free the result with freeParamTypes.
+/// Free a slice of ParamTypes (with pointer-based ValueTypes).
+/// ParamTypes point into type_map, so we don't free the type info pointers.
+pub fn freeParamTypes(allocator: std.mem.Allocator, param_types: []const ParamType) void {
+    // ValueType variants now use pointers into type_map, not allocated strings
+    // So we just free the slice itself
+    allocator.free(param_types);
+}
+
+/// Shallow-copy a slice of ParamTypes.
+/// Since ParamTypes now use pointers into type_map, no deep-copying of strings is needed.
+/// The caller must free the result slice with allocator.free().
 pub fn dupeParamTypes(allocator: std.mem.Allocator, param_types: []const ParamType) ![]ParamType {
-    const result = try allocator.alloc(ParamType, param_types.len);
-    errdefer allocator.free(result);
-
-    var copied: usize = 0;
-    errdefer {
-        // On error, free the struct_type strings we've already copied
-        for (result[0..copied]) |pt| {
-            if (pt.ty == .struct_type) {
-                allocator.free(pt.ty.struct_type);
-            }
-        }
-    }
-
-    for (param_types, 0..) |pt, i| {
-        result[i] = pt;
-        // Deep-copy struct_type string if present
-        if (pt.ty == .struct_type) {
-            result[i].ty = .{ .struct_type = try allocator.dupe(u8, pt.ty.struct_type) };
-        }
-        copied = i + 1;
-    }
-
-    return result;
+    return try allocator.dupe(ParamType, param_types);
 }

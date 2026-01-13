@@ -259,7 +259,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     return .{ .value = result, .ty = if (types.Primitive.fromString(builtin.return_type_name)) |prim|
         .{ .primitive = prim }
     else
-        .{ .struct_type = builtin.return_type_name } };
+        try self.typeNameToValueType(builtin.return_type_name) };
 }
 
 // ============================================================================
@@ -520,7 +520,7 @@ fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!
     try ManagedArray.init(self.func(), managed_ptr, buf_ptr, capacity.value, capacity.value, zero_i32);
 
     // Return as struct type so memcpy works correctly when returning from functions
-    return .{ .value = managed_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
+    return .{ .value = managed_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
 }
 
 /// __managed_array_set_at(managed, index, value) -> void
@@ -549,7 +549,7 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     // The source variable may still be cleaned up at scope exit (decref to 1).
     // When the array is destroyed, it will decref each element (to 0, then free).
     if (value.ty == .struct_type) {
-        if (std.mem.eql(u8, value.ty.struct_type, "String")) {
+        if (std.mem.eql(u8, value.ty.struct_type.name, "String")) {
             try string.emitStringIncref(self, ir.toStringPtr(value.value), "<array_store>");
         }
     }
@@ -626,10 +626,10 @@ fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) Convert
     };
 
     if (elem_info.is_struct) {
-        return .{ .value = elem_ptr.raw(), .ty = .{ .struct_type = type_name } };
+        return .{ .value = elem_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
     } else if (elem_info.is_enum) {
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
-        return .{ .value = elem_val, .ty = .{ .enum_type = type_name } };
+        return .{ .value = elem_val, .ty = try self.typeNameToValueType(type_name) };
     } else if (elem_info.size == 1) {
         // Byte elements: load as i8 (will be auto zero-extended by codegen)
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i8);
@@ -677,13 +677,13 @@ fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
             try self.func().emitMemcpy(new_string_ptr, elem_ptr.asRawPtr(), String.size());
             // Incref the buffer header so caller has their own reference
             try string.emitStringIncref(self, ir.toStringPtr(new_string_ptr.val), "<array index String>");
-            return .{ .value = new_string_ptr.val, .ty = .{ .struct_type = type_name } };
+            return .{ .value = new_string_ptr.val, .ty = try self.typeNameToValueType(type_name) };
         }
 
-        return .{ .value = elem_ptr.raw(), .ty = .{ .struct_type = type_name } };
+        return .{ .value = elem_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
     } else if (elem_info.is_enum) {
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
-        return .{ .value = elem_val, .ty = .{ .enum_type = elem_info.type_name.? } };
+        return .{ .value = elem_val, .ty = try self.typeNameToValueType(elem_info.type_name.?) };
     } else {
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
         return .{ .value = elem_val, .ty = .{ .primitive = if (elem_info.type_name) |tn| types.Primitive.fromString(tn) orelse .int else .int } };
@@ -714,13 +714,13 @@ fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
             try self.func().emitMemcpy(new_string_ptr, elem_ptr.asRawPtr(), String.size());
             // Incref the buffer header so caller has their own reference
             try string.emitStringIncref(self, ir.toStringPtr(new_string_ptr.val), "<map_init_value>");
-            return .{ .value = new_string_ptr.val, .ty = .{ .struct_type = type_name } };
+            return .{ .value = new_string_ptr.val, .ty = try self.typeNameToValueType(type_name) };
         }
 
-        return .{ .value = elem_ptr.raw(), .ty = .{ .struct_type = type_name } };
+        return .{ .value = elem_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
     } else if (elem_info.is_enum) {
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
-        return .{ .value = elem_val, .ty = .{ .enum_type = elem_info.type_name.? } };
+        return .{ .value = elem_val, .ty = try self.typeNameToValueType(elem_info.type_name.?) };
     } else {
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
         return .{ .value = elem_val, .ty = .{ .primitive = if (elem_info.type_name) |tn| types.Primitive.fromString(tn) orelse .int else .int } };
@@ -795,7 +795,7 @@ fn intrinsicCstringToManaged(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     // Initialize the struct (mode=1 for heap-refcounted)
     try initHeapManagedArray(self, array_ptr, buffer, len);
 
-    return .{ .value = array_ptr, .ty = .{ .struct_type = "__ManagedArray" } };
+    return .{ .value = array_ptr, .ty = try self.typeNameToValueType("__ManagedArray") };
 }
 
 const make_char_intrinsics = .{
@@ -828,7 +828,7 @@ fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const pos_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, pos.value, .i32);
     try initSliceArrayFields(self, char_ptr.raw(), pos_i32);
 
-    return .{ .value = char_ptr.raw(), .ty = .{ .struct_type = "Character" } };
+    return .{ .value = char_ptr.raw(), .ty = try self.typeNameToValueType("Character") };
 }
 
 /// __managed_array_byte_at(managed, index) -> byte
@@ -883,7 +883,7 @@ fn intrinsicManagedArraySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const start_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, start.value, .i32);
     try initSliceArrayFields(self, slice_ptr.raw(), start_i32);
 
-    return .{ .value = slice_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
+    return .{ .value = slice_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
 }
 
 /// __managed_array_concat(a, b) -> __ManagedArray
@@ -916,7 +916,7 @@ fn intrinsicManagedArrayConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const mode_one = try self.func().emitConstI32(1);
     try ManagedArray.init(self.func(), result_ptr, buf_ptr, total_len, total_len, mode_one);
 
-    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
+    return .{ .value = result_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
 }
 
 /// __managed_array_make_unique(managed) -> __ManagedArray
@@ -938,7 +938,7 @@ fn intrinsicManagedArrayMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertEr
     const mode_one2 = try self.func().emitConstI32(1);
     try ManagedArray.init(self.func(), result_ptr, new_buf, len, len, mode_one2);
 
-    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
+    return .{ .value = result_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
 }
 
 /// __managed_array_set_byte(managed, index, byte) -> void
@@ -1049,7 +1049,7 @@ fn intrinsicManagedArrayToCstring(self: *AstToIr, call: ast.CallExpr) ConvertErr
         .result = null,
     });
 
-    return .{ .value = cstring_ptr.raw(), .ty = .{ .struct_type = "cstring" } };
+    return .{ .value = cstring_ptr.raw(), .ty = try self.typeNameToValueType("cstring") };
 }
 
 /// __managed_array_from_bytes(buffer, length) -> __ManagedArray
@@ -1071,7 +1071,7 @@ fn intrinsicManagedArrayFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const mode_one = try self.func().emitConstI32(1);
     try ManagedArray.init(self.func(), result_ptr, new_buf, length.value, length.value, mode_one);
 
-    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = "__ManagedArray" } };
+    return .{ .value = result_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
 }
 
 // ============================================================================
@@ -1333,7 +1333,7 @@ fn intrinsicFileReadAll(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
     const invalid_result = try self.func().emitBinaryOp(.mul, invalid_handle, is_invalid, .i64);
     const result_ptr = try self.func().emitBinaryOp(.add, valid_result, invalid_result, .ptr);
 
-    return .{ .value = result_ptr, .ty = .{ .struct_type = "__ManagedArray" } };
+    return .{ .value = result_ptr, .ty = try self.typeNameToValueType("__ManagedArray") };
 }
 
 fn intrinsicWriteFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -1508,7 +1508,7 @@ fn intrinsicFindFilename(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     const null_ptr = try self.func().emitConstI64(0);
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(cstr.raw()), 16, null_ptr);
 
-    return .{ .value = cstr.raw(), .ty = .{ .struct_type = "cstring" } };
+    return .{ .value = cstr.raw(), .ty = try self.typeNameToValueType("cstring") };
 }
 
 /// __get_file_attributes(path cstring) returns int
@@ -1901,7 +1901,7 @@ fn intrinsicProcessReadStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const stdout_pipe = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HSTDOUT_READ);
 
     const result = try emitReadPipeToString(self, stdout_pipe);
-    return .{ .value = result, .ty = .{ .struct_type = "String" } };
+    return .{ .value = result, .ty = try self.typeNameToValueType("String") };
 }
 
 /// __process_read_stderr(handle int) returns String
@@ -1914,7 +1914,7 @@ fn intrinsicProcessReadStderr(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const stderr_pipe = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(handle_ptr), PROCESS_HANDLE_HSTDERR_READ);
 
     const result = try emitReadPipeToString(self, stderr_pipe);
-    return .{ .value = result, .ty = .{ .struct_type = "String" } };
+    return .{ .value = result, .ty = try self.typeNameToValueType("String") };
 }
 
 /// __process_get_exit_code(handle int) returns int

@@ -442,7 +442,7 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
 
 /// Convert indexing on stdlib Array types (Array$int, etc.) by calling the .get() method
 pub fn convertStdlibArrayIndex(self: *AstToIr, base_typed: TypedValue, index_expr: ast.Expression) ConvertError!TypedValue {
-    const type_name = base_typed.ty.struct_type;
+    const type_name = base_typed.ty.struct_type.name;
 
     // Convert the index expression
     const idx_typed = try self.convertExpression(index_expr);
@@ -498,7 +498,7 @@ pub fn convertStdlibArrayIndex(self: *AstToIr, base_typed: TypedValue, index_exp
 
 /// Convert index assignment on stdlib Array types (Array$int, etc.) by calling the .set() method
 pub fn convertStdlibArrayIndexAssign(self: *AstToIr, base_typed: TypedValue, index_expr: ast.Expression, value_expr: ast.Expression) ConvertError!void {
-    const type_name = base_typed.ty.struct_type;
+    const type_name = base_typed.ty.struct_type.name;
 
     // Convert index and value expressions
     const idx_typed = try self.convertExpression(index_expr);
@@ -660,7 +660,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
         try self.func().setValueName(result_ptr.raw(), decl.name);
         try self.var_map.put(self.allocator, decl.name, VarInfo.init(
             result_ptr.raw(),
-            .{ .struct_type = type_name },
+            try self.typeNameToValueType(type_name),
             self.current_decl_is_mutable,
             false,
         ));
@@ -688,14 +688,14 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
         const managed_ptr = try emitEmptyManagedArray(self);
         return .{
             .value = managed_ptr.raw(),
-            .ty = .{ .array_type = .{ .element_type = .i64, .size = 0, .storage = .heap } },
+            .ty = .{ .array_type = try self.getOrCreateArrayType(.{ .element_type = .i64, .size = 0, .storage = .heap }) },
         };
     }
 
     const first_typed = try self.convertExpression(elements[0]);
     const elem_type = first_typed.ty.toIrType();
     const elem_struct_type: ?[]const u8 = switch (first_typed.ty) {
-        .struct_type => |name| name,
+        .struct_type => |struct_info| struct_info.name,
         .primitive, .array_type, .enum_type, .error_union_type, .function_type => null,
     };
     const elem_primitive_type: ?types.Primitive = switch (first_typed.ty) {
@@ -755,7 +755,7 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
 
     return .{
         .value = managed_ptr.raw(),
-        .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .heap, .element_struct_type = elem_struct_type, .element_primitive_type = elem_primitive_type } },
+        .ty = .{ .array_type = try self.getOrCreateArrayType(.{ .element_type = elem_type, .size = elements.len, .storage = .heap, .element_struct_type = elem_struct_type, .element_primitive_type = elem_primitive_type }) },
     };
 }
 
@@ -876,7 +876,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
 
     return .{
         .value = result_ptr.raw(),
-        .ty = .{ .struct_type = target_type_name },
+        .ty = try self.typeNameToValueType(target_type_name),
     };
 }
 
@@ -898,7 +898,7 @@ pub fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!Typ
 
     const struct_info = switch (type_info) {
         .struct_type => |s| s,
-        .primitive, .enum_type => {
+        .primitive, .enum_type, .array_type => {
             debug.astToIr("error: Array type is not a struct: {s}", .{array_type_name});
             return error.UnknownType;
         },
@@ -950,6 +950,6 @@ pub fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!Typ
 
     return .{
         .value = result_ptr.raw(),
-        .ty = .{ .struct_type = array_type_name },
+        .ty = try self.typeNameToValueType(array_type_name),
     };
 }

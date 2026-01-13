@@ -68,12 +68,10 @@ const MetadataResult = struct {
         for (self.funcs) |sig| {
             self.allocator.free(sig.name);
             if (sig.param_types.len > 0) {
-                ast_to_ir.freeParamTypes(self.allocator, sig.param_types);
+                ast_to_ir.freeExternalParamTypes(self.allocator, sig.param_types);
             }
             if (sig.return_type_name) |rtn| self.allocator.free(rtn);
-            if (sig.return_value_type) |rvt| {
-                ast_to_ir.freeValueTypeAllocations(self.allocator, rvt);
-            }
+            // ExternalValueType doesn't have nested allocations - type name strings are in param_types
         }
         self.allocator.free(self.types);
         self.allocator.free(self.funcs);
@@ -129,7 +127,7 @@ const FrontendResult = struct {
             for (sigs) |sig| {
                 self.allocator.free(sig.name);
                 if (sig.param_types.len > 0) {
-                    ast_to_ir.freeParamTypes(self.allocator, sig.param_types);
+                    ast_to_ir.freeExternalParamTypes(self.allocator, sig.param_types);
                 }
                 if (sig.return_type_name) |rtn| {
                     self.allocator.free(rtn);
@@ -148,14 +146,12 @@ fn freeExternalFuncs(allocator: std.mem.Allocator, funcs: []const ast_to_ir.Exte
     for (funcs) |sig| {
         allocator.free(sig.name);
         if (sig.param_types.len > 0) {
-            ast_to_ir.freeParamTypes(allocator, sig.param_types);
+            ast_to_ir.freeExternalParamTypes(allocator, sig.param_types);
         }
         if (sig.return_type_name) |rtn| {
             allocator.free(rtn);
         }
-        if (sig.return_value_type) |rvt| {
-            ast_to_ir.freeValueTypeAllocations(allocator, rvt);
-        }
+        // ExternalValueType doesn't have nested allocations
     }
 }
 
@@ -200,11 +196,8 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
             errdefer {
                 for (funcs) |sig| {
                     allocator.free(sig.name);
-                    if (sig.param_types.len > 0) ast_to_ir.freeParamTypes(allocator, sig.param_types);
+                    if (sig.param_types.len > 0) ast_to_ir.freeExternalParamTypes(allocator, sig.param_types);
                     if (sig.return_type_name) |rtn| allocator.free(rtn);
-                    if (sig.return_value_type) |rvt| {
-                        ast_to_ir.freeValueTypeAllocations(allocator, rvt);
-                    }
                 }
                 allocator.free(funcs);
             }
@@ -290,14 +283,12 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
                 for (sigs) |sig| {
                     allocator.free(sig.name);
                     if (sig.param_types.len > 0) {
-                        ast_to_ir.freeParamTypes(allocator, sig.param_types);
+                        ast_to_ir.freeExternalParamTypes(allocator, sig.param_types);
                     }
                     if (sig.return_type_name) |rtn| {
                         allocator.free(rtn);
                     }
-                    if (sig.return_value_type) |rvt| {
-                        ast_to_ir.freeValueTypeAllocations(allocator, rvt);
-                    }
+                    // ExternalValueType doesn't have nested allocations
                 }
                 allocator.free(sigs);
             };

@@ -646,6 +646,6 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ast_to_ir.
 
     return .{
         .value = result_ptr.raw(),
-        .ty = .{ .struct_type = map_type_name },
+        .ty = try self.typeNameToValueType(map_type_name),
     };
 }
