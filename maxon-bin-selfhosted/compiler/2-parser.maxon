@@ -24,16 +24,16 @@ export type Parser
 
 	export function peek() returns Token
 		if pos >= tokens.count() 'bounds'
-			return makeToken(TokenType.eof, "", 0, 0)
+			return Token{kind: TokenType.eof, text: "", line: 0, column: 0}
 		end 'bounds'
-		return tokens.get(pos)
+		return try tokens.get(pos) otherwise Token{kind: TokenType.eof, text: "", line: 0, column: 0}
 	end 'peek'
 
 	export function previous() returns Token
 		if pos == 0 'bounds'
-			return makeToken(TokenType.eof, "", 0, 0)
+			return Token{kind: TokenType.eof, text: "", line: 0, column: 0}
 		end 'bounds'
-		return tokens.get(pos - 1)
+		return try tokens.get(pos - 1) otherwise Token{kind: TokenType.eof, text: "", line: 0, column: 0}
 	end 'previous'
 
 	export function advance() returns Token
@@ -99,14 +99,14 @@ export type Parser
 	export function parseExpression() returns Expr throws ParseError
 		let loc = currentLoc()
 
-		if matchToken(TokenType.intLiteral) 'int'
-			let lexeme = previous().lexeme
-			let value = parseIntFromString(lexeme)
+		if matchToken(TokenType.integer) 'int'
+			let text = previous().text
+			let value = parseIntFromString(text)
 			return Expr.makeIntLiteral(value, loc)
 		end 'int'
 
 		if matchToken(TokenType.identifier) 'ident'
-			let name = previous().lexeme
+			let name = previous().text
 			return Expr.makeVarRef(name, loc)
 		end 'ident'
 
@@ -116,13 +116,6 @@ export type Parser
 	export function parseStatement() returns Stmt throws ParseError
 		skipNewlines()
 		let loc = currentLoc()
-
-		if matchToken(TokenType.kwLet) 'let'
-			let name = try expect(TokenType.identifier)
-			try expect(TokenType.equals)
-			let value = try parseExpression()
-			return Stmt.makeLet(name.lexeme, value, loc)
-		end 'let'
 
 		if matchToken(TokenType.kwReturn) 'return'
 			skipNewlines()
@@ -139,7 +132,7 @@ export type Parser
 	export function parseFunction() returns FunctionDecl throws ParseError
 		let loc = currentLoc()
 		let nameToken = try expect(TokenType.identifier)
-		let name = nameToken.lexeme
+		let name = nameToken.text
 
 		try expect(TokenType.lparen)
 		try expect(TokenType.rparen)
@@ -159,7 +152,7 @@ export type Parser
 		end 'body'
 
 		try expect(TokenType.kwEnd)
-		try expect(TokenType.blockLabel)
+		try expect(TokenType.charLiteral)
 
 		return FunctionDecl.create(name, returnType, body, loc)
 	end 'parseFunction'

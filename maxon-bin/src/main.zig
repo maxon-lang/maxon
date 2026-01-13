@@ -232,6 +232,17 @@ const BuildConfig = struct {
     sources: []const []const u8,
     optimize: bool,
     debug_info: bool,
+
+    pub fn deinit(self: *const BuildConfig, allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        if (self.output.len > 0) {
+            allocator.free(self.output);
+        }
+        for (self.sources) |src| {
+            allocator.free(src);
+        }
+        allocator.free(self.sources);
+    }
 };
 
 fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
@@ -301,6 +312,7 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
         std.debug.print("Error executing build.maxon: {}\n", .{err});
         std.process.exit(1);
     };
+    defer build_config.deinit(allocator);
 
     // Determine output path
     const output_path = if (build_config.output.len > 0)

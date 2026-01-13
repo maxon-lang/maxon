@@ -356,7 +356,10 @@ pub const IrCodegen = struct {
     }
 
     fn getStackOffset(self: *IrCodegen, val: ir.Value) !i32 {
-        const loc = self.value_locations.get(val) orelse return error.InvalidValue;
+        const loc = self.value_locations.get(val) orelse {
+            debug.log("InvalidValue in getStackOffset: val=%{d} not found (func={s})", .{ val, self.current_func_name });
+            return error.InvalidValue;
+        };
         return switch (loc) {
             .stack => |o| o,
             else => error.ExpectedStackLocation,
@@ -388,7 +391,10 @@ pub const IrCodegen = struct {
     }
 
     fn loadValue(self: *IrCodegen, val: ir.Value, target: LoadTarget) !void {
-        const loc = self.value_locations.get(val) orelse return error.InvalidValue;
+        const loc = self.value_locations.get(val) orelse {
+            debug.log("InvalidValue: val=%{d} not found in value_locations (func={s})", .{ val, self.current_func_name });
+            return error.InvalidValue;
+        };
         switch (loc) {
             .stack => |offset| {
                 debug.codegen("    loadValue: val=%{d}, stack offset={d}, target={s}", .{ val, offset, @tagName(target) });
@@ -417,7 +423,10 @@ pub const IrCodegen = struct {
     }
 
     fn loadToRcx(self: *IrCodegen, val: ir.Value) !void {
-        const loc = self.value_locations.get(val) orelse return error.InvalidValue;
+        const loc = self.value_locations.get(val) orelse {
+            debug.log("InvalidValue in loadToRcx: val=%{d} not found (func={s})", .{ val, self.current_func_name });
+            return error.InvalidValue;
+        };
         switch (loc) {
             .stack => |offset| try self.enc.movRcxRbpOffsetQ(offset),
             .register => |reg| {

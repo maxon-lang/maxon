@@ -1,7 +1,7 @@
 // PE Writer for Windows x86-64 executables
 
 export type CodeBuffer
-	let bytes Array of byte
+	export var bytes Array of byte
 
 	export static function create() returns CodeBuffer
 		return CodeBuffer{bytes: Array of byte{}}
@@ -61,8 +61,9 @@ export type CompleteExeBuilder
 		let imageSize = 12288
 		let entryPointRVA = textSectionRVA
 
-		// DOS Header
-		buffer.emitWord(0x5A4D)  // "MZ"
+		// DOS Header - emit MZ signature as individual bytes
+		buffer.emitByte(0x4D as byte)  // 'M'
+		buffer.emitByte(0x5A as byte)  // 'Z'
 		var i = 0
 		while i < 29 'dospad'
 			buffer.emitWord(0)
@@ -70,11 +71,15 @@ export type CompleteExeBuilder
 		end 'dospad'
 		buffer.emitDword(64)  // e_lfanew
 
-		// PE Signature
-		buffer.emitDword(0x00004550)  // "PE\0\0"
+		// PE Signature - "PE\0\0"
+		buffer.emitByte(0x50 as byte)  // 'P'
+		buffer.emitByte(0x45 as byte)  // 'E'
+		buffer.emitByte(0x00 as byte)
+		buffer.emitByte(0x00 as byte)
 
 		// COFF Header
-		buffer.emitWord(0x8664)  // Machine: AMD64
+		buffer.emitByte(0x64 as byte)  // Machine: AMD64 low byte
+		buffer.emitByte(0x86 as byte)  // Machine: AMD64 high byte
 		buffer.emitWord(2)       // NumberOfSections
 		buffer.emitDword(0)      // TimeDateStamp
 		buffer.emitDword(0)      // PointerToSymbolTable
@@ -83,7 +88,8 @@ export type CompleteExeBuilder
 		buffer.emitWord(0x0022)  // Characteristics
 
 		// Optional Header (PE32+)
-		buffer.emitWord(0x020B)  // Magic
+		buffer.emitByte(0x0B as byte)  // Magic low byte
+		buffer.emitByte(0x02 as byte)  // Magic high byte
 		buffer.emitByte(14 as byte)     // MajorLinkerVersion
 		buffer.emitByte(0 as byte)      // MinorLinkerVersion
 		buffer.emitDword(textSectionSize)
@@ -231,11 +237,25 @@ export type CompleteExeBuilder
 	end 'buildBasicExe'
 
 	export function writeSectionName(name String)
-		buffer.emitBytes(name.prefix(8))
+		// Section names are exactly 8 bytes, padded with nulls
+		var i = 0
+		for b in name.bytes() 'writeBytes'
+			if i >= 8 'done'
+				break 'writeBytes'
+			end 'done'
+			buffer.emitByte(b)
+			i = i + 1
+		end 'writeBytes'
+		while i < 8 'pad'
+			buffer.emitByte(0 as byte)
+			i = i + 1
+		end 'pad'
 	end 'writeSectionName'
 
 	export function writeString(s String)
-		buffer.emitBytes(s.bytes())
+		for b in s.bytes() 'writeBytes'
+			buffer.emitByte(b)
+		end 'writeBytes'
 		buffer.emitByte(0 as byte)
 	end 'writeString'
 

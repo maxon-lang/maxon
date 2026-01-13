@@ -6,8 +6,8 @@ export enum TypeKind
 end 'TypeKind'
 
 export type TypeRef
-	let kind TypeKind
-	let name String
+	export let kind TypeKind
+	export let name String
 
 	export static function makeInt() returns TypeRef
 		return TypeRef{kind: TypeKind.intType, name: "int"}
@@ -19,8 +19,8 @@ export type TypeRef
 end 'TypeRef'
 
 export type SourceLoc
-	let line int
-	let column int
+	export let line int
+	export let column int
 
 	export static function create(line int, column int) returns SourceLoc
 		return SourceLoc{line: line, column: column}
@@ -33,10 +33,10 @@ export enum ExprKind
 end 'ExprKind'
 
 export type Expr
-	let kind ExprKind
-	let intValue int
-	let name String
-	let loc SourceLoc
+	export let kind ExprKind
+	export let intValue int
+	export let name String
+	export let loc SourceLoc
 
 	export static function makeIntLiteral(value int, loc SourceLoc) returns Expr
 		return Expr{kind: ExprKind.intLiteral, intValue: value, name: "", loc: loc}
@@ -53,25 +53,25 @@ export enum StmtKind
 end 'StmtKind'
 
 export type Stmt
-	let kind StmtKind
-	let name String
-	let expr Expr
-	let hasValue bool
-	let loc SourceLoc
+	export var kind StmtKind
+	export var hasValue bool
+	export var name String
+	export var expr Expr
+	export var loc SourceLoc
 
 	export static function makeReturn(value Expr, hasValue bool, loc SourceLoc) returns Stmt
-		var result = Stmt{kind: StmtKind.returnStmt, name: "", expr: value, hasValue: hasValue, loc: loc}
+		var result = Stmt{kind: StmtKind.returnStmt, hasValue: hasValue, name: "", expr: value, loc: loc}
 		return result
 	end 'makeReturn'
 
 	export static function makeLet(name String, value Expr, loc SourceLoc) returns Stmt
-		return Stmt{kind: StmtKind.letStmt, name: name, expr: value, hasValue: true, loc: loc}
+		return Stmt{kind: StmtKind.letStmt, hasValue: true, name: name, expr: value, loc: loc}
 	end 'makeLet'
 end 'Stmt'
 
 export type Parameter
-	let name String
-	let paramType TypeRef
+	export let name String
+	export let paramType TypeRef
 
 	export static function create(name String, paramType TypeRef) returns Parameter
 		return Parameter{name: name, paramType: paramType}
@@ -79,13 +79,13 @@ export type Parameter
 end 'Parameter'
 
 export type FunctionDecl
-	let name String
-	let params Array of Parameter
-	let returnType TypeRef
-	let body Array of Stmt
-	let isExport bool
-	let isExtern bool
-	let loc SourceLoc
+	export let name String
+	export let params Array of Parameter
+	export let returnType TypeRef
+	export let body Array of Stmt
+	export let isExport bool
+	export let isExtern bool
+	export let loc SourceLoc
 
 	export static function create(name String, returnType TypeRef, body Array of Stmt, loc SourceLoc) returns FunctionDecl
 		if body.count() > 0 'hasBody'
@@ -93,21 +93,21 @@ export type FunctionDecl
 		end 'hasBody'
 		var params = Array of Parameter{}
 		var result = FunctionDecl{
-			name: name,
-			params: params,
-			returnType: returnType,
-			body: body,
-			isExport: false,
-			isExtern: false,
-			loc: loc
+		name: name,
+		params: params,
+		returnType: returnType,
+		body: body,
+		isExport: false,
+		isExtern: false,
+		loc: loc
 		}
 		return result
 	end 'create'
 end 'FunctionDecl'
 
 export type Program
-	var functions Array of FunctionDecl
-	let fileName String
+	export var functions Array of FunctionDecl
+	export let fileName String
 
 	export static function create(fileName String) returns Program
 		var funcs = Array of FunctionDecl{}

@@ -7,7 +7,7 @@ export enum CodegenError is Error
 end 'CodegenError'
 
 export type X86Gen
-	let code CodeBuffer
+	export var code CodeBuffer
 
 	export static function create() returns X86Gen
 		return X86Gen{code: CodeBuffer.create()}
@@ -16,7 +16,11 @@ export type X86Gen
 	export function generate(program Program) throws CodegenError
 		var i = 0
 		while i < program.functions.count() 'funcs'
-			try genFunction(program.functions.get(i))
+			let fn = try program.functions.get(i) otherwise 'skip'
+			i = i + 1
+			continue 'funcs'
+			end 'skip'
+			try genFunction(fn)
 			i = i + 1
 		end 'funcs'
 	end 'generate'
@@ -24,7 +28,11 @@ export type X86Gen
 	export function genFunction(fn FunctionDecl) throws CodegenError
 		var i = 0
 		while i < fn.body.count() 'stmts'
-			try genStmt(fn.body.get(i))
+			let stmt = try fn.body.get(i) otherwise 'skip'
+			i = i + 1
+			continue 'stmts'
+			end 'skip'
+			try genStmt(stmt)
 			i = i + 1
 		end 'stmts'
 	end 'genFunction'
