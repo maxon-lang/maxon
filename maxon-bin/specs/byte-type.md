@@ -84,3 +84,115 @@ end 'main'
 ```exitcode
 255
 ```
+
+### Byte Array Push and Get
+
+<!-- test: byte-array-push-get -->
+```maxon
+function main() returns int
+    var arr = Array of byte{}
+    arr.push(10 as byte)
+    arr.push(20 as byte)
+    arr.push(30 as byte)
+
+    var v0 = try arr.get(0) otherwise 0 as byte
+    var v1 = try arr.get(1) otherwise 0 as byte
+    var v2 = try arr.get(2) otherwise 0 as byte
+
+    return (v0 as int) + (v1 as int) + (v2 as int)
+end 'main'
+```
+```exitcode
+60
+```
+
+### Byte Array Initialized
+
+<!-- test: byte-array-initialized -->
+```maxon
+function main() returns int
+    var arr = Array of byte{}
+    arr.push(1 as byte)
+    arr.push(2 as byte)
+    arr.push(3 as byte)
+
+    var v0 = try arr.get(0) otherwise 0 as byte
+    var v1 = try arr.get(1) otherwise 0 as byte
+    var v2 = try arr.get(2) otherwise 0 as byte
+
+    return (v0 as int) + (v1 as int) + (v2 as int)
+end 'main'
+```
+```exitcode
+6
+```
+
+### Byte Array Set
+
+<!-- test: byte-array-set -->
+```maxon
+function main() returns int
+    var arr = Array of byte{}
+    arr.push(10 as byte)
+    arr.push(20 as byte)
+    arr.push(30 as byte)
+
+    arr.set(1, value: 99 as byte)
+
+    var val = try arr.get(1) otherwise 0 as byte
+    return val as int
+end 'main'
+```
+```exitcode
+99
+```
+
+### Byte Array Max Values
+
+<!-- test: byte-array-max-values -->
+```maxon
+function main() returns int
+    var arr = Array of byte{}
+    arr.push(255 as byte)
+    arr.push(0 as byte)
+    arr.push(128 as byte)
+
+    var v0 = try arr.get(0) otherwise 0 as byte
+    var v1 = try arr.get(1) otherwise 99 as byte
+    var v2 = try arr.get(2) otherwise 0 as byte
+
+    if (v0 as int) != 255 'c0'
+        return 1
+    end 'c0'
+    if (v1 as int) != 0 'c1'
+        return 2
+    end 'c1'
+    if (v2 as int) != 128 'c2'
+        return 3
+    end 'c2'
+
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Byte Array Count
+
+<!-- test: byte-array-count -->
+```maxon
+function main() returns int
+    var arr = Array of byte{}
+    arr.push(1 as byte)
+    arr.push(2 as byte)
+    arr.push(3 as byte)
+    arr.push(4 as byte)
+    arr.push(5 as byte)
+
+    return arr.count()
+end 'main'
+```
+```exitcode
+5
+```

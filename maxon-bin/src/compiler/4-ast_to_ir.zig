@@ -4108,17 +4108,11 @@ pub const AstToIr = struct {
         else
             base_typed.value;
 
-        const elem_size: i32 = if (arr_info.element_struct_type) |struct_name| blk: {
-            const type_info = self.type_map.get(struct_name) orelse {
-                self.reportInternalError("unknown array element struct type in index assign");
-                return error.SemanticError;
-            };
-            if (type_info != .struct_type) {
-                self.reportInternalError("array element type is not a struct in index assign");
-                return error.SemanticError;
-            }
-            break :blk type_info.struct_type.size;
-        } else 8; // Primitives are 8 bytes
+        // Get element size using ArrayInfo helper (handles primitives like byte correctly)
+        const elem_size: i32 = arr_info.getElementSize(self.type_map) orelse {
+            self.reportInternalError("cannot determine array element size in index assign");
+            return error.SemanticError;
+        };
 
         const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buffer_ptr), idx_typed.value, elem_size);
         // For structs, copy the entire struct data; for primitives, store the value
@@ -8707,18 +8701,11 @@ pub const AstToIr = struct {
 
         const idx_typed = try self.convertExpression(idx.index.*);
 
-        // Calculate element size: for structs, use actual struct size; for primitives, use 8 bytes
-        const elem_size: i32 = if (arr_info.element_struct_type) |struct_name| blk: {
-            const type_info = self.type_map.get(struct_name) orelse {
-                self.reportInternalError("unknown array element struct type in index");
-                return error.SemanticError;
-            };
-            if (type_info != .struct_type) {
-                self.reportInternalError("array element type is not a struct in index");
-                return error.SemanticError;
-            }
-            break :blk type_info.struct_type.size;
-        } else 8; // Primitives are 8 bytes
+        // Get element size using ArrayInfo helper (handles primitives like byte correctly)
+        const elem_size: i32 = arr_info.getElementSize(self.type_map) orelse {
+            self.reportInternalError("cannot determine array element size in index");
+            return error.SemanticError;
+        };
 
         // Get the array size for bounds checking
         const arr_size: ir.Value = if (arr_info.size) |size|

@@ -1,0 +1,146 @@
+// Test: byte-type.byte-array-count.1
+function main() returns int
+    var arr = Array of byte{}
+    arr.push(1 as byte)
+    arr.push(2 as byte)
+    arr.push(3 as byte)
+    arr.push(4 as byte)
+    arr.push(5 as byte)
+
+    return arr.count()
+end 'main'
+---
+ExitCode: 5
+---
+function main() -> i64 {
+entry:
+    %arr = alloca.sized ptr 40
+    memset %arr 0 40
+    %tmp_alloca.1 = alloca.sized ptr 40
+    %tmp_const = const.i64 i64 1
+    %tmp_const.1 = const.i64 i64 255
+    %tmp_band = band i64 %tmp_const %tmp_const.1
+    %tmp_call = call ptr @Array$byte$push(%tmp_alloca.1, %arr, %tmp_band)
+    %tmp_alloca.2 = alloca.sized ptr 40
+    %tmp_const.2 = const.i64 i64 2
+    %tmp_const.3 = const.i64 i64 255
+    %tmp_band.1 = band i64 %tmp_const.2 %tmp_const.3
+    %tmp_call.1 = call ptr @Array$byte$push(%tmp_alloca.2, %arr, %tmp_band.1)
+    %tmp_alloca.3 = alloca.sized ptr 40
+    %tmp_const.4 = const.i64 i64 3
+    %tmp_const.5 = const.i64 i64 255
+    %tmp_band.2 = band i64 %tmp_const.4 %tmp_const.5
+    %tmp_call.2 = call ptr @Array$byte$push(%tmp_alloca.3, %arr, %tmp_band.2)
+    %tmp_alloca.4 = alloca.sized ptr 40
+    %tmp_const.6 = const.i64 i64 4
+    %tmp_const.7 = const.i64 i64 255
+    %tmp_band.3 = band i64 %tmp_const.6 %tmp_const.7
+    %tmp_call.3 = call ptr @Array$byte$push(%tmp_alloca.4, %arr, %tmp_band.3)
+    %tmp_alloca.5 = alloca.sized ptr 40
+    %tmp_const.8 = const.i64 i64 5
+    %tmp_const.9 = const.i64 i64 255
+    %tmp_band.4 = band i64 %tmp_const.8 %tmp_const.9
+    %tmp_call.4 = call ptr @Array$byte$push(%tmp_alloca.5, %arr, %tmp_band.4)
+    %tmp_call.5 = call i64 @Array$byte$count(%arr)
+    %tmp_load = load ptr %arr
+    heap.free %tmp_load tag="array cleanup"
+    ret %tmp_call.5
+}
+
+function Array$byte$push() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    %value = param i64 2
+    %value.1 = alloca ptr
+    store %value.1 %value
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %len = alloca ptr
+    store %len %tmp_load
+    %tmp_load.1 = load i64 %len
+    %tmp_const = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.1 %tmp_const
+    call @Array$byte$ensureCapacity(%self, %tmp_add)
+    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_load.2 = load i64 %len
+    %tmp_load.3 = load i64 %value.1
+    %tmp_load.4 = load ptr %tmp_fieldptr.2
+    %tmp_elemptr = getelemptr ptr %tmp_load.4 %tmp_load.2 elemsize=1
+    store %tmp_elemptr %tmp_load.3
+    %tmp_fieldptr.3 = getfieldptr ptr %self 0
+    %tmp_load.5 = load i64 %len
+    %tmp_const.2 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.5 %tmp_const.2
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.3 8
+    store %tmp_fieldptr.4 %tmp_add.1
+    memcpy %tmp_param %self 40
+    ret %tmp_param
+}
+
+function Array$byte$ensureCapacity() -> void {
+entry:
+    %self = param ptr 0
+    %requiredLen = param i64 1
+    %requiredLen.1 = alloca ptr
+    store %requiredLen.1 %requiredLen
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 16
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %cap = alloca ptr
+    store %cap %tmp_load
+    %tmp_load.1 = load i64 %requiredLen.1
+    %tmp_load.2 = load i64 %cap
+    %tmp_icmp = icmp.gt i64 %tmp_load.1 %tmp_load.2
+    br.cond %tmp_icmp @block1 @block7
+then:
+    %tmp_load.3 = load i64 %cap
+    %newCap = alloca ptr
+    store %newCap %tmp_load.3
+    %tmp_load.4 = load i64 %newCap
+    %tmp_const = const.i64 i64 4
+    %tmp_icmp.1 = icmp.lt i64 %tmp_load.4 %tmp_const
+    br.cond %tmp_icmp.1 @block2 @block3
+then:
+    %tmp_const.1 = const.i64 i64 4
+    store %newCap %tmp_const.1
+    br @block3
+end:
+    br @block4
+whilecond:
+    %tmp_load.5 = load i64 %newCap
+    %tmp_load.6 = load i64 %requiredLen.1
+    %tmp_icmp.2 = icmp.lt i64 %tmp_load.5 %tmp_load.6
+    br.cond %tmp_icmp.2 @block5 @block6
+whilebody:
+    %tmp_load.7 = load i64 %newCap
+    %tmp_const.2 = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_load.7 %tmp_const.2
+    store %newCap %tmp_mul
+    br @block4
+whilecont:
+    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_load.8 = load i64 %newCap
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_mul.1 = mul i64 %tmp_load.8 %tmp_const.3
+    %tmp_load.9 = load ptr %tmp_fieldptr.2
+    %tmp_realloc = heap.realloc ptr %tmp_load.9 %tmp_mul.1 tag="array grow"
+    store %tmp_fieldptr.2 %tmp_realloc
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 16
+    store %tmp_fieldptr.3 %tmp_load.8
+    br @block7
+end:
+    ret
+}
+
+function Array$byte$count() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load = load i64 %tmp_fieldptr.1
+    ret %tmp_load
+}
+
+---

@@ -12,8 +12,10 @@ pub const PrimitiveTypeInfo = struct {
     maxon_name: []const u8,
     /// Corresponding IR type
     ir_type: ir.Type,
-    /// Size in bytes for stack/memory allocation
+    /// Size in bytes for stack/memory allocation (always 8 for register operations)
     size: i32,
+    /// Size in bytes when stored in an array (e.g., byte=1, int=8)
+    array_element_size: i32,
     /// Whether this type supports arithmetic operations
     is_numeric: bool,
     /// Whether this type is integral (int, bool, byte)
@@ -27,10 +29,10 @@ pub const PrimitiveTypeInfo = struct {
 /// Compile-time lookup table for user-facing Maxon primitive types
 /// Note: ptr and void are intentionally excluded - they are internal types
 pub const primitive_types = [_]PrimitiveTypeInfo{
-    .{ .maxon_name = "int", .ir_type = .i64, .size = 8, .is_numeric = true, .is_integral = true, .is_floating_point = false, .is_signed = true },
-    .{ .maxon_name = "float", .ir_type = .f64, .size = 8, .is_numeric = true, .is_integral = false, .is_floating_point = true, .is_signed = true },
-    .{ .maxon_name = "bool", .ir_type = .i64, .size = 8, .is_numeric = false, .is_integral = true, .is_floating_point = false, .is_signed = false },
-    .{ .maxon_name = "byte", .ir_type = .i64, .size = 8, .is_numeric = true, .is_integral = true, .is_floating_point = false, .is_signed = false },
+    .{ .maxon_name = "int", .ir_type = .i64, .size = 8, .array_element_size = 8, .is_numeric = true, .is_integral = true, .is_floating_point = false, .is_signed = true },
+    .{ .maxon_name = "float", .ir_type = .f64, .size = 8, .array_element_size = 8, .is_numeric = true, .is_integral = false, .is_floating_point = true, .is_signed = true },
+    .{ .maxon_name = "bool", .ir_type = .i64, .size = 8, .array_element_size = 8, .is_numeric = false, .is_integral = true, .is_floating_point = false, .is_signed = false },
+    .{ .maxon_name = "byte", .ir_type = .i64, .size = 8, .array_element_size = 1, .is_numeric = true, .is_integral = true, .is_floating_point = false, .is_signed = false },
 };
 
 /// Canonical primitive type name constants (reference into primitive_types for consistency)
@@ -119,6 +121,30 @@ pub const ArrayInfo = struct {
     size: ?usize, // null for dynamic size
     storage: ArrayStorage,
     element_struct_type: ?[]const u8 = null, // struct name if elements are structs
+    element_primitive_type: ?[]const u8 = null, // primitive type name if elements are primitives (e.g., "byte")
+
+    /// Get the element size in bytes for array indexing.
+    /// For structs, looks up the size from type_map.
+    /// For primitives, uses the correct array element size (e.g., byte=1, int=8).
+    /// Returns null if element type cannot be determined - indicates a compiler bug.
+    pub fn getElementSize(self: ArrayInfo, type_map: anytype) ?i32 {
+        // First check for struct types
+        if (self.element_struct_type) |struct_name| {
+            if (type_map.get(struct_name)) |type_info| {
+                if (type_info == .struct_type) {
+                    return type_info.struct_type.size;
+                }
+            }
+        }
+        // Then check for primitive types
+        if (self.element_primitive_type) |prim_name| {
+            if (getPrimitiveTypeInfo(prim_name)) |info| {
+                return info.array_element_size;
+            }
+        }
+        // Cannot determine element size - this is a compiler error
+        return null;
+    }
 };
 
 /// Function type info - for first-class functions
@@ -374,6 +400,17 @@ pub const EnumTypeInfo = struct {
     /// Returns the ValueType for this enum's rawValue
     pub fn rawValueType(self: EnumTypeInfo) ValueType {
         return self.backing.toValueType();
+    }
+
+    /// Returns the array element size for this enum type.
+    /// Simple enums: 8 bytes (i64 tag value)
+    /// Enums with associated values: 8 bytes (pointer to heap-allocated storage)
+    pub fn arrayElementSize(self: EnumTypeInfo) i32 {
+        // Both simple enums and enums with associated values use 8 bytes per element:
+        // - Simple enums store an i64 tag directly
+        // - Enums with associated values store a pointer to heap-allocated [tag][payload...]
+        _ = self;
+        return 8;
     }
 };
 

@@ -1,0 +1,250 @@
+// Test: byte-type.byte-array-initialized.1
+function main() returns int
+    var arr = Array of byte{}
+    arr.push(1 as byte)
+    arr.push(2 as byte)
+    arr.push(3 as byte)
+
+    var v0 = try arr.get(0) otherwise 0 as byte
+    var v1 = try arr.get(1) otherwise 0 as byte
+    var v2 = try arr.get(2) otherwise 0 as byte
+
+    return (v0 as int) + (v1 as int) + (v2 as int)
+end 'main'
+---
+ExitCode: 6
+---
+function main() -> i64 {
+entry:
+    %arr = alloca.sized ptr 40
+    memset %arr 0 40
+    %tmp_alloca.1 = alloca.sized ptr 40
+    %tmp_const = const.i64 i64 1
+    %tmp_const.1 = const.i64 i64 255
+    %tmp_band = band i64 %tmp_const %tmp_const.1
+    %tmp_call = call ptr @Array$byte$push(%tmp_alloca.1, %arr, %tmp_band)
+    %tmp_alloca.2 = alloca.sized ptr 40
+    %tmp_const.2 = const.i64 i64 2
+    %tmp_const.3 = const.i64 i64 255
+    %tmp_band.1 = band i64 %tmp_const.2 %tmp_const.3
+    %tmp_call.1 = call ptr @Array$byte$push(%tmp_alloca.2, %arr, %tmp_band.1)
+    %tmp_alloca.3 = alloca.sized ptr 40
+    %tmp_const.4 = const.i64 i64 3
+    %tmp_const.5 = const.i64 i64 255
+    %tmp_band.2 = band i64 %tmp_const.4 %tmp_const.5
+    %tmp_call.2 = call ptr @Array$byte$push(%tmp_alloca.3, %arr, %tmp_band.2)
+    %tmp_alloca.4 = alloca.sized ptr 16
+    %tmp_const.6 = const.i64 i64 0
+    %tmp_call.3 = call ptr @Array$byte$get(%tmp_alloca.4, %arr, %tmp_const.6)
+    %tmp_load = load i64 %tmp_alloca.4
+    %tmp_const.7 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.7
+    %tmp_alloca.5 = alloca ptr
+    br.cond %tmp_icmp @block1 @block2
+try_success:
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.4 8
+    %tmp_load.1 = load i64 %tmp_fieldptr
+    store %tmp_alloca.5 %tmp_load.1
+    br @block3
+try_default:
+    %tmp_const.8 = const.i64 i64 0
+    %tmp_const.9 = const.i64 i64 255
+    %tmp_band.3 = band i64 %tmp_const.8 %tmp_const.9
+    store %tmp_alloca.5 %tmp_band.3
+    br @block3
+try_merge:
+    %tmp_load.2 = load i64 %tmp_alloca.5
+    %v0 = alloca ptr
+    store %v0 %tmp_load.2
+    %tmp_alloca.7 = alloca.sized ptr 16
+    %tmp_const.10 = const.i64 i64 1
+    %tmp_call.4 = call ptr @Array$byte$get(%tmp_alloca.7, %arr, %tmp_const.10)
+    %tmp_load.3 = load i64 %tmp_alloca.7
+    %tmp_const.11 = const.i64 i64 0
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.3 %tmp_const.11
+    %tmp_alloca.8 = alloca ptr
+    br.cond %tmp_icmp.1 @block4 @block5
+try_success:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.7 8
+    %tmp_load.4 = load i64 %tmp_fieldptr.1
+    store %tmp_alloca.8 %tmp_load.4
+    br @block6
+try_default:
+    %tmp_const.12 = const.i64 i64 0
+    %tmp_const.13 = const.i64 i64 255
+    %tmp_band.4 = band i64 %tmp_const.12 %tmp_const.13
+    store %tmp_alloca.8 %tmp_band.4
+    br @block6
+try_merge:
+    %tmp_load.5 = load i64 %tmp_alloca.8
+    %v1 = alloca ptr
+    store %v1 %tmp_load.5
+    %tmp_alloca.10 = alloca.sized ptr 16
+    %tmp_const.14 = const.i64 i64 2
+    %tmp_call.5 = call ptr @Array$byte$get(%tmp_alloca.10, %arr, %tmp_const.14)
+    %tmp_load.6 = load i64 %tmp_alloca.10
+    %tmp_const.15 = const.i64 i64 0
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.6 %tmp_const.15
+    %tmp_alloca.11 = alloca ptr
+    br.cond %tmp_icmp.2 @block7 @block8
+try_success:
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.10 8
+    %tmp_load.7 = load i64 %tmp_fieldptr.2
+    store %tmp_alloca.11 %tmp_load.7
+    br @block9
+try_default:
+    %tmp_const.16 = const.i64 i64 0
+    %tmp_const.17 = const.i64 i64 255
+    %tmp_band.5 = band i64 %tmp_const.16 %tmp_const.17
+    store %tmp_alloca.11 %tmp_band.5
+    br @block9
+try_merge:
+    %tmp_load.8 = load i64 %tmp_alloca.11
+    %v2 = alloca ptr
+    store %v2 %tmp_load.8
+    %tmp_load.9 = load i64 %v0
+    %tmp_load.10 = load i64 %v1
+    %tmp_add = add i64 %tmp_load.9 %tmp_load.10
+    %tmp_load.11 = load i64 %v2
+    %tmp_add.1 = add i64 %tmp_add %tmp_load.11
+    %tmp_load.12 = load ptr %arr
+    heap.free %tmp_load.12 tag="array cleanup"
+    ret %tmp_add.1
+}
+
+function Array$byte$push() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    %value = param i64 2
+    %value.1 = alloca ptr
+    store %value.1 %value
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %len = alloca ptr
+    store %len %tmp_load
+    %tmp_load.1 = load i64 %len
+    %tmp_const = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.1 %tmp_const
+    call @Array$byte$ensureCapacity(%self, %tmp_add)
+    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_load.2 = load i64 %len
+    %tmp_load.3 = load i64 %value.1
+    %tmp_load.4 = load ptr %tmp_fieldptr.2
+    %tmp_elemptr = getelemptr ptr %tmp_load.4 %tmp_load.2 elemsize=1
+    store %tmp_elemptr %tmp_load.3
+    %tmp_fieldptr.3 = getfieldptr ptr %self 0
+    %tmp_load.5 = load i64 %len
+    %tmp_const.2 = const.i64 i64 1
+    %tmp_add.1 = add i64 %tmp_load.5 %tmp_const.2
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.3 8
+    store %tmp_fieldptr.4 %tmp_add.1
+    memcpy %tmp_param %self 40
+    ret %tmp_param
+}
+
+function Array$byte$ensureCapacity() -> void {
+entry:
+    %self = param ptr 0
+    %requiredLen = param i64 1
+    %requiredLen.1 = alloca ptr
+    store %requiredLen.1 %requiredLen
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 16
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %cap = alloca ptr
+    store %cap %tmp_load
+    %tmp_load.1 = load i64 %requiredLen.1
+    %tmp_load.2 = load i64 %cap
+    %tmp_icmp = icmp.gt i64 %tmp_load.1 %tmp_load.2
+    br.cond %tmp_icmp @block1 @block7
+then:
+    %tmp_load.3 = load i64 %cap
+    %newCap = alloca ptr
+    store %newCap %tmp_load.3
+    %tmp_load.4 = load i64 %newCap
+    %tmp_const = const.i64 i64 4
+    %tmp_icmp.1 = icmp.lt i64 %tmp_load.4 %tmp_const
+    br.cond %tmp_icmp.1 @block2 @block3
+then:
+    %tmp_const.1 = const.i64 i64 4
+    store %newCap %tmp_const.1
+    br @block3
+end:
+    br @block4
+whilecond:
+    %tmp_load.5 = load i64 %newCap
+    %tmp_load.6 = load i64 %requiredLen.1
+    %tmp_icmp.2 = icmp.lt i64 %tmp_load.5 %tmp_load.6
+    br.cond %tmp_icmp.2 @block5 @block6
+whilebody:
+    %tmp_load.7 = load i64 %newCap
+    %tmp_const.2 = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_load.7 %tmp_const.2
+    store %newCap %tmp_mul
+    br @block4
+whilecont:
+    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_load.8 = load i64 %newCap
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_mul.1 = mul i64 %tmp_load.8 %tmp_const.3
+    %tmp_load.9 = load ptr %tmp_fieldptr.2
+    %tmp_realloc = heap.realloc ptr %tmp_load.9 %tmp_mul.1 tag="array grow"
+    store %tmp_fieldptr.2 %tmp_realloc
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 16
+    store %tmp_fieldptr.3 %tmp_load.8
+    br @block7
+end:
+    ret
+}
+
+function Array$byte$get() -> i64 {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    %index = param i64 2
+    %index.1 = alloca ptr
+    store %index.1 %index
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
+    %tmp_load = load i64 %tmp_fieldptr.1
+    %len = alloca ptr
+    store %len %tmp_load
+    %tmp_load.1 = load i64 %index.1
+    %tmp_const = const.i64 i64 0
+    %tmp_icmp = icmp.lt i64 %tmp_load.1 %tmp_const
+    br.cond %tmp_icmp @block1 @block2
+then:
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_const.2 = const.i64 i64 1
+    store %tmp_param %tmp_const.2
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.2 %tmp_const.1
+    ret %tmp_param
+end:
+    %tmp_load.2 = load i64 %index.1
+    %tmp_load.3 = load i64 %len
+    %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.3
+    br.cond %tmp_icmp.1 @block3 @block4
+then:
+    %tmp_const.3 = const.i64 i64 0
+    %tmp_const.4 = const.i64 i64 1
+    store %tmp_param %tmp_const.4
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.3 %tmp_const.3
+    ret %tmp_param
+end:
+    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_load.4 = load i64 %index.1
+    %tmp_load.5 = load ptr %tmp_fieldptr.4
+    %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=1
+    %tmp_load.6 = load i8 %tmp_elemptr
+    %tmp_const.5 = const.i64 i64 0
+    store %tmp_param %tmp_const.5
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_param 8
+    store %tmp_fieldptr.5 %tmp_load.6
+    ret %tmp_param
+}
+
+---

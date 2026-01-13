@@ -277,7 +277,8 @@ const ShiftDirection = enum { left, right };
 /// Get element size and type info from generic_params or current_type_name
 /// Used by managed array intrinsics to determine element size at compile time
 /// @param param_name: The generic param to look for ("Element", "Key", or "Value")
-fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ElemInfo {
+/// Returns error if element type cannot be determined - this indicates a compiler bug
+fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ConvertError!ElemInfo {
     // Check generic_params for the specified binding (available in monomorphized methods)
     if (self.generic_params.get(param_name)) |elem_type_name| {
         if (self.type_map.get(elem_type_name)) |type_info| {
@@ -290,15 +291,19 @@ fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ElemInfo {
                 };
             } else if (type_info == .enum_type) {
                 return .{
-                    .size = 8,
+                    .size = type_info.enum_type.arrayElementSize(),
                     .is_struct = false,
                     .is_enum = true,
                     .type_name = elem_type_name,
                 };
             }
         }
-        // Known type but not a struct or enum (int, float, bool, byte)
-        return .{ .size = 8, .is_struct = false, .is_enum = false, .type_name = elem_type_name };
+        // Known type but not a struct or enum - must be a primitive
+        if (types.getPrimitiveTypeInfo(elem_type_name)) |prim_info| {
+            return .{ .size = prim_info.array_element_size, .is_struct = false, .is_enum = false, .type_name = elem_type_name };
+        }
+        self.reportInternalError("unknown element type in array intrinsic");
+        return error.SemanticError;
     }
 
     // Fallback: extract from current_type_name (e.g., "Array$String")
@@ -315,23 +320,33 @@ fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ElemInfo {
                     };
                 } else if (type_info == .enum_type) {
                     return .{
-                        .size = 8,
+                        .size = type_info.enum_type.arrayElementSize(),
                         .is_struct = false,
                         .is_enum = true,
                         .type_name = elem_name,
                     };
                 }
             }
-            return .{ .size = 8, .is_struct = false, .is_enum = false, .type_name = elem_name };
+            // Must be a primitive type
+            if (types.getPrimitiveTypeInfo(elem_name)) |prim_info| {
+                return .{ .size = prim_info.array_element_size, .is_struct = false, .is_enum = false, .type_name = elem_name };
+            }
+            self.reportInternalError("unknown element type in Array type name");
+            return error.SemanticError;
+        }
+        // String type uses byte arrays - element size is 1
+        if (std.mem.eql(u8, type_name, "String")) {
+            return .{ .size = 1, .is_struct = false, .is_enum = false, .type_name = types.BYTE };
         }
     }
 
-    // Default to primitive (8 bytes)
-    return .{ .size = 8, .is_struct = false, .is_enum = false, .type_name = null };
+    // Cannot determine element type - this is a compiler error
+    self.reportInternalError("cannot determine array element type - missing generic param or type context");
+    return error.SemanticError;
 }
 
 /// Get element size and type info - default "Element" param
-fn getElementInfo(self: *AstToIr) ElemInfo {
+fn getElementInfo(self: *AstToIr) ConvertError!ElemInfo {
     return getElementInfoForParam(self, "Element");
 }
 
@@ -345,7 +360,7 @@ fn emitArrayShift(
     count: TypedValue,
     direction: ShiftDirection,
 ) ConvertError!void {
-    const elem_info = getElementInfo(self);
+    const elem_info = try getElementInfo(self);
     const elem_size_val = try self.func().emitConstI64(elem_info.size);
 
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
@@ -446,6 +461,7 @@ const managed_array_intrinsics = .{
     .{ "__managed_array_len", intrinsicManagedArrayLen },
     .{ "__managed_array_capacity", intrinsicManagedArrayCapacity },
     .{ "__managed_array_create", intrinsicManagedArrayCreate },
+    .{ "__managed_array_create_bytes", intrinsicManagedArrayCreateBytes },
     .{ "__managed_array_set_at", intrinsicManagedArraySetAt },
     .{ "__managed_array_set_length", intrinsicManagedArraySetLength },
     .{ "__managed_array_grow", intrinsicManagedArrayGrow },
@@ -492,10 +508,29 @@ fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!
 
     const managed_ptr = try ManagedArray.alloca(self.func());
 
-    const elem_info = getElementInfo(self);
+    const elem_info = try getElementInfo(self);
     const elem_size_val = try self.func().emitConstI64(elem_info.size);
     const buf_size = try self.func().emitBinaryOp(.mul, capacity.value, elem_size_val, .i64);
     const buf_ptr = try self.func().emitHeapAlloc(buf_size, "array buffer");
+
+    // Initialize with mode=0 (no refcounting for regular arrays)
+    const zero_i32 = try self.func().emitConstI32(0);
+    try ManagedArray.init(self.func(), managed_ptr, buf_ptr, capacity.value, capacity.value, zero_i32);
+
+    return .{ .value = managed_ptr.raw(), .ty = .{ .primitive = "ptr" } };
+}
+
+/// __managed_array_create_bytes(capacity) -> __ManagedArray
+/// Creates a new byte array with the given capacity (element size = 1)
+/// Used for String buffers and other byte-level operations outside generic contexts
+fn intrinsicManagedArrayCreateBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const capacity = try self.convertExpression(call.args[0]);
+
+    const managed_ptr = try ManagedArray.alloca(self.func());
+
+    // Byte arrays have element size of 1
+    const buf_ptr = try self.func().emitHeapAlloc(capacity.value, "byte array buffer");
 
     // Initialize with mode=0 (no refcounting for regular arrays)
     const zero_i32 = try self.func().emitConstI32(0);
@@ -511,22 +546,14 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const index = try self.convertExpression(call.args[1]);
     const value = try self.convertExpression(call.args[2]);
 
-    const elem_size: i32 = if (value.ty == .struct_type) blk: {
-        const type_info = self.type_map.get(value.ty.struct_type) orelse {
-            self.reportInternalError("unknown struct type in __managed_array_set_at");
-            return error.SemanticError;
-        };
-        if (type_info != .struct_type) {
-            self.reportInternalError("type is not a struct in __managed_array_set_at");
-            return error.SemanticError;
-        }
-        break :blk @intCast(type_info.struct_type.size);
-    } else 8; // Primitives are 8 bytes
+    // Use getElementInfo which properly handles all types including byte arrays
+    const elem_info = try getElementInfo(self);
+    const elem_size = elem_info.size;
 
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
     const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buf_ptr), index.value, elem_size);
 
-    if (value.ty == .struct_type and elem_size > 8) {
+    if (elem_info.is_struct and elem_size > 8) {
         try self.func().emitMemcpy(elem_ptr.asRawPtr(), ir.toRawPtr(value.value), @intCast(elem_size));
     } else {
         try self.func().emitStore(elem_ptr.raw(), value.value);
@@ -561,7 +588,7 @@ fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     const managed = try self.convertExpression(call.args[0]);
     const new_capacity = try self.convertExpression(call.args[1]);
 
-    const elem_info = getElementInfo(self);
+    const elem_info = try getElementInfo(self);
     const elem_size_val = try self.func().emitConstI64(elem_info.size);
     const new_size = try self.func().emitBinaryOp(.mul, new_capacity.value, elem_size_val, .i64);
 
@@ -605,15 +632,31 @@ fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) Convert
     const managed = try self.convertExpression(call.args[0]);
     const index = try self.convertExpression(call.args[1]);
 
-    const elem_info = getElementInfo(self);
+    const elem_info = try getElementInfo(self);
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
     const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buf_ptr), index.value, elem_info.size);
 
+    const type_name = elem_info.type_name orelse {
+        self.reportInternalError("element type name not set in array get intrinsic");
+        return error.SemanticError;
+    };
+
     if (elem_info.is_struct) {
-        return .{ .value = elem_ptr.raw(), .ty = .{ .struct_type = elem_info.type_name.? } };
-    } else {
+        return .{ .value = elem_ptr.raw(), .ty = .{ .struct_type = type_name } };
+    } else if (elem_info.is_enum) {
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
-        return .{ .value = elem_val, .ty = .{ .primitive = elem_info.type_name orelse "int" } };
+        return .{ .value = elem_val, .ty = .{ .enum_type = type_name } };
+    } else if (elem_info.size == 1) {
+        // Byte elements: load as i8 (will be auto zero-extended by codegen)
+        const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i8);
+        return .{ .value = elem_val, .ty = .{ .primitive = type_name } };
+    } else if (elem_info.size == 8) {
+        // 8-byte primitives (int, float, bool)
+        const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
+        return .{ .value = elem_val, .ty = .{ .primitive = type_name } };
+    } else {
+        self.reportInternalError("unsupported element size in array get intrinsic");
+        return error.SemanticError;
     }
 }
 
@@ -625,7 +668,7 @@ fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     const managed = try self.convertExpression(call.args[0]);
     const index = try self.convertExpression(call.args[1]);
 
-    const elem_info = getElementInfoForParam(self, "Key");
+    const elem_info = try getElementInfoForParam(self, "Key");
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
     const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buf_ptr), index.value, elem_info.size);
 
@@ -661,7 +704,7 @@ fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
     const managed = try self.convertExpression(call.args[0]);
     const index = try self.convertExpression(call.args[1]);
 
-    const elem_info = getElementInfoForParam(self, "Value");
+    const elem_info = try getElementInfoForParam(self, "Value");
 
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
     const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buf_ptr), index.value, elem_info.size);

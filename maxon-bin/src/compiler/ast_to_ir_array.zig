@@ -323,8 +323,16 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
         if (self.getStructSizeWithMonomorphization(tn)) |size| {
             break :blk ElemInfo{ .size = size, .is_struct = true, .name = tn };
         }
-        break :blk ElemInfo{ .size = 8, .is_struct = false, .name = tn };
-    } else ElemInfo{ .size = 8, .is_struct = false, .name = null };
+        // Must be a primitive type - get its actual size
+        if (types.getPrimitiveTypeInfo(tn)) |prim_info| {
+            break :blk ElemInfo{ .size = prim_info.array_element_size, .is_struct = false, .name = tn };
+        }
+        self.reportInternalError("unknown element type in array index");
+        return error.SemanticError;
+    } else {
+        self.reportInternalError("cannot determine array element type - missing type context");
+        return error.SemanticError;
+    };
 
     // Load buffer pointer (offset 0) and length (offset 8)
     const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
@@ -690,15 +698,31 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
         .struct_type => |name| name,
         .primitive, .array_type, .enum_type, .error_union_type, .function_type => null,
     };
+    const elem_primitive_type: ?[]const u8 = switch (first_typed.ty) {
+        .primitive => |name| name,
+        else => null,
+    };
 
-    // Calculate element size: structs use their actual size (with monomorphization), primitives use 8 bytes
+    // Calculate element size: structs use their actual size (with monomorphization)
+    // Primitives use their array element size (byte=1, others=8)
     const elem_size: i64 = if (elem_struct_type) |struct_name| blk: {
         const size = self.getStructSizeWithMonomorphization(struct_name) orelse {
             self.reportInternalError("unknown struct size in array literal");
             return error.SemanticError;
         };
         break :blk @intCast(size);
-    } else 8; // Primitives (int, float, bool, enums, etc.) are 8 bytes
+    } else blk: {
+        // Must have a primitive type name
+        const prim_name = elem_primitive_type orelse {
+            self.reportInternalError("cannot determine element type in array literal");
+            return error.SemanticError;
+        };
+        const prim_info = types.getPrimitiveTypeInfo(prim_name) orelse {
+            self.reportInternalError("unknown primitive type in array literal");
+            return error.SemanticError;
+        };
+        break :blk prim_info.array_element_size;
+    };
 
     // Allocate buffer for elements on heap
     const elem_count = try self.func().emitConstI64(@intCast(elements.len));
@@ -735,7 +759,7 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
 
     return .{
         .value = managed_ptr.raw(),
-        .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .heap, .element_struct_type = elem_struct_type } },
+        .ty = .{ .array_type = .{ .element_type = elem_type, .size = elements.len, .storage = .heap, .element_struct_type = elem_struct_type, .element_primitive_type = elem_primitive_type } },
     };
 }
 
@@ -767,7 +791,12 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
 
         // Allocate buffer for elements (on heap for ownership)
         const elem_count = try self.func().emitConstI64(@intCast(elements.len));
-        const elem_size: i64 = 8; // All elements are 8 bytes (i64, f64, or pointer)
+        // Get element size - must be a known primitive type
+        const prim_info = types.getPrimitiveTypeInfo(elem_type_name) orelse {
+            self.reportInternalError("unknown primitive type in init from array");
+            return error.SemanticError;
+        };
+        const elem_size: i64 = prim_info.array_element_size;
         const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
         const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
 
@@ -884,8 +913,18 @@ pub fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!Typ
     // Calculate actual element size from type (with monomorphization fallback)
     const elem_size_val: i64 = if (self.getStructSizeWithMonomorphization(resolved_elem)) |size|
         size
-    else
-        8;
+    else if (types.getPrimitiveTypeInfo(resolved_elem)) |prim_info|
+        prim_info.array_element_size
+    else if (self.type_map.get(resolved_elem)) |elem_type_info| blk: {
+        if (elem_type_info == .enum_type) {
+            break :blk elem_type_info.enum_type.arrayElementSize();
+        }
+        self.reportInternalError("unknown element type in Array type expression");
+        return error.SemanticError;
+    } else {
+        self.reportInternalError("unknown element type in Array type expression");
+        return error.SemanticError;
+    };
     const elem_size = try self.func().emitConstI64(elem_size_val);
     const buffer_size = try self.func().emitBinaryOp(.mul, capacity_typed.value, elem_size, .i64);
     const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
