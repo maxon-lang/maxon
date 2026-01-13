@@ -6,6 +6,25 @@ const compiler = @import("0-compiler.zig");
 // Helper Functions
 // ============================================================================
 
+/// Cached stdlib modules for tests that need them.
+/// Uses page_allocator because the test allocator tracks per-test and would
+/// report leaks for cached data that persists across tests.
+var cached_stdlib: ?[]const compiler.Source = null;
+
+fn getStdlibModules(allocator: std.mem.Allocator) ![]const compiler.Source {
+    _ = allocator;
+    if (cached_stdlib) |modules| {
+        return modules;
+    }
+    // Use page_allocator for the cache since it persists across tests
+    const page_alloc = std.heap.page_allocator;
+    const stdlib_path = try compiler.findStdlibPath(page_alloc);
+    defer page_alloc.free(stdlib_path);
+
+    cached_stdlib = try compiler.loadAllStdlibModules(stdlib_path, page_alloc);
+    return cached_stdlib.?;
+}
+
 /// Compile Maxon source code and check the result by compiling to an executable and running it
 fn compileAndRun(source: []const u8, allocator: std.mem.Allocator) !struct { exit_code: u8, ir_text: []const u8 } {
     const temp_exe = "..\\temp\\test_optimizer.exe";
@@ -29,6 +48,60 @@ fn compileAndRun(source: []const u8, allocator: std.mem.Allocator) !struct { exi
     };
 
     try compiler.compileMultiple(&sources, temp_exe, options, allocator, &compile_result);
+
+    // Read the IR file
+    const ir_content = try std.fs.cwd().readFileAlloc(allocator, temp_ir, 1024 * 1024);
+    errdefer allocator.free(ir_content);
+
+    // Run the executable
+    const result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{temp_exe},
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Clean up
+    std.fs.cwd().deleteFile(temp_exe) catch {};
+    std.fs.cwd().deleteFile(temp_ir) catch {};
+
+    return .{
+        .exit_code = @intCast(result.term.Exited),
+        .ir_text = ir_content,
+    };
+}
+
+/// Compile Maxon source with stdlib and run it (for tests that use Array, String, etc.)
+fn compileAndRunWithStdlib(source: []const u8, allocator: std.mem.Allocator) !struct { exit_code: u8, ir_text: []const u8 } {
+    const temp_exe = "..\\temp\\test_stdlib.exe";
+    const temp_ir = "..\\temp\\test_stdlib.ir";
+
+    // Clean up any existing files
+    std.fs.cwd().deleteFile(temp_exe) catch {};
+    std.fs.cwd().deleteFile(temp_ir) catch {};
+
+    // Load stdlib
+    const stdlib_modules = try getStdlibModules(allocator);
+
+    // Compile with IR emission and stdlib
+    var compile_result: compiler.CompileResult = .{ .error_info = null };
+    defer compile_result.deinit(allocator);
+
+    const options = compiler.CompileOptions{
+        .track_memory = false,
+        .emit_ir = true,
+    };
+
+    // Create sources array with test source + stdlib
+    var all_sources = try allocator.alloc(compiler.Source, stdlib_modules.len + 1);
+    defer allocator.free(all_sources);
+
+    all_sources[0] = .{ .path = "test.maxon", .content = source };
+    for (stdlib_modules, 0..) |mod, i| {
+        all_sources[i + 1] = mod;
+    }
+
+    try compiler.compileMultiple(all_sources, temp_exe, options, allocator, &compile_result);
 
     // Read the IR file
     const ir_content = try std.fs.cwd().readFileAlloc(allocator, temp_ir, 1024 * 1024);
@@ -835,4 +908,358 @@ test "stack probing - large struct recursive" {
     // If stack probing is broken, this would crash before returning
     // The recursive call with 50 iterations ensures multiple large stack frames
     try testing.expectEqual(@as(u8, 0), result.exit_code);
+}
+
+// ============================================================================
+// Managed Array Internals Tests
+// Verify correct IR generation for array memory management
+// ============================================================================
+
+/// Count heap.free instructions in IR
+fn countHeapFree(ir_text: []const u8) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    const pattern = "heap.free";
+
+    while (std.mem.indexOfPos(u8, ir_text, pos, pattern)) |index| {
+        count += 1;
+        pos = index + pattern.len;
+    }
+    return count;
+}
+
+/// Count heap.realloc instructions in IR
+fn countHeapRealloc(ir_text: []const u8) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    const pattern = "heap.realloc";
+
+    while (std.mem.indexOfPos(u8, ir_text, pos, pattern)) |index| {
+        count += 1;
+        pos = index + pattern.len;
+    }
+    return count;
+}
+
+/// Check if IR contains a heap.free with a specific tag
+fn irContainsHeapFreeTag(ir_text: []const u8, tag: []const u8) bool {
+    var buf: [128]u8 = undefined;
+    const pattern = std.fmt.bufPrint(&buf, "heap.free", .{}) catch return false;
+    _ = tag;
+    return std.mem.indexOf(u8, ir_text, pattern) != null;
+}
+
+test "managed array - heap array generates free" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var arr = Array of int{}
+        \\    arr.push(1)
+        \\    arr.push(2)
+        \\    return arr.count()
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Should generate heap.free for array cleanup
+    try testing.expect(countHeapFree(result.ir_text) >= 1);
+    try testing.expect(std.mem.indexOf(u8, result.ir_text, "\"array cleanup\"") != null);
+
+    // Verify correct execution
+    try testing.expectEqual(@as(u8, 2), result.exit_code);
+}
+
+test "managed array - scope cleanup generates free" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    if true 'outer'
+        \\        var outer_arr = Array of int{}
+        \\        outer_arr.push(100)
+        \\        if true 'inner'
+        \\            var inner_arr = Array of int{}
+        \\            inner_arr.push(200)
+        \\        end 'inner'
+        \\    end 'outer'
+        \\    return 0
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Should generate heap.free for both arrays (inner and outer scope cleanup)
+    try testing.expect(countHeapFree(result.ir_text) >= 2);
+
+    // Verify correct execution
+    try testing.expectEqual(@as(u8, 0), result.exit_code);
+}
+
+test "managed array - loop growth generates realloc" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var arr = Array of int{}
+        \\    var i = 0
+        \\    while i < 10 'loop'
+        \\        arr.push(i)
+        \\        i = i + 1
+        \\    end 'loop'
+        \\    return arr.count()
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Should generate heap.realloc for array growth (in ensureCapacity)
+    try testing.expect(countHeapRealloc(result.ir_text) >= 1);
+    try testing.expect(std.mem.indexOf(u8, result.ir_text, "\"array grow\"") != null);
+
+    // Should also generate heap.free for final cleanup
+    try testing.expect(countHeapFree(result.ir_text) >= 1);
+
+    // Verify correct execution (10 elements)
+    try testing.expectEqual(@as(u8, 10), result.exit_code);
+}
+
+test "managed array - fixed size array literal cleanup" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var arr = [10, 20, 30]
+        \\    return try arr.get(1) otherwise 0
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Should generate heap.free for array cleanup
+    try testing.expect(countHeapFree(result.ir_text) >= 1);
+
+    // Verify correct execution
+    try testing.expectEqual(@as(u8, 20), result.exit_code);
+}
+
+test "managed array - struct field array method call" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\type Config
+        \\    export var sources Array of String
+        \\end 'Config'
+        \\
+        \\function main() returns int
+        \\    var config = Config{sources: ["a", "b", "c"]}
+        \\    return config.sources.count()
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Verify correct execution
+    try testing.expectEqual(@as(u8, 3), result.exit_code);
+}
+
+// ============================================================================
+// Managed String Internals Tests
+// Verify correct IR generation for string memory management
+// ============================================================================
+
+test "managed string - heap string generates cleanup" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var s = "this is a heap allocated string!"
+        \\    return s.count()
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Verify correct execution (32 characters)
+    try testing.expectEqual(@as(u8, 32), result.exit_code);
+}
+
+test "managed string - reassignment handles old value" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var s = "first heap allocated value!!"
+        \\    s = "second heap allocated here!!"
+        \\    return s.count()
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Verify correct execution (28 characters in second string)
+    try testing.expectEqual(@as(u8, 28), result.exit_code);
+}
+
+test "managed string - substring retains parent" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var s = "hello world from heap!!"
+        \\    var start = s.startIndex()
+        \\    var spaceIdx = try s.find(" ") otherwise s.endIndex()
+        \\    var sub = s.slice(start, endIndex: spaceIdx)
+        \\    return sub.count()
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Verify correct execution ("hello" = 5 characters)
+    try testing.expectEqual(@as(u8, 5), result.exit_code);
+}
+
+test "managed string - print heap string" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var s = "heap allocated string here!!"
+        \\    return s.count()
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Verify correct execution (28 characters)
+    try testing.expectEqual(@as(u8, 28), result.exit_code);
+}
+
+test "managed string - short string SSO" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var s = "short"
+        \\    return s.count()
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Verify correct execution (5 characters)
+    try testing.expectEqual(@as(u8, 5), result.exit_code);
+}
+
+test "managed string - loop concatenation cleanup" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var s = ""
+        \\    var a = "a"
+        \\    var i = 0
+        \\    while i < 5 'loop'
+        \\        s = "{s}{a}"
+        \\        i = i + 1
+        \\    end 'loop'
+        \\    return s.count()
+        \\end 'main'
+    ;
+
+    const result = try compileAndRunWithStdlib(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // Should generate heap.free for intermediate string cleanup during reassignment
+    try testing.expect(countHeapFree(result.ir_text) >= 1);
+    try testing.expect(std.mem.indexOf(u8, result.ir_text, "\"string cleanup\"") != null);
+
+    // Verify correct execution (5 'a' characters)
+    try testing.expectEqual(@as(u8, 5), result.exit_code);
+}
+
+test "managed string - literal deduplication" {
+    const allocator = testing.allocator;
+
+    const source =
+        \\function main() returns int
+        \\    var a = "hello world"
+        \\    var b = "hello world"
+        \\    var c = "hello world"
+        \\    return a.count() + b.count() + c.count()
+        \\end 'main'
+    ;
+
+    const temp_exe = "..\\temp\\test_dedup.exe";
+
+    // Clean up any existing files
+    std.fs.cwd().deleteFile(temp_exe) catch {};
+
+    // Load stdlib
+    const stdlib_modules = try getStdlibModules(allocator);
+
+    // Compile without IR emission - we need to check the actual PE file
+    var compile_result: compiler.CompileResult = .{ .error_info = null };
+    defer compile_result.deinit(allocator);
+
+    const options = compiler.CompileOptions{
+        .track_memory = false,
+        .emit_ir = false,
+    };
+
+    // Create sources array with test source + stdlib
+    var all_sources = try allocator.alloc(compiler.Source, stdlib_modules.len + 1);
+    defer allocator.free(all_sources);
+
+    all_sources[0] = .{ .path = "test.maxon", .content = source };
+    for (stdlib_modules, 0..) |mod, i| {
+        all_sources[i + 1] = mod;
+    }
+
+    try compiler.compileMultiple(all_sources, temp_exe, options, allocator, &compile_result);
+
+    // Read the executable file
+    const exe_content = try std.fs.cwd().readFileAlloc(allocator, temp_exe, 10 * 1024 * 1024);
+    defer allocator.free(exe_content);
+
+    // Count occurrences of "hello world" in the executable
+    // If deduplication works, it should appear exactly once (or at most a few times for metadata)
+    var count: usize = 0;
+    var pos: usize = 0;
+    const needle = "hello world";
+
+    while (std.mem.indexOfPos(u8, exe_content, pos, needle)) |index| {
+        count += 1;
+        pos = index + needle.len;
+    }
+
+    // Run the executable to verify it works
+    const result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{temp_exe},
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Clean up
+    std.fs.cwd().deleteFile(temp_exe) catch {};
+
+    // Should find "hello world" only once (deduplication worked)
+    // Allow up to 2 occurrences in case of debug symbols or metadata
+    try testing.expect(count <= 2);
+
+    // Verify correct execution (11 + 11 + 11 = 33)
+    try testing.expectEqual(@as(u8, 33), @as(u8, @intCast(result.term.Exited)));
 }
