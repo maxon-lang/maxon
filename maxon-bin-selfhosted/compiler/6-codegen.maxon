@@ -1,5 +1,11 @@
 // x86-64 Code Generator for the Maxon compiler
 
+export enum CodegenError is Error
+	unsupportedInstruction
+	unsupportedExpression
+	unsupportedStatement
+end 'CodegenError'
+
 export type X86Gen
 	let code CodeBuffer
 
@@ -7,31 +13,33 @@ export type X86Gen
 		return X86Gen{code: CodeBuffer.create()}
 	end 'create'
 
-	export function generate(program Program)
+	export function generate(program Program) throws CodegenError
 		var i = 0
 		while i < program.functions.count() 'funcs'
-			genFunction(program.functions[i])
+			try genFunction(program.functions.get(i))
 			i = i + 1
 		end 'funcs'
 	end 'generate'
 
-	export function genFunction(fn FunctionDecl)
+	export function genFunction(fn FunctionDecl) throws CodegenError
 		var i = 0
 		while i < fn.body.count() 'stmts'
-			genStmt(fn.body[i])
+			try genStmt(fn.body.get(i))
 			i = i + 1
 		end 'stmts'
 	end 'genFunction'
 
-	export function genStmt(stmt Stmt)
+	export function genStmt(stmt Stmt) throws CodegenError
 		if stmt.kind == StmtKind.returnStmt 'return'
 			if stmt.hasValue 'hasValue'
-				genExpr(stmt.expr)
+				try genExpr(stmt.expr)
 			end 'hasValue'
-		end 'return'
+		end 'return' else 'unsupported'
+			throw CodegenError.unsupportedStatement
+		end 'unsupported'
 	end 'genStmt'
 
-	export function genExpr(expr Expr)
+	export function genExpr(expr Expr) throws CodegenError
 		if expr.kind == ExprKind.intLiteral 'int'
 			let value = expr.intValue
 			// Check if value fits in 32-bit signed range
@@ -47,7 +55,9 @@ export type X86Gen
 				code.emitByte(0xB8 as byte)  // MOV RAX, imm64 (B8 + 0 for RAX)
 				code.emitQword(value)
 			end 'large'
-		end 'int'
+		end 'int' else 'unsupported'
+			throw CodegenError.unsupportedExpression
+		end 'unsupported'
 	end 'genExpr'
 
 	export function getCode() returns Array of byte

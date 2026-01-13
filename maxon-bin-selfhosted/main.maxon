@@ -9,18 +9,15 @@ function main(args Array of String) returns int
 		return 1
 	end 'noCommand'
 
-	if let command = args[1] 'hasCommand'
-		return match command 'dispatch'
-			"compile" gives compileCommand(args)
-			"run" gives runCommand(args)
-			"version" gives versionCommand()
-			"help" gives helpCommand()
-			default gives unknownCommand(command)
-		end 'dispatch'
-	end 'hasCommand' else 'noCommand2'
-		printUsage()
-		return 1
-	end 'noCommand2'
+	let command = try args.get(1) otherwise ignore
+
+	return match command 'dispatch'
+	"compile" gives compileCommand(args)
+	"run" gives runCommand(args)
+	"version" gives versionCommand()
+	"help" gives helpCommand()
+	default gives unknownCommand(command)
+	end 'dispatch'
 end 'main'
 
 function compileCommand(args Array of String) returns int
@@ -28,12 +25,9 @@ function compileCommand(args Array of String) returns int
 		print("Usage: maxon compile <file.maxon>")
 		return 1
 	end 'noFile'
-	if let sourceFile = args[2] 'hasFile'
-		return compile(sourceFile)
-	end 'hasFile' else 'noFile2'
-		print("Usage: maxon compile <file.maxon>")
-		return 1
-	end 'noFile2'
+
+	let sourcFiles = try args.get(2) otherwise ignore
+	return compile(sourceFile)
 end 'compileCommand'
 
 function helpCommand() returns int
@@ -77,7 +71,7 @@ function runCommand(args Array of String) returns int
 		return 1
 	end 'noFile'
 
-	if let sourceFile = args[2] 'hasFile'
+	if let sourceFile = try args.get(2) 'hasFile'
 		let result = compile(sourceFile)
 		if result != 0 'compileFailed'
 			return result

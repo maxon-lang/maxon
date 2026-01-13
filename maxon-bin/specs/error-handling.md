@@ -395,3 +395,78 @@ end 'main'
 ```maxoncstderr
 error E022: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test:12:5: type mismatch: 'otherwise type 'String' does not match expected type 'int''
 ```
+
+<!-- test: error.throwing-function-requires-try -->
+```maxon
+// Calling a throwing function without try is an error
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+    return 42
+end 'mayFail'
+
+function main() returns int
+    let val = mayFail()
+    return val
+end 'main'
+```
+```maxoncstderr
+error E057: specs/fragments/error-handling.error.throwing-function-requires-try.1.test:12:5: throwing function requires try: 'mayFail'
+```
+
+<!-- test: error.throwing-method-requires-try -->
+```maxon
+// Calling a throwing method without try is an error
+function main() returns int
+    let arr = Array of int{}
+    let val = arr.get(0)
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E057: specs/fragments/error-handling.error.throwing-method-requires-try.1.test:67:3: throwing function requires try: 'get'
+```
+
+<!-- test: error.try-on-non-throwing-function -->
+```maxon
+// Using try on a non-throwing function is an error
+function noFail() returns int
+    return 42
+end 'noFail'
+
+function main() returns int
+    let val = try noFail() otherwise 0
+    return val
+end 'main'
+```
+```maxoncstderr
+error E055: specs/fragments/error-handling.error.try-on-non-throwing-function.1.test:8:5: if try requires a throwing function call: 'expression does not throw'
+```
+
+<!-- test: error.try-on-non-throwing-method -->
+```maxon
+// Using try on a non-throwing method is an error
+function main() returns int
+    let arr = Array of int{}
+    let val = try arr.count() otherwise 0
+    return val
+end 'main'
+```
+```maxoncstderr
+error E055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.test:24:3: if try requires a throwing function call: 'expression does not throw'
+```
+
+<!-- test: error.otherwise-without-try -->
+```maxon
+// Using otherwise without try is an error
+function main() returns int
+    let arr = Array of int{}
+    let val = arr.get(0) otherwise 0
+    return val
+end 'main'
+```
+```maxoncstderr
+error E058: specs/fragments/error-handling.error.otherwise-without-try.1.test:5:26: otherwise requires try expression
+```

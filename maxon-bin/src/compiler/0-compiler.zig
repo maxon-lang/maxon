@@ -102,6 +102,8 @@ const PipelineOptions = struct {
     mode: PipelineMode = .full_ir,
     source_file: ?[]const u8 = null,
     result: ?*CompileResult = null,
+    // Parent allocator for error messages that need to survive arena cleanup
+    parent_allocator: ?std.mem.Allocator = null,
 
     // For full_ir mode only:
     external_funcs: []const ast_to_ir.ExternalFuncSignature = &.{},
@@ -174,8 +176,10 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
     const program = parser.parse() catch |err| {
         if (options.result) |result| {
             result.error_info = parser.last_error;
-            if (parser.last_error) |*e| {
-                e.message_allocated = false;
+            // Transfer ownership of the error message to result
+            // Set message_allocated=false in parser so parser.deinit() won't free it
+            if (parser.last_error != null) {
+                parser.last_error.?.message_allocated = false;
             }
         }
         return err;
@@ -320,6 +324,17 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
                 debug.astToIr("AST to IR error: {}\n", .{e});
                 if (options.result) |result| {
                     result.error_info = ir_error;
+                    // Duplicate error message and file path to parent allocator so they survive arena cleanup
+                    if (ir_error) |err| {
+                        if (options.parent_allocator) |parent_alloc| {
+                            if (err.message_allocated) {
+                                result.error_info.?.message = parent_alloc.dupe(u8, err.message) catch err.message;
+                            }
+                            if (err.location.file) |file| {
+                                result.error_info.?.location.file = parent_alloc.dupe(u8, file) catch file;
+                            }
+                        }
+                    }
                 }
                 return error.IrError;
             };
@@ -435,7 +450,8 @@ const ParsedSourcesInfo = struct {
 /// Parse sources and extract type/function/interface/enum info.
 /// All allocations use the arena in ParsedSourcesInfo.
 /// Parse errors are printed immediately. Returns ParseError if any file failed to parse.
-fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, result: ?*CompileResult) !void {
+/// If parent_alloc is provided, error messages are duplicated to survive arena cleanup.
+fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, result: ?*CompileResult, parent_alloc: ?std.mem.Allocator) !void {
     const arena = info.arena;
     var had_parse_error = false;
 
@@ -452,8 +468,14 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
             // Capture error info for last parse error
             if (result) |res| {
                 res.error_info = parser.last_error;
-                if (parser.last_error) |*e| {
-                    e.message_allocated = false;
+                // If the error message was allocated with the arena, duplicate it
+                // to the parent allocator so it survives arena cleanup
+                if (parser.last_error) |err| {
+                    if (err.message_allocated) {
+                        if (parent_alloc) |alloc| {
+                            res.error_info.?.message = alloc.dupe(u8, err.message) catch err.message;
+                        }
+                    }
                 }
             }
             had_parse_error = true;
@@ -507,7 +529,7 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     // Parse all sources except the last one (user code)
     var info = ParsedSourcesInfo.init(arena);
     // No defer info.deinit() needed - arena handles cleanup
-    try parseSourcesForMetadata(&info, sources[0 .. sources.len - 1], null);
+    try parseSourcesForMetadata(&info, sources[0 .. sources.len - 1], null, null);
 
     // Compile the last source (user code) with all types/funcs available
     const last_source = sources[sources.len - 1];
@@ -605,7 +627,8 @@ pub fn compileMultiple(
     // Phase 1: Parse all sources and collect metadata (uses arena)
     var info = ParsedSourcesInfo.init(arena);
     // No defer info.deinit() needed - arena handles all cleanup
-    try parseSourcesForMetadata(&info, sources, result);
+    // Pass parent allocator so error messages can be duplicated to survive arena cleanup
+    try parseSourcesForMetadata(&info, sources, result, allocator);
 
     // Phase 2: Filter to exported symbols for cross-file visibility
     const exported_funcs = try info.getExportedFuncs();
@@ -625,6 +648,7 @@ pub fn compileMultiple(
             .mode = .full_ir,
             .source_file = source.path,
             .result = result,
+            .parent_allocator = allocator, // For error message survival past arena cleanup
             .external_funcs = exported_funcs,
             .external_types = exported_types,
             .external_interfaces = info.interfaces.items,

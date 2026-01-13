@@ -409,6 +409,8 @@ pub const AstToIr = struct {
     pending_conformance_checks: std.ArrayListUnmanaged(*const ast.TypeDecl) = .{},
     // Error handling: the error type the current function throws (null if non-throwing)
     current_func_throws_type: ?[]const u8 = null,
+    // Error handling: true when inside a try expression (to validate throwing calls are wrapped)
+    in_try_context: bool = false,
     // Scope label tracking: stack of sets for each scope level (to detect duplicate block identifiers)
     scope_labels: std.ArrayListUnmanaged(std.StringHashMapUnmanaged(void)) = .{},
     // Global constants: evaluated compile-time constant values
@@ -4274,6 +4276,11 @@ pub const AstToIr = struct {
     /// Convert if-try statement: `if try expr` or `if let x = try expr`
     /// Uses TryOtherwiseContext to handle proper reference counting for String types
     fn convertIfTryStmt(self: *AstToIr, if_stmt: ast.IfStmt, if_try: *const ast.IfTryCondition) ConvertError!void {
+        // Mark that we're in a try context so throwing calls are allowed
+        const was_in_try = self.in_try_context;
+        self.in_try_context = true;
+        defer self.in_try_context = was_in_try;
+
         // Evaluate the try expression (this calls the throwing function)
         const result_typed = try self.convertExpression(if_try.try_expr.*);
 
@@ -4602,7 +4609,11 @@ pub const AstToIr = struct {
         const iterator_for_call = TypedValue{ .value = iterator_slot, .ty = iterable_typed.ty };
 
         // Call the next() method on the iterator
+        // Set in_try_context because the for loop handles the error (breaks on IterationError)
+        const was_in_try = self.in_try_context;
+        self.in_try_context = true;
         const next_result = try self.convertMethodCallOnTyped(iterator_for_call, "next", &.{});
+        self.in_try_context = was_in_try;
 
         // Check if error union result is success (continue loop) or error (exit loop)
         // Error union layout: offset 0 = tag (0 = success, 1 = error), offset 8 = payload
@@ -6980,8 +6991,19 @@ pub const AstToIr = struct {
         // For now, we only support function calls
         const inner_expr = try_e.expr.*;
 
+        // Mark that we're in a try context so throwing calls are allowed
+        const was_in_try = self.in_try_context;
+        self.in_try_context = true;
+        defer self.in_try_context = was_in_try;
+
         // Evaluate the inner expression (this calls the throwing function)
         const result_typed = try self.convertExpression(inner_expr);
+
+        // Validate that the expression is a throwing function (returns error union)
+        if (result_typed.ty != .error_union_type) {
+            self.reportError(.E055, "expression does not throw");
+            return error.SemanticError;
+        }
 
         // The result should be an error union (from a throwing function via sret)
         // Check the tag at offset 0: 0 = success, 1 = error
@@ -7907,6 +7929,12 @@ pub const AstToIr = struct {
             vt == .error_union_type
         else
             false;
+
+        // Validate that throwing functions are called within try context
+        if (returns_error_union and !self.in_try_context) {
+            self.reportError(.E057, call.func_name);
+            return error.SemanticError;
+        }
 
         // Check if callee returns a struct or error union (needs sret)
         // Note: return_type_name may be set for enums too (from AST extraction),
@@ -8913,6 +8941,12 @@ pub const AstToIr = struct {
             vt == .error_union_type
         else
             false;
+
+        // Validate that throwing methods are called within try context
+        if (returns_error_union and !self.in_try_context) {
+            self.reportError(.E057, method_name);
+            return error.SemanticError;
+        }
 
         // Determine argument layout
         // Note: return_type_name may be set for enums too (from AST extraction),

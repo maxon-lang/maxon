@@ -1038,6 +1038,11 @@ pub const Parser = struct {
         _ = try self.expect(.equals);
         const value = try self.parseExpression();
         if (value) |expr| {
+            // Check for common mistake: otherwise without try
+            if (self.check(.otherwise)) {
+                self.reportError(.E058);
+                return error.UnexpectedToken;
+            }
             if (is_var) {
                 return stmtAt(.{ .var_decl = .{ .name = name_token.text, .type_annotation = null, .value = expr } }, start_line, start_column);
             } else {

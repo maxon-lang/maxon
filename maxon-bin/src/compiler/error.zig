@@ -113,6 +113,8 @@ pub const ErrorCode = enum {
     E054, // main cannot throw
     E055, // if try requires throwing expression
     E056, // generic type requires braces
+    E057, // throwing function requires try
+    E058, // otherwise requires try
 
     const Info = struct {
         code: []const u8,
@@ -171,6 +173,8 @@ pub const ErrorCode = enum {
         .{ .code = "E054", .message = "main cannot throw" },
         .{ .code = "E055", .message = "if try requires a throwing function call" },
         .{ .code = "E056", .message = "generic type instantiation requires '{}'" },
+        .{ .code = "E057", .message = "throwing function requires try" },
+        .{ .code = "E058", .message = "otherwise requires try expression" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

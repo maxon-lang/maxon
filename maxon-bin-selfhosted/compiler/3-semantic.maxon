@@ -1,50 +1,40 @@
 // Semantic Analyzer for the Maxon compiler
 
-export type SemanticError
-	let message String
-	let line int
-	let column int
+export enum SemanticError is Error
+	undefinedVariable
+	undefinedFunction
+	undefinedType
+	typeMismatch
+	duplicateDefinition
+	noMainFunction
 end 'SemanticError'
 
 export type SemanticAnalyzer
-	var errors Array of SemanticError
 	var hasMain bool
 	var localVars Map from String to TypeRef
 
 	export static function create() returns SemanticAnalyzer
-		var errs = Array of SemanticError{}
 		var vars = Map from String to TypeRef{}
 		var result = SemanticAnalyzer{
-			errors: errs,
-			hasMain: false,
-			localVars: vars
+		hasMain: false,
+		localVars: vars
 		}
 		return result
 	end 'create'
 
-	export function success() returns bool
-		return errors.count() == 0
-	end 'success'
-
-	export function addError(message String, loc SourceLoc)
-		let err = SemanticError{message: message, line: loc.line, column: loc.column}
-		errors.push(err)
-	end 'addError'
-
-	export function analyze(program Program)
+	export function analyze(program Program) throws SemanticError
 		var i = 0
 		while i < program.functions.count() 'funcs'
-			analyzeFunction(program.functions[i])
+			try analyzeFunction(try program.functions.get(i))
 			i = i + 1
 		end 'funcs'
 
 		if not hasMain 'noMain'
-			let loc = SourceLoc.create(1, 1)
-			addError("No 'main' function found", loc)
+			throw SemanticError.noMainFunction
 		end 'noMain'
 	end 'analyze'
 
-	export function analyzeFunction(fn FunctionDecl)
+	export function analyzeFunction(fn FunctionDecl) throws SemanticError
 		if fn.name == "main" 'isMain'
 			hasMain = true
 		end 'isMain'
@@ -52,40 +42,31 @@ export type SemanticAnalyzer
 		localVars = Map from String to TypeRef{}
 		var i = 0
 		while i < fn.body.count() 'body'
-			analyzeStmt(fn.body[i])
+			try analyzeStmt(try fn.body.get(i))
 			i = i + 1
 		end 'body'
 	end 'analyzeFunction'
 
-	export function analyzeStmt(stmt Stmt)
+	export function analyzeStmt(stmt Stmt) throws SemanticError
 		if stmt.kind == StmtKind.returnStmt 'return'
 			if stmt.hasValue 'hasValue'
-				analyzeExpr(stmt.expr)
+				try analyzeExpr(stmt.expr)
 			end 'hasValue'
 		end 'return'
 
 		if stmt.kind == StmtKind.letStmt 'let'
-			analyzeExpr(stmt.expr)
+			try analyzeExpr(stmt.expr)
 			localVars.insert(stmt.name, TypeRef.makeInt())
 		end 'let'
 	end 'analyzeStmt'
 
-	export function analyzeExpr(expr Expr)
+	export function analyzeExpr(expr Expr) throws SemanticError
 		if expr.kind == ExprKind.varRef 'varRef'
 			if not localVars.contains(expr.name) 'undefined'
-				addError("Undefined variable: {expr.name}", expr.loc)
+				throw SemanticError.undefinedVariable
 			end 'undefined'
 		end 'varRef'
 	end 'analyzeExpr'
-
-	export function printErrors()
-		var i = 0
-		while i < errors.count() 'errs'
-			let err = errors[i]
-			print("Error: {err.message}")
-			i = i + 1
-		end 'errs'
-	end 'printErrors'
 end 'SemanticAnalyzer'
 
 

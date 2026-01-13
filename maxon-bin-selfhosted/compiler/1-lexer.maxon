@@ -1,5 +1,12 @@
 // Lexer for the Maxon language
 
+enum LexError is Error
+	unexpectedCharacter
+	unterminatedString
+	invalidEscape
+	endOfFile
+end 'LexError'
+
 export type Lexer
 	let source String
 	var pos StringIndex
@@ -17,19 +24,17 @@ export type Lexer
 		return pos == source.endIndex()
 	end 'isAtEnd'
 
-	export function peek() returns Character or nil
+	export function peek() returns Character throws LexError
 		if isAtEnd() 'eof'
-			return nil
+			throw LexError.endOfFile
 		end 'eof'
 		return source.charAt(pos)
 	end 'peek'
 
-	export function advance() returns Character or nil
-		let c = peek() or 'eof'
-			return nil
-		end 'eof'
+	export function advance() returns Character throws LexError
+		let c = try peek()
 
-		let maybeNext = source.indexAfter(pos)
+		let maybeNext = try source.indexAfter(pos)
 		if let nextpos = maybeNext 'got_next'
 			var mutablePos = nextpos
 			pos = mutablePos
@@ -53,14 +58,13 @@ export type Lexer
 
 	export function skipWhitespace()
 		while not isAtEnd() 'loop'
-			let c = peek() or 'done'
-				return
-			end 'done'
-			if c == ' ' or c == '\t' 'ws'
-				advance()
-			end 'ws' else 'notWs'
-				return
-			end 'notWs'
+			if let c = try peek() 'gotChar'
+				if c == ' ' or c == '\t' 'ws'
+					try advance() otherwise ignore
+				end 'ws' else 'notWs'
+					return
+				end 'notWs'
+			end 'gotChar'
 		end 'loop'
 	end 'skipWhitespace'
 
@@ -105,13 +109,14 @@ export type Lexer
 		let startColumn = column
 
 		while not isAtEnd() 'scan'
-			let c = peek() or 'done'
+			if let c = try peek() 'gotChar'
+				if not isAlphaNumeric(c) 'notAlphaNum'
+					break 'scan'
+				end 'notAlphaNum'
+				try advance() otherwise ignore
+			end 'gotChar' else 'eof'
 				break 'scan'
-			end 'done'
-			if not isAlphaNumeric(c) 'notAlphaNum'
-				break 'scan'
-			end 'notAlphaNum'
-			advance()
+			end 'eof'
 		end 'scan'
 
 		let lexeme = source.slice(startPos, pos, nil)
@@ -125,13 +130,14 @@ export type Lexer
 		let startColumn = column
 
 		while not isAtEnd() 'intPart'
-			let c = peek() or 'done'
+			if let c = try peek() 'gotChar'
+				if not isDigit(c) 'notDigit'
+					break 'intPart'
+				end 'notDigit'
+				try advance() otherwise ignore
+			end 'gotChar' else 'eof'
 				break 'intPart'
-			end 'done'
-			if not isDigit(c) 'notDigit'
-				break 'intPart'
-			end 'notDigit'
-			advance()
+			end 'eof'
 		end 'intPart'
 
 		let lexeme = source.slice(startPos, pos, nil)
@@ -143,20 +149,21 @@ export type Lexer
 		let startLine = line
 		let startColumn = column
 
-		advance()  // consume opening quote
+		try advance() otherwise ignore  // consume opening quote
 
 		while not isAtEnd() 'content'
-			let c = peek() or 'done'
+			if let c = try peek() 'gotChar'
+				if c == '\'' 'closeQuote'
+					break 'content'
+				end 'closeQuote'
+				try advance() otherwise ignore
+			end 'gotChar' else 'eof'
 				break 'content'
-			end 'done'
-			if c == '\'' 'closeQuote'
-				break 'content'
-			end 'closeQuote'
-			advance()
+			end 'eof'
 		end 'content'
 
 		if not isAtEnd() 'closeQuote'
-			advance()
+			try advance() otherwise ignore
 		end 'closeQuote'
 
 		let lexeme = source.slice(startPos, pos, nil)
@@ -173,7 +180,7 @@ export type Lexer
 		let startLine = line
 		var startColumn = column
 		var startPos = pos
-		let c = advance() or 'unexpected_eof'
+		let c = try advance() otherwise 'unexpected_eof'
 			return makeToken(TokenType.eof, "", line, column)
 		end 'unexpected_eof'
 

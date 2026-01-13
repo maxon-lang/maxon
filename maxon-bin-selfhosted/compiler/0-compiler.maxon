@@ -8,10 +8,7 @@ export function compile(sourceFile String) returns int
 	print("")
 
 	// Read source file
-	var source = ""
-	do 'readSource'
-		source = try File.readText(sourceFile)
-	end 'readSource' catch (err FileError) 'noSource'
+	let source = try File.readText(sourceFile) otherwise 'noSource'
 		print("Error: Could not read source file: {sourceFile}")
 		return 1
 	end 'noSource'
@@ -25,10 +22,8 @@ export function compile(sourceFile String) returns int
 	// Phase 2: Parsing
 	print("Phase 2: Parsing...")
 	let parser = Parser.create(tokens)
-	let program = parser.parseProgram(sourceFile)
-
-	if parser.hadError 'parseError'
-		print("Error: {parser.errorMessage}")
+	let program = try parser.parseProgram(sourceFile) otherwise (e) 'parseError'
+		print("Parse error: {e}")
 		return 1
 	end 'parseError'
 
@@ -37,12 +32,10 @@ export function compile(sourceFile String) returns int
 	// Phase 3: Semantic Analysis
 	print("Phase 3: Semantic Analysis...")
 	let analyzer = SemanticAnalyzer.create()
-	analyzer.analyze(program)
-
-	if not analyzer.success() 'hasErrors'
-		analyzer.printErrors()
+	try analyzer.analyze(program) otherwise (e) 'semanticError'
+		print("Semantic error: {e}")
 		return 1
-	end 'hasErrors'
+	end 'semanticError'
 	print("  OK")
 
 	// Phase 4: Optimization
@@ -54,13 +47,14 @@ export function compile(sourceFile String) returns int
 	// Phase 5: MIR Code Generation
 	print("Phase 5: Code Generation (MIR)...")
 	let codegen = CodeGen.create()
-	codegen.generate(program)
+	try codegen.generate(program) otherwise (e) 'irError'
+		print("IR generation error: {e}")
+		return 1
+	end 'irError'
 	print("  Generated MIR")
 
 	let mirFile = sourceFile.replace(".maxon", ".mir")
-	do 'writeMir'
-		try File.writeText(mirFile, codegen.output)
-	end 'writeMir' catch (err FileError) 'noMirWrite'
+	try File.writeText(mirFile, codegen.output) otherwise 'noMirWrite'
 		print("Error: Could not write MIR file")
 		return 1
 	end 'noMirWrite'
@@ -69,7 +63,10 @@ export function compile(sourceFile String) returns int
 	// Phase 6: x86-64 Code Generation
 	print("Phase 6: Code Generation (x86-64)...")
 	let x86gen = X86Gen.create()
-	x86gen.generate(program)
+	try x86gen.generate(program) otherwise (e) 'codegenError'
+		print("Code generation error: {e}")
+		return 1
+	end 'codegenError'
 	print("  Generated machine code")
 
 	// Phase 7: PE Executable Generation
@@ -82,9 +79,7 @@ export function compile(sourceFile String) returns int
 
 	// Phase 8: Write Output File
 	print("Phase 8: Writing {outputFile}...")
-	do 'writeExe'
-		try File.writeBinary(outputFile, exeBytes)
-	end 'writeExe' catch (err FileError) 'noExeWrite'
+	try File.writeBinary(outputFile, exeBytes) otherwise 'noExeWrite'
 		print("Error: Could not write executable")
 		return 1
 	end 'noExeWrite'

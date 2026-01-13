@@ -1,13 +1,20 @@
 // Parser for the Maxon language
 
+export enum ParseError is Error
+	unexpectedToken
+	expectedExpression
+	expectedStatement
+	expectedIdentifier
+	expectedType
+	unexpectedEof
+end 'ParseError'
+
 export type Parser
 	var tokens Array of Token
 	var pos int
-	export var hadError bool
-	export var errorMessage String
 
 	export static function create(tokens Array of Token) returns Parser
-		let result = Parser{tokens: tokens, pos: 0, hadError: false, errorMessage: ""}
+		let result = Parser{tokens: tokens, pos: 0}
 		return result
 	end 'create'
 
@@ -19,14 +26,14 @@ export type Parser
 		if pos >= tokens.count() 'bounds'
 			return makeToken(TokenType.eof, "", 0, 0)
 		end 'bounds'
-		return tokens[pos]
+		return tokens.get(pos)
 	end 'peek'
 
 	export function previous() returns Token
 		if pos == 0 'bounds'
 			return makeToken(TokenType.eof, "", 0, 0)
 		end 'bounds'
-		return tokens[pos - 1]
+		return tokens.get(pos - 1)
 	end 'previous'
 
 	export function advance() returns Token
@@ -51,18 +58,12 @@ export type Parser
 		return false
 	end 'matchToken'
 
-	export function expect(kind TokenType, message String) returns Token
+	export function expect(kind TokenType) returns Token throws ParseError
 		if check(kind) 'check'
 			return advance()
 		end 'check'
-		error(message)
-		return makeToken(TokenType.error, "", peek().line, peek().column)
+		throw ParseError.unexpectedToken
 	end 'expect'
-
-	export function error(message String)
-		hadError = true
-		errorMessage = message
-	end 'error'
 
 	export function skipNewlines()
 		while matchToken(TokenType.newline) 'skip'
@@ -74,12 +75,11 @@ export type Parser
 		return SourceLoc.create(tok.line, tok.column)
 	end 'currentLoc'
 
-	export function parseType() returns TypeRef
+	export function parseType() returns TypeRef throws ParseError
 		if matchToken(TokenType.kwInt) 'int'
 			return TypeRef.makeInt()
 		end 'int'
-		error("Expected type")
-		return TypeRef.makeInt()
+		throw ParseError.expectedType
 	end 'parseType'
 
 	// Helper to parse integer from string of digits
@@ -87,8 +87,8 @@ export type Parser
 		var result = 0
 		for c in s 'digits'
 			if c >= '0' and c <= '9' 'digit'
-				let ascii = c.asciiValue() or 'skip'
-					continue 'digits'
+				let ascii = try c.asciiValue() otherwise 'skip'
+				continue 'digits'
 				end 'skip'
 				result = result * 10 + (ascii - 48)
 			end 'digit'
@@ -96,7 +96,7 @@ export type Parser
 		return result
 	end 'parseIntFromString'
 
-	export function parseExpression() returns Expr or nil
+	export function parseExpression() returns Expr throws ParseError
 		let loc = currentLoc()
 
 		if matchToken(TokenType.intLiteral) 'int'
@@ -110,23 +110,18 @@ export type Parser
 			return Expr.makeVarRef(name, loc)
 		end 'ident'
 
-		error("Expected expression")
-		return nil
+		throw ParseError.expectedExpression
 	end 'parseExpression'
 
-	export function parseStatement() returns Stmt or nil
+	export function parseStatement() returns Stmt throws ParseError
 		skipNewlines()
 		let loc = currentLoc()
 
 		if matchToken(TokenType.kwLet) 'let'
-			let name = expect(TokenType.identifier, "Expected variable name").lexeme
-			expect(TokenType.equals, "Expected '=' after variable name")
-			if let value = parseExpression() 'valid_expr'
-				return Stmt.makeLet(name, value, loc)
-			end 'valid_expr' else 'invalid_expr'
-				error("Invalid expression in let statement")
-				return nil
-			end 'invalid_expr'
+			let name = try expect(TokenType.identifier)
+			try expect(TokenType.equals)
+			let value = try parseExpression()
+			return Stmt.makeLet(name.lexeme, value, loc)
 		end 'let'
 
 		if matchToken(TokenType.kwReturn) 'return'
@@ -134,61 +129,51 @@ export type Parser
 			if check(TokenType.newline) or isAtEnd() or check(TokenType.kwEnd) 'noValue'
 				return Stmt.makeReturn(Expr.makeIntLiteral(0, loc), false, loc)
 			end 'noValue'
-			if let value = parseExpression() 'valid_expr'
-				return Stmt.makeReturn(value, true, loc)
-			end 'valid_expr' else 'invalid_expr'
-				error("Invalid expression in return statement")
-				return nil
-			end 'invalid_expr'
+			let value = try parseExpression()
+			return Stmt.makeReturn(value, true, loc)
 		end 'return'
 
-		error("Expected statement")
-		return Stmt.makeReturn(Expr.makeIntLiteral(0, loc), false, loc)
+		throw ParseError.expectedStatement
 	end 'parseStatement'
 
-	export function parseFunction() returns FunctionDecl
+	export function parseFunction() returns FunctionDecl throws ParseError
 		let loc = currentLoc()
-		let name = expect(TokenType.identifier, "Expected function name").lexeme
+		let nameToken = try expect(TokenType.identifier)
+		let name = nameToken.lexeme
 
-		expect(TokenType.lparen, "Expected '(' after function name")
-		expect(TokenType.rparen, "Expected ')' after parameters")
+		try expect(TokenType.lparen)
+		try expect(TokenType.rparen)
 
 		var returnType = TypeRef.makeVoid()
 		if matchToken(TokenType.kwReturns) 'hasReturn'
-			returnType = parseType()
+			returnType = try parseType()
 		end 'hasReturn'
 
 		skipNewlines()
 
 		var body = Array of Stmt{}
 		while not check(TokenType.kwEnd) and not isAtEnd() 'body'
-			if let stmt = parseStatement() 'valid_stmt'
-				body.push(stmt)
-				//var last = body[body.count() - 1]
-				skipNewlines()
-			end 'valid_stmt' else 'invalid_stmt'
-				error("Invalid statement in function body")
-				break
-			end 'invalid_stmt'
+			let stmt = try parseStatement()
+			body.push(stmt)
+			skipNewlines()
 		end 'body'
 
-		expect(TokenType.kwEnd, "Expected 'end' to close function")
-		expect(TokenType.blockLabel, "Expected function name label after 'end'")
+		try expect(TokenType.kwEnd)
+		try expect(TokenType.blockLabel)
 
 		return FunctionDecl.create(name, returnType, body, loc)
 	end 'parseFunction'
 
-	export function parseProgram(fileName String) returns Program
+	export function parseProgram(fileName String) returns Program throws ParseError
 		let program = Program.create(fileName)
 		skipNewlines()
 
 		while not isAtEnd() 'topLevel'
 			if matchToken(TokenType.kwFunction) 'function'
-				let fn = parseFunction()
+				let fn = try parseFunction()
 				program.addFunction(fn)
 			end 'function' else 'notFunction'
-				error("Expected function declaration")
-				advance()
+				throw ParseError.unexpectedToken
 			end 'notFunction'
 			skipNewlines()
 		end 'topLevel'
