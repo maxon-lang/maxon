@@ -3184,6 +3184,20 @@ pub const AstToIr = struct {
             if (needs_implicit_ret) {
                 try self.func().emitRet(null);
             }
+        } else if (self.current_func_throws_type != null and self.sret_ptr != null) {
+            // Void throwing function - ret_type is .ptr for sret, but original return was void
+            // Need to set success tag (0) and return via sret when falling through without throwing
+            const block = self.func().currentBlock() orelse return;
+            const needs_implicit_ret = block.instructions.items.len == 0 or
+                block.instructions.items[block.instructions.items.len - 1].op != .ret;
+            if (needs_implicit_ret) {
+                const sret = self.sret_ptr.?;
+                // Write tag = 0 (success) to sret
+                const zero = try self.func().emitConstI64(0);
+                try self.func().emitStore(sret, zero);
+                try cleanup_helpers.freeHeapAllocations(self);
+                try self.func().emitRet(sret);
+            }
         }
     }
 
@@ -3303,6 +3317,7 @@ pub const AstToIr = struct {
             const payload_size = @max(success_size, error_size);
             sret_info.uses_sret = true;
             sret_info.struct_size = 8 + payload_size;
+            sret_info.ir_type = .ptr; // sret uses pointer return
         }
 
         const ir_func = try self.module.addFunctionWithExport(mangled_name, sret_info.ir_type, method.is_export);
@@ -3387,6 +3402,7 @@ pub const AstToIr = struct {
             const payload_size = @max(success_size, error_size);
             sret_info.uses_sret = true;
             sret_info.struct_size = 8 + payload_size;
+            sret_info.ir_type = .ptr; // sret uses pointer return
         }
 
         const ir_func = try self.module.addFunctionWithExport(decl.name, sret_info.ir_type, decl.is_export);

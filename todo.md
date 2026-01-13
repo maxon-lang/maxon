@@ -210,3 +210,4 @@ Phase 11: Interface declarations (parsing interface definitions)
 - extensions
 - map extension
 - add ArrayIndex
+- semantic error if function is declared as 'throws' but does nothing that might throw

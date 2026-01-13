@@ -71,6 +71,32 @@ Write a string to a text file using UTF-8 encoding.
 
 **Throws:** `FileError.writeError` on failure
 
+### File.readBinary
+
+Read the entire contents of a file as raw bytes.
+
+**Signature:** `static function readBinary(path string) returns Array of byte throws FileError`
+
+**Parameters:**
+- `path`: File path as a string
+
+**Returns:** File contents as a byte array
+
+**Throws:** `FileError.notFound` if file cannot be read
+
+**Example:**
+
+```maxon
+function main() returns int
+    let bytes = try File.readBinary("data.bin") otherwise 'err'
+        print("Could not read file\n")
+        return 0
+    end 'err'
+    print("Read {bytes.count()} bytes\n")
+    return 1
+end 'main'
+```
+
 ### File.writeBinary
 
 Write binary data to a file.
@@ -103,6 +129,30 @@ function main() returns int
     end 'check' else 'nofile'
         print("File does not exist")
     end 'nofile'
+    return 0
+end 'main'
+```
+
+### File.delete
+
+Delete a file at the given path.
+
+**Signature:** `static function delete(path string) throws FileError`
+
+**Parameters:**
+- `path`: File path as a string
+
+**Throws:** `FileError.notFound` if the file cannot be deleted
+
+**Example:**
+
+```maxon
+function main() returns int
+    try File.delete("temp/old_file.txt") otherwise 'err'
+        print("Could not delete file")
+        return 1
+    end 'err'
+    print("File deleted")
     return 0
 end 'main'
 ```
@@ -158,4 +208,75 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: read-binary-nonexistent -->
+```maxon
+function main() returns int
+    var bytes = try File.readBinary("nonexistent_binary_file.bin") otherwise 'err'
+        print("File not found")
+        return 42
+    end 'err'
+    print("Unexpected read: {bytes.count()} bytes")
+    return 1
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+File not found
+```
+
+<!-- test: write-and-read-binary -->
+```maxon
+function main() returns int
+    // Create a byte array with known values
+    var data = Array of byte{}
+    data.push(65 as byte)
+    data.push(66 as byte)
+    data.push(67 as byte)
+
+    // Write binary file
+    try File.writeBinary("test_binary.bin", data) otherwise 'write_err'
+        print("Write failed")
+        return 1
+    end 'write_err'
+
+    // Read it back
+    var readData = try File.readBinary("test_binary.bin") otherwise 'read_err'
+        print("Read failed")
+        return 2
+    end 'read_err'
+
+    // Clean up the temp file
+    try File.delete("test_binary.bin") otherwise 'del_err'
+        print("Delete failed")
+    end 'del_err'
+
+    // Verify count
+    if readData.count() != 3 'count_check'
+        print("Wrong count: {readData.count()}")
+        return 3
+    end 'count_check'
+
+    // Verify first value
+    var b0 = try readData.get(0) otherwise 'e0'
+        return 10
+    end 'e0'
+
+    if b0 != 65 as byte 'check0'
+        print("Wrong value")
+        return 20
+    end 'check0'
+
+    print("Binary read/write OK")
+    return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+Binary read/write OK
 ```

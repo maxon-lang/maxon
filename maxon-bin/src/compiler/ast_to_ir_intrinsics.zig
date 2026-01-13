@@ -461,13 +461,13 @@ const managed_array_intrinsics = .{
     .{ "__managed_array_len", intrinsicManagedArrayLen },
     .{ "__managed_array_capacity", intrinsicManagedArrayCapacity },
     .{ "__managed_array_create", intrinsicManagedArrayCreate },
-    .{ "__managed_array_create_bytes", intrinsicManagedArrayCreateBytes },
     .{ "__managed_array_set_at", intrinsicManagedArraySetAt },
     .{ "__managed_array_set_length", intrinsicManagedArraySetLength },
     .{ "__managed_array_grow", intrinsicManagedArrayGrow },
     .{ "__managed_array_shift_right", intrinsicManagedArrayShiftRight },
     .{ "__managed_array_shift_left", intrinsicManagedArrayShiftLeft },
     .{ "__managed_array_get_unchecked", intrinsicManagedArrayGetUnchecked },
+    .{ "__element_size", intrinsicElementSize },
     // Map initialization intrinsics - use Key/Value generic params
     .{ "__map_get_init_key", intrinsicMapGetInitKey },
     .{ "__map_get_init_value", intrinsicMapGetInitValue },
@@ -499,38 +499,18 @@ fn intrinsicManagedArrayCapacity(self: *AstToIr, call: ast.CallExpr) ConvertErro
     return intrinsicLoadI64Field(self, call, 16);
 }
 
-/// __managed_array_create(capacity) -> __ManagedArray
-/// Creates a new managed array with the given size/capacity (length = capacity)
+/// __managed_array_create(capacity, elem_size) -> __ManagedArray
+/// Creates a new managed array with the given capacity and element size (length = capacity)
 /// Mode is 0 (no refcounting) for regular arrays
 fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
+    try expectArgCount(self, call, 2);
     const capacity = try self.convertExpression(call.args[0]);
+    const elem_size = try self.convertExpression(call.args[1]);
 
     const managed_ptr = try ManagedArray.alloca(self.func());
 
-    const elem_info = try getElementInfo(self);
-    const elem_size_val = try self.func().emitConstI64(elem_info.size);
-    const buf_size = try self.func().emitBinaryOp(.mul, capacity.value, elem_size_val, .i64);
+    const buf_size = try self.func().emitBinaryOp(.mul, capacity.value, elem_size.value, .i64);
     const buf_ptr = try self.func().emitHeapAlloc(buf_size, "array buffer");
-
-    // Initialize with mode=0 (no refcounting for regular arrays)
-    const zero_i32 = try self.func().emitConstI32(0);
-    try ManagedArray.init(self.func(), managed_ptr, buf_ptr, capacity.value, capacity.value, zero_i32);
-
-    return .{ .value = managed_ptr.raw(), .ty = .{ .primitive = "ptr" } };
-}
-
-/// __managed_array_create_bytes(capacity) -> __ManagedArray
-/// Creates a new byte array with the given capacity (element size = 1)
-/// Used for String buffers and other byte-level operations outside generic contexts
-fn intrinsicManagedArrayCreateBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    try expectArgCount(self, call, 1);
-    const capacity = try self.convertExpression(call.args[0]);
-
-    const managed_ptr = try ManagedArray.alloca(self.func());
-
-    // Byte arrays have element size of 1
-    const buf_ptr = try self.func().emitHeapAlloc(capacity.value, "byte array buffer");
 
     // Initialize with mode=0 (no refcounting for regular arrays)
     const zero_i32 = try self.func().emitConstI32(0);
@@ -658,6 +638,16 @@ fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) Convert
         self.reportInternalError("unsupported element size in array get intrinsic");
         return error.SemanticError;
     }
+}
+
+/// __element_size() -> int
+/// Returns the element size for the current generic type context
+/// Used by Array.maxon to pass explicit element size to __managed_array_create
+fn intrinsicElementSize(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 0);
+    const elem_info = try getElementInfo(self);
+    const size_val = try self.func().emitConstI64(elem_info.size);
+    return .{ .value = size_val, .ty = .{ .primitive = "int" } };
 }
 
 /// __map_get_init_key(managed, index) -> Key
@@ -1263,6 +1253,26 @@ fn intrinsicFileClose(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     return .{ .value = try self.func().emitConstI64(0), .ty = .{ .primitive = "int" } };
 }
 
+/// __file_delete(cstr) -> int
+/// Deletes a file. Returns 0 on success, -1 on failure.
+fn intrinsicFileDelete(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const path_cstr = try self.convertExpression(call.args[0]);
+    const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
+
+    // Call DeleteFileA(path) - returns non-zero on success, 0 on failure
+    const result = try externCall(self, "kernel32.dll", "DeleteFileA", &.{path_ptr}, .i64);
+
+    // Convert Windows convention (non-zero=success) to our convention (0=success, -1=failure)
+    // If result is 0 (failure), return -1; else return 0
+    const zero = try self.func().emitConstI64(0);
+    const is_failure = try self.func().emitBinaryOp(.icmp_eq, result, zero, .i64);
+    const neg_one = try self.func().emitConstI64(-1);
+    // Return: is_failure * (-1) + (1 - is_failure) * 0 = is_failure * (-1)
+    const return_val = try self.func().emitBinaryOp(.mul, is_failure, neg_one, .i64);
+    return .{ .value = return_val, .ty = .{ .primitive = "int" } };
+}
+
 /// __file_read_all(cstr) -> __ManagedArray
 /// High-level intrinsic: reads entire file into a managed array.
 /// Returns null pointer on failure (caller checks with == -1 pattern or similar).
@@ -1336,6 +1346,7 @@ const file_intrinsics = .{
     .{ "__file_size", intrinsicFileSize },
     .{ "__file_read", intrinsicFileRead },
     .{ "__file_close", intrinsicFileClose },
+    .{ "__file_delete", intrinsicFileDelete },
     // High-level operations (for convenience, returns -1 on failure)
     .{ "__file_read_all", intrinsicFileReadAll },
     .{ "__write_file", intrinsicWriteFile },

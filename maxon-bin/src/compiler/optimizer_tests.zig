@@ -1263,3 +1263,64 @@ test "managed string - literal deduplication" {
     // Verify correct execution (11 + 11 + 11 = 33)
     try testing.expectEqual(@as(u8, 33), @as(u8, @intCast(result.term.Exited)));
 }
+
+// ============================================================================
+// Void Throwing Function Tests
+// ============================================================================
+
+test "void throwing function sets success tag on implicit return" {
+    // Regression test: void throwing functions must set sret tag = 0 when not throwing
+    const allocator = testing.allocator;
+
+    const source =
+        \\enum MyError is Error
+        \\    failed
+        \\end 'MyError'
+        \\
+        \\function neverThrows() throws MyError
+        \\end 'neverThrows'
+        \\
+        \\function main() returns int
+        \\    var caught = 0
+        \\    try neverThrows() otherwise 'err'
+        \\        caught = 1
+        \\    end 'err'
+        \\    if caught == 0 'ok'
+        \\        return 42
+        \\    end 'ok'
+        \\    return 1
+        \\end 'main'
+    ;
+
+    const result = try compileAndRun(source, allocator);
+    defer allocator.free(result.ir_text);
+
+    // The IR for neverThrows should:
+    // 1. Return ptr (not void) because it uses sret for error union
+    // 2. Store 0 to sret (success tag) before returning
+    // 3. Return the sret pointer
+
+    // Check function signature is "-> ptr" not "-> void"
+    const func_start = std.mem.indexOf(u8, result.ir_text, "function neverThrows()") orelse {
+        std.debug.print("IR:\n{s}\n", .{result.ir_text});
+        return error.FunctionNotFound;
+    };
+    const func_header_end = std.mem.indexOfPos(u8, result.ir_text, func_start, "{") orelse return error.InvalidIR;
+    const func_header = result.ir_text[func_start..func_header_end];
+
+    // Must return ptr (sret), not void
+    try testing.expect(std.mem.indexOf(u8, func_header, "-> ptr") != null);
+
+    // Find the function body
+    const func_end = std.mem.indexOfPos(u8, result.ir_text, func_header_end, "\n}\n") orelse return error.InvalidIR;
+    const func_body = result.ir_text[func_header_end..func_end];
+
+    // Must have a store instruction (to set tag = 0)
+    try testing.expect(std.mem.indexOf(u8, func_body, "store ") != null);
+
+    // Must have ret with sret pointer (not bare ret)
+    try testing.expect(std.mem.indexOf(u8, func_body, "ret %") != null);
+
+    // Verify program runs correctly
+    try testing.expectEqual(@as(u8, 42), result.exit_code);
+}
