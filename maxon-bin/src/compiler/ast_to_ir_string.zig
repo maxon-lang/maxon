@@ -196,21 +196,35 @@ pub fn isStringType(ty: ValueType) bool {
     return ty == .struct_type and std.mem.eql(u8, ty.struct_type.name, "String");
 }
 
-/// Copy a struct and handle refcount increment for String/__ManagedString types.
+/// Check if a struct has __ManagedArray as its first field.
+/// This indicates the struct uses COW refcounting for its buffer.
+pub fn hasManagedArrayFirstField(struct_info: *const types.StructTypeInfo) bool {
+    if (struct_info.fields.len == 0) return false;
+    const first_field = struct_info.fields[0];
+    if (first_field.value_type != .struct_type) return false;
+    return std.mem.eql(u8, first_field.value_type.struct_type.name, "__ManagedArray");
+}
+
+/// Copy a struct and handle refcount increment for types with __ManagedArray.
 /// This is the single point of truth for struct copying with COW semantics.
+/// Handles String, Array$T, and any other type with __ManagedArray at offset 0.
 pub fn emitStructCopy(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.StructPtr, size: i32, struct_name: ?[]const u8) !void {
     try self.func().emitMemcpy(dest_ptr.asRawPtr(), src_ptr.asRawPtr(), size);
 
-    // Handle refcount for String types (which contain __ManagedString at offset 0)
-    // Only incref for String copies, not __ManagedString moves.
-    // __ManagedString is always moved (consumed), never copied.
+    // Handle refcount for types with __ManagedArray at offset 0
     if (struct_name) |name| {
-        if (std.mem.eql(u8, name, "String")) {
-            try emitStringIncref(self, ir.toStringPtr(dest_ptr.raw()), "<struct copy>");
+        // Skip internal __ManagedArray type (it's moved, not copied)
+        if (std.mem.eql(u8, name, "__ManagedArray")) return;
+
+        // Look up struct info to check for __ManagedArray first field
+        if (self.type_map.get(name)) |type_info| {
+            if (type_info == .struct_type) {
+                if (hasManagedArrayFirstField(&type_info.struct_type)) {
+                    // Incref the buffer since we're copying the struct
+                    try array.emitManagedArrayIncref(self, ir.toManagedArrayPtr(dest_ptr.raw()), "<struct copy>");
+                }
+            }
         }
-        // Note: __ManagedString is intentionally NOT increffed here.
-        // When a ManagedString is moved into a String struct, it's a move, not a copy.
-        // The buffer already has refcount=1 from allocation.
     }
 }
 

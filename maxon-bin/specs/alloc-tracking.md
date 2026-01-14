@@ -54,17 +54,18 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 80 bytes (array buffer)
+ALLOC #1: 88 bytes (array buffer)
 MOVE: managed
-FREE #1: 80 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 88 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 80 bytes
-Freed:     80 bytes
+Allocated: 88 bytes
+Freed:     88 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: no-alloc-empty-program -->
@@ -107,20 +108,22 @@ end 'main'
 3
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
-ALLOC #2: 80 bytes (array buffer)
+ALLOC #2: 88 bytes (array buffer)
 MOVE: managed
-FREE #1: 40 bytes (array cleanup)
-FREE #2: 80 bytes (array cleanup)
+DECREF: arr1 -> rc=0
+FREE #1: 48 bytes (array cleanup)
+DECREF: arr2 -> rc=0
+FREE #2: 88 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 120 bytes
-Freed:     120 bytes
+Allocated: 136 bytes
+Freed:     136 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   0
-Decrefs:   0
+Decrefs:   2
 ```
 
 <!-- test: array-early-return-true -->
@@ -140,17 +143,18 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
-FREE #1: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 40 bytes
-Freed:     40 bytes
+Allocated: 48 bytes
+Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: array-early-return-false -->
@@ -170,17 +174,18 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
-FREE #1: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 40 bytes
-Freed:     40 bytes
+Allocated: 48 bytes
+Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: array-passed-to-function -->
@@ -201,17 +206,18 @@ end 'main'
 99
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
-FREE #1: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 40 bytes
-Freed:     40 bytes
+Allocated: 48 bytes
+Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: array-computed-size -->
@@ -229,17 +235,18 @@ end 'main'
 77
 ```
 ```stdout
-ALLOC #1: 80 bytes (array buffer)
+ALLOC #1: 88 bytes (array buffer)
 MOVE: managed
-FREE #1: 80 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 88 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 80 bytes
-Freed:     80 bytes
+Allocated: 88 bytes
+Freed:     88 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: array-borrow-no-leak -->
@@ -262,17 +269,18 @@ end 'main'
 84
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
-FREE #1: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 40 bytes
-Freed:     40 bytes
+Allocated: 48 bytes
+Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: array-borrow-multiple-times -->
@@ -298,17 +306,18 @@ end 'main'
 60
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
-FREE #1: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 40 bytes
-Freed:     40 bytes
+Allocated: 48 bytes
+Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: array-in-loop -->
@@ -332,23 +341,26 @@ end 'main'
 3
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
-FREE #1: 40 bytes (array cleanup)
-ALLOC #2: 40 bytes (array buffer)
+DECREF: arr -> rc=0
+FREE #1: 48 bytes (array cleanup)
+ALLOC #2: 48 bytes (array buffer)
 MOVE: managed
-FREE #2: 40 bytes (array cleanup)
-ALLOC #3: 40 bytes (array buffer)
+DECREF: arr -> rc=0
+FREE #2: 48 bytes (array cleanup)
+ALLOC #3: 48 bytes (array buffer)
 MOVE: managed
-FREE #3: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #3: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 120 bytes
-Freed:     120 bytes
+Allocated: 144 bytes
+Freed:     144 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   0
-Decrefs:   0
+Decrefs:   3
 ```
 
 <!-- test: array-move-no-leak -->
@@ -370,18 +382,19 @@ end 'main'
 100
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
 MOVE: arr
-FREE #1: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 40 bytes
-Freed:     40 bytes
+Allocated: 48 bytes
+Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: array-move-chain -->
@@ -410,19 +423,20 @@ end 'main'
 20
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
 MOVE: arr
 MOVE: arr
-FREE #1: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 40 bytes
-Freed:     40 bytes
+Allocated: 48 bytes
+Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: two-arrays-one-moved-one-borrowed -->
@@ -452,26 +466,28 @@ end 'main'
 109
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
-ALLOC #2: 40 bytes (array buffer)
+ALLOC #2: 48 bytes (array buffer)
 MOVE: managed
 MOVE: arr2
-FREE #2: 40 bytes (array cleanup)
-FREE #1: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #2: 48 bytes (array cleanup)
+DECREF: arr1 -> rc=0
+FREE #1: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 80 bytes
-Freed:     80 bytes
+Allocated: 96 bytes
+Freed:     96 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   0
-Decrefs:   0
+Decrefs:   2
 ```
 
 <!-- test: array-zero-size-no-alloc -->
 <!-- TrackMemory: true -->
-Zero-size arrays do not allocate memory.
+Zero-size arrays allocate an 8-byte refcount header for COW semantics.
 
 ```maxon
 function main() returns int
@@ -487,15 +503,18 @@ end 'main'
 42
 ```
 ```stdout
+ALLOC #1: 8 bytes (array buffer)
 MOVE: managed
+DECREF: arr -> rc=0
+FREE #1: 8 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 0 bytes
-Freed:     0 bytes
+Allocated: 8 bytes
+Freed:     8 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: heap-array-reassign -->
@@ -516,19 +535,21 @@ end 'main'
 20
 ```
 ```stdout
-ALLOC #1: 40 bytes (array buffer)
+ALLOC #1: 48 bytes (array buffer)
 MOVE: managed
-ALLOC #2: 40 bytes (array buffer)
+ALLOC #2: 48 bytes (array buffer)
 MOVE: managed
-FREE #1: 40 bytes (array cleanup)
-FREE #2: 40 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 48 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #2: 48 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 80 bytes
-Freed:     80 bytes
+Allocated: 96 bytes
+Freed:     96 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   0
-Decrefs:   0
+Decrefs:   2
 ```
 

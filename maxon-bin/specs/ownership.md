@@ -378,18 +378,19 @@ end 'main'
 100
 ```
 ```stdout
-ALLOC #1: 24 bytes (array buffer)
+ALLOC #1: 32 bytes (array buffer)
 MOVE: managed
 MOVE: arr
-FREE #1: 24 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 24 bytes
-Freed:     24 bytes
+Allocated: 32 bytes
+Freed:     32 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 ### Mutually Exclusive Branches

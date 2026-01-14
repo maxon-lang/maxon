@@ -1,6 +1,7 @@
 const std = @import("std");
 const compiler = @import("../compiler/0-compiler.zig");
 const ast_to_ir = @import("../compiler/4-ast_to_ir.zig");
+const ast_to_ir_types = @import("../compiler/ast_to_ir_types.zig");
 const ast = @import("../compiler/ast.zig");
 const types = @import("types.zig");
 const lexer = @import("../compiler/1-lexer.zig");
@@ -145,12 +146,12 @@ pub const Analyzer = struct {
         var items: std.ArrayListUnmanaged(types.CompletionItem) = .empty;
 
         // Get type name for method lookup
-        // Now that struct_type, enum_type, array_type are pointers, access .name directly
+        // struct_type and enum_type are pointers, access .name directly
+        // Arrays are struct_type with "Array$" prefix
         const type_name: []const u8 = switch (ty) {
             .primitive => |p| p.toMaxonName(),
             .struct_type => |s| s.name,
             .enum_type => |e| e.name,
-            .array_type => |a| a.name,
             .error_union_type => return &.{},
             .function_type => return &.{},
         };
@@ -321,14 +322,20 @@ pub const Analyzer = struct {
         return null;
     }
 
-    /// Get the type name suitable for method lookup (handles arrays, structs, etc.)
+    /// Get the type name suitable for method lookup (handles generic types)
     fn getTypeNameForMethodLookup(self: *Analyzer, ty: ast_to_ir.ValueType) ?[]const u8 {
         _ = self;
         return switch (ty) {
             .primitive => |p| p.toMaxonName(),
-            .struct_type => |s| s.name,
+            .struct_type => |s| blk: {
+                // For monomorphized generic types, extract base type name before '$'
+                // e.g., Array$Int -> Array, Map$String$Int -> Map, MyGeneric$Foo -> MyGeneric
+                if (std.mem.indexOfScalar(u8, s.name, '$')) |idx| {
+                    break :blk s.name[0..idx];
+                }
+                break :blk s.name;
+            },
             .enum_type => |e| e.name,
-            .array_type => "Array", // Array methods are on the generic Array type
             .error_union_type, .function_type => null,
         };
     }
@@ -408,13 +415,17 @@ pub const Analyzer = struct {
 
         switch (type_info) {
             .struct_type => |st| {
-                writer.print("```maxon\ntype {s}\n```\n\nStruct with {d} fields", .{ name, st.fields.len }) catch return null;
+                // Check if this is a monomorphized generic type (contains '$')
+                if (std.mem.indexOfScalar(u8, name, '$')) |idx| {
+                    const base_type = name[0..idx];
+                    const type_params = name[idx + 1 ..];
+                    writer.print("```maxon\n{s}\n```\n\n{s} type with type parameters {s}", .{ name, base_type, type_params }) catch return null;
+                } else {
+                    writer.print("```maxon\ntype {s}\n```\n\nStruct with {d} fields", .{ name, st.fields.len }) catch return null;
+                }
             },
             .enum_type => |et| {
                 writer.print("```maxon\nenum {s}\n```\n\nEnum with {d} cases", .{ name, et.members.count() }) catch return null;
-            },
-            .array_type => |at| {
-                writer.print("```maxon\n{s}\n```\n\nArray type with element type {s}", .{ name, at.element_type.toMaxonName() }) catch return null;
             },
             .primitive => {
                 writer.print("```maxon\n{s}\n```\n\nPrimitive type", .{name}) catch return null;

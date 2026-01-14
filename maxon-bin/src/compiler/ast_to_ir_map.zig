@@ -132,38 +132,45 @@ pub fn emitMapCleanup(self: *AstToIr, map_ptr: ir.Value, struct_name: []const u8
     }
     const key_type = if (dollar_pos) |pos| key_value_part[0..pos] else key_value_part;
     const value_type = if (dollar_pos) |pos| key_value_part[pos + 1 ..] else "";
-    const has_string_keys = std.mem.eql(u8, key_type, "String");
-    const has_string_values = std.mem.eql(u8, value_type, "String");
 
-    // Get pointer to keys array at offset 0
+    // Check if key/value types have COW semantics (has_managed_buffer)
+    const key_has_managed_buffer = if (self.type_map.get(key_type)) |ti|
+        ti == .struct_type and ti.struct_type.has_managed_buffer
+    else
+        false;
+    const value_has_managed_buffer = if (self.type_map.get(value_type)) |ti|
+        ti == .struct_type and ti.struct_type.has_managed_buffer
+    else
+        false;
+
+    // Get pointer to keys array at offset 0 (Array$K which has __ManagedArray as first field)
     const keys_ptr = map_ptr;
-    // If keys are strings, cleanup occupied slots only (check states array)
-    if (has_string_keys) {
-        try emitMapStringKeysCleanup(self, map_ptr);
+    // If keys have COW semantics, cleanup occupied slots only (check states array)
+    if (key_has_managed_buffer) {
+        try emitMapManagedKeysCleanup(self, map_ptr);
     }
-    // Free the keys buffer (buffer_ptr is at offset 0 of the array struct)
-    const keys_buf_ptr = try self.func().emitLoad(keys_ptr, .ptr);
-    try self.func().emitHeapFree(ir.toRawPtr(keys_buf_ptr), "map keys cleanup");
+    // Cleanup the keys array using refcounted decref
+    try array.emitManagedArrayDecref(self, ir.toManagedArrayPtr(keys_ptr), "m.keys", "map keys cleanup");
 
-    // Get pointer to values array at offset 32
+    // Get pointer to values array at offset 32 (Array$V which has __ManagedArray as first field)
     const values_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
-    // If values are strings, cleanup occupied slots only (check states array)
-    if (has_string_values) {
-        try emitMapStringValuesCleanup(self, map_ptr);
+    // If values have COW semantics, cleanup occupied slots only (check states array)
+    if (value_has_managed_buffer) {
+        try emitMapManagedValuesCleanup(self, map_ptr);
     }
-    // Free the values buffer
-    const values_buf_ptr = try self.func().emitLoad(values_ptr.raw(), .ptr);
-    try self.func().emitHeapFree(ir.toRawPtr(values_buf_ptr), "map values cleanup");
+    // Cleanup the values array using refcounted decref
+    try array.emitManagedArrayDecref(self, ir.toManagedArrayPtr(values_ptr.raw()), "m.values", "map values cleanup");
 
-    // Get pointer to states array at offset 64 and free its buffer
+    // Get pointer to states array at offset 64 (Array$SlotState which has __ManagedArray as first field)
     const states_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.STATES_OFFSET);
-    const states_buf_ptr = try self.func().emitLoad(states_ptr.raw(), .ptr);
-    try self.func().emitHeapFree(ir.toRawPtr(states_buf_ptr), "map states cleanup");
+    // Cleanup the states array using refcounted decref
+    try array.emitManagedArrayDecref(self, ir.toManagedArrayPtr(states_ptr.raw()), "m.states", "map states cleanup");
 }
 
-/// Emit cleanup code for Map string keys, checking the states array for occupied slots.
-/// Only decrefs string buffers for slots where states[i] == 1 (OCCUPIED).
-pub fn emitMapStringKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
+/// Emit cleanup code for Map keys with COW semantics, checking the states array for occupied slots.
+/// Only decrefs buffers for slots where states[i] != 0 (not EMPTY).
+/// Note: Currently uses String.size() since String is the only COW-semantics type.
+fn emitMapManagedKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     // Map layout:
     //   offset 0:  keys array (32 bytes) - buffer_ptr at offset 0
     //   offset 64: states array (32 bytes) - buffer_ptr at offset 64
@@ -339,9 +346,10 @@ pub fn emitMapStringKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     try deferred.restore(self, 0);
 }
 
-/// Emit cleanup code for Map string values, checking the states array for occupied slots.
-/// Only decrefs string buffers for slots where states[i] == 1 (OCCUPIED).
-pub fn emitMapStringValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
+/// Emit cleanup code for Map values with COW semantics, checking the states array for occupied slots.
+/// Only decrefs buffers for slots where states[i] == 1 (OCCUPIED).
+/// Note: Currently uses String.size() since String is the only COW-semantics type.
+fn emitMapManagedValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     // Map layout:
     //   offset 32: values array (32 bytes) - buffer_ptr at offset 0 of Array
     //   offset 64: states array (32 bytes) - buffer_ptr at offset 0 of Array

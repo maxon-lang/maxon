@@ -550,18 +550,19 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
-ALLOC #1: 160 bytes (array grow)
+ALLOC #1: 168 bytes (array grow)
 MOVE: managed
 MOVE: managed
-FREE #1: 160 bytes (array cleanup)
+DECREF: arr -> rc=0
+FREE #1: 168 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 160 bytes
-Freed:     160 bytes
+Allocated: 168 bytes
+Freed:     168 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   0
-Decrefs:   0
+Decrefs:   1
 ```
 
 <!-- test: error.missing-braces -->

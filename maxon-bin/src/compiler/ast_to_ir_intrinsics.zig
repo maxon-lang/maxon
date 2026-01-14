@@ -15,7 +15,9 @@ const String = string.String;
 const Array = array.Array;
 
 // Forward reference to main AstToIr module
-const AstToIr = @import("4-ast_to_ir.zig").AstToIr;
+const ast_to_ir = @import("4-ast_to_ir.zig");
+const AstToIr = ast_to_ir.AstToIr;
+const DeferredBlocks = ast_to_ir.DeferredBlocks;
 
 // ============================================================================
 // Common Helper Functions
@@ -272,6 +274,8 @@ const ElemInfo = struct {
     is_struct: bool,
     is_enum: bool,
     type_name: ?[]const u8,
+    /// True if the element type has COW semantics (has_managed_buffer flag set)
+    has_managed_buffer: bool = false,
 };
 
 /// Direction for array shift operations
@@ -291,6 +295,7 @@ fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ConvertError!E
                     .is_struct = true,
                     .is_enum = false,
                     .type_name = elem_type_name,
+                    .has_managed_buffer = type_info.struct_type.has_managed_buffer,
                 };
             } else if (type_info == .enum_type) {
                 return .{
@@ -309,42 +314,8 @@ fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ConvertError!E
         return error.SemanticError;
     }
 
-    // Fallback: extract from current_type_name (e.g., "Array$String")
-    if (self.current_type_name) |type_name| {
-        if (std.mem.startsWith(u8, type_name, "Array$")) {
-            const elem_name = type_name[6..];
-            if (self.type_map.get(elem_name)) |type_info| {
-                if (type_info == .struct_type) {
-                    return .{
-                        .size = type_info.struct_type.size,
-                        .is_struct = true,
-                        .is_enum = false,
-                        .type_name = elem_name,
-                    };
-                } else if (type_info == .enum_type) {
-                    return .{
-                        .size = type_info.enum_type.arrayElementSize(),
-                        .is_struct = false,
-                        .is_enum = true,
-                        .type_name = elem_name,
-                    };
-                }
-            }
-            // Must be a primitive type
-            if (types.getPrimitiveTypeInfo(elem_name)) |prim_info| {
-                return .{ .size = prim_info.array_element_size, .is_struct = false, .is_enum = false, .type_name = elem_name };
-            }
-            self.reportInternalError("unknown element type in Array type name");
-            return error.SemanticError;
-        }
-        // String type uses byte arrays - element size is 1
-        if (std.mem.eql(u8, type_name, "String")) {
-            return .{ .size = 1, .is_struct = false, .is_enum = false, .type_name = types.BYTE };
-        }
-    }
-
     // Cannot determine element type - this is a compiler error
-    self.reportInternalError("cannot determine array element type - missing generic param or type context");
+    self.reportInternalError("cannot determine array element type - missing generic param");
     return error.SemanticError;
 }
 
@@ -504,7 +475,7 @@ fn intrinsicManagedArrayCapacity(self: *AstToIr, call: ast.CallExpr) ConvertErro
 
 /// __managed_array_create(capacity, elem_size) -> __ManagedArray
 /// Creates a new managed array with the given capacity and element size (length = capacity)
-/// Mode is 0 (no refcounting) for regular arrays
+/// Uses mode=1 (heap-refcounted) with COW semantics - buffer has 8-byte refcount header.
 fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const capacity = try self.convertExpression(call.args[0]);
@@ -513,11 +484,11 @@ fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const managed_ptr = try ManagedArray.alloca(self.func());
 
     const buf_size = try self.func().emitBinaryOp(.mul, capacity.value, elem_size.value, .i64);
-    const buf_ptr = try self.func().emitHeapAlloc(buf_size, "array buffer");
+    const buf_ptr = try array.emitAllocRefcountedBuffer(self, buf_size, "array buffer");
 
-    // Initialize with mode=0 (no refcounting for regular arrays)
-    const zero_i32 = try self.func().emitConstI32(0);
-    try ManagedArray.init(self.func(), managed_ptr, buf_ptr, capacity.value, capacity.value, zero_i32);
+    // Initialize with mode=1 (heap-refcounted with COW semantics)
+    const mode_heap = try self.func().emitConstI32(array.MODE_HEAP);
+    try ManagedArray.init(self.func(), managed_ptr, buf_ptr, capacity.value, capacity.value, mode_heap);
 
     // Return as struct type so memcpy works correctly when returning from functions
     return .{ .value = managed_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
@@ -543,15 +514,14 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
         try self.func().emitStore(elem_ptr.raw(), value.value);
     }
 
-    // When storing a String into an array, we need to incref the buffer header.
-    // The buffer header refcount is shared by all String copies pointing to the same buffer.
-    // Both the source variable and the array slot now reference the buffer, so refcount must be 2.
-    // The source variable may still be cleaned up at scope exit (decref to 1).
-    // When the array is destroyed, it will decref each element (to 0, then free).
-    if (value.ty == .struct_type) {
-        if (std.mem.eql(u8, value.ty.struct_type.name, "String")) {
-            try string.emitStringIncref(self, ir.toStringPtr(value.value), "<array_store>");
-        }
+    // When storing an element with COW semantics (has_managed_buffer) into an array,
+    // we need to incref the buffer header. The buffer header refcount is shared by
+    // all copies pointing to the same buffer. Both the source variable and the array
+    // slot now reference the buffer, so refcount must be incremented.
+    // The source variable may still be cleaned up at scope exit (decref).
+    // When the array is destroyed, it will decref each element.
+    if (value.ty == .struct_type and value.ty.struct_type.has_managed_buffer) {
+        try string.emitStringIncref(self, ir.toStringPtr(value.value), "<array_store>");
     }
 
     return .{ .value = 0, .ty = .{ .primitive = .void } };
@@ -567,6 +537,8 @@ fn intrinsicManagedArraySetLength(self: *AstToIr, call: ast.CallExpr) ConvertErr
 }
 
 /// __managed_array_grow(managed, new_capacity) -> void
+/// Grows the array buffer, accounting for the 8-byte refcount header.
+/// If buffer is null (empty array), allocates new buffer; otherwise reallocates.
 fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);
@@ -574,13 +546,57 @@ fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
 
     const elem_info = try getElementInfo(self);
     const elem_size_val = try self.func().emitConstI64(elem_info.size);
-    const new_size = try self.func().emitBinaryOp(.mul, new_capacity.value, elem_size_val, .i64);
+    const data_size = try self.func().emitBinaryOp(.mul, new_capacity.value, elem_size_val, .i64);
 
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const new_buf = try self.func().emitHeapRealloc(ir.toRawPtr(buf_ptr), new_size, "array grow");
+    const zero = try self.func().emitConstI64(0);
+    const is_null = try self.func().emitBinaryOp(.icmp_eq, buf_ptr, zero, .i64);
 
-    try self.func().emitStore(managed.value, new_buf.raw());
+    // Create blocks for branch
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const alloc_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("grow_alloc");
+    const realloc_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("grow_realloc");
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("grow_end");
+
+    // Branch: if null, allocate new; else realloc
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_null }, .{ .block_ref = alloc_block_idx }, .{ .block_ref = realloc_block_idx } },
+    });
+
+    // Defer blocks: after this, we're back at entry block
+    // Order after defer: deferred[2]=grow_alloc, deferred[1]=grow_realloc, deferred[0]=grow_end
+    var deferred = try DeferredBlocks.init(self.allocator, 3);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 3);
+
+    // Alloc block: allocate new refcounted buffer
+    try deferred.restore(self, 2); // Restore grow_alloc block to emit to it
+    const new_buf_alloc = try array.emitAllocRefcountedBuffer(self, data_size, "array grow");
+    try self.func().emitStore(managed.value, new_buf_alloc.raw());
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(managed.value), 16, new_capacity.value);
+    // Set mode to heap (1) since we're now using a refcounted buffer
+    const mode_heap = try self.func().emitConstI32(array.MODE_HEAP);
+    try struct_helpers.storeI32Field(self.func(), ir.toStructPtr(managed.value), 24, mode_heap);
+    try self.func().emitBr(end_block_idx);
+
+    // Realloc block
+    try deferred.restore(self, 1); // Restore grow_realloc block
+    const eight = try self.func().emitConstI64(8);
+    const total_size = try self.func().emitBinaryOp(.add, data_size, eight, .i64);
+    const buf_ptr2 = try self.func().emitLoad(managed.value, .ptr);
+    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr2, eight, .ptr);
+    const new_header = try self.func().emitHeapRealloc(ir.toRawPtr(header_ptr), total_size, "array grow");
+    const new_data_ptr = try self.func().emitBinaryOp(.add, new_header.raw(), eight, .ptr);
+    try self.func().emitStore(managed.value, new_data_ptr);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(managed.value), 16, new_capacity.value);
+    try self.func().emitBr(end_block_idx);
+
+    // End block
+    try deferred.restore(self, 0); // Restore grow_end block
 
     return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
@@ -656,7 +672,7 @@ fn intrinsicElementSize(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
 
 /// __map_get_init_key(managed, index) -> Key
 /// Like __managed_array_get_unchecked but uses "Key" generic param instead of "Element"
-/// For String keys: copies the struct and increfs the buffer so the caller owns the String
+/// For keys with COW semantics: copies the struct and increfs the buffer so the caller owns it
 fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);
@@ -669,15 +685,15 @@ fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
     if (elem_info.is_struct) {
         const type_name = elem_info.type_name.?;
 
-        // String keys need special handling: copy struct and incref so caller owns it
-        if (std.mem.eql(u8, type_name, "String")) {
-            // Allocate a new String struct on the stack
-            const new_string_ptr = try String.alloca(self.func());
-            // Copy the String struct
-            try self.func().emitMemcpy(new_string_ptr, elem_ptr.asRawPtr(), String.size());
+        // Keys with COW semantics need special handling: copy struct and incref so caller owns it
+        if (elem_info.has_managed_buffer) {
+            // Allocate a new struct on the stack
+            const new_ptr = try self.func().emitAllocaSized(elem_info.size);
+            // Copy the struct
+            try self.func().emitMemcpy(new_ptr, elem_ptr.asRawPtr(), @intCast(elem_info.size));
             // Incref the buffer header so caller has their own reference
-            try string.emitStringIncref(self, ir.toStringPtr(new_string_ptr.val), "<array index String>");
-            return .{ .value = new_string_ptr.val, .ty = try self.typeNameToValueType(type_name) };
+            try string.emitStringIncref(self, ir.toStringPtr(new_ptr.raw()), "<map_key>");
+            return .{ .value = new_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
         }
 
         return .{ .value = elem_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
@@ -692,7 +708,7 @@ fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
 
 /// __map_get_init_value(managed, index) -> Value
 /// Like __managed_array_get_unchecked but uses "Value" generic param instead of "Element"
-/// For String values: copies the struct and increfs the buffer so the caller owns the String
+/// For values with COW semantics: copies the struct and increfs the buffer so the caller owns it
 fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);
@@ -706,15 +722,15 @@ fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
     if (elem_info.is_struct) {
         const type_name = elem_info.type_name.?;
 
-        // String values need special handling: copy struct and incref so caller owns it
-        if (std.mem.eql(u8, type_name, "String")) {
-            // Allocate a new String struct on the stack
-            const new_string_ptr = try String.alloca(self.func());
-            // Copy the String struct
-            try self.func().emitMemcpy(new_string_ptr, elem_ptr.asRawPtr(), String.size());
+        // Values with COW semantics need special handling: copy struct and incref so caller owns it
+        if (elem_info.has_managed_buffer) {
+            // Allocate a new struct on the stack
+            const new_ptr = try self.func().emitAllocaSized(elem_info.size);
+            // Copy the struct
+            try self.func().emitMemcpy(new_ptr, elem_ptr.asRawPtr(), @intCast(elem_info.size));
             // Incref the buffer header so caller has their own reference
-            try string.emitStringIncref(self, ir.toStringPtr(new_string_ptr.val), "<map_init_value>");
-            return .{ .value = new_string_ptr.val, .ty = try self.typeNameToValueType(type_name) };
+            try string.emitStringIncref(self, ir.toStringPtr(new_ptr.raw()), "<map_value>");
+            return .{ .value = new_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
         }
 
         return .{ .value = elem_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };

@@ -197,43 +197,6 @@ pub const TypedValue = struct {
     }
 };
 
-/// Array storage kind
-pub const ArrayStorage = enum {
-    stack,
-    heap,
-};
-
-/// Array type info
-pub const ArrayInfo = struct {
-    name: []const u8 = "", // type name like "Array$int", "Array$Point"
-    element_type: ir.Type,
-    size: ?usize, // null for dynamic size
-    storage: ArrayStorage,
-    element_struct_type: ?[]const u8 = null, // struct name if elements are structs
-    element_primitive_type: ?Primitive = null, // primitive type if elements are primitives (e.g., .byte)
-
-    /// Get the element size in bytes for array indexing.
-    /// For structs, looks up the size from type_map.
-    /// For primitives, uses the correct array element size (e.g., byte=1, int=8).
-    /// Returns null if element type cannot be determined - indicates a compiler bug.
-    pub fn getElementSize(self: ArrayInfo, type_map: anytype) ?i32 {
-        // First check for struct types
-        if (self.element_struct_type) |struct_name| {
-            if (type_map.get(struct_name)) |type_info| {
-                if (type_info == .struct_type) {
-                    return type_info.struct_type.size;
-                }
-            }
-        }
-        // Then check for primitive types
-        if (self.element_primitive_type) |prim| {
-            return prim.arrayElementSize();
-        }
-        // Cannot determine element size - this is a compiler error
-        return null;
-    }
-};
-
 /// Function type info - for first-class functions
 pub const FunctionTypeInfo = struct {
     param_types: []const ValueType, // Parameter types
@@ -279,7 +242,6 @@ pub fn irTypeToName(ir_ty: ir.Type) []const u8 {
 pub const ValueType = union(enum) {
     primitive: Primitive,
     struct_type: *const StructTypeInfo,
-    array_type: *const ArrayInfo,
     enum_type: *const EnumTypeInfo,
     error_union_type: ErrorUnionInfo, // T or E where E conforms to Error
     function_type: FunctionTypeInfo, // First-class function types
@@ -288,7 +250,7 @@ pub const ValueType = union(enum) {
         return switch (self) {
             .primitive => |p| p.toIrType(),
             .enum_type => .i64,
-            .struct_type, .array_type => .ptr,
+            .struct_type => .ptr,
             .error_union_type => .ptr, // Error unions are pointers to discriminated union structures
             .function_type => .ptr, // Function pointers are always pointers
         };
@@ -296,6 +258,14 @@ pub const ValueType = union(enum) {
 
     pub fn isStruct(self: ValueType) bool {
         return self == .struct_type;
+    }
+
+    /// Returns true if this is a monomorphized generic type (e.g., Array$Int, Map$K$V)
+    pub fn isGenericInstance(self: ValueType) bool {
+        return switch (self) {
+            .struct_type => |info| isMonomorphizedType(info.name),
+            else => false,
+        };
     }
 
     /// Returns true if this is a floating-point primitive type
@@ -315,29 +285,19 @@ pub const ValueType = union(enum) {
     }
 
     /// Get the canonical type name for this ValueType
-    /// Returns the primitive name ("int", "float", etc.) or struct/enum/array type name
+    /// Returns the primitive name ("int", "float", etc.) or struct/enum type name
+    /// Arrays return their struct name (e.g., "Array$int")
     pub fn getTypeName(self: ValueType) ?[]const u8 {
         return switch (self) {
             .primitive => |p| p.toMaxonName(),
-            .struct_type => |info| info.name,
+            .struct_type => |info| info.name, // includes arrays (Array$T)
             .enum_type => |info| info.name,
-            .array_type => |info| info.name,
             .error_union_type, .function_type => null,
         };
     }
 
     pub fn isFunctionType(self: ValueType) bool {
         return self == .function_type;
-    }
-
-    /// Returns true if this type requires slot indirection (ptr -> pointer -> data).
-    /// Heap arrays and function types use slots; structs and primitives don't.
-    pub fn usesSlot(self: ValueType) bool {
-        return switch (self) {
-            .array_type => |arr| arr.storage == .heap,
-            .function_type => true,
-            .primitive, .struct_type, .enum_type, .error_union_type => false,
-        };
     }
 };
 
@@ -364,7 +324,7 @@ pub fn freeValueTypeAllocations(allocator: std.mem.Allocator, vt: ValueType) voi
             // The monomorphized type names are freed when struct_type values are processed.
         },
         // Pointer variants point into type_map, no allocations to free here
-        .primitive, .struct_type, .enum_type, .array_type => {},
+        .primitive, .struct_type, .enum_type => {},
     }
 }
 
@@ -403,6 +363,32 @@ pub const StructTypeInfo = struct {
     decl_column: u32 = 0,
     source_file: ?[]const u8 = null,
     is_export: bool = true, // false for private types
+    /// True if this type or any of its fields contain heap allocations that need cleanup.
+    /// Computed when the struct is registered based on field types.
+    needs_cleanup: bool = false,
+    /// For array/collection types: the element type name that may need cleanup.
+    /// Used during cleanup to properly decref elements in Array$T, Map$K$V, etc.
+    element_type_name: ?[]const u8 = null,
+
+    // ========================================================================
+    // Cleanup strategy flags - set during type registration
+    // ========================================================================
+
+    /// True if first field is __ManagedArray. Cleanup uses mode-based COW decref.
+    /// Set for: String, Array$T, and any wrapper with __ManagedArray at offset 0.
+    has_managed_buffer: bool = false,
+
+    /// True if this is the cstring type (data/length/managed pattern).
+    /// Cleanup conditionally frees based on managed pointer being null.
+    is_cstring: bool = false,
+
+    /// True if this is a compiler-internal type (__ManagedArray, etc.)
+    /// that should not be cleaned up at top-level scope.
+    is_internal_type: bool = false,
+
+    /// True if element type has COW semantics (has_managed_buffer = true).
+    /// Set for collections like Array$String, Array$Character, etc.
+    element_has_managed_buffer: bool = false,
 };
 
 /// Associated value info for enum cases
@@ -494,17 +480,17 @@ pub const EnumTypeInfo = struct {
     }
 };
 
-/// Type info - primitives, structs, enums, or arrays
+/// Type info - primitives, structs, or enums
+/// Arrays are represented as struct types with "Array$" prefix
 pub const TypeInfo = union(enum) {
     primitive: ir.Type,
     struct_type: StructTypeInfo,
     enum_type: EnumTypeInfo,
-    array_type: ArrayInfo,
 
     pub fn irType(self: TypeInfo) ir.Type {
         return switch (self) {
             .primitive => |t| t,
-            .struct_type, .array_type => .ptr,
+            .struct_type => .ptr, // includes arrays (Array$T is a struct type)
             .enum_type => .i64,
         };
     }
@@ -517,8 +503,11 @@ pub const TypeInfo = union(enum) {
         return self == .enum_type;
     }
 
-    pub fn isArray(self: TypeInfo) bool {
-        return self == .array_type;
+    pub fn isGenericInstance(self: TypeInfo) bool {
+        return switch (self) {
+            .struct_type => |s| isMonomorphizedType(s.name),
+            else => false,
+        };
     }
 };
 
@@ -594,10 +583,10 @@ pub const ParamType = struct {
 
 /// External value type representation - uses strings instead of pointers
 /// Used for cross-module type info before type_map is populated
+/// Arrays use struct_type with "Array$" prefix (e.g., "Array$int")
 pub const ExternalValueType = union(enum) {
     primitive: Primitive,
-    struct_type: []const u8, // Type name (resolved to pointer during registration)
-    array_type: []const u8, // Type name
+    struct_type: []const u8, // Type name (resolved to pointer during registration), includes arrays
     enum_type: []const u8, // Type name
     error_union_type: ErrorUnionInfo,
     function_type_marker, // Placeholder for function types (represented as ptr)
@@ -637,9 +626,9 @@ pub const VarInfo = struct {
     /// Storage indirection: true = ptr holds a pointer to the data (needs load before access)
     ///                      false = ptr directly holds the data (access directly)
     /// Examples:
-    ///   - Stack-allocated struct via alloca.sized: uses_slot = false (data is at ptr)
-    ///   - Heap-allocated array via alloca ptr: uses_slot = true (ptr -> pointer -> data)
-    uses_slot: bool,
+    ///   - Stack-allocated struct via alloca.sized: is_heap_allocated = false (data is at ptr)
+    ///   - Heap-allocated array via alloca ptr: is_heap_allocated = true (ptr -> pointer -> data)
+    is_heap_allocated: bool,
     /// If true, this is a function parameter (caller owns memory, don't free)
     is_parameter: bool,
     /// For slices: name of parent variable this was borrowed from
@@ -658,7 +647,7 @@ pub const VarInfo = struct {
             .state = .owned,
             .moved_to = null,
             .moved_line = 0,
-            .uses_slot = false,
+            .is_heap_allocated = false,
             .is_parameter = false,
         };
     }
@@ -674,14 +663,14 @@ pub const VarInfo = struct {
             .state = .owned,
             .moved_to = null,
             .moved_line = 0,
-            .uses_slot = true,
+            .is_heap_allocated = true,
             .is_parameter = false,
         };
     }
 
-    /// Legacy init function - prefer initStackAllocated or initHeapAllocated for clarity.
-    /// uses_slot: false = stack-allocated (data at ptr), true = heap-allocated (ptr -> pointer -> data)
-    pub fn init(ptr: ?ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
+    /// Create a VarInfo with explicit heap allocation flag.
+    /// is_heap_allocated: false = stack-allocated (data at ptr), true = heap-allocated (ptr -> pointer -> data)
+    pub fn init(ptr: ?ir.Value, ty: ValueType, is_mutable: bool, is_heap_allocated: bool) VarInfo {
         return .{
             .ptr = ptr,
             .ty = ty,
@@ -690,14 +679,14 @@ pub const VarInfo = struct {
             .state = .owned,
             .moved_to = null,
             .moved_line = 0,
-            .uses_slot = uses_slot,
+            .is_heap_allocated = is_heap_allocated,
             .is_parameter = false,
         };
     }
 
     /// Create a VarInfo for a function parameter.
-    /// uses_slot: false = passed by value on stack, true = passed by pointer
-    pub fn initParam(ptr: ?ir.Value, ty: ValueType, is_mutable: bool, uses_slot: bool) VarInfo {
+    /// is_heap_allocated: false = passed by value on stack, true = passed by pointer
+    pub fn initParam(ptr: ?ir.Value, ty: ValueType, is_mutable: bool, is_heap_allocated: bool) VarInfo {
         return .{
             .ptr = ptr,
             .ty = ty,
@@ -706,27 +695,12 @@ pub const VarInfo = struct {
             .state = .owned,
             .moved_to = null,
             .moved_line = 0,
-            .uses_slot = uses_slot,
+            .is_heap_allocated = is_heap_allocated,
             .is_parameter = true,
         };
     }
 
     /// Create a VarInfo with uses_slot automatically determined from the type.
-    /// Heap arrays, error unions, and function types use a slot; structs and primitives don't.
-    pub fn initFromType(ptr: ?ir.Value, ty: ValueType, is_mutable: bool) VarInfo {
-        return .{
-            .ptr = ptr,
-            .ty = ty,
-            .used = false,
-            .is_mutable = is_mutable,
-            .state = .owned,
-            .moved_to = null,
-            .moved_line = 0,
-            .uses_slot = ty.usesSlot(),
-            .is_parameter = false,
-        };
-    }
-
     pub fn markMoved(self: *VarInfo, func_name: []const u8, line: usize) void {
         self.state = .moved;
         self.moved_to = func_name;
@@ -856,12 +830,6 @@ pub const SemanticInfo = struct {
                         .none, .int => {},
                     }
                 },
-                .array_type => |a| {
-                    // Free the allocated array type name if non-empty
-                    if (a.name.len > 0) {
-                        self.allocator.free(a.name);
-                    }
-                },
                 .primitive => {},
             }
         }
@@ -964,3 +932,83 @@ pub const SemanticInfo = struct {
         return self.types.get(type_name);
     }
 };
+
+// ============================================================================
+// Array Type Helpers
+// ============================================================================
+// These functions extract element info from array type names like "Array$byte"
+// Used to treat arrays as regular struct types (like Map and Set)
+
+/// Parse the base type name from a monomorphized generic type
+/// e.g., "Array$Int" -> "Array", "Map$String$Int" -> "Map"
+/// Returns null if not a monomorphized type
+pub fn parseBaseTypeName(type_name: []const u8) ?[]const u8 {
+    if (std.mem.indexOfScalar(u8, type_name, '$')) |idx| {
+        return type_name[0..idx];
+    }
+    return null;
+}
+
+/// Parse the first type parameter from a monomorphized generic type
+/// e.g., "Array$Int" -> "Int", "Map$String$Int" -> "String", "Set$Foo" -> "Foo"
+/// Returns null if not a monomorphized type
+pub fn parseFirstTypeParameter(type_name: []const u8) ?[]const u8 {
+    const start = (std.mem.indexOfScalar(u8, type_name, '$') orelse return null) + 1;
+    // Find the end (either next '$' or end of string)
+    const rest = type_name[start..];
+    if (std.mem.indexOfScalar(u8, rest, '$')) |end| {
+        return rest[0..end];
+    }
+    return rest;
+}
+
+/// Check if a type name represents a monomorphized generic type
+pub fn isMonomorphizedType(type_name: []const u8) bool {
+    return std.mem.indexOfScalar(u8, type_name, '$') != null;
+}
+
+/// Get element size for a generic collection type name
+/// Returns element size in bytes: 1 for byte, 8 for int/float/ptr/structs
+pub fn getArrayElementSize(type_name: []const u8, type_map: anytype) ?i32 {
+    const elem_name = parseFirstTypeParameter(type_name) orelse return null;
+
+    // Check for primitive types first
+    if (Primitive.fromString(elem_name)) |prim| {
+        return prim.arrayElementSize();
+    }
+
+    // Must be a struct - look up its size
+    if (type_map.get(elem_name)) |type_info| {
+        if (type_info == .struct_type) {
+            return type_info.struct_type.size;
+        }
+    }
+    return null;
+}
+
+/// Element info extracted from array type name
+pub const ArrayElementInfo = struct {
+    ir_type: ir.Type,
+    primitive_type: ?Primitive,
+    struct_name: ?[]const u8,
+};
+
+/// Get element info for a generic collection type name
+pub fn getArrayElementInfo(type_name: []const u8) ?ArrayElementInfo {
+    const elem_name = parseFirstTypeParameter(type_name) orelse return null;
+
+    if (Primitive.fromString(elem_name)) |prim| {
+        return .{
+            .ir_type = prim.toIrType(),
+            .primitive_type = prim,
+            .struct_name = null,
+        };
+    }
+
+    // Struct type
+    return .{
+        .ir_type = .ptr,
+        .primitive_type = null,
+        .struct_name = elem_name,
+    };
+}

@@ -10,47 +10,85 @@ function main() -> i64 {
 entry:
     %tmp_const = const.i64 i64 1
     %tmp_const.1 = const.i64 i64 5
-    %tmp_const.2 = const.i64 i64 40
-    %tmp_heap = heap.alloc ptr %tmp_const.2 tag="set buffer"
-    %tmp_const.3 = const.i64 i64 0
-    %tmp_elemptr = getelemptr ptr %tmp_heap %tmp_const.3 elemsize=8
+    %tmp_add = const.i64 i64 48
+    %tmp_heap = heap.alloc ptr %tmp_add tag="array buffer"
+    %tmp_const.4 = const.i64 i64 1
+    store %tmp_heap %tmp_const.4
+    %tmp_const.5 = const.i64 i64 8
+    %tmp_add.1 = add ptr %tmp_heap %tmp_const.5
+    %tmp_const.6 = const.i64 i64 0
+    %tmp_elemptr = getelemptr ptr %tmp_add.1 %tmp_const.6 elemsize=8
     store %tmp_elemptr %tmp_const
-    %tmp_const.4 = const.i64 i64 2
-    %tmp_const.5 = const.i64 i64 1
-    %tmp_elemptr.1 = getelemptr ptr %tmp_heap %tmp_const.5 elemsize=8
-    store %tmp_elemptr.1 %tmp_const.4
-    %tmp_const.6 = const.i64 i64 3
     %tmp_const.7 = const.i64 i64 2
-    %tmp_elemptr.2 = getelemptr ptr %tmp_heap %tmp_const.7 elemsize=8
-    store %tmp_elemptr.2 %tmp_const.6
-    %tmp_const.8 = const.i64 i64 4
+    %tmp_const.8 = const.i64 i64 1
+    %tmp_elemptr.1 = getelemptr ptr %tmp_add.1 %tmp_const.8 elemsize=8
+    store %tmp_elemptr.1 %tmp_const.7
     %tmp_const.9 = const.i64 i64 3
-    %tmp_elemptr.3 = getelemptr ptr %tmp_heap %tmp_const.9 elemsize=8
-    store %tmp_elemptr.3 %tmp_const.8
-    %tmp_const.10 = const.i64 i64 5
+    %tmp_const.10 = const.i64 i64 2
+    %tmp_elemptr.2 = getelemptr ptr %tmp_add.1 %tmp_const.10 elemsize=8
+    store %tmp_elemptr.2 %tmp_const.9
     %tmp_const.11 = const.i64 i64 4
-    %tmp_elemptr.4 = getelemptr ptr %tmp_heap %tmp_const.11 elemsize=8
-    store %tmp_elemptr.4 %tmp_const.10
+    %tmp_const.12 = const.i64 i64 3
+    %tmp_elemptr.3 = getelemptr ptr %tmp_add.1 %tmp_const.12 elemsize=8
+    store %tmp_elemptr.3 %tmp_const.11
+    %tmp_const.13 = const.i64 i64 5
+    %tmp_const.14 = const.i64 i64 4
+    %tmp_elemptr.4 = getelemptr ptr %tmp_add.1 %tmp_const.14 elemsize=8
+    store %tmp_elemptr.4 %tmp_const.13
     %tmp_alloca = alloca.sized ptr 32
-    %tmp_const.12 = const.i32 i32 0
-    store %tmp_alloca %tmp_heap
+    %tmp_const.15 = const.i32 i32 1
+    store %tmp_alloca %tmp_add.1
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
     store %tmp_fieldptr %tmp_const.1
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 16
     store %tmp_fieldptr.1 %tmp_const.1
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca 24
-    store.i32 %tmp_fieldptr.2 %tmp_const.12
-    %tmp_const.13 = const.i32 i32 0
+    store.i32 %tmp_fieldptr.2 %tmp_const.15
+    %tmp_const.16 = const.i32 i32 0
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca 28
-    store.i32 %tmp_fieldptr.3 %tmp_const.13
-    %arr = alloca ptr
-    store %arr %tmp_alloca
-    %tmp_load = load ptr %arr
-    %tmp_call = call i64 @Array$int$count(%tmp_load)
+    store.i32 %tmp_fieldptr.3 %tmp_const.16
+    %arr = alloca.sized ptr 40
+    %tmp_call = call ptr @Array$int$init(%arr, %tmp_alloca)
+    %tmp_call.1 = call i64 @Array$int$count(%arr)
+    %tmp_fieldptr.4 = getfieldptr ptr %arr 24
+    %tmp_load = load i32 %tmp_fieldptr.4
+    %tmp_sext = sext.i32.i64 i64 %tmp_load
+    %tmp_const.17 = const.i64 i64 3
+    %tmp_band = band i64 %tmp_sext %tmp_const.17
+    %tmp_const.18 = const.i64 i64 1
+    %tmp_icmp = icmp.eq i64 %tmp_band %tmp_const.18
+    br.cond %tmp_icmp @block1 @block3
+arr_decref:
     %tmp_load.1 = load ptr %arr
-    %tmp_load.2 = load ptr %tmp_load.1
-    heap.free %tmp_load.2 tag="array cleanup"
-    ret %tmp_call
+    %tmp_const.19 = const.i64 i64 8
+    %tmp_sub = sub ptr %tmp_load.1 %tmp_const.19
+    %tmp_load.2 = load i64 %tmp_sub
+    %tmp_const.20 = const.i64 i64 1
+    %tmp_sub.1 = sub i64 %tmp_load.2 %tmp_const.20
+    store %tmp_sub %tmp_sub.1
+    %tmp_const.21 = const.i64 i64 0
+    %tmp_icmp.1 = icmp.eq i64 %tmp_sub.1 %tmp_const.21
+    br.cond %tmp_icmp.1 @block2 @block3
+arr_decref_free:
+    %tmp_load.3 = load ptr %arr
+    %tmp_sub.2 = sub ptr %tmp_load.3 %tmp_const.19
+    heap.free %tmp_sub.2 tag="array cleanup"
+    br @block3
+arr_decref_end:
+    ret %tmp_call.1
+}
+
+function Array$int$init() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %managed = param ptr 1
+    memset %tmp_param 0 40
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    memcpy %tmp_fieldptr %managed 32
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 32
+    %tmp_const = const.i64 i64 0
+    store %tmp_fieldptr.1 %tmp_const
+    ret %tmp_param
 }
 
 function Array$int$count() -> i64 {

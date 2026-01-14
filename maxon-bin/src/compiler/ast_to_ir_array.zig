@@ -12,6 +12,16 @@ const string = @import("ast_to_ir_string.zig");
 const cleanup = @import("ast_to_ir_cleanup.zig");
 
 const AstToIr = ast_to_ir.AstToIr;
+
+// ============================================================================
+// Mode Constants for ManagedArray
+// ============================================================================
+/// Mode values for __ManagedArray flags (bits 0-1):
+pub const MODE_SSO: i32 = 0; // Small storage optimization (future) - inline storage in struct
+pub const MODE_HEAP: i32 = 1; // Refcounted heap allocation, decref at buffer-8
+pub const MODE_SLICE: i32 = 2; // Borrowed view, do not free
+pub const MODE_STATIC: i32 = 3; // Read-only data section, never free
+pub const MODE_MASK: i32 = 0x3; // Mask for mode bits (2 bits)
 const BranchBuilder = ast_to_ir.BranchBuilder;
 const TypedValue = types.TypedValue;
 const ValueType = types.ValueType;
@@ -127,6 +137,13 @@ pub const ManagedArray = struct {
         return func.emitBinaryOp(.icmp_eq, masked, one, .i64);
     }
 
+    /// Load the mode value (flags & 3)
+    pub fn loadMode(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+        const flags = try loadFlags(func, ptr);
+        const three = try func.emitConstI32(3);
+        return func.emitBinaryOp(.band, flags, three, .i32);
+    }
+
     /// Initialize a ManagedArray with all fields
     pub fn init(func: *ir.Function, ptr: ir.ManagedArrayPtr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value, flags: ir.Value) !void {
         const struct_ptr = ptr.asStructPtr();
@@ -240,12 +257,20 @@ pub fn initManagedArray(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr, buffer:
 }
 
 /// Allocate a __ManagedArray on the stack and initialize with buffer, length, and capacity.
-/// Uses mode=0 (no refcounting) for regular arrays.
+/// Uses mode=1 (heap) for regular arrays that own their buffer.
 pub fn emitManagedArray(self: *AstToIr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !ir.ManagedArrayPtr {
     const ptr = try ManagedArray.alloca(self.func());
-    const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
-    try ManagedArray.init(self.func(), ptr, buffer, len, capacity, zero_flags);
+    const heap_flags = try self.func().emitConstI32(MODE_HEAP); // mode=1 (heap, owns buffer)
+    try ManagedArray.init(self.func(), ptr, buffer, len, capacity, heap_flags);
     return ptr;
+}
+
+/// Allocate a refcounted buffer and create a __ManagedArray pointing to it.
+/// The buffer includes an 8-byte refcount header at (buffer - 8).
+/// Use this for arrays that need COW semantics with shared ownership.
+pub fn emitRefcountedManagedArray(self: *AstToIr, data_size: ir.Value, len: ir.Value, capacity: ir.Value, tag: []const u8) !ir.ManagedArrayPtr {
+    const buffer = try emitAllocRefcountedBuffer(self, data_size, tag);
+    return emitManagedArray(self, buffer, len, capacity);
 }
 
 /// Size of refcounted buffer header (refcount as i64)
@@ -275,6 +300,130 @@ pub fn emitAllocRefcountedBuffer(self: *AstToIr, data_size: ir.Value, tag: []con
     const eight = try func.emitConstI64(8);
     const data_ptr = try func.emitBinaryOp(.add, buffer_with_header.raw(), eight, .ptr);
     return ir.toRawPtr(data_ptr);
+}
+
+/// Emit incref for a ManagedArray.
+/// The ptr should point to a __ManagedArray or a struct with __ManagedArray at offset 0.
+/// tag is used for memory tracking (variable name or description).
+///
+/// Refcount is stored in the buffer header at (buffer_ptr - 8).
+/// This is shared by all ManagedArray copies that reference the same buffer.
+pub fn emitManagedArrayIncref(self: *AstToIr, ptr: ir.ManagedArrayPtr, tag: []const u8) !void {
+    const is_heap = try ManagedArray.isHeapMode(self.func(), ptr);
+
+    // Create blocks for conditional incref
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("arr_incref");
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("arr_incref_end");
+
+    // Defer end block
+    var deferred = try ast_to_ir.DeferredBlocks.init(self.allocator, 1);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 1);
+
+    // Emit conditional branch from entry block
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = incref_block_idx }, .{ .block_ref = end_block_idx } },
+    });
+
+    // In incref block: increment refcount in buffer header (at buffer_ptr - 8)
+    const buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
+    const eight = try self.func().emitConstI64(8);
+    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
+    const old_ref = try self.func().emitLoad(header_ptr, .i64);
+    const one = try self.func().emitConstI64(1);
+    const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i64);
+    try self.func().emitStore(header_ptr, new_ref);
+
+    // Emit tracking call for incref
+    if (self.track_memory) {
+        const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+        try self.func().emitTrackIncref(tag, new_ref_i32);
+    }
+
+    // Branch to end
+    try self.func().emitBr(end_block_idx);
+
+    // Restore end block
+    try deferred.restore(self, 0);
+}
+
+/// Emit decref for a ManagedArray with conditional free when refcount reaches 0.
+/// The ptr should point to a __ManagedArray or a struct with __ManagedArray at offset 0.
+/// tag is used for memory tracking (variable name or description).
+///
+/// Refcount is stored in the buffer header at (buffer_ptr - 8).
+/// When refcount reaches 0, we free (buffer_ptr - 8) to include the header.
+/// Decref a managed array buffer (COW semantics).
+/// If refcount reaches 0, frees the buffer.
+/// `tag` is used for memory tracking (variable name).
+/// `cleanup_tag` is used for heap free description (e.g., "string cleanup", "array cleanup").
+pub fn emitManagedArrayDecref(self: *AstToIr, ptr: ir.ManagedArrayPtr, tag: []const u8, cleanup_tag: []const u8) !void {
+    const is_heap = try ManagedArray.isHeapMode(self.func(), ptr);
+
+    // Create blocks for conditional decref
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("arr_decref");
+    const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("arr_decref_free");
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("arr_decref_end");
+
+    // Defer end and free blocks
+    var deferred = try ast_to_ir.DeferredBlocks.init(self.allocator, 2);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 2);
+
+    // Emit conditional branch from entry block to decref or end
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = end_block_idx } },
+    });
+
+    // In decref block: load buffer pointer, compute header address, decrement refcount
+    const buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
+    const eight = try self.func().emitConstI64(8);
+    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
+
+    // Decrement the i64 refcount in the header
+    const old_ref = try self.func().emitLoad(header_ptr, .i64);
+    const one = try self.func().emitConstI64(1);
+    const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i64);
+    try self.func().emitStore(header_ptr, new_ref);
+
+    // Emit tracking call for decref
+    if (self.track_memory) {
+        const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+        try self.func().emitTrackDecref(tag, new_ref_i32);
+    }
+
+    // Check if refcount is now zero
+    const zero = try self.func().emitConstI64(0);
+    const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i64);
+
+    // Restore free block
+    try deferred.restore(self, 1);
+
+    // Emit branch from decref block to free or end
+    try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_zero }, .{ .block_ref = free_block_idx }, .{ .block_ref = end_block_idx } },
+    });
+
+    // In free block: free the buffer WITH header (header_ptr, not buf_ptr)
+    const buf_ptr2 = try self.func().emitLoad(ptr.raw(), .ptr);
+    const header_ptr2 = try self.func().emitBinaryOp(.sub, buf_ptr2, eight, .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(header_ptr2), cleanup_tag);
+
+    // Branch to end
+    try self.func().emitBr(end_block_idx);
+
+    // Restore end block
+    try deferred.restore(self, 0);
 }
 
 /// Index into a __ManagedArray: managed[i]
@@ -311,17 +460,19 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
     };
 
     // Determine element size and whether it's a struct (with monomorphization fallback)
-    const ElemInfo = struct { size: i32, is_struct: bool, name: ?[]const u8 };
+    const ElemInfo = struct { size: i32, is_struct: bool, name: ?[]const u8, has_managed_buffer: bool = false };
     const elem_info: ElemInfo = if (elem_type_name) |tn| blk: {
         // First try direct lookup
         if (self.type_map.get(tn)) |type_info| {
             if (type_info == .struct_type) {
-                break :blk ElemInfo{ .size = type_info.struct_type.size, .is_struct = true, .name = tn };
+                break :blk ElemInfo{ .size = type_info.struct_type.size, .is_struct = true, .name = tn, .has_managed_buffer = type_info.struct_type.has_managed_buffer };
             }
         }
         // Try with monomorphization for generic types like Array$String
         if (self.getStructSizeWithMonomorphization(tn)) |size| {
-            break :blk ElemInfo{ .size = size, .is_struct = true, .name = tn };
+            // After monomorphization, look up has_managed_buffer
+            const hmb = if (self.type_map.get(tn)) |ti| ti == .struct_type and ti.struct_type.has_managed_buffer else false;
+            break :blk ElemInfo{ .size = size, .is_struct = true, .name = tn, .has_managed_buffer = hmb };
         }
         // Must be a primitive type - get its actual size
         if (types.getPrimitiveTypeInfo(tn)) |prim_info| {
@@ -386,12 +537,12 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
     // Switch to merge block
     try branch.switchToMerge(true);
 
-    // For String elements, we need to increment the refcount since we're copying
-    // out of the array. The array still owns its copy, and the caller will own
-    // this copy.
+    // For elements with COW semantics (has_managed_buffer), we need to increment the
+    // refcount since we're copying out of the array. The array still owns its copy,
+    // and the caller will own this copy.
     // Note: We do this AFTER the merge block so we can safely create branch blocks
     // for the conditional incref without interfering with the BranchBuilder.
-    if (elem_info.is_struct and elem_info.name != null and std.mem.eql(u8, elem_info.name.?, "String")) {
+    if (elem_info.has_managed_buffer) {
         // Only incref if the error union has a success value (tag == 0)
         const tag = try self.func().emitLoad(eu_ptr.raw(), .i64);
         const zero_const = try self.func().emitConstI64(0);
@@ -411,9 +562,9 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
             .operands = .{ .{ .value = is_success }, .{ .block_ref = incref_idx }, .{ .block_ref = 0 } }, // placeholder for end
         });
 
-        // In incref block: increment refcount of the String at value_slot
+        // In incref block: increment refcount of the element at value_slot
         // emitStringIncref will create its own blocks and end up in its incref_end block
-        try string.emitStringIncref(self, ir.toStringPtr(value_slot.raw()), "<array index String>");
+        try string.emitStringIncref(self, ir.toStringPtr(value_slot.raw()), "<array index>");
 
         // After emitStringIncref, we're in its incref_end block. We need to branch
         // to our end block, so emit the branch NOW (before adding the end block).
@@ -556,11 +707,11 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
     const managed_ptr = if (elements.len == 0)
         try emitEmptyManagedArray(self)
     else blk: {
-        // Allocate buffer for elements (on heap for ownership)
+        // Allocate refcounted buffer for elements
         const elem_count = try self.func().emitConstI64(@intCast(elements.len));
         const elem_size: i64 = 8; // All elements are 8 bytes (i64, f64, or pointer)
         const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
-        const buffer = try self.func().emitHeapAlloc(buffer_size, "set buffer");
+        const buffer = try emitAllocRefcountedBuffer(self, buffer_size, "set buffer");
 
         // Store elements into buffer
         for (elements, 0..) |elem, i| {
@@ -686,9 +837,41 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
 
     if (elements.len == 0) {
         const managed_ptr = try emitEmptyManagedArray(self);
+
+        // Get or create the Array$int type (default element type for empty arrays)
+        // Extract name and size immediately as later operations may invalidate the type_map pointer
+        const array_type_info = try self.getOrCreateArrayType("int");
+        const array_type_name = array_type_info.name;
+        const array_size = array_type_info.size;
+
+        // Call Array$int$init to create the actual Array struct
+        const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
+        try self.module.trackString(init_func_name);
+
+        const func_info = self.func_map.get(init_func_name) orelse {
+            self.reportInternalError("Array init not found for empty array literal");
+            return error.UnknownFunction;
+        };
+
+        if (!func_info.ir_generated) {
+            try self.ensureMethodGenerated(init_func_name);
+        }
+
+        // Allocate space for the Array struct
+        const result_ptr = try self.func().emitAllocaSized(array_size);
+
+        // Re-fetch type_info after potential type_map modifications
+        const final_type_info = &self.type_map.getPtr(array_type_name).?.struct_type;
+
+        // Call init with sret: [sret_ptr, managed_ptr]
+        var args = try self.func().allocator.alloc(ir.Value, 2);
+        args[0] = result_ptr.raw();
+        args[1] = managed_ptr.raw();
+        _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
         return .{
-            .value = managed_ptr.raw(),
-            .ty = .{ .array_type = try self.getOrCreateArrayType(.{ .element_type = .i64, .size = 0, .storage = .heap }) },
+            .value = result_ptr.raw(),
+            .ty = .{ .struct_type = final_type_info },
         };
     }
 
@@ -696,7 +879,7 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
     const elem_type = first_typed.ty.toIrType();
     const elem_struct_type: ?[]const u8 = switch (first_typed.ty) {
         .struct_type => |struct_info| struct_info.name,
-        .primitive, .array_type, .enum_type, .error_union_type, .function_type => null,
+        .primitive, .enum_type, .error_union_type, .function_type => null,
     };
     const elem_primitive_type: ?types.Primitive = switch (first_typed.ty) {
         .primitive => |prim| prim,
@@ -720,10 +903,10 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
         break :blk prim.arrayElementSize();
     };
 
-    // Allocate buffer for elements on heap
+    // Allocate refcounted buffer for elements
     const elem_count = try self.func().emitConstI64(@intCast(elements.len));
     const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
-    const buffer = try self.func().emitHeapAlloc(buffer_size, "set buffer");
+    const buffer = try emitAllocRefcountedBuffer(self, buffer_size, "array buffer");
 
     // Store elements into buffer
     for (elements, 0..) |elem, i| {
@@ -732,11 +915,14 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
         const elem_ptr = try self.func().emitGetElemPtr(buffer, idx_val, @intCast(elem_size));
         if (elem_struct_type) |struct_name| {
             // For structs, copy the struct data
-            // Check if this is a temporary String that we're moving (not copying)
+            // Check if this is a temporary with COW semantics that we're moving (not copying)
             // In that case, we just memcpy without incref since ownership transfers
-            const is_temporary_string = std.mem.eql(u8, struct_name, "String") and
-                cleanup.isInTemporaries(self, typed.value);
-            if (is_temporary_string) {
+            const has_cow_semantics = if (self.type_map.get(struct_name)) |ti|
+                ti == .struct_type and ti.struct_type.has_managed_buffer
+            else
+                false;
+            const is_temporary_cow = has_cow_semantics and cleanup.isInTemporaries(self, typed.value);
+            if (is_temporary_cow) {
                 // Move semantics: just copy data, don't incref (ownership transfers to array)
                 try self.func().emitMemcpy(elem_ptr.asRawPtr(), ir.toRawPtr(typed.value), @intCast(elem_size));
                 cleanup.removeFromTemporaries(self, typed.value);
@@ -753,9 +939,48 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
     // Initialize __ManagedArray with buffer, length, and capacity
     const managed_ptr = try emitManagedArray(self, buffer, elem_count, elem_count);
 
+    // Determine element type name for creating the Array type
+    const elem_name: []const u8 = if (elem_struct_type) |sn|
+        sn
+    else if (elem_primitive_type) |pt|
+        pt.toMaxonName()
+    else
+        elem_type.toMaxonName();
+
+    // Get or create the Array$<elem> type - extract name and size immediately
+    // as later operations may invalidate the type_map pointer
+    const array_type_info = try self.getOrCreateArrayType(elem_name);
+    const array_type_name = array_type_info.name;
+    const array_size = array_type_info.size;
+
+    // Call Array$<elem>$init to create the actual Array struct
+    const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
+    try self.module.trackString(init_func_name);
+
+    const func_info = self.func_map.get(init_func_name) orelse {
+        self.reportInternalError("Array init not found for array literal");
+        return error.UnknownFunction;
+    };
+
+    if (!func_info.ir_generated) {
+        try self.ensureMethodGenerated(init_func_name);
+    }
+
+    // Allocate space for the Array struct
+    const result_ptr = try self.func().emitAllocaSized(array_size);
+
+    // Re-fetch type_info after potential type_map modifications
+    const final_type_info = &self.type_map.getPtr(array_type_name).?.struct_type;
+
+    // Call init with sret: [sret_ptr, managed_ptr]
+    var args = try self.func().allocator.alloc(ir.Value, 2);
+    args[0] = result_ptr.raw();
+    args[1] = managed_ptr.raw();
+    _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
+
     return .{
-        .value = managed_ptr.raw(),
-        .ty = .{ .array_type = try self.getOrCreateArrayType(.{ .element_type = elem_type, .size = elements.len, .storage = .heap, .element_struct_type = elem_struct_type, .element_primitive_type = elem_primitive_type }) },
+        .value = result_ptr.raw(),
+        .ty = .{ .struct_type = final_type_info },
     };
 }
 
@@ -785,7 +1010,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
             return error.UnknownType;
         };
 
-        // Allocate buffer for elements (on heap for ownership)
+        // Allocate refcounted buffer for elements
         const elem_count = try self.func().emitConstI64(@intCast(elements.len));
         // Get element size - must be a known primitive type
         const prim_info = types.getPrimitiveTypeInfo(elem_type_name) orelse {
@@ -794,7 +1019,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
         };
         const elem_size: i64 = prim_info.array_element_size;
         const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
-        const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
+        const buffer = try emitAllocRefcountedBuffer(self, buffer_size, "array buffer");
 
         // Store elements into buffer
         for (elements, 0..) |elem, i| {
@@ -898,7 +1123,7 @@ pub fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!Typ
 
     const struct_info = switch (type_info) {
         .struct_type => |s| s,
-        .primitive, .enum_type, .array_type => {
+        .primitive, .enum_type => {
             debug.astToIr("error: Array type is not a struct: {s}", .{array_type_name});
             return error.UnknownType;
         },
@@ -923,7 +1148,8 @@ pub fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!Typ
     };
     const elem_size = try self.func().emitConstI64(elem_size_val);
     const buffer_size = try self.func().emitBinaryOp(.mul, capacity_typed.value, elem_size, .i64);
-    const buffer = try self.func().emitHeapAlloc(buffer_size, "array buffer");
+    // Allocate refcounted buffer and zero-initialize
+    const buffer = try emitAllocRefcountedBuffer(self, buffer_size, "array buffer");
     // Zero-initialize the buffer so hash tables (Map, Set) have correct initial state
     try self.func().emitMemsetDynamic(buffer, 0, buffer_size);
     const managed_ptr = try emitManagedArray(self, buffer, capacity_typed.value, capacity_typed.value);

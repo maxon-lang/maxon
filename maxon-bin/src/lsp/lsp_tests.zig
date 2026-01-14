@@ -8,8 +8,12 @@ const testing = std.testing;
 // In-process LSP tests using TestClient
 // ============================================================================
 
+// Fast allocator that detects leaks without slow stack traces
+var test_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+const test_allocator = test_gpa.allocator();
+
 test "initialize returns capabilities" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
 
     const result = try client.initialize();
@@ -19,13 +23,13 @@ test "initialize returns capabilities" {
 }
 
 test "shutdown and exit terminate cleanly" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 }
 
 test "server handles full workflow" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -64,7 +68,7 @@ test "server handles full workflow" {
 }
 
 test "full lifecycle with document" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -94,7 +98,7 @@ test "full lifecycle with document" {
 }
 
 test "didOpen registers document" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -113,7 +117,7 @@ test "didOpen registers document" {
 }
 
 test "didChange updates document content" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -147,7 +151,7 @@ test "didChange updates document content" {
 }
 
 test "didClose removes document" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -171,7 +175,7 @@ test "didClose removes document" {
 }
 
 test "completion for array methods" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -229,15 +233,12 @@ test "completion for array methods" {
                 break;
             }
         }
-        if (!found) {
-            std.debug.print("Missing expected completion: {s}\n", .{expected});
-        }
         try testing.expect(found);
     }
 }
 
 test "completion for string methods" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -269,7 +270,7 @@ test "completion for string methods" {
 }
 
 test "completion for struct fields" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -306,7 +307,7 @@ test "completion for struct fields" {
 }
 
 test "completion for enum members" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -346,7 +347,7 @@ test "completion for enum members" {
 }
 
 test "hover shows value for immutable variables" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -372,7 +373,7 @@ test "hover shows value for immutable variables" {
 }
 
 test "hover shows type and value for immutable variable at usage site" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -402,7 +403,7 @@ test "hover shows type and value for immutable variable at usage site" {
 }
 
 test "hover shows local function signature" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -431,7 +432,7 @@ test "hover shows local function signature" {
 }
 
 test "hover shows correct type for function parameter" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -457,7 +458,7 @@ test "hover shows correct type for function parameter" {
 }
 
 test "hover shows intrinsic signature" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -483,7 +484,7 @@ test "hover shows intrinsic signature" {
 }
 
 test "hover shows math builtin signature and help text" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -514,7 +515,7 @@ test "hover shows math builtin signature and help text" {
 }
 
 test "hover shows trunc builtin with help text" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -545,7 +546,7 @@ test "hover shows trunc builtin with help text" {
 }
 
 test "hover shows keyword info" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -567,7 +568,7 @@ test "hover shows keyword info" {
 }
 
 test "hover shows type keyword info" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -589,7 +590,7 @@ test "hover shows type keyword info" {
 }
 
 test "hover excludes text in line comments" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -609,7 +610,7 @@ test "hover excludes text in line comments" {
 }
 
 test "hover excludes text in block comments" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -631,7 +632,7 @@ test "hover excludes text in block comments" {
 }
 
 test "hover works after block comment ends" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -653,7 +654,7 @@ test "hover works after block comment ends" {
 }
 
 test "hover shows struct field info" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -678,7 +679,7 @@ test "hover shows struct field info" {
 }
 
 test "hover shows variable type inside struct method" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -706,7 +707,7 @@ test "hover shows variable type inside struct method" {
 }
 
 test "hover shows variable type inside interface implementation method" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -737,7 +738,7 @@ test "hover shows variable type inside interface implementation method" {
 }
 
 test "hover shows array type" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -764,7 +765,7 @@ test "hover shows array type" {
 }
 
 test "hover shows array of struct type" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -794,7 +795,7 @@ test "hover shows array of struct type" {
 }
 
 test "hover shows struct definition" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -822,7 +823,7 @@ test "hover shows struct definition" {
 }
 
 test "hover shows user function signature" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -851,7 +852,7 @@ test "hover shows user function signature" {
 }
 
 test "hover shows doc comment for function" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -883,7 +884,7 @@ test "hover shows doc comment for function" {
 }
 
 test "hover shows doc comment for method" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -920,7 +921,7 @@ test "hover shows doc comment for method" {
 }
 
 test "hover shows array push method with doc comment" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -948,7 +949,7 @@ test "hover shows array push method with doc comment" {
 }
 
 test "definition returns location" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -974,7 +975,7 @@ test "definition returns location" {
 }
 
 test "definition for var variable" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -997,7 +998,7 @@ test "definition for var variable" {
 }
 
 test "definition for let variable" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1019,7 +1020,7 @@ test "definition for let variable" {
 }
 
 test "definition for function parameter" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1040,7 +1041,7 @@ test "definition for function parameter" {
 }
 
 test "definition for struct type" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1067,7 +1068,7 @@ test "definition for struct type" {
 }
 
 test "definition for struct field" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1095,7 +1096,7 @@ test "definition for struct field" {
 }
 
 test "definition for interface type" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1124,7 +1125,7 @@ test "definition for interface type" {
 }
 
 test "definition for variable in nested scope" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1150,7 +1151,7 @@ test "definition for variable in nested scope" {
 }
 
 test "definition on keyword returns nothing" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1170,7 +1171,7 @@ test "definition on keyword returns nothing" {
 }
 
 test "definition on number literal returns nothing" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1190,7 +1191,7 @@ test "definition on number literal returns nothing" {
 }
 
 test "definition for recursive function call" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1214,7 +1215,7 @@ test "definition for recursive function call" {
 }
 
 test "definition for struct in return type" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1240,7 +1241,7 @@ test "definition for struct in return type" {
 }
 
 test "definition for struct literal type" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1266,7 +1267,7 @@ test "definition for struct literal type" {
 }
 
 test "formatting indents nested code correctly" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1303,7 +1304,7 @@ test "formatting indents nested code correctly" {
 }
 
 test "formatting indents type fields correctly" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1331,7 +1332,7 @@ test "formatting indents type fields correctly" {
 }
 
 test "formatting handles else blocks correctly" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1368,7 +1369,7 @@ test "formatting handles else blocks correctly" {
 }
 
 test "formatting uses spaces when insertSpaces is true" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1396,7 +1397,7 @@ test "formatting uses spaces when insertSpaces is true" {
 }
 
 test "formatting preserves implicit type declarations" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1427,7 +1428,7 @@ test "formatting preserves implicit type declarations" {
 }
 
 test "formatting preserves comments" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1453,7 +1454,7 @@ test "formatting preserves comments" {
 }
 
 test "formatting preserves blank lines" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1479,7 +1480,7 @@ test "formatting preserves blank lines" {
 }
 
 test "formatting formats multiple interfaces at top level" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1510,7 +1511,7 @@ test "formatting formats multiple interfaces at top level" {
 }
 
 test "documentSymbol returns symbols" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1552,7 +1553,7 @@ test "documentSymbol returns symbols" {
 }
 
 test "foldingRange returns ranges" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1588,7 +1589,7 @@ test "foldingRange returns ranges" {
 }
 
 test "linkedEditingRange returns ranges for block labels" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1611,7 +1612,7 @@ test "linkedEditingRange returns ranges for block labels" {
 }
 
 test "linkedEditingRange returns ranges for function names" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1647,7 +1648,7 @@ test "linkedEditingRange returns ranges for function names" {
 }
 
 test "linkedEditingRange returns ranges for interface method names" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1690,7 +1691,7 @@ test "linkedEditingRange returns ranges for interface method names" {
 }
 
 test "rename block identifier updates all occurrences" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1715,7 +1716,7 @@ test "rename block identifier updates all occurrences" {
 }
 
 test "rename function updates function name and end label" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1737,7 +1738,7 @@ test "rename function updates function name and end label" {
 }
 
 test "code action offers fix for unused variable" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1759,7 +1760,7 @@ test "code action offers fix for unused variable" {
 }
 
 test "semantic tokens returns token data" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
@@ -1781,7 +1782,7 @@ test "semantic tokens returns token data" {
 }
 
 test "formatting indents while loop body correctly" {
-    var client = try TestClient.init(testing.allocator);
+    var client = try TestClient.init(test_allocator);
     defer client.deinit();
     _ = try client.initialize();
 
