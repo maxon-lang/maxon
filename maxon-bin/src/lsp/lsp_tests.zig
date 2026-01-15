@@ -1821,3 +1821,62 @@ test "formatting indents while loop body correctly" {
     // The end 'series' should be at 1 tab
     try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'series'") != null);
 }
+
+test "hover shows variable type from intrinsic function call" {
+    var client = try TestClient.init(test_allocator);
+    defer client.deinit();
+    _ = try client.initialize();
+
+    // Test: variable assigned from an intrinsic function call
+    // This tests the case from Directory.maxon where filename = __find_filename(handle)
+    const source =
+        \\function test()
+        \\    var handle = __find_first_file("test".cstr())
+        \\    var filename = __find_filename(handle)
+        \\    var name = String.fromCString(filename)
+        \\end 'test'
+    ;
+
+    try client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'filename' at usage site (line 3, col 34)
+    // Line 3: "    var name = String.fromCString(filename)"
+    //          0         1         2         3
+    //          0123456789012345678901234567890123456789
+    var result = try client.hover("file:///test.maxon", 3, 34);
+    defer result.deinit();
+
+    // The hover should show the variable type
+    try testing.expect(result.contents.len > 0);
+    const content = result.contents;
+    try testing.expect(std.mem.indexOf(u8, content, "filename") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "cstring") != null);
+}
+
+test "hover shows static method signature" {
+    var client = try TestClient.init(test_allocator);
+    defer client.deinit();
+    _ = try client.initialize();
+
+    // Test: hovering over a static method call like String.fromCString
+    const source =
+        \\function test()
+        \\    var cs = "hello".cstr()
+        \\    var name = String.fromCString(cs)
+        \\end 'test'
+    ;
+
+    try client.openDocument("file:///test.maxon", source);
+
+    // Request hover on 'fromCString' at line 2
+    // Line 2: "    var name = String.fromCString(cs)"
+    //          0         1         2
+    //          0123456789012345678901234567
+    var result = try client.hover("file:///test.maxon", 2, 22);
+    defer result.deinit();
+
+    // The hover should show the static method signature
+    try testing.expect(result.contents.len > 0);
+    const content = result.contents;
+    try testing.expect(std.mem.indexOf(u8, content, "fromCString") != null);
+}

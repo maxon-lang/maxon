@@ -298,22 +298,28 @@ pub const Analyzer = struct {
                 const receiver_name = line_content[receiver_start..receiver_end];
                 if (receiver_name.len == 0) return null;
 
-                // Look up the receiver's type
-                const receiver_var = info.findVariable(receiver_name) orelse {
-                    return null;
-                };
+                // Try to look up as variable first (instance method call)
+                if (info.findVariable(receiver_name)) |receiver_var| {
+                    // Get the type name for method lookup
+                    if (self.getTypeNameForMethodLookup(receiver_var.ty)) |type_name| {
+                        // Construct mangled method name and look it up
+                        var mangled_buf: [512]u8 = undefined;
+                        const mangled_name = std.fmt.bufPrint(&mangled_buf, "{s}${s}", .{ type_name, method_name }) catch return null;
 
-                // Get the type name for method lookup
-                const type_name = self.getTypeNameForMethodLookup(receiver_var.ty) orelse {
-                    return null;
-                };
+                        if (info.functions.get(mangled_name)) |func_info| {
+                            return self.formatFunctionHover(method_name, func_info);
+                        }
+                    }
+                }
 
-                // Construct mangled method name and look it up
-                var mangled_buf: [512]u8 = undefined;
-                const mangled_name = std.fmt.bufPrint(&mangled_buf, "{s}${s}", .{ type_name, method_name }) catch return null;
+                // Try to look up as type name (static method call like String.fromCString)
+                if (info.types.get(receiver_name) != null) {
+                    var mangled_buf: [512]u8 = undefined;
+                    const mangled_name = std.fmt.bufPrint(&mangled_buf, "{s}${s}", .{ receiver_name, method_name }) catch return null;
 
-                if (info.functions.get(mangled_name)) |func_info| {
-                    return self.formatFunctionHover(method_name, func_info);
+                    if (info.functions.get(mangled_name)) |func_info| {
+                        return self.formatFunctionHover(method_name, func_info);
+                    }
                 }
 
                 return null;

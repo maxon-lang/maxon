@@ -612,10 +612,19 @@ pub const SemanticAnalyzer = struct {
                 };
             }
 
+            // Convert return_type_name to ValueType for hover and type inference
+            const return_value_type: ?ValueType = if (intr.return_type_name.len > 0)
+                if (types.Primitive.fromString(intr.return_type_name)) |p|
+                    .{ .primitive = p }
+                else
+                    self.typeNameToValueType(intr.return_type_name)
+            else
+                null;
+
             try self.func_map.put(self.allocator, intr.name, .{
                 .return_type = intr.return_ir_type,
-                .return_type_name = intr.return_type_name,
-                .return_value_type = null,
+                .return_type_name = if (intr.return_type_name.len > 0) intr.return_type_name else null,
+                .return_value_type = return_value_type,
                 .param_types = param_types,
                 .doc_comment = if (intr.help_text.len > 0) intr.help_text else null,
             });
