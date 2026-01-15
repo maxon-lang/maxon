@@ -3,9 +3,8 @@
 // A character represents an Extended Grapheme Cluster (EGC).
 // Uses same __ManagedArray storage as String.
 
-// Character is special-cased by the compiler for character literal initialization.
-// It receives __ManagedArray directly rather than going through InitableFromCharLiteral.
-export type Character is Builtin, Hashable, Equatable, Comparable
+// Character is a Builtin type that receives __ManagedArray directly for literal initialization.
+export type Character is Builtin, Hashable, Equatable, Comparable, Stringable
 	var _managed __ManagedArray
 
 	// Internal init used by compiler for character literal initialization
@@ -87,6 +86,11 @@ export type Character is Builtin, Hashable, Equatable, Comparable
 		end 'hash_loop'
 		return h
 	end 'hash'
+
+	// Stringable conformance - convert Character to String
+	function Stringable.toString(_format String) returns String
+		return String{_managed: _managed, _iterPos: 0}
+	end 'toString'
 
 	// Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
 	export function asciiValue() returns int throws CharacterError

@@ -724,14 +724,13 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
         break :blk try emitManagedArray(self, buffer, elem_count, elem_count);
     };
 
-    // Check if this is the Array type (special-cased: receives __ManagedArray directly)
+    // Builtin types receive __ManagedArray directly
     // Other types receive an Array (we create one first, then pass it to their init)
-    // Note: type_name may be monomorphized like "Array$int", so check for prefix
-    const is_array_type = std.mem.eql(u8, type_name, "Array") or std.mem.startsWith(u8, type_name, "Array$");
+    const is_builtin_type = self.isBuiltinType(type_name);
 
-    // For non-Array types, first create an Array from the __ManagedArray
+    // For non-Builtin types, first create an Array from the __ManagedArray
     var init_arg: ir.Value = undefined;
-    if (is_array_type) {
+    if (is_builtin_type) {
         init_arg = managed_ptr.raw();
     } else {
         // Extract element type from the monomorphized type name (e.g., "Set$int" -> "int")
