@@ -1,6 +1,6 @@
-# Managed Arrays in Maxon
+# Managed Memorys in Maxon
 
-This document describes the internal implementation of Maxon's managed array system, including memory layout, reference counting, and the C++ helper API for compiler developers.
+This document describes the internal implementation of Maxon's managed memory system, including memory layout, reference counting, and the C++ helper API for compiler developers.
 
 ## Overview
 
@@ -43,14 +43,14 @@ Empty mutable arrays (`var arr = Array of int`) start with:
 - `_len`: 0
 - `_capacity`: 0 (no heap allocation yet)
 
-When `push()` is called, a heap buffer is allocated via `_managed_array_alloc` and capacity becomes > 0.
+When `push()` is called, a heap buffer is allocated via `_managed_memory_alloc` and capacity becomes > 0.
 
 ### Stack Arrays (capacity = 0)
 
 Arrays declared with `let` or fixed-size `var` arrays store their buffer on the stack:
 
 ```
-___ManagedArrayData<T> (stack mode):
+___ManagedMemoryData<T> (stack mode):
 +--------+--------+--------+
 | buffer | length | cap=0  |
 | (ptr)  | (i64)  | (i64)  |
@@ -72,9 +72,9 @@ Heap allocation:
 | (i32)    | (i32)    | ...            |
 +----------+----------+----------------+
 ^          ^          ^
-offset 0   offset 4   offset 8 (data pointer returned by _managed_array_alloc)
+offset 0   offset 4   offset 8 (data pointer returned by _managed_memory_alloc)
 
-___ManagedArrayData<T> (heap mode):
+___ManagedMemoryData<T> (heap mode):
 +--------+--------+--------+
 | buffer | length | cap    |
 | (ptr)  | (i64)  | (i64)  |
@@ -91,7 +91,7 @@ The full `array<T>` stdlib struct includes an iteration index for for-loop suppo
 array<T> struct (stdlib/array.maxon):
 +-------------------+----------+
 | managed           | iterIndex |
-| (___ManagedArrayData| (i64)     |
+| (___ManagedMemoryData| (i64)     |
 | embedded struct)  |           |
 +-------------------+----------+
 
@@ -119,27 +119,27 @@ type HeapArrayInfo {
 };
 
 type ScopeInfo {
-    // Arrays that need _managed_array_release() at scope exit
+    // Arrays that need _managed_memory_release() at scope exit
     std::vector<HeapArrayInfo> heapAllocatedArrays;
 };
 ```
 
 At scope exit (`popScope`), the compiler emits cleanup code for all tracked allocations.
 
-## ManagedArrayBuilder Helper Class
+## ManagedMemoryBuilder Helper Class
 
-The `ManagedArrayBuilder` class provides a clean C++ API for generating array-related MIR code.
+The `ManagedMemoryBuilder` class provides a clean C++ API for generating array-related MIR code.
 
 ### Usage Example
 
 ```cpp
-#include "codegen_mir/managed_array_builder.h"
+#include "codegen_mir/managed_memory_builder.h"
 
 void someIntrinsicCodegen(MIRCodeGenerator& gen) {
-    ManagedArrayBuilder mab(gen, "int");  // Note: element type is required
+    ManagedMemoryBuilder mab(gen, "int");  // Note: element type is required
 
     // Get type
-    mir::MIRType* managedType = mab.getManagedArrayDataType();
+    mir::MIRType* managedType = mab.getManagedMemoryDataType();
 
     // Extract fields
     mir::MIRValue* dataPtr = mab.getDataPtr(managedPtr);
@@ -173,11 +173,11 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
 
 #### Constructor
 
-- `ManagedArrayBuilder(MIRCodeGenerator &gen, const std::string &elementType)` - Contype builder for arrays of given element type
+- `ManagedMemoryBuilder(MIRCodeGenerator &gen, const std::string &elementType)` - Contype builder for arrays of given element type
 
 #### Type Accessors
 
-- `getManagedArrayDataType()` - Returns `___ManagedArrayData<T>` type type
+- `getManagedMemoryDataType()` - Returns `___ManagedMemoryData<T>` type type
 - `getArrayStructType()` - Returns `array<T>` type type (with iterIndex)
 - `getElementMIRType()` - Returns MIR type for the element
 - `getElementSize()` - Returns element size in bytes
@@ -198,7 +198,7 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
 #### Allocation
 
 - `allocateBuffer(numElements, tag)` - Allocate heap buffer for N elements
-- `allocateManagedStruct(name)` - Stack-allocate `___ManagedArrayData`
+- `allocateManagedStruct(name)` - Stack-allocate `___ManagedMemoryData`
 - `allocateArrayStruct(name)` - Stack-allocate `array<T>` (with iterIndex)
 
 #### Struct Population
@@ -227,7 +227,7 @@ void someIntrinsicCodegen(MIRCodeGenerator& gen) {
 
 ## Key Differences from ManagedStringBuilder
 
-| Aspect | ManagedStringBuilder | ManagedArrayBuilder |
+| Aspect | ManagedStringBuilder | ManagedMemoryBuilder |
 |--------|---------------------|---------------------|
 | Element type | Fixed (byte) | Parameterized (constructor arg) |
 | Capacity semantics | -1=SSO, 0=const, >0=heap | 0=stack, >0=heap |
@@ -265,7 +265,7 @@ The compiler automatically emits cleanup at scope exit:
 ```cpp
 void MIRCodeGenerator::popScope(mir::MIRFunction *function) {
     for (const auto& info : scopeStack.back().heapAllocatedArrays) {
-        ManagedArrayBuilder mab(*this, info.elementType);
+        ManagedMemoryBuilder mab(*this, info.elementType);
         mir::MIRType *arrayStructType = mab.getArrayStructType();
         mir::MIRValue *managedField = builder->createStructGEP(
             arrayStructType, info.alloca, 0, info.name + ".managed");
@@ -288,10 +288,10 @@ Located in `maxon-runtime/runtime.mir`:
 
 | Function | Signature | Purpose |
 |----------|-----------|---------|
-| `_managed_array_alloc` | `(i64 byteSize, ptr tag) -> ptr` | Allocate buffer with header |
-| `_managed_array_release` | `(ptr data, ptr tag) -> void` | Decrement refcount, free if 0 |
-| `_managed_array_retain` | `(ptr data) -> void` | Increment refcount |
-| `_managed_array_get_refcount` | `(ptr data) -> i64` | Get current refcount |
+| `_managed_memory_alloc` | `(i64 byteSize, ptr tag) -> ptr` | Allocate buffer with header |
+| `_managed_memory_release` | `(ptr data, ptr tag) -> void` | Decrement refcount, free if 0 |
+| `_managed_memory_retain` | `(ptr data) -> void` | Increment refcount |
+| `_managed_memory_get_refcount` | `(ptr data) -> i64` | Get current refcount |
 
 ## Debugging Tips
 

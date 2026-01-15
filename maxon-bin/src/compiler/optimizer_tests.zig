@@ -911,7 +911,7 @@ test "stack probing - large struct recursive" {
 }
 
 // ============================================================================
-// Managed Array Internals Tests
+// Managed Memory Internals Tests
 // Verify correct IR generation for array memory management
 // ============================================================================
 
@@ -949,7 +949,7 @@ fn irContainsHeapFreeTag(ir_text: []const u8, tag: []const u8) bool {
     return std.mem.indexOf(u8, ir_text, pattern) != null;
 }
 
-test "managed array - heap array generates free" {
+test "managed memory - heap array generates free" {
     const allocator = testing.allocator;
 
     const source =
@@ -972,7 +972,7 @@ test "managed array - heap array generates free" {
     try testing.expectEqual(@as(u8, 2), result.exit_code);
 }
 
-test "managed array - scope cleanup generates free" {
+test "managed memory - scope cleanup generates free" {
     const allocator = testing.allocator;
 
     const source =
@@ -999,7 +999,7 @@ test "managed array - scope cleanup generates free" {
     try testing.expectEqual(@as(u8, 0), result.exit_code);
 }
 
-test "managed array - loop growth generates realloc" {
+test "managed memory - loop growth generates realloc" {
     const allocator = testing.allocator;
 
     const source =
@@ -1028,7 +1028,7 @@ test "managed array - loop growth generates realloc" {
     try testing.expectEqual(@as(u8, 10), result.exit_code);
 }
 
-test "managed array - fixed size array literal cleanup" {
+test "managed memory - fixed size array literal cleanup" {
     const allocator = testing.allocator;
 
     const source =
@@ -1048,7 +1048,7 @@ test "managed array - fixed size array literal cleanup" {
     try testing.expectEqual(@as(u8, 20), result.exit_code);
 }
 
-test "managed array - struct field array method call" {
+test "managed memory - struct field array method call" {
     const allocator = testing.allocator;
 
     const source =

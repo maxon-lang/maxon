@@ -979,7 +979,7 @@ Fixed use-after-free crashes when assigning array variables to struct fields in 
 
 **Key Insight:** After deep copy, `_capacity` is set to `length` (not 0) because:
 - The new buffer is heap-allocated and owned by this struct instance
-- Capacity > 0 signals heap ownership, ensuring proper cleanup via `_managed_array_release`
+- Capacity > 0 signals heap ownership, ensuring proper cleanup via `_managed_memory_release`
 
 **Location:** [codegen_mir_stmt_decl.cpp:870-945](maxon-bin/codegen_mir/codegen_mir_stmt_decl.cpp#L870-L945)
 
@@ -1004,9 +1004,9 @@ builder->setInsertPoint(skipBlock);
 
 **Files Changed:**
 - `codegen_mir_stmt_decl.cpp` - Added deep copy in `tryGenerateStructInitDecl()` for `isArrayStructType` fields
-- `codegen_mir_managed_array.cpp` - Added null checks in `retainManagedTypesInArrayElements()` for string and `_ManagedString` fields
+- `codegen_mir_managed_memory.cpp` - Added null checks in `retainManagedTypesInArrayElements()` for string and `_ManagedString` fields
 
-**Location:** [codegen_mir_managed_array.cpp:738-780](maxon-bin/codegen_mir/codegen_mir_managed_array.cpp#L738-L780)
+**Location:** [codegen_mir_managed_memory.cpp:738-780](maxon-bin/codegen_mir/codegen_mir_managed_memory.cpp#L738-L780)
 
 ### Winchester 1.7 (2025-12-14)
 
@@ -1054,8 +1054,8 @@ Replaced the fragile multi-pass size recomputation with a robust dependency-trac
    - **Location:** [codegen_mir_stmt_assign.cpp](maxon-bin/codegen_mir/codegen_mir_stmt_assign.cpp)
 
 3. **Empty Array Initial Allocation Leak:**
-   - **Problem:** `var arr = Array of int` allocated 8 bytes via raw `malloc` (no refcount header) that was never freed because `_managed_array_release` expected a header.
-   - **Fix:** Empty mutable arrays now start with `capacity = 0` (stack-like, no allocation). When `push()` is called, `_managed_array_alloc` creates a proper heap buffer with the 8-byte refcount header.
+   - **Problem:** `var arr = Array of int` allocated 8 bytes via raw `malloc` (no refcount header) that was never freed because `_managed_memory_release` expected a header.
+   - **Fix:** Empty mutable arrays now start with `capacity = 0` (stack-like, no allocation). When `push()` is called, `_managed_memory_alloc` creates a proper heap buffer with the 8-byte refcount header.
    - **Location:** [codegen_mir_stmt_decl.cpp:254](maxon-bin/codegen_mir/codegen_mir_stmt_decl.cpp#L254)
 
 **Heap Allocation Header Format (8 bytes):**

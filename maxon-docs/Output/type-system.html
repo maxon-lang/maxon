@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Type System - Maxon Language Documentation</title>
     <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
     <div class="container">
         <nav class="sidebar" id="sidebar" data-active="type-system"></nav>
@@ -33,28 +35,28 @@
             </div>
             <div class="spec-section" id="arrays">
                 <h2>Arrays</h2>
-<h1>Arrays</h1>
-<p>Maxon has two types of arrays: <strong>static arrays</strong> (immutable, stack-allocated) and <strong>dynamic arrays</strong> (mutable, heap-allocated, growable).</p>
+                <h1>Arrays</h1>
+                <p>Maxon has two types of arrays: <strong>static arrays</strong> (immutable, stack-allocated) and <strong>dynamic arrays</strong> (mutable, heap-allocated, growable).</p>
             </div>
             <div class="spec-section" id="associated-types">
                 <h2>Associated Types</h2>
-<p>Associated types allow interfaces to declare type placeholders that implementing types must define. This enables generic interfaces where the concrete types vary by implementation.</p>
-<h3>Declaring Associated Types in Interfaces</h3>
-<p>Use the <code>uses</code> keyword after the interface name to declare associated types:</p>
-<pre><code class="language-maxon">interface Container uses Element
+                <p>Associated types allow interfaces to declare type placeholders that implementing types must define. This enables generic interfaces where the concrete types vary by implementation.</p>
+                <h3>Declaring Associated Types in Interfaces</h3>
+                <p>Use the <code>uses</code> keyword after the interface name to declare associated types:</p>
+                <pre><code class="language-maxon">interface Container uses Element
     function get(index int) returns Element
     function set(index int, value Element) returns Self
 end 'Container'
 </code></pre>
-<p>Associated types can be used in:</p>
-<ul>
-<li>Return types (<code>Element</code>)</li>
-<li>Parameter types (<code>value Element</code>)</li>
-<li>Combined with <code>Self</code> in the same signature</li>
-</ul>
-<h3>Implementing Associated Types</h3>
-<p>Types bind concrete types to associated types using <code>with</code> after the interface name. Interface methods use <code>function InterfaceName.methodName(params)</code> syntax:</p>
-<pre><code class="language-maxon">type IntArray is Container with int
+                <p>Associated types can be used in:</p>
+                <ul>
+                    <li>Return types (<code>Element</code>)</li>
+                    <li>Parameter types (<code>value Element</code>)</li>
+                    <li>Combined with <code>Self</code> in the same signature</li>
+                </ul>
+                <h3>Implementing Associated Types</h3>
+                <p>Types bind concrete types to associated types using <code>with</code> after the interface name. Interface methods use <code>function InterfaceName.methodName(params)</code> syntax:</p>
+                <pre><code class="language-maxon">type IntArray is Container with int
     var data array of 100 int
     var len int
 
@@ -68,10 +70,10 @@ end 'Container'
     end 'set'
 end 'IntArray'
 </code></pre>
-<p>The <code>with</code> types map positionally to the interface's <code>uses</code> types. Method signatures use the concrete type (<code>int</code>) that was bound.</p>
-<h3>Multiple Associated Types</h3>
-<p>For interfaces with multiple associated types, list them in order:</p>
-<pre><code class="language-maxon">interface Pair uses First, Second
+                <p>The <code>with</code> types map positionally to the interface's <code>uses</code> types. Method signatures use the concrete type (<code>int</code>) that was bound.</p>
+                <h3>Multiple Associated Types</h3>
+                <p>For interfaces with multiple associated types, list them in order:</p>
+                <pre><code class="language-maxon">interface Pair uses First, Second
     function getFirst() returns First
     function getSecond() returns Second
 end 'Pair'
@@ -83,29 +85,29 @@ type IntFloat is Pair with int, float
     function Pair.getFirst() returns int
         return a
     end 'getFirst'
-    
+
     function Pair.getSecond() returns float
         return b
     end 'getSecond'
 end 'IntFloat'
 </code></pre>
-<h3>The Iterable Interface</h3>
-<p>The standard library <code>Iterable</code> interface uses associated types:</p>
-<pre><code class="language-maxon">interface Iterable uses Element
+                <h3>The Iterable Interface</h3>
+                <p>The standard library <code>Iterable</code> interface uses associated types:</p>
+                <pre><code class="language-maxon">interface Iterable uses Element
     function next() returns Element or nil
 end 'Iterable'
 </code></pre>
-<p>Different iterators define different element types:</p>
-<ul>
-<li><code>Iterator</code> (for <code>range()</code>): <code>is Iterable with int</code></li>
-<li><code>string</code>: <code>is Iterable with character</code> (grapheme cluster)</li>
-<li><code>ByteView</code>: <code>is Iterable with byte</code> (byte value)</li>
-<li><code>UTF16View</code>: <code>is Iterable with int</code> (UTF-16 code unit)</li>
-<li><code>CodepointView</code>: <code>is Iterable with int</code> (Unicode codepoint)</li>
-</ul>
-<h3>For-Loop Type Inference</h3>
-<p>When iterating with <code>for</code>, the loop variable's type is inferred from the iterator's <code>Element</code> type:</p>
-<pre><code class="language-maxon">function main() returns int
+                <p>Different iterators define different element types:</p>
+                <ul>
+                    <li><code>Iterator</code> (for <code>range()</code>): <code>is Iterable with int</code></li>
+                    <li><code>string</code>: <code>is Iterable with character</code> (grapheme cluster)</li>
+                    <li><code>ByteView</code>: <code>is Iterable with byte</code> (byte value)</li>
+                    <li><code>UTF16View</code>: <code>is Iterable with int</code> (UTF-16 code unit)</li>
+                    <li><code>CodepointView</code>: <code>is Iterable with int</code> (Unicode codepoint)</li>
+                </ul>
+                <h3>For-Loop Type Inference</h3>
+                <p>When iterating with <code>for</code>, the loop variable's type is inferred from the iterator's <code>Element</code> type:</p>
+                <pre><code class="language-maxon">function main() returns int
     var s = &quot;Hi&quot;
     for ch in s 'chars'
         // ch has type 'character' (inferred from string's Element type - grapheme cluster)
@@ -117,17 +119,20 @@ end 'Iterable'
     return 0
 end 'main'
 </code></pre>
-<fieldset class="expected-output"><legend>Expected Output</legend><pre>72
+                <fieldset class="expected-output">
+                    <legend>Expected Output</legend>
+                    <pre>72
 105
-Exit Code: 0</pre></fieldset>
-<h3>Conformance Requirements</h3>
-<p>A type conforming to an interface with associated types must:</p>
-<ol>
-<li>Bind all associated types with <code>with Type1, Type2</code> (positional order matches <code>uses</code>)</li>
-<li>Implement <strong>all</strong> methods - partial implementation is an error</li>
-<li>Use exact type matches in method signatures (no implicit conversions)</li>
-</ol>
-<pre><code class="language-maxon">interface Summable uses Element
+Exit Code: 0</pre>
+                </fieldset>
+                <h3>Conformance Requirements</h3>
+                <p>A type conforming to an interface with associated types must:</p>
+                <ol>
+                    <li>Bind all associated types with <code>with Type1, Type2</code> (positional order matches <code>uses</code>)</li>
+                    <li>Implement <strong>all</strong> methods - partial implementation is an error</li>
+                    <li>Use exact type matches in method signatures (no implicit conversions)</li>
+                </ol>
+                <pre><code class="language-maxon">interface Summable uses Element
     function sum() returns Element
 end 'Summable'
 
@@ -145,15 +150,18 @@ function main() returns int
     return p.sum()
 end 'main'
 </code></pre>
-<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 42</pre></fieldset>
-<h3>Calling Methods</h3>
-<p>Methods are called using the method call syntax:</p>
-<pre><code class="language-maxon">var p = IntPair{a: 10, b: 32}
+                <fieldset class="expected-output">
+                    <legend>Expected Output</legend>
+                    <pre>Exit Code: 42</pre>
+                </fieldset>
+                <h3>Calling Methods</h3>
+                <p>Methods are called using the method call syntax:</p>
+                <pre><code class="language-maxon">var p = IntPair{a: 10, b: 32}
 var result = p.sum()    // Call sum() method on instance p
 </code></pre>
-<h3>Error: Missing Type Binding</h3>
-<p>If a type doesn't bind required associated types:</p>
-<pre><code class="language-maxon">interface HasElement uses Element
+                <h3>Error: Missing Type Binding</h3>
+                <p>If a type doesn't bind required associated types:</p>
+                <pre><code class="language-maxon">interface HasElement uses Element
     function get() returns Element
 end 'HasElement'
 
@@ -169,7 +177,9 @@ function main() returns int
     return 0
 end 'main'
 </code></pre>
-<fieldset class="error-output"><legend>Error Output</legend><pre>Semantic Error: temp_fragment.maxon:6:1
+                <fieldset class="error-output">
+                    <legend>Error Output</legend>
+                    <pre>Semantic Error: temp_fragment.maxon:6:1
 Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
 
   6 | type Broken is HasElement
@@ -179,10 +189,11 @@ Semantic Error: temp_fragment.maxon:6:1
 Method 'Broken.get' has return type 'int' but interface 'HasElement' requires 'Element'
 
   6 | type Broken is HasElement
-    | ^</pre></fieldset>
-<h3>Error: Partial Implementation</h3>
-<p>If a type doesn't implement all interface methods:</p>
-<pre><code class="language-maxon">interface TwoMethods uses Element
+    | ^</pre>
+                </fieldset>
+                <h3>Error: Partial Implementation</h3>
+                <p>If a type doesn't implement all interface methods:</p>
+                <pre><code class="language-maxon">interface TwoMethods uses Element
     function first() returns Element
     function second() returns Element
 end 'TwoMethods'
@@ -199,15 +210,18 @@ function main() returns int
     return 0
 end 'main'
 </code></pre>
-<fieldset class="error-output"><legend>Error Output</legend><pre>Semantic Error: temp_fragment.maxon:7:1
+                <fieldset class="error-output">
+                    <legend>Error Output</legend>
+                    <pre>Semantic Error: temp_fragment.maxon:7:1
 Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns int
 
   7 | type Partial is TwoMethods with int
-    | ^</pre></fieldset>
-<h3>Error: Type Mismatch in Method</h3>
-<p>If a method's signature doesn't match the resolved associated type:</p>
-<pre><code class="language-maxon">interface Producer uses Output
+    | ^</pre>
+                </fieldset>
+                <h3>Error: Type Mismatch in Method</h3>
+                <p>If a method's signature doesn't match the resolved associated type:</p>
+                <pre><code class="language-maxon">interface Producer uses Output
     function produce() returns Output
 end 'Producer'
 
@@ -223,18 +237,21 @@ function main() returns int
     return 0
 end 'main'
 </code></pre>
-<fieldset class="error-output"><legend>Error Output</legend><pre>Semantic Error: temp_fragment.maxon:6:1
+                <fieldset class="error-output">
+                    <legend>Error Output</legend>
+                    <pre>Semantic Error: temp_fragment.maxon:6:1
 Method 'WrongReturn.produce' has return type 'int' but interface 'Producer' requires 'float'
 
   6 | type WrongReturn is Producer with float
-    | ^</pre></fieldset>
+    | ^</pre>
+                </fieldset>
             </div>
             <div class="spec-section" id="contextual-literal-typing">
                 <h2>Contextual Literal Typing</h2>
-<p>Maxon uses contextual literal typing to allow integer and byte literals to adapt to their expected type context in comparisons and function calls.</p>
-<h3>Byte and Int Literals</h3>
-<p>Integer literals in the range 0-255 can be compared directly with byte values:</p>
-<pre><code class="language-maxon">function main() returns int
+                <p>Maxon uses contextual literal typing to allow integer and byte literals to adapt to their expected type context in comparisons and function calls.</p>
+                <h3>Byte and Int Literals</h3>
+                <p>Integer literals in the range 0-255 can be compared directly with byte values:</p>
+                <pre><code class="language-maxon">function main() returns int
     var b = 100 as byte
     if b == 50 'check'
         return 1
@@ -242,9 +259,12 @@ Method 'WrongReturn.produce' has return type 'int' but interface 'Producer' requ
     return 0
 end 'main'
 </code></pre>
-<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 0</pre></fieldset>
-<p>Byte variables can be compared directly with int literals in the 0-255 range:</p>
-<pre><code class="language-maxon">function main() returns int
+                <fieldset class="expected-output">
+                    <legend>Expected Output</legend>
+                    <pre>Exit Code: 0</pre>
+                </fieldset>
+                <p>Byte variables can be compared directly with int literals in the 0-255 range:</p>
+                <pre><code class="language-maxon">function main() returns int
     var b = 200 as byte
     if b == 200 'check'
         return 1
@@ -252,17 +272,20 @@ end 'main'
     return 0
 end 'main'
 </code></pre>
-<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 1</pre></fieldset>
-<h3>No Int/Float Mixing</h3>
-<p>Comparisons between int and float types require explicit casts:</p>
-<pre><code class="language-text">var x = 5
+                <fieldset class="expected-output">
+                    <legend>Expected Output</legend>
+                    <pre>Exit Code: 1</pre>
+                </fieldset>
+                <h3>No Int/Float Mixing</h3>
+                <p>Comparisons between int and float types require explicit casts:</p>
+                <pre><code class="language-text">var x = 5
 var y = 5.0
 if x == y 'check'    // Error: type mismatch
     return 1
 end 'check'
 </code></pre>
-<p>To compare, cast explicitly:</p>
-<pre><code class="language-maxon">function main() returns int
+                <p>To compare, cast explicitly:</p>
+                <pre><code class="language-maxon">function main() returns int
     var x = 5
     var y = 5.0
     if (x as float) == y 'check'
@@ -271,21 +294,27 @@ end 'check'
     return 0
 end 'main'
 </code></pre>
-<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 1</pre></fieldset>
-<h3>Math Intrinsics</h3>
-<p>Math intrinsics like <code>sin</code>, <code>cos</code>, <code>sqrt</code>, etc. accept both int and float arguments (int is promoted to float):</p>
-<pre><code class="language-maxon">function main() returns int
+                <fieldset class="expected-output">
+                    <legend>Expected Output</legend>
+                    <pre>Exit Code: 1</pre>
+                </fieldset>
+                <h3>Math Intrinsics</h3>
+                <p>Math intrinsics like <code>sin</code>, <code>cos</code>, <code>sqrt</code>, etc. accept both int and float arguments (int is promoted to float):</p>
+                <pre><code class="language-maxon">function main() returns int
     var x = sqrt(16.0)
     return trunc(x)
 end 'main'
 </code></pre>
-<fieldset class="expected-output"><legend>Expected Output</legend><pre>Exit Code: 4</pre></fieldset>
+                <fieldset class="expected-output">
+                    <legend>Expected Output</legend>
+                    <pre>Exit Code: 4</pre>
+                </fieldset>
             </div>
             <div class="spec-section" id="default-interface-implementations">
                 <h2>Default Interface Implementations</h2>
-<h3>Default Method Syntax</h3>
-<p>Interfaces can provide default implementations by including a function body. Methods without a body are abstract (must be implemented by conforming types). Methods with a body provide a default that conforming types inherit automatically:</p>
-<pre><code class="language-maxon">interface Collection uses Element extends Iterable
+                <h3>Default Method Syntax</h3>
+                <p>Interfaces can provide default implementations by including a function body. Methods without a body are abstract (must be implemented by conforming types). Methods with a body provide a default that conforming types inherit automatically:</p>
+                <pre><code class="language-maxon">interface Collection uses Element extends Iterable
     function count() returns int                           // Abstract - must be implemented
     function get(index int) returns Element or nil         // Abstract - must be implemented
     function set(index int, value Element) returns Self    // Abstract - must be implemented
@@ -304,65 +333,65 @@ end 'main'
     end 'map'
 end 'Collection'
 </code></pre>
-<h3>Automatic Inheritance</h3>
-<p>When a type implements an interface with default methods:</p>
-<ul>
-<li>If the type provides its own implementation, that is used</li>
-<li>If the type does NOT provide an implementation, the default is automatically synthesized</li>
-</ul>
-<pre><code class="language-maxon">// This type gets map() automatically from Collection's default
+                <h3>Automatic Inheritance</h3>
+                <p>When a type implements an interface with default methods:</p>
+                <ul>
+                    <li>If the type provides its own implementation, that is used</li>
+                    <li>If the type does NOT provide an implementation, the default is automatically synthesized</li>
+                </ul>
+                <pre><code class="language-maxon">// This type gets map() automatically from Collection's default
 type IntList is Collection with int
-    var data _ManagedArray&lt;int&gt;
+    var data _ManagedMemory&lt;int&gt;
 
     function Collection.count() returns int
-        return __managed_array_len(self.data)
+        return __managed_memory_len(self.data)
     end 'count'
 
     function Collection.get(index int) returns int
-        return __managed_array_get_at(self.data, index)
+        return __managed_memory_get_at(self.data, index)
     end 'get'
 
     function Collection.set(index int, value int) IntList
-        __managed_array_set_at(self.data, index, value)
+        __managed_memory_set_at(self.data, index, value)
         return self
     end 'set'
 
     // Note: No map() implementation - uses Collection's default
 end 'IntList'
 </code></pre>
-<h3>Type Substitution</h3>
-<p>In default implementations:</p>
-<ul>
-<li><code>Self</code> refers to the concrete type</li>
-<li>Associated types (like <code>Element</code>) resolve to their bound types</li>
-<li>Method calls on <code>self</code> use the type's implementations</li>
-</ul>
-<h3>Benefits</h3>
-<ol>
-<li><strong>Code reuse</strong>: Common method implementations don't need to be repeated</li>
-<li><strong>API evolution</strong>: New methods can be added to interfaces with defaults without breaking existing implementations</li>
-<li><strong>Separation of concerns</strong>: Core operations (count, get, set) are defined by implementers, derived operations (map) provided by interface</li>
-</ol>
+                <h3>Type Substitution</h3>
+                <p>In default implementations:</p>
+                <ul>
+                    <li><code>Self</code> refers to the concrete type</li>
+                    <li>Associated types (like <code>Element</code>) resolve to their bound types</li>
+                    <li>Method calls on <code>self</code> use the type's implementations</li>
+                </ul>
+                <h3>Benefits</h3>
+                <ol>
+                    <li><strong>Code reuse</strong>: Common method implementations don't need to be repeated</li>
+                    <li><strong>API evolution</strong>: New methods can be added to interfaces with defaults without breaking existing implementations</li>
+                    <li><strong>Separation of concerns</strong>: Core operations (count, get, set) are defined by implementers, derived operations (map) provided by interface</li>
+                </ol>
             </div>
             <div class="spec-section" id="enums">
                 <h2>Enums</h2>
-<h1>Enums</h1>
-<p>Enums define a type with a fixed set of named variants called cases. Maxon supports three kinds of enums: simple enums, raw value enums, and enums with associated values.</p>
-<h3>Simple Enums</h3>
-<p>The simplest form of enum defines named cases with no additional data:</p>
-<pre><code class="language-maxon">enum Direction
+                <h1>Enums</h1>
+                <p>Enums define a type with a fixed set of named variants called cases. Maxon supports three kinds of enums: simple enums, raw value enums, and enums with associated values.</p>
+                <h3>Simple Enums</h3>
+                <p>The simplest form of enum defines named cases with no additional data:</p>
+                <pre><code class="language-maxon">enum Direction
     north
     south
     east
     west
 end 'Direction'
 </code></pre>
-<p>Create enum values using dot notation:</p>
-<pre><code class="language-maxon">var dir = Direction.north
+                <p>Create enum values using dot notation:</p>
+                <pre><code class="language-maxon">var dir = Direction.north
 </code></pre>
-<h3>Raw Value Enums</h3>
-<p>Enums can have an underlying raw value type (<code>int</code> or <code>string</code>):</p>
-<pre><code class="language-maxon">enum HttpStatus int
+                <h3>Raw Value Enums</h3>
+                <p>Enums can have an underlying raw value type (<code>int</code> or <code>string</code>):</p>
+                <pre><code class="language-maxon">enum HttpStatus int
     ok = 200
     notFound = 404
     serverError = 500
@@ -374,48 +403,48 @@ enum Planet string
     venus = &quot;Venus&quot;
 end 'Planet'
 </code></pre>
-<p>Access the raw value with <code>.rawValue</code>:</p>
-<pre><code class="language-maxon">var status = HttpStatus.ok
+                <p>Access the raw value with <code>.rawValue</code>:</p>
+                <pre><code class="language-maxon">var status = HttpStatus.ok
 var code = status.rawValue    // 200
 </code></pre>
-<h3>Associated Values</h3>
-<p>Cases can carry additional data called associated values:</p>
-<pre><code class="language-maxon">enum Result
+                <h3>Associated Values</h3>
+                <p>Cases can carry additional data called associated values:</p>
+                <pre><code class="language-maxon">enum Result
     success(value int)
     failure(code int, message string)
     pending
 end 'Result'
 </code></pre>
-<p>Contype cases with associated values:</p>
-<pre><code class="language-maxon">var r1 = Result.success(42)
+                <p>Contype cases with associated values:</p>
+                <pre><code class="language-maxon">var r1 = Result.success(42)
 var r2 = Result.failure(404, &quot;Not found&quot;)
 var r3 = Result.pending
 </code></pre>
-<h3>Pattern Matching with Value Extraction</h3>
-<p>Use <code>match</code> statements to extract associated values from enum cases:</p>
-<pre><code class="language-maxon">match result 'handle'
+                <h3>Pattern Matching with Value Extraction</h3>
+                <p>Use <code>match</code> statements to extract associated values from enum cases:</p>
+                <pre><code class="language-maxon">match result 'handle'
     success(value) then return value
     failure(code, msg) then print(msg)
     pending then print(&quot;waiting...&quot;)
 end 'handle'
 </code></pre>
-<p>Each binding name becomes a local variable within the case body, with the type inferred from the enum case definition.</p>
-<p>Match expressions also support value extraction using <code>gives</code>:</p>
-<pre><code class="language-maxon">var extracted = match container 'get'
+                <p>Each binding name becomes a local variable within the case body, with the type inferred from the enum case definition.</p>
+                <p>Match expressions also support value extraction using <code>gives</code>:</p>
+                <pre><code class="language-maxon">var extracted = match container 'get'
     empty gives 0
     value(n) gives n
 end 'get'
 </code></pre>
-<h3>Comparing Enum Values</h3>
-<p>Enum values can be compared for equality using <code>==</code> and <code>!=</code>:</p>
-<pre><code class="language-maxon">if dir == Direction.north 'check'
+                <h3>Comparing Enum Values</h3>
+                <p>Enum values can be compared for equality using <code>==</code> and <code>!=</code>:</p>
+                <pre><code class="language-maxon">if dir == Direction.north 'check'
     // handle north
 end 'check'
 </code></pre>
-<p>For enums with associated values, <code>==</code> compares both the case and the associated values.</p>
-<h3>Enum Methods</h3>
-<p>Enums can have methods, similar to structs:</p>
-<pre><code class="language-maxon">enum Direction
+                <p>For enums with associated values, <code>==</code> compares both the case and the associated values.</p>
+                <h3>Enum Methods</h3>
+                <p>Enums can have methods, similar to structs:</p>
+                <pre><code class="language-maxon">enum Direction
     north
     south
     east
@@ -445,17 +474,17 @@ end 'check'
     end 'isVertical'
 end 'Direction'
 </code></pre>
-<p>Call methods using instance-dot-method syntax:</p>
-<pre><code class="language-maxon">var dir = Direction.north
+                <p>Call methods using instance-dot-method syntax:</p>
+                <pre><code class="language-maxon">var dir = Direction.north
 var opp = dir.opposite()    // Direction.south
 var vert = dir.isVertical() // true
 </code></pre>
             </div>
             <div class="spec-section" id="init-from-literal">
                 <h2>Init From Literal</h2>
-<h3>InitableFromStringLiteral</h3>
-<p>Types conforming to <code>InitableFromStringLiteral</code> can be initialized from string literals using cast syntax:</p>
-<pre><code class="language-maxon">type MyString is InitableFromStringLiteral
+                <h3>InitableFromStringLiteral</h3>
+                <p>Types conforming to <code>InitableFromStringLiteral</code> can be initialized from string literals using cast syntax:</p>
+                <pre><code class="language-maxon">type MyString is InitableFromStringLiteral
     var _managed _ManagedString
 
     static function InitableFromStringLiteral.init(managed _ManagedString) returns MyString
@@ -472,11 +501,14 @@ function main()
     print(&quot;{ms.len()}&quot;)
 end 'main'
 </code></pre>
-<fieldset class="expected-output"><legend>Expected Output</legend><pre>5
-Exit Code: 0</pre></fieldset>
-<h3>InitableFromCharLiteral</h3>
-<p>Types conforming to <code>InitableFromCharLiteral</code> can be initialized from character literals:</p>
-<pre><code class="language-maxon">type MyChar is InitableFromCharLiteral
+                <fieldset class="expected-output">
+                    <legend>Expected Output</legend>
+                    <pre>5
+Exit Code: 0</pre>
+                </fieldset>
+                <h3>InitableFromCharLiteral</h3>
+                <p>Types conforming to <code>InitableFromCharLiteral</code> can be initialized from character literals:</p>
+                <pre><code class="language-maxon">type MyChar is InitableFromCharLiteral
     var _managed _ManagedString
 
     static function InitableFromCharLiteral.init(managed _ManagedString) returns MyChar
@@ -493,35 +525,38 @@ function main()
     print(&quot;{mc.len()}&quot;)
 end 'main'
 </code></pre>
-<fieldset class="expected-output"><legend>Expected Output</legend><pre>1
-Exit Code: 0</pre></fieldset>
+                <fieldset class="expected-output">
+                    <legend>Expected Output</legend>
+                    <pre>1
+Exit Code: 0</pre>
+                </fieldset>
             </div>
             <div class="spec-section" id="interfaces">
                 <h2>Interfaces</h2>
-<p>Interfaces define a set of methods that types can implement. They provide a form of interface-based polymorphism.</p>
-<h3>Interface Declaration</h3>
-<p>Interfaces are declared with the <code>interface</code> keyword and contain method signatures:</p>
-<pre><code class="language-maxon">interface Hashable
+                <p>Interfaces define a set of methods that types can implement. They provide a form of interface-based polymorphism.</p>
+                <h3>Interface Declaration</h3>
+                <p>Interfaces are declared with the <code>interface</code> keyword and contain method signatures:</p>
+                <pre><code class="language-maxon">interface Hashable
     function hash() returns int
 end 'Hashable'
 </code></pre>
-<p>Method signatures in interfaces have an implicit <code>self</code> parameter of type <code>Self</code> (the conforming type). You don't declare <code>self</code> - it's automatic.</p>
-<h3>Type Conformance</h3>
-<p>Types declare conformance to interfaces using the <code>is</code> keyword:</p>
-<pre><code class="language-maxon">type Point is Hashable
+                <p>Method signatures in interfaces have an implicit <code>self</code> parameter of type <code>Self</code> (the conforming type). You don't declare <code>self</code> - it's automatic.</p>
+                <h3>Type Conformance</h3>
+                <p>Types declare conformance to interfaces using the <code>is</code> keyword:</p>
+                <pre><code class="language-maxon">type Point is Hashable
     var x int
     var y int
 end 'Point'
 </code></pre>
-<p>A type can conform to multiple interfaces:</p>
-<pre><code class="language-maxon">type Point is Hashable, Equatable
+                <p>A type can conform to multiple interfaces:</p>
+                <pre><code class="language-maxon">type Point is Hashable, Equatable
     var x int
     var y int
 end 'Point'
 </code></pre>
-<h3>Method Implementation</h3>
-<p>Methods implementing interface requirements are defined <strong>inside the type body</strong> using <code>function InterfaceName.methodName(params)</code> syntax. The interface prefix explicitly declares which interface the method implements. The <code>self</code> parameter is implicit:</p>
-<pre><code class="language-maxon">type Point is Hashable
+                <h3>Method Implementation</h3>
+                <p>Methods implementing interface requirements are defined <strong>inside the type body</strong> using <code>function InterfaceName.methodName(params)</code> syntax. The interface prefix explicitly declares which interface the method implements. The <code>self</code> parameter is implicit:</p>
+                <pre><code class="language-maxon">type Point is Hashable
     var x int
     var y int
 
@@ -530,14 +565,14 @@ end 'Point'
     end 'hash'
 end 'Point'
 </code></pre>
-<p>Inside method bodies, you can access type fields directly without <code>self.</code> prefix:</p>
-<ul>
-<li><code>x</code> resolves to <code>self.x</code></li>
-<li><code>y</code> resolves to <code>self.y</code></li>
-</ul>
-<p>You can still use <code>self.field</code> explicitly if needed, especially when a parameter shadows a field name.</p>
-<p>Non-interface methods (methods that don't implement any interface) use simple <code>function methodName(params)</code> syntax without a prefix:</p>
-<pre><code class="language-maxon">type Point
+                <p>Inside method bodies, you can access type fields directly without <code>self.</code> prefix:</p>
+                <ul>
+                    <li><code>x</code> resolves to <code>self.x</code></li>
+                    <li><code>y</code> resolves to <code>self.y</code></li>
+                </ul>
+                <p>You can still use <code>self.field</code> explicitly if needed, especially when a parameter shadows a field name.</p>
+                <p>Non-interface methods (methods that don't implement any interface) use simple <code>function methodName(params)</code> syntax without a prefix:</p>
+                <pre><code class="language-maxon">type Point
     var x int
     var y int
 
@@ -546,15 +581,15 @@ end 'Point'
     end 'getX'
 end 'Point'
 </code></pre>
-<h3>Calling Methods</h3>
-<p>Methods are called using the method call syntax - <code>instance.method()</code>:</p>
-<pre><code class="language-maxon">var p = Point{x: 10, y: 20}
+                <h3>Calling Methods</h3>
+                <p>Methods are called using the method call syntax - <code>instance.method()</code>:</p>
+                <pre><code class="language-maxon">var p = Point{x: 10, y: 20}
 var h = p.hash()
 </code></pre>
-<p>The method receives the instance as an implicit first parameter. Fields are accessed directly by name within the method body.</p>
-<h3>Self Type</h3>
-<p>The <code>Self</code> type in interface signatures represents the conforming type:</p>
-<pre><code class="language-maxon">interface Cloneable
+                <p>The method receives the instance as an implicit first parameter. Fields are accessed directly by name within the method body.</p>
+                <h3>Self Type</h3>
+                <p>The <code>Self</code> type in interface signatures represents the conforming type:</p>
+                <pre><code class="language-maxon">interface Cloneable
     function clone() returns Self
 end 'Cloneable'
 
@@ -567,9 +602,9 @@ type Point is Cloneable
     end 'clone'
 end 'Point'
 </code></pre>
-<h3>Associated Types</h3>
-<p>Interfaces can declare associated types with <code>uses</code>. Structs bind concrete types with <code>with</code>:</p>
-<pre><code class="language-maxon">interface Container uses Element
+                <h3>Associated Types</h3>
+                <p>Interfaces can declare associated types with <code>uses</code>. Structs bind concrete types with <code>with</code>:</p>
+                <pre><code class="language-maxon">interface Container uses Element
     function get(index int) returns Element
 end 'Container'
 
@@ -581,10 +616,10 @@ type IntArray is Container with int
     end 'get'
 end 'IntArray'
 </code></pre>
-<p>See the <a href="associated-types.md">Associated Types</a> spec for full documentation.</p>
-<h3>Partial Implementation Error</h3>
-<p>A type must implement <strong>all</strong> methods from interfaces it conforms to. Partial implementation is an error:</p>
-<pre><code class="language-maxon">interface TwoMethods
+                <p>See the <a href="associated-types.md">Associated Types</a> spec for full documentation.</p>
+                <h3>Partial Implementation Error</h3>
+                <p>A type must implement <strong>all</strong> methods from interfaces it conforms to. Partial implementation is an error:</p>
+                <pre><code class="language-maxon">interface TwoMethods
     function first() returns int
     function second() returns int
 end 'TwoMethods'
@@ -596,23 +631,23 @@ type Incomplete is TwoMethods
     // Missing: TwoMethods.second()
 end 'Incomplete'
 </code></pre>
-<p>This produces a compiler error listing all missing methods.</p>
-<h3>Standard Library Interfaces</h3>
-<p>The standard library (<code>stdlib/interfaces.maxon</code>) defines commonly used interfaces that are automatically imported when referenced:</p>
-<ul>
-<li><strong>Hashable</strong> - Types that can be hashed to an integer: <code>returns int</code></li>
-<li><strong>Equatable</strong> - Types that can be compared for equality: <code>returns bool</code></li>
-<li><strong>Comparable</strong> - Types that can be ordered: <code>returns int</code></li>
-<li><strong>Cloneable</strong> - Types that can be copied: <code>returns Self</code></li>
-<li><strong>Iterable</strong> - Types that can be iterated over (used by for-in loops):<ul>
-<li>Uses <code>Element</code> associated type</li>
-<li><code>returns Element or nil</code></li>
-</ul>
-</li>
-</ul>
-<p>The <code>Iterator</code> type in <code>stdlib/iter/iterator.maxon</code> conforms to <code>Iterable</code> and is used by <code>for</code> loops with <code>range()</code>.</p>
-<h3>Example</h3>
-<pre><code class="language-maxon">type Point is Hashable
+                <p>This produces a compiler error listing all missing methods.</p>
+                <h3>Standard Library Interfaces</h3>
+                <p>The standard library (<code>stdlib/interfaces.maxon</code>) defines commonly used interfaces that are automatically imported when referenced:</p>
+                <ul>
+                    <li><strong>Hashable</strong> - Types that can be hashed to an integer: <code>returns int</code></li>
+                    <li><strong>Equatable</strong> - Types that can be compared for equality: <code>returns bool</code></li>
+                    <li><strong>Comparable</strong> - Types that can be ordered: <code>returns int</code></li>
+                    <li><strong>Cloneable</strong> - Types that can be copied: <code>returns Self</code></li>
+                    <li><strong>Iterable</strong> - Types that can be iterated over (used by for-in loops):<ul>
+                            <li>Uses <code>Element</code> associated type</li>
+                            <li><code>returns Element or nil</code></li>
+                        </ul>
+                    </li>
+                </ul>
+                <p>The <code>Iterator</code> type in <code>stdlib/iter/iterator.maxon</code> conforms to <code>Iterable</code> and is used by <code>for</code> loops with <code>range()</code>.</p>
+                <h3>Example</h3>
+                <pre><code class="language-maxon">type Point is Hashable
     var x int
     var y int
 
@@ -628,14 +663,17 @@ function main() returns int
     return 0
 end 'main'
 </code></pre>
-<fieldset class="expected-output"><legend>Expected Output</legend><pre>630
-Exit Code: 0</pre></fieldset>
+                <fieldset class="expected-output">
+                    <legend>Expected Output</legend>
+                    <pre>630
+Exit Code: 0</pre>
+                </fieldset>
             </div>
             <div class="spec-section" id="self-keyword">
                 <h2>Self Keyword</h2>
-<h3>The <code>self</code> Keyword</h3>
-<p>Inside instance methods, <code>self</code> refers to the current instance:</p>
-<pre><code class="language-text">type Counter
+                <h3>The <code>self</code> Keyword</h3>
+                <p>Inside instance methods, <code>self</code> refers to the current instance:</p>
+                <pre><code class="language-text">type Counter
     var count int
 
     function increment()
@@ -643,8 +681,8 @@ Exit Code: 0</pre></fieldset>
     end 'increment'
 end 'Counter'
 </code></pre>
-<p>Field access can omit <code>self.</code> when unambiguous:</p>
-<pre><code class="language-text">type Counter
+                <p>Field access can omit <code>self.</code> when unambiguous:</p>
+                <pre><code class="language-text">type Counter
     var count int
 
     function increment()
@@ -652,9 +690,9 @@ end 'Counter'
     end 'increment'
 end 'Counter'
 </code></pre>
-<h3>The <code>Self</code> Type</h3>
-<p><code>Self</code> refers to the enclosing type, useful for method signatures:</p>
-<pre><code class="language-text">type Point
+                <h3>The <code>Self</code> Type</h3>
+                <p><code>Self</code> refers to the enclosing type, useful for method signatures:</p>
+                <pre><code class="language-text">type Point
     var x int
     var y int
 
@@ -666,47 +704,47 @@ end 'Point'
             </div>
             <div class="spec-section" id="structs">
                 <h2>Structs</h2>
-<p>Types define custom data types with named fields.</p>
-<h3>Declaration</h3>
-<pre><code class="language-maxon">type Point
+                <p>Types define custom data types with named fields.</p>
+                <h3>Declaration</h3>
+                <pre><code class="language-maxon">type Point
     var x int
     var y int
 end 'Point'
 </code></pre>
-<p>Fields must use <code>let</code> (immutable) or <code>var</code> (mutable):</p>
-<pre><code class="language-maxon">type Config
+                <p>Fields must use <code>let</code> (immutable) or <code>var</code> (mutable):</p>
+                <pre><code class="language-maxon">type Config
     let version int    // Cannot be changed after initialization
     var count int      // Can be modified
 end 'Config'
 </code></pre>
-<h3>Instantiation</h3>
-<p>Create type instances with literal syntax:</p>
-<pre><code class="language-maxon">var p = Point{x: 10, y: 20}
+                <h3>Instantiation</h3>
+                <p>Create type instances with literal syntax:</p>
+                <pre><code class="language-maxon">var p = Point{x: 10, y: 20}
 let config = Config{version: 1, count: 0}
 </code></pre>
-<h3>Instance Mutability</h3>
-<p>The mutability of a type instance is determined by <code>let</code> vs <code>var</code>:</p>
-<p><strong>var type</strong> - Can modify <code>var</code> fields:</p>
-<pre><code class="language-maxon">var p = Point{x: 10, y: 20}
+                <h3>Instance Mutability</h3>
+                <p>The mutability of a type instance is determined by <code>let</code> vs <code>var</code>:</p>
+                <p><strong>var type</strong> - Can modify <code>var</code> fields:</p>
+                <pre><code class="language-maxon">var p = Point{x: 10, y: 20}
 p.x = 30   // OK: type is mutable, field is var
 </code></pre>
-<p><strong>let type</strong> - Cannot modify any fields:</p>
-<pre><code class="language-maxon">let p = Point{x: 10, y: 20}
+                <p><strong>let type</strong> - Cannot modify any fields:</p>
+                <pre><code class="language-maxon">let p = Point{x: 10, y: 20}
 // p.x = 30   // ERROR: type instance is immutable
 </code></pre>
-<h3>Field Mutability</h3>
-<p>Even on a <code>var</code> type, <code>let</code> fields cannot be modified:</p>
-<pre><code class="language-maxon">var c = Config{version: 1, count: 0}
+                <h3>Field Mutability</h3>
+                <p>Even on a <code>var</code> type, <code>let</code> fields cannot be modified:</p>
+                <pre><code class="language-maxon">var c = Config{version: 1, count: 0}
 c.count = 5     // OK: field is var
 // c.version = 2   // ERROR: field is let
 </code></pre>
             </div>
             <div class="spec-section" id="type-methods">
                 <h2>Type Methods</h2>
-<p>Types can contain methods - functions that operate on type instances.</p>
-<h3>Instance Methods</h3>
-<p>Instance methods automatically receive <code>self</code> as the current instance:</p>
-<pre><code class="language-text">type Counter
+                <p>Types can contain methods - functions that operate on type instances.</p>
+                <h3>Instance Methods</h3>
+                <p>Instance methods automatically receive <code>self</code> as the current instance:</p>
+                <pre><code class="language-text">type Counter
     var count int
 
     function increment()
@@ -718,14 +756,14 @@ c.count = 5     // OK: field is var
     end 'get'
 end 'Counter'
 </code></pre>
-<p>Call methods using dot notation:</p>
-<pre><code class="language-text">var c = Counter{count: 0}
+                <p>Call methods using dot notation:</p>
+                <pre><code class="language-text">var c = Counter{count: 0}
 c.increment()
 var value = c.get()
 </code></pre>
-<h3>Static Methods</h3>
-<p>Static methods don't have access to <code>self</code>:</p>
-<pre><code class="language-text">type Math
+                <h3>Static Methods</h3>
+                <p>Static methods don't have access to <code>self</code>:</p>
+                <pre><code class="language-text">type Math
     static function square(x int) returns int
         return x * x
     end 'square'
@@ -733,17 +771,17 @@ end 'Math'
 
 var result = Math.square(5)  // 25
 </code></pre>
-<h3>Export Modifier</h3>
-<p>Use <code>export</code> to make methods visible outside the module:</p>
-<pre><code class="language-text">type PublicAPI
+                <h3>Export Modifier</h3>
+                <p>Use <code>export</code> to make methods visible outside the module:</p>
+                <pre><code class="language-text">type PublicAPI
     export function doSomething() returns int
         return 42
     end 'doSomething'
 end 'PublicAPI'
 </code></pre>
-<h3>Field Access in Methods</h3>
-<p>Methods can access fields directly without <code>self.</code> prefix:</p>
-<pre><code class="language-text">type Point
+                <h3>Field Access in Methods</h3>
+                <p>Methods can access fields directly without <code>self.</code> prefix:</p>
+                <pre><code class="language-text">type Point
     var x int
     var y int
 
@@ -757,4 +795,5 @@ end 'Point'
     </div>
     <script src="nav.js"></script>
 </body>
+
 </html>

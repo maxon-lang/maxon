@@ -5,7 +5,7 @@ const ir = @import("ir.zig");
 const ast = @import("ast.zig");
 const debug = @import("debug.zig");
 const array = @import("ast_to_ir_array.zig");
-const ManagedArray = array.ManagedArray;
+const ManagedMemory = array.ManagedMemory;
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const AstToIr = ast_to_ir.AstToIr;
 const DeferredBlocks = ast_to_ir.DeferredBlocks;
@@ -152,28 +152,28 @@ pub fn emitMapCleanup(self: *AstToIr, map_ptr: ir.Value, struct_name: []const u8
     else
         8;
 
-    // Get pointer to keys array at offset 0 (Array$K which has __ManagedArray as first field)
+    // Get pointer to keys array at offset 0 (Array$K which has __ManagedMemory as first field)
     const keys_ptr = map_ptr;
     // If keys have COW semantics, cleanup occupied slots only (check states array)
     if (key_has_managed_buffer) {
         try emitMapManagedKeysCleanup(self, map_ptr, key_elem_size);
     }
     // Cleanup the keys array using refcounted decref
-    try array.emitManagedArrayDecref(self, ir.toManagedArrayPtr(keys_ptr), "m.keys", "map keys cleanup");
+    try array.emitManagedMemoryDecref(self, ir.toManagedMemoryPtr(keys_ptr), "m.keys", "map keys cleanup");
 
-    // Get pointer to values array at offset 32 (Array$V which has __ManagedArray as first field)
+    // Get pointer to values array at offset 32 (Array$V which has __ManagedMemory as first field)
     const values_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
     // If values have COW semantics, cleanup occupied slots only (check states array)
     if (value_has_managed_buffer) {
         try emitMapManagedValuesCleanup(self, map_ptr, value_elem_size);
     }
     // Cleanup the values array using refcounted decref
-    try array.emitManagedArrayDecref(self, ir.toManagedArrayPtr(values_ptr.raw()), "m.values", "map values cleanup");
+    try array.emitManagedMemoryDecref(self, ir.toManagedMemoryPtr(values_ptr.raw()), "m.values", "map values cleanup");
 
-    // Get pointer to states array at offset 64 (Array$SlotState which has __ManagedArray as first field)
+    // Get pointer to states array at offset 64 (Array$SlotState which has __ManagedMemory as first field)
     const states_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.STATES_OFFSET);
     // Cleanup the states array using refcounted decref
-    try array.emitManagedArrayDecref(self, ir.toManagedArrayPtr(states_ptr.raw()), "m.states", "map states cleanup");
+    try array.emitManagedMemoryDecref(self, ir.toManagedMemoryPtr(states_ptr.raw()), "m.states", "map states cleanup");
 }
 
 /// Emit cleanup code for Map keys with COW semantics, checking the states array for occupied slots.
@@ -277,7 +277,7 @@ fn emitMapManagedKeysCleanup(self: *AstToIr, map_ptr: ir.Value, elem_size: i32) 
 
     // Check if heap mode: cap_flags & 3 == 1
     // cap_flags is at offset 24 in the String
-    const cap_flags_ptr = try ManagedArray.getFlagsPtr(self.func(), ir.toManagedArrayPtr(elem_ptr));
+    const cap_flags_ptr = try ManagedMemory.getFlagsPtr(self.func(), ir.toManagedMemoryPtr(elem_ptr));
     const cap_flags = try self.func().emitLoad(cap_flags_ptr.raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -455,7 +455,7 @@ fn emitMapManagedValuesCleanup(self: *AstToIr, map_ptr: ir.Value, elem_size: i32
 
     // Check if heap mode: cap_flags & 3 == 1
     // cap_flags is at offset 24 in the String
-    const cap_flags_ptr = try ManagedArray.getFlagsPtr(self.func(), ir.toManagedArrayPtr(elem_ptr));
+    const cap_flags_ptr = try ManagedMemory.getFlagsPtr(self.func(), ir.toManagedMemoryPtr(elem_ptr));
     const cap_flags = try self.func().emitLoad(cap_flags_ptr.raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
@@ -614,9 +614,9 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ast_to_ir.
         // The original temporary strings should be cleaned up normally at scope end.
     }
 
-    // Create __ManagedArrays for keys and values
-    const keys_managed_ptr = try array.emitManagedArray(self, keys_buffer, elem_count, elem_count);
-    const values_managed_ptr = try array.emitManagedArray(self, values_buffer, elem_count, elem_count);
+    // Create __ManagedMemorys for keys and values
+    const keys_managed_ptr = try array.emitManagedMemory(self, keys_buffer, elem_count, elem_count);
+    const values_managed_ptr = try array.emitManagedMemory(self, values_buffer, elem_count, elem_count);
 
     // Build init function name - call $init directly (compiler recognizes BuiltinDictionaryLiteral conformance)
     const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{map_type_name});
@@ -658,7 +658,7 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ast_to_ir.
 
     // Free the temporary buffers used to pass keys and values to init
     // The Map$init function copies the data into its internal hash table,
-    // so we need to clean up the temporary managed arrays
+    // so we need to clean up the temporary managed memorys
     debug.astToIr("Map literal: emitting heap.free for temp buffers in block {d}", .{self.func().blocks.items.len - 1});
     try self.func().emitHeapFree(keys_buffer, "map literal keys cleanup");
     try self.func().emitHeapFree(values_buffer, "map literal values cleanup");

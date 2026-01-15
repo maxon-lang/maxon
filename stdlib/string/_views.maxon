@@ -5,21 +5,21 @@
 // ============================================
 
 export type ByteView is Iterable with byte
-	var _managed __ManagedArray
+	var _managed __ManagedMemory
 	var _pos int
 
 	function Iterable.next() returns byte throws IterationError
-		if _pos >= __managed_array_len(_managed) 'at_end'
+		if _pos >= __managed_memory_len(_managed) 'at_end'
 			throw IterationError.exhausted
 		end 'at_end'
-		var b = __managed_array_byte_at(_managed, _pos)
+		var b = __managed_memory_byte_at(_managed, _pos)
 		_pos = _pos + 1
 		return b
 	end 'next'
 
 	/// Get the number of bytes
 	export function count() returns int
-		return __managed_array_len(_managed)
+		return __managed_memory_len(_managed)
 	end 'count'
 end 'ByteView'
 
@@ -28,11 +28,11 @@ end 'ByteView'
 // ============================================
 
 export type CodepointView is Iterable with int
-	var _managed __ManagedArray
+	var _managed __ManagedMemory
 	var _pos int
 
 	function Iterable.next() returns int throws IterationError
-		if _pos >= __managed_array_len(_managed) 'at_end'
+		if _pos >= __managed_memory_len(_managed) 'at_end'
 			throw IterationError.exhausted
 		end 'at_end'
 		var cp = utf8DecodeAt(_managed, pos: _pos)
@@ -45,7 +45,7 @@ export type CodepointView is Iterable with int
 	export function count() returns int
 		var count = 0
 		var pos = 0
-		var len = __managed_array_len(_managed)
+		var len = __managed_memory_len(_managed)
 		while pos < len 'count_loop'
 			var bytes = utf8ByteLengthAt(_managed, pos: pos)
 			pos = pos + bytes
@@ -60,7 +60,7 @@ end 'CodepointView'
 // ============================================
 
 export type UTF16View is Iterable with int
-	var _managed __ManagedArray
+	var _managed __ManagedMemory
 	var _bytePos int
 	var _pendingCodepoint int  // Codepoint pending its low surrogate (0 if none)
 
@@ -72,7 +72,7 @@ export type UTF16View is Iterable with int
 			return low
 		end 'has_pending'
 
-		if _bytePos >= __managed_array_len(_managed) 'at_end'
+		if _bytePos >= __managed_memory_len(_managed) 'at_end'
 			throw IterationError.exhausted
 		end 'at_end'
 
@@ -95,7 +95,7 @@ export type UTF16View is Iterable with int
 	export function count() returns int
 		var count = 0
 		var pos = 0
-		var len = __managed_array_len(_managed)
+		var len = __managed_memory_len(_managed)
 		while pos < len 'count_loop'
 			var cp = utf8DecodeAt(_managed, pos: pos)
 			var bytes = utf8ByteLengthAt(_managed, pos: pos)

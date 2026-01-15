@@ -12,7 +12,7 @@ const ConvertError = types.ConvertError;
 
 const cstring = @import("ast_to_ir_cstring.zig");
 const array_helpers = @import("ast_to_ir_array.zig");
-const ManagedArray = array_helpers.ManagedArray;
+const ManagedMemory = array_helpers.ManagedMemory;
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const AstToIr = ast_to_ir.AstToIr;
 const DeferredBlocks = ast_to_ir.DeferredBlocks;
@@ -24,13 +24,13 @@ const DeferredBlocks = ast_to_ir.DeferredBlocks;
 /// Clean up all temporary managed buffers (strings, etc.) and clear the list
 pub fn cleanupTemporaryManagedBuffers(self: *AstToIr) !void {
     for (self.temporary_strings.items) |managed_ptr| {
-        try array_helpers.emitManagedArrayDecref(self, ir.toManagedArrayPtr(managed_ptr), "<temp>", "temp cleanup");
+        try array_helpers.emitManagedMemoryDecref(self, ir.toManagedMemoryPtr(managed_ptr), "<temp>", "temp cleanup");
     }
     self.temporary_strings.clearRetainingCapacity();
 }
 
 /// Remove a specific value from the temporary strings list (used when assigned to a variable
-/// or when ownership transfers to an array via __managed_array_set_at)
+/// or when ownership transfers to an array via __managed_memory_set_at)
 pub fn removeFromTemporaries(self: *AstToIr, value: ir.Value) void {
     var i: usize = 0;
     while (i < self.temporary_strings.items.len) {
@@ -135,18 +135,18 @@ pub fn clearSliceBorrows(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmana
 
 /// Emit cleanup for all elements with has_managed_buffer in an array.
 /// Iterates through each element and decrefs its buffer using COW semantics.
-/// array_ptr points to an Array$T struct (with __ManagedArray at offset 0).
+/// array_ptr points to an Array$T struct (with __ManagedMemory at offset 0).
 /// elem_struct_info describes the element type (must have has_managed_buffer = true).
 fn emitArrayManagedElementsCleanup(self: *AstToIr, array_ptr: ir.Value, elem_struct_info: *const types.StructTypeInfo) !void {
-    // Array$T layout: __ManagedArray (32 bytes) + iterIndex (8 bytes)
-    // __ManagedArray layout: buffer_ptr (8) + length (8) + capacity (8) + flags (4) + parent_off (4)
-    // Element layout: __ManagedArray at offset 0 (has_managed_buffer types)
+    // Array$T layout: __ManagedMemory (32 bytes) + iterIndex (8 bytes)
+    // __ManagedMemory layout: buffer_ptr (8) + length (8) + capacity (8) + flags (4) + parent_off (4)
+    // Element layout: __ManagedMemory at offset 0 (has_managed_buffer types)
 
     // Get element size from struct info
     const elem_size_int: i64 = @intCast(elem_struct_info.size);
 
     // Load length first to check if empty
-    const len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(array_ptr));
+    const len = try ManagedMemory.loadLen(self.func(), ir.toManagedMemoryPtr(array_ptr));
 
     // Skip cleanup if empty
     const zero = try self.func().emitConstI64(0);
@@ -183,7 +183,7 @@ fn emitArrayManagedElementsCleanup(self: *AstToIr, array_ptr: ir.Value, elem_str
     deferred.deferBlocks(self, 5);
 
     // Condition block: reload len and check if i < len
-    const cond_len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(array_ptr));
+    const cond_len = try ManagedMemory.loadLen(self.func(), ir.toManagedMemoryPtr(array_ptr));
     const cond_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_len, .i64);
 
@@ -206,8 +206,8 @@ fn emitArrayManagedElementsCleanup(self: *AstToIr, array_ptr: ir.Value, elem_str
     const elem_ptr = try self.func().emitBinaryOp(.add, body_buf_ptr, offset, .ptr);
 
     // Check if heap mode: flags & 3 == 1
-    // The element contains __ManagedArray at offset 0
-    const is_heap = try ManagedArray.isHeapMode(self.func(), ir.toManagedArrayPtr(elem_ptr));
+    // The element contains __ManagedMemory at offset 0
+    const is_heap = try ManagedMemory.isHeapMode(self.func(), ir.toManagedMemoryPtr(elem_ptr));
 
     // Branch: if heap mode, go to decref block; otherwise go to next
     try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
@@ -302,7 +302,7 @@ pub fn freeHeapVar(self: *AstToIr, var_info: VarInfo, skip_if_parameter: bool, v
             return;
         }
 
-        // Skip internal types (like __ManagedArray) at top-level - they should only be
+        // Skip internal types (like __ManagedMemory) at top-level - they should only be
         // cleaned up as a field of another struct (String, Array). Standalone internal
         // type variables are typically slices which don't own memory, and they may be
         // declared in conditional blocks where they're not initialized on all paths.
@@ -326,7 +326,7 @@ pub fn freeHeapVar(self: *AstToIr, var_info: VarInfo, skip_if_parameter: bool, v
 }
 
 /// Clean up a struct by recursively cleaning up its fields that need cleanup.
-/// Uses mode-based dispatch for types with __ManagedArray.
+/// Uses mode-based dispatch for types with __ManagedMemory.
 fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types.StructTypeInfo, var_name: []const u8) ConvertError!void {
     const name = struct_info.name;
 
@@ -336,7 +336,7 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
         return;
     }
 
-    // Check if struct has __ManagedArray field - use unified COW decref
+    // Check if struct has __ManagedMemory field - use unified COW decref
     if (struct_info.has_managed_buffer) {
         // First, clean up elements if this is a collection with element cleanup needs
         // Use element_type_name from struct_info if available, otherwise parse from name
@@ -347,8 +347,8 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
             break :blk null;
         };
 
-        // Get pointer to __ManagedArray at the correct offset
-        const managed_ptr = try array_helpers.getManagedArrayPtr(self, struct_ptr, struct_info.managed_buffer_offset);
+        // Get pointer to __ManagedMemory at the correct offset
+        const managed_ptr = try array_helpers.getManagedMemoryPtr(self, struct_ptr, struct_info.managed_buffer_offset);
 
         if (elem_type_name) |eln| {
             // Check if element type needs cleanup
@@ -372,13 +372,13 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
             "string cleanup" // String type (no element_type_name but has_managed_buffer)
         else
             "array cleanup";
-        try array_helpers.emitManagedArrayDecref(self, managed_ptr, var_name, cleanup_tag);
+        try array_helpers.emitManagedMemoryDecref(self, managed_ptr, var_name, cleanup_tag);
         return;
     }
 
-    // Internal types standalone (like __ManagedArray) - use decref with header
+    // Internal types standalone (like __ManagedMemory) - use decref with header
     if (struct_info.is_internal_type) {
-        try array_helpers.emitManagedArrayDecref(self, ir.toManagedArrayPtr(struct_ptr), var_name, "array cleanup");
+        try array_helpers.emitManagedMemoryDecref(self, ir.toManagedMemoryPtr(struct_ptr), var_name, "array cleanup");
         return;
     }
 
@@ -394,7 +394,7 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
 /// Instead, we create blocks just-in-time and branch from wherever we are.
 fn emitElementCleanup(self: *AstToIr, array_ptr: ir.Value, elem_struct_info: *const types.StructTypeInfo) !void {
     // Load length first to check if empty
-    const len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(array_ptr));
+    const len = try ManagedMemory.loadLen(self.func(), ir.toManagedMemoryPtr(array_ptr));
 
     // Skip cleanup if empty
     const zero = try self.func().emitConstI64(0);
@@ -412,7 +412,7 @@ fn emitElementCleanup(self: *AstToIr, array_ptr: ir.Value, elem_struct_info: *co
     _ = try self.func().addBlock("elem_cleanup_cond");
 
     // We're now in cond block - emit condition check (can't branch yet, need body block)
-    const cond_len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(array_ptr));
+    const cond_len = try ManagedMemory.loadLen(self.func(), ir.toManagedMemoryPtr(array_ptr));
     const cond_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const done = try self.func().emitBinaryOp(.icmp_ge, cond_i, cond_len, .i64);
 

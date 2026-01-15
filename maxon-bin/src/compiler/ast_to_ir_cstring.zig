@@ -4,7 +4,7 @@ const std = @import("std");
 const ir = @import("ir.zig");
 const types = @import("ast_to_ir_types.zig");
 const array_helpers = @import("ast_to_ir_array.zig");
-const ManagedArray = array_helpers.ManagedArray;
+const ManagedMemory = array_helpers.ManagedMemory;
 
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const AstToIr = ast_to_ir.AstToIr;
@@ -19,7 +19,7 @@ const DeferredBlocks = ast_to_ir.DeferredBlocks;
 /// Fields:
 /// - data: *u8 (8 bytes) - pointer to null-terminated C string data
 /// - length: i64 (8 bytes) - length of string (not including null terminator)
-/// - managed: *__ManagedArray (8 bytes) - pointer to parent ManagedArray if borrowed, null if owned
+/// - managed: *__ManagedMemory (8 bytes) - pointer to parent ManagedMemory if borrowed, null if owned
 pub const CString = struct {
     pub const SIZE: i32 = 24;
     pub const DATA_OFFSET: i32 = 0;
@@ -127,7 +127,7 @@ pub fn emitCstringCleanup(self: *AstToIr, cstring_ptr: ir.Value) !void {
 
     // === DECREF BLOCK: managed != null, check if heap mode ===
     try deferred.restore(self, 5); // decref_block is at index 5 in deferred
-    const cap_ptr = try ManagedArray.getFlagsPtr(self.func(), ir.toManagedArrayPtr(managed_ptr));
+    const cap_ptr = try ManagedMemory.getFlagsPtr(self.func(), ir.toManagedMemoryPtr(managed_ptr));
     const cap_flags = try self.func().emitLoad(cap_ptr.raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);

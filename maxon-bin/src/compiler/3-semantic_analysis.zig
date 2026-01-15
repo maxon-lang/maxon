@@ -403,7 +403,7 @@ pub const SemanticAnalyzer = struct {
 
     /// Get or create an array type in type_map, returning a pointer to it.
     /// Arrays are represented as struct types with a fixed size of 40 bytes.
-    /// Layout: __ManagedArray (32 bytes) + iterIndex (8 bytes)
+    /// Layout: __ManagedMemory (32 bytes) + iterIndex (8 bytes)
     fn getOrCreateArrayType(self: *SemanticAnalyzer, element_name: []const u8) !*const types.StructTypeInfo {
         // Build array type name: Array$ElementType
         const array_name = try std.fmt.allocPrint(self.allocator, "Array${s}", .{element_name});
@@ -421,12 +421,12 @@ pub const SemanticAnalyzer = struct {
         // Track the allocated name
         try self.allocated_type_strings.append(self.allocator, array_name);
 
-        // Get __ManagedArray type info (registered in registerCompilerInternalTypes)
-        const managed_array_type_info = self.type_map.getPtr("__ManagedArray") orelse
-            return error.OutOfMemory; // __ManagedArray should be registered first
-        const managed_array_struct = switch (managed_array_type_info.*) {
+        // Get __ManagedMemory type info (registered in registerCompilerInternalTypes)
+        const managed_memory_type_info = self.type_map.getPtr("__ManagedMemory") orelse
+            return error.OutOfMemory; // __ManagedMemory should be registered first
+        const managed_memory_struct = switch (managed_memory_type_info.*) {
             .struct_type => |*s| s,
-            else => return error.OutOfMemory, // __ManagedArray should be a struct type
+            else => return error.OutOfMemory, // __ManagedMemory should be a struct type
         };
 
         // Build field info for Array type
@@ -442,7 +442,7 @@ pub const SemanticAnalyzer = struct {
             .name = "managed",
             .offset = 8,
             .size = 32,
-            .value_type = .{ .struct_type = managed_array_struct },
+            .value_type = .{ .struct_type = managed_memory_struct },
         };
 
         // Check if element type has has_managed_buffer (for COW cleanup of elements)
@@ -452,7 +452,7 @@ pub const SemanticAnalyzer = struct {
             false;
 
         // Register as struct type
-        // needs_cleanup is true because it contains __ManagedArray which has needs_cleanup = true
+        // needs_cleanup is true because it contains __ManagedMemory which has needs_cleanup = true
         try self.type_map.put(self.allocator, array_name, .{
             .struct_type = .{
                 .name = array_name,
@@ -573,17 +573,17 @@ pub const SemanticAnalyzer = struct {
     }
 
     fn registerCompilerInternalTypes(self: *SemanticAnalyzer) !void {
-        // __ManagedArray
-        // __ManagedArray (unified for both arrays and strings - 32 bytes)
+        // __ManagedMemory
+        // __ManagedMemory (unified for both arrays and strings - 32 bytes)
         // Layout: ptr buffer (8) + i64 len (8) + i64 capacity (8) + i32 flags (4) + i32 parent_off (4)
-        const managed_array_fields = try self.allocator.alloc(FieldInfo, 5);
-        managed_array_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = .ptr } };
-        managed_array_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = .int } };
-        managed_array_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = .int } };
-        managed_array_fields[3] = .{ .name = "_flags", .offset = 24, .size = 4, .value_type = .{ .primitive = .int } };
-        managed_array_fields[4] = .{ .name = "_parent_off", .offset = 28, .size = 4, .value_type = .{ .primitive = .int } };
-        try self.type_map.put(self.allocator, "__ManagedArray", .{
-            .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = 32, .needs_cleanup = true, .has_managed_buffer = true, .is_internal_type = true },
+        const managed_memory_fields = try self.allocator.alloc(FieldInfo, 5);
+        managed_memory_fields[0] = .{ .name = "_buffer", .offset = 0, .size = 8, .value_type = .{ .primitive = .ptr } };
+        managed_memory_fields[1] = .{ .name = "_len", .offset = 8, .size = 8, .value_type = .{ .primitive = .int } };
+        managed_memory_fields[2] = .{ .name = "_capacity", .offset = 16, .size = 8, .value_type = .{ .primitive = .int } };
+        managed_memory_fields[3] = .{ .name = "_flags", .offset = 24, .size = 4, .value_type = .{ .primitive = .int } };
+        managed_memory_fields[4] = .{ .name = "_parent_off", .offset = 28, .size = 4, .value_type = .{ .primitive = .int } };
+        try self.type_map.put(self.allocator, "__ManagedMemory", .{
+            .struct_type = .{ .name = "__ManagedMemory", .fields = managed_memory_fields, .size = 32, .needs_cleanup = true, .has_managed_buffer = true, .is_internal_type = true },
         });
 
         // cstring
@@ -642,8 +642,8 @@ pub const SemanticAnalyzer = struct {
         const fields = try self.buildFieldInfos(type_decl.fields);
         const size = self.calculateStructSize(fields);
 
-        // Check if this type has COW semantics (__ManagedArray field)
-        const managed_offset = types.findManagedArrayField(fields);
+        // Check if this type has COW semantics (__ManagedMemory field)
+        const managed_offset = types.findManagedMemoryField(fields);
 
         try self.type_map.put(self.allocator, ext_type.name, .{
             .struct_type = .{
@@ -1428,7 +1428,7 @@ pub const SemanticAnalyzer = struct {
             else
                 false;
 
-            const managed_offset = types.findManagedArrayField(fields);
+            const managed_offset = types.findManagedMemoryField(fields);
             try self.type_map.put(self.allocator, mono_name, .{
                 .struct_type = .{
                     .name = mono_name,

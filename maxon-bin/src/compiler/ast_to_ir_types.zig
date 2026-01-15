@@ -171,8 +171,8 @@ pub const TypedValue = struct {
         return .{ .val = self.value };
     }
 
-    /// Convert to ManagedArrayPtr (use when you know the type is an array)
-    pub fn asManagedArrayPtr(self: TypedValue) ir.ManagedArrayPtr {
+    /// Convert to ManagedMemoryPtr (use when you know the type is an array)
+    pub fn asManagedMemoryPtr(self: TypedValue) ir.ManagedMemoryPtr {
         return .{ .val = self.value };
     }
 
@@ -349,11 +349,11 @@ pub const FieldInfo = struct {
     }
 };
 
-/// Find __ManagedArray field in a slice of FieldInfo and return its offset, or null if not found.
-pub fn findManagedArrayField(fields: []const FieldInfo) ?i32 {
+/// Find __ManagedMemory field in a slice of FieldInfo and return its offset, or null if not found.
+pub fn findManagedMemoryField(fields: []const FieldInfo) ?i32 {
     for (fields) |field| {
         if (field.value_type == .struct_type) {
-            if (std.mem.eql(u8, field.value_type.struct_type.name, "__ManagedArray")) {
+            if (std.mem.eql(u8, field.value_type.struct_type.name, "__ManagedMemory")) {
                 return field.offset;
             }
         }
@@ -381,19 +381,19 @@ pub const StructTypeInfo = struct {
     // Cleanup strategy flags - set during type registration
     // ========================================================================
 
-    /// True if struct contains a __ManagedArray field. Cleanup uses mode-based COW decref.
-    /// Set for: String, Array$T, and any wrapper with __ManagedArray.
+    /// True if struct contains a __ManagedMemory field. Cleanup uses mode-based COW decref.
+    /// Set for: String, Array$T, and any wrapper with __ManagedMemory.
     has_managed_buffer: bool = false,
 
-    /// Offset of __ManagedArray field within the struct (if has_managed_buffer is true).
-    /// Used to access the managed array for cleanup/incref operations.
+    /// Offset of __ManagedMemory field within the struct (if has_managed_buffer is true).
+    /// Used to access the managed memory for cleanup/incref operations.
     managed_buffer_offset: i32 = 0,
 
     /// True if this is the cstring type (data/length/managed pattern).
     /// Cleanup conditionally frees based on managed pointer being null.
     is_cstring: bool = false,
 
-    /// True if this is a compiler-internal type (__ManagedArray, etc.)
+    /// True if this is a compiler-internal type (__ManagedMemory, etc.)
     /// that should not be cleaned up at top-level scope.
     is_internal_type: bool = false,
 

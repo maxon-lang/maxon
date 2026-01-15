@@ -9,7 +9,7 @@ const struct_helpers = @import("ir_struct_helpers.zig");
 
 // Import type-specific modules for layouts
 const array = @import("ast_to_ir_array.zig");
-const ManagedArray = array.ManagedArray;
+const ManagedMemory = array.ManagedMemory;
 
 // Forward reference to main AstToIr module
 const ast_to_ir = @import("4-ast_to_ir.zig");
@@ -44,11 +44,11 @@ fn intrinsicLoadI32Field(self: *AstToIr, call: ast.CallExpr, offset: i32) Conver
     return .{ .value = value, .ty = .{ .primitive = .int } };
 }
 
-/// Initialize a heap-allocated __ManagedArray struct (32 bytes for strings with mode=1)
-fn initHeapManagedArray(self: *AstToIr, array_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value) ConvertError!void {
+/// Initialize a heap-allocated __ManagedMemory struct (32 bytes for strings with mode=1)
+fn initHeapManagedMemory(self: *AstToIr, array_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value) ConvertError!void {
     // mode = 1 (heap-refcounted)
     const mode_one = try self.func().emitConstI32(1);
-    return ManagedArray.init(self.func(), ir.toManagedArrayPtr(array_ptr), ir.toRawPtr(buffer), len_i64, len_i64, mode_one);
+    return ManagedMemory.init(self.func(), ir.toManagedMemoryPtr(array_ptr), ir.toRawPtr(buffer), len_i64, len_i64, mode_one);
 }
 
 /// Initialize slice array metadata fields (flags=2, parent_off)
@@ -188,7 +188,7 @@ pub fn isStdlibFile(self: *AstToIr) bool {
 }
 
 /// Check if a type name is internal (starts with underscore)
-/// Internal types like __ManagedArray can only be used in stdlib code
+/// Internal types like __ManagedMemory can only be used in stdlib code
 pub fn isInternalType(type_name: []const u8) bool {
     return type_name.len > 0 and type_name[0] == '_';
 }
@@ -212,7 +212,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
 
         // Dispatch based on codegen strategy
         return switch (category.codegen) {
-            .managed_array => convertManagedArrayIntrinsic(self, call),
+            .managed_memory => convertManagedMemoryIntrinsic(self, call),
             .cstring => convertCstringIntrinsic(self, call),
             .make_char => convertMakeCharIntrinsic(self, call),
             .file_io => convertFileIntrinsic(self, call),
@@ -254,10 +254,10 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
 }
 
 // ============================================================================
-// __ManagedArray Intrinsics (stdlib-only)
+// __ManagedMemory Intrinsics (stdlib-only)
 // ============================================================================
 
-/// Element info for managed array operations
+/// Element info for managed memory operations
 const ElemInfo = struct {
     size: i32,
     is_struct: bool,
@@ -265,7 +265,7 @@ const ElemInfo = struct {
     type_name: ?[]const u8,
     /// True if the element type has COW semantics (has_managed_buffer flag set)
     has_managed_buffer: bool = false,
-    /// Offset of __ManagedArray within the struct (for types with has_managed_buffer)
+    /// Offset of __ManagedMemory within the struct (for types with has_managed_buffer)
     managed_buffer_offset: i32 = 0,
 };
 
@@ -273,7 +273,7 @@ const ElemInfo = struct {
 const ShiftDirection = enum { left, right };
 
 /// Get element size and type info from generic_params or current_type_name
-/// Used by managed array intrinsics to determine element size at compile time
+/// Used by managed memory intrinsics to determine element size at compile time
 /// @param param_name: The generic param to look for ("Element", "Key", or "Value")
 /// Returns error if element type cannot be determined - this indicates a compiler bug
 fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ConvertError!ElemInfo {
@@ -423,71 +423,71 @@ fn dispatchIntrinsic(self: *AstToIr, call: ast.CallExpr, comptime table: anytype
     return error.SemanticError;
 }
 
-const managed_array_intrinsics = .{
-    .{ "__managed_array_len", intrinsicManagedArrayLen },
-    .{ "__managed_array_capacity", intrinsicManagedArrayCapacity },
-    .{ "__managed_array_create", intrinsicManagedArrayCreate },
-    .{ "__managed_array_set_at", intrinsicManagedArraySetAt },
-    .{ "__managed_array_set_length", intrinsicManagedArraySetLength },
-    .{ "__managed_array_grow", intrinsicManagedArrayGrow },
-    .{ "__managed_array_shift_right", intrinsicManagedArrayShiftRight },
-    .{ "__managed_array_shift_left", intrinsicManagedArrayShiftLeft },
-    .{ "__managed_array_get_unchecked", intrinsicManagedArrayGetUnchecked },
+const managed_memory_intrinsics = .{
+    .{ "__managed_memory_len", intrinsicManagedMemoryLen },
+    .{ "__managed_memory_capacity", intrinsicManagedMemoryCapacity },
+    .{ "__managed_memory_create", intrinsicManagedMemoryCreate },
+    .{ "__managed_memory_set_at", intrinsicManagedMemorySetAt },
+    .{ "__managed_memory_set_length", intrinsicManagedMemorySetLength },
+    .{ "__managed_memory_grow", intrinsicManagedMemoryGrow },
+    .{ "__managed_memory_shift_right", intrinsicManagedMemoryShiftRight },
+    .{ "__managed_memory_shift_left", intrinsicManagedMemoryShiftLeft },
+    .{ "__managed_memory_get_unchecked", intrinsicManagedMemoryGetUnchecked },
     .{ "__element_size", intrinsicElementSize },
     // Map initialization intrinsics - use Key/Value generic params
     .{ "__map_get_init_key", intrinsicMapGetInitKey },
     .{ "__map_get_init_value", intrinsicMapGetInitValue },
-    // String-related intrinsics (now unified under __managed_array)
-    .{ "__managed_array_byte_at", intrinsicManagedArrayByteAt },
-    .{ "__managed_array_slice", intrinsicManagedArraySlice },
-    .{ "__managed_array_concat", intrinsicManagedArrayConcat },
-    .{ "__managed_array_make_unique", intrinsicManagedArrayMakeUnique },
-    .{ "__managed_array_set_byte", intrinsicManagedArraySetByte },
-    .{ "__managed_array_to_cstring", intrinsicManagedArrayToCstring },
-    .{ "__managed_array_from_bytes", intrinsicManagedArrayFromBytes },
-    .{ "__managed_array_incref", intrinsicManagedArrayIncref },
-    .{ "__managed_array_refcount", intrinsicManagedArrayRefcount },
-    .{ "__managed_array_is_refcounted", intrinsicManagedArrayIsRefcounted },
-    .{ "__managed_array_flags", intrinsicManagedArrayFlags },
+    // String-related intrinsics (now unified under __managed_memory)
+    .{ "__managed_memory_byte_at", intrinsicManagedMemoryByteAt },
+    .{ "__managed_memory_slice", intrinsicManagedMemorySlice },
+    .{ "__managed_memory_concat", intrinsicManagedMemoryConcat },
+    .{ "__managed_memory_make_unique", intrinsicManagedMemoryMakeUnique },
+    .{ "__managed_memory_set_byte", intrinsicManagedMemorySetByte },
+    .{ "__managed_memory_to_cstring", intrinsicManagedMemoryToCstring },
+    .{ "__managed_memory_from_bytes", intrinsicManagedMemoryFromBytes },
+    .{ "__managed_memory_incref", intrinsicManagedMemoryIncref },
+    .{ "__managed_memory_refcount", intrinsicManagedMemoryRefcount },
+    .{ "__managed_memory_is_refcounted", intrinsicManagedMemoryIsRefcounted },
+    .{ "__managed_memory_flags", intrinsicManagedMemoryFlags },
 };
 
-fn convertManagedArrayIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
-    return dispatchIntrinsic(self, call, managed_array_intrinsics);
+fn convertManagedMemoryIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    return dispatchIntrinsic(self, call, managed_memory_intrinsics);
 }
 
-/// __managed_array_len(managed) -> int
-fn intrinsicManagedArrayLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_memory_len(managed) -> int
+fn intrinsicManagedMemoryLen(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     return intrinsicLoadI64Field(self, call, 8);
 }
 
-/// __managed_array_capacity(managed) -> int
-fn intrinsicManagedArrayCapacity(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_memory_capacity(managed) -> int
+fn intrinsicManagedMemoryCapacity(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     return intrinsicLoadI64Field(self, call, 16);
 }
 
-/// __managed_array_create(capacity, elem_size) -> __ManagedArray
-/// Creates a new managed array with the given capacity and element size (length = capacity)
+/// __managed_memory_create(capacity, elem_size) -> __ManagedMemory
+/// Creates a new managed memory with the given capacity and element size (length = capacity)
 /// Uses mode=1 (heap-refcounted) with COW semantics - buffer has 8-byte refcount header.
-fn intrinsicManagedArrayCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryCreate(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const capacity = try self.convertExpression(call.args[0]);
     const elem_size = try self.convertExpression(call.args[1]);
 
-    const managed_ptr = try ManagedArray.alloca(self.func());
+    const managed_ptr = try ManagedMemory.alloca(self.func());
 
     const buf_size = try self.func().emitBinaryOp(.mul, capacity.value, elem_size.value, .i64);
     const buf_ptr = try array.emitAllocRefcountedBuffer(self, buf_size, "array buffer");
 
     // Initialize with mode=1 (heap-refcounted with COW semantics)
     const mode_heap = try self.func().emitConstI32(array.MODE_HEAP);
-    try ManagedArray.init(self.func(), managed_ptr, buf_ptr, capacity.value, capacity.value, mode_heap);
+    try ManagedMemory.init(self.func(), managed_ptr, buf_ptr, capacity.value, capacity.value, mode_heap);
 
     // Return as struct type so memcpy works correctly when returning from functions
-    return .{ .value = managed_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
+    return .{ .value = managed_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedMemory") };
 }
 
-/// __managed_array_set_at(managed, index, value) -> void
-fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_memory_set_at(managed, index, value) -> void
+fn intrinsicManagedMemorySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
     const managed = try self.convertExpression(call.args[0]);
     const index = try self.convertExpression(call.args[1]);
@@ -513,15 +513,15 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     // The source variable may still be cleaned up at scope exit (decref).
     // When the array is destroyed, it will decref each element.
     if (value.ty == .struct_type and value.ty.struct_type.has_managed_buffer) {
-        const managed_ptr = try array.getManagedArrayPtr(self, value.value, value.ty.struct_type.managed_buffer_offset);
-        try array.emitManagedArrayIncref(self, managed_ptr, "<array_store>");
+        const managed_ptr = try array.getManagedMemoryPtr(self, value.value, value.ty.struct_type.managed_buffer_offset);
+        try array.emitManagedMemoryIncref(self, managed_ptr, "<array_store>");
     }
 
     return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
-/// __managed_array_set_length(managed, new_len) -> void
-fn intrinsicManagedArraySetLength(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_memory_set_length(managed, new_len) -> void
+fn intrinsicManagedMemorySetLength(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);
     const new_len = try self.convertExpression(call.args[1]);
@@ -529,10 +529,10 @@ fn intrinsicManagedArraySetLength(self: *AstToIr, call: ast.CallExpr) ConvertErr
     return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
-/// __managed_array_grow(managed, new_capacity) -> void
+/// __managed_memory_grow(managed, new_capacity) -> void
 /// Grows the array buffer, accounting for the 8-byte refcount header.
 /// If buffer is null (empty array), allocates new buffer; otherwise reallocates.
-fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);
     const new_capacity = try self.convertExpression(call.args[1]);
@@ -594,9 +594,9 @@ fn intrinsicManagedArrayGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
-/// __managed_array_shift_right(managed, start_index, count) -> void
+/// __managed_memory_shift_right(managed, start_index, count) -> void
 /// Shifts elements right, iterating backwards to handle overlap
-fn intrinsicManagedArrayShiftRight(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryShiftRight(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
     const managed = try self.convertExpression(call.args[0]);
     const start_index = try self.convertExpression(call.args[1]);
@@ -605,9 +605,9 @@ fn intrinsicManagedArrayShiftRight(self: *AstToIr, call: ast.CallExpr) ConvertEr
     return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
-/// __managed_array_shift_left(managed, start_index, count) -> void
+/// __managed_memory_shift_left(managed, start_index, count) -> void
 /// Shifts elements left, iterating forwards to handle overlap
-fn intrinsicManagedArrayShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
     const managed = try self.convertExpression(call.args[0]);
     const start_index = try self.convertExpression(call.args[1]);
@@ -616,11 +616,11 @@ fn intrinsicManagedArrayShiftLeft(self: *AstToIr, call: ast.CallExpr) ConvertErr
     return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
-/// __managed_array_get_unchecked(managed, index) -> Element
+/// __managed_memory_get_unchecked(managed, index) -> Element
 /// Returns a pointer to the element in the array buffer.
 /// For struct elements (including String), returns pointer directly to array buffer.
 /// Caller is responsible for copying and incref if needed.
-fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryGetUnchecked(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);
     const index = try self.convertExpression(call.args[1]);
@@ -655,7 +655,7 @@ fn intrinsicManagedArrayGetUnchecked(self: *AstToIr, call: ast.CallExpr) Convert
 
 /// __element_size() -> int
 /// Returns the element size for the current generic type context
-/// Used by Array.maxon to pass explicit element size to __managed_array_create
+/// Used by Array.maxon to pass explicit element size to __managed_memory_create
 fn intrinsicElementSize(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 0);
     const elem_info = try getElementInfo(self);
@@ -664,7 +664,7 @@ fn intrinsicElementSize(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
 }
 
 /// __map_get_init_key(managed, index) -> Key
-/// Like __managed_array_get_unchecked but uses "Key" generic param instead of "Element"
+/// Like __managed_memory_get_unchecked but uses "Key" generic param instead of "Element"
 /// For keys with COW semantics: copies the struct and increfs the buffer so the caller owns it
 fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
@@ -685,8 +685,8 @@ fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
             // Copy the struct
             try self.func().emitMemcpy(new_ptr, elem_ptr.asRawPtr(), @intCast(elem_info.size));
             // Incref the buffer header so caller has their own reference
-            const managed_ptr = try array.getManagedArrayPtr(self, new_ptr.raw(), elem_info.managed_buffer_offset);
-            try array.emitManagedArrayIncref(self, managed_ptr, "<map_key>");
+            const managed_ptr = try array.getManagedMemoryPtr(self, new_ptr.raw(), elem_info.managed_buffer_offset);
+            try array.emitManagedMemoryIncref(self, managed_ptr, "<map_key>");
             return .{ .value = new_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
         }
 
@@ -701,7 +701,7 @@ fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
 }
 
 /// __map_get_init_value(managed, index) -> Value
-/// Like __managed_array_get_unchecked but uses "Value" generic param instead of "Element"
+/// Like __managed_memory_get_unchecked but uses "Value" generic param instead of "Element"
 /// For values with COW semantics: copies the struct and increfs the buffer so the caller owns it
 fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
@@ -723,8 +723,8 @@ fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
             // Copy the struct
             try self.func().emitMemcpy(new_ptr, elem_ptr.asRawPtr(), @intCast(elem_info.size));
             // Incref the buffer header so caller has their own reference
-            const managed_ptr = try array.getManagedArrayPtr(self, new_ptr.raw(), elem_info.managed_buffer_offset);
-            try array.emitManagedArrayIncref(self, managed_ptr, "<map_value>");
+            const managed_ptr = try array.getManagedMemoryPtr(self, new_ptr.raw(), elem_info.managed_buffer_offset);
+            try array.emitManagedMemoryIncref(self, managed_ptr, "<map_value>");
             return .{ .value = new_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
         }
 
@@ -739,10 +739,10 @@ fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 }
 
 // ============================================================================
-// __ManagedArray Intrinsics for Strings (stdlib-only)
+// __ManagedMemory Intrinsics for Strings (stdlib-only)
 // ============================================================================
 //
-// __ManagedArray memory layout (32 bytes):
+// __ManagedMemory memory layout (32 bytes):
 //   Offset 0: ptr buffer      - Pointer to data (8 bytes)
 //   Offset 8: i64 len         - Length (8 bytes)
 //   Offset 16: i64 capacity   - Capacity (8 bytes)
@@ -776,8 +776,8 @@ fn intrinsicCstringWriteStdout(self: *AstToIr, call: ast.CallExpr) ConvertError!
     return .{ .value = result orelse try self.func().emitConstI64(0), .ty = .{ .primitive = .int } };
 }
 
-/// __cstring_to_managed(cstr) -> __ManagedArray
-/// Converts a cstring struct to a __ManagedArray (string mode)
+/// __cstring_to_managed(cstr) -> __ManagedMemory
+/// Converts a cstring struct to a __ManagedMemory (string mode)
 /// The string data is copied to a new heap buffer with header for refcounting
 /// cstring struct layout: data(8) + length(8) + managed(8)
 fn intrinsicCstringToManaged(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -799,14 +799,14 @@ fn intrinsicCstringToManaged(self: *AstToIr, call: ast.CallExpr) ConvertError!Ty
     // Copy string to buffer (include null terminator)
     try emitMemcpyWin(self, buffer, src_ptr, alloc_size);
 
-    // Allocate __ManagedArray struct (32 bytes)
+    // Allocate __ManagedMemory struct (32 bytes)
     const array_size = try self.func().emitConstI64(32);
     const array_ptr = try emitHeapAllocWin(self, heap, array_size);
 
     // Initialize the struct (mode=1 for heap-refcounted)
-    try initHeapManagedArray(self, array_ptr, buffer, len);
+    try initHeapManagedMemory(self, array_ptr, buffer, len);
 
-    return .{ .value = array_ptr, .ty = try self.typeNameToValueType("__ManagedArray") };
+    return .{ .value = array_ptr, .ty = try self.typeNameToValueType("__ManagedMemory") };
 }
 
 const make_char_intrinsics = .{
@@ -825,7 +825,7 @@ fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const pos = try self.convertExpression(call.args[1]);
     const len = try self.convertExpression(call.args[2]);
 
-    const char_ptr = try ManagedArray.alloca(self.func());
+    const char_ptr = try ManagedMemory.alloca(self.func());
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
     // Store slice buffer pointer (offset 0)
@@ -842,9 +842,9 @@ fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     return .{ .value = char_ptr.raw(), .ty = try self.typeNameToValueType("Character") };
 }
 
-/// __managed_array_byte_at(managed, index) -> byte
+/// __managed_memory_byte_at(managed, index) -> byte
 /// Returns the byte at the given index in the buffer
-fn intrinsicManagedArrayByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const managed = try self.convertExpression(call.args[0]);
     const index = try self.convertExpression(call.args[1]);
@@ -856,11 +856,11 @@ fn intrinsicManagedArrayByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError!
     return .{ .value = byte_val, .ty = .{ .primitive = .byte } };
 }
 
-/// __managed_array_slice(managed, start, end) -> __ManagedArray (slice mode)
-/// Creates a slice view into the managed array
-/// Returns a 32-byte __ManagedArray with flags = 2 (slice mode)
+/// __managed_memory_slice(managed, start, end) -> __ManagedMemory (slice mode)
+/// Creates a slice view into the managed memory
+/// Returns a 32-byte __ManagedMemory with flags = 2 (slice mode)
 /// Layout: buffer(8) + len(8) + capacity(8) + flags(4) + parent_off(4)
-fn intrinsicManagedArraySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemorySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
 
     // Track borrow source for compile-time borrow checking
@@ -879,7 +879,7 @@ fn intrinsicManagedArraySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const start = try self.convertExpression(call.args[1]);
     const end = try self.convertExpression(call.args[2]);
 
-    const slice_ptr = try ManagedArray.alloca(self.func());
+    const slice_ptr = try ManagedMemory.alloca(self.func());
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
     // Store slice buffer = parent_buf_ptr + start (offset 0)
@@ -894,12 +894,12 @@ fn intrinsicManagedArraySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const start_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, start.value, .i32);
     try initSliceArrayFields(self, slice_ptr.raw(), start_i32);
 
-    return .{ .value = slice_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
+    return .{ .value = slice_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedMemory") };
 }
 
-/// __managed_array_concat(a, b) -> __ManagedArray
-/// Concatenates two managed arrays (strings) into a new heap-allocated array
-fn intrinsicManagedArrayConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_memory_concat(a, b) -> __ManagedMemory
+/// Concatenates two managed memorys (strings) into a new heap-allocated array
+fn intrinsicManagedMemoryConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
 
     const a = try self.convertExpression(call.args[0]);
@@ -922,17 +922,17 @@ fn intrinsicManagedArrayConcat(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const dst_offset = try self.func().emitBinaryOp(.add, buf_ptr.raw(), a_len, .ptr);
     try self.func().emitMemcpyDynamic(ir.toRawPtr(dst_offset), ir.toRawPtr(b_buf), b_len);
 
-    // Initialize __ManagedArray struct (mode=1 for heap-refcounted)
-    const result_ptr = try ManagedArray.alloca(self.func());
+    // Initialize __ManagedMemory struct (mode=1 for heap-refcounted)
+    const result_ptr = try ManagedMemory.alloca(self.func());
     const mode_one = try self.func().emitConstI32(1);
-    try ManagedArray.init(self.func(), result_ptr, buf_ptr, total_len, total_len, mode_one);
+    try ManagedMemory.init(self.func(), result_ptr, buf_ptr, total_len, total_len, mode_one);
 
-    return .{ .value = result_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
+    return .{ .value = result_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedMemory") };
 }
 
-/// __managed_array_make_unique(managed) -> __ManagedArray
+/// __managed_memory_make_unique(managed) -> __ManagedMemory
 /// Creates a mutable copy of the array (COW - copy on write)
-fn intrinsicManagedArrayMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
@@ -944,17 +944,17 @@ fn intrinsicManagedArrayMakeUnique(self: *AstToIr, call: ast.CallExpr) ConvertEr
     const new_buf = try array.emitAllocRefcountedBuffer(self, len, "array buffer");
     try self.func().emitMemcpyDynamic(new_buf, ir.toRawPtr(orig_buf), len);
 
-    // Initialize __ManagedArray struct (mode=1 for heap-refcounted)
-    const result_ptr = try ManagedArray.alloca(self.func());
+    // Initialize __ManagedMemory struct (mode=1 for heap-refcounted)
+    const result_ptr = try ManagedMemory.alloca(self.func());
     const mode_one2 = try self.func().emitConstI32(1);
-    try ManagedArray.init(self.func(), result_ptr, new_buf, len, len, mode_one2);
+    try ManagedMemory.init(self.func(), result_ptr, new_buf, len, len, mode_one2);
 
-    return .{ .value = result_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
+    return .{ .value = result_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedMemory") };
 }
 
-/// __managed_array_set_byte(managed, index, byte) -> void
+/// __managed_memory_set_byte(managed, index, byte) -> void
 /// Sets a byte at the given index (caller must ensure array is unique)
-fn intrinsicManagedArraySetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemorySetByte(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
     const managed = try self.convertExpression(call.args[0]);
     const index = try self.convertExpression(call.args[1]);
@@ -968,18 +968,18 @@ fn intrinsicManagedArraySetByte(self: *AstToIr, call: ast.CallExpr) ConvertError
     return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
-/// __managed_array_to_cstring(managed) -> cstring struct
-/// Creates a cstring struct from a __ManagedArray (string).
-/// For heap-refcounted mode: shares buffer (already null-terminated), holds reference to managed array
+/// __managed_memory_to_cstring(managed) -> cstring struct
+/// Creates a cstring struct from a __ManagedMemory (string).
+/// For heap-refcounted mode: shares buffer (already null-terminated), holds reference to managed memory
 /// For Slice mode: copies data to new null-terminated buffer (cstring owns its buffer)
-fn intrinsicManagedArrayToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryToCstring(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
     const cstring_ptr = try self.func().emitAllocaSized(24);
 
     // Load flags to determine mode
-    const flags = try ManagedArray.loadFlags(self.func(), ir.toManagedArrayPtr(managed.value));
+    const flags = try ManagedMemory.loadFlags(self.func(), ir.toManagedMemoryPtr(managed.value));
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, flags, three, .i32);
     const two = try self.func().emitConstI32(2);
@@ -1069,9 +1069,9 @@ fn intrinsicManagedArrayToCstring(self: *AstToIr, call: ast.CallExpr) ConvertErr
     return .{ .value = cstring_ptr.raw(), .ty = try self.typeNameToValueType("cstring") };
 }
 
-/// __managed_array_from_bytes(buffer, length) -> __ManagedArray
-/// Creates a new managed array (string) from a byte array buffer
-fn intrinsicManagedArrayFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+/// __managed_memory_from_bytes(buffer, length) -> __ManagedMemory
+/// Creates a new managed memory (string) from a byte array buffer
+fn intrinsicManagedMemoryFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 2);
     const buffer = try self.convertExpression(call.args[0]);
     const length = try self.convertExpression(call.args[1]);
@@ -1083,21 +1083,21 @@ fn intrinsicManagedArrayFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const src_buf = try self.func().emitLoad(buffer.value, .ptr);
     try self.func().emitMemcpyDynamic(new_buf, ir.toRawPtr(src_buf), length.value);
 
-    // Initialize __ManagedArray struct (mode=1 for heap-refcounted)
-    const result_ptr = try ManagedArray.alloca(self.func());
+    // Initialize __ManagedMemory struct (mode=1 for heap-refcounted)
+    const result_ptr = try ManagedMemory.alloca(self.func());
     const mode_one = try self.func().emitConstI32(1);
-    try ManagedArray.init(self.func(), result_ptr, new_buf, length.value, length.value, mode_one);
+    try ManagedMemory.init(self.func(), result_ptr, new_buf, length.value, length.value, mode_one);
 
-    return .{ .value = result_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedArray") };
+    return .{ .value = result_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedMemory") };
 }
 
 // ============================================================================
 // Reference Counting Intrinsics for COW Strings
 // ============================================================================
 
-/// __managed_array_incref(managed) -> void
+/// __managed_memory_incref(managed) -> void
 /// Increments the reference count in buffer header for heap-refcounted arrays
-fn intrinsicManagedArrayIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
@@ -1115,9 +1115,9 @@ fn intrinsicManagedArrayIncref(self: *AstToIr, call: ast.CallExpr) ConvertError!
     return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
-/// __managed_array_refcount(managed) -> int
+/// __managed_memory_refcount(managed) -> int
 /// Returns the refcount from buffer header (buf_ptr - 8)
-fn intrinsicManagedArrayRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
@@ -1132,22 +1132,22 @@ fn intrinsicManagedArrayRefcount(self: *AstToIr, call: ast.CallExpr) ConvertErro
     return .{ .value = refcount, .ty = .{ .primitive = .int } };
 }
 
-/// __managed_array_is_refcounted(managed) -> bool
+/// __managed_memory_is_refcounted(managed) -> bool
 /// Returns true if the array is heap-refcounted (flags & 0x1 == 1)
-fn intrinsicManagedArrayIsRefcounted(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryIsRefcounted(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
-    const flags = try ManagedArray.loadFlags(self.func(), ir.toManagedArrayPtr(managed.value));
+    const flags = try ManagedMemory.loadFlags(self.func(), ir.toManagedMemoryPtr(managed.value));
     const one = try self.func().emitConstI32(1);
     const is_refcounted = try self.func().emitBinaryOp(.band, flags, one, .i32);
 
     return .{ .value = is_refcounted, .ty = .{ .primitive = .bool } };
 }
 
-/// __managed_array_flags(managed) -> int
+/// __managed_memory_flags(managed) -> int
 /// Returns the flags field (offset 24, i32)
-fn intrinsicManagedArrayFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+fn intrinsicManagedMemoryFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     return intrinsicLoadI32Field(self, call, 24);
 }
 
@@ -1162,12 +1162,12 @@ fn emitWriteFileIR(self: *AstToIr, path_cstr: TypedValue, data_source: TypedValu
     const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
 
     // Get the managed buffer pointer at the correct offset within the struct.
-    // For types with __ManagedArray (String, Array$T), the managed buffer may not be at offset 0.
+    // For types with __ManagedMemory (String, Array$T), the managed buffer may not be at offset 0.
     const managed_offset: i32 = if (data_source.ty == .struct_type)
         data_source.ty.struct_type.managed_buffer_offset
     else
         0;
-    const managed_ptr = try array.getManagedArrayPtr(self, data_source.value, managed_offset);
+    const managed_ptr = try array.getManagedMemoryPtr(self, data_source.value, managed_offset);
     const data_ptr = try self.func().emitLoad(managed_ptr.raw(), .ptr);
     const data_len = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(managed_ptr.raw()), 8);
 
@@ -1214,7 +1214,7 @@ fn emitWriteFileIR(self: *AstToIr, path_cstr: TypedValue, data_source: TypedValu
 // __file_size(handle) -> int      : Gets file size in bytes
 // __file_read(handle, buffer, size) -> int : Reads into buffer, returns bytes read
 // __file_close(handle)            : Closes file handle
-// __file_read_all(cstr) -> __ManagedArray : High-level: reads entire file (null on failure)
+// __file_read_all(cstr) -> __ManagedMemory : High-level: reads entire file (null on failure)
 
 /// __file_open_read(cstr) -> int
 /// Opens a file for reading. Returns handle or -1 (INVALID_HANDLE_VALUE) on failure.
@@ -1249,15 +1249,15 @@ fn intrinsicFileSize(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue
     return .{ .value = size, .ty = .{ .primitive = .int } };
 }
 
-/// __file_read(handle, managed_array, size) -> int
-/// Reads from file into managed array's buffer. Returns bytes read.
+/// __file_read(handle, managed_memory, size) -> int
+/// Reads from file into managed memory's buffer. Returns bytes read.
 fn intrinsicFileRead(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
     const handle_typed = try self.convertExpression(call.args[0]);
     const array_typed = try self.convertExpression(call.args[1]);
     const size_typed = try self.convertExpression(call.args[2]);
 
-    // Get buffer pointer from __ManagedArray (offset 0)
+    // Get buffer pointer from __ManagedMemory (offset 0)
     const buffer = try self.func().emitLoad(array_typed.value, .ptr);
 
     // Allocate bytes_read on stack
@@ -1302,8 +1302,8 @@ fn intrinsicFileDelete(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVal
     return .{ .value = return_val, .ty = .{ .primitive = .int } };
 }
 
-/// __file_read_all(cstr) -> __ManagedArray
-/// High-level intrinsic: reads entire file into a managed array.
+/// __file_read_all(cstr) -> __ManagedMemory
+/// High-level intrinsic: reads entire file into a managed memory.
 /// Returns null pointer on failure (caller checks with == -1 pattern or similar).
 fn intrinsicFileReadAll(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
@@ -1344,11 +1344,11 @@ fn intrinsicFileReadAll(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
     // Close handle
     try emitCloseHandle(self, handle);
 
-    // Allocate __ManagedArray struct (32 bytes)
+    // Allocate __ManagedMemory struct (32 bytes)
     const array_size = try self.func().emitConstI64(32);
     const array_ptr = try emitHeapAllocWin(self, heap, array_size);
 
-    try initHeapManagedArray(self, array_ptr, buffer, bytes_read);
+    try initHeapManagedMemory(self, array_ptr, buffer, bytes_read);
 
     // If handle was invalid, return -1 (as int), else return array_ptr
     // This lets Maxon code check: if result == -1 then error
@@ -1358,7 +1358,7 @@ fn intrinsicFileReadAll(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedVa
     const invalid_result = try self.func().emitBinaryOp(.mul, invalid_handle, is_invalid, .i64);
     const result_ptr = try self.func().emitBinaryOp(.add, valid_result, invalid_result, .ptr);
 
-    return .{ .value = result_ptr, .ty = try self.typeNameToValueType("__ManagedArray") };
+    return .{ .value = result_ptr, .ty = try self.typeNameToValueType("__ManagedMemory") };
 }
 
 fn intrinsicWriteFile(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
@@ -1782,10 +1782,10 @@ fn emitReadPipeToString(self: *AstToIr, pipe_handle: ir.Value) ConvertError!ir.V
     // Free temp buffer
     _ = try externCall(self, "kernel32.dll", "HeapFree", &.{ heap, zero, buffer }, .i64);
 
-    // Create __ManagedArray on the stack with the buffer
-    const managed_ptr = try ManagedArray.alloca(self.func());
+    // Create __ManagedMemory on the stack with the buffer
+    const managed_ptr = try ManagedMemory.alloca(self.func());
     const mode_one = try self.func().emitConstI32(1); // heap-refcounted
-    try ManagedArray.init(self.func(), managed_ptr, string_buffer, bytes_read, bytes_read, mode_one);
+    try ManagedMemory.init(self.func(), managed_ptr, string_buffer, bytes_read, bytes_read, mode_one);
 
     // Create String via stdlib's BuiltinStringLiteral.init
     const string_ptr = try array.emitStringFromManaged(self, managed_ptr);

@@ -1,7 +1,7 @@
-/// ManagedArray and Array IR emission helpers.
+/// ManagedMemory and Array IR emission helpers.
 /// Contains layout constants, COW (copy-on-write) refcounting operations,
 /// string/array creation, and struct copy/move helpers.
-/// ManagedArray is the unified managed type for both strings and arrays.
+/// ManagedMemory is the unified managed type for both strings and arrays.
 const std = @import("std");
 const ast = @import("ast.zig");
 const ir = @import("ir.zig");
@@ -14,9 +14,9 @@ const cleanup = @import("ast_to_ir_cleanup.zig");
 const AstToIr = ast_to_ir.AstToIr;
 
 // ============================================================================
-// Mode Constants for ManagedArray
+// Mode Constants for ManagedMemory
 // ============================================================================
-/// Mode values for __ManagedArray flags (bits 0-1):
+/// Mode values for __ManagedMemory flags (bits 0-1):
 pub const MODE_SSO: i32 = 0; // Small storage optimization (future) - inline storage in struct
 pub const MODE_HEAP: i32 = 1; // Refcounted heap allocation, decref at buffer-8
 pub const MODE_SLICE: i32 = 2; // Borrowed view, do not free
@@ -29,9 +29,9 @@ const VarInfo = types.VarInfo;
 const ConvertError = types.ConvertError;
 
 // ============================================================================
-// ManagedArray Layout (32 bytes)
+// ManagedMemory Layout (32 bytes)
 // ============================================================================
-/// __ManagedArray struct layout (32 bytes total)
+/// __ManagedMemory struct layout (32 bytes total)
 /// Unified managed type for both strings and arrays.
 /// Layout: buffer(8) + len(8) + capacity(8) + flags(4) + parent_off(4)
 ///
@@ -47,7 +47,7 @@ const ConvertError = types.ConvertError;
 /// - Mode 1 (heap-refcounted): Ref-counted heap allocation, refcount at buffer - 8
 /// - Mode 2 (slice): Zero-copy view into parent buffer, uses parent_off
 /// - Mode 3 (static): Pointer to read-only data section, never freed
-pub const ManagedArray = struct {
+pub const ManagedMemory = struct {
     const SIZE: i32 = 32;
     const BUFFER_OFFSET: i32 = 0;
     const LEN_OFFSET: i32 = 8;
@@ -57,77 +57,77 @@ pub const ManagedArray = struct {
 
     comptime {
         if (PARENT_OFF_OFFSET + 4 != SIZE) {
-            @compileError("ManagedArray layout mismatch: PARENT_OFF_OFFSET + 4 != SIZE");
+            @compileError("ManagedMemory layout mismatch: PARENT_OFF_OFFSET + 4 != SIZE");
         }
         if (LEN_OFFSET != BUFFER_OFFSET + 8) {
-            @compileError("ManagedArray layout mismatch: LEN_OFFSET != BUFFER_OFFSET + 8");
+            @compileError("ManagedMemory layout mismatch: LEN_OFFSET != BUFFER_OFFSET + 8");
         }
         if (CAPACITY_OFFSET != LEN_OFFSET + 8) {
-            @compileError("ManagedArray layout mismatch: CAPACITY_OFFSET != LEN_OFFSET + 8");
+            @compileError("ManagedMemory layout mismatch: CAPACITY_OFFSET != LEN_OFFSET + 8");
         }
         if (FLAGS_OFFSET != CAPACITY_OFFSET + 8) {
-            @compileError("ManagedArray layout mismatch: FLAGS_OFFSET != CAPACITY_OFFSET + 8");
+            @compileError("ManagedMemory layout mismatch: FLAGS_OFFSET != CAPACITY_OFFSET + 8");
         }
         if (PARENT_OFF_OFFSET != FLAGS_OFFSET + 4) {
-            @compileError("ManagedArray layout mismatch: PARENT_OFF_OFFSET != FLAGS_OFFSET + 4");
+            @compileError("ManagedMemory layout mismatch: PARENT_OFF_OFFSET != FLAGS_OFFSET + 4");
         }
     }
 
     // ========================================================================
-    // Helper functions for ManagedArray layout
+    // Helper functions for ManagedMemory layout
     // ========================================================================
 
-    /// Returns the size of ManagedArray struct in bytes
+    /// Returns the size of ManagedMemory struct in bytes
     pub fn size() i32 {
         return SIZE;
     }
 
-    /// Allocate a ManagedArray on the stack
-    pub fn alloca(func: *ir.Function) !ir.ManagedArrayPtr {
+    /// Allocate a ManagedMemory on the stack
+    pub fn alloca(func: *ir.Function) !ir.ManagedMemoryPtr {
         const raw_ptr = try func.emitAllocaSized(SIZE);
-        return raw_ptr.asManagedArrayPtr();
+        return raw_ptr.asManagedMemoryPtr();
     }
 
     /// Load the buffer pointer (offset 0)
-    pub fn loadBuffer(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+    pub fn loadBuffer(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.Value {
         return func.emitLoad(ptr.raw(), .ptr);
     }
 
     /// Load the length field (offset 8)
-    pub fn loadLen(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+    pub fn loadLen(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.Value {
         const len_ptr = try func.emitGetFieldPtr(ptr.asStructPtr(), LEN_OFFSET);
         return func.emitLoad(len_ptr.raw(), .i64);
     }
 
     /// Get pointer to the length field
-    pub fn getLenPtr(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.StructPtr {
+    pub fn getLenPtr(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.StructPtr {
         return func.emitGetFieldPtr(ptr.asStructPtr(), LEN_OFFSET);
     }
 
     /// Load the capacity field (offset 16)
-    pub fn loadCapacity(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+    pub fn loadCapacity(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.Value {
         const cap_ptr = try func.emitGetFieldPtr(ptr.asStructPtr(), CAPACITY_OFFSET);
         return func.emitLoad(cap_ptr.raw(), .i64);
     }
 
     /// Get pointer to the capacity field
-    pub fn getCapacityPtr(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.StructPtr {
+    pub fn getCapacityPtr(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.StructPtr {
         return func.emitGetFieldPtr(ptr.asStructPtr(), CAPACITY_OFFSET);
     }
 
     /// Load the flags field (offset 24) as i32
-    pub fn loadFlags(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+    pub fn loadFlags(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.Value {
         const flags_ptr = try func.emitGetFieldPtr(ptr.asStructPtr(), FLAGS_OFFSET);
         return func.emitLoad(flags_ptr.raw(), .i32);
     }
 
     /// Get pointer to the flags field
-    pub fn getFlagsPtr(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.StructPtr {
+    pub fn getFlagsPtr(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.StructPtr {
         return func.emitGetFieldPtr(ptr.asStructPtr(), FLAGS_OFFSET);
     }
 
-    /// Check if the ManagedArray is in heap mode (flags & 3 == 1)
-    pub fn isHeapMode(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+    /// Check if the ManagedMemory is in heap mode (flags & 3 == 1)
+    pub fn isHeapMode(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.Value {
         const flags = try loadFlags(func, ptr);
         const three = try func.emitConstI32(3);
         const masked = try func.emitBinaryOp(.band, flags, three, .i32);
@@ -136,14 +136,14 @@ pub const ManagedArray = struct {
     }
 
     /// Load the mode value (flags & 3)
-    pub fn loadMode(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
+    pub fn loadMode(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.Value {
         const flags = try loadFlags(func, ptr);
         const three = try func.emitConstI32(3);
         return func.emitBinaryOp(.band, flags, three, .i32);
     }
 
-    /// Initialize a ManagedArray with all fields
-    pub fn init(func: *ir.Function, ptr: ir.ManagedArrayPtr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value, flags: ir.Value) !void {
+    /// Initialize a ManagedMemory with all fields
+    pub fn init(func: *ir.Function, ptr: ir.ManagedMemoryPtr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value, flags: ir.Value) !void {
         const struct_ptr = ptr.asStructPtr();
         // buffer pointer at offset 0
         try func.emitStore(struct_ptr.raw(), buffer.raw());
@@ -158,8 +158,8 @@ pub const ManagedArray = struct {
         try struct_helpers.storeI32Field(func, struct_ptr, PARENT_OFF_OFFSET, zero_i32);
     }
 
-    /// Initialize a ManagedArray as empty (null buffer, zero len/capacity/flags/parent_off)
-    pub fn initEmpty(func: *ir.Function, ptr: ir.ManagedArrayPtr) !void {
+    /// Initialize a ManagedMemory as empty (null buffer, zero len/capacity/flags/parent_off)
+    pub fn initEmpty(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !void {
         const struct_ptr = ptr.asStructPtr();
         const null_ptr = try func.emitConstI64(0);
         const zero_i32 = try func.emitConstI32(0);
@@ -183,43 +183,43 @@ pub const ManagedArray = struct {
     }
 };
 // ============================================================================
-// ManagedArray Helpers
+// ManagedMemory Helpers
 // ============================================================================
 
-/// Allocate a __ManagedArray on the stack and initialize it as empty.
-pub fn emitEmptyManagedArray(self: *AstToIr) !ir.ManagedArrayPtr {
-    const ptr = try ManagedArray.alloca(self.func());
-    try ManagedArray.initEmpty(self.func(), ptr);
+/// Allocate a __ManagedMemory on the stack and initialize it as empty.
+pub fn emitEmptyManagedMemory(self: *AstToIr) !ir.ManagedMemoryPtr {
+    const ptr = try ManagedMemory.alloca(self.func());
+    try ManagedMemory.initEmpty(self.func(), ptr);
     return ptr;
 }
 
-/// Initialize an existing __ManagedArray as empty.
-pub fn initManagedArrayEmpty(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !void {
-    return ManagedArray.initEmpty(self.func(), managed_ptr);
+/// Initialize an existing __ManagedMemory as empty.
+pub fn initManagedMemoryEmpty(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr) !void {
+    return ManagedMemory.initEmpty(self.func(), managed_ptr);
 }
 
-/// Initialize an existing __ManagedArray with buffer, length, and capacity values.
+/// Initialize an existing __ManagedMemory with buffer, length, and capacity values.
 /// Uses mode=0 (no refcounting) for regular arrays.
-pub fn initManagedArray(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !void {
+pub fn initManagedMemory(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !void {
     const zero_flags = try self.func().emitConstI32(0); // mode=0 (no refcounting for regular arrays)
-    return ManagedArray.init(self.func(), managed_ptr, buffer, len, capacity, zero_flags);
+    return ManagedMemory.init(self.func(), managed_ptr, buffer, len, capacity, zero_flags);
 }
 
-/// Allocate a __ManagedArray on the stack and initialize with buffer, length, and capacity.
+/// Allocate a __ManagedMemory on the stack and initialize with buffer, length, and capacity.
 /// Uses mode=1 (heap) for regular arrays that own their buffer.
-pub fn emitManagedArray(self: *AstToIr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !ir.ManagedArrayPtr {
-    const ptr = try ManagedArray.alloca(self.func());
+pub fn emitManagedMemory(self: *AstToIr, buffer: ir.RawPtr, len: ir.Value, capacity: ir.Value) !ir.ManagedMemoryPtr {
+    const ptr = try ManagedMemory.alloca(self.func());
     const heap_flags = try self.func().emitConstI32(MODE_HEAP); // mode=1 (heap, owns buffer)
-    try ManagedArray.init(self.func(), ptr, buffer, len, capacity, heap_flags);
+    try ManagedMemory.init(self.func(), ptr, buffer, len, capacity, heap_flags);
     return ptr;
 }
 
-/// Allocate a refcounted buffer and create a __ManagedArray pointing to it.
+/// Allocate a refcounted buffer and create a __ManagedMemory pointing to it.
 /// The buffer includes an 8-byte refcount header at (buffer - 8).
 /// Use this for arrays that need COW semantics with shared ownership.
-pub fn emitRefcountedManagedArray(self: *AstToIr, data_size: ir.Value, len: ir.Value, capacity: ir.Value, tag: []const u8) !ir.ManagedArrayPtr {
+pub fn emitRefcountedManagedMemory(self: *AstToIr, data_size: ir.Value, len: ir.Value, capacity: ir.Value, tag: []const u8) !ir.ManagedMemoryPtr {
     const buffer = try emitAllocRefcountedBuffer(self, data_size, tag);
-    return emitManagedArray(self, buffer, len, capacity);
+    return emitManagedMemory(self, buffer, len, capacity);
 }
 
 /// Size of refcounted buffer header (refcount as i64)
@@ -234,7 +234,7 @@ pub const REFCOUNTED_BUFFER_HEADER_SIZE: i64 = 8;
 ///   |               +-- returned data_ptr
 ///   +-- allocation base (header)
 ///
-/// The refcount is initialized to 1 (for the ManagedArray being created).
+/// The refcount is initialized to 1 (for the ManagedMemory being created).
 pub fn emitAllocRefcountedBuffer(self: *AstToIr, data_size: ir.Value, tag: []const u8) !ir.RawPtr {
     const func = self.func();
     // Allocate data_size + 8 for header
@@ -242,7 +242,7 @@ pub fn emitAllocRefcountedBuffer(self: *AstToIr, data_size: ir.Value, tag: []con
     const total_size = try func.emitBinaryOp(.add, data_size, header_size, .i64);
     const buffer_with_header = try func.emitHeapAlloc(total_size, tag);
 
-    // Initialize refcount in header to 1 (for the ManagedArray being created)
+    // Initialize refcount in header to 1 (for the ManagedMemory being created)
     try func.emitStore(buffer_with_header.raw(), try func.emitConstI64(1));
 
     // Return data pointer (header + 8)
@@ -251,14 +251,14 @@ pub fn emitAllocRefcountedBuffer(self: *AstToIr, data_size: ir.Value, tag: []con
     return ir.toRawPtr(data_ptr);
 }
 
-/// Emit incref for a ManagedArray.
-/// The ptr should point to a __ManagedArray or a struct with __ManagedArray at offset 0.
+/// Emit incref for a ManagedMemory.
+/// The ptr should point to a __ManagedMemory or a struct with __ManagedMemory at offset 0.
 /// tag is used for memory tracking (variable name or description).
 ///
 /// Refcount is stored in the buffer header at (buffer_ptr - 8).
-/// This is shared by all ManagedArray copies that reference the same buffer.
-pub fn emitManagedArrayIncref(self: *AstToIr, ptr: ir.ManagedArrayPtr, tag: []const u8) !void {
-    const is_heap = try ManagedArray.isHeapMode(self.func(), ptr);
+/// This is shared by all ManagedMemory copies that reference the same buffer.
+pub fn emitManagedMemoryIncref(self: *AstToIr, ptr: ir.ManagedMemoryPtr, tag: []const u8) !void {
+    const is_heap = try ManagedMemory.isHeapMode(self.func(), ptr);
 
     // Create blocks for conditional incref
     const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
@@ -300,18 +300,18 @@ pub fn emitManagedArrayIncref(self: *AstToIr, ptr: ir.ManagedArrayPtr, tag: []co
     try deferred.restore(self, 0);
 }
 
-/// Emit decref for a ManagedArray with conditional free when refcount reaches 0.
-/// The ptr should point to a __ManagedArray or a struct with __ManagedArray at offset 0.
+/// Emit decref for a ManagedMemory with conditional free when refcount reaches 0.
+/// The ptr should point to a __ManagedMemory or a struct with __ManagedMemory at offset 0.
 /// tag is used for memory tracking (variable name or description).
 ///
 /// Refcount is stored in the buffer header at (buffer_ptr - 8).
 /// When refcount reaches 0, we free (buffer_ptr - 8) to include the header.
-/// Decref a managed array buffer (COW semantics).
+/// Decref a managed memory buffer (COW semantics).
 /// If refcount reaches 0, frees the buffer.
 /// `tag` is used for memory tracking (variable name).
 /// `cleanup_tag` is used for heap free description (e.g., "string cleanup", "array cleanup").
-pub fn emitManagedArrayDecref(self: *AstToIr, ptr: ir.ManagedArrayPtr, tag: []const u8, cleanup_tag: []const u8) !void {
-    const is_heap = try ManagedArray.isHeapMode(self.func(), ptr);
+pub fn emitManagedMemoryDecref(self: *AstToIr, ptr: ir.ManagedMemoryPtr, tag: []const u8, cleanup_tag: []const u8) !void {
+    const is_heap = try ManagedMemory.isHeapMode(self.func(), ptr);
 
     // Create blocks for conditional decref
     const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
@@ -379,7 +379,7 @@ pub fn emitManagedArrayDecref(self: *AstToIr, ptr: ir.ManagedArrayPtr, tag: []co
 // String Helpers
 // ============================================================================
 
-/// Create and initialize a __ManagedArray on the stack from string bytes.
+/// Create and initialize a __ManagedMemory on the stack from string bytes.
 /// Returns a pointer to the allocated struct.
 ///
 /// String buffer layout with header:
@@ -389,11 +389,11 @@ pub fn emitManagedArrayDecref(self: *AstToIr, ptr: ir.ManagedArrayPtr, tag: []co
 ///   +-- allocation base (header)
 ///
 /// The refcount is stored at (data_ptr - 8), shared by all String copies.
-pub fn emitManagedArrayFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.ManagedArrayPtr {
-    const managed_ptr = try ManagedArray.alloca(self.func());
+pub fn emitManagedMemoryFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.ManagedMemoryPtr {
+    const managed_ptr = try ManagedMemory.alloca(self.func());
 
     if (str_bytes.len == 0) {
-        try ManagedArray.initEmpty(self.func(), managed_ptr);
+        try ManagedMemory.initEmpty(self.func(), managed_ptr);
     } else {
         // Heap allocation for string data WITH 8-byte header for refcount
         // Layout: [refcount:i64][data...][null]
@@ -418,7 +418,7 @@ pub fn emitManagedArrayFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Mana
         const null_idx = try self.func().emitConstI64(@intCast(str_bytes.len));
         try self.func().emitStoreI8((try self.func().emitGetElemPtr(data_ptr.asRawPtr(), null_idx, 1)).raw(), try self.func().emitConstI8(0));
 
-        // Initialize __ManagedArray fields (mode=1 for heap-refcounted)
+        // Initialize __ManagedMemory fields (mode=1 for heap-refcounted)
         // Store data_ptr (not the allocation base with header)
         try self.func().emitStore(managed_ptr.raw(), data_ptr.raw());
         const len_i64 = try self.func().emitConstI64(@intCast(str_bytes.len));
@@ -431,23 +431,23 @@ pub fn emitManagedArrayFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Mana
     return managed_ptr;
 }
 
-/// Create and initialize a __ManagedArray from a runtime buffer pointer and length.
+/// Create and initialize a __ManagedMemory from a runtime buffer pointer and length.
 /// Used for runtime string conversions (int to string, float to string, etc.)
-pub fn emitManagedArrayFromBuffer(self: *AstToIr, buffer: ir.RawPtr, len_i64: ir.Value) !ir.ManagedArrayPtr {
-    const ptr = try ManagedArray.alloca(self.func());
+pub fn emitManagedMemoryFromBuffer(self: *AstToIr, buffer: ir.RawPtr, len_i64: ir.Value) !ir.ManagedMemoryPtr {
+    const ptr = try ManagedMemory.alloca(self.func());
     const mode_one = try self.func().emitConstI32(1); // mode=1 for heap-refcounted
-    try ManagedArray.init(self.func(), ptr, buffer, len_i64, len_i64, mode_one);
+    try ManagedMemory.init(self.func(), ptr, buffer, len_i64, len_i64, mode_one);
     return ptr;
 }
 
-/// Create a __ManagedArray pointing to static data in the .rdata section.
+/// Create a __ManagedMemory pointing to static data in the .rdata section.
 /// No heap allocation, no refcount. Mode=3 ensures it's never freed.
 /// The string data is stored directly in the executable's code section.
-pub fn emitManagedArrayFromStaticBytes(self: *AstToIr, str_bytes: []const u8) !ir.ManagedArrayPtr {
-    const managed_ptr = try ManagedArray.alloca(self.func());
+pub fn emitManagedMemoryFromStaticBytes(self: *AstToIr, str_bytes: []const u8) !ir.ManagedMemoryPtr {
+    const managed_ptr = try ManagedMemory.alloca(self.func());
 
     if (str_bytes.len == 0) {
-        try ManagedArray.initEmpty(self.func(), managed_ptr);
+        try ManagedMemory.initEmpty(self.func(), managed_ptr);
     } else {
         // Allocate space for the string data plus null terminator in the static data section
         const static_bytes = try self.allocator.alloc(u8, str_bytes.len + 1);
@@ -479,17 +479,17 @@ pub fn emitManagedArrayFromStaticBytes(self: *AstToIr, str_bytes: []const u8) !i
 // ============================================================================
 
 /// Create a String by calling the stdlib's String$init (BuiltinStringLiteral.init).
-/// This is the proper way to create a String from a __ManagedArray - delegates
+/// This is the proper way to create a String from a __ManagedMemory - delegates
 /// to stdlib rather than having compiler knowledge of String layout.
-pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !ir.Value {
+pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr) !ir.Value {
     const result = try self.emitTypeInit("String", managed_ptr.raw());
     return result.ptr;
 }
 
 /// Create a Character by calling the stdlib's Character$init (BuiltinCharLiteral.init).
-/// This is the proper way to create a Character from a __ManagedArray - delegates
+/// This is the proper way to create a Character from a __ManagedMemory - delegates
 /// to stdlib rather than having compiler knowledge of Character layout.
-pub fn emitCharacterFromManaged(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr) !ir.Value {
+pub fn emitCharacterFromManaged(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr) !ir.Value {
     const result = try self.emitTypeInit("Character", managed_ptr.raw());
     return result.ptr;
 }
@@ -508,28 +508,28 @@ pub fn emitTypeAlloca(self: *AstToIr, type_name: []const u8) !ir.RawPtr {
 // Struct Helpers
 // ============================================================================
 
-/// Copy a struct and handle refcount increment for types with __ManagedArray.
+/// Copy a struct and handle refcount increment for types with __ManagedMemory.
 /// This is the single point of truth for struct copying with COW semantics.
-/// Handles String, Array$T, cstring, and any other type with __ManagedArray at any offset.
+/// Handles String, Array$T, cstring, and any other type with __ManagedMemory at any offset.
 pub fn emitStructCopy(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.StructPtr, size: i32, struct_name: ?[]const u8) !void {
     try self.func().emitMemcpy(dest_ptr.asRawPtr(), src_ptr.asRawPtr(), size);
 
-    // Handle refcount for types with __ManagedArray
+    // Handle refcount for types with __ManagedMemory
     if (struct_name) |name| {
-        // Skip internal __ManagedArray type (it's moved, not copied)
-        if (std.mem.eql(u8, name, "__ManagedArray")) return;
+        // Skip internal __ManagedMemory type (it's moved, not copied)
+        if (std.mem.eql(u8, name, "__ManagedMemory")) return;
 
-        // Look up struct info to check for __ManagedArray field
+        // Look up struct info to check for __ManagedMemory field
         if (self.type_map.get(name)) |type_info| {
             if (type_info == .struct_type) {
                 const struct_info = &type_info.struct_type;
                 if (struct_info.has_managed_buffer) {
-                    // Get pointer to __ManagedArray at the correct offset
-                    const managed_ptr = try getManagedArrayPtr(self, dest_ptr.raw(), struct_info.managed_buffer_offset);
+                    // Get pointer to __ManagedMemory at the correct offset
+                    const managed_ptr = try getManagedMemoryPtr(self, dest_ptr.raw(), struct_info.managed_buffer_offset);
                     // Incref the buffer since we're copying the struct
-                    try emitManagedArrayIncref(self, managed_ptr, "<struct copy>");
+                    try emitManagedMemoryIncref(self, managed_ptr, "<struct copy>");
                 } else if (struct_info.is_cstring) {
-                    // cstring has a managed pointer (offset 16) that may reference a __ManagedArray.
+                    // cstring has a managed pointer (offset 16) that may reference a __ManagedMemory.
                     // If managed != null and the buffer is heap mode, we need to incref.
                     try emitCstringCopyIncref(self, dest_ptr);
                 }
@@ -538,13 +538,13 @@ pub fn emitStructCopy(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.Struct
     }
 }
 
-/// Get pointer to __ManagedArray at the given offset within a struct.
-pub fn getManagedArrayPtr(self: *AstToIr, struct_ptr: ir.Value, offset: i32) !ir.ManagedArrayPtr {
+/// Get pointer to __ManagedMemory at the given offset within a struct.
+pub fn getManagedMemoryPtr(self: *AstToIr, struct_ptr: ir.Value, offset: i32) !ir.ManagedMemoryPtr {
     if (offset == 0) {
-        return ir.toManagedArrayPtr(struct_ptr);
+        return ir.toManagedMemoryPtr(struct_ptr);
     } else {
         const field_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(struct_ptr), offset);
-        return ir.toManagedArrayPtr(field_ptr.raw());
+        return ir.toManagedMemoryPtr(field_ptr.raw());
     }
 }
 
@@ -557,7 +557,7 @@ pub fn emitStructMove(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.Struct
 
 /// Emit incref for cstring copy.
 /// cstring layout: data(8) + length(8) + managed(8)
-/// If managed != null and points to a heap-mode __ManagedArray, incref its buffer.
+/// If managed != null and points to a heap-mode __ManagedMemory, incref its buffer.
 fn emitCstringCopyIncref(self: *AstToIr, cstring_ptr: ir.StructPtr) !void {
     const cstring = @import("ast_to_ir_cstring.zig");
 
@@ -575,8 +575,8 @@ fn emitCstringCopyIncref(self: *AstToIr, cstring_ptr: ir.StructPtr) !void {
     const check_heap_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("cstr_copy_check_heap");
 
-    // Check if the managed array is in heap mode (flags & 3 == 1)
-    const flags_ptr = try ManagedArray.getFlagsPtr(self.func(), ir.toManagedArrayPtr(managed_ptr));
+    // Check if the managed memory is in heap mode (flags & 3 == 1)
+    const flags_ptr = try ManagedMemory.getFlagsPtr(self.func(), ir.toManagedMemoryPtr(managed_ptr));
     const flags = try self.func().emitLoad(flags_ptr.raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, flags, three, .i32);
@@ -623,10 +623,10 @@ fn emitCstringCopyIncref(self: *AstToIr, cstring_ptr: ir.StructPtr) !void {
 // Array Indexing
 // ============================================================================
 
-/// Index into a __ManagedArray: managed[i]
+/// Index into a __ManagedMemory: managed[i]
 /// Returns the element as an error union (bounds-checked, throws ArrayError on out of bounds)
 /// Uses current_type_name or var_name context to determine element type
-pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression, var_name: ?[]const u8) ConvertError!TypedValue {
+pub fn convertManagedMemoryIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression, var_name: ?[]const u8) ConvertError!TypedValue {
     const idx_typed = try self.convertExpression(index_expr);
 
     // Extract element type from context
@@ -685,7 +685,7 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
 
     // Load buffer pointer (offset 0) and length (offset 8)
     const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-    const len_ptr = try ManagedArray.getLenPtr(self.func(), ir.toManagedArrayPtr(managed_ptr));
+    const len_ptr = try ManagedMemory.getLenPtr(self.func(), ir.toManagedMemoryPtr(managed_ptr));
     const len = try self.func().emitLoad(len_ptr.raw(), .i64);
 
     // Calculate error union size: 8 (tag) + max(element size, 8 for error enum)
@@ -747,12 +747,12 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
         const is_success = try self.func().emitBinaryOp(.icmp_eq, tag, zero_const, .i64);
 
         // Create conditional block for incref - using simple pattern without deferred blocks
-        // since emitManagedArrayIncref will create its own blocks
+        // since emitManagedMemoryIncref will create its own blocks
         const entry_idx: u32 = @intCast(self.func().blocks.items.len - 1);
         const incref_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("array_get_incref");
 
-        // We'll add the end block AFTER emitManagedArrayIncref to avoid index confusion
+        // We'll add the end block AFTER emitManagedMemoryIncref to avoid index confusion
         // For now, emit conditional branch with placeholder (we'll fix the end index)
         const branch_instr_idx = self.func().blocks.items[entry_idx].instructions.items.len;
         try self.func().blocks.items[entry_idx].instructions.append(self.allocator, .{
@@ -761,11 +761,11 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
         });
 
         // In incref block: increment refcount of the element at value_slot
-        // emitManagedArrayIncref will create its own blocks and end up in its incref_end block
-        const elem_managed_ptr = try getManagedArrayPtr(self, value_slot.raw(), elem_info.managed_buffer_offset);
-        try emitManagedArrayIncref(self, elem_managed_ptr, "<array index>");
+        // emitManagedMemoryIncref will create its own blocks and end up in its incref_end block
+        const elem_managed_ptr = try getManagedMemoryPtr(self, value_slot.raw(), elem_info.managed_buffer_offset);
+        try emitManagedMemoryIncref(self, elem_managed_ptr, "<array index>");
 
-        // After emitManagedArrayIncref, we're in its incref_end block. We need to branch
+        // After emitManagedMemoryIncref, we're in its incref_end block. We need to branch
         // to our end block, so emit the branch NOW (before adding the end block).
         // The end block will be at the current length after we add it.
         const end_idx: u32 = @intCast(self.func().blocks.items.len);
@@ -889,13 +889,13 @@ pub fn convertInitableFromArrayLiteralSimple(self: *AstToIr, decl: ast.VarDecl, 
 }
 
 /// Convert InitableFromArrayLiteral: var arr Array of int = [1, 2, 3]
-/// Creates a __ManagedArray and calls Type$init(managed)
+/// Creates a __ManagedMemory and calls Type$init(managed)
 pub fn convertInitableFromArrayLiteral(self: *AstToIr, decl: ast.VarDecl, gen: ast.GenericTypeExpr) !void {
     try convertInitableFromArrayLiteralImpl(self, decl, gen.base_type);
 }
 
 /// Implementation of InitableFromArrayLiteral transformation
-/// Array is special-cased: receives __ManagedArray directly.
+/// Array is special-cased: receives __ManagedMemory directly.
 /// Other types receive an Array (following Swift's ExpressibleByArrayLiteral pattern).
 pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
     const arr_lit = decl.value.array_literal;
@@ -904,7 +904,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
     debug.astToIr("InitableFromArrayLiteral: {s} with {d} elements", .{ type_name, elements.len });
 
     const managed_ptr = if (elements.len == 0)
-        try emitEmptyManagedArray(self)
+        try emitEmptyManagedMemory(self)
     else blk: {
         // Allocate refcounted buffer for elements
         const elem_count = try self.func().emitConstI64(@intCast(elements.len));
@@ -920,14 +920,14 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
             try self.func().emitStore(elem_ptr.raw(), typed.value);
         }
 
-        break :blk try emitManagedArray(self, buffer, elem_count, elem_count);
+        break :blk try emitManagedMemory(self, buffer, elem_count, elem_count);
     };
 
-    // Types implementing BuiltinArrayLiteral receive __ManagedArray directly
+    // Types implementing BuiltinArrayLiteral receive __ManagedMemory directly
     // Other types receive an Array (we create one first, then pass it to their init)
     const is_builtin_type = self.isBuiltinLiteralType(type_name, "BuiltinArrayLiteral");
 
-    // For non-Builtin types, first create an Array from the __ManagedArray
+    // For non-Builtin types, first create an Array from the __ManagedMemory
     var init_arg: ir.Value = undefined;
     if (is_builtin_type) {
         init_arg = managed_ptr.raw();
@@ -938,7 +938,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
         else
             "int"; // Default to int for non-generic types
 
-        // Create an Array$ElementType by calling Array$ElementType$init(__ManagedArray)
+        // Create an Array$ElementType by calling Array$ElementType$init(__ManagedMemory)
         var type_args = [_][]const u8{elem_type_name};
         const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
         const array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
@@ -1040,7 +1040,7 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
     };
 
     if (elements.len == 0) {
-        const managed_ptr = try emitEmptyManagedArray(self);
+        const managed_ptr = try emitEmptyManagedMemory(self);
 
         // Get or create the Array$int type (default element type for empty arrays)
         // Extract name and size immediately as later operations may invalidate the type_map pointer
@@ -1141,8 +1141,8 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
         }
     }
 
-    // Initialize __ManagedArray with buffer, length, and capacity
-    const managed_ptr = try emitManagedArray(self, buffer, elem_count, elem_count);
+    // Initialize __ManagedMemory with buffer, length, and capacity
+    const managed_ptr = try emitManagedMemory(self, buffer, elem_count, elem_count);
 
     // Determine element type name for creating the Array type
     const elem_name: []const u8 = if (elem_struct_type) |sn|
@@ -1201,11 +1201,11 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
     // Handle empty collection - use 'int' as default element type
     var elem_type_name: []const u8 = "int";
 
-    // Create __ManagedArray for elements
+    // Create __ManagedMemory for elements
     var managed_ptr: ir.Value = undefined;
 
     if (elements.len == 0) {
-        managed_ptr = (try emitEmptyManagedArray(self)).raw();
+        managed_ptr = (try emitEmptyManagedMemory(self)).raw();
     } else {
         // Infer element type from first element
         const first_typed = try self.convertExpression(elements[0]);
@@ -1234,7 +1234,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
             try self.func().emitStore(elem_ptr.raw(), typed.value);
         }
 
-        managed_ptr = (try emitManagedArray(self, buffer, elem_count, elem_count)).raw();
+        managed_ptr = (try emitManagedMemory(self, buffer, elem_count, elem_count)).raw();
     }
 
     // Build the monomorphized type name: TypeName$ElementType
@@ -1243,7 +1243,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
 
     debug.astToIr("InitFromArray target type: {s}", .{target_type_name});
 
-    // Create an Array from the __ManagedArray (InitableFromArrayLiteral.init takes Array)
+    // Create an Array from the __ManagedMemory (InitableFromArrayLiteral.init takes Array)
     // First create the monomorphized Array type for the element type
     const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
     const array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
@@ -1334,7 +1334,7 @@ pub fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!Typ
         },
     };
 
-    // Build __ManagedArray with the given capacity
+    // Build __ManagedMemory with the given capacity
     // For Array of N int, len = capacity so all elements are immediately accessible
     // Calculate actual element size from type (with monomorphization fallback)
     const elem_size_val: i64 = if (self.getStructSizeWithMonomorphization(resolved_elem)) |size|
@@ -1357,7 +1357,7 @@ pub fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!Typ
     const buffer = try emitAllocRefcountedBuffer(self, buffer_size, "array buffer");
     // Zero-initialize the buffer so hash tables (Map, Set) have correct initial state
     try self.func().emitMemsetDynamic(buffer, 0, buffer_size);
-    const managed_ptr = try emitManagedArray(self, buffer, capacity_typed.value, capacity_typed.value);
+    const managed_ptr = try emitManagedMemory(self, buffer, capacity_typed.value, capacity_typed.value);
 
     // Call Array$init(result_ptr, managed_ptr) via InitableFromArrayLiteral interface
     const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});

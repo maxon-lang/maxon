@@ -42,18 +42,18 @@ When a type implements an interface with default methods:
 ```maxon
 // This type gets map() automatically from Collection's default
 type IntList is Collection with int
-    var data __ManagedArray<int>
+    var data __ManagedMemory<int>
 
     function Collection.count() returns int
-        return __managed_array_len(self.data)
+        return __managed_memory_len(self.data)
     end 'count'
 
     function Collection.get(index int) returns int
-        return __managed_array_get_at(self.data, index)
+        return __managed_memory_get_at(self.data, index)
     end 'get'
 
     function Collection.set(index int, value int)
-        __managed_array_set_at(self.data, index, value)
+        __managed_memory_set_at(self.data, index, value)
     end 'set'
 
     // Note: No map() implementation - uses Collection's default

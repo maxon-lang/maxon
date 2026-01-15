@@ -26,22 +26,22 @@ export type File
 		return handle
 	end 'openForRead'
 
-	/// Read file into a managed array
-	static function readFileData(path String, extraBytes int) returns __ManagedArray throws FileError
+	/// Read file into a managed memory
+	static function readFileData(path String, extraBytes int) returns __ManagedMemory throws FileError
 		let handle = try openForRead(path)
 		let size = __file_size(handle)
-		var managed = __managed_array_create(size + extraBytes, 1)
+		var managed = __managed_memory_create(size + extraBytes, 1)
 		let bytesRead = __file_read(handle, managed, size)
 		__file_close(handle)
-		__managed_array_set_length(managed, bytesRead)
+		__managed_memory_set_length(managed, bytesRead)
 		return managed
 	end 'readFileData'
 
 	/// Read text file content as a UTF-8 string
 	export static function readText(path String) returns String throws FileError
 		var managed = try readFileData(path, extraBytes: 1)
-		let len = __managed_array_len(managed)
-		__managed_array_set_byte(managed, len, 0)
+		let len = __managed_memory_len(managed)
+		__managed_memory_set_byte(managed, len, 0)
 		return String{_managed: managed, _iterPos: 0}
 	end 'readText'
 

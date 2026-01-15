@@ -7,7 +7,7 @@
 // ============================================
 
 // findGraphemeEndManagedRange - Find end of grapheme cluster in range
-function findGraphemeEndManagedRange(managed __ManagedArray, offset int, startPos int, len int) returns int
+function findGraphemeEndManagedRange(managed __ManagedMemory, offset int, startPos int, len int) returns int
 	if startPos >= len 'atEnd'
 			return startPos
 	end 'atEnd'
@@ -46,9 +46,9 @@ function findGraphemeEndManagedRange(managed __ManagedArray, offset int, startPo
 	return pos
 end 'findGraphemeEndManagedRange'
 
-/// Find the end of the grapheme cluster in a __ManagedArray starting at startPos
+/// Find the end of the grapheme cluster in a __ManagedMemory starting at startPos
 /// Returns the byte offset of the end of the grapheme cluster
-export function findGraphemeEndManaged(managed __ManagedArray, startPos int, len int) returns int
+export function findGraphemeEndManaged(managed __ManagedMemory, startPos int, len int) returns int
 	return findGraphemeEndManagedRange(managed, offset: 0, startPos: startPos, len: len)
 end 'findGraphemeEndManaged'
 
@@ -57,7 +57,7 @@ end 'findGraphemeEndManaged'
 // ============================================
 
 // countGraphemesManagedRange - Count grapheme clusters in range
-function countGraphemesManagedRange(managed __ManagedArray, offset int, len int) returns int
+function countGraphemesManagedRange(managed __ManagedMemory, offset int, len int) returns int
 	var graphemeCount = 0
 	var pos = 0
 	while pos < len 'countLoop'
@@ -67,17 +67,17 @@ function countGraphemesManagedRange(managed __ManagedArray, offset int, len int)
 	return graphemeCount
 end 'countGraphemesManagedRange'
 
-/// Count the total number of grapheme clusters in a __ManagedArray
-export function countGraphemesManaged(managed __ManagedArray) returns int
-	return countGraphemesManagedRange(managed, offset: 0, len: __managed_array_len(managed))
+/// Count the total number of grapheme clusters in a __ManagedMemory
+export function countGraphemesManaged(managed __ManagedMemory) returns int
+	return countGraphemesManagedRange(managed, offset: 0, len: __managed_memory_len(managed))
 end 'countGraphemesManaged'
 
 /// Convert a byte index to a grapheme (character) index
 /// Returns the number of grapheme clusters before the byte position
-export function byteIndexToGraphemeIndex(managed __ManagedArray, byteIdx int) returns int
+export function byteIndexToGraphemeIndex(managed __ManagedMemory, byteIdx int) returns int
 	var graphemeIdx = 0
 	var pos = 0
-	var len = __managed_array_len(managed)
+	var len = __managed_memory_len(managed)
 	while pos < byteIdx and pos < len 'count'
 			pos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
 			graphemeIdx = graphemeIdx + 1
@@ -87,9 +87,9 @@ end 'byteIndexToGraphemeIndex'
 
 /// Advance from a byte position by a number of grapheme clusters
 /// Returns the byte position after advancing by `count` graphemes
-export function graphemeOffsetToBytePos(managed __ManagedArray, startBytePos int, count int) returns int
+export function graphemeOffsetToBytePos(managed __ManagedMemory, startBytePos int, count int) returns int
 	var pos = startBytePos
-	var len = __managed_array_len(managed)
+	var len = __managed_memory_len(managed)
 	var i = 0
 	while i < count and pos < len 'advance'
 			pos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)

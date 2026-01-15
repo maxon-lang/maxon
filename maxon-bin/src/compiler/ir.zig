@@ -38,12 +38,12 @@ pub fn Ptr(comptime Tag: type) type {
 }
 
 // Marker types for specific structs (zero-size, compile-time only)
-pub const ManagedArrayTag = struct {};
+pub const ManagedMemoryTag = struct {};
 pub const MapTag = struct {};
 pub const ErrorUnionTag = struct {};
 
 // Type aliases for common pointer types
-pub const ManagedArrayPtr = Ptr(ManagedArrayTag); // Pointer to __ManagedArray
+pub const ManagedMemoryPtr = Ptr(ManagedMemoryTag); // Pointer to __ManagedMemory
 pub const MapPtr = Ptr(MapTag); // Pointer to Map struct
 pub const ErrorUnionPtr = Ptr(ErrorUnionTag); // Pointer to error union
 
@@ -74,7 +74,7 @@ pub const RawPtr = struct {
         return .{ .val = self.val };
     }
 
-    pub fn asManagedArrayPtr(self: RawPtr) ManagedArrayPtr {
+    pub fn asManagedMemoryPtr(self: RawPtr) ManagedMemoryPtr {
         return .{ .val = self.val };
     }
 
@@ -143,8 +143,8 @@ pub fn toElemPtr(val: Value) ElemPtr {
     return .{ .val = val };
 }
 
-/// Convert raw Value to ManagedArrayPtr
-pub fn toManagedArrayPtr(val: Value) ManagedArrayPtr {
+/// Convert raw Value to ManagedMemoryPtr
+pub fn toManagedMemoryPtr(val: Value) ManagedMemoryPtr {
     return .{ .val = val };
 }
 

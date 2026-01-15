@@ -1,20 +1,20 @@
 // Character type - minimal implementation for basic character support
 //
 // A character represents an Extended Grapheme Cluster (EGC).
-// Uses same __ManagedArray storage as String.
+// Uses same __ManagedMemory storage as String.
 
-// Character receives __ManagedArray directly for literal initialization via BuiltinCharLiteral.
+// Character receives __ManagedMemory directly for literal initialization via BuiltinCharLiteral.
 export type Character is BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable
-	var _managed __ManagedArray
+	var _managed __ManagedMemory
 
 	// Default type for character literals - compiler discovers this via BuiltinCharLiteral interface
-	static function BuiltinCharLiteral.init(managed __ManagedArray) returns Character
+	static function BuiltinCharLiteral.init(managed __ManagedMemory) returns Character
 		return Character{_managed: managed}
 	end 'init'
 
 	// Basic properties
 	export function byteLength() returns int
-		return __managed_array_len(_managed)
+		return __managed_memory_len(_managed)
 	end 'byteLength'
 
 	// View methods - returns ByteView for iterating over raw UTF-8 bytes
@@ -29,14 +29,14 @@ export type Character is BuiltinCharLiteral, Hashable, Equatable, Comparable, St
 
 	// Equatable conformance
 	function Equatable.equals(other Character) returns bool
-		var len1 = __managed_array_len(_managed)
-		var len2 = __managed_array_len(other._managed)
+		var len1 = __managed_memory_len(_managed)
+		var len2 = __managed_memory_len(other._managed)
 		if len1 != len2 'length_check'
 			return false
 		end 'length_check'
 		var i = 0
 		while i < len1 'compare_loop'
-			if __managed_array_byte_at(_managed, i) != __managed_array_byte_at(other._managed, i) 'byte_check'
+			if __managed_memory_byte_at(_managed, i) != __managed_memory_byte_at(other._managed, i) 'byte_check'
 				return false
 			end 'byte_check'
 			i = i + 1
@@ -47,16 +47,16 @@ export type Character is BuiltinCharLiteral, Hashable, Equatable, Comparable, St
 	// Comparable conformance
 	// Compares characters byte-by-byte (lexicographic comparison)
 	function Comparable.compare(other Character) returns int
-		var len1 = __managed_array_len(_managed)
-		var len2 = __managed_array_len(other._managed)
+		var len1 = __managed_memory_len(_managed)
+		var len2 = __managed_memory_len(other._managed)
 		var minLen = len1
 		if len2 < len1 'min_check'
 			minLen = len2
 		end 'min_check'
 		var i = 0
 		while i < minLen 'compare_loop'
-			var b1 = __managed_array_byte_at(_managed, i)
-			var b2 = __managed_array_byte_at(other._managed, i)
+			var b1 = __managed_memory_byte_at(_managed, i)
+			var b2 = __managed_memory_byte_at(other._managed, i)
 			if b1 < b2 'byte_lt'
 				return 0 - 1
 			end 'byte_lt'
@@ -77,10 +77,10 @@ export type Character is BuiltinCharLiteral, Hashable, Equatable, Comparable, St
 	// Hashable conformance (djb2 hash algorithm)
 	function Hashable.hash() returns int
 		var h = 5381
-		var len = __managed_array_len(_managed)
+		var len = __managed_memory_len(_managed)
 		var i = 0
 		while i < len 'hash_loop'
-			var b = __managed_array_byte_at(_managed, i)
+			var b = __managed_memory_byte_at(_managed, i)
 			h = h * 33 + b
 			i = i + 1
 		end 'hash_loop'
@@ -94,11 +94,11 @@ export type Character is BuiltinCharLiteral, Hashable, Equatable, Comparable, St
 
 	// Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
 	export function asciiValue() returns int throws CharacterError
-		var len = __managed_array_len(_managed)
+		var len = __managed_memory_len(_managed)
 		if len != 1 'check_len'
 			throw CharacterError.notAscii
 		end 'check_len'
-		var b = __managed_array_byte_at(_managed, 0)
+		var b = __managed_memory_byte_at(_managed, 0)
 		if b >= 128 'check_ascii'
 			throw CharacterError.notAscii
 		end 'check_ascii'

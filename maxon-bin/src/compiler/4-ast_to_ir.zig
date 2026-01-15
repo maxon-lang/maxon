@@ -22,7 +22,7 @@ const map_helpers = @import("ast_to_ir_map.zig");
 const cleanup_helpers = @import("ast_to_ir_cleanup.zig");
 
 // Re-export layouts for other modules
-pub const ManagedArray = array_helpers.ManagedArray;
+pub const ManagedMemory = array_helpers.ManagedMemory;
 pub const CString = cstring_helpers.CString;
 pub const ErrorUnion = error_union_helpers.ErrorUnion;
 pub const Map = map_helpers.Map;
@@ -731,7 +731,7 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     /// Register compiler-internal types needed before processing external types.
-    /// This includes primitives (int, float, etc.) and internal types (__ManagedArray, cstring).
+    /// This includes primitives (int, float, etc.) and internal types (__ManagedMemory, cstring).
     /// Safe to call multiple times - skips already registered types.
     fn registerBuiltinTypes(self: *AstToIr) !void {
         // Register primitive types from the single source of truth
@@ -741,25 +741,25 @@ pub const AstToIr = struct {
             }
         }
 
-        // Register __ManagedArray compiler-internal type (32 bytes - unified for both arrays and strings)
+        // Register __ManagedMemory compiler-internal type (32 bytes - unified for both arrays and strings)
         // Layout: ptr buffer (8) + i64 len (8) + i64 capacity (8) + i32 flags (4) + i32 parent_off (4)
         // Mode detection via flags & 0x3:
         //   0 = SSO (future - inline storage)
         //   1 = Heap-refcounted (refcount at buffer-8)
         //   2 = Slice (borrowed view into parent)
-        if (!self.type_map.contains("__ManagedArray")) {
-            const managed_array_fields = try ManagedArray.createFieldDefs(self.allocator);
-            self.type_map.put(self.allocator, "__ManagedArray", .{
-                .struct_type = .{ .name = "__ManagedArray", .fields = managed_array_fields, .size = ManagedArray.size(), .needs_cleanup = true, .has_managed_buffer = true, .is_internal_type = true },
+        if (!self.type_map.contains("__ManagedMemory")) {
+            const managed_memory_fields = try ManagedMemory.createFieldDefs(self.allocator);
+            self.type_map.put(self.allocator, "__ManagedMemory", .{
+                .struct_type = .{ .name = "__ManagedMemory", .fields = managed_memory_fields, .size = ManagedMemory.size(), .needs_cleanup = true, .has_managed_buffer = true, .is_internal_type = true },
             }) catch {
-                self.allocator.free(managed_array_fields);
+                self.allocator.free(managed_memory_fields);
                 return error.OutOfMemory;
             };
         }
 
         // Register cstring compiler-internal type (24 bytes)
         // Layout: data(8) + length(8) + managed(8)
-        // For non-slice strings: data points to String's buffer, managed points to __ManagedArray (incref'd)
+        // For non-slice strings: data points to String's buffer, managed points to __ManagedMemory (incref'd)
         // For slice strings: data points to newly allocated null-terminated copy, managed = null
         if (!self.type_map.contains("cstring")) {
             const cstring_fields = try CString.createFieldDefs(self.allocator);
@@ -1171,9 +1171,9 @@ pub const AstToIr = struct {
                 const array_ptr = try self.func().emitAllocaSized(arr_struct_info.size);
 
                 if (elements.len == 0) {
-                    // Initialize with empty managed array at the correct offset
-                    const managed_ptr = try array_helpers.getManagedArrayPtr(self, array_ptr.raw(), arr_struct_info.managed_buffer_offset);
-                    try array_helpers.ManagedArray.initEmpty(self.func(), managed_ptr);
+                    // Initialize with empty managed memory at the correct offset
+                    const managed_ptr = try array_helpers.getManagedMemoryPtr(self, array_ptr.raw(), arr_struct_info.managed_buffer_offset);
+                    try array_helpers.ManagedMemory.initEmpty(self.func(), managed_ptr);
                 } else {
                     // Allocate refcounted buffer for elements
                     const elem_count = try self.func().emitConstI64(@intCast(elements.len));
@@ -1197,10 +1197,10 @@ pub const AstToIr = struct {
                         try self.func().emitStore(elem_ptr.raw(), value);
                     }
 
-                    // Initialize __ManagedArray at the correct offset within the Array struct
-                    const managed_ptr = try array_helpers.getManagedArrayPtr(self, array_ptr.raw(), arr_struct_info.managed_buffer_offset);
+                    // Initialize __ManagedMemory at the correct offset within the Array struct
+                    const managed_ptr = try array_helpers.getManagedMemoryPtr(self, array_ptr.raw(), arr_struct_info.managed_buffer_offset);
                     const heap_flags = try self.func().emitConstI32(array_helpers.MODE_HEAP);
-                    try array_helpers.ManagedArray.init(self.func(), managed_ptr, buffer, elem_count, elem_count, heap_flags);
+                    try array_helpers.ManagedMemory.init(self.func(), managed_ptr, buffer, elem_count, elem_count, heap_flags);
                 }
 
                 // Initialize iterIndex field to 0
@@ -1223,7 +1223,7 @@ pub const AstToIr = struct {
             },
             .runtime_expr => |expr| {
                 // For runtime-initialized constants, convert the expression
-                // convertArrayLiteral already returns a full Array struct (not __ManagedArray)
+                // convertArrayLiteral already returns a full Array struct (not __ManagedMemory)
                 return self.convertExpression(expr);
             },
         };
@@ -1451,7 +1451,7 @@ pub const AstToIr = struct {
             }
         }
 
-        // Allow access to internal types (like __ManagedArray) when registering external types
+        // Allow access to internal types (like __ManagedMemory) when registering external types
         // since these come from stdlib and may have internal fields
         const saved_in_stdlib = self.in_stdlib_method;
         self.in_stdlib_method = true;
@@ -1472,8 +1472,8 @@ pub const AstToIr = struct {
             break :blk false;
         };
 
-        // Check for __ManagedArray field (for COW semantics)
-        const managed_offset = types.findManagedArrayField(field_result.fields);
+        // Check for __ManagedMemory field (for COW semantics)
+        const managed_offset = types.findManagedMemoryField(field_result.fields);
 
         try self.type_map.put(self.allocator, ext_type.name, .{
             .struct_type = .{
@@ -2709,8 +2709,8 @@ pub const AstToIr = struct {
         else
             false;
 
-        // Find __ManagedArray field offset
-        const managed_offset = types.findManagedArrayField(field_result.fields);
+        // Find __ManagedMemory field offset
+        const managed_offset = types.findManagedMemoryField(field_result.fields);
 
         const struct_info = StructTypeInfo{
             .name = mono_name,
@@ -3919,8 +3919,8 @@ pub const AstToIr = struct {
                         // For types with COW semantics that are NOT from a variable (e.g., from array element access),
                         // we need to incref since we're copying from shared data
                         if (struct_info.has_managed_buffer and expr != .identifier) {
-                            const managed_ptr = try array_helpers.getManagedArrayPtr(self, value_ptr.raw(), struct_info.managed_buffer_offset);
-                            try array_helpers.emitManagedArrayIncref(self, managed_ptr, "<array element return>");
+                            const managed_ptr = try array_helpers.getManagedMemoryPtr(self, value_ptr.raw(), struct_info.managed_buffer_offset);
+                            try array_helpers.emitManagedMemoryIncref(self, managed_ptr, "<array element return>");
                         }
                     } else {
                         try self.func().emitStore(value_ptr.raw(), typed_val.value);
@@ -4024,8 +4024,8 @@ pub const AstToIr = struct {
                     // but we need to incref if copying from another variable
                     if (assign.value == .identifier or assign.value == .field_access) {
                         if (value_typed.ty == .struct_type and value_typed.ty.struct_type.has_managed_buffer) {
-                            const managed_ptr = try array_helpers.getManagedArrayPtr(self, var_info.ptr.?, value_typed.ty.struct_type.managed_buffer_offset);
-                            try array_helpers.emitManagedArrayIncref(self, managed_ptr, assign.target);
+                            const managed_ptr = try array_helpers.getManagedMemoryPtr(self, var_info.ptr.?, value_typed.ty.struct_type.managed_buffer_offset);
+                            try array_helpers.emitManagedMemoryIncref(self, managed_ptr, assign.target);
                         }
                     }
                     // For types with managed buffer assignment from a temporary (literal/interpolation/etc),
@@ -4045,8 +4045,8 @@ pub const AstToIr = struct {
 
             // COW: If assigning a type with managed buffer from another variable/field, incref the new value
             if (value_typed.ty == .struct_type and value_typed.ty.struct_type.has_managed_buffer and (assign.value == .identifier or assign.value == .field_access)) {
-                const managed_ptr = try array_helpers.getManagedArrayPtr(self, var_info.ptr.?, value_typed.ty.struct_type.managed_buffer_offset);
-                try array_helpers.emitManagedArrayIncref(self, managed_ptr, assign.target);
+                const managed_ptr = try array_helpers.getManagedMemoryPtr(self, var_info.ptr.?, value_typed.ty.struct_type.managed_buffer_offset);
+                try array_helpers.emitManagedMemoryIncref(self, managed_ptr, assign.target);
             }
             var_info.resetOwnership();
             return;
@@ -4415,8 +4415,8 @@ pub const AstToIr = struct {
                 if (self.var_map.get(binding_name)) |var_info| {
                     if (var_info.ptr) |ptr| {
                         if (var_info.ty == .struct_type and var_info.ty.struct_type.has_managed_buffer) {
-                            const managed_ptr = try array_helpers.getManagedArrayPtr(self, ptr, var_info.ty.struct_type.managed_buffer_offset);
-                            try array_helpers.emitManagedArrayDecref(self, managed_ptr, binding_name, "binding cleanup");
+                            const managed_ptr = try array_helpers.getManagedMemoryPtr(self, ptr, var_info.ty.struct_type.managed_buffer_offset);
+                            try array_helpers.emitManagedMemoryDecref(self, managed_ptr, binding_name, "binding cleanup");
                         }
                     }
                 }
@@ -5076,7 +5076,7 @@ pub const AstToIr = struct {
     }
 
     /// Check if a type implements a specific BuiltinXxxLiteral interface.
-    /// Types implementing these interfaces receive __ManagedArray directly from the compiler.
+    /// Types implementing these interfaces receive __ManagedMemory directly from the compiler.
     pub fn isBuiltinLiteralType(self: *AstToIr, type_name: []const u8, interface_name: []const u8) bool {
         // Handle monomorphized names like "Array$int", "Map$String$int"
         const base_name = if (std.mem.indexOf(u8, type_name, "$")) |dollar_pos|
@@ -6217,7 +6217,7 @@ pub const AstToIr = struct {
         const processed = try self.processEscapeSequences(str_bytes);
         defer self.allocator.free(processed);
 
-        const managed_ptr = try array_helpers.emitManagedArrayFromStaticBytes(self, processed);
+        const managed_ptr = try array_helpers.emitManagedMemoryFromStaticBytes(self, processed);
         const result_ptr = try self.emitWrapperFromManaged(managed_ptr, .string);
 
         // Track as temporary String that may need cleanup
@@ -6237,7 +6237,7 @@ pub const AstToIr = struct {
         const processed = try self.processEscapeSequences(str_bytes);
         defer self.allocator.free(processed);
 
-        const managed_ptr = try array_helpers.emitManagedArrayFromStaticBytes(self, processed);
+        const managed_ptr = try array_helpers.emitManagedMemoryFromStaticBytes(self, processed);
         try self.emitWrapperInitIntoPtr(dest_ptr, managed_ptr, .string);
     }
 
@@ -6303,7 +6303,7 @@ pub const AstToIr = struct {
         const null_pos = try self.func().emitGetElemPtr(final_buffer, len, 1);
         try self.func().emitStoreI8(null_pos.raw(), try self.func().emitConstI8(0));
 
-        const managed_ptr = try array_helpers.emitManagedArrayFromBuffer(self, final_buffer, len);
+        const managed_ptr = try array_helpers.emitManagedMemoryFromBuffer(self, final_buffer, len);
         const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
         try self.temporary_strings.append(self.allocator, string_ptr);
         return .{ .value = string_ptr, .ty = try self.typeNameToValueType("String") };
@@ -6333,18 +6333,18 @@ pub const AstToIr = struct {
         switch (typed_val.ty) {
             .struct_type => |struct_info| {
                 if (std.mem.eql(u8, struct_info.name, "String")) {
-                    // Extract buffer+length from String's __ManagedArray (borrowed, not temp)
+                    // Extract buffer+length from String's __ManagedMemory (borrowed, not temp)
                     const managed_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(typed_val.value), 0);
-                    const buffer_val = try ManagedArray.loadBuffer(self.func(), ir.toManagedArrayPtr(managed_ptr.raw()));
-                    const len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(managed_ptr.raw()));
+                    const buffer_val = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(managed_ptr.raw()));
+                    const len = try ManagedMemory.loadLen(self.func(), ir.toManagedMemoryPtr(managed_ptr.raw()));
                     return .{ .buffer = ir.toRawPtr(buffer_val), .len = len, .is_temp = false };
                 }
                 if (self.typeConformsTo(struct_info.name, "Stringable")) {
                     // Call toString, then extract buffer from returned String (borrowed, not temp)
                     const string_ptr = try self.callStringableToString(struct_info.name, typed_val.value, format_spec);
                     const managed_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(string_ptr), 0);
-                    const buffer_val = try ManagedArray.loadBuffer(self.func(), ir.toManagedArrayPtr(managed_ptr.raw()));
-                    const len = try ManagedArray.loadLen(self.func(), ir.toManagedArrayPtr(managed_ptr.raw()));
+                    const buffer_val = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(managed_ptr.raw()));
+                    const len = try ManagedMemory.loadLen(self.func(), ir.toManagedMemoryPtr(managed_ptr.raw()));
                     return .{ .buffer = ir.toRawPtr(buffer_val), .len = len, .is_temp = false };
                 }
                 const msg = std.fmt.allocPrint(self.allocator, "cannot convert type '{s}' to string for interpolation", .{struct_info.name}) catch "cannot convert type to string";
@@ -6506,10 +6506,10 @@ pub const AstToIr = struct {
         // Get string length using inline strlen
         const str_len = try self.func().emitCstrLen(enum_value);
 
-        // Create a ManagedArray with flags=0 (static data, no cleanup needed)
-        const managed_ptr = try ManagedArray.alloca(self.func());
+        // Create a ManagedMemory with flags=0 (static data, no cleanup needed)
+        const managed_ptr = try ManagedMemory.alloca(self.func());
         const zero_i32 = try self.func().emitConstI32(0);
-        try ManagedArray.init(self.func(), managed_ptr, ir.toRawPtr(enum_value), str_len, str_len, zero_i32);
+        try ManagedMemory.init(self.func(), managed_ptr, ir.toRawPtr(enum_value), str_len, str_len, zero_i32);
 
         // Create String by calling stdlib String$init
         const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
@@ -6548,11 +6548,11 @@ pub const AstToIr = struct {
         return result_ptr.raw();
     }
 
-    /// Emit a call to concatenate two __ManagedArray values, returning a new __ManagedArray
-    fn emitManagedArrayConcat(self: *AstToIr, a: ir.ManagedArrayPtr, b: ir.ManagedArrayPtr) ConvertError!ir.ManagedArrayPtr {
-        // Get lengths from ManagedArray (already i64)
-        const a_len = try ManagedArray.loadLen(self.func(), a);
-        const b_len = try ManagedArray.loadLen(self.func(), b);
+    /// Emit a call to concatenate two __ManagedMemory values, returning a new __ManagedMemory
+    fn emitManagedMemoryConcat(self: *AstToIr, a: ir.ManagedMemoryPtr, b: ir.ManagedMemoryPtr) ConvertError!ir.ManagedMemoryPtr {
+        // Get lengths from ManagedMemory (already i64)
+        const a_len = try ManagedMemory.loadLen(self.func(), a);
+        const b_len = try ManagedMemory.loadLen(self.func(), b);
         const total_len = try self.func().emitBinaryOp(.add, a_len, b_len, .i64);
 
         // Allocate new buffer with header: total_len + 1 for null terminator
@@ -6561,11 +6561,11 @@ pub const AstToIr = struct {
         const new_buffer = try array_helpers.emitAllocRefcountedBuffer(self, data_size, "string concat");
 
         // Copy first string
-        const a_buf = try ManagedArray.loadBuffer(self.func(), a);
+        const a_buf = try ManagedMemory.loadBuffer(self.func(), a);
         try self.func().emitMemcpyDynamic(new_buffer, ir.toRawPtr(a_buf), a_len);
 
         // Copy second string at offset a_len
-        const b_buf = try ManagedArray.loadBuffer(self.func(), b);
+        const b_buf = try ManagedMemory.loadBuffer(self.func(), b);
         const offset_ptr = try self.func().emitGetElemPtr(new_buffer, a_len, 1);
         try self.func().emitMemcpyDynamic(offset_ptr.asRawPtr(), ir.toRawPtr(b_buf), b_len);
 
@@ -6573,7 +6573,7 @@ pub const AstToIr = struct {
         const null_offset = try self.func().emitGetElemPtr(new_buffer, total_len, 1);
         try self.func().emitStoreI8(null_offset.raw(), try self.func().emitConstI8(0));
 
-        return array_helpers.emitManagedArrayFromBuffer(self, new_buffer, total_len);
+        return array_helpers.emitManagedMemoryFromBuffer(self, new_buffer, total_len);
     }
 
     /// Emit a call to concatenate two String values
@@ -6582,7 +6582,7 @@ pub const AstToIr = struct {
         const a_managed = try self.func().emitGetFieldPtr(ir.toStructPtr(a), 0);
         const b_managed = try self.func().emitGetFieldPtr(ir.toStructPtr(b), 0);
 
-        const result_managed = try self.emitManagedArrayConcat(ir.toManagedArrayPtr(a_managed.raw()), ir.toManagedArrayPtr(b_managed.raw()));
+        const result_managed = try self.emitManagedMemoryConcat(ir.toManagedMemoryPtr(a_managed.raw()), ir.toManagedMemoryPtr(b_managed.raw()));
         const string_ptr = try array_helpers.emitStringFromManaged(self, result_managed);
         // Track as temporary for cleanup after expression evaluation
         try self.temporary_strings.append(self.allocator, string_ptr);
@@ -6601,7 +6601,7 @@ pub const AstToIr = struct {
         args[1] = value;
         const len = (try self.func().emitCall("__runtime_int_to_string", args, .i64)).?;
 
-        const managed_ptr = try array_helpers.emitManagedArrayFromBuffer(self, buffer, len);
+        const managed_ptr = try array_helpers.emitManagedMemoryFromBuffer(self, buffer, len);
         const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
         // Track as temporary for cleanup after expression evaluation
         try self.temporary_strings.append(self.allocator, string_ptr);
@@ -6621,7 +6621,7 @@ pub const AstToIr = struct {
         args[1] = value;
         const len = (try self.func().emitCall("__runtime_float_to_string", args, .i64)).?;
 
-        const managed_ptr = try array_helpers.emitManagedArrayFromBuffer(self, buffer, len);
+        const managed_ptr = try array_helpers.emitManagedMemoryFromBuffer(self, buffer, len);
         const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
         // Track as temporary for cleanup after expression evaluation
         try self.temporary_strings.append(self.allocator, string_ptr);
@@ -6640,7 +6640,7 @@ pub const AstToIr = struct {
         args[1] = value;
         const len = (try self.func().emitCall("__runtime_bool_to_string", args, .i64)).?;
 
-        const managed_ptr = try array_helpers.emitManagedArrayFromBuffer(self, buffer, len);
+        const managed_ptr = try array_helpers.emitManagedMemoryFromBuffer(self, buffer, len);
         const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
         // Track as temporary for cleanup after expression evaluation
         try self.temporary_strings.append(self.allocator, string_ptr);
@@ -6709,7 +6709,7 @@ pub const AstToIr = struct {
         const processed = try self.processEscapeSequences(char_bytes);
 
         // Character literals use heap allocation (mode=1) since they have shorter lifetimes
-        const managed_ptr = try array_helpers.emitManagedArrayFromBytes(self, processed);
+        const managed_ptr = try array_helpers.emitManagedMemoryFromBytes(self, processed);
         const result_ptr = try self.emitWrapperFromManaged(managed_ptr, .character);
 
         const type_info = self.type_map.getPtr(LiteralWrapperType.character.typeName()) orelse {
@@ -7501,8 +7501,8 @@ pub const AstToIr = struct {
             if (ctx.success_type == .struct_type and ctx.success_type.struct_type.has_managed_buffer) {
                 if (default_expr == .identifier) {
                     // Default is a variable/parameter - need to incref the copy
-                    const managed_ptr = try array_helpers.getManagedArrayPtr(self, ctx.result_ptr, ctx.success_type.struct_type.managed_buffer_offset);
-                    try array_helpers.emitManagedArrayIncref(self, managed_ptr, "<index default>");
+                    const managed_ptr = try array_helpers.getManagedMemoryPtr(self, ctx.result_ptr, ctx.success_type.struct_type.managed_buffer_offset);
+                    try array_helpers.emitManagedMemoryIncref(self, managed_ptr, "<index default>");
                 } else {
                     // Default is a temporary - transfer ownership, remove from temporaries
                     cleanup_helpers.removeFromTemporaries(self, default_typed.value);
@@ -7699,9 +7699,9 @@ pub const AstToIr = struct {
         // Get string length using inline strlen
         const str_len = try self.func().emitCstrLen(data_ptr);
 
-        const managed_ptr = try ManagedArray.alloca(self.func());
+        const managed_ptr = try ManagedMemory.alloca(self.func());
         const zero_i32 = try self.func().emitConstI32(0);
-        try ManagedArray.init(self.func(), managed_ptr, ir.toRawPtr(data_ptr), str_len, str_len, zero_i32);
+        try ManagedMemory.init(self.func(), managed_ptr, ir.toRawPtr(data_ptr), str_len, str_len, zero_i32);
 
         // Call the appropriate stdlib init method
         if (is_character) {
@@ -8318,7 +8318,7 @@ pub const AstToIr = struct {
     }
 
     /// Convert InitableFromDictionaryLiteral with type annotation: var m Map from K to V = ["a": 1, "b": 2]
-    /// Map is special-cased: receives __ManagedArrays directly.
+    /// Map is special-cased: receives __ManagedMemorys directly.
     /// Other types receive two Arrays (following Swift's ExpressibleByDictionaryLiteral pattern).
     fn convertInitableFromDictionaryLiteralSimple(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
         const map_lit = decl.value.map_literal;
@@ -8330,10 +8330,10 @@ pub const AstToIr = struct {
         var values_managed_ptr: ir.Value = undefined;
 
         if (entries.len == 0) {
-            keys_managed_ptr = (try array_helpers.emitEmptyManagedArray(
+            keys_managed_ptr = (try array_helpers.emitEmptyManagedMemory(
                 self,
             )).raw();
-            values_managed_ptr = (try array_helpers.emitEmptyManagedArray(
+            values_managed_ptr = (try array_helpers.emitEmptyManagedMemory(
                 self,
             )).raw();
         } else {
@@ -8357,15 +8357,15 @@ pub const AstToIr = struct {
                 try self.func().emitStore(value_ptr.raw(), value_typed.value);
             }
 
-            keys_managed_ptr = (try array_helpers.emitManagedArray(self, keys_buffer, elem_count, elem_count)).raw();
-            values_managed_ptr = (try array_helpers.emitManagedArray(self, values_buffer, elem_count, elem_count)).raw();
+            keys_managed_ptr = (try array_helpers.emitManagedMemory(self, keys_buffer, elem_count, elem_count)).raw();
+            values_managed_ptr = (try array_helpers.emitManagedMemory(self, values_buffer, elem_count, elem_count)).raw();
         }
 
-        // Types implementing BuiltinDictionaryLiteral receive __ManagedArrays directly
+        // Types implementing BuiltinDictionaryLiteral receive __ManagedMemorys directly
         // Other types receive Arrays (we create them first, then pass to their init)
         const is_builtin_type = self.isBuiltinLiteralType(type_name, "BuiltinDictionaryLiteral");
 
-        // For non-Builtin types, first create Arrays from the __ManagedArrays
+        // For non-Builtin types, first create Arrays from the __ManagedMemorys
         var keys_arg: ir.Value = undefined;
         var values_arg: ir.Value = undefined;
         if (is_builtin_type) {
@@ -8537,9 +8537,9 @@ pub const AstToIr = struct {
         }
     };
 
-    /// Emit a wrapper type (String or Character) from a __ManagedArray.
+    /// Emit a wrapper type (String or Character) from a __ManagedMemory.
     /// Returns the pointer to the allocated wrapper struct.
-    fn emitWrapperFromManaged(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr, wrapper: LiteralWrapperType) ConvertError!ir.Value {
+    fn emitWrapperFromManaged(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr, wrapper: LiteralWrapperType) ConvertError!ir.Value {
         const type_info = self.type_map.get(wrapper.typeName()) orelse {
             self.reportError(.E006, wrapper.typeName());
             return error.UnknownType;
@@ -8550,7 +8550,7 @@ pub const AstToIr = struct {
     }
 
     /// Initialize a wrapper type (String or Character) into a pre-allocated pointer.
-    fn emitWrapperInitIntoPtr(self: *AstToIr, dest_ptr: ir.Value, managed_ptr: ir.ManagedArrayPtr, wrapper: LiteralWrapperType) ConvertError!void {
+    fn emitWrapperInitIntoPtr(self: *AstToIr, dest_ptr: ir.Value, managed_ptr: ir.ManagedMemoryPtr, wrapper: LiteralWrapperType) ConvertError!void {
         const init_name = wrapper.initFuncName();
         const func_info = self.func_map.get(init_name) orelse {
             self.reportInternalError(init_name);
@@ -8600,7 +8600,7 @@ pub const AstToIr = struct {
     }
 
     /// Common implementation for literal initialization (string or character literals).
-    /// All types receive __ManagedArray directly.
+    /// All types receive __ManagedMemory directly.
     fn convertLiteralInit(
         self: *AstToIr,
         bytes: []const u8,
@@ -8608,8 +8608,8 @@ pub const AstToIr = struct {
         decl_name: []const u8,
         wrapper: LiteralWrapperType,
     ) !void {
-        _ = wrapper; // No longer needed - all types receive __ManagedArray
-        const managed_ptr = try array_helpers.emitManagedArrayFromBytes(self, bytes);
+        _ = wrapper; // No longer needed - all types receive __ManagedMemory
+        const managed_ptr = try array_helpers.emitManagedMemoryFromBytes(self, bytes);
 
         const result = try self.emitTypeInit(type_name, managed_ptr.raw());
 
@@ -8622,18 +8622,18 @@ pub const AstToIr = struct {
     }
 
     /// Common implementation for literal casts ("hello" as MyType or 'A' as MyType).
-    /// All types receive __ManagedArray directly.
+    /// All types receive __ManagedMemory directly.
     fn convertLiteralCast(
         self: *AstToIr,
         literal: []const u8,
         type_name: []const u8,
         wrapper: LiteralWrapperType,
     ) ConvertError!TypedValue {
-        _ = wrapper; // No longer needed - all types receive __ManagedArray
+        _ = wrapper; // No longer needed - all types receive __ManagedMemory
         const processed = try self.processEscapeSequences(literal);
         defer self.allocator.free(processed);
 
-        const managed_ptr = try array_helpers.emitManagedArrayFromBytes(self, processed);
+        const managed_ptr = try array_helpers.emitManagedMemoryFromBytes(self, processed);
         const result = try self.emitTypeInit(type_name, managed_ptr.raw());
 
         return .{
@@ -8669,12 +8669,12 @@ pub const AstToIr = struct {
     fn convertIndex(self: *AstToIr, idx: ast.IndexExpr) ConvertError!TypedValue {
         const base_typed = try self.convertExpression(idx.base.*);
 
-        // Handle __ManagedArray indexing (stdlib only)
+        // Handle __ManagedMemory indexing (stdlib only)
         if (base_typed.ty == .struct_type) {
-            if (std.mem.eql(u8, base_typed.ty.struct_type.name, "__ManagedArray")) {
+            if (std.mem.eql(u8, base_typed.ty.struct_type.name, "__ManagedMemory")) {
                 // Extract variable name if base is an identifier
                 const var_name: ?[]const u8 = if (idx.base.* == .identifier) idx.base.identifier else null;
-                return array_helpers.convertManagedArrayIndex(self, base_typed.value, idx.index.*, var_name);
+                return array_helpers.convertManagedMemoryIndex(self, base_typed.value, idx.index.*, var_name);
             }
             // Handle stdlib Array types (Array$int, etc.) - call .get() method
             if (std.mem.startsWith(u8, base_typed.ty.struct_type.name, "Array$")) {
@@ -8682,7 +8682,7 @@ pub const AstToIr = struct {
             }
         }
 
-        // Only struct types with Array$ prefix or __ManagedArray support indexing
+        // Only struct types with Array$ prefix or __ManagedMemory support indexing
         std.debug.print("[AST->IR] convertIndexExpr: expected array type\n", .{});
         self.reportError(.E006, "expected array type for indexing");
         return error.UnknownType;
@@ -8857,7 +8857,7 @@ pub const AstToIr = struct {
                     }
 
                     // NOTE: Temporaries with managed buffers passed to Array.push are NOT removed from temporaries here.
-                    // The intrinsic __managed_array_set_at calls emitManagedArrayIncref on the stored value,
+                    // The intrinsic __managed_memory_set_at calls emitManagedMemoryIncref on the stored value,
                     // bumping refcount to 2. The temp cleanup decrefs (to 1), and array cleanup decrefs (to 0, freed).
                     // This ensures proper refcounting with the buffer header scheme.
 
@@ -9175,8 +9175,8 @@ pub fn convertWithExternals(
         (external_enums orelse &[_]ExternalEnumInfo{}).len + 500; // 500 extra for monomorphized types
     try converter.type_map.ensureUnusedCapacity(allocator, @intCast(estimated_types));
 
-    // Register builtin types first (primitives, __ManagedArray, cstring, etc.)
-    // External types may depend on these (e.g., Array has a __ManagedArray field)
+    // Register builtin types first (primitives, __ManagedMemory, cstring, etc.)
+    // External types may depend on these (e.g., Array has a __ManagedMemory field)
     try converter.registerBuiltinTypes();
 
     // Register external interfaces before types (needed for conformance checking)

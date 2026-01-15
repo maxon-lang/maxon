@@ -1,14 +1,14 @@
-// Array receives __ManagedArray directly for literal initialization via BuiltinArrayLiteral.
+// Array receives __ManagedMemory directly for literal initialization via BuiltinArrayLiteral.
 export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Element, Indexed with Element
 	var iterIndex int          // Current iteration position (now at offset 0)
-	var managed __ManagedArray  // Compiler-managed opaque array storage (now at offset 8)
+	var managed __ManagedMemory  // Compiler-managed opaque array storage (now at offset 8)
 
 	// =========================================================================
 	// Builtin initialization (compiler special-case)
 	// =========================================================================
 
 	// Default type for array literals - compiler discovers this via BuiltinArrayLiteral interface
-	static function BuiltinArrayLiteral.init(managed __ManagedArray) returns Self
+	static function BuiltinArrayLiteral.init(managed __ManagedMemory) returns Self
 		return Self{managed: managed, iterIndex: 0}
 	end 'init'
 
@@ -18,34 +18,34 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 
 	/// Get the number of elements in the array
 	export function Sized.count() returns int
-		return __managed_array_len(managed)
+		return __managed_memory_len(managed)
 	end 'count'
 
 	/// Get the current capacity (allocated space)
 	export function capacity() returns int
-		return __managed_array_capacity(managed)
+		return __managed_memory_capacity(managed)
 	end 'capacity'
 
 	/// Check if array is empty
 	export function isEmpty() returns bool
-		return __managed_array_len(managed) == 0
+		return __managed_memory_len(managed) == 0
 	end 'isEmpty'
 
 	/// Get first element, throws if empty
 	export function first() returns Element throws ArrayError
-		if __managed_array_len(managed) == 0 'empty'
+		if __managed_memory_len(managed) == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
-		return __managed_array_get_unchecked(managed, 0)
+		return __managed_memory_get_unchecked(managed, 0)
 	end 'first'
 
 	/// Get last element, throws if empty
 	export function last() returns Element throws ArrayError
-		var len = __managed_array_len(managed)
+		var len = __managed_memory_len(managed)
 		if len == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
-		return __managed_array_get_unchecked(managed, len - 1)
+		return __managed_memory_get_unchecked(managed, len - 1)
 	end 'last'
 
 	// =========================================================================
@@ -54,40 +54,40 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 
 	/// Get element at index, throws if out of bounds
 	export function Indexed.get(index int) returns Element throws ArrayError
-		var len = __managed_array_len(managed)
+		var len = __managed_memory_len(managed)
 		if index < 0 'lower'
 			throw ArrayError.indexOutOfBounds
 		end 'lower'
 		if index >= len 'upper'
 			throw ArrayError.indexOutOfBounds
 		end 'upper'
-		return __managed_array_get_unchecked(managed, index)
+		return __managed_memory_get_unchecked(managed, index)
 	end 'get'
 
 	/// Set element at index (no-op if index out of bounds)
 	export function Indexed.set(index int, value Element)
-		var len = __managed_array_len(managed)
+		var len = __managed_memory_len(managed)
 		if index >= 0 'lower'
 			if index < len 'upper'
-				__managed_array_set_at(managed, index, value)
+				__managed_memory_set_at(managed, index, value)
 			end 'upper'
 		end 'lower'
 	end 'set'
 
 	/// Transform each element with the given function
 	export function map(transform (Element) returns Element) returns Self
-		var len = __managed_array_len(managed)
-		var result = __managed_array_create(len, __element_size())
+		var len = __managed_memory_len(managed)
+		var result = __managed_memory_create(len, __element_size())
 		var i = 0
 		while i < len 'loop'
 			// Since i is always in bounds, we can safely unwrap with 'or 0'
 			// The default value is never used
-			var elem = __managed_array_get_unchecked(managed, i)
+			var elem = __managed_memory_get_unchecked(managed, i)
 			var transformed = transform(elem)
-			__managed_array_set_at(result, i, transformed)
+			__managed_memory_set_at(result, i, transformed)
 			i = i + 1
 		end 'loop'
-		__managed_array_set_length(result, len)
+		__managed_memory_set_length(result, len)
 		return Self{managed: result, iterIndex: 0}
 	end 'map'
 
@@ -97,7 +97,7 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 
 	/// Ensure capacity for at least requiredLen elements, growing if needed
 	function ensureCapacity(requiredLen int)
-		var cap = __managed_array_capacity(managed)
+		var cap = __managed_memory_capacity(managed)
 		if requiredLen > cap 'grow'
 			// Double capacity until sufficient, minimum 4
 			var newCap = cap
@@ -107,16 +107,16 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 			while newCap < requiredLen 'double'
 				newCap = newCap * 2
 			end 'double'
-			__managed_array_grow(managed, newCap)
+			__managed_memory_grow(managed, newCap)
 		end 'grow'
 	end 'ensureCapacity'
 
 	/// Append element to end
 	export function push(value Element) returns Self
-		var len = __managed_array_len(managed)
+		var len = __managed_memory_len(managed)
 		ensureCapacity(len + 1)
-		__managed_array_set_at(managed, len, value)
-		__managed_array_set_length(managed, len + 1)
+		__managed_memory_set_at(managed, len, value)
+		__managed_memory_set_length(managed, len + 1)
 		return self
 	end 'push'
 
@@ -126,31 +126,31 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 		if otherLen == 0 'empty'
 			return self
 		end 'empty'
-		var len = __managed_array_len(managed)
+		var len = __managed_memory_len(managed)
 		ensureCapacity(len + otherLen)
 		for item in other 'copy'
-			__managed_array_set_at(managed, len, item)
+			__managed_memory_set_at(managed, len, item)
 			len = len + 1
 		end 'copy'
-		__managed_array_set_length(managed, len)
+		__managed_memory_set_length(managed, len)
 		return self
 	end 'append'
 
 	/// Remove and return last element, throws if empty
 	export function pop() returns Element throws ArrayError
-		var len = __managed_array_len(managed)
+		var len = __managed_memory_len(managed)
 		if len == 0 'empty'
 			throw ArrayError.indexOutOfBounds
 		end 'empty'
 		var newLen = len - 1
-		var value = __managed_array_get_unchecked(managed, newLen)
-		__managed_array_set_length(managed, newLen)
+		var value = __managed_memory_get_unchecked(managed, newLen)
+		__managed_memory_set_length(managed, newLen)
 		return value
 	end 'pop'
 
 	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
 	export function insert(at int, value Element) returns Self
-		var len = __managed_array_len(managed)
+		var len = __managed_memory_len(managed)
 		var index = at
 
 		// Clamp index to valid range
@@ -166,18 +166,18 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 
 		// Shift elements right to make room
 		if index < len 'shift'
-			__managed_array_shift_right(managed, index, 1)
+			__managed_memory_shift_right(managed, index, 1)
 		end 'shift'
 
 		// Insert element and update length
-		__managed_array_set_at(managed, index, value)
-		__managed_array_set_length(managed, len + 1)
+		__managed_memory_set_at(managed, index, value)
+		__managed_memory_set_length(managed, len + 1)
 		return self
 	end 'insert'
 
 	/// Remove and return element at index, shifting elements to the left (throws if out of bounds)
 	export function remove(at int) returns Element throws ArrayError
-		var len = __managed_array_len(managed)
+		var len = __managed_memory_len(managed)
 
 		// Check bounds
 		if at < 0 'lower'
@@ -188,20 +188,20 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 		end 'upper'
 
 		// Save element before shifting
-		var value = __managed_array_get_unchecked(managed, at)
+		var value = __managed_memory_get_unchecked(managed, at)
 
 		// Shift elements left to fill gap
 		if at < len - 1 'shift'
-			__managed_array_shift_left(managed, at, 1)
+			__managed_memory_shift_left(managed, at, 1)
 		end 'shift'
 
-		__managed_array_set_length(managed, len - 1)
+		__managed_memory_set_length(managed, len - 1)
 		return value
 	end 'remove'
 
 	/// Remove all elements from the array (keeps capacity)
 	export function clear() returns Self
-		__managed_array_set_length(managed, 0)
+		__managed_memory_set_length(managed, 0)
 		return self
 	end 'clear'
 
@@ -211,9 +211,9 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 
 	/// Reserve space by ensuring array has at least minCapacity slots
 	export function reserve(minCapacity int) returns Self
-		var cap = __managed_array_capacity(managed)
+		var cap = __managed_memory_capacity(managed)
 		if minCapacity > cap 'grow'
-			__managed_array_grow(managed, minCapacity)
+			__managed_memory_grow(managed, minCapacity)
 		end 'grow'
 		return self
 	end 'reserve'
@@ -224,11 +224,11 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 
 	/// Get next element in iteration, throws when exhausted
 	function Iterable.next() returns Element throws IterationError
-		var len = __managed_array_len(managed)
+		var len = __managed_memory_len(managed)
 		if iterIndex >= len 'done'
 			throw IterationError.exhausted
 		end 'done'
-		var value = __managed_array_get_unchecked(managed, iterIndex)
+		var value = __managed_memory_get_unchecked(managed, iterIndex)
 		iterIndex = iterIndex + 1
 		return value
 	end 'next'

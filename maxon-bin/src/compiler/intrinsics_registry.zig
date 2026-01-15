@@ -18,7 +18,7 @@ pub const IntrinsicParam = struct {
 pub const IntrinsicVisibility = enum {
     /// Available to all user code (e.g., math builtins like trunc, sqrt)
     public,
-    /// Only available in stdlib code (e.g., __managed_array_*, __string_*)
+    /// Only available in stdlib code (e.g., __managed_memory_*, __string_*)
     stdlib_only,
 };
 
@@ -28,8 +28,8 @@ pub const IntrinsicCodegen = enum {
     unary_op,
     /// Custom code generation handler required
     custom,
-    /// Managed array intrinsics (__managed_array_*) - unified for arrays and strings
-    managed_array,
+    /// Managed memory intrinsics (__managed_memory_*) - unified for arrays and strings
+    managed_memory,
     /// C-string intrinsics (__cstring_*)
     cstring,
     /// Character creation intrinsics (__make_char_*)
@@ -244,9 +244,9 @@ pub const IntrinsicCategory = struct {
 
 /// All intrinsic categories - used for dispatch in convertBuiltin
 pub const intrinsic_categories = [_]IntrinsicCategory{
-    .{ .prefix = "__managed_array_", .visibility = .stdlib_only, .codegen = .managed_array },
-    .{ .prefix = "__map_get_init_", .visibility = .stdlib_only, .codegen = .managed_array },
-    .{ .prefix = "__element_size", .visibility = .stdlib_only, .codegen = .managed_array },
+    .{ .prefix = "__managed_memory_", .visibility = .stdlib_only, .codegen = .managed_memory },
+    .{ .prefix = "__map_get_init_", .visibility = .stdlib_only, .codegen = .managed_memory },
+    .{ .prefix = "__element_size", .visibility = .stdlib_only, .codegen = .managed_memory },
     .{ .prefix = "__cstring_", .visibility = .stdlib_only, .codegen = .cstring },
     .{ .prefix = "__make_char_", .visibility = .stdlib_only, .codegen = .make_char },
     .{ .prefix = "__file_", .visibility = .stdlib_only, .codegen = .file_io },

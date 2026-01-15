@@ -124,15 +124,15 @@ Enable the maxon compiler to compile the self-hosted compiler in `maxon-bin-self
 ---
 
 ### Phase 5: Collections
-**Goal:** Map type for symbol tables, managed arrays for dynamic collections.
+**Goal:** Map type for symbol tables, managed memorys for dynamic collections.
 
-#### 5.1 Managed Arrays (Array of T)
+#### 5.1 Managed Memorys (Array of T)
 - [ ] Parse `Array of T` type syntax (uppercase for stdlib types)
 - [ ] Parse `Array of T` empty initialization expression
-- [ ] Internal `__ManagedArray` struct (24 bytes: data_ptr, length, capacity)
-- [ ] Compiler builtins: `__managed_array_len`, `__managed_array_capacity`, `__managed_array_set_length`
-- [ ] Compiler builtins: `__managed_array_grow`, `__managed_array_set_at`
-- [ ] Compiler builtins: `__managed_array_shift_left`, `__managed_array_shift_right`
+- [ ] Internal `__ManagedMemory` struct (24 bytes: data_ptr, length, capacity)
+- [ ] Compiler builtins: `__managed_memory_len`, `__managed_memory_capacity`, `__managed_memory_set_length`
+- [ ] Compiler builtins: `__managed_memory_grow`, `__managed_memory_set_at`
+- [ ] Compiler builtins: `__managed_memory_shift_left`, `__managed_memory_shift_right`
 - [ ] `memmove` IR instruction for overlapping memory operations
 - [ ] stdlib `Array` type uses builtins for push/pop/insert/remove
 
