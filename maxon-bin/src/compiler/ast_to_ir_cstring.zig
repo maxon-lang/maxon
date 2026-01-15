@@ -3,8 +3,8 @@
 const std = @import("std");
 const ir = @import("ir.zig");
 const types = @import("ast_to_ir_types.zig");
-const string = @import("ast_to_ir_managed.zig");
-const ManagedArray = string.ManagedArray;
+const array_helpers = @import("ast_to_ir_array.zig");
+const ManagedArray = array_helpers.ManagedArray;
 
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const AstToIr = ast_to_ir.AstToIr;

@@ -10,11 +10,9 @@ const ValueType = types.ValueType;
 const OwnershipState = types.OwnershipState;
 const ConvertError = types.ConvertError;
 
-const string = @import("ast_to_ir_managed.zig");
 const cstring = @import("ast_to_ir_cstring.zig");
 const array_helpers = @import("ast_to_ir_array.zig");
-const ManagedArray = string.ManagedArray;
-const String = string.String;
+const ManagedArray = array_helpers.ManagedArray;
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const AstToIr = ast_to_ir.AstToIr;
 const DeferredBlocks = ast_to_ir.DeferredBlocks;
@@ -350,7 +348,7 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
         };
 
         // Get pointer to __ManagedArray at the correct offset
-        const managed_ptr = try string.getManagedArrayPtr(self, struct_ptr, struct_info.managed_buffer_offset);
+        const managed_ptr = try array_helpers.getManagedArrayPtr(self, struct_ptr, struct_info.managed_buffer_offset);
 
         if (elem_type_name) |eln| {
             // Check if element type needs cleanup
