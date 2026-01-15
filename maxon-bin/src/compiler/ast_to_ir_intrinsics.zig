@@ -8,7 +8,7 @@ const intrinsics_registry = @import("intrinsics_registry.zig");
 const struct_helpers = @import("ir_struct_helpers.zig");
 
 // Import type-specific modules for layouts
-const array = @import("ast_to_ir_array.zig");
+const array = @import("ast_to_ir_managed_memory.zig");
 const ManagedMemory = array.ManagedMemory;
 
 // Forward reference to main AstToIr module

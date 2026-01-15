@@ -3,7 +3,7 @@
 const std = @import("std");
 const ir = @import("ir.zig");
 const types = @import("ast_to_ir_types.zig");
-const array_helpers = @import("ast_to_ir_array.zig");
+const array_helpers = @import("ast_to_ir_managed_memory.zig");
 const ManagedMemory = array_helpers.ManagedMemory;
 
 const ast_to_ir = @import("4-ast_to_ir.zig");

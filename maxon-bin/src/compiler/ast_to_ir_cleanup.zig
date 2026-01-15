@@ -11,7 +11,7 @@ const OwnershipState = types.OwnershipState;
 const ConvertError = types.ConvertError;
 
 const cstring = @import("ast_to_ir_cstring.zig");
-const array_helpers = @import("ast_to_ir_array.zig");
+const array_helpers = @import("ast_to_ir_managed_memory.zig");
 const ManagedMemory = array_helpers.ManagedMemory;
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const AstToIr = ast_to_ir.AstToIr;
