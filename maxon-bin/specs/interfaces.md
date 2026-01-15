@@ -117,10 +117,10 @@ interface Container uses Element
 end 'Container'
 
 type IntArray is Container with int
-    var data Array of 10 int
+    var data Array of int
 
     function Container.get(index int) returns int
-        return data[index]
+        return try data.get(index) otherwise 0
     end 'get'
 end 'IntArray'
 ```

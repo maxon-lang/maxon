@@ -39,9 +39,11 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 			cap = cap * 2
 		end 'calc_cap'
 
-		// Allocate internal arrays
-		var elems = Array of cap Element
-		var sts = Array of cap int
+		// Allocate internal arrays with preallocated capacity
+		var elems = Array of Element{}
+		elems.resize(cap)
+		var sts = Array of int{}
+		sts.resize(cap)
 
 		// Create the set type (copies array structs by value)
 		var result = Self{elements: elems, states: sts, count: 0, capacity: cap}
@@ -60,8 +62,10 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 	export function Unique.insert(element Element)
 		// Initialize if empty struct was created with zero capacity
 		if capacity == 0 'init_empty'
-			var newElements = Array of 16 Element
-			var newStates = Array of 16 int
+			var newElements = Array of Element{}
+			newElements.resize(16)
+			var newStates = Array of int{}
+			newStates.resize(16)
 			elements = newElements
 			states = newStates
 			capacity = 16
@@ -83,7 +87,7 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 		var probes = 0
 
 		while probes < capacity 'probe'
-			var state = try states.get(index: index) otherwise 0
+			var state = try states.get(index) otherwise 0
 
 			if state == 0 'empty'
 				// Empty slot - insert here or at first deleted
@@ -92,8 +96,8 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 					insertIndex = firstDeleted
 				end 'use_deleted'
 
-				elements.set(index: insertIndex, value: element)
-				states.set(index: insertIndex, value: 1)
+				elements.set(insertIndex, value: element)
+				states.set(insertIndex, value: 1)
 				count = count + 1
 				return
 			end 'empty'
@@ -103,7 +107,7 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 			end 'mark_deleted'
 
 			if state == 1 'check_exists'
-				if let existing = try elements.get(index: index) 'get_existing'
+				if let existing = try elements.get(index) 'get_existing'
 					if existing == element 'exists'
 						// Element already exists - no-op for sets
 						return
@@ -119,8 +123,8 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 		// Should never reach here if load factor is maintained
 		// But if we do, insert at first deleted slot
 		if firstDeleted >= 0 'fallback'
-			elements.set(index: firstDeleted, value: element)
-			states.set(index: firstDeleted, value: 1)
+			elements.set(firstDeleted, value: element)
+			states.set(firstDeleted, value: 1)
 			count = count + 1
 		end 'fallback'
 	end 'insert'
@@ -140,14 +144,14 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 
 		var probes = 0
 		while probes < capacity 'probe'
-			var state = try states.get(index: index) otherwise 0
+			var state = try states.get(index) otherwise 0
 
 			if state == 0 'empty'
 				return false
 			end 'empty'
 
 			if state == 1 'check_found'
-				if let existing = try elements.get(index: index) 'get_existing'
+				if let existing = try elements.get(index) 'get_existing'
 					if existing == element 'found'
 						return true
 					end 'found'
@@ -176,16 +180,16 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 
 		var probes = 0
 		while probes < capacity 'probe'
-			var state = try states.get(index: index) otherwise 0
+			var state = try states.get(index) otherwise 0
 
 			if state == 0 'empty'
 				return false
 			end 'empty'
 
 			if state == 1 'check_found'
-				if let existing = try elements.get(index: index) 'get_existing'
+				if let existing = try elements.get(index) 'get_existing'
 					if existing == element 'found'
-						states.set(index: index, value: 2)
+						states.set(index, value: 2)
 						count = count - 1
 						return true
 					end 'found'
@@ -207,11 +211,11 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 	/// Iterate to the next element in the set
 	function Iterable.next() returns Element throws IterationError
 		while iterIndex < capacity 'scan'
-			var state = try states.get(index: iterIndex) otherwise 0
+			var state = try states.get(iterIndex) otherwise 0
 			var idx = iterIndex
 			iterIndex = iterIndex + 1
 			if state == 1 'occupied'
-				if let elem = try elements.get(index: idx) 'get_elem'
+				if let elem = try elements.get(idx) 'get_elem'
 					return elem
 				end 'get_elem'
 			end 'occupied'
@@ -236,9 +240,11 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 		var oldElements = elements
 		var oldStates = states
 
-		// Allocate new arrays
-		var newElements = Array of newCapacity Element
-		var newStates = Array of newCapacity int
+		// Allocate new arrays with preallocated capacity
+		var newElements = Array of Element{}
+		newElements.resize(newCapacity)
+		var newStates = Array of int{}
+		newStates.resize(newCapacity)
 
 		// Update type to use new arrays
 		elements = newElements
@@ -249,11 +255,11 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 		// Rehash all occupied entries from old arrays
 		var i = 0
 		while i < oldCapacity 'rehash'
-			var state = try oldStates.get(index: i) otherwise 0
+			var state = try oldStates.get(i) otherwise 0
 
 			if state == 1 'occupied'
 				// Re-insert into new arrays using insert logic
-				if let element = try oldElements.get(index: i) 'get_elem'
+				if let element = try oldElements.get(i) 'get_elem'
 					var hash = element.hash()
 					var index = hash mod newCapacity
 					if index < 0 'fix_negative'
@@ -261,14 +267,14 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 					end 'fix_negative'
 
 					// Find empty slot (no deleted slots in fresh array)
-					var currentState = try states.get(index: index) otherwise 0
+					var currentState = try states.get(index) otherwise 0
 					while currentState != 0 'find_slot'
 						index = (index + 1) mod newCapacity
-						currentState = try states.get(index: index) otherwise 0
+						currentState = try states.get(index) otherwise 0
 					end 'find_slot'
 
-					elements.set(index: index, value: element)
-					states.set(index: index, value: 1)
+					elements.set(index, value: element)
+					states.set(index, value: 1)
 					count = count + 1
 				end 'get_elem'
 			end 'occupied'

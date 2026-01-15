@@ -790,8 +790,8 @@ pub fn convertManagedMemoryIndex(self: *AstToIr, managed_ptr: ir.Value, index_ex
     };
 }
 
-/// Convert indexing on stdlib Array types (Array$int, etc.) by calling the .get() method
-pub fn convertStdlibArrayIndex(self: *AstToIr, base_typed: TypedValue, index_expr: ast.Expression) ConvertError!TypedValue {
+/// Convert indexing on types implementing Indexed interface by calling the .get() method
+pub fn convertIndexedGet(self: *AstToIr, base_typed: TypedValue, index_expr: ast.Expression) ConvertError!TypedValue {
     const type_name = base_typed.ty.struct_type.name;
 
     // Convert the index expression
@@ -802,7 +802,7 @@ pub fn convertStdlibArrayIndex(self: *AstToIr, base_typed: TypedValue, index_exp
     try self.module.trackString(mangled_name);
 
     const func_info = self.func_map.get(mangled_name) orelse {
-        const msg = std.fmt.allocPrint(self.allocator, "stdlib Array type '{s}' missing 'get' method", .{type_name}) catch "stdlib Array missing get method";
+        const msg = std.fmt.allocPrint(self.allocator, "Indexed type '{s}' missing 'get' method", .{type_name}) catch "Indexed type missing get method";
         self.reportInternalError(msg);
         return error.SemanticError;
     };
@@ -846,8 +846,8 @@ pub fn convertStdlibArrayIndex(self: *AstToIr, base_typed: TypedValue, index_exp
     };
 }
 
-/// Convert index assignment on stdlib Array types (Array$int, etc.) by calling the .set() method
-pub fn convertStdlibArrayIndexAssign(self: *AstToIr, base_typed: TypedValue, index_expr: ast.Expression, value_expr: ast.Expression) ConvertError!void {
+/// Convert index assignment on types implementing Indexed interface by calling the .set() method
+pub fn convertIndexedSet(self: *AstToIr, base_typed: TypedValue, index_expr: ast.Expression, value_expr: ast.Expression) ConvertError!void {
     const type_name = base_typed.ty.struct_type.name;
 
     // Convert index and value expressions
@@ -859,7 +859,7 @@ pub fn convertStdlibArrayIndexAssign(self: *AstToIr, base_typed: TypedValue, ind
     try self.module.trackString(mangled_name);
 
     const func_info = self.func_map.get(mangled_name) orelse {
-        const msg = std.fmt.allocPrint(self.allocator, "stdlib Array type '{s}' missing 'set' method", .{type_name}) catch "stdlib Array missing set method";
+        const msg = std.fmt.allocPrint(self.allocator, "Indexed type '{s}' missing 'set' method", .{type_name}) catch "Indexed type missing set method";
         self.reportInternalError(msg);
         return error.SemanticError;
     };
@@ -1307,80 +1307,5 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
     return .{
         .value = result_ptr.raw(),
         .ty = try self.typeNameToValueType(target_type_name),
-    };
-}
-
-pub fn convertArrayType(self: *AstToIr, arr: ast.ArrayTypeExpr) ConvertError!TypedValue {
-    // Convert size expression (capacity)
-    const capacity_typed = try self.convertExpression(arr.size.*);
-
-    // Get or create monomorphized Array type for the element type
-    // Resolve element type first (e.g., "Element" -> "int" when inside a generic type)
-    const resolved_elem = self.resolveTypeName(arr.element_type);
-    var type_args = [_][]const u8{resolved_elem};
-    const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
-
-    // Get struct info for the monomorphized Array type
-    const type_info = self.type_map.get(array_type_name) orelse {
-        debug.astToIr("error: Array type not found after monomorphization: {s}", .{array_type_name});
-        return error.UnknownType;
-    };
-
-    const struct_info = switch (type_info) {
-        .struct_type => |s| s,
-        .primitive, .enum_type => {
-            debug.astToIr("error: Array type is not a struct: {s}", .{array_type_name});
-            return error.UnknownType;
-        },
-    };
-
-    // Build __ManagedMemory with the given capacity
-    // For Array of N int, len = capacity so all elements are immediately accessible
-    // Calculate actual element size from type (with monomorphization fallback)
-    const elem_size_val: i64 = if (self.getStructSizeWithMonomorphization(resolved_elem)) |size|
-        size
-    else if (types.getPrimitiveTypeInfo(resolved_elem)) |prim_info|
-        prim_info.array_element_size
-    else if (self.type_map.get(resolved_elem)) |elem_type_info| blk: {
-        if (elem_type_info == .enum_type) {
-            break :blk elem_type_info.enum_type.arrayElementSize();
-        }
-        self.reportInternalError("unknown element type in Array type expression");
-        return error.SemanticError;
-    } else {
-        self.reportInternalError("unknown element type in Array type expression");
-        return error.SemanticError;
-    };
-    const elem_size = try self.func().emitConstI64(elem_size_val);
-    const buffer_size = try self.func().emitBinaryOp(.mul, capacity_typed.value, elem_size, .i64);
-    // Allocate refcounted buffer and zero-initialize
-    const buffer = try emitAllocRefcountedBuffer(self, buffer_size, "array buffer");
-    // Zero-initialize the buffer so hash tables (Map, Set) have correct initial state
-    try self.func().emitMemsetDynamic(buffer, 0, buffer_size);
-    const managed_ptr = try emitManagedMemory(self, buffer, capacity_typed.value, capacity_typed.value);
-
-    // Call Array$init(result_ptr, managed_ptr) via InitableFromArrayLiteral interface
-    const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
-    try self.module.trackString(init_func_name);
-
-    // Trigger lazy generation if needed
-    if (self.func_map.get(init_func_name)) |func_info| {
-        if (!func_info.ir_generated) {
-            try self.ensureMethodGenerated(init_func_name);
-        }
-    }
-
-    // Allocate space for the Array struct (sret)
-    const result_ptr = try self.func().emitAllocaSized(@intCast(struct_info.size));
-
-    var args = try self.allocator.alloc(ir.Value, 2);
-    args[0] = result_ptr.raw();
-    args[1] = managed_ptr.raw();
-
-    _ = try self.func().emitCall(init_func_name, args, .ptr);
-
-    return .{
-        .value = result_ptr.raw(),
-        .ty = try self.typeNameToValueType(array_type_name),
     };
 }

@@ -1940,7 +1940,7 @@ fn formatExpression(writer: anytype, expr: ast.Expression) !void {
             }
         },
         // For complex expressions, just show a placeholder
-        .closure, .try_expr, .match_expr, .map_literal, .init_from_array, .array_type, .interpolated_string => {
+        .closure, .try_expr, .match_expr, .map_literal, .init_from_array, .interpolated_string => {
             try writer.writeAll("...");
         },
     }

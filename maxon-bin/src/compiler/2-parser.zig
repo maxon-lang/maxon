@@ -705,15 +705,8 @@ pub const Parser = struct {
             _ = self.advance(); // consume 'of'
 
             // Parse type arguments for generic types
-            // Note: "Array of int" and "Array of 5 int" are both stdlib Array types
             var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
             errdefer type_args.deinit(self.allocator);
-
-            // For Array type, skip optional size integer (e.g., "Array of 3 int")
-            // The size is only used in expressions, not in type annotations
-            if (std.mem.eql(u8, type_name, "Array") and self.check(.integer)) {
-                _ = self.advance(); // skip the size - it's ignored for type checking
-            }
 
             // First type argument is required
             try type_args.append(self.allocator, try self.expectTypeName());
@@ -2219,10 +2212,6 @@ pub const Parser = struct {
         if (self.check(.lbracket)) {
             return try self.parseArrayLiteral();
         }
-        // Sized array: Array of N type
-        if (self.check(.array)) {
-            return try self.parseArrayType();
-        }
         // Check for Self keyword (for Self{...} struct initialization in methods)
         if (self.check(.Self)) {
             const token = self.advance();
@@ -2235,54 +2224,8 @@ pub const Parser = struct {
             const token = self.advance();
 
             // Check for generic type instantiation: TypeName of T{...}
-            // or sized array: Array of N type
             if (self.check(.of)) {
                 _ = self.advance(); // consume 'of'
-
-                // Check for sized array: Array of <expr> <type>
-                // Sized arrays are detected by the token after 'of':
-                // - integer literal: Array of 5 int
-                // - lparen: Array of (n+1) int
-                // - minus (negative): Array of -3 int
-                // - lowercase identifier (variable): Array of n int
-                // Generic types have a type name (int/float/bool/byte or capitalized identifier)
-                const is_array_type = blk: {
-                    if (!std.mem.eql(u8, token.text, "Array")) break :blk false;
-                    if (self.check(.integer) or self.check(.lparen) or self.check(.minus)) break :blk true;
-                    if (self.check(.identifier)) {
-                        const next = self.peek(0);
-                        if (next) |tok| {
-                            // Lowercase identifier that's not a builtin type is a variable (size expr)
-                            // Type names are: int, float, bool, byte, or start uppercase (String, Character, etc.)
-                            const first_char = tok.text[0];
-                            const is_builtin_type = std.mem.eql(u8, tok.text, "int") or
-                                std.mem.eql(u8, tok.text, "float") or
-                                std.mem.eql(u8, tok.text, "bool") or
-                                std.mem.eql(u8, tok.text, "byte");
-                            const starts_uppercase = first_char >= 'A' and first_char <= 'Z';
-                            // If it's not a builtin type and doesn't start uppercase, it's a variable
-                            break :blk !is_builtin_type and !starts_uppercase;
-                        }
-                    }
-                    break :blk false;
-                };
-
-                if (is_array_type) {
-                    // Parse size expression
-                    const size_expr = try self.parseExpression() orelse {
-                        self.reportError(.E003);
-                        return error.ExpectedExpression;
-                    };
-                    const size_ptr = try self.createExpr(size_expr);
-
-                    // Parse element type
-                    const elem_type = try self.expectTypeName();
-
-                    return try self.parsePostfix(.{ .array_type = .{
-                        .size = size_ptr,
-                        .element_type = elem_type,
-                    } });
-                }
 
                 // Parse type arguments
                 var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -2659,8 +2602,8 @@ pub const Parser = struct {
                     } };
                 }
             } else if (self.check(.lbracket)) {
-                // Bracket indexing is not supported - use .get(index: i) and .set(index: i, value: v)
-                self.reportErrorWithDetails(.E053, "Use .get(index: i) for reading and .set(index: i, value: v) for writing");
+                // Bracket indexing is not supported - use .get(i) and .set(i, value: v)
+                self.reportErrorWithDetails(.E053, "Use .get(i) for reading and .set(i, value: v) for writing");
                 return error.UnexpectedToken;
             } else if (self.check(.as)) {
                 // Type cast: expr as Type
@@ -2761,26 +2704,6 @@ pub const Parser = struct {
         _ = try self.expect(.rbracket);
         return try self.parsePostfix(.{ .map_literal = .{
             .entries = try entries.toOwnedSlice(self.allocator),
-        } });
-    }
-
-    fn parseArrayType(self: *Parser) ParseError!ast.Expression {
-        _ = try self.expect(.array);
-        _ = try self.expect(.of);
-
-        // Parse size expression
-        const size_expr = try self.parseExpression() orelse {
-            self.reportError(.E003);
-            return error.ExpectedExpression;
-        };
-        const size_ptr = try self.createExpr(size_expr);
-
-        // Parse element type
-        const elem_type = try self.expectTypeName();
-
-        return try self.parsePostfix(.{ .array_type = .{
-            .size = size_ptr,
-            .element_type = elem_type,
         } });
     }
 

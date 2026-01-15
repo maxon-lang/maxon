@@ -426,11 +426,6 @@ pub const IndexExpr = struct {
     index: *const Expression,
 };
 
-pub const ArrayTypeExpr = struct {
-    size: *const Expression,
-    element_type: []const u8,
-};
-
 pub const MethodCallExpr = struct {
     base: *const Expression,
     method_name: []const u8,
@@ -517,7 +512,6 @@ pub const Expression = union(enum) {
     array_literal: ArrayLiteralExpr,
     map_literal: MapLiteralExpr,
     index: IndexExpr,
-    array_type: ArrayTypeExpr,
     method_call: MethodCallExpr,
     cast: CastExpr,
     closure: ClosureExpr,
@@ -787,9 +781,6 @@ fn freeExpressionArgs(expr: Expression, allocator: std.mem.Allocator) void {
         .index => |idx| {
             freeExpressionArgs(idx.base.*, allocator);
             freeExpressionArgs(idx.index.*, allocator);
-        },
-        .array_type => |arr| {
-            freeExpressionArgs(arr.size.*, allocator);
         },
         .method_call => |mcall| {
             freeExpressionArgs(mcall.base.*, allocator);

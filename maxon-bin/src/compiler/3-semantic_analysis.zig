@@ -239,7 +239,7 @@ pub const MutationAnalyzer = struct {
             },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
-            .integer, .float_lit, .bool_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .init_from_array, .array_type, .interpolated_string => {},
+            .integer, .float_lit, .bool_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .init_from_array, .interpolated_string => {},
         }
     }
 
@@ -370,14 +370,30 @@ pub const SemanticAnalyzer = struct {
         return switch (evt) {
             .primitive => |p| .{ .primitive = p },
             .struct_type => |name| blk: {
-                // Check if this is an array type like "Array$byte" that needs to be created
-                if (std.mem.startsWith(u8, name, "Array$")) {
-                    const element_name = name["Array$".len..];
-                    if (self.getOrCreateArrayType(element_name)) |arr_ptr| {
-                        break :blk .{ .struct_type = arr_ptr };
-                    } else |_| {
-                        break :blk null;
+                // Check if this is a monomorphized type like "Array$byte" or "Map$String$int"
+                if (std.mem.indexOf(u8, name, "$")) |dollar_pos| {
+                    const base_type = name[0..dollar_pos];
+                    // Parse type arguments (everything after base$)
+                    var type_args: [8][]const u8 = undefined;
+                    var num_args: usize = 0;
+                    var rest = name[dollar_pos + 1 ..];
+                    while (rest.len > 0 and num_args < 8) {
+                        if (std.mem.indexOf(u8, rest, "$")) |next_dollar| {
+                            type_args[num_args] = rest[0..next_dollar];
+                            rest = rest[next_dollar + 1 ..];
+                        } else {
+                            type_args[num_args] = rest;
+                            rest = "";
+                        }
+                        num_args += 1;
                     }
+                    // Create the monomorphized type
+                    _ = self.getOrCreateMonomorphizedType(base_type, type_args[0..num_args]) catch break :blk null;
+                    // Look up the created type
+                    if (self.type_map.getPtr(name)) |info_ptr| {
+                        break :blk .{ .struct_type = &info_ptr.struct_type };
+                    }
+                    break :blk null;
                 }
                 break :blk self.typeNameToValueType(name);
             },
@@ -399,74 +415,6 @@ pub const SemanticAnalyzer = struct {
             };
         }
         return result;
-    }
-
-    /// Get or create an array type in type_map, returning a pointer to it.
-    /// Arrays are represented as struct types with a fixed size of 40 bytes.
-    /// Layout: __ManagedMemory (32 bytes) + iterIndex (8 bytes)
-    fn getOrCreateArrayType(self: *SemanticAnalyzer, element_name: []const u8) !*const types.StructTypeInfo {
-        // Build array type name: Array$ElementType
-        const array_name = try std.fmt.allocPrint(self.allocator, "Array${s}", .{element_name});
-        errdefer self.allocator.free(array_name);
-
-        // Check if already exists
-        if (self.type_map.getPtr(array_name)) |type_info_ptr| {
-            self.allocator.free(array_name); // Don't need the name, already exists
-            return switch (type_info_ptr.*) {
-                .struct_type => |*s| s,
-                else => unreachable,
-            };
-        }
-
-        // Track the allocated name
-        try self.allocated_type_strings.append(self.allocator, array_name);
-
-        // Get __ManagedMemory type info (registered in registerCompilerInternalTypes)
-        const managed_memory_type_info = self.type_map.getPtr("__ManagedMemory") orelse
-            return error.OutOfMemory; // __ManagedMemory should be registered first
-        const managed_memory_struct = switch (managed_memory_type_info.*) {
-            .struct_type => |*s| s,
-            else => return error.OutOfMemory, // __ManagedMemory should be a struct type
-        };
-
-        // Build field info for Array type
-        // Layout: iterIndex (8 bytes at offset 0) + managed (32 bytes at offset 8)
-        const array_fields = try self.allocator.alloc(FieldInfo, 2);
-        array_fields[0] = .{
-            .name = "iterIndex",
-            .offset = 0,
-            .size = 8,
-            .value_type = .{ .primitive = .int },
-        };
-        array_fields[1] = .{
-            .name = "managed",
-            .offset = 8,
-            .size = 32,
-            .value_type = .{ .struct_type = managed_memory_struct },
-        };
-
-        // Check if element type has has_managed_buffer (for COW cleanup of elements)
-        const element_has_managed_buffer = if (self.type_map.get(element_name)) |elem_type_info|
-            elem_type_info == .struct_type and elem_type_info.struct_type.has_managed_buffer
-        else
-            false;
-
-        // Register as struct type
-        // needs_cleanup is true because it contains __ManagedMemory which has needs_cleanup = true
-        try self.type_map.put(self.allocator, array_name, .{
-            .struct_type = .{
-                .name = array_name,
-                .size = 40,
-                .fields = array_fields,
-                .needs_cleanup = true,
-                .element_type_name = element_name,
-                .has_managed_buffer = true,
-                .managed_buffer_offset = 8, // managed is at offset 8
-                .element_has_managed_buffer = element_has_managed_buffer,
-            },
-        });
-
-        return &self.type_map.getPtr(array_name).?.struct_type;
     }
 
     // ------------------------------------------------------------------------
@@ -826,9 +774,9 @@ pub const SemanticAnalyzer = struct {
         });
     }
 
-    fn registerMethod(self: *SemanticAnalyzer, type_name: []const u8, method: ast.MethodDecl) !void {
+    fn registerMethod(self: *SemanticAnalyzer, type_name: []const u8, method: ast.MethodDecl) std.mem.Allocator.Error!void {
         const param_types = try self.buildParamTypes(method.params);
-        const return_info: ReturnInfo = if (method.return_type) |rt| try self.typeExprToReturnInfo(rt) else .{ .ir_type = .void, .type_name = null, .value_type = null };
+        const return_info: ReturnInfo = if (method.return_type) |rt| self.typeExprToReturnInfo(rt) catch @as(ReturnInfo, .{ .ir_type = .ptr, .type_name = null, .value_type = null }) else .{ .ir_type = .void, .type_name = null, .value_type = null };
 
         // Build mangled method name: TypeName$methodName
         const mangled = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
@@ -856,12 +804,12 @@ pub const SemanticAnalyzer = struct {
     // Helper Functions
     // ------------------------------------------------------------------------
 
-    fn buildFieldInfos(self: *SemanticAnalyzer, fields: []const ast.FieldDecl) ![]const FieldInfo {
+    fn buildFieldInfos(self: *SemanticAnalyzer, fields: []const ast.FieldDecl) std.mem.Allocator.Error![]const FieldInfo {
         const result = try self.allocator.alloc(FieldInfo, fields.len);
         var offset: i32 = 0;
 
         for (fields, 0..) |field, i| {
-            const value_type = try self.typeExprToValueType(field.type_expr);
+            const value_type = self.typeExprToValueType(field.type_expr) catch @as(ValueType, .{ .primitive = .ptr });
             const display_name = self.typeExprToDisplayName(field.type_expr);
 
             // Determine field size - check if it's a registered struct type or Array type
@@ -904,11 +852,11 @@ pub const SemanticAnalyzer = struct {
         return false;
     }
 
-    fn buildParamTypes(self: *SemanticAnalyzer, params: []const ast.ParamDecl) ![]const ParamType {
+    fn buildParamTypes(self: *SemanticAnalyzer, params: []const ast.ParamDecl) std.mem.Allocator.Error![]const ParamType {
         const result = try self.allocator.alloc(ParamType, params.len);
         for (params, 0..) |param, i| {
             result[i] = .{
-                .ty = try self.typeExprToValueType(param.type_expr),
+                .ty = self.typeExprToValueType(param.type_expr) catch @as(ValueType, .{ .primitive = .ptr }),
                 .name = param.name,
                 .display_name = self.typeExprToDisplayName(param.type_expr),
                 .default_value = param.default_value,
@@ -942,16 +890,40 @@ pub const SemanticAnalyzer = struct {
                 return self.simpleNameToValueType(name);
             },
             .generic => |g| {
-                // For generic types like "Array of int", return array type info
-                if (std.mem.eql(u8, g.base_type, "Array") or std.mem.eql(u8, g.base_type, "array")) {
-                    if (g.type_args.len > 0) {
-                        const elem_name = g.type_args[0];
-                        const resolved = self.generic_params.get(elem_name) orelse elem_name;
-                        const array_ptr = try self.getOrCreateArrayType(resolved);
-                        return ValueType{ .struct_type = array_ptr };
+                // For generic types like "Array of int", create the monomorphized type
+                if (g.type_args.len > 0) {
+                    // Resolve type arguments through generic parameter substitution
+                    var resolved_args = try self.allocator.alloc([]const u8, g.type_args.len);
+                    defer self.allocator.free(resolved_args);
+                    for (g.type_args, 0..) |arg, i| {
+                        resolved_args[i] = self.generic_params.get(arg) orelse arg;
+                    }
+
+                    // Build monomorphized name to check if it already exists
+                    var name_buf: [256]u8 = undefined;
+                    var name_len: usize = 0;
+                    @memcpy(name_buf[0..g.base_type.len], g.base_type);
+                    name_len = g.base_type.len;
+                    for (resolved_args) |arg| {
+                        name_buf[name_len] = '$';
+                        name_len += 1;
+                        @memcpy(name_buf[name_len .. name_len + arg.len], arg);
+                        name_len += arg.len;
+                    }
+                    const mono_name = name_buf[0..name_len];
+
+                    // Check if type already exists in type_map
+                    if (self.type_map.getPtr(mono_name)) |info_ptr| {
+                        return ValueType{ .struct_type = &info_ptr.struct_type };
+                    }
+
+                    // Type doesn't exist - create it via monomorphization
+                    const created_name = try self.getOrCreateMonomorphizedType(g.base_type, resolved_args);
+                    if (self.type_map.getPtr(created_name)) |info_ptr| {
+                        return ValueType{ .struct_type = &info_ptr.struct_type };
                     }
                 }
-                // Other generic types - look up in type_map or fallback to ptr
+                // Fallback - look up base type in type_map or return ptr
                 return self.typeNameToValueType(g.base_type) orelse .{ .primitive = .ptr };
             },
             .error_union => |eu| {
@@ -1316,7 +1288,7 @@ pub const SemanticAnalyzer = struct {
                 }
             },
             // Literals and simple expressions don't trigger monomorphization
-            .integer, .float_lit, .bool_lit, .string_literal, .char_literal, .identifier, .self_expr, .array_type => {},
+            .integer, .float_lit, .bool_lit, .string_literal, .char_literal, .identifier, .self_expr => {},
         }
     }
 
@@ -1412,9 +1384,9 @@ pub const SemanticAnalyzer = struct {
             const fields = try self.buildFieldInfos(type_decl.fields);
             const size = self.calculateStructSize(fields);
 
-            // Determine element_type_name for Array types (used during cleanup)
-            const is_array = std.mem.eql(u8, base_type, "Array");
-            const element_type_name: ?[]const u8 = if (is_array and type_args.len > 0)
+            // Determine element_type_name for generic types with one type arg (used during cleanup)
+            // This applies to Array, Set, and other single-parameter generic types
+            const element_type_name: ?[]const u8 = if (type_args.len > 0)
                 type_args[0]
             else
                 null;
@@ -1622,12 +1594,20 @@ pub const SemanticAnalyzer = struct {
                 if (arr.elements.len > 0) {
                     if (self.inferExpressionType(arr.elements[0])) |elem_ty| {
                         const elem_name = elem_ty.getTypeName() orelse "int";
-                        const arr_ptr = self.getOrCreateArrayType(elem_name) catch break :blk null;
-                        break :blk ValueType{ .struct_type = arr_ptr };
+                        var type_args = [_][]const u8{elem_name};
+                        const mono_name = self.getOrCreateMonomorphizedType("Array", &type_args) catch break :blk null;
+                        if (self.type_map.getPtr(mono_name)) |info_ptr| {
+                            break :blk ValueType{ .struct_type = &info_ptr.struct_type };
+                        }
                     }
                 }
-                const arr_ptr = self.getOrCreateArrayType("int") catch break :blk null;
-                break :blk ValueType{ .struct_type = arr_ptr };
+                // Default to Array$int for empty arrays
+                var type_args = [_][]const u8{"int"};
+                const mono_name = self.getOrCreateMonomorphizedType("Array", &type_args) catch break :blk null;
+                if (self.type_map.getPtr(mono_name)) |info_ptr| {
+                    break :blk ValueType{ .struct_type = &info_ptr.struct_type };
+                }
+                break :blk null;
             },
             .struct_init => |sinit| self.typeNameToValueType(sinit.type_name),
             .binary => |bin| self.inferExpressionType(bin.left.*),

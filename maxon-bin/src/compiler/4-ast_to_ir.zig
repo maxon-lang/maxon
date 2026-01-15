@@ -3735,12 +3735,6 @@ pub const AstToIr = struct {
     fn convertVarDecl(self: *AstToIr, decl: ast.VarDecl) !void {
         debug.astToIr("Converting var decl: {s}", .{decl.name});
 
-        // Array types cannot be immutable (they have no initial contents)
-        if (!self.current_decl_is_mutable and decl.value == .array_type) {
-            self.reportError(.E013, decl.name);
-            return error.SemanticError;
-        }
-
         // Check for InitableFromArrayLiteral transformation
         // Syntax: var arr Array of int = [1, 2, 3] (generic) or var arr IntArray = [...] (simple)
         if (decl.type_annotation) |type_ann| {
@@ -4174,10 +4168,10 @@ pub const AstToIr = struct {
 
         const base_typed = try self.convertExpression(assign.base.*);
 
-        // Handle stdlib Array types (Array$int, etc.) - call .set() method
+        // Handle types implementing Indexed interface - call .set() method
         if (base_typed.ty == .struct_type) {
-            if (std.mem.startsWith(u8, base_typed.ty.struct_type.name, "Array$")) {
-                try array_helpers.convertStdlibArrayIndexAssign(self, base_typed, assign.index.*, assign.value);
+            if (self.structConformsToIndexed(base_typed.ty.struct_type.name)) {
+                try array_helpers.convertIndexedSet(self, base_typed, assign.index.*, assign.value);
                 return;
             }
         }
@@ -5082,6 +5076,17 @@ pub const AstToIr = struct {
         else
             type_name;
         return self.typeConformsTo(base_name, interface_name);
+    }
+
+    /// Check if a struct type conforms to the Indexed interface.
+    /// Handles monomorphized names (e.g., "Array$int" -> checks "Array" conforms to Indexed).
+    fn structConformsToIndexed(self: *AstToIr, type_name: []const u8) bool {
+        // Get base type name from monomorphized name (e.g., "Array$int" -> "Array")
+        const base_name = if (std.mem.indexOf(u8, type_name, "$")) |pos|
+            type_name[0..pos]
+        else
+            type_name;
+        return self.typeConformsTo(base_name, "Indexed");
     }
 
     /// Find the type that conforms to a BuiltinLiteral interface (e.g., BuiltinStringLiteral).
@@ -6075,7 +6080,6 @@ pub const AstToIr = struct {
             .map_literal => |map| convertMapLiteral(self, map),
             .init_from_array => |ifa| array_helpers.convertInitFromArray(self, ifa),
             .index => |idx| self.convertIndex(idx),
-            .array_type => |arr| array_helpers.convertArrayType(self, arr),
             .method_call => |mcall| self.convertMethodCallExpr(mcall),
             .cast => |c| self.convertCast(c),
             .interpolated_string => |interp| self.convertInterpolatedString(interp),
@@ -7562,8 +7566,14 @@ pub const AstToIr = struct {
     fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
         // Build monomorphized type name if there are type arguments
         const type_name = if (sinit.type_args.len > 0) blk: {
+            // Resolve type arguments through generic_params (e.g., "Element" -> "int")
+            var resolved_args = try self.allocator.alloc([]const u8, sinit.type_args.len);
+            defer self.allocator.free(resolved_args);
+            for (sinit.type_args, 0..) |arg, i| {
+                resolved_args[i] = self.resolveTypeName(arg);
+            }
             // Check if monomorphized version exists, if not create it
-            const mono_name = try self.getOrCreateMonomorphizedType(sinit.type_name, sinit.type_args);
+            const mono_name = try self.getOrCreateMonomorphizedType(sinit.type_name, resolved_args);
             break :blk mono_name;
         } else self.resolveTypeName(sinit.type_name);
 
@@ -7577,7 +7587,13 @@ pub const AstToIr = struct {
     fn initStructInto(self: *AstToIr, sinit: ast.StructInitExpr, dest_ptr: ir.Value) ConvertError!void {
         // Build monomorphized type name if there are type arguments
         const type_name = if (sinit.type_args.len > 0) blk: {
-            const mono_name = try self.getOrCreateMonomorphizedType(sinit.type_name, sinit.type_args);
+            // Resolve type arguments through generic_params (e.g., "Element" -> "int")
+            var resolved_args = try self.allocator.alloc([]const u8, sinit.type_args.len);
+            defer self.allocator.free(resolved_args);
+            for (sinit.type_args, 0..) |arg, i| {
+                resolved_args[i] = self.resolveTypeName(arg);
+            }
+            const mono_name = try self.getOrCreateMonomorphizedType(sinit.type_name, resolved_args);
             break :blk mono_name;
         } else self.resolveTypeName(sinit.type_name);
         try self.initStructIntoResolved(sinit, dest_ptr, type_name);
@@ -8674,15 +8690,15 @@ pub const AstToIr = struct {
                 const var_name: ?[]const u8 = if (idx.base.* == .identifier) idx.base.identifier else null;
                 return array_helpers.convertManagedMemoryIndex(self, base_typed.value, idx.index.*, var_name);
             }
-            // Handle stdlib Array types (Array$int, etc.) - call .get() method
-            if (std.mem.startsWith(u8, base_typed.ty.struct_type.name, "Array$")) {
-                return array_helpers.convertStdlibArrayIndex(self, base_typed, idx.index.*);
+            // Handle types implementing Indexed interface - call .get() method
+            if (self.structConformsToIndexed(base_typed.ty.struct_type.name)) {
+                return array_helpers.convertIndexedGet(self, base_typed, idx.index.*);
             }
         }
 
-        // Only struct types with Array$ prefix or __ManagedMemory support indexing
-        std.debug.print("[AST->IR] convertIndexExpr: expected array type\n", .{});
-        self.reportError(.E006, "expected array type for indexing");
+        // Only struct types implementing Indexed or __ManagedMemory support indexing
+        std.debug.print("[AST->IR] convertIndexExpr: type does not support indexing\n", .{});
+        self.reportError(.E006, "type does not support indexing (does not implement Indexed interface)");
         return error.UnknownType;
     }
 

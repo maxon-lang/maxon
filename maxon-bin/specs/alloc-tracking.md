@@ -22,7 +22,7 @@ maxon compile --track-allocs myprogram.maxon
 
 Each allocation prints:
 ```text
-ALLOC #1: 80 bytes (array buffer)
+ALLOC #1: 80 bytes (array grow)
 ```
 
 Each free prints:
@@ -45,7 +45,8 @@ Leaked:    0 bytes
 ```maxon
 function main() returns int
     let size = 10
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 42)
     return try arr.get(0) otherwise 0
 end 'main'
@@ -54,8 +55,7 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 88 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 88 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #1: 88 bytes (array cleanup)
 
@@ -63,7 +63,7 @@ FREE #1: 88 bytes (array cleanup)
 Allocated: 88 bytes
 Freed:     88 bytes
 Leaked:    0 bytes
-Moves:     1
+Moves:     0
 Increfs:   0
 Decrefs:   1
 ```
@@ -95,8 +95,10 @@ Decrefs:   0
 function main() returns int
     let size1 = 5
     let size2 = 10
-    var arr1 = Array of size1 int
-    var arr2 = Array of size2 int
+    var arr1 = Array of int{}
+    arr1.resize(size1)
+    var arr2 = Array of int{}
+    arr2.resize(size2)
     arr1.set(0, value: 1)
     arr2.set(0, value: 2)
     var a = try arr1.get(0) otherwise 0
@@ -108,10 +110,8 @@ end 'main'
 3
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
-ALLOC #2: 88 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
+ALLOC #2: 88 bytes (array grow)
 DECREF: arr1 -> rc=0
 FREE #1: 48 bytes (array cleanup)
 DECREF: arr2 -> rc=0
@@ -121,7 +121,7 @@ FREE #2: 88 bytes (array cleanup)
 Allocated: 136 bytes
 Freed:     136 bytes
 Leaked:    0 bytes
-Moves:     2
+Moves:     0
 Increfs:   0
 Decrefs:   2
 ```
@@ -131,7 +131,8 @@ Decrefs:   2
 ```maxon
 function main() returns int
     let size = 5
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 42)
     if true 'check'
         return try arr.get(0) otherwise 0
@@ -143,8 +144,7 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -152,7 +152,7 @@ FREE #1: 48 bytes (array cleanup)
 Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
-Moves:     1
+Moves:     0
 Increfs:   0
 Decrefs:   1
 ```
@@ -162,7 +162,8 @@ Decrefs:   1
 ```maxon
 function main() returns int
     let size = 5
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 42)
     if false 'check'
         return 0
@@ -174,8 +175,7 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -183,7 +183,7 @@ FREE #1: 48 bytes (array cleanup)
 Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
-Moves:     1
+Moves:     0
 Increfs:   0
 Decrefs:   1
 ```
@@ -197,7 +197,8 @@ end 'sum_first'
 
 function main() returns int
     let size = 5
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 99)
     return sum_first(arr)
 end 'main'
@@ -206,8 +207,7 @@ end 'main'
 99
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -215,7 +215,7 @@ FREE #1: 48 bytes (array cleanup)
 Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
-Moves:     1
+Moves:     0
 Increfs:   0
 Decrefs:   1
 ```
@@ -226,7 +226,8 @@ Decrefs:   1
 function main() returns int
     let a = 2
     let b = 5
-    var arr = Array of (a * b) int
+    var arr = Array of int{}
+    arr.resize(a * b)
     arr.set(0, value: 77)
     return try arr.get(0) otherwise 0
 end 'main'
@@ -235,8 +236,7 @@ end 'main'
 77
 ```
 ```stdout
-ALLOC #1: 88 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 88 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #1: 88 bytes (array cleanup)
 
@@ -244,7 +244,7 @@ FREE #1: 88 bytes (array cleanup)
 Allocated: 88 bytes
 Freed:     88 bytes
 Leaked:    0 bytes
-Moves:     1
+Moves:     0
 Increfs:   0
 Decrefs:   1
 ```
@@ -258,7 +258,8 @@ end 'readFirst'
 
 function main() returns int
     let size = 5
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 42)
     let result = readFirst(arr)
     var sum = try arr.get(0) otherwise 0
@@ -269,8 +270,7 @@ end 'main'
 84
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -278,7 +278,7 @@ FREE #1: 48 bytes (array cleanup)
 Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
-Moves:     1
+Moves:     0
 Increfs:   0
 Decrefs:   1
 ```
@@ -292,7 +292,8 @@ end 'getElement'
 
 function main() returns int
     let size = 5
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 10)
     arr.set(1, value: 20)
     arr.set(2, value: 30)
@@ -306,8 +307,7 @@ end 'main'
 60
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -315,7 +315,7 @@ FREE #1: 48 bytes (array cleanup)
 Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
-Moves:     1
+Moves:     0
 Increfs:   0
 Decrefs:   1
 ```
@@ -328,7 +328,8 @@ function main() returns int
     var sum = 0
     while i < 3 'loop'
         let size = 5
-        var arr = Array of size int
+        var arr = Array of int{}
+        arr.resize(size)
         arr.set(0, value: i)
         var val = try arr.get(0) otherwise 0
         sum = sum + val
@@ -341,16 +342,13 @@ end 'main'
 3
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
-ALLOC #2: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #2: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #2: 48 bytes (array cleanup)
-ALLOC #3: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #3: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #3: 48 bytes (array cleanup)
 
@@ -358,7 +356,7 @@ FREE #3: 48 bytes (array cleanup)
 Allocated: 144 bytes
 Freed:     144 bytes
 Leaked:    0 bytes
-Moves:     3
+Moves:     0
 Increfs:   0
 Decrefs:   3
 ```
@@ -373,7 +371,8 @@ end 'mutateFirst'
 
 function main() returns int
     let size = 5
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 42)
     return mutateFirst(arr)
 end 'main'
@@ -382,8 +381,7 @@ end 'main'
 100
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
 MOVE: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
@@ -392,7 +390,7 @@ FREE #1: 48 bytes (array cleanup)
 Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
-Moves:     2
+Moves:     1
 Increfs:   0
 Decrefs:   1
 ```
@@ -414,7 +412,8 @@ end 'doubleAddTen'
 
 function main() returns int
     let size = 5
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 5)
     return doubleAddTen(arr)
 end 'main'
@@ -423,8 +422,7 @@ end 'main'
 20
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
 MOVE: arr
 MOVE: arr
 DECREF: arr -> rc=0
@@ -434,7 +432,7 @@ FREE #1: 48 bytes (array cleanup)
 Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
-Moves:     3
+Moves:     2
 Increfs:   0
 Decrefs:   1
 ```
@@ -453,8 +451,10 @@ end 'writeIt'
 
 function main() returns int
     let size = 5
-    var arr1 = Array of size int
-    var arr2 = Array of size int
+    var arr1 = Array of int{}
+    arr1.resize(size)
+    var arr2 = Array of int{}
+    arr2.resize(size)
     arr1.set(0, value: 10)
     arr2.set(0, value: 20)
     let borrowed = readIt(arr1)
@@ -466,10 +466,8 @@ end 'main'
 109
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
-ALLOC #2: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
+ALLOC #2: 48 bytes (array grow)
 MOVE: arr2
 DECREF: arr -> rc=0
 FREE #2: 48 bytes (array cleanup)
@@ -480,19 +478,20 @@ FREE #1: 48 bytes (array cleanup)
 Allocated: 96 bytes
 Freed:     96 bytes
 Leaked:    0 bytes
-Moves:     3
+Moves:     1
 Increfs:   0
 Decrefs:   2
 ```
 
 <!-- test: array-zero-size-no-alloc -->
 <!-- TrackMemory: true -->
-Zero-size arrays allocate an 8-byte refcount header for COW semantics.
+Zero-size arrays don't allocate memory.
 
 ```maxon
 function main() returns int
     let size = 0
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     if size > 0 'check'
         arr.set(0, value: 1)
     end 'check'
@@ -503,18 +502,14 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 8 bytes (array buffer)
-MOVE: managed
-DECREF: arr -> rc=0
-FREE #1: 8 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 8 bytes
-Freed:     8 bytes
+Allocated: 0 bytes
+Freed:     0 bytes
 Leaked:    0 bytes
-Moves:     1
+Moves:     0
 Increfs:   0
-Decrefs:   1
+Decrefs:   0
 ```
 
 <!-- test: heap-array-reassign -->
@@ -524,9 +519,11 @@ Reassigning a heap array frees the old memory and allocates new memory.
 ```maxon
 function main() returns int
     let size = 5
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 10)
-    arr = Array of size int
+    arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 20)
     return try arr.get(0) otherwise 0
 end 'main'
@@ -535,12 +532,10 @@ end 'main'
 20
 ```
 ```stdout
-ALLOC #1: 48 bytes (array buffer)
-MOVE: managed
-ALLOC #2: 48 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
+ALLOC #2: 48 bytes (array grow)
 DECREF: arr -> rc=0
 FREE #2: 48 bytes (array cleanup)
 
@@ -548,8 +543,6 @@ FREE #2: 48 bytes (array cleanup)
 Allocated: 96 bytes
 Freed:     96 bytes
 Leaked:    0 bytes
-Moves:     2
+Moves:     0
 Increfs:   0
 Decrefs:   2
-```
-

@@ -786,6 +786,28 @@ var arr = [1, 2, 3]
 arr.set(0, value: 100)  // First positional, second named
 ```
 
+### Creating Empty Arrays
+
+Create an empty typed array using struct initialization syntax:
+```maxon
+var numbers = Array of int{}     // Empty array
+numbers.push(42)                 // Add elements with push
+```
+
+To preallocate with a specific length (elements zero-initialized):
+```maxon
+var buffer = Array of int{}
+buffer.resize(100)               // Length is now 100
+buffer.set(0, value: 42)         // Can set any index 0-99
+```
+
+To preallocate capacity without changing length (for performance):
+```maxon
+var buffer = Array of int{}
+buffer.reserve(100)              // Capacity is 100, length is 0
+buffer.push(42)                  // Now length is 1
+```
+
 ---
 
 ## Statements
@@ -1670,7 +1692,7 @@ end 'forever'
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
 for i in range(start: 0, end: numbers.count()) 'iter'
-    var num = try numbers.get(index: i) otherwise 0
+    var num = try numbers.get(i) otherwise 0
     print("{num}")
 end 'iter'
 ```

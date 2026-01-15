@@ -340,12 +340,9 @@ MOVE: managed
 ALLOC #1: 80 bytes (map buffer)
 ALLOC #2: 16 bytes (map buffer)
 MOVE: managed
-ALLOC #3: 648 bytes (array buffer)
-MOVE: managed
-ALLOC #4: 136 bytes (array buffer)
-MOVE: managed
-ALLOC #5: 136 bytes (array buffer)
-MOVE: managed
+ALLOC #3: 648 bytes (array grow)
+ALLOC #4: 136 bytes (array grow)
+ALLOC #5: 136 bytes (array grow)
 MOVE: ks
 MOVE: vs
 MOVE: sts
@@ -364,7 +361,7 @@ FREE #5: 136 bytes (array cleanup)
 Allocated: 1016 bytes
 Freed:     1016 bytes
 Leaked:    0 bytes
-Moves:     10
+Moves:     7
 Increfs:   0
 Decrefs:   3
 ```
@@ -388,12 +385,9 @@ ALLOC #1: 120 bytes (map buffer)
 ALLOC #2: 24 bytes (map buffer)
 MOVE: managed
 MOVE: managed
-ALLOC #3: 648 bytes (array buffer)
-MOVE: managed
-ALLOC #4: 136 bytes (array buffer)
-MOVE: managed
-ALLOC #5: 136 bytes (array buffer)
-MOVE: managed
+ALLOC #3: 648 bytes (array grow)
+ALLOC #4: 136 bytes (array grow)
+ALLOC #5: 136 bytes (array grow)
 MOVE: ks
 MOVE: vs
 MOVE: sts
@@ -413,7 +407,7 @@ FREE #5: 136 bytes (array cleanup)
 Allocated: 1064 bytes
 Freed:     1064 bytes
 Leaked:    0 bytes
-Moves:     12
+Moves:     9
 Increfs:   0
 Decrefs:   3
 ```
@@ -437,12 +431,9 @@ MOVE: managed
 ALLOC #1: 80 bytes (map buffer)
 ALLOC #2: 16 bytes (map buffer)
 MOVE: managed
-ALLOC #3: 648 bytes (array buffer)
-MOVE: managed
-ALLOC #4: 136 bytes (array buffer)
-MOVE: managed
-ALLOC #5: 136 bytes (array buffer)
-MOVE: managed
+ALLOC #3: 648 bytes (array grow)
+ALLOC #4: 136 bytes (array grow)
+ALLOC #5: 136 bytes (array grow)
 MOVE: ks
 MOVE: vs
 MOVE: sts
@@ -461,7 +452,7 @@ FREE #5: 136 bytes (array cleanup)
 Allocated: 1016 bytes
 Freed:     1016 bytes
 Leaked:    0 bytes
-Moves:     10
+Moves:     7
 Increfs:   0
 Decrefs:   3
 ```
@@ -483,12 +474,9 @@ end 'main'
 MOVE: managed
 ALLOC #1: 40 bytes (map buffer)
 ALLOC #2: 8 bytes (map buffer)
-ALLOC #3: 648 bytes (array buffer)
-MOVE: managed
-ALLOC #4: 136 bytes (array buffer)
-MOVE: managed
-ALLOC #5: 136 bytes (array buffer)
-MOVE: managed
+ALLOC #3: 648 bytes (array grow)
+ALLOC #4: 136 bytes (array grow)
+ALLOC #5: 136 bytes (array grow)
 MOVE: ks
 MOVE: vs
 MOVE: sts
@@ -508,7 +496,7 @@ FREE #5: 136 bytes (array cleanup)
 Allocated: 968 bytes
 Freed:     968 bytes
 Leaked:    0 bytes
-Moves:     10
+Moves:     7
 Increfs:   0
 Decrefs:   3
 ```
@@ -534,12 +522,9 @@ ALLOC #1: 120 bytes (map buffer)
 ALLOC #2: 24 bytes (map buffer)
 MOVE: managed
 MOVE: managed
-ALLOC #3: 648 bytes (array buffer)
-MOVE: managed
-ALLOC #4: 136 bytes (array buffer)
-MOVE: managed
-ALLOC #5: 136 bytes (array buffer)
-MOVE: managed
+ALLOC #3: 648 bytes (array grow)
+ALLOC #4: 136 bytes (array grow)
+ALLOC #5: 136 bytes (array grow)
 MOVE: ks
 MOVE: vs
 MOVE: sts
@@ -559,7 +544,7 @@ FREE #5: 136 bytes (array cleanup)
 Allocated: 1064 bytes
 Freed:     1064 bytes
 Leaked:    0 bytes
-Moves:     12
+Moves:     9
 Increfs:   0
 Decrefs:   3
 ```
@@ -580,12 +565,9 @@ end 'main'
 MOVE: managed
 ALLOC #1: 40 bytes (map buffer)
 ALLOC #2: 8 bytes (map buffer)
-ALLOC #3: 648 bytes (array buffer)
-MOVE: managed
-ALLOC #4: 136 bytes (array buffer)
-MOVE: managed
-ALLOC #5: 136 bytes (array buffer)
-MOVE: managed
+ALLOC #3: 648 bytes (array grow)
+ALLOC #4: 136 bytes (array grow)
+ALLOC #5: 136 bytes (array grow)
 MOVE: ks
 MOVE: vs
 MOVE: sts
@@ -604,7 +586,4 @@ FREE #5: 136 bytes (array cleanup)
 Allocated: 968 bytes
 Freed:     968 bytes
 Leaked:    0 bytes
-Moves:     9
-Increfs:   0
-Decrefs:   3
-```
+Moves:     6

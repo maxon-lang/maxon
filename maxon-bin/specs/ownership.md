@@ -369,7 +369,8 @@ end 'mutateFirst'
 
 function main() returns int
     let size = 3
-    var arr = Array of size int
+    var arr = Array of int{}
+    arr.resize(size)
     arr.set(0, value: 42)
     return mutateFirst(arr)
 end 'main'
@@ -378,8 +379,7 @@ end 'main'
 100
 ```
 ```stdout
-ALLOC #1: 32 bytes (array buffer)
-MOVE: managed
+ALLOC #1: 32 bytes (array grow)
 MOVE: arr
 DECREF: arr -> rc=0
 FREE #1: 32 bytes (array cleanup)
@@ -388,7 +388,7 @@ FREE #1: 32 bytes (array cleanup)
 Allocated: 32 bytes
 Freed:     32 bytes
 Leaked:    0 bytes
-Moves:     2
+Moves:     1
 Increfs:   0
 Decrefs:   1
 ```

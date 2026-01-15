@@ -218,6 +218,7 @@ test "completion for array methods" {
         "push",
         "remove",
         "reserve",
+        "resize",
         "set",
     };
 
