@@ -38,6 +38,8 @@ pub const IntrinsicCodegen = enum {
     file_io,
     /// Process execution intrinsics (__process_*)
     process,
+    /// Command line argument intrinsics (__command_line_*)
+    command_line,
 };
 
 /// Intrinsic definition
@@ -256,6 +258,7 @@ pub const intrinsic_categories = [_]IntrinsicCategory{
     .{ .prefix = "__get_file_attributes", .visibility = .stdlib_only, .codegen = .file_io },
     .{ .prefix = "__directory_exists", .visibility = .stdlib_only, .codegen = .file_io },
     .{ .prefix = "__process_", .visibility = .stdlib_only, .codegen = .process },
+    .{ .prefix = "__command_line_", .visibility = .stdlib_only, .codegen = .command_line },
 };
 
 /// Find a category by name prefix

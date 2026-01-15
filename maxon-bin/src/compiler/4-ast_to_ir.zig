@@ -3583,19 +3583,9 @@ pub const AstToIr = struct {
         const ir_func = try self.module.addFunctionWithExport(decl.name, sret_info.ir_type, decl.is_export);
         const param_offset = try self.setupFunctionState(ir_func, decl.name, sret_info);
 
-        // Check if this is main with args parameter
-        const is_main_with_args = std.mem.eql(u8, decl.name, "main") and
-            decl.params.len == 1 and
-            self.isArgsArrayOfString(decl.params[0].type_expr);
-
-        if (is_main_with_args) {
-            // For main(args array of String), call __get_command_args() and bind result
-            try self.registerMainArgsParameter(decl.params[0]);
-        } else {
-            // Register parameters normally (offset by 1 if using sret)
-            for (decl.params, 0..) |param, i| {
-                try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
-            }
+        // Register parameters (offset by 1 if using sret)
+        for (decl.params, 0..) |param, i| {
+            try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
         }
 
         // Convert body and add implicit return for void functions
@@ -3684,45 +3674,6 @@ pub const AstToIr = struct {
                 ));
             },
         }
-    }
-
-    /// Check if a type expression is "array of String" (the type for main's args parameter)
-    fn isArgsArrayOfString(self: *AstToIr, type_expr: ast.TypeExpr) bool {
-        _ = self;
-        switch (type_expr) {
-            .generic => |gen| {
-                // Check for "Array of String" or "array of String"
-                if (!std.mem.eql(u8, gen.base_type, "Array") and !std.mem.eql(u8, gen.base_type, "array")) {
-                    return false;
-                }
-                // Must have exactly one type argument (the element type)
-                if (gen.type_args.len != 1) return false;
-                // Element type must be "String"
-                return std.mem.eql(u8, gen.type_args[0], "String");
-            },
-            else => return false,
-        }
-    }
-
-    /// Register the args parameter for main(args array of String)
-    /// Generates IR to get command line arguments via Windows APIs
-    fn registerMainArgsParameter(self: *AstToIr, param: ast.ParamDecl) !void {
-        // Generate IR to get the array pointer (uses extern_call to Windows APIs)
-        const array_ptr = try intrinsics.emitGetCommandArgs(self);
-
-        // Store the pointer in a stack slot for the args variable
-        const slot_ptr = try self.func().emitAlloca(.ptr);
-        try self.func().setValueName(slot_ptr.raw(), param.name);
-        try self.func().emitStore(slot_ptr.raw(), array_ptr);
-
-        // Register the variable with Array$String type info
-        const value_type = try self.typeNameToValueType("Array$String");
-        try self.var_map.put(self.allocator, param.name, VarInfo.initParam(
-            slot_ptr.raw(),
-            value_type,
-            true, // is_mutable
-            true, // is_heap_allocated - the array pointer is stored in a slot
-        ));
     }
 
     // ------------------------------------------------------------------------

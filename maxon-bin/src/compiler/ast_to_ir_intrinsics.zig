@@ -229,6 +229,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
             .make_char => convertMakeCharIntrinsic(self, call),
             .file_io => convertFileIntrinsic(self, call),
             .process => convertProcessIntrinsic(self, call),
+            .command_line => convertCommandLineIntrinsic(self, call),
             .unary_op, .custom => unreachable, // These use individual lookup below
         };
     }
@@ -1572,145 +1573,6 @@ fn emitDirectoryExistsIR(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
 }
 
 // ============================================================================
-// Command Line Arguments (generates IR instead of calling x86-64 runtime)
-// ============================================================================
-
-/// Generate IR to get command line arguments as Array$String
-/// This replaces the old __get_command_args x86-64 runtime function
-///
-/// Array$String layout (40 bytes):
-///   [0]  __ManagedArray managed (32 bytes)
-///   [32] int iterIndex (8 bytes)
-///
-/// String layout (40 bytes):
-///   [0]  __ManagedArray _managed (32 bytes)
-///   [32] int _iterPos (8 bytes)
-///
-/// __ManagedArray layout (32 bytes):
-///   [0]  ptr buffer (8 bytes)
-///   [8]  i64 len (8 bytes)
-///   [16] i64 capacity (8 bytes)
-///   [24] i32 flags (4 bytes) - mode flags (bits 0-1: 0=SSO, 1=refcounted, 2=slice)
-///   [28] i32 parent_off (4 bytes)
-pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
-    // Get process heap (needed for allocations)
-    const heap = try emitGetProcessHeap(self);
-
-    // Allocate argc storage on stack (8 bytes for i32 result, aligned)
-    const argc_ptr = try self.func().emitAllocaSized(8);
-
-    // Get command line and parse to argv
-    const cmdline_w = try emitGetCommandLineW(self);
-    const argv_w = try emitCommandLineToArgvW(self, cmdline_w, argc_ptr.raw());
-
-    // Load argc (it's stored as i32 but we need i64)
-    const argc_i32 = try self.func().emitLoad(argc_ptr.raw(), .i32);
-    const argc = try self.func().emitUnaryOp(.sext_i32_i64, argc_i32, .i64);
-
-    // Look up Array$String type info to get correct size and offsets
-    const array_type_info = self.type_map.get("Array$String") orelse unreachable;
-    const array_struct_info = &array_type_info.struct_type;
-
-    // Allocate Array$String struct
-    const array_size = try self.func().emitConstI64(array_struct_info.size);
-    const result_ptr = try emitHeapAllocWin(self, heap, array_size);
-
-    // Look up String type info for element size
-    const string_type_info = self.type_map.get("String") orelse unreachable;
-    const string_struct_info = &string_type_info.struct_type;
-
-    // Allocate strings array: argc * string_size bytes
-    const string_size = try self.func().emitConstI64(string_struct_info.size);
-    const strings_alloc_size = try self.func().emitBinaryOp(.mul, argc, string_size, .i64);
-    const strings_buf = try emitHeapAllocWin(self, heap, strings_alloc_size);
-
-    // Get pointer to __ManagedArray at the correct offset within Array$String
-    const managed_ptr = try string.getManagedArrayPtr(self, result_ptr, array_struct_info.managed_buffer_offset);
-
-    // Initialize __ManagedArray part with mode 0 (not refcounted)
-    const zero_i32 = try self.func().emitConstI32(0);
-    try ManagedArray.init(self.func(), managed_ptr, ir.toRawPtr(strings_buf), argc, argc, zero_i32);
-
-    // Initialize iterIndex field - find its offset dynamically
-    const zero_i64 = try self.func().emitConstI64(0);
-    for (array_struct_info.fields) |field| {
-        if (std.mem.eql(u8, field.name, "iterIndex")) {
-            try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(result_ptr), field.offset, zero_i64);
-            break;
-        }
-    }
-
-    // Loop counter on stack
-    const i_ptr = try self.func().emitAllocaSized(8);
-    try self.func().emitStore(i_ptr.raw(), zero_i64);
-
-    // Create condition block - get its index before creating
-    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
-    const cond_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("cmd_args_cond");
-
-    // Emit branch from entry to cond
-    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
-        .op = .br,
-        .operands = .{ .{ .block_ref = cond_block_idx }, .none, .none },
-    });
-
-    // Now in cond block - emit condition check
-    const i_val = try self.func().emitLoad(i_ptr.raw(), .i64);
-    const cond = try self.func().emitBinaryOp(.icmp_lt, i_val, argc, .i64);
-
-    // Create body block
-    const body_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("cmd_args_body");
-
-    // Now in body block - convert argv_w[i] to UTF-8 String
-    const i_body = try self.func().emitLoad(i_ptr.raw(), .i64);
-
-    // Get argv_w[i] pointer (each pointer is 8 bytes)
-    const argv_i_ptr_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(argv_w), i_body, 8);
-    const wide_str = try self.func().emitLoad(argv_i_ptr_ptr.raw(), .ptr);
-
-    // Get required UTF-8 buffer size (pass 0 for dest and size to query)
-    const utf8_size = try emitWideCharToMultiByte(self, wide_str, zero_i64, zero_i64);
-
-    // Allocate UTF-8 buffer with refcount header for String
-    const utf8_buf = try array.emitAllocRefcountedBuffer(self, utf8_size, "string buffer");
-
-    // Convert to UTF-8
-    _ = try emitWideCharToMultiByte(self, wide_str, utf8_buf.raw(), utf8_size);
-
-    // Calculate String element address: strings_buf + i * string_size
-    const string_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(strings_buf), i_body, string_struct_info.size);
-
-    // len = utf8_size - 1 (exclude null terminator)
-    const one_i64 = try self.func().emitConstI64(1);
-    const len_i64 = try self.func().emitBinaryOp(.sub, utf8_size, one_i64, .i64);
-    try initHeapString(self, string_ptr.raw(), utf8_buf.raw(), len_i64);
-
-    // Increment i
-    const new_i = try self.func().emitBinaryOp(.add, i_body, one_i64, .i64);
-    try self.func().emitStore(i_ptr.raw(), new_i);
-
-    // Branch back to cond
-    try self.func().emitBr(cond_block_idx);
-
-    // Create end block - now we know the final index
-    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("cmd_args_end");
-
-    // Emit conditional branch in cond block now that we know end_block_idx
-    try self.func().blocks.items[cond_block_idx].instructions.append(self.allocator, .{
-        .op = .br_cond,
-        .operands = .{ .{ .value = cond }, .{ .block_ref = body_block_idx }, .{ .block_ref = end_block_idx } },
-    });
-
-    // Now in end block - free argv_w and return result
-    try emitLocalFree(self, argv_w);
-
-    return result_ptr;
-}
-
-// ============================================================================
 // Process Intrinsics (stdlib-only)
 // ============================================================================
 //
@@ -1994,4 +1856,125 @@ fn intrinsicProcessClose(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedV
     _ = try externCall(self, "kernel32.dll", "HeapFree", &.{ heap, zero, handle_ptr }, .i64);
 
     return .{ .value = zero, .ty = .{ .primitive = .void } };
+}
+
+// ============================================================================
+// Command Line Intrinsics (stdlib-only)
+// ============================================================================
+//
+// These intrinsics provide low-level access to command line arguments.
+// Each call re-parses the command line via Windows APIs - no caching.
+
+const command_line_intrinsics = .{
+    .{ "__command_line_count", intrinsicCommandLineCount },
+    .{ "__command_line_arg", intrinsicCommandLineArg },
+};
+
+fn convertCommandLineIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    return dispatchIntrinsic(self, call, command_line_intrinsics);
+}
+
+/// __command_line_count() returns int
+/// Returns total argument count (argc) including the executable path.
+fn intrinsicCommandLineCount(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 0);
+
+    // Allocate argc storage on stack
+    const argc_ptr = try self.func().emitAllocaSized(8);
+
+    // Get command line and parse to argv
+    const cmdline_w = try emitGetCommandLineW(self);
+    const argv_w = try emitCommandLineToArgvW(self, cmdline_w, argc_ptr.raw());
+
+    // Load argc (stored as i32)
+    const argc_i32 = try self.func().emitLoad(argc_ptr.raw(), .i32);
+    const argc = try self.func().emitUnaryOp(.sext_i32_i64, argc_i32, .i64);
+
+    // Free argv array
+    try emitLocalFree(self, argv_w);
+
+    return .{ .value = argc, .ty = .{ .primitive = .int } };
+}
+
+/// __command_line_arg(index int) returns cstring
+/// Returns the argument at the given index as a cstring struct.
+/// Returns cstring with null data pointer if index is out of bounds.
+fn intrinsicCommandLineArg(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
+    try expectArgCount(self, call, 1);
+    const index_arg = try self.convertExpression(call.args[0]);
+    const index = index_arg.value;
+
+    // Allocate cstring struct on stack (24 bytes: data + length + managed)
+    const cstring_ptr = try self.func().emitAllocaSized(24);
+    const zero = try self.func().emitConstI64(0);
+    // Initialize to null data, zero length, null managed
+    try self.func().emitStore(cstring_ptr.raw(), zero);
+    try struct_helpers.storeI64Field(self.func(), cstring_ptr.asStruct(), 8, zero);
+    try struct_helpers.storeI64Field(self.func(), cstring_ptr.asStruct(), 16, zero);
+
+    // Allocate argc storage on stack
+    const argc_ptr = try self.func().emitAllocaSized(8);
+
+    // Get command line and parse to argv
+    const cmdline_w = try emitGetCommandLineW(self);
+    const argv_w = try emitCommandLineToArgvW(self, cmdline_w, argc_ptr.raw());
+
+    // Load argc (stored as i32)
+    const argc_i32 = try self.func().emitLoad(argc_ptr.raw(), .i32);
+    const argc = try self.func().emitUnaryOp(.sext_i32_i64, argc_i32, .i64);
+
+    // Bounds check: if index >= argc, skip to end
+    const in_bounds = try self.func().emitBinaryOp(.icmp_lt, index, argc, .i64);
+
+    // Remember the entry block index before creating new blocks
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+    // Create valid block and emit instructions for valid case
+    const valid_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cmdarg_valid");
+
+    // Now in valid block: get argv[index] and convert to UTF-8
+
+    // Get argv_w[index] pointer (each pointer is 8 bytes)
+    const argv_i_ptr_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(argv_w), index, 8);
+    const wide_str = try self.func().emitLoad(argv_i_ptr_ptr.raw(), .ptr);
+
+    // Get required UTF-8 buffer size
+    const utf8_size = try emitWideCharToMultiByte(self, wide_str, zero, zero);
+
+    // Allocate UTF-8 buffer using tracked allocator
+    const utf8_buf = try self.func().emitHeapAlloc(utf8_size, "command line arg");
+
+    // Convert to UTF-8
+    _ = try emitWideCharToMultiByte(self, wide_str, utf8_buf.raw(), utf8_size);
+
+    // Store cstring fields: data = utf8_buf, length = utf8_size - 1 (exclude null), managed = null
+    try self.func().emitStore(cstring_ptr.raw(), utf8_buf.raw());
+    const one = try self.func().emitConstI64(1);
+    const len = try self.func().emitBinaryOp(.sub, utf8_size, one, .i64);
+    try struct_helpers.storeI64Field(self.func(), cstring_ptr.asStruct(), 8, len);
+    // managed is already zero from initialization
+
+    // Create end block
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cmdarg_end");
+
+    // Now emit the branches to tie everything together
+
+    // Entry block: conditional branch to valid or end
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = in_bounds }, .{ .block_ref = valid_block_idx }, .{ .block_ref = end_block_idx } },
+    });
+
+    // Valid block: branch to end
+    try self.func().blocks.items[valid_block_idx].instructions.append(self.allocator, .{
+        .op = .br,
+        .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
+    });
+
+    // Now in end block: free argv and return cstring struct pointer
+    try emitLocalFree(self, argv_w);
+
+    return .{ .value = cstring_ptr.raw(), .ty = try self.typeNameToValueType("cstring") };
 }
