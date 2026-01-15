@@ -61,8 +61,9 @@ try_merge:
     %val = alloca ptr
     store %val %tmp_load.2
     %tmp_load.3 = load i64 %val
-    %tmp_fieldptr.1 = getfieldptr ptr %arr 24
-    %tmp_load.4 = load i32 %tmp_fieldptr.1
+    %tmp_fieldptr.1 = getfieldptr ptr %arr 8
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_fieldptr.1 24
+    %tmp_load.4 = load i32 %tmp_fieldptr.2
     %tmp_sext = sext.i32.i64 i64 %tmp_load.4
     %tmp_const.14 = const.i64 i64 3
     %tmp_band.5 = band i64 %tmp_sext %tmp_const.14
@@ -70,7 +71,7 @@ try_merge:
     %tmp_icmp.1 = icmp.eq i64 %tmp_band.5 %tmp_const.15
     br.cond %tmp_icmp.1 @block4 @block6
 arr_decref:
-    %tmp_load.5 = load ptr %arr
+    %tmp_load.5 = load ptr %tmp_fieldptr.1
     %tmp_const.16 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.5 %tmp_const.16
     %tmp_load.6 = load i64 %tmp_sub
@@ -81,7 +82,7 @@ arr_decref:
     %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.18
     br.cond %tmp_icmp.2 @block5 @block6
 arr_decref_free:
-    %tmp_load.7 = load ptr %arr
+    %tmp_load.7 = load ptr %tmp_fieldptr.1
     %tmp_sub.2 = sub ptr %tmp_load.7 %tmp_const.16
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block6
@@ -96,7 +97,7 @@ entry:
     %value = param i64 2
     %value.1 = alloca ptr
     store %value.1 %value
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     %len = alloca ptr
@@ -105,13 +106,13 @@ entry:
     %tmp_const = const.i64 i64 1
     %tmp_add = add i64 %tmp_load.1 %tmp_const
     call @Array$byte$ensureCapacity(%self, %tmp_add)
-    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_fieldptr.2 = getfieldptr ptr %self 8
     %tmp_load.2 = load i64 %len
     %tmp_load.3 = load i64 %value.1
     %tmp_load.4 = load ptr %tmp_fieldptr.2
     %tmp_elemptr = getelemptr ptr %tmp_load.4 %tmp_load.2 elemsize=1
     store %tmp_elemptr %tmp_load.3
-    %tmp_fieldptr.3 = getfieldptr ptr %self 0
+    %tmp_fieldptr.3 = getfieldptr ptr %self 8
     %tmp_load.5 = load i64 %len
     %tmp_const.2 = const.i64 i64 1
     %tmp_add.1 = add i64 %tmp_load.5 %tmp_const.2
@@ -127,7 +128,7 @@ entry:
     %requiredLen = param i64 1
     %requiredLen.1 = alloca ptr
     store %requiredLen.1 %requiredLen
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 16
     %tmp_load = load i64 %tmp_fieldptr.1
     %cap = alloca ptr
@@ -162,7 +163,7 @@ whilebody:
     store %newCap %tmp_mul
     br @block4
 whilecont:
-    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_fieldptr.2 = getfieldptr ptr %self 8
     %tmp_load.8 = load i64 %newCap
     %tmp_const.3 = const.i64 i64 1
     %tmp_mul.1 = mul i64 %tmp_load.8 %tmp_const.3
@@ -211,7 +212,7 @@ entry:
     %value = param i64 2
     %value.1 = alloca ptr
     store %value.1 %value
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     %len = alloca ptr
@@ -226,7 +227,7 @@ then:
     %tmp_icmp.1 = icmp.lt i64 %tmp_load.2 %tmp_load.3
     br.cond %tmp_icmp.1 @block2 @block3
 then:
-    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_fieldptr.2 = getfieldptr ptr %self 8
     %tmp_load.4 = load i64 %index.1
     %tmp_load.5 = load i64 %value.1
     %tmp_load.6 = load ptr %tmp_fieldptr.2
@@ -246,7 +247,7 @@ entry:
     %index = param i64 2
     %index.1 = alloca ptr
     store %index.1 %index
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     %len = alloca ptr
@@ -275,7 +276,7 @@ then:
     store %tmp_fieldptr.3 %tmp_const.3
     ret %tmp_param
 end:
-    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_fieldptr.4 = getfieldptr ptr %self 8
     %tmp_load.4 = load i64 %index.1
     %tmp_load.5 = load ptr %tmp_fieldptr.4
     %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=1

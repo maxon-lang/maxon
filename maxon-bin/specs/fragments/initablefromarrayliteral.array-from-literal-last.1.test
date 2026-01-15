@@ -63,8 +63,9 @@ try_merge:
     %val = alloca ptr
     store %val %tmp_load.2
     %tmp_load.3 = load i64 %val
-    %tmp_fieldptr.5 = getfieldptr ptr %arr 24
-    %tmp_load.4 = load i32 %tmp_fieldptr.5
+    %tmp_fieldptr.5 = getfieldptr ptr %arr 8
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_fieldptr.5 24
+    %tmp_load.4 = load i32 %tmp_fieldptr.6
     %tmp_sext = sext.i32.i64 i64 %tmp_load.4
     %tmp_const.15 = const.i64 i64 3
     %tmp_band = band i64 %tmp_sext %tmp_const.15
@@ -72,7 +73,7 @@ try_merge:
     %tmp_icmp.1 = icmp.eq i64 %tmp_band %tmp_const.16
     br.cond %tmp_icmp.1 @block4 @block6
 arr_decref:
-    %tmp_load.5 = load ptr %arr
+    %tmp_load.5 = load ptr %tmp_fieldptr.5
     %tmp_const.17 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.5 %tmp_const.17
     %tmp_load.6 = load i64 %tmp_sub
@@ -83,7 +84,7 @@ arr_decref:
     %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.19
     br.cond %tmp_icmp.2 @block5 @block6
 arr_decref_free:
-    %tmp_load.7 = load ptr %arr
+    %tmp_load.7 = load ptr %tmp_fieldptr.5
     %tmp_sub.2 = sub ptr %tmp_load.7 %tmp_const.17
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block6
@@ -96,9 +97,9 @@ entry:
     %tmp_param = param ptr 0
     %managed = param ptr 1
     memset %tmp_param 0 40
-    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
     memcpy %tmp_fieldptr %managed 32
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 32
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 0
     %tmp_const = const.i64 i64 0
     store %tmp_fieldptr.1 %tmp_const
     ret %tmp_param
@@ -108,7 +109,7 @@ function Array$int$last() -> ptr {
 entry:
     %tmp_param = param ptr 0
     %self = param ptr 1
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     %len = alloca ptr
@@ -125,7 +126,7 @@ then:
     store %tmp_fieldptr.2 %tmp_const.1
     ret %tmp_param
 end:
-    %tmp_fieldptr.3 = getfieldptr ptr %self 0
+    %tmp_fieldptr.3 = getfieldptr ptr %self 8
     %tmp_load.2 = load i64 %len
     %tmp_const.3 = const.i64 i64 1
     %tmp_sub = sub i64 %tmp_load.2 %tmp_const.3

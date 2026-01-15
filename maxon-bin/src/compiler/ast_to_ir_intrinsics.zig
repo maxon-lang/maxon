@@ -1159,8 +1159,16 @@ fn intrinsicManagedArrayFlags(self: *AstToIr, call: ast.CallExpr) ConvertError!T
 /// Returns 0 on success, non-zero on failure
 fn emitWriteFileIR(self: *AstToIr, path_cstr: TypedValue, data_source: TypedValue) ConvertError!TypedValue {
     const path_ptr = try self.func().emitLoad(path_cstr.value, .ptr);
-    const data_ptr = try self.func().emitLoad(data_source.value, .ptr);
-    const data_len = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(data_source.value), 8);
+
+    // Get the managed buffer pointer at the correct offset within the struct.
+    // For types with __ManagedArray (String, Array$T), the managed buffer may not be at offset 0.
+    const managed_offset: i32 = if (data_source.ty == .struct_type)
+        data_source.ty.struct_type.managed_buffer_offset
+    else
+        0;
+    const managed_ptr = try string.getManagedArrayPtr(self, data_source.value, managed_offset);
+    const data_ptr = try self.func().emitLoad(managed_ptr.raw(), .ptr);
+    const data_len = try struct_helpers.loadI64Field(self.func(), ir.toStructPtr(managed_ptr.raw()), 8);
 
     // CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL)
     // GENERIC_WRITE = 0x40000000, CREATE_ALWAYS = 2, FILE_ATTRIBUTE_NORMAL = 0x80
@@ -1599,23 +1607,38 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     const argc_i32 = try self.func().emitLoad(argc_ptr.raw(), .i32);
     const argc = try self.func().emitUnaryOp(.sext_i32_i64, argc_i32, .i64);
 
-    // Allocate Array$String struct (40 bytes: 32 for __ManagedArray + 8 for iterIndex)
-    const array_size = try self.func().emitConstI64(Array.size());
+    // Look up Array$String type info to get correct size and offsets
+    const array_type_info = self.type_map.get("Array$String") orelse unreachable;
+    const array_struct_info = &array_type_info.struct_type;
+
+    // Allocate Array$String struct
+    const array_size = try self.func().emitConstI64(array_struct_info.size);
     const result_ptr = try emitHeapAllocWin(self, heap, array_size);
 
-    // Allocate strings array: argc * 40 bytes (each String is 40 bytes)
-    const string_size = try self.func().emitConstI64(String.size());
+    // Look up String type info for element size
+    const string_type_info = self.type_map.get("String") orelse unreachable;
+    const string_struct_info = &string_type_info.struct_type;
+
+    // Allocate strings array: argc * string_size bytes
+    const string_size = try self.func().emitConstI64(string_struct_info.size);
     const strings_alloc_size = try self.func().emitBinaryOp(.mul, argc, string_size, .i64);
     const strings_buf = try emitHeapAllocWin(self, heap, strings_alloc_size);
 
-    // Initialize Array$String's __ManagedArray part (first 32 bytes):
-    // Mode 0 for regular arrays (not refcounted)
-    const zero_i32 = try self.func().emitConstI32(0);
-    try ManagedArray.init(self.func(), ir.toManagedArrayPtr(result_ptr), ir.toRawPtr(strings_buf), argc, argc, zero_i32);
+    // Get pointer to __ManagedArray at the correct offset within Array$String
+    const managed_ptr = try string.getManagedArrayPtr(self, result_ptr, array_struct_info.managed_buffer_offset);
 
-    // Initialize iterIndex at offset 32
+    // Initialize __ManagedArray part with mode 0 (not refcounted)
+    const zero_i32 = try self.func().emitConstI32(0);
+    try ManagedArray.init(self.func(), managed_ptr, ir.toRawPtr(strings_buf), argc, argc, zero_i32);
+
+    // Initialize iterIndex field - find its offset dynamically
     const zero_i64 = try self.func().emitConstI64(0);
-    try Array.storeIterIndex(self.func(), ir.toStructPtr(result_ptr), zero_i64);
+    for (array_struct_info.fields) |field| {
+        if (std.mem.eql(u8, field.name, "iterIndex")) {
+            try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(result_ptr), field.offset, zero_i64);
+            break;
+        }
+    }
 
     // Loop counter on stack
     const i_ptr = try self.func().emitAllocaSized(8);
@@ -1656,8 +1679,8 @@ pub fn emitGetCommandArgs(self: *AstToIr) ConvertError!ir.Value {
     // Convert to UTF-8
     _ = try emitWideCharToMultiByte(self, wide_str, utf8_buf.raw(), utf8_size);
 
-    // Calculate String element address: strings_buf + i * 40
-    const string_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(strings_buf), i_body, String.size());
+    // Calculate String element address: strings_buf + i * string_size
+    const string_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(strings_buf), i_body, string_struct_info.size);
 
     // len = utf8_size - 1 (exclude null terminator)
     const one_i64 = try self.func().emitConstI64(1);

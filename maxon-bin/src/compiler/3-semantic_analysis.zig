@@ -430,19 +430,19 @@ pub const SemanticAnalyzer = struct {
         };
 
         // Build field info for Array type
-        // Layout: managed (32 bytes at offset 0) + iterIndex (8 bytes at offset 32)
+        // Layout: iterIndex (8 bytes at offset 0) + managed (32 bytes at offset 8)
         const array_fields = try self.allocator.alloc(FieldInfo, 2);
         array_fields[0] = .{
-            .name = "managed",
-            .offset = 0,
-            .size = 32,
-            .value_type = .{ .struct_type = managed_array_struct },
-        };
-        array_fields[1] = .{
             .name = "iterIndex",
-            .offset = 32,
+            .offset = 0,
             .size = 8,
             .value_type = .{ .primitive = .int },
+        };
+        array_fields[1] = .{
+            .name = "managed",
+            .offset = 8,
+            .size = 32,
+            .value_type = .{ .struct_type = managed_array_struct },
         };
 
         // Check if element type has has_managed_buffer (for COW cleanup of elements)
@@ -461,6 +461,7 @@ pub const SemanticAnalyzer = struct {
                 .needs_cleanup = true,
                 .element_type_name = element_name,
                 .has_managed_buffer = true,
+                .managed_buffer_offset = 8, // managed is at offset 8
                 .element_has_managed_buffer = element_has_managed_buffer,
             },
         });
@@ -632,8 +633,8 @@ pub const SemanticAnalyzer = struct {
         const fields = try self.buildFieldInfos(type_decl.fields);
         const size = self.calculateStructSize(fields);
 
-        // Check if this type has COW semantics (first field is __ManagedArray)
-        const has_managed_buffer = hasFirstFieldManagedArray(fields);
+        // Check if this type has COW semantics (__ManagedArray field)
+        const managed_offset = types.findManagedArrayField(fields);
 
         try self.type_map.put(self.allocator, ext_type.name, .{
             .struct_type = .{
@@ -641,7 +642,8 @@ pub const SemanticAnalyzer = struct {
                 .fields = fields,
                 .size = size,
                 .needs_cleanup = fieldsNeedCleanup(fields),
-                .has_managed_buffer = has_managed_buffer,
+                .has_managed_buffer = managed_offset != null,
+                .managed_buffer_offset = managed_offset orelse 0,
             },
         });
 
@@ -891,14 +893,6 @@ pub const SemanticAnalyzer = struct {
             }
         }
         return false;
-    }
-
-    /// Check if first field is __ManagedArray (for COW buffer cleanup)
-    fn hasFirstFieldManagedArray(fields: []const FieldInfo) bool {
-        if (fields.len == 0) return false;
-        const first_field = fields[0];
-        if (first_field.value_type != .struct_type) return false;
-        return std.mem.eql(u8, first_field.value_type.struct_type.name, "__ManagedArray");
     }
 
     fn buildParamTypes(self: *SemanticAnalyzer, params: []const ast.ParamDecl) ![]const ParamType {
@@ -1425,6 +1419,7 @@ pub const SemanticAnalyzer = struct {
             else
                 false;
 
+            const managed_offset = types.findManagedArrayField(fields);
             try self.type_map.put(self.allocator, mono_name, .{
                 .struct_type = .{
                     .name = mono_name,
@@ -1432,7 +1427,8 @@ pub const SemanticAnalyzer = struct {
                     .size = size,
                     .needs_cleanup = fieldsNeedCleanup(fields),
                     .element_type_name = element_type_name,
-                    .has_managed_buffer = hasFirstFieldManagedArray(fields),
+                    .has_managed_buffer = managed_offset != null,
+                    .managed_buffer_offset = managed_offset orelse 0,
                     .element_has_managed_buffer = element_has_managed_buffer,
                 },
             });

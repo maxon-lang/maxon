@@ -98,7 +98,8 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 
 	// concat method
 	export function concat(other String) returns String
-		return __managed_array_concat(_managed, other._managed)
+		var result = __managed_array_concat(_managed, other._managed)
+		return String{_managed: result, _iterPos: 0}
 	end 'concat'
 
 	// Search methods
@@ -127,12 +128,14 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 	// Slicing - returns a new String backed by slice into this string's buffer
 	// Use endIndex for end position, or length for character count
 	export function slice(start StringIndex, endIndex StringIndex) returns String
-		return __managed_array_slice(_managed, start.bytePos(), endIndex.bytePos())
+		var result = __managed_array_slice(_managed, start.bytePos(), endIndex.bytePos())
+		return String{_managed: result, _iterPos: 0}
 	end 'slice'
 
 	export function slice(start StringIndex, length int) returns String
 		var endBytePos = graphemeOffsetToBytePos(_managed, startBytePos: start.bytePos(), count: length)
-		return __managed_array_slice(_managed, start.bytePos(), endBytePos)
+		var result = __managed_array_slice(_managed, start.bytePos(), endBytePos)
+		return String{_managed: result, _iterPos: 0}
 	end 'slice'
 
 	// View methods
@@ -210,7 +213,7 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 			builtResult = __managed_array_concat(builtResult, suffixSlice)
 		end 'has_suffix'
 
-		return builtResult
+		return String{_managed: builtResult, _iterPos: 0}
 	end 'replace'
 
 	export function replaceFirst(old String, new String) returns String
@@ -227,7 +230,8 @@ export type String is Builtin, Hashable, Equatable, Iterable with Character
 		var selfLen = __managed_array_len(_managed)
 		var prefixSlice = __managed_array_slice(_managed, 0, idx)
 		var suffixSlice = __managed_array_slice(_managed, idx + oldLen, selfLen)
-		return __managed_array_concat(__managed_array_concat(prefixSlice, new._managed), suffixSlice)
+		var result = __managed_array_concat(__managed_array_concat(prefixSlice, new._managed), suffixSlice)
+		return String{_managed: result, _iterPos: 0}
 	end 'replaceFirst'
 
 	// Case conversion

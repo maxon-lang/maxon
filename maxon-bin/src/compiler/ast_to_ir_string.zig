@@ -196,35 +196,39 @@ pub fn isStringType(ty: ValueType) bool {
     return ty == .struct_type and std.mem.eql(u8, ty.struct_type.name, "String");
 }
 
-/// Check if a struct has __ManagedArray as its first field.
-/// This indicates the struct uses COW refcounting for its buffer.
-pub fn hasManagedArrayFirstField(struct_info: *const types.StructTypeInfo) bool {
-    if (struct_info.fields.len == 0) return false;
-    const first_field = struct_info.fields[0];
-    if (first_field.value_type != .struct_type) return false;
-    return std.mem.eql(u8, first_field.value_type.struct_type.name, "__ManagedArray");
-}
-
 /// Copy a struct and handle refcount increment for types with __ManagedArray.
 /// This is the single point of truth for struct copying with COW semantics.
-/// Handles String, Array$T, and any other type with __ManagedArray at offset 0.
+/// Handles String, Array$T, and any other type with __ManagedArray at any offset.
 pub fn emitStructCopy(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.StructPtr, size: i32, struct_name: ?[]const u8) !void {
     try self.func().emitMemcpy(dest_ptr.asRawPtr(), src_ptr.asRawPtr(), size);
 
-    // Handle refcount for types with __ManagedArray at offset 0
+    // Handle refcount for types with __ManagedArray
     if (struct_name) |name| {
         // Skip internal __ManagedArray type (it's moved, not copied)
         if (std.mem.eql(u8, name, "__ManagedArray")) return;
 
-        // Look up struct info to check for __ManagedArray first field
+        // Look up struct info to check for __ManagedArray field
         if (self.type_map.get(name)) |type_info| {
             if (type_info == .struct_type) {
-                if (hasManagedArrayFirstField(&type_info.struct_type)) {
+                const struct_info = &type_info.struct_type;
+                if (struct_info.has_managed_buffer) {
+                    // Get pointer to __ManagedArray at the correct offset
+                    const managed_ptr = try getManagedArrayPtr(self, dest_ptr.raw(), struct_info.managed_buffer_offset);
                     // Incref the buffer since we're copying the struct
-                    try array.emitManagedArrayIncref(self, ir.toManagedArrayPtr(dest_ptr.raw()), "<struct copy>");
+                    try array.emitManagedArrayIncref(self, managed_ptr, "<struct copy>");
                 }
             }
         }
+    }
+}
+
+/// Get pointer to __ManagedArray at the given offset within a struct.
+pub fn getManagedArrayPtr(self: *AstToIr, struct_ptr: ir.Value, offset: i32) !ir.ManagedArrayPtr {
+    if (offset == 0) {
+        return ir.toManagedArrayPtr(struct_ptr);
+    } else {
+        const field_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(struct_ptr), offset);
+        return ir.toManagedArrayPtr(field_ptr.raw());
     }
 }
 

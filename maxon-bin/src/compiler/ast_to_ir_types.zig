@@ -354,6 +354,18 @@ pub const FieldInfo = struct {
     }
 };
 
+/// Find __ManagedArray field in a slice of FieldInfo and return its offset, or null if not found.
+pub fn findManagedArrayField(fields: []const FieldInfo) ?i32 {
+    for (fields) |field| {
+        if (field.value_type == .struct_type) {
+            if (std.mem.eql(u8, field.value_type.struct_type.name, "__ManagedArray")) {
+                return field.offset;
+            }
+        }
+    }
+    return null;
+}
+
 /// Struct type info
 pub const StructTypeInfo = struct {
     name: []const u8,
@@ -374,9 +386,13 @@ pub const StructTypeInfo = struct {
     // Cleanup strategy flags - set during type registration
     // ========================================================================
 
-    /// True if first field is __ManagedArray. Cleanup uses mode-based COW decref.
-    /// Set for: String, Array$T, and any wrapper with __ManagedArray at offset 0.
+    /// True if struct contains a __ManagedArray field. Cleanup uses mode-based COW decref.
+    /// Set for: String, Array$T, and any wrapper with __ManagedArray.
     has_managed_buffer: bool = false,
+
+    /// Offset of __ManagedArray field within the struct (if has_managed_buffer is true).
+    /// Used to access the managed array for cleanup/incref operations.
+    managed_buffer_offset: i32 = 0,
 
     /// True if this is the cstring type (data/length/managed pattern).
     /// Cleanup conditionally frees based on managed pointer being null.

@@ -328,7 +328,7 @@ pub fn freeHeapVar(self: *AstToIr, var_info: VarInfo, skip_if_parameter: bool, v
 }
 
 /// Clean up a struct by recursively cleaning up its fields that need cleanup.
-/// Uses mode-based dispatch for types with __ManagedArray at offset 0.
+/// Uses mode-based dispatch for types with __ManagedArray.
 fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types.StructTypeInfo, var_name: []const u8) ConvertError!void {
     const name = struct_info.name;
 
@@ -338,8 +338,8 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
         return;
     }
 
-    // Check if first field is __ManagedArray - use unified COW decref
-    if (string.hasManagedArrayFirstField(struct_info)) {
+    // Check if struct has __ManagedArray field - use unified COW decref
+    if (struct_info.has_managed_buffer) {
         // First, clean up elements if this is a collection with element cleanup needs
         // Use element_type_name from struct_info if available, otherwise parse from name
         const elem_type_name = struct_info.element_type_name orelse blk: {
@@ -349,6 +349,9 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
             break :blk null;
         };
 
+        // Get pointer to __ManagedArray at the correct offset
+        const managed_ptr = try string.getManagedArrayPtr(self, struct_ptr, struct_info.managed_buffer_offset);
+
         if (elem_type_name) |eln| {
             // Check if element type needs cleanup
             if (self.type_map.get(eln)) |elem_type_info| {
@@ -356,9 +359,9 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
                     // Use specialized cleanup for elements with COW semantics (has_managed_buffer)
                     // These have their own inline decref loop for efficient buffer management
                     if (elem_type_info.struct_type.has_managed_buffer) {
-                        try emitArrayManagedElementsCleanup(self, struct_ptr, &elem_type_info.struct_type);
+                        try emitArrayManagedElementsCleanup(self, managed_ptr.raw(), &elem_type_info.struct_type);
                     } else {
-                        try emitElementCleanup(self, struct_ptr, &elem_type_info.struct_type);
+                        try emitElementCleanup(self, managed_ptr.raw(), &elem_type_info.struct_type);
                     }
                 }
             }
@@ -371,7 +374,7 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
             "string cleanup" // String type (no element_type_name but has_managed_buffer)
         else
             "array cleanup";
-        try array_helpers.emitManagedArrayDecref(self, ir.toManagedArrayPtr(struct_ptr), var_name, cleanup_tag);
+        try array_helpers.emitManagedArrayDecref(self, managed_ptr, var_name, cleanup_tag);
         return;
     }
 

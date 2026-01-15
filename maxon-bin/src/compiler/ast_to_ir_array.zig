@@ -190,21 +190,21 @@ pub const ManagedArray = struct {
 // ============================================================================
 /// Array struct layout (40 bytes total)
 /// This is the user-facing Array type that wraps __ManagedArray
-/// Layout: __ManagedArray(32) + iterIndex(8) = 40 bytes
+/// Layout: iterIndex(8) + __ManagedArray(32) = 40 bytes
 pub const Array = struct {
     const SIZE: i32 = 40;
-    const MANAGED_ARRAY_OFFSET: i32 = 0;
-    const ITER_INDEX_OFFSET: i32 = 32;
+    const ITER_INDEX_OFFSET: i32 = 0;
+    const MANAGED_ARRAY_OFFSET: i32 = 8;
 
     comptime {
         if (SIZE < ManagedArray.SIZE) {
             @compileError("Array layout mismatch: SIZE < ManagedArray.SIZE");
         }
-        if (ITER_INDEX_OFFSET != ManagedArray.SIZE) {
-            @compileError("Array layout mismatch: ITER_INDEX_OFFSET != ManagedArray.SIZE");
+        if (MANAGED_ARRAY_OFFSET + ManagedArray.SIZE != SIZE) {
+            @compileError("Array layout mismatch: MANAGED_ARRAY_OFFSET + ManagedArray.SIZE != SIZE");
         }
-        if (ITER_INDEX_OFFSET + 8 != SIZE) {
-            @compileError("Array layout mismatch: ITER_INDEX_OFFSET + 8 != SIZE");
+        if (ITER_INDEX_OFFSET + 8 != MANAGED_ARRAY_OFFSET) {
+            @compileError("Array layout mismatch: ITER_INDEX_OFFSET + 8 != MANAGED_ARRAY_OFFSET");
         }
     }
 
@@ -222,12 +222,12 @@ pub const Array = struct {
         return func.emitAllocaSized(SIZE);
     }
 
-    /// Store the iter index field (offset 32)
+    /// Store the iter index field (offset 0)
     pub fn storeIterIndex(func: *ir.Function, ptr: ir.StructPtr, value: ir.Value) !void {
         try struct_helpers.storeI64Field(func, ptr, ITER_INDEX_OFFSET, value);
     }
 
-    /// Load the iter index field (offset 32)
+    /// Load the iter index field (offset 0)
     pub fn loadIterIndex(func: *ir.Function, ptr: ir.StructPtr) !ir.Value {
         return struct_helpers.loadI64Field(func, ptr, ITER_INDEX_OFFSET);
     }

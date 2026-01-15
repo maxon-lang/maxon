@@ -28,20 +28,21 @@ entry:
     %tmp_mul = mul i64 %tmp_sext %tmp_const.2
     %tmp_const.3 = const.i64 i64 0
     %tmp_extern.4 = extern.call ptr @"kernel32.dll:HeapAlloc"(%tmp_extern, %tmp_const.3, %tmp_mul)
-    %tmp_const.4 = const.i32 i32 0
-    store %tmp_extern.3 %tmp_extern.4
     %tmp_fieldptr = getfieldptr ptr %tmp_extern.3 8
-    store %tmp_fieldptr %tmp_sext
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_extern.3 16
+    %tmp_const.4 = const.i32 i32 0
+    store %tmp_fieldptr %tmp_extern.4
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     store %tmp_fieldptr.1 %tmp_sext
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_extern.3 24
-    store.i32 %tmp_fieldptr.2 %tmp_const.4
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_fieldptr 16
+    store %tmp_fieldptr.2 %tmp_sext
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr 24
+    store.i32 %tmp_fieldptr.3 %tmp_const.4
     %tmp_const.5 = const.i32 i32 0
-    %tmp_fieldptr.3 = getfieldptr ptr %tmp_extern.3 28
-    store.i32 %tmp_fieldptr.3 %tmp_const.5
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr 28
+    store.i32 %tmp_fieldptr.4 %tmp_const.5
     %tmp_const.6 = const.i64 i64 0
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_extern.3 32
-    store %tmp_fieldptr.4 %tmp_const.6
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_extern.3 0
+    store %tmp_fieldptr.5 %tmp_const.6
     %tmp_alloca.1 = alloca.sized ptr 8
     store %tmp_alloca.1 %tmp_const.6
     br @block1
@@ -73,18 +74,18 @@ cmd_args_body:
     %tmp_sub = sub i64 %tmp_extern.5 %tmp_const.16
     %tmp_const.17 = const.i32 i32 1
     store %tmp_elemptr.1 %tmp_add.1
-    %tmp_fieldptr.5 = getfieldptr ptr %tmp_elemptr.1 8
-    store %tmp_fieldptr.5 %tmp_sub
-    %tmp_fieldptr.6 = getfieldptr ptr %tmp_elemptr.1 16
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_elemptr.1 8
     store %tmp_fieldptr.6 %tmp_sub
-    %tmp_fieldptr.7 = getfieldptr ptr %tmp_elemptr.1 24
-    store.i32 %tmp_fieldptr.7 %tmp_const.17
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_elemptr.1 16
+    store %tmp_fieldptr.7 %tmp_sub
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_elemptr.1 24
+    store.i32 %tmp_fieldptr.8 %tmp_const.17
     %tmp_const.18 = const.i32 i32 0
-    %tmp_fieldptr.8 = getfieldptr ptr %tmp_elemptr.1 28
-    store.i32 %tmp_fieldptr.8 %tmp_const.18
+    %tmp_fieldptr.9 = getfieldptr ptr %tmp_elemptr.1 28
+    store.i32 %tmp_fieldptr.9 %tmp_const.18
     %tmp_const.19 = const.i64 i64 0
-    %tmp_fieldptr.9 = getfieldptr ptr %tmp_elemptr.1 32
-    store %tmp_fieldptr.9 %tmp_const.19
+    %tmp_fieldptr.10 = getfieldptr ptr %tmp_elemptr.1 32
+    store %tmp_fieldptr.10 %tmp_const.19
     %tmp_add.2 = add i64 %tmp_load.2 %tmp_const.16
     store %tmp_alloca.1 %tmp_add.2
     br @block1
@@ -108,22 +109,22 @@ then:
     %arg = alloca.sized ptr 40
     br.cond %tmp_icmp.2 @block5 @block6
 try_success:
-    %tmp_fieldptr.10 = getfieldptr ptr %tmp_alloca.3 8
-    memcpy %arg %tmp_fieldptr.10 40
+    %tmp_fieldptr.11 = getfieldptr ptr %tmp_alloca.3 8
+    memcpy %arg %tmp_fieldptr.11 40
     br @block7
 try_default:
     %tmp_alloca.5 = alloca.sized ptr 32
     %tmp_const.23 = const.i64 i64 0
     %tmp_const.24 = const.i32 i32 0
     store %tmp_alloca.5 %tmp_const.23
-    %tmp_fieldptr.11 = getfieldptr ptr %tmp_alloca.5 8
-    store %tmp_fieldptr.11 %tmp_const.23
-    %tmp_fieldptr.12 = getfieldptr ptr %tmp_alloca.5 16
+    %tmp_fieldptr.12 = getfieldptr ptr %tmp_alloca.5 8
     store %tmp_fieldptr.12 %tmp_const.23
-    %tmp_fieldptr.13 = getfieldptr ptr %tmp_alloca.5 24
-    store.i32 %tmp_fieldptr.13 %tmp_const.24
-    %tmp_fieldptr.14 = getfieldptr ptr %tmp_alloca.5 28
+    %tmp_fieldptr.13 = getfieldptr ptr %tmp_alloca.5 16
+    store %tmp_fieldptr.13 %tmp_const.23
+    %tmp_fieldptr.14 = getfieldptr ptr %tmp_alloca.5 24
     store.i32 %tmp_fieldptr.14 %tmp_const.24
+    %tmp_fieldptr.15 = getfieldptr ptr %tmp_alloca.5 28
+    store.i32 %tmp_fieldptr.15 %tmp_const.24
     %tmp_alloca.6 = alloca.sized ptr 40
     %tmp_call.2 = call ptr @String$init(%tmp_alloca.6, %tmp_alloca.5)
     memcpy %arg %tmp_alloca.6 40
@@ -131,8 +132,8 @@ try_default:
 try_merge:
     %tmp_call.3 = call i64 @print(%arg)
     %tmp_const.25 = const.i64 i64 0
-    %tmp_fieldptr.15 = getfieldptr ptr %arg 24
-    %tmp_load.7 = load i32 %tmp_fieldptr.15
+    %tmp_fieldptr.16 = getfieldptr ptr %arg 24
+    %tmp_load.7 = load i32 %tmp_fieldptr.16
     %tmp_sext.1 = sext.i32.i64 i64 %tmp_load.7
     %tmp_const.26 = const.i64 i64 3
     %tmp_band = band i64 %tmp_sext.1 %tmp_const.26
@@ -159,8 +160,8 @@ arr_decref_end:
     ret %tmp_const.25
 end:
     %tmp_const.31 = const.i64 i64 1
-    %tmp_fieldptr.16 = getfieldptr ptr %arg 24
-    %tmp_load.11 = load i32 %tmp_fieldptr.16
+    %tmp_fieldptr.17 = getfieldptr ptr %arg 24
+    %tmp_load.11 = load i32 %tmp_fieldptr.17
     %tmp_sext.2 = sext.i32.i64 i64 %tmp_load.11
     %tmp_const.32 = const.i64 i64 3
     %tmp_band.1 = band i64 %tmp_sext.2 %tmp_const.32
@@ -190,7 +191,7 @@ arr_decref_end:
 function Array$String$count() -> i64 {
 entry:
     %self = param ptr 0
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     ret %tmp_load
@@ -203,7 +204,7 @@ entry:
     %index = param i64 2
     %index.1 = alloca ptr
     store %index.1 %index
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     %len = alloca ptr
@@ -232,7 +233,7 @@ then:
     store %tmp_fieldptr.3 %tmp_const.3
     ret %tmp_param
 end:
-    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_fieldptr.4 = getfieldptr ptr %self 8
     %tmp_load.4 = load i64 %index.1
     %tmp_load.5 = load ptr %tmp_fieldptr.4
     %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=40

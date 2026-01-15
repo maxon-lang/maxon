@@ -113,8 +113,9 @@ try_merge:
     %tmp_fieldptr.15 = getfieldptr ptr %pt1 8
     %tmp_load.3 = load i64 %tmp_fieldptr.15
     %tmp_add.2 = add i64 %tmp_load.2 %tmp_load.3
-    %tmp_fieldptr.16 = getfieldptr ptr %points 24
-    %tmp_load.4 = load i32 %tmp_fieldptr.16
+    %tmp_fieldptr.16 = getfieldptr ptr %points 8
+    %tmp_fieldptr.17 = getfieldptr ptr %tmp_fieldptr.16 24
+    %tmp_load.4 = load i32 %tmp_fieldptr.17
     %tmp_sext = sext.i32.i64 i64 %tmp_load.4
     %tmp_const.21 = const.i64 i64 3
     %tmp_band = band i64 %tmp_sext %tmp_const.21
@@ -122,7 +123,7 @@ try_merge:
     %tmp_icmp.2 = icmp.eq i64 %tmp_band %tmp_const.22
     br.cond %tmp_icmp.2 @block7 @block9
 arr_decref:
-    %tmp_load.5 = load ptr %points
+    %tmp_load.5 = load ptr %tmp_fieldptr.16
     %tmp_const.23 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.5 %tmp_const.23
     %tmp_load.6 = load i64 %tmp_sub
@@ -133,7 +134,7 @@ arr_decref:
     %tmp_icmp.3 = icmp.eq i64 %tmp_sub.1 %tmp_const.25
     br.cond %tmp_icmp.3 @block8 @block9
 arr_decref_free:
-    %tmp_load.7 = load ptr %points
+    %tmp_load.7 = load ptr %tmp_fieldptr.16
     %tmp_sub.2 = sub ptr %tmp_load.7 %tmp_const.23
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block9
@@ -146,9 +147,9 @@ entry:
     %tmp_param = param ptr 0
     %managed = param ptr 1
     memset %tmp_param 0 40
-    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
     memcpy %tmp_fieldptr %managed 32
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 32
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 0
     %tmp_const = const.i64 i64 0
     store %tmp_fieldptr.1 %tmp_const
     ret %tmp_param
@@ -161,7 +162,7 @@ entry:
     %index = param i64 2
     %index.1 = alloca ptr
     store %index.1 %index
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     %len = alloca ptr
@@ -190,7 +191,7 @@ then:
     store %tmp_fieldptr.3 %tmp_const.3
     ret %tmp_param
 end:
-    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_fieldptr.4 = getfieldptr ptr %self 8
     %tmp_load.4 = load i64 %index.1
     %tmp_load.5 = load ptr %tmp_fieldptr.4
     %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=16

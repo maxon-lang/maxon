@@ -61,7 +61,7 @@ entry:
     %index = param i64 2
     %index.1 = alloca ptr
     store %index.1 %index
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     %len = alloca ptr
@@ -90,7 +90,7 @@ then:
     store %tmp_fieldptr.3 %tmp_const.3
     ret %tmp_param
 end:
-    %tmp_fieldptr.4 = getfieldptr ptr %self 0
+    %tmp_fieldptr.4 = getfieldptr ptr %self 8
     %tmp_load.4 = load i64 %index.1
     %tmp_load.5 = load ptr %tmp_fieldptr.4
     %tmp_elemptr = getelemptr ptr %tmp_load.5 %tmp_load.4 elemsize=8
@@ -162,8 +162,9 @@ try_merge:
     %tmp_load.4 = load i64 %sum
     %tmp_load.5 = load i64 %result
     %tmp_add.2 = add i64 %tmp_load.4 %tmp_load.5
-    %tmp_fieldptr.5 = getfieldptr ptr %arr 24
-    %tmp_load.6 = load i32 %tmp_fieldptr.5
+    %tmp_fieldptr.5 = getfieldptr ptr %arr 8
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_fieldptr.5 24
+    %tmp_load.6 = load i32 %tmp_fieldptr.6
     %tmp_sext = sext.i32.i64 i64 %tmp_load.6
     %tmp_const.13 = const.i64 i64 3
     %tmp_band = band i64 %tmp_sext %tmp_const.13
@@ -171,7 +172,7 @@ try_merge:
     %tmp_icmp.1 = icmp.eq i64 %tmp_band %tmp_const.14
     br.cond %tmp_icmp.1 @block4 @block6
 arr_decref:
-    %tmp_load.7 = load ptr %arr
+    %tmp_load.7 = load ptr %tmp_fieldptr.5
     %tmp_const.15 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.7 %tmp_const.15
     %tmp_load.8 = load i64 %tmp_sub
@@ -182,7 +183,7 @@ arr_decref:
     %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.17
     br.cond %tmp_icmp.2 @block5 @block6
 arr_decref_free:
-    %tmp_load.9 = load ptr %arr
+    %tmp_load.9 = load ptr %tmp_fieldptr.5
     %tmp_sub.2 = sub ptr %tmp_load.9 %tmp_const.15
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block6
@@ -195,9 +196,9 @@ entry:
     %tmp_param = param ptr 0
     %managed = param ptr 1
     memset %tmp_param 0 40
-    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 8
     memcpy %tmp_fieldptr %managed 32
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 32
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 0
     %tmp_const = const.i64 i64 0
     store %tmp_fieldptr.1 %tmp_const
     ret %tmp_param
@@ -212,7 +213,7 @@ entry:
     %value = param i64 2
     %value.1 = alloca ptr
     store %value.1 %value
-    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     %len = alloca ptr
@@ -227,7 +228,7 @@ then:
     %tmp_icmp.1 = icmp.lt i64 %tmp_load.2 %tmp_load.3
     br.cond %tmp_icmp.1 @block2 @block3
 then:
-    %tmp_fieldptr.2 = getfieldptr ptr %self 0
+    %tmp_fieldptr.2 = getfieldptr ptr %self 8
     %tmp_load.4 = load i64 %index.1
     %tmp_load.5 = load i64 %value.1
     %tmp_load.6 = load ptr %tmp_fieldptr.2
