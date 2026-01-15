@@ -4,10 +4,9 @@ const std = @import("std");
 const ir = @import("ir.zig");
 const ast = @import("ast.zig");
 const debug = @import("debug.zig");
-const string = @import("ast_to_ir_string.zig");
+const string = @import("ast_to_ir_managed.zig");
 const array = @import("ast_to_ir_array.zig");
 const ManagedArray = string.ManagedArray;
-const String = string.String;
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const AstToIr = ast_to_ir.AstToIr;
 const DeferredBlocks = ast_to_ir.DeferredBlocks;
@@ -133,21 +132,32 @@ pub fn emitMapCleanup(self: *AstToIr, map_ptr: ir.Value, struct_name: []const u8
     const key_type = if (dollar_pos) |pos| key_value_part[0..pos] else key_value_part;
     const value_type = if (dollar_pos) |pos| key_value_part[pos + 1 ..] else "";
 
-    // Check if key/value types have COW semantics (has_managed_buffer)
-    const key_has_managed_buffer = if (self.type_map.get(key_type)) |ti|
+    // Check if key/value types have COW semantics (has_managed_buffer) and get sizes
+    const key_type_info = self.type_map.get(key_type);
+    const key_has_managed_buffer = if (key_type_info) |ti|
         ti == .struct_type and ti.struct_type.has_managed_buffer
     else
         false;
-    const value_has_managed_buffer = if (self.type_map.get(value_type)) |ti|
+    const key_elem_size: i32 = if (key_type_info) |ti|
+        if (ti == .struct_type) ti.struct_type.size else 8
+    else
+        8;
+
+    const value_type_info = self.type_map.get(value_type);
+    const value_has_managed_buffer = if (value_type_info) |ti|
         ti == .struct_type and ti.struct_type.has_managed_buffer
     else
         false;
+    const value_elem_size: i32 = if (value_type_info) |ti|
+        if (ti == .struct_type) ti.struct_type.size else 8
+    else
+        8;
 
     // Get pointer to keys array at offset 0 (Array$K which has __ManagedArray as first field)
     const keys_ptr = map_ptr;
     // If keys have COW semantics, cleanup occupied slots only (check states array)
     if (key_has_managed_buffer) {
-        try emitMapManagedKeysCleanup(self, map_ptr);
+        try emitMapManagedKeysCleanup(self, map_ptr, key_elem_size);
     }
     // Cleanup the keys array using refcounted decref
     try array.emitManagedArrayDecref(self, ir.toManagedArrayPtr(keys_ptr), "m.keys", "map keys cleanup");
@@ -156,7 +166,7 @@ pub fn emitMapCleanup(self: *AstToIr, map_ptr: ir.Value, struct_name: []const u8
     const values_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
     // If values have COW semantics, cleanup occupied slots only (check states array)
     if (value_has_managed_buffer) {
-        try emitMapManagedValuesCleanup(self, map_ptr);
+        try emitMapManagedValuesCleanup(self, map_ptr, value_elem_size);
     }
     // Cleanup the values array using refcounted decref
     try array.emitManagedArrayDecref(self, ir.toManagedArrayPtr(values_ptr.raw()), "m.values", "map values cleanup");
@@ -169,8 +179,7 @@ pub fn emitMapCleanup(self: *AstToIr, map_ptr: ir.Value, struct_name: []const u8
 
 /// Emit cleanup code for Map keys with COW semantics, checking the states array for occupied slots.
 /// Only decrefs buffers for slots where states[i] != 0 (not EMPTY).
-/// Note: Currently uses String.size() since String is the only COW-semantics type.
-fn emitMapManagedKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
+fn emitMapManagedKeysCleanup(self: *AstToIr, map_ptr: ir.Value, elem_size: i32) !void {
     // Map layout:
     //   offset 0:  keys array (32 bytes) - buffer_ptr at offset 0
     //   offset 64: states array (32 bytes) - buffer_ptr at offset 64
@@ -262,9 +271,9 @@ fn emitMapManagedKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     // Get keys buffer pointer (at offset 0 of map)
     const keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
 
-    // Calculate element pointer: buf_ptr + i * 40 (String size)
-    const elem_size = try self.func().emitConstI64(String.size());
-    const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
+    // Calculate element pointer: buf_ptr + i * elem_size
+    const elem_size_val = try self.func().emitConstI64(elem_size);
+    const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size_val, .i64);
     const elem_ptr = try self.func().emitBinaryOp(.add, keys_buf_ptr, offset, .ptr);
 
     // Check if heap mode: cap_flags & 3 == 1
@@ -288,7 +297,7 @@ fn emitMapManagedKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     // Decref block: decrement refcount in buffer header and check if zero
     const decref_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const decref_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
-    const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
+    const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size_val, .i64);
     const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_keys_buf_ptr, decref_offset, .ptr);
 
     // Buffer header refcount: load buf_ptr from String, subtract 8 to get header
@@ -321,8 +330,7 @@ fn emitMapManagedKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     // Heap free block: recompute elem_ptr and free buffer at header (buf_ptr - 8)
     const heap_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const heap_keys_buf_ptr = try self.func().emitLoad(map_ptr, .ptr);
-    const heap_elem_size = try self.func().emitConstI64(String.size());
-    const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
+    const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, elem_size_val, .i64);
     const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_keys_buf_ptr, heap_offset, .ptr);
 
     // Free the buffer including header and jump to next
@@ -348,8 +356,7 @@ fn emitMapManagedKeysCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
 
 /// Emit cleanup code for Map values with COW semantics, checking the states array for occupied slots.
 /// Only decrefs buffers for slots where states[i] == 1 (OCCUPIED).
-/// Note: Currently uses String.size() since String is the only COW-semantics type.
-fn emitMapManagedValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
+fn emitMapManagedValuesCleanup(self: *AstToIr, map_ptr: ir.Value, elem_size: i32) !void {
     // Map layout:
     //   offset 32: values array (32 bytes) - buffer_ptr at offset 0 of Array
     //   offset 64: states array (32 bytes) - buffer_ptr at offset 0 of Array
@@ -442,9 +449,9 @@ fn emitMapManagedValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     const values_array_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
     const values_buf_ptr = try self.func().emitLoad(values_array_ptr.raw(), .ptr);
 
-    // Calculate element pointer: buf_ptr + i * 40 (String size)
-    const elem_size = try self.func().emitConstI64(String.size());
-    const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size, .i64);
+    // Calculate element pointer: buf_ptr + i * elem_size
+    const elem_size_val = try self.func().emitConstI64(elem_size);
+    const offset = try self.func().emitBinaryOp(.mul, occ_i, elem_size_val, .i64);
     const elem_ptr = try self.func().emitBinaryOp(.add, values_buf_ptr, offset, .ptr);
 
     // Check if heap mode: cap_flags & 3 == 1
@@ -469,7 +476,7 @@ fn emitMapManagedValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     const decref_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const decref_values_array_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
     const decref_values_buf_ptr = try self.func().emitLoad(decref_values_array_ptr.raw(), .ptr);
-    const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
+    const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size_val, .i64);
     const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_values_buf_ptr, decref_offset, .ptr);
 
     // Buffer header refcount: load buf_ptr from String, subtract 8 to get header
@@ -503,8 +510,7 @@ fn emitMapManagedValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
     const heap_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const heap_values_array_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(map_ptr), Map.VALUES_OFFSET);
     const heap_values_buf_ptr = try self.func().emitLoad(heap_values_array_ptr.raw(), .ptr);
-    const heap_elem_size = try self.func().emitConstI64(String.size());
-    const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, heap_elem_size, .i64);
+    const heap_offset = try self.func().emitBinaryOp(.mul, heap_i, elem_size_val, .i64);
     const heap_elem_ptr = try self.func().emitBinaryOp(.add, heap_values_buf_ptr, heap_offset, .ptr);
 
     // Free the buffer including header and jump to next

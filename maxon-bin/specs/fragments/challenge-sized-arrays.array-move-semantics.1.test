@@ -40,13 +40,12 @@ try_merge:
     %tmp_fieldptr.1 = getfieldptr ptr %arr 8
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_fieldptr.1 24
     %tmp_load.3 = load i32 %tmp_fieldptr.2
-    %tmp_sext = sext.i32.i64 i64 %tmp_load.3
-    %tmp_const.6 = const.i64 i64 3
-    %tmp_band = band i64 %tmp_sext %tmp_const.6
-    %tmp_const.7 = const.i64 i64 1
-    %tmp_icmp.1 = icmp.eq i64 %tmp_band %tmp_const.7
+    %tmp_const.6 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.3 %tmp_const.6
+    %tmp_const.7 = const.i32 i32 1
+    %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.7
     br.cond %tmp_icmp.1 @block4 @block6
-arr_decref:
+decref:
     %tmp_load.4 = load ptr %tmp_fieldptr.1
     %tmp_const.8 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.4 %tmp_const.8
@@ -57,12 +56,12 @@ arr_decref:
     %tmp_const.10 = const.i64 i64 0
     %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.10
     br.cond %tmp_icmp.2 @block5 @block6
-arr_decref_free:
+decref_free:
     %tmp_load.6 = load ptr %tmp_fieldptr.1
     %tmp_sub.2 = sub ptr %tmp_load.6 %tmp_const.8
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block6
-arr_decref_end:
+decref_end:
     ret %tmp_load.2
 }
 

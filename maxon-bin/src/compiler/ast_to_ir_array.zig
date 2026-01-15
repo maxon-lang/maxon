@@ -8,7 +8,7 @@ const debug = @import("debug.zig");
 const struct_helpers = @import("ir_struct_helpers.zig");
 const types = @import("ast_to_ir_types.zig");
 const ast_to_ir = @import("4-ast_to_ir.zig");
-const string = @import("ast_to_ir_string.zig");
+const string = @import("ast_to_ir_managed.zig");
 const cleanup = @import("ast_to_ir_cleanup.zig");
 
 const AstToIr = ast_to_ir.AstToIr;
@@ -129,12 +129,10 @@ pub const ManagedArray = struct {
     /// Check if the ManagedArray is in heap mode (flags & 3 == 1)
     pub fn isHeapMode(func: *ir.Function, ptr: ir.ManagedArrayPtr) !ir.Value {
         const flags = try loadFlags(func, ptr);
-        // Sign-extend flags from i32 to i64 for comparison
-        const flags_i64 = try func.emitUnaryOp(.sext_i32_i64, flags, .i64);
-        const three = try func.emitConstI64(3);
-        const masked = try func.emitBinaryOp(.band, flags_i64, three, .i64);
-        const one = try func.emitConstI64(1);
-        return func.emitBinaryOp(.icmp_eq, masked, one, .i64);
+        const three = try func.emitConstI32(3);
+        const masked = try func.emitBinaryOp(.band, flags, three, .i32);
+        const one = try func.emitConstI32(1);
+        return func.emitBinaryOp(.icmp_eq, masked, one, .i32);
     }
 
     /// Load the mode value (flags & 3)
@@ -314,9 +312,9 @@ pub fn emitManagedArrayIncref(self: *AstToIr, ptr: ir.ManagedArrayPtr, tag: []co
     // Create blocks for conditional incref
     const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
     const incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("arr_incref");
+    _ = try self.func().addBlock("incref");
     const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("arr_incref_end");
+    _ = try self.func().addBlock("incref_end");
 
     // Defer end block
     var deferred = try ast_to_ir.DeferredBlocks.init(self.allocator, 1);
@@ -367,11 +365,11 @@ pub fn emitManagedArrayDecref(self: *AstToIr, ptr: ir.ManagedArrayPtr, tag: []co
     // Create blocks for conditional decref
     const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
     const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("arr_decref");
+    _ = try self.func().addBlock("decref");
     const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("arr_decref_free");
+    _ = try self.func().addBlock("decref_free");
     const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("arr_decref_end");
+    _ = try self.func().addBlock("decref_end");
 
     // Defer end and free blocks
     var deferred = try ast_to_ir.DeferredBlocks.init(self.allocator, 2);
@@ -460,19 +458,20 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
     };
 
     // Determine element size and whether it's a struct (with monomorphization fallback)
-    const ElemInfo = struct { size: i32, is_struct: bool, name: ?[]const u8, has_managed_buffer: bool = false };
+    const ElemInfo = struct { size: i32, is_struct: bool, name: ?[]const u8, has_managed_buffer: bool = false, managed_buffer_offset: i32 = 0 };
     const elem_info: ElemInfo = if (elem_type_name) |tn| blk: {
         // First try direct lookup
         if (self.type_map.get(tn)) |type_info| {
             if (type_info == .struct_type) {
-                break :blk ElemInfo{ .size = type_info.struct_type.size, .is_struct = true, .name = tn, .has_managed_buffer = type_info.struct_type.has_managed_buffer };
+                break :blk ElemInfo{ .size = type_info.struct_type.size, .is_struct = true, .name = tn, .has_managed_buffer = type_info.struct_type.has_managed_buffer, .managed_buffer_offset = type_info.struct_type.managed_buffer_offset };
             }
         }
         // Try with monomorphization for generic types like Array$String
         if (self.getStructSizeWithMonomorphization(tn)) |size| {
-            // After monomorphization, look up has_managed_buffer
+            // After monomorphization, look up has_managed_buffer and managed_buffer_offset
             const hmb = if (self.type_map.get(tn)) |ti| ti == .struct_type and ti.struct_type.has_managed_buffer else false;
-            break :blk ElemInfo{ .size = size, .is_struct = true, .name = tn, .has_managed_buffer = hmb };
+            const mbo = if (self.type_map.get(tn)) |ti| if (ti == .struct_type) ti.struct_type.managed_buffer_offset else 0 else 0;
+            break :blk ElemInfo{ .size = size, .is_struct = true, .name = tn, .has_managed_buffer = hmb, .managed_buffer_offset = mbo };
         }
         // Must be a primitive type - get its actual size
         if (types.getPrimitiveTypeInfo(tn)) |prim_info| {
@@ -549,12 +548,12 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
         const is_success = try self.func().emitBinaryOp(.icmp_eq, tag, zero_const, .i64);
 
         // Create conditional block for incref - using simple pattern without deferred blocks
-        // since emitStringIncref will create its own blocks
+        // since emitManagedArrayIncref will create its own blocks
         const entry_idx: u32 = @intCast(self.func().blocks.items.len - 1);
         const incref_idx: u32 = @intCast(self.func().blocks.items.len);
         _ = try self.func().addBlock("array_get_incref");
 
-        // We'll add the end block AFTER emitStringIncref to avoid index confusion
+        // We'll add the end block AFTER emitManagedArrayIncref to avoid index confusion
         // For now, emit conditional branch with placeholder (we'll fix the end index)
         const branch_instr_idx = self.func().blocks.items[entry_idx].instructions.items.len;
         try self.func().blocks.items[entry_idx].instructions.append(self.allocator, .{
@@ -563,10 +562,11 @@ pub fn convertManagedArrayIndex(self: *AstToIr, managed_ptr: ir.Value, index_exp
         });
 
         // In incref block: increment refcount of the element at value_slot
-        // emitStringIncref will create its own blocks and end up in its incref_end block
-        try string.emitStringIncref(self, ir.toStringPtr(value_slot.raw()), "<array index>");
+        // emitManagedArrayIncref will create its own blocks and end up in its incref_end block
+        const elem_managed_ptr = try string.getManagedArrayPtr(self, value_slot.raw(), elem_info.managed_buffer_offset);
+        try emitManagedArrayIncref(self, elem_managed_ptr, "<array index>");
 
-        // After emitStringIncref, we're in its incref_end block. We need to branch
+        // After emitManagedArrayIncref, we're in its incref_end block. We need to branch
         // to our end block, so emit the branch NOW (before adding the end block).
         // The end block will be at the current length after we add it.
         const end_idx: u32 = @intCast(self.func().blocks.items.len);

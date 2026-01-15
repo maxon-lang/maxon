@@ -171,11 +171,6 @@ pub const TypedValue = struct {
         return .{ .val = self.value };
     }
 
-    /// Convert to StringPtr (use when you know the type is String)
-    pub fn asStringPtr(self: TypedValue) ir.StringPtr {
-        return .{ .val = self.value };
-    }
-
     /// Convert to ManagedArrayPtr (use when you know the type is an array)
     pub fn asManagedArrayPtr(self: TypedValue) ir.ManagedArrayPtr {
         return .{ .val = self.value };

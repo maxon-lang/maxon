@@ -10,7 +10,7 @@ const ValueType = types.ValueType;
 const OwnershipState = types.OwnershipState;
 const ConvertError = types.ConvertError;
 
-const string = @import("ast_to_ir_string.zig");
+const string = @import("ast_to_ir_managed.zig");
 const cstring = @import("ast_to_ir_cstring.zig");
 const array_helpers = @import("ast_to_ir_array.zig");
 const ManagedArray = string.ManagedArray;
@@ -20,13 +20,13 @@ const AstToIr = ast_to_ir.AstToIr;
 const DeferredBlocks = ast_to_ir.DeferredBlocks;
 
 // ============================================================================
-// Temporary String Cleanup
+// Temporary Managed Buffer Cleanup
 // ============================================================================
 
-/// Clean up all temporary strings and clear the list
-pub fn cleanupTemporaryStrings(self: *AstToIr) !void {
-    for (self.temporary_strings.items) |str_ptr| {
-        try string.emitStringDecref(self, ir.toStringPtr(str_ptr), "<temp>");
+/// Clean up all temporary managed buffers (strings, etc.) and clear the list
+pub fn cleanupTemporaryManagedBuffers(self: *AstToIr) !void {
+    for (self.temporary_strings.items) |managed_ptr| {
+        try array_helpers.emitManagedArrayDecref(self, ir.toManagedArrayPtr(managed_ptr), "<temp>", "temp cleanup");
     }
     self.temporary_strings.clearRetainingCapacity();
 }
@@ -56,10 +56,10 @@ pub fn isInTemporaries(self: *AstToIr, value: ir.Value) bool {
 // Borrow Checking Helpers
 // ============================================================================
 
-/// Mark a source string variable as borrowed and record the borrower
-pub fn markStringBorrowed(self: *AstToIr, source_var_name: []const u8) void {
+/// Mark a variable with managed buffer as borrowed and record the borrower
+pub fn markManagedBorrowed(self: *AstToIr, source_var_name: []const u8) void {
     if (self.var_map.getPtr(source_var_name)) |var_info| {
-        if (string.isStringType(var_info.ty)) {
+        if (var_info.ty == .struct_type and var_info.ty.struct_type.has_managed_buffer) {
             var_info.borrow_state = .borrowed;
         }
     }
@@ -74,12 +74,12 @@ pub fn clearBorrowFromParent(self: *AstToIr, slice_var_info: *const VarInfo) voi
     }
 }
 
-/// Check if a string variable can be modified (not borrowed)
+/// Check if a variable with managed buffer can be modified (not borrowed)
 /// Returns an error if the variable is currently borrowed
-pub fn checkStringNotBorrowed(self: *AstToIr, var_name: []const u8) ConvertError!void {
+pub fn checkManagedNotBorrowed(self: *AstToIr, var_name: []const u8) ConvertError!void {
     if (self.var_map.get(var_name)) |var_info| {
-        if (string.isStringType(var_info.ty) and var_info.borrow_state == .borrowed) {
-            const msg = std.fmt.allocPrint(self.allocator, "Cannot modify string '{s}' while it is borrowed", .{var_name}) catch {
+        if (var_info.ty == .struct_type and var_info.ty.struct_type.has_managed_buffer and var_info.borrow_state == .borrowed) {
+            const msg = std.fmt.allocPrint(self.allocator, "Cannot modify '{s}' while it is borrowed", .{var_name}) catch {
                 self.reportError(.E020, var_name);
                 return error.SemanticError;
             };
@@ -94,14 +94,14 @@ pub fn checkStringNotBorrowed(self: *AstToIr, var_name: []const u8) ConvertError
     }
 }
 
-/// Check that no borrowed strings go out of scope
+/// Check that no borrowed variables with managed buffers go out of scope
 /// Called before freeing heap variables at scope end
 pub fn checkNoOutstandingBorrows(self: *AstToIr) ConvertError!void {
     var iter = self.var_map.iterator();
     while (iter.next()) |entry| {
         const var_info = entry.value_ptr.*;
-        if (string.isStringType(var_info.ty) and var_info.borrow_state == .borrowed) {
-            const msg = std.fmt.allocPrint(self.allocator, "String '{s}' goes out of scope while still borrowed", .{entry.key_ptr.*}) catch {
+        if (var_info.ty == .struct_type and var_info.ty.struct_type.has_managed_buffer and var_info.borrow_state == .borrowed) {
+            const msg = std.fmt.allocPrint(self.allocator, "Variable '{s}' goes out of scope while still borrowed", .{entry.key_ptr.*}) catch {
                 self.reportError(.E021, entry.key_ptr.*);
                 return error.SemanticError;
             };
@@ -513,8 +513,8 @@ pub fn freeHeapVars(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(O
 /// Free all heap allocations including temporaries.
 pub fn freeHeapAllocations(self: *AstToIr) !void {
     try freeHeapVars(self, null);
-    // Clean up any remaining temporary strings (e.g., method call arguments)
-    try cleanupTemporaryStrings(self);
+    // Clean up any remaining temporary managed buffers (e.g., method call arguments)
+    try cleanupTemporaryManagedBuffers(self);
     // Also clean up runtime-initialized constants that have heap resources (Maps, Arrays, etc.)
     try freeRuntimeConstants(self);
 }

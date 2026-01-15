@@ -8,10 +8,9 @@ const intrinsics_registry = @import("intrinsics_registry.zig");
 const struct_helpers = @import("ir_struct_helpers.zig");
 
 // Import type-specific modules for layouts
-const string = @import("ast_to_ir_string.zig");
+const string = @import("ast_to_ir_managed.zig");
 const array = @import("ast_to_ir_array.zig");
 const ManagedArray = string.ManagedArray;
-const String = string.String;
 const Array = array.Array;
 
 // Forward reference to main AstToIr module
@@ -45,15 +44,6 @@ fn intrinsicLoadI32Field(self: *AstToIr, call: ast.CallExpr, offset: i32) Conver
     const arg = try self.convertExpression(call.args[0]);
     const value = try struct_helpers.loadI32AsI64(self.func(), ir.toStructPtr(arg.value), offset);
     return .{ .value = value, .ty = .{ .primitive = .int } };
-}
-
-/// Initialize a heap-allocated String struct (40 bytes with _iterPos field)
-/// Calls initHeapManagedArray for the __ManagedArray part
-fn initHeapString(self: *AstToIr, string_ptr: ir.Value, buffer: ir.Value, len_i64: ir.Value) ConvertError!void {
-    try initHeapManagedArray(self, string_ptr, buffer, len_i64);
-    // Add _iterPos = 0 at offset 32
-    const zero_i64 = try self.func().emitConstI64(0);
-    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(string_ptr), 32, zero_i64);
 }
 
 /// Initialize a heap-allocated __ManagedArray struct (32 bytes for strings with mode=1)
@@ -277,6 +267,8 @@ const ElemInfo = struct {
     type_name: ?[]const u8,
     /// True if the element type has COW semantics (has_managed_buffer flag set)
     has_managed_buffer: bool = false,
+    /// Offset of __ManagedArray within the struct (for types with has_managed_buffer)
+    managed_buffer_offset: i32 = 0,
 };
 
 /// Direction for array shift operations
@@ -297,6 +289,7 @@ fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ConvertError!E
                     .is_enum = false,
                     .type_name = elem_type_name,
                     .has_managed_buffer = type_info.struct_type.has_managed_buffer,
+                    .managed_buffer_offset = type_info.struct_type.managed_buffer_offset,
                 };
             } else if (type_info == .enum_type) {
                 return .{
@@ -522,7 +515,8 @@ fn intrinsicManagedArraySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     // The source variable may still be cleaned up at scope exit (decref).
     // When the array is destroyed, it will decref each element.
     if (value.ty == .struct_type and value.ty.struct_type.has_managed_buffer) {
-        try string.emitStringIncref(self, ir.toStringPtr(value.value), "<array_store>");
+        const managed_ptr = try string.getManagedArrayPtr(self, value.value, value.ty.struct_type.managed_buffer_offset);
+        try array.emitManagedArrayIncref(self, managed_ptr, "<array_store>");
     }
 
     return .{ .value = 0, .ty = .{ .primitive = .void } };
@@ -693,7 +687,8 @@ fn intrinsicMapGetInitKey(self: *AstToIr, call: ast.CallExpr) ConvertError!Typed
             // Copy the struct
             try self.func().emitMemcpy(new_ptr, elem_ptr.asRawPtr(), @intCast(elem_info.size));
             // Incref the buffer header so caller has their own reference
-            try string.emitStringIncref(self, ir.toStringPtr(new_ptr.raw()), "<map_key>");
+            const managed_ptr = try string.getManagedArrayPtr(self, new_ptr.raw(), elem_info.managed_buffer_offset);
+            try array.emitManagedArrayIncref(self, managed_ptr, "<map_key>");
             return .{ .value = new_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
         }
 
@@ -730,7 +725,8 @@ fn intrinsicMapGetInitValue(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
             // Copy the struct
             try self.func().emitMemcpy(new_ptr, elem_ptr.asRawPtr(), @intCast(elem_info.size));
             // Incref the buffer header so caller has their own reference
-            try string.emitStringIncref(self, ir.toStringPtr(new_ptr.raw()), "<map_value>");
+            const managed_ptr = try string.getManagedArrayPtr(self, new_ptr.raw(), elem_info.managed_buffer_offset);
+            try array.emitManagedArrayIncref(self, managed_ptr, "<map_value>");
             return .{ .value = new_ptr.raw(), .ty = try self.typeNameToValueType(type_name) };
         }
 
@@ -1042,6 +1038,12 @@ fn intrinsicManagedArrayToCstring(self: *AstToIr, call: ast.CallExpr) ConvertErr
     const one_ref = try self.func().emitConstI64(1);
     const new_ref = try self.func().emitBinaryOp(.add, old_ref, one_ref, .i64);
     try self.func().emitStore(header_ptr, new_ref);
+
+    // Emit tracking call for incref
+    if (self.track_memory) {
+        const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+        try self.func().emitTrackIncref("<cstr>", new_ref_i32);
+    }
 
     const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("cstr_end");
@@ -1782,12 +1784,13 @@ fn emitReadPipeToString(self: *AstToIr, pipe_handle: ir.Value) ConvertError!ir.V
     // Free temp buffer
     _ = try externCall(self, "kernel32.dll", "HeapFree", &.{ heap, zero, buffer }, .i64);
 
-    // Allocate String struct (40 bytes)
-    const string_struct_size = try self.func().emitConstI64(String.size());
-    const string_ptr = try emitHeapAllocWin(self, heap, string_struct_size);
+    // Create __ManagedArray on the stack with the buffer
+    const managed_ptr = try ManagedArray.alloca(self.func());
+    const mode_one = try self.func().emitConstI32(1); // heap-refcounted
+    try ManagedArray.init(self.func(), managed_ptr, string_buffer, bytes_read, bytes_read, mode_one);
 
-    // Initialize String struct
-    try initHeapString(self, string_ptr, string_buffer.raw(), bytes_read);
+    // Create String via stdlib's BuiltinStringLiteral.init
+    const string_ptr = try string.emitStringFromManaged(self, managed_ptr);
 
     return string_ptr;
 }

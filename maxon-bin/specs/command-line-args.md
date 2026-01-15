@@ -173,11 +173,17 @@ MOVE: result
 INCREF: <array element return> -> rc=3
 INCREF: <array element return> -> rc=3
 INCREF: <array element return> -> rc=3
-fooMOVE: managed
+INCREF: <cstr> -> rc=4
+fooDECREF: <cstr cleanup> -> rc=3
+MOVE: managed
 
-barMOVE: managed
+INCREF: <cstr> -> rc=4
+barDECREF: <cstr cleanup> -> rc=3
+MOVE: managed
 
-bazMOVE: managed
+INCREF: <cstr> -> rc=4
+bazDECREF: <cstr cleanup> -> rc=3
+MOVE: managed
 
 DECREF: arg1 -> rc=2
 DECREF: arg2 -> rc=2
@@ -193,8 +199,8 @@ Allocated: 180 bytes
 Freed:     180 bytes
 Leaked:    0 bytes
 Moves:     7
-Increfs:   6
-Decrefs:   7
+Increfs:   9
+Decrefs:   10
 ```
 
 <!-- test: iterate-args -->

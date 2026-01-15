@@ -38,13 +38,11 @@ pub fn Ptr(comptime Tag: type) type {
 }
 
 // Marker types for specific structs (zero-size, compile-time only)
-pub const StringTag = struct {};
 pub const ManagedArrayTag = struct {};
 pub const MapTag = struct {};
 pub const ErrorUnionTag = struct {};
 
 // Type aliases for common pointer types
-pub const StringPtr = Ptr(StringTag); // Pointer to String struct
 pub const ManagedArrayPtr = Ptr(ManagedArrayTag); // Pointer to __ManagedArray
 pub const MapPtr = Ptr(MapTag); // Pointer to Map struct
 pub const ErrorUnionPtr = Ptr(ErrorUnionTag); // Pointer to error union
@@ -73,11 +71,6 @@ pub const RawPtr = struct {
 
     /// Convert raw memory to struct pointer (after you've initialized it as a struct)
     pub fn asStruct(self: RawPtr) StructPtr {
-        return .{ .val = self.val };
-    }
-
-    /// Convert to specific typed pointer
-    pub fn asStringPtr(self: RawPtr) StringPtr {
         return .{ .val = self.val };
     }
 
@@ -147,11 +140,6 @@ pub fn toRawPtr(val: Value) RawPtr {
 
 /// Convert raw Value to ElemPtr
 pub fn toElemPtr(val: Value) ElemPtr {
-    return .{ .val = val };
-}
-
-/// Convert raw Value to StringPtr
-pub fn toStringPtr(val: Value) StringPtr {
     return .{ .val = val };
 }
 

@@ -3,10 +3,12 @@
 const std = @import("std");
 const ir = @import("ir.zig");
 const types = @import("ast_to_ir_types.zig");
-const string = @import("ast_to_ir_string.zig");
+const string = @import("ast_to_ir_managed.zig");
 const ManagedArray = string.ManagedArray;
 
-const AstToIr = @import("4-ast_to_ir.zig").AstToIr;
+const ast_to_ir = @import("4-ast_to_ir.zig");
+const AstToIr = ast_to_ir.AstToIr;
+const DeferredBlocks = ast_to_ir.DeferredBlocks;
 
 // ============================================================================
 // CString Layout (24 bytes)
@@ -19,10 +21,10 @@ const AstToIr = @import("4-ast_to_ir.zig").AstToIr;
 /// - length: i64 (8 bytes) - length of string (not including null terminator)
 /// - managed: *__ManagedArray (8 bytes) - pointer to parent ManagedArray if borrowed, null if owned
 pub const CString = struct {
-    const SIZE: i32 = 24;
-    const DATA_OFFSET: i32 = 0;
-    const LENGTH_OFFSET: i32 = 8;
-    const MANAGED_OFFSET: i32 = 16;
+    pub const SIZE: i32 = 24;
+    pub const DATA_OFFSET: i32 = 0;
+    pub const LENGTH_OFFSET: i32 = 8;
+    pub const MANAGED_OFFSET: i32 = 16;
 
     comptime {
         if (MANAGED_OFFSET + 8 != SIZE) {
@@ -97,24 +99,47 @@ pub fn emitCstringCleanup(self: *AstToIr, cstring_ptr: ir.Value) !void {
     const null_val = try self.func().emitConstI64(0);
     const is_not_null = try self.func().emitBinaryOp(.icmp_ne, managed_ptr, null_val, .i64);
 
-    // Create all blocks in execution order
+    // Create all blocks upfront
     const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
-
     const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("cstr_decref");
+    const do_decref_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cstr_do_decref");
+    const do_free_managed_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cstr_free_managed");
+    const skip_decref_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cstr_skip_decref");
+    const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cstr_free");
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("cstr_cleanup_end");
 
-    // === DECREF BLOCK: managed != null, decref the __ManagedString ===
+    // Defer all blocks except entry (6 blocks: decref, do_decref, free_managed, skip_decref, free, end)
+    var deferred = try DeferredBlocks.init(self.allocator, 6);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 6);
+
+    // Entry block: branch based on managed != null
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_not_null }, .{ .block_ref = decref_block_idx }, .{ .block_ref = free_block_idx } },
+    });
+
+    // === DECREF BLOCK: managed != null, check if heap mode ===
+    try deferred.restore(self, 5); // decref_block is at index 5 in deferred
     const cap_ptr = try ManagedArray.getFlagsPtr(self.func(), ir.toManagedArrayPtr(managed_ptr));
     const cap_flags = try self.func().emitLoad(cap_ptr.raw(), .i32);
     const three = try self.func().emitConstI32(3);
     const mode = try self.func().emitBinaryOp(.band, cap_flags, three, .i32);
     const one_i32 = try self.func().emitConstI32(1);
     const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one_i32, .i32);
+    try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = do_decref_idx }, .{ .block_ref = skip_decref_idx } },
+    });
 
-    const do_decref_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("cstr_do_decref");
-
-    // In do_decref block: decrement refcount in buffer header and free if zero
+    // === DO_DECREF BLOCK: decrement refcount, check if zero ===
+    try deferred.restore(self, 4); // do_decref_block
     const decref_buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
     const eight_decref = try self.func().emitConstI64(8);
     const header_ptr = try self.func().emitBinaryOp(.sub, decref_buf_ptr, eight_decref, .ptr);
@@ -122,69 +147,39 @@ pub fn emitCstringCleanup(self: *AstToIr, cstring_ptr: ir.Value) !void {
     const one_ref = try self.func().emitConstI64(1);
     const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i64);
     try self.func().emitStore(header_ptr, new_ref);
+
+    // Emit tracking call for decref
+    if (self.track_memory) {
+        const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+        try self.func().emitTrackDecref("<cstr cleanup>", new_ref_i32);
+    }
+
     const zero = try self.func().emitConstI64(0);
     const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i64);
-
-    const do_free_managed_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("cstr_free_managed");
-
-    // In free managed block: free the buffer including header
-    const free_buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-    const eight_free = try self.func().emitConstI64(8);
-    const free_header_ptr = try self.func().emitBinaryOp(.sub, free_buf_ptr, eight_free, .ptr);
-    try self.func().emitHeapFree(ir.toRawPtr(free_header_ptr), "string cleanup");
-
-    const skip_decref_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("cstr_skip_decref");
-
-    const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("cstr_free");
-
-    // === FREE BLOCK: managed == null, free the data pointer ===
-    const data_ptr = try self.func().emitLoad(cstring_ptr, .ptr);
-    try self.func().emitHeapFree(ir.toRawPtr(data_ptr), "cstring release");
-
-    const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("cstr_cleanup_end");
-
-    // Now go back and add all the branch instructions
-
-    // Entry: if managed != null -> decref, else -> free
-    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
-        .op = .br_cond,
-        .operands = .{ .{ .value = is_not_null }, .{ .block_ref = decref_block_idx }, .{ .block_ref = free_block_idx } },
-    });
-
-    // Decref block: if heap mode -> do_decref, else -> skip_decref
-    try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
-        .op = .br_cond,
-        .operands = .{ .{ .value = is_heap }, .{ .block_ref = do_decref_idx }, .{ .block_ref = skip_decref_idx } },
-    });
-
-    // Do_decref block: if refcount zero -> free_managed, else -> skip_decref
     try self.func().blocks.items[do_decref_idx].instructions.append(self.allocator, .{
         .op = .br_cond,
         .operands = .{ .{ .value = is_zero }, .{ .block_ref = do_free_managed_idx }, .{ .block_ref = skip_decref_idx } },
     });
 
-    // Free_managed block: goto end
-    try self.func().blocks.items[do_free_managed_idx].instructions.append(self.allocator, .{
-        .op = .br,
-        .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
-        .result = null,
-    });
+    // === FREE_MANAGED BLOCK: free the buffer including header ===
+    try deferred.restore(self, 3); // free_managed_block
+    const free_buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
+    const eight_free = try self.func().emitConstI64(8);
+    const free_header_ptr = try self.func().emitBinaryOp(.sub, free_buf_ptr, eight_free, .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(free_header_ptr), "string cleanup");
+    try self.func().emitBr(end_block_idx);
 
-    // Skip_decref block: goto end
-    try self.func().blocks.items[skip_decref_idx].instructions.append(self.allocator, .{
-        .op = .br,
-        .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
-        .result = null,
-    });
+    // === SKIP_DECREF BLOCK: goto end ===
+    try deferred.restore(self, 2); // skip_decref_block
+    try self.func().emitBr(end_block_idx);
 
-    // Free block: goto end
-    try self.func().blocks.items[free_block_idx].instructions.append(self.allocator, .{
-        .op = .br,
-        .operands = .{ .{ .block_ref = end_block_idx }, .none, .none },
-        .result = null,
-    });
+    // === FREE BLOCK: managed == null, free the data pointer ===
+    try deferred.restore(self, 1); // free_block
+    const data_ptr = try self.func().emitLoad(cstring_ptr, .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(data_ptr), "cstring release");
+    try self.func().emitBr(end_block_idx);
+
+    // === END BLOCK ===
+    try deferred.restore(self, 0); // end_block
+    // End block is empty, control falls through to next instruction
 }

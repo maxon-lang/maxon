@@ -101,20 +101,20 @@ end 'Iterable'
 
 // Sized - types that have a count/length
 export interface Sized
-    function count() returns int
+	function count() returns int
 end 'Sized'
 
 // Indexed - types with integer-based positional access
 export interface Indexed uses Element
-    function get(index int) returns Element throws ArrayError
-    function set(index int, value Element)
+	function get(index int) returns Element throws ArrayError
+	function set(index int, value Element)
 end 'Indexed'
 
 // Unique - set-like types that store unique elements
 export interface Unique uses Element
-    function insert(element Element)
-    function contains(element Element) returns bool
-    function remove(element Element) returns bool
+	function insert(element Element)
+	function contains(element Element) returns bool
+	function remove(element Element) returns bool
 end 'Unique'
 
 // Stringable - enables custom types to participate in string interpolation
@@ -143,20 +143,20 @@ export interface Dictionary uses Key, Value
 end 'Dictionary'
 
 // InitableFromStringLiteral - types that can be initialized from string literals
-// The compiler creates a String from the literal and passes it to init().
+// The compiler passes the __ManagedArray directly to init().
 // This follows the Swift ExpressibleByStringLiteral pattern.
-// The compiler detects conformance and transforms: var x MyType = "hello" -> var x = MyType.init(String.init(managed))
-// Note: String itself is special-cased by the compiler (uses __ManagedArray directly).
+// Example: var x MyType = "hello" -> var x = MyType.init(__ManagedArray from literal)
+// User types should construct a String if needed: String.init(value)
 export interface InitableFromStringLiteral
-	static function init(value String) returns Self
+	static function init(value __ManagedArray) returns Self
 end 'InitableFromStringLiteral'
 
 // InitableFromCharLiteral - types that can be initialized from character literals
 // Similar to InitableFromStringLiteral but for single-character literals like 'A' or '🎉'
-// The compiler creates a Character from the literal and passes it to init().
-// Note: Character itself is special-cased by the compiler (uses __ManagedArray directly).
+// The compiler passes the __ManagedArray directly to init().
+// User types should construct a Character if needed: Character.init(value)
 export interface InitableFromCharLiteral
-	static function init(value Character) returns Self
+	static function init(value __ManagedArray) returns Self
 end 'InitableFromCharLiteral'
 
 // InitableFromArrayLiteral - types that can be initialized from array literals
@@ -178,5 +178,5 @@ export interface InitableFromDictionaryLiteral uses Key, Value
 end 'InitableFromDictionaryLiteral'
 
 export interface Parsable
-    static function fromString(input String) returns Self throws Error
+	static function fromString(input String) returns Self throws Error
 end 'Parsable'
