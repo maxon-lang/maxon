@@ -6,18 +6,6 @@
 // - Automatic resize at 75% load factor
 // - Keys must implement Hashable interface
 //
-// **Slot States**:
-// - 0 = EMPTY (never used)
-// - 1 = OCCUPIED (has valid key-value pair)
-// - 2 = DELETED (tombstone for probing continuity)
-//
-// **Usage**:
-// ```maxon
-// var m = Map from ["a": 1, "b": 2, "c": 3]
-// m.insert(key: "d", value: 4)
-// var v = try m.get(key: "b") otherwise 0
-// print("found: {v}")
-// ```
 
 enum SlotState
 	Empty
@@ -25,9 +13,8 @@ enum SlotState
 	Deleted
 end 'SlotState'
 
-// Map is special-cased by the compiler for map literal initialization.
-// It receives __ManagedArrays directly rather than going through InitableFromDictionaryLiteral.
-export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value), Iterable with (Pair with (Key, Value))
+// Map receives __ManagedArrays directly for literal initialization via BuiltinDictionaryLiteral.
+export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary with (Key, Value), Iterable with (Pair with (Key, Value))
 	var keys Array of Key              // Key storage
 	var values Array of Value          // Value storage
 	var states Array of SlotState      // Slot states
@@ -35,10 +22,8 @@ export type Map uses Key, Value is Builtin, Sized, Dictionary with (Key, Value),
 	var capacity int                   // Total slots
 	var iterIndex int                  // Iteration state
 
-	// Internal init used by compiler for map literal initialization
-	// Called by the compiler for `Map from ["a": 1, "b": 2]` syntax
-	// The keys and values are received as raw __ManagedArray containing typed elements
-	static function Builtin.init(initKeys __ManagedArray, initValues __ManagedArray) returns Self
+	// Default type for dictionary literals - compiler discovers this via BuiltinDictionaryLiteral interface
+	static function BuiltinDictionaryLiteral.init(initKeys __ManagedArray, initValues __ManagedArray) returns Self
 		// Get number of elements in the managed arrays
 		var numElements = __managed_array_len(initKeys)
 

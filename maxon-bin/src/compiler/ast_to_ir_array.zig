@@ -724,9 +724,9 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
         break :blk try emitManagedArray(self, buffer, elem_count, elem_count);
     };
 
-    // Builtin types receive __ManagedArray directly
+    // Types implementing BuiltinArrayLiteral receive __ManagedArray directly
     // Other types receive an Array (we create one first, then pass it to their init)
-    const is_builtin_type = self.isBuiltinType(type_name);
+    const is_builtin_type = self.isBuiltinLiteralType(type_name, "BuiltinArrayLiteral");
 
     // For non-Builtin types, first create an Array from the __ManagedArray
     var init_arg: ir.Value = undefined;
@@ -834,16 +834,23 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
 pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) ConvertError!TypedValue {
     const elements = arr_lit.elements;
 
+    // Find the type that implements BuiltinArrayLiteral interface
+    const base_type_name = self.findDefaultLiteralType("BuiltinArrayLiteral") orelse {
+        self.reportError(.E006, "no type implements BuiltinArrayLiteral interface for array literals");
+        return error.SemanticError;
+    };
+
     if (elements.len == 0) {
         const managed_ptr = try emitEmptyManagedArray(self);
 
         // Get or create the Array$int type (default element type for empty arrays)
         // Extract name and size immediately as later operations may invalidate the type_map pointer
-        const array_type_info = try self.getOrCreateArrayType("int");
-        const array_type_name = array_type_info.name;
+        var type_args = [_][]const u8{"int"};
+        const array_type_name = try self.getOrCreateMonomorphizedType(base_type_name, &type_args);
+        const array_type_info = &self.type_map.getPtr(array_type_name).?.struct_type;
         const array_size = array_type_info.size;
 
-        // Call Array$int$init to create the actual Array struct
+        // Call init method directly
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
         try self.module.trackString(init_func_name);
 
@@ -946,13 +953,13 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
     else
         elem_type.toMaxonName();
 
-    // Get or create the Array$<elem> type - extract name and size immediately
-    // as later operations may invalidate the type_map pointer
-    const array_type_info = try self.getOrCreateArrayType(elem_name);
-    const array_type_name = array_type_info.name;
+    // Get or create the monomorphized type using the discovered base type
+    var type_args = [_][]const u8{elem_name};
+    const array_type_name = try self.getOrCreateMonomorphizedType(base_type_name, &type_args);
+    const array_type_info = &self.type_map.getPtr(array_type_name).?.struct_type;
     const array_size = array_type_info.size;
 
-    // Call Array$<elem>$init to create the actual Array struct
+    // Call init method directly
     const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
     try self.module.trackString(init_func_name);
 

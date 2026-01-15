@@ -171,7 +171,7 @@ pub const ErrorCode = enum {
         .{ .code = "E052", .message = "arguments must include parameter name" },
         .{ .code = "E053", .message = "bracket indexing not supported" },
         .{ .code = "E054", .message = "main cannot throw" },
-        .{ .code = "E055", .message = "if try requires a throwing function call" },
+        .{ .code = "E055", .message = "try requires a throwing function" },
         .{ .code = "E056", .message = "generic type instantiation requires '{}'" },
         .{ .code = "E057", .message = "throwing function requires try" },
         .{ .code = "E058", .message = "otherwise requires try expression" },

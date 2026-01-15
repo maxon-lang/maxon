@@ -2648,6 +2648,8 @@ pub const Parser = struct {
                         .method_name = field_token.text,
                         .args = try args.toOwnedSlice(self.allocator),
                         .named_args = try named_args.toOwnedSlice(self.allocator),
+                        .method_line = field_token.line,
+                        .method_column = field_token.column,
                     } };
                 } else {
                     const base_ptr = try self.createExpr(expr);

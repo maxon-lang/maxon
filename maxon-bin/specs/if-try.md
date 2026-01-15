@@ -372,5 +372,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E055: specs/fragments/if-try.error.if-try-non-throwing.1.test:7:5: if try requires a throwing function call: 'expression does not throw'
+error E055: specs/fragments/if-try.error.if-try-non-throwing.1.test:7:5: try requires a throwing function: ''noThrow' does not throw'
 ```

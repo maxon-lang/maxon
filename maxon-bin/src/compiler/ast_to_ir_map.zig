@@ -529,7 +529,7 @@ fn emitMapManagedValuesCleanup(self: *AstToIr, map_ptr: ir.Value) !void {
 }
 /// Convert a map literal expression to IR.
 /// Creates a Map instance by allocating temporary buffers for keys and values,
-/// then calling the Map$init method with InitableFromDictionaryLiteral interface.
+/// then calling the Map$init method with BuiltinDictionaryLiteral interface.
 pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ast_to_ir.ConvertError!ast_to_ir.TypedValue {
     const entries = map_lit.entries;
 
@@ -539,6 +539,12 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ast_to_ir.
         self.reportError(.E006, "empty map literal requires type annotation");
         return error.UnknownType;
     }
+
+    // Find the type that implements BuiltinDictionaryLiteral interface
+    const base_type_name = self.findDefaultLiteralType("BuiltinDictionaryLiteral") orelse {
+        self.reportError(.E006, "no type implements BuiltinDictionaryLiteral interface for map literals");
+        return error.SemanticError;
+    };
 
     // Infer key and value types from the first entry
     const first_key_typed = try self.convertExpression(entries[0].key.*);
@@ -557,9 +563,9 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ast_to_ir.
 
     debug.astToIr("Map literal: {d} entries, key type={s}, value type={s}", .{ entries.len, key_type_name, value_type_name });
 
-    // Build the monomorphized Map type name: Map$KeyType$ValueType
+    // Build the monomorphized Map type name using discovered base type
     var type_args = [_][]const u8{ key_type_name, value_type_name };
-    const map_type_name = try self.getOrCreateMonomorphizedType("Map", &type_args);
+    const map_type_name = try self.getOrCreateMonomorphizedType(base_type_name, &type_args);
 
     // Calculate element sizes based on actual types
     const key_elem_size: i64 = try self.getValueTypeSize(first_key_typed.ty);
@@ -607,13 +613,13 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ast_to_ir.
     const keys_managed_ptr = try array.emitManagedArray(self, keys_buffer, elem_count, elem_count);
     const values_managed_ptr = try array.emitManagedArray(self, values_buffer, elem_count, elem_count);
 
-    // Build init function name: Map$K$V$init (static init from InitableFromDictionaryLiteral interface)
+    // Build init function name - call $init directly (compiler recognizes BuiltinDictionaryLiteral conformance)
     const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{map_type_name});
     try self.module.trackString(init_func_name);
 
     // Look up function and type info
     const func_info = self.func_map.get(init_func_name) orelse {
-        const msg = std.fmt.allocPrint(self.allocator, "Map type '{s}' missing init method for InitableFromDictionaryLiteral", .{map_type_name}) catch "missing init method";
+        const msg = std.fmt.allocPrint(self.allocator, "Map type '{s}' missing $init method", .{map_type_name}) catch "missing init method";
         self.reportInternalError(msg);
         return error.UnknownFunction;
     };

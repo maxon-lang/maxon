@@ -436,6 +436,8 @@ pub const MethodCallExpr = struct {
     method_name: []const u8,
     args: []const Expression,
     named_args: []const NamedArg = &.{}, // Named arguments (name = value)
+    method_line: u32 = 0, // Line of the method name (for error reporting)
+    method_column: u32 = 0, // Column of the method name (for error reporting)
 };
 
 pub const CastExpr = struct {

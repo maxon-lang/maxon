@@ -98,6 +98,6 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E011: specs/fragments/stdlib-autodiscovery.wrong-arg-count.1.test:3:5: Wrong number of arguments: expected 2, got 1
+error E011: specs/fragments/stdlib-autodiscovery.wrong-arg-count.1.test:3:23: Wrong number of arguments: expected 2, got 1
 ```
 

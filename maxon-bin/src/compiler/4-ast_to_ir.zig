@@ -3199,6 +3199,10 @@ pub const AstToIr = struct {
         // Restore context after generation
         self.restoreConversionContext(saved_context);
 
+        // Restore caller's line/column (not saved in SavedContext since it's only needed here)
+        self.current_line = caller_line;
+        self.current_column = caller_column;
+
         // Propagate error if method generation failed, with caller's location
         if (gen_err) |e| {
             // Update error location to point to user code that triggered the method generation
@@ -4336,6 +4340,13 @@ pub const AstToIr = struct {
     /// Convert if-try statement: `if try expr` or `if let x = try expr`
     /// Uses TryOtherwiseContext to handle proper reference counting for String types
     fn convertIfTryStmt(self: *AstToIr, if_stmt: ast.IfStmt, if_try: *const ast.IfTryCondition) ConvertError!void {
+        // Extract function/method name for error reporting
+        const call_name: []const u8 = switch (if_try.try_expr.*) {
+            .call => |c| c.func_name,
+            .method_call => |mc| mc.method_name,
+            else => "expression",
+        };
+
         // Mark that we're in a try context so throwing calls are allowed
         const was_in_try = self.in_try_context;
         self.in_try_context = true;
@@ -4346,7 +4357,8 @@ pub const AstToIr = struct {
 
         // Validate that the expression is a throwing function (returns error union)
         if (result_typed.ty != .error_union_type) {
-            self.reportErrorAt(.E055, "expression does not throw", if_stmt.block.start_line, if_stmt.block.start_column);
+            const msg = std.fmt.allocPrint(self.allocator, "'{s}' does not throw", .{call_name}) catch "expression does not throw";
+            self.reportErrorAt(.E055, msg, if_stmt.block.start_line, if_stmt.block.start_column);
             return error.SemanticError;
         }
 
@@ -5062,15 +5074,49 @@ pub const AstToIr = struct {
         return false;
     }
 
-    /// Check if a type implements the Builtin interface (receives __ManagedArray directly).
-    /// This replaces hardcoded checks for String, Array, Character, Map.
-    pub fn isBuiltinType(self: *AstToIr, type_name: []const u8) bool {
+    /// Check if a type implements a specific BuiltinXxxLiteral interface.
+    /// Types implementing these interfaces receive __ManagedArray directly from the compiler.
+    pub fn isBuiltinLiteralType(self: *AstToIr, type_name: []const u8, interface_name: []const u8) bool {
         // Handle monomorphized names like "Array$int", "Map$String$int"
         const base_name = if (std.mem.indexOf(u8, type_name, "$")) |dollar_pos|
             type_name[0..dollar_pos]
         else
             type_name;
-        return self.typeConformsTo(base_name, "Builtin");
+        return self.typeConformsTo(base_name, interface_name);
+    }
+
+    /// Find the type that conforms to a BuiltinLiteral interface (e.g., BuiltinStringLiteral).
+    /// Searches type_decl_map for types declaring conformance to the interface.
+    /// Returns the type name or null if not found.
+    /// Reports an error if multiple types implement the same interface.
+    pub fn findDefaultLiteralType(self: *AstToIr, interface_name: []const u8) ?[]const u8 {
+        var found_type: ?[]const u8 = null;
+
+        // Search type_decl_map for types that conform to the interface
+        var iter = self.type_decl_map.iterator();
+        while (iter.next()) |entry| {
+            const type_name = entry.key_ptr.*;
+            const type_decl = entry.value_ptr.*;
+
+            // Skip monomorphized types (like Array$int) - we want the base type
+            if (std.mem.indexOf(u8, type_name, "$") != null) continue;
+
+            // Check if this type declares conformance to the target interface
+            for (type_decl.conformances) |conformance| {
+                if (std.mem.eql(u8, conformance.interface_name, interface_name)) {
+                    if (found_type) |existing| {
+                        // Multiple types implement the same interface - report error
+                        const error_msg = std.fmt.allocPrint(self.allocator, "multiple types implement {s}: '{s}' and '{s}'", .{ interface_name, existing, type_name }) catch "multiple types implement interface";
+                        self.reportError(.E006, error_msg);
+                        return null;
+                    }
+                    found_type = type_name;
+                    break;
+                }
+            }
+        }
+
+        return found_type;
     }
 
     /// Check if an argument type is compatible with a parameter type.
@@ -6165,78 +6211,33 @@ pub const AstToIr = struct {
         return self.convertIdentifier(name);
     }
 
-    /// Convert string literal expression to a string type
-    /// This creates a String struct with the literal data
+    /// Convert string literal expression to a String type.
     fn convertStringLiteral(self: *AstToIr, str_bytes: []const u8) ConvertError!TypedValue {
-        // Process escape sequences
         const processed = try self.processEscapeSequences(str_bytes);
         defer self.allocator.free(processed);
 
-        // Check if "String" type exists and conforms to InitableFromStringLiteral
-        const type_name = "String";
+        const managed_ptr = try string_helpers.emitManagedArrayFromStaticBytes(self, processed);
+        const result_ptr = try self.emitWrapperFromManaged(managed_ptr, .string);
 
-        // If the String type exists, create a managed string and call init
-        if (self.type_map.getPtr(type_name)) |type_info_ptr| {
-            if (type_info_ptr.* == .struct_type) {
-                const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
-                try self.module.trackString(init_func_name);
+        // Track as temporary String that may need cleanup
+        try self.temporary_strings.append(self.allocator, result_ptr);
 
-                if (self.func_map.get(init_func_name)) |func_info| {
-                    // Trigger lazy generation if needed
-                    if (!func_info.ir_generated) {
-                        try self.ensureMethodGenerated(init_func_name);
-                    }
-
-                    const managed_ptr = try string_helpers.emitManagedArrayFromStaticBytes(self, processed);
-
-                    // Allocate result struct and call init
-                    const struct_size = type_info_ptr.struct_type.size;
-                    const result_ptr = try self.func().emitAllocaSized(struct_size);
-
-                    var args = try self.func().allocator.alloc(ir.Value, 2);
-                    args[0] = result_ptr.raw();
-                    args[1] = managed_ptr.raw();
-
-                    _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
-
-                    // Track this as a temporary String that may need cleanup
-                    try self.temporary_strings.append(self.allocator, result_ptr.raw());
-
-                    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = &type_info_ptr.struct_type } };
-                }
-            }
-        }
-
-        // Fallback: store string bytes as a pointer to constant data
-        // This is used when String type is not available
-        const str_ptr = try self.func().emitStringConstant(processed);
-        return .{ .value = str_ptr.raw(), .ty = try self.typeNameToValueType("String") };
+        const type_info = self.type_map.getPtr(LiteralWrapperType.string.typeName()) orelse {
+            self.reportError(.E006, LiteralWrapperType.string.typeName());
+            return error.UnknownType;
+        };
+        return .{ .value = result_ptr, .ty = .{ .struct_type = &type_info.struct_type } };
     }
 
     /// Emit a string literal directly into a pre-allocated String pointer.
     /// Unlike convertStringLiteral, this does NOT add to temporary_strings tracking.
     /// Used for control-flow constructs where only one path executes at runtime.
     fn emitStringLiteralIntoPtr(self: *AstToIr, dest_ptr: ir.Value, str_bytes: []const u8) ConvertError!void {
-        // Process escape sequences
         const processed = try self.processEscapeSequences(str_bytes);
         defer self.allocator.free(processed);
 
-        // Create managed string from static bytes
         const managed_ptr = try string_helpers.emitManagedArrayFromStaticBytes(self, processed);
-
-        // Call String$init to initialize the destination pointer (Builtin.init is also registered as init)
-        const init_func_name = "String$init";
-        if (self.func_map.get(init_func_name)) |func_info| {
-            // Trigger lazy generation if needed
-            if (!func_info.ir_generated) {
-                try self.ensureMethodGenerated(init_func_name);
-            }
-
-            var args = try self.func().allocator.alloc(ir.Value, 2);
-            args[0] = dest_ptr;
-            args[1] = managed_ptr.raw();
-            _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
-        }
+        try self.emitWrapperInitIntoPtr(dest_ptr, managed_ptr, .string);
     }
 
     /// Convert an interpolated string expression to a String
@@ -6578,46 +6579,19 @@ pub const AstToIr = struct {
         return result.toOwnedSlice(self.allocator);
     }
 
-    /// Convert character literal expression to a character type
-    /// This creates a Character struct with the literal data
+    /// Convert character literal expression to a Character type.
     fn convertCharLiteral(self: *AstToIr, char_bytes: []const u8) ConvertError!TypedValue {
-        const type_name = "Character";
+        const processed = try self.processEscapeSequences(char_bytes);
 
-        // Process escape sequences in the character literal
-        const processed_bytes = try self.processEscapeSequences(char_bytes);
+        // Character literals use heap allocation (mode=1) since they have shorter lifetimes
+        const managed_ptr = try string_helpers.emitManagedArrayFromBytes(self, processed);
+        const result_ptr = try self.emitWrapperFromManaged(managed_ptr, .character);
 
-        // If the Character type exists, create a managed string and call init
-        if (self.type_map.getPtr(type_name)) |type_info_ptr| {
-            if (type_info_ptr.* == .struct_type) {
-                const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
-                try self.module.trackString(init_func_name);
-
-                if (self.func_map.get(init_func_name)) |func_info| {
-                    // Trigger lazy generation if needed
-                    if (!func_info.ir_generated) {
-                        try self.ensureMethodGenerated(init_func_name);
-                    }
-
-                    const managed_ptr = try string_helpers.emitManagedArrayFromBytes(self, processed_bytes);
-
-                    // Allocate result struct and call init
-                    const struct_size = type_info_ptr.struct_type.size;
-                    const result_ptr = try self.func().emitAllocaSized(struct_size);
-
-                    var args = try self.func().allocator.alloc(ir.Value, 2);
-                    args[0] = result_ptr.raw();
-                    args[1] = managed_ptr.raw();
-
-                    _ = try self.func().emitCall(init_func_name, args, func_info.return_type);
-
-                    return .{ .value = result_ptr.raw(), .ty = .{ .struct_type = &type_info_ptr.struct_type } };
-                }
-            }
-        }
-
-        // Fallback: store char bytes as constant data pointer
-        const char_ptr = try self.func().emitStringConstant(processed_bytes);
-        return .{ .value = char_ptr.raw(), .ty = try self.typeNameToValueType("Character") };
+        const type_info = self.type_map.getPtr(LiteralWrapperType.character.typeName()) orelse {
+            self.reportError(.E006, LiteralWrapperType.character.typeName());
+            return error.UnknownType;
+        };
+        return .{ .value = result_ptr, .ty = .{ .struct_type = &type_info.struct_type } };
     }
 
     fn convertIdentifier(self: *AstToIr, name: []const u8) ConvertError!TypedValue {
@@ -7034,6 +7008,13 @@ pub const AstToIr = struct {
         // For now, we only support function calls
         const inner_expr = try_e.expr.*;
 
+        // Extract function/method name for error reporting
+        const call_name: []const u8 = switch (inner_expr) {
+            .call => |c| c.func_name,
+            .method_call => |mc| mc.method_name,
+            else => "expression",
+        };
+
         // Mark that we're in a try context so throwing calls are allowed
         const was_in_try = self.in_try_context;
         self.in_try_context = true;
@@ -7044,7 +7025,8 @@ pub const AstToIr = struct {
 
         // Validate that the expression is a throwing function (returns error union)
         if (result_typed.ty != .error_union_type) {
-            self.reportError(.E055, "expression does not throw");
+            const msg = std.fmt.allocPrint(self.allocator, "'{s}' does not throw", .{call_name}) catch "expression does not throw";
+            self.reportError(.E055, msg);
             return error.SemanticError;
         }
 
@@ -7726,7 +7708,8 @@ pub const AstToIr = struct {
 
         // Validate argument count
         if (ec.args.len != case_info.associated_values.len) {
-            self.reportError(.E011, ec.case_name);
+            const msg = std.fmt.allocPrint(self.allocator, "expected {d}, got {d}", .{ case_info.associated_values.len, ec.args.len }) catch "wrong argument count";
+            self.reportError(.E011, msg);
             return error.WrongArgumentCount;
         }
 
@@ -7788,7 +7771,8 @@ pub const AstToIr = struct {
             const actual_type = arg_typed.ty.getTypeName();
             if (actual_type) |actual| {
                 if (!self.areTypesEquivalent(actual, expected_type)) {
-                    self.reportError(.E022, av.name);
+                    const msg = std.fmt.allocPrint(self.allocator, "expected {s}, got {s}", .{ expected_type, actual }) catch "type mismatch";
+                    self.reportError(.E022, msg);
                     return error.TypeMismatch;
                 }
             }
@@ -8250,9 +8234,9 @@ pub const AstToIr = struct {
             values_managed_ptr = (try array_helpers.emitManagedArray(self, values_buffer, elem_count, elem_count)).raw();
         }
 
-        // Builtin types receive __ManagedArrays directly
+        // Types implementing BuiltinDictionaryLiteral receive __ManagedArrays directly
         // Other types receive Arrays (we create them first, then pass to their init)
-        const is_builtin_type = self.isBuiltinType(type_name);
+        const is_builtin_type = self.isBuiltinLiteralType(type_name, "BuiltinDictionaryLiteral");
 
         // For non-Builtin types, first create Arrays from the __ManagedArrays
         var keys_arg: ir.Value = undefined;
@@ -8403,25 +8387,46 @@ pub const AstToIr = struct {
     const LiteralWrapperType = enum {
         string,
         character,
+
+        fn typeName(self: LiteralWrapperType) []const u8 {
+            return switch (self) {
+                .string => "String",
+                .character => "Character",
+            };
+        }
+
+        fn initFuncName(self: LiteralWrapperType) []const u8 {
+            return switch (self) {
+                .string => "String$init",
+                .character => "Character$init",
+            };
+        }
+
+        fn builtinInterface(self: LiteralWrapperType) []const u8 {
+            return switch (self) {
+                .string => "BuiltinStringLiteral",
+                .character => "BuiltinCharLiteral",
+            };
+        }
     };
 
     /// Emit a wrapper type (String or Character) from a __ManagedArray.
     /// Returns the pointer to the allocated wrapper struct.
     fn emitWrapperFromManaged(self: *AstToIr, managed_ptr: ir.ManagedArrayPtr, wrapper: LiteralWrapperType) ConvertError!ir.Value {
-        const wrapper_name: []const u8 = switch (wrapper) {
-            .string => "String",
-            .character => "Character",
+        const type_info = self.type_map.get(wrapper.typeName()) orelse {
+            self.reportError(.E006, wrapper.typeName());
+            return error.UnknownType;
         };
-        const init_name: []const u8 = switch (wrapper) {
-            .string => "String$init",
-            .character => "Character$init",
-        };
+        const wrapper_ptr = try self.func().emitAllocaSized(type_info.struct_type.size);
+        try self.emitWrapperInitIntoPtr(wrapper_ptr.raw(), managed_ptr, wrapper);
+        return wrapper_ptr.raw();
+    }
 
+    /// Initialize a wrapper type (String or Character) into a pre-allocated pointer.
+    fn emitWrapperInitIntoPtr(self: *AstToIr, dest_ptr: ir.Value, managed_ptr: ir.ManagedArrayPtr, wrapper: LiteralWrapperType) ConvertError!void {
+        const init_name = wrapper.initFuncName();
         const func_info = self.func_map.get(init_name) orelse {
-            self.reportInternalError(switch (wrapper) {
-                .string => "String$init not found",
-                .character => "Character$init not found",
-            });
+            self.reportInternalError(init_name);
             return error.UnknownFunction;
         };
 
@@ -8429,18 +8434,10 @@ pub const AstToIr = struct {
             try self.ensureMethodGenerated(init_name);
         }
 
-        const type_info = self.type_map.get(wrapper_name) orelse {
-            self.reportError(.E006, wrapper_name);
-            return error.UnknownType;
-        };
-
-        const wrapper_ptr = try self.func().emitAllocaSized(type_info.struct_type.size);
         var args = try self.func().allocator.alloc(ir.Value, 2);
-        args[0] = wrapper_ptr.raw();
+        args[0] = dest_ptr;
         args[1] = managed_ptr.raw();
         _ = try self.func().emitCall(init_name, args, func_info.return_type);
-
-        return wrapper_ptr.raw();
     }
 
     /// Call Type$init with an argument and return the result pointer.
@@ -8487,8 +8484,8 @@ pub const AstToIr = struct {
     ) !void {
         const managed_ptr = try string_helpers.emitManagedArrayFromBytes(self, bytes);
 
-        // Builtin types receive __ManagedArray directly
-        const init_arg = if (self.isBuiltinType(type_name))
+        // Types implementing BuiltinXxxLiteral receive __ManagedArray directly
+        const init_arg = if (self.isBuiltinLiteralType(type_name, wrapper.builtinInterface()))
             managed_ptr.raw()
         else
             try self.emitWrapperFromManaged(managed_ptr, wrapper);
@@ -8868,7 +8865,8 @@ pub const AstToIr = struct {
                     // Check if method_name is an enum case with associated values
                     if (enum_info.case_info.get(mcall.method_name)) |case_info| {
                         if (case_info.associated_values.len > 0) {
-                            // This is enum case construction
+                            // This is enum case construction - update location to method name for error reporting
+                            self.setMethodLocation(mcall);
                             return self.convertEnumCase(.{
                                 .enum_name = base_name,
                                 .case_name = mcall.method_name,
@@ -8877,13 +8875,17 @@ pub const AstToIr = struct {
                         }
                     }
                 }
-                // Regular static method call
+                // Regular static method call - update location to method name for error reporting
+                self.setMethodLocation(mcall);
                 return self.emitMethodCallWithNamedArgs(base_name, mcall.method_name, mcall.args, mcall.named_args, null);
             }
         }
 
         // Convert base and get its type (instance method call)
         const base_typed = try self.convertExpression(mcall.base.*);
+
+        // Update location to method name for error reporting (after base is converted)
+        self.setMethodLocation(mcall);
 
         // Check if this is a struct type with methods
         if (base_typed.ty == .struct_type) {
@@ -8905,6 +8907,14 @@ pub const AstToIr = struct {
         debug.astToIr("error: method call on non-struct type", .{});
         self.reportError(.E003, mcall.method_name);
         return error.SemanticError;
+    }
+
+    /// Set current location to the method name position for error reporting
+    fn setMethodLocation(self: *AstToIr, mcall: ast.MethodCallExpr) void {
+        if (mcall.method_column != 0) {
+            self.current_line = mcall.method_line;
+            self.current_column = mcall.method_column;
+        }
     }
 
     /// Emit a method call on a primitive type (hash, equals)

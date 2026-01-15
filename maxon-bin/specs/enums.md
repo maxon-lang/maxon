@@ -547,7 +547,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E011: specs/fragments/enums.error.associated-value-wrong-count.1.test:8:5: wrong argument count: 'success'
+error E011: specs/fragments/enums.error.associated-value-wrong-count.1.test:8:21: wrong argument count: 'expected 1, got 2'
 ```
 
 <!-- test: error.associated-value-type-mismatch -->
@@ -562,7 +562,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/enums.error.associated-value-type-mismatch.1.test:7:5: type mismatch: 'n'
+error E022: specs/fragments/enums.error.associated-value-type-mismatch.1.test:7:24: type mismatch: 'expected int, got String'
 ```
 
 <!-- test: match-enum-binding-simple -->

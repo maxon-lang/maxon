@@ -426,7 +426,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E057: specs/fragments/error-handling.error.throwing-method-requires-try.1.test:67:3: throwing function requires try: 'get'
+error E057: specs/fragments/error-handling.error.throwing-method-requires-try.1.test:5:19: throwing function requires try: 'get'
 ```
 
 <!-- test: error.try-on-non-throwing-function -->
@@ -442,7 +442,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E055: specs/fragments/error-handling.error.try-on-non-throwing-function.1.test:8:5: if try requires a throwing function call: 'expression does not throw'
+error E055: specs/fragments/error-handling.error.try-on-non-throwing-function.1.test:8:5: try requires a throwing function: ''noFail' does not throw'
 ```
 
 <!-- test: error.try-on-non-throwing-method -->
@@ -455,7 +455,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.test:24:3: if try requires a throwing function call: 'expression does not throw'
+error E055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.test:5:23: try requires a throwing function: ''count' does not throw'
 ```
 
 <!-- test: error.otherwise-without-try -->
