@@ -426,7 +426,6 @@ pub const AstToIr = struct {
         float: f64,
         bool: bool,
         string: []const u8,
-        array: []const ConstantValue,
         enum_member: struct {
             enum_name: []const u8,
             member_name: []const u8,
@@ -1136,85 +1135,6 @@ pub const AstToIr = struct {
                 .ty = .{ .primitive = .bool },
             },
             .string => |s| self.convertStringLiteral(s),
-            .array => |elements| {
-                // Convert array constant elements to IR values directly
-                // instead of going through convertArrayLiteral which expects
-                // expressions to still be valid
-
-                // Determine element type from first element (or default to int)
-                const elem_prim: types.Primitive = if (elements.len == 0)
-                    .int
-                else switch (elements[0]) {
-                    .int => .int,
-                    .float => .float,
-                    .bool => .bool,
-                    else => .int,
-                };
-
-                // Get the Array type name and info
-                const arr_type_name = try std.fmt.allocPrint(self.allocator, "Array${s}", .{elem_prim.toMaxonName()});
-                try self.module.trackString(arr_type_name);
-
-                // Get or create the monomorphized Array type
-                var type_args = [_][]const u8{elem_prim.toMaxonName()};
-                _ = try self.getOrCreateMonomorphizedType("Array", &type_args);
-
-                const arr_type_info = self.type_map.get(arr_type_name) orelse {
-                    self.reportInternalError("failed to get Array type info");
-                    return error.SemanticError;
-                };
-                const arr_struct_info = &arr_type_info.struct_type;
-
-                // Allocate the full Array struct (includes iterIndex field)
-                const array_ptr = try self.func().emitAllocaSized(arr_struct_info.size);
-
-                if (elements.len == 0) {
-                    // Initialize with empty managed memory at the correct offset
-                    const managed_ptr = try array_helpers.getManagedMemoryPtr(self, array_ptr.raw(), arr_struct_info.managed_buffer_offset);
-                    try array_helpers.ManagedMemory.initEmpty(self.func(), managed_ptr);
-                } else {
-                    // Allocate refcounted buffer for elements
-                    const elem_count = try self.func().emitConstI64(@intCast(elements.len));
-                    const elem_size: i64 = 8;
-                    const buffer_size = try self.func().emitConstI64(@intCast(elements.len * @as(usize, @intCast(elem_size))));
-                    const buffer = try array_helpers.emitAllocRefcountedBuffer(self, buffer_size, "array buffer");
-
-                    // Store elements into buffer
-                    for (elements, 0..) |elem, i| {
-                        const value = switch (elem) {
-                            .int => |v| try self.func().emitConstI64(v),
-                            .float => |v| try self.func().emitConstF64(v),
-                            .bool => |v| try self.func().emitConstI64(if (v) 1 else 0),
-                            else => {
-                                self.reportError(.E003, "array element");
-                                return error.SemanticError;
-                            },
-                        };
-                        const idx_val = try self.func().emitConstI64(@intCast(i));
-                        const elem_ptr = try self.func().emitGetElemPtr(buffer, idx_val, @intCast(elem_size));
-                        try self.func().emitStore(elem_ptr.raw(), value);
-                    }
-
-                    // Initialize __ManagedMemory at the correct offset within the Array struct
-                    const managed_ptr = try array_helpers.getManagedMemoryPtr(self, array_ptr.raw(), arr_struct_info.managed_buffer_offset);
-                    const heap_flags = try self.func().emitConstI32(array_helpers.MODE_HEAP);
-                    try array_helpers.ManagedMemory.init(self.func(), managed_ptr, buffer, elem_count, elem_count, heap_flags);
-                }
-
-                // Initialize iterIndex field to 0
-                const zero_i64 = try self.func().emitConstI64(0);
-                for (arr_struct_info.fields) |field| {
-                    if (std.mem.eql(u8, field.name, "iterIndex")) {
-                        try struct_helpers.storeI64Field(self.func(), array_ptr.asStruct(), field.offset, zero_i64);
-                        break;
-                    }
-                }
-
-                return .{
-                    .value = array_ptr.raw(),
-                    .ty = .{ .struct_type = arr_struct_info },
-                };
-            },
             .enum_member => |em| .{
                 .value = try self.func().emitConstI64(em.value),
                 .ty = try self.typeNameToValueType(em.enum_name),
@@ -2477,48 +2397,6 @@ pub const AstToIr = struct {
             };
         }
         return result;
-    }
-
-    /// Get or create an array type in the type_map and return a pointer to its StructTypeInfo.
-    /// Arrays are represented as struct types with a fixed size of 40 bytes.
-    /// Takes the element type name directly (e.g., "int", "byte", "Point").
-    pub fn getOrCreateArrayType(self: *AstToIr, elem_name: []const u8) !*const types.StructTypeInfo {
-        // Check if it already exists by name
-        const array_name = try std.fmt.allocPrint(self.allocator, "Array${s}", .{elem_name});
-
-        if (self.type_map.getPtr(array_name)) |entry| {
-            self.allocator.free(array_name);
-            return &entry.struct_type;
-        }
-        self.allocator.free(array_name);
-
-        // Create via monomorphization to register methods properly
-        var type_args = [_][]const u8{elem_name};
-        const mono_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
-
-        return &self.type_map.getPtr(mono_name).?.struct_type;
-    }
-
-    /// Get an array type by its string name (e.g., "Array$byte") if it exists.
-    /// Used when external function signatures reference array types.
-    /// Returns null if the type doesn't exist yet (will be created lazily during monomorphization).
-    fn getOrCreateArrayTypeByName(self: *AstToIr, array_type_name: []const u8) ?*const types.StructTypeInfo {
-        debug.astToIr("getOrCreateArrayTypeByName: '{s}'", .{array_type_name});
-
-        // Check if it already exists
-        if (self.type_map.getPtr(array_type_name)) |entry| {
-            if (entry.* == .struct_type) {
-                debug.astToIr("  -> found existing", .{});
-                return &entry.struct_type;
-            }
-            debug.astToIr("  -> exists but not struct_type", .{});
-            return null;
-        }
-
-        // Type doesn't exist yet - will be created via getOrCreateMonomorphizedType
-        // when actually needed (during method calls or variable access)
-        debug.astToIr("  -> not found, will be created lazily", .{});
-        return null;
     }
 
     fn typeExprToValueType(self: *AstToIr, type_expr: ast.TypeExpr) !ValueType {
@@ -6250,48 +6128,94 @@ pub const AstToIr = struct {
         is_temp: bool, // true if buffer needs to be freed after use
     };
 
+    /// Info for one part of an interpolated string (used in builder pattern)
+    const PartInfo = struct {
+        len: ir.Value,
+        buffer: ?StringBuffer = null, // Pre-computed buffer (for expressions)
+        literal_bytes: ?[]const u8 = null, // For static literals (processed escape sequences)
+    };
+
     /// Convert an interpolated string expression to a String
-    /// Uses the traditional concat-based approach: convert each part to String, then concat
+    /// Uses the builder pattern: calculate total length, single allocation, copy all parts
     fn convertInterpolatedString(self: *AstToIr, interp: ast.InterpolatedStringExpr) ConvertError!TypedValue {
         if (interp.parts.len == 0) {
             return self.convertStringLiteral("");
         }
 
-        // Convert each part to a String, then reduce by concatenation
-        var strings: std.ArrayListUnmanaged(ir.Value) = .empty;
-        defer strings.deinit(self.allocator);
+        // Phase 1: Collect info about each part (buffer + length)
+        var parts: std.ArrayListUnmanaged(PartInfo) = .empty;
+        defer parts.deinit(self.allocator);
 
         for (interp.parts) |part| {
             if (part.is_expression) {
                 const expr = part.expr orelse continue;
                 const typed_val = try self.convertExpression(expr.*);
-                const string_val = try self.convertToString(typed_val, part.format_spec);
-                try strings.append(self.allocator, string_val);
+                const buffer = try self.convertToBuffer(typed_val, part.format_spec);
+                try parts.append(self.allocator, .{ .len = buffer.len, .buffer = buffer });
             } else {
                 const literal = part.literal_value orelse continue;
                 const processed = try self.processEscapeSequences(literal);
-                defer self.allocator.free(processed);
-                const string_val = try self.convertStringLiteral(processed);
-                try strings.append(self.allocator, string_val.value);
+                // Track the processed string so it doesn't get freed
+                try self.module.trackString(processed);
+                const len = try self.func().emitConstI64(@intCast(processed.len));
+                try parts.append(self.allocator, .{ .len = len, .literal_bytes = processed });
             }
         }
 
-        if (strings.items.len == 0) {
+        if (parts.items.len == 0) {
             return self.convertStringLiteral("");
         }
 
-        // Single string - just return it
-        if (strings.items.len == 1) {
-            return .{ .value = strings.items[0], .ty = try self.typeNameToValueType("String") };
+        // Single part optimization
+        if (parts.items.len == 1) {
+            const part = parts.items[0];
+            if (part.literal_bytes) |bytes| {
+                return self.convertStringLiteral(bytes);
+            } else if (part.buffer) |buf| {
+                return self.createStringFromBuffer(buf.buffer, buf.len);
+            }
         }
 
-        // Multiple strings - reduce by concatenation
-        var result = strings.items[0];
-        for (strings.items[1..]) |s| {
-            result = try self.emitStringConcatCall(result, s);
+        // Phase 2: Sum all lengths to get total
+        var total_len = try self.func().emitConstI64(0);
+        for (parts.items) |part| {
+            total_len = try self.func().emitBinaryOp(.add, total_len, part.len, .i64);
         }
 
-        return .{ .value = result, .ty = try self.typeNameToValueType("String") };
+        // Phase 3: Allocate single buffer for total length + 1 (null terminator)
+        const one = try self.func().emitConstI64(1);
+        const alloc_size = try self.func().emitBinaryOp(.add, total_len, one, .i64);
+        const final_buffer = try array_helpers.emitAllocRefcountedBuffer(self, alloc_size, "string interpolation");
+
+        // Phase 4: Copy each part at the correct offset
+        var offset = try self.func().emitConstI64(0);
+        for (parts.items) |part| {
+            const dest_ptr = try self.func().emitGetElemPtr(final_buffer, offset, 1);
+
+            if (part.literal_bytes) |bytes| {
+                // Literal: emit static bytes and copy
+                if (bytes.len > 0) {
+                    const static_buf = try self.emitStaticStringBuffer(bytes);
+                    try self.func().emitMemcpyDynamic(dest_ptr.asRawPtr(), static_buf.buffer, part.len);
+                }
+            } else if (part.buffer) |buf| {
+                // Expression: copy from buffer
+                try self.func().emitMemcpyDynamic(dest_ptr.asRawPtr(), buf.buffer, part.len);
+            }
+
+            offset = try self.func().emitBinaryOp(.add, offset, part.len, .i64);
+        }
+
+        // Phase 5: Null terminate
+        const null_pos = try self.func().emitGetElemPtr(final_buffer, total_len, 1);
+        try self.func().emitStoreI8(null_pos.raw(), try self.func().emitConstI8(0));
+
+        // Phase 6: Wrap in ManagedMemory -> String
+        const managed_ptr = try array_helpers.emitManagedMemoryFromBuffer(self, final_buffer, total_len);
+        const string_ptr = (try self.emitTypeInit("String", managed_ptr.raw())).ptr;
+        try self.temporary_strings.append(self.allocator, string_ptr);
+
+        return .{ .value = string_ptr, .ty = try self.typeNameToValueType("String") };
     }
 
     /// Create a String from a raw buffer and length
@@ -6306,7 +6230,7 @@ pub const AstToIr = struct {
         try self.func().emitStoreI8(null_pos.raw(), try self.func().emitConstI8(0));
 
         const managed_ptr = try array_helpers.emitManagedMemoryFromBuffer(self, final_buffer, len);
-        const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
+        const string_ptr = (try self.emitTypeInit("String", managed_ptr.raw())).ptr;
         try self.temporary_strings.append(self.allocator, string_ptr);
         return .{ .value = string_ptr, .ty = try self.typeNameToValueType("String") };
     }
@@ -6342,8 +6266,10 @@ pub const AstToIr = struct {
                     return .{ .buffer = ir.toRawPtr(buffer_val), .len = len, .is_temp = false };
                 }
                 if (self.typeConformsTo(struct_info.name, "Stringable")) {
-                    // Call toString, then extract buffer from returned String (borrowed, not temp)
+                    // Call toString, then extract buffer from returned String
                     const string_ptr = try self.callStringableToString(struct_info.name, typed_val.value, format_spec);
+                    // Track the returned String so it stays alive until we copy its data
+                    try self.temporary_strings.append(self.allocator, string_ptr);
                     const managed_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(string_ptr), 0);
                     const buffer_val = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(managed_ptr.raw()));
                     const len = try ManagedMemory.loadLen(self.func(), ir.toManagedMemoryPtr(managed_ptr.raw()));
@@ -6355,12 +6281,12 @@ pub const AstToIr = struct {
             },
             .primitive => |prim| {
                 if (prim == .bool) {
-                    return self.emitBoolToBuffer(typed_val.value);
+                    return self.emitBoolToStackBuffer(typed_val.value);
                 }
                 if (prim.isFloatingPoint()) {
-                    return self.emitFloatToBuffer(typed_val.value);
+                    return self.emitFloatToStackBuffer(typed_val.value);
                 } else if (prim.isIntegral()) {
-                    return self.emitIntToBuffer(typed_val.value);
+                    return self.emitIntToStackBuffer(typed_val.value);
                 }
                 const msg = std.fmt.allocPrint(self.allocator, "cannot convert primitive type '{s}' to string for interpolation", .{prim.toMaxonName()}) catch "cannot convert primitive to string";
                 self.reportInternalError(msg);
@@ -6370,7 +6296,7 @@ pub const AstToIr = struct {
                 if (enum_info.backing == .string) {
                     return self.convertStringEnumToBuffer(typed_val.value, enum_info.*);
                 }
-                return self.emitIntToBuffer(typed_val.value);
+                return self.emitIntToStackBuffer(typed_val.value);
             },
             .error_union_type => {
                 self.reportInternalError("cannot convert error union to string for interpolation");
@@ -6423,99 +6349,51 @@ pub const AstToIr = struct {
         return .{ .buffer = buffer, .len = len, .is_temp = true };
     }
 
+    /// Emit int to stack buffer (stack allocation, no cleanup needed)
+    fn emitIntToStackBuffer(self: *AstToIr, value: ir.Value) ConvertError!StringBuffer {
+        // Allocate on stack (22 bytes max: sign + 20 digits + null)
+        const buffer = try self.func().emitAllocaSized(22);
+
+        var args = try self.allocator.alloc(ir.Value, 2);
+        args[0] = buffer.raw();
+        args[1] = value;
+        const len = (try self.func().emitCall("__runtime_int_to_string", args, .i64)).?;
+
+        return .{ .buffer = buffer, .len = len, .is_temp = false };
+    }
+
+    /// Emit float to stack buffer (stack allocation, no cleanup needed)
+    fn emitFloatToStackBuffer(self: *AstToIr, value: ir.Value) ConvertError!StringBuffer {
+        // Allocate on stack (32 bytes max)
+        const buffer = try self.func().emitAllocaSized(32);
+
+        var args = try self.allocator.alloc(ir.Value, 2);
+        args[0] = buffer.raw();
+        args[1] = value;
+        const len = (try self.func().emitCall("__runtime_float_to_string", args, .i64)).?;
+
+        return .{ .buffer = buffer, .len = len, .is_temp = false };
+    }
+
+    /// Emit bool to stack buffer (stack allocation, no cleanup needed)
+    fn emitBoolToStackBuffer(self: *AstToIr, value: ir.Value) ConvertError!StringBuffer {
+        // Allocate on stack (6 bytes max: "false\0")
+        const buffer = try self.func().emitAllocaSized(6);
+
+        var args = try self.allocator.alloc(ir.Value, 2);
+        args[0] = buffer.raw();
+        args[1] = value;
+        const len = (try self.func().emitCall("__runtime_bool_to_string", args, .i64)).?;
+
+        return .{ .buffer = buffer, .len = len, .is_temp = false };
+    }
+
     /// Convert string-backed enum to buffer (static data, not temp)
     fn convertStringEnumToBuffer(self: *AstToIr, enum_value: ir.Value, _: types.EnumTypeInfo) ConvertError!StringBuffer {
         // For string-backed enums, the value IS a pointer to string data in .rdata
         // We need to get length via strlen
         const len = try self.func().emitCstrLen(enum_value);
         return .{ .buffer = ir.toRawPtr(enum_value), .len = len, .is_temp = false };
-    }
-
-    /// Convert a TypedValue to a String pointer
-    /// Handles different types: Stringable struct types, primitives (int, float, bool)
-    fn convertToString(self: *AstToIr, typed_val: TypedValue, format_spec: ?[]const u8) ConvertError!ir.Value {
-        switch (typed_val.ty) {
-            .struct_type => |struct_info| {
-                // String passthrough optimization - already a String, just return it
-                if (std.mem.eql(u8, struct_info.name, "String")) {
-                    return typed_val.value;
-                }
-                // All other struct types must implement Stringable for string interpolation
-                if (self.typeConformsTo(struct_info.name, "Stringable")) {
-                    return self.callStringableToString(struct_info.name, typed_val.value, format_spec);
-                }
-                const msg = std.fmt.allocPrint(self.allocator, "cannot convert type '{s}' to string for interpolation", .{struct_info.name}) catch "cannot convert type to string";
-                self.reportInternalError(msg);
-                return error.UnknownType;
-            },
-            .primitive => |prim| {
-                // Check bool first since it needs special "true"/"false" output
-                if (prim == .bool) {
-                    return self.convertBoolToString(typed_val.value);
-                }
-                if (prim.isFloatingPoint()) {
-                    return self.convertFloatToString(typed_val.value);
-                } else if (prim.isIntegral()) {
-                    return self.convertIntToString(typed_val.value);
-                }
-                const msg = std.fmt.allocPrint(self.allocator, "cannot convert primitive type '{s}' to string for interpolation", .{prim.toMaxonName()}) catch "cannot convert primitive to string";
-                self.reportInternalError(msg);
-                return error.UnknownType;
-            },
-            .enum_type => |enum_info| {
-                // Check if string-backed enum
-                if (enum_info.backing == .string) {
-                    // String-backed enum: generate switch on ordinal to select raw string value
-                    return self.convertStringEnumToString(typed_val.value, enum_info.*);
-                }
-                // Int-backed or simple enum: convert ordinal to string
-                return self.convertIntToString(typed_val.value);
-            },
-            .error_union_type => {
-                self.reportInternalError("cannot convert error union to string for interpolation");
-                return error.UnknownType;
-            },
-            .function_type => {
-                self.reportInternalError("cannot convert function to string for interpolation");
-                return error.UnknownType;
-            },
-        }
-    }
-
-    /// Convert an int to a String
-    fn convertIntToString(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        return self.emitIntToStringCall(value);
-    }
-
-    /// Convert a float to a String
-    fn convertFloatToString(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        return self.emitFloatToStringCall(value);
-    }
-
-    /// Convert a bool to a String
-    fn convertBoolToString(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        return self.emitBoolToStringCall(value);
-    }
-
-    /// Convert a string-backed enum to its string value
-    /// The enum value is now a pointer to constant string data, so we create a String from it
-    fn convertStringEnumToString(self: *AstToIr, enum_value: ir.Value, enum_info: types.EnumTypeInfo) ConvertError!ir.Value {
-        _ = enum_info;
-
-        // The enum value is a pointer to null-terminated string data in the data section
-        // Create a String in slice mode from this pointer
-
-        // Get string length using inline strlen
-        const str_len = try self.func().emitCstrLen(enum_value);
-
-        // Create a ManagedMemory with flags=0 (static data, no cleanup needed)
-        const managed_ptr = try ManagedMemory.alloca(self.func());
-        const zero_i32 = try self.func().emitConstI32(0);
-        try ManagedMemory.init(self.func(), managed_ptr, ir.toRawPtr(enum_value), str_len, str_len, zero_i32);
-
-        // Create String by calling stdlib String$init
-        const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
-        return string_ptr;
     }
 
     /// Call Stringable.toString() on a type that conforms to Stringable
@@ -6585,65 +6463,7 @@ pub const AstToIr = struct {
         const b_managed = try self.func().emitGetFieldPtr(ir.toStructPtr(b), 0);
 
         const result_managed = try self.emitManagedMemoryConcat(ir.toManagedMemoryPtr(a_managed.raw()), ir.toManagedMemoryPtr(b_managed.raw()));
-        const string_ptr = try array_helpers.emitStringFromManaged(self, result_managed);
-        // Track as temporary for cleanup after expression evaluation
-        try self.temporary_strings.append(self.allocator, string_ptr);
-        return string_ptr;
-    }
-
-    /// Emit code to convert an int to a String
-    fn emitIntToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        // Allocate buffer with header (22 bytes max: sign + 20 digits + null)
-        const buffer_size = try self.func().emitConstI64(22);
-        const buffer = try array_helpers.emitAllocRefcountedBuffer(self, buffer_size, "int.toString");
-
-        // Call __runtime_int_to_string(buffer, value) -> returns length
-        var args = try self.allocator.alloc(ir.Value, 2);
-        args[0] = buffer.raw();
-        args[1] = value;
-        const len = (try self.func().emitCall("__runtime_int_to_string", args, .i64)).?;
-
-        const managed_ptr = try array_helpers.emitManagedMemoryFromBuffer(self, buffer, len);
-        const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
-        // Track as temporary for cleanup after expression evaluation
-        try self.temporary_strings.append(self.allocator, string_ptr);
-        return string_ptr;
-    }
-
-    /// Emit code to convert a float to a String
-    /// For now, keep calling the runtime function since the inline version is complex
-    fn emitFloatToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        // Allocate buffer with header (32 bytes should be enough for most floats)
-        const buffer_size = try self.func().emitConstI64(32);
-        const buffer = try array_helpers.emitAllocRefcountedBuffer(self, buffer_size, "float.toString");
-
-        // Call __runtime_float_to_string(buffer, value) -> returns length
-        var args = try self.allocator.alloc(ir.Value, 2);
-        args[0] = buffer.raw();
-        args[1] = value;
-        const len = (try self.func().emitCall("__runtime_float_to_string", args, .i64)).?;
-
-        const managed_ptr = try array_helpers.emitManagedMemoryFromBuffer(self, buffer, len);
-        const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
-        // Track as temporary for cleanup after expression evaluation
-        try self.temporary_strings.append(self.allocator, string_ptr);
-        return string_ptr;
-    }
-
-    /// Emit code to convert a bool to a String
-    fn emitBoolToStringCall(self: *AstToIr, value: ir.Value) ConvertError!ir.Value {
-        // Create a buffer with header (6 bytes max: "false\0")
-        const buffer_size = try self.func().emitConstI64(6);
-        const buffer = try array_helpers.emitAllocRefcountedBuffer(self, buffer_size, "bool.toString");
-
-        // Call __runtime_bool_to_string(buffer, value) -> returns length
-        var args = try self.allocator.alloc(ir.Value, 2);
-        args[0] = buffer.raw();
-        args[1] = value;
-        const len = (try self.func().emitCall("__runtime_bool_to_string", args, .i64)).?;
-
-        const managed_ptr = try array_helpers.emitManagedMemoryFromBuffer(self, buffer, len);
-        const string_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
+        const string_ptr = (try self.emitTypeInit("String", result_managed.raw())).ptr;
         // Track as temporary for cleanup after expression evaluation
         try self.temporary_strings.append(self.allocator, string_ptr);
         return string_ptr;
@@ -7719,10 +7539,10 @@ pub const AstToIr = struct {
 
         // Call the appropriate stdlib init method
         if (is_character) {
-            const struct_ptr = try array_helpers.emitCharacterFromManaged(self, managed_ptr);
+            const struct_ptr = (try self.emitTypeInit("Character", managed_ptr.raw())).ptr;
             return .{ .value = struct_ptr, .ty = try self.typeNameToValueType(types.CHARACTER) };
         } else {
-            const struct_ptr = try array_helpers.emitStringFromManaged(self, managed_ptr);
+            const struct_ptr = (try self.emitTypeInit("String", managed_ptr.raw())).ptr;
             return .{ .value = struct_ptr, .ty = try self.typeNameToValueType(types.STRING) };
         }
     }

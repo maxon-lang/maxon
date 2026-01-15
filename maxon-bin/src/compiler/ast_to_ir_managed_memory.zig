@@ -474,26 +474,6 @@ pub fn emitManagedMemoryFromStaticBytes(self: *AstToIr, str_bytes: []const u8) !
     return managed_ptr;
 }
 
-// ============================================================================
-// Type Creation via stdlib BuiltinLiteral interfaces
-// ============================================================================
-
-/// Create a String by calling the stdlib's String$init (BuiltinStringLiteral.init).
-/// This is the proper way to create a String from a __ManagedMemory - delegates
-/// to stdlib rather than having compiler knowledge of String layout.
-pub fn emitStringFromManaged(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr) !ir.Value {
-    const result = try self.emitTypeInit("String", managed_ptr.raw());
-    return result.ptr;
-}
-
-/// Create a Character by calling the stdlib's Character$init (BuiltinCharLiteral.init).
-/// This is the proper way to create a Character from a __ManagedMemory - delegates
-/// to stdlib rather than having compiler knowledge of Character layout.
-pub fn emitCharacterFromManaged(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr) !ir.Value {
-    const result = try self.emitTypeInit("Character", managed_ptr.raw());
-    return result.ptr;
-}
-
 /// Allocate a type's struct on the stack by looking up its size from the type_map.
 /// Returns an uninitialized pointer that can be passed to functions.
 pub fn emitTypeAlloca(self: *AstToIr, type_name: []const u8) !ir.RawPtr {

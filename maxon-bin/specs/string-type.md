@@ -1115,36 +1115,31 @@ end 'main'
 ```stdout
 MOVE: managed
 MOVE: managed
-ALLOC #1: 20 bytes (string concat)
+ALLOC #1: 20 bytes (string interpolation)
 MOVE: managed
-ALLOC #2: 30 bytes (int.toString)
-MOVE: managed
-MOVE: managed
-ALLOC #3: 12 bytes (string concat)
+ALLOC #2: 12 bytes (string interpolation)
 MOVE: managed
 INCREF: <cstr> -> rc=2
 11
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
-FREE #2: 30 bytes (temp cleanup)
-DECREF: <temp> -> rc=0
-FREE #3: 12 bytes (temp cleanup)
+FREE #2: 12 bytes (temp cleanup)
 DECREF: s -> rc=0
 FREE #1: 20 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 62 bytes
-Freed:     62 bytes
+Allocated: 32 bytes
+Freed:     32 bytes
 Leaked:    0 bytes
-Moves:     6
+Moves:     4
 Increfs:   1
-Decrefs:   4
+Decrefs:   3
 ```
 
 <!-- test: memory-tracking-chained-interp -->
 <!-- TrackMemory: true -->
-String interpolation with multiple parts creates intermediate concat results.
-Each intermediate result is properly cleaned up at scope exit.
+String interpolation with multiple parts creates a single allocation with O(n) copy.
+All intermediate buffers use stack allocation for primitives.
 ```maxon
 function main() returns int
     var a = "a"
@@ -1164,44 +1159,31 @@ MOVE: managed
 MOVE: managed
 MOVE: managed
 MOVE: managed
-ALLOC #1: 11 bytes (string concat)
+ALLOC #1: 13 bytes (string interpolation)
 MOVE: managed
-ALLOC #2: 12 bytes (string concat)
-MOVE: managed
-ALLOC #3: 13 bytes (string concat)
-MOVE: managed
-DECREF: <temp> -> rc=0
-FREE #1: 11 bytes (temp cleanup)
-DECREF: <temp> -> rc=0
-FREE #2: 12 bytes (temp cleanup)
-ALLOC #4: 30 bytes (int.toString)
-MOVE: managed
-MOVE: managed
-ALLOC #5: 11 bytes (string concat)
+ALLOC #2: 11 bytes (string interpolation)
 MOVE: managed
 INCREF: <cstr> -> rc=2
 4
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
-FREE #4: 30 bytes (temp cleanup)
-DECREF: <temp> -> rc=0
-FREE #5: 11 bytes (temp cleanup)
+FREE #2: 11 bytes (temp cleanup)
 DECREF: s -> rc=0
-FREE #3: 13 bytes (string cleanup)
+FREE #1: 13 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 77 bytes
-Freed:     77 bytes
+Allocated: 24 bytes
+Freed:     24 bytes
 Leaked:    0 bytes
-Moves:     10
+Moves:     6
 Increfs:   1
-Decrefs:   6
+Decrefs:   3
 ```
 
 <!-- test: memory-tracking-loop-interp -->
 <!-- TrackMemory: true -->
 String accumulation in loop properly releases old values on reassignment.
-The final value is released at scope exit.
+The final value is released at scope exit. Uses efficient O(n) interpolation.
 ```maxon
 function main() returns int
     var s = ""
@@ -1221,38 +1203,33 @@ end 'main'
 ```stdout
 MOVE: managed
 MOVE: managed
-ALLOC #1: 10 bytes (string concat)
+ALLOC #1: 10 bytes (string interpolation)
 MOVE: managed
-ALLOC #2: 11 bytes (string concat)
+ALLOC #2: 11 bytes (string interpolation)
 MOVE: managed
 DECREF: s -> rc=0
 FREE #1: 10 bytes (string cleanup)
-ALLOC #3: 12 bytes (string concat)
+ALLOC #3: 12 bytes (string interpolation)
 MOVE: managed
 DECREF: s -> rc=0
 FREE #2: 11 bytes (string cleanup)
-ALLOC #4: 30 bytes (int.toString)
-MOVE: managed
-MOVE: managed
-ALLOC #5: 11 bytes (string concat)
+ALLOC #4: 11 bytes (string interpolation)
 MOVE: managed
 INCREF: <cstr> -> rc=2
 3
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
-FREE #4: 30 bytes (temp cleanup)
-DECREF: <temp> -> rc=0
-FREE #5: 11 bytes (temp cleanup)
+FREE #4: 11 bytes (temp cleanup)
 DECREF: s -> rc=0
 FREE #3: 12 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 74 bytes
-Freed:     74 bytes
+Allocated: 44 bytes
+Freed:     44 bytes
 Leaked:    0 bytes
-Moves:     8
+Moves:     6
 Increfs:   1
-Decrefs:   6
+Decrefs:   5
 ```
 
 <!-- test: memory-tracking-no-leak-scope-exit -->
@@ -1271,26 +1248,21 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
-ALLOC #1: 30 bytes (int.toString)
-MOVE: managed
-MOVE: managed
-ALLOC #2: 12 bytes (string concat)
+ALLOC #1: 12 bytes (string interpolation)
 MOVE: managed
 INCREF: <cstr> -> rc=2
 27
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
-FREE #1: 30 bytes (temp cleanup)
-DECREF: <temp> -> rc=0
-FREE #2: 12 bytes (temp cleanup)
+FREE #1: 12 bytes (temp cleanup)
 
 === MEMORY STATS ===
-Allocated: 42 bytes
-Freed:     42 bytes
+Allocated: 12 bytes
+Freed:     12 bytes
 Leaked:    0 bytes
-Moves:     4
+Moves:     2
 Increfs:   1
-Decrefs:   3
+Decrefs:   2
 ```
 
 <!-- test: toLower -->

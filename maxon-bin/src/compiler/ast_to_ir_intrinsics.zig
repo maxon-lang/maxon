@@ -1787,10 +1787,8 @@ fn emitReadPipeToString(self: *AstToIr, pipe_handle: ir.Value) ConvertError!ir.V
     const mode_one = try self.func().emitConstI32(1); // heap-refcounted
     try ManagedMemory.init(self.func(), managed_ptr, string_buffer, bytes_read, bytes_read, mode_one);
 
-    // Create String via stdlib's BuiltinStringLiteral.init
-    const string_ptr = try array.emitStringFromManaged(self, managed_ptr);
-
-    return string_ptr;
+    // Create String via stdlib's String$init
+    return (try self.emitTypeInit("String", managed_ptr.raw())).ptr;
 }
 
 /// __process_read_stdout(handle int) returns String
