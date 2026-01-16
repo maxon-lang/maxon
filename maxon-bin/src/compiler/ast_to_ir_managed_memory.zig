@@ -243,7 +243,14 @@ pub fn emitAllocRefcountedBuffer(self: *AstToIr, data_size: ir.Value, tag: []con
     const buffer_with_header = try func.emitHeapAlloc(total_size, tag);
 
     // Initialize refcount in header to 1 (for the ManagedMemory being created)
-    try func.emitStore(buffer_with_header.raw(), try func.emitConstI64(1));
+    const one = try func.emitConstI64(1);
+    try func.emitStore(buffer_with_header.raw(), one);
+
+    // Track the initial refcount as an incref
+    if (self.track_memory) {
+        const one_i32 = try func.emitConstI32(1);
+        try func.emitTrackIncref(tag, one_i32);
+    }
 
     // Return data pointer (header + 8)
     const eight = try func.emitConstI64(8);
@@ -404,6 +411,12 @@ pub fn emitManagedMemoryFromBytes(self: *AstToIr, str_bytes: []const u8) !ir.Man
         const one_refcount = try self.func().emitConstI64(1);
         if (debug.enabled) std.debug.print("[DEBUG] Emitting store 1 to header at {d}\n", .{buffer_with_header.raw()});
         try self.func().emitStore(buffer_with_header.raw(), one_refcount);
+
+        // Track the initial refcount as an incref
+        if (self.track_memory) {
+            const one_i32 = try self.func().emitConstI32(1);
+            try self.func().emitTrackIncref("string buffer", one_i32);
+        }
 
         // Data pointer is header + 8
         const data_ptr = try self.func().emitGetElemPtr(buffer_with_header, try self.func().emitConstI64(8), 1);

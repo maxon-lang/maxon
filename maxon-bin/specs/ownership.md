@@ -380,6 +380,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 32 bytes (array grow)
+INCREF: array grow -> rc=1
 MOVE: arr
 DECREF: arr -> rc=0
 FREE #1: 32 bytes (array cleanup)
@@ -389,7 +390,7 @@ Allocated: 32 bytes
 Freed:     32 bytes
 Leaked:    0 bytes
 Moves:     1
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 

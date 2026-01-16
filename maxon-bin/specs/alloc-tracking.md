@@ -56,6 +56,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 88 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #1: 88 bytes (array cleanup)
 
@@ -64,7 +65,7 @@ Allocated: 88 bytes
 Freed:     88 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 
@@ -111,7 +112,9 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 ALLOC #2: 88 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr1 -> rc=0
 FREE #1: 48 bytes (array cleanup)
 DECREF: arr2 -> rc=0
@@ -122,7 +125,7 @@ Allocated: 136 bytes
 Freed:     136 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   2
 Decrefs:   2
 ```
 
@@ -145,6 +148,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -153,7 +157,7 @@ Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 
@@ -176,6 +180,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -184,7 +189,7 @@ Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 
@@ -208,6 +213,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -216,7 +222,7 @@ Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 
@@ -237,6 +243,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 88 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #1: 88 bytes (array cleanup)
 
@@ -245,7 +252,7 @@ Allocated: 88 bytes
 Freed:     88 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 
@@ -271,6 +278,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -279,7 +287,7 @@ Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 
@@ -308,6 +316,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -316,7 +325,7 @@ Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 
@@ -343,12 +352,15 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 ALLOC #2: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #2: 48 bytes (array cleanup)
 ALLOC #3: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #3: 48 bytes (array cleanup)
 
@@ -357,7 +369,7 @@ Allocated: 144 bytes
 Freed:     144 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   3
 Decrefs:   3
 ```
 
@@ -382,6 +394,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 MOVE: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
@@ -391,7 +404,7 @@ Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     1
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 
@@ -423,6 +436,7 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 MOVE: arr
 MOVE: arr
 DECREF: arr -> rc=0
@@ -433,7 +447,7 @@ Allocated: 48 bytes
 Freed:     48 bytes
 Leaked:    0 bytes
 Moves:     2
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 
@@ -467,7 +481,9 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 ALLOC #2: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 MOVE: arr2
 DECREF: arr -> rc=0
 FREE #2: 48 bytes (array cleanup)
@@ -479,7 +495,7 @@ Allocated: 96 bytes
 Freed:     96 bytes
 Leaked:    0 bytes
 Moves:     1
-Increfs:   0
+Increfs:   2
 Decrefs:   2
 ```
 
@@ -533,9 +549,11 @@ end 'main'
 ```
 ```stdout
 ALLOC #1: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 ALLOC #2: 48 bytes (array grow)
+INCREF: array grow -> rc=1
 DECREF: arr -> rc=0
 FREE #2: 48 bytes (array cleanup)
 
@@ -544,5 +562,5 @@ Allocated: 96 bytes
 Freed:     96 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   0
+Increfs:   2
 Decrefs:   2

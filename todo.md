@@ -214,5 +214,3 @@ Phase 11: Interface declarations (parsing interface definitions)
 - File.maxon FileError is too general
 - move command line args into stdlib (std.process.args)
 - reviews E014 UnusedVariable
-- optimize string interpolation
-- incref/decref discrepancy

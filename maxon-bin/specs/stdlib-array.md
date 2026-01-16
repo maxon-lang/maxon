@@ -551,6 +551,7 @@ end 'main'
 ```stdout
 MOVE: managed
 ALLOC #1: 168 bytes (array grow)
+INCREF: array grow -> rc=1
 MOVE: managed
 MOVE: managed
 DECREF: arr -> rc=0
@@ -561,7 +562,7 @@ Allocated: 168 bytes
 Freed:     168 bytes
 Leaked:    0 bytes
 Moves:     3
-Increfs:   0
+Increfs:   1
 Decrefs:   1
 ```
 

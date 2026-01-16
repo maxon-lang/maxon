@@ -1116,8 +1116,10 @@ end 'main'
 MOVE: managed
 MOVE: managed
 ALLOC #1: 20 bytes (string interpolation)
+INCREF: string interpolation -> rc=1
 MOVE: managed
 ALLOC #2: 12 bytes (string interpolation)
+INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 11
@@ -1132,7 +1134,7 @@ Allocated: 32 bytes
 Freed:     32 bytes
 Leaked:    0 bytes
 Moves:     4
-Increfs:   1
+Increfs:   3
 Decrefs:   3
 ```
 
@@ -1160,8 +1162,10 @@ MOVE: managed
 MOVE: managed
 MOVE: managed
 ALLOC #1: 13 bytes (string interpolation)
+INCREF: string interpolation -> rc=1
 MOVE: managed
 ALLOC #2: 11 bytes (string interpolation)
+INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 4
@@ -1176,7 +1180,7 @@ Allocated: 24 bytes
 Freed:     24 bytes
 Leaked:    0 bytes
 Moves:     6
-Increfs:   1
+Increfs:   3
 Decrefs:   3
 ```
 
@@ -1204,16 +1208,20 @@ end 'main'
 MOVE: managed
 MOVE: managed
 ALLOC #1: 10 bytes (string interpolation)
+INCREF: string interpolation -> rc=1
 MOVE: managed
 ALLOC #2: 11 bytes (string interpolation)
+INCREF: string interpolation -> rc=1
 MOVE: managed
 DECREF: s -> rc=0
 FREE #1: 10 bytes (string cleanup)
 ALLOC #3: 12 bytes (string interpolation)
+INCREF: string interpolation -> rc=1
 MOVE: managed
 DECREF: s -> rc=0
 FREE #2: 11 bytes (string cleanup)
 ALLOC #4: 11 bytes (string interpolation)
+INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 3
@@ -1228,7 +1236,7 @@ Allocated: 44 bytes
 Freed:     44 bytes
 Leaked:    0 bytes
 Moves:     6
-Increfs:   1
+Increfs:   5
 Decrefs:   5
 ```
 
@@ -1249,6 +1257,7 @@ end 'main'
 ```stdout
 MOVE: managed
 ALLOC #1: 12 bytes (string interpolation)
+INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 27
@@ -1261,7 +1270,7 @@ Allocated: 12 bytes
 Freed:     12 bytes
 Leaked:    0 bytes
 Moves:     2
-Increfs:   1
+Increfs:   2
 Decrefs:   2
 ```
 

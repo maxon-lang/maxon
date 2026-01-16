@@ -159,6 +159,7 @@ end 'main'
 ALLOC #1: 4 bytes (command line arg)
 MOVE: managed
 ALLOC #2: 168 bytes (array grow)
+INCREF: array grow -> rc=1
 INCREF: <array_store> -> rc=2
 FREE #1: 4 bytes (cstring release)
 ALLOC #3: 4 bytes (command line arg)
@@ -199,7 +200,7 @@ Allocated: 180 bytes
 Freed:     180 bytes
 Leaked:    0 bytes
 Moves:     7
-Increfs:   9
+Increfs:   10
 Decrefs:   10
 ```
 
