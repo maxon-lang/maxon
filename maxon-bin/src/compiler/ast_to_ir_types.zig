@@ -645,6 +645,9 @@ pub const VarInfo = struct {
     borrowed_from: ?[]const u8 = null,
     /// Current borrow state
     borrow_state: BorrowState = .none,
+    /// Declaration location for error reporting
+    decl_line: u32 = 0,
+    decl_column: u32 = 0,
 
     /// Create a VarInfo for a stack-allocated value (data stored directly at ptr).
     /// Use this for values created with alloca.sized or stack structs.

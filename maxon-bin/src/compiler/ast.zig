@@ -32,6 +32,8 @@ pub const ChildBlock = struct {
     match_patterns: []const Expression = &.{},
     pattern_bindings: []const ?PatternBinding = &.{},
     has_fallthrough: bool = false,
+    pattern_line: u32 = 0,
+    pattern_column: u32 = 0,
 
     // For if-try else clauses with error binding
     error_binding: ?[]const u8 = null,
@@ -155,6 +157,8 @@ pub const ParamDecl = struct {
     name: []const u8,
     type_expr: TypeExpr,
     default_value: ?*const Expression = null, // Optional default value for parameter
+    line: u32 = 0,
+    column: u32 = 0,
 };
 
 /// A named argument at a call site: name = value
@@ -174,6 +178,8 @@ pub const FunctionDecl = struct {
     body: []Statement,
     block: BlockInfo = .{},
     doc_comment: ?[]const u8 = null, // Doc comment (/// or /** */) preceding the function
+    line: u32 = 0,
+    column: u32 = 0,
 };
 
 pub const IndexAssign = struct {

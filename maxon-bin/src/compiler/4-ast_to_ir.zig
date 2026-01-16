@@ -3259,7 +3259,12 @@ pub const AstToIr = struct {
             // Skip variables starting with underscore (intentionally unused)
             if (!entry.value_ptr.used and !std.mem.startsWith(u8, entry.key_ptr.*, "_")) {
                 debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
-                self.reportError(.E014, entry.key_ptr.*);
+                // Use declaration location if available, otherwise fall back to current location
+                if (entry.value_ptr.decl_line > 0) {
+                    self.reportErrorAt(.E014, entry.key_ptr.*, entry.value_ptr.decl_line, entry.value_ptr.decl_column);
+                } else {
+                    self.reportError(.E014, entry.key_ptr.*);
+                }
                 return error.UnusedVariable;
             }
         }
@@ -3421,7 +3426,7 @@ pub const AstToIr = struct {
         // Check that all paths return for non-void functions
         if (decl.return_type != null) {
             if (!allPathsReturn(decl.body)) {
-                self.reportError(.E037, decl.name);
+                self.reportErrorAt(.E037, decl.name, decl.line, decl.column);
                 return error.MissingReturn;
             }
         }
@@ -3505,6 +3510,8 @@ pub const AstToIr = struct {
                 if (owns_memory) {
                     var_info.is_parameter = false; // We now own it, should free on return
                 }
+                var_info.decl_line = param.line;
+                var_info.decl_column = param.column;
                 try self.var_map.put(self.allocator, param.name, var_info);
             },
             .error_union_type => {
@@ -3514,12 +3521,15 @@ pub const AstToIr = struct {
                 try self.func().setValueName(slot_ptr.raw(), param.name);
                 try self.func().emitStore(slot_ptr.raw(), param_val);
 
-                try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                var var_info = VarInfo.init(
                     slot_ptr.raw(),
                     value_type,
                     true,
                     true,
-                ));
+                );
+                var_info.decl_line = param.line;
+                var_info.decl_column = param.column;
+                try self.var_map.put(self.allocator, param.name, var_info);
             },
             .primitive, .enum_type => {
                 const ir_type = value_type.toIrType();
@@ -3528,13 +3538,15 @@ pub const AstToIr = struct {
                 const ptr = try self.func().emitAlloca(ir_type);
                 try self.func().setValueName(ptr.raw(), param.name);
                 try self.func().emitStore(ptr.raw(), param_val);
-                try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                var var_info = VarInfo.init(
                     ptr.raw(),
                     value_type,
                     true,
                     false,
-                ));
-                if (std.mem.eql(u8, param.name, "value")) {}
+                );
+                var_info.decl_line = param.line;
+                var_info.decl_column = param.column;
+                try self.var_map.put(self.allocator, param.name, var_info);
             },
             .function_type => {
                 // Function pointers are passed as pointers - store in a stack slot
@@ -3543,12 +3555,15 @@ pub const AstToIr = struct {
                 const ptr = try self.func().emitAlloca(.ptr);
                 try self.func().setValueName(ptr.raw(), param.name);
                 try self.func().emitStore(ptr.raw(), param_val);
-                try self.var_map.put(self.allocator, param.name, VarInfo.initParam(
+                var var_info = VarInfo.initParam(
                     ptr.raw(),
                     value_type,
                     true,
                     true, // is_heap_allocated for function pointers
-                ));
+                );
+                var_info.decl_line = param.line;
+                var_info.decl_column = param.column;
+                try self.var_map.put(self.allocator, param.name, var_info);
             },
         }
     }
@@ -4792,13 +4807,10 @@ pub const AstToIr = struct {
         for (match_stmt.children) |child| {
             if (child.role != .match_case) continue;
             for (child.match_patterns) |pattern| {
-                const body = getChildBody(child);
                 const pattern_key = self.patternToString(pattern) catch continue;
 
                 if (seen_patterns.contains(pattern_key)) {
-                    self.current_line = body.line;
-                    self.current_column = body.column;
-                    self.reportError(.E027, pattern_key);
+                    self.reportErrorAt(.E027, pattern_key, child.pattern_line, child.pattern_column);
                     self.allocator.free(pattern_key);
                     return error.SemanticError;
                 }

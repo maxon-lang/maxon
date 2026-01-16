@@ -547,7 +547,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E027: specs/fragments/match-statements.error.match-duplicate-pattern.1.test:6:16: duplicate pattern in match: '1'
+error E027: specs/fragments/match-statements.error.match-duplicate-pattern.1.test:6:9: duplicate pattern in match: '1'
 ```
 
 <!-- test: error.match-type-mismatch -->

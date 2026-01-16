@@ -583,6 +583,8 @@ pub const Parser = struct {
                 .name = first_name.text,
                 .type_expr = first_type,
                 .default_value = first_default,
+                .line = first_name.line,
+                .column = first_name.column,
             });
 
             while (self.check(.comma)) {
@@ -594,6 +596,8 @@ pub const Parser = struct {
                     .name = param_name.text,
                     .type_expr = param_type,
                     .default_value = param_default,
+                    .line = param_name.line,
+                    .column = param_name.column,
                 });
             }
         }
@@ -881,6 +885,8 @@ pub const Parser = struct {
                 .identifier = name_token.text,
             },
             .doc_comment = doc_comment,
+            .line = name_token.line,
+            .column = name_token.column,
         };
     }
 
@@ -1506,6 +1512,11 @@ pub const Parser = struct {
             var pattern_bindings: std.ArrayListUnmanaged(?ast.PatternBinding) = .empty;
             errdefer pattern_bindings.deinit(self.allocator);
 
+            // Capture location of first pattern for error reporting
+            const pattern_token = self.current();
+            const pattern_line = pattern_token.line;
+            const pattern_column = pattern_token.column;
+
             // Parse first pattern (may be identifier with bindings like `value(n)`)
             const first_result = try self.parseMatchPattern();
             try patterns.append(self.allocator, first_result.pattern);
@@ -1531,6 +1542,8 @@ pub const Parser = struct {
                 .match_patterns = try patterns.toOwnedSlice(self.allocator),
                 .pattern_bindings = try pattern_bindings.toOwnedSlice(self.allocator),
                 .has_fallthrough = result.has_fallthrough,
+                .pattern_line = pattern_line,
+                .pattern_column = pattern_column,
             });
         }
 
