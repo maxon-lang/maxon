@@ -525,8 +525,7 @@ pub const TypeInfo = union(enum) {
 /// Function signature info
 pub const FuncInfo = struct {
     return_type: ir.Type,
-    return_type_name: ?[]const u8,
-    return_value_type: ?ValueType, // Full type info for arrays
+    return_value_type: ?ValueType, // Full return type info (struct, enum, primitive, error_union, etc.)
     param_types: []const ParamType,
     doc_comment: ?[]const u8 = null, // Doc comment (/// or /** */) from source
     ir_generated: bool = true, // false for pending lazy-generated methods
@@ -792,8 +791,6 @@ pub const SemanticInfo = struct {
     allocated_type_strings: std.ArrayListUnmanaged([]const u8) = .{},
     // Allocated function name strings (for registered external functions)
     allocated_func_names: std.ArrayListUnmanaged([]const u8) = .{},
-    // Allocated return_type_name strings (for registered external functions)
-    allocated_return_type_names: std.ArrayListUnmanaged([]const u8) = .{},
     // Keep stdlib source strings alive (they're referenced by type/func names)
     stdlib_sources: []const []const u8 = &.{},
     // Keep user source string alive (variable names are slices into this)
@@ -920,12 +917,6 @@ pub const SemanticInfo = struct {
             self.allocator.free(str);
         }
         self.allocated_func_names.deinit(self.allocator);
-
-        // Free allocated return_type_name strings
-        for (self.allocated_return_type_names.items) |str| {
-            self.allocator.free(str);
-        }
-        self.allocated_return_type_names.deinit(self.allocator);
     }
 
     /// Find a variable by name

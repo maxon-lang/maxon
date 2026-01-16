@@ -396,9 +396,11 @@ pub const Analyzer = struct {
         writer.writeByte(')') catch return null;
 
         // Add return type if not void
-        if (func.return_type_name) |rt| {
-            writer.writeAll(" returns ") catch return null;
-            writer.writeAll(rt) catch return null;
+        if (func.return_value_type) |vt| {
+            if (vt.getTypeName()) |rt| {
+                writer.writeAll(" returns ") catch return null;
+                writer.writeAll(rt) catch return null;
+            }
         } else if (func.return_type != .void) {
             writer.writeAll(" returns ") catch return null;
             writer.writeAll(func.return_type.toMaxonName()) catch return null;
@@ -1721,8 +1723,10 @@ fn findPositionInOriginal(original: []const u8, trimmed: []const u8, pos_in_trim
 }
 
 fn formatFuncSignature(func: ast_to_ir.FuncInfo) []const u8 {
-    if (func.return_type_name) |rt| {
-        return rt;
+    if (func.return_value_type) |vt| {
+        if (vt.getTypeName()) |rt| {
+            return rt;
+        }
     }
     return func.return_type.toMaxonName();
 }

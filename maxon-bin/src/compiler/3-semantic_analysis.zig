@@ -283,8 +283,6 @@ pub const SemanticAnalyzer = struct {
     allocated_type_strings: std.ArrayListUnmanaged([]const u8),
     // Track allocated external function names (need to be freed later)
     allocated_func_names: std.ArrayListUnmanaged([]const u8),
-    // Track allocated external return type names (need to be freed later)
-    allocated_return_type_names: std.ArrayListUnmanaged([]const u8),
 
     // Current context for variable collection
     current_func_name: ?[]const u8 = null,
@@ -305,7 +303,6 @@ pub const SemanticAnalyzer = struct {
             .captured_vars = .{},
             .allocated_type_strings = .{},
             .allocated_func_names = .{},
-            .allocated_return_type_names = .{},
             .mutation_analyzer = MutationAnalyzer.init(allocator),
         };
     }
@@ -327,10 +324,6 @@ pub const SemanticAnalyzer = struct {
             self.allocator.free(str);
         }
         self.allocated_func_names.deinit(self.allocator);
-        for (self.allocated_return_type_names.items) |str| {
-            self.allocator.free(str);
-        }
-        self.allocated_return_type_names.deinit(self.allocator);
     }
 
     /// Convert a type name to a ValueType with pointer to type_map entry.
@@ -571,7 +564,6 @@ pub const SemanticAnalyzer = struct {
 
             try self.func_map.put(self.allocator, intr.name, .{
                 .return_type = intr.return_ir_type,
-                .return_type_name = if (intr.return_type_name.len > 0) intr.return_type_name else null,
                 .return_value_type = return_value_type,
                 .param_types = param_types,
                 .doc_comment = if (intr.help_text.len > 0) intr.help_text else null,
@@ -612,11 +604,6 @@ pub const SemanticAnalyzer = struct {
         // Track allocated function name (will be transferred to SemanticInfo)
         try self.allocated_func_names.append(self.allocator, ext_func.name);
 
-        // Track allocated return type name if present
-        if (ext_func.return_type_name) |rtn| {
-            try self.allocated_return_type_names.append(self.allocator, rtn);
-        }
-
         // Check if this replaces an existing external function - if so, free the old param_types
         if (self.func_map.fetchRemove(ext_func.name)) |kv| {
             const old_func = kv.value;
@@ -636,7 +623,6 @@ pub const SemanticAnalyzer = struct {
 
         try self.func_map.put(self.allocator, ext_func.name, .{
             .return_type = ext_func.return_type,
-            .return_type_name = ext_func.return_type_name,
             .return_value_type = return_value_type,
             .param_types = param_types,
             .doc_comment = ext_func.doc_comment,
@@ -764,7 +750,6 @@ pub const SemanticAnalyzer = struct {
 
         try self.func_map.put(self.allocator, decl.name, .{
             .return_type = return_info.ir_type,
-            .return_type_name = return_info.type_name,
             .return_value_type = return_info.value_type,
             .param_types = param_types,
             .doc_comment = decl.doc_comment,
@@ -792,7 +777,6 @@ pub const SemanticAnalyzer = struct {
 
         try self.func_map.put(self.allocator, mangled, .{
             .return_type = return_info.ir_type,
-            .return_type_name = return_info.type_name,
             .return_value_type = return_info.value_type,
             .param_types = param_types,
             .doc_comment = method.doc_comment,
@@ -1683,11 +1667,11 @@ pub const SemanticAnalyzer = struct {
                 const mangled = std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, mc.method_name }) catch break :blk null;
                 defer self.allocator.free(mangled);
                 const func_info = self.func_map.get(mangled) orelse break :blk null;
-                break :blk func_info.return_type_name;
+                break :blk if (func_info.return_value_type) |vt| vt.getTypeName() else null;
             },
             .call => |call| blk: {
                 const func_info = self.func_map.get(call.func_name) orelse break :blk null;
-                break :blk func_info.return_type_name;
+                break :blk if (func_info.return_value_type) |vt| vt.getTypeName() else null;
             },
             else => null,
         };
@@ -1707,7 +1691,6 @@ pub const SemanticAnalyzer = struct {
             .interfaces = self.interface_map,
             .allocated_type_strings = self.allocated_type_strings,
             .allocated_func_names = self.allocated_func_names,
-            .allocated_return_type_names = self.allocated_return_type_names,
         };
 
         // Clear our maps to prevent double-free
@@ -1716,7 +1699,6 @@ pub const SemanticAnalyzer = struct {
         self.interface_map = .{};
         self.allocated_type_strings = .{};
         self.allocated_func_names = .{};
-        self.allocated_return_type_names = .{};
 
         return result;
     }
