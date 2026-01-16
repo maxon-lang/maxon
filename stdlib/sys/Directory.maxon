@@ -1,18 +1,16 @@
-enum DirectoryError is Error
+/// Error for directory list operations
+export enum DirectoryListError is Error
 	notFound
-	permissionDenied
-	notDirectory
-	alreadyExists
-end 'DirectoryError'
+end 'DirectoryListError'
 
 export type Directory
 	/// List files and directories in a path
-	export static function list(path String) returns Array of String throws DirectoryError
+	export static function list(path String) returns Array of String throws DirectoryListError
 		var pattern = "{path}\\*"
 		var cs = pattern.cstr()
 		var handle = __find_first_file(cs)
 		if handle == 0 'notFound'
-			throw DirectoryError.notFound
+			throw DirectoryListError.notFound
 		end 'notFound'
 		var result = Array of String{}
 		var filename = __find_filename(handle)

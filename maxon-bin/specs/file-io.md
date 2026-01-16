@@ -16,31 +16,31 @@ File I/O operations using the `File` type.
 File operations use function-specific error types:
 
 ```maxon
-enum ReadError is Error
+enum FileReadError is Error
     notFound
-end 'ReadError'
+end 'FileReadError'
 
-enum WriteError is Error
+enum FileWriteError is Error
     failed
-end 'WriteError'
+end 'FileWriteError'
 
-enum DeleteError is Error
+enum FileDeleteError is Error
     notFound
-end 'DeleteError'
+end 'FileDeleteError'
 ```
 
 ### File.readText
 
 Read the entire contents of a text file as a UTF-8 encoded string.
 
-**Signature:** `static function readText(path string) returns string throws ReadError`
+**Signature:** `static function readText(path string) returns string throws FileReadError`
 
 **Parameters:**
 - `path`: File path as a string
 
 **Returns:** File contents as a string
 
-**Throws:** `ReadError.notFound` if file cannot be read
+**Throws:** `FileReadError.notFound` if file cannot be read
 
 **Example:**
 
@@ -65,26 +65,26 @@ Could not read file
 
 Write a string to a text file using UTF-8 encoding.
 
-**Signature:** `static function writeText(path string, content string) throws WriteError`
+**Signature:** `static function writeText(path string, content string) throws FileWriteError`
 
 **Parameters:**
 - `path`: File path as a string
 - `content`: Text content to write
 
-**Throws:** `WriteError.failed` on failure
+**Throws:** `FileWriteError.failed` on failure
 
 ### File.readBinary
 
 Read the entire contents of a file as raw bytes.
 
-**Signature:** `static function readBinary(path string) returns Array of byte throws ReadError`
+**Signature:** `static function readBinary(path string) returns Array of byte throws FileReadError`
 
 **Parameters:**
 - `path`: File path as a string
 
 **Returns:** File contents as a byte array
 
-**Throws:** `ReadError.notFound` if file cannot be read
+**Throws:** `FileReadError.notFound` if file cannot be read
 
 **Example:**
 
@@ -103,13 +103,13 @@ end 'main'
 
 Write binary data to a file.
 
-**Signature:** `static function writeBinary(path string, content Array of byte) throws WriteError`
+**Signature:** `static function writeBinary(path string, content Array of byte) throws FileWriteError`
 
 **Parameters:**
 - `path`: File path as a string
 - `content`: Binary data as a byte array
 
-**Throws:** `WriteError.failed` on failure
+**Throws:** `FileWriteError.failed` on failure
 
 ### File.exists
 
@@ -139,12 +139,12 @@ end 'main'
 
 Delete a file at the given path.
 
-**Signature:** `static function delete(path string) throws DeleteError`
+**Signature:** `static function delete(path string) throws FileDeleteError`
 
 **Parameters:**
 - `path`: File path as a string
 
-**Throws:** `DeleteError.notFound` if the file cannot be deleted
+**Throws:** `FileDeleteError.notFound` if the file cannot be deleted
 
 **Example:**
 

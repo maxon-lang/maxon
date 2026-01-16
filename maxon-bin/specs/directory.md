@@ -11,31 +11,28 @@ category: stdlib
 
 Directory operations using the `Directory` type.
 
-### DirectoryError
+### Error Types
 
-Error type for directory operations:
+Directory operations use function-specific error types:
 
 ```maxon
-enum DirectoryError is Error
+enum DirectoryListError is Error
     notFound
-    permissionDenied
-    notDirectory
-    alreadyExists
-end 'DirectoryError'
+end 'DirectoryListError'
 ```
 
 ### Directory.list
 
 List files and directories in a path.
 
-**Signature:** `static function list(path string) returns Array of string throws DirectoryError`
+**Signature:** `static function list(path string) returns Array of string throws DirectoryListError`
 
 **Parameters:**
 - `path`: Directory path as a string
 
 **Returns:** Array of filenames (excluding `.` and `..`)
 
-**Throws:** `DirectoryError.notFound` if directory doesn't exist
+**Throws:** `DirectoryListError.notFound` if directory doesn't exist
 
 **Example:**
 
