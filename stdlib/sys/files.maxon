@@ -1,13 +1,17 @@
-/// Errors that can occur during file operations
-export enum FileError is Error
+/// Error for file read operations
+export enum ReadError is Error
 	notFound
-	permissionDenied
-	alreadyExists
-	diskFull
-	invalidPath
-	readError
-	writeError
-end 'FileError'
+end 'ReadError'
+
+/// Error for file write operations
+export enum WriteError is Error
+	failed
+end 'WriteError'
+
+/// Error for file delete operations
+export enum DeleteError is Error
+	notFound
+end 'DeleteError'
 
 let INVALID_HANDLE = -1
 
@@ -18,16 +22,16 @@ export type File
 	end 'tryOpen'
 
 	/// Open file for reading, throwing if not found
-	static function openForRead(path String) returns int throws FileError
+	static function openForRead(path String) returns int throws ReadError
 		let handle = tryOpen(path)
 		if handle == INVALID_HANDLE 'notFound'
-			throw FileError.notFound
+			throw ReadError.notFound
 		end 'notFound'
 		return handle
 	end 'openForRead'
 
 	/// Read file into a managed memory
-	static function readFileData(path String, extraBytes int) returns __ManagedMemory throws FileError
+	static function readFileData(path String, extraBytes int) returns __ManagedMemory throws ReadError
 		let handle = try openForRead(path)
 		let size = __file_size(handle)
 		var managed = __managed_memory_create(size + extraBytes, 1)
@@ -38,7 +42,7 @@ export type File
 	end 'readFileData'
 
 	/// Read text file content as a UTF-8 string
-	export static function readText(path String) returns String throws FileError
+	export static function readText(path String) returns String throws ReadError
 		var managed = try readFileData(path, extraBytes: 1)
 		let len = __managed_memory_len(managed)
 		__managed_memory_set_byte(managed, len, 0)
@@ -46,24 +50,24 @@ export type File
 	end 'readText'
 
 	/// Read file content as raw bytes
-	export static function readBinary(path String) returns Array of byte throws FileError
+	export static function readBinary(path String) returns Array of byte throws ReadError
 		var managed = try readFileData(path, extraBytes: 0)
 		return Array of byte{managed: managed, iterIndex: 0}
 	end 'readBinary'
 
 	/// Write string content to a text file
-	export static function writeText(path String, content String) throws FileError
+	export static function writeText(path String, content String) throws WriteError
 		let res = __write_file(path.cstr(), content.cstr())
 		if res != 0 'failed'
-			throw FileError.writeError
+			throw WriteError.failed
 		end 'failed'
 	end 'writeText'
 
 	/// Write binary content to a file
-	export static function writeBinary(path String, content Array of byte) throws FileError
+	export static function writeBinary(path String, content Array of byte) throws WriteError
 		let res = __write_file_binary(path.cstr(), content)
 		if res != 0 'failed'
-			throw FileError.writeError
+			throw WriteError.failed
 		end 'failed'
 	end 'writeBinary'
 
@@ -78,10 +82,10 @@ export type File
 	end 'exists'
 
 	/// Delete a file at the given path
-	export static function delete(path String) throws FileError
+	export static function delete(path String) throws DeleteError
 		let res = __file_delete(path.cstr())
 		if res != 0 'failed'
-			throw FileError.notFound
+			throw DeleteError.notFound
 		end 'failed'
 	end 'delete'
 end 'File'
