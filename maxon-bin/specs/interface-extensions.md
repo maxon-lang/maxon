@@ -68,7 +68,7 @@ extension Iterable
     function map(transform (Element) returns Element) returns Array of Element
         var result = Array of Element{}
         for item in self 'loop'
-            result = result.push(transform(item))
+            result.push(transform(item))
         end 'loop'
         return result
     end 'map'

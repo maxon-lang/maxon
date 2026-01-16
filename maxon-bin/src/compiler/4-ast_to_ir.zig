@@ -4710,8 +4710,26 @@ pub const AstToIr = struct {
             // (e.g., result = result.concat(b) needs result's buffer while evaluating RHS)
             const value_typed = try self.convertExpression(assign.value);
 
-            // Free old heap memory AFTER evaluating RHS
-            try cleanup_helpers.freeHeapVar(self, var_info.*, false, assign.target);
+            // Check for self-returning method call pattern: x = x.method(...)
+            // When a method is called on a variable and returns Self (same type), the method
+            // typically mutates the variable in place and returns it. In this case, the old
+            // and new values share the same managed buffer, so we must skip the decref to
+            // avoid freeing the buffer we're about to use.
+            const is_self_returning_method_call = blk: {
+                if (assign.value != .method_call) break :blk false;
+                const mcall = assign.value.method_call;
+                if (mcall.base.* != .identifier) break :blk false;
+                if (!std.mem.eql(u8, mcall.base.identifier, assign.target)) break :blk false;
+                // Only skip decref for types with managed buffers where aliasing is problematic
+                if (value_typed.ty != .struct_type) break :blk false;
+                if (!value_typed.ty.struct_type.has_managed_buffer) break :blk false;
+                break :blk true;
+            };
+
+            // Free old heap memory AFTER evaluating RHS, unless it's a self-returning method call
+            if (!is_self_returning_method_call) {
+                try cleanup_helpers.freeHeapVar(self, var_info.*, false, assign.target);
+            }
 
             const is_reference = var_info.ty == .struct_type;
             if (is_reference and !var_info.is_heap_allocated) {

@@ -566,6 +566,31 @@ Increfs:   1
 Decrefs:   1
 ```
 
+<!-- test: push-self-assignment -->
+Test that `arr = arr.push(value)` pattern works correctly.
+This pattern was previously broken due to incorrect refcount handling when the
+same variable appears on both sides of an assignment with a mutating method call.
+
+```maxon
+function main() returns int
+    var arr = Array of int{}
+    arr = arr.push(1)
+    arr = arr.push(2)
+    arr = arr.push(3)
+
+    var sum = 0
+    for n in arr 'loop'
+        sum = sum + n
+    end 'loop'
+
+    // 1 + 2 + 3 = 6
+    return sum
+end 'main'
+```
+```exitcode
+6
+```
+
 <!-- test: error.missing-braces -->
 Generic type instantiation requires braces.
 
