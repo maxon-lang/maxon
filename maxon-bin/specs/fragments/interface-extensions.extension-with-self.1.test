@@ -1,0 +1,55 @@
+// Test: interface-extensions.extension-with-self.1
+interface Summable
+    function value() returns int
+end 'Summable'
+
+extension Summable
+    function doubled() returns int
+        return self.value() * 2
+    end 'doubled'
+end 'Summable'
+
+type Number is Summable
+    var n int
+
+    function Summable.value() returns int
+        return n
+    end 'value'
+end 'Number'
+
+function main() returns int
+    var num = Number{n: 21}
+    return num.doubled()
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %num = alloca.sized ptr 8
+    memset %num 0 8
+    %tmp_fieldptr = getfieldptr ptr %num 0
+    %tmp_const = const.i64 i64 21
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call i64 @Number$doubled(%num)
+    ret %tmp_call
+}
+
+function Number$doubled() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_call = call i64 @Number$value(%self)
+    %tmp_const = const.i64 i64 2
+    %tmp_mul = mul i64 %tmp_call %tmp_const
+    ret %tmp_mul
+}
+
+function Number$value() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+---

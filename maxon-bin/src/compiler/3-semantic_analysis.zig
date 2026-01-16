@@ -865,7 +865,7 @@ pub const SemanticAnalyzer = struct {
     }
 
     fn typeExprToValueType(self: *SemanticAnalyzer, type_expr: ast.TypeExpr) !ValueType {
-        return switch (type_expr) {
+        return switch (type_expr.expr) {
             .simple => |name| {
                 // Check for generic parameter substitution
                 if (self.generic_params.get(name)) |concrete| {
@@ -965,7 +965,7 @@ pub const SemanticAnalyzer = struct {
 
     /// Convert a TypeExpr to a human-readable display string (e.g., "Array of Point")
     fn typeExprToDisplayName(self: *SemanticAnalyzer, type_expr: ast.TypeExpr) ?[]const u8 {
-        return switch (type_expr) {
+        return switch (type_expr.expr) {
             .simple => |name| name,
             .generic => |gen| {
                 // Format as "BaseType of Arg1, Arg2"

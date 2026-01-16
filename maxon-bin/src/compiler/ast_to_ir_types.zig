@@ -537,9 +537,11 @@ pub const FuncInfo = struct {
 /// Pending method info for lazy generation of monomorphized type methods
 pub const PendingMethod = struct {
     type_name: []const u8, // "Array$int" - the monomorphized type
-    method: *const ast.MethodDecl, // Pointer to method AST
-    generic_bindings: []const GenericBinding, // ["Element" -> "int"]
-    source_file: ?[]const u8, // Source file path for error reporting
+    method: ?*const ast.MethodDecl = null, // Pointer to method AST (for regular methods)
+    extension_method: ?*const ast.ExtensionMethod = null, // Pointer to extension method AST
+    generic_bindings: []const GenericBinding = &.{}, // ["Element" -> "int"]
+    type_bindings: std.StringHashMapUnmanaged([]const u8) = .{}, // For extension methods: associated type bindings
+    source_file: ?[]const u8 = null, // Source file path for error reporting
 
     pub const GenericBinding = struct {
         param: []const u8,
@@ -574,6 +576,12 @@ pub const ExternalTypeInfo = struct {
 pub const ExternalInterfaceInfo = struct {
     /// Original interface declaration (needed for method signatures)
     interface_decl: *const ast.InterfaceDecl,
+};
+
+/// External extension info - for cross-module compilation
+pub const ExternalExtensionInfo = struct {
+    /// Original extension declaration (needed for method bodies)
+    extension_decl: *const ast.ExtensionDecl,
 };
 
 /// External enum info - for cross-module compilation

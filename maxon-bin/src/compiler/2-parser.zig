@@ -84,6 +84,8 @@ pub const Parser = struct {
         errdefer enums.deinit(self.allocator);
         var interfaces: std.ArrayListUnmanaged(ast.InterfaceDecl) = .empty;
         errdefer interfaces.deinit(self.allocator);
+        var extensions: std.ArrayListUnmanaged(ast.ExtensionDecl) = .empty;
+        errdefer extensions.deinit(self.allocator);
         var functions: std.ArrayListUnmanaged(ast.FunctionDecl) = .empty;
         errdefer functions.deinit(self.allocator);
         var global_constants: std.ArrayListUnmanaged(ast.GlobalConstant) = .empty;
@@ -98,6 +100,8 @@ pub const Parser = struct {
                 try types.append(self.allocator, try self.parseTypeDecl());
             } else if (self.check(.interface)) {
                 try interfaces.append(self.allocator, try self.parseInterfaceDecl());
+            } else if (self.check(.extension)) {
+                try extensions.append(self.allocator, try self.parseExtensionDecl(false));
             } else if (self.check(.let)) {
                 // Top-level let declaration (non-exported)
                 try global_constants.append(self.allocator, try self.parseGlobalConstant(false));
@@ -108,6 +112,9 @@ pub const Parser = struct {
                         try types.append(self.allocator, try self.parseTypeDecl());
                     } else if (next.type == .interface) {
                         try interfaces.append(self.allocator, try self.parseInterfaceDecl());
+                    } else if (next.type == .extension) {
+                        _ = self.advance(); // skip 'export'
+                        try extensions.append(self.allocator, try self.parseExtensionDecl(true));
                     } else if (next.type == .function) {
                         _ = self.advance(); // skip 'export'
                         try functions.append(self.allocator, try self.parseFunctionWithExport(true));
@@ -151,6 +158,7 @@ pub const Parser = struct {
             .types = try types.toOwnedSlice(self.allocator),
             .enums = try enums.toOwnedSlice(self.allocator),
             .interfaces = try interfaces.toOwnedSlice(self.allocator),
+            .extensions = try extensions.toOwnedSlice(self.allocator),
             .functions = try functions.toOwnedSlice(self.allocator),
             .global_constants = try global_constants.toOwnedSlice(self.allocator),
         };
@@ -699,7 +707,10 @@ pub const Parser = struct {
             return try self.parseFunctionTypeExpr();
         }
 
-        var base_type: ast.TypeExpr = undefined;
+        // Capture location of the type expression (the first token)
+        const start_token = self.current();
+        const type_line = start_token.line;
+        const type_column = start_token.column;
 
         // Parse type name (may include "Array" which is treated as a generic type)
         const type_name = try self.expectTypeName();
@@ -729,10 +740,14 @@ pub const Parser = struct {
                 try type_args.append(self.allocator, try self.expectTypeName());
             }
 
-            base_type = .{ .generic = .{
-                .base_type = type_name,
-                .type_args = try type_args.toOwnedSlice(self.allocator),
-            } };
+            return .{
+                .expr = .{ .generic = .{
+                    .base_type = type_name,
+                    .type_args = try type_args.toOwnedSlice(self.allocator),
+                } },
+                .line = type_line,
+                .column = type_column,
+            };
         } else if (self.check(.from)) {
             // Check for "TypeName from K to V" syntax (two-argument generics like Map)
             _ = self.advance(); // consume 'from'
@@ -750,19 +765,30 @@ pub const Parser = struct {
             type_args_arr[0] = key_type;
             type_args_arr[1] = value_type;
 
-            base_type = .{ .generic = .{
-                .base_type = type_name,
-                .type_args = type_args_arr,
-            } };
+            return .{
+                .expr = .{ .generic = .{
+                    .base_type = type_name,
+                    .type_args = type_args_arr,
+                } },
+                .line = type_line,
+                .column = type_column,
+            };
         } else {
-            base_type = .{ .simple = type_name };
+            return .{
+                .expr = .{ .simple = type_name },
+                .line = type_line,
+                .column = type_column,
+            };
         }
-
-        return base_type;
     }
 
     /// Parse function type: (int, string) returns bool or (x int, y int) returns int
     fn parseFunctionTypeExpr(self: *Parser) ParseError!ast.TypeExpr {
+        // Capture location of the function type (the opening paren)
+        const start_token = self.current();
+        const type_line = start_token.line;
+        const type_column = start_token.column;
+
         _ = try self.expect(.lparen);
 
         var param_types: std.ArrayListUnmanaged(ast.TypeExpr) = .empty;
@@ -798,11 +824,15 @@ pub const Parser = struct {
             return_type = ret_ptr;
         }
 
-        return .{ .function_type = .{
-            .param_types = try param_types.toOwnedSlice(self.allocator),
-            .param_names = try param_names.toOwnedSlice(self.allocator),
-            .return_type = return_type,
-        } };
+        return .{
+            .expr = .{ .function_type = .{
+                .param_types = try param_types.toOwnedSlice(self.allocator),
+                .param_names = try param_names.toOwnedSlice(self.allocator),
+                .return_type = return_type,
+            } },
+            .line = type_line,
+            .column = type_column,
+        };
     }
 
     const FunctionTypeParam = struct {
@@ -831,7 +861,11 @@ pub const Parser = struct {
             }
 
             // Otherwise, first token was the type itself (e.g., a struct name)
-            return .{ .name = null, .type_expr = .{ .simple = first.text } };
+            return .{ .name = null, .type_expr = .{
+                .expr = .{ .simple = first.text },
+                .line = first.line,
+                .column = first.column,
+            } };
         }
 
         // Not an identifier, parse as type directly (int, float, etc.)
@@ -842,16 +876,17 @@ pub const Parser = struct {
     /// Infer a TypeExpr from an expression (for field default values)
     fn inferTypeFromExpr(self: *Parser, expr: ast.Expression) ParseError!ast.TypeExpr {
         _ = self;
+        // No specific location for inferred types (they're synthetic)
         return switch (expr) {
-            .integer => .{ .simple = "int" },
-            .float_lit => .{ .simple = "float" },
-            .bool_lit => .{ .simple = "bool" },
-            .string_literal, .interpolated_string => .{ .simple = "String" },
-            .char_literal => .{ .simple = "Character" },
+            .integer => .{ .expr = .{ .simple = "int" } },
+            .float_lit => .{ .expr = .{ .simple = "float" } },
+            .bool_lit => .{ .expr = .{ .simple = "bool" } },
+            .string_literal, .interpolated_string => .{ .expr = .{ .simple = "String" } },
+            .char_literal => .{ .expr = .{ .simple = "Character" } },
             else => {
                 // For complex expressions, we cannot infer at parse time
                 // Return a placeholder and let semantic analysis handle it
-                return .{ .simple = "int" }; // fallback
+                return .{ .expr = .{ .simple = "int" } }; // fallback
             },
         };
     }
@@ -3137,24 +3172,73 @@ pub const Parser = struct {
         const throws_type = try self.parseOptionalThrowsClause();
         _ = try self.expect(.newline);
 
-        // Check if this has a default implementation (body before end/function)
-        self.skipNewlines();
-        const has_default_impl = !self.check(.end) and !self.check(.function) and !self.check(.static);
-        const default_body: ?[]ast.Statement = if (has_default_impl) blk: {
-            const body_result = try self.parseBodyUntilEnd(name_token.text);
-            try self.expectEndNewline();
-            if (self.check(.newline)) _ = self.advance();
-            break :blk body_result.body;
-        } else null;
-
         return .{
             .name = name_token.text,
             .is_static = is_static,
             .params = params,
             .return_type = return_type,
             .throws_type = throws_type,
-            .has_default_impl = has_default_impl,
-            .default_body = default_body,
+        };
+    }
+
+    fn parseExtensionDecl(self: *Parser, is_export: bool) ParseError!ast.ExtensionDecl {
+        _ = try self.expect(.extension);
+        const name_token = try self.expect(.identifier);
+        _ = try self.expect(.newline);
+
+        // Parse extension methods
+        var methods: std.ArrayListUnmanaged(ast.ExtensionMethod) = .empty;
+        errdefer methods.deinit(self.allocator);
+
+        while (!self.check(.end) and !self.isAtEnd()) {
+            if (self.check(.newline)) {
+                _ = self.advance();
+                continue;
+            }
+            try methods.append(self.allocator, try self.parseExtensionMethod());
+        }
+
+        const end_line = try self.expectEndLabel(name_token.text);
+        try self.expectEndNewline();
+
+        return .{
+            .interface_name = name_token.text,
+            .is_export = is_export,
+            .methods = try methods.toOwnedSlice(self.allocator),
+            .block = .{
+                .start_line = name_token.line,
+                .start_column = name_token.column,
+                .end_line = end_line,
+                .identifier = name_token.text,
+            },
+        };
+    }
+
+    fn parseExtensionMethod(self: *Parser) ParseError!ast.ExtensionMethod {
+        _ = try self.expect(.function);
+        const name_token = try self.expect(.identifier);
+        _ = try self.expect(.lparen);
+        const params = try self.parseParamList();
+        const return_type = try self.parseOptionalReturnType();
+        const throws_type = try self.parseOptionalThrowsClause();
+        _ = try self.expect(.newline);
+
+        // Extension methods MUST have a body
+        const body_result = try self.parseBodyUntilEnd(name_token.text);
+        try self.expectEndNewline();
+
+        return .{
+            .name = name_token.text,
+            .params = params,
+            .return_type = return_type,
+            .throws_type = throws_type,
+            .body = body_result.body,
+            .block = .{
+                .start_line = name_token.line,
+                .start_column = name_token.column,
+                .end_line = body_result.end_line,
+                .identifier = name_token.text,
+            },
         };
     }
 };

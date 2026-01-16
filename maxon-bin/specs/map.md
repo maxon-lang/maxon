@@ -21,8 +21,6 @@ var lookup = [10: 1000, 20: 2000, 30: 3000]         // map<int,int>
 
 The key and value types are automatically inferred from the literal values.
 
-> **Note:** String keys will be supported when strings are implemented in Maxon. Currently, use integer keys.
-
 You can also create an empty map with explicit types:
 
 ```text

@@ -1,0 +1,89 @@
+// Test: interface-extensions.extension-returns-struct.1
+interface Pointlike
+    function getX() returns int
+    function getY() returns int
+end 'Pointlike'
+
+type SimplePoint
+    export var x int
+    export var y int
+end 'SimplePoint'
+
+extension Pointlike
+    function asSimple() returns SimplePoint
+        return SimplePoint{x: self.getX(), y: self.getY()}
+    end 'asSimple'
+end 'Pointlike'
+
+type Coord is Pointlike
+    var cx int
+    var cy int
+
+    function Pointlike.getX() returns int
+        return cx
+    end 'getX'
+
+    function Pointlike.getY() returns int
+        return cy
+    end 'getY'
+end 'Coord'
+
+function main() returns int
+    var c = Coord{cx: 10, cy: 32}
+    var p = c.asSimple()
+    return p.x + p.y
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %c = alloca.sized ptr 16
+    memset %c 0 16
+    %tmp_fieldptr = getfieldptr ptr %c 0
+    %tmp_const = const.i64 i64 10
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %c 8
+    %tmp_const.1 = const.i64 i64 32
+    store %tmp_fieldptr.1 %tmp_const.1
+    %p = alloca.sized ptr 16
+    %tmp_call = call ptr @Coord$asSimple(%p, %c)
+    %tmp_fieldptr.2 = getfieldptr ptr %p 0
+    %tmp_load = load i64 %tmp_fieldptr.2
+    %tmp_fieldptr.3 = getfieldptr ptr %p 8
+    %tmp_load.1 = load i64 %tmp_fieldptr.3
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    ret %tmp_add
+}
+
+function Coord$asSimple() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    %self = param ptr 1
+    memset %tmp_param 0 16
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_call = call i64 @Coord$getX(%self)
+    store %tmp_fieldptr %tmp_call
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
+    %tmp_call.1 = call i64 @Coord$getY(%self)
+    store %tmp_fieldptr.1 %tmp_call.1
+    ret %tmp_param
+}
+
+function Coord$getX() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+function Coord$getY() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 8
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+---

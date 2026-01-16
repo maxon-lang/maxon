@@ -1,23 +1,13 @@
 *You* Aren't Going To Write It
 You *Are* Going To Read It
 
-
-Sequence: The most basic protocol. Allows you to iterate (use a for loop).
-
-Collection: Extends Sequence. Adds the ability to access elements by index (str[i]) and count elements.
-
-BidirectionalCollection: Extends Collection. Adds the ability to traverse backwards (needed for finding the last index of a character).
-
-StringProtocol: Extends BidirectionalCollection. This is the specific protocol that adds string-like behaviors (comparisons, uppercase/lowercase transformations, C-string interoperability).
-
-Why do this? By making String a Collection, you get hundreds of algorithms for free: .map, .filter, .reduce, .dropFirst, .split. The Swift team didn't have to write these specifically for Strings; they just inherited them from the Collection protocol logic.
-
 ## Priorities
-- implement map() for Set which should be a generic implementation that also replaces code in Map
+- error message keep getting the wrong file/row/column
 - self hosting features
 - debugging (speed up the dev process)
 - memory safety (generational references)
 - parser needs to be strict about new lines
+- multiline string literals using multiple quotes
 
 ## TODO
 - // Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
@@ -38,6 +28,7 @@ Why do this? By making String a Collection, you get hundreds of algorithms for f
 - lsp is lowercasing paths on windows for comparison which isn't really correct
 - oh god locales
 - optimize stack arrays (simd, bitmask filtering)
+- extensions
 
 ## Ideas
 - reorganize structs to improve cache locality
@@ -67,7 +58,7 @@ add "test" to maxon
 add "lint" to maxon
 add "profile" to maxon
 add "docs" to maxon
-add "fmt" to maxon
+add "format" to maxon
 add package manager to maxon
 
 self hosting
@@ -205,9 +196,3 @@ Value: Vectors straight-line code. If you manually write x1 = a[0] + b[0]; x2 = 
 Phase 7: Interface conformance checking (verify types implement required methods)
 Phase 9: Export keyword enforcement (visibility rules)
 Phase 11: Interface declarations (parsing interface definitions)
-
-
-- extensions
-- map extension
-- add ArrayIndex
-- semantic error if function is declared as 'throws' but does nothing that might throw

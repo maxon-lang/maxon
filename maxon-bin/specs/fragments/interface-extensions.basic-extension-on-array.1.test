@@ -1,0 +1,44 @@
+// Test: interface-extensions.basic-extension-on-array.1
+interface Countable
+    function value() returns int
+end 'Countable'
+
+extension Countable
+    function count() returns int
+        return 42
+    end 'count'
+end 'Countable'
+
+type IntList is Countable
+    var data int
+
+    function Countable.value() returns int
+        return data
+    end 'value'
+end 'IntList'
+
+function main() returns int
+    var list = IntList{data: 5}
+    return list.count()
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %list = alloca.sized ptr 8
+    memset %list 0 8
+    %tmp_fieldptr = getfieldptr ptr %list 0
+    %tmp_const = const.i64 i64 5
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call i64 @IntList$count(%list)
+    ret %tmp_call
+}
+
+function IntList$count() -> i64 {
+entry:
+    %tmp_const = const.i64 i64 42
+    ret %tmp_const
+}
+
+---

@@ -52,6 +52,7 @@ pub const Program = struct {
     types: []TypeDecl,
     enums: []EnumDecl,
     interfaces: []InterfaceDecl,
+    extensions: []ExtensionDecl,
     functions: []FunctionDecl,
     global_constants: []GlobalConstant,
 };
@@ -62,8 +63,6 @@ pub const InterfaceMethod = struct {
     params: []const ParamDecl,
     return_type: ?TypeExpr, // null for void
     throws_type: ?[]const u8, // error type if method throws (must conform to Error)
-    has_default_impl: bool,
-    default_body: ?[]Statement,
 };
 
 pub const InterfaceDecl = struct {
@@ -72,6 +71,22 @@ pub const InterfaceDecl = struct {
     generic_params: []const []const u8, // ["Element"] for `uses Element`
     extends: []const []const u8, // ["Collection", "Iterable"] for `extends Collection, Iterable`
     methods: []InterfaceMethod,
+    block: BlockInfo = .{},
+};
+
+pub const ExtensionMethod = struct {
+    name: []const u8,
+    params: []const ParamDecl,
+    return_type: ?TypeExpr,
+    throws_type: ?[]const u8,
+    body: []Statement, // Required - extensions must have bodies
+    block: BlockInfo = .{},
+};
+
+pub const ExtensionDecl = struct {
+    interface_name: []const u8,
+    is_export: bool,
+    methods: []ExtensionMethod,
     block: BlockInfo = .{},
 };
 
@@ -146,11 +161,17 @@ pub const ErrorUnionTypeExpr = struct {
     error_type: []const u8, // The error type name (must conform to Error)
 };
 
-pub const TypeExpr = union(enum) {
-    simple: []const u8, // int, float, MyStruct
-    generic: GenericTypeExpr, // Array of int, Map of string int
-    error_union: ErrorUnionTypeExpr, // T or E (where E conforms to Error)
-    function_type: FunctionTypeExpr, // (int, string) returns bool
+pub const TypeExpr = struct {
+    expr: TypeExprKind,
+    line: u32 = 0,
+    column: u32 = 0,
+
+    pub const TypeExprKind = union(enum) {
+        simple: []const u8, // int, float, MyStruct
+        generic: GenericTypeExpr, // Array of int, Map of string int
+        error_union: ErrorUnionTypeExpr, // T or E (where E conforms to Error)
+        function_type: FunctionTypeExpr, // (int, string) returns bool
+    };
 };
 
 pub const ParamDecl = struct {
@@ -602,18 +623,28 @@ pub fn freeProgram(program: Program, allocator: std.mem.Allocator) void {
             }
             allocator.free(method.params);
             freeTypeExpr(method.return_type, allocator);
-            if (method.default_body) |body| {
-                for (body) |stmt| {
-                    freeStatementArgs(stmt, allocator);
-                }
-                allocator.free(body);
-            }
         }
         allocator.free(iface.methods);
         allocator.free(iface.generic_params);
         allocator.free(iface.extends);
     }
     allocator.free(program.interfaces);
+
+    for (program.extensions) |ext| {
+        for (ext.methods) |method| {
+            for (method.params) |param| {
+                freeTypeExpr(param.type_expr, allocator);
+            }
+            allocator.free(method.params);
+            freeTypeExpr(method.return_type, allocator);
+            for (method.body) |stmt| {
+                freeStatementArgs(stmt, allocator);
+            }
+            allocator.free(method.body);
+        }
+        allocator.free(ext.methods);
+    }
+    allocator.free(program.extensions);
 
     for (program.functions) |func| {
         for (func.body) |stmt| {
@@ -860,7 +891,7 @@ fn freeOtherwiseClause(ow: *const OtherwiseClause, allocator: std.mem.Allocator)
 
 fn freeTypeExpr(type_expr: ?TypeExpr, allocator: std.mem.Allocator) void {
     const te = type_expr orelse return;
-    switch (te) {
+    switch (te.expr) {
         .generic => |g| {
             if (g.type_args.len > 0) {
                 allocator.free(g.type_args);

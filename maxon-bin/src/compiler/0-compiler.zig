@@ -61,6 +61,7 @@ const MetadataResult = struct {
     types: []ast_to_ir.ExternalTypeInfo,
     funcs: []ast_to_ir.ExternalFuncSignature,
     interfaces: []ast_to_ir.ExternalInterfaceInfo,
+    extensions: []ast_to_ir.ExternalExtensionInfo,
     enums: []const ast_to_ir.ExternalEnumInfo,
     allocator: std.mem.Allocator,
 
@@ -76,6 +77,7 @@ const MetadataResult = struct {
         self.allocator.free(self.types);
         self.allocator.free(self.funcs);
         self.allocator.free(self.interfaces);
+        self.allocator.free(self.extensions);
         self.allocator.free(self.enums);
     }
 };
@@ -107,6 +109,7 @@ const PipelineOptions = struct {
     external_funcs: []const ast_to_ir.ExternalFuncSignature = &.{},
     external_types: []const ast_to_ir.ExternalTypeInfo = &.{},
     external_interfaces: []const ast_to_ir.ExternalInterfaceInfo = &.{},
+    external_extensions: []const ast_to_ir.ExternalExtensionInfo = &.{},
     external_enums: []const ast_to_ir.ExternalEnumInfo = &.{},
     track_memory: bool = false,
     emit_ir: bool = false,
@@ -205,6 +208,9 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
             const interfaces = try ast_to_ir.extractInterfaceInfo(program, allocator);
             errdefer allocator.free(interfaces);
 
+            const extensions = try ast_to_ir.extractExtensionInfo(program, allocator);
+            errdefer allocator.free(extensions);
+
             const enums = try ast_to_ir.extractEnumDecls(program, allocator, options.source_file);
             errdefer allocator.free(enums);
 
@@ -212,6 +218,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
                 .types = types,
                 .funcs = funcs,
                 .interfaces = interfaces,
+                .extensions = extensions,
                 .enums = enums,
                 .allocator = allocator,
             } };
@@ -308,6 +315,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
                 options.external_funcs,
                 options.external_types,
                 options.external_interfaces,
+                options.external_extensions,
                 options.external_enums,
                 .{ .track_memory = options.track_memory },
                 &ir_error,
@@ -400,6 +408,7 @@ const ParsedSourcesInfo = struct {
     types: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeInfo),
     funcs: std.ArrayListUnmanaged(ast_to_ir.ExternalFuncSignature),
     interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo),
+    extensions: std.ArrayListUnmanaged(ast_to_ir.ExternalExtensionInfo),
     enums: std.ArrayListUnmanaged(ast_to_ir.ExternalEnumInfo),
     arena: std.mem.Allocator, // Arena allocator - caller owns the arena
 
@@ -408,6 +417,7 @@ const ParsedSourcesInfo = struct {
             .types = .empty,
             .funcs = .empty,
             .interfaces = .empty,
+            .extensions = .empty,
             .enums = .empty,
             .arena = arena,
         };
@@ -496,6 +506,12 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
         }
         // No free needed - arena handles it
 
+        const ext_info = ast_to_ir.extractExtensionInfo(program, arena) catch continue;
+        for (ext_info) |ext| {
+            try info.extensions.append(arena, ext);
+        }
+        // No free needed - arena handles it
+
         const enum_decls = ast_to_ir.extractEnumDecls(program, arena, source.path) catch continue;
         for (enum_decls) |enum_decl| {
             try info.enums.append(arena, enum_decl);
@@ -531,6 +547,7 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
         .external_funcs = info.funcs.items,
         .external_types = info.types.items,
         .external_interfaces = info.interfaces.items,
+        .external_extensions = info.extensions.items,
         .external_enums = info.enums.items,
     }) catch {
         return error.IrError;
@@ -643,6 +660,7 @@ pub fn compileMultiple(
             .external_funcs = exported_funcs,
             .external_types = exported_types,
             .external_interfaces = info.interfaces.items,
+            .external_extensions = info.extensions.items,
             .external_enums = info.enums.items,
             .track_memory = options.track_memory,
         });

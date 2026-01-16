@@ -35,6 +35,7 @@ pub const FuncInfo = types.FuncInfo;
 pub const ExternalFuncSignature = types.ExternalFuncSignature;
 pub const ExternalTypeInfo = types.ExternalTypeInfo;
 pub const ExternalInterfaceInfo = types.ExternalInterfaceInfo;
+pub const ExternalExtensionInfo = types.ExternalExtensionInfo;
 pub const ExternalEnumInfo = types.ExternalEnumInfo;
 pub const ParamType = types.ParamType;
 pub const OwnershipState = types.OwnershipState;
@@ -361,6 +362,7 @@ pub const AstToIr = struct {
     type_decl_map: std.StringHashMapUnmanaged(ast.TypeDecl), // Type declarations for conformance lookup
     enum_decl_map: std.StringHashMapUnmanaged(ast.EnumDecl), // Enum declarations for conformance lookup
     type_source_files: std.StringHashMapUnmanaged([]const u8) = .{}, // Source file for each type (for error reporting)
+    extension_methods: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(*const ast.ExtensionMethod)) = .{}, // Interface name -> extension methods
     current_decl_is_mutable: bool,
     mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer,
     current_line: usize,
@@ -776,6 +778,9 @@ pub const AstToIr = struct {
         // Register interfaces first (needed for conformance checking)
         for (program.interfaces) |iface| try self.registerInterface(iface);
 
+        // Register extensions (methods provided for interface conforming types)
+        for (program.extensions) |*ext| try self.registerExtension(ext);
+
         // Check conformance for external types (registered before convert() was called)
         for (self.pending_conformance_checks.items) |type_decl| {
             try self.checkInterfaceConformance(type_decl.*);
@@ -808,6 +813,12 @@ pub const AstToIr = struct {
         // Check interface conformance for all types
         for (program.types) |type_decl| {
             try self.checkInterfaceConformance(type_decl);
+        }
+
+        // Synthesize extension methods for conforming types
+        for (program.types) |type_decl| {
+            if (type_decl.generic_params.len > 0) continue;
+            try self.synthesizeExtensionMethods(type_decl);
         }
 
         // Evaluate global constants before converting functions
@@ -1258,7 +1269,7 @@ pub const AstToIr = struct {
 
     /// Get the size of a type from a TypeExpr. Primitives are 8 bytes, structs use their registered size.
     fn getTypeSize(self: *AstToIr, te: ast.TypeExpr) i32 {
-        return switch (te) {
+        return switch (te.expr) {
             .simple => |name| {
                 // Check if it's a primitive type
                 if (types.isPrimitiveTypeName(name)) {
@@ -1305,6 +1316,16 @@ pub const AstToIr = struct {
     // ------------------------------------------------------------------------
 
     fn registerType(self: *AstToIr, type_decl: ast.TypeDecl) !void {
+        // Set location for error reporting to the type declaration's location
+        const saved_line = self.current_line;
+        const saved_column = self.current_column;
+        self.current_line = type_decl.block.start_line;
+        self.current_column = type_decl.block.start_column;
+        defer {
+            self.current_line = saved_line;
+            self.current_column = saved_column;
+        }
+
         // Store the type declaration for conformance checking
         try self.type_decl_map.put(self.allocator, type_decl.name, type_decl);
 
@@ -1358,6 +1379,21 @@ pub const AstToIr = struct {
         if (self.type_map.contains(ext_type.name)) return;
 
         const type_decl = ext_type.type_decl;
+
+        // Set location and source file for error reporting to the type declaration's location
+        const saved_line = self.current_line;
+        const saved_column = self.current_column;
+        const saved_source_file = self.source_file;
+        self.current_line = type_decl.block.start_line;
+        self.current_column = type_decl.block.start_column;
+        if (ext_type.source_path) |sp| {
+            self.source_file = sp;
+        }
+        defer {
+            self.current_line = saved_line;
+            self.current_column = saved_column;
+            self.source_file = saved_source_file;
+        }
 
         // Set up generic type parameters (e.g., "Element" for Array uses Element)
         for (type_decl.generic_params) |param| {
@@ -1553,7 +1589,7 @@ pub const AstToIr = struct {
             var payload_size: i32 = 0;
 
             for (member.associated_values) |av| {
-                const type_name = switch (av.type_expr) {
+                const type_name = switch (av.type_expr.expr) {
                     .simple => |name| name,
                     else => "ptr", // Complex types are pointers
                 };
@@ -1615,6 +1651,20 @@ pub const AstToIr = struct {
         debug.astToIr("Registered interface '{s}' with {d} methods, {d} associated types, extends {d} interfaces", .{ iface.name, iface.methods.len, iface.generic_params.len, iface.extends.len });
     }
 
+    /// Register extension methods for an interface
+    pub fn registerExtension(self: *AstToIr, ext: *const ast.ExtensionDecl) !void {
+        const entry = self.extension_methods.getOrPutValue(
+            self.allocator,
+            ext.interface_name,
+            .{},
+        ) catch return error.OutOfMemory;
+
+        for (ext.methods) |*method| {
+            try entry.value_ptr.append(self.allocator, method);
+        }
+        debug.astToIr("Registered {d} extension method(s) for interface '{s}'", .{ ext.methods.len, ext.interface_name });
+    }
+
     /// Collect all methods from an interface including methods from transitively extended interfaces.
     /// Returns a list of (interface_name, method) pairs to track which interface requires each method.
     fn collectAllInterfaceMethods(self: *AstToIr, interface_name: []const u8, visited: *std.StringHashMapUnmanaged(void)) !std.ArrayListUnmanaged(types.InterfaceMethodInfo) {
@@ -1648,6 +1698,16 @@ pub const AstToIr = struct {
     }
 
     fn checkInterfaceConformance(self: *AstToIr, type_decl: ast.TypeDecl) !void {
+        // Set location for error reporting to the type declaration's location
+        const saved_line = self.current_line;
+        const saved_column = self.current_column;
+        self.current_line = type_decl.block.start_line;
+        self.current_column = type_decl.block.start_column;
+        defer {
+            self.current_line = saved_line;
+            self.current_column = saved_column;
+        }
+
         for (type_decl.conformances) |conformance| {
             // Reject struct types trying to conform to Error interface
             // Error can only be implemented by enums
@@ -1663,8 +1723,8 @@ pub const AstToIr = struct {
                     .message = msg,
                     .location = .{
                         .file = self.source_file,
-                        .line = 1,
-                        .column = 1,
+                        .line = @intCast(self.current_line),
+                        .column = @intCast(self.current_column),
                     },
                     .message_allocated = true,
                 };
@@ -1689,8 +1749,8 @@ pub const AstToIr = struct {
                     .message = msg,
                     .location = .{
                         .file = self.source_file,
-                        .line = 1,
-                        .column = 1,
+                        .line = @intCast(self.current_line),
+                        .column = @intCast(self.current_column),
                     },
                     .message_allocated = true,
                 };
@@ -1744,9 +1804,6 @@ pub const AstToIr = struct {
             for (all_interface_methods.items) |method_info| {
                 const iface_method = method_info.method;
                 const source_interface = method_info.interface_name;
-
-                // Skip methods with default implementations (they're optional to override)
-                if (iface_method.has_default_impl) continue;
 
                 // Look for matching method in type - must have qualified name "Interface.method"
                 var found_method: ?ast.MethodDecl = null;
@@ -2093,9 +2150,74 @@ pub const AstToIr = struct {
         return type_arg;
     }
 
+    /// Convert display format type name to internal format
+    /// e.g., "Pair of int int" -> "Pair$int$int"
+    fn displayNameToInternal(self: *AstToIr, display_name: []const u8) []const u8 {
+        // Check if it contains " of " indicating a generic type
+        if (std.mem.indexOf(u8, display_name, " of ")) |of_pos| {
+            var internal_name_builder: std.ArrayListUnmanaged(u8) = .empty;
+            internal_name_builder.appendSlice(self.allocator, display_name[0..of_pos]) catch return display_name;
+            const rest = display_name[of_pos + 4 ..]; // skip " of "
+            // Split by spaces and join with $
+            var it = std.mem.splitScalar(u8, rest, ' ');
+            while (it.next()) |arg| {
+                internal_name_builder.append(self.allocator, '$') catch return display_name;
+                internal_name_builder.appendSlice(self.allocator, arg) catch return display_name;
+            }
+            const owned = internal_name_builder.toOwnedSlice(self.allocator) catch return display_name;
+            self.module.trackString(owned) catch {};
+            return owned;
+        }
+        // Not a generic type, return as-is
+        return display_name;
+    }
+
+    /// Substitute generic parameters in a conformance type arg string
+    /// e.g., "Pair with (Key, Value)" with {Key: "string", Value: "int"} -> "Pair with (string, int)"
+    fn substituteGenericParamsInTypeArg(
+        self: *AstToIr,
+        type_arg: []const u8,
+        generic_params: []const []const u8,
+        type_args: []const []const u8,
+    ) []const u8 {
+        var result: std.ArrayListUnmanaged(u8) = .empty;
+        var i: usize = 0;
+        while (i < type_arg.len) {
+            // Try to match a generic param at this position
+            var matched = false;
+            for (generic_params, type_args) |param, arg| {
+                if (i + param.len <= type_arg.len and
+                    std.mem.eql(u8, type_arg[i .. i + param.len], param))
+                {
+                    // Check that it's a whole word (not part of a longer identifier)
+                    const at_end = (i + param.len == type_arg.len);
+                    const next_char_is_boundary = at_end or
+                        !std.ascii.isAlphanumeric(type_arg[i + param.len]) and type_arg[i + param.len] != '_';
+                    const at_start = (i == 0);
+                    const prev_char_is_boundary = at_start or
+                        !std.ascii.isAlphanumeric(type_arg[i - 1]) and type_arg[i - 1] != '_';
+
+                    if (prev_char_is_boundary and next_char_is_boundary) {
+                        result.appendSlice(self.allocator, arg) catch return type_arg;
+                        i += param.len;
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if (!matched) {
+                result.append(self.allocator, type_arg[i]) catch return type_arg;
+                i += 1;
+            }
+        }
+        const owned = result.toOwnedSlice(self.allocator) catch return type_arg;
+        self.module.trackString(owned) catch {};
+        return owned;
+    }
+
     /// Resolve a type expression by substituting associated types and Self with their bound types
     fn resolveAssociatedTypeWithSelf(self: *AstToIr, type_expr: ast.TypeExpr, bindings: std.StringHashMapUnmanaged([]const u8), self_type: []const u8) []const u8 {
-        return switch (type_expr) {
+        return switch (type_expr.expr) {
             .simple => |name| {
                 // Handle Self specially
                 if (std.mem.eql(u8, name, "Self")) return self_type;
@@ -2182,13 +2304,517 @@ pub const AstToIr = struct {
         return false;
     }
 
+    /// Synthesize extension methods for a type that conforms to interfaces with extensions.
+    /// Creates synthesized methods like `Array$map` from `extension Iterable`.
+    fn synthesizeExtensionMethods(self: *AstToIr, type_decl: ast.TypeDecl) !void {
+        // Set location for error reporting to the type declaration's location
+        const saved_line = self.current_line;
+        const saved_column = self.current_column;
+        self.current_line = type_decl.block.start_line;
+        self.current_column = type_decl.block.start_column;
+        defer {
+            self.current_line = saved_line;
+            self.current_column = saved_column;
+        }
+
+        // Build type bindings map for associated type substitution
+        var type_bindings = std.StringHashMapUnmanaged([]const u8){};
+        defer type_bindings.deinit(self.allocator);
+
+        for (type_decl.conformances) |conformance| {
+            const iface = self.interface_map.get(conformance.interface_name) orelse continue;
+
+            // Build type bindings for associated types
+            for (iface.associated_types, 0..) |assoc_type, i| {
+                if (i < conformance.type_args.len) {
+                    // Normalize the type arg (handle "Pair with (Key, Value)" -> "Pair of Key Value")
+                    const normalized = self.normalizeConformanceTypeArg(conformance.type_args[i]);
+                    // Convert to internal format (e.g., "Pair of int int" -> "Pair$int$int")
+                    const internal = self.displayNameToInternal(normalized);
+                    try type_bindings.put(self.allocator, assoc_type, internal);
+                }
+            }
+
+            // Also bind Self to the type name
+            try type_bindings.put(self.allocator, "Self", type_decl.name);
+
+            // Check for extension methods on this interface
+            if (self.extension_methods.get(conformance.interface_name)) |ext_methods| {
+                for (ext_methods.items) |ext_method| {
+                    // Check if the type already has a method with this name (override)
+                    var already_implemented = false;
+                    for (type_decl.methods) |type_method| {
+                        if (std.mem.eql(u8, type_method.name, ext_method.name)) {
+                            already_implemented = true;
+                            break;
+                        }
+                    }
+
+                    if (!already_implemented) {
+                        // Create and convert the synthesized method
+                        try self.synthesizeExtensionMethod(type_decl.name, ext_method, &type_bindings);
+                    }
+                }
+            }
+
+            // Also check for extensions on interfaces this one extends (transitively)
+            try self.synthesizeTransitiveExtensionMethods(type_decl, conformance.interface_name, &type_bindings);
+        }
+    }
+
+    /// Check parent interfaces for extensions and synthesize those methods too
+    fn synthesizeTransitiveExtensionMethods(
+        self: *AstToIr,
+        type_decl: ast.TypeDecl,
+        interface_name: []const u8,
+        type_bindings: *std.StringHashMapUnmanaged([]const u8),
+    ) !void {
+        const iface = self.interface_map.get(interface_name) orelse return;
+
+        for (iface.extends) |parent_iface_name| {
+            // Check for extension methods on parent interface
+            if (self.extension_methods.get(parent_iface_name)) |ext_methods| {
+                for (ext_methods.items) |ext_method| {
+                    // Check if the type already has a method with this name
+                    var already_implemented = false;
+                    for (type_decl.methods) |type_method| {
+                        if (std.mem.eql(u8, type_method.name, ext_method.name)) {
+                            already_implemented = true;
+                            break;
+                        }
+                    }
+
+                    // Also check if we already synthesized this method (from another conformance path)
+                    const mangled_name = std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_decl.name, ext_method.name }) catch continue;
+                    defer self.allocator.free(mangled_name);
+
+                    if (self.func_map.contains(mangled_name)) {
+                        already_implemented = true;
+                    }
+
+                    if (!already_implemented) {
+                        try self.synthesizeExtensionMethod(type_decl.name, ext_method, type_bindings);
+                    }
+                }
+            }
+
+            // Recursively check parent's parents
+            try self.synthesizeTransitiveExtensionMethods(type_decl, parent_iface_name, type_bindings);
+        }
+    }
+
+    /// Synthesize extension methods for a monomorphized generic type.
+    /// This is called during getOrCreateMonomorphizedType to add extension methods
+    /// with the correct monomorphized type name (e.g., Set$int$map instead of Set$map).
+    fn synthesizeExtensionMethodsForMonomorphizedType(
+        self: *AstToIr,
+        mono_name: []const u8,
+        type_decl: *const ast.TypeDecl,
+        type_args: []const []const u8,
+    ) !void {
+        debug.astToIr("synthesizeExtensionMethodsForMonomorphizedType: {s} with {d} conformances", .{ mono_name, type_decl.conformances.len });
+
+        // Build type bindings from conformances with substituted generic params
+        var type_bindings = std.StringHashMapUnmanaged([]const u8){};
+        defer type_bindings.deinit(self.allocator);
+
+        // Bind Self to the monomorphized type name
+        try type_bindings.put(self.allocator, "Self", mono_name);
+
+        for (type_decl.conformances) |conformance| {
+            debug.astToIr("  Checking conformance to '{s}'", .{conformance.interface_name});
+            const iface = self.interface_map.get(conformance.interface_name) orelse continue;
+
+            // Build type bindings by substituting generic params in the conformance type args
+            for (iface.associated_types, 0..) |assoc_type, i| {
+                if (i < conformance.type_args.len) {
+                    // Substitute generic params (Key, Value, etc.) with actual type args (string, int, etc.)
+                    const substituted = self.substituteGenericParamsInTypeArg(
+                        conformance.type_args[i],
+                        type_decl.generic_params,
+                        type_args,
+                    );
+                    // Normalize (handle "Pair with (string, int)" -> "Pair of string int")
+                    const normalized = self.normalizeConformanceTypeArg(substituted);
+                    // Convert to internal format (e.g., "Pair of int int" -> "Pair$int$int")
+                    const internal = self.displayNameToInternal(normalized);
+                    try type_bindings.put(self.allocator, assoc_type, internal);
+                }
+            }
+
+            // Check for extension methods on this interface
+            if (self.extension_methods.get(conformance.interface_name)) |ext_methods| {
+                debug.astToIr("    Found {d} extension methods for interface '{s}'", .{ ext_methods.items.len, conformance.interface_name });
+                for (ext_methods.items) |ext_method| {
+                    debug.astToIr("      Extension method: '{s}'", .{ext_method.name});
+                    // Check if the type already has a method with this name (override)
+                    var already_implemented = false;
+                    for (type_decl.methods) |type_method| {
+                        if (std.mem.eql(u8, type_method.name, ext_method.name)) {
+                            already_implemented = true;
+                            break;
+                        }
+                    }
+
+                    // Also check if we already synthesized this method (from another conformance path)
+                    const mangled_name = std.fmt.allocPrint(self.allocator, "{s}${s}", .{ mono_name, ext_method.name }) catch continue;
+                    defer self.allocator.free(mangled_name);
+
+                    if (self.func_map.contains(mangled_name)) {
+                        already_implemented = true;
+                    }
+
+                    if (!already_implemented) {
+                        // Create and synthesize the extension method with mono_name as the type
+                        try self.synthesizeExtensionMethod(mono_name, ext_method, &type_bindings);
+                    }
+                }
+            }
+
+            // Also check for extensions on interfaces this one extends (transitively)
+            try self.synthesizeTransitiveExtensionMethodsForMono(mono_name, type_decl, conformance.interface_name, &type_bindings);
+        }
+    }
+
+    /// Check parent interfaces for extensions and synthesize those methods for a monomorphized type
+    fn synthesizeTransitiveExtensionMethodsForMono(
+        self: *AstToIr,
+        mono_name: []const u8,
+        type_decl: *const ast.TypeDecl,
+        interface_name: []const u8,
+        type_bindings: *std.StringHashMapUnmanaged([]const u8),
+    ) !void {
+        const iface = self.interface_map.get(interface_name) orelse return;
+
+        for (iface.extends) |parent_iface_name| {
+            // Check for extension methods on parent interface
+            if (self.extension_methods.get(parent_iface_name)) |ext_methods| {
+                for (ext_methods.items) |ext_method| {
+                    // Check if the type already has a method with this name
+                    var already_implemented = false;
+                    for (type_decl.methods) |type_method| {
+                        if (std.mem.eql(u8, type_method.name, ext_method.name)) {
+                            already_implemented = true;
+                            break;
+                        }
+                    }
+
+                    // Also check if we already synthesized this method
+                    const mangled_name = std.fmt.allocPrint(self.allocator, "{s}${s}", .{ mono_name, ext_method.name }) catch continue;
+                    defer self.allocator.free(mangled_name);
+
+                    if (self.func_map.contains(mangled_name)) {
+                        already_implemented = true;
+                    }
+
+                    if (!already_implemented) {
+                        try self.synthesizeExtensionMethod(mono_name, ext_method, type_bindings);
+                    }
+                }
+            }
+
+            // Recursively check parent's parents
+            try self.synthesizeTransitiveExtensionMethodsForMono(mono_name, type_decl, parent_iface_name, type_bindings);
+        }
+    }
+
+    /// Synthesize a single extension method for a concrete type
+    fn synthesizeExtensionMethod(
+        self: *AstToIr,
+        type_name: []const u8,
+        ext_method: *const ast.ExtensionMethod,
+        type_bindings: *std.StringHashMapUnmanaged([]const u8),
+    ) !void {
+        // Set location for error reporting to the extension method's location
+        const saved_line = self.current_line;
+        const saved_column = self.current_column;
+        self.current_line = ext_method.block.start_line;
+        self.current_column = ext_method.block.start_column;
+        defer {
+            self.current_line = saved_line;
+            self.current_column = saved_column;
+        }
+
+        const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, ext_method.name });
+        errdefer self.allocator.free(mangled_name);
+        try self.module.trackString(mangled_name);
+
+        debug.astToIr("Synthesizing extension method '{s}' for type '{s}' at line {d}:{d}", .{ ext_method.name, type_name, ext_method.block.start_line, ext_method.block.start_column });
+
+        // Build parameter types with associated type substitution
+        // +1 for implicit self parameter (extension methods are always instance methods)
+        var param_types = try self.allocator.alloc(ParamType, ext_method.params.len + 1);
+        errdefer self.allocator.free(param_types);
+
+        // First param is self (pointer to type instance)
+        param_types[0] = .{ .ty = try self.typeNameToValueType(type_name), .name = "self" };
+
+        for (ext_method.params, 0..) |param, i| {
+            // Substitute associated types in parameter type
+            const resolved_type = try self.substituteAssociatedTypesInTypeExpr(param.type_expr, type_bindings);
+            param_types[i + 1] = .{
+                .ty = resolved_type,
+                .name = param.name,
+                .default_value = param.default_value,
+            };
+        }
+
+        // Resolve return type with substitution
+        var ret_value_type: ?ValueType = null;
+        if (ext_method.return_type) |rt| {
+            ret_value_type = try self.substituteAssociatedTypesInTypeExpr(rt, type_bindings);
+        }
+
+        // Determine IR return type
+        const ir_ret_type: ir.Type = if (ret_value_type) |vt| vt.toIrType() else .void;
+
+        // Register the function info
+        try self.func_map.put(self.allocator, mangled_name, .{
+            .param_types = param_types,
+            .return_type = ir_ret_type,
+            .return_value_type = ret_value_type,
+            .ir_generated = false, // Will be generated lazily
+        });
+
+        // Clone type_bindings so it survives after the caller's defer deinit
+        var cloned_bindings = std.StringHashMapUnmanaged([]const u8){};
+        var iter = type_bindings.iterator();
+        while (iter.next()) |entry| {
+            try cloned_bindings.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        // Store in pending_methods for lazy conversion
+        try self.pending_methods.put(self.allocator, mangled_name, .{
+            .type_name = type_name,
+            .extension_method = ext_method,
+            .type_bindings = cloned_bindings,
+        });
+    }
+
+    /// Substitute associated types in a TypeExpr, returning a ValueType
+    fn substituteAssociatedTypesInTypeExpr(
+        self: *AstToIr,
+        type_expr: ast.TypeExpr,
+        bindings: *std.StringHashMapUnmanaged([]const u8),
+    ) !ValueType {
+        switch (type_expr.expr) {
+            .simple => |name| {
+                // Check for Self or associated types
+                if (std.mem.eql(u8, name, "Self")) {
+                    const self_type = bindings.get("Self") orelse name;
+                    if (self.getValueTypeByName(self_type)) |vt| return vt;
+                    // Fall back to looking up struct type
+                    if (self.type_map.getPtr(self_type)) |ptr| {
+                        if (ptr.* == .struct_type) {
+                            return .{ .struct_type = &ptr.struct_type };
+                        } else if (ptr.* == .enum_type) {
+                            return .{ .enum_type = &ptr.enum_type };
+                        }
+                    }
+                    self.reportError(.E006, self_type);
+                    return error.UnknownType;
+                }
+                if (bindings.get(name)) |bound| {
+                    // The binding might be in display format ("Pair of int int")
+                    // or internal format ("Pair$int$int"). Try both.
+                    if (self.getValueTypeByName(bound)) |vt| {
+                        return vt;
+                    }
+                    if (self.type_map.getPtr(bound)) |ptr| {
+                        if (ptr.* == .struct_type) {
+                            return .{ .struct_type = &ptr.struct_type };
+                        } else if (ptr.* == .enum_type) {
+                            return .{ .enum_type = &ptr.enum_type };
+                        }
+                    }
+                    // Try converting display name to internal name ("Base of A B" -> "Base$A$B")
+                    if (std.mem.indexOf(u8, bound, " of ")) |of_pos| {
+                        var internal_name_builder: std.ArrayListUnmanaged(u8) = .empty;
+                        defer internal_name_builder.deinit(self.allocator);
+                        internal_name_builder.appendSlice(self.allocator, bound[0..of_pos]) catch {};
+                        const rest = bound[of_pos + 4 ..]; // skip " of "
+                        // Split by spaces and join with $
+                        var it = std.mem.splitScalar(u8, rest, ' ');
+                        while (it.next()) |arg| {
+                            internal_name_builder.append(self.allocator, '$') catch {};
+                            internal_name_builder.appendSlice(self.allocator, arg) catch {};
+                        }
+                        if (self.type_map.getPtr(internal_name_builder.items)) |ptr| {
+                            if (ptr.* == .struct_type) {
+                                return .{ .struct_type = &ptr.struct_type };
+                            } else if (ptr.* == .enum_type) {
+                                return .{ .enum_type = &ptr.enum_type };
+                            }
+                        }
+                        std.debug.print("DEBUG   not found in type_map, trying to create...\n", .{});
+                        // Type doesn't exist yet - try to create it
+                        const base_type = bound[0..of_pos];
+                        var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
+                        defer type_args.deinit(self.allocator);
+                        var it2 = std.mem.splitScalar(u8, rest, ' ');
+                        while (it2.next()) |arg| {
+                            type_args.append(self.allocator, arg) catch {};
+                        }
+                        std.debug.print("DEBUG   base_type='{s}', type_args.items.len={d}\n", .{ base_type, type_args.items.len });
+                        if (type_args.items.len > 0) {
+                            _ = self.getOrCreateMonomorphizedType(base_type, type_args.items) catch |e| {
+                                std.debug.print("DEBUG   getOrCreateMonomorphizedType failed: {s}\n", .{@errorName(e)});
+                            };
+                            if (self.type_map.getPtr(internal_name_builder.items)) |ptr| {
+                                std.debug.print("DEBUG   found after creation!\n", .{});
+                                if (ptr.* == .struct_type) {
+                                    return .{ .struct_type = &ptr.struct_type };
+                                } else if (ptr.* == .enum_type) {
+                                    return .{ .enum_type = &ptr.enum_type };
+                                }
+                            }
+                            std.debug.print("DEBUG   still not found after creation attempt!\n", .{});
+                        }
+                    }
+                    self.reportError(.E006, bound);
+                    return error.UnknownType;
+                }
+                if (self.getValueTypeByName(name)) |vt| return vt;
+                if (self.type_map.getPtr(name)) |ptr| {
+                    if (ptr.* == .struct_type) {
+                        return .{ .struct_type = &ptr.struct_type };
+                    } else if (ptr.* == .enum_type) {
+                        return .{ .enum_type = &ptr.enum_type };
+                    }
+                }
+                self.reportError(.E006, name);
+                return error.UnknownType;
+            },
+            .generic => |g| {
+                // Handle generic types like "Array of Element" or "Pair of Key Value"
+                const base_name = if (std.mem.eql(u8, g.base_type, "Self"))
+                    bindings.get("Self") orelse g.base_type
+                else if (bindings.get(g.base_type)) |bound|
+                    bound
+                else
+                    g.base_type;
+
+                // Substitute type arguments using bindings
+                if (g.type_args.len > 0) {
+                    // Resolve each type argument
+                    var resolved_args = try self.allocator.alloc([]const u8, g.type_args.len);
+                    defer self.allocator.free(resolved_args);
+
+                    for (g.type_args, 0..) |arg, i| {
+                        resolved_args[i] = if (bindings.get(arg)) |bound| bound else arg;
+                    }
+
+                    // Build internal type name with $ separators (e.g., "Pair$int$int")
+                    var internal_name_builder: std.ArrayListUnmanaged(u8) = .empty;
+                    defer internal_name_builder.deinit(self.allocator);
+                    try internal_name_builder.appendSlice(self.allocator, base_name);
+                    for (resolved_args) |arg| {
+                        try internal_name_builder.append(self.allocator, '$');
+                        try internal_name_builder.appendSlice(self.allocator, arg);
+                    }
+                    const internal_name = internal_name_builder.items;
+
+                    // Try to get the type, or create monomorphized version
+                    if (self.type_map.getPtr(internal_name)) |type_ptr| {
+                        if (type_ptr.* == .struct_type) {
+                            return .{ .struct_type = &type_ptr.struct_type };
+                        }
+                    }
+
+                    // Trigger monomorphization - this creates the type with internal name
+                    _ = try self.getOrCreateMonomorphizedType(base_name, resolved_args);
+                    if (self.type_map.getPtr(internal_name)) |type_ptr| {
+                        if (type_ptr.* == .struct_type) {
+                            return .{ .struct_type = &type_ptr.struct_type };
+                        }
+                    }
+
+                    // Build display name for error message
+                    var display_name_builder: std.ArrayListUnmanaged(u8) = .empty;
+                    defer display_name_builder.deinit(self.allocator);
+                    try display_name_builder.appendSlice(self.allocator, base_name);
+                    try display_name_builder.appendSlice(self.allocator, " of ");
+                    for (resolved_args, 0..) |arg, j| {
+                        if (j > 0) try display_name_builder.append(self.allocator, ' ');
+                        try display_name_builder.appendSlice(self.allocator, arg);
+                    }
+                    const display_name = try self.allocator.dupe(u8, display_name_builder.items);
+                    try self.module.trackString(display_name);
+                    self.reportError(.E006, display_name);
+                    return error.UnknownType;
+                }
+
+                return try self.typeExprToValueType(type_expr);
+            },
+            .error_union => |eu| {
+                // Recursively substitute in the success type
+                const inner_vt = try self.substituteAssociatedTypesInTypeExpr(eu.success_type.*, bindings);
+                // Build the ErrorUnionInfo from the substituted success type
+                const success_ir_type = inner_vt.toIrType();
+                const success_primitive_type: ?types.Primitive = if (inner_vt == .primitive) inner_vt.primitive else null;
+                const success_struct_type: ?[]const u8 = if (inner_vt == .struct_type) inner_vt.struct_type.name else null;
+                const success_enum_type: ?[]const u8 = if (inner_vt == .enum_type) inner_vt.enum_type.name else null;
+
+                return .{ .error_union_type = .{
+                    .success_type = success_ir_type,
+                    .success_primitive_type = success_primitive_type,
+                    .success_struct_type = success_struct_type,
+                    .success_enum_type = success_enum_type,
+                    .error_enum_type = eu.error_type,
+                } };
+            },
+            .function_type => |ft| {
+                // Substitute types in function parameter and return types
+                var param_types = try self.allocator.alloc(ValueType, ft.param_types.len);
+                for (ft.param_types, 0..) |pt, i| {
+                    param_types[i] = try self.substituteAssociatedTypesInTypeExpr(pt, bindings);
+                }
+
+                var ret_type: ?*const ValueType = null;
+                var return_ir_type: ir.Type = .void;
+                if (ft.return_type) |rt| {
+                    const ret_vt = try self.substituteAssociatedTypesInTypeExpr(rt.*, bindings);
+                    const ret_ptr = try self.allocator.create(ValueType);
+                    ret_ptr.* = ret_vt;
+                    ret_type = ret_ptr;
+                    return_ir_type = ret_vt.toIrType();
+                }
+
+                return .{ .function_type = .{
+                    .param_types = param_types,
+                    .return_type = ret_type,
+                    .return_ir_type = return_ir_type,
+                } };
+            },
+        }
+    }
+
+    /// Get a ValueType by type name, returns null if unknown
+    fn getValueTypeByName(self: *AstToIr, name: []const u8) ?ValueType {
+        // Check primitives
+        if (types.Primitive.fromString(name)) |prim| {
+            return .{ .primitive = prim };
+        }
+
+        // Check type map
+        if (self.type_map.getPtr(name)) |type_ptr| {
+            if (type_ptr.* == .struct_type) {
+                return .{ .struct_type = &type_ptr.struct_type };
+            } else if (type_ptr.* == .enum_type) {
+                return .{ .enum_type = &type_ptr.enum_type };
+            }
+        }
+
+        return null;
+    }
+
     fn registerFunction(self: *AstToIr, decl: ast.FunctionDecl) !void {
         var ret_primitive_type: ?types.Primitive = null; // Track primitive type (byte, int, etc.) for error unions
         var ret_value_type: ?ValueType = null;
         const ret_type: ir.Type = if (decl.return_type) |rt| blk: {
             // Always convert to ValueType for type-safe return type info
             ret_value_type = try self.typeExprToValueType(rt);
-            switch (rt) {
+            switch (rt.expr) {
                 .simple, .generic => {
                     const base_name = typeExprBaseTypeName(rt).?;
                     const type_info = self.type_map.get(base_name) orelse {
@@ -2263,7 +2889,7 @@ pub const AstToIr = struct {
 
     /// Extract base type name from simple or generic type expressions
     fn typeExprBaseTypeName(type_expr: ast.TypeExpr) ?[]const u8 {
-        return switch (type_expr) {
+        return switch (type_expr.expr) {
             .simple => |name| name,
             .generic => |gen| gen.base_type,
             .error_union, .function_type => null,
@@ -2272,7 +2898,7 @@ pub const AstToIr = struct {
 
     /// Convert type expression to string representation for error messages
     fn typeExprToString(type_expr: ast.TypeExpr) []const u8 {
-        return switch (type_expr) {
+        return switch (type_expr.expr) {
             .simple => |name| name,
             .generic => |gen| gen.base_type,
             .error_union => |eu| eu.error_type,
@@ -2360,16 +2986,23 @@ pub const AstToIr = struct {
                     break :blk vt;
                 }
                 // If not found and it's an Array type, trigger monomorphization
+                // BUT only if the element type is a concrete type (not a generic parameter like "Element")
                 if (std.mem.startsWith(u8, name, "Array$")) {
                     const element_name = name["Array$".len..];
-                    var type_args = [_][]const u8{element_name};
-                    const mono_name = self.getOrCreateMonomorphizedType("Array", &type_args) catch {
-                        debug.astToIr("convertExternalValueType: failed to monomorphize {s}", .{name});
-                        break :blk null;
-                    };
-                    if (self.type_map.getPtr(mono_name)) |entry| {
-                        if (entry.* == .struct_type) {
-                            break :blk .{ .struct_type = &entry.struct_type };
+                    // Skip if element type is a generic parameter (not a concrete type)
+                    // Concrete types are either primitives or registered in type_map
+                    const is_concrete = types.Primitive.fromString(element_name) != null or
+                        self.type_map.contains(element_name);
+                    if (is_concrete) {
+                        var type_args = [_][]const u8{element_name};
+                        const mono_name = self.getOrCreateMonomorphizedType("Array", &type_args) catch {
+                            debug.astToIr("convertExternalValueType: failed to monomorphize {s}", .{name});
+                            break :blk null;
+                        };
+                        if (self.type_map.getPtr(mono_name)) |entry| {
+                            if (entry.* == .struct_type) {
+                                break :blk .{ .struct_type = &entry.struct_type };
+                            }
                         }
                     }
                 }
@@ -2398,18 +3031,39 @@ pub const AstToIr = struct {
     }
 
     fn typeExprToValueType(self: *AstToIr, type_expr: ast.TypeExpr) !ValueType {
-        switch (type_expr) {
+        // Save the original location for more accurate error reporting
+        const saved_line = self.current_line;
+        const saved_column = self.current_column;
+        if (type_expr.line != 0) {
+            self.current_line = type_expr.line;
+            self.current_column = type_expr.column;
+        }
+        defer {
+            self.current_line = saved_line;
+            self.current_column = saved_column;
+        }
+
+        switch (type_expr.expr) {
             .simple => {
                 const base_name = typeExprBaseTypeName(type_expr).?;
                 const resolved = self.resolveTypeName(base_name);
+                // Debug: check if generic resolution worked
+                if (!std.mem.eql(u8, base_name, resolved)) {
+                    debug.astToIr("typeExprToValueType: resolved '{s}' -> '{s}'", .{ base_name, resolved });
+                }
                 // Check for internal type access
                 try intrinsics.checkInternalTypeAccess(self, resolved);
+                // Debug: if looking up a resolved generic param that is Point, check type_map state
                 const type_info_ptr = self.type_map.getPtr(resolved) orelse {
                     self.reportError(.E006, resolved);
                     return error.UnknownType;
                 };
-                // Check visibility
-                try self.checkTypeVisibility(resolved, type_info_ptr.*);
+                // Check visibility - but skip for types resolved from generic parameters
+                // because visibility was already checked at the monomorphization site
+                const is_generic_param_resolution = !std.mem.eql(u8, base_name, resolved);
+                if (!is_generic_param_resolution) {
+                    try self.checkTypeVisibility(resolved, type_info_ptr.*);
+                }
                 return switch (type_info_ptr.*) {
                     .struct_type => |*s| .{ .struct_type = s },
                     .enum_type => |*e| .{ .enum_type = e },
@@ -2512,8 +3166,11 @@ pub const AstToIr = struct {
 
         // Check if already registered
         if (self.type_map.contains(mono_name)) {
+            debug.astToIr("getOrCreateMonomorphizedType: '{s}' already exists in type_map - early return", .{mono_name});
             return mono_name;
         }
+
+        debug.astToIr("getOrCreateMonomorphizedType: Creating new monomorphized type '{s}'", .{mono_name});
 
         // Get the original generic type declaration
         const type_decl = self.type_decl_map.get(base_type) orelse {
@@ -2624,6 +3281,10 @@ pub const AstToIr = struct {
             self.allocator.free(bindings);
         }
 
+        // Synthesize extension methods for the monomorphized type
+        // Build type bindings from the conformances with resolved generic params
+        try self.synthesizeExtensionMethodsForMonomorphizedType(mono_name, &type_decl, type_args);
+
         // Restore in_stdlib_method flag
         self.in_stdlib_method = saved_in_stdlib;
 
@@ -2728,7 +3389,7 @@ pub const AstToIr = struct {
         const ret_type: ir.Type = if (m.return_type) |rt| blk: {
             // Always convert to ValueType for type-safe return type info
             ret_value_type = try self.typeExprToValueType(rt);
-            switch (rt) {
+            switch (rt.expr) {
                 .simple => {
                     const base_name = typeExprBaseTypeName(rt).?;
                     const resolved = self.resolveTypeName(base_name);
@@ -2893,10 +3554,38 @@ pub const AstToIr = struct {
         method: *const ast.MethodDecl,
         bindings: []const PendingMethod.GenericBinding,
     ) !bool {
+        // Get source file for the base type (for error reporting)
+        // type_name might be monomorphized like "Map$String$int", so extract base type "Map"
+        const base_type = if (std.mem.indexOf(u8, type_name, "$")) |idx|
+            type_name[0..idx]
+        else
+            type_name;
+        const method_source_file = self.type_source_files.get(base_type) orelse self.source_file;
+
+        // Set location and source file for error reporting to the method's location
+        const saved_line = self.current_line;
+        const saved_column = self.current_column;
+        const saved_source_file = self.source_file;
+        self.current_line = method.block.start_line;
+        self.current_column = method.block.start_column;
+        self.source_file = method_source_file;
+        defer {
+            self.current_line = saved_line;
+            self.current_column = saved_column;
+            self.source_file = saved_source_file;
+        }
+
         // Save current type context for Self resolution
         const saved_type = self.current_type_name;
         self.current_type_name = type_name;
         defer self.current_type_name = saved_type;
+
+        // Apply generic bindings for type resolution (e.g., Element -> int)
+        const saved_generic_params = self.generic_params;
+        for (bindings) |b| {
+            self.generic_params.put(self.allocator, b.param, b.concrete) catch {};
+        }
+        defer self.generic_params = saved_generic_params;
 
         const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
         try self.module.trackString(mangled_name);
@@ -2909,14 +3598,6 @@ pub const AstToIr = struct {
         const func_info = try self.buildMethodFuncInfoFromPtr(type_name, method, false);
 
         try self.func_map.put(self.allocator, mangled_name, func_info);
-
-        // Get source file for the base type (for error reporting)
-        // type_name might be monomorphized like "Map$String$int", so extract base type "Map"
-        const base_type = if (std.mem.indexOf(u8, type_name, "$")) |idx|
-            type_name[0..idx]
-        else
-            type_name;
-        const method_source_file = self.type_source_files.get(base_type) orelse self.source_file;
 
         // Queue for lazy generation (duplicate source_file to own it since source can be freed)
         const owned_source_file = if (method_source_file) |sf|
@@ -3034,56 +3715,109 @@ pub const AstToIr = struct {
         // Save context before generating the method
         const saved_context = self.saveConversionContext();
 
-        // Save previous generic param values (for reentrancy with nested generic types)
+        // Handle extension methods differently from regular methods
+        if (pending.extension_method) |ext_method| {
+            // Extension method: set up type bindings
+            var saved_generic_params = std.StringHashMapUnmanaged(?[]const u8){};
+            defer saved_generic_params.deinit(self.allocator);
 
-        var saved_generic_params = try self.allocator.alloc(?[]const u8, pending.generic_bindings.len);
-        defer self.allocator.free(saved_generic_params);
-        for (pending.generic_bindings, 0..) |binding, i| {
-            saved_generic_params[i] = self.generic_params.get(binding.param);
-
-            try self.generic_params.put(self.allocator, binding.param, binding.concrete);
-        }
-
-        // Allow stdlib builtins for stdlib types
-        self.in_stdlib_method = true;
-
-        // Save caller's location for error reporting (user code that triggered this method generation)
-        const caller_source_file = self.source_file;
-        const caller_line = self.current_line;
-        const caller_column = self.current_column;
-
-        // Generate the method IR (source_file stays as caller's file for error reporting)
-
-        var gen_err: ?ConvertError = null;
-        self.convertMethod(pending.type_name, pending.method.*) catch |e| {
-            gen_err = e;
-        };
-
-        // Restore generic params to their previous values
-        for (pending.generic_bindings, 0..) |binding, i| {
-            if (saved_generic_params[i]) |prev_value| {
-                self.generic_params.put(self.allocator, binding.param, prev_value) catch {};
-            } else {
-                _ = self.generic_params.remove(binding.param);
+            var iter = pending.type_bindings.iterator();
+            while (iter.next()) |entry| {
+                saved_generic_params.put(self.allocator, entry.key_ptr.*, self.generic_params.get(entry.key_ptr.*)) catch {};
+                try self.generic_params.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
             }
-        }
 
-        // Restore context after generation
-        self.restoreConversionContext(saved_context);
+            // Allow stdlib builtins for stdlib types
+            self.in_stdlib_method = true;
 
-        // Restore caller's line/column (not saved in SavedContext since it's only needed here)
-        self.current_line = caller_line;
-        self.current_column = caller_column;
+            // Save caller's location for error reporting
+            const caller_source_file = self.source_file;
+            const caller_line = self.current_line;
+            const caller_column = self.current_column;
 
-        // Propagate error if method generation failed, with caller's location
-        if (gen_err) |e| {
-            // Update error location to point to user code that triggered the method generation
-            if (self.last_error) |*le| {
-                le.location.file = caller_source_file;
-                le.location.line = @intCast(caller_line);
-                le.location.column = @intCast(caller_column);
+            // Generate the extension method IR
+            var gen_err: ?ConvertError = null;
+            self.convertExtensionMethod(pending.type_name, ext_method, &pending.type_bindings) catch |e| {
+                gen_err = e;
+            };
+
+            // Restore generic params
+            var restore_iter = saved_generic_params.iterator();
+            while (restore_iter.next()) |entry| {
+                if (entry.value_ptr.*) |prev_value| {
+                    self.generic_params.put(self.allocator, entry.key_ptr.*, prev_value) catch {};
+                } else {
+                    _ = self.generic_params.remove(entry.key_ptr.*);
+                }
             }
-            return e;
+
+            // Restore context after generation
+            self.restoreConversionContext(saved_context);
+
+            // Restore caller's line/column
+            self.current_line = caller_line;
+            self.current_column = caller_column;
+
+            // Propagate error if method generation failed
+            if (gen_err) |e| {
+                if (self.last_error) |*le| {
+                    le.location.file = caller_source_file;
+                    le.location.line = @intCast(caller_line);
+                    le.location.column = @intCast(caller_column);
+                }
+                return e;
+            }
+        } else if (pending.method) |method| {
+            // Regular method: save previous generic param values (for reentrancy with nested generic types)
+            var saved_generic_params = try self.allocator.alloc(?[]const u8, pending.generic_bindings.len);
+            defer self.allocator.free(saved_generic_params);
+            for (pending.generic_bindings, 0..) |binding, i| {
+                saved_generic_params[i] = self.generic_params.get(binding.param);
+
+                try self.generic_params.put(self.allocator, binding.param, binding.concrete);
+            }
+
+            // Allow stdlib builtins for stdlib types
+            self.in_stdlib_method = true;
+
+            // Save caller's location for error reporting (user code that triggered this method generation)
+            const caller_source_file = self.source_file;
+            const caller_line = self.current_line;
+            const caller_column = self.current_column;
+
+            // Generate the method IR (source_file stays as caller's file for error reporting)
+
+            var gen_err: ?ConvertError = null;
+            self.convertMethod(pending.type_name, method.*) catch |e| {
+                gen_err = e;
+            };
+
+            // Restore generic params to their previous values
+            for (pending.generic_bindings, 0..) |binding, i| {
+                if (saved_generic_params[i]) |prev_value| {
+                    self.generic_params.put(self.allocator, binding.param, prev_value) catch {};
+                } else {
+                    _ = self.generic_params.remove(binding.param);
+                }
+            }
+
+            // Restore context after generation
+            self.restoreConversionContext(saved_context);
+
+            // Restore caller's line/column (not saved in SavedContext since it's only needed here)
+            self.current_line = caller_line;
+            self.current_column = caller_column;
+
+            // Propagate error if method generation failed, with caller's location
+            if (gen_err) |e| {
+                // Update error location to point to user code that triggered the method generation
+                if (self.last_error) |*le| {
+                    le.location.file = caller_source_file;
+                    le.location.line = @intCast(caller_line);
+                    le.location.column = @intCast(caller_column);
+                }
+                return e;
+            }
         }
 
         // Mark as generated in func_map
@@ -3123,7 +3857,7 @@ pub const AstToIr = struct {
         var uses_sret = false;
         var sret_struct_size: i32 = 0;
 
-        switch (rt) {
+        switch (rt.expr) {
             .simple => |name| {
                 const resolved = if (resolve_names) self.resolveTypeName(name) else name;
                 if (self.type_map.get(resolved)) |type_info| {
@@ -3158,7 +3892,7 @@ pub const AstToIr = struct {
             },
         }
 
-        const ir_type: ir.Type = switch (rt) {
+        const ir_type: ir.Type = switch (rt.expr) {
             .simple, .generic => blk: {
                 const base_name = typeExprBaseTypeName(rt).?;
                 const resolved = if (resolve_names) self.resolveTypeName(base_name) else base_name;
@@ -3168,7 +3902,7 @@ pub const AstToIr = struct {
         };
 
         // Get the resolved type name for sret type checking
-        const type_name: ?[]const u8 = switch (rt) {
+        const type_name: ?[]const u8 = switch (rt.expr) {
             .simple => |name| if (resolve_names) self.resolveTypeName(name) else name,
             .generic => |gen| blk: {
                 var resolved_args: [8][]const u8 = undefined;
@@ -3418,6 +4152,90 @@ pub const AstToIr = struct {
         self.self_ptr = null;
     }
 
+    /// Convert an extension method to IR for a specific type
+    fn convertExtensionMethod(
+        self: *AstToIr,
+        type_name: []const u8,
+        method: *const ast.ExtensionMethod,
+        type_bindings: *const std.StringHashMapUnmanaged([]const u8),
+    ) !void {
+        // Save current type context
+        const saved_type = self.current_type_name;
+        self.current_type_name = type_name;
+        defer self.current_type_name = saved_type;
+
+        // Track if this method throws (for throw statement validation)
+        self.current_func_throws_type = method.throws_type;
+        defer self.current_func_throws_type = null;
+
+        // Generate mangled name
+        const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method.name });
+        try self.module.trackString(mangled_name);
+
+        debug.astToIr("Converting extension method '{s}' for type '{s}'", .{ method.name, type_name });
+
+        // Analyze return type for sret handling
+        var sret_info = try self.analyzeReturnType(method.return_type, true);
+
+        // If method throws, we need to use sret for the error union
+        if (method.throws_type) |error_type| {
+            const error_size = if (self.type_map.get(error_type)) |type_info|
+                if (type_info == .struct_type) type_info.struct_type.size else 8
+            else
+                8;
+
+            const success_size = if (sret_info.uses_sret) sret_info.struct_size else 8;
+            const payload_size = @max(success_size, error_size);
+            sret_info.uses_sret = true;
+            sret_info.struct_size = 8 + payload_size;
+            sret_info.ir_type = .ptr;
+        }
+
+        const ir_func = try self.module.addFunction(mangled_name, sret_info.ir_type);
+
+        self.self_ptr = null;
+        var param_offset = try self.setupFunctionState(ir_func, mangled_name, sret_info);
+
+        // Register implicit self parameter (extension methods are always instance methods)
+        const self_val = try ir_func.emitParam(param_offset, .ptr);
+        try ir_func.setValueName(self_val, "self");
+        self.self_ptr = self_val;
+
+        // Register self as a variable for explicit self.field access
+        try self.var_map.put(self.allocator, "self", VarInfo.initParam(
+            self_val,
+            try self.typeNameToValueType(type_name),
+            false, // self is immutable
+            false,
+        ));
+
+        param_offset += 1;
+
+        // Set up type bindings in generic_params for resolution
+        var iter = type_bindings.iterator();
+        while (iter.next()) |entry| {
+            try self.generic_params.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        // Register explicit parameters
+        for (method.params, 0..) |param, i| {
+            try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
+        }
+
+        // Convert body and add implicit return for void methods
+        try self.convertBodyAndFinalize(method.body, sret_info.ir_type);
+
+        // Skip unused variable check for 'self' - it's always implicitly used
+        if (self.var_map.getPtr("self")) |self_info| {
+            self_info.used = true;
+        }
+
+        try self.checkUnusedVariables();
+
+        // Clear method context
+        self.self_ptr = null;
+    }
+
     // ------------------------------------------------------------------------
     // Function Conversion
     // ------------------------------------------------------------------------
@@ -3630,7 +4448,7 @@ pub const AstToIr = struct {
         // Check for InitableFromArrayLiteral transformation
         // Syntax: var arr Array of int = [1, 2, 3] (generic) or var arr IntArray = [...] (simple)
         if (decl.type_annotation) |type_ann| {
-            const base_type_name: ?[]const u8 = switch (type_ann) {
+            const base_type_name: ?[]const u8 = switch (type_ann.expr) {
                 .generic => |gen| gen.base_type,
                 .simple => |name| name,
                 .error_union, .function_type => null,
@@ -3639,7 +4457,7 @@ pub const AstToIr = struct {
                 if (self.typeConformsTo(t_name, "InitableFromArrayLiteral")) {
                     if (decl.value == .array_literal) {
                         // For generic types, get the monomorphized type name
-                        const resolved_type_name: []const u8 = switch (type_ann) {
+                        const resolved_type_name: []const u8 = switch (type_ann.expr) {
                             .generic => |gen| blk: {
                                 var resolved_args = try self.allocator.alloc([]const u8, gen.type_args.len);
                                 defer self.allocator.free(resolved_args);
@@ -3661,7 +4479,7 @@ pub const AstToIr = struct {
                 if (self.typeConformsTo(t_name, "InitableFromDictionaryLiteral")) {
                     if (decl.value == .map_literal) {
                         // For generic types, get the monomorphized type name
-                        const resolved_type_name: []const u8 = switch (type_ann) {
+                        const resolved_type_name: []const u8 = switch (type_ann.expr) {
                             .generic => |gen| blk: {
                                 var resolved_args = try self.allocator.alloc([]const u8, gen.type_args.len);
                                 defer self.allocator.free(resolved_args);
@@ -8690,14 +9508,12 @@ pub const AstToIr = struct {
 
         // Return appropriate value - return_value_type is always set for non-void returns
         if (sret_buffer) |buf| {
-
             return .{ .value = buf, .ty = func_info.return_value_type.? };
         }
         const ret_ty: ValueType = if (func_info.return_value_type) |vt|
             vt
         else
             .{ .primitive = types.Primitive.fromIrType(func_info.return_type) };
-
 
         return .{ .value = result orelse try self.func().emitConstI64(0), .ty = ret_ty };
     }
@@ -8960,6 +9776,7 @@ pub fn convertWithExternals(
     external_funcs: ?[]const ExternalFuncSignature,
     external_types: ?[]const ExternalTypeInfo,
     external_interfaces: ?[]const ExternalInterfaceInfo,
+    external_extensions: ?[]const ExternalExtensionInfo,
     external_enums: ?[]const ExternalEnumInfo,
     options: ConvertOptions,
     out_error: *?err.CompileError,
@@ -8985,6 +9802,13 @@ pub fn convertWithExternals(
     if (external_interfaces) |ext_ifaces| {
         for (ext_ifaces) |ext_iface| {
             try converter.registerInterface(ext_iface.interface_decl.*);
+        }
+    }
+
+    // Register external extensions (must be after interfaces)
+    if (external_extensions) |ext_exts| {
+        for (ext_exts) |ext_ext| {
+            try converter.registerExtension(ext_ext.extension_decl);
         }
     }
 
@@ -9043,6 +9867,10 @@ pub fn convertWithExternals(
             for (ext_types) |ext_type| {
                 if (!converter.type_map.contains(ext_type.name)) {
                     debug.astToIr("Failed to register external type '{s}' after {d} passes", .{ ext_type.name, pass });
+                    converter.reportError(.E006, ext_type.name);
+                    if (converter.last_error) |le| {
+                        out_error.* = copyErrorWithOwnedPath(allocator, le);
+                    }
                     return error.UnknownType;
                 }
             }
@@ -9148,6 +9976,23 @@ pub fn extractInterfaceInfo(program: ast.Program, allocator: std.mem.Allocator) 
     return iface_infos.toOwnedSlice(allocator);
 }
 
+/// Extract extension info from a parsed program (for cross-module compilation)
+pub fn extractExtensionInfo(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalExtensionInfo {
+    var ext_infos = std.ArrayListUnmanaged(ExternalExtensionInfo){};
+    errdefer ext_infos.deinit(allocator);
+
+    for (program.extensions) |*ext_decl| {
+        // Only include exported extensions
+        if (ext_decl.is_export) {
+            try ext_infos.append(allocator, .{
+                .extension_decl = ext_decl,
+            });
+        }
+    }
+
+    return ext_infos.toOwnedSlice(allocator);
+}
+
 /// Extract function signatures from a parsed program (for cross-module compilation)
 /// This includes methods from type declarations
 pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalFuncSignature {
@@ -9179,7 +10024,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             if (name) |n| {
                 // For generic types, getStructNameFromTypeExpr already allocates
                 // For simple types, we need to dupe
-                if (rt == .generic) {
+                if (rt.expr == .generic) {
                     break :blk n;
                 }
                 break :blk try allocator.dupe(u8, n);
@@ -9235,7 +10080,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 if (name) |n| {
                     // For generic types, getStructNameFromTypeExpr already allocates
                     // For simple types, we need to dupe
-                    if (rt == .generic) {
+                    if (rt.expr == .generic) {
                         break :blk n;
                     }
                     break :blk try allocator.dupe(u8, n);
@@ -9245,7 +10090,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
 
             // Track primitive return type (byte, int, etc.) for error unions
             const return_primitive_type: ?types.Primitive = if (method.return_type) |rt| blk: {
-                switch (rt) {
+                switch (rt.expr) {
                     .simple => |name| break :blk types.Primitive.fromString(name),
                     else => break :blk null,
                 }
@@ -9318,7 +10163,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
 
 /// Helper: get IR type from TypeExpr (simplified)
 fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
-    return switch (te) {
+    return switch (te.expr) {
         .simple => |name| {
             // Use centralized primitive type lookup
             return types.nameToIrType(name);
@@ -9332,7 +10177,7 @@ fn getIrTypeFromTypeExpr(te: ast.TypeExpr) ir.Type {
 /// Helper: get ExternalValueType from TypeExpr for return types.
 /// Returns ExternalValueType for all types (primitives, structs, enums, error unions, etc.)
 fn getExternalValueTypeForReturn(allocator: std.mem.Allocator, te: ast.TypeExpr) ?types.ExternalValueType {
-    return switch (te) {
+    return switch (te.expr) {
         .simple => |name| blk: {
             // Check if primitive
             if (types.Primitive.fromString(name)) |p| {
@@ -9363,7 +10208,7 @@ fn getExternalValueTypeForReturn(allocator: std.mem.Allocator, te: ast.TypeExpr)
             const success_ir_type = getIrTypeFromTypeExpr(eu.success_type.*);
             const success_struct_name = getStructNameFromTypeExpr(allocator, eu.success_type.*, null);
             // Get primitive type if success type is a primitive (e.g., .byte)
-            const success_primitive: ?types.Primitive = switch (eu.success_type.*) {
+            const success_primitive: ?types.Primitive = switch (eu.success_type.*.expr) {
                 .simple => |name| types.Primitive.fromString(name),
                 else => null,
             };
@@ -9391,7 +10236,7 @@ fn getStructNameFromTypeExpr(
     te: ast.TypeExpr,
     alloc_tracker: ?*std.ArrayListUnmanaged([]const u8),
 ) ?[]const u8 {
-    return switch (te) {
+    return switch (te.expr) {
         .simple => |name| {
             // Known primitives don't have struct names
             if (types.isPrimitiveTypeName(name)) {
@@ -9431,7 +10276,7 @@ fn getStructNameFromTypeExpr(
 /// OWNERSHIP: Allocates copies of all type names for uniform ownership.
 /// CLEANUP: Caller MUST free using freeExternalParamTypes()
 fn getExternalValueTypeFromTypeExpr(allocator: std.mem.Allocator, te: ast.TypeExpr) types.ExternalValueType {
-    return switch (te) {
+    return switch (te.expr) {
         .simple => |name| blk: {
             // Known primitives are primitive types
             if (types.Primitive.fromString(name)) |p| {
@@ -9444,13 +10289,13 @@ fn getExternalValueTypeFromTypeExpr(allocator: std.mem.Allocator, te: ast.TypeEx
         },
         .generic => |gen| blk: {
             // Build monomorphized name: BaseType$Arg1$Arg2...
-            const name = getStructNameFromTypeExpr(allocator, .{ .generic = gen }, null) orelse break :blk .{ .struct_type = gen.base_type };
+            const name = getStructNameFromTypeExpr(allocator, .{ .expr = .{ .generic = gen } }, null) orelse break :blk .{ .struct_type = gen.base_type };
             // Array types use struct_type with "Array$" prefix
             break :blk .{ .struct_type = name };
         },
         .error_union => |eu| blk: {
             // Get primitive type if success type is a primitive (e.g., .byte)
-            const success_primitive: ?types.Primitive = switch (eu.success_type.*) {
+            const success_primitive: ?types.Primitive = switch (eu.success_type.*.expr) {
                 .simple => |name| types.Primitive.fromString(name),
                 else => null,
             };

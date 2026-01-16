@@ -1,0 +1,59 @@
+// Test: interface-extensions.extension-with-params.1
+interface Scalable
+    function base() returns int
+end 'Scalable'
+
+extension Scalable
+    function scale(factor int) returns int
+        return self.base() * factor
+    end 'scale'
+end 'Scalable'
+
+type Amount is Scalable
+    var amount int
+
+    function Scalable.base() returns int
+        return amount
+    end 'base'
+end 'Amount'
+
+function main() returns int
+    var a = Amount{amount: 7}
+    return a.scale(6)
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry:
+    %a = alloca.sized ptr 8
+    memset %a 0 8
+    %tmp_fieldptr = getfieldptr ptr %a 0
+    %tmp_const = const.i64 i64 7
+    store %tmp_fieldptr %tmp_const
+    %tmp_const.1 = const.i64 i64 6
+    %tmp_call = call i64 @Amount$scale(%a, %tmp_const.1)
+    ret %tmp_call
+}
+
+function Amount$scale() -> i64 {
+entry:
+    %self = param ptr 0
+    %factor = param i64 1
+    %factor.1 = alloca ptr
+    store %factor.1 %factor
+    %tmp_call = call i64 @Amount$base(%self)
+    %tmp_load = load i64 %factor.1
+    %tmp_mul = mul i64 %tmp_call %tmp_load
+    ret %tmp_mul
+}
+
+function Amount$base() -> i64 {
+entry:
+    %self = param ptr 0
+    %tmp_fieldptr = getfieldptr ptr %self 0
+    %tmp_load = load i64 %tmp_fieldptr
+    ret %tmp_load
+}
+
+---
