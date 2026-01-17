@@ -427,6 +427,8 @@ pub const AstToIr = struct {
     converted_runtime_constants: std.StringHashMapUnmanaged(TypedValue) = .{},
     // Memory tracking option: emit track.move/track.incref/track.decref instructions
     track_memory: bool = false,
+    // Expected type hint for expression conversion (used for closure parameter type inference)
+    expected_type: ?ValueType = null,
 
     /// A compile-time constant value
     pub const ConstantValue = union(enum) {
@@ -4593,6 +4595,13 @@ pub const AstToIr = struct {
             // If using sret and returning a struct literal, write directly to sret buffer
             if (self.sret_ptr) |sret| {
                 if (expr == .struct_init) {
+                    // Set expected_type based on function's return type for type inference
+                    const saved_expected = self.expected_type;
+                    defer self.expected_type = saved_expected;
+                    if (self.sret_type_name) |type_name| {
+                        self.expected_type = self.typeNameToValueType(type_name) catch null;
+                    }
+
                     if (self.current_func_throws_type != null) {
                         // Returning struct init from throwing function - wrap in success result
                         // Write tag = 0 (success) first
@@ -7464,26 +7473,69 @@ pub const AstToIr = struct {
 
     /// Convert a closure expression to a function pointer
     /// Closures are compiled to anonymous functions
+    /// Parameter types can be inferred from context via self.expected_type
     fn convertClosure(self: *AstToIr, clos: ast.ClosureExpr) ConvertError!TypedValue {
         // Generate a unique name for the anonymous function
         const anon_name = try std.fmt.allocPrint(self.allocator, "__anon_closure_{d}", .{self.anon_closure_counter});
         self.anon_closure_counter += 1;
         try self.module.trackString(anon_name);
 
+        // Extract expected function type for parameter type inference
+        const expected_fn_type: ?types.FunctionTypeInfo = if (self.expected_type) |et|
+            if (et == .function_type) et.function_type else null
+        else
+            null;
+
         // Build parameter list for the synthesized function
         var param_ir_types = try self.allocator.alloc(ir.Type, clos.params.len);
         var func_param_types = try self.allocator.alloc(ParamType, clos.params.len);
         for (clos.params, 0..) |param, i| {
-            param_ir_types[i] = types.nameToIrType(param.type_name);
-            func_param_types[i] = .{ .ty = if (types.Primitive.fromString(param.type_name)) |prim|
-                .{ .primitive = prim }
-            else
-                try self.typeNameToValueType(param.type_name) };
+            // Get type from explicit annotation or infer from expected type
+            const param_value_type: ValueType = if (param.type_name) |explicit_type| blk: {
+                // Explicit type annotation
+                break :blk if (types.Primitive.fromString(explicit_type)) |prim|
+                    .{ .primitive = prim }
+                else
+                    try self.typeNameToValueType(explicit_type);
+            } else if (expected_fn_type) |fn_type| blk: {
+                // Infer from expected function type
+                if (i < fn_type.param_types.len) {
+                    break :blk fn_type.param_types[i];
+                } else {
+                    self.reportError(.E022, param.name);
+                    return error.TypeMismatch;
+                }
+            } else {
+                // No type annotation and no expected type - error
+                self.reportError(.E022, param.name);
+                return error.TypeMismatch;
+            };
+
+            param_ir_types[i] = param_value_type.toIrType();
+            func_param_types[i] = .{ .ty = param_value_type };
         }
 
-        // Determine return type from the body expression type
-        // For now, assume it matches the first param type (works for map transforms)
-        const return_type: ir.Type = if (clos.params.len > 0) param_ir_types[0] else .i64;
+        // Determine if return type needs sret (struct > 16 bytes)
+        // We'll know the actual return type after converting the body,
+        // but for closures returning the same type as their parameter, we can check now
+        const expected_return_type: ?ValueType = if (expected_fn_type) |fn_type|
+            if (fn_type.return_type) |ret| ret.* else null
+        else
+            null;
+
+        const uses_sret = if (expected_return_type) |ret_type| blk: {
+            break :blk switch (ret_type) {
+                .struct_type => |s| s.size > 16,
+                else => false,
+            };
+        } else false;
+
+        const sret_size: i32 = if (expected_return_type) |ret_type| blk: {
+            break :blk try self.getValueTypeSize(ret_type);
+        } else 0;
+
+        // Parameter offset for sret
+        const param_offset: i32 = if (uses_sret) 1 else 0;
 
         // Save current function context - MUST capture index BEFORE addFunction which may reallocate
         const saved_func_idx: ?usize = if (self.current_func) |curr| blk: {
@@ -7493,40 +7545,111 @@ pub const AstToIr = struct {
             break :blk null;
         } else null;
         const saved_var_map = self.var_map;
+        const saved_expected_type = self.expected_type;
+        const saved_sret_ptr = self.sret_ptr;
+        const saved_sret_size = self.sret_size;
+        self.expected_type = null; // Clear expected type for body conversion
+        self.sret_ptr = null;
+        self.sret_size = 0;
 
         // Create the function in the module (may reallocate functions array)
-        const func_ir = try self.module.addFunction(anon_name, return_type);
+        // Return type is ptr for sret, otherwise determined by body (we'll use ptr for now)
+        const func_ir = try self.module.addFunction(anon_name, .ptr);
         _ = try func_ir.addBlock("entry");
         self.current_func = func_ir;
         self.var_map = .empty;
 
-        // Add parameters to variable map
+        // Set up sret if needed
+        if (uses_sret) {
+            self.sret_ptr = try func_ir.emitParam(0, .ptr);
+            self.sret_size = sret_size;
+        }
+
+        // Add parameters to variable map - mirror registerParameter logic
+        // Note: parameter indices are offset by param_offset if using sret
         for (clos.params, 0..) |param, i| {
-            // Parameters are passed by value in registers/stack - allocate local storage
-            const param_ptr = try func_ir.emitAllocaSized(8);
-            const param_val = try func_ir.emitParam(@intCast(i), param_ir_types[i]);
-            try func_ir.emitStore(param_ptr.raw(), param_val);
-            try self.var_map.put(self.allocator, param.name, VarInfo.initParam(
-                param_ptr.raw(),
-                if (types.Primitive.fromString(param.type_name)) |prim|
-                    .{ .primitive = prim }
-                else
-                    try self.typeNameToValueType(param.type_name),
-                false, // immutable
-                false, // doesn't use slot
-            ));
+            const param_idx: i32 = @as(i32, @intCast(i)) + param_offset;
+            const param_type = func_param_types[i].ty;
+            switch (param_type) {
+                .struct_type => {
+                    // Struct types are passed as pointers - store pointer directly in var_map
+                    const param_val = try func_ir.emitParam(param_idx, .ptr);
+                    try self.var_map.put(self.allocator, param.name, VarInfo.initParam(
+                        param_val,
+                        param_type,
+                        false, // immutable
+                        false, // doesn't use slot
+                    ));
+                },
+                .error_union_type => {
+                    // Error unions are passed as pointers - store pointer in a slot
+                    const param_val = try func_ir.emitParam(param_idx, .ptr);
+                    const slot_ptr = try func_ir.emitAlloca(.ptr);
+                    try func_ir.emitStore(slot_ptr.raw(), param_val);
+                    try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                        slot_ptr.raw(),
+                        param_type,
+                        false, // immutable
+                        true, // uses slot
+                    ));
+                },
+                .primitive, .enum_type => {
+                    // Primitive/enum types passed by value - allocate local storage
+                    const ir_type = param_type.toIrType();
+                    const param_ptr = try func_ir.emitAlloca(ir_type);
+                    const param_val = try func_ir.emitParam(param_idx, ir_type);
+                    try func_ir.emitStore(param_ptr.raw(), param_val);
+                    try self.var_map.put(self.allocator, param.name, VarInfo.init(
+                        param_ptr.raw(),
+                        param_type,
+                        false, // immutable
+                        false, // doesn't use slot
+                    ));
+                },
+                .function_type => {
+                    // Function pointers - store in a slot
+                    const param_val = try func_ir.emitParam(param_idx, .ptr);
+                    const ptr = try func_ir.emitAlloca(.ptr);
+                    try func_ir.emitStore(ptr.raw(), param_val);
+                    try self.var_map.put(self.allocator, param.name, VarInfo.initParam(
+                        ptr.raw(),
+                        param_type,
+                        false, // immutable
+                        true, // uses slot
+                    ));
+                },
+            }
+        }
+
+        // If expected return type is available, set it for body expression conversion
+        // This enables anonymous struct literal inference in the closure body
+        if (expected_fn_type) |fn_type| {
+            if (fn_type.return_type) |ret_ty| {
+                self.expected_type = ret_ty.*;
+            }
         }
 
         // Convert the body expression
         const body_result = try self.convertExpression(clos.body.*);
 
-        // Emit return
-        try func_ir.emitRet(body_result.value);
+        // Emit return - handle sret case
+        if (self.sret_ptr) |sret| {
+            // Copy body result to sret and return sret pointer
+            const sret_raw: ir.RawPtr = .{ .val = sret };
+            const body_raw: ir.RawPtr = .{ .val = body_result.value };
+            try func_ir.emitMemcpy(sret_raw, body_raw, sret_size);
+            try func_ir.emitRet(sret);
+        } else {
+            try func_ir.emitRet(body_result.value);
+        }
 
         // Restore context - recompute pointer from saved index (array may have been reallocated)
         self.current_func = if (saved_func_idx) |idx| &self.module.functions.items[idx] else null;
         self.var_map.deinit(self.allocator);
         self.var_map = saved_var_map;
+        self.expected_type = saved_expected_type;
+        self.sret_ptr = saved_sret_ptr;
+        self.sret_size = saved_sret_size;
 
         // Register this function in the function map
         try self.func_map.put(self.allocator, anon_name, .{
@@ -7540,11 +7663,8 @@ pub const AstToIr = struct {
 
         // Build the function type for the closure
         const closure_param_types = try self.allocator.alloc(ValueType, clos.params.len);
-        for (clos.params, 0..) |param, i| {
-            closure_param_types[i] = if (types.Primitive.fromString(param.type_name)) |prim|
-                .{ .primitive = prim }
-            else
-                try self.typeNameToValueType(param.type_name);
+        for (func_param_types, 0..) |pt, i| {
+            closure_param_types[i] = pt.ty;
         }
 
         // Build return type pointer
@@ -8218,18 +8338,47 @@ pub const AstToIr = struct {
     }
 
     fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
-        // Build monomorphized type name if there are type arguments
-        const type_name = if (sinit.type_args.len > 0) blk: {
-            // Resolve type arguments through generic_params (e.g., "Element" -> "int")
-            var resolved_args = try self.allocator.alloc([]const u8, sinit.type_args.len);
-            defer self.allocator.free(resolved_args);
-            for (sinit.type_args, 0..) |arg, i| {
-                resolved_args[i] = self.resolveTypeName(arg);
+        // Determine type name - explicit or inferred from context
+        const type_name: []const u8 = if (sinit.type_name) |explicit_name| blk: {
+            // Build monomorphized type name if there are type arguments
+            if (sinit.type_args.len > 0) {
+                // Resolve type arguments through generic_params (e.g., "Element" -> "int")
+                var resolved_args = try self.allocator.alloc([]const u8, sinit.type_args.len);
+                defer self.allocator.free(resolved_args);
+                for (sinit.type_args, 0..) |arg, i| {
+                    resolved_args[i] = self.resolveTypeName(arg);
+                }
+                // Check if monomorphized version exists, if not create it
+                const mono_name = try self.getOrCreateMonomorphizedType(explicit_name, resolved_args);
+                break :blk mono_name;
+            } else {
+                // No type args - check if expected_type provides the monomorphized version
+                // e.g., Pair{...} in a context expecting Pair$String$int
+                if (self.expected_type) |et| {
+                    if (et == .struct_type) {
+                        const expected_name = et.struct_type.name;
+                        // Check if expected type is a monomorphization of the explicit type
+                        if (std.mem.startsWith(u8, expected_name, explicit_name) and
+                            expected_name.len > explicit_name.len and
+                            expected_name[explicit_name.len] == '$')
+                        {
+                            break :blk expected_name;
+                        }
+                    }
+                }
+                break :blk self.resolveTypeName(explicit_name);
             }
-            // Check if monomorphized version exists, if not create it
-            const mono_name = try self.getOrCreateMonomorphizedType(sinit.type_name, resolved_args);
-            break :blk mono_name;
-        } else self.resolveTypeName(sinit.type_name);
+        } else blk: {
+            // Anonymous struct literal - infer type from expected_type
+            if (self.expected_type) |et| {
+                if (et == .struct_type) {
+                    break :blk et.struct_type.name;
+                }
+            }
+            // No expected type or not a struct type - error
+            self.reportError(.E022, "anonymous struct literal requires type context");
+            return error.TypeMismatch;
+        };
 
         const struct_info = try self.lookupStructInfo(type_name);
         const struct_ptr = try self.func().emitAllocaSized(struct_info.size);
@@ -8239,17 +8388,46 @@ pub const AstToIr = struct {
 
     /// Initialize struct fields into an existing pointer (used for sret returns)
     fn initStructInto(self: *AstToIr, sinit: ast.StructInitExpr, dest_ptr: ir.Value) ConvertError!void {
-        // Build monomorphized type name if there are type arguments
-        const type_name = if (sinit.type_args.len > 0) blk: {
-            // Resolve type arguments through generic_params (e.g., "Element" -> "int")
-            var resolved_args = try self.allocator.alloc([]const u8, sinit.type_args.len);
-            defer self.allocator.free(resolved_args);
-            for (sinit.type_args, 0..) |arg, i| {
-                resolved_args[i] = self.resolveTypeName(arg);
+        // Determine type name - explicit or inferred from context
+        const type_name: []const u8 = if (sinit.type_name) |explicit_name| blk: {
+            // Build monomorphized type name if there are type arguments
+            if (sinit.type_args.len > 0) {
+                // Resolve type arguments through generic_params (e.g., "Element" -> "int")
+                var resolved_args = try self.allocator.alloc([]const u8, sinit.type_args.len);
+                defer self.allocator.free(resolved_args);
+                for (sinit.type_args, 0..) |arg, i| {
+                    resolved_args[i] = self.resolveTypeName(arg);
+                }
+                const mono_name = try self.getOrCreateMonomorphizedType(explicit_name, resolved_args);
+                break :blk mono_name;
+            } else {
+                // No type args - check if expected_type provides the monomorphized version
+                // e.g., Pair{...} in a context expecting Pair$String$int
+                if (self.expected_type) |et| {
+                    if (et == .struct_type) {
+                        const expected_name = et.struct_type.name;
+                        // Check if expected type is a monomorphization of the explicit type
+                        if (std.mem.startsWith(u8, expected_name, explicit_name) and
+                            expected_name.len > explicit_name.len and
+                            expected_name[explicit_name.len] == '$')
+                        {
+                            break :blk expected_name;
+                        }
+                    }
+                }
+                break :blk self.resolveTypeName(explicit_name);
             }
-            const mono_name = try self.getOrCreateMonomorphizedType(sinit.type_name, resolved_args);
-            break :blk mono_name;
-        } else self.resolveTypeName(sinit.type_name);
+        } else blk: {
+            // Anonymous struct literal - infer type from expected_type
+            if (self.expected_type) |et| {
+                if (et == .struct_type) {
+                    break :blk et.struct_type.name;
+                }
+            }
+            // No expected type or not a struct type - error
+            self.reportError(.E022, "anonymous struct literal requires type context");
+            return error.TypeMismatch;
+        };
         try self.initStructIntoResolved(sinit, dest_ptr, type_name);
     }
 
@@ -8819,7 +8997,16 @@ pub const AstToIr = struct {
                 .expr => |e| e,
                 .default => |d| d.*,
             };
+
+            // Set expected type hint for type inference (closures, anonymous struct literals)
+            const saved_expected = self.expected_type;
+            if (i < func_info.param_types.len) {
+                self.expected_type = func_info.param_types[i].ty;
+            }
+
             const arg = try self.convertExpression(arg_expr);
+            self.expected_type = saved_expected;
+
             var arg_value = arg.value;
             var arg_ty = arg.ty;
 
@@ -9475,11 +9662,19 @@ pub const AstToIr = struct {
         switch (call_args) {
             .expressions => |exprs| {
                 for (exprs, 0..) |arg_expr, i| {
+                    const param_index = i + self_offset; // Account for self parameter
+
+                    // Set expected type hint for type inference (closures, anonymous struct literals)
+                    const saved_expected = self.expected_type;
+                    if (param_index < func_info.param_types.len) {
+                        self.expected_type = func_info.param_types[param_index].ty;
+                    }
+
                     const arg = try self.convertExpression(arg_expr);
+                    self.expected_type = saved_expected;
+
                     var arg_value = arg.value;
                     var arg_ty = arg.ty;
-
-                    const param_index = i + self_offset; // Account for self parameter
 
                     // Type validation and implicit conversions
                     if (param_index < func_info.param_types.len) {

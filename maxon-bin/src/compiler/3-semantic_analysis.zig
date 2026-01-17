@@ -1141,8 +1141,11 @@ pub const SemanticAnalyzer = struct {
         switch (expr) {
             .struct_init => |sinit| {
                 // This is the main monomorphization trigger
-                if (sinit.type_args.len > 0) {
-                    _ = try self.getOrCreateMonomorphizedType(sinit.type_name, sinit.type_args);
+                // Skip anonymous struct literals (type_name is null) - they're inferred from context
+                if (sinit.type_name) |type_name| {
+                    if (sinit.type_args.len > 0) {
+                        _ = try self.getOrCreateMonomorphizedType(type_name, sinit.type_args);
+                    }
                 }
                 for (sinit.fields) |field| {
                     try self.discoverInExpression(field.value.*);
@@ -1593,7 +1596,7 @@ pub const SemanticAnalyzer = struct {
                 }
                 break :blk null;
             },
-            .struct_init => |sinit| self.typeNameToValueType(sinit.type_name),
+            .struct_init => |sinit| if (sinit.type_name) |type_name| self.typeNameToValueType(type_name) else null,
             .binary => |bin| self.inferExpressionType(bin.left.*),
             .unary => |un| self.inferExpressionType(un.operand.*),
             .compare => ValueType{ .primitive = .bool },

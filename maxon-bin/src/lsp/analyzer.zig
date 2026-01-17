@@ -1916,7 +1916,9 @@ fn formatExpression(writer: anytype, expr: ast.Expression) !void {
             try writer.writeByte(']');
         },
         .struct_init => |sinit| {
-            try writer.writeAll(sinit.type_name);
+            if (sinit.type_name) |type_name| {
+                try writer.writeAll(type_name);
+            }
             try writer.writeAll(" { ");
             for (sinit.fields, 0..) |field, i| {
                 if (i > 0) try writer.writeAll(", ");

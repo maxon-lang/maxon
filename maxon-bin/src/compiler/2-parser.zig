@@ -782,6 +782,50 @@ pub const Parser = struct {
         }
     }
 
+    /// Convert a TypeExpr to a monomorphized string name
+    /// Simple types: "int", "String"
+    /// Generic types: "Pair$String$int", "Array$int"
+    fn typeExprToMonoName(self: *Parser, type_expr: ast.TypeExpr) ![]const u8 {
+        switch (type_expr.expr) {
+            .simple => |name| return name,
+            .generic => |gen| {
+                // Build monomorphized name: "Pair$String$int"
+                var parts: std.ArrayListUnmanaged([]const u8) = .empty;
+                defer parts.deinit(self.allocator);
+                try parts.append(self.allocator, gen.base_type);
+                for (gen.type_args) |arg| {
+                    try parts.append(self.allocator, arg);
+                }
+                // Join with $
+                var total_len: usize = 0;
+                for (parts.items) |part| {
+                    total_len += part.len;
+                }
+                total_len += parts.items.len - 1; // for $ separators
+
+                const result = try self.allocator.alloc(u8, total_len);
+                var pos: usize = 0;
+                for (parts.items, 0..) |part, i| {
+                    if (i > 0) {
+                        result[pos] = '$';
+                        pos += 1;
+                    }
+                    @memcpy(result[pos .. pos + part.len], part);
+                    pos += part.len;
+                }
+                return result;
+            },
+            .function_type => {
+                // Function types in closures - not typically used as parameter types
+                return "(fn)";
+            },
+            .error_union => {
+                // Error union types - not typically used as closure parameter types
+                return "(error_union)";
+            },
+        }
+    }
+
     /// Parse function type: (int, string) returns bool or (x int, y int) returns int
     fn parseFunctionTypeExpr(self: *Parser) ParseError!ast.TypeExpr {
         // Capture location of the function type (the opening paren)
@@ -2260,6 +2304,13 @@ pub const Parser = struct {
         if (self.check(.lbracket)) {
             return try self.parseArrayLiteral();
         }
+        // Anonymous struct literal: {field: value, ...}
+        // Pattern: { identifier : ... - type inferred from context
+        if (self.check(.lbrace)) {
+            if (self.isAnonymousStructLiteral()) {
+                return try self.parseAnonymousStructInit();
+            }
+        }
         // Check for Self keyword (for Self{...} struct initialization in methods)
         if (self.check(.Self)) {
             const token = self.advance();
@@ -2386,11 +2437,11 @@ pub const Parser = struct {
         return null;
     }
 
-    /// Check if the current position is the start of a closure: (name type, ...) gives
+    /// Check if the current position is the start of a closure: (name [type], ...) gives
+    /// Type is optional - can be `(x, y) gives` or `(x int, y int) gives`
     fn isClosureStart(self: *Parser) bool {
         // We're at '('
-        // Closure format: (identifier type [, identifier type ...]) gives
-        // Look for pattern: ( identifier type [,|)] ) gives
+        // Closure format: (identifier [type] [, identifier [type] ...]) gives
         var lookahead: usize = 1;
 
         // Skip the lparen
@@ -2398,12 +2449,17 @@ pub const Parser = struct {
         if (after_lparen.type != .identifier) return false;
         lookahead += 1;
 
-        // After identifier, expect type name (identifier or int/float/bool)
-        const type_tok = self.peek(lookahead) orelse return false;
-        if (type_tok.type != .identifier and type_tok.type != .int and type_tok.type != .float) return false;
-        lookahead += 1;
+        // After identifier, we can have:
+        // - type expression (identifier, int, float, or complex type like "Pair of String int")
+        // - comma (no type, move to next param)
+        // - rparen (no type, end of params)
+        const after_id = self.peek(lookahead) orelse return false;
+        if (after_id.type == .identifier or after_id.type == .int or after_id.type == .float) {
+            // Type present - skip the entire type expression
+            lookahead = self.skipTypeExprLookahead(lookahead);
+        }
 
-        // Now we can have: ) gives  OR  , identifier type ...
+        // Now we can have: ) gives  OR  , identifier [type] ...
         // Skip params until we hit )
         while (true) {
             const tok = self.peek(lookahead) orelse return false;
@@ -2413,13 +2469,17 @@ pub const Parser = struct {
             }
             if (tok.type == .comma) {
                 lookahead += 1;
-                // Expect identifier type
+                // Expect identifier [type]
                 const id_tok = self.peek(lookahead) orelse return false;
                 if (id_tok.type != .identifier) return false;
                 lookahead += 1;
-                const t_tok = self.peek(lookahead) orelse return false;
-                if (t_tok.type != .identifier and t_tok.type != .int and t_tok.type != .float) return false;
-                lookahead += 1;
+                // Check for optional type
+                const after_param = self.peek(lookahead) orelse return false;
+                if (after_param.type == .identifier or after_param.type == .int or after_param.type == .float) {
+                    // Type present - skip the entire type expression
+                    lookahead = self.skipTypeExprLookahead(lookahead);
+                }
+                // Otherwise, no type - continue
             } else {
                 return false;
             }
@@ -2430,26 +2490,55 @@ pub const Parser = struct {
         return gives_tok.type == .gives;
     }
 
-    /// Parse a closure: (name type, ...) gives expr
+    /// Skip a type expression during lookahead for closure detection
+    /// Returns the new lookahead position after the type expression
+    /// Handles: simple types (int, float, bool), identifiers, generic types (Pair of A B)
+    fn skipTypeExprLookahead(self: *Parser, start: usize) usize {
+        var pos = start;
+
+        // Skip the base type (int, float, identifier)
+        const base = self.peek(pos) orelse return pos;
+        if (base.type != .identifier and base.type != .int and base.type != .float) {
+            return pos;
+        }
+        pos += 1;
+
+        // Check for generic type: "of" followed by type arguments
+        const maybe_of = self.peek(pos) orelse return pos;
+        if (maybe_of.type == .of) {
+            pos += 1;
+            // Skip type arguments until we hit comma or rparen
+            while (true) {
+                const tok = self.peek(pos) orelse return pos;
+                if (tok.type == .comma or tok.type == .rparen) {
+                    break;
+                }
+                // Skip this type argument token
+                pos += 1;
+            }
+        }
+
+        return pos;
+    }
+
+    /// Parse a closure: (name [type], ...) gives expr
+    /// Type is optional - if omitted, will be inferred from context
     fn parseClosure(self: *Parser) ParseError!ast.Expression {
         _ = self.advance(); // consume '('
 
         var params: std.ArrayListUnmanaged(ast.ClosureParam) = .empty;
         errdefer params.deinit(self.allocator);
 
-        // Parse params: identifier type, identifier type, ...
+        // Parse params: identifier [type], identifier [type], ...
         while (!self.check(.rparen)) {
             const name_tok = try self.expect(.identifier);
-            // Parse type (can be identifier like "int" or type keyword)
-            const type_name = if (self.check(.int)) blk: {
-                _ = self.advance();
-                break :blk "int";
-            } else if (self.check(.float)) blk: {
-                _ = self.advance();
-                break :blk "float";
+            // Type is optional - if next is comma or rparen, no type specified
+            const type_name: ?[]const u8 = if (self.check(.comma) or self.check(.rparen)) blk: {
+                break :blk null; // Type will be inferred from context
             } else blk: {
-                const t = try self.expect(.identifier);
-                break :blk t.text;
+                // Parse full type expression (handles "int", "Pair of String int", etc.)
+                const type_expr = try self.parseTypeExpr();
+                break :blk try self.typeExprToMonoName(type_expr);
             };
 
             try params.append(self.allocator, .{
@@ -2791,6 +2880,46 @@ pub const Parser = struct {
         return try self.parsePostfix(.{ .struct_init = .{
             .type_name = type_name,
             .type_args = type_args,
+            .fields = try fields.toOwnedSlice(self.allocator),
+        } });
+    }
+
+    /// Check if the current position starts an anonymous struct literal: { identifier : ...
+    /// This is used to disambiguate between blocks and anonymous struct literals
+    fn isAnonymousStructLiteral(self: *Parser) bool {
+        // Pattern: { identifier :
+        // We're at '{'
+        const peek1 = self.peek(1) orelse return false;
+        if (peek1.type != .identifier) return false;
+        const peek2 = self.peek(2) orelse return false;
+        return peek2.type == .colon;
+    }
+
+    /// Parse an anonymous struct literal: {field: value, ...}
+    /// Type will be inferred from context
+    fn parseAnonymousStructInit(self: *Parser) ParseError!ast.Expression {
+        _ = try self.expect(.lbrace);
+        self.skipNewlines();
+
+        var fields: std.ArrayListUnmanaged(ast.FieldInit) = .empty;
+        errdefer fields.deinit(self.allocator);
+
+        if (!self.check(.rbrace)) {
+            try fields.append(self.allocator, try self.parseFieldInit());
+            self.skipNewlines();
+
+            while (self.check(.comma)) {
+                _ = self.advance();
+                self.skipNewlines();
+                try fields.append(self.allocator, try self.parseFieldInit());
+                self.skipNewlines();
+            }
+        }
+
+        _ = try self.expect(.rbrace);
+        return try self.parsePostfix(.{ .struct_init = .{
+            .type_name = null, // Anonymous - type inferred from context
+            .type_args = &.{},
             .fields = try fields.toOwnedSlice(self.allocator),
         } });
     }

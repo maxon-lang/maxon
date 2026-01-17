@@ -289,3 +289,45 @@ end 'main'
 ```exitcode
 63
 ```
+
+<!-- test: stdlib-map-on-map -->
+```maxon
+function main() returns int
+    var m = ["a": 1, "b": 2, "c": 3]
+    var mapped = m.map((p Pair of String int) gives Pair of String int{key: p.key, value: p.value * 10})
+    
+    var sum = 0
+    for pair in mapped 'loop'
+        sum = sum + pair.value
+    end 'loop'
+    
+    // 10 + 20 + 30 = 60
+    return sum
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: stdlib-map-on-map-with-function -->
+```maxon
+function multiplyValue(p Pair of String int) returns Pair of String int
+    return Pair of String int{key: p.key, value: p.value * 10}
+end 'multiplyValue'
+
+function main() returns int
+    var m = ["a": 1, "b": 2, "c": 3]
+    var mapped = m.map(multiplyValue)
+    
+    var sum = 0
+    for pair in mapped 'loop'
+        sum = sum + pair.value
+    end 'loop'
+    
+    // 10 + 20 + 30 = 60
+    return sum
+end 'main'
+```
+```exitcode
+60
+```

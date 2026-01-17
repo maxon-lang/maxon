@@ -418,7 +418,7 @@ pub const FieldInit = struct {
 };
 
 pub const StructInitExpr = struct {
-    type_name: []const u8,
+    type_name: ?[]const u8, // null for anonymous literals like {x: 1}
     type_args: []const []const u8, // ["int"] for `Container of int{...}`
     fields: []const FieldInit,
 };
@@ -480,7 +480,7 @@ pub const InterpolatedStringExpr = struct {
 
 pub const ClosureParam = struct {
     name: []const u8,
-    type_name: []const u8,
+    type_name: ?[]const u8, // null means infer from context
 };
 
 pub const ClosureExpr = struct {
