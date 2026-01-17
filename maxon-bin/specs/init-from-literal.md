@@ -11,14 +11,14 @@ category: type-system
 
 ### InitableFromStringLiteral
 
-Types conforming to `InitableFromStringLiteral` can be initialized from string literals using cast syntax. The `init` method receives a `__ManagedMemory` containing the UTF-8 bytes:
+Types conforming to `InitableFromStringLiteral` can be initialized from string literals using cast syntax. The `init` method receives a `String`:
 
 ```maxon
 type MyString is InitableFromStringLiteral
     var _value String
 
-    static function InitableFromStringLiteral.init(value __ManagedMemory) returns MyString
-        return MyString{_value: String.init(value)}
+    static function InitableFromStringLiteral.init(value String) returns MyString
+        return MyString{_value: value}
     end 'init'
 
     export function len() returns int
@@ -41,14 +41,14 @@ end 'main'
 
 ### InitableFromCharLiteral
 
-Types conforming to `InitableFromCharLiteral` can be initialized from character literals. The `init` method receives a `__ManagedMemory` containing the UTF-8 bytes:
+Types conforming to `InitableFromCharLiteral` can be initialized from character literals. The `init` method receives a `Character`:
 
 ```maxon
 type MyChar is InitableFromCharLiteral
     var _value Character
 
-    static function InitableFromCharLiteral.init(value __ManagedMemory) returns MyChar
-        return MyChar{_value: Character.init(value)}
+    static function InitableFromCharLiteral.init(value Character) returns MyChar
+        return MyChar{_value: value}
     end 'init'
 
     export function len() returns int
@@ -77,8 +77,8 @@ end 'main'
 type Wrapper is InitableFromStringLiteral
     var _value String
 
-    static function InitableFromStringLiteral.init(value __ManagedMemory) returns Wrapper
-        return Wrapper{_value: String.init(value)}
+    static function InitableFromStringLiteral.init(value String) returns Wrapper
+        return Wrapper{_value: value}
     end 'init'
 
     export function len() returns int
@@ -100,8 +100,8 @@ end 'main'
 type Wrapper is InitableFromStringLiteral
     var _value String
 
-    static function InitableFromStringLiteral.init(value __ManagedMemory) returns Wrapper
-        return Wrapper{_value: String.init(value)}
+    static function InitableFromStringLiteral.init(value String) returns Wrapper
+        return Wrapper{_value: value}
     end 'init'
 
     export function len() returns int
@@ -123,8 +123,8 @@ len: 0
 type CharWrapper is InitableFromCharLiteral
     var _value Character
 
-    static function InitableFromCharLiteral.init(value __ManagedMemory) returns CharWrapper
-        return CharWrapper{_value: Character.init(value)}
+    static function InitableFromCharLiteral.init(value Character) returns CharWrapper
+        return CharWrapper{_value: value}
     end 'init'
 
     export function len() returns int

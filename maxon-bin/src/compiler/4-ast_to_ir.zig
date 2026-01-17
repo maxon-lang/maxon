@@ -46,6 +46,12 @@ pub const PendingMethod = types.PendingMethod;
 pub const SemanticInfo = types.SemanticInfo;
 pub const SemanticVarInfo = types.SemanticVarInfo;
 
+/// Result of emitTypeInit - pointer to initialized struct and its type info
+const EmitTypeInitResult = struct {
+    ptr: ir.Value,
+    type_info: *const types.StructTypeInfo,
+};
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -9218,7 +9224,7 @@ pub const AstToIr = struct {
 
     /// Call Type$init with an argument and return the result pointer.
     /// Returns the result pointer and the type info for use in TypedValue.
-    pub fn emitTypeInit(self: *AstToIr, type_name: []const u8, init_arg: ir.Value) ConvertError!struct { ptr: ir.Value, type_info: *const types.StructTypeInfo } {
+    pub fn emitTypeInit(self: *AstToIr, type_name: []const u8, init_arg: ir.Value) ConvertError!EmitTypeInitResult {
         const init_func_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{type_name});
         try self.module.trackString(init_func_name);
 
@@ -9248,8 +9254,22 @@ pub const AstToIr = struct {
         return .{ .ptr = result_ptr.raw(), .type_info = &type_info_ptr.struct_type };
     }
 
-    /// Common implementation for literal initialization (string or character literals).
-    /// All types receive __ManagedMemory directly.
+    /// Create a user type from literal bytes via two-step initialization:
+    /// 1. Create __ManagedMemory from bytes
+    /// 2. Create wrapper (String/Character) from __ManagedMemory
+    /// 3. Call user type's init with the wrapper
+    fn emitLiteralToUserType(
+        self: *AstToIr,
+        bytes: []const u8,
+        type_name: []const u8,
+        wrapper: LiteralWrapperType,
+    ) ConvertError!EmitTypeInitResult {
+        const managed_ptr = try array_helpers.emitManagedMemoryFromBytes(self, bytes);
+        const wrapper_ptr = try self.emitWrapperFromManaged(managed_ptr, wrapper);
+        return self.emitTypeInit(type_name, wrapper_ptr);
+    }
+
+    /// Convert literal initialization: var s MyType = "hello"
     fn convertLiteralInit(
         self: *AstToIr,
         bytes: []const u8,
@@ -9257,11 +9277,7 @@ pub const AstToIr = struct {
         decl_name: []const u8,
         wrapper: LiteralWrapperType,
     ) !void {
-        _ = wrapper; // No longer needed - all types receive __ManagedMemory
-        const managed_ptr = try array_helpers.emitManagedMemoryFromBytes(self, bytes);
-
-        const result = try self.emitTypeInit(type_name, managed_ptr.raw());
-
+        const result = try self.emitLiteralToUserType(bytes, type_name, wrapper);
         try self.func().setValueName(result.ptr, decl_name);
         try self.var_map.put(self.allocator, decl_name, VarInfo.initStackAllocated(
             result.ptr,
@@ -9270,21 +9286,16 @@ pub const AstToIr = struct {
         ));
     }
 
-    /// Common implementation for literal casts ("hello" as MyType or 'A' as MyType).
-    /// All types receive __ManagedMemory directly.
+    /// Convert literal cast: "hello" as MyType
     fn convertLiteralCast(
         self: *AstToIr,
         literal: []const u8,
         type_name: []const u8,
         wrapper: LiteralWrapperType,
     ) ConvertError!TypedValue {
-        _ = wrapper; // No longer needed - all types receive __ManagedMemory
         const processed = try self.processEscapeSequences(literal);
         defer self.allocator.free(processed);
-
-        const managed_ptr = try array_helpers.emitManagedMemoryFromBytes(self, processed);
-        const result = try self.emitTypeInit(type_name, managed_ptr.raw());
-
+        const result = try self.emitLiteralToUserType(processed, type_name, wrapper);
         return .{
             .value = result.ptr,
             .ty = .{ .struct_type = result.type_info },
