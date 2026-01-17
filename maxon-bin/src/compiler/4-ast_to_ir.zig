@@ -37,6 +37,7 @@ pub const ExternalTypeInfo = types.ExternalTypeInfo;
 pub const ExternalInterfaceInfo = types.ExternalInterfaceInfo;
 pub const ExternalExtensionInfo = types.ExternalExtensionInfo;
 pub const ExternalEnumInfo = types.ExternalEnumInfo;
+pub const ExternalTypeAliasInfo = types.ExternalTypeAliasInfo;
 pub const ParamType = types.ParamType;
 pub const OwnershipState = types.OwnershipState;
 pub const VarInfo = types.VarInfo;
@@ -818,6 +819,30 @@ pub const AstToIr = struct {
             try self.registerEnum(enum_decl);
         }
 
+        // Pre-register all types with placeholder info in type_map
+        // This is needed so that type aliases like "typealias FooArray is Array with Foo"
+        // can reference types (Foo) that are defined later in the same file
+        for (program.types) |type_decl| {
+            // Skip generic types - they don't need placeholder registration
+            if (type_decl.generic_params.len > 0) continue;
+            // Skip if already registered
+            if (self.type_map.contains(type_decl.name)) continue;
+            // Register placeholder in type_map (will be updated with full info later)
+            try self.type_map.put(self.allocator, type_decl.name, .{
+                .struct_type = .{
+                    .name = type_decl.name,
+                    .fields = &[_]FieldInfo{},
+                    .size = 0, // Will be computed during full registration
+                    .decl_line = type_decl.block.start_line,
+                    .decl_column = type_decl.block.start_column,
+                    .source_file = self.source_file,
+                    .is_export = type_decl.is_export,
+                },
+            });
+            // Also register in type_decl_map for getOrCreateMonomorphizedType to find it
+            try self.type_decl_map.put(self.allocator, type_decl.name, type_decl);
+        }
+
         // Process top-level type aliases BEFORE registering types and functions
         // Types may reference these aliases in their fields, and functions in parameters/return types
         // Note: Type aliases can reference generic types from stdlib (like Map) which are already
@@ -1261,11 +1286,13 @@ pub const AstToIr = struct {
         return false;
     }
 
-    /// Safely remove an associated type alias, preserving extension-defined aliases
+    /// Remove an associated type alias.
+    /// NOTE: We previously preserved extension-defined aliases here, but that caused
+    /// bugs when the alias contained unresolved generic params like "Element".
+    /// Now we always remove the alias - it will be re-registered when needed with
+    /// the correct resolved type args for each specific monomorphization context.
     fn safeRemoveAssociatedTypeAlias(self: *AstToIr, alias_name: []const u8) void {
-        if (!self.isExtensionDefinedAlias(alias_name)) {
-            _ = self.associated_type_aliases.remove(alias_name);
-        }
+        _ = self.associated_type_aliases.remove(alias_name);
     }
 
     // ------------------------------------------------------------------------
@@ -1562,8 +1589,14 @@ pub const AstToIr = struct {
     /// Register an external type (from stdlib or other modules).
     /// Computes field sizes using type_map, so dependent types must be registered first.
     pub fn registerExternalType(self: *AstToIr, ext_type: ExternalTypeInfo) !void {
-        // Skip if already registered (avoid duplicate allocations)
-        if (self.type_map.contains(ext_type.name)) return;
+        // Skip if already fully registered (not just pre-registered with placeholder)
+        // Pre-registered placeholders have size=0 and need to be updated with actual size
+        if (self.type_map.get(ext_type.name)) |existing| {
+            switch (existing) {
+                .struct_type => |s| if (s.size > 0) return,
+                .primitive, .enum_type => return,
+            }
+        }
 
         const type_decl = ext_type.type_decl;
 
@@ -1595,7 +1628,12 @@ pub const AstToIr = struct {
             });
         }
         defer {
-            // Clean up generic params only (associated type aliases stay registered)
+            // Clean up both generic params AND associated type aliases after type registration
+            // Associated type aliases must be cleaned up because they contain unresolved generic params
+            // like "Element" that are only valid within this type's scope.
+            for (type_decl.associated_types) |assoc| {
+                self.safeRemoveAssociatedTypeAlias(assoc.name);
+            }
             for (type_decl.generic_params) |param| {
                 _ = self.generic_params.remove(param);
             }
@@ -1647,17 +1685,9 @@ pub const AstToIr = struct {
             try self.type_source_files.put(self.allocator, ext_type.name, owned_path);
         }
 
-        // Register associated types as global type aliases
-        // NOTE: We only register the alias here, NOT the monomorphized type.
-        // The monomorphized type will be created lazily when first used, after all types are registered.
-        // This avoids dependency ordering issues where the element type (e.g., String) isn't registered yet.
-        for (type_decl.associated_types) |assoc| {
-            // Register permanently (don't clean up)
-            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
-                .base_type = assoc.base_type,
-                .type_args = assoc.type_args,
-            });
-        }
+        // NOTE: Type-level associated types (like Set.ElementArray) are NOT registered globally
+        // because they contain generic params (like "Element") that are only valid within the type's scope.
+        // They are set up temporarily for field resolution during type registration, then cleaned up.
 
         debug.astToIr("Registered external type '{s}' with size {d}", .{ ext_type.name, field_result.size });
     }
@@ -1857,17 +1887,12 @@ pub const AstToIr = struct {
             .decl_column = iface.block.start_column,
         });
 
-        // Register interface's associated type declarations as global type aliases
-        // e.g., `associatedtype ElementArray is Array with Element` in an interface
-        for (iface.associated_types) |assoc| {
-            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
-                .base_type = assoc.base_type,
-                .type_args = assoc.type_args,
-            });
-            debug.astToIr("Registered interface associated type '{s}' -> '{s}'", .{ assoc.name, assoc.base_type });
-        }
+        // NOTE: Interface associated types (like "ElementArray is Array with Element") are NOT
+        // registered globally here. They are set up temporarily during synthesizeExtensionMethodsForMonomorphizedType
+        // when the generic params are available to resolve type arguments like "Element".
+        // Registering them globally would cause "unknown type: Element" errors when Element isn't mapped.
 
-        debug.astToIr("Registered interface '{s}' with {d} methods, {d} associated types, extends {d} interfaces", .{ iface.name, iface.methods.len, iface.generic_params.len, iface.extends.len });
+        debug.astToIr("Registered interface '{s}' with {d} methods, {d} associated types, extends {d} interfaces", .{ iface.name, iface.methods.len, iface.associated_types.len, iface.extends.len });
     }
 
     /// Register extension methods for an interface
@@ -1885,15 +1910,10 @@ pub const AstToIr = struct {
         // Store extension declaration for accessing associated types
         try self.extension_decls.put(self.allocator, ext.interface_name, ext);
 
-        // Register extension's associated type declarations as global type aliases
-        // e.g., `associatedtype ElementArray is Array with Element` in an extension
-        for (ext.associated_types) |assoc| {
-            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
-                .base_type = assoc.base_type,
-                .type_args = assoc.type_args,
-            });
-            debug.astToIr("Registered extension associated type '{s}' -> '{s}'", .{ assoc.name, assoc.base_type });
-        }
+        // NOTE: Extension associated types (like "ElementArray is Array with Element") are NOT
+        // registered globally here. They are set up temporarily during synthesizeExtensionMethodsForMonomorphizedType
+        // when the generic params are available to resolve type arguments like "Element".
+        // Registering them globally would cause "unknown type: Element" errors when Element isn't mapped.
 
         debug.astToIr("Registered {d} extension method(s) for interface '{s}'", .{ ext.methods.len, ext.interface_name });
     }
@@ -2606,7 +2626,7 @@ pub const AstToIr = struct {
 
                     if (!already_implemented) {
                         // Create and convert the synthesized method
-                        try self.synthesizeExtensionMethod(type_decl.name, ext_method, &type_bindings);
+                        try self.synthesizeExtensionMethod(type_decl.name, ext_method, &type_bindings, conformance.interface_name);
                     }
                 }
             }
@@ -2684,7 +2704,7 @@ pub const AstToIr = struct {
                     }
 
                     if (!already_implemented) {
-                        try self.synthesizeExtensionMethod(type_decl.name, ext_method, type_bindings);
+                        try self.synthesizeExtensionMethod(type_decl.name, ext_method, type_bindings, parent_iface_name);
                     }
                 }
             }
@@ -2789,7 +2809,7 @@ pub const AstToIr = struct {
 
                     if (!already_implemented) {
                         // Create and synthesize the extension method with mono_name as the type
-                        try self.synthesizeExtensionMethod(mono_name, ext_method, &type_bindings);
+                        try self.synthesizeExtensionMethod(mono_name, ext_method, &type_bindings, conformance.interface_name);
                     }
                 }
             }
@@ -2901,7 +2921,7 @@ pub const AstToIr = struct {
                     }
 
                     if (!already_implemented) {
-                        try self.synthesizeExtensionMethod(mono_name, ext_method, type_bindings);
+                        try self.synthesizeExtensionMethod(mono_name, ext_method, type_bindings, parent_iface_name);
                     }
                 }
             }
@@ -2924,6 +2944,7 @@ pub const AstToIr = struct {
         type_name: []const u8,
         ext_method: *const ast.ExtensionMethod,
         type_bindings: *std.StringHashMapUnmanaged([]const u8),
+        interface_name: []const u8,
     ) !void {
         // Set location for error reporting to the extension method's location
         const saved_line = self.current_line;
@@ -2987,6 +3008,7 @@ pub const AstToIr = struct {
         try self.pending_methods.put(self.allocator, mangled_name, .{
             .type_name = type_name,
             .extension_method = ext_method,
+            .extension_interface_name = interface_name,
             .type_bindings = cloned_bindings,
         });
     }
@@ -3075,7 +3097,9 @@ pub const AstToIr = struct {
                     for (alias.type_args, 0..) |arg, i| {
                         if (i >= 8) break;
                         // First check bindings, then generic_params
-                        resolved_args[i] = bindings.get(arg) orelse (self.generic_params.get(arg) orelse arg);
+                        const resolved = bindings.get(arg) orelse (self.generic_params.get(arg) orelse arg);
+                        resolved_args[i] = resolved;
+                        debug.astToIr("substituteAssociatedTypesInTypeExpr: alias '{s}' arg '{s}' -> '{s}'", .{ name, arg, resolved });
                     }
                     const num_args = @min(alias.type_args.len, 8);
 
@@ -3569,7 +3593,9 @@ pub const AstToIr = struct {
             var resolved_args: [8][]const u8 = undefined;
             for (alias.type_args, 0..) |arg, i| {
                 if (i >= 8) break;
-                resolved_args[i] = self.generic_params.get(arg) orelse arg;
+                const resolved = self.generic_params.get(arg) orelse arg;
+                resolved_args[i] = resolved;
+                debug.astToIr("resolveTypeName: alias '{s}' arg '{s}' -> '{s}'", .{ type_name, arg, resolved });
             }
             const num_args = @min(alias.type_args.len, 8);
 
@@ -4178,7 +4204,7 @@ pub const AstToIr = struct {
 
         // Handle extension methods differently from regular methods
         if (pending.extension_method) |ext_method| {
-            // Extension method: set up type bindings
+            // Extension method: set up type bindings (generic params like Element -> int)
             var saved_generic_params = std.StringHashMapUnmanaged(?[]const u8){};
             defer saved_generic_params.deinit(self.allocator);
 
@@ -4186,6 +4212,23 @@ pub const AstToIr = struct {
             while (iter.next()) |entry| {
                 saved_generic_params.put(self.allocator, entry.key_ptr.*, self.generic_params.get(entry.key_ptr.*)) catch {};
                 try self.generic_params.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            // Set up extension's associated type aliases (like ElementArray -> Array with Element)
+            var saved_ext_aliases: []?AssociatedTypeAlias = &.{};
+            var ext_assoc_types: []const ast.TypeAliasDecl = &.{};
+            if (pending.extension_interface_name) |iface_name| {
+                if (self.extension_decls.get(iface_name)) |ext_decl| {
+                    ext_assoc_types = ext_decl.associated_types;
+                    saved_ext_aliases = self.allocator.alloc(?AssociatedTypeAlias, ext_assoc_types.len) catch &.{};
+                    for (ext_assoc_types, 0..) |assoc, i| {
+                        saved_ext_aliases[i] = self.associated_type_aliases.get(assoc.name);
+                        self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                            .base_type = assoc.base_type,
+                            .type_args = assoc.type_args,
+                        }) catch {};
+                    }
+                }
             }
 
             // Allow stdlib builtins for stdlib types
@@ -4201,6 +4244,20 @@ pub const AstToIr = struct {
             self.convertExtensionMethod(pending.type_name, ext_method, &pending.type_bindings) catch |e| {
                 gen_err = e;
             };
+
+            // Restore extension associated type aliases
+            for (ext_assoc_types, 0..) |assoc, i| {
+                if (i < saved_ext_aliases.len) {
+                    if (saved_ext_aliases[i]) |prev_value| {
+                        self.associated_type_aliases.put(self.allocator, assoc.name, prev_value) catch {};
+                    } else {
+                        self.safeRemoveAssociatedTypeAlias(assoc.name);
+                    }
+                }
+            }
+            if (saved_ext_aliases.len > 0) {
+                self.allocator.free(saved_ext_aliases);
+            }
 
             // Restore generic params
             var restore_iter = saved_generic_params.iterator();
@@ -6262,9 +6319,7 @@ pub const AstToIr = struct {
         };
     }
 
-    /// Check if two type names are equivalent (handles type aliases and internal types).
-    /// String and __ManagedString are equivalent because String's first field is __ManagedString,
-    /// allowing binary-compatible pass-by-value. This is checked via the type_map.
+    /// Check if two type names are equivalent (handles type aliases).
     fn areTypesEquivalent(self: *AstToIr, name1: []const u8, name2: []const u8) bool {
         if (std.mem.eql(u8, name1, name2)) return true;
 
@@ -6275,33 +6330,6 @@ pub const AstToIr = struct {
         if (std.mem.eql(u8, resolved1, resolved2)) return true;
         if (std.mem.eql(u8, resolved1, name2)) return true;
         if (std.mem.eql(u8, name1, resolved2)) return true;
-
-        // Check if one type contains the other as its first field with offset 0
-        // This handles String <-> __ManagedString equivalence
-        if (self.type_map.get(name1)) |type_info1| {
-            if (type_info1 == .struct_type) {
-                const fields = type_info1.struct_type.fields;
-                if (fields.len > 0 and fields[0].offset == 0) {
-                    if (fields[0].value_type == .primitive) {
-                        if (std.mem.eql(u8, fields[0].value_type.primitive.toMaxonName(), name2)) return true;
-                    } else if (fields[0].value_type == .struct_type) {
-                        if (std.mem.eql(u8, fields[0].value_type.struct_type.name, name2)) return true;
-                    }
-                }
-            }
-        }
-        if (self.type_map.get(name2)) |type_info2| {
-            if (type_info2 == .struct_type) {
-                const fields = type_info2.struct_type.fields;
-                if (fields.len > 0 and fields[0].offset == 0) {
-                    if (fields[0].value_type == .primitive) {
-                        if (std.mem.eql(u8, fields[0].value_type.primitive.toMaxonName(), name1)) return true;
-                    } else if (fields[0].value_type == .struct_type) {
-                        if (std.mem.eql(u8, fields[0].value_type.struct_type.name, name1)) return true;
-                    }
-                }
-            }
-        }
 
         return false;
     }
@@ -10542,7 +10570,7 @@ fn copyErrorWithOwnedPath(allocator: std.mem.Allocator, error_in: err.CompileErr
 }
 
 pub fn convertWithFile(program: ast.Program, allocator: std.mem.Allocator, mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer, source_file: ?[]const u8, out_error: *?err.CompileError) ConvertError!ir.Module {
-    return convertWithExternals(program, allocator, mutation_analyzer, source_file, null, null, null, .{}, out_error);
+    return convertWithExternals(program, allocator, mutation_analyzer, source_file, null, null, null, null, null, null, .{}, out_error);
 }
 
 /// Options for AST-to-IR conversion
@@ -10561,6 +10589,7 @@ pub fn convertWithExternals(
     external_interfaces: ?[]const ExternalInterfaceInfo,
     external_extensions: ?[]const ExternalExtensionInfo,
     external_enums: ?[]const ExternalEnumInfo,
+    external_type_aliases: ?[]const ExternalTypeAliasInfo,
     options: ConvertOptions,
     out_error: *?err.CompileError,
 ) ConvertError!ir.Module {
@@ -10619,6 +10648,32 @@ pub fn convertWithExternals(
         }
     }
 
+    // Pre-register external types with placeholder info in type_map and type_decl_map
+    // This is needed so that type aliases like "typealias FooArray is Array with Foo"
+    // can reference types (Foo) that are defined in the same file
+    if (external_types) |ext_types| {
+        for (ext_types) |ext_type| {
+            // Skip generic types - they don't need placeholder registration
+            if (ext_type.type_decl.generic_params.len > 0) continue;
+            // Skip if already registered
+            if (converter.type_map.contains(ext_type.name)) continue;
+            // Register placeholder in type_map (will be updated with full info later)
+            try converter.type_map.put(allocator, ext_type.name, .{
+                .struct_type = .{
+                    .name = ext_type.name,
+                    .fields = &[_]FieldInfo{},
+                    .size = 0, // Will be computed during full registration
+                    .decl_line = ext_type.type_decl.block.start_line,
+                    .decl_column = ext_type.type_decl.block.start_column,
+                    .source_file = ext_type.source_path,
+                    .is_export = ext_type.is_exported,
+                },
+            });
+            // Also register in type_decl_map for getOrCreateMonomorphizedType to find it
+            try converter.type_decl_map.put(allocator, ext_type.name, ext_type.type_decl.*);
+        }
+    }
+
     // Register external types before conversion.
     // Use multiple passes because types can depend on each other.
     if (external_types) |ext_types| {
@@ -10629,11 +10684,17 @@ pub fn convertWithExternals(
         while (registered_count < ext_types.len and pass < max_passes) : (pass += 1) {
             const prev_count = registered_count;
             for (ext_types) |ext_type| {
-                // Skip if already registered
-                if (converter.type_map.contains(ext_type.name)) continue;
+                // Skip if already fully registered (not just pre-registered placeholder with size=0)
+                if (converter.type_map.get(ext_type.name)) |existing| {
+                    switch (existing) {
+                        .struct_type => |s| if (s.size > 0) continue, // Fully registered
+                        .primitive, .enum_type => continue, // Non-struct types are always fully registered
+                    }
+                }
 
                 // Try to register - may fail if dependencies aren't ready
-                converter.registerExternalType(ext_type) catch {
+                converter.registerExternalType(ext_type) catch |reg_err| {
+                    debug.astToIr("registerExternalType failed for '{s}': {}", .{ ext_type.name, reg_err });
                     // Clear any error from this attempt to avoid memory leaks
                     converter.clearLastError();
                     continue; // Try again next pass
@@ -10650,11 +10711,64 @@ pub fn convertWithExternals(
             for (ext_types) |ext_type| {
                 if (!converter.type_map.contains(ext_type.name)) {
                     debug.astToIr("Failed to register external type '{s}' after {d} passes", .{ ext_type.name, pass });
-                    converter.reportError(.E006, ext_type.name, @src());
+                    // Set source file and use proper location from the type declaration
+                    if (ext_type.source_path) |src_path| {
+                        converter.source_file = src_path;
+                    }
+                    converter.reportErrorAt(.E006, ext_type.name, ext_type.type_decl.block.start_line, ext_type.type_decl.block.start_column, @src());
                     if (converter.last_error) |le| {
                         out_error.* = copyErrorWithOwnedPath(allocator, le);
                     }
                     return error.UnknownType;
+                }
+            }
+        }
+    }
+
+    // Process external type aliases AFTER registering external types
+    // Type aliases need the base types (like Array) to be in type_decl_map
+    if (external_type_aliases) |ext_aliases| {
+        for (ext_aliases) |ext_alias| {
+            // Skip type aliases from the same source file - they will be processed in convert()
+            // after local types have been pre-registered (needed for forward references like
+            // "typealias FooArray is Array with Foo" where Foo is defined later in the same file)
+            if (ext_alias.source_path) |alias_src| {
+                if (source_file) |current_src| {
+                    if (std.mem.eql(u8, alias_src, current_src)) {
+                        continue;
+                    }
+                }
+            }
+            const alias_decl = ext_alias.type_alias_decl;
+            if (alias_decl.type_args.len > 0) {
+                // Monomorphize to create the concrete type (e.g., Array$Token)
+                const mono_name = converter.getOrCreateMonomorphizedType(alias_decl.base_type, alias_decl.type_args) catch {
+                    converter.clearLastError();
+                    continue; // Skip if monomorphization fails (dependency not ready)
+                };
+
+                // Register the alias in associated_type_aliases for resolution
+                try converter.associated_type_aliases.put(allocator, alias_decl.name, .{
+                    .base_type = alias_decl.base_type,
+                    .type_args = alias_decl.type_args,
+                });
+
+                // Also register in type_map so the alias name can be used as a type
+                if (converter.type_map.get(mono_name)) |type_info| {
+                    try converter.type_map.put(allocator, alias_decl.name, type_info);
+                }
+
+                debug.astToIr("Registered external type alias '{s}' -> '{s}'", .{ alias_decl.name, mono_name });
+            } else {
+                // No type args - this is just an alias to an existing type
+                try converter.associated_type_aliases.put(allocator, alias_decl.name, .{
+                    .base_type = alias_decl.base_type,
+                    .type_args = alias_decl.type_args,
+                });
+
+                // Copy the type info from the base type
+                if (converter.type_map.get(alias_decl.base_type)) |type_info| {
+                    try converter.type_map.put(allocator, alias_decl.name, type_info);
                 }
             }
         }
@@ -10740,6 +10854,22 @@ pub fn extractEnumDecls(program: ast.Program, allocator: std.mem.Allocator, sour
     }
 
     return enum_infos.toOwnedSlice(allocator);
+}
+
+/// Extract type alias declarations from a parsed program (for cross-module compilation)
+pub fn extractTypeAliases(program: ast.Program, allocator: std.mem.Allocator, source_path: ?[]const u8) ![]const ExternalTypeAliasInfo {
+    var alias_infos = std.ArrayListUnmanaged(ExternalTypeAliasInfo){};
+    errdefer alias_infos.deinit(allocator);
+
+    for (program.type_aliases) |*alias_decl| {
+        try alias_infos.append(allocator, .{
+            .type_alias_decl = alias_decl,
+            .source_path = source_path,
+            .is_exported = alias_decl.name.len > 0 and alias_decl.name[0] >= 'A' and alias_decl.name[0] <= 'Z', // Convention: exported if capitalized
+        });
+    }
+
+    return alias_infos.toOwnedSlice(allocator);
 }
 
 /// Extract interface info from a parsed program (for cross-module compilation)
@@ -10888,11 +11018,46 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 }
             }
 
+            // Resolve associated type aliases in return type (e.g., StringArray -> Array$String)
+            // This is needed because associated types are scoped to the containing type
+            if (return_type_name) |name| {
+                for (type_decl.associated_types) |assoc| {
+                    if (std.mem.eql(u8, name, assoc.name)) {
+                        // Build monomorphized name: BaseType$Arg1$Arg2...
+                        var size: usize = assoc.base_type.len;
+                        for (assoc.type_args) |arg| {
+                            size += 1 + arg.len;
+                        }
+                        const buf = try allocator.alloc(u8, size);
+                        var pos: usize = 0;
+                        @memcpy(buf[pos..][0..assoc.base_type.len], assoc.base_type);
+                        pos += assoc.base_type.len;
+                        for (assoc.type_args) |arg| {
+                            buf[pos] = '$';
+                            pos += 1;
+                            @memcpy(buf[pos..][0..arg.len], arg);
+                            pos += arg.len;
+                        }
+                        // Free old name and use resolved name
+                        allocator.free(name);
+                        return_type_name = buf;
+                        break;
+                    }
+                }
+            }
+
             // Calculate return_value_type, accounting for throws
-            var return_value_type: ?types.ExternalValueType = if (method.return_type) |rt|
-                getExternalValueTypeForReturn(allocator, rt)
-            else
-                null;
+            // Use resolved return_type_name if available
+            var return_value_type: ?types.ExternalValueType = if (method.return_type) |rt| blk: {
+                // If we resolved an associated type, use struct_type with the resolved name
+                if (return_type_name) |resolved_name| {
+                    // Check if this is a monomorphized generic type (contains $)
+                    if (std.mem.indexOf(u8, resolved_name, "$") != null) {
+                        break :blk .{ .struct_type = resolved_name };
+                    }
+                }
+                break :blk getExternalValueTypeForReturn(allocator, rt);
+            } else null;
 
             // If method throws, wrap return type in error_union_type
             if (method.throws_type) |error_type| {
@@ -10917,7 +11082,34 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 param_types[0] = .{ .ty = .{ .struct_type = self_type_name }, .name = "self" };
             }
             for (method.params, 0..) |param, i| {
-                const vt = getExternalValueTypeFromTypeExpr(allocator, param.type_expr);
+                var vt = getExternalValueTypeFromTypeExpr(allocator, param.type_expr);
+                // Resolve associated type aliases in parameter types (e.g., ByteArray -> Array$byte)
+                if (vt == .struct_type) {
+                    const param_type_name = vt.struct_type;
+                    for (type_decl.associated_types) |assoc| {
+                        if (std.mem.eql(u8, param_type_name, assoc.name)) {
+                            // Build monomorphized name: BaseType$Arg1$Arg2...
+                            var size: usize = assoc.base_type.len;
+                            for (assoc.type_args) |arg| {
+                                size += 1 + arg.len;
+                            }
+                            const buf = allocator.alloc(u8, size) catch break;
+                            var pos: usize = 0;
+                            @memcpy(buf[pos..][0..assoc.base_type.len], assoc.base_type);
+                            pos += assoc.base_type.len;
+                            for (assoc.type_args) |arg| {
+                                buf[pos] = '$';
+                                pos += 1;
+                                @memcpy(buf[pos..][0..arg.len], arg);
+                                pos += arg.len;
+                            }
+                            // Free old name and use resolved name
+                            allocator.free(param_type_name);
+                            vt = .{ .struct_type = buf };
+                            break;
+                        }
+                    }
+                }
                 param_types[i + extra_params] = .{
                     .ty = vt,
                     .name = param.name,

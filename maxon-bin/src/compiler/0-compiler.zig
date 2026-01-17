@@ -111,6 +111,7 @@ const PipelineOptions = struct {
     external_interfaces: []const ast_to_ir.ExternalInterfaceInfo = &.{},
     external_extensions: []const ast_to_ir.ExternalExtensionInfo = &.{},
     external_enums: []const ast_to_ir.ExternalEnumInfo = &.{},
+    external_type_aliases: []const ast_to_ir.ExternalTypeAliasInfo = &.{},
     track_memory: bool = false,
     emit_ir: bool = false,
 
@@ -317,6 +318,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
                 options.external_interfaces,
                 options.external_extensions,
                 options.external_enums,
+                options.external_type_aliases,
                 .{ .track_memory = options.track_memory },
                 &ir_error,
             ) catch |e| {
@@ -410,6 +412,7 @@ const ParsedSourcesInfo = struct {
     interfaces: std.ArrayListUnmanaged(ast_to_ir.ExternalInterfaceInfo),
     extensions: std.ArrayListUnmanaged(ast_to_ir.ExternalExtensionInfo),
     enums: std.ArrayListUnmanaged(ast_to_ir.ExternalEnumInfo),
+    type_aliases: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeAliasInfo),
     arena: std.mem.Allocator, // Arena allocator - caller owns the arena
 
     fn init(arena: std.mem.Allocator) ParsedSourcesInfo {
@@ -419,6 +422,7 @@ const ParsedSourcesInfo = struct {
             .interfaces = .empty,
             .extensions = .empty,
             .enums = .empty,
+            .type_aliases = .empty,
             .arena = arena,
         };
     }
@@ -442,6 +446,17 @@ const ParsedSourcesInfo = struct {
         for (self.types.items) |t| {
             if (t.is_exported) {
                 try exported.append(self.arena, t);
+            }
+        }
+        return exported.toOwnedSlice(self.arena);
+    }
+
+    /// Filter to only exported type aliases
+    fn getExportedTypeAliases(self: *ParsedSourcesInfo) ![]const ast_to_ir.ExternalTypeAliasInfo {
+        var exported: std.ArrayListUnmanaged(ast_to_ir.ExternalTypeAliasInfo) = .empty;
+        for (self.type_aliases.items) |alias| {
+            if (alias.is_exported) {
+                try exported.append(self.arena, alias);
             }
         }
         return exported.toOwnedSlice(self.arena);
@@ -515,6 +530,12 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
         const enum_decls = ast_to_ir.extractEnumDecls(program, arena, source.path) catch continue;
         for (enum_decls) |enum_decl| {
             try info.enums.append(arena, enum_decl);
+        }
+        // No free needed - arena handles it
+
+        const type_alias_decls = ast_to_ir.extractTypeAliases(program, arena, source.path) catch continue;
+        for (type_alias_decls) |alias_decl| {
+            try info.type_aliases.append(arena, alias_decl);
         }
         // No free needed - arena handles it
     }
@@ -643,6 +664,8 @@ pub fn compileMultiple(
     // No defer free needed - arena handles it
     const exported_types = try info.getExportedTypes();
     // No defer free needed - arena handles it
+    const exported_type_aliases = try info.getExportedTypeAliases();
+    // No defer free needed - arena handles it
 
     // Phase 3: Compile and merge all sources
     // IR modules use arena - merged at the end, then codegen uses parent allocator for output
@@ -662,6 +685,7 @@ pub fn compileMultiple(
             .external_interfaces = info.interfaces.items,
             .external_extensions = info.extensions.items,
             .external_enums = info.enums.items,
+            .external_type_aliases = exported_type_aliases,
             .track_memory = options.track_memory,
         });
 

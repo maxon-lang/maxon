@@ -88,7 +88,7 @@ pub const CString = struct {
 
 /// Emit cleanup for a cstring variable.
 /// cstring struct: data(8) + length(8) + managed(8)
-/// If managed != null: decref the __ManagedString (cstring borrowed from String)
+/// If managed != null: decref the __ManagedMemory (cstring borrowed from String)
 /// If managed == null: free the data pointer (cstring owns buffer from slice copy)
 pub fn emitCstringCleanup(self: *AstToIr, cstring_ptr: ir.Value) !void {
     // Load managed pointer (offset 16)

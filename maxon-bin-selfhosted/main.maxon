@@ -1,15 +1,19 @@
 // Maxon Command Line Tool
 // Main entry point for the maxon toolchain
 
+typealias StringArray is Array with String
+
 let VERSION = "0.3.0"
 
-function main(args Array of String) returns int
-	if args.count() < 2 'noCommand'
+function main() returns int
+	var args = CommandLine.args()
+
+	if args.count() < 1 'noCommand'
 		printUsage()
 		return 1
 	end 'noCommand'
 
-	let command = try args.get(1) otherwise ignore
+	let command = try args.get(0) otherwise ignore
 
 	return match command 'dispatch'
 	"compile" gives compileCommand(args)
@@ -20,13 +24,13 @@ function main(args Array of String) returns int
 	end 'dispatch'
 end 'main'
 
-function compileCommand(args Array of String) returns int
-	if args.count() < 3 'noFile'
+function compileCommand(args StringArray) returns int
+	if args.count() < 2 'noFile'
 		print("Usage: maxon compile <file.maxon>\n")
 		return 1
 	end 'noFile'
 
-	let sourceFile = try args.get(2) otherwise ignore
+	let sourceFile = try args.get(1) otherwise ignore
 	return compile(sourceFile)
 end 'compileCommand'
 
@@ -65,13 +69,13 @@ function versionCommand() returns int
 	return 0
 end 'versionCommand'
 
-function runCommand(args Array of String) returns int
-	if args.count() < 3 'noFile'
+function runCommand(args StringArray) returns int
+	if args.count() < 2 'noFile'
 		print("Usage: maxon run <file.maxon>\n")
 		return 1
 	end 'noFile'
 
-	if let sourceFile = try args.get(2) 'hasFile'
+	if let sourceFile = try args.get(1) 'hasFile'
 		let result = compile(sourceFile)
 		if result != 0 'compileFailed'
 			return result

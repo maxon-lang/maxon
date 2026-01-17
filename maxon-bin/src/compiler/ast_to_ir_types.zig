@@ -220,7 +220,7 @@ pub fn nameToIrType(name: []const u8) ir.Type {
     }
     // Handle internal types not in primitive_types
     if (std.mem.eql(u8, name, VOID)) return .void;
-    // All other types (structs, __ManagedString, etc.) are represented as pointers
+    // All other types (structs, etc.) are represented as pointers
     return .ptr;
 }
 
@@ -539,6 +539,7 @@ pub const PendingMethod = struct {
     type_name: []const u8, // "Array$int" - the monomorphized type
     method: ?*const ast.MethodDecl = null, // Pointer to method AST (for regular methods)
     extension_method: ?*const ast.ExtensionMethod = null, // Pointer to extension method AST
+    extension_interface_name: ?[]const u8 = null, // For extension methods: interface name (to look up associated types)
     generic_bindings: []const GenericBinding = &.{}, // ["Element" -> "int"]
     type_bindings: std.StringHashMapUnmanaged([]const u8) = .{}, // For extension methods: associated type bindings
     source_file: ?[]const u8 = null, // Source file path for error reporting
@@ -589,6 +590,14 @@ pub const ExternalEnumInfo = struct {
     /// Original enum declaration (needed for validation)
     enum_decl: *const ast.EnumDecl,
     source_path: ?[]const u8 = null, // Source file path (for error reporting)
+};
+
+/// External type alias info - for cross-module compilation
+pub const ExternalTypeAliasInfo = struct {
+    /// Original type alias declaration
+    type_alias_decl: *const ast.TypeAliasDecl,
+    source_path: ?[]const u8 = null, // Source file path (for error reporting)
+    is_exported: bool = false,
 };
 
 /// Parameter type info
