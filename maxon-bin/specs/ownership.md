@@ -170,7 +170,7 @@ end 'main'
 
 <!-- test: struct-array-field-moved-into-type -->
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 type Container
     var data IntArray
@@ -364,7 +364,7 @@ end 'main'
 Moved arrays are not freed by the original owner, preventing double-free.
 The caller allocates, the callee (mutateFirst) takes ownership and frees.
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function mutateFirst(arr IntArray) returns int
     arr.set(0, value: 100)

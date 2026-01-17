@@ -477,6 +477,35 @@ pub const SemanticAnalyzer = struct {
             try self.registerType(type_decl);
         }
 
+        // 5.5. Process top-level type aliases
+        // Monomorphize them immediately so they can be used as concrete types
+        for (program.type_aliases) |alias_decl| {
+            if (alias_decl.type_args.len > 0) {
+                // Monomorphize to create the concrete type (e.g., Pair$String$int)
+                const mono_name = try self.getOrCreateMonomorphizedType(alias_decl.base_type, alias_decl.type_args);
+
+                // Now register the alias name (e.g., StringIntPair) to point to the same type info
+                if (self.type_map.get(mono_name)) |type_info| {
+                    try self.type_map.put(self.allocator, alias_decl.name, type_info);
+
+                    // Also copy type_decl_map entry if it exists
+                    if (self.type_decl_map.get(mono_name)) |type_decl| {
+                        try self.type_decl_map.put(self.allocator, alias_decl.name, type_decl);
+                    }
+                }
+            } else {
+                // No type args - this is just an alias to an existing type
+                // Copy the type info from the base type
+                if (self.type_map.get(alias_decl.base_type)) |type_info| {
+                    try self.type_map.put(self.allocator, alias_decl.name, type_info);
+
+                    if (self.type_decl_map.get(alias_decl.base_type)) |type_decl| {
+                        try self.type_decl_map.put(self.allocator, alias_decl.name, type_decl);
+                    }
+                }
+            }
+        }
+
         // 6. Register functions
         for (program.functions) |fn_decl| {
             try self.registerFunction(fn_decl);

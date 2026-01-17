@@ -90,6 +90,8 @@ pub const Parser = struct {
         errdefer functions.deinit(self.allocator);
         var global_constants: std.ArrayListUnmanaged(ast.GlobalConstant) = .empty;
         errdefer global_constants.deinit(self.allocator);
+        var type_aliases: std.ArrayListUnmanaged(ast.TypeAliasDecl) = .empty;
+        errdefer type_aliases.deinit(self.allocator);
 
         // Skip leading newlines
         self.skipNewlines();
@@ -98,6 +100,8 @@ pub const Parser = struct {
             // Check for type declaration (with optional 'export' prefix)
             if (self.check(.type)) {
                 try types.append(self.allocator, try self.parseTypeDecl());
+            } else if (self.check(.typealias)) {
+                try type_aliases.append(self.allocator, try self.parseTypeAliasDecl(false));
             } else if (self.check(.interface)) {
                 try interfaces.append(self.allocator, try self.parseInterfaceDecl());
             } else if (self.check(.extension)) {
@@ -110,6 +114,9 @@ pub const Parser = struct {
                 if (self.peek(1)) |next| {
                     if (next.type == .type) {
                         try types.append(self.allocator, try self.parseTypeDecl());
+                    } else if (next.type == .typealias) {
+                        _ = self.advance(); // skip 'export'
+                        try type_aliases.append(self.allocator, try self.parseTypeAliasDecl(true));
                     } else if (next.type == .interface) {
                         try interfaces.append(self.allocator, try self.parseInterfaceDecl());
                     } else if (next.type == .extension) {
@@ -161,6 +168,7 @@ pub const Parser = struct {
             .extensions = try extensions.toOwnedSlice(self.allocator),
             .functions = try functions.toOwnedSlice(self.allocator),
             .global_constants = try global_constants.toOwnedSlice(self.allocator),
+            .type_aliases = try type_aliases.toOwnedSlice(self.allocator),
         };
     }
 
@@ -278,33 +286,8 @@ pub const Parser = struct {
 
         _ = try self.expect(.newline);
 
-        // Skip blank lines before checking for type alias vs type body
-        self.skipNewlines();
-
-        // Check if this is a type alias (no body) - if we see a top-level declaration
-        // or EOF after the conformances, this type has no body
-        if (conformances.items.len > 0 and self.isTopLevelDeclarationStart()) {
-            // This is a type alias like `type IntArray is Array with int`
-            // No body, no `end` block needed
-            return .{
-                .name = name_token.text,
-                .is_export = is_export,
-                .generic_params = generic_params,
-                .conformances = try conformances.toOwnedSlice(self.allocator),
-                .associated_types = &[_]ast.AssociatedTypeDecl{},
-                .fields = &[_]ast.FieldDecl{},
-                .methods = &[_]ast.MethodDecl{},
-                .block = .{
-                    .start_line = name_token.line,
-                    .start_column = name_token.column,
-                    .end_line = name_token.line,
-                    .identifier = name_token.text,
-                },
-            };
-        }
-
         // Parse associated types, fields and methods
-        var associated_types: std.ArrayListUnmanaged(ast.AssociatedTypeDecl) = .empty;
+        var associated_types: std.ArrayListUnmanaged(ast.TypeAliasDecl) = .empty;
         errdefer associated_types.deinit(self.allocator);
         var fields: std.ArrayListUnmanaged(ast.FieldDecl) = .empty;
         errdefer fields.deinit(self.allocator);
@@ -324,9 +307,9 @@ pub const Parser = struct {
                 continue;
             }
 
-            // Check for associatedtype declaration
-            if (self.check(.associatedtype)) {
-                try associated_types.append(self.allocator, try self.parseAssociatedType());
+            // Check for typealias declaration
+            if (self.check(.typealias)) {
+                try associated_types.append(self.allocator, try self.parseTypeAliasDecl(false));
                 continue;
             }
 
@@ -3021,35 +3004,6 @@ pub const Parser = struct {
         return self.pos >= self.tokens.len or self.tokens[self.pos].type == .eof;
     }
 
-    /// Check if the current token starts a top-level declaration.
-    /// Used to detect type aliases (types with conformances but no body).
-    fn isTopLevelDeclarationStart(self: *Parser) bool {
-        if (self.isAtEnd()) return true;
-        const token_type = self.current().type;
-        // Direct top-level keywords
-        if (token_type == .type or
-            token_type == .function or
-            token_type == .@"enum" or
-            token_type == .interface or
-            token_type == .extension or
-            token_type == .let)
-        {
-            return true;
-        }
-        // export followed by a top-level keyword (but not var which is a field)
-        if (token_type == .@"export") {
-            if (self.peek(1)) |next| {
-                return next.type == .type or
-                    next.type == .function or
-                    next.type == .@"enum" or
-                    next.type == .interface or
-                    next.type == .extension or
-                    next.type == .let;
-            }
-        }
-        return false;
-    }
-
     fn skipNewlines(self: *Parser) void {
         while (self.check(.newline) or self.check(.doc_comment)) {
             if (self.check(.doc_comment)) {
@@ -3233,7 +3187,7 @@ pub const Parser = struct {
         _ = try self.expect(.newline);
 
         // Parse interface body: associated types and methods
-        var associated_types: std.ArrayListUnmanaged(ast.AssociatedTypeDecl) = .empty;
+        var associated_types: std.ArrayListUnmanaged(ast.TypeAliasDecl) = .empty;
         errdefer associated_types.deinit(self.allocator);
         var methods: std.ArrayListUnmanaged(ast.InterfaceMethod) = .empty;
         errdefer methods.deinit(self.allocator);
@@ -3244,9 +3198,9 @@ pub const Parser = struct {
                 continue;
             }
 
-            // Check for associatedtype declaration
-            if (self.check(.associatedtype)) {
-                try associated_types.append(self.allocator, try self.parseAssociatedType());
+            // Check for typealias declaration
+            if (self.check(.typealias)) {
+                try associated_types.append(self.allocator, try self.parseTypeAliasDecl(false));
             } else {
                 try methods.append(self.allocator, try self.parseInterfaceMethod());
             }
@@ -3271,9 +3225,10 @@ pub const Parser = struct {
         };
     }
 
-    /// Parse an associated type declaration: associatedtype Name is GenericType with (TypeArg1, TypeArg2)
-    fn parseAssociatedType(self: *Parser) ParseError!ast.AssociatedTypeDecl {
-        const assoc_token = try self.expect(.associatedtype);
+    /// Parse a type alias declaration: typealias Name is GenericType with (TypeArg1, TypeArg2)
+    fn parseTypeAliasDecl(self: *Parser, is_export: bool) ParseError!ast.TypeAliasDecl {
+        _ = is_export; // TODO: Add export support for top-level type aliases
+        const alias_token = try self.expect(.typealias);
         const name_token = try self.expect(.identifier);
         _ = try self.expect(.is);
         const base_type_token = try self.expect(.identifier);
@@ -3309,8 +3264,8 @@ pub const Parser = struct {
             .name = name_token.text,
             .base_type = base_type_token.text,
             .type_args = try type_args.toOwnedSlice(self.allocator),
-            .line = assoc_token.line,
-            .column = assoc_token.column,
+            .line = alias_token.line,
+            .column = alias_token.column,
         };
     }
 
@@ -3342,7 +3297,7 @@ pub const Parser = struct {
         _ = try self.expect(.newline);
 
         // Parse associated types and extension methods
-        var associated_types: std.ArrayListUnmanaged(ast.AssociatedTypeDecl) = .empty;
+        var associated_types: std.ArrayListUnmanaged(ast.TypeAliasDecl) = .empty;
         errdefer associated_types.deinit(self.allocator);
         var methods: std.ArrayListUnmanaged(ast.ExtensionMethod) = .empty;
         errdefer methods.deinit(self.allocator);
@@ -3352,9 +3307,9 @@ pub const Parser = struct {
                 _ = self.advance();
                 continue;
             }
-            // Check for associatedtype declaration
-            if (self.check(.associatedtype)) {
-                try associated_types.append(self.allocator, try self.parseAssociatedType());
+            // Check for typealias declaration
+            if (self.check(.typealias)) {
+                try associated_types.append(self.allocator, try self.parseTypeAliasDecl(false));
             } else {
                 try methods.append(self.allocator, try self.parseExtensionMethod());
             }

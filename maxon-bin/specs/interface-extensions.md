@@ -65,7 +65,7 @@ Extensions from interfaces are also applied transitively. If interface `B` exten
 
 ```maxon
 extension Iterable
-    associatedtype ElementArray is Array with Element
+    typealias ElementArray is Array with Element
 
     function map(transform (Element) returns Element) returns ElementArray
         var result = ElementArray{}
@@ -272,7 +272,7 @@ end 'main'
 
 <!-- test: stdlib-map-on-set -->
 ```maxon
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 function main() returns int
     var s = IntSet{}
@@ -296,7 +296,7 @@ end 'main'
 
 <!-- test: stdlib-map-on-map -->
 ```maxon
-type StringIntPair is Pair with (String, int)
+typealias StringIntPair is Pair with (String, int)
 
 function main() returns int
     var m = ["a": 1, "b": 2, "c": 3]
@@ -317,7 +317,7 @@ end 'main'
 
 <!-- test: stdlib-map-on-map-with-function -->
 ```maxon
-type StringIntPair is Pair with (String, int)
+typealias StringIntPair is Pair with (String, int)
 
 function multiplyValue(p StringIntPair) returns StringIntPair
     return StringIntPair{key: p.key, value: p.value * 10}

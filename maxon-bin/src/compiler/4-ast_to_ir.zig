@@ -824,7 +824,46 @@ pub const AstToIr = struct {
             if (self.type_map.contains(enum_decl.name)) continue;
             try self.registerEnum(enum_decl);
         }
+
+        // Process top-level type aliases BEFORE registering types and functions
+        // Types may reference these aliases in their fields, and functions in parameters/return types
+        // Note: Type aliases can reference generic types from stdlib (like Map) which are already
+        // registered as external types before convert() is called
+        for (program.type_aliases) |alias_decl| {
+            if (alias_decl.type_args.len > 0) {
+                // Monomorphize to create the concrete type (e.g., Pair$String$int)
+                const mono_name = try self.getOrCreateMonomorphizedType(alias_decl.base_type, alias_decl.type_args);
+
+                // Register the alias in associated_type_aliases for resolution
+                try self.associated_type_aliases.put(self.allocator, alias_decl.name, .{
+                    .base_type = alias_decl.base_type,
+                    .type_args = alias_decl.type_args,
+                });
+
+                // Also register in type_map so the alias name can be used as a type
+                if (self.type_map.get(mono_name)) |type_info| {
+                    try self.type_map.put(self.allocator, alias_decl.name, type_info);
+                }
+
+                debug.astToIr("Registered top-level type alias '{s}' -> '{s}'", .{ alias_decl.name, mono_name });
+            } else {
+                // No type args - this is just an alias to an existing type
+                try self.associated_type_aliases.put(self.allocator, alias_decl.name, .{
+                    .base_type = alias_decl.base_type,
+                    .type_args = alias_decl.type_args,
+                });
+
+                // Copy the type info from the base type
+                if (self.type_map.get(alias_decl.base_type)) |type_info| {
+                    try self.type_map.put(self.allocator, alias_decl.name, type_info);
+                }
+            }
+        }
+
+        // Register types after type aliases so fields can reference aliases
         for (program.types) |type_decl| try self.registerType(type_decl);
+
+        // Register functions after type aliases so they can use aliases in parameter/return types
         for (program.functions) |fn_decl| try self.registerFunction(fn_decl);
 
         // Register methods from types
@@ -3535,7 +3574,8 @@ pub const AstToIr = struct {
         if (self.generic_params.get(type_name)) |resolved| {
             return resolved;
         }
-        // Check if this is an associated type alias (e.g., "ElementArray" -> "Array$int")
+        // Check if this is a type alias (top-level or associated)
+        // Resolve it to the actual monomorphized type
         if (self.associated_type_aliases.get(type_name)) |alias| {
             // Resolve the alias by substituting type_args through generic_params
             var resolved_args: [8][]const u8 = undefined;
@@ -3551,6 +3591,7 @@ pub const AstToIr = struct {
             };
             return mono_name;
         }
+        // Otherwise return as-is (it's a direct type name)
         return type_name;
     }
 
@@ -4212,7 +4253,7 @@ pub const AstToIr = struct {
             else
                 pending.type_name;
             var saved_aliases: []?AssociatedTypeAlias = &.{};
-            var type_assoc_types: []const ast.AssociatedTypeDecl = &.{};
+            var type_assoc_types: []const ast.TypeAliasDecl = &.{};
             if (self.type_decl_map.get(base_type_name)) |type_decl| {
                 type_assoc_types = type_decl.associated_types;
                 saved_aliases = self.allocator.alloc(?AssociatedTypeAlias, type_assoc_types.len) catch &.{};
@@ -5117,7 +5158,10 @@ pub const AstToIr = struct {
                 // Check return type matches expected type
                 if (self.sret_type_name) |expected| {
                     if (typed_val.ty.getTypeName()) |actual| {
-                        if (!std.mem.eql(u8, actual, expected)) {
+                        // Resolve both type names to handle type aliases
+                        const resolved_expected = self.resolveTypeName(expected);
+                        const resolved_actual = self.resolveTypeName(actual);
+                        if (!std.mem.eql(u8, resolved_actual, resolved_expected)) {
                             self.reportErrorWithSuffix(.E022, actual, "B");
                             return error.TypeMismatch;
                         }

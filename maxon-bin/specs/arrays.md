@@ -33,7 +33,7 @@ var x = try constants.get(1) otherwise 0  // Can read elements
 Create an array with preallocated capacity and length using `.resize()`:
 
 ```text
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 var buffer = IntArray{}
 buffer.resize(10)   // Length is now 10, elements are zero-initialized
@@ -43,7 +43,7 @@ buffer.set(0, value: 42)
 Use `.reserve()` to allocate capacity without changing length (for performance when appending):
 
 ```text
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 var buffer = IntArray{}
 buffer.reserve(100)  // Capacity is 100, length is still 0
@@ -244,7 +244,7 @@ end 'main'
 <!-- test: array-with-reserve -->
 Test that arrays can be created with `.reserve()` for preallocated capacity.
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -259,7 +259,7 @@ end 'main'
 <!-- test: array-with-resize -->
 Test that arrays can be created with `.resize()` for preallocated length.
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}

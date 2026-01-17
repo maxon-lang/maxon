@@ -116,7 +116,7 @@ interface Container uses Element
     function get(index int) returns Element
 end 'Container'
 
-type InternalIntArray is Array with int
+typealias InternalIntArray is Array with int
 
 type IntArray is Container with int
     var data InternalIntArray

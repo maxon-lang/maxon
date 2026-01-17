@@ -64,9 +64,9 @@ Single-line comments only:
 
 ### Keywords
 ```
-and, as, associatedtype, bool, break, continue, default, else, end, enum, export, extern,
+and, as, bool, break, continue, default, else, end, enum, export, extern,
 fallthrough, false, float, for, function, gives, if, ignore, in, int, interface, is, let, match,
-not, or, otherwise, return, static, then, throw, throws, true, try, type, var, while
+not, or, otherwise, return, static, then, throw, throws, true, try, type, typealias, var, while
 ```
 
 ### Literals
@@ -792,7 +792,7 @@ arr.set(0, value: 100)  // First positional, second named
 
 Create an empty typed array using a type alias:
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 var numbers = IntArray{}         // Empty array
 numbers.push(42)                 // Add elements with push
@@ -800,7 +800,7 @@ numbers.push(42)                 // Add elements with push
 
 To preallocate with a specific length (elements zero-initialized):
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 var buffer = IntArray{}
 buffer.resize(100)               // Length is now 100

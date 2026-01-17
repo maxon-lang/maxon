@@ -55,11 +55,12 @@ pub const Program = struct {
     extensions: []ExtensionDecl,
     functions: []FunctionDecl,
     global_constants: []GlobalConstant,
+    type_aliases: []TypeAliasDecl,
 };
 
-/// Associated type declaration in an interface
-/// Syntax: associatedtype Name is GenericType with (TypeArg1, TypeArg2)
-pub const AssociatedTypeDecl = struct {
+/// Type alias declaration (top-level or associated type in interface/type)
+/// Syntax: typealias Name is GenericType with (TypeArg1, TypeArg2)
+pub const TypeAliasDecl = struct {
     name: []const u8, // e.g., "ElementArray"
     base_type: []const u8, // e.g., "Array"
     type_args: []const []const u8, // e.g., ["Element"] or ["Key", "Value"]
@@ -80,7 +81,7 @@ pub const InterfaceDecl = struct {
     is_export: bool,
     generic_params: []const []const u8, // ["Element"] for `uses Element`
     extends: []const []const u8, // ["Collection", "Iterable"] for `extends Collection, Iterable`
-    associated_types: []AssociatedTypeDecl, // Associated type declarations
+    associated_types: []TypeAliasDecl, // Associated type declarations
     methods: []InterfaceMethod,
     block: BlockInfo = .{},
 };
@@ -97,7 +98,7 @@ pub const ExtensionMethod = struct {
 pub const ExtensionDecl = struct {
     interface_name: []const u8,
     is_export: bool,
-    associated_types: []AssociatedTypeDecl, // Associated type declarations
+    associated_types: []TypeAliasDecl, // Associated type declarations
     methods: []ExtensionMethod,
     block: BlockInfo = .{},
 };
@@ -144,7 +145,7 @@ pub const TypeDecl = struct {
     is_export: bool,
     generic_params: []const []const u8, // ["Element"] for `uses Element`
     conformances: []const InterfaceConformance,
-    associated_types: []AssociatedTypeDecl, // Associated type declarations
+    associated_types: []TypeAliasDecl, // Associated type declarations
     fields: []FieldDecl,
     methods: []MethodDecl,
     block: BlockInfo = .{},

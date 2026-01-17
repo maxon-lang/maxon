@@ -24,7 +24,7 @@ The key and value types are automatically inferred from the literal values.
 You can also create an empty map with a type alias:
 
 ```text
-type IntIntMap is Map with (int, int)
+typealias IntIntMap is Map with (int, int)
 var m = IntIntMap{}
 ```
 
@@ -256,7 +256,7 @@ end 'main'
 
 <!-- test: empty-map.from-syntax -->
 ```maxon
-type IntIntMap is Map with (int, int)
+typealias IntIntMap is Map with (int, int)
 
 function main() returns int
     var m = IntIntMap{}
@@ -309,7 +309,7 @@ end 'main'
 
 <!-- test: map-type-in-field -->
 ```maxon
-type IntIntMap is Map with (int, int)
+typealias IntIntMap is Map with (int, int)
 
 type Container
     export var data IntIntMap

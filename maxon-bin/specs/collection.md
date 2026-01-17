@@ -159,7 +159,7 @@ end 'main'
 
 <!-- test: count-empty -->
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}

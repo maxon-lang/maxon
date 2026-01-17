@@ -89,7 +89,7 @@ end 'main'
 
 <!-- test: byte-array-push-get -->
 ```maxon
-type ByteArray is Array with byte
+typealias ByteArray is Array with byte
 
 function main() returns int
     var arr = ByteArray{}
@@ -112,7 +112,7 @@ end 'main'
 
 <!-- test: byte-array-initialized -->
 ```maxon
-type ByteArray is Array with byte
+typealias ByteArray is Array with byte
 
 function main() returns int
     var arr = ByteArray{}
@@ -135,7 +135,7 @@ end 'main'
 
 <!-- test: byte-array-set -->
 ```maxon
-type ByteArray is Array with byte
+typealias ByteArray is Array with byte
 
 function main() returns int
     var arr = ByteArray{}
@@ -157,7 +157,7 @@ end 'main'
 
 <!-- test: byte-array-max-values -->
 ```maxon
-type ByteArray is Array with byte
+typealias ByteArray is Array with byte
 
 function main() returns int
     var arr = ByteArray{}
@@ -190,7 +190,7 @@ end 'main'
 
 <!-- test: byte-array-count -->
 ```maxon
-type ByteArray is Array with byte
+typealias ByteArray is Array with byte
 
 function main() returns int
     var arr = ByteArray{}

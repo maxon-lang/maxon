@@ -14,7 +14,7 @@ The compiler validates that function and method arguments match the expected par
 
 ### Method call - wrong type for Self parameter (the original bug)
 ```test error
-type StringArray is Array with String
+typealias StringArray is Array with String
 
 function main() returns int
 	var arr = StringArray.new()
@@ -26,7 +26,7 @@ MaxoncStderr: `error E022: type mismatch`
 
 ### Method call - wrong element type
 ```test error
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
 	var arr = IntArray.new()
@@ -38,7 +38,7 @@ MaxoncStderr: `error E022: type mismatch`
 
 ### Regular function call - primitive where struct expected
 ```test error
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function takeArray(arr IntArray)
 end 'takeArray'
@@ -84,7 +84,7 @@ MaxoncStderr: `error E022: type mismatch`
 
 ### Implicit method call (calling method from within type)
 ```test error
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 type Container
 	var items IntArray
@@ -102,8 +102,8 @@ MaxoncStderr: `error E022: type mismatch`
 
 ### Array of different element types
 ```test error
-type IntArray is Array with int
-type StringArray is Array with String
+typealias IntArray is Array with int
+typealias StringArray is Array with String
 
 function main() returns int
 	var ints = IntArray.new()

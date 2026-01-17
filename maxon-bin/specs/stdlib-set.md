@@ -17,7 +17,7 @@ The `Set` type is a generic hash set that stores unique elements.
 
 Create an empty set with a type alias:
 ```text
-type IntSet is Set with int
+typealias IntSet is Set with int
 var s = IntSet{}
 ```
 
@@ -30,7 +30,7 @@ var s = Set from [1, 2, 3]
 
 Use `insert` to add elements:
 ```text
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 var s = IntSet{}
 s.insert(10)
@@ -71,7 +71,7 @@ var cap = s.capacity      // Current capacity (accessed via field, not method)
 Create an empty set and verify it starts empty.
 
 ```maxon
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 function main() returns int
     var s = IntSet{}
@@ -89,7 +89,7 @@ end 'main'
 Insert a single element and check count.
 
 ```maxon
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 function main() returns int
     var s = IntSet{}
@@ -108,7 +108,7 @@ end 'main'
 Insert multiple elements and verify count.
 
 ```maxon
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 function main() returns int
     var s = IntSet{}
@@ -129,7 +129,7 @@ end 'main'
 Inserting duplicate should not increase count.
 
 ```maxon
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 function main() returns int
     var s = IntSet{}
@@ -150,7 +150,7 @@ end 'main'
 Check contains returns true for present element.
 
 ```maxon
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 function main() returns int
     var s = IntSet{}
@@ -169,7 +169,7 @@ end 'main'
 Check contains returns false for absent element.
 
 ```maxon
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 function main() returns int
     var s = IntSet{}
@@ -188,7 +188,7 @@ end 'main'
 Remove an element and verify it's gone.
 
 ```maxon
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 function main() returns int
     var s = IntSet{}
@@ -214,7 +214,7 @@ end 'main'
 Remove returns false for absent element.
 
 ```maxon
-type IntSet is Set with int
+typealias IntSet is Set with int
 
 function main() returns int
     var s = IntSet{}

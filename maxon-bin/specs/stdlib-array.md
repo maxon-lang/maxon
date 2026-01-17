@@ -17,7 +17,7 @@ The `Array` type is a generic, dynamically-sized collection that can hold elemen
 
 Define a concrete type alias for your array:
 ```text
-type IntArray is Array with int
+typealias IntArray is Array with int
 ```
 
 Create an empty array:
@@ -34,7 +34,7 @@ var arr = [1, 2, 3]
 
 Use `push` to add elements to the end:
 ```text
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 var arr = IntArray{}
 arr.push(10)
@@ -108,7 +108,7 @@ end 'loop'
 Create an empty array and verify it starts empty.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -129,7 +129,7 @@ end 'main'
 Push a single element and retrieve it.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -149,7 +149,7 @@ end 'main'
 Push multiple elements and verify count.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -170,7 +170,7 @@ end 'main'
 Push multiple elements and get each one.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -204,7 +204,7 @@ end 'main'
 Set an element and verify the change.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -229,7 +229,7 @@ end 'main'
 Test first() and last() methods.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -258,7 +258,7 @@ end 'main'
 Pop elements and verify they are removed.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -308,7 +308,7 @@ end 'main'
 Iterate over array using for-in loop.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -336,7 +336,7 @@ end 'main'
 Verify isEmpty changes with push/pop.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -368,7 +368,7 @@ end 'main'
 Clear an array and verify it's empty.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -397,7 +397,7 @@ end 'main'
 Get throws error for out of bounds index.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -418,7 +418,7 @@ end 'main'
 Reserve capacity for efficiency.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -443,7 +443,7 @@ end 'main'
 Push string literals into an array and retrieve them.
 
 ```maxon
-type StringArray is Array with String
+typealias StringArray is Array with String
 
 function main() returns int
     var arr = StringArray{}
@@ -472,7 +472,7 @@ helloworld
 Push longer string literals (heap-allocated) into an array.
 
 ```maxon
-type StringArray is Array with String
+typealias StringArray is Array with String
 
 function main() returns int
     var arr = StringArray{}
@@ -501,7 +501,7 @@ hello this is a longer stringworld this is also a longer string
 Push string variables into an array.
 
 ```maxon
-type StringArray is Array with String
+typealias StringArray is Array with String
 
 function main() returns int
     var arr = StringArray{}
@@ -528,7 +528,7 @@ firstsecond
 Iterate over an array of strings.
 
 ```maxon
-type StringArray is Array with String
+typealias StringArray is Array with String
 
 function main() returns int
     var arr = StringArray{}
@@ -553,7 +553,7 @@ abc
 Get strings from array using get method.
 
 ```maxon
-type StringArray is Array with String
+typealias StringArray is Array with String
 
 function main() returns int
     var arr = StringArray{}
@@ -578,7 +578,7 @@ two
 Verify string array memory is properly managed (no leaks).
 
 ```maxon
-type StringArray is Array with String
+typealias StringArray is Array with String
 
 function main() returns int
     var arr = StringArray{}
@@ -615,7 +615,7 @@ This pattern was previously broken due to incorrect refcount handling when the
 same variable appears on both sides of an assignment with a mutating method call.
 
 ```maxon
-type IntArray is Array with int
+typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}

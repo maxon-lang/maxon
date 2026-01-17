@@ -116,6 +116,30 @@ fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]const u8 {
     return normalized_resolved;
 }
 
+/// Normalize line endings by converting CRLF to LF for cross-platform consistency
+fn normalizeLineEndings(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
+    // Count how many CR characters to remove
+    var cr_count: usize = 0;
+    for (text) |c| {
+        if (c == '\r') cr_count += 1;
+    }
+
+    if (cr_count == 0) {
+        return allocator.dupe(u8, text);
+    }
+
+    var result = try allocator.alloc(u8, text.len - cr_count);
+    var j: usize = 0;
+    for (text) |c| {
+        if (c != '\r') {
+            result[j] = c;
+            j += 1;
+        }
+    }
+
+    return result;
+}
+
 /// Parsed fragment file
 pub const Fragment = struct {
     name: []const u8,
@@ -688,8 +712,15 @@ fn runTest(
             } else "Unknown compilation error";
             defer if (actual_error_allocated) allocator.free(actual_error);
 
+            // Normalize line endings for cross-platform comparison (CRLF -> LF)
+            const normalized_expected = normalizeLineEndings(allocator, std.mem.trim(u8, expected_err, " \t\r\n")) catch expected_err;
+            defer if (normalized_expected.ptr != expected_err.ptr) allocator.free(normalized_expected);
+
+            const normalized_actual = normalizeLineEndings(allocator, std.mem.trim(u8, actual_error, " \t\r\n")) catch actual_error;
+            defer if (normalized_actual.ptr != actual_error.ptr) allocator.free(normalized_actual);
+
             // Check for exact match of error line
-            if (!std.mem.eql(u8, std.mem.trim(u8, actual_error, " \t\r\n"), std.mem.trim(u8, expected_err, " \t\r\n"))) {
+            if (!std.mem.eql(u8, normalized_actual, normalized_expected)) {
                 const msg = std.fmt.allocPrint(allocator, "Expected error:\n  {s}\nActual error:\n  {s}", .{ expected_err, actual_error }) catch "Error message mismatch";
                 return .{ .name = fragment.name, .status = .failed, .message = msg };
             }
