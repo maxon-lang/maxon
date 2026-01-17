@@ -587,54 +587,6 @@ fn compileMultipleToIr(sources: []const Source, allocator: std.mem.Allocator, re
     return ir_string;
 }
 
-pub fn compile(source: []const u8, output_path: []const u8, allocator: std.mem.Allocator) !void {
-    var result: CompileResult = .{ .error_info = null };
-    return compileWithInfo(source, output_path, null, .{}, allocator, &result);
-}
-
-pub fn compileWithFile(source: []const u8, output_path: []const u8, source_file: []const u8, allocator: std.mem.Allocator, result: *CompileResult) !void {
-    return compileWithInfo(source, output_path, source_file, .{}, allocator, result);
-}
-
-pub fn compileWithOptions(source: []const u8, output_path: []const u8, source_file: []const u8, options: CompileOptions, allocator: std.mem.Allocator, result: *CompileResult) !void {
-    return compileWithInfo(source, output_path, source_file, .{ .track_memory = options.track_memory, .emit_ir = options.emit_ir }, allocator, result);
-}
-
-fn compileWithInfo(source: []const u8, output_path: []const u8, source_file: ?[]const u8, pipeline_opts: PipelineOptions, allocator: std.mem.Allocator, result: *CompileResult) !void {
-    // Run frontend pipeline
-    var pipeline_result = try runFrontend(source, allocator, .{
-        .mode = .full_ir,
-        .source_file = source_file,
-        .result = result,
-        .track_memory = pipeline_opts.track_memory,
-        .emit_ir = pipeline_opts.emit_ir,
-    });
-    defer pipeline_result.deinit();
-
-    const frontend = pipeline_result.full_ir;
-
-    // Emit IR to file if requested
-    if (pipeline_opts.emit_ir) {
-        try writeIrFile(frontend.ir_module, output_path, allocator);
-    }
-
-    // 6 - Generate x86-64 code
-    debug.log("Generating x86-64 code from IR", .{});
-    const codegen_result = ir_codegen.generate(frontend.ir_module, allocator, .{
-        .track_memory = pipeline_opts.track_memory,
-    }) catch |err| {
-        debug.log("IR codegen error: {}", .{err});
-        return error.CodegenError;
-    };
-    defer allocator.free(codegen_result.code);
-    defer allocator.free(codegen_result.external_patches);
-
-    // 7 - Write PE executable
-    pe.writePE(output_path, codegen_result.code, codegen_result.external_patches) catch {
-        return error.WriteError;
-    };
-}
-
 /// Compile multiple source files into a single executable.
 /// Sources are compiled in order and their IR is merged.
 /// Later sources can reference functions/types from earlier sources.

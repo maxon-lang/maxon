@@ -64,6 +64,7 @@ pub const TypeAliasDecl = struct {
     name: []const u8, // e.g., "ElementArray"
     base_type: []const u8, // e.g., "Array"
     type_args: []const []const u8, // e.g., ["Element"] or ["Key", "Value"]
+    is_export: bool = false, // Whether this type alias is exported
     line: u32 = 0,
     column: u32 = 0,
 };

@@ -3227,7 +3227,6 @@ pub const Parser = struct {
 
     /// Parse a type alias declaration: typealias Name is GenericType with (TypeArg1, TypeArg2)
     fn parseTypeAliasDecl(self: *Parser, is_export: bool) ParseError!ast.TypeAliasDecl {
-        _ = is_export; // TODO: Add export support for top-level type aliases
         const alias_token = try self.expect(.typealias);
         const name_token = try self.expect(.identifier);
         _ = try self.expect(.is);
@@ -3264,6 +3263,7 @@ pub const Parser = struct {
             .name = name_token.text,
             .base_type = base_type_token.text,
             .type_args = try type_args.toOwnedSlice(self.allocator),
+            .is_export = is_export,
             .line = alias_token.line,
             .column = alias_token.column,
         };

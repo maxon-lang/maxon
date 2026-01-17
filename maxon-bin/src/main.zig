@@ -53,6 +53,28 @@ pub fn main() !void {
     }
 }
 
+fn printCompileError(err: anyerror) void {
+    if (err == error.LexerError) {
+        std.debug.print("Lexer error: invalid token or syntax\n", .{});
+    } else if (err == error.ParserError) {
+        std.debug.print("Parser error: failed to parse source\n", .{});
+    } else if (err == error.SemanticError) {
+        std.debug.print("Semantic error: type checking failed\n", .{});
+    } else if (err == error.IrError) {
+        std.debug.print("IR generation error: failed to convert to intermediate representation\n  hint: run with -v for debug output\n", .{});
+    } else if (err == error.CodegenError) {
+        std.debug.print("Code generation error: failed to generate x86-64 machine code\n  hint: run with -v for debug output\n", .{});
+    } else if (err == error.WriteError) {
+        std.debug.print("Write error: failed to write output file\n", .{});
+    } else if (err == error.StdlibNotFound) {
+        std.debug.print("Standard library not found\n", .{});
+    } else if (err == error.OutOfMemory) {
+        std.debug.print("Out of memory\n", .{});
+    } else {
+        std.debug.print("Compilation failed: {}\n", .{err});
+    }
+}
+
 fn printUsage() void {
     std.debug.print("Usage: maxon [options] <command> [args]\n\n", .{});
     std.debug.print("Options:\n", .{});
@@ -181,7 +203,7 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
         if (result.error_info) |error_info| {
             error_info.printToStderr();
         } else {
-            std.debug.print("Compilation failed: {}\n", .{err});
+            printCompileError(err);
         }
         std.process.exit(1);
     };
@@ -376,7 +398,7 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
         if (result.error_info) |error_info| {
             error_info.printToStderr();
         } else {
-            std.debug.print("Build failed: {}\n", .{err});
+            printCompileError(err);
         }
         std.process.exit(1);
     };
@@ -604,7 +626,7 @@ fn runBuildLegacy(cwd_path: []const u8, stdlib_modules: []const compiler.Source,
         if (result.error_info) |error_info| {
             error_info.printToStderr();
         } else {
-            std.debug.print("Build failed: {}\n", .{err});
+            printCompileError(err);
         }
         std.process.exit(1);
     };

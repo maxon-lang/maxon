@@ -3638,6 +3638,7 @@ pub const AstToIr = struct {
 
         // Get the original generic type declaration
         const type_decl = self.type_decl_map.get(base_type) orelse {
+            debug.astToIr("type_decl_map lookup FAILED for '{s}'", .{base_type});
             self.reportError(.E006, base_type, @src());
             return error.UnknownType;
         };
@@ -10653,9 +10654,16 @@ pub fn convertWithExternals(
     // can reference types (Foo) that are defined in the same file
     if (external_types) |ext_types| {
         for (ext_types) |ext_type| {
-            // Skip generic types - they don't need placeholder registration
-            if (ext_type.type_decl.generic_params.len > 0) continue;
+            // Always register in type_decl_map (needed for monomorphization of generic types)
             // Skip if already registered
+            if (!converter.type_decl_map.contains(ext_type.name)) {
+                try converter.type_decl_map.put(allocator, ext_type.name, ext_type.type_decl.*);
+            }
+
+            // Skip generic types for type_map placeholder registration
+            // (they get registered when monomorphized)
+            if (ext_type.type_decl.generic_params.len > 0) continue;
+            // Skip if already registered in type_map
             if (converter.type_map.contains(ext_type.name)) continue;
             // Register placeholder in type_map (will be updated with full info later)
             try converter.type_map.put(allocator, ext_type.name, .{
@@ -10669,8 +10677,64 @@ pub fn convertWithExternals(
                     .is_export = ext_type.is_exported,
                 },
             });
-            // Also register in type_decl_map for getOrCreateMonomorphizedType to find it
-            try converter.type_decl_map.put(allocator, ext_type.name, ext_type.type_decl.*);
+        }
+    }
+
+    // Process external type aliases BEFORE registering external types
+    // This is critical because types may have fields that use type aliases
+    // (e.g., Parser has field 'tokens: TokenArray' where TokenArray is a typealias)
+    // Type aliases need element types to be pre-registered (done above) for monomorphization
+    if (external_type_aliases) |ext_aliases| {
+        debug.astToIr("Processing {d} external type aliases", .{ext_aliases.len});
+        for (ext_aliases) |ext_alias| {
+            // Skip type aliases from the same source file - they will be processed in convert()
+            // after local types have been pre-registered (needed for forward references like
+            // "typealias FooArray is Array with Foo" where Foo is defined later in the same file)
+            if (ext_alias.source_path) |alias_src| {
+                if (source_file) |current_src| {
+                    if (std.mem.eql(u8, alias_src, current_src)) {
+                        debug.astToIr("Skipping type alias '{s}' (same source file)", .{ext_alias.type_alias_decl.name});
+                        continue;
+                    }
+                }
+            }
+            const alias_decl = ext_alias.type_alias_decl;
+            debug.astToIr("Processing type alias '{s}' base={s} with {d} type args", .{ alias_decl.name, alias_decl.base_type, alias_decl.type_args.len });
+            if (alias_decl.type_args.len > 0) {
+                // Monomorphize to create the concrete type (e.g., Array$Token)
+                const mono_name = converter.getOrCreateMonomorphizedType(alias_decl.base_type, alias_decl.type_args) catch |e| {
+                    debug.astToIr("Failed to monomorphize alias '{s}': {}", .{ alias_decl.name, e });
+                    converter.clearLastError();
+                    continue; // Skip if monomorphization fails (dependency not ready)
+                };
+
+                // Register the alias in associated_type_aliases for resolution
+                try converter.associated_type_aliases.put(allocator, alias_decl.name, .{
+                    .base_type = alias_decl.base_type,
+                    .type_args = alias_decl.type_args,
+                });
+
+                // Also register in type_map so the alias name can be used as a type
+                if (converter.type_map.get(mono_name)) |type_info| {
+                    try converter.type_map.put(allocator, alias_decl.name, type_info);
+                    debug.astToIr("Registered alias '{s}' -> '{s}'", .{ alias_decl.name, mono_name });
+                } else {
+                    debug.astToIr("WARNING: mono_name '{s}' not found in type_map", .{mono_name});
+                }
+
+                debug.astToIr("Registered external type alias '{s}' -> '{s}'", .{ alias_decl.name, mono_name });
+            } else {
+                // No type args - this is just an alias to an existing type
+                try converter.associated_type_aliases.put(allocator, alias_decl.name, .{
+                    .base_type = alias_decl.base_type,
+                    .type_args = alias_decl.type_args,
+                });
+
+                // Copy the type info from the base type
+                if (converter.type_map.get(alias_decl.base_type)) |type_info| {
+                    try converter.type_map.put(allocator, alias_decl.name, type_info);
+                }
+            }
         }
     }
 
@@ -10720,55 +10784,6 @@ pub fn convertWithExternals(
                         out_error.* = copyErrorWithOwnedPath(allocator, le);
                     }
                     return error.UnknownType;
-                }
-            }
-        }
-    }
-
-    // Process external type aliases AFTER registering external types
-    // Type aliases need the base types (like Array) to be in type_decl_map
-    if (external_type_aliases) |ext_aliases| {
-        for (ext_aliases) |ext_alias| {
-            // Skip type aliases from the same source file - they will be processed in convert()
-            // after local types have been pre-registered (needed for forward references like
-            // "typealias FooArray is Array with Foo" where Foo is defined later in the same file)
-            if (ext_alias.source_path) |alias_src| {
-                if (source_file) |current_src| {
-                    if (std.mem.eql(u8, alias_src, current_src)) {
-                        continue;
-                    }
-                }
-            }
-            const alias_decl = ext_alias.type_alias_decl;
-            if (alias_decl.type_args.len > 0) {
-                // Monomorphize to create the concrete type (e.g., Array$Token)
-                const mono_name = converter.getOrCreateMonomorphizedType(alias_decl.base_type, alias_decl.type_args) catch {
-                    converter.clearLastError();
-                    continue; // Skip if monomorphization fails (dependency not ready)
-                };
-
-                // Register the alias in associated_type_aliases for resolution
-                try converter.associated_type_aliases.put(allocator, alias_decl.name, .{
-                    .base_type = alias_decl.base_type,
-                    .type_args = alias_decl.type_args,
-                });
-
-                // Also register in type_map so the alias name can be used as a type
-                if (converter.type_map.get(mono_name)) |type_info| {
-                    try converter.type_map.put(allocator, alias_decl.name, type_info);
-                }
-
-                debug.astToIr("Registered external type alias '{s}' -> '{s}'", .{ alias_decl.name, mono_name });
-            } else {
-                // No type args - this is just an alias to an existing type
-                try converter.associated_type_aliases.put(allocator, alias_decl.name, .{
-                    .base_type = alias_decl.base_type,
-                    .type_args = alias_decl.type_args,
-                });
-
-                // Copy the type info from the base type
-                if (converter.type_map.get(alias_decl.base_type)) |type_info| {
-                    try converter.type_map.put(allocator, alias_decl.name, type_info);
                 }
             }
         }
@@ -10865,7 +10880,7 @@ pub fn extractTypeAliases(program: ast.Program, allocator: std.mem.Allocator, so
         try alias_infos.append(allocator, .{
             .type_alias_decl = alias_decl,
             .source_path = source_path,
-            .is_exported = alias_decl.name.len > 0 and alias_decl.name[0] >= 'A' and alias_decl.name[0] <= 'Z', // Convention: exported if capitalized
+            .is_exported = alias_decl.is_export,
         });
     }
 
