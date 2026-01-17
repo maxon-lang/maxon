@@ -493,11 +493,7 @@ pub const AstToIr = struct {
     }
 
     /// Report a user error (their code is wrong)
-    pub fn reportError(self: *AstToIr, code: err.ErrorCode, details: []const u8) void {
-        self.reportErrorWithSuffix(code, details, null);
-    }
-
-    pub fn reportErrorWithSuffix(self: *AstToIr, code: err.ErrorCode, details: []const u8, suffix: ?[]const u8) void {
+    pub fn reportError(self: *AstToIr, code: err.ErrorCode, details: []const u8, src: std.builtin.SourceLocation) void {
         // Format: "base message: 'details'"
         const base_msg = code.message();
         const formatted = std.fmt.allocPrint(self.allocator, "{s}: '{s}'", .{ base_msg, details }) catch {
@@ -510,7 +506,7 @@ pub const AstToIr = struct {
                     .line = @intCast(self.current_line),
                     .column = @intCast(self.current_column),
                 },
-                .suffix = suffix,
+                .caller_location = src,
             };
             return;
         };
@@ -523,7 +519,7 @@ pub const AstToIr = struct {
                 .column = @intCast(self.current_column),
             },
             .message_allocated = true,
-            .suffix = suffix,
+            .caller_location = src,
         };
     }
 
@@ -538,18 +534,14 @@ pub const AstToIr = struct {
     }
 
     /// Report an error at a specific source location
-    pub fn reportErrorAt(self: *AstToIr, code: err.ErrorCode, details: []const u8, line: u32, column: u32) void {
-        self.reportErrorAtWithSuffix(code, details, line, column, null);
-    }
-
-    pub fn reportErrorAtWithSuffix(self: *AstToIr, code: err.ErrorCode, details: []const u8, line: u32, column: u32, suffix: ?[]const u8) void {
+    pub fn reportErrorAt(self: *AstToIr, code: err.ErrorCode, details: []const u8, line: u32, column: u32, src: std.builtin.SourceLocation) void {
         const base_msg = code.message();
         const formatted = std.fmt.allocPrint(self.allocator, "{s}: '{s}'", .{ base_msg, details }) catch {
             self.last_error = .{
                 .code = code,
                 .message = base_msg,
                 .location = .{ .file = self.source_file, .line = line, .column = column },
-                .suffix = suffix,
+                .caller_location = src,
             };
             return;
         };
@@ -558,12 +550,12 @@ pub const AstToIr = struct {
             .message = formatted,
             .location = .{ .file = self.source_file, .line = line, .column = column },
             .message_allocated = true,
-            .suffix = suffix,
+            .caller_location = src,
         };
     }
 
     /// Report an internal compiler error (compiler bug or limitation)
-    pub fn reportInternalError(self: *AstToIr, message: []const u8) void {
+    pub fn reportInternalError(self: *AstToIr, message: []const u8, src: std.builtin.SourceLocation) void {
         self.last_error = .{
             .code = null,
             .message = message,
@@ -572,6 +564,7 @@ pub const AstToIr = struct {
                 .line = @intCast(self.current_line),
                 .column = 1,
             },
+            .caller_location = src,
         };
     }
 
@@ -750,7 +743,7 @@ pub const AstToIr = struct {
         var current_scope = &self.scope_labels.items[self.scope_labels.items.len - 1];
         if (current_scope.get(lbl) != null) {
             // Duplicate label at same scope level
-            self.reportError(.E036, lbl);
+            self.reportError(.E036, lbl, @src());
             return error.SemanticError;
         }
         try current_scope.put(self.allocator, lbl, {});
@@ -984,7 +977,7 @@ pub const AstToIr = struct {
                 cycle_names.appendSlice(self.allocator, entry.key_ptr.*) catch {};
             }
             const msg = std.fmt.allocPrint(self.allocator, "Circular dependency detected among global constants: {s}", .{cycle_names.items}) catch {
-                self.reportError(.E005, name);
+                self.reportError(.E005, name, @src());
                 return error.SemanticError;
             };
             self.last_error = .{
@@ -1001,7 +994,7 @@ pub const AstToIr = struct {
 
         // Get the constant AST
         const constant = self.global_constant_asts.get(name) orelse {
-            self.reportError(.E005, name);
+            self.reportError(.E005, name, @src());
             return error.UndefinedVariable;
         };
 
@@ -1035,7 +1028,7 @@ pub const AstToIr = struct {
                     return self.evaluateConstant(name);
                 }
                 // Unknown identifier in constant expression
-                self.reportError(.E005, name);
+                self.reportError(.E005, name, @src());
                 return error.UndefinedVariable;
             },
             .unary => |un| {
@@ -1047,14 +1040,14 @@ pub const AstToIr = struct {
                         } else if (operand == .float) {
                             return .{ .float = -operand.float };
                         }
-                        self.reportErrorWithSuffix(.E003, "operand", "B");
+                        self.reportError(.E003, "operand", @src());
                         return error.SemanticError;
                     },
                     .not => {
                         if (operand == .bool) {
                             return .{ .bool = !operand.bool };
                         }
-                        self.reportErrorWithSuffix(.E003, "operand", "C");
+                        self.reportError(.E003, "operand", @src());
                         return error.SemanticError;
                     },
                 }
@@ -1091,7 +1084,7 @@ pub const AstToIr = struct {
                         .mul => l * r,
                         .div => l / r,
                         .mod, .band, .bitor, .bxor, .shl, .shr => {
-                            self.reportErrorWithSuffix(.E003, "operand", "D");
+                            self.reportError(.E003, "operand", @src());
                             return error.SemanticError;
                         },
                     } };
@@ -1107,13 +1100,13 @@ pub const AstToIr = struct {
                         .mul => l * r,
                         .div => l / r,
                         .mod, .band, .bitor, .bxor, .shl, .shr => {
-                            self.reportErrorWithSuffix(.E003, "operand", "E");
+                            self.reportError(.E003, "operand", @src());
                             return error.SemanticError;
                         },
                     } };
                 }
 
-                self.reportErrorWithSuffix(.E003, "operand", "F");
+                self.reportError(.E003, "operand", @src());
                 return error.SemanticError;
             },
             .compare => |cmp| {
@@ -1156,13 +1149,13 @@ pub const AstToIr = struct {
                         .eq => l == r,
                         .ne => l != r,
                         else => {
-                            self.reportErrorWithSuffix(.E003, "operand", "G");
+                            self.reportError(.E003, "operand", @src());
                             return error.SemanticError;
                         },
                     } };
                 }
 
-                self.reportErrorWithSuffix(.E003, "operand", "H");
+                self.reportError(.E003, "operand", @src());
                 return error.SemanticError;
             },
             .logical => |log| {
@@ -1176,7 +1169,7 @@ pub const AstToIr = struct {
                     } };
                 }
 
-                self.reportErrorWithSuffix(.E003, "operand", "I");
+                self.reportError(.E003, "operand", @src());
                 return error.SemanticError;
             },
             .array_literal => |_| {
@@ -1203,7 +1196,7 @@ pub const AstToIr = struct {
                         }
                     }
                 }
-                self.reportErrorWithSuffix(.E003, "field access", "J");
+                self.reportError(.E003, "field access", @src());
                 return error.SemanticError;
             },
             .map_literal => |_| {
@@ -1216,7 +1209,7 @@ pub const AstToIr = struct {
             },
             else => {
                 // Unsupported expression type in constant context
-                self.reportErrorWithSuffix(.E003, "expression", "K");
+                self.reportError(.E003, "expression", @src());
                 return error.SemanticError;
             },
         };
@@ -1281,7 +1274,7 @@ pub const AstToIr = struct {
 
     fn lookupIrType(self: *AstToIr, name: []const u8) !ir.Type {
         const type_info = self.type_map.get(name) orelse {
-            self.reportErrorWithSuffix(.E006, name, "G");
+            self.reportError(.E006, name, @src());
             return error.UnknownType;
         };
         // Check visibility
@@ -1297,7 +1290,7 @@ pub const AstToIr = struct {
             return switch (type_info) {
                 .struct_type => |s| s,
                 .primitive, .enum_type => {
-                    self.reportErrorWithSuffix(.E006, type_name, "H");
+                    self.reportError(.E006, type_name, @src());
                     return error.UnknownType;
                 },
             };
@@ -1324,7 +1317,7 @@ pub const AstToIr = struct {
 
             // Try to create the monomorphized type
             _ = self.getOrCreateMonomorphizedType(base_type, args_list.items) catch {
-                self.reportErrorWithSuffix(.E006, type_name, "I");
+                self.reportError(.E006, type_name, @src());
                 return error.UnknownType;
             };
 
@@ -1333,14 +1326,14 @@ pub const AstToIr = struct {
                 return switch (type_info) {
                     .struct_type => |s| s,
                     .primitive, .enum_type => {
-                        self.reportErrorWithSuffix(.E006, type_name, "J");
+                        self.reportError(.E006, type_name, @src());
                         return error.UnknownType;
                     },
                 };
             }
         }
 
-        self.reportErrorWithSuffix(.E006, type_name, "K");
+        self.reportError(.E006, type_name, @src());
         return error.UnknownType;
     }
 
@@ -1348,7 +1341,7 @@ pub const AstToIr = struct {
         for (struct_info.fields) |f| {
             if (std.mem.eql(u8, f.name, field_name)) return f;
         }
-        self.reportError(.E007, field_name);
+        self.reportError(.E007, field_name, @src());
         return error.UnknownField;
     }
 
@@ -1362,13 +1355,13 @@ pub const AstToIr = struct {
                         if (self.source_file) |current_file| {
                             if (!std.mem.eql(u8, def_file, current_file)) {
                                 debug.astToIr("Type visibility error: '{s}' defined in '{s}' accessed from '{s}'", .{ type_name, def_file, current_file });
-                                self.reportErrorWithSuffix(.E006, type_name, "L");
+                                self.reportError(.E006, type_name, @src());
                                 return error.UnknownType;
                             }
                         } else {
                             // No current source file (shouldn't happen)
                             debug.astToIr("Type visibility error: '{s}' - no current source file", .{type_name});
-                            self.reportErrorWithSuffix(.E006, type_name, "M");
+                            self.reportError(.E006, type_name, @src());
                             return error.UnknownType;
                         }
                     }
@@ -1654,24 +1647,16 @@ pub const AstToIr = struct {
             try self.type_source_files.put(self.allocator, ext_type.name, owned_path);
         }
 
-        // Register associated types as global type aliases and create their monomorphized types
-        // This is needed so that return types like "StringArray" can be resolved from user code
+        // Register associated types as global type aliases
+        // NOTE: We only register the alias here, NOT the monomorphized type.
+        // The monomorphized type will be created lazily when first used, after all types are registered.
+        // This avoids dependency ordering issues where the element type (e.g., String) isn't registered yet.
         for (type_decl.associated_types) |assoc| {
             // Register permanently (don't clean up)
             try self.associated_type_aliases.put(self.allocator, assoc.name, .{
                 .base_type = assoc.base_type,
                 .type_args = assoc.type_args,
             });
-
-            // Also create the monomorphized type and register it under the alias name
-            const mono_name = self.getOrCreateMonomorphizedType(assoc.base_type, assoc.type_args) catch continue;
-            if (self.type_map.get(mono_name)) |mono_type| {
-                // Register the alias name as well
-                if (!self.type_map.contains(assoc.name)) {
-                    try self.type_map.put(self.allocator, assoc.name, mono_type);
-                    debug.astToIr("Registered associated type '{s}' -> '{s}'", .{ assoc.name, mono_name });
-                }
-            }
         }
 
         debug.astToIr("Registered external type '{s}' with size {d}", .{ ext_type.name, field_result.size });
@@ -1707,7 +1692,7 @@ pub const AstToIr = struct {
         for (enum_decl.members) |member| {
             // Check for duplicate case names
             if (members.contains(member.name)) {
-                self.reportErrorAt(.E030, member.name, member.line, member.column);
+                self.reportErrorAt(.E030, member.name, member.line, member.column, @src());
                 return error.SemanticError;
             }
 
@@ -1717,7 +1702,7 @@ pub const AstToIr = struct {
                     .none => backing = .{ .string = .{} },
                     .string => {},
                     else => {
-                        self.reportErrorAt(.E032, "expected String, got other type", member.line, member.column);
+                        self.reportErrorAt(.E032, "expected String, got other type", member.line, member.column, @src());
                         return error.SemanticError;
                     },
                 }
@@ -1730,7 +1715,7 @@ pub const AstToIr = struct {
                     .none => backing = .{ .character = .{} },
                     .character => {},
                     else => {
-                        self.reportErrorAt(.E032, "expected character, got other type", member.line, member.column);
+                        self.reportErrorAt(.E032, "expected character, got other type", member.line, member.column, @src());
                         return error.SemanticError;
                     },
                 }
@@ -1747,7 +1732,7 @@ pub const AstToIr = struct {
                             else => {
                                 const msg = try std.fmt.allocPrint(self.allocator, "expected {s}, got int", .{backing.displayName()});
                                 try self.module.trackString(msg);
-                                self.reportErrorAt(.E032, msg, member.line, member.column);
+                                self.reportErrorAt(.E032, msg, member.line, member.column, @src());
                                 return error.SemanticError;
                             },
                         }
@@ -1756,7 +1741,7 @@ pub const AstToIr = struct {
                         if (seen_raw_values.get(next_value)) |_| {
                             const msg = try std.fmt.allocPrint(self.allocator, "{d}", .{next_value});
                             try self.module.trackString(msg);
-                            self.reportErrorAt(.E031, msg, member.line, member.column);
+                            self.reportErrorAt(.E031, msg, member.line, member.column, @src());
                             return error.SemanticError;
                         }
                     },
@@ -1767,7 +1752,7 @@ pub const AstToIr = struct {
                             else => {
                                 const msg = try std.fmt.allocPrint(self.allocator, "expected {s}, got float", .{backing.displayName()});
                                 try self.module.trackString(msg);
-                                self.reportErrorAt(.E032, msg, member.line, member.column);
+                                self.reportErrorAt(.E032, msg, member.line, member.column, @src());
                                 return error.SemanticError;
                             },
                         }
@@ -1780,7 +1765,7 @@ pub const AstToIr = struct {
                             else => {
                                 const msg = try std.fmt.allocPrint(self.allocator, "expected {s}, got String", .{backing.displayName()});
                                 try self.module.trackString(msg);
-                                self.reportErrorAt(.E032, msg, member.line, member.column);
+                                self.reportErrorAt(.E032, msg, member.line, member.column, @src());
                                 return error.SemanticError;
                             },
                         }
@@ -1793,7 +1778,7 @@ pub const AstToIr = struct {
                             else => {
                                 const msg = try std.fmt.allocPrint(self.allocator, "expected {s}, got character", .{backing.displayName()});
                                 try self.module.trackString(msg);
-                                self.reportErrorAt(.E032, msg, member.line, member.column);
+                                self.reportErrorAt(.E032, msg, member.line, member.column, @src());
                                 return error.SemanticError;
                             },
                         }
@@ -1963,7 +1948,7 @@ pub const AstToIr = struct {
                 const msg = std.fmt.allocPrint(self.allocator, "Type '{s}' cannot conform to Error - only enums can implement Error", .{
                     type_decl.name,
                 }) catch {
-                    self.reportError(.E023, type_decl.name);
+                    self.reportError(.E023, type_decl.name, @src());
                     return error.SemanticError;
                 };
                 self.last_error = .{
@@ -1998,7 +1983,7 @@ pub const AstToIr = struct {
                 const msg = std.fmt.allocPrint(self.allocator, "Unknown interface '{s}' - interface may not be exported or does not exist", .{
                     conformance.interface_name,
                 }) catch {
-                    self.reportError(.E051, conformance.interface_name);
+                    self.reportError(.E051, conformance.interface_name, @src());
                     return error.SemanticError;
                 };
                 self.last_error = .{
@@ -2031,7 +2016,7 @@ pub const AstToIr = struct {
                         assoc_type,
                         conformance.interface_name,
                     }) catch {
-                        self.reportError(.E015, assoc_type);
+                        self.reportError(.E015, assoc_type, @src());
                         return error.SemanticError;
                     };
                     self.last_error = .{
@@ -2094,7 +2079,7 @@ pub const AstToIr = struct {
                                     source_interface,
                                     expected,
                                 }) catch {
-                                    self.reportError(.E015, iface_method.name);
+                                    self.reportError(.E015, iface_method.name, @src());
                                     return error.SemanticError;
                                 };
                                 self.last_error = .{
@@ -2118,7 +2103,7 @@ pub const AstToIr = struct {
                                 source_interface,
                                 expected,
                             }) catch {
-                                self.reportError(.E015, iface_method.name);
+                                self.reportError(.E015, iface_method.name, @src());
                                 return error.SemanticError;
                             };
                             self.last_error = .{
@@ -2142,7 +2127,7 @@ pub const AstToIr = struct {
                             actual,
                             source_interface,
                         }) catch {
-                            self.reportError(.E015, iface_method.name);
+                            self.reportError(.E015, iface_method.name, @src());
                             return error.SemanticError;
                         };
                         self.last_error = .{
@@ -2172,7 +2157,7 @@ pub const AstToIr = struct {
                                     source_interface,
                                     expected,
                                 }) catch {
-                                    self.reportError(.E015, iface_method.name);
+                                    self.reportError(.E015, iface_method.name, @src());
                                     return error.SemanticError;
                                 };
                                 self.last_error = .{
@@ -2202,7 +2187,7 @@ pub const AstToIr = struct {
                                         iface_method.name,
                                         impl_throws,
                                     }) catch {
-                                        self.reportError(.E015, iface_method.name);
+                                        self.reportError(.E015, iface_method.name, @src());
                                         return error.SemanticError;
                                     };
                                     self.last_error = .{
@@ -2227,7 +2212,7 @@ pub const AstToIr = struct {
                                         source_interface,
                                         iface_throws,
                                     }) catch {
-                                        self.reportError(.E015, iface_method.name);
+                                        self.reportError(.E015, iface_method.name, @src());
                                         return error.SemanticError;
                                     };
                                     self.last_error = .{
@@ -2251,7 +2236,7 @@ pub const AstToIr = struct {
                                 iface_throws,
                                 source_interface,
                             }) catch {
-                                self.reportError(.E015, iface_method.name);
+                                self.reportError(.E015, iface_method.name, @src());
                                 return error.SemanticError;
                             };
                             self.last_error = .{
@@ -2344,7 +2329,7 @@ pub const AstToIr = struct {
                                         method_name,
                                         iface_name,
                                     }) catch {
-                                        self.reportError(.E015, method_name);
+                                        self.reportError(.E015, method_name, @src());
                                         return error.SemanticError;
                                     };
                                     self.last_error = .{
@@ -3026,7 +3011,7 @@ pub const AstToIr = struct {
                             return .{ .enum_type = &ptr.enum_type };
                         }
                     }
-                    self.reportErrorWithSuffix(.E006, self_type, "N");
+                    self.reportError(.E006, self_type, @src());
                     return error.UnknownType;
                 }
                 if (bindings.get(name)) |bound| {
@@ -3080,7 +3065,7 @@ pub const AstToIr = struct {
                             }
                         }
                     }
-                    self.reportErrorWithSuffix(.E006, bound, "O");
+                    self.reportError(.E006, bound, @src());
                     return error.UnknownType;
                 }
                 // Check if this is an associated type alias (e.g., "ElementArray" -> "Array with Element")
@@ -3096,7 +3081,7 @@ pub const AstToIr = struct {
 
                     // Get or create the monomorphized type
                     const mono_name = self.getOrCreateMonomorphizedType(alias.base_type, resolved_args[0..num_args]) catch {
-                        self.reportErrorWithSuffix(.E006, name, "P");
+                        self.reportError(.E006, name, @src());
                         return error.UnknownType;
                     };
                     if (self.type_map.getPtr(mono_name)) |ptr| {
@@ -3115,7 +3100,7 @@ pub const AstToIr = struct {
                         return .{ .enum_type = &ptr.enum_type };
                     }
                 }
-                self.reportErrorWithSuffix(.E006, name, "Q");
+                self.reportError(.E006, name, @src());
                 return error.UnknownType;
             },
             .generic => |g| {
@@ -3173,7 +3158,7 @@ pub const AstToIr = struct {
                     }
                     const display_name = try self.allocator.dupe(u8, display_name_builder.items);
                     try self.module.trackString(display_name);
-                    self.reportErrorWithSuffix(.E006, display_name, "R");
+                    self.reportError(.E006, display_name, @src());
                     return error.UnknownType;
                 }
 
@@ -3251,7 +3236,7 @@ pub const AstToIr = struct {
                 .simple, .generic => {
                     const base_name = typeExprBaseTypeName(rt).?;
                     const type_info = self.type_map.get(base_name) orelse {
-                        self.reportErrorWithSuffix(.E006, base_name, "S");
+                        self.reportError(.E006, base_name, @src());
                         return error.UnknownType;
                     };
                     if (type_info == .primitive) {
@@ -3385,7 +3370,7 @@ pub const AstToIr = struct {
             return .{ .primitive = prim };
         }
         const type_info_ptr = self.type_map.getPtr(type_name) orelse {
-            self.reportErrorWithSuffix(.E006, type_name, "T");
+            self.reportError(.E006, type_name, @src());
             return error.UnknownType;
         };
         return switch (type_info_ptr.*) {
@@ -3414,14 +3399,17 @@ pub const AstToIr = struct {
         return switch (evt) {
             .primitive => |p| .{ .primitive = p },
             .struct_type => |name| blk: {
-                // First try normal lookup
-                if (self.typeNameToValueTypeOpt(name)) |vt| {
+                // First resolve the name through associated_type_aliases (e.g., StringArray -> Array$String)
+                const resolved_name = self.resolveTypeName(name);
+
+                // Try normal lookup with resolved name
+                if (self.typeNameToValueTypeOpt(resolved_name)) |vt| {
                     break :blk vt;
                 }
                 // If not found and it's an Array type, trigger monomorphization
                 // BUT only if the element type is a concrete type (not a generic parameter like "Element")
-                if (std.mem.startsWith(u8, name, "Array$")) {
-                    const element_name = name["Array$".len..];
+                if (std.mem.startsWith(u8, resolved_name, "Array$")) {
+                    const element_name = resolved_name["Array$".len..];
                     // Skip if element type is a generic parameter (not a concrete type)
                     // Concrete types are either primitives or registered in type_map
                     const is_concrete = types.Primitive.fromString(element_name) != null or
@@ -3429,7 +3417,7 @@ pub const AstToIr = struct {
                     if (is_concrete) {
                         var type_args = [_][]const u8{element_name};
                         const mono_name = self.getOrCreateMonomorphizedType("Array", &type_args) catch {
-                            debug.astToIr("convertExternalValueType: failed to monomorphize {s}", .{name});
+                            debug.astToIr("convertExternalValueType: failed to monomorphize {s}", .{resolved_name});
                             break :blk null;
                         };
                         if (self.type_map.getPtr(mono_name)) |entry| {
@@ -3487,7 +3475,7 @@ pub const AstToIr = struct {
                 // Check for internal type access
                 try intrinsics.checkInternalTypeAccess(self, resolved);
                 const type_info_ptr = self.type_map.getPtr(resolved) orelse {
-                    self.reportErrorWithSuffix(.E006, resolved, "U");
+                    self.reportError(.E006, resolved, @src());
                     return error.UnknownType;
                 };
                 // Check visibility - but skip for types resolved from generic parameters
@@ -3502,7 +3490,7 @@ pub const AstToIr = struct {
                     .primitive => if (types.Primitive.fromString(resolved)) |prim|
                         .{ .primitive = prim }
                     else {
-                        self.reportErrorWithSuffix(.E006, resolved, "V");
+                        self.reportError(.E006, resolved, @src());
                         return error.UnknownType;
                     },
                 };
@@ -3624,13 +3612,13 @@ pub const AstToIr = struct {
 
         // Get the original generic type declaration
         const type_decl = self.type_decl_map.get(base_type) orelse {
-            self.reportErrorWithSuffix(.E006, base_type, "W");
+            self.reportError(.E006, base_type, @src());
             return error.UnknownType;
         };
 
         // Verify we have the right number of type arguments
         if (type_decl.generic_params.len != type_args.len) {
-            self.reportError(.E011, base_type);
+            self.reportError(.E011, base_type, @src());
             return error.TypeMismatch;
         }
 
@@ -3775,20 +3763,23 @@ pub const AstToIr = struct {
     /// ensure the type is registered before looking up its size.
     /// Returns the struct size, or null if the type cannot be resolved.
     pub fn getStructSizeWithMonomorphization(self: *AstToIr, struct_name: []const u8) ?i32 {
-        // First try direct lookup
-        if (self.type_map.get(struct_name)) |type_info| {
+        // First resolve the name through associated_type_aliases (e.g., StringArray -> Array$String)
+        const resolved_name = self.resolveTypeName(struct_name);
+
+        // Try direct lookup with resolved name
+        if (self.type_map.get(resolved_name)) |type_info| {
             if (type_info == .struct_type) {
                 return type_info.struct_type.size;
             }
         }
 
         // Not found - try to trigger monomorphization for generic types
-        if (std.mem.startsWith(u8, struct_name, "Array$")) {
-            const elem_type = struct_name["Array$".len..];
+        if (std.mem.startsWith(u8, resolved_name, "Array$")) {
+            const elem_type = resolved_name["Array$".len..];
             _ = self.getOrCreateMonomorphizedType("Array", &[_][]const u8{elem_type}) catch return null;
-        } else if (std.mem.startsWith(u8, struct_name, "Map$")) {
+        } else if (std.mem.startsWith(u8, resolved_name, "Map$")) {
             // Parse Map$Key$Value
-            const rest = struct_name["Map$".len..];
+            const rest = resolved_name["Map$".len..];
             if (std.mem.indexOf(u8, rest, "$")) |sep| {
                 const key_type = rest[0..sep];
                 const val_type = rest[sep + 1 ..];
@@ -3802,7 +3793,7 @@ pub const AstToIr = struct {
         }
 
         // Try lookup again after monomorphization
-        if (self.type_map.get(struct_name)) |type_info| {
+        if (self.type_map.get(resolved_name)) |type_info| {
             if (type_info == .struct_type) {
                 return type_info.struct_type.size;
             }
@@ -3864,7 +3855,7 @@ pub const AstToIr = struct {
                     const base_name = typeExprBaseTypeName(rt).?;
                     const resolved = self.resolveTypeName(base_name);
                     const type_info = self.type_map.get(resolved) orelse {
-                        self.reportErrorWithSuffix(.E006, resolved, "X");
+                        self.reportError(.E006, resolved, @src());
                         return error.UnknownType;
                     };
                     if (type_info == .enum_type) {
@@ -3958,7 +3949,7 @@ pub const AstToIr = struct {
                         method.name,
                         interface_name,
                     }) catch {
-                        self.reportError(.E015, method.name);
+                        self.reportError(.E015, method.name, @src());
                         return error.SemanticError;
                     };
                     self.last_error = .{
@@ -4498,9 +4489,9 @@ pub const AstToIr = struct {
                 debug.astToIr("error: unused variable '{s}'\n", .{entry.key_ptr.*});
                 // Use declaration location if available, otherwise fall back to current location
                 if (entry.value_ptr.decl_line > 0) {
-                    self.reportErrorAt(.E014, entry.key_ptr.*, entry.value_ptr.decl_line, entry.value_ptr.decl_column);
+                    self.reportErrorAt(.E014, entry.key_ptr.*, entry.value_ptr.decl_line, entry.value_ptr.decl_column, @src());
                 } else {
-                    self.reportError(.E014, entry.key_ptr.*);
+                    self.reportError(.E014, entry.key_ptr.*, @src());
                 }
                 return error.UnusedVariable;
             }
@@ -4748,14 +4739,14 @@ pub const AstToIr = struct {
         // Check that all paths return for non-void functions
         if (decl.return_type != null) {
             if (!allPathsReturn(decl.body)) {
-                self.reportErrorAt(.E037, decl.name, decl.line, decl.column);
+                self.reportErrorAt(.E037, decl.name, decl.line, decl.column, @src());
                 return error.MissingReturn;
             }
         }
 
         // main cannot throw - errors must be handled within main
         if (std.mem.eql(u8, decl.name, "main") and decl.throws_type != null) {
-            self.reportErrorAt(.E054, "main", decl.block.start_line, decl.block.start_column);
+            self.reportErrorAt(.E054, "main", decl.block.start_line, decl.block.start_column, @src());
             return error.SemanticError;
         }
 
@@ -5162,7 +5153,7 @@ pub const AstToIr = struct {
                         const resolved_expected = self.resolveTypeName(expected);
                         const resolved_actual = self.resolveTypeName(actual);
                         if (!std.mem.eql(u8, resolved_actual, resolved_expected)) {
-                            self.reportErrorWithSuffix(.E022, actual, "B");
+                            self.reportError(.E022, actual, @src());
                             return error.TypeMismatch;
                         }
                     }
@@ -5212,7 +5203,7 @@ pub const AstToIr = struct {
         if (self.var_map.getPtr(assign.target)) |var_info| {
             if (!var_info.is_mutable) {
                 debug.astToIr("cannot assign to immutable variable '{s}'\n", .{assign.target});
-                self.reportError(.E009, assign.target);
+                self.reportError(.E009, assign.target, @src());
                 return error.ImmutableAssign;
             }
             // Check if this variable's managed buffer is borrowed - cannot modify while borrowed
@@ -5297,7 +5288,7 @@ pub const AstToIr = struct {
                             // Check if field is mutable
                             if (!self.isFieldMutable(type_name, assign.target)) {
                                 debug.astToIr("cannot assign to immutable field '{s}'\n", .{assign.target});
-                                self.reportError(.E009, assign.target);
+                                self.reportError(.E009, assign.target, @src());
                                 return error.ImmutableAssign;
                             }
 
@@ -5330,7 +5321,7 @@ pub const AstToIr = struct {
 
         // Variable not found
         debug.astToIr("error: undefined variable '{s}'\n", .{assign.target});
-        self.reportError(.E005, assign.target);
+        self.reportError(.E005, assign.target, @src());
         return error.UndefinedVariable;
     }
 
@@ -5347,7 +5338,7 @@ pub const AstToIr = struct {
             const var_name = assign.base.identifier;
             if (self.var_map.get(var_name)) |var_info| {
                 if (!var_info.is_mutable) {
-                    self.reportError(.E009, var_name);
+                    self.reportError(.E009, var_name, @src());
                     return error.ImmutableAssign;
                 }
             }
@@ -5358,7 +5349,7 @@ pub const AstToIr = struct {
             .struct_type => |struct_info| struct_info.name,
             .primitive, .enum_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAssign: expected struct type for field '{s}'\n", .{assign.field_name});
-                self.reportErrorWithSuffix(.E006, assign.field_name, "Y");
+                self.reportError(.E006, assign.field_name, @src());
                 return error.UnknownType;
             },
         };
@@ -5370,16 +5361,16 @@ pub const AstToIr = struct {
         const is_inside_type = self.current_type_name != null and std.mem.eql(u8, self.current_type_name.?, type_name);
         if (!field_info.is_export and !is_inside_type) {
             const msg = std.fmt.allocPrint(self.allocator, "{s}' outside of type '{s}", .{ assign.field_name, type_name }) catch {
-                self.reportError(.E050, assign.field_name);
+                self.reportError(.E050, assign.field_name, @src());
                 return error.SemanticError;
             };
-            self.reportError(.E050, msg);
+            self.reportError(.E050, msg, @src());
             return error.SemanticError;
         }
 
         // Check if field is mutable
         if (!field_info.is_mutable) {
-            self.reportError(.E009, assign.field_name);
+            self.reportError(.E009, assign.field_name, @src());
             return error.ImmutableAssign;
         }
 
@@ -5402,7 +5393,7 @@ pub const AstToIr = struct {
             const var_name = assign.base.identifier;
             if (self.var_map.get(var_name)) |var_info| {
                 if (!var_info.is_mutable) {
-                    self.reportError(.E009, var_name);
+                    self.reportError(.E009, var_name, @src());
                     return error.ImmutableAssign;
                 }
             }
@@ -5592,7 +5583,7 @@ pub const AstToIr = struct {
         // Validate that the expression is a throwing function (returns error union)
         if (result_typed.ty != .error_union_type) {
             const msg = std.fmt.allocPrint(self.allocator, "'{s}' does not throw", .{call_name}) catch "expression does not throw";
-            self.reportErrorAt(.E055, msg, if_stmt.block.start_line, if_stmt.block.start_column);
+            self.reportErrorAt(.E055, msg, if_stmt.block.start_line, if_stmt.block.start_column, @src());
             return error.SemanticError;
         }
 
@@ -5805,7 +5796,7 @@ pub const AstToIr = struct {
                 if (was_owned and var_info.state == .moved) {
                     // Variable was moved in loop body - next iteration would use moved value
                     debug.astToIr("variable '{s}' was moved in loop body\n", .{entry.key_ptr.*});
-                    self.reportError(.E008, entry.key_ptr.*);
+                    self.reportError(.E008, entry.key_ptr.*, @src());
                     return error.UseAfterMove;
                 }
             }
@@ -5987,8 +5978,9 @@ pub const AstToIr = struct {
         };
 
         // Determine the var type from the error union element info
+        // Note: resolve type aliases (e.g., StringArray -> Array$String) before lookup
         const var_type: types.ValueType = if (element_info.wrapped_struct_type) |wrapped_struct_name|
-            try self.typeNameToValueType(wrapped_struct_name)
+            try self.typeNameToValueType(self.resolveTypeName(wrapped_struct_name))
         else if (element_info.wrapped_enum_type) |wrapped_enum_name|
             try self.typeNameToValueType(wrapped_enum_name)
         else
@@ -6010,7 +6002,7 @@ pub const AstToIr = struct {
                 const was_owned = entry.value_ptr.* == .owned;
                 if (was_owned and var_info.state == .moved) {
                     debug.astToIr("variable '{s}' was moved in loop body\n", .{entry.key_ptr.*});
-                    self.reportError(.E008, entry.key_ptr.*);
+                    self.reportError(.E008, entry.key_ptr.*, @src());
                     return error.UseAfterMove;
                 }
             }
@@ -6102,7 +6094,7 @@ pub const AstToIr = struct {
                 if (body.kind == .@"return") {
                     self.current_line = body.line;
                     self.current_column = body.column;
-                    self.reportError(.E025, "cannot combine 'fallthrough' with 'return'");
+                    self.reportError(.E025, "cannot combine 'fallthrough' with 'return'", @src());
                     return error.SemanticError;
                 }
             }
@@ -6125,7 +6117,7 @@ pub const AstToIr = struct {
                     const pattern_type_name = pattern_typed.ty.getTypeName() orelse "unknown";
                     const scrutinee_type_name = scrutinee_ty.getTypeName() orelse "unknown";
                     const msg = std.fmt.allocPrint(self.allocator, "pattern type '{s}' does not match scrutinee type '{s}'", .{ pattern_type_name, scrutinee_type_name }) catch {
-                        self.reportError(.E028, "pattern type mismatch");
+                        self.reportError(.E028, "pattern type mismatch", @src());
                         return error.SemanticError;
                     };
                     self.last_error = .{
@@ -6160,7 +6152,7 @@ pub const AstToIr = struct {
                 const pattern_key = self.patternToString(pattern) catch continue;
 
                 if (seen_patterns.contains(pattern_key)) {
-                    self.reportErrorAt(.E027, pattern_key, child.pattern_line, child.pattern_column);
+                    self.reportErrorAt(.E027, pattern_key, child.pattern_line, child.pattern_column, @src());
                     self.allocator.free(pattern_key);
                     return error.SemanticError;
                 }
@@ -6213,7 +6205,7 @@ pub const AstToIr = struct {
                             }
 
                             const msg = std.fmt.allocPrint(self.allocator, "match on enum '{s}' is not exhaustive, missing: {s}", .{ enum_name, missing_str.items }) catch {
-                                self.reportError(.E026, enum_name);
+                                self.reportError(.E026, enum_name, @src());
                                 return error.SemanticError;
                             };
                             self.last_error = .{
@@ -6358,7 +6350,7 @@ pub const AstToIr = struct {
                     if (found_type) |existing| {
                         // Multiple types implement the same interface - report error
                         const error_msg = std.fmt.allocPrint(self.allocator, "multiple types implement {s}: '{s}' and '{s}'", .{ interface_name, existing, type_name }) catch "multiple types implement interface";
-                        self.reportErrorWithSuffix(.E006, error_msg, "Z");
+                        self.reportError(.E006, error_msg, @src());
                         return null;
                     }
                     found_type = type_name;
@@ -6565,13 +6557,13 @@ pub const AstToIr = struct {
             // Get the case info for this pattern
             const case_info = enum_info.case_info.get(binding.case_name) orelse {
                 // Unknown case - report error
-                self.reportError(.E034, binding.case_name);
+                self.reportError(.E034, binding.case_name, @src());
                 return error.SemanticError;
             };
 
             // Validate binding count matches associated values count
             if (binding.bindings.len != case_info.associated_values.len) {
-                self.reportError(.E035, binding.case_name);
+                self.reportError(.E035, binding.case_name, @src());
                 return error.SemanticError;
             }
 
@@ -6616,13 +6608,13 @@ pub const AstToIr = struct {
             // Get the case info for this pattern
             const case_info = enum_info.case_info.get(binding.case_name) orelse {
                 // Unknown case - report error
-                self.reportError(.E034, binding.case_name);
+                self.reportError(.E034, binding.case_name, @src());
                 return error.SemanticError;
             };
 
             // Validate binding count matches associated values count
             if (binding.bindings.len != case_info.associated_values.len) {
-                self.reportError(.E035, binding.case_name);
+                self.reportError(.E035, binding.case_name, @src());
                 return error.SemanticError;
             }
 
@@ -6667,13 +6659,13 @@ pub const AstToIr = struct {
             // Get the case info for this pattern
             const case_info = enum_info.case_info.get(binding.case_name) orelse {
                 // Unknown case - report error
-                self.reportError(.E034, binding.case_name);
+                self.reportError(.E034, binding.case_name, @src());
                 return error.SemanticError;
             };
 
             // Validate binding count matches associated values count
             if (binding.bindings.len != case_info.associated_values.len) {
-                self.reportError(.E035, binding.case_name);
+                self.reportError(.E035, binding.case_name, @src());
                 return error.SemanticError;
             }
 
@@ -6972,7 +6964,7 @@ pub const AstToIr = struct {
                     };
                 } else {
                     // Unknown case - report error
-                    self.reportError(.E034, case_name);
+                    self.reportError(.E034, case_name, @src());
                     return error.SemanticError;
                 }
             }
@@ -7026,7 +7018,7 @@ pub const AstToIr = struct {
 
         if (num_cases == 0 and !has_default) {
             // Empty match expression with no default - error
-            self.reportErrorWithSuffix(.E003, "empty match expression requires default case", "L");
+            self.reportError(.E003, "empty match expression requires default case", @src());
             return error.SemanticError;
         }
 
@@ -7214,14 +7206,14 @@ pub const AstToIr = struct {
                 }
             }
             // Label not found
-            self.reportError(.E012, label);
+            self.reportError(.E012, label, @src());
             return error.SemanticError;
         }
         // Unlabeled break - use current loop
         if (self.loop_end_block) |end_block| {
             try self.func().emitBr(end_block);
         } else {
-            self.reportError(.E012, "break");
+            self.reportError(.E012, "break", @src());
             return error.SemanticError;
         }
     }
@@ -7240,14 +7232,14 @@ pub const AstToIr = struct {
                 }
             }
             // Label not found
-            self.reportError(.E012, label);
+            self.reportError(.E012, label, @src());
             return error.SemanticError;
         }
         // Unlabeled continue - use current loop
         if (self.loop_cond_block) |cond_block| {
             try self.func().emitBr(cond_block);
         } else {
-            self.reportError(.E012, "continue");
+            self.reportError(.E012, "continue", @src());
             return error.SemanticError;
         }
     }
@@ -7255,7 +7247,7 @@ pub const AstToIr = struct {
     fn convertThrowStmt(self: *AstToIr, throw_stmt: ast.ThrowStmt) ConvertError!void {
         // Verify we're in a throwing function
         const throws_type = self.current_func_throws_type orelse {
-            self.reportError(.E001, "throw statement in non-throwing function");
+            self.reportError(.E001, "throw statement in non-throwing function", @src());
             return error.SemanticError;
         };
 
@@ -7267,18 +7259,18 @@ pub const AstToIr = struct {
             .enum_type => |enum_info| enum_info.name,
             .struct_type => |struct_info| {
                 // Struct errors are no longer allowed
-                self.reportError(.E023, struct_info.name);
+                self.reportError(.E023, struct_info.name, @src());
                 return error.SemanticError;
             },
             else => {
-                self.reportError(.E001, "throw requires an error enum type");
+                self.reportError(.E001, "throw requires an error enum type", @src());
                 return error.SemanticError;
             },
         };
 
         // Check that thrown type matches declared throws type
         if (!std.mem.eql(u8, error_type_name, throws_type)) {
-            self.reportError(.E001, "thrown error type does not match function's throws declaration");
+            self.reportError(.E001, "thrown error type does not match function's throws declaration", @src());
             return error.SemanticError;
         }
 
@@ -7299,7 +7291,7 @@ pub const AstToIr = struct {
             try self.func().emitRet(sret);
         } else {
             // This shouldn't happen for throwing functions, but handle gracefully
-            self.reportError(.E001, "throwing function missing sret pointer");
+            self.reportError(.E001, "throwing function missing sret pointer", @src());
             return error.SemanticError;
         }
     }
@@ -7340,11 +7332,11 @@ pub const AstToIr = struct {
     /// Convert 'self' expression - reference to current instance
     fn convertSelfExpr(self: *AstToIr) ConvertError!TypedValue {
         const self_val = self.self_ptr orelse {
-            self.reportError(.E005, "self");
+            self.reportError(.E005, "self", @src());
             return error.UndefinedVariable;
         };
         const type_name = self.current_type_name orelse {
-            self.reportError(.E005, "self (no type context)");
+            self.reportError(.E005, "self (no type context)", @src());
             return error.UndefinedVariable;
         };
         // Mark self as used
@@ -7455,7 +7447,7 @@ pub const AstToIr = struct {
         try self.temporary_strings.append(self.allocator, result_ptr);
 
         const type_info = self.type_map.getPtr(LiteralWrapperType.string.typeName()) orelse {
-            self.reportErrorWithSuffix(.E006, LiteralWrapperType.string.typeName(), "AA");
+            self.reportError(.E006, LiteralWrapperType.string.typeName(), @src());
             return error.UnknownType;
         };
         return .{ .value = result_ptr, .ty = .{ .struct_type = &type_info.struct_type } };
@@ -7627,7 +7619,7 @@ pub const AstToIr = struct {
                     return .{ .buffer = ir.toRawPtr(buffer_val), .len = len, .is_temp = false };
                 }
                 const msg = std.fmt.allocPrint(self.allocator, "cannot convert type '{s}' to string for interpolation", .{struct_info.name}) catch "cannot convert type to string";
-                self.reportInternalError(msg);
+                self.reportInternalError(msg, @src());
                 return error.UnknownType;
             },
             .primitive => |prim| {
@@ -7640,7 +7632,7 @@ pub const AstToIr = struct {
                     return self.emitIntToStackBuffer(typed_val.value);
                 }
                 const msg = std.fmt.allocPrint(self.allocator, "cannot convert primitive type '{s}' to string for interpolation", .{prim.toMaxonName()}) catch "cannot convert primitive to string";
-                self.reportInternalError(msg);
+                self.reportInternalError(msg, @src());
                 return error.UnknownType;
             },
             .enum_type => |enum_info| {
@@ -7650,11 +7642,11 @@ pub const AstToIr = struct {
                 return self.emitIntToStackBuffer(typed_val.value);
             },
             .error_union_type => {
-                self.reportInternalError("cannot convert error union to string for interpolation");
+                self.reportInternalError("cannot convert error union to string for interpolation", @src());
                 return error.UnknownType;
             },
             .function_type => {
-                self.reportInternalError("cannot convert function to string for interpolation");
+                self.reportInternalError("cannot convert function to string for interpolation", @src());
                 return error.UnknownType;
             },
         }
@@ -7755,7 +7747,7 @@ pub const AstToIr = struct {
         try self.module.trackString(method_name);
 
         const func_info = self.func_map.get(method_name) orelse {
-            self.reportError(.E005, method_name);
+            self.reportError(.E005, method_name, @src());
             return error.UndefinedVariable;
         };
 
@@ -7886,7 +7878,7 @@ pub const AstToIr = struct {
         const result_ptr = try self.emitWrapperFromManaged(managed_ptr, .character);
 
         const type_info = self.type_map.getPtr(LiteralWrapperType.character.typeName()) orelse {
-            self.reportErrorWithSuffix(.E006, LiteralWrapperType.character.typeName(), "AB");
+            self.reportError(.E006, LiteralWrapperType.character.typeName(), @src());
             return error.UnknownType;
         };
         return .{ .value = result_ptr, .ty = .{ .struct_type = &type_info.struct_type } };
@@ -7894,14 +7886,14 @@ pub const AstToIr = struct {
 
     fn convertIdentifier(self: *AstToIr, name: []const u8) ConvertError!TypedValue {
         const info = self.var_map.getPtr(name) orelse {
-            self.reportError(.E005, name);
+            self.reportError(.E005, name, @src());
             return error.UndefinedVariable;
         };
         if (std.mem.eql(u8, name, "value")) {}
 
         if (info.state == .moved) {
             debug.astToIr("variable '{s}' was moved\n", .{name});
-            self.reportError(.E008, name);
+            self.reportError(.E008, name, @src());
             return error.UseAfterMove;
         }
 
@@ -7966,7 +7958,7 @@ pub const AstToIr = struct {
         if (!types.isPrimitiveTypeName(target_type_name)) {
             // Unknown cast target type
             debug.astToIr("Unknown cast target type: {s}\n", .{target_type_name});
-            self.reportErrorWithSuffix(.E006, target_type_name, "AC");
+            self.reportError(.E006, target_type_name, @src());
             return error.TypeMismatch;
         }
         const target_ty: ValueType = if (types.Primitive.fromString(target_type_name)) |prim|
@@ -8013,7 +8005,7 @@ pub const AstToIr = struct {
                             const resolved_name = self.resolveTypeName(explicit_type);
                             // Check for exact/typealias match
                             if (std.mem.eql(u8, resolved_name, exp_name)) {
-                                self.reportErrorAt(.E059, explicit_type, param.type_line, param.type_column);
+                                self.reportErrorAt(.E059, explicit_type, param.type_line, param.type_column, @src());
                                 return error.TypeMismatch;
                             }
                             // Check for monomorphization match (e.g., "Pair" when expecting "Pair$String$int")
@@ -8021,7 +8013,7 @@ pub const AstToIr = struct {
                                 exp_name.len > explicit_type.len and
                                 exp_name[explicit_type.len] == '$')
                             {
-                                self.reportErrorAt(.E059, explicit_type, param.type_line, param.type_column);
+                                self.reportErrorAt(.E059, explicit_type, param.type_line, param.type_column, @src());
                                 return error.TypeMismatch;
                             }
                         }
@@ -8037,12 +8029,12 @@ pub const AstToIr = struct {
                 if (i < fn_type.param_types.len) {
                     break :blk fn_type.param_types[i];
                 } else {
-                    self.reportErrorWithSuffix(.E022, param.name, "C");
+                    self.reportError(.E022, param.name, @src());
                     return error.TypeMismatch;
                 }
             } else {
                 // No type annotation and no expected type - error
-                self.reportErrorWithSuffix(.E022, param.name, "D");
+                self.reportError(.E022, param.name, @src());
                 return error.TypeMismatch;
             };
 
@@ -8333,7 +8325,7 @@ pub const AstToIr = struct {
 
             // Check for int/float mismatch (either direction)
             if ((left_is_int and right_is_float) or (left_is_float and right_is_int)) {
-                self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "E");
+                self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
                 return error.TypeMismatch;
             }
 
@@ -8343,13 +8335,13 @@ pub const AstToIr = struct {
                 if (cmp.right.* == .integer) {
                     const lit_value = cmp.right.integer;
                     if (lit_value < 0 or lit_value > 255) {
-                        self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "F");
+                        self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
                         return error.TypeMismatch;
                     }
                     // Literal is in range - allow the comparison
                 } else {
                     // Right is an int variable, not a literal - error
-                    self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "G");
+                    self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
                     return error.TypeMismatch;
                 }
             } else if (right_is_byte and left_is_int) {
@@ -8357,13 +8349,13 @@ pub const AstToIr = struct {
                 if (cmp.left.* == .integer) {
                     const lit_value = cmp.left.integer;
                     if (lit_value < 0 or lit_value > 255) {
-                        self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "H");
+                        self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
                         return error.TypeMismatch;
                     }
                     // Literal is in range - allow the comparison
                 } else {
                     // Left is an int variable, not a literal - error
-                    self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "I");
+                    self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
                     return error.TypeMismatch;
                 }
             }
@@ -8462,7 +8454,7 @@ pub const AstToIr = struct {
         // Validate that the expression is a throwing function (returns error union)
         if (result_typed.ty != .error_union_type) {
             const msg = std.fmt.allocPrint(self.allocator, "'{s}' does not throw", .{call_name}) catch "expression does not throw";
-            self.reportError(.E055, msg);
+            self.reportError(.E055, msg, @src());
             return error.SemanticError;
         }
 
@@ -8487,7 +8479,7 @@ pub const AstToIr = struct {
         // No otherwise clause - propagate error to caller
         // Verify we're in a valid context for try without otherwise
         if (self.current_func_throws_type == null) {
-            self.reportErrorWithSuffix(.E022, "try without otherwise requires enclosing function to throw", "J");
+            self.reportError(.E022, "try without otherwise requires enclosing function to throw", @src());
             return error.SemanticError;
         }
 
@@ -8512,10 +8504,11 @@ pub const AstToIr = struct {
         deferred.deferBlocks(self, 2);
 
         // Get success type info from error union
+        // Note: resolve type aliases (e.g., StringArray -> Array$String) before lookup
         const success_type: types.ValueType = if (result_typed.ty == .error_union_type) blk: {
             const eu_info = result_typed.ty.error_union_type;
             if (eu_info.success_struct_type) |struct_name| {
-                break :blk self.typeNameToValueType(struct_name) catch .{ .primitive = .int };
+                break :blk self.typeNameToValueType(self.resolveTypeName(struct_name)) catch .{ .primitive = .int };
             } else if (eu_info.success_enum_type) |enum_name| {
                 break :blk self.typeNameToValueType(enum_name) catch .{ .primitive = .int };
             } else if (eu_info.success_primitive_type) |prim| {
@@ -8560,7 +8553,7 @@ pub const AstToIr = struct {
             try self.func().emitMemcpy(ir.toRawPtr(sret), ir.toRawPtr(result_typed.value), self.sret_size);
             try self.func().emitRet(sret);
         } else {
-            self.reportError(.E001, "try requires sret for error propagation");
+            self.reportError(.E001, "try requires sret for error propagation", @src());
             return error.SemanticError;
         }
 
@@ -8603,10 +8596,11 @@ pub const AstToIr = struct {
 
         fn initWithOptions(self_ir: *AstToIr, result_typed: TypedValue, is_success: ir.Value, error_block_name: []const u8, branch_to_merge: bool) ConvertError!TryOtherwiseContext {
             // Extract success type from error union
+            // Note: resolve type aliases (e.g., StringArray -> Array$String) before lookup
             const success_type: types.ValueType = if (result_typed.ty == .error_union_type) blk: {
                 const eu_info = result_typed.ty.error_union_type;
                 if (eu_info.success_struct_type) |struct_name| {
-                    break :blk self_ir.typeNameToValueType(struct_name) catch .{ .primitive = .int };
+                    break :blk self_ir.typeNameToValueType(self_ir.resolveTypeName(struct_name)) catch .{ .primitive = .int };
                 } else if (eu_info.success_enum_type) |enum_name| {
                     break :blk self_ir.typeNameToValueType(enum_name) catch .{ .primitive = .int };
                 } else if (eu_info.success_primitive_type) |prim| {
@@ -8621,7 +8615,7 @@ pub const AstToIr = struct {
             // Use helper to get struct size with automatic monomorphization
             const struct_size: i32 = if (is_struct_type) blk: {
                 break :blk self_ir.getStructSizeWithMonomorphization(success_type.struct_type.name) orelse {
-                    self_ir.reportInternalError("unknown struct type size in try-otherwise");
+                    self_ir.reportInternalError("unknown struct type size in try-otherwise", @src());
                     return error.SemanticError;
                 };
             } else 0;
@@ -8795,7 +8789,7 @@ pub const AstToIr = struct {
             const expected_name = ctx.success_type.getTypeName() orelse "unknown";
             const actual_name = default_typed.ty.getTypeName() orelse "unknown";
             const msg = std.fmt.allocPrint(self.allocator, "otherwise type '{s}' does not match expected type '{s}'", .{ actual_name, expected_name }) catch "type mismatch in otherwise";
-            self.reportErrorWithSuffix(.E022, msg, "K");
+            self.reportError(.E022, msg, @src());
             return error.SemanticError;
         }
 
@@ -8898,14 +8892,14 @@ pub const AstToIr = struct {
                             expected_name[explicit_name.len] == '$')
                         {
                             // E059: explicit type is redundant when it can be inferred
-                            self.reportError(.E059, explicit_name);
+                            self.reportError(.E059, explicit_name, @src());
                             return error.TypeMismatch;
                         }
                         // Check for exact or typealias match
                         const resolved_name = self.resolveTypeName(explicit_name);
                         if (std.mem.eql(u8, resolved_name, expected_name)) {
                             // E059: explicit type is redundant when it can be inferred
-                            self.reportError(.E059, explicit_name);
+                            self.reportError(.E059, explicit_name, @src());
                             return error.TypeMismatch;
                         }
                     }
@@ -8920,7 +8914,7 @@ pub const AstToIr = struct {
                 }
             }
             // No expected type or not a struct type - error
-            self.reportErrorWithSuffix(.E022, "anonymous struct literal requires type context", "L");
+            self.reportError(.E022, "anonymous struct literal requires type context", @src());
             return error.TypeMismatch;
         };
 
@@ -8956,14 +8950,14 @@ pub const AstToIr = struct {
                             expected_name[explicit_name.len] == '$')
                         {
                             // E059: explicit type is redundant when it can be inferred
-                            self.reportError(.E059, explicit_name);
+                            self.reportError(.E059, explicit_name, @src());
                             return error.TypeMismatch;
                         }
                         // Check for exact or typealias match
                         const resolved_name = self.resolveTypeName(explicit_name);
                         if (std.mem.eql(u8, resolved_name, expected_name)) {
                             // E059: explicit type is redundant when it can be inferred
-                            self.reportError(.E059, explicit_name);
+                            self.reportError(.E059, explicit_name, @src());
                             return error.TypeMismatch;
                         }
                     }
@@ -8978,7 +8972,7 @@ pub const AstToIr = struct {
                 }
             }
             // No expected type or not a struct type - error
-            self.reportErrorWithSuffix(.E022, "anonymous struct literal requires type context", "M");
+            self.reportError(.E022, "anonymous struct literal requires type context", @src());
             return error.TypeMismatch;
         };
         try self.initStructIntoResolved(sinit, dest_ptr, type_name);
@@ -9084,7 +9078,7 @@ pub const AstToIr = struct {
         // Only error if moving immutable value into mutable field
         if (!var_info.is_mutable and dest_is_mutable) {
             debug.astToIr("cannot move immutable variable '{s}' into mutable field\n", .{var_name});
-            self.reportError(.E010, var_name);
+            self.reportError(.E010, var_name, @src());
             return error.ImmutableMove;
         }
         var_info.markMoved(target_type, self.current_line);
@@ -9119,7 +9113,7 @@ pub const AstToIr = struct {
                 if (type_info_ptr.* == .enum_type) {
                     const enum_info = &type_info_ptr.enum_type;
                     const member_value = enum_info.members.get(faccess.field_name) orelse {
-                        self.reportError(.E034, faccess.field_name);
+                        self.reportError(.E034, faccess.field_name, @src());
                         return error.SemanticError;
                     };
                     const enum_ty = types.ValueType{ .enum_type = enum_info };
@@ -9172,7 +9166,7 @@ pub const AstToIr = struct {
                 };
             }
             std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
-            self.reportErrorWithSuffix(.E006, faccess.field_name, "AD");
+            self.reportError(.E006, faccess.field_name, @src());
             return error.UnknownType;
         }
 
@@ -9180,7 +9174,7 @@ pub const AstToIr = struct {
             .struct_type => |struct_info| struct_info.name,
             .primitive, .enum_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
-                self.reportErrorWithSuffix(.E006, faccess.field_name, "AE");
+                self.reportError(.E006, faccess.field_name, @src());
                 return error.UnknownType;
             },
         };
@@ -9192,10 +9186,10 @@ pub const AstToIr = struct {
         const is_inside_type = self.current_type_name != null and std.mem.eql(u8, self.current_type_name.?, type_name);
         if (!field_info.is_export and !is_inside_type) {
             const msg = std.fmt.allocPrint(self.allocator, "{s}' outside of type '{s}", .{ faccess.field_name, type_name }) catch {
-                self.reportError(.E050, faccess.field_name);
+                self.reportError(.E050, faccess.field_name, @src());
                 return error.SemanticError;
             };
-            self.reportError(.E050, msg);
+            self.reportError(.E050, msg, @src());
             return error.SemanticError;
         }
 
@@ -9214,12 +9208,12 @@ pub const AstToIr = struct {
     fn convertEnumCase(self: *AstToIr, ec: ast.EnumCaseExpr) ConvertError!TypedValue {
         // Look up enum type
         const type_info_ptr = self.type_map.getPtr(ec.enum_name) orelse {
-            self.reportErrorWithSuffix(.E006, ec.enum_name, "AF");
+            self.reportError(.E006, ec.enum_name, @src());
             return error.UnknownType;
         };
 
         if (type_info_ptr.* != .enum_type) {
-            self.reportErrorWithSuffix(.E006, ec.enum_name, "AG");
+            self.reportError(.E006, ec.enum_name, @src());
             return error.UnknownType;
         }
 
@@ -9228,14 +9222,14 @@ pub const AstToIr = struct {
 
         // Get case info
         const case_info = enum_info.case_info.get(ec.case_name) orelse {
-            self.reportError(.E034, ec.case_name);
+            self.reportError(.E034, ec.case_name, @src());
             return error.SemanticError;
         };
 
         // Validate argument count
         if (ec.args.len != case_info.associated_values.len) {
             const msg = std.fmt.allocPrint(self.allocator, "expected {d}, got {d}", .{ case_info.associated_values.len, ec.args.len }) catch "wrong argument count";
-            self.reportError(.E011, msg);
+            self.reportError(.E011, msg, @src());
             return error.WrongArgumentCount;
         }
 
@@ -9298,7 +9292,7 @@ pub const AstToIr = struct {
             if (actual_type) |actual| {
                 if (!self.areTypesEquivalent(actual, expected_type)) {
                     const msg = std.fmt.allocPrint(self.allocator, "expected {s}, got {s}", .{ expected_type, actual }) catch "type mismatch";
-                    self.reportErrorWithSuffix(.E022, msg, "N");
+                    self.reportError(.E022, msg, @src());
                     return error.TypeMismatch;
                 }
             }
@@ -9347,7 +9341,7 @@ pub const AstToIr = struct {
         const is_builtin = std.mem.eql(u8, func_name, "print");
         if (!is_intrinsic and !is_builtin and positional_args.len > 1) {
             const msg = std.fmt.allocPrint(self.allocator, "Second and subsequent arguments must be named. Use 'name: value' syntax", .{}) catch {
-                self.reportError(.E052, func_name);
+                self.reportError(.E052, func_name, @src());
                 return error.WrongArgumentCount;
             };
             self.last_error = .{
@@ -9398,13 +9392,13 @@ pub const AstToIr = struct {
             }
 
             if (found_idx == null) {
-                self.reportError(.E045, named.name);
+                self.reportError(.E045, named.name, @src());
                 return error.UnknownParameter;
             }
 
             const idx = found_idx.?;
             if (filled[idx]) {
-                self.reportError(.E047, named.name);
+                self.reportError(.E047, named.name, @src());
                 return error.DuplicateArgument;
             }
 
@@ -9422,7 +9416,7 @@ pub const AstToIr = struct {
                         param.name,
                         func_name,
                     }) catch {
-                        self.reportError(.E049, param.name);
+                        self.reportError(.E049, param.name, @src());
                         return error.MissingArgument;
                     };
                     self.last_error = .{
@@ -9485,7 +9479,7 @@ pub const AstToIr = struct {
 
         const func_info = self.func_map.get(call.func_name) orelse {
             // Report undefined function error immediately with location
-            self.reportError(.E024, call.func_name);
+            self.reportError(.E024, call.func_name, @src());
             return error.UnknownFunction;
         };
 
@@ -9507,7 +9501,7 @@ pub const AstToIr = struct {
 
         // Validate that throwing functions are called within try context
         if (returns_error_union and !self.in_try_context) {
-            self.reportError(.E057, call.func_name);
+            self.reportError(.E057, call.func_name, @src());
             return error.SemanticError;
         }
 
@@ -9529,7 +9523,7 @@ pub const AstToIr = struct {
                 // Error union size = 8 (tag) + max(success_size, error_size)
                 const eu_info = func_info.return_value_type.?.error_union_type;
                 const success_size = self.getErrorUnionSuccessSize(eu_info) orelse {
-                    self.reportInternalError("unknown error union success type size");
+                    self.reportInternalError("unknown error union success type size", @src());
                     return error.SemanticError;
                 };
                 // Error enums are always 8 bytes (i64 ordinal)
@@ -9637,7 +9631,7 @@ pub const AstToIr = struct {
         // Check argument count
         if (call.args.len != func_type_info.param_types.len) {
             const msg = std.fmt.allocPrint(self.allocator, "expected {d} arguments, got {d}", .{ func_type_info.param_types.len, call.args.len }) catch "wrong number of arguments";
-            self.reportError(.E008, msg);
+            self.reportError(.E008, msg, @src());
             return error.WrongArgumentCount;
         }
 
@@ -9702,7 +9696,7 @@ pub const AstToIr = struct {
 
         if (!var_info.is_mutable) {
             debug.astToIr("cannot move immutable variable '{s}'\n", .{var_name});
-            self.reportError(.E010, var_name);
+            self.reportError(.E010, var_name, @src());
             return error.ImmutableMove;
         }
 
@@ -9789,7 +9783,7 @@ pub const AstToIr = struct {
             const keys_array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{keys_array_type_name});
             try self.module.trackString(keys_array_init_name);
             const keys_array_func_info = self.func_map.get(keys_array_init_name) orelse {
-                self.reportInternalError("Array init not found for InitableFromDictionaryLiteral keys");
+                self.reportInternalError("Array init not found for InitableFromDictionaryLiteral keys", @src());
                 return error.UnknownFunction;
             };
 
@@ -9798,7 +9792,7 @@ pub const AstToIr = struct {
             }
 
             const keys_array_type_info = self.type_map.get(keys_array_type_name) orelse {
-                self.reportErrorWithSuffix(.E006, keys_array_type_name, "AH");
+                self.reportError(.E006, keys_array_type_name, @src());
                 return error.UnknownType;
             };
 
@@ -9808,7 +9802,7 @@ pub const AstToIr = struct {
             const values_array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{values_array_type_name});
             try self.module.trackString(values_array_init_name);
             const values_array_func_info = self.func_map.get(values_array_init_name) orelse {
-                self.reportInternalError("Array init not found for InitableFromDictionaryLiteral values");
+                self.reportInternalError("Array init not found for InitableFromDictionaryLiteral values", @src());
                 return error.UnknownFunction;
             };
 
@@ -9817,7 +9811,7 @@ pub const AstToIr = struct {
             }
 
             const values_array_type_info = self.type_map.get(values_array_type_name) orelse {
-                self.reportErrorWithSuffix(.E006, values_array_type_name, "AI");
+                self.reportError(.E006, values_array_type_name, @src());
                 return error.UnknownType;
             };
 
@@ -9848,7 +9842,7 @@ pub const AstToIr = struct {
         // Look up the function and type info
         const func_info = self.func_map.get(init_func_name) orelse {
             const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method for InitableFromDictionaryLiteral", .{type_name}) catch "missing init method";
-            self.reportInternalError(msg);
+            self.reportInternalError(msg, @src());
             return error.UnknownFunction;
         };
 
@@ -9858,7 +9852,7 @@ pub const AstToIr = struct {
         }
 
         const type_info = self.type_map.get(type_name) orelse {
-            self.reportErrorWithSuffix(.E006, type_name, "AJ");
+            self.reportError(.E006, type_name, @src());
             return error.UnknownType;
         };
 
@@ -9936,7 +9930,7 @@ pub const AstToIr = struct {
     /// Returns the pointer to the allocated wrapper struct.
     fn emitWrapperFromManaged(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr, wrapper: LiteralWrapperType) ConvertError!ir.Value {
         const type_info = self.type_map.get(wrapper.typeName()) orelse {
-            self.reportErrorWithSuffix(.E006, wrapper.typeName(), "AK");
+            self.reportError(.E006, wrapper.typeName(), @src());
             return error.UnknownType;
         };
         const wrapper_ptr = try self.func().emitAllocaSized(type_info.struct_type.size);
@@ -9948,7 +9942,7 @@ pub const AstToIr = struct {
     fn emitWrapperInitIntoPtr(self: *AstToIr, dest_ptr: ir.Value, managed_ptr: ir.ManagedMemoryPtr, wrapper: LiteralWrapperType) ConvertError!void {
         const init_name = wrapper.initFuncName();
         const func_info = self.func_map.get(init_name) orelse {
-            self.reportInternalError(init_name);
+            self.reportInternalError(init_name, @src());
             return error.UnknownFunction;
         };
 
@@ -9970,7 +9964,7 @@ pub const AstToIr = struct {
 
         const func_info = self.func_map.get(init_func_name) orelse {
             const msg = std.fmt.allocPrint(self.allocator, "type '{s}' missing init method", .{type_name}) catch "missing init method";
-            self.reportInternalError(msg);
+            self.reportInternalError(msg, @src());
             return error.UnknownFunction;
         };
 
@@ -9979,7 +9973,7 @@ pub const AstToIr = struct {
         }
 
         const type_info_ptr = self.type_map.getPtr(type_name) orelse {
-            self.reportErrorWithSuffix(.E006, type_name, "AL");
+            self.reportError(.E006, type_name, @src());
             return error.UnknownType;
         };
 
@@ -10084,7 +10078,7 @@ pub const AstToIr = struct {
 
         // Only struct types implementing Indexed or __ManagedMemory support indexing
         std.debug.print("[AST->IR] convertIndexExpr: type does not support indexing\n", .{});
-        self.reportErrorWithSuffix(.E006, "type does not support indexing (does not implement Indexed interface)", "AM");
+        self.reportError(.E006, "type does not support indexing (does not implement Indexed interface)", @src());
         return error.UnknownType;
     }
 
@@ -10133,7 +10127,7 @@ pub const AstToIr = struct {
 
         const func_info = func_info_opt orelse {
             debug.astToIr("error: unknown method '{s}' on type '{s}'", .{ method_name, type_name });
-            self.reportErrorWithSuffix(.E003, mangled_name, "M");
+            self.reportError(.E003, mangled_name, @src());
             return error.SemanticError;
         };
 
@@ -10146,7 +10140,7 @@ pub const AstToIr = struct {
                     expected_args,
                     call_args.len(),
                 }) catch {
-                    self.reportError(.E011, method_name);
+                    self.reportError(.E011, method_name, @src());
                     return error.WrongArgumentCount;
                 };
                 self.last_error = .{
@@ -10176,7 +10170,7 @@ pub const AstToIr = struct {
 
         // Validate that throwing methods are called within try context
         if (returns_error_union and !self.in_try_context) {
-            self.reportError(.E057, method_name);
+            self.reportError(.E057, method_name, @src());
             return error.SemanticError;
         }
 
@@ -10202,7 +10196,7 @@ pub const AstToIr = struct {
                 // Error union size = 8 (tag) + max(success_size, error_size)
                 const eu_info = func_info.return_value_type.?.error_union_type;
                 const success_size = self.getErrorUnionSuccessSize(eu_info) orelse {
-                    self.reportInternalError("unknown error union success type size");
+                    self.reportInternalError("unknown error union success type size", @src());
                     return error.SemanticError;
                 };
                 // Error enums are always 8 bytes (i64 ordinal)
@@ -10338,7 +10332,7 @@ pub const AstToIr = struct {
 
         const func_info = self.func_map.get(mangled_name) orelse {
             debug.astToIr("error: unknown method '{s}' on type '{s}'", .{ method_name, type_name });
-            self.reportErrorWithSuffix(.E003, mangled_name, "N");
+            self.reportError(.E003, mangled_name, @src());
             return error.SemanticError;
         };
 
@@ -10374,7 +10368,7 @@ pub const AstToIr = struct {
             .struct_type => |struct_info| struct_info.name,
             .primitive, .enum_type, .error_union_type, .function_type => {
                 debug.astToIr("error: method call on non-struct type", .{});
-                self.reportErrorWithSuffix(.E003, method_name, "O");
+                self.reportError(.E003, method_name, @src());
                 return error.SemanticError;
             },
         };
@@ -10433,7 +10427,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: method call on non-struct type", .{});
-        self.reportErrorWithSuffix(.E003, mcall.method_name, "P");
+        self.reportError(.E003, mcall.method_name, @src());
         return error.SemanticError;
     }
 
@@ -10453,7 +10447,7 @@ pub const AstToIr = struct {
             return self.emitPrimitiveHash(base_typed.value, prim);
         } else if (std.mem.eql(u8, method_name, "equals")) {
             if (arg_exprs.len != 1) {
-                self.reportError(.E011, "equals() requires exactly 1 argument");
+                self.reportError(.E011, "equals() requires exactly 1 argument", @src());
                 return error.WrongArgumentCount;
             }
             const other = try self.convertExpression(arg_exprs[0]);
@@ -10461,7 +10455,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: unknown method '{s}' on primitive type '{s}'", .{ method_name, prim.toMaxonName() });
-        self.reportErrorWithSuffix(.E003, method_name, "Q");
+        self.reportError(.E003, method_name, @src());
         return error.SemanticError;
     }
 
@@ -10504,7 +10498,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: hash not supported for type '{s}'", .{prim.toMaxonName()});
-        self.reportErrorWithSuffix(.E003, prim.toMaxonName(), "R");
+        self.reportError(.E003, prim.toMaxonName(), @src());
         return error.SemanticError;
     }
 
@@ -10521,7 +10515,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: equals not supported for type '{s}'", .{prim.toMaxonName()});
-        self.reportErrorWithSuffix(.E003, prim.toMaxonName(), "S");
+        self.reportError(.E003, prim.toMaxonName(), @src());
         return error.SemanticError;
     }
 };
@@ -10656,7 +10650,7 @@ pub fn convertWithExternals(
             for (ext_types) |ext_type| {
                 if (!converter.type_map.contains(ext_type.name)) {
                     debug.astToIr("Failed to register external type '{s}' after {d} passes", .{ ext_type.name, pass });
-                    converter.reportErrorWithSuffix(.E006, ext_type.name, "AN");
+                    converter.reportError(.E006, ext_type.name, @src());
                     if (converter.last_error) |le| {
                         out_error.* = copyErrorWithOwnedPath(allocator, le);
                     }
@@ -11139,13 +11133,13 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ConvertErr
     // Empty map literals require type annotation (cannot infer types)
     if (entries.len == 0) {
         debug.astToIr("error: empty map literal requires type annotation", .{});
-        self.reportErrorWithSuffix(.E006, "empty map literal requires type annotation", "AO");
+        self.reportError(.E006, "empty map literal requires type annotation", @src());
         return error.UnknownType;
     }
 
     // Find the type that implements BuiltinDictionaryLiteral interface
     const base_type_name = self.findDefaultLiteralType("BuiltinDictionaryLiteral") orelse {
-        self.reportErrorWithSuffix(.E006, "no type implements BuiltinDictionaryLiteral interface for map literals", "AP");
+        self.reportError(.E006, "no type implements BuiltinDictionaryLiteral interface for map literals", @src());
         return error.SemanticError;
     };
 
@@ -11155,12 +11149,12 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ConvertErr
 
     const key_type_name = first_key_typed.ty.getTypeName() orelse {
         debug.astToIr("error: map key type must be a named type (primitive or struct)", .{});
-        self.reportErrorWithSuffix(.E006, "map key type must be a named type", "AQ");
+        self.reportError(.E006, "map key type must be a named type", @src());
         return error.UnknownType;
     };
     const value_type_name = first_value_typed.ty.getTypeName() orelse {
         debug.astToIr("error: map value type must be a named type (primitive or struct)", .{});
-        self.reportErrorWithSuffix(.E006, "map value type must be a named type", "AR");
+        self.reportError(.E006, "map value type must be a named type", @src());
         return error.UnknownType;
     };
 
@@ -11223,7 +11217,7 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ConvertErr
     // Look up function and type info
     const func_info = self.func_map.get(init_func_name) orelse {
         const msg = std.fmt.allocPrint(self.allocator, "Map type '{s}' missing $init method", .{map_type_name}) catch "missing init method";
-        self.reportInternalError(msg);
+        self.reportInternalError(msg, @src());
         return error.UnknownFunction;
     };
 
@@ -11233,7 +11227,7 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ConvertErr
     }
 
     const type_info = self.type_map.get(map_type_name) orelse {
-        self.reportErrorWithSuffix(.E006, map_type_name, "AS");
+        self.reportError(.E006, map_type_name, @src());
         return error.UnknownType;
     };
 

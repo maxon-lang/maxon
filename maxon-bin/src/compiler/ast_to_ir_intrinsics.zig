@@ -23,7 +23,7 @@ const DeferredBlocks = ast_to_ir.DeferredBlocks;
 /// Validate argument count and report error if mismatch
 fn expectArgCount(self: *AstToIr, call: ast.CallExpr, expected: usize) ConvertError!void {
     if (call.args.len != expected) {
-        self.reportError(.E011, call.func_name);
+        self.reportError(.E011, call.func_name, @src());
         return error.WrongArgumentCount;
     }
 }
@@ -196,7 +196,7 @@ pub fn isInternalType(type_name: []const u8) bool {
 /// Check if internal type access is allowed, returns error if not
 pub fn checkInternalTypeAccess(self: *AstToIr, type_name: []const u8) ConvertError!void {
     if (isInternalType(type_name) and !isStdlibFile(self)) {
-        self.reportError(.E018, type_name);
+        self.reportError(.E018, type_name, @src());
         return error.SemanticError;
     }
 }
@@ -206,7 +206,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     if (intrinsics_registry.findCategory(call.func_name)) |category| {
         // Enforce visibility
         if (category.visibility == .stdlib_only and !isStdlibFile(self)) {
-            self.reportError(.E016, call.func_name);
+            self.reportError(.E016, call.func_name, @src());
             return error.SemanticError;
         }
 
@@ -226,7 +226,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
     const builtin = intrinsics_registry.isMathBuiltin(call.func_name) orelse return error.NotABuiltin;
 
     if (call.args.len != 1) {
-        self.reportError(.E011, call.func_name);
+        self.reportError(.E011, call.func_name, @src());
         return error.WrongArgumentCount;
     }
 
@@ -241,7 +241,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
             break :blk self.func().emitUnaryOp(.sitofp, arg.value, .f64) catch return error.OutOfMemory;
         }
         const msg = std.fmt.allocPrint(self.allocator, "{s}() requires {s} argument", .{ call.func_name, arg_ir_type.toMaxonName() }) catch call.func_name;
-        self.reportErrorWithSuffix(.E022, msg, "A");
+        self.reportError(.E022, msg, @src());
         return error.TypeMismatch;
     } else arg.value;
 
@@ -302,12 +302,12 @@ fn getElementInfoForParam(self: *AstToIr, param_name: []const u8) ConvertError!E
         if (types.getPrimitiveTypeInfo(elem_type_name)) |prim_info| {
             return .{ .size = prim_info.array_element_size, .is_struct = false, .is_enum = false, .type_name = elem_type_name };
         }
-        self.reportInternalError("unknown element type in array intrinsic");
+        self.reportInternalError("unknown element type in array intrinsic", @src());
         return error.SemanticError;
     }
 
     // Cannot determine element type - this is a compiler error
-    self.reportInternalError("cannot determine array element type - missing generic param");
+    self.reportInternalError("cannot determine array element type - missing generic param", @src());
     return error.SemanticError;
 }
 
@@ -419,7 +419,7 @@ fn dispatchIntrinsic(self: *AstToIr, call: ast.CallExpr, comptime table: anytype
             return entry[1](self, call);
         }
     }
-    self.reportError(.E019, call.func_name);
+    self.reportError(.E019, call.func_name, @src());
     return error.SemanticError;
 }
 
@@ -630,7 +630,7 @@ fn intrinsicManagedMemoryGetUnchecked(self: *AstToIr, call: ast.CallExpr) Conver
     const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buf_ptr), index.value, elem_info.size);
 
     const type_name = elem_info.type_name orelse {
-        self.reportInternalError("element type name not set in array get intrinsic");
+        self.reportInternalError("element type name not set in array get intrinsic", @src());
         return error.SemanticError;
     };
 
@@ -648,7 +648,7 @@ fn intrinsicManagedMemoryGetUnchecked(self: *AstToIr, call: ast.CallExpr) Conver
         const elem_val = try self.func().emitLoad(elem_ptr.raw(), .i64);
         return .{ .value = elem_val, .ty = .{ .primitive = types.Primitive.fromString(type_name) orelse .int } };
     } else {
-        self.reportInternalError("unsupported element size in array get intrinsic");
+        self.reportInternalError("unsupported element size in array get intrinsic", @src());
         return error.SemanticError;
     }
 }

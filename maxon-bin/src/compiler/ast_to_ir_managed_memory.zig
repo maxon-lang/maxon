@@ -491,7 +491,7 @@ pub fn emitManagedMemoryFromStaticBytes(self: *AstToIr, str_bytes: []const u8) !
 /// Returns an uninitialized pointer that can be passed to functions.
 pub fn emitTypeAlloca(self: *AstToIr, type_name: []const u8) !ir.RawPtr {
     const type_info = self.type_map.get(type_name) orelse {
-        self.reportInternalError(type_name);
+        self.reportInternalError(type_name, @src());
         return error.UnknownType;
     };
     return self.func().emitAllocaSized(type_info.struct_type.size);
@@ -669,10 +669,10 @@ pub fn convertManagedMemoryIndex(self: *AstToIr, managed_ptr: ir.Value, index_ex
         if (types.getPrimitiveTypeInfo(tn)) |prim_info| {
             break :blk ElemInfo{ .size = prim_info.array_element_size, .is_struct = false, .name = tn };
         }
-        self.reportInternalError("unknown element type in array index");
+        self.reportInternalError("unknown element type in array index", @src());
         return error.SemanticError;
     } else {
-        self.reportInternalError("cannot determine array element type - missing type context");
+        self.reportInternalError("cannot determine array element type - missing type context", @src());
         return error.SemanticError;
     };
 
@@ -796,7 +796,7 @@ pub fn convertIndexedGet(self: *AstToIr, base_typed: TypedValue, index_expr: ast
 
     const func_info = self.func_map.get(mangled_name) orelse {
         const msg = std.fmt.allocPrint(self.allocator, "Indexed type '{s}' missing 'get' method", .{type_name}) catch "Indexed type missing get method";
-        self.reportInternalError(msg);
+        self.reportInternalError(msg, @src());
         return error.SemanticError;
     };
 
@@ -808,7 +808,7 @@ pub fn convertIndexedGet(self: *AstToIr, base_typed: TypedValue, index_expr: ast
     // The get method returns Element throws ArrayError (an error union)
     // Args: sret_ptr, self_ptr, index
     const return_type = func_info.return_value_type orelse {
-        self.reportInternalError("get method has no return type");
+        self.reportInternalError("get method has no return type", @src());
         return error.SemanticError;
     };
 
@@ -816,7 +816,7 @@ pub fn convertIndexedGet(self: *AstToIr, base_typed: TypedValue, index_expr: ast
     const sret_size: i32 = if (return_type == .error_union_type) blk: {
         const eu_info = return_type.error_union_type;
         const success_size = self.getErrorUnionSuccessSize(eu_info) orelse {
-            self.reportInternalError("unknown error union success type size");
+            self.reportInternalError("unknown error union success type size", @src());
             return error.SemanticError;
         };
         const error_size: i32 = 8; // Error enums are always 8 bytes
@@ -853,7 +853,7 @@ pub fn convertIndexedSet(self: *AstToIr, base_typed: TypedValue, index_expr: ast
 
     const func_info = self.func_map.get(mangled_name) orelse {
         const msg = std.fmt.allocPrint(self.allocator, "Indexed type '{s}' missing 'set' method", .{type_name}) catch "Indexed type missing set method";
-        self.reportInternalError(msg);
+        self.reportInternalError(msg, @src());
         return error.SemanticError;
     };
 
@@ -937,7 +937,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
         const array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
         try self.module.trackString(array_init_name);
         const array_func_info = self.func_map.get(array_init_name) orelse {
-            self.reportInternalError("Array init not found for InitableFromArrayLiteral");
+            self.reportInternalError("Array init not found for InitableFromArrayLiteral", @src());
             return error.UnknownFunction;
         };
 
@@ -947,7 +947,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
 
         // Get Array type info for size
         const array_type_info = self.type_map.get(array_type_name) orelse {
-            self.reportErrorWithSuffix(.E006, array_type_name, "A");
+            self.reportError(.E006, array_type_name, @src());
             return error.UnknownType;
         };
 
@@ -968,7 +968,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
 
     // Look up the function and type info
     const func_info = self.func_map.get(init_func_name) orelse {
-        self.reportErrorWithSuffix(.E003, init_func_name, "A");
+        self.reportError(.E003, init_func_name, @src());
         return error.UnknownFunction;
     };
 
@@ -978,7 +978,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
     }
 
     const type_info = self.type_map.get(type_name) orelse {
-        self.reportErrorWithSuffix(.E006, type_name, "B");
+        self.reportError(.E006, type_name, @src());
         return error.UnknownType;
     };
 
@@ -1028,7 +1028,7 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
 
     // Find the type that implements BuiltinArrayLiteral interface
     const base_type_name = self.findDefaultLiteralType("BuiltinArrayLiteral") orelse {
-        self.reportErrorWithSuffix(.E006, "no type implements BuiltinArrayLiteral interface for array literals", "C");
+        self.reportError(.E006, "no type implements BuiltinArrayLiteral interface for array literals", @src());
         return error.SemanticError;
     };
 
@@ -1047,7 +1047,7 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
         try self.module.trackString(init_func_name);
 
         const func_info = self.func_map.get(init_func_name) orelse {
-            self.reportInternalError("Array init not found for empty array literal");
+            self.reportInternalError("Array init not found for empty array literal", @src());
             return error.UnknownFunction;
         };
 
@@ -1088,14 +1088,14 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
     // Primitives use their array element size (byte=1, others=8)
     const elem_size: i64 = if (elem_struct_type) |struct_name| blk: {
         const size = self.getStructSizeWithMonomorphization(struct_name) orelse {
-            self.reportInternalError("unknown struct size in array literal");
+            self.reportInternalError("unknown struct size in array literal", @src());
             return error.SemanticError;
         };
         break :blk @intCast(size);
     } else blk: {
         // Must have a primitive type
         const prim = elem_primitive_type orelse {
-            self.reportInternalError("cannot determine element type in array literal");
+            self.reportInternalError("cannot determine element type in array literal", @src());
             return error.SemanticError;
         };
         break :blk prim.arrayElementSize();
@@ -1156,7 +1156,7 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
     try self.module.trackString(init_func_name);
 
     const func_info = self.func_map.get(init_func_name) orelse {
-        self.reportInternalError("Array init not found for array literal");
+        self.reportInternalError("Array init not found for array literal", @src());
         return error.UnknownFunction;
     };
 
@@ -1204,7 +1204,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
         const first_typed = try self.convertExpression(elements[0]);
         elem_type_name = first_typed.ty.getTypeName() orelse {
             debug.astToIr("error: element type must be a named type", .{});
-            self.reportErrorWithSuffix(.E006, "element type must be a named type", "D");
+            self.reportError(.E006, "element type must be a named type", @src());
             return error.UnknownType;
         };
 
@@ -1212,7 +1212,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
         const elem_count = try self.func().emitConstI64(@intCast(elements.len));
         // Get element size - must be a known primitive type
         const prim_info = types.getPrimitiveTypeInfo(elem_type_name) orelse {
-            self.reportInternalError("unknown primitive type in init from array");
+            self.reportInternalError("unknown primitive type in init from array", @src());
             return error.SemanticError;
         };
         const elem_size: i64 = prim_info.array_element_size;
@@ -1242,7 +1242,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
     const array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
     try self.module.trackString(array_init_name);
     const array_func_info = self.func_map.get(array_init_name) orelse {
-        self.reportInternalError("Array init not found for InitableFromArrayLiteral");
+        self.reportInternalError("Array init not found for InitableFromArrayLiteral", @src());
         return error.UnknownFunction;
     };
 
@@ -1252,7 +1252,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
 
     // Get Array type info for size
     const array_type_info = self.type_map.get(array_type_name) orelse {
-        self.reportErrorWithSuffix(.E006, array_type_name, "E");
+        self.reportError(.E006, array_type_name, @src());
         return error.UnknownType;
     };
 
@@ -1271,7 +1271,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
     // Look up function and type info
     const func_info = self.func_map.get(init_func_name) orelse {
         const msg = std.fmt.allocPrint(self.allocator, "Type '{s}' missing init method for InitableFromArrayLiteral", .{target_type_name}) catch "missing init method";
-        self.reportInternalError(msg);
+        self.reportInternalError(msg, @src());
         return error.UnknownFunction;
     };
 
@@ -1281,7 +1281,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
     }
 
     const type_info = self.type_map.get(target_type_name) orelse {
-        self.reportErrorWithSuffix(.E006, target_type_name, "F");
+        self.reportError(.E006, target_type_name, @src());
         return error.UnknownType;
     };
 

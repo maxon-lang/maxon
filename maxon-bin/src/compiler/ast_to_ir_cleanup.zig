@@ -78,7 +78,7 @@ pub fn checkManagedNotBorrowed(self: *AstToIr, var_name: []const u8) ConvertErro
     if (self.var_map.get(var_name)) |var_info| {
         if (var_info.ty == .struct_type and var_info.ty.struct_type.has_managed_buffer and var_info.borrow_state == .borrowed) {
             const msg = std.fmt.allocPrint(self.allocator, "Cannot modify '{s}' while it is borrowed", .{var_name}) catch {
-                self.reportError(.E020, var_name);
+                self.reportError(.E020, var_name, @src());
                 return error.SemanticError;
             };
             self.last_error = .{
@@ -100,7 +100,7 @@ pub fn checkNoOutstandingBorrows(self: *AstToIr) ConvertError!void {
         const var_info = entry.value_ptr.*;
         if (var_info.ty == .struct_type and var_info.ty.struct_type.has_managed_buffer and var_info.borrow_state == .borrowed) {
             const msg = std.fmt.allocPrint(self.allocator, "Variable '{s}' goes out of scope while still borrowed", .{entry.key_ptr.*}) catch {
-                self.reportError(.E021, entry.key_ptr.*);
+                self.reportError(.E021, entry.key_ptr.*, @src());
                 return error.SemanticError;
             };
             self.last_error = .{

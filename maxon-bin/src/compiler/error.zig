@@ -61,26 +61,6 @@ fn normalizePath(path: []const u8, buf: []u8) []const u8 {
 }
 
 /// Error codes for the Maxon compiler
-///
-/// Error Code Suffix Mapping
-/// =========================
-/// Some error codes appear in multiple places. Each call site is assigned a unique suffix
-/// to help identify exactly where the error originated.
-///
-/// E003 (expected expression) - 63 call sites:
-///   A: ast_to_ir_managed_memory.zig:971 - init function lookup
-///   B-S: 4-ast_to_ir.zig - constant evaluation, field access, method lookup (18 sites)
-///   T-BK: 2-parser.zig - expression parsing in various contexts (44 sites)
-///
-/// E006 (unknown type) - 45 call sites:
-///   A-F: ast_to_ir_managed_memory.zig - managed memory type lookups (6 sites)
-///   G-AS: 4-ast_to_ir.zig - type resolution in various contexts (39 sites)
-///
-/// E022 (type mismatch) - 14 call sites:
-///   A: ast_to_ir_intrinsics.zig:244 - intrinsic type mismatch
-///   B-N: 4-ast_to_ir.zig - assignment, comparison, and struct literal type checks (13 sites)
-///
-/// Other error codes with multiple uses may be assigned suffixes in the future.
 pub const ErrorCode = enum {
     E001,
     E002,
@@ -231,14 +211,15 @@ pub const CompileError = struct {
     message: []const u8,
     location: SourceLocation,
     message_allocated: bool = false,
-    suffix: ?[]const u8 = null,
+    caller_location: ?std.builtin.SourceLocation = null,
 
-    /// Format error message: "error E001: file.maxon:10:5: message"
+    /// Format error message: "error E001(file:line): file.maxon:10:5: message"
     /// or for internal errors: "internal error: file.maxon:10:5: message"
     pub fn print(self: CompileError, writer: anytype) !void {
         if (self.code) |code| {
-            if (self.suffix) |suffix| {
-                try writer.print("error {s}:{s}: ", .{ code.format(), suffix });
+            if (self.caller_location) |loc| {
+                const filename = std.fs.path.basename(loc.file);
+                try writer.print("error {s}({s}:{d}): ", .{ code.format(), filename, loc.line });
             } else {
                 try writer.print("error {s}: ", .{code.format()});
             }
@@ -256,8 +237,9 @@ pub const CompileError = struct {
     /// Format error message to stderr
     pub fn printToStderr(self: CompileError) void {
         if (self.code) |code| {
-            if (self.suffix) |suffix| {
-                std.debug.print("error {s}:{s}: ", .{ code.format(), suffix });
+            if (self.caller_location) |loc| {
+                const filename = std.fs.path.basename(loc.file);
+                std.debug.print("error {s}({s}:{d}): ", .{ code.format(), filename, loc.line });
             } else {
                 std.debug.print("error {s}: ", .{code.format()});
             }
