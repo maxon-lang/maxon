@@ -17,10 +17,12 @@ The most common internal type is `__ManagedMemory`, which provides the underlyin
 
 ### Using Arrays in User Code
 
-User code should use the public `Array` type from the standard library:
+User code should use the public `Array` type from the standard library with a type alias:
 
 ```text
-var arr = Array of int{}
+type IntArray is Array with int
+
+var arr = IntArray{}
 arr.push(42)
 print(arr.count())
 ```
@@ -31,8 +33,10 @@ The internal `__ManagedMemory` type is used internally by the `Array` implementa
 
 <!-- test: array-public-api -->
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(10)
     arr.push(20)
     arr.push(30)

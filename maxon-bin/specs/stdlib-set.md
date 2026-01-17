@@ -15,9 +15,10 @@ The `Set` type is a generic hash set that stores unique elements.
 
 ### Creating Sets
 
-Create an empty set:
+Create an empty set with a type alias:
 ```text
-var s = Set of int{}
+type IntSet is Set with int
+var s = IntSet{}
 ```
 
 Create a set from an array literal:
@@ -29,7 +30,9 @@ var s = Set from [1, 2, 3]
 
 Use `insert` to add elements:
 ```text
-var s = Set of int{}
+type IntSet is Set with int
+
+var s = IntSet{}
 s.insert(10)
 s.insert(20)
 ```
@@ -68,8 +71,10 @@ var cap = s.capacity      // Current capacity (accessed via field, not method)
 Create an empty set and verify it starts empty.
 
 ```maxon
+type IntSet is Set with int
+
 function main() returns int
-    var s = Set of int{}
+    var s = IntSet{}
     if s.count() != 0 'check'
         return 1
     end 'check'
@@ -84,8 +89,10 @@ end 'main'
 Insert a single element and check count.
 
 ```maxon
+type IntSet is Set with int
+
 function main() returns int
-    var s = Set of int{}
+    var s = IntSet{}
     s.insert(42)
     if s.count() != 1 'check'
         return 1
@@ -101,8 +108,10 @@ end 'main'
 Insert multiple elements and verify count.
 
 ```maxon
+type IntSet is Set with int
+
 function main() returns int
-    var s = Set of int{}
+    var s = IntSet{}
     s.insert(10)
     s.insert(20)
     s.insert(30)
@@ -120,8 +129,10 @@ end 'main'
 Inserting duplicate should not increase count.
 
 ```maxon
+type IntSet is Set with int
+
 function main() returns int
-    var s = Set of int{}
+    var s = IntSet{}
     s.insert(42)
     s.insert(42)
     s.insert(42)
@@ -139,8 +150,10 @@ end 'main'
 Check contains returns true for present element.
 
 ```maxon
+type IntSet is Set with int
+
 function main() returns int
-    var s = Set of int{}
+    var s = IntSet{}
     s.insert(42)
     if s.contains(42) == false 'check'
         return 1
@@ -156,8 +169,10 @@ end 'main'
 Check contains returns false for absent element.
 
 ```maxon
+type IntSet is Set with int
+
 function main() returns int
-    var s = Set of int{}
+    var s = IntSet{}
     s.insert(42)
     if s.contains(99) == true 'check'
         return 1
@@ -173,8 +188,10 @@ end 'main'
 Remove an element and verify it's gone.
 
 ```maxon
+type IntSet is Set with int
+
 function main() returns int
-    var s = Set of int{}
+    var s = IntSet{}
     s.insert(42)
     var removed = s.remove(42)
     if removed == false 'check1'
@@ -197,8 +214,10 @@ end 'main'
 Remove returns false for absent element.
 
 ```maxon
+type IntSet is Set with int
+
 function main() returns int
-    var s = Set of int{}
+    var s = IntSet{}
     s.insert(42)
     var removed = s.remove(99)
     if removed == true 'check'

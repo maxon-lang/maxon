@@ -49,60 +49,6 @@ export function utf8IsAscii(b byte) returns bool
 	return b < 128
 end 'utf8IsAscii'
 
-/// Count the number of UTF-8 codepoints in a byte array
-/// This counts lead bytes only (skips continuation bytes)
-export function utf8CodepointCount(data Array of byte, len int) returns int
-	var count = 0
-	var i = 0
-
-	while i < len 'count_loop'
-		var b = try data.get(i) otherwise 0
-
-		// Only count non-continuation bytes
-		if b < 128 or b >= 192 'is_lead'
-			count = count + 1
-		end 'is_lead'
-
-		i = i + 1
-	end 'count_loop'
-
-	return count
-end 'utf8CodepointCount'
-
-/// Decode a UTF-8 codepoint from a byte array at the given offset
-/// Returns the codepoint value as an integer
-/// Assumes valid UTF-8 encoding at the offset
-export function utf8Decode(data Array of byte, offset int) returns int
-	var b0 = try data.get(offset) otherwise 0
-
-	// ASCII (1 byte): 0xxxxxxx
-	if b0 < 128 'ascii'
-		return b0
-	end 'ascii'
-
-	// 2-byte sequence: 110xxxxx 10xxxxxx
-	if b0 < 224 'two_byte'
-		var b1 = try data.get(offset + 1) otherwise 0
-		var cp = ((b0 mod 32) * 64) + (b1 mod 64)
-		return cp
-	end 'two_byte'
-
-	// 3-byte sequence: 1110xxxx 10xxxxxx 10xxxxxx
-	if b0 < 240 'three_byte'
-		var b1 = try data.get(offset + 1) otherwise 0
-		var b2 = try data.get(offset + 2) otherwise 0
-		var cp = ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
-		return cp
-	end 'three_byte'
-
-	// 4-byte sequence: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
-	var b1 = try data.get(offset + 1) otherwise 0
-	var b2 = try data.get(offset + 2) otherwise 0
-	var b3 = try data.get(offset + 3) otherwise 0
-	var cp = ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)
-	return cp
-end 'utf8Decode'
-
 /// Get the number of bytes needed to encode a codepoint in UTF-8
 export function utf8EncodeLength(codepoint int) returns int
 	if codepoint < 128 'ascii'

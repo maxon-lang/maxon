@@ -57,6 +57,16 @@ pub const Program = struct {
     global_constants: []GlobalConstant,
 };
 
+/// Associated type declaration in an interface
+/// Syntax: associatedtype Name is GenericType with (TypeArg1, TypeArg2)
+pub const AssociatedTypeDecl = struct {
+    name: []const u8, // e.g., "ElementArray"
+    base_type: []const u8, // e.g., "Array"
+    type_args: []const []const u8, // e.g., ["Element"] or ["Key", "Value"]
+    line: u32 = 0,
+    column: u32 = 0,
+};
+
 pub const InterfaceMethod = struct {
     name: []const u8,
     is_static: bool,
@@ -70,6 +80,7 @@ pub const InterfaceDecl = struct {
     is_export: bool,
     generic_params: []const []const u8, // ["Element"] for `uses Element`
     extends: []const []const u8, // ["Collection", "Iterable"] for `extends Collection, Iterable`
+    associated_types: []AssociatedTypeDecl, // Associated type declarations
     methods: []InterfaceMethod,
     block: BlockInfo = .{},
 };
@@ -86,6 +97,7 @@ pub const ExtensionMethod = struct {
 pub const ExtensionDecl = struct {
     interface_name: []const u8,
     is_export: bool,
+    associated_types: []AssociatedTypeDecl, // Associated type declarations
     methods: []ExtensionMethod,
     block: BlockInfo = .{},
 };
@@ -132,6 +144,7 @@ pub const TypeDecl = struct {
     is_export: bool,
     generic_params: []const []const u8, // ["Element"] for `uses Element`
     conformances: []const InterfaceConformance,
+    associated_types: []AssociatedTypeDecl, // Associated type declarations
     fields: []FieldDecl,
     methods: []MethodDecl,
     block: BlockInfo = .{},

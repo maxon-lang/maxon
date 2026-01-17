@@ -2,6 +2,7 @@
 You *Are* Going To Read It
 
 ## Priorities
+- there are many uses of the same error code
 - error message keep getting the wrong file/row/column
 - self hosting features
 - debugging (speed up the dev process)

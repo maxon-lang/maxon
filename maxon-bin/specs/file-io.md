@@ -77,7 +77,9 @@ Write a string to a text file using UTF-8 encoding.
 
 Read the entire contents of a file as raw bytes.
 
-**Signature:** `static function readBinary(path string) returns Array of byte throws FileReadError`
+**Signature:** `static function readBinary(path string) returns ByteArray throws FileReadError`
+
+where `type ByteArray is Array with byte`
 
 **Parameters:**
 - `path`: File path as a string
@@ -103,7 +105,9 @@ end 'main'
 
 Write binary data to a file.
 
-**Signature:** `static function writeBinary(path string, content Array of byte) throws FileWriteError`
+**Signature:** `static function writeBinary(path string, content ByteArray) throws FileWriteError`
+
+where `type ByteArray is Array with byte`
 
 **Parameters:**
 - `path`: File path as a string
@@ -232,9 +236,11 @@ File not found
 
 <!-- test: write-and-read-binary -->
 ```maxon
+type ByteArray is Array with byte
+
 function main() returns int
     // Create a byte array with known values
-    var data = Array of byte{}
+    var data = ByteArray{}
     data.push(65 as byte)
     data.push(66 as byte)
     data.push(67 as byte)

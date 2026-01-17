@@ -46,6 +46,14 @@ pub const PendingMethod = types.PendingMethod;
 pub const SemanticInfo = types.SemanticInfo;
 pub const SemanticVarInfo = types.SemanticVarInfo;
 
+/// Associated type alias for generic type instantiation.
+/// e.g., `associatedtype ElementArray is Array with Element` creates an alias
+/// where ElementArray resolves to Array$<resolved Element>.
+pub const AssociatedTypeAlias = struct {
+    base_type: []const u8, // e.g., "Array"
+    type_args: []const []const u8, // e.g., ["Element"] - these get substituted via generic_params
+};
+
 /// Result of emitTypeInit - pointer to initialized struct and its type info
 const EmitTypeInitResult = struct {
     ptr: ir.Value,
@@ -369,6 +377,7 @@ pub const AstToIr = struct {
     enum_decl_map: std.StringHashMapUnmanaged(ast.EnumDecl), // Enum declarations for conformance lookup
     type_source_files: std.StringHashMapUnmanaged([]const u8) = .{}, // Source file for each type (for error reporting)
     extension_methods: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(*const ast.ExtensionMethod)) = .{}, // Interface name -> extension methods
+    extension_decls: std.StringHashMapUnmanaged(*const ast.ExtensionDecl) = .{}, // Interface name -> extension declaration (for associated types)
     current_decl_is_mutable: bool,
     mutation_analyzer: ?*const semantic_analysis.MutationAnalyzer,
     current_line: usize,
@@ -393,6 +402,8 @@ pub const AstToIr = struct {
     self_ptr: ?ir.Value = null,
     // Generic type parameters (e.g., "Element" -> "int" for Array of int)
     generic_params: std.StringHashMapUnmanaged([]const u8) = .{},
+    // Associated type aliases (e.g., "ElementArray" -> Array with Element)
+    associated_type_aliases: std.StringHashMapUnmanaged(AssociatedTypeAlias) = .{},
     // Pending methods awaiting lazy generation (mangled_name -> PendingMethod)
     pending_methods: std.StringHashMapUnmanaged(PendingMethod) = .{},
     // Set of methods currently being generated (prevents infinite recursion)
@@ -483,6 +494,10 @@ pub const AstToIr = struct {
 
     /// Report a user error (their code is wrong)
     pub fn reportError(self: *AstToIr, code: err.ErrorCode, details: []const u8) void {
+        self.reportErrorWithSuffix(code, details, null);
+    }
+
+    pub fn reportErrorWithSuffix(self: *AstToIr, code: err.ErrorCode, details: []const u8, suffix: ?[]const u8) void {
         // Format: "base message: 'details'"
         const base_msg = code.message();
         const formatted = std.fmt.allocPrint(self.allocator, "{s}: '{s}'", .{ base_msg, details }) catch {
@@ -495,6 +510,7 @@ pub const AstToIr = struct {
                     .line = @intCast(self.current_line),
                     .column = @intCast(self.current_column),
                 },
+                .suffix = suffix,
             };
             return;
         };
@@ -507,6 +523,7 @@ pub const AstToIr = struct {
                 .column = @intCast(self.current_column),
             },
             .message_allocated = true,
+            .suffix = suffix,
         };
     }
 
@@ -522,12 +539,17 @@ pub const AstToIr = struct {
 
     /// Report an error at a specific source location
     pub fn reportErrorAt(self: *AstToIr, code: err.ErrorCode, details: []const u8, line: u32, column: u32) void {
+        self.reportErrorAtWithSuffix(code, details, line, column, null);
+    }
+
+    pub fn reportErrorAtWithSuffix(self: *AstToIr, code: err.ErrorCode, details: []const u8, line: u32, column: u32, suffix: ?[]const u8) void {
         const base_msg = code.message();
         const formatted = std.fmt.allocPrint(self.allocator, "{s}: '{s}'", .{ base_msg, details }) catch {
             self.last_error = .{
                 .code = code,
                 .message = base_msg,
                 .location = .{ .file = self.source_file, .line = line, .column = column },
+                .suffix = suffix,
             };
             return;
         };
@@ -536,6 +558,7 @@ pub const AstToIr = struct {
             .message = formatted,
             .location = .{ .file = self.source_file, .line = line, .column = column },
             .message_allocated = true,
+            .suffix = suffix,
         };
     }
 
@@ -806,8 +829,19 @@ pub const AstToIr = struct {
 
         // Register methods from types
         for (program.types) |type_decl| {
+            // Set up associated type aliases for this type (needed for return type resolution)
+            for (type_decl.associated_types) |assoc| {
+                try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                    .base_type = assoc.base_type,
+                    .type_args = assoc.type_args,
+                });
+            }
             for (type_decl.methods) |method| {
                 try self.registerMethod(type_decl.name, method);
+            }
+            // Clean up associated type aliases, but preserve extension-defined aliases
+            for (type_decl.associated_types) |assoc| {
+                self.safeRemoveAssociatedTypeAlias(assoc.name);
             }
         }
 
@@ -840,8 +874,19 @@ pub const AstToIr = struct {
         // Skip generic types - their methods are converted lazily when monomorphized
         for (program.types) |type_decl| {
             if (type_decl.generic_params.len > 0) continue;
+            // Set up associated type aliases for this type
+            for (type_decl.associated_types) |assoc| {
+                try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                    .base_type = assoc.base_type,
+                    .type_args = assoc.type_args,
+                });
+            }
             for (type_decl.methods) |method| {
                 try self.convertMethod(type_decl.name, method);
+            }
+            // Clean up associated type aliases, but preserve extension-defined aliases
+            for (type_decl.associated_types) |assoc| {
+                self.safeRemoveAssociatedTypeAlias(assoc.name);
             }
         }
 
@@ -963,14 +1008,14 @@ pub const AstToIr = struct {
                         } else if (operand == .float) {
                             return .{ .float = -operand.float };
                         }
-                        self.reportError(.E003, "operand");
+                        self.reportErrorWithSuffix(.E003, "operand", "B");
                         return error.SemanticError;
                     },
                     .not => {
                         if (operand == .bool) {
                             return .{ .bool = !operand.bool };
                         }
-                        self.reportError(.E003, "operand");
+                        self.reportErrorWithSuffix(.E003, "operand", "C");
                         return error.SemanticError;
                     },
                 }
@@ -1007,7 +1052,7 @@ pub const AstToIr = struct {
                         .mul => l * r,
                         .div => l / r,
                         .mod, .band, .bitor, .bxor, .shl, .shr => {
-                            self.reportError(.E003, "operand");
+                            self.reportErrorWithSuffix(.E003, "operand", "D");
                             return error.SemanticError;
                         },
                     } };
@@ -1023,13 +1068,13 @@ pub const AstToIr = struct {
                         .mul => l * r,
                         .div => l / r,
                         .mod, .band, .bitor, .bxor, .shl, .shr => {
-                            self.reportError(.E003, "operand");
+                            self.reportErrorWithSuffix(.E003, "operand", "E");
                             return error.SemanticError;
                         },
                     } };
                 }
 
-                self.reportError(.E003, "operand");
+                self.reportErrorWithSuffix(.E003, "operand", "F");
                 return error.SemanticError;
             },
             .compare => |cmp| {
@@ -1072,13 +1117,13 @@ pub const AstToIr = struct {
                         .eq => l == r,
                         .ne => l != r,
                         else => {
-                            self.reportError(.E003, "operand");
+                            self.reportErrorWithSuffix(.E003, "operand", "G");
                             return error.SemanticError;
                         },
                     } };
                 }
 
-                self.reportError(.E003, "operand");
+                self.reportErrorWithSuffix(.E003, "operand", "H");
                 return error.SemanticError;
             },
             .logical => |log| {
@@ -1092,7 +1137,7 @@ pub const AstToIr = struct {
                     } };
                 }
 
-                self.reportError(.E003, "operand");
+                self.reportErrorWithSuffix(.E003, "operand", "I");
                 return error.SemanticError;
             },
             .array_literal => |_| {
@@ -1119,7 +1164,7 @@ pub const AstToIr = struct {
                         }
                     }
                 }
-                self.reportError(.E003, "field access");
+                self.reportErrorWithSuffix(.E003, "field access", "J");
                 return error.SemanticError;
             },
             .map_literal => |_| {
@@ -1132,7 +1177,7 @@ pub const AstToIr = struct {
             },
             else => {
                 // Unsupported expression type in constant context
-                self.reportError(.E003, "expression");
+                self.reportErrorWithSuffix(.E003, "expression", "K");
                 return error.SemanticError;
             },
         };
@@ -1167,12 +1212,37 @@ pub const AstToIr = struct {
     }
 
     // ------------------------------------------------------------------------
+    // Associated Type Helpers
+    // ------------------------------------------------------------------------
+
+    /// Check if an associated type name is defined by an extension (not just a type)
+    /// Extension-defined aliases should be preserved when cleaning up type-specific aliases
+    fn isExtensionDefinedAlias(self: *AstToIr, alias_name: []const u8) bool {
+        var ext_iter = self.extension_decls.valueIterator();
+        while (ext_iter.next()) |ext| {
+            for (ext.*.associated_types) |ext_assoc| {
+                if (std.mem.eql(u8, ext_assoc.name, alias_name)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Safely remove an associated type alias, preserving extension-defined aliases
+    fn safeRemoveAssociatedTypeAlias(self: *AstToIr, alias_name: []const u8) void {
+        if (!self.isExtensionDefinedAlias(alias_name)) {
+            _ = self.associated_type_aliases.remove(alias_name);
+        }
+    }
+
+    // ------------------------------------------------------------------------
     // Type Lookup Helpers
     // ------------------------------------------------------------------------
 
     fn lookupIrType(self: *AstToIr, name: []const u8) !ir.Type {
         const type_info = self.type_map.get(name) orelse {
-            self.reportError(.E006, name);
+            self.reportErrorWithSuffix(.E006, name, "G");
             return error.UnknownType;
         };
         // Check visibility
@@ -1188,7 +1258,7 @@ pub const AstToIr = struct {
             return switch (type_info) {
                 .struct_type => |s| s,
                 .primitive, .enum_type => {
-                    self.reportError(.E006, type_name);
+                    self.reportErrorWithSuffix(.E006, type_name, "H");
                     return error.UnknownType;
                 },
             };
@@ -1215,7 +1285,7 @@ pub const AstToIr = struct {
 
             // Try to create the monomorphized type
             _ = self.getOrCreateMonomorphizedType(base_type, args_list.items) catch {
-                self.reportError(.E006, type_name);
+                self.reportErrorWithSuffix(.E006, type_name, "I");
                 return error.UnknownType;
             };
 
@@ -1224,14 +1294,14 @@ pub const AstToIr = struct {
                 return switch (type_info) {
                     .struct_type => |s| s,
                     .primitive, .enum_type => {
-                        self.reportError(.E006, type_name);
+                        self.reportErrorWithSuffix(.E006, type_name, "J");
                         return error.UnknownType;
                     },
                 };
             }
         }
 
-        self.reportError(.E006, type_name);
+        self.reportErrorWithSuffix(.E006, type_name, "K");
         return error.UnknownType;
     }
 
@@ -1253,13 +1323,13 @@ pub const AstToIr = struct {
                         if (self.source_file) |current_file| {
                             if (!std.mem.eql(u8, def_file, current_file)) {
                                 debug.astToIr("Type visibility error: '{s}' defined in '{s}' accessed from '{s}'", .{ type_name, def_file, current_file });
-                                self.reportError(.E006, type_name);
+                                self.reportErrorWithSuffix(.E006, type_name, "L");
                                 return error.UnknownType;
                             }
                         } else {
                             // No current source file (shouldn't happen)
                             debug.astToIr("Type visibility error: '{s}' - no current source file", .{type_name});
-                            self.reportError(.E006, type_name);
+                            self.reportErrorWithSuffix(.E006, type_name, "M");
                             return error.UnknownType;
                         }
                     }
@@ -1337,12 +1407,89 @@ pub const AstToIr = struct {
         // Store the type declaration for conformance checking
         try self.type_decl_map.put(self.allocator, type_decl.name, type_decl);
 
+        // Check if this is a type alias (no fields, no methods, conformance to a generic type)
+        // e.g., "type IntArray is Array with int"
+        if (type_decl.fields.len == 0 and type_decl.methods.len == 0 and type_decl.conformances.len == 1) {
+            const conformance = type_decl.conformances[0];
+            // Check if the conformance target is a type (not an interface)
+            if (self.type_decl_map.get(conformance.interface_name)) |base_type_decl| {
+                // This is a type alias - register it as an associated type alias
+                // that maps this type name to the monomorphized base type
+                debug.astToIr("Registering type alias '{s}' -> '{s}' with {d} args", .{
+                    type_decl.name,
+                    conformance.interface_name,
+                    conformance.type_args.len,
+                });
+
+                // Register the type alias permanently (not cleaned up after this function)
+                try self.associated_type_aliases.put(self.allocator, type_decl.name, .{
+                    .base_type = conformance.interface_name,
+                    .type_args = conformance.type_args,
+                });
+
+                // Get or create the monomorphized type
+                const mono_name = try self.getOrCreateMonomorphizedType(conformance.interface_name, conformance.type_args);
+
+                // Get the monomorphized type info and copy it for the alias
+                if (self.type_map.get(mono_name)) |mono_type| {
+                    switch (mono_type) {
+                        .struct_type => |s| {
+                            try self.type_map.put(self.allocator, type_decl.name, .{
+                                .struct_type = .{
+                                    .name = type_decl.name,
+                                    .fields = s.fields, // Reuse fields from base type
+                                    .size = s.size,
+                                    .decl_line = type_decl.block.start_line,
+                                    .decl_column = type_decl.block.start_column,
+                                    .source_file = self.source_file,
+                                    .is_export = type_decl.is_export,
+                                },
+                            });
+                            debug.astToIr("Registered type alias '{s}' -> '{s}' with size {d}", .{ type_decl.name, mono_name, s.size });
+                        },
+                        else => {
+                            // For non-struct types, just copy the type info
+                            try self.type_map.put(self.allocator, type_decl.name, mono_type);
+                            debug.astToIr("Registered type alias '{s}' -> '{s}' (non-struct)", .{ type_decl.name, mono_name });
+                        },
+                    }
+                } else {
+                    // Monomorphized type not found - this is an error but should be caught elsewhere
+                    debug.astToIr("Warning: monomorphized type '{s}' not found for alias '{s}'", .{ mono_name, type_decl.name });
+                    // Fall through to register as empty struct
+                    try self.type_map.put(self.allocator, type_decl.name, .{
+                        .struct_type = .{
+                            .name = type_decl.name,
+                            .fields = &[_]FieldInfo{},
+                            .size = @intCast(base_type_decl.fields.len * 8), // Rough estimate
+                            .decl_line = type_decl.block.start_line,
+                            .decl_column = type_decl.block.start_column,
+                            .source_file = self.source_file,
+                            .is_export = type_decl.is_export,
+                        },
+                    });
+                }
+                return;
+            }
+        }
+
         // Set up generic type parameters (e.g., "Element" for Array uses Element)
         // For now, map all generic params to i64 as a default
         for (type_decl.generic_params) |param| {
             try self.generic_params.put(self.allocator, param, "int");
         }
+        // Set up associated type aliases
+        for (type_decl.associated_types) |assoc| {
+            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                .base_type = assoc.base_type,
+                .type_args = assoc.type_args,
+            });
+        }
         defer {
+            // Clean up associated type aliases, but preserve extension-defined aliases
+            for (type_decl.associated_types) |assoc| {
+                self.safeRemoveAssociatedTypeAlias(assoc.name);
+            }
             // Clean up generic params after type registration
             for (type_decl.generic_params) |param| {
                 _ = self.generic_params.remove(param);
@@ -1407,7 +1554,16 @@ pub const AstToIr = struct {
         for (type_decl.generic_params) |param| {
             try self.generic_params.put(self.allocator, param, "int");
         }
+        // Set up associated type aliases for field resolution
+        // (we'll register them permanently at the end of this function)
+        for (type_decl.associated_types) |assoc| {
+            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                .base_type = assoc.base_type,
+                .type_args = assoc.type_args,
+            });
+        }
         defer {
+            // Clean up generic params only (associated type aliases stay registered)
             for (type_decl.generic_params) |param| {
                 _ = self.generic_params.remove(param);
             }
@@ -1457,6 +1613,26 @@ pub const AstToIr = struct {
         if (ext_type.source_path) |sp| {
             const owned_path = try self.allocator.dupe(u8, sp);
             try self.type_source_files.put(self.allocator, ext_type.name, owned_path);
+        }
+
+        // Register associated types as global type aliases and create their monomorphized types
+        // This is needed so that return types like "StringArray" can be resolved from user code
+        for (type_decl.associated_types) |assoc| {
+            // Register permanently (don't clean up)
+            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                .base_type = assoc.base_type,
+                .type_args = assoc.type_args,
+            });
+
+            // Also create the monomorphized type and register it under the alias name
+            const mono_name = self.getOrCreateMonomorphizedType(assoc.base_type, assoc.type_args) catch continue;
+            if (self.type_map.get(mono_name)) |mono_type| {
+                // Register the alias name as well
+                if (!self.type_map.contains(assoc.name)) {
+                    try self.type_map.put(self.allocator, assoc.name, mono_type);
+                    debug.astToIr("Registered associated type '{s}' -> '{s}'", .{ assoc.name, mono_name });
+                }
+            }
         }
 
         debug.astToIr("Registered external type '{s}' with size {d}", .{ ext_type.name, field_result.size });
@@ -1656,6 +1832,17 @@ pub const AstToIr = struct {
             .decl_line = iface.block.start_line,
             .decl_column = iface.block.start_column,
         });
+
+        // Register interface's associated type declarations as global type aliases
+        // e.g., `associatedtype ElementArray is Array with Element` in an interface
+        for (iface.associated_types) |assoc| {
+            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                .base_type = assoc.base_type,
+                .type_args = assoc.type_args,
+            });
+            debug.astToIr("Registered interface associated type '{s}' -> '{s}'", .{ assoc.name, assoc.base_type });
+        }
+
         debug.astToIr("Registered interface '{s}' with {d} methods, {d} associated types, extends {d} interfaces", .{ iface.name, iface.methods.len, iface.generic_params.len, iface.extends.len });
     }
 
@@ -1670,6 +1857,20 @@ pub const AstToIr = struct {
         for (ext.methods) |*method| {
             try entry.value_ptr.append(self.allocator, method);
         }
+
+        // Store extension declaration for accessing associated types
+        try self.extension_decls.put(self.allocator, ext.interface_name, ext);
+
+        // Register extension's associated type declarations as global type aliases
+        // e.g., `associatedtype ElementArray is Array with Element` in an extension
+        for (ext.associated_types) |assoc| {
+            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                .base_type = assoc.base_type,
+                .type_args = assoc.type_args,
+            });
+            debug.astToIr("Registered extension associated type '{s}' -> '{s}'", .{ assoc.name, assoc.base_type });
+        }
+
         debug.astToIr("Registered {d} extension method(s) for interface '{s}'", .{ ext.methods.len, ext.interface_name });
     }
 
@@ -1737,6 +1938,15 @@ pub const AstToIr = struct {
                     .message_allocated = true,
                 };
                 return error.SemanticError;
+            }
+
+            // Check if this is a type alias (conformance to a type, not an interface)
+            // e.g., "type IntArray is Array with int" - Array is a type, not an interface
+            if (self.type_decl_map.contains(conformance.interface_name)) {
+                // This is a type alias, not an interface conformance - skip conformance checking
+                // The type alias handling is done in registerType
+                debug.astToIr("Skipping type alias conformance '{s}' for type '{s}'", .{ conformance.interface_name, type_decl.name });
+                continue;
             }
 
             const iface = self.interface_map.get(conformance.interface_name) orelse {
@@ -2332,7 +2542,7 @@ pub const AstToIr = struct {
         for (type_decl.conformances) |conformance| {
             const iface = self.interface_map.get(conformance.interface_name) orelse continue;
 
-            // Build type bindings for associated types
+            // Build type bindings for associated types (interface's generic params)
             for (iface.associated_types, 0..) |assoc_type, i| {
                 if (i < conformance.type_args.len) {
                     // Normalize the type arg (handle "Pair with (Key, Value)" -> "Pair of Key Value")
@@ -2340,11 +2550,23 @@ pub const AstToIr = struct {
                     // Convert to internal format (e.g., "Pair of int int" -> "Pair$int$int")
                     const internal = self.displayNameToInternal(normalized);
                     try type_bindings.put(self.allocator, assoc_type, internal);
+                    // Also put in generic_params for associated type alias resolution
+                    try self.generic_params.put(self.allocator, assoc_type, internal);
                 }
             }
 
             // Also bind Self to the type name
             try type_bindings.put(self.allocator, "Self", type_decl.name);
+
+            // Set up extension's associated type aliases (e.g., ElementArray -> Array with Element)
+            if (self.extension_decls.get(conformance.interface_name)) |ext_decl| {
+                for (ext_decl.associated_types) |assoc| {
+                    try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                        .base_type = assoc.base_type,
+                        .type_args = assoc.type_args,
+                    });
+                }
+            }
 
             // Check for extension methods on this interface
             if (self.extension_methods.get(conformance.interface_name)) |ext_methods| {
@@ -2365,8 +2587,45 @@ pub const AstToIr = struct {
                 }
             }
 
+            // Clean up extension's associated type aliases
+            if (self.extension_decls.get(conformance.interface_name)) |ext_decl| {
+                for (ext_decl.associated_types) |assoc| {
+                    self.safeRemoveAssociatedTypeAlias(assoc.name);
+                }
+            }
+
+            // Clean up generic_params for interface's associated types
+            for (iface.associated_types) |assoc_type| {
+                _ = self.generic_params.remove(assoc_type);
+            }
+
             // Also check for extensions on interfaces this one extends (transitively)
+            // Re-set up type_bindings for transitive check
+            for (iface.associated_types, 0..) |assoc_type, i| {
+                if (i < conformance.type_args.len) {
+                    const normalized = self.normalizeConformanceTypeArg(conformance.type_args[i]);
+                    const internal = self.displayNameToInternal(normalized);
+                    try self.generic_params.put(self.allocator, assoc_type, internal);
+                }
+            }
+            if (self.extension_decls.get(conformance.interface_name)) |ext_decl| {
+                for (ext_decl.associated_types) |assoc| {
+                    try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                        .base_type = assoc.base_type,
+                        .type_args = assoc.type_args,
+                    });
+                }
+            }
             try self.synthesizeTransitiveExtensionMethods(type_decl, conformance.interface_name, &type_bindings);
+            // Final cleanup
+            if (self.extension_decls.get(conformance.interface_name)) |ext_decl| {
+                for (ext_decl.associated_types) |assoc| {
+                    self.safeRemoveAssociatedTypeAlias(assoc.name);
+                }
+            }
+            for (iface.associated_types) |assoc_type| {
+                _ = self.generic_params.remove(assoc_type);
+            }
         }
     }
 
@@ -2436,9 +2695,29 @@ pub const AstToIr = struct {
             // Build type bindings by substituting generic params in the conformance type args
             for (iface.associated_types, 0..) |assoc_type, i| {
                 if (i < conformance.type_args.len) {
+                    // First, check if the conformance type arg is an associated type of this type
+                    // e.g., "Entry" in "Iterable with Entry" -> "Pair with (Key, Value)"
+                    var type_arg_str = conformance.type_args[i];
+                    if (self.associated_type_aliases.get(type_arg_str)) |alias| {
+                        // Expand the associated type alias to its definition
+                        // e.g., Entry -> "Pair with (Key, Value)"
+                        var expanded_buf: std.ArrayListUnmanaged(u8) = .empty;
+                        expanded_buf.appendSlice(self.allocator, alias.base_type) catch {};
+                        if (alias.type_args.len > 0) {
+                            expanded_buf.appendSlice(self.allocator, " with (") catch {};
+                            for (alias.type_args, 0..) |arg, j| {
+                                if (j > 0) expanded_buf.appendSlice(self.allocator, ", ") catch {};
+                                expanded_buf.appendSlice(self.allocator, arg) catch {};
+                            }
+                            expanded_buf.appendSlice(self.allocator, ")") catch {};
+                        }
+                        type_arg_str = expanded_buf.toOwnedSlice(self.allocator) catch conformance.type_args[i];
+                        self.module.trackString(type_arg_str) catch {};
+                    }
+
                     // Substitute generic params (Key, Value, etc.) with actual type args (string, int, etc.)
                     const substituted = self.substituteGenericParamsInTypeArg(
-                        conformance.type_args[i],
+                        type_arg_str,
                         type_decl.generic_params,
                         type_args,
                     );
@@ -2447,6 +2726,18 @@ pub const AstToIr = struct {
                     // Convert to internal format (e.g., "Pair of int int" -> "Pair$int$int")
                     const internal = self.displayNameToInternal(normalized);
                     try type_bindings.put(self.allocator, assoc_type, internal);
+                    // Also put in generic_params for associated type alias resolution
+                    try self.generic_params.put(self.allocator, assoc_type, internal);
+                }
+            }
+
+            // Set up extension's associated type aliases (e.g., ElementArray -> Array with Element)
+            if (self.extension_decls.get(conformance.interface_name)) |ext_decl| {
+                for (ext_decl.associated_types) |assoc| {
+                    try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                        .base_type = assoc.base_type,
+                        .type_args = assoc.type_args,
+                    });
                 }
             }
 
@@ -2479,8 +2770,68 @@ pub const AstToIr = struct {
                 }
             }
 
+            // Clean up extension's associated type aliases before transitive check
+            if (self.extension_decls.get(conformance.interface_name)) |ext_decl| {
+                for (ext_decl.associated_types) |assoc| {
+                    self.safeRemoveAssociatedTypeAlias(assoc.name);
+                }
+            }
+            for (iface.associated_types) |assoc_type| {
+                _ = self.generic_params.remove(assoc_type);
+            }
+
+            // Re-set up for transitive extension methods
+            for (iface.associated_types, 0..) |assoc_type, i| {
+                if (i < conformance.type_args.len) {
+                    // First, check if the conformance type arg is an associated type of this type
+                    var type_arg_str = conformance.type_args[i];
+                    if (self.associated_type_aliases.get(type_arg_str)) |alias| {
+                        // Expand the associated type alias to its definition
+                        var expanded_buf: std.ArrayListUnmanaged(u8) = .empty;
+                        expanded_buf.appendSlice(self.allocator, alias.base_type) catch {};
+                        if (alias.type_args.len > 0) {
+                            expanded_buf.appendSlice(self.allocator, " with (") catch {};
+                            for (alias.type_args, 0..) |arg, j| {
+                                if (j > 0) expanded_buf.appendSlice(self.allocator, ", ") catch {};
+                                expanded_buf.appendSlice(self.allocator, arg) catch {};
+                            }
+                            expanded_buf.appendSlice(self.allocator, ")") catch {};
+                        }
+                        type_arg_str = expanded_buf.toOwnedSlice(self.allocator) catch conformance.type_args[i];
+                        self.module.trackString(type_arg_str) catch {};
+                    }
+
+                    const substituted = self.substituteGenericParamsInTypeArg(
+                        type_arg_str,
+                        type_decl.generic_params,
+                        type_args,
+                    );
+                    const normalized = self.normalizeConformanceTypeArg(substituted);
+                    const internal = self.displayNameToInternal(normalized);
+                    try self.generic_params.put(self.allocator, assoc_type, internal);
+                }
+            }
+            if (self.extension_decls.get(conformance.interface_name)) |ext_decl| {
+                for (ext_decl.associated_types) |assoc| {
+                    try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                        .base_type = assoc.base_type,
+                        .type_args = assoc.type_args,
+                    });
+                }
+            }
+
             // Also check for extensions on interfaces this one extends (transitively)
             try self.synthesizeTransitiveExtensionMethodsForMono(mono_name, type_decl, conformance.interface_name, &type_bindings);
+
+            // Final cleanup
+            if (self.extension_decls.get(conformance.interface_name)) |ext_decl| {
+                for (ext_decl.associated_types) |assoc| {
+                    self.safeRemoveAssociatedTypeAlias(assoc.name);
+                }
+            }
+            for (iface.associated_types) |assoc_type| {
+                _ = self.generic_params.remove(assoc_type);
+            }
         }
     }
 
@@ -2495,6 +2846,16 @@ pub const AstToIr = struct {
         const iface = self.interface_map.get(interface_name) orelse return;
 
         for (iface.extends) |parent_iface_name| {
+            // Set up parent extension's associated type aliases if any
+            if (self.extension_decls.get(parent_iface_name)) |parent_ext_decl| {
+                for (parent_ext_decl.associated_types) |assoc| {
+                    try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                        .base_type = assoc.base_type,
+                        .type_args = assoc.type_args,
+                    });
+                }
+            }
+
             // Check for extension methods on parent interface
             if (self.extension_methods.get(parent_iface_name)) |ext_methods| {
                 for (ext_methods.items) |ext_method| {
@@ -2523,6 +2884,13 @@ pub const AstToIr = struct {
 
             // Recursively check parent's parents
             try self.synthesizeTransitiveExtensionMethodsForMono(mono_name, type_decl, parent_iface_name, type_bindings);
+
+            // Clean up parent extension's associated type aliases
+            if (self.extension_decls.get(parent_iface_name)) |parent_ext_decl| {
+                for (parent_ext_decl.associated_types) |assoc| {
+                    self.safeRemoveAssociatedTypeAlias(assoc.name);
+                }
+            }
         }
     }
 
@@ -2619,7 +2987,7 @@ pub const AstToIr = struct {
                             return .{ .enum_type = &ptr.enum_type };
                         }
                     }
-                    self.reportError(.E006, self_type);
+                    self.reportErrorWithSuffix(.E006, self_type, "N");
                     return error.UnknownType;
                 }
                 if (bindings.get(name)) |bound| {
@@ -2654,7 +3022,6 @@ pub const AstToIr = struct {
                                 return .{ .enum_type = &ptr.enum_type };
                             }
                         }
-                        std.debug.print("DEBUG   not found in type_map, trying to create...\n", .{});
                         // Type doesn't exist yet - try to create it
                         const base_type = bound[0..of_pos];
                         var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
@@ -2663,24 +3030,43 @@ pub const AstToIr = struct {
                         while (it2.next()) |arg| {
                             type_args.append(self.allocator, arg) catch {};
                         }
-                        std.debug.print("DEBUG   base_type='{s}', type_args.items.len={d}\n", .{ base_type, type_args.items.len });
                         if (type_args.items.len > 0) {
-                            _ = self.getOrCreateMonomorphizedType(base_type, type_args.items) catch |e| {
-                                std.debug.print("DEBUG   getOrCreateMonomorphizedType failed: {s}\n", .{@errorName(e)});
-                            };
+                            _ = self.getOrCreateMonomorphizedType(base_type, type_args.items) catch {};
                             if (self.type_map.getPtr(internal_name_builder.items)) |ptr| {
-                                std.debug.print("DEBUG   found after creation!\n", .{});
                                 if (ptr.* == .struct_type) {
                                     return .{ .struct_type = &ptr.struct_type };
                                 } else if (ptr.* == .enum_type) {
                                     return .{ .enum_type = &ptr.enum_type };
                                 }
                             }
-                            std.debug.print("DEBUG   still not found after creation attempt!\n", .{});
                         }
                     }
-                    self.reportError(.E006, bound);
+                    self.reportErrorWithSuffix(.E006, bound, "O");
                     return error.UnknownType;
+                }
+                // Check if this is an associated type alias (e.g., "ElementArray" -> "Array with Element")
+                if (self.associated_type_aliases.get(name)) |alias| {
+                    // Resolve the alias by substituting type_args through bindings and generic_params
+                    var resolved_args: [8][]const u8 = undefined;
+                    for (alias.type_args, 0..) |arg, i| {
+                        if (i >= 8) break;
+                        // First check bindings, then generic_params
+                        resolved_args[i] = bindings.get(arg) orelse (self.generic_params.get(arg) orelse arg);
+                    }
+                    const num_args = @min(alias.type_args.len, 8);
+
+                    // Get or create the monomorphized type
+                    const mono_name = self.getOrCreateMonomorphizedType(alias.base_type, resolved_args[0..num_args]) catch {
+                        self.reportErrorWithSuffix(.E006, name, "P");
+                        return error.UnknownType;
+                    };
+                    if (self.type_map.getPtr(mono_name)) |ptr| {
+                        if (ptr.* == .struct_type) {
+                            return .{ .struct_type = &ptr.struct_type };
+                        } else if (ptr.* == .enum_type) {
+                            return .{ .enum_type = &ptr.enum_type };
+                        }
+                    }
                 }
                 if (self.getValueTypeByName(name)) |vt| return vt;
                 if (self.type_map.getPtr(name)) |ptr| {
@@ -2690,7 +3076,7 @@ pub const AstToIr = struct {
                         return .{ .enum_type = &ptr.enum_type };
                     }
                 }
-                self.reportError(.E006, name);
+                self.reportErrorWithSuffix(.E006, name, "Q");
                 return error.UnknownType;
             },
             .generic => |g| {
@@ -2748,7 +3134,7 @@ pub const AstToIr = struct {
                     }
                     const display_name = try self.allocator.dupe(u8, display_name_builder.items);
                     try self.module.trackString(display_name);
-                    self.reportError(.E006, display_name);
+                    self.reportErrorWithSuffix(.E006, display_name, "R");
                     return error.UnknownType;
                 }
 
@@ -2826,7 +3212,7 @@ pub const AstToIr = struct {
                 .simple, .generic => {
                     const base_name = typeExprBaseTypeName(rt).?;
                     const type_info = self.type_map.get(base_name) orelse {
-                        self.reportError(.E006, base_name);
+                        self.reportErrorWithSuffix(.E006, base_name, "S");
                         return error.UnknownType;
                     };
                     if (type_info == .primitive) {
@@ -2960,7 +3346,7 @@ pub const AstToIr = struct {
             return .{ .primitive = prim };
         }
         const type_info_ptr = self.type_map.getPtr(type_name) orelse {
-            self.reportError(.E006, type_name);
+            self.reportErrorWithSuffix(.E006, type_name, "T");
             return error.UnknownType;
         };
         return switch (type_info_ptr.*) {
@@ -3061,9 +3447,8 @@ pub const AstToIr = struct {
                 }
                 // Check for internal type access
                 try intrinsics.checkInternalTypeAccess(self, resolved);
-                // Debug: if looking up a resolved generic param that is Point, check type_map state
                 const type_info_ptr = self.type_map.getPtr(resolved) orelse {
-                    self.reportError(.E006, resolved);
+                    self.reportErrorWithSuffix(.E006, resolved, "U");
                     return error.UnknownType;
                 };
                 // Check visibility - but skip for types resolved from generic parameters
@@ -3078,7 +3463,7 @@ pub const AstToIr = struct {
                     .primitive => if (types.Primitive.fromString(resolved)) |prim|
                         .{ .primitive = prim }
                     else {
-                        self.reportError(.E006, resolved);
+                        self.reportErrorWithSuffix(.E006, resolved, "V");
                         return error.UnknownType;
                     },
                 };
@@ -3139,7 +3524,7 @@ pub const AstToIr = struct {
         }
     }
 
-    /// Resolve type name, handling 'Self' substitution and generic type parameters
+    /// Resolve type name, handling 'Self' substitution, generic type parameters, and associated types
     pub fn resolveTypeName(self: *AstToIr, type_name: []const u8) []const u8 {
         if (std.mem.eql(u8, type_name, "Self")) {
             const resolved = self.current_type_name orelse type_name;
@@ -3149,6 +3534,22 @@ pub const AstToIr = struct {
         // Check if this is a generic type parameter (e.g., "Element")
         if (self.generic_params.get(type_name)) |resolved| {
             return resolved;
+        }
+        // Check if this is an associated type alias (e.g., "ElementArray" -> "Array$int")
+        if (self.associated_type_aliases.get(type_name)) |alias| {
+            // Resolve the alias by substituting type_args through generic_params
+            var resolved_args: [8][]const u8 = undefined;
+            for (alias.type_args, 0..) |arg, i| {
+                if (i >= 8) break;
+                resolved_args[i] = self.generic_params.get(arg) orelse arg;
+            }
+            const num_args = @min(alias.type_args.len, 8);
+
+            // Try to get or create the monomorphized type
+            const mono_name = self.getOrCreateMonomorphizedType(alias.base_type, resolved_args[0..num_args]) catch {
+                return type_name; // Fallback to original name on error
+            };
+            return mono_name;
         }
         return type_name;
     }
@@ -3182,7 +3583,7 @@ pub const AstToIr = struct {
 
         // Get the original generic type declaration
         const type_decl = self.type_decl_map.get(base_type) orelse {
-            self.reportError(.E006, base_type);
+            self.reportErrorWithSuffix(.E006, base_type, "W");
             return error.UnknownType;
         };
 
@@ -3200,7 +3601,18 @@ pub const AstToIr = struct {
             saved_params[i] = self.generic_params.get(param);
             try self.generic_params.put(self.allocator, param, arg);
         }
-        // Note: We restore generic_params at the very end, after method registration
+
+        // Set up associated type aliases (needed for field type resolution AND method registration)
+        var saved_aliases = try self.allocator.alloc(?AssociatedTypeAlias, type_decl.associated_types.len);
+        defer self.allocator.free(saved_aliases);
+        for (type_decl.associated_types, 0..) |assoc, i| {
+            saved_aliases[i] = self.associated_type_aliases.get(assoc.name);
+            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                .base_type = assoc.base_type,
+                .type_args = assoc.type_args,
+            });
+        }
+        // Note: We restore generic_params and associated_type_aliases at the very end, after method registration
 
         // Allow stdlib builtins when monomorphizing stdlib types (e.g., Array$int)
         // This must be set BEFORE processing fields since field types may be internal types
@@ -3295,6 +3707,15 @@ pub const AstToIr = struct {
 
         // Restore in_stdlib_method flag
         self.in_stdlib_method = saved_in_stdlib;
+
+        // Restore associated type aliases after registration
+        for (type_decl.associated_types, 0..) |assoc, i| {
+            if (saved_aliases[i]) |prev_value| {
+                try self.associated_type_aliases.put(self.allocator, assoc.name, prev_value);
+            } else {
+                self.safeRemoveAssociatedTypeAlias(assoc.name);
+            }
+        }
 
         // Restore generic params after registration
         for (type_decl.generic_params, 0..) |param, i| {
@@ -3402,7 +3823,7 @@ pub const AstToIr = struct {
                     const base_name = typeExprBaseTypeName(rt).?;
                     const resolved = self.resolveTypeName(base_name);
                     const type_info = self.type_map.get(resolved) orelse {
-                        self.reportError(.E006, resolved);
+                        self.reportErrorWithSuffix(.E006, resolved, "X");
                         return error.UnknownType;
                     };
                     if (type_info == .enum_type) {
@@ -3785,6 +4206,25 @@ pub const AstToIr = struct {
                 try self.generic_params.put(self.allocator, binding.param, binding.concrete);
             }
 
+            // Set up associated type aliases from the base type declaration
+            const base_type_name = if (std.mem.indexOf(u8, pending.type_name, "$")) |idx|
+                pending.type_name[0..idx]
+            else
+                pending.type_name;
+            var saved_aliases: []?AssociatedTypeAlias = &.{};
+            var type_assoc_types: []const ast.AssociatedTypeDecl = &.{};
+            if (self.type_decl_map.get(base_type_name)) |type_decl| {
+                type_assoc_types = type_decl.associated_types;
+                saved_aliases = self.allocator.alloc(?AssociatedTypeAlias, type_assoc_types.len) catch &.{};
+                for (type_assoc_types, 0..) |assoc, i| {
+                    saved_aliases[i] = self.associated_type_aliases.get(assoc.name);
+                    self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                        .base_type = assoc.base_type,
+                        .type_args = assoc.type_args,
+                    }) catch {};
+                }
+            }
+
             // Allow stdlib builtins for stdlib types
             self.in_stdlib_method = true;
 
@@ -3799,6 +4239,20 @@ pub const AstToIr = struct {
             self.convertMethod(pending.type_name, method.*) catch |e| {
                 gen_err = e;
             };
+
+            // Restore associated type aliases to their previous values
+            for (type_assoc_types, 0..) |assoc, i| {
+                if (i < saved_aliases.len) {
+                    if (saved_aliases[i]) |prev_value| {
+                        self.associated_type_aliases.put(self.allocator, assoc.name, prev_value) catch {};
+                    } else {
+                        self.safeRemoveAssociatedTypeAlias(assoc.name);
+                    }
+                }
+            }
+            if (saved_aliases.len > 0) {
+                self.allocator.free(saved_aliases);
+            }
 
             // Restore generic params to their previous values
             for (pending.generic_bindings, 0..) |binding, i| {
@@ -4182,6 +4636,13 @@ pub const AstToIr = struct {
 
         debug.astToIr("Converting extension method '{s}' for type '{s}'", .{ method.name, type_name });
 
+        // Set up type bindings in generic_params for resolution BEFORE analyzing return type
+        // This is needed so ElementArray and other associated types can be resolved
+        var iter = type_bindings.iterator();
+        while (iter.next()) |entry| {
+            try self.generic_params.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
+        }
+
         // Analyze return type for sret handling
         var sret_info = try self.analyzeReturnType(method.return_type, true);
 
@@ -4218,12 +4679,6 @@ pub const AstToIr = struct {
         ));
 
         param_offset += 1;
-
-        // Set up type bindings in generic_params for resolution
-        var iter = type_bindings.iterator();
-        while (iter.next()) |entry| {
-            try self.generic_params.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
-        }
 
         // Register explicit parameters
         for (method.params, 0..) |param, i| {
@@ -4663,7 +5118,7 @@ pub const AstToIr = struct {
                 if (self.sret_type_name) |expected| {
                     if (typed_val.ty.getTypeName()) |actual| {
                         if (!std.mem.eql(u8, actual, expected)) {
-                            self.reportError(.E022, actual);
+                            self.reportErrorWithSuffix(.E022, actual, "B");
                             return error.TypeMismatch;
                         }
                     }
@@ -4859,7 +5314,7 @@ pub const AstToIr = struct {
             .struct_type => |struct_info| struct_info.name,
             .primitive, .enum_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAssign: expected struct type for field '{s}'\n", .{assign.field_name});
-                self.reportError(.E006, assign.field_name);
+                self.reportErrorWithSuffix(.E006, assign.field_name, "Y");
                 return error.UnknownType;
             },
         };
@@ -5777,6 +6232,14 @@ pub const AstToIr = struct {
     fn areTypesEquivalent(self: *AstToIr, name1: []const u8, name2: []const u8) bool {
         if (std.mem.eql(u8, name1, name2)) return true;
 
+        // Check if either name is a type alias that resolves to the other
+        // e.g., ByteArray -> Array$byte, so ByteArray == Array$byte
+        const resolved1 = self.resolveTypeName(name1);
+        const resolved2 = self.resolveTypeName(name2);
+        if (std.mem.eql(u8, resolved1, resolved2)) return true;
+        if (std.mem.eql(u8, resolved1, name2)) return true;
+        if (std.mem.eql(u8, name1, resolved2)) return true;
+
         // Check if one type contains the other as its first field with offset 0
         // This handles String <-> __ManagedString equivalence
         if (self.type_map.get(name1)) |type_info1| {
@@ -5851,7 +6314,7 @@ pub const AstToIr = struct {
                     if (found_type) |existing| {
                         // Multiple types implement the same interface - report error
                         const error_msg = std.fmt.allocPrint(self.allocator, "multiple types implement {s}: '{s}' and '{s}'", .{ interface_name, existing, type_name }) catch "multiple types implement interface";
-                        self.reportError(.E006, error_msg);
+                        self.reportErrorWithSuffix(.E006, error_msg, "Z");
                         return null;
                     }
                     found_type = type_name;
@@ -6519,7 +6982,7 @@ pub const AstToIr = struct {
 
         if (num_cases == 0 and !has_default) {
             // Empty match expression with no default - error
-            self.reportError(.E003, "empty match expression requires default case");
+            self.reportErrorWithSuffix(.E003, "empty match expression requires default case", "L");
             return error.SemanticError;
         }
 
@@ -6948,7 +7411,7 @@ pub const AstToIr = struct {
         try self.temporary_strings.append(self.allocator, result_ptr);
 
         const type_info = self.type_map.getPtr(LiteralWrapperType.string.typeName()) orelse {
-            self.reportError(.E006, LiteralWrapperType.string.typeName());
+            self.reportErrorWithSuffix(.E006, LiteralWrapperType.string.typeName(), "AA");
             return error.UnknownType;
         };
         return .{ .value = result_ptr, .ty = .{ .struct_type = &type_info.struct_type } };
@@ -7379,7 +7842,7 @@ pub const AstToIr = struct {
         const result_ptr = try self.emitWrapperFromManaged(managed_ptr, .character);
 
         const type_info = self.type_map.getPtr(LiteralWrapperType.character.typeName()) orelse {
-            self.reportError(.E006, LiteralWrapperType.character.typeName());
+            self.reportErrorWithSuffix(.E006, LiteralWrapperType.character.typeName(), "AB");
             return error.UnknownType;
         };
         return .{ .value = result_ptr, .ty = .{ .struct_type = &type_info.struct_type } };
@@ -7459,7 +7922,7 @@ pub const AstToIr = struct {
         if (!types.isPrimitiveTypeName(target_type_name)) {
             // Unknown cast target type
             debug.astToIr("Unknown cast target type: {s}\n", .{target_type_name});
-            self.reportError(.E006, target_type_name);
+            self.reportErrorWithSuffix(.E006, target_type_name, "AC");
             return error.TypeMismatch;
         }
         const target_ty: ValueType = if (types.Primitive.fromString(target_type_name)) |prim|
@@ -7502,12 +7965,12 @@ pub const AstToIr = struct {
                 if (i < fn_type.param_types.len) {
                     break :blk fn_type.param_types[i];
                 } else {
-                    self.reportError(.E022, param.name);
+                    self.reportErrorWithSuffix(.E022, param.name, "C");
                     return error.TypeMismatch;
                 }
             } else {
                 // No type annotation and no expected type - error
-                self.reportError(.E022, param.name);
+                self.reportErrorWithSuffix(.E022, param.name, "D");
                 return error.TypeMismatch;
             };
 
@@ -7798,7 +8261,7 @@ pub const AstToIr = struct {
 
             // Check for int/float mismatch (either direction)
             if ((left_is_int and right_is_float) or (left_is_float and right_is_int)) {
-                self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison");
+                self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "E");
                 return error.TypeMismatch;
             }
 
@@ -7808,13 +8271,13 @@ pub const AstToIr = struct {
                 if (cmp.right.* == .integer) {
                     const lit_value = cmp.right.integer;
                     if (lit_value < 0 or lit_value > 255) {
-                        self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison");
+                        self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "F");
                         return error.TypeMismatch;
                     }
                     // Literal is in range - allow the comparison
                 } else {
                     // Right is an int variable, not a literal - error
-                    self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison");
+                    self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "G");
                     return error.TypeMismatch;
                 }
             } else if (right_is_byte and left_is_int) {
@@ -7822,13 +8285,13 @@ pub const AstToIr = struct {
                 if (cmp.left.* == .integer) {
                     const lit_value = cmp.left.integer;
                     if (lit_value < 0 or lit_value > 255) {
-                        self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison");
+                        self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "H");
                         return error.TypeMismatch;
                     }
                     // Literal is in range - allow the comparison
                 } else {
                     // Left is an int variable, not a literal - error
-                    self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison");
+                    self.reportErrorWithSuffix(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", "I");
                     return error.TypeMismatch;
                 }
             }
@@ -7952,7 +8415,7 @@ pub const AstToIr = struct {
         // No otherwise clause - propagate error to caller
         // Verify we're in a valid context for try without otherwise
         if (self.current_func_throws_type == null) {
-            self.reportError(.E022, "try without otherwise requires enclosing function to throw");
+            self.reportErrorWithSuffix(.E022, "try without otherwise requires enclosing function to throw", "J");
             return error.SemanticError;
         }
 
@@ -8260,7 +8723,7 @@ pub const AstToIr = struct {
             const expected_name = ctx.success_type.getTypeName() orelse "unknown";
             const actual_name = default_typed.ty.getTypeName() orelse "unknown";
             const msg = std.fmt.allocPrint(self.allocator, "otherwise type '{s}' does not match expected type '{s}'", .{ actual_name, expected_name }) catch "type mismatch in otherwise";
-            self.reportError(.E022, msg);
+            self.reportErrorWithSuffix(.E022, msg, "K");
             return error.SemanticError;
         }
 
@@ -8376,7 +8839,7 @@ pub const AstToIr = struct {
                 }
             }
             // No expected type or not a struct type - error
-            self.reportError(.E022, "anonymous struct literal requires type context");
+            self.reportErrorWithSuffix(.E022, "anonymous struct literal requires type context", "L");
             return error.TypeMismatch;
         };
 
@@ -8425,7 +8888,7 @@ pub const AstToIr = struct {
                 }
             }
             // No expected type or not a struct type - error
-            self.reportError(.E022, "anonymous struct literal requires type context");
+            self.reportErrorWithSuffix(.E022, "anonymous struct literal requires type context", "M");
             return error.TypeMismatch;
         };
         try self.initStructIntoResolved(sinit, dest_ptr, type_name);
@@ -8619,7 +9082,7 @@ pub const AstToIr = struct {
                 };
             }
             std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
-            self.reportError(.E006, faccess.field_name);
+            self.reportErrorWithSuffix(.E006, faccess.field_name, "AD");
             return error.UnknownType;
         }
 
@@ -8627,7 +9090,7 @@ pub const AstToIr = struct {
             .struct_type => |struct_info| struct_info.name,
             .primitive, .enum_type, .error_union_type, .function_type => {
                 std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
-                self.reportError(.E006, faccess.field_name);
+                self.reportErrorWithSuffix(.E006, faccess.field_name, "AE");
                 return error.UnknownType;
             },
         };
@@ -8661,12 +9124,12 @@ pub const AstToIr = struct {
     fn convertEnumCase(self: *AstToIr, ec: ast.EnumCaseExpr) ConvertError!TypedValue {
         // Look up enum type
         const type_info_ptr = self.type_map.getPtr(ec.enum_name) orelse {
-            self.reportError(.E006, ec.enum_name);
+            self.reportErrorWithSuffix(.E006, ec.enum_name, "AF");
             return error.UnknownType;
         };
 
         if (type_info_ptr.* != .enum_type) {
-            self.reportError(.E006, ec.enum_name);
+            self.reportErrorWithSuffix(.E006, ec.enum_name, "AG");
             return error.UnknownType;
         }
 
@@ -8745,7 +9208,7 @@ pub const AstToIr = struct {
             if (actual_type) |actual| {
                 if (!self.areTypesEquivalent(actual, expected_type)) {
                     const msg = std.fmt.allocPrint(self.allocator, "expected {s}, got {s}", .{ expected_type, actual }) catch "type mismatch";
-                    self.reportError(.E022, msg);
+                    self.reportErrorWithSuffix(.E022, msg, "N");
                     return error.TypeMismatch;
                 }
             }
@@ -9245,7 +9708,7 @@ pub const AstToIr = struct {
             }
 
             const keys_array_type_info = self.type_map.get(keys_array_type_name) orelse {
-                self.reportError(.E006, keys_array_type_name);
+                self.reportErrorWithSuffix(.E006, keys_array_type_name, "AH");
                 return error.UnknownType;
             };
 
@@ -9264,7 +9727,7 @@ pub const AstToIr = struct {
             }
 
             const values_array_type_info = self.type_map.get(values_array_type_name) orelse {
-                self.reportError(.E006, values_array_type_name);
+                self.reportErrorWithSuffix(.E006, values_array_type_name, "AI");
                 return error.UnknownType;
             };
 
@@ -9305,7 +9768,7 @@ pub const AstToIr = struct {
         }
 
         const type_info = self.type_map.get(type_name) orelse {
-            self.reportError(.E006, type_name);
+            self.reportErrorWithSuffix(.E006, type_name, "AJ");
             return error.UnknownType;
         };
 
@@ -9383,7 +9846,7 @@ pub const AstToIr = struct {
     /// Returns the pointer to the allocated wrapper struct.
     fn emitWrapperFromManaged(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr, wrapper: LiteralWrapperType) ConvertError!ir.Value {
         const type_info = self.type_map.get(wrapper.typeName()) orelse {
-            self.reportError(.E006, wrapper.typeName());
+            self.reportErrorWithSuffix(.E006, wrapper.typeName(), "AK");
             return error.UnknownType;
         };
         const wrapper_ptr = try self.func().emitAllocaSized(type_info.struct_type.size);
@@ -9426,7 +9889,7 @@ pub const AstToIr = struct {
         }
 
         const type_info_ptr = self.type_map.getPtr(type_name) orelse {
-            self.reportError(.E006, type_name);
+            self.reportErrorWithSuffix(.E006, type_name, "AL");
             return error.UnknownType;
         };
 
@@ -9531,7 +9994,7 @@ pub const AstToIr = struct {
 
         // Only struct types implementing Indexed or __ManagedMemory support indexing
         std.debug.print("[AST->IR] convertIndexExpr: type does not support indexing\n", .{});
-        self.reportError(.E006, "type does not support indexing (does not implement Indexed interface)");
+        self.reportErrorWithSuffix(.E006, "type does not support indexing (does not implement Indexed interface)", "AM");
         return error.UnknownType;
     }
 
@@ -9556,7 +10019,7 @@ pub const AstToIr = struct {
         call_args: MethodCallArgs,
         self_value: ?ir.Value,
     ) ConvertError!TypedValue {
-        const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method_name });
+        var mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method_name });
         try self.module.trackString(mangled_name);
 
         // If method not found, try to create the type on-demand (for generic types like Array$String)
@@ -9566,9 +10029,21 @@ pub const AstToIr = struct {
             _ = self.lookupStructInfo(type_name) catch {};
             func_info_opt = self.func_map.get(mangled_name);
         }
+
+        // If still not found, try resolving type alias (e.g., ByteArray -> Array$byte)
+        if (func_info_opt == null) {
+            const resolved_type = self.resolveTypeName(type_name);
+            if (!std.mem.eql(u8, resolved_type, type_name)) {
+                // Type was resolved to something different - try with resolved name
+                mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ resolved_type, method_name });
+                try self.module.trackString(mangled_name);
+                func_info_opt = self.func_map.get(mangled_name);
+            }
+        }
+
         const func_info = func_info_opt orelse {
             debug.astToIr("error: unknown method '{s}' on type '{s}'", .{ method_name, type_name });
-            self.reportError(.E003, mangled_name);
+            self.reportErrorWithSuffix(.E003, mangled_name, "M");
             return error.SemanticError;
         };
 
@@ -9773,7 +10248,7 @@ pub const AstToIr = struct {
 
         const func_info = self.func_map.get(mangled_name) orelse {
             debug.astToIr("error: unknown method '{s}' on type '{s}'", .{ method_name, type_name });
-            self.reportError(.E003, mangled_name);
+            self.reportErrorWithSuffix(.E003, mangled_name, "N");
             return error.SemanticError;
         };
 
@@ -9809,7 +10284,7 @@ pub const AstToIr = struct {
             .struct_type => |struct_info| struct_info.name,
             .primitive, .enum_type, .error_union_type, .function_type => {
                 debug.astToIr("error: method call on non-struct type", .{});
-                self.reportError(.E003, method_name);
+                self.reportErrorWithSuffix(.E003, method_name, "O");
                 return error.SemanticError;
             },
         };
@@ -9868,7 +10343,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: method call on non-struct type", .{});
-        self.reportError(.E003, mcall.method_name);
+        self.reportErrorWithSuffix(.E003, mcall.method_name, "P");
         return error.SemanticError;
     }
 
@@ -9896,7 +10371,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: unknown method '{s}' on primitive type '{s}'", .{ method_name, prim.toMaxonName() });
-        self.reportError(.E003, method_name);
+        self.reportErrorWithSuffix(.E003, method_name, "Q");
         return error.SemanticError;
     }
 
@@ -9939,7 +10414,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: hash not supported for type '{s}'", .{prim.toMaxonName()});
-        self.reportError(.E003, prim.toMaxonName());
+        self.reportErrorWithSuffix(.E003, prim.toMaxonName(), "R");
         return error.SemanticError;
     }
 
@@ -9956,7 +10431,7 @@ pub const AstToIr = struct {
         }
 
         debug.astToIr("error: equals not supported for type '{s}'", .{prim.toMaxonName()});
-        self.reportError(.E003, prim.toMaxonName());
+        self.reportErrorWithSuffix(.E003, prim.toMaxonName(), "S");
         return error.SemanticError;
     }
 };
@@ -10091,7 +10566,7 @@ pub fn convertWithExternals(
             for (ext_types) |ext_type| {
                 if (!converter.type_map.contains(ext_type.name)) {
                     debug.astToIr("Failed to register external type '{s}' after {d} passes", .{ ext_type.name, pass });
-                    converter.reportError(.E006, ext_type.name);
+                    converter.reportErrorWithSuffix(.E006, ext_type.name, "AN");
                     if (converter.last_error) |le| {
                         out_error.* = copyErrorWithOwnedPath(allocator, le);
                     }
@@ -10574,13 +11049,13 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ConvertErr
     // Empty map literals require type annotation (cannot infer types)
     if (entries.len == 0) {
         debug.astToIr("error: empty map literal requires type annotation", .{});
-        self.reportError(.E006, "empty map literal requires type annotation");
+        self.reportErrorWithSuffix(.E006, "empty map literal requires type annotation", "AO");
         return error.UnknownType;
     }
 
     // Find the type that implements BuiltinDictionaryLiteral interface
     const base_type_name = self.findDefaultLiteralType("BuiltinDictionaryLiteral") orelse {
-        self.reportError(.E006, "no type implements BuiltinDictionaryLiteral interface for map literals");
+        self.reportErrorWithSuffix(.E006, "no type implements BuiltinDictionaryLiteral interface for map literals", "AP");
         return error.SemanticError;
     };
 
@@ -10590,12 +11065,12 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ConvertErr
 
     const key_type_name = first_key_typed.ty.getTypeName() orelse {
         debug.astToIr("error: map key type must be a named type (primitive or struct)", .{});
-        self.reportError(.E006, "map key type must be a named type");
+        self.reportErrorWithSuffix(.E006, "map key type must be a named type", "AQ");
         return error.UnknownType;
     };
     const value_type_name = first_value_typed.ty.getTypeName() orelse {
         debug.astToIr("error: map value type must be a named type (primitive or struct)", .{});
-        self.reportError(.E006, "map value type must be a named type");
+        self.reportErrorWithSuffix(.E006, "map value type must be a named type", "AR");
         return error.UnknownType;
     };
 
@@ -10668,7 +11143,7 @@ pub fn convertMapLiteral(self: *AstToIr, map_lit: ast.MapLiteralExpr) ConvertErr
     }
 
     const type_info = self.type_map.get(map_type_name) orelse {
-        self.reportError(.E006, map_type_name);
+        self.reportErrorWithSuffix(.E006, map_type_name, "AS");
         return error.UnknownType;
     };
 

@@ -55,7 +55,7 @@ When called on a type like `IntArray is Container with int`, the return type `El
 
 ### Extension Method Synthesis
 
-When a type conforms to an interface that has extensions, the compiler synthesizes concrete methods for that type. For example, if `Array of int` conforms to `Iterable`, calling `myArray.count()` invokes a method specialized for `Array of int`.
+When a type conforms to an interface that has extensions, the compiler synthesizes concrete methods for that type. For example, if `type IntArray is Array with int` conforms to `Iterable`, calling `myArray.count()` invokes a method specialized for `IntArray`.
 
 ### Transitive Extensions
 
@@ -65,8 +65,10 @@ Extensions from interfaces are also applied transitively. If interface `B` exten
 
 ```maxon
 extension Iterable
-    function map(transform (Element) returns Element) returns Array of Element
-        var result = Array of Element{}
+    associatedtype ElementArray is Array with Element
+
+    function map(transform (Element) returns Element) returns ElementArray
+        var result = ElementArray{}
         for item in self 'loop'
             result.push(transform(item))
         end 'loop'
@@ -270,18 +272,20 @@ end 'main'
 
 <!-- test: stdlib-map-on-set -->
 ```maxon
+type IntSet is Set with int
+
 function main() returns int
-    var s = Set of int{}
+    var s = IntSet{}
     s.insert(10)
     s.insert(20)
     s.insert(30)
     var mapped = s.map((x int) gives x + 1)
-    
+
     var sum = 0
     for n in mapped 'loop'
         sum = sum + n
     end 'loop'
-    
+
     // 11 + 21 + 31 = 63 (order may vary but sum is same)
     return sum
 end 'main'
@@ -292,15 +296,17 @@ end 'main'
 
 <!-- test: stdlib-map-on-map -->
 ```maxon
+type StringIntPair is Pair with (String, int)
+
 function main() returns int
     var m = ["a": 1, "b": 2, "c": 3]
-    var mapped = m.map((p Pair of String int) gives Pair of String int{key: p.key, value: p.value * 10})
-    
+    var mapped = m.map((p StringIntPair) gives StringIntPair{key: p.key, value: p.value * 10})
+
     var sum = 0
     for pair in mapped 'loop'
         sum = sum + pair.value
     end 'loop'
-    
+
     // 10 + 20 + 30 = 60
     return sum
 end 'main'
@@ -311,19 +317,21 @@ end 'main'
 
 <!-- test: stdlib-map-on-map-with-function -->
 ```maxon
-function multiplyValue(p Pair of String int) returns Pair of String int
-    return Pair of String int{key: p.key, value: p.value * 10}
+type StringIntPair is Pair with (String, int)
+
+function multiplyValue(p StringIntPair) returns StringIntPair
+    return StringIntPair{key: p.key, value: p.value * 10}
 end 'multiplyValue'
 
 function main() returns int
     var m = ["a": 1, "b": 2, "c": 3]
     var mapped = m.map(multiplyValue)
-    
+
     var sum = 0
     for pair in mapped 'loop'
         sum = sum + pair.value
     end 'loop'
-    
+
     // 10 + 20 + 30 = 60
     return sum
 end 'main'

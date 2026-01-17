@@ -953,8 +953,10 @@ test "managed memory - heap array generates free" {
     const allocator = testing.allocator;
 
     const source =
+        \\type IntArray is Array with int
+        \\
         \\function main() returns int
-        \\    var arr = Array of int{}
+        \\    var arr = IntArray{}
         \\    arr.push(1)
         \\    arr.push(2)
         \\    return arr.count()
@@ -976,12 +978,14 @@ test "managed memory - scope cleanup generates free" {
     const allocator = testing.allocator;
 
     const source =
+        \\type IntArray is Array with int
+        \\
         \\function main() returns int
         \\    if true 'outer'
-        \\        var outer_arr = Array of int{}
+        \\        var outer_arr = IntArray{}
         \\        outer_arr.push(100)
         \\        if true 'inner'
-        \\            var inner_arr = Array of int{}
+        \\            var inner_arr = IntArray{}
         \\            inner_arr.push(200)
         \\        end 'inner'
         \\    end 'outer'
@@ -1003,8 +1007,10 @@ test "managed memory - loop growth generates realloc" {
     const allocator = testing.allocator;
 
     const source =
+        \\type IntArray is Array with int
+        \\
         \\function main() returns int
-        \\    var arr = Array of int{}
+        \\    var arr = IntArray{}
         \\    var i = 0
         \\    while i < 10 'loop'
         \\        arr.push(i)
@@ -1052,8 +1058,10 @@ test "managed memory - struct field array method call" {
     const allocator = testing.allocator;
 
     const source =
+        \\type StringArray is Array with String
+        \\
         \\type Config
-        \\    export var sources Array of String
+        \\    export var sources StringArray
         \\end 'Config'
         \\
         \\function main() returns int

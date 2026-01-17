@@ -678,7 +678,9 @@ var result = divide(dividend: 10, divisor: 2)
 
 **Array Parameters**
 ```maxon
-function sum(numbers Array of int) returns int
+type IntArray is Array with int
+
+function sum(numbers IntArray) returns int
     var total = 0
     for num in numbers 'loop'
         total = total + num
@@ -788,22 +790,28 @@ arr.set(0, value: 100)  // First positional, second named
 
 ### Creating Empty Arrays
 
-Create an empty typed array using struct initialization syntax:
+Create an empty typed array using a type alias:
 ```maxon
-var numbers = Array of int{}     // Empty array
+type IntArray is Array with int
+
+var numbers = IntArray{}         // Empty array
 numbers.push(42)                 // Add elements with push
 ```
 
 To preallocate with a specific length (elements zero-initialized):
 ```maxon
-var buffer = Array of int{}
+type IntArray is Array with int
+
+var buffer = IntArray{}
 buffer.resize(100)               // Length is now 100
 buffer.set(0, value: 42)         // Can set any index 0-99
 ```
 
 To preallocate capacity without changing length (for performance):
 ```maxon
-var buffer = Array of int{}
+type IntArray is Array with int
+
+var buffer = IntArray{}
 buffer.reserve(100)              // Capacity is 100, length is 0
 buffer.push(42)                  // Now length is 1
 ```
@@ -1486,10 +1494,12 @@ end 'main'
 ### BuildConfig Type
 
 ```maxon
+type StringArray is Array with String
+
 type BuildConfig
     var name String           // Executable name
     var output String         // Output path (e.g., "bin/app.exe")
-    var sources Array of String  // Source files (empty = auto-discover)
+    var sources StringArray   // Source files (empty = auto-discover)
     var optimize bool         // Enable optimizations
     var debug_info bool       // Include debug symbols
 end 'BuildConfig'

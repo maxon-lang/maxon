@@ -16,6 +16,8 @@ end 'FileDeleteError'
 let INVALID_HANDLE = -1
 
 export type File
+	associatedtype ByteArray is Array with byte
+
 	/// Open a file for reading, returning INVALID_HANDLE if it doesn't exist
 	static function tryOpen(path String) returns int
 		return __file_open_read(path.cstr())
@@ -50,9 +52,9 @@ export type File
 	end 'readText'
 
 	/// Read file content as raw bytes
-	export static function readBinary(path String) returns Array of byte throws FileReadError
+	export static function readBinary(path String) returns ByteArray throws FileReadError
 		var managed = try readFileData(path, extraBytes: 0)
-		return Array of byte{managed: managed, iterIndex: 0}
+		return ByteArray{managed: managed, iterIndex: 0}
 	end 'readBinary'
 
 	/// Write string content to a text file
@@ -64,7 +66,7 @@ export type File
 	end 'writeText'
 
 	/// Write binary content to a file
-	export static function writeBinary(path String, content Array of byte) throws FileWriteError
+	export static function writeBinary(path String, content ByteArray) throws FileWriteError
 		let res = __write_file_binary(path.cstr(), content)
 		if res != 0 'failed'
 			throw FileWriteError.failed

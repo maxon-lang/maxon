@@ -101,8 +101,10 @@ end 'Iterable'
 
 // Extension methods for Iterable - available on all conforming types
 export extension Iterable
-	function map(transform (Element) returns Element) returns Array of Element
-		var result = Array of Element{}
+	associatedtype ElementArray is Array with Element
+
+	function map(transform (Element) returns Element) returns ElementArray
+		var result = ElementArray{}
 		for item in self 'loop'
 			result.push(transform(item))
 		end 'loop'
@@ -174,7 +176,8 @@ end 'InitableFromCharLiteral'
 // The compiler detects conformance and transforms: var x MyType = [1, 2, 3] -> var x = MyType.init(Array.init(managed))
 // Note: Array itself is special-cased by the compiler (uses __ManagedMemory directly).
 export interface InitableFromArrayLiteral uses Element
-	static function init(value Array of Element) returns Self
+	associatedtype ElementArray is Array with Element
+	static function init(value ElementArray) returns Self
 end 'InitableFromArrayLiteral'
 
 // InitableFromDictionaryLiteral - types that can be initialized from map literals
@@ -183,7 +186,9 @@ end 'InitableFromArrayLiteral'
 // Both arrays have the same length and corresponding indices represent key-value pairs.
 // Note: Map itself is special-cased by the compiler (uses __ManagedMemory directly).
 export interface InitableFromDictionaryLiteral uses Key, Value
-	static function init(keys Array of Key, values Array of Value) returns Self
+	associatedtype KeyArray is Array with Key
+	associatedtype ValueArray is Array with Value
+	static function init(keys KeyArray, values ValueArray) returns Self
 end 'InitableFromDictionaryLiteral'
 
 export interface Parsable

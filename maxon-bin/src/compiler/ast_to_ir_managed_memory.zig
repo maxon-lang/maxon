@@ -947,7 +947,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
 
         // Get Array type info for size
         const array_type_info = self.type_map.get(array_type_name) orelse {
-            self.reportError(.E006, array_type_name);
+            self.reportErrorWithSuffix(.E006, array_type_name, "A");
             return error.UnknownType;
         };
 
@@ -968,7 +968,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
 
     // Look up the function and type info
     const func_info = self.func_map.get(init_func_name) orelse {
-        self.reportError(.E003, init_func_name);
+        self.reportErrorWithSuffix(.E003, init_func_name, "A");
         return error.UnknownFunction;
     };
 
@@ -978,7 +978,7 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
     }
 
     const type_info = self.type_map.get(type_name) orelse {
-        self.reportError(.E006, type_name);
+        self.reportErrorWithSuffix(.E006, type_name, "B");
         return error.UnknownType;
     };
 
@@ -1028,7 +1028,7 @@ pub fn convertArrayLiteral(self: *AstToIr, arr_lit: ast.ArrayLiteralExpr) Conver
 
     // Find the type that implements BuiltinArrayLiteral interface
     const base_type_name = self.findDefaultLiteralType("BuiltinArrayLiteral") orelse {
-        self.reportError(.E006, "no type implements BuiltinArrayLiteral interface for array literals");
+        self.reportErrorWithSuffix(.E006, "no type implements BuiltinArrayLiteral interface for array literals", "C");
         return error.SemanticError;
     };
 
@@ -1204,7 +1204,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
         const first_typed = try self.convertExpression(elements[0]);
         elem_type_name = first_typed.ty.getTypeName() orelse {
             debug.astToIr("error: element type must be a named type", .{});
-            self.reportError(.E006, "element type must be a named type");
+            self.reportErrorWithSuffix(.E006, "element type must be a named type", "D");
             return error.UnknownType;
         };
 
@@ -1252,7 +1252,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
 
     // Get Array type info for size
     const array_type_info = self.type_map.get(array_type_name) orelse {
-        self.reportError(.E006, array_type_name);
+        self.reportErrorWithSuffix(.E006, array_type_name, "E");
         return error.UnknownType;
     };
 
@@ -1281,7 +1281,7 @@ pub fn convertInitFromArray(self: *AstToIr, ifa: ast.InitFromArrayExpr) ConvertE
     }
 
     const type_info = self.type_map.get(target_type_name) orelse {
-        self.reportError(.E006, target_type_name);
+        self.reportErrorWithSuffix(.E006, target_type_name, "F");
         return error.UnknownType;
     };
 

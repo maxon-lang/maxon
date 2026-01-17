@@ -21,15 +21,18 @@
 // ```
 
 export type Set uses Element is Sized, InitableFromArrayLiteral with Element, Iterable with Element, Unique with Element
-	var elements Array of Element   // Element storage
-	var states Array of int         // Slot states: 0=empty, 1=occupied, 2=deleted
+	associatedtype ElementArray is Array with Element
+	associatedtype IntArray is Array with int
+
+	var elements ElementArray   // Element storage
+	var states IntArray         // Slot states: 0=empty, 1=occupied, 2=deleted
 	var count int                   // Number of occupied entries
 	var capacity int                // Total slots
 	var iterIndex int               // Current iteration position
 
 	// InitableFromArrayLiteral conformance - initialize Set from array literal
 	// Called by the compiler for `Set from [1, 2, 3]` syntax
-	static function InitableFromArrayLiteral.init(arr Array of Element) returns Self
+	static function InitableFromArrayLiteral.init(arr ElementArray) returns Self
 		// Get number of elements in the array
 		var numElements = arr.count()
 
@@ -40,9 +43,9 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 		end 'calc_cap'
 
 		// Allocate internal arrays with preallocated capacity
-		var elems = Array of Element{}
+		var elems = ElementArray{}
 		elems.resize(cap)
-		var sts = Array of int{}
+		var sts = IntArray{}
 		sts.resize(cap)
 
 		// Create the set type (copies array structs by value)
@@ -62,9 +65,9 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 	export function Unique.insert(element Element)
 		// Initialize if empty struct was created with zero capacity
 		if capacity == 0 'init_empty'
-			var newElements = Array of Element{}
+			var newElements = ElementArray{}
 			newElements.resize(16)
-			var newStates = Array of int{}
+			var newStates = IntArray{}
 			newStates.resize(16)
 			elements = newElements
 			states = newStates
@@ -241,9 +244,9 @@ export type Set uses Element is Sized, InitableFromArrayLiteral with Element, It
 		var oldStates = states
 
 		// Allocate new arrays with preallocated capacity
-		var newElements = Array of Element{}
+		var newElements = ElementArray{}
 		newElements.resize(newCapacity)
-		var newStates = Array of int{}
+		var newStates = IntArray{}
 		newStates.resize(newCapacity)
 
 		// Update type to use new arrays

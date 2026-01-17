@@ -43,9 +43,11 @@ Leaked:    0 bytes
 <!-- test: dynamic-array-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
     let size = 10
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 42)
     return try arr.get(0) otherwise 0
@@ -93,12 +95,14 @@ Decrefs:   0
 <!-- test: multiple-arrays -->
 <!-- TrackMemory: true -->
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
     let size1 = 5
     let size2 = 10
-    var arr1 = Array of int{}
+    var arr1 = IntArray{}
     arr1.resize(size1)
-    var arr2 = Array of int{}
+    var arr2 = IntArray{}
     arr2.resize(size2)
     arr1.set(0, value: 1)
     arr2.set(0, value: 2)
@@ -132,9 +136,11 @@ Decrefs:   2
 <!-- test: array-early-return-true -->
 <!-- TrackMemory: true -->
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
     let size = 5
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 42)
     if true 'check'
@@ -164,9 +170,11 @@ Decrefs:   1
 <!-- test: array-early-return-false -->
 <!-- TrackMemory: true -->
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
     let size = 5
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 42)
     if false 'check'
@@ -196,13 +204,15 @@ Decrefs:   1
 <!-- test: array-passed-to-function -->
 <!-- TrackMemory: true -->
 ```maxon
-function sum_first(arr Array of int) returns int
+type IntArray is Array with int
+
+function sum_first(arr IntArray) returns int
     return try arr.get(0) otherwise 0
 end 'sum_first'
 
 function main() returns int
     let size = 5
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 99)
     return sum_first(arr)
@@ -229,10 +239,12 @@ Decrefs:   1
 <!-- test: array-computed-size -->
 <!-- TrackMemory: true -->
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
     let a = 2
     let b = 5
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(a * b)
     arr.set(0, value: 77)
     return try arr.get(0) otherwise 0
@@ -259,13 +271,15 @@ Decrefs:   1
 <!-- test: array-borrow-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
-function readFirst(arr Array of int) returns int
+type IntArray is Array with int
+
+function readFirst(arr IntArray) returns int
     return try arr.get(0) otherwise 0
 end 'readFirst'
 
 function main() returns int
     let size = 5
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 42)
     let result = readFirst(arr)
@@ -294,13 +308,15 @@ Decrefs:   1
 <!-- test: array-borrow-multiple-times -->
 <!-- TrackMemory: true -->
 ```maxon
-function getElement(arr Array of int, idx int) returns int
+type IntArray is Array with int
+
+function getElement(arr IntArray, idx int) returns int
     return try arr.get(idx) otherwise 0
 end 'getElement'
 
 function main() returns int
     let size = 5
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 10)
     arr.set(1, value: 20)
@@ -332,12 +348,14 @@ Decrefs:   1
 <!-- test: array-in-loop -->
 <!-- TrackMemory: true -->
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
     var i = 0
     var sum = 0
     while i < 3 'loop'
         let size = 5
-        var arr = Array of int{}
+        var arr = IntArray{}
         arr.resize(size)
         arr.set(0, value: i)
         var val = try arr.get(0) otherwise 0
@@ -376,14 +394,16 @@ Decrefs:   3
 <!-- test: array-move-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
-function mutateFirst(arr Array of int) returns int
+type IntArray is Array with int
+
+function mutateFirst(arr IntArray) returns int
     arr.set(0, value: 100)
     return try arr.get(0) otherwise 0
 end 'mutateFirst'
 
 function main() returns int
     let size = 5
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 42)
     return mutateFirst(arr)
@@ -411,13 +431,15 @@ Decrefs:   1
 <!-- test: array-move-chain -->
 <!-- TrackMemory: true -->
 ```maxon
-function addTen(arr Array of int) returns int
+type IntArray is Array with int
+
+function addTen(arr IntArray) returns int
     var val = try arr.get(0) otherwise 0
     arr.set(0, value: val + 10)
     return try arr.get(0) otherwise 0
 end 'addTen'
 
-function doubleAddTen(arr Array of int) returns int
+function doubleAddTen(arr IntArray) returns int
     var val = try arr.get(0) otherwise 0
     arr.set(0, value: val * 2)
     return addTen(arr)
@@ -425,7 +447,7 @@ end 'doubleAddTen'
 
 function main() returns int
     let size = 5
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 5)
     return doubleAddTen(arr)
@@ -454,20 +476,22 @@ Decrefs:   1
 <!-- test: two-arrays-one-moved-one-borrowed -->
 <!-- TrackMemory: true -->
 ```maxon
-function readIt(arr Array of int) returns int
+type IntArray is Array with int
+
+function readIt(arr IntArray) returns int
     return try arr.get(0) otherwise 0
 end 'readIt'
 
-function writeIt(arr Array of int) returns int
+function writeIt(arr IntArray) returns int
     arr.set(0, value: 99)
     return try arr.get(0) otherwise 0
 end 'writeIt'
 
 function main() returns int
     let size = 5
-    var arr1 = Array of int{}
+    var arr1 = IntArray{}
     arr1.resize(size)
-    var arr2 = Array of int{}
+    var arr2 = IntArray{}
     arr2.resize(size)
     arr1.set(0, value: 10)
     arr2.set(0, value: 20)
@@ -504,9 +528,11 @@ Decrefs:   2
 Zero-size arrays don't allocate memory.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
     let size = 0
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     if size > 0 'check'
         arr.set(0, value: 1)
@@ -533,12 +559,14 @@ Decrefs:   0
 Reassigning a heap array frees the old memory and allocates new memory.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
     let size = 5
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 10)
-    arr = Array of int{}
+    arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 20)
     return try arr.get(0) otherwise 0

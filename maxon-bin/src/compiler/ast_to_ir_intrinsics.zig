@@ -241,7 +241,7 @@ pub fn convertBuiltin(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValu
             break :blk self.func().emitUnaryOp(.sitofp, arg.value, .f64) catch return error.OutOfMemory;
         }
         const msg = std.fmt.allocPrint(self.allocator, "{s}() requires {s} argument", .{ call.func_name, arg_ir_type.toMaxonName() }) catch call.func_name;
-        self.reportError(.E022, msg);
+        self.reportErrorWithSuffix(.E022, msg, "A");
         return error.TypeMismatch;
     } else arg.value;
 

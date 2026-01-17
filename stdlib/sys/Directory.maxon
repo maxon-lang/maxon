@@ -4,15 +4,17 @@ export enum DirectoryListError is Error
 end 'DirectoryListError'
 
 export type Directory
+	associatedtype StringArray is Array with String
+
 	/// List files and directories in a path
-	export static function list(path String) returns Array of String throws DirectoryListError
+	export static function list(path String) returns StringArray throws DirectoryListError
 		var pattern = "{path}\\*"
 		var cs = pattern.cstr()
 		var handle = __find_first_file(cs)
 		if handle == 0 'notFound'
 			throw DirectoryListError.notFound
 		end 'notFound'
-		var result = Array of String{}
+		var result = StringArray{}
 		var filename = __find_filename(handle)
 		var name = String.fromCString(filename)
 		if name != "." and name != ".." 'notDot1'

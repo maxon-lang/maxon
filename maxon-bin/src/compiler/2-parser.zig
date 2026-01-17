@@ -177,6 +177,10 @@ pub const Parser = struct {
     }
 
     fn reportError(self: *Parser, code: err.ErrorCode) void {
+        self.reportErrorWithSuffix(code, null);
+    }
+
+    fn reportErrorWithSuffix(self: *Parser, code: err.ErrorCode, suffix: ?[]const u8) void {
         const tok = self.current();
         self.last_error = .{
             .code = code,
@@ -186,6 +190,7 @@ pub const Parser = struct {
                 .line = tok.line,
                 .column = tok.column,
             },
+            .suffix = suffix,
         };
     }
 
@@ -203,10 +208,14 @@ pub const Parser = struct {
     }
 
     fn reportErrorWithDetails(self: *Parser, code: err.ErrorCode, details: []const u8) void {
+        self.reportErrorWithDetailsAndSuffix(code, details, null);
+    }
+
+    fn reportErrorWithDetailsAndSuffix(self: *Parser, code: err.ErrorCode, details: []const u8, suffix: ?[]const u8) void {
         const tok = self.current();
         const formatted = std.fmt.allocPrint(self.allocator, "{s}: '{s}'", .{ code.message(), details }) catch {
             // Fall back to basic message on allocation failure
-            self.reportError(code);
+            self.reportErrorWithSuffix(code, suffix);
             return;
         };
         self.last_error = .{
@@ -218,6 +227,7 @@ pub const Parser = struct {
                 .column = tok.column,
             },
             .message_allocated = true,
+            .suffix = suffix,
         };
     }
 
@@ -268,7 +278,34 @@ pub const Parser = struct {
 
         _ = try self.expect(.newline);
 
-        // Parse fields and methods
+        // Skip blank lines before checking for type alias vs type body
+        self.skipNewlines();
+
+        // Check if this is a type alias (no body) - if we see a top-level declaration
+        // or EOF after the conformances, this type has no body
+        if (conformances.items.len > 0 and self.isTopLevelDeclarationStart()) {
+            // This is a type alias like `type IntArray is Array with int`
+            // No body, no `end` block needed
+            return .{
+                .name = name_token.text,
+                .is_export = is_export,
+                .generic_params = generic_params,
+                .conformances = try conformances.toOwnedSlice(self.allocator),
+                .associated_types = &[_]ast.AssociatedTypeDecl{},
+                .fields = &[_]ast.FieldDecl{},
+                .methods = &[_]ast.MethodDecl{},
+                .block = .{
+                    .start_line = name_token.line,
+                    .start_column = name_token.column,
+                    .end_line = name_token.line,
+                    .identifier = name_token.text,
+                },
+            };
+        }
+
+        // Parse associated types, fields and methods
+        var associated_types: std.ArrayListUnmanaged(ast.AssociatedTypeDecl) = .empty;
+        errdefer associated_types.deinit(self.allocator);
         var fields: std.ArrayListUnmanaged(ast.FieldDecl) = .empty;
         errdefer fields.deinit(self.allocator);
         var methods: std.ArrayListUnmanaged(ast.MethodDecl) = .empty;
@@ -284,6 +321,12 @@ pub const Parser = struct {
             if (self.check(.doc_comment)) {
                 const doc_text = self.advance().text;
                 self.pending_doc_comment = doc_text;
+                continue;
+            }
+
+            // Check for associatedtype declaration
+            if (self.check(.associatedtype)) {
+                try associated_types.append(self.allocator, try self.parseAssociatedType());
                 continue;
             }
 
@@ -324,7 +367,7 @@ pub const Parser = struct {
                 // Type inferred from default value: `var count = 0`
                 _ = self.advance(); // consume '='
                 const default_expr = try self.parseExpression() orelse {
-                    self.reportError(.E003);
+                    self.reportErrorWithSuffix(.E003, "T");
                     return error.ExpectedExpression;
                 };
                 default_value = try self.createExpr(default_expr);
@@ -338,7 +381,7 @@ pub const Parser = struct {
                 if (self.check(.equals)) {
                     _ = self.advance(); // consume '='
                     const default_expr = try self.parseExpression() orelse {
-                        self.reportError(.E003);
+                        self.reportErrorWithSuffix(.E003, "U");
                         return error.ExpectedExpression;
                     };
                     default_value = try self.createExpr(default_expr);
@@ -364,6 +407,7 @@ pub const Parser = struct {
             .is_export = is_export,
             .generic_params = generic_params,
             .conformances = try conformances.toOwnedSlice(self.allocator),
+            .associated_types = try associated_types.toOwnedSlice(self.allocator),
             .fields = try fields.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),
             .block = .{
@@ -382,7 +426,7 @@ pub const Parser = struct {
         _ = try self.expect(.equals);
 
         const value_expr = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "V");
             return error.ExpectedExpression;
         };
 
@@ -619,7 +663,7 @@ pub const Parser = struct {
         if (self.check(.equals)) {
             _ = self.advance(); // consume '='
             const expr = try self.parseExpression() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "W");
                 return error.ExpectedExpression;
             };
             return try self.createExpr(expr);
@@ -712,74 +756,14 @@ pub const Parser = struct {
         const type_line = start_token.line;
         const type_column = start_token.column;
 
-        // Parse type name (may include "Array" which is treated as a generic type)
+        // Parse simple type name - generic types must be instantiated via type aliases
         const type_name = try self.expectTypeName();
 
-        // Check for generic type instantiation: TypeName of arg1 [arg2 ...]
-        if (self.check(.of)) {
-            _ = self.advance(); // consume 'of'
-
-            // Parse type arguments for generic types
-            var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
-            errdefer type_args.deinit(self.allocator);
-
-            // First type argument is required
-            try type_args.append(self.allocator, try self.expectTypeName());
-
-            // Additional type arguments are optional (for types like Map of string int)
-            while (self.check(.identifier) or self.check(.int) or self.check(.float)) {
-                // Only consume if it looks like a type name (starts with lowercase or is a known type)
-                const next = self.peek(0);
-                if (next == null) break;
-                // Check if this could be a type name (heuristic: not 'or', 'and', etc.)
-                if (std.mem.eql(u8, next.?.text, "or") or
-                    std.mem.eql(u8, next.?.text, "and"))
-                {
-                    break;
-                }
-                try type_args.append(self.allocator, try self.expectTypeName());
-            }
-
-            return .{
-                .expr = .{ .generic = .{
-                    .base_type = type_name,
-                    .type_args = try type_args.toOwnedSlice(self.allocator),
-                } },
-                .line = type_line,
-                .column = type_column,
-            };
-        } else if (self.check(.from)) {
-            // Check for "TypeName from K to V" syntax (two-argument generics like Map)
-            _ = self.advance(); // consume 'from'
-
-            // Parse first type argument (key type)
-            const key_type = try self.expectTypeName();
-
-            // Expect 'to' keyword
-            _ = try self.expect(.to);
-
-            // Parse second type argument (value type)
-            const value_type = try self.expectTypeName();
-
-            var type_args_arr = try self.allocator.alloc([]const u8, 2);
-            type_args_arr[0] = key_type;
-            type_args_arr[1] = value_type;
-
-            return .{
-                .expr = .{ .generic = .{
-                    .base_type = type_name,
-                    .type_args = type_args_arr,
-                } },
-                .line = type_line,
-                .column = type_column,
-            };
-        } else {
-            return .{
-                .expr = .{ .simple = type_name },
-                .line = type_line,
-                .column = type_column,
-            };
-        }
+        return .{
+            .expr = .{ .simple = type_name },
+            .line = type_line,
+            .column = type_column,
+        };
     }
 
     /// Convert a TypeExpr to a monomorphized string name
@@ -1023,7 +1007,7 @@ pub const Parser = struct {
         if (self.check(.@"try")) {
             _ = self.advance(); // consume 'try'
             const operand = try self.parseUnary() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "X");
                 return error.ExpectedExpression;
             };
             // Check for otherwise clause
@@ -1043,7 +1027,7 @@ pub const Parser = struct {
             const start_pos = self.pos;
             // Try to parse as expression
             const expr = try self.parseExpression() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "Y");
                 return error.ExpectedExpression;
             };
 
@@ -1051,7 +1035,7 @@ pub const Parser = struct {
             if (self.check(.equals)) {
                 _ = self.advance(); // consume '='
                 const value = try self.parseExpression() orelse {
-                    self.reportError(.E003);
+                    self.reportErrorWithSuffix(.E003, "Z");
                     return error.ExpectedExpression;
                 };
                 _ = try self.expect(.newline);
@@ -1127,7 +1111,7 @@ pub const Parser = struct {
                 return stmtAt(.{ .let_decl = .{ .name = name_token.text, .type_annotation = null, .value = expr } }, start_line, start_column);
             }
         }
-        self.reportError(.E003);
+        self.reportErrorWithSuffix(.E003, "AA");
         return error.ExpectedExpression;
     }
 
@@ -1281,7 +1265,7 @@ pub const Parser = struct {
     /// and parseElseBlock for else-if chains.
     fn parseIfConditionAndBody(self: *Parser, start_line: u32, start_column: u32) ParseError!ast.IfStmt {
         const condition = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AB");
             return error.ExpectedExpression;
         };
 
@@ -1335,7 +1319,7 @@ pub const Parser = struct {
 
         // Parse the expression being tried (the function call)
         const try_expr = try self.parseUnary() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AC");
             return error.ExpectedExpression;
         };
 
@@ -1432,7 +1416,7 @@ pub const Parser = struct {
         _ = try self.expect(.@"while");
 
         const condition = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AD");
             return error.ExpectedExpression;
         };
 
@@ -1480,7 +1464,7 @@ pub const Parser = struct {
 
         // Parse iterable expression
         const iterable = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AE");
             return error.ExpectedExpression;
         };
 
@@ -1525,7 +1509,7 @@ pub const Parser = struct {
 
         _ = try self.expect(.throw);
         const error_expr = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AF");
             return error.ExpectedExpression;
         };
         _ = try self.expect(.newline);
@@ -1545,7 +1529,7 @@ pub const Parser = struct {
 
         // Parse scrutinee expression
         const scrutinee = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AG");
             return error.ExpectedExpression;
         };
 
@@ -1729,7 +1713,7 @@ pub const Parser = struct {
 
         // Fall back to regular expression parsing for other patterns
         const pattern = try self.parseLogicalAnd() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AH");
             return error.ExpectedExpression;
         };
         return .{
@@ -1761,7 +1745,7 @@ pub const Parser = struct {
         // Parse other statements (assignment, call, etc.)
         if (self.check(.identifier) or self.check(.self)) {
             const expr = try self.parseExpression() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AI");
                 return error.ExpectedExpression;
             };
 
@@ -1769,7 +1753,7 @@ pub const Parser = struct {
             if (self.check(.equals)) {
                 _ = self.advance(); // consume '='
                 const value = try self.parseExpression() orelse {
-                    self.reportError(.E003);
+                    self.reportErrorWithSuffix(.E003, "AJ");
                     return error.ExpectedExpression;
                 };
 
@@ -1838,7 +1822,7 @@ pub const Parser = struct {
 
         // Parse scrutinee expression
         const scrutinee = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AK");
             return error.ExpectedExpression;
         };
 
@@ -1862,7 +1846,7 @@ pub const Parser = struct {
                 _ = self.advance();
                 _ = try self.expect(.gives);
                 default_expr = try self.parseExpression() orelse {
-                    self.reportError(.E003);
+                    self.reportErrorWithSuffix(.E003, "AL");
                     return error.ExpectedExpression;
                 };
                 _ = try self.expect(.newline);
@@ -1891,7 +1875,7 @@ pub const Parser = struct {
 
             // Parse result expression
             const result = try self.parseExpression() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AM");
                 return error.ExpectedExpression;
             };
             _ = try self.expect(.newline);
@@ -1932,7 +1916,7 @@ pub const Parser = struct {
         while (self.check(.@"or")) {
             _ = self.advance();
             const right = try self.parseLogicalAnd() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AN");
                 return error.ExpectedExpression;
             };
 
@@ -1961,7 +1945,7 @@ pub const Parser = struct {
 
             _ = self.advance();
             const right = try self.parseBitwiseOr() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AO");
                 return error.ExpectedExpression;
             };
 
@@ -2000,7 +1984,7 @@ pub const Parser = struct {
         while (self.check(token)) {
             _ = self.advance();
             const right = try nextParser(self) orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AP");
                 return error.ExpectedExpression;
             };
             left = try self.makeBinary(left, op, right);
@@ -2014,7 +1998,7 @@ pub const Parser = struct {
         if (self.matchComparison()) |op| {
             _ = self.advance();
             const right = try self.parseShift() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AQ");
                 return error.ExpectedExpression;
             };
             left = try self.makeCompare(left, op, right);
@@ -2046,7 +2030,7 @@ pub const Parser = struct {
         while (self.matchShift()) |op| {
             _ = self.advance();
             const right = try self.parseAdditive() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AR");
                 return error.ExpectedExpression;
             };
             left = try self.makeBinary(left, op, right);
@@ -2066,7 +2050,7 @@ pub const Parser = struct {
         while (self.matchAdditive()) |op| {
             _ = self.advance();
             const right = try self.parseMultiplicative() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AS");
                 return error.ExpectedExpression;
             };
             left = try self.makeBinary(left, op, right);
@@ -2080,7 +2064,7 @@ pub const Parser = struct {
         while (self.matchMultiplicative()) |op| {
             _ = self.advance();
             const right = try self.parseUnary() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AT");
                 return error.ExpectedExpression;
             };
             left = try self.makeBinary(left, op, right);
@@ -2093,7 +2077,7 @@ pub const Parser = struct {
         if (self.check(.minus)) {
             _ = self.advance();
             const operand = try self.parseUnary() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AU");
                 return error.ExpectedExpression;
             };
             return .{ .unary = .{
@@ -2105,7 +2089,7 @@ pub const Parser = struct {
         if (self.check(.not)) {
             _ = self.advance();
             const operand = try self.parseUnary() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AV");
                 return error.ExpectedExpression;
             };
             return .{ .unary = .{
@@ -2117,7 +2101,7 @@ pub const Parser = struct {
         if (self.check(.@"try")) {
             _ = self.advance();
             const operand = try self.parseUnary() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AW");
                 return error.ExpectedExpression;
             };
 
@@ -2204,7 +2188,7 @@ pub const Parser = struct {
 
         // Default expression mode: otherwise defaultExpr
         const default_expr = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AX");
             return error.ExpectedExpression;
         };
         const expr_ptr = try self.createExpr(default_expr);
@@ -2322,51 +2306,10 @@ pub const Parser = struct {
         if (self.check(.identifier)) {
             const token = self.advance();
 
-            // Check for generic type instantiation: TypeName of T{...}
+            // Inline generic syntax "TypeName of T{...}" is no longer allowed
+            // Use type aliases instead: "type MyArray is Array with T"
             if (self.check(.of)) {
-                _ = self.advance(); // consume 'of'
-
-                // Parse type arguments
-                var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
-                errdefer type_args.deinit(self.allocator);
-
-                // First type argument is required
-                try type_args.append(self.allocator, try self.expectTypeName());
-
-                // Additional type arguments (for types like Map of string int)
-                while (self.check(.identifier) or self.check(.int) or self.check(.float)) {
-                    const next = self.peek(0);
-                    if (next == null) break;
-                    // Stop if next token is a keyword or could be part of expression
-                    if (std.mem.eql(u8, next.?.text, "or") or
-                        std.mem.eql(u8, next.?.text, "and"))
-                    {
-                        break;
-                    }
-                    // Only continue if followed by identifier (another type arg)
-                    // or lbrace (struct init)
-                    const peek1 = self.peek(1);
-                    if (peek1 != null and peek1.?.type != .identifier and peek1.?.type != .int and peek1.?.type != .float and peek1.?.type != .lbrace) {
-                        break;
-                    }
-                    try type_args.append(self.allocator, try self.expectTypeName());
-                }
-
-                // Must be followed by struct init
-                if (self.check(.lbrace)) {
-                    return try self.parseStructInit(token.text, try type_args.toOwnedSlice(self.allocator));
-                }
-
-                // Otherwise this is just a generic type used as expression (error case)
-                // Build type string for error message: "Array of byte" etc.
-                var type_str: std.ArrayListUnmanaged(u8) = .empty;
-                type_str.appendSlice(self.allocator, token.text) catch {};
-                type_str.appendSlice(self.allocator, " of ") catch {};
-                for (type_args.items, 0..) |arg, i| {
-                    if (i > 0) type_str.appendSlice(self.allocator, " ") catch {};
-                    type_str.appendSlice(self.allocator, arg) catch {};
-                }
-                self.reportErrorWithDetails(.E056, type_str.items);
+                self.reportErrorWithDetails(.E002, "of");
                 return error.UnexpectedToken;
             }
 
@@ -2428,7 +2371,7 @@ pub const Parser = struct {
             }
             _ = self.advance(); // consume '('
             const expr = try self.parseExpression() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "AY");
                 return error.ExpectedExpression;
             };
             _ = try self.expect(.rparen);
@@ -2556,7 +2499,7 @@ pub const Parser = struct {
 
         // Parse the body expression
         const body_expr = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "AZ");
             return error.ExpectedExpression;
         };
         const body_ptr = try self.createExpr(body_expr);
@@ -2634,10 +2577,10 @@ pub const Parser = struct {
                 defer sub_parser.deinit();
 
                 const expr = sub_parser.parseExpression() catch {
-                    self.reportError(.E003);
+                    self.reportErrorWithSuffix(.E003, "BA");
                     return error.ExpectedExpression;
                 } orelse {
-                    self.reportError(.E003);
+                    self.reportErrorWithSuffix(.E003, "BB");
                     return error.ExpectedExpression;
                 };
 
@@ -2764,7 +2707,7 @@ pub const Parser = struct {
         if (!self.check(.rbracket)) {
             // Parse first expression (could be array element or map key)
             const first = try self.parseExpression() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "BC");
                 return error.ExpectedExpression;
             };
 
@@ -2783,7 +2726,7 @@ pub const Parser = struct {
             while (self.check(.comma)) {
                 _ = self.advance();
                 const elem = try self.parseExpression() orelse {
-                    self.reportError(.E003);
+                    self.reportErrorWithSuffix(.E003, "BD");
                     return error.ExpectedExpression;
                 };
                 try elements.append(self.allocator, elem);
@@ -2811,7 +2754,7 @@ pub const Parser = struct {
         // Parse first entry's value (we already have the key)
         _ = try self.expect(.colon);
         const first_value = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "BE");
             return error.ExpectedExpression;
         };
         try entries.append(self.allocator, .{
@@ -2824,12 +2767,12 @@ pub const Parser = struct {
             _ = self.advance(); // consume ','
 
             const key = try self.parseExpression() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "BF");
                 return error.ExpectedExpression;
             };
             _ = try self.expect(.colon);
             const value = try self.parseExpression() orelse {
-                self.reportError(.E003);
+                self.reportErrorWithSuffix(.E003, "BG");
                 return error.ExpectedExpression;
             };
             try entries.append(self.allocator, .{
@@ -2848,7 +2791,7 @@ pub const Parser = struct {
         const name = try self.expect(.identifier);
         _ = try self.expect(.colon);
         const value = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "BH");
             return error.ExpectedExpression;
         };
         return .{
@@ -2917,11 +2860,13 @@ pub const Parser = struct {
         }
 
         _ = try self.expect(.rbrace);
-        return try self.parsePostfix(.{ .struct_init = .{
-            .type_name = null, // Anonymous - type inferred from context
-            .type_args = &.{},
-            .fields = try fields.toOwnedSlice(self.allocator),
-        } });
+        return try self.parsePostfix(.{
+            .struct_init = .{
+                .type_name = null, // Anonymous - type inferred from context
+                .type_args = &.{},
+                .fields = try fields.toOwnedSlice(self.allocator),
+            },
+        });
     }
 
     fn parseCall(self: *Parser, func_name: []const u8) ParseError!ast.Expression {
@@ -2992,7 +2937,7 @@ pub const Parser = struct {
                     const name_token = self.advance(); // consume identifier
                     _ = self.advance(); // consume ':'
                     const value = try self.parseExpression() orelse {
-                        self.reportError(.E003);
+                        self.reportErrorWithSuffix(.E003, "BI");
                         return error.ExpectedExpression;
                     };
                     const value_ptr = try self.createExpr(value);
@@ -3008,7 +2953,7 @@ pub const Parser = struct {
 
         // Regular positional argument
         const expr = try self.parseExpression() orelse {
-            self.reportError(.E003);
+            self.reportErrorWithSuffix(.E003, "BJ");
             return error.ExpectedExpression;
         };
         return .{ .positional = expr };
@@ -3074,6 +3019,35 @@ pub const Parser = struct {
 
     fn isAtEnd(self: *Parser) bool {
         return self.pos >= self.tokens.len or self.tokens[self.pos].type == .eof;
+    }
+
+    /// Check if the current token starts a top-level declaration.
+    /// Used to detect type aliases (types with conformances but no body).
+    fn isTopLevelDeclarationStart(self: *Parser) bool {
+        if (self.isAtEnd()) return true;
+        const token_type = self.current().type;
+        // Direct top-level keywords
+        if (token_type == .type or
+            token_type == .function or
+            token_type == .@"enum" or
+            token_type == .interface or
+            token_type == .extension or
+            token_type == .let)
+        {
+            return true;
+        }
+        // export followed by a top-level keyword (but not var which is a field)
+        if (token_type == .@"export") {
+            if (self.peek(1)) |next| {
+                return next.type == .type or
+                    next.type == .function or
+                    next.type == .@"enum" or
+                    next.type == .interface or
+                    next.type == .extension or
+                    next.type == .let;
+            }
+        }
+        return false;
     }
 
     fn skipNewlines(self: *Parser) void {
@@ -3199,7 +3173,7 @@ pub const Parser = struct {
             if (self.check(.equals)) {
                 _ = self.advance(); // consume '='
                 const expr = try self.parseExpression() orelse {
-                    self.reportError(.E003);
+                    self.reportErrorWithSuffix(.E003, "BK");
                     return error.ExpectedExpression;
                 };
                 value = try self.createExpr(expr);
@@ -3258,7 +3232,9 @@ pub const Parser = struct {
 
         _ = try self.expect(.newline);
 
-        // Parse interface methods
+        // Parse interface body: associated types and methods
+        var associated_types: std.ArrayListUnmanaged(ast.AssociatedTypeDecl) = .empty;
+        errdefer associated_types.deinit(self.allocator);
         var methods: std.ArrayListUnmanaged(ast.InterfaceMethod) = .empty;
         errdefer methods.deinit(self.allocator);
 
@@ -3267,7 +3243,13 @@ pub const Parser = struct {
                 _ = self.advance();
                 continue;
             }
-            try methods.append(self.allocator, try self.parseInterfaceMethod());
+
+            // Check for associatedtype declaration
+            if (self.check(.associatedtype)) {
+                try associated_types.append(self.allocator, try self.parseAssociatedType());
+            } else {
+                try methods.append(self.allocator, try self.parseInterfaceMethod());
+            }
         }
 
         const end_line = try self.expectEndLabel(name_token.text);
@@ -3278,6 +3260,7 @@ pub const Parser = struct {
             .is_export = is_export,
             .generic_params = generic_params,
             .extends = extends_list,
+            .associated_types = try associated_types.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),
             .block = .{
                 .start_line = name_token.line,
@@ -3285,6 +3268,49 @@ pub const Parser = struct {
                 .end_line = end_line,
                 .identifier = name_token.text,
             },
+        };
+    }
+
+    /// Parse an associated type declaration: associatedtype Name is GenericType with (TypeArg1, TypeArg2)
+    fn parseAssociatedType(self: *Parser) ParseError!ast.AssociatedTypeDecl {
+        const assoc_token = try self.expect(.associatedtype);
+        const name_token = try self.expect(.identifier);
+        _ = try self.expect(.is);
+        const base_type_token = try self.expect(.identifier);
+
+        // Parse: with TypeArg or with (TypeArg1, TypeArg2)
+        _ = try self.expect(.with);
+
+        var type_args: std.ArrayListUnmanaged([]const u8) = .empty;
+        errdefer type_args.deinit(self.allocator);
+
+        // Check for parenthesized type args: with (X, Y)
+        if (self.check(.lparen)) {
+            _ = self.advance(); // consume '('
+            const first_arg = try self.expectTypeName();
+            try type_args.append(self.allocator, first_arg);
+
+            while (self.check(.comma)) {
+                _ = self.advance(); // consume comma
+                const arg = try self.expectTypeName();
+                try type_args.append(self.allocator, arg);
+            }
+
+            _ = try self.expect(.rparen); // consume ')'
+        } else {
+            // Single type arg: with TypeArg
+            const arg = try self.expectTypeName();
+            try type_args.append(self.allocator, arg);
+        }
+
+        _ = try self.expect(.newline);
+
+        return .{
+            .name = name_token.text,
+            .base_type = base_type_token.text,
+            .type_args = try type_args.toOwnedSlice(self.allocator),
+            .line = assoc_token.line,
+            .column = assoc_token.column,
         };
     }
 
@@ -3315,7 +3341,9 @@ pub const Parser = struct {
         const name_token = try self.expect(.identifier);
         _ = try self.expect(.newline);
 
-        // Parse extension methods
+        // Parse associated types and extension methods
+        var associated_types: std.ArrayListUnmanaged(ast.AssociatedTypeDecl) = .empty;
+        errdefer associated_types.deinit(self.allocator);
         var methods: std.ArrayListUnmanaged(ast.ExtensionMethod) = .empty;
         errdefer methods.deinit(self.allocator);
 
@@ -3324,7 +3352,12 @@ pub const Parser = struct {
                 _ = self.advance();
                 continue;
             }
-            try methods.append(self.allocator, try self.parseExtensionMethod());
+            // Check for associatedtype declaration
+            if (self.check(.associatedtype)) {
+                try associated_types.append(self.allocator, try self.parseAssociatedType());
+            } else {
+                try methods.append(self.allocator, try self.parseExtensionMethod());
+            }
         }
 
         const end_line = try self.expectEndLabel(name_token.text);
@@ -3333,6 +3366,7 @@ pub const Parser = struct {
         return .{
             .interface_name = name_token.text,
             .is_export = is_export,
+            .associated_types = try associated_types.toOwnedSlice(self.allocator),
             .methods = try methods.toOwnedSlice(self.allocator),
             .block = .{
                 .start_line = name_token.line,

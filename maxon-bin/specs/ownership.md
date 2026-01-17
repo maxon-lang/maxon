@@ -170,8 +170,10 @@ end 'main'
 
 <!-- test: struct-array-field-moved-into-type -->
 ```maxon
+type IntArray is Array with int
+
 type Container
-    var data Array of int
+    var data IntArray
 end 'Container'
 
 function main() returns int
@@ -183,7 +185,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs/fragments/ownership.struct-array-field-moved-into-type.1.test:9:5: use after move: 'arr'
+error E008: specs/fragments/ownership.struct-array-field-moved-into-type.1.test:11:5: use after move: 'arr'
 ```
 
 <!-- test: struct-literal-deferred-ownership -->
@@ -362,14 +364,16 @@ end 'main'
 Moved arrays are not freed by the original owner, preventing double-free.
 The caller allocates, the callee (mutateFirst) takes ownership and frees.
 ```maxon
-function mutateFirst(arr Array of int) returns int
+type IntArray is Array with int
+
+function mutateFirst(arr IntArray) returns int
     arr.set(0, value: 100)
     return try arr.get(0) otherwise 0
 end 'mutateFirst'
 
 function main() returns int
     let size = 3
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.resize(size)
     arr.set(0, value: 42)
     return mutateFirst(arr)

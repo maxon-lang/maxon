@@ -259,6 +259,14 @@ pub const MutationAnalyzer = struct {
 // Semantic Analyzer - Type Analysis Pass
 // ============================================================================
 
+/// Associated type alias for generic type instantiation.
+/// e.g., `associatedtype ElementArray is Array with Element` creates an alias
+/// where ElementArray resolves to Array$<resolved Element>.
+const AssociatedTypeAlias = struct {
+    base_type: []const u8, // e.g., "Array"
+    type_args: []const []const u8, // e.g., ["Element"] - these get substituted via generic_params
+};
+
 /// Performs semantic analysis: type registration, interface conformance checking,
 /// and variable collection. Runs before IR generation.
 pub const SemanticAnalyzer = struct {
@@ -275,6 +283,10 @@ pub const SemanticAnalyzer = struct {
 
     // Generic type parameter bindings (e.g., "Element" -> "int" for Array of int)
     generic_params: std.StringHashMapUnmanaged([]const u8),
+
+    // Associated type aliases (e.g., "ElementArray" -> Array with Element)
+    // These get resolved by substituting type_args through generic_params
+    associated_type_aliases: std.StringHashMapUnmanaged(AssociatedTypeAlias),
 
     // Variables captured for LSP
     captured_vars: std.ArrayListUnmanaged(SemanticVarInfo),
@@ -300,6 +312,7 @@ pub const SemanticAnalyzer = struct {
             .type_decl_map = .{},
             .enum_decl_map = .{},
             .generic_params = .{},
+            .associated_type_aliases = .{},
             .captured_vars = .{},
             .allocated_type_strings = .{},
             .allocated_func_names = .{},
@@ -315,6 +328,7 @@ pub const SemanticAnalyzer = struct {
         self.type_decl_map.deinit(self.allocator);
         self.enum_decl_map.deinit(self.allocator);
         self.generic_params.deinit(self.allocator);
+        self.associated_type_aliases.deinit(self.allocator);
         self.captured_vars.deinit(self.allocator);
         for (self.allocated_type_strings.items) |str| {
             self.allocator.free(str);
@@ -474,8 +488,19 @@ pub const SemanticAnalyzer = struct {
             for (type_decl.generic_params) |param| {
                 try self.generic_params.put(self.allocator, param, "int");
             }
+            // Set up associated type aliases for the type
+            for (type_decl.associated_types) |assoc| {
+                try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                    .base_type = assoc.base_type,
+                    .type_args = assoc.type_args,
+                });
+            }
             for (type_decl.methods) |method| {
                 try self.registerMethod(type_decl.name, method);
+            }
+            // Clear associated type aliases
+            for (type_decl.associated_types) |assoc| {
+                _ = self.associated_type_aliases.remove(assoc.name);
             }
             // Clear generic params
             for (type_decl.generic_params) |param| {
@@ -656,9 +681,30 @@ pub const SemanticAnalyzer = struct {
     }
 
     fn registerType(self: *SemanticAnalyzer, type_decl: ast.TypeDecl) !void {
+        // Set up generic params for the type (needed for field type resolution)
+        for (type_decl.generic_params) |param| {
+            try self.generic_params.put(self.allocator, param, "int");
+        }
+        // Set up associated type aliases for the type (needed for field type resolution)
+        for (type_decl.associated_types) |assoc| {
+            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                .base_type = assoc.base_type,
+                .type_args = assoc.type_args,
+            });
+        }
+
         // Calculate field offsets and build FieldInfo array
         const fields = try self.buildFieldInfos(type_decl.fields);
         const size = self.calculateStructSize(fields);
+
+        // Clear associated type aliases
+        for (type_decl.associated_types) |assoc| {
+            _ = self.associated_type_aliases.remove(assoc.name);
+        }
+        // Clear generic params
+        for (type_decl.generic_params) |param| {
+            _ = self.generic_params.remove(param);
+        }
 
         try self.type_map.put(self.allocator, type_decl.name, .{
             .struct_type = .{
@@ -947,6 +993,30 @@ pub const SemanticAnalyzer = struct {
     }
 
     fn simpleNameToValueType(self: *SemanticAnalyzer, name: []const u8) ValueType {
+        // Check for associated type alias (e.g., ElementArray -> Array with Element)
+        if (self.associated_type_aliases.get(name)) |alias| {
+            // Resolve the alias: substitute type_args through generic_params, then create monomorphized type
+            var resolved_args: [8][]const u8 = undefined;
+            for (alias.type_args, 0..) |arg, i| {
+                if (i >= 8) break;
+                resolved_args[i] = self.generic_params.get(arg) orelse arg;
+            }
+            const num_args = @min(alias.type_args.len, 8);
+
+            // Try to get or create the monomorphized type
+            const mono_name = self.getOrCreateMonomorphizedType(alias.base_type, resolved_args[0..num_args]) catch {
+                // Fallback to ptr on error
+                return ValueType{ .primitive = .ptr };
+            };
+            if (self.type_map.getPtr(mono_name)) |info_ptr| {
+                return switch (info_ptr.*) {
+                    .struct_type => |*s| ValueType{ .struct_type = s },
+                    .enum_type => |*e| ValueType{ .enum_type = e },
+                    .primitive => |p| ValueType{ .primitive = types.Primitive.fromIrType(p) },
+                };
+            }
+        }
+
         // Check if it's a known type
         if (self.type_map.getPtr(name)) |type_info_ptr| {
             return switch (type_info_ptr.*) {
@@ -1015,8 +1085,19 @@ pub const SemanticAnalyzer = struct {
             for (type_decl.generic_params) |param| {
                 try self.generic_params.put(self.allocator, param, "int");
             }
+            // Set up associated type aliases
+            for (type_decl.associated_types) |assoc| {
+                try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                    .base_type = assoc.base_type,
+                    .type_args = assoc.type_args,
+                });
+            }
             for (type_decl.methods) |method| {
                 try self.discoverInStatements(method.body);
+            }
+            // Clear associated type aliases
+            for (type_decl.associated_types) |assoc| {
+                _ = self.associated_type_aliases.remove(assoc.name);
             }
             for (type_decl.generic_params) |param| {
                 _ = self.generic_params.remove(param);
@@ -1359,6 +1440,17 @@ pub const SemanticAnalyzer = struct {
             try self.generic_params.put(self.allocator, param, resolved);
         }
 
+        // Set up associated type aliases for the type being monomorphized
+        var saved_aliases = try self.allocator.alloc(?AssociatedTypeAlias, type_decl.associated_types.len);
+        defer self.allocator.free(saved_aliases);
+        for (type_decl.associated_types, 0..) |assoc, i| {
+            saved_aliases[i] = self.associated_type_aliases.get(assoc.name);
+            try self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                .base_type = assoc.base_type,
+                .type_args = assoc.type_args,
+            });
+        }
+
         // The name to use - either mono_name if new, or existing_name if type already existed
         const final_name = if (type_already_exists) existing_name.? else mono_name;
 
@@ -1415,6 +1507,15 @@ pub const SemanticAnalyzer = struct {
             }
         }
 
+        // Restore associated type aliases
+        for (type_decl.associated_types, 0..) |assoc, i| {
+            if (saved_aliases[i]) |prev_value| {
+                try self.associated_type_aliases.put(self.allocator, assoc.name, prev_value);
+            } else {
+                _ = self.associated_type_aliases.remove(assoc.name);
+            }
+        }
+
         // Restore generic params
         for (type_decl.generic_params, 0..) |param, i| {
             if (saved_params[i]) |prev_value| {
@@ -1445,11 +1546,22 @@ pub const SemanticAnalyzer = struct {
             for (type_decl.generic_params) |param| {
                 self.generic_params.put(self.allocator, param, "int") catch {};
             }
+            // Set up associated type aliases
+            for (type_decl.associated_types) |assoc| {
+                self.associated_type_aliases.put(self.allocator, assoc.name, .{
+                    .base_type = assoc.base_type,
+                    .type_args = assoc.type_args,
+                }) catch {};
+            }
             for (type_decl.methods) |method| {
                 self.current_func_name = method.name;
                 self.current_type_name = type_decl.name;
                 try self.collectParametersAsVariables(method.params);
                 try self.collectVariablesFromBody(method.body);
+            }
+            // Clear associated type aliases
+            for (type_decl.associated_types) |assoc| {
+                _ = self.associated_type_aliases.remove(assoc.name);
             }
             for (type_decl.generic_params) |param| {
                 _ = self.generic_params.remove(param);

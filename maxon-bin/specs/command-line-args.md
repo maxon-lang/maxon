@@ -25,7 +25,7 @@ end 'main'
 
 ## API
 
-- `CommandLine.args()` - Returns `Array of String` containing user arguments (excludes executable path)
+- `CommandLine.args()` - Returns `StringArray` (where `type StringArray is Array with String`) containing user arguments (excludes executable path)
 - `CommandLine.executablePath()` - Returns `String` containing the executable path
 
 ## Properties

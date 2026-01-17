@@ -25,7 +25,9 @@ end 'DirectoryListError'
 
 List files and directories in a path.
 
-**Signature:** `static function list(path string) returns Array of string throws DirectoryListError`
+**Signature:** `static function list(path string) returns StringArray throws DirectoryListError`
+
+where `type StringArray is Array with String`
 
 **Parameters:**
 - `path`: Directory path as a string

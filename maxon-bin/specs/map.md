@@ -21,10 +21,11 @@ var lookup = [10: 1000, 20: 2000, 30: 3000]         // map<int,int>
 
 The key and value types are automatically inferred from the literal values.
 
-You can also create an empty map with explicit types:
+You can also create an empty map with a type alias:
 
 ```text
-var m = Map from int to int{}
+type IntIntMap is Map with (int, int)
+var m = IntIntMap{}
 ```
 
 ## Methods
@@ -255,8 +256,10 @@ end 'main'
 
 <!-- test: empty-map.from-syntax -->
 ```maxon
+type IntIntMap is Map with (int, int)
+
 function main() returns int
-    var m = Map from int to int{}
+    var m = IntIntMap{}
     m.insert(1, 100)
     var result = try m.get(1) otherwise 0
     return result
@@ -306,12 +309,14 @@ end 'main'
 
 <!-- test: map-type-in-field -->
 ```maxon
+type IntIntMap is Map with (int, int)
+
 type Container
-    export var data Map from int to int
+    export var data IntIntMap
 end 'Container'
 
 function main() returns int
-    var m = Map from int to int{}
+    var m = IntIntMap{}
     m.insert(1, 42)
     var c = Container{data: m}
     var result = try c.data.get(1) otherwise 0

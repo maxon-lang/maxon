@@ -14,8 +14,10 @@ The compiler validates that function and method arguments match the expected par
 
 ### Method call - wrong type for Self parameter (the original bug)
 ```test error
+type StringArray is Array with String
+
 function main() returns int
-	var arr = Array of String.new()
+	var arr = StringArray.new()
 	arr.append("hello")
 	return 0
 end 'main'
@@ -24,8 +26,10 @@ MaxoncStderr: `error E022: type mismatch`
 
 ### Method call - wrong element type
 ```test error
+type IntArray is Array with int
+
 function main() returns int
-	var arr = Array of int.new()
+	var arr = IntArray.new()
 	arr.push("hello")
 	return 0
 end 'main'
@@ -34,7 +38,9 @@ MaxoncStderr: `error E022: type mismatch`
 
 ### Regular function call - primitive where struct expected
 ```test error
-function takeArray(arr Array of int)
+type IntArray is Array with int
+
+function takeArray(arr IntArray)
 end 'takeArray'
 
 function main() returns int
@@ -78,8 +84,10 @@ MaxoncStderr: `error E022: type mismatch`
 
 ### Implicit method call (calling method from within type)
 ```test error
+type IntArray is Array with int
+
 type Container
-	var items Array of int
+	var items IntArray
 
 	function addWrong(s String)
 		items.push(s)
@@ -94,9 +102,12 @@ MaxoncStderr: `error E022: type mismatch`
 
 ### Array of different element types
 ```test error
+type IntArray is Array with int
+type StringArray is Array with String
+
 function main() returns int
-	var ints = Array of int.new()
-	var strings = Array of String.new()
+	var ints = IntArray.new()
+	var strings = StringArray.new()
 	ints.append(strings)
 	return 0
 end 'main'

@@ -89,8 +89,10 @@ end 'main'
 
 <!-- test: byte-array-push-get -->
 ```maxon
+type ByteArray is Array with byte
+
 function main() returns int
-    var arr = Array of byte{}
+    var arr = ByteArray{}
     arr.push(10 as byte)
     arr.push(20 as byte)
     arr.push(30 as byte)
@@ -110,8 +112,10 @@ end 'main'
 
 <!-- test: byte-array-initialized -->
 ```maxon
+type ByteArray is Array with byte
+
 function main() returns int
-    var arr = Array of byte{}
+    var arr = ByteArray{}
     arr.push(1 as byte)
     arr.push(2 as byte)
     arr.push(3 as byte)
@@ -131,8 +135,10 @@ end 'main'
 
 <!-- test: byte-array-set -->
 ```maxon
+type ByteArray is Array with byte
+
 function main() returns int
-    var arr = Array of byte{}
+    var arr = ByteArray{}
     arr.push(10 as byte)
     arr.push(20 as byte)
     arr.push(30 as byte)
@@ -151,8 +157,10 @@ end 'main'
 
 <!-- test: byte-array-max-values -->
 ```maxon
+type ByteArray is Array with byte
+
 function main() returns int
-    var arr = Array of byte{}
+    var arr = ByteArray{}
     arr.push(255 as byte)
     arr.push(0 as byte)
     arr.push(128 as byte)
@@ -182,8 +190,10 @@ end 'main'
 
 <!-- test: byte-array-count -->
 ```maxon
+type ByteArray is Array with byte
+
 function main() returns int
-    var arr = Array of byte{}
+    var arr = ByteArray{}
     arr.push(1 as byte)
     arr.push(2 as byte)
     arr.push(3 as byte)

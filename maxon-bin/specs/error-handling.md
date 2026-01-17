@@ -418,15 +418,17 @@ error E057: specs/fragments/error-handling.error.throwing-function-requires-try.
 
 <!-- test: error.throwing-method-requires-try -->
 ```maxon
+type IntArray is Array with int
+
 // Calling a throwing method without try is an error
 function main() returns int
-    let arr = Array of int{}
+    let arr = IntArray{}
     let val = arr.get(0)
     return 0
 end 'main'
 ```
 ```maxoncstderr
-error E057: specs/fragments/error-handling.error.throwing-method-requires-try.1.test:5:19: throwing function requires try: 'get'
+error E057: specs/fragments/error-handling.error.throwing-method-requires-try.1.test:7:19: throwing function requires try: 'get'
 ```
 
 <!-- test: error.try-on-non-throwing-function -->
@@ -447,26 +449,30 @@ error E055: specs/fragments/error-handling.error.try-on-non-throwing-function.1.
 
 <!-- test: error.try-on-non-throwing-method -->
 ```maxon
+type IntArray is Array with int
+
 // Using try on a non-throwing method is an error
 function main() returns int
-    let arr = Array of int{}
+    let arr = IntArray{}
     let val = try arr.count() otherwise 0
     return val
 end 'main'
 ```
 ```maxoncstderr
-error E055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.test:5:23: try requires a throwing function: ''count' does not throw'
+error E055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.test:7:23: try requires a throwing function: ''count' does not throw'
 ```
 
 <!-- test: error.otherwise-without-try -->
 ```maxon
+type IntArray is Array with int
+
 // Using otherwise without try is an error
 function main() returns int
-    let arr = Array of int{}
+    let arr = IntArray{}
     let val = arr.get(0) otherwise 0
     return val
 end 'main'
 ```
 ```maxoncstderr
-error E058: specs/fragments/error-handling.error.otherwise-without-try.1.test:5:26: otherwise requires try expression
+error E058: specs/fragments/error-handling.error.otherwise-without-try.1.test:7:26: otherwise requires try expression
 ```

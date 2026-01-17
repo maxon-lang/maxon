@@ -116,8 +116,10 @@ interface Container uses Element
     function get(index int) returns Element
 end 'Container'
 
+type InternalIntArray is Array with int
+
 type IntArray is Container with int
-    var data Array of int
+    var data InternalIntArray
 
     function Container.get(index int) returns int
         return try data.get(index) otherwise 0

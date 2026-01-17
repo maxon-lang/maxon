@@ -1654,36 +1654,55 @@ test "linkedEditingRange returns ranges for interface method names" {
     _ = try client.initialize();
 
     // Type with interface method implementation
+    // Line 0: interface Countable
+    // Line 1: function count() returns int
+    // Line 2: end 'Countable'
+    // Line 3: (empty)
+    // Line 4: type MyStruct is Countable
+    // Line 5:     var value int
+    // Line 6: (empty)
+    // Line 7:     function Countable.count() returns int
+    // Line 8:         return value
+    // Line 9:     end 'count'
+    // Line 10: end 'MyStruct'
     const source =
         \\interface Countable
         \\function count() returns int
         \\end 'Countable'
         \\
         \\type MyStruct is Countable
-        \\function Countable.count() returns int
-        \\return 0
-        \\end 'count'
+        \\    var value int
+        \\
+        \\    function Countable.count() returns int
+        \\        return value
+        \\    end 'count'
         \\end 'MyStruct'
     ;
     try client.openDocument("file:///test.maxon", source);
 
-    // Request linked editing on the method name "count" at line 5, character 20
-    var result = try client.linkedEditingRange("file:///test.maxon", 5, 20);
+    // Request linked editing on the method name "count" at line 7, character 24
+    // "    function Countable.count() returns int"
+    //                        ^^^^^
+    // Position: "    function Countable." = 23 chars, so "count" starts at 23
+    var result = try client.linkedEditingRange("file:///test.maxon", 7, 24);
     defer result.deinit();
 
     // Should return 2 ranges: method name and end label
     try testing.expectEqual(@as(usize, 2), result.ranges.len);
 
     // Check ranges point to the right locations
-    // Range 0: method name at line 5, characters 19-24 (count)
-    // Range 1: end label at line 7, characters 5-10 (count inside quotes)
+    // Range 0: method name at line 7, characters 23-28 (count)
+    // Range 1: end label at line 9, characters 9-14 (count inside quotes)
+    // "    end 'count'"
+    //          ^^^^^
+    // Position: "    end '" = 9 chars, so "count" is at 9-14
     var has_method_name = false;
     var has_end_label = false;
     for (result.ranges) |range| {
-        if (range.start.line == 5 and range.start.character == 19 and range.end.line == 5 and range.end.character == 24) {
+        if (range.start.line == 7 and range.start.character == 23 and range.end.line == 7 and range.end.character == 28) {
             has_method_name = true;
         }
-        if (range.start.line == 7 and range.start.character == 5 and range.end.line == 7 and range.end.character == 10) {
+        if (range.start.line == 9 and range.start.character == 9 and range.end.line == 9 and range.end.character == 14) {
             has_end_label = true;
         }
     }

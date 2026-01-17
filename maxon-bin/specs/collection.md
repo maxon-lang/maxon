@@ -159,8 +159,10 @@ end 'main'
 
 <!-- test: count-empty -->
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     print("{arr.count()}\n")
     return 0
 end 'main'

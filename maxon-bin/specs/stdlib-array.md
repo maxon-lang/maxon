@@ -15,9 +15,14 @@ The `Array` type is a generic, dynamically-sized collection that can hold elemen
 
 ### Creating Arrays
 
+Define a concrete type alias for your array:
+```text
+type IntArray is Array with int
+```
+
 Create an empty array:
 ```text
-var arr = Array of int{}
+var arr = IntArray{}
 ```
 
 Create an array from a literal:
@@ -29,7 +34,9 @@ var arr = [1, 2, 3]
 
 Use `push` to add elements to the end:
 ```text
-var arr = Array of int{}
+type IntArray is Array with int
+
+var arr = IntArray{}
 arr.push(10)
 arr.push(20)
 arr.push(30)
@@ -101,8 +108,10 @@ end 'loop'
 Create an empty array and verify it starts empty.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     if arr.count() != 0 'check'
         return 1
     end 'check'
@@ -120,8 +129,10 @@ end 'main'
 Push a single element and retrieve it.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(42)
     var val = try arr.get(0) otherwise -1
     if val != 42 'check'
@@ -138,8 +149,10 @@ end 'main'
 Push multiple elements and verify count.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(10)
     arr.push(20)
     arr.push(30)
@@ -157,27 +170,29 @@ end 'main'
 Push multiple elements and get each one.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(10)
     arr.push(20)
     arr.push(30)
-    
+
     var v0 = try arr.get(0) otherwise -1
     if v0 != 10 'c0'
         return 1
     end 'c0'
-    
+
     var v1 = try arr.get(1) otherwise -1
     if v1 != 20 'c1'
         return 2
     end 'c1'
-    
+
     var v2 = try arr.get(2) otherwise -1
     if v2 != 30 'c2'
         return 3
     end 'c2'
-    
+
     return 0
 end 'main'
 ```
@@ -189,14 +204,16 @@ end 'main'
 Set an element and verify the change.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(10)
     arr.push(20)
     arr.push(30)
-    
+
     arr.set(1, value: 99)
-    
+
     var val = try arr.get(1) otherwise -1
     if val != 99 'check'
         return 1
@@ -212,22 +229,24 @@ end 'main'
 Test first() and last() methods.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(10)
     arr.push(20)
     arr.push(30)
-    
+
     var f = try arr.first() otherwise -1
     if f != 10 'fc'
         return 1
     end 'fc'
-    
+
     var l = try arr.last() otherwise -1
     if l != 30 'lc'
         return 3
     end 'lc'
-    
+
     return 0
 end 'main'
 ```
@@ -239,21 +258,23 @@ end 'main'
 Pop elements and verify they are removed.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(10)
     arr.push(20)
     arr.push(30)
-    
+
     var val = try arr.pop() otherwise -1
     if val != 30 'check'
         return 1
     end 'check'
-    
+
     if arr.count() != 2 'cnt'
         return 3
     end 'cnt'
-    
+
     return 0
 end 'main'
 ```
@@ -287,21 +308,23 @@ end 'main'
 Iterate over array using for-in loop.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(10)
     arr.push(20)
     arr.push(30)
-    
+
     var sum = 0
     for item in arr 'loop'
         sum = sum + item
     end 'loop'
-    
+
     if sum != 60 'check'
         return 1
     end 'check'
-    
+
     return 0
 end 'main'
 ```
@@ -313,25 +336,27 @@ end 'main'
 Verify isEmpty changes with push/pop.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
-    
+    var arr = IntArray{}
+
     if arr.isEmpty() == false 'e1'
         return 1
     end 'e1'
-    
+
     arr.push(42)
-    
+
     if arr.isEmpty() == true 'e2'
         return 2
     end 'e2'
-    
+
     var _ = try arr.pop() otherwise 0
-    
+
     if arr.isEmpty() == false 'e3'
         return 3
     end 'e3'
-    
+
     return 0
 end 'main'
 ```
@@ -343,22 +368,24 @@ end 'main'
 Clear an array and verify it's empty.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(10)
     arr.push(20)
     arr.push(30)
-    
+
     arr.clear()
-    
+
     if arr.count() != 0 'cnt'
         return 1
     end 'cnt'
-    
+
     if arr.isEmpty() == false 'empty'
         return 2
     end 'empty'
-    
+
     return 0
 end 'main'
 ```
@@ -370,10 +397,12 @@ end 'main'
 Get throws error for out of bounds index.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.push(10)
-    
+
     var val = try arr.get(5) otherwise -1
     if val == -1 'check'
         return 0
@@ -389,8 +418,10 @@ end 'main'
 Reserve capacity for efficiency.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr.reserve(100)
 
     if arr.capacity() < 100 'cap'
@@ -412,8 +443,10 @@ end 'main'
 Push string literals into an array and retrieve them.
 
 ```maxon
+type StringArray is Array with String
+
 function main() returns int
-    var arr = Array of String{}
+    var arr = StringArray{}
     arr.push("hello")
     arr.push("world")
 
@@ -439,8 +472,10 @@ helloworld
 Push longer string literals (heap-allocated) into an array.
 
 ```maxon
+type StringArray is Array with String
+
 function main() returns int
-    var arr = Array of String{}
+    var arr = StringArray{}
     arr.push("hello this is a longer string")
     arr.push("world this is also a longer string")
 
@@ -466,8 +501,10 @@ hello this is a longer stringworld this is also a longer string
 Push string variables into an array.
 
 ```maxon
+type StringArray is Array with String
+
 function main() returns int
-    var arr = Array of String{}
+    var arr = StringArray{}
     var s1 = "first"
     var s2 = "second"
     arr.push(s1)
@@ -491,8 +528,10 @@ firstsecond
 Iterate over an array of strings.
 
 ```maxon
+type StringArray is Array with String
+
 function main() returns int
-    var arr = Array of String{}
+    var arr = StringArray{}
     arr.push("a")
     arr.push("b")
     arr.push("c")
@@ -514,8 +553,10 @@ abc
 Get strings from array using get method.
 
 ```maxon
+type StringArray is Array with String
+
 function main() returns int
-    var arr = Array of String{}
+    var arr = StringArray{}
     arr.push("one")
     arr.push("two")
     arr.push("three")
@@ -537,8 +578,10 @@ two
 Verify string array memory is properly managed (no leaks).
 
 ```maxon
+type StringArray is Array with String
+
 function main() returns int
-    var arr = Array of String{}
+    var arr = StringArray{}
     arr.push("test string one")
     arr.push("test string two")
     arr.push("test string three")
@@ -572,8 +615,10 @@ This pattern was previously broken due to incorrect refcount handling when the
 same variable appears on both sides of an assignment with a mutating method call.
 
 ```maxon
+type IntArray is Array with int
+
 function main() returns int
-    var arr = Array of int{}
+    var arr = IntArray{}
     arr = arr.push(1)
     arr = arr.push(2)
     arr = arr.push(3)
@@ -591,15 +636,3 @@ end 'main'
 6
 ```
 
-<!-- test: error.missing-braces -->
-Generic type instantiation requires braces.
-
-```maxon
-function main() returns int
-    var arr = Array of byte
-    return 0
-end 'main'
-```
-```maxoncstderr
-error E056: specs/fragments/stdlib-array.error.missing-braces.1.test:3:28: generic type instantiation requires '{}': 'Array of byte'
-```
