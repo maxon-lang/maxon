@@ -135,6 +135,7 @@ pub const ErrorCode = enum {
     E056, // generic type requires braces
     E057, // throwing function requires try
     E058, // otherwise requires try
+    E059, // redundant type annotation
 
     const Info = struct {
         code: []const u8,
@@ -195,6 +196,7 @@ pub const ErrorCode = enum {
         .{ .code = "E056", .message = "generic type instantiation requires '{}'" },
         .{ .code = "E057", .message = "throwing function requires try" },
         .{ .code = "E058", .message = "otherwise requires try expression" },
+        .{ .code = "E059", .message = "redundant type annotation" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

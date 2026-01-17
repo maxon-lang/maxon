@@ -1,0 +1,43 @@
+// Test: redundant-type-annotation.ok.anonymous-literal.1
+type Point
+    export var x int
+    export var y int
+end 'Point'
+
+function makePoint() returns Point
+    return {x: 1, y: 2}
+end 'makePoint'
+
+function main() returns int
+    var p = makePoint()
+    return p.x + p.y
+end 'main'
+---
+ExitCode: 3
+---
+function makePoint() -> ptr {
+entry:
+    %tmp_param = param ptr 0
+    memset %tmp_param 0 16
+    %tmp_fieldptr = getfieldptr ptr %tmp_param 0
+    %tmp_const = const.i64 i64 1
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8
+    %tmp_const.1 = const.i64 i64 2
+    store %tmp_fieldptr.1 %tmp_const.1
+    ret %tmp_param
+}
+
+function main() -> i64 {
+entry:
+    %p = alloca.sized ptr 16
+    %tmp_call = call ptr @makePoint(%p)
+    %tmp_fieldptr = getfieldptr ptr %p 0
+    %tmp_load = load i64 %tmp_fieldptr
+    %tmp_fieldptr.1 = getfieldptr ptr %p 8
+    %tmp_load.1 = load i64 %tmp_fieldptr.1
+    %tmp_add = add i64 %tmp_load %tmp_load.1
+    ret %tmp_add
+}
+
+---

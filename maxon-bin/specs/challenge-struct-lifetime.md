@@ -22,7 +22,7 @@ type Result
 end 'Result'
 
 function compute(a int, b int) returns Result
-    return Result{sum: a + b, product: a * b}
+    return {sum: a + b, product: a * b}
 end 'compute'
 
 function main() returns int
@@ -41,7 +41,7 @@ type Counter
 end 'Counter'
 
 function increment(c Counter) returns Counter
-    return Counter{value: c.value + 1}
+    return {value: c.value + 1}
 end 'increment'
 
 function main() returns int
@@ -61,15 +61,15 @@ type Value
 end 'Value'
 
 function step1() returns Value
-    return Value{n: 1}
+    return {n: 1}
 end 'step1'
 
 function step2(v Value) returns Value
-    return Value{n: v.n + 10}
+    return {n: v.n + 10}
 end 'step2'
 
 function step3(v Value) returns Value
-    return Value{n: v.n + 100}
+    return {n: v.n + 100}
 end 'step3'
 
 function main() returns int

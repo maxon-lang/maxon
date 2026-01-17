@@ -2459,9 +2459,14 @@ pub const Parser = struct {
         while (!self.check(.rparen)) {
             const name_tok = try self.expect(.identifier);
             // Type is optional - if next is comma or rparen, no type specified
+            var type_line: u32 = 0;
+            var type_column: u32 = 0;
             const type_name: ?[]const u8 = if (self.check(.comma) or self.check(.rparen)) blk: {
                 break :blk null; // Type will be inferred from context
             } else blk: {
+                // Capture location before parsing type for error reporting
+                type_line = self.current().line;
+                type_column = self.current().column;
                 // Parse full type expression (handles "int", "Pair of String int", etc.)
                 const type_expr = try self.parseTypeExpr();
                 break :blk try self.typeExprToMonoName(type_expr);
@@ -2470,6 +2475,8 @@ pub const Parser = struct {
             try params.append(self.allocator, .{
                 .name = name_tok.text,
                 .type_name = type_name,
+                .type_line = type_line,
+                .type_column = type_column,
             });
 
             if (self.check(.comma)) {

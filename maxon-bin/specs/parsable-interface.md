@@ -38,7 +38,7 @@ type Money is Parsable
             throw MoneyParseError.NegativeValue
         end 'negative'
 
-        return Money{cents: input.byteLength()}
+        return {cents: input.byteLength()}
     end 'fromString'
 end 'Money'
 ```
@@ -78,7 +78,7 @@ type Value is Parsable
     var n int
 
     static function Parsable.fromString(input String) returns Self throws ParseError
-        return Value{n: input.byteLength()}
+        return {n: input.byteLength()}
     end 'fromString'
 end 'Value'
 
@@ -101,7 +101,7 @@ type Value is Parsable
     export var n int
 
     static function Parsable.fromString(input String) returns Self throws ParseError
-        return Value{n: input.byteLength()}
+        return {n: input.byteLength()}
     end 'fromString'
 end 'Value'
 
@@ -130,7 +130,7 @@ type Value is Parsable
         if input.byteLength() == 0 'check'
             throw ParseError.Empty
         end 'check'
-        return Value{n: input.byteLength()}
+        return {n: input.byteLength()}
     end 'fromString'
 end 'Value'
 
@@ -165,7 +165,7 @@ type Money is Parsable
             throw MoneyParseError.NegativeValue
         end 'negative'
 
-        return Money{cents: input.byteLength()}
+        return {cents: input.byteLength()}
     end 'fromString'
 end 'Money'
 
@@ -194,7 +194,7 @@ type Value is Parsable
         if input.startsWith("x") 'check'
             throw ParseError.Invalid
         end 'check'
-        return Value{n: input.byteLength()}
+        return {n: input.byteLength()}
     end 'fromString'
 end 'Value'
 
@@ -227,7 +227,7 @@ type Value is Parsable
     var n int
 
     static function Parsable.fromString(input String) returns Self
-        return Value{n: input.byteLength()}
+        return {n: input.byteLength()}
     end 'fromString'
 end 'Value'
 
@@ -250,7 +250,7 @@ type Value is Parsable
     var n int
 
     static function Parsable.fromString(input String) returns Self throws NotAnError
-        return Value{n: input.byteLength()}
+        return {n: input.byteLength()}
     end 'fromString'
 end 'Value'
 

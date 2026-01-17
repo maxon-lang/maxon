@@ -48,7 +48,7 @@ end 'Outer'
 
 function makeOuter() returns Outer
     var i = Inner{value: 42}
-    return Outer{inner: i}
+    return {inner: i}
 end 'makeOuter'
 
 function main() returns int

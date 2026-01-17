@@ -7999,6 +7999,34 @@ pub const AstToIr = struct {
         for (clos.params, 0..) |param, i| {
             // Get type from explicit annotation or infer from expected type
             const param_value_type: ValueType = if (param.type_name) |explicit_type| blk: {
+                // Check for redundant type annotation (E059)
+                if (expected_fn_type) |fn_type| {
+                    if (i < fn_type.param_types.len) {
+                        const expected_param_type = fn_type.param_types[i];
+                        // Get expected type name for comparison
+                        const expected_name: ?[]const u8 = switch (expected_param_type) {
+                            .struct_type => |s| s.name,
+                            .enum_type => |e| e.name,
+                            else => null,
+                        };
+                        if (expected_name) |exp_name| {
+                            const resolved_name = self.resolveTypeName(explicit_type);
+                            // Check for exact/typealias match
+                            if (std.mem.eql(u8, resolved_name, exp_name)) {
+                                self.reportErrorAt(.E059, explicit_type, param.type_line, param.type_column);
+                                return error.TypeMismatch;
+                            }
+                            // Check for monomorphization match (e.g., "Pair" when expecting "Pair$String$int")
+                            if (std.mem.startsWith(u8, exp_name, explicit_type) and
+                                exp_name.len > explicit_type.len and
+                                exp_name[explicit_type.len] == '$')
+                            {
+                                self.reportErrorAt(.E059, explicit_type, param.type_line, param.type_column);
+                                return error.TypeMismatch;
+                            }
+                        }
+                    }
+                }
                 // Explicit type annotation
                 break :blk if (types.Primitive.fromString(explicit_type)) |prim|
                     .{ .primitive = prim }
@@ -8869,7 +8897,16 @@ pub const AstToIr = struct {
                             expected_name.len > explicit_name.len and
                             expected_name[explicit_name.len] == '$')
                         {
-                            break :blk expected_name;
+                            // E059: explicit type is redundant when it can be inferred
+                            self.reportError(.E059, explicit_name);
+                            return error.TypeMismatch;
+                        }
+                        // Check for exact or typealias match
+                        const resolved_name = self.resolveTypeName(explicit_name);
+                        if (std.mem.eql(u8, resolved_name, expected_name)) {
+                            // E059: explicit type is redundant when it can be inferred
+                            self.reportError(.E059, explicit_name);
+                            return error.TypeMismatch;
                         }
                     }
                 }
@@ -8918,7 +8955,16 @@ pub const AstToIr = struct {
                             expected_name.len > explicit_name.len and
                             expected_name[explicit_name.len] == '$')
                         {
-                            break :blk expected_name;
+                            // E059: explicit type is redundant when it can be inferred
+                            self.reportError(.E059, explicit_name);
+                            return error.TypeMismatch;
+                        }
+                        // Check for exact or typealias match
+                        const resolved_name = self.resolveTypeName(explicit_name);
+                        if (std.mem.eql(u8, resolved_name, expected_name)) {
+                            // E059: explicit type is redundant when it can be inferred
+                            self.reportError(.E059, explicit_name);
+                            return error.TypeMismatch;
                         }
                     }
                 }

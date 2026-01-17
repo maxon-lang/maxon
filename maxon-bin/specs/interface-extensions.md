@@ -222,7 +222,7 @@ end 'SimplePoint'
 
 extension Pointlike
     function asSimple() returns SimplePoint
-        return SimplePoint{x: self.getX(), y: self.getY()}
+        return {x: self.getX(), y: self.getY()}
     end 'asSimple'
 end 'Pointlike'
 
@@ -300,7 +300,7 @@ typealias StringIntPair is Pair with (String, int)
 
 function main() returns int
     var m = ["a": 1, "b": 2, "c": 3]
-    var mapped = m.map((p StringIntPair) gives StringIntPair{key: p.key, value: p.value * 10})
+    var mapped = m.map((p) gives {key: p.key, value: p.value * 10})
 
     var sum = 0
     for pair in mapped 'loop'
@@ -320,7 +320,7 @@ end 'main'
 typealias StringIntPair is Pair with (String, int)
 
 function multiplyValue(p StringIntPair) returns StringIntPair
-    return StringIntPair{key: p.key, value: p.value * 10}
+    return {key: p.key, value: p.value * 10}
 end 'multiplyValue'
 
 function main() returns int

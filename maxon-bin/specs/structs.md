@@ -193,7 +193,7 @@ type Pair
 end 'Pair'
 
 function makePair(a int, b int) returns Pair
-    return Pair { first: a, second: b }
+    return { first: a, second: b }
 end 'makePair'
 
 function main() returns int
@@ -217,7 +217,7 @@ function acceptPoint(p Point) returns int
 end 'acceptPoint'
 
 function main() returns int
-    return acceptPoint(Point{x: 3, y: 4})
+    return acceptPoint({x: 3, y: 4})
 end 'main'
 ```
 ```exitcode

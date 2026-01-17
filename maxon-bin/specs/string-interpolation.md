@@ -102,7 +102,7 @@ type Point is Stringable
     var y int
 
     function Stringable.toString(format String) returns String
-        return "({self.x}, {self.y})"
+        return {self.y})"
     end 'toString'
 end 'Point'
 

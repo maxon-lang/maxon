@@ -45,7 +45,7 @@ type Point
     var y int
 
     function origin() returns Self
-        return Point{x: 0, y: 0}
+        return {x: 0, y: 0}
     end 'origin'
 end 'Point'
 ```

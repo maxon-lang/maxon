@@ -102,7 +102,7 @@ type Point is Cloneable
     var y int
 
     function Cloneable.clone() returns Point
-        return Point{x: x, y: y}
+        return {x: x, y: y}
     end 'clone'
 end 'Point'
 ```
@@ -310,7 +310,7 @@ type Point is Movable
     export var y int
 
     function Movable.move(dx int, dy int) returns Point
-        return Point{x: x + dx, y: y + dy}
+        return {x: x + dx, y: y + dy}
     end 'move'
 end 'Point'
 

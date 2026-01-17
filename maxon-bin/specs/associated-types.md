@@ -42,7 +42,7 @@ type IntArray is Container with int
 
     function Container.set(index int, value int) returns IntArray
         data[index] = value
-        return IntArray{data: data, len: len}
+        return {data: data, len: len}
     end 'set'
 end 'IntArray'
 ```
@@ -268,7 +268,7 @@ type IntSum is Accumulator with int
     var sum int
 
     function Accumulator.add(item int) returns IntSum
-        return IntSum{sum: sum + item}
+        return {sum: sum + item}
     end 'add'
 
     function Accumulator.total() returns int

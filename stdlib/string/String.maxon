@@ -5,13 +5,13 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
 
 	// Default type for string literals - compiler discovers this via BuiltinStringLiteral interface
 	static function BuiltinStringLiteral.init(managed __ManagedMemory) returns String
-		return String{_managed: managed, _iterPos: 0}
+		return {_managed: managed, _iterPos: 0}
 	end 'init'
 
 	/// Create a String from a raw null-terminated C string pointer
 	export static function fromCString(cstr cstring) returns String
 		var managed = __cstring_to_managed(cstr)
-		return String{_managed: managed, _iterPos: 0}
+		return {_managed: managed, _iterPos: 0}
 	end 'fromCString'
 
 	export function byteLength() returns int
@@ -69,12 +69,12 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
 
 	// String index methods
 	export function startIndex() returns StringIndex
-		return StringIndex{_charIndex: 0, _bytePos: 0}
+		return {_charIndex: 0, _bytePos: 0}
 	end 'startIndex'
 
 	export function endIndex() returns StringIndex
 		var charCount = countGraphemesManaged(_managed)
-		return StringIndex{_charIndex: charCount, _bytePos: __managed_memory_len(_managed)}
+		return {_charIndex: charCount, _bytePos: __managed_memory_len(_managed)}
 	end 'endIndex'
 
 	/// Get character at the given index. Returns the grapheme cluster at that position.
@@ -96,13 +96,13 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
 		var byteStart = idx.bytePos()
 		var endPos = findGraphemeEndManaged(_managed, startPos: byteStart, len: len)
 		var byteLen = endPos - byteStart
-		return StringIndex{_charIndex: idx.charIndex() + 1, _bytePos: byteStart + byteLen}
+		return {_charIndex: idx.charIndex() + 1, _bytePos: byteStart + byteLen}
 	end 'indexAfter'
 
 	// concat method
 	export function concat(other String) returns String
 		var result = __managed_memory_concat(_managed, other._managed)
-		return String{_managed: result, _iterPos: 0}
+		return {_managed: result, _iterPos: 0}
 	end 'concat'
 
 	// Search methods
@@ -125,33 +125,33 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
 		end 'not_found'
 		// Convert byte index to grapheme (char) index
 		var charIdx = byteIndexToGraphemeIndex(_managed, byteIdx: byteIdx)
-		return StringIndex{_charIndex: charIdx, _bytePos: byteIdx}
+		return {_charIndex: charIdx, _bytePos: byteIdx}
 	end 'find'
 
 	// Slicing - returns a new String backed by slice into this string's buffer
 	// Use endIndex for end position, or length for character count
 	export function slice(start StringIndex, endIndex StringIndex) returns String
 		var result = __managed_memory_slice(_managed, start.bytePos(), endIndex.bytePos())
-		return String{_managed: result, _iterPos: 0}
+		return {_managed: result, _iterPos: 0}
 	end 'slice'
 
 	export function slice(start StringIndex, length int) returns String
 		var endBytePos = graphemeOffsetToBytePos(_managed, startBytePos: start.bytePos(), count: length)
 		var result = __managed_memory_slice(_managed, start.bytePos(), endBytePos)
-		return String{_managed: result, _iterPos: 0}
+		return {_managed: result, _iterPos: 0}
 	end 'slice'
 
 	// View methods
 	export function bytes() returns ByteView
-		return ByteView{_managed: _managed, _pos: 0}
+		return {_managed: _managed, _pos: 0}
 	end 'bytes'
 
 	export function codepoints() returns CodepointView
-		return CodepointView{_managed: _managed, _pos: 0}
+		return {_managed: _managed, _pos: 0}
 	end 'codepoints'
 
 	export function utf16() returns UTF16View
-		return UTF16View{_managed: _managed, _bytePos: 0, _pendingCodepoint: 0}
+		return {_managed: _managed, _bytePos: 0, _pendingCodepoint: 0}
 	end 'utf16'
 
 	/// Convert to a C-compatible null-terminated string for FFI operations
@@ -165,7 +165,7 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
 	export function replace(old String, new String) returns String
 		var oldLen = __managed_memory_len(old._managed)
 		if oldLen == 0 'empty_old'
-			return String{_managed: _managed, _iterPos: 0}
+			return {_managed: _managed, _iterPos: 0}
 		end 'empty_old'
 
 		// We build the result incrementally using __ManagedMemory
@@ -186,7 +186,7 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
 
 		// If no matches, return self
 		if matchCount == 0 'no_matches'
-			return String{_managed: _managed, _iterPos: 0}
+			return {_managed: _managed, _iterPos: 0}
 		end 'no_matches'
 
 		// Build result by processing matches
@@ -216,32 +216,32 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
 			builtResult = __managed_memory_concat(builtResult, suffixSlice)
 		end 'has_suffix'
 
-		return String{_managed: builtResult, _iterPos: 0}
+		return {_managed: builtResult, _iterPos: 0}
 	end 'replace'
 
 	export function replaceFirst(old String, new String) returns String
 		var oldLen = __managed_memory_len(old._managed)
 		if oldLen == 0 'empty_old'
-			return String{_managed: _managed, _iterPos: 0}
+			return {_managed: _managed, _iterPos: 0}
 		end 'empty_old'
 
 		var idx = findManaged(_managed, needle: old._managed)
 		if idx < 0 'not_found'
-			return String{_managed: _managed, _iterPos: 0}
+			return {_managed: _managed, _iterPos: 0}
 		end 'not_found'
 
 		var selfLen = __managed_memory_len(_managed)
 		var prefixSlice = __managed_memory_slice(_managed, 0, idx)
 		var suffixSlice = __managed_memory_slice(_managed, idx + oldLen, selfLen)
 		var result = __managed_memory_concat(__managed_memory_concat(prefixSlice, new._managed), suffixSlice)
-		return String{_managed: result, _iterPos: 0}
+		return {_managed: result, _iterPos: 0}
 	end 'replaceFirst'
 
 	// Case conversion
 	export function toLower() returns String
 		var len = __managed_memory_len(_managed)
 		if len == 0 'empty'
-			return String{_managed: _managed, _iterPos: 0}
+			return {_managed: _managed, _iterPos: 0}
 		end 'empty'
 
 		// Make a unique copy for mutation
@@ -255,7 +255,7 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
 			end 'is_upper'
 			i = i + 1
 		end 'convert'
-		return String{_managed: copy, _iterPos: 0}
+		return {_managed: copy, _iterPos: 0}
 	end 'toLower'
 end 'String'
 

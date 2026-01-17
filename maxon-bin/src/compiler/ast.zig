@@ -495,6 +495,8 @@ pub const InterpolatedStringExpr = struct {
 pub const ClosureParam = struct {
     name: []const u8,
     type_name: ?[]const u8, // null means infer from context
+    type_line: u32 = 0, // line number of type annotation (for error reporting)
+    type_column: u32 = 0, // column number of type annotation
 };
 
 pub const ClosureExpr = struct {
