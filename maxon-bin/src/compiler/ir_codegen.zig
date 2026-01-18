@@ -3325,17 +3325,22 @@ pub const IrCodegen = struct {
             }
         }
 
-        // Restore callee-saved registers before epilogue
-        // XMMs are loaded from stack, GPRs are popped in reverse order
-        try self.emitCalleeSavedRestores();
-
         if (std.mem.eql(u8, self.current_func_name, "main") and !self.track_memory) {
-            // Exit code in RCX for ExitProcess (when not using _start wrapper)
+            // For main without _start wrapper, we call ExitProcess directly.
+            // No need to restore callee-saved registers since ExitProcess never returns.
+            // Stack alignment: after prologue push + callee-saved pushes, RSP % 16 == 8.
+            // We need to maintain this for the call. Since we're NOT popping the
+            // callee-saved registers, and allocShadowSpace subtracts 32 (which is 0 mod 16),
+            // RSP % 16 remains 8, which is correct for the call.
             try self.enc.movRcxRax();
+            try self.enc.allocShadowSpace();
             // call [rip+0] - patched by PE writer for ExitProcess
             try self.enc.emit(&.{ 0xFF, 0x15, 0, 0, 0, 0 });
+            // Note: no freeShadowSpace or epilogue needed since ExitProcess never returns
         } else {
-            // Normal return - _start will handle ExitProcess when tracking
+            // Normal return - restore callee-saved registers and return
+            // _start will handle ExitProcess when tracking
+            try self.emitCalleeSavedRestores();
             try self.enc.epilogue();
         }
     }
