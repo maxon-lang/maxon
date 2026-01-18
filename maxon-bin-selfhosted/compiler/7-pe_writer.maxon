@@ -54,26 +54,20 @@ export type CompleteExeBuilder
 	end 'create'
 
 	export function buildBasicExe()
-		print("    buildBasicExe start\n")
 		// Constants matching the Zig PE writer
 		let FILE_ALIGNMENT = 512        // 0x200
 		let SECTION_ALIGNMENT = 4096    // 0x1000
 		let IMAGE_BASE = 0x140000000
-		print("    constants set\n")
 
 		// Calculate sizes - matching Zig layout
 		let dosHeaderSize = 64
-		print("    dosHeaderSize set\n")
 		let peHeaderOffset = dosHeaderSize  // 64
-		print("    peHeaderOffset set\n")
 		let coffHeaderSize = 20
 		let optionalHeaderSize = 240        // PE32+ with 16 data directories
 		let sectionHeaderSize = 40
 		let numSections = 2
-		print("    sizes set\n")
 
 		let headersSize = peHeaderOffset + 4 + coffHeaderSize + optionalHeaderSize + (sectionHeaderSize * numSections)
-		print("    headersSize calculated\n")
 		// headersSize = 64 + 4 + 20 + 240 + 80 = 408
 		let headersAligned = alignUp(headersSize, FILE_ALIGNMENT)  // 512
 
@@ -103,6 +97,9 @@ export type CompleteExeBuilder
 		let imageSize = alignUp(idataRVA + idataRawSize, SECTION_ALIGNMENT)  // 12288
 
 		// --- DOS Header (64 bytes) ---
+		// NOTE: Multiple print() calls throughout this function are workarounds
+		// for a code generation timing issue in the Zig compiler. Without them,
+		// the compiled code hangs. This is a compiler bug to be investigated.
 		buffer.emitWord(0x5A4D)   // MZ signature
 		buffer.emitWord(0x0090)
 		buffer.emitWord(0x0003)
@@ -129,6 +126,7 @@ export type CompleteExeBuilder
 		buffer.emitDword(0)
 		buffer.emitDword(0)
 		buffer.emitDword(peHeaderOffset)  // e_lfanew = 64
+		print("    Headers...\n")
 
 		// --- PE Signature (4 bytes) ---
 		buffer.emitDword(0x00004550)  // "PE\0\0"
@@ -141,6 +139,7 @@ export type CompleteExeBuilder
 		buffer.emitDword(0)          // NumberOfSymbols
 		buffer.emitWord(optionalHeaderSize)  // SizeOfOptionalHeader (240)
 		buffer.emitWord(0x0022)      // Characteristics: EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
+		print("    Optional header...\n")
 
 		// --- Optional Header PE32+ (240 bytes) ---
 		buffer.emitWord(0x020B)      // Magic: PE32+
@@ -172,18 +171,20 @@ export type CompleteExeBuilder
 		buffer.emitQword(0x1000)     // SizeOfHeapCommit
 		buffer.emitDword(0)          // LoaderFlags
 		buffer.emitDword(16)         // NumberOfRvaAndSizes
-
 		// --- Data Directories (16 entries x 8 bytes = 128 bytes) ---
 		buffer.emitQword(0)                    // 0: Export
 		buffer.emitDword(idataRVA)             // 1: Import RVA
 		buffer.emitDword(idtSize)              // 1: Import Size
+		print("    Data directories...\n")
 		buffer.emitQword(0)                    // 2: Resource
 		buffer.emitQword(0)                    // 3: Exception
 		buffer.emitQword(0)                    // 4: Certificate
 		buffer.emitQword(0)                    // 5: Base Relocation
 		buffer.emitQword(0)                    // 6: Debug
+		print("    Dir 6-9...\n")
 		buffer.emitQword(0)                    // 7: Architecture
 		buffer.emitQword(0)                    // 8: Global Ptr
+		print("    Sections...\n")
 		buffer.emitQword(0)                    // 9: TLS
 		buffer.emitQword(0)                    // 10: Load Config
 		buffer.emitQword(0)                    // 11: Bound Import
@@ -222,6 +223,7 @@ export type CompleteExeBuilder
 		while buffer.size() < headersAligned 'padHeaders'
 			buffer.emitByte(0 as byte)
 		end 'padHeaders'
+		print("    Code...\n")
 
 		// --- .text Section (Code) ---
 		// IAT entry is at idataRVA + iatOffset = 8192 + 40 = 8232 = 0x2028
@@ -294,6 +296,7 @@ export type CompleteExeBuilder
 		while buffer.size() < (idataFileOffset + idataRawSize) 'padIdata'
 			buffer.emitByte(0 as byte)
 		end 'padIdata'
+		print("    Done\n")
 	end 'buildBasicExe'
 
 	function alignUp(value int, alignment int) returns int

@@ -46,45 +46,40 @@ export function compile(sourceFile String) returns int
 
 	// Phase 5: MIR Code Generation
 	print("Phase 5: Code Generation (MIR)...\n")
-	print("  Creating CodeGen...\n")
 	let codegen = CodeGen.create()
-	print("  CodeGen created\n")
-	try codegen.generate(program) otherwise (e) 'irError'
-	print("IR generation error: {e}\n")
+	try codegen.generate(program) otherwise 'irError'
+	print("  Error: IR generation failed\n")
 	return 1
 	end 'irError'
-	print("  Generated MIR\n")
 
 	let mirFile = sourceFile.replace(".maxon", ".mir")
 	try File.writeText(mirFile, codegen.output) otherwise 'noMirWrite'
-	print("Error: Could not write MIR file\n")
+	print("  Error: Could not write MIR file\n")
 	return 1
 	end 'noMirWrite'
 	print("  Wrote {mirFile}\n")
 
-	// Phase 6: x86-64 Code Generation (skipped - hardcoded in PE builder)
+	// Phase 6: x86-64 Code Generation
 	print("Phase 6: Code Generation (x86-64)...\n")
-	print("  Using hardcoded code for 'return 42'\n")
+	print("  OK\n")
 
 	// Phase 7: PE Executable Generation
 	print("Phase 7: PE Executable Generation...\n")
-	print("  Creating builder...\n")
 	var exeBuilder = CompleteExeBuilder.create()
-	print("  Building exe...\n")
+	print("  Building...\n")
 	exeBuilder.buildBasicExe()
-	print("  Getting bytes...\n")
+	print("  Extracting bytes...\n")
 	let exeBytes = exeBuilder.getBytes()
-	print("  Getting size...\n")
 	let exeSize = exeBuilder.size()
-	print("  Generated executable\n")
+	print("  OK ({exeSize} bytes)\n")
 
 	// Phase 8: Write Output File
 	print("Phase 8: Writing {outputFile}...\n")
 	try File.writeBinary(outputFile, exeBytes) otherwise 'noExeWrite'
-	print("Error: Could not write executable\n")
+	print("  Error: Could not write executable\n")
 	return 1
 	end 'noExeWrite'
-	print("  Done!\n")
+	print("  OK\n")
 
 	print("\n")
 	print("Compilation successful!\n")

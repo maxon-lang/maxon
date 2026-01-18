@@ -197,7 +197,15 @@ fn analyzeLiveness(allocator: std.mem.Allocator, func: *const ir.Function) !Live
         defer call_indices.deinit(allocator);
 
         for (block.instructions.items, 0..) |inst, i| {
-            if (inst.op == .call) {
+            // These instructions all make internal/external calls that clobber caller-saved registers
+            const is_call_like = switch (inst.op) {
+                .call, .call_indirect, .extern_call => true,
+                .track_incref, .track_decref, .track_move => true,
+                // heap operations call external DLL functions
+                .heap_alloc, .heap_free, .heap_realloc => true,
+                else => false,
+            };
+            if (is_call_like) {
                 try call_indices.append(allocator, i);
             }
         }
@@ -1142,14 +1150,18 @@ pub const IrCodegen = struct {
     fn generatePrintAllocSummary(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__print_alloc_summary", self.code.items.len);
 
-        // Prologue - save callee-saved registers we'll use
+        // Prologue - save callee-saved registers
         try self.enc.pushRbp();
         try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
         try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
         try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
         try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x60 }); // sub rsp, 96 (expanded for new counters)
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00 }); // sub rsp, 160 (for buffer at rbp-160 to rbp-180)
+
+        // Save RSI and RDI to stack (callee-saved on Windows x64)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0x90 }); // mov [rbp-112], rsi
+        try self.enc.emit(&.{ 0x48, 0x89, 0x7D, 0x98 }); // mov [rbp-104], rdi
 
         // Get stdout handle
         try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
@@ -1206,8 +1218,10 @@ pub const IrCodegen = struct {
         try self.printNumberFromStack(-96);
         try self.printStaticString("\n");
 
-        // Epilogue
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x60 }); // add rsp, 96
+        // Epilogue - restore RSI/RDI from stack
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0x90 }); // mov rsi, [rbp-112]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x7D, 0x98 }); // mov rdi, [rbp-104]
+        try self.enc.emit(&.{ 0x48, 0x81, 0xC4, 0xA0, 0x00, 0x00, 0x00 }); // add rsp, 160 (must match prologue)
         try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
         try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
         try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
@@ -1278,7 +1292,11 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
         try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00 }); // sub rsp, 160 (for buffer at rbp-160 to rbp-180)
+
+        // Save RSI and RDI to stack (callee-saved on Windows x64)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0xA0 }); // mov [rbp-96], rsi
+        try self.enc.emit(&.{ 0x48, 0x89, 0x7D, 0xA8 }); // mov [rbp-88], rdi
 
         // Save inputs to stack
         try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xC8 }); // mov [rbp-56], rcx (ptr)
@@ -1298,7 +1316,14 @@ pub const IrCodegen = struct {
         try self.emitStoreTrackingField(.total_allocated);
 
         // Store entry in tracking table: {ptr, size, id} at table_base + count*24
-        // Get current table count
+        // First check if table is full (256 entries max)
+        try self.emitLoadTrackingField(.table_count);
+        try self.enc.emit(&.{ 0x48, 0x3D, 0x00, 0x01, 0x00, 0x00 }); // cmp rax, 256
+        // jge rel32 (skip if count >= 256) - opcode 0F 8D
+        try self.enc.emit(&.{ 0x0F, 0x8D, 0x00, 0x00, 0x00, 0x00 }); // jge rel32 (placeholder)
+        const skip_store = self.code.items.len - 4; // offset to patch
+
+        // Get current table count again
         try self.emitLoadTrackingField(.table_count);
         try self.enc.emit(&.{ 0x48, 0x89, 0xC1 }); // mov rcx, rax (count)
 
@@ -1327,6 +1352,14 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
         try self.emitStoreTrackingField(.table_count);
 
+        // Patch skip jump - calculate offset from end of jge instruction to here
+        const after_store = self.code.items.len;
+        const skip_rel: i32 = @intCast(@as(i64, @intCast(after_store)) - @as(i64, @intCast(skip_store)) - 4);
+        self.code.items[skip_store] = @bitCast(@as(i8, @intCast(skip_rel & 0xFF)));
+        self.code.items[skip_store + 1] = @bitCast(@as(i8, @intCast((skip_rel >> 8) & 0xFF)));
+        self.code.items[skip_store + 2] = @bitCast(@as(i8, @intCast((skip_rel >> 16) & 0xFF)));
+        self.code.items[skip_store + 3] = @bitCast(@as(i8, @intCast((skip_rel >> 24) & 0xFF)));
+
         // Get stdout handle
         try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
         try self.emitExternalCall("kernel32.dll", "GetStdHandle");
@@ -1353,8 +1386,10 @@ pub const IrCodegen = struct {
         // Print ")\n"
         try self.printStaticString(")\n");
 
-        // Epilogue
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
+        // Epilogue - restore RSI/RDI from stack
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xA0 }); // mov rsi, [rbp-96]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x7D, 0xA8 }); // mov rdi, [rbp-88]
+        try self.enc.emit(&.{ 0x48, 0x81, 0xC4, 0xA0, 0x00, 0x00, 0x00 }); // add rsp, 160 (must match prologue)
         try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
         try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
         try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
@@ -1380,7 +1415,11 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
         try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00 }); // sub rsp, 160 (for buffer at rbp-160 to rbp-180)
+
+        // Save RSI and RDI to stack (callee-saved on Windows x64)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0xA0 }); // mov [rbp-96], rsi
+        try self.enc.emit(&.{ 0x48, 0x89, 0x7D, 0xA8 }); // mov [rbp-88], rdi
 
         // Save inputs to stack and registers
         try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xC8 }); // mov [rbp-56], rcx (ptr)
@@ -1438,8 +1477,10 @@ pub const IrCodegen = struct {
         // Print ")\n"
         try self.printStaticString(")\n");
 
-        // Epilogue
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
+        // Epilogue - restore RSI/RDI from stack
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xA0 }); // mov rsi, [rbp-96]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x7D, 0xA8 }); // mov rdi, [rbp-88]
+        try self.enc.emit(&.{ 0x48, 0x81, 0xC4, 0xA0, 0x00, 0x00, 0x00 }); // add rsp, 160 (must match prologue)
         try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
         try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
         try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
@@ -1471,13 +1512,17 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
         try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x60 }); // sub rsp, 96
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00 }); // sub rsp, 160 (for buffer at rbp-160 to rbp-180)
+
+        // Save RSI and RDI to stack (callee-saved on Windows x64)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0x80 }); // mov [rbp-128], rsi
+        try self.enc.emit(&.{ 0x48, 0x89, 0x7D, 0x88 }); // mov [rbp-120], rdi
 
         // Save all inputs to stack immediately
         try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xC8 }); // mov [rbp-56], rcx (old_ptr)
         try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xC0 }); // mov [rbp-64], rdx (old_size)
         try self.enc.emit(&.{ 0x4C, 0x89, 0x45, 0xB8 }); // mov [rbp-72], r8 (new_ptr)
-        try self.enc.emit(&.{ 0x4C, 0x89, 0x4D, 0xB0 }); // mov [rbp-80], r9 (new_size) <- THE FIX
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x4D, 0xB0 }); // mov [rbp-80], r9 (new_size)
         // Copy tag_ptr from [rbp+48] to [rbp-88]
         try self.enc.emit(&.{ 0x48, 0x8B, 0x45, 0x30 }); // mov rax, [rbp+48]
         try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xA8 }); // mov [rbp-88], rax
@@ -1547,8 +1592,10 @@ pub const IrCodegen = struct {
         // Print ")\n"
         try self.printStaticString(")\n");
 
-        // Epilogue
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x60 }); // add rsp, 96
+        // Epilogue - restore RSI/RDI from stack
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0x80 }); // mov rsi, [rbp-128]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x7D, 0x88 }); // mov rdi, [rbp-120]
+        try self.enc.emit(&.{ 0x48, 0x81, 0xC4, 0xA0, 0x00, 0x00, 0x00 }); // add rsp, 160 (must match prologue)
         try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
         try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
         try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
@@ -1573,14 +1620,21 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
         try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x50 }); // sub rsp, 80
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00 }); // sub rsp, 160 (for buffer at rbp-160 to rbp-180)
+
+        // Save RSI and RDI to stack (callee-saved on Windows x64)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0xA0 }); // mov [rbp-96], rsi
+        try self.enc.emit(&.{ 0x48, 0x89, 0x7D, 0xA8 }); // mov [rbp-88], rdi
 
         // Stack layout:
+        //   [rbp-48] = temp for printTagFromR12
         //   [rbp-56] = from_var_ptr (RCX)
         //   [rbp-64] = from_var_len (RDX)
         //   [rbp-72] = to_var_ptr (R8)
         //   [rbp-80] = to_var_len (R9)
-        //   [rbp-48] = temp for printTagFromR12
+        //   [rbp-88] = saved RDI
+        //   [rbp-96] = saved RSI
+        //   [rbp-160] to [rbp-180] = printNumberFromStack buffer
 
         // Save all inputs to stack immediately
         try self.enc.emit(&.{ 0x48, 0x89, 0x4D, 0xC8 }); // mov [rbp-56], rcx (from_var_ptr)
@@ -1610,8 +1664,10 @@ pub const IrCodegen = struct {
         // Print newline
         try self.printStaticString("\n");
 
-        // Epilogue
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x50 }); // add rsp, 80
+        // Epilogue - restore RSI/RDI from stack
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xA0 }); // mov rsi, [rbp-96]
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x7D, 0xA8 }); // mov rdi, [rbp-88]
+        try self.enc.emit(&.{ 0x48, 0x81, 0xC4, 0xA0, 0x00, 0x00, 0x00 }); // add rsp, 160 (must match prologue)
         try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
         try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
         try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
@@ -1622,24 +1678,35 @@ pub const IrCodegen = struct {
 
     /// Generate __track_incref - tracks reference count increment
     /// Input: RCX = var_ptr, RDX = var_len, R8 = new_refcount
-    /// Stack layout:
+    /// Stack layout (all storage after sub rsp, 192):
+    ///   [rbp-8]  = saved r12
+    ///   [rbp-16] = saved r13
+    ///   [rbp-24] = saved r14
+    ///   [rbp-32] = saved r15
+    ///   [rbp-40] = saved rsi
     ///   [rbp-48] = var_len (for printTagFromR12)
     ///   [rbp-56] = new_refcount
+    ///   [rbp-160] to [rbp-180] = printNumberFromStack buffer
     fn generateTrackIncref(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__track_incref", self.code.items.len);
 
-        // Prologue - save callee-saved registers
+        // Prologue - use sub rsp approach so all offsets are predictable
+        // On Windows x64, RSI and RDI are callee-saved - we use RSI/RDI in printNumberFromStack
         try self.enc.pushRbp();
         try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
-        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
-        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
-        try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
-        try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00 }); // sub rsp, 192 (for buffer at rbp-160 to rbp-180)
+
+        // Save callee-saved registers to known stack slots
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x65, 0xF8 }); // mov [rbp-8], r12
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x6D, 0xF0 }); // mov [rbp-16], r13
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x75, 0xE8 }); // mov [rbp-24], r14
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x7D, 0xE0 }); // mov [rbp-32], r15
+        try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0xD8 }); // mov [rbp-40], rsi
+        try self.enc.emit(&.{ 0x48, 0x89, 0x7D, 0xC0 }); // mov [rbp-64], rdi (CRITICAL: RDI is callee-saved!)
 
         // Save inputs
         try self.enc.emit(&.{ 0x49, 0x89, 0xCC }); // mov r12, rcx (var_ptr)
-        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xD0 }); // mov [rbp-48], rdx (var_len)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xD0 }); // mov [rbp-48], rdx (var_len for printTagFromR12)
         try self.enc.emit(&.{ 0x4C, 0x89, 0x45, 0xC8 }); // mov [rbp-56], r8 (new_refcount)
 
         // Increment incref_count
@@ -1661,42 +1728,56 @@ pub const IrCodegen = struct {
         // Print " -> rc="
         try self.printStaticString(" -> rc=");
 
-        // Print new refcount from stack
+        // Print new refcount from stack (at [rbp-56])
         try self.printNumberFromStack(-56);
 
         // Print newline
         try self.printStaticString("\n");
 
-        // Epilogue
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
-        try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
-        try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
-        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
-        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+        // Epilogue - restore callee-saved registers from stack slots
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x7D, 0xC0 }); // mov rdi, [rbp-64] (CRITICAL: restore RDI!)
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xD8 }); // mov rsi, [rbp-40]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x7D, 0xE0 }); // mov r15, [rbp-32]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x75, 0xE8 }); // mov r14, [rbp-24]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x6D, 0xF0 }); // mov r13, [rbp-16]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x65, 0xF8 }); // mov r12, [rbp-8]
+        try self.enc.emit(&.{ 0x48, 0x89, 0xEC }); // mov rsp, rbp
         try self.enc.popRbp();
         try self.enc.ret();
     }
 
     /// Generate __track_decref - tracks reference count decrement
     /// Input: RCX = var_ptr, RDX = var_len, R8 = new_refcount
-    /// Stack layout:
+    /// Stack layout (all storage after sub rsp, 192):
+    ///   [rbp-8]  = saved r12
+    ///   [rbp-16] = saved r13
+    ///   [rbp-24] = saved r14
+    ///   [rbp-32] = saved r15
+    ///   [rbp-40] = saved rsi
+    ///   [rbp-64] = saved rdi
     ///   [rbp-48] = var_len (for printTagFromR12)
     ///   [rbp-56] = new_refcount
+    ///   [rbp-160] to [rbp-180] = printNumberFromStack buffer
     fn generateTrackDecref(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "__track_decref", self.code.items.len);
 
-        // Prologue - save callee-saved registers
+        // Prologue - use sub rsp approach so all offsets are predictable
+        // On Windows x64, RSI and RDI are callee-saved - we use RSI/RDI in printNumberFromStack
         try self.enc.pushRbp();
         try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
-        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
-        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
-        try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
-        try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
-        try self.enc.emit(&.{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00 }); // sub rsp, 192 (for buffer at rbp-160 to rbp-180)
+
+        // Save callee-saved registers to known stack slots
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x65, 0xF8 }); // mov [rbp-8], r12
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x6D, 0xF0 }); // mov [rbp-16], r13
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x75, 0xE8 }); // mov [rbp-24], r14
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x7D, 0xE0 }); // mov [rbp-32], r15
+        try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0xD8 }); // mov [rbp-40], rsi
+        try self.enc.emit(&.{ 0x48, 0x89, 0x7D, 0xC0 }); // mov [rbp-64], rdi (CRITICAL: RDI is callee-saved!)
 
         // Save inputs
         try self.enc.emit(&.{ 0x49, 0x89, 0xCC }); // mov r12, rcx (var_ptr)
-        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xD0 }); // mov [rbp-48], rdx (var_len)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xD0 }); // mov [rbp-48], rdx (var_len for printTagFromR12)
         try self.enc.emit(&.{ 0x4C, 0x89, 0x45, 0xC8 }); // mov [rbp-56], r8 (new_refcount)
 
         // Increment decref_count
@@ -1718,18 +1799,19 @@ pub const IrCodegen = struct {
         // Print " -> rc="
         try self.printStaticString(" -> rc=");
 
-        // Print new refcount from stack
+        // Print new refcount from stack (at [rbp-56])
         try self.printNumberFromStack(-56);
 
         // Print newline
         try self.printStaticString("\n");
 
-        // Epilogue
-        try self.enc.emit(&.{ 0x48, 0x83, 0xC4, 0x40 }); // add rsp, 64
-        try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
-        try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
-        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
-        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+        // Epilogue - restore callee-saved registers from stack slots
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xD8 }); // mov rsi, [rbp-40]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x7D, 0xE0 }); // mov r15, [rbp-32]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x75, 0xE8 }); // mov r14, [rbp-24]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x6D, 0xF0 }); // mov r13, [rbp-16]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x65, 0xF8 }); // mov r12, [rbp-8]
+        try self.enc.emit(&.{ 0x48, 0x89, 0xEC }); // mov rsp, rbp
         try self.enc.popRbp();
         try self.enc.ret();
     }
@@ -2501,13 +2583,18 @@ pub const IrCodegen = struct {
     }
 
     /// Helper to print number from a stack offset - assumes R15 = stdout handle
-    /// Uses [rbp-40] as conversion buffer. Converts number at [rbp+stack_offset] to decimal and prints.
+    /// Uses [rbp-160] as conversion buffer end. Converts number at [rbp+stack_offset] to decimal and prints.
+    /// Buffer spans [rbp-160] to [rbp-180] for up to 20 digit numbers.
+    /// NOTE: Stack slots [rbp-8] to [rbp-128] are used by tracking funcs for saved regs and data.
     fn printNumberFromStack(self: *IrCodegen, stack_offset: i8) !void {
         // Load number from stack to RAX
         try self.enc.emit(&.{ 0x48, 0x8B, 0x45, @bitCast(stack_offset) }); // mov rax, [rbp+offset]
 
-        // lea rdi, [rbp-40] (end of buffer - we write backwards)
-        try self.enc.emit(&.{ 0x48, 0x8D, 0x7D, 0xD8 }); // lea rdi, [rbp-40]
+        // lea rdi, [rbp-160] (end of buffer - we write backwards)
+        // Using disp32 because -160 doesn't fit in disp8 (-128 to +127)
+        // ModRM: mod=10 (disp32), reg=RDI (111), r/m=RBP (101) = 0xBD
+        // disp32 = -160 = 0xFFFFFF60 (little-endian: 60 FF FF FF)
+        try self.enc.emit(&.{ 0x48, 0x8D, 0xBD, 0x60, 0xFF, 0xFF, 0xFF }); // lea rdi, [rbp-160]
 
         // Store null terminator
         try self.enc.emit(&.{ 0xC6, 0x07, 0x00 }); // mov byte [rdi], 0
@@ -3605,6 +3692,11 @@ pub const IrCodegen = struct {
         const src_val = inst.operands[1].value;
         const size_val = inst.operands[2].value;
 
+        // Save RSI and RDI (callee-saved on Windows x64)
+        // Push two to maintain 16-byte stack alignment
+        try self.enc.emit(&.{0x56}); // push rsi
+        try self.enc.emit(&.{0x57}); // push rdi
+
         // Load size to rcx (rep count)
         try self.loadToRcx(size_val);
 
@@ -3626,6 +3718,10 @@ pub const IrCodegen = struct {
 
         // rep movsb: copy rcx bytes from [rsi] to [rdi]
         try self.enc.repMovsb();
+
+        // Restore RDI and RSI
+        try self.enc.emit(&.{0x5F}); // pop rdi
+        try self.enc.emit(&.{0x5E}); // pop rsi
     }
 
     fn genMemset(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -3664,6 +3760,11 @@ pub const IrCodegen = struct {
         const byte_val: u8 = @intCast(inst.operands[1].immediate_i32);
         const size_val = inst.operands[2].value;
 
+        // Save RDI (callee-saved on Windows x64)
+        // Push two to maintain 16-byte stack alignment
+        try self.enc.emit(&.{0x57}); // push rdi
+        try self.enc.emit(&.{0x56}); // push rsi (for alignment only)
+
         // Load size to rcx (rep count)
         try self.loadToRcx(size_val);
 
@@ -3684,6 +3785,10 @@ pub const IrCodegen = struct {
 
         // rep stosb: store al to [rdi], rcx times
         try self.enc.repStosb();
+
+        // Restore RSI and RDI
+        try self.enc.emit(&.{0x5E}); // pop rsi
+        try self.enc.emit(&.{0x5F}); // pop rdi
     }
 
     fn genCstrLen(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -3691,6 +3796,11 @@ pub const IrCodegen = struct {
         // Algorithm: set rcx to max, search for null byte, length = ~rcx - 1
         const result = inst.result.?;
         const ptr_val = inst.operands[0].value;
+
+        // Save RDI (callee-saved on Windows x64)
+        // Push two to maintain 16-byte stack alignment
+        try self.enc.emit(&.{0x57}); // push rdi
+        try self.enc.emit(&.{0x56}); // push rsi (for alignment only)
 
         // Load string pointer value to rdi (always use mov, not lea - we want the pointer value)
         const ptr_offset = try self.getStackOffset(ptr_val);
@@ -3713,6 +3823,10 @@ pub const IrCodegen = struct {
 
         // Move result from rcx to rax
         try self.enc.movRaxRcx();
+
+        // Restore RSI and RDI
+        try self.enc.emit(&.{0x5E}); // pop rsi
+        try self.enc.emit(&.{0x5F}); // pop rdi
 
         // Store result
         try self.storeToStack(result, .i64);
@@ -4448,6 +4562,11 @@ pub const IrCodegen = struct {
         const size_val = inst.operands[0].value;
         debug.codegen("  HeapAlloc: size=%{d}", .{size_val});
 
+        // Save callee-saved registers we'll use (R12, R13)
+        // Push two to maintain 16-byte stack alignment
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
+
         // Save size to R12 (callee-saved)
         try self.loadToRax(size_val);
         try self.enc.movR12Rax();
@@ -4523,6 +4642,10 @@ pub const IrCodegen = struct {
         self.code.items[skip_alloc_jmp + 2] = @truncate(@as(u32, @bitCast(skip_alloc_rel)) >> 16);
         self.code.items[skip_alloc_jmp + 3] = @truncate(@as(u32, @bitCast(skip_alloc_rel)) >> 24);
 
+        // Restore callee-saved registers
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+
         try self.storeToStack(inst.result.?, .ptr);
         try self.markIndirect(inst.result.?);
     }
@@ -4530,6 +4653,13 @@ pub const IrCodegen = struct {
     fn genHeapFree(self: *IrCodegen, inst: ir.Instruction) !void {
         const ptr_val = inst.operands[0].value;
         debug.codegen("  HeapFree: ptr=%{d}", .{ptr_val});
+
+        // Save callee-saved registers we'll use (R12, R13, R14, R15)
+        // Push four to maintain 16-byte stack alignment
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
+        try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
+        try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
 
         // Save ptr to R12
         try self.loadToRax(ptr_val);
@@ -4611,12 +4741,25 @@ pub const IrCodegen = struct {
         self.code.items[skip_free_jmp + 1] = @truncate(@as(u32, @bitCast(skip_free_rel)) >> 8);
         self.code.items[skip_free_jmp + 2] = @truncate(@as(u32, @bitCast(skip_free_rel)) >> 16);
         self.code.items[skip_free_jmp + 3] = @truncate(@as(u32, @bitCast(skip_free_rel)) >> 24);
+
+        // Restore callee-saved registers
+        try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
+        try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
     }
 
     fn genHeapRealloc(self: *IrCodegen, inst: ir.Instruction) !void {
         const old_ptr = inst.operands[0].value;
         const new_size = inst.operands[1].value;
         debug.codegen("  HeapRealloc: old_ptr=%{d}, new_size=%{d}", .{ old_ptr, new_size });
+
+        // Save callee-saved registers we'll use (R12, R13, R14, R15)
+        // Push four to maintain 16-byte stack alignment
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
+        try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
+        try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
 
         // Save old_ptr to R12, new_size to R13 (callee-saved)
         try self.loadToRax(old_ptr);
@@ -4769,6 +4912,12 @@ pub const IrCodegen = struct {
         self.code.items[skip_realloc_jmp + 2] = @truncate(@as(u32, @bitCast(skip_rel)) >> 16);
         self.code.items[skip_realloc_jmp + 3] = @truncate(@as(u32, @bitCast(skip_rel)) >> 24);
 
+        // Restore callee-saved registers
+        try self.enc.emit(&.{ 0x41, 0x5F }); // pop r15
+        try self.enc.emit(&.{ 0x41, 0x5E }); // pop r14
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+
         // Result is in RAX
         try self.storeToStack(inst.result.?, .ptr);
         try self.markIndirect(inst.result.?);
@@ -4825,6 +4974,11 @@ pub const IrCodegen = struct {
         const new_refcount = inst.operands[1].value;
         debug.codegen("  TrackIncref: tag={s}, new_rc=%{d}", .{ tag, new_refcount });
 
+        // Save R12 and R13 since we use R12 temporarily (R12 is callee-saved)
+        // Push two registers to maintain 16-byte stack alignment
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
+
         // Save new_refcount to R12 before string embedding
         try self.loadToRax(new_refcount);
         try self.enc.movR12Rax();
@@ -4856,6 +5010,10 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x4D, 0x89, 0xE0 }); // mov r8, r12
 
         try self.emitInternalCall("__track_incref");
+
+        // Restore R13 and R12
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
     }
 
     fn genTrackDecref(self: *IrCodegen, inst: ir.Instruction) !void {
@@ -4864,6 +5022,11 @@ pub const IrCodegen = struct {
         const tag = inst.operands[0].alloc_tag;
         const new_refcount = inst.operands[1].value;
         debug.codegen("  TrackDecref: tag={s}, new_rc=%{d}", .{ tag, new_refcount });
+
+        // Save R12 and R13 since we use R12 temporarily (R12 is callee-saved)
+        // Push two registers to maintain 16-byte stack alignment
+        try self.enc.emit(&.{ 0x41, 0x54 }); // push r12
+        try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
 
         // Save new_refcount to R12 before string embedding
         try self.loadToRax(new_refcount);
@@ -4896,6 +5059,10 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x4D, 0x89, 0xE0 }); // mov r8, r12
 
         try self.emitInternalCall("__track_decref");
+
+        // Restore R13 and R12
+        try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
+        try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
     }
 
     fn emitTrackFreeCall(self: *IrCodegen, tag: []const u8) !void {
