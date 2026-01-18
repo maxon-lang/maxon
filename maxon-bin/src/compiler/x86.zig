@@ -480,6 +480,28 @@ pub const Encoder = struct {
         try self.emit(&.{ 0xF2, 0x0F, 0x10, 0xC8 });
     }
 
+    /// movsd xmm_dst, xmm_src - Move scalar double between XMM registers
+    pub fn movsdXmmXmm(self: *Encoder, dst: Xmm, src: Xmm) !void {
+        const dst_idx = @intFromEnum(dst);
+        const src_idx = @intFromEnum(src);
+
+        // Determine REX prefix
+        // REX.R = 1 if dst >= xmm8
+        // REX.B = 1 if src >= xmm8
+        const rex_r: u8 = if (dst_idx >= 8) 0x44 else 0;
+        const rex_b: u8 = if (src_idx >= 8) 0x41 else 0;
+        const rex = rex_r | rex_b;
+
+        // movsd xmm_dst, xmm_src: F2 [REX] 0F 10 /r (ModR/M = 0xC0 + (dst&7)<<3 + (src&7))
+        const modrm: u8 = 0xC0 | (@as(u8, @intCast(dst_idx & 7)) << 3) | @as(u8, @intCast(src_idx & 7));
+
+        if (rex != 0) {
+            try self.emit(&.{ 0xF2, rex, 0x0F, 0x10, modrm });
+        } else {
+            try self.emit(&.{ 0xF2, 0x0F, 0x10, modrm });
+        }
+    }
+
     pub fn movsdMemRcxXmm0(self: *Encoder) !void {
         try self.emit(&.{ 0xF2, 0x0F, 0x11, 0x01 });
     }
@@ -907,5 +929,156 @@ pub const Encoder = struct {
     pub fn movRcxImm64(self: *Encoder, imm: i64) !void {
         try self.emit(&.{ 0x48, 0xB9 });
         try self.emit(&@as([8]u8, @bitCast(imm)));
+    }
+
+    // -------------------------------------------------------------------------
+    // Generic register operations for linear-scan register allocator
+    // -------------------------------------------------------------------------
+
+    /// MOV dst, src - 64-bit register-to-register move
+    /// Emits REX prefix + MOV with proper ModR/M encoding
+    pub fn movGprGpr(self: *Encoder, dst: Gpr, src: Gpr) !void {
+        const dst_num: u8 = @intFromEnum(dst);
+        const src_num: u8 = @intFromEnum(src);
+
+        // REX prefix: 0100 WRXB
+        // W=1 (64-bit), R=src extension, B=dst extension
+        var rex: u8 = 0x48;
+        if (src_num >= 8) rex |= 0x04; // REX.R
+        if (dst_num >= 8) rex |= 0x01; // REX.B
+
+        // ModR/M: mod=11 (reg-reg), reg=src, rm=dst
+        const modrm: u8 = 0xC0 | ((src_num & 0x07) << 3) | (dst_num & 0x07);
+
+        try self.emit(&.{ rex, 0x89, modrm });
+    }
+
+    /// MOV [rbp+offset], src - store GPR to stack
+    /// Handles any GPR as source
+    pub fn movRbpOffsetGpr(self: *Encoder, offset: i32, src: Gpr) !void {
+        const src_num: u8 = @intFromEnum(src);
+
+        // REX prefix: W=1, R=src extension, B=0 (rbp doesn't need extension)
+        var rex: u8 = 0x48;
+        if (src_num >= 8) rex |= 0x04; // REX.R
+
+        // ModR/M: mod depends on offset size, reg=src, rm=101 (rbp)
+        const reg_bits: u8 = (src_num & 0x07) << 3;
+
+        if (offset >= -128 and offset <= 127) {
+            // 8-bit displacement: mod=01, rm=101
+            const modrm: u8 = 0x45 | reg_bits;
+            try self.emit(&.{ rex, 0x89, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            // 32-bit displacement: mod=10, rm=101
+            const modrm: u8 = 0x85 | reg_bits;
+            try self.emit(&.{ rex, 0x89, modrm });
+            try self.emitI32(offset);
+        }
+    }
+
+    /// MOV dst, [rbp+offset] - load GPR from stack
+    /// Handles any GPR as destination
+    pub fn movGprRbpOffset(self: *Encoder, dst: Gpr, offset: i32) !void {
+        const dst_num: u8 = @intFromEnum(dst);
+
+        // REX prefix: W=1, R=dst extension, B=0 (rbp doesn't need extension)
+        var rex: u8 = 0x48;
+        if (dst_num >= 8) rex |= 0x04; // REX.R
+
+        // ModR/M: mod depends on offset size, reg=dst, rm=101 (rbp)
+        const reg_bits: u8 = (dst_num & 0x07) << 3;
+
+        if (offset >= -128 and offset <= 127) {
+            // 8-bit displacement: mod=01, rm=101
+            const modrm: u8 = 0x45 | reg_bits;
+            try self.emit(&.{ rex, 0x8B, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            // 32-bit displacement: mod=10, rm=101
+            const modrm: u8 = 0x85 | reg_bits;
+            try self.emit(&.{ rex, 0x8B, modrm });
+            try self.emitI32(offset);
+        }
+    }
+
+    /// MOV dst, imm64 - load 64-bit immediate to any GPR
+    /// Uses the movabs encoding (REX.W + B8+rd + imm64)
+    pub fn movGprImm64(self: *Encoder, dst: Gpr, imm: i64) !void {
+        const dst_num: u8 = @intFromEnum(dst);
+
+        // REX prefix: W=1 (64-bit), B=dst extension
+        var rex: u8 = 0x48;
+        if (dst_num >= 8) rex |= 0x01; // REX.B
+
+        // Opcode: B8+rd (low 3 bits of register number)
+        const opcode: u8 = 0xB8 + (dst_num & 0x07);
+
+        try self.emit(&.{ rex, opcode });
+        try self.emitI64(imm);
+    }
+
+    /// LEA dst, [rbp+offset] - load effective address to any GPR
+    pub fn leaGprRbpOffset(self: *Encoder, dst: Gpr, offset: i32) !void {
+        const dst_num: u8 = @intFromEnum(dst);
+
+        // REX prefix: W=1, R=dst extension, B=0 (rbp doesn't need extension)
+        var rex: u8 = 0x48;
+        if (dst_num >= 8) rex |= 0x04; // REX.R
+
+        // ModR/M: mod depends on offset size, reg=dst, rm=101 (rbp)
+        const reg_bits: u8 = (dst_num & 0x07) << 3;
+
+        if (offset >= -128 and offset <= 127) {
+            // 8-bit displacement: mod=01, rm=101
+            const modrm: u8 = 0x45 | reg_bits;
+            try self.emit(&.{ rex, 0x8D, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            // 32-bit displacement: mod=10, rm=101
+            const modrm: u8 = 0x85 | reg_bits;
+            try self.emit(&.{ rex, 0x8D, modrm });
+            try self.emitI32(offset);
+        }
+    }
+
+    /// ADD dst, src - 64-bit register addition
+    pub fn addGprGpr(self: *Encoder, dst: Gpr, src: Gpr) !void {
+        const dst_num: u8 = @intFromEnum(dst);
+        const src_num: u8 = @intFromEnum(src);
+
+        var rex: u8 = 0x48;
+        if (src_num >= 8) rex |= 0x04; // REX.R
+        if (dst_num >= 8) rex |= 0x01; // REX.B
+
+        const modrm: u8 = 0xC0 | ((src_num & 0x07) << 3) | (dst_num & 0x07);
+
+        try self.emit(&.{ rex, 0x01, modrm });
+    }
+
+    /// SUB dst, src - 64-bit register subtraction
+    pub fn subGprGpr(self: *Encoder, dst: Gpr, src: Gpr) !void {
+        const dst_num: u8 = @intFromEnum(dst);
+        const src_num: u8 = @intFromEnum(src);
+
+        var rex: u8 = 0x48;
+        if (src_num >= 8) rex |= 0x04; // REX.R
+        if (dst_num >= 8) rex |= 0x01; // REX.B
+
+        const modrm: u8 = 0xC0 | ((src_num & 0x07) << 3) | (dst_num & 0x07);
+
+        try self.emit(&.{ rex, 0x29, modrm });
+    }
+
+    /// CMP gpr1, gpr2 - compare two 64-bit registers
+    pub fn cmpGprGpr(self: *Encoder, gpr1: Gpr, gpr2: Gpr) !void {
+        const gpr1_num: u8 = @intFromEnum(gpr1);
+        const gpr2_num: u8 = @intFromEnum(gpr2);
+
+        var rex: u8 = 0x48;
+        if (gpr2_num >= 8) rex |= 0x04; // REX.R
+        if (gpr1_num >= 8) rex |= 0x01; // REX.B
+
+        const modrm: u8 = 0xC0 | ((gpr2_num & 0x07) << 3) | (gpr1_num & 0x07);
+
+        try self.emit(&.{ rex, 0x39, modrm });
     }
 };

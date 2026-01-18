@@ -51,36 +51,9 @@ pub fn writePE(path: []const u8, code: []const u8, external_patches: []const ir_
         dlls.deinit(allocator);
     }
 
-    // Always include ExitProcess for main's exit
-    try addImport(&dlls, allocator, "kernel32.dll", "ExitProcess", null);
-
-    // Add all external patches
+    // Add all external patches (includes ExitProcess from main's return)
     for (external_patches) |patch| {
         try addImport(&dlls, allocator, patch.dll, patch.func_name, patch.offset);
-    }
-
-    // Also scan code for FF 15 patterns without patches (legacy ExitProcess call)
-    var i: usize = 0;
-    while (i + 5 < code.len) : (i += 1) {
-        if (code[i] == 0xFF and code[i + 1] == 0x15) {
-            // Check if already tracked
-            const offset = i + 2; // Position of the displacement
-            var found = false;
-            for (dlls.items) |dll| {
-                for (dll.functions.items) |func| {
-                    for (func.code_offsets.items) |o| {
-                        if (o == offset) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (!found) {
-                // This is the legacy ExitProcess call from main
-                try addImport(&dlls, allocator, "kernel32.dll", "ExitProcess", offset);
-            }
-        }
     }
 
     // Calculate .idata section layout

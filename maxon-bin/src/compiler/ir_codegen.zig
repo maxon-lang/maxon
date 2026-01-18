@@ -70,6 +70,42 @@ pub const CodegenOptions = struct {
     track_registers: bool = false,
 };
 
+/// Live range for a single value - tracks the span of instructions where it's live
+const LiveRange = struct {
+    value: ir.Value,
+    start: u32, // First instruction index where value is defined
+    end: u32, // Last instruction index where value is used
+    is_float: bool, // Whether this is a float value (uses XMM registers)
+    live_across_call: bool, // Whether the range crosses a call instruction
+    assigned_reg: ?x86.Gpr, // Assigned GPR (null if spilled or XMM)
+    assigned_xmm: ?x86.Xmm, // Assigned XMM (null if spilled or GPR)
+    spill_slot: ?i32, // Stack offset if spilled (null if in register)
+};
+
+/// Per-block liveness sets for dataflow analysis
+const BlockLiveness = struct {
+    live_in: std.AutoHashMapUnmanaged(ir.Value, void),
+    live_out: std.AutoHashMapUnmanaged(ir.Value, void),
+    def_set: std.AutoHashMapUnmanaged(ir.Value, void),
+    use_set: std.AutoHashMapUnmanaged(ir.Value, void),
+
+    fn init() BlockLiveness {
+        return .{
+            .live_in = .{},
+            .live_out = .{},
+            .def_set = .{},
+            .use_set = .{},
+        };
+    }
+
+    fn deinit(self: *BlockLiveness, allocator: std.mem.Allocator) void {
+        self.live_in.deinit(allocator);
+        self.live_out.deinit(allocator);
+        self.def_set.deinit(allocator);
+        self.use_set.deinit(allocator);
+    }
+};
+
 /// Register allocation information for a function
 /// Tracks register assignments, stack slots, and callee-saved register usage
 /// for proper function prologue/epilogue generation
@@ -94,6 +130,12 @@ const RegAllocInfo = struct {
     /// Stack offset where hidden return pointer is saved (valid when has_hidden_ret_ptr is true)
     /// The caller passes the return buffer pointer in RCX, which we save here in the prologue
     hidden_ret_ptr_offset: i32,
+    /// Live ranges for all values in the function (computed by linear-scan allocator)
+    live_ranges: std.ArrayListUnmanaged(LiveRange),
+    /// Next available spill slot offset (grows downward from frame base)
+    next_spill_offset: i32,
+    /// Whether linear-scan allocation is enabled (vs stack-only fallback)
+    use_linear_scan: bool,
 
     fn init() RegAllocInfo {
         return .{
@@ -106,6 +148,9 @@ const RegAllocInfo = struct {
             .outgoing_stack_args_size = 0,
             .has_hidden_ret_ptr = false,
             .hidden_ret_ptr_offset = 0,
+            .live_ranges = .{},
+            .next_spill_offset = -8,
+            .use_linear_scan = false, // Disabled by default for now
         };
     }
 
@@ -115,6 +160,7 @@ const RegAllocInfo = struct {
         self.stack_slots.deinit(allocator);
         self.used_callee_saved_gprs.deinit(allocator);
         self.used_callee_saved_xmms.deinit(allocator);
+        self.live_ranges.deinit(allocator);
     }
 };
 
@@ -219,6 +265,294 @@ fn analyzeLiveness(allocator: std.mem.Allocator, func: *const ir.Function) !Live
     }
 
     return info;
+}
+
+/// Build live ranges from liveness analysis for linear-scan allocation
+/// Assigns instruction indices and computes start/end for each value
+fn buildLiveRanges(
+    allocator: std.mem.Allocator,
+    func: *const ir.Function,
+    value_types: *const std.AutoHashMapUnmanaged(ir.Value, ir.Type),
+) !std.ArrayListUnmanaged(LiveRange) {
+    var ranges: std.ArrayListUnmanaged(LiveRange) = .empty;
+    var value_to_range: std.AutoHashMapUnmanaged(ir.Value, usize) = .{};
+    defer value_to_range.deinit(allocator);
+
+    // Global instruction index across all blocks
+    var inst_idx: u32 = 0;
+
+    // Find call instruction positions for live_across_call detection
+    var call_positions: std.ArrayListUnmanaged(u32) = .empty;
+    defer call_positions.deinit(allocator);
+
+    for (func.blocks.items) |block| {
+        for (block.instructions.items) |inst| {
+            if (inst.op == .call or inst.op == .call_indirect or inst.op == .extern_call) {
+                try call_positions.append(allocator, inst_idx);
+            }
+            inst_idx += 1;
+        }
+    }
+
+    // Reset for main pass
+    inst_idx = 0;
+
+    for (func.blocks.items) |block| {
+        for (block.instructions.items) |inst| {
+            // Record definition - but skip values that MUST be on stack
+            // These operations produce pointer values that represent stack addresses
+            // and are used by getStackOffset later
+            if (inst.result) |result| {
+                const result_type = if (value_types.get(result)) |t| t else ir.Type.i64;
+
+                // Pointer values must stay on stack - they're used by getStackOffset
+                const must_be_on_stack = result_type == .ptr or switch (inst.op) {
+                    // alloca creates a stack slot and returns a pointer to it
+                    .alloca, .alloca_sized, .alloca_dynamic => true,
+                    // These compute addresses that may need to be on stack
+                    .getelemptr, .getfieldptr => true,
+                    // Parameters need special handling (they arrive in registers but are often stored)
+                    .param => true,
+                    // String constants are addresses
+                    .const_string => true,
+                    // Function addresses
+                    .func_addr => true,
+                    // Heap operations return pointers
+                    .heap_alloc, .heap_realloc => true,
+                    // Loads from pointers might produce pointers
+                    .load => true,
+                    // Call results can be pointers
+                    .call, .call_indirect, .extern_call => true,
+                    else => false,
+                };
+
+                if (!must_be_on_stack) {
+                    const is_float = result_type == .f64;
+                    try ranges.append(allocator, .{
+                        .value = result,
+                        .start = inst_idx,
+                        .end = inst_idx, // Will be extended by uses
+                        .is_float = is_float,
+                        .live_across_call = false,
+                        .assigned_reg = null,
+                        .assigned_xmm = null,
+                        .spill_slot = null,
+                    });
+                    try value_to_range.put(allocator, result, ranges.items.len - 1);
+                }
+            }
+
+            // Extend ranges for each use
+            for (inst.operands) |operand| {
+                switch (operand) {
+                    .value => |val| {
+                        if (value_to_range.get(val)) |range_idx| {
+                            ranges.items[range_idx].end = inst_idx;
+                        }
+                    },
+                    .call_args => |args| {
+                        for (args) |arg| {
+                            if (value_to_range.get(arg)) |range_idx| {
+                                ranges.items[range_idx].end = inst_idx;
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            inst_idx += 1;
+        }
+    }
+
+    // Mark ranges that cross calls
+    for (ranges.items) |*range| {
+        for (call_positions.items) |call_pos| {
+            if (range.start < call_pos and call_pos < range.end) {
+                range.live_across_call = true;
+                break;
+            }
+        }
+    }
+
+    return ranges;
+}
+
+/// Linear-scan register allocation
+/// Allocates physical registers to live ranges, preferring caller-saved for short-lived
+/// values and callee-saved for values live across calls
+fn linearScanAllocate(
+    allocator: std.mem.Allocator,
+    ranges: *std.ArrayListUnmanaged(LiveRange),
+    used_callee_saved_gprs: *std.ArrayListUnmanaged(x86.Gpr),
+    used_callee_saved_xmms: *std.ArrayListUnmanaged(x86.Xmm),
+) !i32 {
+    // Sort ranges by start position
+    std.mem.sort(LiveRange, ranges.items, {}, struct {
+        fn lessThan(_: void, a: LiveRange, b: LiveRange) bool {
+            return a.start < b.start;
+        }
+    }.lessThan);
+
+    // Available registers (Windows x64 ABI)
+    // Caller-saved: RAX, RCX, RDX, R8, R9, R10, R11
+    // Callee-saved: RBX, RSI, RDI, R12, R13, R14, R15
+    // We exclude RAX (used for return values), RCX/RDX/R8/R9 (argument passing), RSP, RBP
+    // Available GPRs for allocation: R10, R11 (caller-saved), RBX, RSI, RDI, R12-R15 (callee-saved)
+    var free_caller_saved_gprs: std.ArrayListUnmanaged(x86.Gpr) = .empty;
+    defer free_caller_saved_gprs.deinit(allocator);
+    try free_caller_saved_gprs.appendSlice(allocator, &[_]x86.Gpr{ .r10, .r11 });
+
+    var free_callee_saved_gprs: std.ArrayListUnmanaged(x86.Gpr) = .empty;
+    defer free_callee_saved_gprs.deinit(allocator);
+    try free_callee_saved_gprs.appendSlice(allocator, &[_]x86.Gpr{ .rbx, .rsi, .rdi, .r12, .r13, .r14, .r15 });
+
+    // XMM registers: xmm0-5 caller-saved, xmm6-15 callee-saved
+    // xmm0-3 used for args, so available: xmm4, xmm5 (caller), xmm6-15 (callee)
+    var free_caller_saved_xmms: std.ArrayListUnmanaged(x86.Xmm) = .empty;
+    defer free_caller_saved_xmms.deinit(allocator);
+    try free_caller_saved_xmms.appendSlice(allocator, &[_]x86.Xmm{ .xmm4, .xmm5 });
+
+    var free_callee_saved_xmms: std.ArrayListUnmanaged(x86.Xmm) = .empty;
+    defer free_callee_saved_xmms.deinit(allocator);
+    try free_callee_saved_xmms.appendSlice(allocator, &[_]x86.Xmm{ .xmm6, .xmm7, .xmm8, .xmm9, .xmm10, .xmm11, .xmm12, .xmm13, .xmm14, .xmm15 });
+
+    // Active list - ranges currently in registers, sorted by end position
+    var active: std.ArrayListUnmanaged(*LiveRange) = .empty;
+    defer active.deinit(allocator);
+
+    var next_spill_offset: i32 = -8;
+
+    for (ranges.items) |*range| {
+        // Expire old intervals
+        var i: usize = 0;
+        while (i < active.items.len) {
+            if (active.items[i].end < range.start) {
+                // This interval has expired, free its register
+                const expired = active.items[i];
+                if (expired.is_float) {
+                    if (expired.assigned_xmm) |xmm| {
+                        // Return to appropriate pool
+                        if (isCalleeSavedXmm(xmm)) {
+                            try free_callee_saved_xmms.append(allocator, xmm);
+                        } else {
+                            try free_caller_saved_xmms.append(allocator, xmm);
+                        }
+                    }
+                } else {
+                    if (expired.assigned_reg) |reg| {
+                        if (isCalleeSavedGpr(reg)) {
+                            try free_callee_saved_gprs.append(allocator, reg);
+                        } else {
+                            try free_caller_saved_gprs.append(allocator, reg);
+                        }
+                    }
+                }
+                _ = active.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        // Allocate register for current range
+        if (range.is_float) {
+            // Float allocation
+            if (range.live_across_call) {
+                // Prefer callee-saved for values live across calls
+                if (free_callee_saved_xmms.items.len > 0) {
+                    range.assigned_xmm = free_callee_saved_xmms.pop();
+                    try markCalleeSavedXmmUsed(allocator, range.assigned_xmm.?, used_callee_saved_xmms);
+                } else if (free_caller_saved_xmms.items.len > 0) {
+                    // Fall back to caller-saved (will need save/restore around calls)
+                    range.assigned_xmm = free_caller_saved_xmms.pop();
+                } else {
+                    // Spill
+                    range.spill_slot = next_spill_offset;
+                    next_spill_offset -= 8;
+                }
+            } else {
+                // Prefer caller-saved for short-lived values
+                if (free_caller_saved_xmms.items.len > 0) {
+                    range.assigned_xmm = free_caller_saved_xmms.pop();
+                } else if (free_callee_saved_xmms.items.len > 0) {
+                    range.assigned_xmm = free_callee_saved_xmms.pop();
+                    try markCalleeSavedXmmUsed(allocator, range.assigned_xmm.?, used_callee_saved_xmms);
+                } else {
+                    // Spill
+                    range.spill_slot = next_spill_offset;
+                    next_spill_offset -= 8;
+                }
+            }
+        } else {
+            // GPR allocation
+            if (range.live_across_call) {
+                // Prefer callee-saved for values live across calls
+                if (free_callee_saved_gprs.items.len > 0) {
+                    range.assigned_reg = free_callee_saved_gprs.pop();
+                    try markCalleeSavedGprUsed(allocator, range.assigned_reg.?, used_callee_saved_gprs);
+                } else if (free_caller_saved_gprs.items.len > 0) {
+                    range.assigned_reg = free_caller_saved_gprs.pop();
+                } else {
+                    // Spill
+                    range.spill_slot = next_spill_offset;
+                    next_spill_offset -= 8;
+                }
+            } else {
+                // Prefer caller-saved for short-lived values
+                if (free_caller_saved_gprs.items.len > 0) {
+                    range.assigned_reg = free_caller_saved_gprs.pop();
+                } else if (free_callee_saved_gprs.items.len > 0) {
+                    range.assigned_reg = free_callee_saved_gprs.pop();
+                    try markCalleeSavedGprUsed(allocator, range.assigned_reg.?, used_callee_saved_gprs);
+                } else {
+                    // Spill
+                    range.spill_slot = next_spill_offset;
+                    next_spill_offset -= 8;
+                }
+            }
+        }
+
+        // Add to active list if allocated to a register
+        if (range.assigned_reg != null or range.assigned_xmm != null) {
+            try active.append(allocator, range);
+            // Keep active list sorted by end position
+            std.mem.sort(*LiveRange, active.items, {}, struct {
+                fn lessThan(_: void, a: *LiveRange, b: *LiveRange) bool {
+                    return a.end < b.end;
+                }
+            }.lessThan);
+        }
+    }
+
+    return next_spill_offset;
+}
+
+fn isCalleeSavedGpr(reg: x86.Gpr) bool {
+    return switch (reg) {
+        .rbx, .rsi, .rdi, .r12, .r13, .r14, .r15 => true,
+        else => false,
+    };
+}
+
+fn isCalleeSavedXmm(xmm: x86.Xmm) bool {
+    return switch (xmm) {
+        .xmm6, .xmm7, .xmm8, .xmm9, .xmm10, .xmm11, .xmm12, .xmm13, .xmm14, .xmm15 => true,
+        else => false,
+    };
+}
+
+fn markCalleeSavedGprUsed(allocator: std.mem.Allocator, reg: x86.Gpr, used: *std.ArrayListUnmanaged(x86.Gpr)) !void {
+    for (used.items) |r| {
+        if (r == reg) return; // Already recorded
+    }
+    try used.append(allocator, reg);
+}
+
+fn markCalleeSavedXmmUsed(allocator: std.mem.Allocator, xmm: x86.Xmm, used: *std.ArrayListUnmanaged(x86.Xmm)) !void {
+    for (used.items) |x| {
+        if (x == xmm) return; // Already recorded
+    }
+    try used.append(allocator, xmm);
 }
 
 /// Check if a return type requires hidden pointer (large struct/error union > 8 bytes)
@@ -373,7 +707,10 @@ pub const IrCodegen = struct {
         };
         return switch (loc) {
             .stack => |o| o,
-            else => error.ExpectedStackLocation,
+            else => {
+                debug.log("ExpectedStackLocation in getStackOffset: val=%{d} has location {s} (func={s})", .{ val, @tagName(loc), self.current_func_name });
+                return error.ExpectedStackLocation;
+            },
         };
     }
 
@@ -391,14 +728,60 @@ pub const IrCodegen = struct {
 
     const LoadTarget = union(enum) { rax, xmm: x86.Xmm };
 
-    fn storeToStack(self: *IrCodegen, result: ir.Value, ty: ir.Type) !void {
-        const offset = self.allocStackSlots(1);
-        if (ty == .f64) {
-            try self.enc.movsdRbpOffsetXmm0(offset);
+    /// Store result from RAX (or XMM0 for floats) to assigned location
+    /// Linear-scan allocator determines whether this goes to:
+    /// - A GPR register (reg_map)
+    /// - An XMM register (xmm_map)
+    /// - A stack slot (stack_slots from spill)
+    /// If not pre-allocated, falls back to allocating a new stack slot
+    fn storeResult(self: *IrCodegen, result: ir.Value, ty: ir.Type) !void {
+        // Check if linear-scan allocated a register for this value
+        if (self.reg_alloc.reg_map.get(result)) |reg| {
+            // Value has an assigned GPR - move from RAX to that register
+            if (reg != .rax) {
+                try self.enc.movGprGpr(reg, .rax);
+            }
+            try self.setValueLocation(result, .{ .register = reg }, ty);
+            if (self.track_registers) {
+                std.debug.print("[STORE] {s}: %{d} -> {s} (regalloc)\n", .{ self.current_func_name, result, @tagName(reg) });
+            }
+        } else if (self.reg_alloc.xmm_map.get(result)) |xmm| {
+            // Value has an assigned XMM register
+            if (xmm != .xmm0) {
+                // movsd xmm_target, xmm0
+                try self.enc.movsdXmmXmm(xmm, .xmm0);
+            }
+            try self.setValueLocation(result, .{ .xmm = xmm }, ty);
+            if (self.track_registers) {
+                std.debug.print("[STORE] {s}: %{d} -> {s} (regalloc)\n", .{ self.current_func_name, result, @tagName(xmm) });
+            }
+        } else if (self.reg_alloc.stack_slots.get(result)) |offset| {
+            // Value was spilled by linear-scan - use pre-allocated spill slot
+            if (ty == .f64) {
+                try self.enc.movsdRbpOffsetXmm0(offset);
+            } else {
+                try self.enc.movRbpOffsetRax(offset);
+            }
+            try self.setValueLocation(result, .{ .stack = offset }, ty);
+            if (self.track_registers) {
+                std.debug.print("[STORE] {s}: %{d} -> stack[{d}] (spill)\n", .{ self.current_func_name, result, offset });
+            }
         } else {
-            try self.enc.movRbpOffsetRax(offset);
+            // Fallback: value not pre-allocated, allocate new stack slot
+            // This handles parameters and other values not in the live ranges
+            const offset = self.allocStackSlots(1);
+            if (ty == .f64) {
+                try self.enc.movsdRbpOffsetXmm0(offset);
+            } else {
+                try self.enc.movRbpOffsetRax(offset);
+            }
+            try self.setValueLocation(result, .{ .stack = offset }, ty);
         }
-        try self.setValueLocation(result, .{ .stack = offset }, ty);
+    }
+
+    /// Legacy function - redirects to storeResult
+    fn storeToStack(self: *IrCodegen, result: ir.Value, ty: ir.Type) !void {
+        try self.storeResult(result, ty);
     }
 
     fn loadValue(self: *IrCodegen, val: ir.Value, target: LoadTarget) !void {
@@ -423,14 +806,16 @@ pub const IrCodegen = struct {
             },
             .register => |reg| switch (target) {
                 .rax => {
-                    if (reg == .rcx) try self.enc.movRaxRcx() else if (reg == .rdx) try self.enc.movRaxRdx() else if (reg != .rax) return error.UnsupportedRegister;
+                    if (reg != .rax) {
+                        try self.enc.movGprGpr(.rax, reg);
+                    }
                 },
                 .xmm => return error.CannotLoadRegToXmm,
             },
             .xmm => |reg| switch (target) {
                 .rax => return error.CannotLoadXmmToRax,
                 .xmm => |xmm| if (reg != xmm) {
-                    if (xmm == .xmm0) try self.enc.movsdXmm0Xmm1() else try self.enc.movsdXmm1Xmm0();
+                    try self.enc.movsdXmmXmm(xmm, reg);
                 },
             },
         }
@@ -448,10 +833,9 @@ pub const IrCodegen = struct {
         switch (loc) {
             .stack => |offset| try self.enc.movRcxRbpOffsetQ(offset),
             .register => |reg| {
-                if (reg == .rax) try self.enc.movRcxRax() else if (reg == .rdx) {
-                    // mov rcx, rdx
-                    try self.enc.emit(&.{ 0x48, 0x89, 0xD1 });
-                } else if (reg != .rcx) return error.UnsupportedRegister;
+                if (reg != .rcx) {
+                    try self.enc.movGprGpr(.rcx, reg);
+                }
             },
             .xmm => return error.CannotLoadXmmToGpr,
         }
@@ -472,12 +856,10 @@ pub const IrCodegen = struct {
             try self.func_return_types.put(self.allocator, func.name, func.return_type);
         }
 
-        // Generate _start wrapper if tracking is enabled
-        if (self.track_memory) {
-            try self.generateStartWrapper();
-        }
+        // Generate _start wrapper (entry point that calls main and ExitProcess)
+        try self.generateStartWrapper();
 
-        // Generate main function first (entry point)
+        // Generate main function
         if (module.getFunction("main")) |func| {
             try self.func_offsets.put(self.allocator, func.name, self.code.items.len);
             try self.generateFunction(func);
@@ -678,15 +1060,18 @@ pub const IrCodegen = struct {
         try self.enc.popRax(); // restore rax
     }
 
-    /// Generate _start wrapper that enables tracking, calls main, prints summary
+    /// Generate _start wrapper - entry point that calls main and ExitProcess
+    /// When tracking is enabled, also calls tracking setup/summary functions
     fn generateStartWrapper(self: *IrCodegen) !void {
         try self.func_offsets.put(self.allocator, "_start", self.code.items.len);
 
-        // Prologue
+        // Prologue - need stack frame for callee-saved register
         try self.enc.prologue(64);
 
-        // Call __enable_alloc_tracking
-        try self.emitInternalCall("__enable_alloc_tracking");
+        if (self.track_memory) {
+            // Call __enable_alloc_tracking
+            try self.emitInternalCall("__enable_alloc_tracking");
+        }
 
         // Call main
         try self.emitInternalCall("main");
@@ -694,8 +1079,10 @@ pub const IrCodegen = struct {
         // Save main's return value to R12 (callee-saved)
         try self.enc.emit(&.{ 0x49, 0x89, 0xC4 }); // mov r12, rax
 
-        // Call __print_alloc_summary
-        try self.emitInternalCall("__print_alloc_summary");
+        if (self.track_memory) {
+            // Call __print_alloc_summary
+            try self.emitInternalCall("__print_alloc_summary");
+        }
 
         // Call ExitProcess with main's return value
         try self.enc.emit(&.{ 0x4C, 0x89, 0xE1 }); // mov rcx, r12
@@ -2301,6 +2688,8 @@ pub const IrCodegen = struct {
     /// Allocate registers for a function based on liveness analysis
     /// This determines which callee-saved registers will be used and need save/restore
     fn allocateRegisters(self: *IrCodegen, func: *const ir.Function, liveness: *const LivenessInfo) !void {
+        _ = liveness; // We use buildLiveRanges which does its own liveness analysis
+
         // Reset reg_alloc for this function
         self.reg_alloc.deinit(self.allocator);
         self.reg_alloc = RegAllocInfo.init();
@@ -2310,33 +2699,52 @@ pub const IrCodegen = struct {
         // This shifts all other parameters right by one register
         self.reg_alloc.has_hidden_ret_ptr = hasHiddenReturnPointer(func.return_type);
 
-        // Track available callee-saved registers
-        var available_gprs: std.ArrayListUnmanaged(x86.Gpr) = .empty;
-        defer available_gprs.deinit(self.allocator);
-        for (x86.win64.callee_saved_gprs) |reg| {
-            try available_gprs.append(self.allocator, reg);
+        // Collect value types from all instructions for live range analysis
+        var value_types: std.AutoHashMapUnmanaged(ir.Value, ir.Type) = .{};
+        defer value_types.deinit(self.allocator);
+
+        for (func.blocks.items) |block| {
+            for (block.instructions.items) |inst| {
+                if (inst.result) |result| {
+                    const ty = inferResultType(inst);
+                    try value_types.put(self.allocator, result, ty);
+                }
+            }
         }
 
-        var available_xmms: std.ArrayListUnmanaged(x86.Xmm) = .empty;
-        defer available_xmms.deinit(self.allocator);
-        for (x86.win64.callee_saved_xmms) |reg| {
-            try available_xmms.append(self.allocator, reg);
+        // Build live ranges for all values
+        self.reg_alloc.live_ranges = try buildLiveRanges(self.allocator, func, &value_types);
+
+        // Run linear-scan register allocation
+        self.reg_alloc.next_spill_offset = try linearScanAllocate(
+            self.allocator,
+            &self.reg_alloc.live_ranges,
+            &self.reg_alloc.used_callee_saved_gprs,
+            &self.reg_alloc.used_callee_saved_xmms,
+        );
+
+        // For now, don't populate reg_map/xmm_map - keep using stack-based storage
+        // The codegen assumes values can be addressed via getStackOffset(), which expects
+        // stack locations. Enabling register allocation requires updating all places that
+        // use getStackOffset to also handle register locations.
+        //
+        // TODO: Enable register allocation by updating genStore, genLoad, etc. to handle
+        // register-allocated values. For now, values go through the storeResult fallback
+        // which allocates new stack slots.
+        //
+        // Populate only stack_slots for spilled values - this doesn't change behavior
+        // but prepares for when we fully enable register allocation
+        for (self.reg_alloc.live_ranges.items) |range| {
+            if (range.spill_slot) |slot| {
+                try self.reg_alloc.stack_slots.put(self.allocator, range.value, slot);
+            }
+            // Note: We intentionally skip assigned_reg and assigned_xmm here
+            // so that storeResult falls back to stack allocation
         }
-
-        // Allocate values that are live across calls to callee-saved registers
-        // For now, just track which values need callee-saved regs
-        // The actual value locations will still use the existing stack-based approach
-        // but we record which callee-saved regs are used for the prologue/epilogue
-
-        // Future enhancement: iterate over liveness.live_across_calls to assign
-        // callee-saved registers to values that are live across function calls.
-        // For now, the stack-based approach handles all values, so no callee-saved
-        // registers are actually used yet. This infrastructure is in place for
-        // when we implement true register allocation.
-        _ = liveness;
 
         // Scan for heap operations which use callee-saved registers internally.
         // These registers must be saved/restored in the prologue/epilogue.
+        // We add these AFTER linear-scan so they don't get clobbered.
         // - heap_alloc: uses R12 (always), R13 (when tracking)
         // - heap_free: uses R12 (always), R13+R14 (when tracking)
         // - heap_realloc: uses R12+R13 (always), R14+R15 (when tracking)
@@ -2358,16 +2766,16 @@ pub const IrCodegen = struct {
         // Add callee-saved registers used by heap operations
         if (uses_heap_alloc or uses_heap_free or uses_heap_realloc) {
             // R12 is used by all heap operations
-            try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r12);
+            try markCalleeSavedGprUsed(self.allocator, .r12, &self.reg_alloc.used_callee_saved_gprs);
             if (self.track_registers) {
                 std.debug.print("[CALLEE-SAVED] {s}: adding R12 (heap ops)\n", .{func.name});
             }
         }
         if (uses_heap_realloc) {
             // R13 is used by heap_realloc to hold new_size across HeapReAlloc call
-            try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r13);
+            try markCalleeSavedGprUsed(self.allocator, .r13, &self.reg_alloc.used_callee_saved_gprs);
             // R14 is used by heap_realloc to hold result (new_ptr) after HeapReAlloc
-            try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r14);
+            try markCalleeSavedGprUsed(self.allocator, .r14, &self.reg_alloc.used_callee_saved_gprs);
             if (self.track_registers) {
                 std.debug.print("[CALLEE-SAVED] {s}: adding R13, R14 (heap_realloc)\n", .{func.name});
             }
@@ -2376,24 +2784,58 @@ pub const IrCodegen = struct {
             // When memory tracking is enabled, additional registers are used
             if (uses_heap_alloc and !uses_heap_realloc) {
                 // heap_alloc uses R13 for tracking (but realloc already added it)
-                try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r13);
+                try markCalleeSavedGprUsed(self.allocator, .r13, &self.reg_alloc.used_callee_saved_gprs);
             }
             if (uses_heap_free) {
                 // heap_free uses R13+R14 for tracking
                 if (!uses_heap_alloc and !uses_heap_realloc) {
-                    try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r13);
+                    try markCalleeSavedGprUsed(self.allocator, .r13, &self.reg_alloc.used_callee_saved_gprs);
                 }
                 // R14 is only added here if not already added by heap_realloc
                 if (!uses_heap_realloc) {
-                    try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r14);
+                    try markCalleeSavedGprUsed(self.allocator, .r14, &self.reg_alloc.used_callee_saved_gprs);
                 }
             }
             if (uses_heap_realloc) {
                 // heap_realloc uses R15 for tracking old_size
                 // R14 was already added above (always used by heap_realloc)
-                try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r15);
+                try markCalleeSavedGprUsed(self.allocator, .r15, &self.reg_alloc.used_callee_saved_gprs);
             }
         }
+    }
+
+    /// Infer the result type of an instruction based on its opcode
+    fn inferResultType(inst: ir.Instruction) ir.Type {
+        return switch (inst.op) {
+            // Float operations
+            .fadd, .fsub, .fmul, .fdiv => .f64,
+            .sitofp => .f64, // signed int to float
+            .fabs, .fsqrt, .fceil, .ffloor, .fround => .f64,
+            .bitcast_i64_to_f64 => .f64,
+            // Integer operations
+            .add, .sub, .mul, .div, .mod => .i64,
+            .fptosi => .i64, // float to signed int
+            .bitcast_f64_to_i64 => .i64,
+            .band, .bitor, .bxor, .shl, .shr => .i64,
+            // Boolean/comparison results (i64 for 0/1)
+            .icmp_eq, .icmp_ne, .icmp_lt, .icmp_le, .icmp_gt, .icmp_ge => .i64,
+            .fcmp_eq, .fcmp_ne, .fcmp_lt, .fcmp_le, .fcmp_gt, .fcmp_ge => .i64,
+            // Pointer operations
+            .load, .heap_alloc, .heap_realloc, .alloca, .alloca_sized, .alloca_dynamic => .ptr,
+            .getelemptr, .getfieldptr, .func_addr => .ptr,
+            // Constants
+            .const_i64 => .i64,
+            .const_i32 => .i32,
+            .const_i8 => .i8,
+            .const_f64 => .f64,
+            .const_string => .ptr,
+            // Truncations and extensions
+            .trunc_i64_i32 => .i32,
+            .trunc_i64_i8 => .i8,
+            .sext_i32_i64, .zext_i8_i64 => .i64,
+            // Default to i64 for other operations (param, call, extern_call, etc.)
+            else => .i64,
+        };
     }
 
     /// Emit callee-saved register saves after prologue
@@ -2940,6 +3382,223 @@ pub const IrCodegen = struct {
         }
     }
 
+    /// Emit inline struct copy: copies size bytes from src_reg to dst_reg
+    /// Uses RAX as scratch register. Handles 8-byte, 4-byte, 2-byte, and 1-byte moves.
+    /// This is used for large struct returns via hidden pointer (Windows x64 ABI).
+    fn emitStructCopy(self: *IrCodegen, src_reg: x86.Gpr, dst_reg: x86.Gpr, size: u32) !void {
+        if (size == 0) return;
+
+        var offset: u32 = 0;
+
+        // Copy 8 bytes at a time
+        while (offset + 8 <= size) : (offset += 8) {
+            // mov rax, [src_reg + offset]
+            try self.emitMovRaxMemRegOffset(src_reg, @intCast(offset));
+            // mov [dst_reg + offset], rax
+            try self.emitMovMemRegOffsetRax(dst_reg, @intCast(offset));
+        }
+
+        // Copy remaining 4 bytes if any
+        if (offset + 4 <= size) {
+            // mov eax, [src_reg + offset]
+            try self.emitMovEaxMemRegOffset(src_reg, @intCast(offset));
+            // mov [dst_reg + offset], eax
+            try self.emitMovMemRegOffsetEax(dst_reg, @intCast(offset));
+            offset += 4;
+        }
+
+        // Copy remaining 2 bytes if any
+        if (offset + 2 <= size) {
+            // mov ax, [src_reg + offset]
+            try self.emitMovAxMemRegOffset(src_reg, @intCast(offset));
+            // mov [dst_reg + offset], ax
+            try self.emitMovMemRegOffsetAx(dst_reg, @intCast(offset));
+            offset += 2;
+        }
+
+        // Copy remaining 1 byte if any
+        if (offset < size) {
+            // mov al, [src_reg + offset]
+            try self.emitMovAlMemRegOffset(src_reg, @intCast(offset));
+            // mov [dst_reg + offset], al
+            try self.emitMovMemRegOffsetAl(dst_reg, @intCast(offset));
+        }
+    }
+
+    /// Emit: mov rax, [reg + offset] (64-bit load from memory)
+    fn emitMovRaxMemRegOffset(self: *IrCodegen, reg: x86.Gpr, offset: i32) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        var rex: u8 = 0x48; // REX.W
+        if (reg_num >= 8) rex |= 0x01; // REX.B
+
+        if (offset == 0 and reg_num != 5 and reg_num != 13) { // rbp and r13 require displacement
+            const modrm: u8 = 0x00 | (reg_num & 0x07); // mod=00, reg=rax(0), rm=reg
+            try self.enc.emit(&.{ rex, 0x8B, modrm });
+        } else if (offset >= -128 and offset <= 127) {
+            const modrm: u8 = 0x40 | (reg_num & 0x07); // mod=01, disp8
+            try self.enc.emit(&.{ rex, 0x8B, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            const modrm: u8 = 0x80 | (reg_num & 0x07); // mod=10, disp32
+            try self.enc.emit(&.{ rex, 0x8B, modrm });
+            try self.enc.emitI32(offset);
+        }
+    }
+
+    /// Emit: mov [reg + offset], rax (64-bit store to memory)
+    fn emitMovMemRegOffsetRax(self: *IrCodegen, reg: x86.Gpr, offset: i32) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        var rex: u8 = 0x48; // REX.W
+        if (reg_num >= 8) rex |= 0x01; // REX.B
+
+        if (offset == 0 and reg_num != 5 and reg_num != 13) {
+            const modrm: u8 = 0x00 | (reg_num & 0x07);
+            try self.enc.emit(&.{ rex, 0x89, modrm });
+        } else if (offset >= -128 and offset <= 127) {
+            const modrm: u8 = 0x40 | (reg_num & 0x07);
+            try self.enc.emit(&.{ rex, 0x89, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            const modrm: u8 = 0x80 | (reg_num & 0x07);
+            try self.enc.emit(&.{ rex, 0x89, modrm });
+            try self.enc.emitI32(offset);
+        }
+    }
+
+    /// Emit: mov eax, [reg + offset] (32-bit load)
+    fn emitMovEaxMemRegOffset(self: *IrCodegen, reg: x86.Gpr, offset: i32) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        var prefix: ?u8 = null;
+        if (reg_num >= 8) prefix = 0x41; // REX.B
+
+        if (offset == 0 and reg_num != 5 and reg_num != 13) {
+            const modrm: u8 = 0x00 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x8B, modrm });
+        } else if (offset >= -128 and offset <= 127) {
+            const modrm: u8 = 0x40 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x8B, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            const modrm: u8 = 0x80 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x8B, modrm });
+            try self.enc.emitI32(offset);
+        }
+    }
+
+    /// Emit: mov [reg + offset], eax (32-bit store)
+    fn emitMovMemRegOffsetEax(self: *IrCodegen, reg: x86.Gpr, offset: i32) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        var prefix: ?u8 = null;
+        if (reg_num >= 8) prefix = 0x41;
+
+        if (offset == 0 and reg_num != 5 and reg_num != 13) {
+            const modrm: u8 = 0x00 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x89, modrm });
+        } else if (offset >= -128 and offset <= 127) {
+            const modrm: u8 = 0x40 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x89, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            const modrm: u8 = 0x80 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x89, modrm });
+            try self.enc.emitI32(offset);
+        }
+    }
+
+    /// Emit: mov ax, [reg + offset] (16-bit load)
+    fn emitMovAxMemRegOffset(self: *IrCodegen, reg: x86.Gpr, offset: i32) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        const prefix_66: u8 = 0x66; // Operand-size override
+
+        if (reg_num >= 8) {
+            try self.enc.emit(&.{ prefix_66, 0x41 }); // 66h + REX.B
+        } else {
+            try self.enc.emitByte(prefix_66);
+        }
+
+        if (offset == 0 and reg_num != 5 and reg_num != 13) {
+            const modrm: u8 = 0x00 | (reg_num & 0x07);
+            try self.enc.emit(&.{ 0x8B, modrm });
+        } else if (offset >= -128 and offset <= 127) {
+            const modrm: u8 = 0x40 | (reg_num & 0x07);
+            try self.enc.emit(&.{ 0x8B, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            const modrm: u8 = 0x80 | (reg_num & 0x07);
+            try self.enc.emit(&.{ 0x8B, modrm });
+            try self.enc.emitI32(offset);
+        }
+    }
+
+    /// Emit: mov [reg + offset], ax (16-bit store)
+    fn emitMovMemRegOffsetAx(self: *IrCodegen, reg: x86.Gpr, offset: i32) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        const prefix_66: u8 = 0x66;
+
+        if (reg_num >= 8) {
+            try self.enc.emit(&.{ prefix_66, 0x41 });
+        } else {
+            try self.enc.emitByte(prefix_66);
+        }
+
+        if (offset == 0 and reg_num != 5 and reg_num != 13) {
+            const modrm: u8 = 0x00 | (reg_num & 0x07);
+            try self.enc.emit(&.{ 0x89, modrm });
+        } else if (offset >= -128 and offset <= 127) {
+            const modrm: u8 = 0x40 | (reg_num & 0x07);
+            try self.enc.emit(&.{ 0x89, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            const modrm: u8 = 0x80 | (reg_num & 0x07);
+            try self.enc.emit(&.{ 0x89, modrm });
+            try self.enc.emitI32(offset);
+        }
+    }
+
+    /// Emit: mov al, [reg + offset] (8-bit load)
+    fn emitMovAlMemRegOffset(self: *IrCodegen, reg: x86.Gpr, offset: i32) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        var prefix: ?u8 = null;
+        if (reg_num >= 8) prefix = 0x41;
+
+        if (offset == 0 and reg_num != 5 and reg_num != 13) {
+            const modrm: u8 = 0x00 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x8A, modrm });
+        } else if (offset >= -128 and offset <= 127) {
+            const modrm: u8 = 0x40 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x8A, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            const modrm: u8 = 0x80 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x8A, modrm });
+            try self.enc.emitI32(offset);
+        }
+    }
+
+    /// Emit: mov [reg + offset], al (8-bit store)
+    fn emitMovMemRegOffsetAl(self: *IrCodegen, reg: x86.Gpr, offset: i32) !void {
+        const reg_num: u8 = @intFromEnum(reg);
+        var prefix: ?u8 = null;
+        if (reg_num >= 8) prefix = 0x41;
+
+        if (offset == 0 and reg_num != 5 and reg_num != 13) {
+            const modrm: u8 = 0x00 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x88, modrm });
+        } else if (offset >= -128 and offset <= 127) {
+            const modrm: u8 = 0x40 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x88, modrm, @bitCast(@as(i8, @intCast(offset))) });
+        } else {
+            const modrm: u8 = 0x80 | (reg_num & 0x07);
+            if (prefix) |p| try self.enc.emitByte(p);
+            try self.enc.emit(&.{ 0x88, modrm });
+            try self.enc.emitI32(offset);
+        }
+    }
+
     fn genMemcpyDyn(self: *IrCodegen, inst: ir.Instruction) !void {
         // Dynamic-sized memcpy using rep movsb
         const dest_val = inst.operands[0].value;
@@ -3325,24 +3984,10 @@ pub const IrCodegen = struct {
             }
         }
 
-        if (std.mem.eql(u8, self.current_func_name, "main") and !self.track_memory) {
-            // For main without _start wrapper, we call ExitProcess directly.
-            // No need to restore callee-saved registers since ExitProcess never returns.
-            // Stack alignment: after prologue push + callee-saved pushes, RSP % 16 == 8.
-            // We need to maintain this for the call. Since we're NOT popping the
-            // callee-saved registers, and allocShadowSpace subtracts 32 (which is 0 mod 16),
-            // RSP % 16 remains 8, which is correct for the call.
-            try self.enc.movRcxRax();
-            try self.enc.allocShadowSpace();
-            // call [rip+0] - patched by PE writer for ExitProcess
-            try self.enc.emit(&.{ 0xFF, 0x15, 0, 0, 0, 0 });
-            // Note: no freeShadowSpace or epilogue needed since ExitProcess never returns
-        } else {
-            // Normal return - restore callee-saved registers and return
-            // _start will handle ExitProcess when tracking
-            try self.emitCalleeSavedRestores();
-            try self.enc.epilogue();
-        }
+        // Normal return - restore callee-saved registers and return
+        // _start wrapper handles calling ExitProcess after main returns
+        try self.emitCalleeSavedRestores();
+        try self.enc.epilogue();
     }
 
     fn genParam(self: *IrCodegen, inst: ir.Instruction) !void {
