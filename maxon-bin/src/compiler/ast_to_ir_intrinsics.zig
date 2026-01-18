@@ -502,6 +502,12 @@ fn intrinsicManagedMemorySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!
 
     if (elem_info.is_struct and elem_size > 8) {
         try self.func().emitMemcpy(elem_ptr.asRawPtr(), ir.toRawPtr(value.value), @intCast(elem_size));
+    } else if (elem_size == 1) {
+        // For byte-sized elements, use i8 store to avoid writing 8 bytes
+        try self.func().emitStoreI8(elem_ptr.raw(), value.value);
+    } else if (elem_size == 4) {
+        // For 32-bit elements, use i32 store
+        try self.func().emitStoreI32(elem_ptr.raw(), value.value);
     } else {
         try self.func().emitStore(elem_ptr.raw(), value.value);
     }

@@ -67,6 +67,7 @@ const ChkstkPatch = struct {
 /// Code generation options
 pub const CodegenOptions = struct {
     track_memory: bool = false,
+    track_registers: bool = false,
 };
 
 /// Register allocation information for a function
@@ -258,6 +259,8 @@ pub const IrCodegen = struct {
     jump_patches: std.ArrayListUnmanaged(JumpPatch),
     // Allocation tracking
     track_memory: bool,
+    // Register/stack tracking
+    track_registers: bool,
     // Offsets to tracking data (set after all code is generated)
     tracking_data_offset: ?usize = null,
     // Patches for RIP-relative tracking data access
@@ -301,6 +304,7 @@ pub const IrCodegen = struct {
             .block_offsets = .{},
             .jump_patches = .{},
             .track_memory = options.track_memory,
+            .track_registers = options.track_registers,
             .tracking_data_patches = .{},
             .func_return_types = .{},
             .stored_types = .{},
@@ -351,6 +355,13 @@ pub const IrCodegen = struct {
     // ------------------------------------------------------------------------
 
     fn setValueLocation(self: *IrCodegen, val: ir.Value, loc: ValueLocation, ty: ir.Type) !void {
+        if (self.track_registers) {
+            switch (loc) {
+                .stack => |offset| std.debug.print("[REG] {s}: %{d} -> stack[{d}] ({s})\n", .{ self.current_func_name, val, offset, ty.toIrName() }),
+                .register => |reg| std.debug.print("[REG] {s}: %{d} -> {s} ({s})\n", .{ self.current_func_name, val, @tagName(reg), ty.toIrName() }),
+                .xmm => |xmm| std.debug.print("[REG] {s}: %{d} -> {s} ({s})\n", .{ self.current_func_name, val, @tagName(xmm), ty.toIrName() }),
+            }
+        }
         try self.value_locations.put(self.allocator, val, loc);
         try self.value_types.put(self.allocator, val, ty);
     }
@@ -395,6 +406,13 @@ pub const IrCodegen = struct {
             debug.log("InvalidValue: val=%{d} not found in value_locations (func={s})", .{ val, self.current_func_name });
             return error.InvalidValue;
         };
+        if (self.track_registers) {
+            switch (loc) {
+                .stack => |offset| std.debug.print("[LOAD] {s}: %{d} from stack[{d}] -> {s}\n", .{ self.current_func_name, val, offset, @tagName(target) }),
+                .register => |reg| std.debug.print("[LOAD] {s}: %{d} from {s} -> {s}\n", .{ self.current_func_name, val, @tagName(reg), @tagName(target) }),
+                .xmm => |xmm| std.debug.print("[LOAD] {s}: %{d} from {s} -> {s}\n", .{ self.current_func_name, val, @tagName(xmm), @tagName(target) }),
+            }
+        }
         switch (loc) {
             .stack => |offset| {
                 debug.codegen("    loadValue: val=%{d}, stack offset={d}, target={s}", .{ val, offset, @tagName(target) });
@@ -2316,6 +2334,66 @@ pub const IrCodegen = struct {
         // registers are actually used yet. This infrastructure is in place for
         // when we implement true register allocation.
         _ = liveness;
+
+        // Scan for heap operations which use callee-saved registers internally.
+        // These registers must be saved/restored in the prologue/epilogue.
+        // - heap_alloc: uses R12 (always), R13 (when tracking)
+        // - heap_free: uses R12 (always), R13+R14 (when tracking)
+        // - heap_realloc: uses R12+R13 (always), R14+R15 (when tracking)
+        var uses_heap_alloc = false;
+        var uses_heap_free = false;
+        var uses_heap_realloc = false;
+
+        for (func.blocks.items) |block| {
+            for (block.instructions.items) |inst| {
+                switch (inst.op) {
+                    .heap_alloc => uses_heap_alloc = true,
+                    .heap_free => uses_heap_free = true,
+                    .heap_realloc => uses_heap_realloc = true,
+                    else => {},
+                }
+            }
+        }
+
+        // Add callee-saved registers used by heap operations
+        if (uses_heap_alloc or uses_heap_free or uses_heap_realloc) {
+            // R12 is used by all heap operations
+            try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r12);
+            if (self.track_registers) {
+                std.debug.print("[CALLEE-SAVED] {s}: adding R12 (heap ops)\n", .{func.name});
+            }
+        }
+        if (uses_heap_realloc) {
+            // R13 is used by heap_realloc to hold new_size across HeapReAlloc call
+            try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r13);
+            // R14 is used by heap_realloc to hold result (new_ptr) after HeapReAlloc
+            try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r14);
+            if (self.track_registers) {
+                std.debug.print("[CALLEE-SAVED] {s}: adding R13, R14 (heap_realloc)\n", .{func.name});
+            }
+        }
+        if (self.track_memory) {
+            // When memory tracking is enabled, additional registers are used
+            if (uses_heap_alloc and !uses_heap_realloc) {
+                // heap_alloc uses R13 for tracking (but realloc already added it)
+                try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r13);
+            }
+            if (uses_heap_free) {
+                // heap_free uses R13+R14 for tracking
+                if (!uses_heap_alloc and !uses_heap_realloc) {
+                    try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r13);
+                }
+                // R14 is only added here if not already added by heap_realloc
+                if (!uses_heap_realloc) {
+                    try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r14);
+                }
+            }
+            if (uses_heap_realloc) {
+                // heap_realloc uses R15 for tracking old_size
+                // R14 was already added above (always used by heap_realloc)
+                try self.reg_alloc.used_callee_saved_gprs.append(self.allocator, .r15);
+            }
+        }
     }
 
     /// Emit callee-saved register saves after prologue
@@ -3337,6 +3415,10 @@ pub const IrCodegen = struct {
         const ret_type = self.func_return_types.get(func_name) orelse inst.result_type;
 
         debug.codegen("  Calling {s} with {d} args", .{ func_name, args.len });
+
+        if (self.track_registers) {
+            std.debug.print("[CALL] {s}: calling {s} with {d} args, stack_offset={d}\n", .{ self.current_func_name, func_name, args.len, self.next_stack_offset });
+        }
 
         // Check if called function returns large struct requiring hidden pointer
         const callee_has_hidden_ret = hasHiddenReturnPointer(ret_type);

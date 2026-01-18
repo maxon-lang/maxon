@@ -45,6 +45,7 @@ pub const CompileResult = struct {
 /// Public compile options exposed to CLI
 pub const CompileOptions = struct {
     track_memory: bool = false,
+    track_registers: bool = false,
     emit_ir: bool = false,
     emit_asm: bool = false,
 };
@@ -113,6 +114,7 @@ const PipelineOptions = struct {
     external_enums: []const ast_to_ir.ExternalEnumInfo = &.{},
     external_type_aliases: []const ast_to_ir.ExternalTypeAliasInfo = &.{},
     track_memory: bool = false,
+    track_registers: bool = false,
     emit_ir: bool = false,
 
     // For semantic_only mode:
@@ -639,6 +641,7 @@ pub fn compileMultiple(
             .external_enums = info.enums.items,
             .external_type_aliases = exported_type_aliases,
             .track_memory = options.track_memory,
+            .track_registers = options.track_registers,
         });
 
         var frontend = pipeline_result.full_ir;
@@ -665,6 +668,7 @@ pub fn compileMultiple(
     // Codegen output uses parent allocator since it's passed to PE writer
     const codegen_result = ir_codegen.generate(final_module.*, allocator, .{
         .track_memory = options.track_memory,
+        .track_registers = options.track_registers,
     }) catch |err| {
         debug.log("IR codegen error: {}", .{err});
         return error.CodegenError;

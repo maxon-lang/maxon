@@ -29,6 +29,10 @@ export type Token
 	export let text String
 	export let line int
 	export let column int
+
+	export static function eof() returns Token
+		return {kind: TokenType.eof, text: "", line: 0, column: 0}
+	end 'eof'
 end 'Token'
 
 export typealias TokenArray is Array with Token
@@ -56,7 +60,7 @@ export type Lexer
 
 			// Newline
 			if c == '\n' 'newline'
-				tokens.push(Token{kind: TokenType.newline, text: "\n", line: line, column: column})
+				tokens.push({kind: TokenType.newline, text: "\n", line: line, column: column})
 				pos = try source.indexAfter(pos) otherwise pos
 				line = line + 1
 				column = 1
@@ -75,14 +79,14 @@ export type Lexer
 
 			// Single character tokens
 			if c == '(' 'lparen'
-				tokens.push(Token{kind: TokenType.lparen, text: "(", line: line, column: column})
+				tokens.push({kind: TokenType.lparen, text: "(", line: line, column: column})
 				pos = try source.indexAfter(pos) otherwise pos
 				column = column + 1
 				continue 'mainLoop'
 			end 'lparen'
 
 			if c == ')' 'rparen'
-				tokens.push(Token{kind: TokenType.rparen, text: ")", line: line, column: column})
+				tokens.push({kind: TokenType.rparen, text: ")", line: line, column: column})
 				pos = try source.indexAfter(pos) otherwise pos
 				column = column + 1
 				continue 'mainLoop'
@@ -101,7 +105,7 @@ export type Lexer
 				let text = source.slice(start, endIndex: pos)
 				pos = try source.indexAfter(pos) otherwise pos
 				column = column + 1
-				tokens.push(Token{kind: TokenType.charLiteral, text: text, line: line, column: startCol})
+				tokens.push({kind: TokenType.charLiteral, text: text, line: line, column: startCol})
 				continue 'mainLoop'
 			end 'charLit'
 
@@ -114,7 +118,7 @@ export type Lexer
 					column = column + 1
 				end 'scanDigits'
 				let text = source.slice(start, endIndex: pos)
-				tokens.push(Token{kind: TokenType.integer, text: text, line: line, column: startCol})
+				tokens.push({kind: TokenType.integer, text: text, line: line, column: startCol})
 				continue 'mainLoop'
 			end 'number'
 
@@ -130,7 +134,7 @@ export type Lexer
 				end 'scanIdent'
 				let text = source.slice(start, endIndex: pos)
 				let tokenType = getKeyword(text)
-				tokens.push(Token{kind: tokenType, text: text, line: line, column: startCol})
+				tokens.push({kind: tokenType, text: text, line: line, column: startCol})
 				continue 'mainLoop'
 			end 'ident'
 
@@ -139,7 +143,7 @@ export type Lexer
 			column = column + 1
 		end 'mainLoop'
 
-		tokens.push(Token{kind: TokenType.eof, text: "", line: line, column: column})
+		tokens.push({kind: TokenType.eof, text: "", line: line, column: column})
 		return tokens
 	end 'tokenize'
 

@@ -88,11 +88,13 @@ fn printUsage() void {
     std.debug.print("\nCompile Options:\n", .{});
     std.debug.print("  -v                      Enable verbose/debug output\n", .{});
     std.debug.print("  --track-memory          Enable runtime memory tracking (allocs, moves, refcounts)\n", .{});
+    std.debug.print("  --track-registers       Show compile-time register/stack allocation debug info\n", .{});
     std.debug.print("  --emit-ir               Emit IR output (.ir file)\n", .{});
     std.debug.print("  --emit-asm              Emit assembly output (.asm file)\n", .{});
     std.debug.print("\nBuild Options:\n", .{});
     std.debug.print("  -v                      Enable verbose/debug output\n", .{});
     std.debug.print("  --track-memory          Enable runtime memory tracking (allocs, moves, refcounts)\n", .{});
+    std.debug.print("  --track-registers       Show compile-time register/stack allocation debug info\n", .{});
     std.debug.print("  --emit-ir               Emit IR output (.ir file)\n", .{});
     std.debug.print("  --emit-asm              Emit assembly output (.asm file)\n", .{});
     std.debug.print("\nTest Options:\n", .{});
@@ -103,6 +105,7 @@ fn printUsage() void {
 fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     var source_path: ?[:0]u8 = null;
     var track_memory = false;
+    var track_registers = false;
     var emit_ir = false;
     var emit_asm = false;
 
@@ -112,6 +115,8 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
             compiler.debug.enabled = true;
         } else if (std.mem.eql(u8, arg, "--track-memory") or std.mem.eql(u8, arg, "--track-allocs")) {
             track_memory = true;
+        } else if (std.mem.eql(u8, arg, "--track-registers")) {
+            track_registers = true;
         } else if (std.mem.eql(u8, arg, "--emit-ir")) {
             emit_ir = true;
         } else if (std.mem.eql(u8, arg, "--emit-asm")) {
@@ -196,7 +201,7 @@ fn runCompile(args: [][:0]u8, allocator: std.mem.Allocator) void {
     compiler.compileMultiple(
         sources.items,
         output_path,
-        .{ .track_memory = track_memory, .emit_ir = emit_ir, .emit_asm = emit_asm },
+        .{ .track_memory = track_memory, .track_registers = track_registers, .emit_ir = emit_ir, .emit_asm = emit_asm },
         allocator,
         &result,
     ) catch |err| {
@@ -269,6 +274,7 @@ const BuildConfig = struct {
 
 fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
     var track_memory = false;
+    var track_registers = false;
     var emit_ir = false;
     var emit_asm = false;
 
@@ -278,6 +284,8 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
             compiler.debug.enabled = true;
         } else if (std.mem.eql(u8, arg, "--track-memory") or std.mem.eql(u8, arg, "--track-allocs")) {
             track_memory = true;
+        } else if (std.mem.eql(u8, arg, "--track-registers")) {
+            track_registers = true;
         } else if (std.mem.eql(u8, arg, "--emit-ir")) {
             emit_ir = true;
         } else if (std.mem.eql(u8, arg, "--emit-asm")) {
@@ -319,7 +327,7 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
     const build_source = std.fs.cwd().readFileAlloc(allocator, "build.maxon", 1024 * 1024) catch |err| {
         if (err == error.FileNotFound) {
             // No build.maxon - fall back to legacy behavior
-            runBuildLegacy(cwd_path, stdlib_modules, track_memory, emit_ir, emit_asm, allocator);
+            runBuildLegacy(cwd_path, stdlib_modules, track_memory, track_registers, emit_ir, emit_asm, allocator);
             return;
         }
         std.debug.print("Error reading build.maxon: {}\n", .{err});
@@ -391,7 +399,7 @@ fn runBuild(args: [][:0]u8, allocator: std.mem.Allocator) void {
     compiler.compileMultiple(
         all_sources.items,
         output_path,
-        .{ .track_memory = track_memory, .emit_ir = emit_ir, .emit_asm = emit_asm },
+        .{ .track_memory = track_memory, .track_registers = track_registers, .emit_ir = emit_ir, .emit_asm = emit_asm },
         allocator,
         &result,
     ) catch |err| {
@@ -563,7 +571,7 @@ fn parseBuildConfig(json: []const u8, allocator: std.mem.Allocator) !BuildConfig
 }
 
 /// Legacy build behavior when no build.maxon is present
-fn runBuildLegacy(cwd_path: []const u8, stdlib_modules: []const compiler.Source, track_memory: bool, emit_ir: bool, emit_asm: bool, allocator: std.mem.Allocator) void {
+fn runBuildLegacy(cwd_path: []const u8, stdlib_modules: []const compiler.Source, track_memory: bool, track_registers: bool, emit_ir: bool, emit_asm: bool, allocator: std.mem.Allocator) void {
     // Scan for .maxon files
     const user_sources = compiler.collectProjectFiles(cwd_path, allocator) catch |err| {
         std.debug.print("Error scanning directory: {}\n", .{err});
@@ -619,7 +627,7 @@ fn runBuildLegacy(cwd_path: []const u8, stdlib_modules: []const compiler.Source,
     compiler.compileMultiple(
         all_sources.items,
         output_path,
-        .{ .track_memory = track_memory, .emit_ir = emit_ir, .emit_asm = emit_asm },
+        .{ .track_memory = track_memory, .track_registers = track_registers, .emit_ir = emit_ir, .emit_asm = emit_asm },
         allocator,
         &result,
     ) catch |err| {
