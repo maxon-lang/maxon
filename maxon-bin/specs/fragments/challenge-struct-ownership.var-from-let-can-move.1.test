@@ -22,7 +22,10 @@ entry:
     %tmp_fieldptr = getfieldptr ptr %d 0
     %tmp_const = const.i64 i64 100
     store %tmp_fieldptr %tmp_const
-    ret %tmp_const
+    %tmp_alloca = alloca ptr
+    store %tmp_alloca %tmp_const
+    %tmp_load.1 = load i64 %tmp_alloca
+    ret %tmp_load.1
 }
 
 function main() -> i64 {
@@ -35,7 +38,10 @@ entry:
     %copy = alloca.sized ptr 8
     memcpy %copy %original 8
     %tmp_call = call i64 @consume(%copy)
-    ret %tmp_call
+    %tmp_alloca.2 = alloca ptr
+    store %tmp_alloca.2 %tmp_call
+    %tmp_load = load i64 %tmp_alloca.2
+    ret %tmp_load
 }
 
 ---

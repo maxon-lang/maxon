@@ -25,6 +25,8 @@ entry:
     %tmp_const.2 = const.i64 i64 30
     %tmp_call.2 = call ptr @Array$int$push(%tmp_alloca.3, %arr, %tmp_const.2)
     %tmp_call.3 = call i64 @Array$int$count(%arr)
+    %tmp_alloca.4 = alloca ptr
+    store %tmp_alloca.4 %tmp_call.3
     %tmp_fieldptr = getfieldptr ptr %arr 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 24
     %tmp_load = load i32 %tmp_fieldptr.1
@@ -50,7 +52,8 @@ decref_free:
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block3
 decref_end:
-    ret %tmp_call.3
+    %tmp_load.4 = load i64 %tmp_alloca.4
+    ret %tmp_load.4
 }
 
 function Array$int$push() -> ptr {
@@ -172,7 +175,10 @@ entry:
     %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
-    ret %tmp_load
+    %tmp_alloca = alloca ptr
+    store %tmp_alloca %tmp_load
+    %tmp_load.1 = load i64 %tmp_alloca
+    ret %tmp_load.1
 }
 
 ---

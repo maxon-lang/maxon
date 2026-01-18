@@ -26,7 +26,10 @@ entry:
     %tmp_const = const.i64 i64 42
     store %tmp_fieldptr %tmp_const
     %tmp_call = call i64 @Counter$getCount(%c)
-    ret %tmp_call
+    %tmp_alloca.1 = alloca ptr
+    store %tmp_alloca.1 %tmp_call
+    %tmp_load = load i64 %tmp_alloca.1
+    ret %tmp_load
 }
 
 function Counter$getCount() -> i64 {
@@ -34,7 +37,10 @@ entry:
     %self = param ptr 0
     %tmp_fieldptr = getfieldptr ptr %self 0
     %tmp_load = load i64 %tmp_fieldptr
-    ret %tmp_load
+    %tmp_alloca = alloca ptr
+    store %tmp_alloca %tmp_load
+    %tmp_load.1 = load i64 %tmp_alloca
+    ret %tmp_load.1
 }
 
 ---

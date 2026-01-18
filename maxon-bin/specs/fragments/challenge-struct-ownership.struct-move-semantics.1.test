@@ -21,7 +21,10 @@ entry:
     %tmp_fieldptr = getfieldptr ptr %d 0
     %tmp_const = const.i64 i64 100
     store %tmp_fieldptr %tmp_const
-    ret %tmp_const
+    %tmp_alloca = alloca ptr
+    store %tmp_alloca %tmp_const
+    %tmp_load.1 = load i64 %tmp_alloca
+    ret %tmp_load.1
 }
 
 function main() -> i64 {
@@ -32,7 +35,10 @@ entry:
     %tmp_const = const.i64 i64 42
     store %tmp_fieldptr %tmp_const
     %tmp_call = call i64 @takeOwnership(%d)
-    ret %tmp_call
+    %tmp_alloca.1 = alloca ptr
+    store %tmp_alloca.1 %tmp_call
+    %tmp_load = load i64 %tmp_alloca.1
+    ret %tmp_load
 }
 
 ---

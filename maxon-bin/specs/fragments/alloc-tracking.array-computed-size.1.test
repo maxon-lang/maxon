@@ -64,6 +64,8 @@ try_default:
     br @block3
 try_merge:
     %tmp_load.4 = load i64 %tmp_alloca.5
+    %tmp_alloca.6 = alloca ptr
+    store %tmp_alloca.6 %tmp_load.4
     %tmp_fieldptr.1 = getfieldptr ptr %arr 8
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_fieldptr.1 24
     %tmp_load.5 = load i32 %tmp_fieldptr.2
@@ -89,7 +91,8 @@ decref_free:
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block6
 decref_end:
-    ret %tmp_load.4
+    %tmp_load.9 = load i64 %tmp_alloca.6
+    ret %tmp_load.9
 }
 
 function Array$int$resize() -> ptr {

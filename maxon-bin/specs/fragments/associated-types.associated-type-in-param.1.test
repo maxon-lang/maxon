@@ -41,7 +41,10 @@ entry:
     %tmp_call.1 = call ptr @IntSum$add(%tmp_alloca.2, %acc, %tmp_const.2)
     memcpy %acc %tmp_alloca.2 8
     %tmp_call.2 = call i64 @IntSum$total(%acc)
-    ret %tmp_call.2
+    %tmp_alloca.3 = alloca ptr
+    store %tmp_alloca.3 %tmp_call.2
+    %tmp_load = load i64 %tmp_alloca.3
+    ret %tmp_load
 }
 
 function IntSum$add() -> ptr {
@@ -66,7 +69,10 @@ entry:
     %self = param ptr 0
     %tmp_fieldptr = getfieldptr ptr %self 0
     %tmp_load = load i64 %tmp_fieldptr
-    ret %tmp_load
+    %tmp_alloca = alloca ptr
+    store %tmp_alloca %tmp_load
+    %tmp_load.1 = load i64 %tmp_alloca
+    ret %tmp_load.1
 }
 
 ---

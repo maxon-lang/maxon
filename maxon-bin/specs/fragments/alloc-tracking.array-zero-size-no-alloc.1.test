@@ -44,6 +44,8 @@ then:
     br @block2
 end:
     %tmp_const.5 = const.i64 i64 42
+    %tmp_alloca.3 = alloca ptr
+    store %tmp_alloca.3 %tmp_const.5
     %tmp_fieldptr = getfieldptr ptr %arr 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 24
     %tmp_load.2 = load i32 %tmp_fieldptr.1
@@ -69,7 +71,8 @@ decref_free:
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block5
 decref_end:
-    ret %tmp_const.5
+    %tmp_load.6 = load i64 %tmp_alloca.3
+    ret %tmp_load.6
 }
 
 function Array$int$resize() -> ptr {

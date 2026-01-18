@@ -46,6 +46,8 @@ try_default:
 try_merge:
     %tmp_call.3 = call i64 @print(%arg)
     %tmp_const.4 = const.i64 i64 0
+    %tmp_alloca.5 = alloca ptr
+    store %tmp_alloca.5 %tmp_const.4
     %tmp_fieldptr.5 = getfieldptr ptr %arg 24
     %tmp_load.1 = load i32 %tmp_fieldptr.5
     %tmp_const.5 = const.i32 i32 3
@@ -75,18 +77,18 @@ decref_end:
     %tmp_load.5 = load i64 %tmp_fieldptr.7
     %tmp_const.10 = const.i64 i64 0
     %tmp_icmp.3 = icmp.eq i64 %tmp_load.5 %tmp_const.10
-    %tmp_alloca.5 = alloca ptr
-    store %tmp_alloca.5 %tmp_const.10
+    %tmp_alloca.6 = alloca ptr
+    store %tmp_alloca.6 %tmp_const.10
     br.cond %tmp_icmp.3 @block12 @block7
 arr_managed_cleanup_cond:
     %tmp_fieldptr.8 = getfieldptr ptr %tmp_fieldptr.6 8
     %tmp_load.6 = load i64 %tmp_fieldptr.8
-    %tmp_load.7 = load i64 %tmp_alloca.5
+    %tmp_load.7 = load i64 %tmp_alloca.6
     %tmp_icmp.4 = icmp.ge i64 %tmp_load.7 %tmp_load.6
     br.cond %tmp_icmp.4 @block12 @block8
 arr_managed_cleanup_body:
     %tmp_load.8 = load ptr %tmp_fieldptr.6
-    %tmp_load.9 = load i64 %tmp_alloca.5
+    %tmp_load.9 = load i64 %tmp_alloca.6
     %tmp_const.11 = const.i64 i64 40
     %tmp_mul = mul i64 %tmp_load.9 %tmp_const.11
     %tmp_add = add ptr %tmp_load.8 %tmp_mul
@@ -99,7 +101,7 @@ arr_managed_cleanup_body:
     br.cond %tmp_icmp.5 @block9 @block11
 arr_managed_cleanup_decref:
     %tmp_load.11 = load ptr %tmp_fieldptr.6
-    %tmp_load.12 = load i64 %tmp_alloca.5
+    %tmp_load.12 = load i64 %tmp_alloca.6
     %tmp_mul.1 = mul i64 %tmp_load.12 %tmp_const.11
     %tmp_add.1 = add ptr %tmp_load.11 %tmp_mul.1
     %tmp_load.13 = load ptr %tmp_add.1
@@ -114,7 +116,7 @@ arr_managed_cleanup_decref:
     br.cond %tmp_icmp.6 @block10 @block11
 arr_managed_cleanup_heap_free:
     %tmp_load.15 = load ptr %tmp_fieldptr.6
-    %tmp_load.16 = load i64 %tmp_alloca.5
+    %tmp_load.16 = load i64 %tmp_alloca.6
     %tmp_mul.2 = mul i64 %tmp_load.16 %tmp_const.11
     %tmp_add.2 = add ptr %tmp_load.15 %tmp_mul.2
     %tmp_load.17 = load ptr %tmp_add.2
@@ -124,9 +126,9 @@ arr_managed_cleanup_heap_free:
     br @block11
 arr_managed_cleanup_next:
     %tmp_const.18 = const.i64 i64 1
-    %tmp_load.18 = load i64 %tmp_alloca.5
+    %tmp_load.18 = load i64 %tmp_alloca.6
     %tmp_add.3 = add i64 %tmp_load.18 %tmp_const.18
-    store %tmp_alloca.5 %tmp_add.3
+    store %tmp_alloca.6 %tmp_add.3
     br @block7
 arr_managed_cleanup_end:
     %tmp_fieldptr.10 = getfieldptr ptr %tmp_fieldptr.6 24
@@ -153,7 +155,8 @@ decref_free:
     heap.free %tmp_sub.8 tag="array cleanup"
     br @block15
 decref_end:
-    ret %tmp_const.4
+    %tmp_load.23 = load i64 %tmp_alloca.5
+    ret %tmp_load.23
 }
 
 function Array$String$get() -> ptr {

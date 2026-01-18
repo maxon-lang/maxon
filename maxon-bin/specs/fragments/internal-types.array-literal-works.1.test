@@ -50,6 +50,8 @@ entry:
     %arr = alloca.sized ptr 40
     %tmp_call = call ptr @Array$int$init(%arr, %tmp_alloca)
     %tmp_call.1 = call i64 @Array$int$count(%arr)
+    %tmp_alloca.2 = alloca ptr
+    store %tmp_alloca.2 %tmp_call.1
     %tmp_fieldptr.4 = getfieldptr ptr %arr 8
     %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.4 24
     %tmp_load = load i32 %tmp_fieldptr.5
@@ -75,7 +77,8 @@ decref_free:
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block3
 decref_end:
-    ret %tmp_call.1
+    %tmp_load.4 = load i64 %tmp_alloca.2
+    ret %tmp_load.4
 }
 
 function Array$int$init() -> ptr {
@@ -97,7 +100,10 @@ entry:
     %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
-    ret %tmp_load
+    %tmp_alloca = alloca ptr
+    store %tmp_alloca %tmp_load
+    %tmp_load.1 = load i64 %tmp_alloca
+    ret %tmp_load.1
 }
 
 ---

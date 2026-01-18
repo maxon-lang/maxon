@@ -44,6 +44,8 @@ entry:
     %tmp_band.4 = band i64 %tmp_const.8 %tmp_const.9
     %tmp_call.4 = call ptr @Array$byte$push(%tmp_alloca.5, %arr, %tmp_band.4)
     %tmp_call.5 = call i64 @Array$byte$count(%arr)
+    %tmp_alloca.6 = alloca ptr
+    store %tmp_alloca.6 %tmp_call.5
     %tmp_fieldptr = getfieldptr ptr %arr 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 24
     %tmp_load = load i32 %tmp_fieldptr.1
@@ -69,7 +71,8 @@ decref_free:
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block3
 decref_end:
-    ret %tmp_call.5
+    %tmp_load.4 = load i64 %tmp_alloca.6
+    ret %tmp_load.4
 }
 
 function Array$byte$push() -> ptr {
@@ -191,7 +194,10 @@ entry:
     %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
-    ret %tmp_load
+    %tmp_alloca = alloca ptr
+    store %tmp_alloca %tmp_load
+    %tmp_load.1 = load i64 %tmp_alloca
+    ret %tmp_load.1
 }
 
 ---

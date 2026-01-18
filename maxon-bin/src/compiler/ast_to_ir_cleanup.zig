@@ -9,6 +9,7 @@ const VarInfo = types.VarInfo;
 const ValueType = types.ValueType;
 const OwnershipState = types.OwnershipState;
 const ConvertError = types.ConvertError;
+const FieldInfo = types.FieldInfo;
 
 const cstring = @import("ast_to_ir_cstring.zig");
 const array_helpers = @import("ast_to_ir_managed_memory.zig");
@@ -323,6 +324,28 @@ pub fn freeHeapVar(self: *AstToIr, var_info: VarInfo, skip_if_parameter: bool, v
 
         try cleanupStruct(self, struct_ptr, struct_info, var_name);
     }
+}
+
+/// Cleanup old field value before reassignment (for types with managed buffers).
+/// This is used when reassigning to a struct field to properly release the old value.
+pub fn cleanupFieldBeforeReassign(self: *AstToIr, field_ptr: ir.StructPtr, field_info: FieldInfo, context: []const u8) !void {
+    // Only cleanup struct types
+    if (field_info.value_type != .struct_type) return;
+
+    const struct_name = field_info.structName() orelse return;
+
+    // Look up the struct type info
+    const type_info = self.type_map.get(struct_name) orelse return;
+    if (type_info != .struct_type) return;
+
+    const struct_info = &type_info.struct_type;
+
+    // Only clean up types that have heap allocations
+    if (!struct_info.needs_cleanup) return;
+
+    debug.astToIr("cleanupFieldBeforeReassign: cleaning up field {s} of type {s}", .{ context, struct_name });
+
+    try cleanupStruct(self, field_ptr.raw(), struct_info, context);
 }
 
 /// Clean up a struct by recursively cleaning up its fields that need cleanup.

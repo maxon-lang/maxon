@@ -54,20 +54,26 @@ export type CompleteExeBuilder
 	end 'create'
 
 	export function buildBasicExe()
+		print("    buildBasicExe start\n")
 		// Constants matching the Zig PE writer
 		let FILE_ALIGNMENT = 512        // 0x200
 		let SECTION_ALIGNMENT = 4096    // 0x1000
 		let IMAGE_BASE = 0x140000000
+		print("    constants set\n")
 
 		// Calculate sizes - matching Zig layout
 		let dosHeaderSize = 64
+		print("    dosHeaderSize set\n")
 		let peHeaderOffset = dosHeaderSize  // 64
+		print("    peHeaderOffset set\n")
 		let coffHeaderSize = 20
 		let optionalHeaderSize = 240        // PE32+ with 16 data directories
 		let sectionHeaderSize = 40
 		let numSections = 2
+		print("    sizes set\n")
 
 		let headersSize = peHeaderOffset + 4 + coffHeaderSize + optionalHeaderSize + (sectionHeaderSize * numSections)
+		print("    headersSize calculated\n")
 		// headersSize = 64 + 4 + 20 + 240 + 80 = 408
 		let headersAligned = alignUp(headersSize, FILE_ALIGNMENT)  // 512
 
@@ -291,7 +297,10 @@ export type CompleteExeBuilder
 	end 'buildBasicExe'
 
 	function alignUp(value int, alignment int) returns int
-		return (value + alignment - 1) & (0 - alignment)
+		let added = value + alignment - 1
+		let mask = 0 - alignment
+		let result = added & mask
+		return result
 	end 'alignUp'
 
 	export function writeSectionName(name String)

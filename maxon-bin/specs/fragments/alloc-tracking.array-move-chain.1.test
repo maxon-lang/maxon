@@ -88,6 +88,8 @@ try_default:
     br @block6
 try_merge:
     %tmp_load.6 = load i64 %tmp_alloca.4
+    %tmp_alloca.5 = alloca ptr
+    store %tmp_alloca.5 %tmp_load.6
     %tmp_fieldptr.2 = getfieldptr ptr %arr 8
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 24
     %tmp_load.7 = load i32 %tmp_fieldptr.3
@@ -113,7 +115,8 @@ decref_free:
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block9
 decref_end:
-    ret %tmp_load.6
+    %tmp_load.11 = load i64 %tmp_alloca.5
+    ret %tmp_load.11
 }
 
 function Array$int$get() -> ptr {
@@ -231,7 +234,10 @@ try_merge:
     %tmp_mul = mul i64 %tmp_load.3 %tmp_const.4
     call @Array$int$set(%arr, %tmp_const.3, %tmp_mul)
     %tmp_call.1 = call i64 @addTen(%arr)
-    ret %tmp_call.1
+    %tmp_alloca.3 = alloca ptr
+    store %tmp_alloca.3 %tmp_call.1
+    %tmp_load.4 = load i64 %tmp_alloca.3
+    ret %tmp_load.4
 }
 
 function main() -> i64 {
@@ -248,7 +254,10 @@ entry:
     %tmp_const.2 = const.i64 i64 5
     call @Array$int$set(%arr, %tmp_const.1, %tmp_const.2)
     %tmp_call.1 = call i64 @doubleAddTen(%arr)
-    ret %tmp_call.1
+    %tmp_alloca.3 = alloca ptr
+    store %tmp_alloca.3 %tmp_call.1
+    %tmp_load.1 = load i64 %tmp_alloca.3
+    ret %tmp_load.1
 }
 
 function Array$int$resize() -> ptr {

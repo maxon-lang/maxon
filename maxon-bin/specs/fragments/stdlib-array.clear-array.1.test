@@ -43,6 +43,8 @@ entry:
     br.cond %tmp_icmp @block1 @block5
 then:
     %tmp_const.4 = const.i64 i64 1
+    %tmp_alloca.5 = alloca ptr
+    store %tmp_alloca.5 %tmp_const.4
     %tmp_fieldptr = getfieldptr ptr %arr 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 24
     %tmp_load = load i32 %tmp_fieldptr.1
@@ -68,7 +70,8 @@ decref_free:
     heap.free %tmp_sub.2 tag="array cleanup"
     br @block4
 decref_end:
-    ret %tmp_const.4
+    %tmp_load.4 = load i64 %tmp_alloca.5
+    ret %tmp_load.4
 end:
     %tmp_call.5 = call i64 @Array$int$isEmpty(%arr)
     %tmp_const.10 = const.i64 i64 0
@@ -76,60 +79,66 @@ end:
     br.cond %tmp_icmp.3 @block6 @block10
 then:
     %tmp_const.11 = const.i64 i64 2
+    %tmp_alloca.6 = alloca ptr
+    store %tmp_alloca.6 %tmp_const.11
     %tmp_fieldptr.2 = getfieldptr ptr %arr 8
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 24
-    %tmp_load.4 = load i32 %tmp_fieldptr.3
+    %tmp_load.5 = load i32 %tmp_fieldptr.3
     %tmp_const.12 = const.i32 i32 3
-    %tmp_band.1 = band i32 %tmp_load.4 %tmp_const.12
+    %tmp_band.1 = band i32 %tmp_load.5 %tmp_const.12
     %tmp_const.13 = const.i32 i32 1
     %tmp_icmp.4 = icmp.eq i32 %tmp_band.1 %tmp_const.13
     br.cond %tmp_icmp.4 @block7 @block9
 decref:
-    %tmp_load.5 = load ptr %tmp_fieldptr.2
+    %tmp_load.6 = load ptr %tmp_fieldptr.2
     %tmp_const.14 = const.i64 i64 8
-    %tmp_sub.3 = sub ptr %tmp_load.5 %tmp_const.14
-    %tmp_load.6 = load i64 %tmp_sub.3
+    %tmp_sub.3 = sub ptr %tmp_load.6 %tmp_const.14
+    %tmp_load.7 = load i64 %tmp_sub.3
     %tmp_const.15 = const.i64 i64 1
-    %tmp_sub.4 = sub i64 %tmp_load.6 %tmp_const.15
+    %tmp_sub.4 = sub i64 %tmp_load.7 %tmp_const.15
     store %tmp_sub.3 %tmp_sub.4
     %tmp_const.16 = const.i64 i64 0
     %tmp_icmp.5 = icmp.eq i64 %tmp_sub.4 %tmp_const.16
     br.cond %tmp_icmp.5 @block8 @block9
 decref_free:
-    %tmp_load.7 = load ptr %tmp_fieldptr.2
-    %tmp_sub.5 = sub ptr %tmp_load.7 %tmp_const.14
+    %tmp_load.8 = load ptr %tmp_fieldptr.2
+    %tmp_sub.5 = sub ptr %tmp_load.8 %tmp_const.14
     heap.free %tmp_sub.5 tag="array cleanup"
     br @block9
 decref_end:
-    ret %tmp_const.11
+    %tmp_load.9 = load i64 %tmp_alloca.6
+    ret %tmp_load.9
 end:
     %tmp_const.17 = const.i64 i64 0
+    %tmp_alloca.7 = alloca ptr
+    store %tmp_alloca.7 %tmp_const.17
     %tmp_fieldptr.4 = getfieldptr ptr %arr 8
     %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.4 24
-    %tmp_load.8 = load i32 %tmp_fieldptr.5
+    %tmp_load.10 = load i32 %tmp_fieldptr.5
     %tmp_const.18 = const.i32 i32 3
-    %tmp_band.2 = band i32 %tmp_load.8 %tmp_const.18
+    %tmp_band.2 = band i32 %tmp_load.10 %tmp_const.18
     %tmp_const.19 = const.i32 i32 1
     %tmp_icmp.6 = icmp.eq i32 %tmp_band.2 %tmp_const.19
     br.cond %tmp_icmp.6 @block11 @block13
 decref:
-    %tmp_load.9 = load ptr %tmp_fieldptr.4
+    %tmp_load.11 = load ptr %tmp_fieldptr.4
     %tmp_const.20 = const.i64 i64 8
-    %tmp_sub.6 = sub ptr %tmp_load.9 %tmp_const.20
-    %tmp_load.10 = load i64 %tmp_sub.6
+    %tmp_sub.6 = sub ptr %tmp_load.11 %tmp_const.20
+    %tmp_load.12 = load i64 %tmp_sub.6
     %tmp_const.21 = const.i64 i64 1
-    %tmp_sub.7 = sub i64 %tmp_load.10 %tmp_const.21
+    %tmp_sub.7 = sub i64 %tmp_load.12 %tmp_const.21
     store %tmp_sub.6 %tmp_sub.7
     %tmp_const.22 = const.i64 i64 0
     %tmp_icmp.7 = icmp.eq i64 %tmp_sub.7 %tmp_const.22
     br.cond %tmp_icmp.7 @block12 @block13
 decref_free:
-    %tmp_load.11 = load ptr %tmp_fieldptr.4
-    %tmp_sub.8 = sub ptr %tmp_load.11 %tmp_const.20
+    %tmp_load.13 = load ptr %tmp_fieldptr.4
+    %tmp_sub.8 = sub ptr %tmp_load.13 %tmp_const.20
     heap.free %tmp_sub.8 tag="array cleanup"
     br @block13
 decref_end:
-    ret %tmp_const.17
+    %tmp_load.14 = load i64 %tmp_alloca.7
+    ret %tmp_load.14
 }
 
 function Array$int$push() -> ptr {
@@ -263,7 +272,10 @@ entry:
     %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
-    ret %tmp_load
+    %tmp_alloca = alloca ptr
+    store %tmp_alloca %tmp_load
+    %tmp_load.1 = load i64 %tmp_alloca
+    ret %tmp_load.1
 }
 
 function Array$int$isEmpty() -> i64 {
@@ -274,7 +286,10 @@ entry:
     %tmp_load = load i64 %tmp_fieldptr.1
     %tmp_const = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
-    ret %tmp_icmp
+    %tmp_alloca = alloca ptr
+    store %tmp_alloca %tmp_icmp
+    %tmp_load.1 = load i64 %tmp_alloca
+    ret %tmp_load.1
 }
 
 ---

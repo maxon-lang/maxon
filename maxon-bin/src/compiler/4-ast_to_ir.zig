@@ -1502,6 +1502,14 @@ pub const AstToIr = struct {
                                     .decl_column = type_decl.block.start_column,
                                     .source_file = self.source_file,
                                     .is_export = type_decl.is_export,
+                                    // Copy cleanup flags from source type
+                                    .needs_cleanup = s.needs_cleanup,
+                                    .has_managed_buffer = s.has_managed_buffer,
+                                    .managed_buffer_offset = s.managed_buffer_offset,
+                                    .element_type_name = s.element_type_name,
+                                    .is_cstring = s.is_cstring,
+                                    .is_internal_type = s.is_internal_type,
+                                    .element_has_managed_buffer = s.element_has_managed_buffer,
                                 },
                             });
                             debug.astToIr("Registered type alias '{s}' -> '{s}' with size {d}", .{ type_decl.name, mono_name, s.size });
@@ -1515,7 +1523,7 @@ pub const AstToIr = struct {
                 } else {
                     // Monomorphized type not found - this is an error but should be caught elsewhere
                     debug.astToIr("Warning: monomorphized type '{s}' not found for alias '{s}'", .{ mono_name, type_decl.name });
-                    // Fall through to register as empty struct
+                    // Fall through to register as empty struct with conservative cleanup flag
                     try self.type_map.put(self.allocator, type_decl.name, .{
                         .struct_type = .{
                             .name = type_decl.name,
@@ -1525,6 +1533,7 @@ pub const AstToIr = struct {
                             .decl_column = type_decl.block.start_column,
                             .source_file = self.source_file,
                             .is_export = type_decl.is_export,
+                            .needs_cleanup = true, // Conservative: assume cleanup needed
                         },
                     });
                 }
@@ -1566,6 +1575,21 @@ pub const AstToIr = struct {
 
         const field_result = try self.buildFieldInfos(type_decl.fields);
 
+        // Compute needs_cleanup: true if any field's type needs cleanup
+        const needs_cleanup = blk: {
+            for (field_result.fields) |field| {
+                if (field.value_type == .struct_type) {
+                    if (field.value_type.struct_type.needs_cleanup) {
+                        break :blk true;
+                    }
+                }
+            }
+            break :blk false;
+        };
+
+        // Check for __ManagedMemory field (for COW semantics)
+        const managed_offset = types.findManagedMemoryField(field_result.fields);
+
         try self.type_map.put(self.allocator, type_decl.name, .{
             .struct_type = .{
                 .name = type_decl.name,
@@ -1575,6 +1599,9 @@ pub const AstToIr = struct {
                 .decl_column = type_decl.block.start_column,
                 .source_file = self.source_file,
                 .is_export = type_decl.is_export,
+                .needs_cleanup = needs_cleanup,
+                .has_managed_buffer = managed_offset != null,
+                .managed_buffer_offset = managed_offset orelse 0,
             },
         });
 
@@ -5250,10 +5277,24 @@ pub const AstToIr = struct {
             }
         }
 
+        // If we have a return value, save it to stack before cleanup since cleanup may
+        // create new blocks and the value reference won't be valid across block boundaries
+        var ret_slot: ?ir.RawPtr = null;
+        if (ret_value) |val| {
+            ret_slot = try self.func().emitAlloca(self.func().return_type);
+            try self.func().emitStore(ret_slot.?.raw(), val);
+        }
+
         // Free heap allocations before return
         try cleanup_helpers.freeHeapAllocations(self);
 
-        try self.func().emitRet(ret_value);
+        // Reload return value after cleanup (we may now be in a different block)
+        if (ret_slot) |slot| {
+            const final_ret_value = try self.func().emitLoad(slot.raw(), self.func().return_type);
+            try self.func().emitRet(final_ret_value);
+        } else {
+            try self.func().emitRet(null);
+        }
     }
 
     fn convertAssignment(self: *AstToIr, assign: ast.AssignStmt) ConvertError!void {
@@ -5355,9 +5396,30 @@ pub const AstToIr = struct {
                                 info.used = true;
                             }
 
+                            // Evaluate RHS FIRST (may reference old field value)
                             const value_typed = try self.convertExpression(assign.value);
                             const self_val = self.self_ptr.?;
                             const field_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(self_val), field.offset);
+
+                            // Check for self-returning method call: field = field.method(...)
+                            // When a method is called on the same field being assigned and returns Self,
+                            // we must NOT cleanup the old field value to avoid freeing shared memory.
+                            const is_self_returning_method_call = blk: {
+                                if (assign.value != .method_call) break :blk false;
+                                const mcall = assign.value.method_call;
+                                // For implicit self field, check if method base is the same identifier as the target
+                                if (mcall.base.* != .identifier) break :blk false;
+                                if (!std.mem.eql(u8, mcall.base.identifier, assign.target)) break :blk false;
+                                // Only skip cleanup for types with managed buffers
+                                if (value_typed.ty != .struct_type) break :blk false;
+                                if (!value_typed.ty.struct_type.has_managed_buffer) break :blk false;
+                                break :blk true;
+                            };
+
+                            // Cleanup old field value (unless self-returning method call)
+                            if (!is_self_returning_method_call) {
+                                try cleanup_helpers.cleanupFieldBeforeReassign(self, field_ptr, field, assign.target);
+                            }
 
                             // Track ownership transfer: source variable is moved to field
                             try self.trackFieldOwnershipTransfer(assign.value, type_name, field.is_mutable);
@@ -5369,6 +5431,11 @@ pub const AstToIr = struct {
                                 try array_helpers.emitStructCopy(self, field_ptr, ir.toStructPtr(value_typed.value), field.size, field.structName());
                             } else {
                                 try self.func().emitStore(field_ptr.raw(), value_typed.value);
+                            }
+
+                            // Remove from temporaries if source is a temporary with managed buffer
+                            if (value_typed.ty == .struct_type and value_typed.ty.struct_type.has_managed_buffer) {
+                                cleanup_helpers.removeFromTemporaries(self, value_typed.value);
                             }
                             return;
                         }
@@ -5433,7 +5500,37 @@ pub const AstToIr = struct {
         }
 
         const field_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(base.value), field_info.offset);
+
+        // Evaluate RHS FIRST (may reference old field value, e.g., obj.field = obj.field.concat(...))
         const val_typed = try self.convertExpression(assign.value);
+
+        // Check for self-returning method call pattern on this field: obj.field = obj.field.method(...)
+        // When a method is called on the same field being assigned and returns Self (same type),
+        // the method may return a new value that shares or is derived from the field's buffer.
+        // In this case, we must NOT cleanup the old field value to avoid freeing memory that
+        // might still be referenced.
+        const is_self_returning_method_call = blk: {
+            if (assign.value != .method_call) break :blk false;
+            const mcall = assign.value.method_call;
+            if (mcall.base.* != .field_access) break :blk false;
+            const fa = mcall.base.field_access;
+            // Check if method is called on the same field being assigned to
+            // Compare the base expressions and field names
+            if (!std.mem.eql(u8, fa.field_name, assign.field_name)) break :blk false;
+            // Also check that the base objects match (both should reference the same object)
+            // For simplicity, we check if both bases are identifiers with the same name
+            if (fa.base.* != .identifier or assign.base.* != .identifier) break :blk false;
+            if (!std.mem.eql(u8, fa.base.identifier, assign.base.identifier)) break :blk false;
+            // Only skip cleanup for types with managed buffers where aliasing is problematic
+            if (val_typed.ty != .struct_type) break :blk false;
+            if (!val_typed.ty.struct_type.has_managed_buffer) break :blk false;
+            break :blk true;
+        };
+
+        // Cleanup old field value (unless self-returning method call which may share buffer)
+        if (!is_self_returning_method_call) {
+            try cleanup_helpers.cleanupFieldBeforeReassign(self, field_ptr, field_info, assign.field_name);
+        }
 
         // Check if field is a struct type (including Arrays, which are now embedded structs)
         const is_embedded_struct = field_info.value_type == .struct_type;
@@ -5442,6 +5539,15 @@ pub const AstToIr = struct {
             try array_helpers.emitStructCopy(self, field_ptr, ir.toStructPtr(val_typed.value), field_info.size, field_info.structName());
         } else {
             try self.func().emitStore(field_ptr.raw(), val_typed.value);
+        }
+
+        // Track ownership transfer from source variable to field
+        try self.trackFieldOwnershipTransfer(assign.value, type_name, field_info.is_mutable);
+
+        // Remove from temporaries if source is a temporary with managed buffer
+        // (ownership transfers to the field, so the temporary shouldn't be cleaned up separately)
+        if (val_typed.ty == .struct_type and val_typed.ty.struct_type.has_managed_buffer) {
+            cleanup_helpers.removeFromTemporaries(self, val_typed.value);
         }
     }
 
@@ -6839,12 +6945,24 @@ pub const AstToIr = struct {
             const i = case_idx;
             case_idx += 1;
 
+            // Save temporary_strings length before pattern comparison
+            // Temporaries created during pattern matching must be cleaned up before branching,
+            // otherwise they won't exist in all paths and cleanup will access uninitialized memory
+            const temp_strings_start = self.temporary_strings.items.len;
+
             // Emit pattern comparisons in check block
             var cmp_result: ir.Value = undefined;
             for (child.match_patterns, 0..) |pattern, pi| {
                 const pattern_typed = try self.convertPatternExpression(pattern, scrutinee_typed.ty);
                 const this_cmp = try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
                 cmp_result = if (pi == 0) this_cmp else try self.func().emitBinaryOp(.bitor, cmp_result, this_cmp, .i64);
+            }
+
+            // Clean up temporaries created during pattern comparison BEFORE branching
+            // This ensures cleanup happens regardless of which branch is taken
+            while (self.temporary_strings.items.len > temp_strings_start) {
+                const managed_ptr = self.temporary_strings.pop().?;
+                try array_helpers.emitManagedMemoryDecref(self, ir.toManagedMemoryPtr(managed_ptr), "<pattern temp>", "pattern temp cleanup");
             }
 
             // Restore body[i] to get its actual index
@@ -7126,6 +7244,11 @@ pub const AstToIr = struct {
         // Process each case
         for (match_expr.cases, 0..) |match_case, i| {
             // Current block is check[i]
+            // Save temporary_strings length before pattern comparison
+            // Temporaries created during pattern matching must be cleaned up before branching,
+            // otherwise they won't exist in all paths and cleanup will access uninitialized memory
+            const temp_strings_start = self.temporary_strings.items.len;
+
             // Emit pattern comparisons
             var cmp_result: ir.Value = undefined;
             for (match_case.patterns, 0..) |pattern, pi| {
@@ -7137,6 +7260,13 @@ pub const AstToIr = struct {
                 } else {
                     cmp_result = try self.func().emitBinaryOp(.bitor, cmp_result, this_cmp, .i64);
                 }
+            }
+
+            // Clean up temporaries created during pattern comparison BEFORE branching
+            // This ensures cleanup happens regardless of which branch is taken
+            while (self.temporary_strings.items.len > temp_strings_start) {
+                const managed_ptr = self.temporary_strings.pop().?;
+                try array_helpers.emitManagedMemoryDecref(self, ir.toManagedMemoryPtr(managed_ptr), "<pattern temp>", "pattern temp cleanup");
             }
 
             // Determine next target if no match
@@ -7472,8 +7602,8 @@ pub const AstToIr = struct {
         const managed_ptr = try array_helpers.emitManagedMemoryFromStaticBytes(self, processed);
         const result_ptr = try self.emitWrapperFromManaged(managed_ptr, .string);
 
-        // Track as temporary String that may need cleanup
-        try self.temporary_strings.append(self.allocator, result_ptr);
+        // Static strings (flags=3) never need cleanup - they point to .rdata section
+        // Do NOT add to temporary_strings
 
         const type_info = self.type_map.getPtr(LiteralWrapperType.string.typeName()) orelse {
             self.reportError(.E006, LiteralWrapperType.string.typeName(), @src());
