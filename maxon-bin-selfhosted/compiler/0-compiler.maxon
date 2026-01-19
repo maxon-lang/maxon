@@ -3,17 +3,13 @@
 
 /// Compile a Maxon source file
 /// Returns 0 on success, non-zero on error
-export function compile(sourceFile String, emitIr bool, logConfig LogConfig) returns int
+export function compile(sourceFile String, emitIr bool) returns int
 	let outputFile = sourceFile.replace(".maxon", ".exe")
-	let logLevel = logConfig.globalLevel
 
-	print("Compiling: {sourceFile} -> {outputFile}\n")
+	Logger.info(LogCategory.ir, message: "Compiling: {sourceFile} -> {outputFile}")
 	if emitIr 'showIr'
-		print("  (emit IR: enabled)\n")
+		Logger.debug(LogCategory.ir, message: "emit IR: enabled")
 	end 'showIr'
-	if logLevel > 0 'showLog'
-		print("  (log level: {logLevel})\n")
-	end 'showLog'
 
 	// Create shared error collector
 	var errors = ErrorCollector.create()
@@ -27,7 +23,7 @@ export function compile(sourceFile String, emitIr bool, logConfig LogConfig) ret
 	// Phase 1: Lexical Analysis
 	var lexer = Lexer.init(source, sourceFile: sourceFile, errors: errors)
 	let tokens = lexer.tokenize()
-	print("  Lexed {tokens.count()} tokens\n")
+	Logger.info(LogCategory.lexer, message: "Lexed {tokens.count()} tokens")
 
 	// Check for lexer errors
 	if errors.hasAnyErrors() 'lexerErrors'
@@ -39,7 +35,7 @@ export function compile(sourceFile String, emitIr bool, logConfig LogConfig) ret
 	// Phase 2: Parsing
 	var parser = Parser.init(tokens, sourceFile: sourceFile, errors: errors)
 	let program = parser.parse()
-	print("  Parsed {program.functions.count()} function(s)\n")
+	Logger.info(LogCategory.parser, message: "Parsed {program.functions.count()} function(s)")
 
 	// Check for parser errors
 	if errors.hasAnyErrors() 'parserErrors'
@@ -49,7 +45,7 @@ export function compile(sourceFile String, emitIr bool, logConfig LogConfig) ret
 	end 'parserErrors'
 
 	// Phase 3-7: Not yet implemented
-	print("  [Stages 3-7 not yet implemented]\n")
+	Logger.info(LogCategory.semantic, message: "[Stages 3-7 not yet implemented]")
 
 	return 0
 end 'compile'

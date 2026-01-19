@@ -490,6 +490,50 @@ end 'check'
 
 For enums with associated values, `==` compares both the case and the associated values.
 
+### Creating Enums from Names (`fromName`)
+
+The `fromName` static method creates an enum value from a string name. It returns an error union that throws `EnumError.invalidName` if the name doesn't match any case:
+
+```maxon
+enum Direction
+    north
+    south
+    east
+    west
+end 'Direction'
+
+// Compile-time known name
+var dir = try Direction.fromName("north") otherwise Direction.south
+
+// Runtime string
+function getDirection(name String) returns Direction
+    return try Direction.fromName(name) otherwise Direction.north
+end 'getDirection'
+```
+
+For enums with associated values, pass the values as additional arguments when the name is a compile-time literal:
+
+```maxon
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+// With associated values (name must be compile-time literal)
+var c = try Container.fromName("value", 42) otherwise Container.empty
+
+// Cases without associated values work with runtime strings
+function getContainer(name String) returns Container
+    return try Container.fromName(name) otherwise Container.empty
+end 'getContainer'
+```
+
+**Notes:**
+- Returns `throws EnumError`, use with `try...otherwise` or `try...catch`
+- Compile-time literal names are validated at compile time
+- Associated value types are validated at compile time
+- Runtime strings only support cases without associated values
+
 ### Enum Methods
 
 Enums can have methods, similar to structs:

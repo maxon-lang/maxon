@@ -204,6 +204,10 @@ match result 'handle'
     pending then print("waiting")
 end 'handle'
 
+// Create from name (throws EnumError.invalidName on unknown name)
+var dir = try Direction.fromName("north") otherwise Direction.south
+var c = try Result.fromName("success", 42) otherwise Result.pending
+
 // Methods
 enum Direction
     north
