@@ -259,27 +259,19 @@ entry_0:
     %tmp_param = param ptr 0
     %self = param ptr 1
     %value = param i64 2
-    %value.1 = alloca ptr
-    store %value.1 %value
     %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
-    %len = alloca ptr
-    store %len %tmp_load
-    %tmp_load.1 = load i64 %len
     %tmp_const = const.i64 i64 1
-    %tmp_add = add i64 %tmp_load.1 %tmp_const
+    %tmp_add = add i64 %tmp_load %tmp_const
     call @Array$byte$ensureCapacity(%self, %tmp_add)
     %tmp_fieldptr.2 = getfieldptr ptr %self 8
-    %tmp_load.2 = load i64 %len
-    %tmp_load.3 = load i64 %value.1
     %tmp_load.4 = load ptr %tmp_fieldptr.2
-    %tmp_elemptr = getelemptr ptr %tmp_load.4 %tmp_load.2 elemsize=1
-    store.i8 %tmp_elemptr %tmp_load.3
+    %tmp_elemptr = getelemptr ptr %tmp_load.4 %tmp_load elemsize=1
+    store.i8 %tmp_elemptr %value
     %tmp_fieldptr.3 = getfieldptr ptr %self 8
-    %tmp_load.5 = load i64 %len
     %tmp_const.2 = const.i64 i64 1
-    %tmp_add.1 = add i64 %tmp_load.5 %tmp_const.2
+    %tmp_add.1 = add i64 %tmp_load %tmp_const.2
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.3 8
     store %tmp_fieldptr.4 %tmp_add.1
     memcpy %tmp_param %self 40
@@ -297,17 +289,14 @@ entry_0:
     %tmp_load = load i64 %tmp_fieldptr.1
     %cap = alloca ptr
     store %cap %tmp_load
-    %tmp_load.1 = load i64 %requiredLen.1
-    %tmp_load.2 = load i64 %cap
-    %tmp_icmp = icmp.gt i64 %tmp_load.1 %tmp_load.2
+    %tmp_icmp = icmp.gt i64 %requiredLen %tmp_load
     br.cond %tmp_icmp @then$grow_1 @end$grow_10
 then$grow_1:
     %tmp_load.3 = load i64 %cap
     %newCap = alloca ptr
     store %newCap %tmp_load.3
-    %tmp_load.4 = load i64 %newCap
     %tmp_const = const.i64 i64 4
-    %tmp_icmp.1 = icmp.lt i64 %tmp_load.4 %tmp_const
+    %tmp_icmp.1 = icmp.lt i64 %tmp_load.3 %tmp_const
     br.cond %tmp_icmp.1 @then$min_2 @end$min_3
 then$min_2:
     %tmp_const.1 = const.i64 i64 4
@@ -379,9 +368,8 @@ entry_0:
     %tmp_load = load i64 %tmp_fieldptr.1
     %len = alloca ptr
     store %len %tmp_load
-    %tmp_load.1 = load i64 %index.1
     %tmp_const = const.i64 i64 0
-    %tmp_icmp = icmp.lt i64 %tmp_load.1 %tmp_const
+    %tmp_icmp = icmp.lt i64 %index %tmp_const
     br.cond %tmp_icmp @then$lower_1 @end$lower_2
 then$lower_1:
     %tmp_const.1 = const.i64 i64 0

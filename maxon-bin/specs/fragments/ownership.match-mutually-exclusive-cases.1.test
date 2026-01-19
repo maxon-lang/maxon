@@ -18,43 +18,31 @@ ExitCode: 11
 function test() -> i64 {
 entry_0:
     %choice = param i64 0
-    %choice.1 = alloca ptr
-    store %choice.1 %choice
     %tmp_const = const.i64 i64 10
     %x = alloca ptr
     store %x %tmp_const
-    %tmp_load.1 = load i64 %choice.1
     br @match_check_1
 match_check_1:
     %tmp_const.3 = const.i64 i64 1
-    %tmp_icmp = icmp.eq i64 %tmp_load.1 %tmp_const.3
+    %tmp_icmp = icmp.eq i64 %choice %tmp_const.3
     br.cond %tmp_icmp @match_body_2 @match_check_3
 match_body_2:
     %tmp_load.2 = load i64 %x
     %tmp_const.4 = const.i64 i64 1
     %tmp_add = add i64 %tmp_load.2 %tmp_const.4
-    %tmp_alloca.2 = alloca ptr
-    store %tmp_alloca.2 %tmp_add
-    %tmp_load.3 = load i64 %tmp_alloca.2
-    ret %tmp_load.3
+    ret %tmp_add
 match_check_3:
     %tmp_const.5 = const.i64 i64 2
-    %tmp_icmp.1 = icmp.eq i64 %tmp_load.1 %tmp_const.5
+    %tmp_icmp.1 = icmp.eq i64 %choice %tmp_const.5
     br.cond %tmp_icmp.1 @match_body_4 @match_default_5
 match_body_4:
     %tmp_load.4 = load i64 %x
     %tmp_const.6 = const.i64 i64 2
     %tmp_add.1 = add i64 %tmp_load.4 %tmp_const.6
-    %tmp_alloca.3 = alloca ptr
-    store %tmp_alloca.3 %tmp_add.1
-    %tmp_load.5 = load i64 %tmp_alloca.3
-    ret %tmp_load.5
+    ret %tmp_add.1
 match_default_5:
     %tmp_load.6 = load i64 %x
-    %tmp_alloca.4 = alloca ptr
-    store %tmp_alloca.4 %tmp_load.6
-    %tmp_load.7 = load i64 %tmp_alloca.4
-    ret %tmp_load.7
+    ret %tmp_load.6
 match_merge_6:
 }
 
@@ -62,10 +50,7 @@ function main() -> i64 {
 entry_0:
     %tmp_const = const.i64 i64 1
     %tmp_call = call i64 @test(%tmp_const)
-    %tmp_alloca = alloca ptr
-    store %tmp_alloca %tmp_call
-    %tmp_load = load i64 %tmp_alloca
-    ret %tmp_load
+    ret %tmp_call
 }
 
 ---

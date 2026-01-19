@@ -20,55 +20,29 @@ ExitCode: 50
 function double() -> i64 {
 entry_0:
     %x = param i64 0
-    %x.1 = alloca ptr
-    store %x.1 %x
-    %tmp_load = load i64 %x.1
     %tmp_const = const.i64 i64 2
-    %tmp_mul = mul i64 %tmp_load %tmp_const
-    %tmp_alloca.1 = alloca ptr
-    store %tmp_alloca.1 %tmp_mul
-    %tmp_load.1 = load i64 %tmp_alloca.1
-    ret %tmp_load.1
+    %tmp_mul = mul i64 %x %tmp_const
+    ret %tmp_mul
 }
 
 function triple() -> i64 {
 entry_0:
     %x = param i64 0
-    %x.1 = alloca ptr
-    store %x.1 %x
-    %tmp_load = load i64 %x.1
     %tmp_const = const.i64 i64 3
-    %tmp_mul = mul i64 %tmp_load %tmp_const
-    %tmp_alloca.1 = alloca ptr
-    store %tmp_alloca.1 %tmp_mul
-    %tmp_load.1 = load i64 %tmp_alloca.1
-    ret %tmp_load.1
+    %tmp_mul = mul i64 %x %tmp_const
+    ret %tmp_mul
 }
 
 function main() -> i64 {
 entry_0:
     %tmp_funcaddr = func.addr ptr @double
-    %f = alloca ptr
-    store %f %tmp_funcaddr
-    %tmp_load = load ptr %f
     %tmp_const = const.i64 i64 10
-    %tmp_call_ind = call.indirect i64 %tmp_load(%tmp_const)
-    %a = alloca ptr
-    store %a %tmp_call_ind
+    %tmp_call_ind = call.indirect i64 %tmp_funcaddr(%tmp_const)
     %tmp_funcaddr.1 = func.addr ptr @triple
-    store %f %tmp_funcaddr.1
-    %tmp_load.1 = load ptr %f
     %tmp_const.1 = const.i64 i64 10
-    %tmp_call_ind.1 = call.indirect i64 %tmp_load.1(%tmp_const.1)
-    %b = alloca ptr
-    store %b %tmp_call_ind.1
-    %tmp_load.2 = load i64 %a
-    %tmp_load.3 = load i64 %b
-    %tmp_add = add i64 %tmp_load.2 %tmp_load.3
-    %tmp_alloca.3 = alloca ptr
-    store %tmp_alloca.3 %tmp_add
-    %tmp_load.4 = load i64 %tmp_alloca.3
-    ret %tmp_load.4
+    %tmp_call_ind.1 = call.indirect i64 %tmp_funcaddr.1(%tmp_const.1)
+    %tmp_add = add i64 %tmp_call_ind %tmp_call_ind.1
+    ret %tmp_add
 }
 
 ---

@@ -341,7 +341,7 @@ test "constant folding - complex expression (1+2+3)*(4+5)" {
     try testing.expectEqual(@as(u8, 54), result.exit_code);
 }
 
-test "constant folding - with variable (partial folding)" {
+test "constant folding - with variable (full folding)" {
     const allocator = testing.allocator;
 
     const source =
@@ -354,18 +354,13 @@ test "constant folding - with variable (partial folding)" {
     const result = try compileAndRun(source, allocator);
     defer allocator.free(result.ir_text);
 
-    // 1+2 should be folded to 3, and 4 should be present for variable assignment
-    try testing.expect(irContainsConst(result.ir_text, 3));
-    try testing.expect(irContainsConst(result.ir_text, 4));
+    // With alloca/store/load elimination, constant variables are propagated,
+    // allowing full constant folding. The entire expression evaluates to 49.
+    try testing.expect(irContainsConst(result.ir_text, 49));
 
-    // But intermediate values 1, 2 should not be present
-    try testing.expect(!irContainsConst(result.ir_text, 1));
-    try testing.expect(!irContainsConst(result.ir_text, 2));
-
-    // Should still have arithmetic operations for expressions involving x
-    // Exactly 2 adds (3+x and x+3) and 1 mul
-    try testing.expectEqual(@as(usize, 2), countIROperation(result.ir_text, "add"));
-    try testing.expectEqual(@as(usize, 1), countIROperation(result.ir_text, "mul"));
+    // No arithmetic operations needed - everything is folded at compile time
+    try testing.expectEqual(@as(usize, 0), countIROperation(result.ir_text, "add"));
+    try testing.expectEqual(@as(usize, 0), countIROperation(result.ir_text, "mul"));
 
     // (1+2+4)*(4+(1+2)) = 7*7 = 49
     try testing.expectEqual(@as(u8, 49), result.exit_code);
@@ -407,7 +402,7 @@ test "constant folding - zero operations" {
     try testing.expectEqual(@as(u8, 0), result.exit_code);
 }
 
-test "constant folding - does not fold variable operations" {
+test "constant folding - folds constant variable operations" {
     const allocator = testing.allocator;
 
     const source =
@@ -421,14 +416,14 @@ test "constant folding - does not fold variable operations" {
     const result = try compileAndRun(source, allocator);
     defer allocator.free(result.ir_text);
 
-    // Should have constants for variable initialization
-    try testing.expect(irContainsConst(result.ir_text, 10));
-    try testing.expect(irContainsConst(result.ir_text, 20));
+    // With alloca/store/load elimination, constant variables are propagated,
+    // allowing the entire expression to be folded to 30
+    try testing.expect(irContainsConst(result.ir_text, 30));
 
-    // Should have exactly 1 add instruction (x + y)
-    try testing.expectEqual(@as(usize, 1), countIROperation(result.ir_text, "add"));
+    // No add instruction needed - fully folded at compile time
+    try testing.expectEqual(@as(usize, 0), countIROperation(result.ir_text, "add"));
 
-    // But it should still compute correctly
+    // Result is correct
     try testing.expectEqual(@as(u8, 30), result.exit_code);
 }
 

@@ -19,6 +19,7 @@ pub fn optimize(module: *ir.Module, allocator: std.mem.Allocator) !void {
         while (iteration < max_iterations) : (iteration += 1) {
             const before_count = countInstructions(func);
 
+            try allocaStoreLoadElimination(func, allocator);
             try constantFolding(func, allocator);
             try copyPropagation(func, allocator);
             try deadStoreElimination(func, allocator);
@@ -104,6 +105,108 @@ fn markFunctionReachable(module: *ir.Module, func_name: []const u8, reachable: *
                     }
                 },
                 else => {},
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Alloca/Store/Load Elimination
+// ============================================================================
+
+/// Optimize alloca/store/load patterns where the alloca, store, and load are all
+/// in the same basic block. This replaces uses of the load result with the stored
+/// value across all blocks, then lets DCE/DSE clean up the dead instructions.
+fn allocaStoreLoadElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
+    // Build a map of load results to their replacement values
+    var replacements: std.AutoHashMapUnmanaged(ir.Value, ir.Value) = .{};
+    defer replacements.deinit(allocator);
+
+    // Phase 1: Find alloca/store/load patterns within each block
+    for (func.blocks.items) |block| {
+        // Track allocas and their stored values within this block
+        var alloca_to_stored: std.AutoHashMapUnmanaged(ir.Value, ir.Value) = .{};
+        defer alloca_to_stored.deinit(allocator);
+
+        for (block.instructions.items) |inst| {
+            switch (inst.op) {
+                .alloca, .alloca_sized, .alloca_dynamic => {
+                    // Mark this alloca as a candidate (no value stored yet)
+                    if (inst.result) |result| {
+                        try alloca_to_stored.put(allocator, result, result); // sentinel: points to itself
+                    }
+                },
+                .store => {
+                    const ptr = inst.operands[0].value;
+                    const val = inst.operands[1].value;
+                    // If storing to an alloca we're tracking, record the stored value
+                    if (alloca_to_stored.contains(ptr)) {
+                        try alloca_to_stored.put(allocator, ptr, val);
+                    }
+                },
+                .load => {
+                    const ptr = inst.operands[0].value;
+                    // If loading from an alloca that has a stored value (not sentinel)
+                    if (alloca_to_stored.get(ptr)) |stored_val| {
+                        if (stored_val != ptr) { // Not the sentinel
+                            if (inst.result) |load_result| {
+                                try replacements.put(allocator, load_result, stored_val);
+                            }
+                        }
+                    }
+                },
+                // Any instruction that might invalidate the stored value
+                .call, .call_indirect, .extern_call => {
+                    // Conservatively invalidate all tracked allocas if their address might escape
+                    for (inst.operands) |op| {
+                        if (op == .call_args) {
+                            for (op.call_args) |arg| {
+                                _ = alloca_to_stored.remove(arg);
+                            }
+                        }
+                    }
+                },
+                .memcpy, .memcpy_dyn => {
+                    const dest_ptr = inst.operands[0].value;
+                    _ = alloca_to_stored.remove(dest_ptr);
+                },
+                else => {},
+            }
+        }
+    }
+
+    // Phase 2: If no replacements found, nothing to do
+    if (replacements.count() == 0) return;
+
+    // Phase 3: Replace all uses of load results with their stored values
+    for (func.blocks.items) |*block| {
+        for (block.instructions.items) |*inst| {
+            for (&inst.operands) |*op| {
+                switch (op.*) {
+                    .value => |v| {
+                        if (replacements.get(v)) |replacement| {
+                            op.* = .{ .value = replacement };
+                        }
+                    },
+                    .call_args => |args| {
+                        var needs_update = false;
+                        for (args) |arg| {
+                            if (replacements.contains(arg)) {
+                                needs_update = true;
+                                break;
+                            }
+                        }
+                        if (needs_update) {
+                            const new_args = try func.allocator.alloc(ir.Value, args.len);
+                            for (args, 0..) |arg, i| {
+                                new_args[i] = replacements.get(arg) orelse arg;
+                            }
+                            func.allocator.free(args);
+                            op.* = .{ .call_args = new_args };
+                        }
+                    },
+                    else => {},
+                }
             }
         }
     }

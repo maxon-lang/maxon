@@ -39,19 +39,15 @@ entry_0:
     %tmp_fieldptr.1 = getfieldptr ptr %pos 8
     %tmp_const.1 = const.i64 i64 20
     store %tmp_fieldptr.1 %tmp_const.1
-    %tmp_load = load i64 %choice.1
     %tmp_const.2 = const.i64 i64 1
-    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.2
+    %tmp_icmp = icmp.eq i64 %choice %tmp_const.2
     br.cond %tmp_icmp @then$first_1 @end$first_2
 then$first_1:
     %temp = alloca.sized ptr 16
     memcpy %temp %pos 16
     %tmp_fieldptr.2 = getfieldptr ptr %temp 0
     %tmp_load.1 = load i64 %tmp_fieldptr.2
-    %tmp_alloca.3 = alloca ptr
-    store %tmp_alloca.3 %tmp_load.1
-    %tmp_load.2 = load i64 %tmp_alloca.3
-    ret %tmp_load.2
+    ret %tmp_load.1
 end$first_2:
     %tmp_load.3 = load i64 %choice.1
     %tmp_const.3 = const.i64 i64 2
@@ -62,30 +58,21 @@ then$second_3:
     memcpy %temp.1 %pos 16
     %tmp_fieldptr.3 = getfieldptr ptr %temp.1 8
     %tmp_load.4 = load i64 %tmp_fieldptr.3
-    %tmp_alloca.5 = alloca ptr
-    store %tmp_alloca.5 %tmp_load.4
-    %tmp_load.5 = load i64 %tmp_alloca.5
-    ret %tmp_load.5
+    ret %tmp_load.4
 end$second_4:
     %tmp_fieldptr.4 = getfieldptr ptr %pos 0
     %tmp_load.6 = load i64 %tmp_fieldptr.4
     %tmp_fieldptr.5 = getfieldptr ptr %pos 8
     %tmp_load.7 = load i64 %tmp_fieldptr.5
     %tmp_add = add i64 %tmp_load.6 %tmp_load.7
-    %tmp_alloca.6 = alloca ptr
-    store %tmp_alloca.6 %tmp_add
-    %tmp_load.8 = load i64 %tmp_alloca.6
-    ret %tmp_load.8
+    ret %tmp_add
 }
 
 function main() -> i64 {
 entry_0:
     %tmp_const = const.i64 i64 3
     %tmp_call = call i64 @testMutuallyExclusiveMoves(%tmp_const)
-    %tmp_alloca = alloca ptr
-    store %tmp_alloca %tmp_call
-    %tmp_load = load i64 %tmp_alloca
-    ret %tmp_load
+    ret %tmp_call
 }
 
 ---

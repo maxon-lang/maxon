@@ -18,11 +18,8 @@ ExitCode: 42
 function test() -> i64 {
 entry_0:
     %x = param i64 0
-    %x.1 = alloca ptr
-    store %x.1 %x
-    %tmp_load = load i64 %x.1
     %tmp_const = const.i64 i64 0
-    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
+    %tmp_icmp = icmp.eq i64 %x %tmp_const
     br.cond %tmp_icmp @then$outer_1 @end$outer_10
 then$outer_1:
     %tmp_alloca.1 = alloca.sized ptr 32
@@ -117,20 +114,14 @@ decref_end_9:
     br @end$outer_10
 end$outer_10:
     %tmp_const.18 = const.i64 i64 42
-    %tmp_alloca.6 = alloca ptr
-    store %tmp_alloca.6 %tmp_const.18
-    %tmp_load.10 = load i64 %tmp_alloca.6
-    ret %tmp_load.10
+    ret %tmp_const.18
 }
 
 function main() -> i64 {
 entry_0:
     %tmp_const = const.i64 i64 5
     %tmp_call = call i64 @test(%tmp_const)
-    %tmp_alloca = alloca ptr
-    store %tmp_alloca %tmp_call
-    %tmp_load = load i64 %tmp_alloca
-    ret %tmp_load
+    ret %tmp_call
 }
 
 ---

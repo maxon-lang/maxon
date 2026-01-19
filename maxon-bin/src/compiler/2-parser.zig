@@ -2042,6 +2042,23 @@ pub const Parser = struct {
         // Check for unary minus
         if (self.check(.minus)) {
             _ = self.advance();
+            // Fold negative numeric literals directly
+            if (self.check(.integer)) {
+                const token = self.advance();
+                const value = std.fmt.parseInt(i64, token.text, 0) catch {
+                    self.reportError(.E001, @src());
+                    return error.InvalidNumber;
+                };
+                return try self.parsePostfix(.{ .integer = -value });
+            }
+            if (self.check(.float_literal)) {
+                const token = self.advance();
+                const value = std.fmt.parseFloat(f64, token.text) catch {
+                    self.reportError(.E001, @src());
+                    return error.InvalidNumber;
+                };
+                return try self.parsePostfix(.{ .float_lit = -value });
+            }
             const operand = try self.parseUnary() orelse {
                 self.reportError(.E003, @src());
                 return error.ExpectedExpression;

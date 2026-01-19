@@ -16,50 +16,32 @@ ExitCode: 99
 ---
 function main() -> i64 {
 entry_0:
-    %tmp_alloca = alloca ptr
     %tmp_const = const.i64 i64 16
     %tmp_heap = heap.alloc ptr %tmp_const tag="enum storage"
-    store %tmp_alloca %tmp_heap
     %tmp_const.1 = const.i64 i64 1
     store %tmp_heap %tmp_const.1
     %tmp_const.2 = const.i64 i64 99
     %tmp_fieldptr = getfieldptr ptr %tmp_heap 8
     store %tmp_fieldptr %tmp_const.2
-    %tmp_load = load ptr %tmp_alloca
-    %r = alloca ptr
-    store %r %tmp_load
-    %tmp_load.2 = load i64 %r
     br @match_check_1
 match_check_1:
     %tmp_const.5 = const.i64 i64 0
-    %tmp_load.3 = load i64 %tmp_load.2
+    %tmp_load.3 = load i64 %tmp_heap
     %tmp_icmp = icmp.eq i64 %tmp_load.3 %tmp_const.5
     br.cond %tmp_icmp @match_body_2 @match_check_3
 match_body_2:
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_load.2 8
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_heap 8
     %tmp_load.4 = load i64 %tmp_fieldptr.1
-    %tmp_alloca.2 = alloca ptr
-    store %tmp_alloca.2 %tmp_load.4
-    %tmp_load.5 = load i64 %tmp_alloca.2
-    %tmp_alloca.3 = alloca ptr
-    store %tmp_alloca.3 %tmp_load.5
-    %tmp_load.6 = load i64 %tmp_alloca.3
-    ret %tmp_load.6
+    ret %tmp_load.4
 match_check_3:
     %tmp_const.6 = const.i64 i64 1
-    %tmp_load.7 = load i64 %tmp_load.2
+    %tmp_load.7 = load i64 %tmp_heap
     %tmp_icmp.1 = icmp.eq i64 %tmp_load.7 %tmp_const.6
     br.cond %tmp_icmp.1 @match_body_4 @match_merge_5
 match_body_4:
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_load.2 8
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_heap 8
     %tmp_load.8 = load i64 %tmp_fieldptr.2
-    %tmp_alloca.4 = alloca ptr
-    store %tmp_alloca.4 %tmp_load.8
-    %tmp_load.9 = load i64 %tmp_alloca.4
-    %tmp_alloca.5 = alloca ptr
-    store %tmp_alloca.5 %tmp_load.9
-    %tmp_load.10 = load i64 %tmp_alloca.5
-    ret %tmp_load.10
+    ret %tmp_load.8
 match_merge_5:
 }
 
