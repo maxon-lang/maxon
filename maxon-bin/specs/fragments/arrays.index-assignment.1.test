@@ -8,7 +8,7 @@ end 'main'
 ExitCode: 100
 ---
 function main() -> i64 {
-entry:
+entry_0:
     %tmp_const = const.i64 i64 10
     %tmp_const.1 = const.i64 i64 3
     %tmp_add = const.i64 i64 32
@@ -52,17 +52,17 @@ entry:
     %tmp_const.17 = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.17
     %tmp_alloca.3 = alloca ptr
-    br.cond %tmp_icmp @block1 @block2
-try_success:
+    br.cond %tmp_icmp @try_success_1 @try_default_2
+try_success_1:
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
     %tmp_load.1 = load i64 %tmp_fieldptr.4
     store %tmp_alloca.3 %tmp_load.1
-    br @block3
-try_default:
+    br @try_merge_3
+try_default_2:
     %tmp_const.18 = const.i64 i64 0
     store %tmp_alloca.3 %tmp_const.18
-    br @block3
-try_merge:
+    br @try_merge_3
+try_merge_3:
     %tmp_load.2 = load i64 %tmp_alloca.3
     %tmp_alloca.4 = alloca ptr
     store %tmp_alloca.4 %tmp_load.2
@@ -73,8 +73,8 @@ try_merge:
     %tmp_band = band i32 %tmp_load.3 %tmp_const.19
     %tmp_const.20 = const.i32 i32 1
     %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.20
-    br.cond %tmp_icmp.1 @block4 @block6
-decref:
+    br.cond %tmp_icmp.1 @decref_4 @decref_end_6
+decref_4:
     %tmp_load.4 = load ptr %tmp_fieldptr.5
     %tmp_const.21 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.4 %tmp_const.21
@@ -84,19 +84,19 @@ decref:
     store %tmp_sub %tmp_sub.1
     %tmp_const.23 = const.i64 i64 0
     %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.23
-    br.cond %tmp_icmp.2 @block5 @block6
-decref_free:
+    br.cond %tmp_icmp.2 @decref_free_5 @decref_end_6
+decref_free_5:
     %tmp_load.6 = load ptr %tmp_fieldptr.5
     %tmp_sub.2 = sub ptr %tmp_load.6 %tmp_const.21
     heap.free %tmp_sub.2 tag="array cleanup"
-    br @block6
-decref_end:
+    br @decref_end_6
+decref_end_6:
     %tmp_load.7 = load i64 %tmp_alloca.4
     ret %tmp_load.7
 }
 
 function Array$int$init() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %managed = param ptr 1
     memset %tmp_param 0 40
@@ -109,7 +109,7 @@ entry:
 }
 
 function Array$int$set() -> void {
-entry:
+entry_0:
     %self = param ptr 0
     %index = param i64 1
     %index.1 = alloca ptr
@@ -125,28 +125,28 @@ entry:
     %tmp_load.1 = load i64 %index.1
     %tmp_const = const.i64 i64 0
     %tmp_icmp = icmp.ge i64 %tmp_load.1 %tmp_const
-    br.cond %tmp_icmp @block1 @block4
-then:
+    br.cond %tmp_icmp @then$lower_1 @end$lower_4
+then$lower_1:
     %tmp_load.2 = load i64 %index.1
     %tmp_load.3 = load i64 %len
     %tmp_icmp.1 = icmp.lt i64 %tmp_load.2 %tmp_load.3
-    br.cond %tmp_icmp.1 @block2 @block3
-then:
+    br.cond %tmp_icmp.1 @then$upper_2 @end$upper_3
+then$upper_2:
     %tmp_fieldptr.2 = getfieldptr ptr %self 8
     %tmp_load.4 = load i64 %index.1
     %tmp_load.5 = load i64 %value.1
     %tmp_load.6 = load ptr %tmp_fieldptr.2
     %tmp_elemptr = getelemptr ptr %tmp_load.6 %tmp_load.4 elemsize=8
     store %tmp_elemptr %tmp_load.5
-    br @block3
-end:
-    br @block4
-end:
+    br @end$upper_3
+end$upper_3:
+    br @end$lower_4
+end$lower_4:
     ret
 }
 
 function Array$int$get() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %self = param ptr 1
     %index = param i64 2
@@ -160,27 +160,27 @@ entry:
     %tmp_load.1 = load i64 %index.1
     %tmp_const = const.i64 i64 0
     %tmp_icmp = icmp.lt i64 %tmp_load.1 %tmp_const
-    br.cond %tmp_icmp @block1 @block2
-then:
+    br.cond %tmp_icmp @then$lower_1 @end$lower_2
+then$lower_1:
     %tmp_const.1 = const.i64 i64 0
     %tmp_const.2 = const.i64 i64 1
     store %tmp_param %tmp_const.2
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
     store %tmp_fieldptr.2 %tmp_const.1
     ret %tmp_param
-end:
+end$lower_2:
     %tmp_load.2 = load i64 %index.1
     %tmp_load.3 = load i64 %len
     %tmp_icmp.1 = icmp.ge i64 %tmp_load.2 %tmp_load.3
-    br.cond %tmp_icmp.1 @block3 @block4
-then:
+    br.cond %tmp_icmp.1 @then$upper_3 @end$upper_4
+then$upper_3:
     %tmp_const.3 = const.i64 i64 0
     %tmp_const.4 = const.i64 i64 1
     store %tmp_param %tmp_const.4
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_param 8
     store %tmp_fieldptr.3 %tmp_const.3
     ret %tmp_param
-end:
+end$upper_4:
     %tmp_fieldptr.4 = getfieldptr ptr %self 8
     %tmp_load.4 = load i64 %index.1
     %tmp_load.5 = load ptr %tmp_fieldptr.4

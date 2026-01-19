@@ -25,7 +25,7 @@ end 'main'
 ExitCode: 7
 ---
 function mayFail() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %n = param i64 1
     %n.1 = alloca ptr
@@ -33,15 +33,15 @@ entry:
     %tmp_load = load i64 %n.1
     %tmp_const = const.i64 i64 3
     %tmp_icmp = icmp.lt i64 %tmp_load %tmp_const
-    br.cond %tmp_icmp @block1 @block2
-then:
+    br.cond %tmp_icmp @then$check_1 @end$check_2
+then$check_1:
     %tmp_const.1 = const.i64 i64 0
     %tmp_const.2 = const.i64 i64 1
     store %tmp_param %tmp_const.2
     %tmp_fieldptr = getfieldptr ptr %tmp_param 8
     store %tmp_fieldptr %tmp_const.1
     ret %tmp_param
-end:
+end$check_2:
     %tmp_load.1 = load i64 %n.1
     %tmp_const.3 = const.i64 i64 0
     store %tmp_param %tmp_const.3
@@ -51,20 +51,20 @@ end:
 }
 
 function main() -> i64 {
-entry:
+entry_0:
     %tmp_const = const.i64 i64 0
     %sum = alloca ptr
     store %sum %tmp_const
     %tmp_const.1 = const.i64 i64 0
     %i = alloca ptr
     store %i %tmp_const.1
-    br @block1
-whilecond:
+    br @whilecond_1
+whilecond_1:
     %tmp_load = load i64 %i
     %tmp_const.2 = const.i64 i64 5
     %tmp_icmp = icmp.lt i64 %tmp_load %tmp_const.2
-    br.cond %tmp_icmp @block2 @block6
-whilebody:
+    br.cond %tmp_icmp @whilebody_2 @whilecont_6
+whilebody_2:
     %tmp_alloca.2 = alloca.sized ptr 16
     %tmp_load.1 = load i64 %i
     %tmp_call = call ptr @mayFail(%tmp_alloca.2, %tmp_load.1)
@@ -72,8 +72,8 @@ whilebody:
     %tmp_const.3 = const.i64 i64 0
     %tmp_icmp.1 = icmp.eq i64 %tmp_load.2 %tmp_const.3
     %tmp_alloca.3 = alloca ptr
-    br.cond %tmp_icmp.1 @block3 @block4
-try_success:
+    br.cond %tmp_icmp.1 @try_success_3 @if_try_else_4
+try_success_3:
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
     %tmp_load.3 = load i64 %tmp_fieldptr
     store %tmp_alloca.3 %tmp_load.3
@@ -81,16 +81,16 @@ try_success:
     %tmp_load.5 = load i64 %tmp_alloca.3
     %tmp_add = add i64 %tmp_load.4 %tmp_load.5
     store %sum %tmp_add
-    br @block5
-if_try_else:
-    br @block5
-try_merge:
+    br @try_merge_5
+if_try_else_4:
+    br @try_merge_5
+try_merge_5:
     %tmp_load.6 = load i64 %i
     %tmp_const.4 = const.i64 i64 1
     %tmp_add.1 = add i64 %tmp_load.6 %tmp_const.4
     store %i %tmp_add.1
-    br @block1
-whilecont:
+    br @whilecond_1
+whilecont_6:
     %tmp_load.7 = load i64 %sum
     %tmp_alloca.4 = alloca ptr
     store %tmp_alloca.4 %tmp_load.7

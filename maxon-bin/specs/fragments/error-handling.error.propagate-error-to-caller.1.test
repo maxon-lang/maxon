@@ -21,7 +21,7 @@ end 'main'
 ExitCode: 99
 ---
 function inner() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %tmp_const = const.i64 i64 0
     %tmp_const.1 = const.i64 i64 1
@@ -32,24 +32,24 @@ entry:
 }
 
 function middle() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %tmp_alloca = alloca.sized ptr 16
     %tmp_call = call ptr @inner(%tmp_alloca)
     %tmp_load = load i64 %tmp_alloca
     %tmp_const = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
-    br.cond %tmp_icmp @block1 @block2
-try_success:
+    br.cond %tmp_icmp @try_success_1 @try_propagate_2
+try_success_1:
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
     %tmp_alloca.1 = alloca ptr
     %tmp_load.1 = load i64 %tmp_fieldptr
     store %tmp_alloca.1 %tmp_load.1
-    br @block3
-try_propagate:
+    br @try_merge_3
+try_propagate_2:
     memcpy %tmp_param %tmp_alloca 16
     ret %tmp_param
-try_merge:
+try_merge_3:
     %tmp_load.2 = load i64 %tmp_alloca.1
     %x = alloca ptr
     store %x %tmp_load.2
@@ -62,24 +62,24 @@ try_merge:
 }
 
 function main() -> i64 {
-entry:
+entry_0:
     %tmp_alloca = alloca.sized ptr 16
     %tmp_call = call ptr @middle(%tmp_alloca)
     %tmp_load = load i64 %tmp_alloca
     %tmp_const = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
     %tmp_alloca.1 = alloca ptr
-    br.cond %tmp_icmp @block1 @block2
-try_success:
+    br.cond %tmp_icmp @try_success_1 @try_default_2
+try_success_1:
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
     %tmp_load.1 = load i64 %tmp_fieldptr
     store %tmp_alloca.1 %tmp_load.1
-    br @block3
-try_default:
+    br @try_merge_3
+try_default_2:
     %tmp_const.1 = const.i64 i64 99
     store %tmp_alloca.1 %tmp_const.1
-    br @block3
-try_merge:
+    br @try_merge_3
+try_merge_3:
     %tmp_load.2 = load i64 %tmp_alloca.1
     %x = alloca ptr
     store %x %tmp_load.2

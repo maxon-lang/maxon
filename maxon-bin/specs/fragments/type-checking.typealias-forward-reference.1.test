@@ -14,7 +14,7 @@ end 'main'
 ExitCode: 0
 ---
 function main() -> i64 {
-entry:
+entry_0:
     %arr = alloca.sized ptr 40
     memset %arr 0 40
     %tmp_alloca.1 = alloca.sized ptr 40
@@ -36,8 +36,8 @@ entry:
     %tmp_band = band i32 %tmp_load %tmp_const.2
     %tmp_const.3 = const.i32 i32 1
     %tmp_icmp = icmp.eq i32 %tmp_band %tmp_const.3
-    br.cond %tmp_icmp @block1 @block3
-decref:
+    br.cond %tmp_icmp @decref_1 @decref_end_3
+decref_1:
     %tmp_load.1 = load ptr %tmp_fieldptr.1
     %tmp_const.4 = const.i64 i64 8
     %tmp_sub.1 = sub ptr %tmp_load.1 %tmp_const.4
@@ -47,19 +47,19 @@ decref:
     store %tmp_sub.1 %tmp_sub.2
     %tmp_const.6 = const.i64 i64 0
     %tmp_icmp.1 = icmp.eq i64 %tmp_sub.2 %tmp_const.6
-    br.cond %tmp_icmp.1 @block2 @block3
-decref_free:
+    br.cond %tmp_icmp.1 @decref_free_2 @decref_end_3
+decref_free_2:
     %tmp_load.3 = load ptr %tmp_fieldptr.1
     %tmp_sub.3 = sub ptr %tmp_load.3 %tmp_const.4
     heap.free %tmp_sub.3 tag="array cleanup"
-    br @block3
-decref_end:
+    br @decref_end_3
+decref_end_3:
     %tmp_load.4 = load i64 %tmp_alloca.3
     ret %tmp_load.4
 }
 
 function Array$Foo$push() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %self = param ptr 1
     %value = param ptr 2
@@ -88,7 +88,7 @@ entry:
 }
 
 function Array$Foo$ensureCapacity() -> void {
-entry:
+entry_0:
     %self = param ptr 0
     %requiredLen = param i64 1
     %requiredLen.1 = alloca ptr
@@ -101,33 +101,33 @@ entry:
     %tmp_load.1 = load i64 %requiredLen.1
     %tmp_load.2 = load i64 %cap
     %tmp_icmp = icmp.gt i64 %tmp_load.1 %tmp_load.2
-    br.cond %tmp_icmp @block1 @block10
-then:
+    br.cond %tmp_icmp @then$grow_1 @end$grow_10
+then$grow_1:
     %tmp_load.3 = load i64 %cap
     %newCap = alloca ptr
     store %newCap %tmp_load.3
     %tmp_load.4 = load i64 %newCap
     %tmp_const = const.i64 i64 4
     %tmp_icmp.1 = icmp.lt i64 %tmp_load.4 %tmp_const
-    br.cond %tmp_icmp.1 @block2 @block3
-then:
+    br.cond %tmp_icmp.1 @then$min_2 @end$min_3
+then$min_2:
     %tmp_const.1 = const.i64 i64 4
     store %newCap %tmp_const.1
-    br @block3
-end:
-    br @block4
-whilecond:
+    br @end$min_3
+end$min_3:
+    br @whilecond_4
+whilecond_4:
     %tmp_load.5 = load i64 %newCap
     %tmp_load.6 = load i64 %requiredLen.1
     %tmp_icmp.2 = icmp.lt i64 %tmp_load.5 %tmp_load.6
-    br.cond %tmp_icmp.2 @block5 @block6
-whilebody:
+    br.cond %tmp_icmp.2 @whilebody_5 @whilecont_6
+whilebody_5:
     %tmp_load.7 = load i64 %newCap
     %tmp_const.2 = const.i64 i64 2
     %tmp_mul = mul i64 %tmp_load.7 %tmp_const.2
     store %newCap %tmp_mul
-    br @block4
-whilecont:
+    br @whilecond_4
+whilecont_6:
     %tmp_fieldptr.2 = getfieldptr ptr %self 8
     %tmp_load.8 = load i64 %newCap
     %tmp_const.3 = const.i64 i64 8
@@ -135,8 +135,8 @@ whilecont:
     %tmp_load.9 = load ptr %tmp_fieldptr.2
     %tmp_const.4 = const.i64 i64 0
     %tmp_icmp.3 = icmp.eq i64 %tmp_load.9 %tmp_const.4
-    br.cond %tmp_icmp.3 @block7 @block8
-grow_alloc:
+    br.cond %tmp_icmp.3 @grow_alloc_7 @grow_realloc_8
+grow_alloc_7:
     %tmp_const.5 = const.i64 i64 8
     %tmp_add = add i64 %tmp_mul.1 %tmp_const.5
     %tmp_heap = heap.alloc ptr %tmp_add tag="array grow"
@@ -150,8 +150,8 @@ grow_alloc:
     %tmp_const.8 = const.i32 i32 1
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.2 24
     store.i32 %tmp_fieldptr.4 %tmp_const.8
-    br @block9
-grow_realloc:
+    br @grow_end_9
+grow_realloc_8:
     %tmp_const.9 = const.i64 i64 8
     %tmp_add.2 = add i64 %tmp_mul.1 %tmp_const.9
     %tmp_load.10 = load ptr %tmp_fieldptr.2
@@ -161,15 +161,15 @@ grow_realloc:
     store %tmp_fieldptr.2 %tmp_add.3
     %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.5 %tmp_load.8
-    br @block9
-grow_end:
-    br @block10
-end:
+    br @grow_end_9
+grow_end_9:
+    br @end$grow_10
+end$grow_10:
     ret
 }
 
 function Array$Foo$count() -> i64 {
-entry:
+entry_0:
     %self = param ptr 0
     %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8

@@ -671,6 +671,8 @@ pub const VarInfo = struct {
     /// Declaration location for error reporting
     decl_line: u32 = 0,
     decl_column: u32 = 0,
+    /// For enum variables: the known member name if statically determinable
+    const_enum_member: ?[]const u8 = null,
 
     /// Create a VarInfo for a stack-allocated value (data stored directly at ptr).
     /// Use this for values created with alloca.sized or stack structs.

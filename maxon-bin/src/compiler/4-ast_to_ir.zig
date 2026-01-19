@@ -5241,12 +5241,28 @@ pub const AstToIr = struct {
         };
 
         // Function types use heap allocation (pointer indirection), everything else is stack-allocated
-        try self.var_map.put(self.allocator, decl.name, VarInfo.init(
+        var var_info = VarInfo.init(
             ptr,
             init_typed.ty,
             self.current_decl_is_mutable,
             is_function_type,
-        ));
+        );
+
+        // Track known enum member for compile-time .name optimization
+        if (init_typed.ty == .enum_type) {
+            if (decl.value == .field_access) {
+                const faccess = decl.value.field_access;
+                if (faccess.base.* == .identifier) {
+                    if (self.type_map.getPtr(faccess.base.identifier)) |type_info_ptr| {
+                        if (type_info_ptr.* == .enum_type) {
+                            var_info.const_enum_member = faccess.field_name;
+                        }
+                    }
+                }
+            }
+        }
+
+        try self.var_map.put(self.allocator, decl.name, var_info);
 
         // If this was a temporary with managed buffer, the variable now owns it - remove from temporaries
         if (init_typed.ty == .struct_type and init_typed.ty.struct_type.has_managed_buffer) {
@@ -5482,6 +5498,22 @@ pub const AstToIr = struct {
                 const managed_ptr = try array_helpers.getManagedMemoryPtr(self, var_info.ptr.?, value_typed.ty.struct_type.managed_buffer_offset);
                 try array_helpers.emitManagedMemoryIncref(self, managed_ptr, assign.target);
             }
+
+            // Update const_enum_member for enum types on reassignment
+            if (var_info.ty == .enum_type) {
+                var_info.const_enum_member = null; // Clear by default
+                if (assign.value == .field_access) {
+                    const faccess = assign.value.field_access;
+                    if (faccess.base.* == .identifier) {
+                        if (self.type_map.getPtr(faccess.base.identifier)) |type_info_ptr| {
+                            if (type_info_ptr.* == .enum_type) {
+                                var_info.const_enum_member = faccess.field_name;
+                            }
+                        }
+                    }
+                }
+            }
+
             var_info.resetOwnership();
             return;
         }
@@ -5715,17 +5747,32 @@ pub const AstToIr = struct {
         // Save entry block index - we'll emit br_cond later with correct target indices
         const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
 
+        // Create block names, optionally including the source label for readability
+        const label = if_stmt.block.identifier;
+        const then_name = if (label) |l|
+            try std.fmt.allocPrint(self.allocator, "then${s}", .{l})
+        else
+            "then";
+        const else_name = if (label) |l|
+            try std.fmt.allocPrint(self.allocator, "else${s}", .{l})
+        else
+            "else";
+        const end_name = if (label) |l|
+            try std.fmt.allocPrint(self.allocator, "end${s}", .{l})
+        else
+            "end";
+
         // Create then block
         const then_block_idx: u32 = @intCast(self.func().blocks.items.len);
-        _ = try self.func().addBlock("then");
+        _ = try self.func().addBlock(then_name);
 
         // Create else block (if needed) - actual index determined after then body
         if (has_else_block) {
-            _ = try self.func().addBlock("else");
+            _ = try self.func().addBlock(else_name);
         }
 
         // Create end block - actual index determined after all bodies
-        _ = try self.func().addBlock("end");
+        _ = try self.func().addBlock(end_name);
 
         // DON'T emit br_cond yet - nested ifs in body will shift block indices
         // We'll emit it after all blocks are restored with correct indices
@@ -9429,42 +9476,104 @@ pub const AstToIr = struct {
         return .{ .value = result_ptr.raw(), .ty = string_type };
     }
 
-    /// Recursive helper to emit chained if-else for .name
+    /// Emit chained if-else for .name using iterative approach
+    /// Creates: if (val == member0) { name = "member0" } else if (val == member1) { ... } else { name = "lastMember" }
     fn emitEnumNameChain(
         self: *AstToIr,
         enum_value: ir.Value,
         enum_info: *const types.EnumTypeInfo,
         result_ptr: ir.Value,
-        index: usize,
+        start_index: usize,
     ) ConvertError!void {
+        _ = start_index;
         const num_members = enum_info.member_names_ordered.len;
-        const member_name = enum_info.member_names_ordered[index];
 
-        // Base case: last member (no more branching needed)
-        if (index == num_members - 1) {
-            try self.emitStringLiteralIntoPtr(result_ptr, member_name);
-            return;
+        // Structure for n members (e.g., 3: Hearts, Diamonds, Spades):
+        // entry: cmp Hearts -> case0 / check0
+        // check0: cmp Diamonds -> case1 / case2 (last is default)
+        // case0: store "Hearts", br merge
+        // case1: store "Diamonds", br merge
+        // case2: store "Spades", br merge
+        // merge: ...
+        //
+        // For n members we need:
+        // - n-2 check blocks (for members 1 to n-2, the last member has no check - it's the default)
+        // - n case blocks (one per member)
+        // - 1 merge block
+        //
+        // Total blocks to create and defer: (n-2) check + n case + 1 merge = 2n-1
+
+        const num_check_blocks = if (num_members > 2) num_members - 2 else 0;
+        const total_new_blocks = num_check_blocks + num_members + 1; // check + case + merge
+
+        // Allocate arrays for block indices
+        var case_blocks = try self.allocator.alloc(u32, num_members);
+        defer self.allocator.free(case_blocks);
+        var check_blocks = try self.allocator.alloc(u32, num_check_blocks);
+        defer self.allocator.free(check_blocks);
+
+        // Save entry block index
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+        // Create all blocks and track their indices
+        // Order: check0, check1, ..., case0, case1, ..., caseN-1, merge
+        for (0..num_check_blocks) |i| {
+            check_blocks[i] = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("sv_check");
+        }
+        for (0..num_members) |i| {
+            case_blocks[i] = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("sv_case");
+        }
+        const merge_block: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("sv_merge");
+
+        // Defer all newly created blocks (we need to emit to entry first)
+        var deferred = try DeferredBlocks.init(self.allocator, total_new_blocks);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, total_new_blocks);
+
+        // Now we're back in the entry block - emit first comparison
+        const first_member = enum_info.member_names_ordered[0];
+        const first_cmp_value = try self.emitEnumMemberCompareValue(enum_info, first_member, 0);
+        const first_is_match = try self.func().emitBinaryOp(.icmp_eq, enum_value, first_cmp_value, .i64);
+        // If match -> case0, else -> check0 (or case1 if only 2 members)
+        const first_else_target = if (num_members > 2) check_blocks[0] else case_blocks[1];
+        try self.func().emitBrCond(first_is_match, case_blocks[0], first_else_target);
+
+        // Emit check blocks for members 1 to n-2
+        // Restore check blocks in order and emit comparisons
+        for (0..num_check_blocks) |i| {
+            // Restore check block i (stored in reverse order, so restore from end)
+            try deferred.restore(self, total_new_blocks - 1 - i);
+
+            const member_idx = i + 1; // check_blocks[0] checks member 1, etc.
+            const member_name = enum_info.member_names_ordered[member_idx];
+            const cmp_value = try self.emitEnumMemberCompareValue(enum_info, member_name, member_idx);
+            const is_match = try self.func().emitBinaryOp(.icmp_eq, enum_value, cmp_value, .i64);
+            // If match -> case[member_idx], else -> next check (or last case if no more checks)
+            const else_target = if (i + 1 < num_check_blocks) check_blocks[i + 1] else case_blocks[num_members - 1];
+            try self.func().emitBrCond(is_match, case_blocks[member_idx], else_target);
         }
 
-        // Get the comparison value for this member based on backing type
-        const cmp_value = try self.emitEnumMemberCompareValue(enum_info, member_name, index);
-        const is_match = try self.func().emitBinaryOp(.icmp_eq, enum_value, cmp_value, .i64);
+        // Emit case blocks - each stores the member name and branches to merge
+        for (0..num_members) |i| {
+            // Restore case block i
+            try deferred.restore(self, total_new_blocks - 1 - num_check_blocks - i);
 
-        // Create branch: if match -> emit this member's string, else -> check next
-        var branch = try BranchBuilder.init(self, is_match, "sv_then", "sv_else", "sv_merge");
-        defer branch.deinit();
+            const member_name = enum_info.member_names_ordered[i];
+            try self.emitStringLiteralIntoPtr(result_ptr, member_name);
 
-        // Then block: emit string for this member
-        try self.emitStringLiteralIntoPtr(result_ptr, member_name);
+            // Branch to merge (directly to block, not using emitBr which uses current block)
+            try self.func().blocks.items[self.func().blocks.items.len - 1].instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = merge_block }, .none, .none },
+            });
+        }
 
-        // Switch to else block
-        try branch.switchToElse(true);
-
-        // Else block: recursively handle remaining members
-        try self.emitEnumNameChain(enum_value, enum_info, result_ptr, index + 1);
-
-        // Switch to merge block
-        try branch.switchToMerge(true);
+        // Restore merge block for subsequent code
+        try deferred.restore(self, 0);
+        _ = entry_block_idx;
     }
 
     /// Emit the comparison value for a specific enum member based on backing type
@@ -9503,6 +9612,25 @@ pub const AstToIr = struct {
     }
 
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
+        // Check for direct .name access on enum member construction (e.g., EnumType.Member.name)
+        if (std.mem.eql(u8, faccess.field_name, "name")) {
+            if (faccess.base.* == .field_access) {
+                const inner_faccess = faccess.base.field_access;
+                if (inner_faccess.base.* == .identifier) {
+                    if (self.type_map.getPtr(inner_faccess.base.identifier)) |type_info_ptr| {
+                        if (type_info_ptr.* == .enum_type) {
+                            const enum_info = &type_info_ptr.enum_type;
+                            // Verify the field name is a valid enum member
+                            if (enum_info.members.contains(inner_faccess.field_name)) {
+                                // Directly emit the member name as a string literal
+                                return try self.convertStringLiteral(inner_faccess.field_name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Check for enum member access (e.g., Colors.Green)
         if (faccess.base.* == .identifier) {
             if (self.type_map.getPtr(faccess.base.identifier)) |type_info_ptr| {
@@ -9562,6 +9690,16 @@ pub const AstToIr = struct {
                 };
             }
             if (std.mem.eql(u8, faccess.field_name, "name")) {
+                // Check if we know the enum member at compile time
+                if (faccess.base.* == .identifier) {
+                    if (self.var_map.get(faccess.base.identifier)) |var_info| {
+                        if (var_info.const_enum_member) |member_name| {
+                            // Directly emit the member name as a string literal
+                            return try self.convertStringLiteral(member_name);
+                        }
+                    }
+                }
+                // Fall back to runtime dispatch
                 return try self.emitEnumName(base.value, enum_info);
             }
             std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});

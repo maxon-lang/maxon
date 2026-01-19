@@ -8,7 +8,7 @@ end 'main'
 ExitCode: 42
 ---
 function main() -> i64 {
-entry:
+entry_0:
     %tmp_const = const.i64 i64 42
     %tmp_const.1 = const.i64 i64 3
     %tmp_add = const.i64 i64 32
@@ -48,17 +48,17 @@ entry:
     %tmp_const.13 = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.13
     %tmp_alloca.3 = alloca ptr
-    br.cond %tmp_icmp @block1 @block2
-try_success:
+    br.cond %tmp_icmp @try_success_1 @try_default_2
+try_success_1:
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.2 8
     %tmp_load.1 = load i64 %tmp_fieldptr.4
     store %tmp_alloca.3 %tmp_load.1
-    br @block3
-try_default:
+    br @try_merge_3
+try_default_2:
     %tmp_const.14 = const.i64 i64 0
     store %tmp_alloca.3 %tmp_const.14
-    br @block3
-try_merge:
+    br @try_merge_3
+try_merge_3:
     %tmp_load.2 = load i64 %tmp_alloca.3
     %val = alloca ptr
     store %val %tmp_load.2
@@ -72,8 +72,8 @@ try_merge:
     %tmp_band = band i32 %tmp_load.4 %tmp_const.15
     %tmp_const.16 = const.i32 i32 1
     %tmp_icmp.1 = icmp.eq i32 %tmp_band %tmp_const.16
-    br.cond %tmp_icmp.1 @block4 @block6
-decref:
+    br.cond %tmp_icmp.1 @decref_4 @decref_end_6
+decref_4:
     %tmp_load.5 = load ptr %tmp_fieldptr.5
     %tmp_const.17 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.5 %tmp_const.17
@@ -83,19 +83,19 @@ decref:
     store %tmp_sub %tmp_sub.1
     %tmp_const.19 = const.i64 i64 0
     %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.19
-    br.cond %tmp_icmp.2 @block5 @block6
-decref_free:
+    br.cond %tmp_icmp.2 @decref_free_5 @decref_end_6
+decref_free_5:
     %tmp_load.7 = load ptr %tmp_fieldptr.5
     %tmp_sub.2 = sub ptr %tmp_load.7 %tmp_const.17
     heap.free %tmp_sub.2 tag="array cleanup"
-    br @block6
-decref_end:
+    br @decref_end_6
+decref_end_6:
     %tmp_load.8 = load i64 %tmp_alloca.5
     ret %tmp_load.8
 }
 
 function Array$int$init() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %managed = param ptr 1
     memset %tmp_param 0 40
@@ -108,7 +108,7 @@ entry:
 }
 
 function Array$int$first() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %self = param ptr 1
     %tmp_fieldptr = getfieldptr ptr %self 8
@@ -116,15 +116,15 @@ entry:
     %tmp_load = load i64 %tmp_fieldptr.1
     %tmp_const = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
-    br.cond %tmp_icmp @block1 @block2
-then:
+    br.cond %tmp_icmp @then$empty_1 @end$empty_2
+then$empty_1:
     %tmp_const.1 = const.i64 i64 0
     %tmp_const.2 = const.i64 i64 1
     store %tmp_param %tmp_const.2
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_param 8
     store %tmp_fieldptr.2 %tmp_const.1
     ret %tmp_param
-end:
+end$empty_2:
     %tmp_fieldptr.3 = getfieldptr ptr %self 8
     %tmp_const.3 = const.i64 i64 0
     %tmp_load.1 = load ptr %tmp_fieldptr.3

@@ -20,7 +20,7 @@ end 'main'
 ExitCode: 99
 ---
 function mayFail() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %succeed = param i64 1
     %succeed.1 = alloca ptr
@@ -28,15 +28,15 @@ entry:
     %tmp_load = load i64 %succeed.1
     %tmp_const = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const
-    br.cond %tmp_icmp @block1 @block2
-then:
+    br.cond %tmp_icmp @then$check_1 @end$check_2
+then$check_1:
     %tmp_const.1 = const.i64 i64 0
     %tmp_const.2 = const.i64 i64 1
     store %tmp_param %tmp_const.2
     %tmp_fieldptr = getfieldptr ptr %tmp_param 8
     store %tmp_fieldptr %tmp_const.1
     ret %tmp_param
-end:
+end$check_2:
     %tmp_const.3 = const.i64 i64 42
     %tmp_const.4 = const.i64 i64 0
     store %tmp_param %tmp_const.4
@@ -46,7 +46,7 @@ end:
 }
 
 function main() -> i64 {
-entry:
+entry_0:
     %tmp_alloca = alloca.sized ptr 16
     %tmp_const = const.i64 i64 0
     %tmp_call = call ptr @mayFail(%tmp_alloca, %tmp_const)
@@ -54,8 +54,8 @@ entry:
     %tmp_const.1 = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.1
     %tmp_alloca.1 = alloca ptr
-    br.cond %tmp_icmp @block1 @block2
-try_success:
+    br.cond %tmp_icmp @try_success_1 @if_try_else_2
+try_success_1:
     %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
     %tmp_load.1 = load i64 %tmp_fieldptr
     store %tmp_alloca.1 %tmp_load.1
@@ -64,9 +64,9 @@ try_success:
     store %tmp_alloca.2 %tmp_load.2
     %tmp_load.3 = load i64 %tmp_alloca.2
     ret %tmp_load.3
-if_try_else:
-    br @block3
-try_merge:
+if_try_else_2:
+    br @try_merge_3
+try_merge_3:
     %tmp_const.2 = const.i64 i64 99
     %tmp_alloca.3 = alloca ptr
     store %tmp_alloca.3 %tmp_const.2

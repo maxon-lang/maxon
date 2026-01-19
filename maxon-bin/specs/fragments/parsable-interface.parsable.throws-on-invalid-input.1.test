@@ -25,7 +25,7 @@ end 'main'
 ExitCode: 42
 ---
 function main() -> i64 {
-entry:
+entry_0:
     %tmp_alloca = alloca.sized ptr 16
     %tmp_alloca.1 = alloca.sized ptr 32
     %tmp_const = const.i64 i64 0
@@ -46,18 +46,18 @@ entry:
     %tmp_const.2 = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.2
     %v = alloca.sized ptr 8
-    br.cond %tmp_icmp @block1 @block2
-try_success:
+    br.cond %tmp_icmp @try_success_1 @try_otherwise_block_2
+try_success_1:
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca 8
     memcpy %v %tmp_fieldptr.4 8
-    br @block3
-try_otherwise_block:
+    br @try_merge_3
+try_otherwise_block_2:
     %tmp_const.3 = const.i64 i64 42
     %tmp_alloca.4 = alloca ptr
     store %tmp_alloca.4 %tmp_const.3
     %tmp_load.1 = load i64 %tmp_alloca.4
     ret %tmp_load.1
-try_merge:
+try_merge_3:
     %tmp_fieldptr.5 = getfieldptr ptr %v 0
     %tmp_load.2 = load i64 %tmp_fieldptr.5
     %tmp_alloca.5 = alloca ptr
@@ -67,21 +67,21 @@ try_merge:
 }
 
 function Value$fromString() -> ptr {
-entry:
+entry_0:
     %tmp_param = param ptr 0
     %input = param ptr 1
     %tmp_call = call i64 @String$byteLength(%input)
     %tmp_const = const.i64 i64 0
     %tmp_icmp = icmp.eq i64 %tmp_call %tmp_const
-    br.cond %tmp_icmp @block1 @block2
-then:
+    br.cond %tmp_icmp @then$check_1 @end$check_2
+then$check_1:
     %tmp_const.1 = const.i64 i64 1
     %tmp_const.2 = const.i64 i64 1
     store %tmp_param %tmp_const.2
     %tmp_fieldptr = getfieldptr ptr %tmp_param 8
     store %tmp_fieldptr %tmp_const.1
     ret %tmp_param
-end:
+end$check_2:
     %tmp_const.3 = const.i64 i64 0
     store %tmp_param %tmp_const.3
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_param 8

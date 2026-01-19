@@ -943,8 +943,8 @@ pub const Module = struct {
         for (self.functions.items) |func| {
             try writer.print("function {s}() -> {s} {{\n", .{ func.name, func.return_type.toIrName() });
 
-            for (func.blocks.items) |block| {
-                try writer.print("{s}:\n", .{block.name});
+            for (func.blocks.items, 0..) |block, block_idx| {
+                try writer.print("{s}_{d}:\n", .{ block.name, block_idx });
                 debug.ir("Block {s} has {d} instructions", .{ block.name, block.instructions.items.len });
 
                 for (block.instructions.items, 0..) |inst, idx| {
@@ -1046,7 +1046,13 @@ fn printInstruction(writer: anytype, inst: Instruction, func: *const Function) !
             .immediate_i32 => |i| try writer.print(" {d}", .{i}),
             .immediate_i64 => |i| try writer.print(" {d}", .{i}),
             .immediate_f64 => |f| try writer.print(" {d}", .{f}),
-            .block_ref => |b| try writer.print(" @block{d}", .{b}),
+            .block_ref => |b| {
+                if (b < func.blocks.items.len) {
+                    try writer.print(" @{s}_{d}", .{ func.blocks.items[b].name, b });
+                } else {
+                    try writer.print(" @block{d}", .{b});
+                }
+            },
             .func_name => |n| try writer.print(" @{s}", .{n}),
             .call_args => |args| {
                 try writer.writeAll("(");

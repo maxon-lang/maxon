@@ -27,7 +27,7 @@ end 'main'
 ExitCode: 30
 ---
 function test() -> i64 {
-entry:
+entry_0:
     %a = param i64 0
     %a.1 = alloca ptr
     store %a.1 %a
@@ -45,13 +45,13 @@ entry:
     %tmp_load = load i64 %a.1
     %tmp_const.2 = const.i64 i64 1
     %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.2
-    br.cond %tmp_icmp @block1 @block4
-then:
+    br.cond %tmp_icmp @then$outer_1 @end$outer_4
+then$outer_1:
     %tmp_load.1 = load i64 %b.1
     %tmp_const.3 = const.i64 i64 1
     %tmp_icmp.1 = icmp.eq i64 %tmp_load.1 %tmp_const.3
-    br.cond %tmp_icmp.1 @block2 @block3
-then:
+    br.cond %tmp_icmp.1 @then$inner_2 @end$inner_3
+then$inner_2:
     %temp = alloca.sized ptr 16
     memcpy %temp %pos 16
     %tmp_fieldptr.2 = getfieldptr ptr %temp 0
@@ -60,14 +60,14 @@ then:
     store %tmp_alloca.4 %tmp_load.2
     %tmp_load.3 = load i64 %tmp_alloca.4
     ret %tmp_load.3
-end:
+end$inner_3:
     %tmp_fieldptr.3 = getfieldptr ptr %pos 8
     %tmp_load.4 = load i64 %tmp_fieldptr.3
     %tmp_alloca.5 = alloca ptr
     store %tmp_alloca.5 %tmp_load.4
     %tmp_load.5 = load i64 %tmp_alloca.5
     ret %tmp_load.5
-end:
+end$outer_4:
     %tmp_fieldptr.4 = getfieldptr ptr %pos 0
     %tmp_load.6 = load i64 %tmp_fieldptr.4
     %tmp_fieldptr.5 = getfieldptr ptr %pos 8
@@ -80,7 +80,7 @@ end:
 }
 
 function main() -> i64 {
-entry:
+entry_0:
     %tmp_const = const.i64 i64 2
     %tmp_const.1 = const.i64 i64 2
     %tmp_call = call i64 @test(%tmp_const, %tmp_const.1)
