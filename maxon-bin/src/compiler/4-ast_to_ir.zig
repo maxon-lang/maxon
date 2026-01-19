@@ -8954,6 +8954,7 @@ pub const AstToIr = struct {
             } else .{ .primitive = .int };
 
             const is_struct_type = success_type == .struct_type;
+            const is_enum_with_av = success_type == .enum_type and success_type.enum_type.has_associated_values;
 
             // Use helper to get struct size with automatic monomorphization
             const struct_size: i32 = if (is_struct_type) blk: {
@@ -8965,8 +8966,11 @@ pub const AstToIr = struct {
 
             // Allocate result buffer BEFORE creating new blocks (in current/entry block)
             // so it's visible to both success and error paths
+            // For enums with associated values, allocate as ptr type since the value IS a pointer
             const result_ptr = if (is_struct_type)
                 (try self_ir.func().emitAllocaSized(struct_size)).raw()
+            else if (is_enum_with_av)
+                (try self_ir.func().emitAlloca(.ptr)).raw()
             else
                 (try self_ir.func().emitAlloca(.i64)).raw();
 
@@ -9005,7 +9009,10 @@ pub const AstToIr = struct {
                 // that gets abandoned - there's no explicit cleanup of its String value.
                 // By not increfing, the refcount stays correct for the single remaining reference.
             } else {
-                const success_value = try self_ir.func().emitLoad(value_ptr.raw(), .i64);
+                // Use the correct IR type for the success value
+                // Enums with associated values are stored as pointers
+                const load_type = success_type.toIrType();
+                const success_value = try self_ir.func().emitLoad(value_ptr.raw(), load_type);
                 try self_ir.func().emitStore(result_ptr, success_value);
             }
 
@@ -9094,7 +9101,8 @@ pub const AstToIr = struct {
             const final_value = if (self.is_struct_type)
                 self.result_ptr
             else
-                try self_ir.func().emitLoad(self.result_ptr, .i64);
+                // Use the correct IR type - enums with associated values are pointers
+                try self_ir.func().emitLoad(self.result_ptr, self.success_type.toIrType());
 
             return .{ .value = final_value, .ty = self.success_type };
         }
@@ -9720,6 +9728,251 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Emit EnumType.fromName("caseName", ...args) - converts string name to enum value.
+    /// Returns error union: enum value on success, EnumError.invalidName on failure.
+    /// For compile-time known names, validates and emits direct construction.
+    /// For runtime names, generates comparison chain against all member names.
+    fn emitEnumFromName(
+        self: *AstToIr,
+        enum_info: *const types.EnumTypeInfo,
+        arg_exprs: []const ast.Expression,
+    ) ConvertError!TypedValue {
+        if (arg_exprs.len == 0) {
+            self.reportError(.E011, "fromName requires at least 1 argument (the case name)", @src());
+            return error.WrongArgumentCount;
+        }
+
+        const num_members = enum_info.member_names_ordered.len;
+        if (num_members == 0) {
+            self.reportError(.E003, "empty enum has no cases", @src());
+            return error.SemanticError;
+        }
+
+        // Check if the name argument is a compile-time string literal
+        if (arg_exprs[0] == .string_literal) {
+            const literal_name = arg_exprs[0].string_literal;
+            return self.emitEnumFromNameCompileTime(enum_info, literal_name, arg_exprs[1..]);
+        }
+
+        // Runtime case - generate comparison chain
+        return self.emitEnumFromNameRuntime(enum_info, arg_exprs);
+    }
+
+    /// Emit fromName with compile-time known case name.
+    /// Validates the case exists and argument count matches, then emits direct construction.
+    fn emitEnumFromNameCompileTime(
+        self: *AstToIr,
+        enum_info: *const types.EnumTypeInfo,
+        case_name: []const u8,
+        associated_args: []const ast.Expression,
+    ) ConvertError!TypedValue {
+        // Validate the case exists
+        const case_info = enum_info.case_info.get(case_name) orelse {
+            self.reportError(.E034, case_name, @src());
+            return error.SemanticError;
+        };
+
+        // Validate associated value count
+        if (associated_args.len != case_info.associated_values.len) {
+            const msg = std.fmt.allocPrint(self.allocator, "case '{s}' expects {d} argument(s), got {d}", .{
+                case_name,
+                case_info.associated_values.len,
+                associated_args.len,
+            }) catch "wrong argument count";
+            self.reportError(.E011, msg, @src());
+            return error.WrongArgumentCount;
+        }
+
+        // Convert associated value arguments
+        var converted_args = try self.allocator.alloc(ast.Expression, associated_args.len);
+        defer self.allocator.free(converted_args);
+        for (associated_args, 0..) |arg, i| {
+            converted_args[i] = arg;
+        }
+
+        // Use convertEnumCase to construct the enum value
+        const enum_value = try self.convertEnumCase(.{
+            .enum_name = enum_info.name,
+            .case_name = case_name,
+            .args = converted_args,
+        });
+
+        // Wrap in error union (success case)
+        const eu_ptr = try self.func().emitAllocaSized(ErrorUnion.size());
+        try ErrorUnion.storeSuccess(self.func(), eu_ptr.raw(), enum_value.value);
+
+        return .{
+            .value = eu_ptr.raw(),
+            .ty = .{ .error_union_type = .{
+                .success_type = if (enum_info.has_associated_values) .ptr else .i64,
+                .success_enum_type = enum_info.name,
+                .error_enum_type = "EnumError",
+            } },
+        };
+    }
+
+    /// Emit fromName with runtime string comparison.
+    /// Generates a chain of comparisons against all member names.
+    /// Only works for cases without associated values (returns error for AV cases at runtime).
+    fn emitEnumFromNameRuntime(
+        self: *AstToIr,
+        enum_info: *const types.EnumTypeInfo,
+        arg_exprs: []const ast.Expression,
+    ) ConvertError!TypedValue {
+        // For runtime names, we only support cases without associated values
+        // Additional args are not supported in runtime mode
+        if (arg_exprs.len > 1) {
+            self.reportError(.E011, "runtime fromName only supports cases without associated values", @src());
+            return error.WrongArgumentCount;
+        }
+
+        const num_members = enum_info.member_names_ordered.len;
+
+        // Allocate error union result: [tag: i64][value: i64]
+        const eu_ptr = try self.func().emitAllocaSized(ErrorUnion.size());
+
+        // Convert the name argument (String)
+        const name_typed = try self.convertExpression(arg_exprs[0]);
+
+        // Verify it's a String type
+        if (name_typed.ty != .struct_type or !std.mem.eql(u8, name_typed.ty.struct_type.name, "String")) {
+            self.reportError(.E006, "fromName argument must be a String", @src());
+            return error.TypeMismatch;
+        }
+
+        // Structure for n members:
+        // check0: if name == "member0" -> case0, else -> check1
+        // check1: if name == "member1" -> case1, else -> check2
+        // ...
+        // checkN-1: if name == "memberN-1" -> caseN-1, else -> error_case
+        // case0: store success(member0), br merge
+        // case1: store success(member1), br merge
+        // ...
+        // error_case: store error(EnumError.invalidName), br merge
+        // merge: return result
+
+        // For simplicity, we'll generate: check0 -> case0/check1, check1 -> case1/check2, ..., checkN-1 -> caseN-1/error, merge
+        // We need: N check blocks (reuse entry for check0), N case blocks, 1 error block, 1 merge block
+
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+        // Create all blocks
+        var case_blocks = try self.allocator.alloc(u32, num_members);
+        defer self.allocator.free(case_blocks);
+        var check_blocks = try self.allocator.alloc(u32, num_members);
+        defer self.allocator.free(check_blocks);
+
+        // First check is in entry block
+        check_blocks[0] = entry_block_idx;
+
+        // Create remaining check blocks (check1, check2, ...)
+        for (1..num_members) |i| {
+            check_blocks[i] = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("fn_check");
+        }
+
+        // Create case blocks
+        for (0..num_members) |i| {
+            case_blocks[i] = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("fn_case");
+        }
+
+        // Create error and merge blocks
+        const error_block: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("fn_error");
+        const merge_block: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("fn_merge");
+
+        // Defer all new blocks (everything except entry)
+        const total_new_blocks = (num_members - 1) + num_members + 2; // checks (minus entry) + cases + error + merge
+        var deferred = try DeferredBlocks.init(self.allocator, total_new_blocks);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, total_new_blocks);
+
+        // Now emit code in entry block (check0)
+        // We're in entry block now
+        for (0..num_members) |i| {
+            // Create string literal for this member name
+            const member_name = enum_info.member_names_ordered[i];
+            const member_string = try self.convertStringLiteral(member_name);
+
+            // Compare: name_typed.equals(member_string)
+            const is_match_result = try self.emitMethodCallWithIrArgs("String", "equals", &.{member_string.value}, name_typed.value);
+            const is_match = is_match_result.value;
+
+            // Conditional branch: match -> case[i], no match -> next_check or error
+            const next_block = if (i + 1 < num_members) check_blocks[i + 1] else error_block;
+            try self.func().emitBrCond(is_match, case_blocks[i], next_block);
+
+            // If not last check, restore next check block
+            if (i + 1 < num_members) {
+                // Restore check block i+1 (stored in reverse order)
+                // The blocks were stored: merge, error, case[n-1], ..., case[0], check[n-1], ..., check[1]
+                // Index 0 = merge, 1 = error, 2..n+1 = cases (reversed), n+2..2n = checks[n-1..1] (reversed)
+                const check_restore_idx = total_new_blocks - i - 1;
+                try deferred.restore(self, check_restore_idx);
+            }
+        }
+
+        // Emit case blocks - each stores success and branches to merge
+        for (0..num_members) |i| {
+            // Restore case block
+            const case_restore_idx = total_new_blocks - (num_members - 1) - 1 - i;
+            try deferred.restore(self, case_restore_idx);
+
+            const member_name = enum_info.member_names_ordered[i];
+            const case_info = enum_info.case_info.get(member_name).?;
+
+            // Check if this case has associated values - if so, store error instead
+            if (case_info.associated_values.len > 0) {
+                // This case requires associated values - store error
+                const error_tag = try self.func().emitConstI64(0); // EnumError.invalidName ordinal is 0
+                try ErrorUnion.storeError(self.func(), eu_ptr.raw(), error_tag);
+            } else {
+                // Store success: enum value is the tag
+                const tag_value = try self.func().emitConstI64(case_info.tag);
+
+                // For enums with associated values (but this case has none),
+                // we need to heap-allocate and store tag at offset 0
+                if (enum_info.has_associated_values) {
+                    const size_val = try self.func().emitConstI64(16);
+                    const heap_ptr = try self.func().emitHeapAlloc(size_val, "enum storage");
+                    try self.func().emitStore(heap_ptr.raw(), tag_value);
+                    try ErrorUnion.storeSuccess(self.func(), eu_ptr.raw(), heap_ptr.raw());
+                } else {
+                    try ErrorUnion.storeSuccess(self.func(), eu_ptr.raw(), tag_value);
+                }
+            }
+
+            // Branch to merge
+            try self.func().blocks.items[self.func().blocks.items.len - 1].instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = merge_block }, .none, .none },
+            });
+        }
+
+        // Emit error block
+        try deferred.restore(self, 1); // error block is index 1
+        const error_tag = try self.func().emitConstI64(0); // EnumError.invalidName ordinal is 0
+        try ErrorUnion.storeError(self.func(), eu_ptr.raw(), error_tag);
+        try self.func().blocks.items[self.func().blocks.items.len - 1].instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = merge_block }, .none, .none },
+        });
+
+        // Restore merge block
+        try deferred.restore(self, 0);
+
+        return .{
+            .value = eu_ptr.raw(),
+            .ty = .{ .error_union_type = .{
+                .success_type = if (enum_info.has_associated_values) .ptr else .i64,
+                .success_enum_type = enum_info.name,
+                .error_enum_type = "EnumError",
+            } },
+        };
+    }
+
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
         // Check for direct .name access on enum member construction (e.g., EnumType.Member.name)
         if (std.mem.eql(u8, faccess.field_name, "name")) {
@@ -9779,6 +10032,17 @@ pub const AstToIr = struct {
                             return .{ .value = (try self.func().emitStringConstant(null_term_val, try self.sourceLabel())).raw(), .ty = enum_ty };
                         },
                         .none, .int => {},
+                    }
+                    // For enums with associated values, ALL cases (even those without their own
+                    // associated values) must be heap-allocated pointers with [tag: i64][payload...]
+                    if (enum_info.has_associated_values) {
+                        // Allocate minimum 16 bytes for tag + potential payload
+                        const size_val = try self.func().emitConstI64(16);
+                        const heap_ptr = try self.func().emitHeapAlloc(size_val, "enum storage");
+                        // Store the tag at offset 0
+                        const tag_val = try self.func().emitConstI64(member_value);
+                        try self.func().emitStore(heap_ptr.raw(), tag_val);
+                        return .{ .value = heap_ptr.raw(), .ty = enum_ty };
                     }
                     return .{ .value = try self.func().emitConstI64(member_value), .ty = enum_ty };
                 }
@@ -11148,9 +11412,16 @@ pub const AstToIr = struct {
             self.allocator.free(qualified_name);
 
             if (self.type_map.get(base_name)) |type_info| {
-                // Check if this is an enum case construction (e.g., Container.value(42))
+                // Check if this is an enum type
                 if (type_info == .enum_type) {
                     const enum_info = type_info.enum_type;
+
+                    // Check for fromName static method
+                    if (std.mem.eql(u8, mcall.method_name, "fromName")) {
+                        self.setMethodLocation(mcall);
+                        return self.emitEnumFromName(&enum_info, mcall.args);
+                    }
+
                     // Check if method_name is an enum case with associated values
                     if (enum_info.case_info.get(mcall.method_name)) |case_info| {
                         if (case_info.associated_values.len > 0) {

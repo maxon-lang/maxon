@@ -1,0 +1,70 @@
+// Test: enums.fromName-associated-compile-time.1
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function main() returns int
+    var c = try Container.fromName("value", 42) otherwise Container.empty
+    match c 'check'
+        value(n) then return n
+        empty then return 0
+    end 'check'
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry_0:
+    %tmp_const = const.i64 i64 16
+    %tmp_heap = heap.alloc ptr %tmp_const tag="enum storage"
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_heap %tmp_const.1
+    %tmp_const.2 = const.i64 i64 42
+    %tmp_fieldptr = getfieldptr ptr %tmp_heap 8
+    store %tmp_fieldptr %tmp_const.2
+    %tmp_alloca.1 = alloca.sized ptr 16
+    %tmp_const.3 = const.i64 i64 0
+    store %tmp_alloca.1 %tmp_const.3
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.1 8
+    store %tmp_fieldptr.1 %tmp_heap
+    %tmp_const.4 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_const.3 %tmp_const.4
+    %tmp_alloca.2 = alloca ptr
+    br.cond %tmp_icmp @try_success_1 @try_default_2
+try_success_1:
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.1 8
+    %tmp_load.2 = load ptr %tmp_fieldptr.2
+    store %tmp_alloca.2 %tmp_load.2
+    br @try_merge_3
+try_default_2:
+    %tmp_const.5 = const.i64 i64 16
+    %tmp_heap.1 = heap.alloc ptr %tmp_const.5 tag="enum storage"
+    %tmp_const.6 = const.i64 i64 0
+    store %tmp_heap.1 %tmp_const.6
+    store %tmp_alloca.2 %tmp_heap.1
+    br @try_merge_3
+try_merge_3:
+    %tmp_load.3 = load ptr %tmp_alloca.2
+    br @match_check_4
+match_check_4:
+    %tmp_const.9 = const.i64 i64 1
+    %tmp_load.6 = load i64 %tmp_load.3
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.6 %tmp_const.9
+    br.cond %tmp_icmp.1 @match_body_5 @match_check_6
+match_body_5:
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_load.3 8
+    %tmp_load.7 = load i64 %tmp_fieldptr.3
+    ret %tmp_load.7
+match_check_6:
+    %tmp_const.10 = const.i64 i64 0
+    %tmp_load.10 = load i64 %tmp_load.3
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.10 %tmp_const.10
+    br.cond %tmp_icmp.2 @match_body_7 @match_merge_8
+match_body_7:
+    %tmp_const.11 = const.i64 i64 0
+    ret %tmp_const.11
+match_merge_8:
+}
+
+---

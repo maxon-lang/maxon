@@ -1,0 +1,190 @@
+// Test: enums.fromName-simple-failure.1
+enum Direction
+    north
+    south
+end 'Direction'
+
+function getInvalidName() returns String
+    return "invalid"
+end 'getInvalidName'
+
+function main() returns int
+    var name = getInvalidName()
+    var dir = try Direction.fromName(name) otherwise Direction.north
+    if dir == Direction.north 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function getInvalidName() -> ptr {
+entry_0:
+    %tmp_param = param ptr 0
+    %tmp_alloca = alloca.sized ptr 32
+    %tmp_strconst = const.string ptr <8 bytes> label="line:8"
+    store %tmp_alloca %tmp_strconst
+    %tmp_const = const.i64 i64 7
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 16
+    store %tmp_fieldptr.1 %tmp_const
+    %tmp_const.1 = const.i32 i32 3
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca 24
+    store.i32 %tmp_fieldptr.2 %tmp_const.1
+    %tmp_const.2 = const.i32 i32 0
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca 28
+    store.i32 %tmp_fieldptr.3 %tmp_const.2
+    %tmp_alloca.1 = alloca.sized ptr 40
+    %tmp_call = call ptr @String$init(%tmp_alloca.1, %tmp_alloca)
+    memcpy %tmp_param %tmp_alloca.1 40
+    ret %tmp_param
+}
+
+function main() -> i64 {
+entry_0:
+    %name = alloca.sized ptr 40
+    %tmp_call = call ptr @getInvalidName(%name)
+    %tmp_alloca.1 = alloca.sized ptr 16
+    %tmp_alloca.2 = alloca.sized ptr 32
+    %tmp_strconst = const.string ptr <6 bytes> label="line:13"
+    store %tmp_alloca.2 %tmp_strconst
+    %tmp_const = const.i64 i64 5
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 8
+    store %tmp_fieldptr %tmp_const
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.2 16
+    store %tmp_fieldptr.1 %tmp_const
+    %tmp_const.1 = const.i32 i32 3
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.2 24
+    store.i32 %tmp_fieldptr.2 %tmp_const.1
+    %tmp_const.2 = const.i32 i32 0
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.2 28
+    store.i32 %tmp_fieldptr.3 %tmp_const.2
+    %tmp_alloca.3 = alloca.sized ptr 40
+    %tmp_call.1 = call ptr @String$init(%tmp_alloca.3, %tmp_alloca.2)
+    %tmp_call.2 = call i64 @String$equals(%name, %tmp_alloca.3)
+    br.cond %tmp_call.2 @fn_case_2 @fn_check_1
+fn_check_1:
+    %tmp_alloca.4 = alloca.sized ptr 32
+    %tmp_strconst.1 = const.string ptr <6 bytes> label="line:13"
+    store %tmp_alloca.4 %tmp_strconst.1
+    %tmp_const.3 = const.i64 i64 5
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_alloca.4 8
+    store %tmp_fieldptr.4 %tmp_const.3
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.4 16
+    store %tmp_fieldptr.5 %tmp_const.3
+    %tmp_const.4 = const.i32 i32 3
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_alloca.4 24
+    store.i32 %tmp_fieldptr.6 %tmp_const.4
+    %tmp_const.5 = const.i32 i32 0
+    %tmp_fieldptr.7 = getfieldptr ptr %tmp_alloca.4 28
+    store.i32 %tmp_fieldptr.7 %tmp_const.5
+    %tmp_alloca.5 = alloca.sized ptr 40
+    %tmp_call.3 = call ptr @String$init(%tmp_alloca.5, %tmp_alloca.4)
+    %tmp_call.4 = call i64 @String$equals(%name, %tmp_alloca.5)
+    br.cond %tmp_call.4 @fn_case_3 @fn_error_4
+fn_case_2:
+    %tmp_const.6 = const.i64 i64 0
+    %tmp_const.7 = const.i64 i64 0
+    store %tmp_alloca.1 %tmp_const.7
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.1 8
+    store %tmp_fieldptr.8 %tmp_const.6
+    br @fn_merge_5
+fn_case_3:
+    %tmp_const.8 = const.i64 i64 1
+    %tmp_const.9 = const.i64 i64 0
+    store %tmp_alloca.1 %tmp_const.9
+    %tmp_fieldptr.9 = getfieldptr ptr %tmp_alloca.1 8
+    store %tmp_fieldptr.9 %tmp_const.8
+    br @fn_merge_5
+fn_error_4:
+    %tmp_const.10 = const.i64 i64 0
+    %tmp_const.11 = const.i64 i64 1
+    store %tmp_alloca.1 %tmp_const.11
+    %tmp_fieldptr.10 = getfieldptr ptr %tmp_alloca.1 8
+    store %tmp_fieldptr.10 %tmp_const.10
+    br @fn_merge_5
+fn_merge_5:
+    %tmp_load = load i64 %tmp_alloca.1
+    %tmp_const.12 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_load %tmp_const.12
+    %tmp_alloca.6 = alloca ptr
+    br.cond %tmp_icmp @try_success_6 @try_default_7
+try_success_6:
+    %tmp_fieldptr.11 = getfieldptr ptr %tmp_alloca.1 8
+    %tmp_load.1 = load i64 %tmp_fieldptr.11
+    store %tmp_alloca.6 %tmp_load.1
+    br @try_merge_8
+try_default_7:
+    %tmp_const.13 = const.i64 i64 0
+    store %tmp_alloca.6 %tmp_const.13
+    br @try_merge_8
+try_merge_8:
+    %tmp_load.2 = load i64 %tmp_alloca.6
+    %tmp_const.14 = const.i64 i64 0
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.2 %tmp_const.14
+    br.cond %tmp_icmp.1 @then$check_9 @end$check_13
+then$check_9:
+    %tmp_const.15 = const.i64 i64 1
+    %tmp_alloca.8 = alloca ptr
+    store %tmp_alloca.8 %tmp_const.15
+    %tmp_fieldptr.12 = getfieldptr ptr %name 24
+    %tmp_load.4 = load i32 %tmp_fieldptr.12
+    %tmp_const.16 = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load.4 %tmp_const.16
+    %tmp_const.17 = const.i32 i32 1
+    %tmp_icmp.2 = icmp.eq i32 %tmp_band %tmp_const.17
+    br.cond %tmp_icmp.2 @decref_10 @decref_end_12
+decref_10:
+    %tmp_load.5 = load ptr %name
+    %tmp_const.18 = const.i64 i64 8
+    %tmp_sub = sub ptr %tmp_load.5 %tmp_const.18
+    %tmp_load.6 = load i64 %tmp_sub
+    %tmp_const.19 = const.i64 i64 1
+    %tmp_sub.1 = sub i64 %tmp_load.6 %tmp_const.19
+    store %tmp_sub %tmp_sub.1
+    %tmp_const.20 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.eq i64 %tmp_sub.1 %tmp_const.20
+    br.cond %tmp_icmp.3 @decref_free_11 @decref_end_12
+decref_free_11:
+    %tmp_load.7 = load ptr %name
+    %tmp_sub.2 = sub ptr %tmp_load.7 %tmp_const.18
+    heap.free %tmp_sub.2 tag="string cleanup"
+    br @decref_end_12
+decref_end_12:
+    %tmp_load.8 = load i64 %tmp_alloca.8
+    ret %tmp_load.8
+end$check_13:
+    %tmp_const.21 = const.i64 i64 0
+    %tmp_alloca.9 = alloca ptr
+    store %tmp_alloca.9 %tmp_const.21
+    %tmp_fieldptr.13 = getfieldptr ptr %name 24
+    %tmp_load.9 = load i32 %tmp_fieldptr.13
+    %tmp_const.22 = const.i32 i32 3
+    %tmp_band.1 = band i32 %tmp_load.9 %tmp_const.22
+    %tmp_const.23 = const.i32 i32 1
+    %tmp_icmp.4 = icmp.eq i32 %tmp_band.1 %tmp_const.23
+    br.cond %tmp_icmp.4 @decref_14 @decref_end_16
+decref_14:
+    %tmp_load.10 = load ptr %name
+    %tmp_const.24 = const.i64 i64 8
+    %tmp_sub.3 = sub ptr %tmp_load.10 %tmp_const.24
+    %tmp_load.11 = load i64 %tmp_sub.3
+    %tmp_const.25 = const.i64 i64 1
+    %tmp_sub.4 = sub i64 %tmp_load.11 %tmp_const.25
+    store %tmp_sub.3 %tmp_sub.4
+    %tmp_const.26 = const.i64 i64 0
+    %tmp_icmp.5 = icmp.eq i64 %tmp_sub.4 %tmp_const.26
+    br.cond %tmp_icmp.5 @decref_free_15 @decref_end_16
+decref_free_15:
+    %tmp_load.12 = load ptr %name
+    %tmp_sub.5 = sub ptr %tmp_load.12 %tmp_const.24
+    heap.free %tmp_sub.5 tag="string cleanup"
+    br @decref_end_16
+decref_end_16:
+    %tmp_load.13 = load i64 %tmp_alloca.9
+    ret %tmp_load.13
+}
+
+---

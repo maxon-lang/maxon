@@ -244,7 +244,8 @@ pub const ValueType = union(enum) {
     pub fn toIrType(self: ValueType) ir.Type {
         return switch (self) {
             .primitive => |p| p.toIrType(),
-            .enum_type => .i64,
+            // Enums with associated values are stored as pointers to heap-allocated tag+payload
+            .enum_type => |e| if (e.has_associated_values) .ptr else .i64,
             .struct_type => .ptr,
             .error_union_type => .ptr, // Error unions are pointers to discriminated union structures
             .function_type => .ptr, // Function pointers are always pointers

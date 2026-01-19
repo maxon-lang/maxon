@@ -1246,3 +1246,185 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: fromName-simple-success -->
+```maxon
+enum Direction
+    north
+    south
+    east
+    west
+end 'Direction'
+
+function main() returns int
+    var dir = try Direction.fromName("south") otherwise Direction.north
+    if dir == Direction.south 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromName-simple-failure -->
+```maxon
+enum Direction
+    north
+    south
+end 'Direction'
+
+function getInvalidName() returns String
+    return "invalid"
+end 'getInvalidName'
+
+function main() returns int
+    var name = getInvalidName()
+    var dir = try Direction.fromName(name) otherwise Direction.north
+    if dir == Direction.north 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromName-int-backed -->
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+function main() returns int
+    var status = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok
+    if status.rawValue == 404 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromName-dynamic -->
+```maxon
+enum Color
+    red
+    green
+    blue
+end 'Color'
+
+function getName() returns String
+    return "green"
+end 'getName'
+
+function main() returns int
+    var name = getName()
+    var color = try Color.fromName(name) otherwise Color.red
+    if color == Color.green 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromName-associated-compile-time -->
+```maxon
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function main() returns int
+    var c = try Container.fromName("value", 42) otherwise Container.empty
+    match c 'check'
+        value(n) then return n
+        empty then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: fromName-associated-empty-case -->
+```maxon
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function main() returns int
+    var c = try Container.fromName("empty") otherwise Container.value(99)
+    match c 'check'
+        empty then return 1
+        value(_n) then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.fromName-invalid-case -->
+```maxon
+enum Direction
+    north
+    south
+end 'Direction'
+
+function main() returns int
+    let _d = try Direction.fromName("invalid_case_name_that_does_not_exist") otherwise Direction.north
+    return 0
+end 'main'
+```
+```stderr
+E034
+```
+
+<!-- test: error.fromName-wrong-arg-count -->
+```maxon
+enum Container
+    value(n int)
+end 'Container'
+
+function main() returns int
+    let _c = try Container.fromName("value") otherwise Container.value(0)
+    return 0
+end 'main'
+```
+```stderr
+E011
+```
+
+<!-- test: fromName-associated-runtime-empty -->
+```maxon
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function getName() returns String
+    return "empty"
+end 'getName'
+
+function main() returns int
+    var name = getName()
+    var c = try Container.fromName(name) otherwise Container.value(99)
+    match c 'check'
+        empty then return 1
+        value(_n) then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
