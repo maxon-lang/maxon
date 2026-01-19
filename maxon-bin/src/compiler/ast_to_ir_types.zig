@@ -469,6 +469,8 @@ pub const EnumTypeInfo = struct {
     has_associated_values: bool = false,
     /// Maximum payload size for associated values (used for memory layout)
     max_payload_size: i32 = 0,
+    /// Ordered array of member names for .name lookup (index = tag value)
+    member_names_ordered: []const []const u8 = &.{},
     decl_line: u32 = 0,
     decl_column: u32 = 0,
     source_file: ?[]const u8 = null,

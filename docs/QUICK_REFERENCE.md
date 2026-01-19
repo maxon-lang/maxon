@@ -177,11 +177,16 @@ enum HttpStatus
     notFound = 404
 end 'HttpStatus'
 var code = HttpStatus.ok.rawValue  // 200
+var n = HttpStatus.ok.name         // "ok"
 
 // String-backed
 enum Planet
     earth = "Earth"
+    mars = "Mars"
 end 'Planet'
+var p = Planet.mars
+var raw = p.rawValue   // "Mars" (backing value)
+var name = p.name      // "mars" (case name)
 
 // Associated values
 enum Result
@@ -400,3 +405,27 @@ try c.asciiValue()                   // throws CharacterError
 | `Indexed uses E` | `get(i) -> E throws ArrayError`, `set(i, value)` |
 | `Error` | (marker for throwable enums) |
 
+## Command Line
+
+### Commands
+```bash
+maxon compile <file.maxon>   # Compile single file → file.exe
+maxon build                  # Build project in current directory
+maxon spec-test              # Run spec fragment tests
+maxon lsp-server             # Start LSP server for IDE integration
+```
+
+### Options (compile/build)
+| Option | Description |
+|--------|-------------|
+| `-v` | Verbose/debug output |
+| `--emit-ir` | Output IR to `<source>.ir` |
+| `--emit-asm` | Output assembly to `<source>.asm` |
+| `--track-memory` | Runtime memory tracking (allocs, moves, refcounts) |
+| `--track-registers` | Compile-time register/stack allocation debug info |
+
+### Test Options (spec-test)
+| Option | Description |
+|--------|-------------|
+| `--filter <pattern>` | Run tests matching pattern |
+| `--verbose` | Detailed test output |

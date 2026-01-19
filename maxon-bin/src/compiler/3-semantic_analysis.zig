@@ -1756,12 +1756,16 @@ pub const SemanticAnalyzer = struct {
                 break :blk func_info.return_value_type;
             },
             .field_access => |fa| blk: {
-                // Handle enum rawValue access
+                // Handle enum rawValue/name access
                 const base_ty = self.inferExpressionType(fa.base.*) orelse break :blk null;
                 if (base_ty == .enum_type) {
                     if (std.mem.eql(u8, fa.field_name, "rawValue")) {
                         // Get enum backing type directly from pointer
                         break :blk base_ty.enum_type.rawValueType();
+                    }
+                    if (std.mem.eql(u8, fa.field_name, "name")) {
+                        // .name always returns String (the enum case name)
+                        break :blk self.typeNameToValueType("String");
                     }
                 }
                 // For struct field access, look up the field type directly from pointer

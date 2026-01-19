@@ -406,6 +406,22 @@ var status = HttpStatus.ok
 var code = status.rawValue    // 200
 ```
 
+Access the case name with `.name`:
+
+```maxon
+var status = HttpStatus.notFound
+var n = status.name       // "notFound"
+var code = status.rawValue    // 404
+```
+
+For string-backed enums, `.rawValue` returns the backing value while `.name` returns the case name:
+
+```maxon
+var p = Planet.mars
+var rawName = p.rawValue  // "Mars" (backing value)
+var caseName = p.name     // "mars" (case name)
+```
+
 ### Associated Values
 
 Cases can carry additional data called associated values:

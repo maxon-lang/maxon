@@ -1,0 +1,319 @@
+// Maxon Compiler - Parser (Stage 2)
+// Parses tokens into an Abstract Syntax Tree
+
+// ============================================================================
+// AST Node Types
+// ============================================================================
+
+/// Types supported in basic.maxon
+export enum TypeKind
+	typeInt
+	typeVoid
+end 'TypeKind'
+
+/// Expression kinds
+export enum ExprKind
+	intLiteral
+end 'ExprKind'
+
+/// Statement kinds
+export enum StmtKind
+	returnStmt
+end 'StmtKind'
+
+/// An expression node
+export type Expr
+	var kind ExprKind
+	var intValue int      // for intLiteral
+	var line int
+	var column int
+
+	export static function createIntLiteral(value int, line int, column int) returns Expr
+		return {kind: ExprKind.intLiteral, intValue: value, line: line, column: column}
+	end 'createIntLiteral'
+end 'Expr'
+
+/// A statement node
+export type Stmt
+	var kind StmtKind
+	var expr Expr         // for returnStmt
+	var line int
+	var column int
+
+	export static function createReturn(expr Expr, line int, column int) returns Stmt
+		return {kind: StmtKind.returnStmt, expr: expr, line: line, column: column}
+	end 'createReturn'
+end 'Stmt'
+
+export typealias StmtArray is Array with Stmt
+
+/// A function declaration
+export type FunctionDecl
+	var name String
+	var returnType TypeKind
+	var body StmtArray
+	var line int
+	var column int
+
+	export static function create(name String, returnType TypeKind, body StmtArray, line int, column int) returns FunctionDecl
+		return {name: name, returnType: returnType, body: body, line: line, column: column}
+	end 'create'
+end 'FunctionDecl'
+
+export typealias FunctionArray is Array with FunctionDecl
+
+/// The root AST node representing a complete program
+export type Program
+	var functions FunctionArray
+
+	export static function create() returns Program
+		return {functions: FunctionArray{}}
+	end 'create'
+
+	export function addFunction(fn FunctionDecl)
+		functions.push(fn)
+	end 'addFunction'
+end 'Program'
+
+// ============================================================================
+// Parser
+// ============================================================================
+
+/// Parser state for building AST from tokens
+export type Parser
+	var tokens TokenArray
+	var pos int
+	var sourceFile String
+	var errors ErrorCollector
+
+	export static function init(tokens TokenArray, sourceFile String, errors ErrorCollector) returns Parser
+		return {tokens: tokens, pos: 0, sourceFile: sourceFile, errors: errors}
+	end 'init'
+
+	/// Parse all tokens into a Program AST
+	export function parse() returns Program
+		var program = Program.create()
+
+		skipNewlines()
+
+		while not isAtEnd() 'parseLoop'
+			if check(TokenType.keywordFunction) 'isFunc'
+				if let fn = try parseFunction() 'gotFunc'
+					program.addFunction(fn)
+				end 'gotFunc'
+			end 'isFunc' else 'notFunc'
+				error(ErrorCode.E2001, message: "expected 'function' declaration")
+				advance()
+			end 'notFunc'
+			skipNewlines()
+		end 'parseLoop'
+
+		return program
+	end 'parse'
+
+	/// Parse a function declaration
+	/// function NAME() returns TYPE
+	///     BODY
+	/// end 'NAME'
+	function parseFunction() returns FunctionDecl?
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		// 'function' keyword
+		if not consume(TokenType.keywordFunction) 'noFunc'
+			error(ErrorCode.E2001, message: "expected 'function'")
+			return nil
+		end 'noFunc'
+
+		// function name
+		if not check(TokenType.identifier) 'noName'
+			error(ErrorCode.E2004, message: "expected function name")
+			return nil
+		end 'noName'
+		let name = currentToken().text
+		advance()
+
+		// '(' ')'
+		if not consume(TokenType.lparen) 'noLparen'
+			error(ErrorCode.E2001, message: "expected '('")
+			return nil
+		end 'noLparen'
+		if not consume(TokenType.rparen) 'noRparen'
+			error(ErrorCode.E2001, message: "expected ')'")
+			return nil
+		end 'noRparen'
+
+		// 'returns' TYPE
+		if not consume(TokenType.keywordReturns) 'noReturns'
+			error(ErrorCode.E2001, message: "expected 'returns'")
+			return nil
+		end 'noReturns'
+
+		let returnType = parseType()
+
+		// newline before body
+		if not consumeNewline() 'noNewline'
+			error(ErrorCode.E2003, message: "expected newline after function signature")
+			return nil
+		end 'noNewline'
+
+		// Parse body statements
+		var body = StmtArray{}
+		skipNewlines()
+
+		while not isAtEnd() and not check(TokenType.keywordEnd) 'bodyLoop'
+			if let stmt = try parseStatement() 'gotStmt'
+				body.push(stmt)
+			end 'gotStmt'
+			skipNewlines()
+		end 'bodyLoop'
+
+		// 'end' 'NAME'
+		if not consume(TokenType.keywordEnd) 'noEnd'
+			error(ErrorCode.E2001, message: "expected 'end'")
+			return nil
+		end 'noEnd'
+
+		if not check(TokenType.charLiteral) 'noBlockId'
+			error(ErrorCode.E2005, message: "expected block identifier after 'end'")
+			return nil
+		end 'noBlockId'
+
+		let blockId = currentToken().text
+		if blockId != name 'mismatch'
+			error(ErrorCode.E2006, message: "block identifier '{blockId}' does not match function name '{name}'")
+		end 'mismatch'
+		advance()
+
+		consumeNewline()
+
+		return FunctionDecl.create(name, returnType: returnType, body: body, line: startLine, column: startCol)
+	end 'parseFunction'
+
+	/// Parse a type (only 'int' for now)
+	function parseType() returns TypeKind
+		if check(TokenType.keywordInt) 'isInt'
+			advance()
+			return TypeKind.typeInt
+		end 'isInt'
+		error(ErrorCode.E2001, message: "expected type")
+		return TypeKind.typeVoid
+	end 'parseType'
+
+	/// Parse a statement
+	function parseStatement() returns Stmt?
+		if check(TokenType.keywordReturn) 'isReturn'
+			return parseReturnStatement()
+		end 'isReturn'
+		error(ErrorCode.E2001, message: "expected statement")
+		advance()
+		return nil
+	end 'parseStatement'
+
+	/// Parse a return statement: return EXPR
+	function parseReturnStatement() returns Stmt?
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		if not consume(TokenType.keywordReturn) 'noReturn'
+			return nil
+		end 'noReturn'
+
+		if let expr = try parseExpression() 'gotExpr'
+			if not consumeNewline() 'noNewline'
+				error(ErrorCode.E2003, message: "expected newline after return statement")
+			end 'noNewline'
+			return Stmt.createReturn(expr, line: startLine, column: startCol)
+		end 'gotExpr'
+
+		error(ErrorCode.E2002, message: "expected expression after 'return'")
+		return nil
+	end 'parseReturnStatement'
+
+	/// Parse an expression (only integer literals for now)
+	function parseExpression() returns Expr?
+		if check(TokenType.integer) 'isInt'
+			let tok = currentToken()
+			let value = parseInt(tok.text)
+			advance()
+			return Expr.createIntLiteral(value, line: tok.line, column: tok.column)
+		end 'isInt'
+		return nil
+	end 'parseExpression'
+
+	/// Parse an integer string to int
+	function parseInt(text String) returns int
+		var result = 0
+		var idx = text.startIndex()
+		while let c = try text.getCharacter(at: idx) 'parseLoop'
+			if c >= '0' and c <= '9' 'isDigit'
+				result = result * 10 + (c.asInt() - 48)
+			end 'isDigit'
+			if let nextIdx = try text.indexAfter(idx) 'advance'
+				idx = nextIdx
+			end 'advance' else 'done'
+				break 'parseLoop'
+			end 'done'
+		end 'parseLoop'
+		return result
+	end 'parseInt'
+
+	// ========================================================================
+	// Token Helpers
+	// ========================================================================
+
+	function isAtEnd() returns bool
+		return check(TokenType.eof)
+	end 'isAtEnd'
+
+	function currentToken() returns Token
+		if pos < tokens.count() 'inBounds'
+			return try tokens.get(pos) otherwise ignore
+		end 'inBounds'
+		// Return EOF token if out of bounds
+		return Token.create(TokenType.eof, text: "", line: 0, column: 0)
+	end 'currentToken'
+
+	function check(tokenType TokenType) returns bool
+		return currentToken().tokenType == tokenType
+	end 'check'
+
+	function advance() returns Token
+		let tok = currentToken()
+		if not isAtEnd() 'notEnd'
+			pos = pos + 1
+		end 'notEnd'
+		return tok
+	end 'advance'
+
+	function consume(tokenType TokenType) returns bool
+		if check(tokenType) 'matches'
+			advance()
+			return true
+		end 'matches'
+		return false
+	end 'consume'
+
+	function consumeNewline() returns bool
+		if check(TokenType.newline) 'isNewline'
+			advance()
+			return true
+		end 'isNewline'
+		// Also accept EOF as end of statement
+		if check(TokenType.eof) 'isEof'
+			return true
+		end 'isEof'
+		return false
+	end 'consumeNewline'
+
+	function skipNewlines()
+		while check(TokenType.newline) 'skipLoop'
+			advance()
+		end 'skipLoop'
+	end 'skipNewlines'
+
+	function error(code ErrorCode, message String)
+		let tok = currentToken()
+		errors.addErrorAt(code, message: message, file: sourceFile, line: tok.line, column: tok.column)
+	end 'error'
+end 'Parser'

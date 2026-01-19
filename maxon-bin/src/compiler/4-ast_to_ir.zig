@@ -1975,6 +1975,12 @@ pub const AstToIr = struct {
         // Store enum declaration for conformance lookup
         try self.enum_decl_map.put(self.allocator, enum_decl.name, enum_decl);
 
+        // Build ordered member names array for .name lookup
+        const member_names_ordered = try self.allocator.alloc([]const u8, enum_decl.members.len);
+        for (enum_decl.members, 0..) |member, i| {
+            member_names_ordered[i] = member.name;
+        }
+
         try self.type_map.put(self.allocator, enum_decl.name, .{
             .enum_type = .{
                 .name = enum_decl.name,
@@ -1984,6 +1990,7 @@ pub const AstToIr = struct {
                 .is_error = is_error,
                 .has_associated_values = has_associated_values,
                 .max_payload_size = max_payload_size,
+                .member_names_ordered = member_names_ordered,
                 .decl_line = enum_decl.block.start_line,
                 .decl_column = enum_decl.block.start_column,
                 .source_file = self.source_file,
@@ -9388,6 +9395,113 @@ pub const AstToIr = struct {
         }
     }
 
+    /// Emit code to get the string name of an enum value at runtime.
+    /// Uses chained BranchBuilder for conditional selection.
+    fn emitEnumName(self: *AstToIr, enum_value: ir.Value, enum_info: *const types.EnumTypeInfo) ConvertError!TypedValue {
+        const num_members = enum_info.member_names_ordered.len;
+        if (num_members == 0) {
+            self.reportError(.E003, "empty enum has no name", @src());
+            return error.SemanticError;
+        }
+
+        // Get the String type info
+        const string_type = try self.typeNameToValueType(types.STRING);
+        if (string_type != .struct_type) {
+            self.reportError(.E006, "String", @src());
+            return error.UnknownType;
+        }
+        const string_struct = string_type.struct_type;
+
+        // Allocate storage for the result String
+        const result_ptr = try self.func().emitAllocaSized(string_struct.size);
+
+        // Single member - no branching needed
+        if (num_members == 1) {
+            try self.emitStringLiteralIntoPtr(result_ptr.raw(), enum_info.member_names_ordered[0]);
+            return .{ .value = result_ptr.raw(), .ty = string_type };
+        }
+
+        // For n members, we need n-1 branches.
+        // For simple/int-backed enums: compare against tag ordinals (0, 1, 2, ...)
+        // For string/char/float-backed enums: compare against backing values
+        try self.emitEnumNameChain(enum_value, enum_info, result_ptr.raw(), 0);
+
+        return .{ .value = result_ptr.raw(), .ty = string_type };
+    }
+
+    /// Recursive helper to emit chained if-else for .name
+    fn emitEnumNameChain(
+        self: *AstToIr,
+        enum_value: ir.Value,
+        enum_info: *const types.EnumTypeInfo,
+        result_ptr: ir.Value,
+        index: usize,
+    ) ConvertError!void {
+        const num_members = enum_info.member_names_ordered.len;
+        const member_name = enum_info.member_names_ordered[index];
+
+        // Base case: last member (no more branching needed)
+        if (index == num_members - 1) {
+            try self.emitStringLiteralIntoPtr(result_ptr, member_name);
+            return;
+        }
+
+        // Get the comparison value for this member based on backing type
+        const cmp_value = try self.emitEnumMemberCompareValue(enum_info, member_name, index);
+        const is_match = try self.func().emitBinaryOp(.icmp_eq, enum_value, cmp_value, .i64);
+
+        // Create branch: if match -> emit this member's string, else -> check next
+        var branch = try BranchBuilder.init(self, is_match, "sv_then", "sv_else", "sv_merge");
+        defer branch.deinit();
+
+        // Then block: emit string for this member
+        try self.emitStringLiteralIntoPtr(result_ptr, member_name);
+
+        // Switch to else block
+        try branch.switchToElse(true);
+
+        // Else block: recursively handle remaining members
+        try self.emitEnumNameChain(enum_value, enum_info, result_ptr, index + 1);
+
+        // Switch to merge block
+        try branch.switchToMerge(true);
+    }
+
+    /// Emit the comparison value for a specific enum member based on backing type
+    fn emitEnumMemberCompareValue(
+        self: *AstToIr,
+        enum_info: *const types.EnumTypeInfo,
+        member_name: []const u8,
+        index: usize,
+    ) ConvertError!ir.Value {
+        const tag = enum_info.members.get(member_name) orelse @as(i64, @intCast(index));
+
+        return switch (enum_info.backing) {
+            .none, .int => try self.func().emitConstI64(tag),
+            .float => |float_map| blk: {
+                const float_val = float_map.get(tag) orelse break :blk try self.func().emitConstI64(tag);
+                const f64_val = try self.func().emitConstF64(float_val);
+                break :blk try self.func().emitUnaryOp(.bitcast_f64_to_i64, f64_val, .i64);
+            },
+            .string => |string_map| blk: {
+                const string_val = string_map.get(tag) orelse break :blk try self.func().emitConstI64(tag);
+                const null_term_val = try self.allocator.alloc(u8, string_val.len + 1);
+                @memcpy(null_term_val[0..string_val.len], string_val);
+                null_term_val[string_val.len] = 0;
+                try self.module.trackString(null_term_val);
+                break :blk (try self.func().emitStringConstant(null_term_val)).raw();
+            },
+            .character => |char_map| blk: {
+                const char_val = char_map.get(tag) orelse break :blk try self.func().emitConstI64(tag);
+                const null_term_val = try self.allocator.alloc(u8, char_val.len + 1);
+                @memcpy(null_term_val[0..char_val.len], char_val);
+                null_term_val[char_val.len] = 0;
+                try self.module.trackString(null_term_val);
+                break :blk (try self.func().emitStringConstant(null_term_val)).raw();
+            },
+        };
+    }
+
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
         // Check for enum member access (e.g., Colors.Green)
         if (faccess.base.* == .identifier) {
@@ -9436,7 +9550,7 @@ pub const AstToIr = struct {
 
         const base = try self.convertExpression(faccess.base.*);
 
-        // Handle .rawValue for enum types
+        // Handle .rawValue and .name for enum types
         if (base.ty == .enum_type) {
             const enum_info = base.ty.enum_type;
             if (std.mem.eql(u8, faccess.field_name, "rawValue")) {
@@ -9446,6 +9560,9 @@ pub const AstToIr = struct {
                     .string => try self.emitStringOrCharFromPtr(base.value, false),
                     .character => try self.emitStringOrCharFromPtr(base.value, true),
                 };
+            }
+            if (std.mem.eql(u8, faccess.field_name, "name")) {
+                return try self.emitEnumName(base.value, enum_info);
             }
             std.debug.print("[AST->IR] convertFieldAccess: expected struct type for field '{s}'\n", .{faccess.field_name});
             self.reportError(.E006, faccess.field_name, @src());

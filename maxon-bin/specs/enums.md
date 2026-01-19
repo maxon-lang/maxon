@@ -119,6 +119,47 @@ var c = Color.green
 var ordinal = c.rawValue  // 1
 ```
 
+### name
+
+All enums have a `.name` property that returns the member's name as a String, regardless of the enum's backing type:
+
+```maxon
+enum Color
+    red
+    green
+    blue
+end 'Color'
+
+var c = Color.green
+var n = c.name  // "green"
+```
+
+This is different from `rawValue` for backed enums - `name` always returns the case name:
+
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+var s = HttpStatus.notFound
+var code = s.rawValue  // 404
+var n = s.name         // "notFound"
+```
+
+For string-backed enums, `rawValue` returns the backing value while `name` returns the case name:
+
+```maxon
+enum Planet
+    earth = "Earth"
+    mars = "Mars"
+end 'Planet'
+
+var p = Planet.mars
+var rawName = p.rawValue  // "Mars" (backing value)
+var caseName = p.name     // "mars" (case name)
+```
+
 ### Associated Values
 
 Cases can carry additional data called associated values:
@@ -1057,4 +1098,151 @@ end 'main'
 ```
 ```maxoncstderr
 error E032: specs/fragments/enums.error.mixed-backing-types.1.test:4:5: raw value type mismatch: 'expected int, got String'
+```
+
+<!-- test: name-simple -->
+```maxon
+enum Color
+    red
+    green
+    blue
+end 'Color'
+
+function main() returns int
+    var c = Color.green
+    var n = c.name
+    if n == "green" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: name-int-backed -->
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+function main() returns int
+    var s = HttpStatus.notFound
+    if s.name == "notFound" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: name-string-backed -->
+```maxon
+enum Planet
+    earth = "Earth"
+    mars = "Mars"
+end 'Planet'
+
+function main() returns int
+    var p = Planet.mars
+    // rawValue is "Mars", name is "mars"
+    if p.name == "mars" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: name-from-function -->
+```maxon
+enum Direction
+    north
+    south
+    east
+    west
+end 'Direction'
+
+function getName(d Direction) returns String
+    return d.name
+end 'getName'
+
+function main() returns int
+    var d = Direction.west
+    var n = getName(d)
+    if n == "west" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: name-reassign -->
+```maxon
+enum Status
+    pending
+    active
+    done
+end 'Status'
+
+function main() returns int
+    var s = Status.pending
+    s = Status.done
+    if s.name == "done" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: name-float-backed -->
+```maxon
+enum Weights
+    light = 1.5
+    medium = 2.5
+    heavy = 3.5
+end 'Weights'
+
+function main() returns int
+    var w = Weights.heavy
+    if w.name == "heavy" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: name-char-backed -->
+```maxon
+enum CardSuit
+    Hearts = 'H'
+    Diamonds = 'D'
+    Spades = 'S'
+end 'CardSuit'
+
+function main() returns int
+    var s = CardSuit.Diamonds
+    if s.name == "Diamonds" 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
 ```
