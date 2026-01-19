@@ -171,6 +171,7 @@ fn tryFoldConstant(inst: ir.Instruction, constants: *std.AutoHashMapUnmanaged(ir
         .const_i32,
         .const_f64,
         .const_string,
+        .const_data,
         .alloca,
         .alloca_sized,
         .alloca_dynamic,
@@ -431,9 +432,9 @@ fn handleOther(
                     op.* = .{ .call_args = new_args };
                 }
             },
-            // none, immediate_*, block_ref, func_name, elem_size, string_data, extern_func:
+            // none, immediate_*, block_ref, func_name, elem_size, string_data, etc:
             // These don't contain ir.Value references, so no propagation needed
-            .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .extern_func => {},
+            .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .data_label, .extern_func => {},
         }
     }
 
@@ -592,6 +593,7 @@ fn collectPointerMappings(func: *ir.Function, ctx: *DseContext) !void {
                     .const_i64,
                     .const_f64,
                     .const_string,
+                    .const_data,
                     .alloca,
                     .alloca_sized,
                     .alloca_dynamic,
@@ -750,6 +752,7 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                 .const_i64,
                 .const_f64,
                 .const_string,
+                .const_data,
                 .alloca,
                 .alloca_sized,
                 .alloca_dynamic,
@@ -884,9 +887,9 @@ fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
                             try used.put(allocator, arg, {});
                         }
                     },
-                    // none, immediate_*, block_ref, func_name, elem_size, string_data, extern_func:
+                    // none, immediate_*, block_ref, func_name, elem_size, string_data, etc:
                     // These don't reference ir.Value, so nothing to mark as used
-                    .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .extern_func => {},
+                    .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .data_label, .extern_func => {},
                 }
             }
         }
@@ -937,6 +940,7 @@ fn isDeadInstruction(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Va
         .const_i64,
         .const_f64,
         .const_string,
+        .const_data,
         .alloca,
         .alloca_sized,
         .alloca_dynamic,

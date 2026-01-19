@@ -1537,6 +1537,13 @@ pub const AstToIr = struct {
         return self.current_func.?;
     }
 
+    /// Create a source location label like "line:42"
+    pub fn sourceLabel(self: *AstToIr) ![]const u8 {
+        const label = try std.fmt.allocPrint(self.allocator, "line:{d}", .{self.current_line});
+        try self.module.trackString(label);
+        return label;
+    }
+
     // ------------------------------------------------------------------------
     // Registration (Types, Enums, Functions)
     // ------------------------------------------------------------------------
@@ -7928,7 +7935,7 @@ pub const AstToIr = struct {
         static_bytes[str_bytes.len] = 0;
         try self.module.trackString(static_bytes);
 
-        const static_ptr = try self.func().emitStringConstant(static_bytes);
+        const static_ptr = try self.func().emitStringConstant(static_bytes, try self.sourceLabel());
         const len = try self.func().emitConstI64(@intCast(str_bytes.len));
         return .{ .buffer = static_ptr, .len = len, .is_temp = false };
     }
@@ -8159,7 +8166,7 @@ pub const AstToIr = struct {
         const msg = try self.allocator.dupe(u8, msg_slice);
 
         // Emit string constant for the message (stored in data section)
-        const msg_ptr = try self.func().emitStringConstant(msg);
+        const msg_ptr = try self.func().emitStringConstant(msg, try self.sourceLabel());
         const msg_len = try self.func().emitConstI64(@intCast(msg.len));
 
         // Call __panic(msg_ptr, msg_len)
@@ -9443,7 +9450,8 @@ pub const AstToIr = struct {
     }
 
     /// Emit code to get the string name of an enum value at runtime.
-    /// Uses chained BranchBuilder for conditional selection.
+    /// For simple/int-backed enums: uses table lookup (O(1))
+    /// For string/char/float-backed enums: uses chained comparisons
     fn emitEnumName(self: *AstToIr, enum_value: ir.Value, enum_info: *const types.EnumTypeInfo) ConvertError!TypedValue {
         const num_members = enum_info.member_names_ordered.len;
         if (num_members == 0) {
@@ -9462,18 +9470,119 @@ pub const AstToIr = struct {
         // Allocate storage for the result String
         const result_ptr = try self.func().emitAllocaSized(string_struct.size);
 
-        // Single member - no branching needed
+        // Single member - no lookup needed
         if (num_members == 1) {
             try self.emitStringLiteralIntoPtr(result_ptr.raw(), enum_info.member_names_ordered[0]);
             return .{ .value = result_ptr.raw(), .ty = string_type };
         }
 
-        // For n members, we need n-1 branches.
-        // For simple/int-backed enums: compare against tag ordinals (0, 1, 2, ...)
-        // For string/char/float-backed enums: compare against backing values
-        try self.emitEnumNameChain(enum_value, enum_info, result_ptr.raw(), 0);
+        // For simple/int-backed enums, use table lookup (enum value is the index)
+        // For string/char/float-backed enums, fall back to chained comparisons
+        switch (enum_info.backing) {
+            .none, .int => try self.emitEnumNameTableLookup(enum_value, enum_info, result_ptr.raw()),
+            .string, .character, .float => try self.emitEnumNameChain(enum_value, enum_info, result_ptr.raw(), 0),
+        }
 
         return .{ .value = result_ptr.raw(), .ty = string_type };
+    }
+
+    /// Emit table-based lookup for enum .name (for simple/int-backed enums)
+    /// Uses rdata for both string data and offset/length table
+    fn emitEnumNameTableLookup(
+        self: *AstToIr,
+        enum_value: ir.Value,
+        enum_info: *const types.EnumTypeInfo,
+        result_ptr: ir.Value,
+    ) ConvertError!void {
+        const num_members = enum_info.member_names_ordered.len;
+
+        // Build string blob: all names concatenated with null terminators
+        // And offset/length table: array of (offset: i64, length: i64) pairs
+        var string_blob_size: usize = 0;
+        for (enum_info.member_names_ordered) |name| {
+            string_blob_size += name.len + 1; // +1 for null terminator
+        }
+
+        // Allocate and populate string blob
+        const string_blob = try self.allocator.alloc(u8, string_blob_size);
+        try self.module.trackString(string_blob);
+        var blob_offset: usize = 0;
+        for (enum_info.member_names_ordered) |name| {
+            @memcpy(string_blob[blob_offset .. blob_offset + name.len], name);
+            string_blob[blob_offset + name.len] = 0;
+            blob_offset += name.len + 1;
+        }
+
+        // Build offset/length table (16 bytes per entry: 8 for offset, 8 for length)
+        const entry_size: i32 = 16;
+        const table_size = num_members * @as(usize, @intCast(entry_size));
+        const table_data = try self.allocator.alloc(u8, table_size);
+        try self.module.trackString(table_data);
+
+        blob_offset = 0;
+        for (enum_info.member_names_ordered, 0..) |name, i| {
+            const entry_offset = i * @as(usize, @intCast(entry_size));
+            // Store offset as little-endian i64
+            const offset_bytes: [8]u8 = @bitCast(@as(i64, @intCast(blob_offset)));
+            @memcpy(table_data[entry_offset .. entry_offset + 8], &offset_bytes);
+            // Store length as little-endian i64
+            const len_bytes: [8]u8 = @bitCast(@as(i64, @intCast(name.len)));
+            @memcpy(table_data[entry_offset + 8 .. entry_offset + 16], &len_bytes);
+            blob_offset += name.len + 1;
+        }
+
+        // Emit const.data for both blobs (these go in rdata section)
+        const names_label = try std.fmt.allocPrint(self.allocator, "{s}.names", .{enum_info.name});
+        try self.module.trackString(names_label);
+        const table_label = try std.fmt.allocPrint(self.allocator, "{s}.name_offsets", .{enum_info.name});
+        try self.module.trackString(table_label);
+        const string_base_ptr = try self.func().emitConstData(string_blob, names_label);
+        const table_ptr = try self.func().emitConstData(table_data, table_label);
+
+        // Index into table: table_ptr + enum_value * 16
+        const entry_ptr = try self.func().emitGetElemPtr(table_ptr, enum_value, entry_size);
+
+        // Load offset from entry (at offset 0)
+        const offset_field = try self.func().emitGetFieldPtr(.{ .val = entry_ptr.val }, 0);
+        const str_offset = try self.func().emitLoad(offset_field.val, .i64);
+
+        // Load length from entry (at offset 8)
+        const len_field = try self.func().emitGetFieldPtr(.{ .val = entry_ptr.val }, 8);
+        const str_len = try self.func().emitLoad(len_field.val, .i64);
+
+        // Compute actual string pointer: string_base + offset
+        const str_ptr = try self.func().emitBinaryOp(.add, string_base_ptr.raw(), str_offset, .ptr);
+
+        // Now construct the String into result_ptr
+        // String layout: __ManagedMemory (32 bytes) + _iterPos (8 bytes)
+        // __ManagedMemory: _buffer (8) + _len (8) + _capacity (8) + _flags (4) + _parent_off (4)
+
+        // Store buffer pointer (offset 0)
+        const buf_field = try self.func().emitGetFieldPtr(.{ .val = result_ptr }, 0);
+        try self.func().emitStore(buf_field.val, str_ptr);
+
+        // Store length (offset 8)
+        const len_field_out = try self.func().emitGetFieldPtr(.{ .val = result_ptr }, 8);
+        try self.func().emitStore(len_field_out.val, str_len);
+
+        // Store capacity = length (offset 16)
+        const cap_field = try self.func().emitGetFieldPtr(.{ .val = result_ptr }, 16);
+        try self.func().emitStore(cap_field.val, str_len);
+
+        // Store flags = 3 (static, non-owning) (offset 24)
+        const flags_field = try self.func().emitGetFieldPtr(.{ .val = result_ptr }, 24);
+        const flags_val = try self.func().emitConstI32(3);
+        try self.func().emitStoreI32(flags_field.val, flags_val);
+
+        // Store parent_off = 0 (offset 28)
+        const parent_field = try self.func().emitGetFieldPtr(.{ .val = result_ptr }, 28);
+        const zero_i32 = try self.func().emitConstI32(0);
+        try self.func().emitStoreI32(parent_field.val, zero_i32);
+
+        // Store _iterPos = 0 (offset 32)
+        const iter_field = try self.func().emitGetFieldPtr(.{ .val = result_ptr }, 32);
+        const zero_i64 = try self.func().emitConstI64(0);
+        try self.func().emitStore(iter_field.val, zero_i64);
     }
 
     /// Emit chained if-else for .name using iterative approach
@@ -9598,7 +9707,7 @@ pub const AstToIr = struct {
                 @memcpy(null_term_val[0..string_val.len], string_val);
                 null_term_val[string_val.len] = 0;
                 try self.module.trackString(null_term_val);
-                break :blk (try self.func().emitStringConstant(null_term_val)).raw();
+                break :blk (try self.func().emitStringConstant(null_term_val, try self.sourceLabel())).raw();
             },
             .character => |char_map| blk: {
                 const char_val = char_map.get(tag) orelse break :blk try self.func().emitConstI64(tag);
@@ -9606,7 +9715,7 @@ pub const AstToIr = struct {
                 @memcpy(null_term_val[0..char_val.len], char_val);
                 null_term_val[char_val.len] = 0;
                 try self.module.trackString(null_term_val);
-                break :blk (try self.func().emitStringConstant(null_term_val)).raw();
+                break :blk (try self.func().emitStringConstant(null_term_val, try self.sourceLabel())).raw();
             },
         };
     }
@@ -9657,7 +9766,7 @@ pub const AstToIr = struct {
                             @memcpy(null_term_val[0..string_val.len], string_val);
                             null_term_val[string_val.len] = 0;
                             try self.module.trackString(null_term_val);
-                            return .{ .value = (try self.func().emitStringConstant(null_term_val)).raw(), .ty = enum_ty };
+                            return .{ .value = (try self.func().emitStringConstant(null_term_val, try self.sourceLabel())).raw(), .ty = enum_ty };
                         },
                         .character => |char_map| {
                             const char_val = char_map.get(member_value) orelse
@@ -9667,7 +9776,7 @@ pub const AstToIr = struct {
                             @memcpy(null_term_val[0..char_val.len], char_val);
                             null_term_val[char_val.len] = 0;
                             try self.module.trackString(null_term_val);
-                            return .{ .value = (try self.func().emitStringConstant(null_term_val)).raw(), .ty = enum_ty };
+                            return .{ .value = (try self.func().emitStringConstant(null_term_val, try self.sourceLabel())).raw(), .ty = enum_ty };
                         },
                         .none, .int => {},
                     }

@@ -251,6 +251,7 @@ pub const Instruction = struct {
         const_i64,
         const_f64,
         const_string, // string constant (pointer to data section)
+        const_data, // arbitrary constant data (pointer to data section)
 
         // Memory
         alloca,
@@ -356,6 +357,7 @@ pub const Instruction = struct {
                 .const_i64 => "const.i64",
                 .const_f64 => "const.f64",
                 .const_string => "const.string",
+                .const_data => "const.data",
                 .alloca => "alloca",
                 .alloca_sized => "alloca.sized",
                 .alloca_dynamic => "alloca.dynamic",
@@ -439,6 +441,7 @@ pub const Instruction = struct {
         elem_size: i32, // Element size for getelemptr
         string_data: []const u8, // String constant data
         alloc_tag: []const u8, // Tag for heap allocations (for tracking)
+        data_label: []const u8, // Label for const.data (for debugging)
         extern_func: struct { // External DLL function reference
             dll_name: []const u8,
             func_name: []const u8,
@@ -608,6 +611,7 @@ pub const Function = struct {
             .const_i64 => "tmp_const",
             .const_f64 => "tmp_fconst",
             .const_string => "tmp_strconst",
+            .const_data => "tmp_data",
             .alloca, .alloca_sized, .alloca_dynamic => "tmp_alloca",
             .load => "tmp_load",
             .store, .store_i8, .store_i32 => "tmp_store",
@@ -703,8 +707,14 @@ pub const Function = struct {
     }
 
     /// Emit a string constant (pointer to data section)
-    pub fn emitStringConstant(self: *Function, str: []const u8) !RawPtr {
-        const val = try self.emitWithResult(.const_string, .ptr, .{ .{ .string_data = str }, .none, .none });
+    pub fn emitStringConstant(self: *Function, str: []const u8, label: []const u8) !RawPtr {
+        const val = try self.emitWithResult(.const_string, .ptr, .{ .{ .string_data = str }, .{ .data_label = label }, .none });
+        return .{ .val = val };
+    }
+
+    /// Emit arbitrary constant data (pointer to data section)
+    pub fn emitConstData(self: *Function, data: []const u8, label: []const u8) !RawPtr {
+        const val = try self.emitWithResult(.const_data, .ptr, .{ .{ .string_data = data }, .{ .data_label = label }, .none });
         return .{ .val = val };
     }
 
@@ -1067,8 +1077,12 @@ fn printInstruction(writer: anytype, inst: Instruction, func: *const Function) !
                 try writer.writeAll(")");
             },
             .elem_size => |size| try writer.print(" elemsize={d}", .{size}),
-            .string_data => |str| try writer.print(" \"{s}\"", .{str}),
+            .string_data => |str| {
+                // Show size only, label shown separately
+                try writer.print(" <{d} bytes>", .{str.len});
+            },
             .alloc_tag => |tag| try writer.print(" tag=\"{s}\"", .{tag}),
+            .data_label => |label| try writer.print(" label=\"{s}\"", .{label}),
             .extern_func => |ef| try writer.print(" @\"{s}:{s}\"", .{ ef.dll_name, ef.func_name }),
         }
     }

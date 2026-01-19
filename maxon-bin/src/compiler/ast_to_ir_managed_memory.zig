@@ -469,7 +469,7 @@ pub fn emitManagedMemoryFromStaticBytes(self: *AstToIr, str_bytes: []const u8) !
         try self.module.trackString(static_bytes);
 
         // Get pointer to static string in .rdata section
-        const static_ptr = try self.func().emitStringConstant(static_bytes);
+        const static_ptr = try self.func().emitStringConstant(static_bytes, try self.sourceLabel());
 
         // Store static pointer as buffer
         try self.func().emitStore(managed_ptr.raw(), static_ptr.raw());

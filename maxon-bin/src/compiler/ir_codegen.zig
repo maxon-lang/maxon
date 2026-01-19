@@ -3088,6 +3088,7 @@ pub const IrCodegen = struct {
             .const_i64 => try self.genConst64(inst, inst.operands[0].immediate_i64, .i64),
             .const_f64 => try self.genConst64(inst, @bitCast(inst.operands[0].immediate_f64), .f64),
             .const_string => try self.genConstString(inst),
+            .const_data => try self.genConstData(inst),
             .alloca => try self.genAlloca(inst),
             .alloca_sized => try self.genAllocaSized(inst),
             .alloca_dynamic => try self.genAllocaDynamic(inst),
@@ -3204,6 +3205,46 @@ pub const IrCodegen = struct {
         try self.enc.movRbpOffsetRax(offset);
         try self.setValueLocation(result, .{ .stack = offset }, .ptr);
         // Mark as indirect so loadArgs loads the value (the string pointer) rather than LEA
+        try self.markIndirect(result);
+    }
+
+    fn genConstData(self: *IrCodegen, inst: ir.Instruction) !void {
+        const result = inst.result.?;
+        const data = inst.operands[0].string_data;
+
+        // Check if this data already exists (deduplication)
+        var string_index: usize = self.string_constants.items.len;
+        for (self.string_constants.items, 0..) |existing, idx| {
+            if (std.mem.eql(u8, existing.data, data)) {
+                string_index = idx;
+                break;
+            }
+        } else {
+            // Add new data to constants table
+            try self.string_constants.append(self.allocator, .{
+                .data = data,
+                .offset = 0, // Will be set after code generation
+            });
+        }
+
+        // Allocate stack slot for the pointer
+        const offset = self.allocStackSlots(1);
+
+        // Emit LEA with placeholder RIP-relative offset (will be patched later)
+        // LEA RAX, [RIP + disp32]
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x05 }); // LEA RAX, [RIP + disp32]
+        // Record patch location (current position is where disp32 goes)
+        try self.string_constant_patches.append(self.allocator, .{
+            .code_offset = self.code.items.len,
+            .string_index = string_index,
+        });
+        // Emit placeholder displacement
+        try self.enc.emit(&.{ 0x00, 0x00, 0x00, 0x00 });
+
+        // Store pointer to stack
+        try self.enc.movRbpOffsetRax(offset);
+        try self.setValueLocation(result, .{ .stack = offset }, .ptr);
+        // Mark as indirect so loadArgs loads the value (the data pointer) rather than LEA
         try self.markIndirect(result);
     }
 
