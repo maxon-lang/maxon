@@ -54,6 +54,23 @@ export type Calculator
 end 'Calculator'
 ```
 
+### Namespace Disambiguation
+
+When multiple modules export symbols with the same name, you must use qualified names to disambiguate:
+
+```text
+// If both math.maxon and string.maxon export 'add':
+var result1 = math.add(1, 2)        // Calls math.maxon's add
+var result2 = string.add("a", "b")  // Calls string.maxon's add
+```
+
+If you use an unqualified name that is ambiguous, the compiler will report an error:
+```text
+error E061: ambiguous symbol reference: 'add' - defined in 'math' and 'string', use 'math.add' or 'string.add'
+```
+
+Note: When there's no collision, unqualified names continue to work normally.
+
 ## Tests
 
 <!-- test: export-function-basic -->
@@ -120,4 +137,102 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: export-typealias-basic -->
+```maxon
+export typealias IntArray is Array with int
+
+function main() returns int
+    var arr = IntArray{}
+    arr.push(42)
+    return try arr.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: export-typealias-in-type-field -->
+```maxon
+export typealias IntArray is Array with int
+
+type Container
+    export var items IntArray
+
+    static function create() returns Self
+        return {items: IntArray{}}
+    end 'create'
+
+    function add(n int)
+        items.push(n)
+    end 'add'
+
+    function sum() returns int
+        var total = 0
+        for item in items 'loop'
+            total = total + item
+        end 'loop'
+        return total
+    end 'sum'
+end 'Container'
+
+function main() returns int
+    var c = Container.create()
+    c.add(20)
+    c.add(22)
+    return c.sum()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: export-typealias-as-return-type -->
+```maxon
+export typealias IntArray is Array with int
+
+function makeArray() returns IntArray
+    var arr = IntArray{}
+    arr.push(42)
+    return arr
+end 'makeArray'
+
+function main() returns int
+    var arr = makeArray()
+    return try arr.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: non-export-typealias-in-same-file -->
+```maxon
+typealias IntArray is Array with int
+
+function main() returns int
+    var arr = IntArray{}
+    arr.push(42)
+    return try arr.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.typealias-with-unknown-element-type -->
+```maxon
+typealias BadArray is Array with UnknownType
+
+type Container
+    var items BadArray
+end 'Container'
+
+function main() returns int
+    return 0
+end 'main'
+```
+```stderr
+error E006: unknown type: 'UnknownType'
 ```

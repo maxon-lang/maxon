@@ -532,6 +532,8 @@ pub const FuncInfo = struct {
     decl_line: u32 = 0,
     decl_column: u32 = 0,
     is_external: bool = false, // true for external/stdlib functions (param type names are allocated)
+    source_module: ?[]const u8 = null, // Module name for disambiguation (e.g., "math" from "math.maxon")
+    ir_name: ?[]const u8 = null, // Actual IR function name (for qualified names, this is the unqualified name)
 };
 
 /// Pending method info for lazy generation of monomorphized type methods
@@ -559,6 +561,7 @@ pub const ExternalFuncSignature = struct {
     return_value_type: ?ExternalValueType = null, // Full return type info (for error unions, etc.)
     is_exported: bool = false, // Whether this function is exported from its module
     source_path: ?[]const u8 = null, // Source file path (to distinguish stdlib vs user)
+    source_module: ?[]const u8 = null, // Module name derived from source_path (for disambiguation)
     param_types: []const ExternalParamType = &.{}, // Parameter types for type checking
     doc_comment: ?[]const u8 = null, // Doc comment (/// or /** */) from source
 };
@@ -571,6 +574,7 @@ pub const ExternalTypeInfo = struct {
     type_decl: *const ast.TypeDecl,
     is_exported: bool = false, // Whether this type is exported from its module
     source_path: ?[]const u8 = null, // Source file path (to distinguish stdlib vs user)
+    source_module: ?[]const u8 = null, // Module name derived from source_path (for disambiguation)
 };
 
 /// External interface info - for cross-module compilation

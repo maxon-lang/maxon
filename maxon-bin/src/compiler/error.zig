@@ -116,6 +116,8 @@ pub const ErrorCode = enum {
     E057, // throwing function requires try
     E058, // otherwise requires try
     E059, // redundant type annotation
+    E060, // type not exported
+    E061, // ambiguous symbol reference
 
     const Info = struct {
         code: []const u8,
@@ -177,6 +179,8 @@ pub const ErrorCode = enum {
         .{ .code = "E057", .message = "throwing function requires try" },
         .{ .code = "E058", .message = "otherwise requires try expression" },
         .{ .code = "E059", .message = "redundant type annotation" },
+        .{ .code = "E060", .message = "type not exported" },
+        .{ .code = "E061", .message = "ambiguous symbol reference" },
     };
 
     pub fn format(self: ErrorCode) []const u8 {

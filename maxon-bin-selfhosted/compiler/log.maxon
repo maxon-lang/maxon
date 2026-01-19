@@ -1,0 +1,49 @@
+// Maxon Compiler - Logging System
+// Simple logging with categories and verbosity levels
+
+/// Log categories for different compiler stages
+export enum LogCategory
+	lexer
+	parser
+	semantic
+	ir
+	optimizer
+	codegen
+	pe
+end 'LogCategory'
+
+/// Configuration for logging verbosity
+export type LogConfig
+	export var globalLevel int
+
+	/// Create a config with no logging (level 0)
+	export static function create() returns LogConfig
+		return {globalLevel: 0}
+	end 'create'
+
+	/// Create a config with a specific level
+	export static function withLevel(level int) returns LogConfig
+		return {globalLevel: level}
+	end 'withLevel'
+end 'LogConfig'
+
+/// Log a message if the level is enabled
+export function log(config LogConfig, category LogCategory, level int, message String)
+	if level <= config.globalLevel 'checkLevel'
+		let categoryName = getCategoryName(category)
+		print("[{categoryName}] {message}\n")
+	end 'checkLevel'
+end 'log'
+
+/// Get the string name of a category
+function getCategoryName(category LogCategory) returns String
+	return match category 'catName'
+		LogCategory.lexer gives "lexer"
+		LogCategory.parser gives "parser"
+		LogCategory.semantic gives "semantic"
+		LogCategory.ir gives "ir"
+		LogCategory.optimizer gives "optimizer"
+		LogCategory.codegen gives "codegen"
+		LogCategory.pe gives "pe"
+	end 'catName'
+end 'getCategoryName'

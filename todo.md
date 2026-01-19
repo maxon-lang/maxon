@@ -2,6 +2,8 @@
 You *Are* Going To Read It
 
 ## Priorities
+- return {errors: [], hasErrors: false} gives a confusing error
+- change "typealias foo is bar" to "typealias foo = bar"
 - check for conflicting symbols (especially typealias), exported and non-exported
 - self hosting features
 - debugging (speed up the dev process)
@@ -10,6 +12,8 @@ You *Are* Going To Read It
 - multiline string literals using multiple quotes
 
 ## TODO
+- iterators with index
+- 2 types of Stringable, formatted and not formatted
 - // Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
 - implement swift inspired stdlib File support
 - see if we can/should get rid of MIR arrays, and also strings use StaticArray

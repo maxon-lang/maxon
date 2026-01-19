@@ -26,12 +26,51 @@ end 'main'
 
 function compileCommand(args StringArray) returns int
 	if args.count() < 2 'noFile'
-		print("Usage: maxon compile <file.maxon>\n")
+		print("Usage: maxon compile <file.maxon> [options]\n")
+		print("\n")
+		print("Options:\n")
+		print("  --emit-ir        Output IR representation\n")
+		print("  --log=LEVEL      Enable debug logging (1-3)\n")
 		return 1
 	end 'noFile'
 
 	let sourceFile = try args.get(1) otherwise ignore
-	return compile(sourceFile)
+
+	// Parse options
+	var emitIr = false
+	var logConfig = LogConfig.create()
+
+	var i = 2
+	while i < args.count() 'parseOpts'
+		let arg = try args.get(i) otherwise ignore
+
+		if arg == "--emit-ir" 'isEmitIr'
+			emitIr = true
+		end 'isEmitIr'
+
+		if arg.startsWith("--log=") 'isLog'
+			// Extract the part after "--log="
+			let eqIdx = try arg.find("=") otherwise arg.startIndex()
+			let afterEq = try arg.indexAfter(eqIdx) otherwise eqIdx
+			let logArg = arg.slice(afterEq, endIndex: arg.endIndex())
+			// Simple level parsing (no parseInt available yet)
+			var level = 0
+			if logArg == "1" 'l1'
+				level = 1
+			end 'l1'
+			if logArg == "2" 'l2'
+				level = 2
+			end 'l2'
+			if logArg == "3" 'l3'
+				level = 3
+			end 'l3'
+			logConfig = LogConfig.withLevel(level)
+		end 'isLog'
+
+		i = i + 1
+	end 'parseOpts'
+
+	return compile(sourceFile, emitIr: emitIr, logConfig: logConfig)
 end 'compileCommand'
 
 function helpCommand() returns int
@@ -57,8 +96,14 @@ function printUsage() returns int
 	print("  version               Print version information\n")
 	print("  help                  Show this help message\n")
 	print("\n")
+	print("Compile Options:\n")
+	print("  --emit-ir             Output IR representation (.ir file)\n")
+	print("  --log=LEVEL           Enable debug logging (1-3)\n")
+	print("\n")
 	print("Examples:\n")
 	print("  maxon compile basic.maxon\n")
+	print("  maxon compile basic.maxon --emit-ir\n")
+	print("  maxon compile basic.maxon --log=2\n")
 	print("  maxon run basic.maxon\n")
 	return 0
 end 'printUsage'
@@ -76,7 +121,9 @@ function runCommand(args StringArray) returns int
 	end 'noFile'
 
 	if let sourceFile = try args.get(1) 'hasFile'
-		let result = compile(sourceFile)
+		// Run with default options (no IR emit, no logging)
+		let logConfig = LogConfig.create()
+		let result = compile(sourceFile, emitIr: false, logConfig: logConfig)
 		if result != 0 'compileFailed'
 			return result
 		end 'compileFailed'

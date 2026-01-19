@@ -1,89 +1,43 @@
 // Maxon Compiler - Main entry point
+// Orchestrates all compilation phases
 
-export function compile(sourceFile String) returns int
+/// Compile a Maxon source file
+/// Returns 0 on success, non-zero on error
+export function compile(sourceFile String, emitIr bool, logConfig LogConfig) returns int
 	let outputFile = sourceFile.replace(".maxon", ".exe")
+	let logLevel = logConfig.globalLevel
 
-	print("Source:  {sourceFile}\n")
-	print("Output:  {outputFile}\n")
-	print("\n")
+	print("Compiling: {sourceFile} -> {outputFile}\n")
+	if emitIr 'showIr'
+		print("  (emit IR: enabled)\n")
+	end 'showIr'
+	if logLevel > 0 'showLog'
+		print("  (log level: {logLevel})\n")
+	end 'showLog'
+
+	// Create shared error collector
+	var errors = ErrorCollector.create()
 
 	// Read source file
 	let source = try File.readText(sourceFile) otherwise 'noSource'
-	print("Error: Could not read source file: {sourceFile}\n")
-	return 1
+		print("Error: Could not read source file: {sourceFile}\n")
+		return 1
 	end 'noSource'
 
 	// Phase 1: Lexical Analysis
-	print("Phase 1: Lexing...\n")
-	let lexer = Lexer.init(source)
+	var lexer = Lexer.init(source, sourceFile: sourceFile, errors: errors)
 	let tokens = lexer.tokenize()
-	print("  Found {tokens.count()} tokens\n")
+	print("  Lexed {tokens.count()} tokens\n")
 
-	// Phase 2: Parsing
-	print("Phase 2: Parsing...\n")
-	let parser = Parser.create(tokens)
-	let program = try parser.parseProgram(sourceFile) otherwise (e) 'parseError'
-	print("Parse error: {e}\n")
-	return 1
-	end 'parseError'
+	// Check for lexer errors
+	if errors.hasAnyErrors() 'lexerErrors'
+		print("\nLexer errors:\n")
+		errors.printAll()
+		return 1
+	end 'lexerErrors'
 
-	print("  Parsed {program.functions.count()} functions\n")
-
-	// Phase 3: Semantic Analysis
-	print("Phase 3: Semantic Analysis...\n")
-	var analyzer = SemanticAnalyzer.create()
-	try analyzer.analyze(program) otherwise (e) 'semanticError'
-	print("Semantic error: {e}\n")
-	return 1
-	end 'semanticError'
-	print("  OK\n")
-
-	// Phase 4: Optimization
-	print("Phase 4: Optimization...\n")
-	let optimizer = createStandardOptimizer()
-	optimizer.optimize(program)
-	print("  Done\n")
-
-	// Phase 5: MIR Code Generation
-	print("Phase 5: Code Generation (MIR)...\n")
-	let codegen = CodeGen.create()
-	try codegen.generate(program) otherwise 'irError'
-	print("  Error: IR generation failed\n")
-	return 1
-	end 'irError'
-
-	let mirFile = sourceFile.replace(".maxon", ".mir")
-	try File.writeText(mirFile, codegen.output) otherwise 'noMirWrite'
-	print("  Error: Could not write MIR file\n")
-	return 1
-	end 'noMirWrite'
-	print("  Wrote {mirFile}\n")
-
-	// Phase 6: x86-64 Code Generation
-	print("Phase 6: Code Generation (x86-64)...\n")
-	print("  OK\n")
-
-	// Phase 7: PE Executable Generation
-	print("Phase 7: PE Executable Generation...\n")
-	var exeBuilder = CompleteExeBuilder.create()
-	print("  Building...\n")
-	exeBuilder.buildBasicExe()
-	print("  Extracting bytes...\n")
-	let exeBytes = exeBuilder.getBytes()
-	let exeSize = exeBuilder.size()
-	print("  OK ({exeSize} bytes)\n")
-
-	// Phase 8: Write Output File
-	print("Phase 8: Writing {outputFile}...\n")
-	try File.writeBinary(outputFile, exeBytes) otherwise 'noExeWrite'
-	print("  Error: Could not write executable\n")
-	return 1
-	end 'noExeWrite'
-	print("  OK\n")
-
-	print("\n")
-	print("Compilation successful!\n")
-	print("Output: {outputFile} ({exeSize} bytes)\n")
+	// Phase 2-7: Not yet implemented
+	print("  [Stages 2-7 not yet implemented]\n")
 
 	return 0
 end 'compile'

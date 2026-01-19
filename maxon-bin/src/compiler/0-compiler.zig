@@ -22,6 +22,16 @@ pub const CompileError = error{
     StdlibNotFound,
 };
 
+/// Derive module name from a source file path.
+/// E.g., "math.maxon" -> "math", "stdlib/fmt.maxon" -> "fmt"
+fn deriveModuleName(source_path: []const u8) []const u8 {
+    const basename = std.fs.path.basename(source_path);
+    if (std.mem.endsWith(u8, basename, ".maxon")) {
+        return basename[0 .. basename.len - 6];
+    }
+    return basename;
+}
+
 /// Represents a source file with its path and content
 pub const Source = struct {
     path: []const u8,
@@ -32,11 +42,16 @@ pub const Source = struct {
 pub const CompileResult = struct {
     error_info: ?compile_error.CompileError,
 
-    /// Free allocated error message if present
+    /// Free allocated error message and file path if present
     pub fn deinit(self: *CompileResult, allocator: std.mem.Allocator) void {
         if (self.error_info) |err| {
             if (err.message_allocated) {
                 allocator.free(err.message);
+            }
+            if (err.location.file_allocated) {
+                if (err.location.file) |file| {
+                    allocator.free(file);
+                }
             }
         }
     }
@@ -113,6 +128,7 @@ const PipelineOptions = struct {
     external_extensions: []const ast_to_ir.ExternalExtensionInfo = &.{},
     external_enums: []const ast_to_ir.ExternalEnumInfo = &.{},
     external_type_aliases: []const ast_to_ir.ExternalTypeAliasInfo = &.{},
+    all_type_aliases: []const ast_to_ir.ExternalTypeAliasInfo = &.{}, // For unexported alias error detection
     track_memory: bool = false,
     track_registers: bool = false,
     emit_ir: bool = false,
@@ -321,6 +337,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
                 options.external_extensions,
                 options.external_enums,
                 options.external_type_aliases,
+                options.all_type_aliases,
                 .{ .track_memory = options.track_memory },
                 &ir_error,
             ) catch |e| {
@@ -335,6 +352,7 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
                             }
                             if (err.location.file) |file| {
                                 result.error_info.?.location.file = parent_alloc.dupe(u8, file) catch file;
+                                result.error_info.?.location.file_allocated = true;
                             }
                         }
                     }
@@ -463,6 +481,11 @@ const ParsedSourcesInfo = struct {
         }
         return exported.toOwnedSlice(self.arena);
     }
+
+    /// Get all type aliases (for unexported alias error detection)
+    fn getAllTypeAliases(self: *ParsedSourcesInfo) []const ast_to_ir.ExternalTypeAliasInfo {
+        return self.type_aliases.items;
+    }
 };
 
 /// Parse sources and extract type/function/interface/enum info.
@@ -501,10 +524,13 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
         };
 
         // Extract metadata using arena - no need to free intermediate slices
+        const module_name = deriveModuleName(source.path);
+
         const type_info = ast_to_ir.extractTypeInfo(program, arena) catch continue;
         for (type_info) |t| {
             var t_with_path = t;
             t_with_path.source_path = source.path;
+            t_with_path.source_module = module_name;
             try info.types.append(arena, t_with_path);
         }
         // No free needed - arena handles it
@@ -513,6 +539,7 @@ fn parseSourcesForMetadata(info: *ParsedSourcesInfo, sources: []const Source, re
         for (func_sigs) |sig| {
             var sig_with_path = sig;
             sig_with_path.source_path = source.path;
+            sig_with_path.source_module = module_name;
             try info.funcs.append(arena, sig_with_path);
         }
         // No free needed - arena handles it
@@ -620,6 +647,7 @@ pub fn compileMultiple(
     // No defer free needed - arena handles it
     const exported_type_aliases = try info.getExportedTypeAliases();
     // No defer free needed - arena handles it
+    const all_type_aliases = info.getAllTypeAliases();
 
     // Phase 3: Compile and merge all sources
     // IR modules use arena - merged at the end, then codegen uses parent allocator for output
@@ -640,6 +668,7 @@ pub fn compileMultiple(
             .external_extensions = info.extensions.items,
             .external_enums = info.enums.items,
             .external_type_aliases = exported_type_aliases,
+            .all_type_aliases = all_type_aliases,
             .track_memory = options.track_memory,
             .track_registers = options.track_registers,
         });

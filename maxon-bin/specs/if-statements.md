@@ -183,3 +183,49 @@ end 'main'
 ```exitcode
 3
 ```
+
+<!-- test: if-statements.nested-if-with-scoped-string -->
+Variables declared inside if blocks go out of scope at the end of the block.
+Return after the if should not attempt to clean up those variables.
+```maxon
+function test(x int) returns int
+    if x == 0 'outer'
+        let inner = "hello"
+        if inner == "hello" 'checkInner'
+            return 1
+        end 'checkInner'
+    end 'outer'
+    return 42
+end 'test'
+
+function main() returns int
+    return test(5)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: if-statements.nested-if-with-multiple-returns -->
+Nested if statements with returns inside should work correctly.
+The outer if creates a variable that shouldn't be accessed after the if.
+```maxon
+function test(c int, next int) returns int
+    if c == 0 'maybePrefix'
+        if next == 1 'isHex'
+            return 1
+        end 'isHex'
+        if next == 2 'isBinary'
+            return 2
+        end 'isBinary'
+    end 'maybePrefix'
+    return 42
+end 'test'
+
+function main() returns int
+    return test(5, next: 0)
+end 'main'
+```
+```exitcode
+42
+```

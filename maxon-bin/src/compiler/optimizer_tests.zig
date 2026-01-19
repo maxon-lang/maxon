@@ -1332,3 +1332,224 @@ test "void throwing function sets success tag on implicit return" {
     // Verify program runs correctly
     try testing.expectEqual(@as(u8, 42), result.exit_code);
 }
+
+// ============================================================================
+// Namespace Disambiguation Tests (E061)
+// Tests for multi-file exports with the same symbol name
+// ============================================================================
+
+/// Helper to compile multiple sources and expect a compile error
+fn expectCompileError(sources: []const compiler.Source, expected_error_code: []const u8, allocator: std.mem.Allocator) !void {
+    const temp_exe = "..\\temp\\test_error.exe";
+
+    // Clean up any existing files
+    std.fs.cwd().deleteFile(temp_exe) catch {};
+
+    var compile_result: compiler.CompileResult = .{ .error_info = null };
+    defer compile_result.deinit(allocator);
+
+    const options = compiler.CompileOptions{
+        .track_memory = false,
+        .emit_ir = false,
+    };
+
+    compiler.compileMultiple(sources, temp_exe, options, allocator, &compile_result) catch {
+        // Check that we got the expected error code
+        if (compile_result.error_info) |error_info| {
+            if (error_info.code) |code| {
+                const code_str = code.format();
+                if (std.mem.indexOf(u8, code_str, expected_error_code) != null) {
+                    return; // Success - got expected error
+                }
+                std.debug.print("Expected error code {s}, got {s}\n", .{ expected_error_code, code_str });
+                return error.WrongErrorCode;
+            }
+            std.debug.print("Got error but no error code: {s}\n", .{error_info.message});
+        }
+        return error.NoErrorInfo;
+    };
+
+    // If we get here, compilation succeeded when it should have failed
+    std.fs.cwd().deleteFile(temp_exe) catch {};
+    return error.ExpectedCompileError;
+}
+
+/// Helper to compile multiple sources and run the executable
+fn compileMultipleAndRun(sources: []const compiler.Source, allocator: std.mem.Allocator) !u8 {
+    const temp_exe = "..\\temp\\test_multi.exe";
+
+    // Clean up any existing files
+    std.fs.cwd().deleteFile(temp_exe) catch {};
+
+    var compile_result: compiler.CompileResult = .{ .error_info = null };
+    defer compile_result.deinit(allocator);
+
+    const options = compiler.CompileOptions{
+        .track_memory = false,
+        .emit_ir = false,
+    };
+
+    try compiler.compileMultiple(sources, temp_exe, options, allocator, &compile_result);
+
+    // Run the executable
+    const result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{temp_exe},
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    // Clean up
+    std.fs.cwd().deleteFile(temp_exe) catch {};
+
+    return @intCast(result.term.Exited);
+}
+
+test "namespace disambiguation - E061 ambiguous symbol reference" {
+    const allocator = testing.allocator;
+
+    // Two files export a function with the same name
+    const lib_a =
+        \\export function helper() returns int
+        \\    return 10
+        \\end 'helper'
+    ;
+
+    const lib_b =
+        \\export function helper() returns int
+        \\    return 20
+        \\end 'helper'
+    ;
+
+    // Main file tries to call helper() without qualification - should fail with E061
+    const main_source =
+        \\function main() returns int
+        \\    return helper()
+        \\end 'main'
+    ;
+
+    const sources = [_]compiler.Source{
+        .{ .path = "main.maxon", .content = main_source },
+        .{ .path = "lib_a.maxon", .content = lib_a },
+        .{ .path = "lib_b.maxon", .content = lib_b },
+    };
+
+    try expectCompileError(&sources, "E061", allocator);
+}
+
+test "namespace disambiguation - qualified names resolve ambiguity" {
+    const allocator = testing.allocator;
+
+    // Two files export a function with the same name
+    const lib_a =
+        \\export function helper() returns int
+        \\    return 10
+        \\end 'helper'
+    ;
+
+    const lib_b =
+        \\export function helper() returns int
+        \\    return 20
+        \\end 'helper'
+    ;
+
+    // Main file uses qualified names to disambiguate
+    const main_source =
+        \\function main() returns int
+        \\    return lib_a.helper() + lib_b.helper()
+        \\end 'main'
+    ;
+
+    const sources = [_]compiler.Source{
+        .{ .path = "main.maxon", .content = main_source },
+        .{ .path = "lib_a.maxon", .content = lib_a },
+        .{ .path = "lib_b.maxon", .content = lib_b },
+    };
+
+    const exit_code = try compileMultipleAndRun(&sources, allocator);
+    // 10 + 20 = 30
+    try testing.expectEqual(@as(u8, 30), exit_code);
+}
+
+test "namespace disambiguation - single export needs no qualification" {
+    const allocator = testing.allocator;
+
+    // Only one file exports the function - no ambiguity
+    const lib_a =
+        \\export function getValue() returns int
+        \\    return 42
+        \\end 'getValue'
+    ;
+
+    const main_source =
+        \\function main() returns int
+        \\    return getValue()
+        \\end 'main'
+    ;
+
+    const sources = [_]compiler.Source{
+        .{ .path = "main.maxon", .content = main_source },
+        .{ .path = "lib_a.maxon", .content = lib_a },
+    };
+
+    const exit_code = try compileMultipleAndRun(&sources, allocator);
+    try testing.expectEqual(@as(u8, 42), exit_code);
+}
+
+test "namespace disambiguation - qualified name with single export" {
+    const allocator = testing.allocator;
+
+    // Qualified names work even when not strictly necessary
+    const lib_a =
+        \\export function getValue() returns int
+        \\    return 42
+        \\end 'getValue'
+    ;
+
+    const main_source =
+        \\function main() returns int
+        \\    return lib_a.getValue()
+        \\end 'main'
+    ;
+
+    const sources = [_]compiler.Source{
+        .{ .path = "main.maxon", .content = main_source },
+        .{ .path = "lib_a.maxon", .content = lib_a },
+    };
+
+    const exit_code = try compileMultipleAndRun(&sources, allocator);
+    try testing.expectEqual(@as(u8, 42), exit_code);
+}
+
+test "namespace disambiguation - different names no conflict" {
+    const allocator = testing.allocator;
+
+    // Different function names - no conflict
+    const lib_a =
+        \\export function funcA() returns int
+        \\    return 10
+        \\end 'funcA'
+    ;
+
+    const lib_b =
+        \\export function funcB() returns int
+        \\    return 20
+        \\end 'funcB'
+    ;
+
+    const main_source =
+        \\function main() returns int
+        \\    return funcA() + funcB()
+        \\end 'main'
+    ;
+
+    const sources = [_]compiler.Source{
+        .{ .path = "main.maxon", .content = main_source },
+        .{ .path = "lib_a.maxon", .content = lib_a },
+        .{ .path = "lib_b.maxon", .content = lib_b },
+    };
+
+    const exit_code = try compileMultipleAndRun(&sources, allocator);
+    // 10 + 20 = 30
+    try testing.expectEqual(@as(u8, 30), exit_code);
+}

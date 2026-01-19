@@ -441,6 +441,10 @@ pub const AstToIr = struct {
     track_memory: bool = false,
     // Expected type hint for expression conversion (used for closure parameter type inference)
     expected_type: ?ValueType = null,
+    // All type aliases from all files (for detecting unexported alias usage)
+    all_type_aliases: ?[]const ExternalTypeAliasInfo = null,
+    // Symbol collisions: maps symbol name -> list of modules that export it (only populated when collision exists)
+    symbol_collisions: std.StringHashMapUnmanaged(std.ArrayListUnmanaged([]const u8)) = .{},
 
     /// A compile-time constant value
     pub const ConstantValue = union(enum) {
@@ -569,6 +573,45 @@ pub const AstToIr = struct {
         };
     }
 
+    /// Report an ambiguous symbol reference error (E061) with helpful message
+    fn reportAmbiguousSymbol(self: *AstToIr, symbol: []const u8, modules: []const []const u8, src: std.builtin.SourceLocation) void {
+        // Build error message: "'add' - defined in 'math' and 'string', use 'math.add' or 'string.add'"
+        // For simplicity, handle the common case of 2 modules
+        const message = if (modules.len == 2)
+            std.fmt.allocPrint(self.allocator, "'{s}' - defined in '{s}' and '{s}', use '{s}.{s}' or '{s}.{s}'", .{
+                symbol, modules[0], modules[1], modules[0], symbol, modules[1], symbol,
+            }) catch "ambiguous symbol reference"
+        else if (modules.len > 0)
+            std.fmt.allocPrint(self.allocator, "'{s}' - defined in multiple modules, use qualified name (e.g., '{s}.{s}')", .{
+                symbol, modules[0], symbol,
+            }) catch "ambiguous symbol reference"
+        else
+            "ambiguous symbol reference";
+
+        self.last_error = .{
+            .code = .E061,
+            .message = message,
+            .location = .{
+                .file = self.source_file,
+                .line = @intCast(self.current_line),
+                .column = @intCast(self.current_column),
+            },
+            .message_allocated = modules.len >= 2,
+            .caller_location = src,
+        };
+    }
+
+    /// Check if a function name refers to an ambiguous symbol (multiple modules export same name)
+    fn isAmbiguousSymbol(self: *AstToIr, func_name: []const u8) bool {
+        // Qualified names (containing '.') are never ambiguous
+        if (std.mem.indexOfScalar(u8, func_name, '.') != null) return false;
+        // Check if we have tracked collisions for this name
+        if (self.symbol_collisions.get(func_name)) |modules| {
+            return modules.items.len > 1;
+        }
+        return false;
+    }
+
     // ------------------------------------------------------------------------
     // Loop Block Helpers (for intrinsics module)
     // ------------------------------------------------------------------------
@@ -586,6 +629,31 @@ pub const AstToIr = struct {
     /// Finish loop by restoring end block. Wrapper around LoopBlocks.finish.
     pub fn finishLoop(self: *AstToIr, loop: *LoopBlocks) !void {
         return loop.finish(self);
+    }
+
+    /// Get the current source module name (derived from source_file).
+    /// Returns null if source_file is not set.
+    fn getModuleName(self: *AstToIr) ?[]const u8 {
+        const source_file = self.source_file orelse return null;
+        const basename = std.fs.path.basename(source_file);
+        if (std.mem.endsWith(u8, basename, ".maxon")) {
+            return basename[0 .. basename.len - 6];
+        }
+        return basename;
+    }
+
+    /// Generate an IR function name for an exported function.
+    /// Returns module$funcname for exported functions (to allow multiple files to export same name),
+    /// or just funcname for non-exported functions.
+    fn getIrFunctionName(self: *AstToIr, func_name: []const u8, is_export: bool) ![]const u8 {
+        // Only prefix exported functions with module name
+        // Non-exported (private) functions keep simple names since they're file-local
+        if (is_export) {
+            if (self.getModuleName()) |mod| {
+                return try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ mod, func_name });
+            }
+        }
+        return func_name;
     }
 
     pub fn deinit(self: *AstToIr) void {
@@ -1402,6 +1470,27 @@ pub const AstToIr = struct {
             },
             .primitive => {}, // Primitives are always visible
         }
+    }
+
+    /// Check if a type name is an unexported type alias from another file.
+    /// Returns the source file path if found, null otherwise.
+    fn findUnexportedAlias(self: *AstToIr, type_name: []const u8) ?[]const u8 {
+        const all_aliases = self.all_type_aliases orelse return null;
+        for (all_aliases) |alias| {
+            if (std.mem.eql(u8, alias.type_alias_decl.name, type_name)) {
+                if (!alias.is_exported) {
+                    // Check if it's from a different file
+                    if (alias.source_path) |alias_path| {
+                        if (self.source_file) |current_path| {
+                            if (!std.mem.eql(u8, alias_path, current_path)) {
+                                return alias_path;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /// Get the size of a type from a TypeExpr. Primitives are 8 bytes, structs use their registered size.
@@ -3345,15 +3434,22 @@ pub const AstToIr = struct {
             };
         }
 
+        // For exported functions, set ir_name to the module-prefixed name
+        const ir_name: ?[]const u8 = if (decl.is_export)
+            try self.getIrFunctionName(decl.name, true)
+        else
+            null;
+
         try self.func_map.put(self.allocator, decl.name, .{
             .return_type = effective_ret_type,
             .return_value_type = effective_ret_value_type,
             .param_types = param_types,
             .decl_line = decl.block.start_line,
             .decl_column = decl.block.start_column,
+            .ir_name = ir_name,
         });
 
-        debug.astToIr("Registered function '{s}' returning {s}", .{ decl.name, ret_type.toIrName() });
+        debug.astToIr("Registered function '{s}' returning {s}, ir_name={?s}", .{ decl.name, ret_type.toIrName(), ir_name });
     }
 
     /// Extract base type name from simple or generic type expressions
@@ -3526,6 +3622,11 @@ pub const AstToIr = struct {
                 // Check for internal type access
                 try intrinsics.checkInternalTypeAccess(self, resolved);
                 const type_info_ptr = self.type_map.getPtr(resolved) orelse {
+                    // Check if this is an unexported type alias from another file
+                    if (self.findUnexportedAlias(base_name)) |_| {
+                        self.reportError(.E060, base_name, @src());
+                        return error.UnknownType;
+                    }
                     self.reportError(.E006, resolved, @src());
                     return error.UnknownType;
                 };
@@ -4860,7 +4961,10 @@ pub const AstToIr = struct {
             sret_info.ir_type = .ptr; // sret uses pointer return
         }
 
-        const ir_func = try self.module.addFunctionWithExport(decl.name, sret_info.ir_type, decl.is_export);
+        // For exported functions, use module-prefixed IR name (e.g., "math$add")
+        // This allows multiple files to export the same function name
+        const ir_name = try self.getIrFunctionName(decl.name, decl.is_export);
+        const ir_func = try self.module.addFunctionWithExport(ir_name, sret_info.ir_type, decl.is_export);
         const param_offset = try self.setupFunctionState(ir_func, decl.name, sret_info);
 
         // Register parameters (offset by 1 if using sret)
@@ -5653,6 +5757,10 @@ pub const AstToIr = struct {
         else
             false;
         if (!then_terminates) {
+            // Clean up variables declared in the then block before branching to end.
+            // These variables go out of scope here, so we need to free them now.
+            try cleanup_helpers.freeHeapVars(self, &saved_states);
+
             then_exit_block_idx = @intCast(self.func().blocks.items.len - 1);
         } else {
             // If then block terminates, restore ownership states since code after if is only
@@ -5666,6 +5774,22 @@ pub const AstToIr = struct {
                         var_info.moved_line = 0;
                     }
                 }
+            }
+        }
+        // Remove variables declared in the then block from var_map since they're out of scope.
+        // This prevents cleanup code at later return statements from trying to access
+        // variables that were only conditionally defined.
+        {
+            var to_remove = std.ArrayListUnmanaged([]const u8){};
+            defer to_remove.deinit(self.allocator);
+            var var_iter = self.var_map.keyIterator();
+            while (var_iter.next()) |key| {
+                if (!saved_states.contains(key.*)) {
+                    try to_remove.append(self.allocator, key.*);
+                }
+            }
+            for (to_remove.items) |key| {
+                _ = self.var_map.remove(key);
             }
         }
 
@@ -9642,6 +9766,14 @@ pub const AstToIr = struct {
             return error.UnknownFunction;
         };
 
+        // Check for ambiguous symbol reference (multiple modules export same name)
+        if (self.isAmbiguousSymbol(call.func_name)) {
+            if (self.symbol_collisions.get(call.func_name)) |modules| {
+                self.reportAmbiguousSymbol(call.func_name, modules.items, @src());
+                return error.SemanticError;
+            }
+        }
+
         // Resolve named arguments and default values to positional arguments
         const resolved_args = try self.resolveCallArguments(
             call.func_name,
@@ -9758,7 +9890,9 @@ pub const AstToIr = struct {
             }
         }
 
-        const result = try self.func().emitCall(call.func_name, args, func_info.return_type);
+        // Use ir_name if available (for external functions with module-prefixed names)
+        const call_name = func_info.ir_name orelse call.func_name;
+        const result = try self.func().emitCall(call_name, args, func_info.return_type);
 
         // If sret buffer was used (for actual structs or error unions), return it
         if (sret_buffer) |buf| {
@@ -9766,6 +9900,103 @@ pub const AstToIr = struct {
             return .{ .value = buf, .ty = func_info.return_value_type.? };
         }
         // return_value_type is always set for non-void returns
+        if (func_info.return_value_type) |vtype| {
+            return .{ .value = result orelse 0, .ty = vtype };
+        }
+        return .{ .value = result orelse 0, .ty = .{ .primitive = types.Primitive.fromIrType(func_info.return_type) } };
+    }
+
+    /// Convert a qualified function call (module.function)
+    fn convertQualifiedFunctionCall(
+        self: *AstToIr,
+        qualified_name: []const u8,
+        arg_exprs: []const ast.Expression,
+        named_args: []const ast.NamedArg,
+        func_info: FuncInfo,
+    ) ConvertError!TypedValue {
+        // Resolve named arguments and default values to positional arguments
+        const resolved_args = try self.resolveCallArguments(
+            qualified_name,
+            arg_exprs,
+            named_args,
+            func_info.param_types,
+            false, // no implicit self for regular functions
+        );
+        defer self.allocator.free(resolved_args);
+
+        // Check if return type is error union (needs sret)
+        const returns_error_union = if (func_info.return_value_type) |vt|
+            vt == .error_union_type
+        else
+            false;
+
+        // Validate that throwing functions are called within try context
+        if (returns_error_union and !self.in_try_context) {
+            self.reportError(.E057, qualified_name, @src());
+            return error.SemanticError;
+        }
+
+        // Check if callee returns a struct or error union (needs sret)
+        const returns_actual_struct = if (func_info.return_value_type) |vt|
+            vt == .struct_type
+        else
+            false;
+        const returns_struct = returns_actual_struct or returns_error_union;
+        var sret_buffer: ?ir.Value = null;
+
+        // Allocate args: +1 if using sret for hidden first parameter
+        const num_args = resolved_args.len + @as(usize, if (returns_struct) 1 else 0);
+        const args = try self.func().allocator.alloc(ir.Value, num_args);
+
+        // If returning struct or error union, allocate buffer in caller and pass as first arg
+        if (returns_struct) {
+            if (returns_error_union) {
+                const eu_info = func_info.return_value_type.?.error_union_type;
+                const success_size = self.getErrorUnionSuccessSize(eu_info) orelse {
+                    self.reportInternalError("unknown error union success type size", @src());
+                    return error.SemanticError;
+                };
+                const error_size: i32 = 8;
+                sret_buffer = (try self.func().emitAllocaSized(8 + @max(success_size, error_size))).raw();
+            } else {
+                const struct_info = func_info.return_value_type.?.struct_type;
+                sret_buffer = (try self.func().emitAllocaSized(struct_info.size)).raw();
+            }
+            args[0] = sret_buffer.?;
+        }
+
+        const arg_offset: usize = if (returns_struct) 1 else 0;
+        for (resolved_args, 0..) |resolved_arg, i| {
+            const arg_expr: ast.Expression = switch (resolved_arg) {
+                .expr => |e| e,
+                .default => |d| d.*,
+            };
+
+            const saved_expected = self.expected_type;
+            if (i < func_info.param_types.len) {
+                self.expected_type = func_info.param_types[i].ty;
+            }
+            defer self.expected_type = saved_expected;
+
+            const arg = try self.convertExpression(arg_expr);
+            var arg_value = arg.value;
+
+            // Load if this is a struct and we have a pointer to it
+            if (arg.ty == .struct_type and arg.ty.struct_type.size <= 8) {
+                arg_value = try self.func().emitLoad(arg_value, .i64);
+            }
+
+            args[i + arg_offset] = arg_value;
+        }
+
+        // Use ir_name if available (for qualified calls, this is the actual unqualified function name)
+        const call_name = func_info.ir_name orelse qualified_name;
+        const result = try self.func().emitCall(call_name, args, func_info.return_type);
+
+        // If sret buffer was used, return it
+        if (sret_buffer) |buf| {
+            return .{ .value = buf, .ty = func_info.return_value_type.? };
+        }
         if (func_info.return_value_type) |vtype| {
             return .{ .value = result orelse 0, .ty = vtype };
         }
@@ -10539,6 +10770,20 @@ pub const AstToIr = struct {
         // Check if base is a type name (static method call: TypeName.method() or enum case construction)
         if (mcall.base.* == .identifier) {
             const base_name = mcall.base.identifier;
+
+            // Check if this is a qualified function call (module.function)
+            // We construct "module.function" and look it up in func_map
+            const qualified_name = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ base_name, mcall.method_name }) catch {
+                return error.OutOfMemory;
+            };
+            if (self.func_map.get(qualified_name)) |func_info| {
+                // This is a qualified function call - convert it like a regular call
+                self.setMethodLocation(mcall);
+                return self.convertQualifiedFunctionCall(qualified_name, mcall.args, mcall.named_args, func_info);
+            }
+            // Not a qualified function - free the string and continue with other checks
+            self.allocator.free(qualified_name);
+
             if (self.type_map.get(base_name)) |type_info| {
                 // Check if this is an enum case construction (e.g., Container.value(42))
                 if (type_info == .enum_type) {
@@ -10721,12 +10966,14 @@ pub fn convertWithExternals(
     external_extensions: ?[]const ExternalExtensionInfo,
     external_enums: ?[]const ExternalEnumInfo,
     external_type_aliases: ?[]const ExternalTypeAliasInfo,
+    all_type_aliases: ?[]const ExternalTypeAliasInfo,
     options: ConvertOptions,
     out_error: *?err.CompileError,
 ) ConvertError!ir.Module {
     var converter = AstToIr.init(allocator, mutation_analyzer);
     converter.source_file = source_file;
     converter.track_memory = options.track_memory;
+    converter.all_type_aliases = all_type_aliases;
     defer converter.deinit();
 
     // Pre-allocate type_map capacity to prevent resizing during conversion.
@@ -10871,18 +11118,31 @@ pub fn convertWithExternals(
     // Register external types before conversion.
     // Use multiple passes because types can depend on each other.
     if (external_types) |ext_types| {
-        var registered_count: usize = 0;
         var pass: usize = 0;
         const max_passes = ext_types.len + 1;
 
-        while (registered_count < ext_types.len and pass < max_passes) : (pass += 1) {
-            const prev_count = registered_count;
+        // Track types that successfully registered (have non-zero size or are non-struct)
+        var successfully_registered = std.StringHashMapUnmanaged(void){};
+        defer successfully_registered.deinit(allocator);
+
+        while (pass < max_passes) : (pass += 1) {
+            var made_progress = false;
             for (ext_types) |ext_type| {
+                // Skip if already successfully registered
+                if (successfully_registered.contains(ext_type.name)) continue;
+
                 // Skip if already fully registered (not just pre-registered placeholder with size=0)
                 if (converter.type_map.get(ext_type.name)) |existing| {
                     switch (existing) {
-                        .struct_type => |s| if (s.size > 0) continue, // Fully registered
-                        .primitive, .enum_type => continue, // Non-struct types are always fully registered
+                        .struct_type => |s| if (s.size > 0) {
+                            // Mark as successfully registered
+                            successfully_registered.put(allocator, ext_type.name, {}) catch {};
+                            continue;
+                        },
+                        .primitive, .enum_type => {
+                            successfully_registered.put(allocator, ext_type.name, {}) catch {};
+                            continue;
+                        },
                     }
                 }
 
@@ -10893,22 +11153,40 @@ pub fn convertWithExternals(
                     converter.clearLastError();
                     continue; // Try again next pass
                 };
-                registered_count += 1;
+                made_progress = true;
+                // Mark as successfully registered after registerExternalType succeeds
+                successfully_registered.put(allocator, ext_type.name, {}) catch {};
             }
             // If no progress was made, we have unresolvable dependencies
-            if (registered_count == prev_count) break;
+            if (!made_progress) break;
         }
 
-        // Check if all types were registered
-        if (registered_count < ext_types.len) {
-            // Find the first unregistered type for error reporting
+        // Count how many types are successfully registered
+        const fully_registered_count = successfully_registered.count();
+        debug.astToIr("Type registration complete: {d}/{d} types fully registered after {d} passes", .{ fully_registered_count, ext_types.len, pass });
+
+        // Check if all types were fully registered
+        if (fully_registered_count < ext_types.len) {
+            // Find the first incompletely registered type for error reporting
             for (ext_types) |ext_type| {
-                if (!converter.type_map.contains(ext_type.name)) {
+                const is_fully_registered = successfully_registered.contains(ext_type.name);
+
+                if (!is_fully_registered) {
                     debug.astToIr("Failed to register external type '{s}' after {d} passes", .{ ext_type.name, pass });
                     // Set source file and use proper location from the type declaration
                     if (ext_type.source_path) |src_path| {
                         converter.source_file = src_path;
                     }
+                    // Try one more time to get a meaningful error message
+                    converter.registerExternalType(ext_type) catch |reg_err| {
+                        debug.astToIr("Final registration attempt for '{s}' failed: {}", .{ ext_type.name, reg_err });
+                        // The error from this attempt should have details about what type couldn't be resolved
+                        if (converter.last_error) |le| {
+                            out_error.* = copyErrorWithOwnedPath(allocator, le);
+                            return error.UnknownType;
+                        }
+                    };
+                    // Fallback error if registration didn't set an error
                     converter.reportErrorAt(.E006, ext_type.name, ext_type.type_decl.block.start_line, ext_type.type_decl.block.start_column, @src());
                     if (converter.last_error) |le| {
                         out_error.* = copyErrorWithOwnedPath(allocator, le);
@@ -10922,9 +11200,6 @@ pub fn convertWithExternals(
     // Register external function signatures before conversion
     if (external_funcs) |funcs| {
         for (funcs) |ext_func| {
-            // Skip if already registered (avoid duplicates from multiple source files)
-            if (converter.func_map.contains(ext_func.name)) continue;
-
             // Convert ExternalParamTypes to ParamTypes by resolving type names to pointers
             const param_types = try converter.convertExternalParamTypes(ext_func.param_types);
 
@@ -10934,12 +11209,50 @@ pub fn convertWithExternals(
             else
                 null;
 
-            try converter.func_map.put(allocator, ext_func.name, .{
+            // For exported functions, the IR name is module-prefixed (e.g., "lib_a$helper")
+            const ir_name: ?[]const u8 = if (ext_func.is_exported and ext_func.source_module != null)
+                try std.fmt.allocPrint(allocator, "{s}${s}", .{ ext_func.source_module.?, ext_func.name })
+            else
+                null;
+
+            const func_info = FuncInfo{
                 .return_type = ext_func.return_type,
                 .return_value_type = return_value_type,
                 .param_types = param_types,
-            });
-            debug.astToIr("Registered external function '{s}' returning {s}", .{ ext_func.name, ext_func.return_type.toIrName() });
+                .source_module = ext_func.source_module,
+                .ir_name = ir_name,
+            };
+
+            // Check for collision (same name already registered from different module)
+            if (converter.func_map.get(ext_func.name)) |existing| {
+                // Track collision - both modules export this name
+                const collision_entry = converter.symbol_collisions.getPtr(ext_func.name) orelse blk: {
+                    var list = std.ArrayListUnmanaged([]const u8){};
+                    // Add the existing function's module
+                    if (existing.source_module) |mod| {
+                        try list.append(allocator, mod);
+                    }
+                    try converter.symbol_collisions.put(allocator, ext_func.name, list);
+                    break :blk converter.symbol_collisions.getPtr(ext_func.name).?;
+                };
+                // Add the new function's module
+                if (ext_func.source_module) |mod| {
+                    try collision_entry.append(allocator, mod);
+                }
+                debug.astToIr("Collision detected for '{s}' from module '{?s}'", .{ ext_func.name, ext_func.source_module });
+            } else {
+                // No collision - register with unqualified name
+                try converter.func_map.put(allocator, ext_func.name, func_info);
+                debug.astToIr("Registered external function '{s}' returning {s}", .{ ext_func.name, ext_func.return_type.toIrName() });
+            }
+
+            // Always register with qualified name (module.funcname) for explicit disambiguation
+            // The qualified lookup uses the same ir_name (module$func) as the unqualified lookup
+            if (ext_func.source_module) |mod| {
+                const qualified_name = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ mod, ext_func.name });
+                try converter.func_map.put(allocator, qualified_name, func_info);
+                debug.astToIr("Registered qualified function '{s}' -> ir_name '{?s}'", .{ qualified_name, ir_name });
+            }
         }
     }
 
