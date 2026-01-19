@@ -50,14 +50,6 @@ print(40 + 2)
 \`\`\`
 ```
 
-### Expected Error
-```markdown
-### Test: type-mismatch
-<!-- expect: error -->
-\`\`\`maxon
-var x int = "hello"  // type error
-\`\`\`
-```
 
 ## Important Rules
 

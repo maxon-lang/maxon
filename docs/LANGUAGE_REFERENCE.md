@@ -554,7 +554,6 @@ end 'HttpError'
 ### Mutable Variables (`var`)
 ```maxon
 var x = 42              // Type inferred
-var y int = 10          // Explicit type
 x = x + 5               // Reassignment allowed
 ```
 
@@ -567,7 +566,7 @@ let name = "Maxon"
 
 **Rules:**
 - All variables must be initialized at declaration
-- Type can be inferred from initializer or explicitly specified
+- Type is always inferred from the initializer
 - Scope is block-scoped
 - Primitives are stack-allocated; `var` arrays use heap buffers (with automatic cleanup)
 
@@ -1804,9 +1803,9 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 
 2. **Initialize all variables**: No uninitialized variables allowed
 
-3. **Use explicit types when clarity matters**: 
+3. **Use clear initializers**: Type is always inferred from the value
    ```maxon
-   var count int = 0    // Clear intent
+   var count = 0    // Type inferred as int
    ```
 
 4. **Return from all code paths**:

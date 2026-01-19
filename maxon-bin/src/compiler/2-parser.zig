@@ -350,18 +350,8 @@ pub const Parser = struct {
                 // Infer type from the default expression
                 field_type = try self.inferTypeFromExpr(default_expr);
             } else {
-                // Explicit type specified
+                // Explicit type specified (no default value allowed with explicit type)
                 field_type = try self.parseTypeExpr();
-
-                // Check for optional default value: `var value int = 0`
-                if (self.check(.equals)) {
-                    _ = self.advance(); // consume '='
-                    const default_expr = try self.parseExpression() orelse {
-                        self.reportError(.E003, @src());
-                        return error.ExpectedExpression;
-                    };
-                    default_value = try self.createExpr(default_expr);
-                }
             }
 
             try fields.append(self.allocator, .{

@@ -16,7 +16,7 @@ let name = value            // immutable variable
 type Name
     var field1 int          // mutable field
     let field2 string       // immutable field
-    var field3 int = 0      // field with default value
+    var field3 = 0      // field with default value
 end 'Name'
 
 var instance = Name{field1: 1, field2: "hello"}  // instantiation

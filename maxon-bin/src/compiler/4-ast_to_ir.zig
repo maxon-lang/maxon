@@ -5130,7 +5130,6 @@ pub const AstToIr = struct {
         debug.astToIr("Converting var decl: {s}", .{decl.name});
 
         // Check for InitableFromArrayLiteral transformation
-        // Syntax: var arr Array of int = [1, 2, 3] (generic) or var arr IntArray = [...] (simple)
         if (decl.type_annotation) |type_ann| {
             const base_type_name: ?[]const u8 = switch (type_ann.expr) {
                 .generic => |gen| gen.base_type,
@@ -5181,7 +5180,7 @@ pub const AstToIr = struct {
                 }
 
                 // Check for InitableFromStringLiteral transformation
-                // Syntax: var s string = "hello" or var s String = "hello"
+                // Syntax: var s = "hello" (type String inferred from literal)
                 if (self.typeConformsTo(t_name, "InitableFromStringLiteral")) {
                     if (decl.value == .string_literal) {
                         const resolved_type_name = self.resolveTypeName(t_name);
@@ -5191,7 +5190,7 @@ pub const AstToIr = struct {
                 }
 
                 // Check for InitableFromCharLiteral transformation
-                // Syntax: var c character = 'a' or var c Character = 'a'
+                // Syntax: var c = 'a' (type Character inferred from literal)
                 if (self.typeConformsTo(t_name, "InitableFromCharLiteral")) {
                     if (decl.value == .char_literal) {
                         const resolved_type_name = self.resolveTypeName(t_name);
@@ -10426,14 +10425,14 @@ pub const AstToIr = struct {
         };
     }
 
-    /// Convert InitableFromStringLiteral: var s String = "hello"
+    /// Convert InitableFromStringLiteral: var s = "hello"
     fn convertInitableFromStringLiteral(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
         const processed = try self.processEscapeSequences(decl.value.string_literal);
         defer self.allocator.free(processed);
         try self.convertLiteralInit(processed, type_name, decl.name, .string);
     }
 
-    /// Convert InitableFromCharLiteral: var c Character = 'a'
+    /// Convert InitableFromCharLiteral: var c = 'a'
     fn convertInitableFromCharLiteral(self: *AstToIr, decl: ast.VarDecl, type_name: []const u8) !void {
         const processed = try self.processEscapeSequences(decl.value.char_literal);
         defer self.allocator.free(processed);

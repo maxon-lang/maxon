@@ -37,7 +37,7 @@ suite('Syntax Highlighting Test Suite', () => {
 	test('Type keywords are present and can be highlighted', async () => {
 		const testContent = [
 			"function test(a int, b float, c bool, d character) int",
-			"    var str string = \"hello\"",
+			"    var str = \"hello\"",
 			"    return a",
 			"end 'test'"
 		].join('\n');

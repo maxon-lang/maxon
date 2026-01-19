@@ -202,42 +202,25 @@ export type Lexer
 	end 'extractSubstring'
 
 	function isDigit(c Character) returns bool
-		if let ascii = try c.asciiValue() 'getAscii'
-			return ascii >= 48 and ascii <= 57
-		end 'getAscii'
-		return false
+		return c >= '0' and c <= '9'
 	end 'isDigit'
 
 	function isIdentifierStart(c Character) returns bool
-		if let ascii = try c.asciiValue() 'getAscii'
-			return (ascii >= 65 and ascii <= 90) or (ascii >= 97 and ascii <= 122) or ascii == 95
-		end 'getAscii'
-		return false
+		return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or c == '_'
 	end 'isIdentifierStart'
 
 	function isIdentifierContinue(c Character) returns bool
-		if let ascii = try c.asciiValue() 'getAscii'
-			return (ascii >= 65 and ascii <= 90) or (ascii >= 97 and ascii <= 122) or (ascii >= 48 and ascii <= 57) or ascii == 95
-		end 'getAscii'
-		return false
+		return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '_'
 	end 'isIdentifierContinue'
 
 	function getKeywordType(text String) returns TokenType
-		if text == "function" 'kw01'
-			return TokenType.keywordFunction
-		end 'kw01'
-		if text == "returns" 'kw02'
-			return TokenType.keywordReturns
-		end 'kw02'
-		if text == "return" 'kw03'
-			return TokenType.keywordReturn
-		end 'kw03'
-		if text == "end" 'kw04'
-			return TokenType.keywordEnd
-		end 'kw04'
-		if text == "int" 'kw05'
-			return TokenType.keywordInt
-		end 'kw05'
-		return TokenType.identifier
+		return match text 'keyword'
+			"function" gives TokenType.keywordFunction
+			"returns" gives TokenType.keywordReturns
+			"return" gives TokenType.keywordReturn
+			"end" gives TokenType.keywordEnd
+			"int" gives TokenType.keywordInt
+			default gives TokenType.identifier
+		end 'keyword'
 	end 'getKeywordType'
 end 'Lexer'

@@ -227,8 +227,8 @@ end 'main'
 <!-- test: struct-field-default -->
 ```maxon
 type Counter
-	export var value int = 0
-	export var step int = 1
+	export var value = 0
+	export var step = 1
 end 'Counter'
 
 function main() returns int

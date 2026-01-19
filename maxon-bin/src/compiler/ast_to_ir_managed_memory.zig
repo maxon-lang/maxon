@@ -881,7 +881,7 @@ pub fn convertInitableFromArrayLiteralSimple(self: *AstToIr, decl: ast.VarDecl, 
     try convertInitableFromArrayLiteralImpl(self, decl, type_name);
 }
 
-/// Convert InitableFromArrayLiteral: var arr Array of int = [1, 2, 3]
+/// Convert InitableFromArrayLiteral
 /// Creates a __ManagedMemory and calls Type$init(managed)
 pub fn convertInitableFromArrayLiteral(self: *AstToIr, decl: ast.VarDecl, gen: ast.GenericTypeExpr) !void {
     try convertInitableFromArrayLiteralImpl(self, decl, gen.base_type);

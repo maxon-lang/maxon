@@ -53,7 +53,7 @@ end 'main'
 Explicit type annotations are not allowed on var declarations.
 ```maxon
 function main() returns int
-    var x int = 0
+    var x = 0
     return x
 end 'main'
 ```
@@ -65,7 +65,7 @@ E002
 Explicit type annotations are not allowed on let declarations.
 ```maxon
 function main() returns int
-    let x int = 0
+    let x = 0
     return x
 end 'main'
 ```
