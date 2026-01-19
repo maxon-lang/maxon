@@ -877,16 +877,24 @@ pub const SemanticAnalyzer = struct {
                 else => 8, // Primitives, pointers, etc. are 8 bytes
             };
 
+            // Static fields don't have an offset in the instance layout
+            const field_offset = if (field.is_static) -1 else offset;
+
             result[i] = .{
                 .name = field.name,
-                .offset = offset,
+                .offset = field_offset,
                 .size = size,
                 .value_type = value_type,
                 .display_name = display_name,
                 .is_mutable = field.is_mutable,
                 .is_export = field.is_export,
+                .is_static = field.is_static,
             };
-            offset += size;
+
+            // Only advance offset for non-static fields
+            if (!field.is_static) {
+                offset += size;
+            }
         }
 
         return result;

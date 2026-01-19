@@ -48,6 +48,10 @@
 ```maxon
 let x = 42          // immutable (type inferred)
 var y = 10          // mutable (type inferred)
+
+// Top-level variables (outside functions)
+var globalCounter = 0   // mutable, accessible from any function
+let MAX_SIZE = 1024     // immutable constant
 ```
 
 ## Functions
@@ -126,6 +130,9 @@ type Point is Hashable, Describable   // interface conformance
     export let name = "point"   // public immutable with default
     var internal int                   // private field
 
+    static var count = 0               // static mutable field
+    static let MAX = 100               // static immutable constant
+
     function Hashable.hash() returns int   // interface method
         return x * 31 + y
     end 'hash'
@@ -142,6 +149,10 @@ end 'Point'
 // Instantiation
 var p = Point{x: 10, y: 20}
 var o = Point.origin()
+
+// Static field access
+Point.count = Point.count + 1
+print(Point.MAX)
 ```
 
 ## Interfaces

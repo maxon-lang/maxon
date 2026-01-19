@@ -324,6 +324,48 @@ var mag = p2.magnitude()          // Instance method call
 | Call syntax | `instance.method()` | `Type.method()` |
 | Declaration | `function name()` | `static function name()` |
 
+### Static Fields
+
+Static fields are shared across all instances of a type. They are declared using `static var` (mutable) or `static let` (immutable):
+
+```maxon
+type Counter
+    static var count = 0
+    static let MAX_COUNT = 1000
+
+    var id int
+
+    static function create() returns Counter
+        Counter.count = Counter.count + 1
+        return Counter{id: Counter.count}
+    end 'create'
+end 'Counter'
+```
+
+**Accessing Static Fields:**
+```maxon
+var c1 = Counter.create()    // Counter.count becomes 1
+var c2 = Counter.create()    // Counter.count becomes 2
+print(Counter.count)         // Prints: 2
+print(Counter.MAX_COUNT)     // Prints: 1000
+```
+
+**Static Field Rules:**
+- Declared with `static var` or `static let` inside a type body
+- Must have an initializer value (no uninitialized static fields)
+- Accessed using `TypeName.fieldName` syntax (not instance syntax)
+- `static var` fields can be reassigned; `static let` fields are immutable
+- Initialized at program startup, before `main()` executes
+
+**Differences from Instance Fields:**
+
+| Feature | Instance Field | Static Field |
+|---------|---------------|--------------|
+| Storage | Per instance | One per type |
+| Access | `instance.field` | `Type.field` |
+| Declaration | `var field type` | `static var field = value` |
+| Requires initializer | No (can use type default) | Yes |
+
 ### Interfaces
 
 Interfaces define a set of method signatures that types can implement:
@@ -629,6 +671,32 @@ let name = "Maxon"
 - Type is always inferred from the initializer
 - Scope is block-scoped
 - Primitives are stack-allocated; `var` arrays use heap buffers (with automatic cleanup)
+
+### Top-Level Variables
+
+Variables can be declared at the top level of a module (outside any function):
+
+```maxon
+var globalCounter = 0
+let MAX_SIZE = 1024
+
+function main() returns int
+    globalCounter = globalCounter + 1
+    return globalCounter
+end 'main'
+```
+
+**Top-Level Variable Rules:**
+- `var` declares a mutable top-level variable (can be reassigned from any function)
+- `let` declares an immutable top-level constant (compile-time evaluated)
+- Must have an initializer with a constant expression (integer, float, bool, or string literal)
+- Initialized before `main()` executes
+- Accessible from any function in the same module
+
+**Use Cases:**
+- Configuration constants (`let MAX_BUFFER_SIZE = 4096`)
+- Counters and state shared across function calls (`var callCount = 0`)
+- Program-wide settings
 
 ---
 

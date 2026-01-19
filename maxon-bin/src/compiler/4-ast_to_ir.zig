@@ -445,6 +445,18 @@ pub const AstToIr = struct {
     all_type_aliases: ?[]const ExternalTypeAliasInfo = null,
     // Symbol collisions: maps symbol name -> list of modules that export it (only populated when collision exists)
     symbol_collisions: std.StringHashMapUnmanaged(std.ArrayListUnmanaged([]const u8)) = .{},
+    // Global variables: mutable module-level and static fields - maps name to type info
+    global_variables: std.StringHashMapUnmanaged(GlobalVarInfo) = .{},
+    // Global variable AST nodes (for forward reference resolution during init)
+    global_variable_asts: std.StringHashMapUnmanaged(ast.GlobalVariable) = .{},
+
+    /// Info about a global variable
+    pub const GlobalVarInfo = struct {
+        ir_type: ir.Type,
+        value_type: ?ValueType,
+        size: i32, // Size in bytes for the global storage
+        init_value: ?ConstantValue, // Initial value (evaluated at compile time)
+    };
 
     /// A compile-time constant value
     pub const ConstantValue = union(enum) {
@@ -782,6 +794,10 @@ pub const AstToIr = struct {
         self.global_constant_asts.deinit(self.allocator);
         self.constants_in_progress.deinit(self.allocator);
         self.converted_runtime_constants.deinit(self.allocator);
+
+        // Clean up global variable-related maps
+        self.global_variables.deinit(self.allocator);
+        self.global_variable_asts.deinit(self.allocator);
     }
 
     // ------------------------------------------------------------------------
@@ -991,6 +1007,14 @@ pub const AstToIr = struct {
         // Evaluate global constants before converting functions
         // This must happen after enums are registered so we can resolve enum member references
         try self.evaluateGlobalConstants(program.global_constants);
+
+        // Register global variables (top-level var declarations)
+        try self.registerGlobalVariables(program.global_variables);
+
+        // Register static fields from all types
+        for (program.types) |type_decl| {
+            try self.registerStaticFields(type_decl);
+        }
 
         // Convert functions
         for (program.functions) |fn_decl| try self.convertFunction(fn_decl);
@@ -1334,6 +1358,93 @@ pub const AstToIr = struct {
                 return self.convertExpression(expr);
             },
         };
+    }
+
+    // ------------------------------------------------------------------------
+    // Global Variable Registration
+    // ------------------------------------------------------------------------
+
+    /// Register all global variables (top-level var declarations)
+    fn registerGlobalVariables(self: *AstToIr, variables: []const ast.GlobalVariable) ConvertError!void {
+        for (variables) |variable| {
+            // First store the AST for forward reference resolution
+            try self.global_variable_asts.put(self.allocator, variable.name, variable);
+
+            // Evaluate the initializer to get the initial value and infer the type
+            const init_value = try self.evaluateConstantExpr(variable.value);
+            const info = self.constantValueToGlobalVarInfo(init_value);
+            try self.global_variables.put(self.allocator, variable.name, info);
+        }
+    }
+
+    /// Register static fields from a type declaration
+    fn registerStaticFields(self: *AstToIr, type_decl: ast.TypeDecl) ConvertError!void {
+        // Get the type info to access field declarations
+        for (type_decl.fields) |field| {
+            if (!field.is_static) continue;
+
+            // Build qualified name: TypeName.fieldName
+            const qualified_name = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_decl.name, field.name }) catch {
+                return error.OutOfMemory;
+            };
+
+            // Static fields must have a default value
+            if (field.default_value) |default_expr| {
+                // Evaluate the default value as a constant
+                const init_value = try self.evaluateConstantExpr(default_expr.*);
+
+                if (field.is_mutable) {
+                    // static var - add to global_variables (stored in memory, mutable)
+                    const info = self.constantValueToGlobalVarInfo(init_value);
+                    try self.global_variables.put(self.allocator, qualified_name, info);
+                } else {
+                    // static let - add to global_constants (inlined at use sites, immutable)
+                    try self.global_constants.put(self.allocator, qualified_name, init_value);
+                }
+            } else {
+                // Static fields without defaults - for now, error
+                // TODO: Support zero-initialization for static fields without defaults
+                self.reportError(.E003, field.name, @src());
+                return error.SemanticError;
+            }
+        }
+    }
+
+    /// Convert a constant value to GlobalVarInfo
+    fn constantValueToGlobalVarInfo(self: *AstToIr, value: ConstantValue) GlobalVarInfo {
+        _ = self;
+        return switch (value) {
+            .int => .{ .ir_type = .i64, .value_type = .{ .primitive = .int }, .size = 8, .init_value = value },
+            .float => .{ .ir_type = .f64, .value_type = .{ .primitive = .float }, .size = 8, .init_value = value },
+            .bool => .{ .ir_type = .i64, .value_type = .{ .primitive = .bool }, .size = 8, .init_value = value },
+            .string => .{ .ir_type = .ptr, .value_type = .{ .primitive = .ptr }, .size = 8, .init_value = value },
+            .enum_member => .{ .ir_type = .i64, .value_type = null, .size = 8, .init_value = value },
+            .runtime_expr => .{ .ir_type = .ptr, .value_type = null, .size = 8, .init_value = value },
+        };
+    }
+
+    /// Emit initialization code for all global variables at the start of main
+    fn emitGlobalVariableInit(self: *AstToIr) ConvertError!void {
+        var iter = self.global_variables.iterator();
+        while (iter.next()) |entry| {
+            const name = entry.key_ptr.*;
+            const info = entry.value_ptr.*;
+
+            if (info.init_value) |init_val| {
+                // Emit the initial value as a constant
+                const value_ir = switch (init_val) {
+                    .int => |v| try self.func().emitConstI64(v),
+                    .float => |v| try self.func().emitConstF64(v),
+                    .bool => |v| try self.func().emitConstI64(if (v) 1 else 0),
+                    .enum_member => |em| try self.func().emitConstI64(em.value),
+                    .string, .runtime_expr => continue, // TODO: Handle string/runtime init
+                };
+
+                // Get the global address and store the value
+                const global_ptr = try self.func().emitGlobalAddr(name, info.size);
+                try self.func().emitStore(global_ptr.val, value_ir);
+            }
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -4986,6 +5097,11 @@ pub const AstToIr = struct {
             try self.registerParameter(param, @as(i32, @intCast(i)) + param_offset);
         }
 
+        // If this is main, emit initialization code for global variables
+        if (std.mem.eql(u8, decl.name, "main")) {
+            try self.emitGlobalVariableInit();
+        }
+
         // Convert body and add implicit return for void functions
         try self.convertBodyAndFinalize(decl.body, sret_info.ir_type);
 
@@ -5431,7 +5547,18 @@ pub const AstToIr = struct {
     }
 
     fn convertAssignment(self: *AstToIr, assign: ast.AssignStmt) ConvertError!void {
-        // First try as a regular variable
+        // First check for global variable assignment
+        if (self.global_variables.get(assign.target)) |global_info| {
+            // Global variables are always mutable (that's why they're in global_variables, not global_constants)
+            const value_typed = try self.convertExpression(assign.value);
+
+            // Emit global.addr + store
+            const global_ptr = try self.func().emitGlobalAddr(assign.target, global_info.size);
+            try self.func().emitStore(global_ptr.val, value_typed.value);
+            return;
+        }
+
+        // Then try as a regular local variable
         if (self.var_map.getPtr(assign.target)) |var_info| {
             if (!var_info.is_mutable) {
                 debug.astToIr("cannot assign to immutable variable '{s}'\n", .{assign.target});
@@ -5607,6 +5734,43 @@ pub const AstToIr = struct {
     }
 
     fn convertFieldAssign(self: *AstToIr, assign: ast.FieldAssign) ConvertError!void {
+        // Check for static field assignment (e.g., TypeName.staticField = value)
+        if (assign.base.* == .identifier) {
+            const type_name = assign.base.identifier;
+            // Build qualified name to check for static field
+            const qualified_name = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, assign.field_name }) catch {
+                return error.OutOfMemory;
+            };
+
+            // Check if this is a static variable (static var field)
+            // Use iteration to get stable key stored in the map
+            var iter = self.global_variables.iterator();
+            while (iter.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*, qualified_name)) {
+                    self.allocator.free(qualified_name);
+                    const global_info = entry.value_ptr.*;
+                    const stable_name = entry.key_ptr.*;
+                    // Static variables are always mutable (that's why they're in global_variables)
+                    const value_typed = try self.convertExpression(assign.value);
+
+                    // Emit global.addr + store for static variable
+                    const global_ptr = try self.func().emitGlobalAddr(stable_name, global_info.size);
+                    try self.func().emitStore(global_ptr.val, value_typed.value);
+                    return;
+                }
+            }
+
+            // Check if trying to assign to a static constant (static let field) - error
+            if (self.global_constants.get(qualified_name) != null) {
+                self.allocator.free(qualified_name);
+                self.reportError(.E009, assign.field_name, @src());
+                return error.ImmutableAssign;
+            }
+
+            // Not a static field, free the temporary name
+            self.allocator.free(qualified_name);
+        }
+
         // Check if base is an immutable variable (let struct)
         if (assign.base.* == .identifier) {
             const var_name = assign.base.identifier;
@@ -8228,27 +8392,42 @@ pub const AstToIr = struct {
     }
 
     fn convertIdentifier(self: *AstToIr, name: []const u8) ConvertError!TypedValue {
-        const info = self.var_map.getPtr(name) orelse {
-            self.reportError(.E005, name, @src());
-            return error.UndefinedVariable;
-        };
-        if (std.mem.eql(u8, name, "value")) {}
+        // First check local variables
+        if (self.var_map.getPtr(name)) |info| {
+            if (std.mem.eql(u8, name, "value")) {}
 
-        if (info.state == .moved) {
-            debug.astToIr("variable '{s}' was moved\n", .{name});
-            self.reportError(.E008, name, @src());
-            return error.UseAfterMove;
+            if (info.state == .moved) {
+                debug.astToIr("variable '{s}' was moved\n", .{name});
+                self.reportError(.E008, name, @src());
+                return error.UseAfterMove;
+            }
+
+            info.used = true;
+
+            // Reference types may use heap allocation (pointer indirection); value types always load
+            const value = if (info.ty == .struct_type)
+                if (info.is_heap_allocated) try self.func().emitLoad(info.ptr.?, .ptr) else info.ptr.?
+            else
+                try self.func().emitLoad(info.ptr.?, info.ty.toIrType());
+
+            return .{ .value = value, .ty = info.ty };
         }
 
-        info.used = true;
+        // Check global variables (top-level var and static fields)
+        if (self.global_variables.get(name)) |global_info| {
+            // Emit global.addr + load
+            const global_ptr = try self.func().emitGlobalAddr(name, global_info.size);
+            const value = try self.func().emitLoad(global_ptr.val, global_info.ir_type);
+            return .{ .value = value, .ty = global_info.value_type orelse .{ .primitive = types.Primitive.fromIrType(global_info.ir_type) } };
+        }
 
-        // Reference types may use heap allocation (pointer indirection); value types always load
-        const value = if (info.ty == .struct_type)
-            if (info.is_heap_allocated) try self.func().emitLoad(info.ptr.?, .ptr) else info.ptr.?
-        else
-            try self.func().emitLoad(info.ptr.?, info.ty.toIrType());
+        // Check global constants
+        if (self.global_constants.get(name)) |constant| {
+            return self.convertConstantValue(constant);
+        }
 
-        return .{ .value = value, .ty = info.ty };
+        self.reportError(.E005, name, @src());
+        return error.UndefinedVariable;
     }
 
     fn convertUnary(self: *AstToIr, un: ast.UnaryExpr) ConvertError!TypedValue {
@@ -9974,6 +10153,39 @@ pub const AstToIr = struct {
     }
 
     fn convertFieldAccess(self: *AstToIr, faccess: ast.FieldAccessExpr) ConvertError!TypedValue {
+        // Check for static field access (e.g., TypeName.staticField)
+        if (faccess.base.* == .identifier) {
+            const type_name = faccess.base.identifier;
+            // Build qualified name to check for static field
+            const qualified_name = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ type_name, faccess.field_name }) catch {
+                return error.OutOfMemory;
+            };
+
+            // Check if this is a static variable (static var field)
+            // Use getKeyPtr to get the stable key stored in the map
+            var iter = self.global_variables.iterator();
+            while (iter.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*, qualified_name)) {
+                    self.allocator.free(qualified_name);
+                    const global_info = entry.value_ptr.*;
+                    const stable_name = entry.key_ptr.*;
+                    // Emit global.addr + load for static variable
+                    const global_ptr = try self.func().emitGlobalAddr(stable_name, global_info.size);
+                    const value = try self.func().emitLoad(global_ptr.val, global_info.ir_type);
+                    return .{ .value = value, .ty = global_info.value_type orelse .{ .primitive = types.Primitive.fromIrType(global_info.ir_type) } };
+                }
+            }
+
+            // Check if this is a static constant (static let field)
+            if (self.global_constants.get(qualified_name)) |constant| {
+                self.allocator.free(qualified_name);
+                return self.convertConstantValue(constant);
+            }
+
+            // Not a static field, free the temporary name
+            self.allocator.free(qualified_name);
+        }
+
         // Check for direct .name access on enum member construction (e.g., EnumType.Member.name)
         if (std.mem.eql(u8, faccess.field_name, "name")) {
             if (faccess.base.* == .field_access) {

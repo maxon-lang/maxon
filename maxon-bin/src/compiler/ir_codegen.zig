@@ -64,6 +64,19 @@ const ChkstkPatch = struct {
     call_offset: usize, // Where the call rel32 displacement is in code
 };
 
+/// Global variable entry for mutable data section
+const GlobalVarEntry = struct {
+    size: usize, // Size in bytes
+    offset: usize, // Offset in data section (set after code generation)
+    init_data: ?[]const u8, // Initial data bytes (null for zero-init)
+};
+
+/// Patch for RIP-relative access to global variable
+const GlobalVarPatch = struct {
+    code_offset: usize, // Where the RIP-relative displacement is in code
+    name: []const u8, // Global variable name
+};
+
 /// Code generation options
 pub const CodegenOptions = struct {
     track_memory: bool = false,
@@ -325,6 +338,8 @@ fn buildLiveRanges(
                     .const_string => true,
                     // Function addresses
                     .func_addr => true,
+                    // Global variable addresses
+                    .global_addr => true,
                     // Heap operations return pointers
                     .heap_alloc, .heap_realloc => true,
                     // Loads from pointers might produce pointers
@@ -628,6 +643,12 @@ pub const IrCodegen = struct {
     string_data_offset: ?usize = null,
     // Patches for __chkstk calls in function prologues
     chkstk_patches: std.ArrayListUnmanaged(ChkstkPatch),
+    // Global variables (mutable data section)
+    global_variables: std.StringHashMapUnmanaged(GlobalVarEntry) = .{},
+    // Patches for global variable references
+    global_var_patches: std.ArrayListUnmanaged(GlobalVarPatch) = .{},
+    // Offset where global data section starts (set after code generation)
+    global_data_offset: ?usize = null,
 
     pub fn init(allocator: std.mem.Allocator, code: *std.ArrayListUnmanaged(u8), options: CodegenOptions) IrCodegen {
         return .{
@@ -675,6 +696,8 @@ pub const IrCodegen = struct {
         self.string_constants.deinit(self.allocator);
         self.string_constant_patches.deinit(self.allocator);
         self.chkstk_patches.deinit(self.allocator);
+        self.global_variables.deinit(self.allocator);
+        self.global_var_patches.deinit(self.allocator);
     }
 
     /// Get external call patches for PE writer
@@ -912,6 +935,12 @@ pub const IrCodegen = struct {
             try self.patchStringConstantRefs();
         }
 
+        // Generate global variables data section and patch references
+        if (self.global_variables.count() > 0) {
+            try self.generateGlobalData();
+            try self.patchGlobalVarRefs();
+        }
+
         // Patch call sites
         try self.patchCalls();
     }
@@ -962,6 +991,54 @@ pub const IrCodegen = struct {
             const rip = patch.code_offset + 4;
             // Calculate relative offset: target - rip
             const rel: i32 = @intCast(@as(i64, @intCast(str_offset)) - @as(i64, @intCast(rip)));
+
+            // Write the displacement
+            const bytes: [4]u8 = @bitCast(rel);
+            self.code.items[patch.code_offset] = bytes[0];
+            self.code.items[patch.code_offset + 1] = bytes[1];
+            self.code.items[patch.code_offset + 2] = bytes[2];
+            self.code.items[patch.code_offset + 3] = bytes[3];
+        }
+    }
+
+    /// Generate global variables data section
+    /// Appends storage for all global variables to the code buffer
+    fn generateGlobalData(self: *IrCodegen) !void {
+        // Align to 8 bytes for safety
+        while (self.code.items.len % 8 != 0) {
+            try self.code.append(self.allocator, 0);
+        }
+        self.global_data_offset = self.code.items.len;
+
+        // Allocate space for each global variable and record its offset
+        var iter = self.global_variables.iterator();
+        while (iter.next()) |entry| {
+            const var_entry = entry.value_ptr;
+            var_entry.offset = self.code.items.len;
+
+            if (var_entry.init_data) |init_bytes| {
+                // Write initial value
+                try self.code.appendSlice(self.allocator, init_bytes);
+                // Pad to alignment if needed
+                const padding = (8 - (init_bytes.len % 8)) % 8;
+                try self.code.appendNTimes(self.allocator, 0, padding);
+            } else {
+                // Zero-initialize
+                try self.code.appendNTimes(self.allocator, 0, var_entry.size);
+            }
+        }
+    }
+
+    /// Patch all RIP-relative references to global variables
+    fn patchGlobalVarRefs(self: *IrCodegen) !void {
+        for (self.global_var_patches.items) |patch| {
+            // Get the global variable's actual offset in code
+            const var_entry = self.global_variables.get(patch.name) orelse continue;
+            const var_offset = var_entry.offset;
+            // RIP at time of instruction is patch.code_offset + 4 (after the disp32)
+            const rip = patch.code_offset + 4;
+            // Calculate relative offset: target - rip
+            const rel: i32 = @intCast(@as(i64, @intCast(var_offset)) - @as(i64, @intCast(rip)));
 
             // Write the displacement
             const bytes: [4]u8 = @bitCast(rel);
@@ -2909,7 +2986,7 @@ pub const IrCodegen = struct {
             .fcmp_eq, .fcmp_ne, .fcmp_lt, .fcmp_le, .fcmp_gt, .fcmp_ge => .i64,
             // Pointer operations
             .load, .heap_alloc, .heap_realloc, .alloca, .alloca_sized, .alloca_dynamic => .ptr,
-            .getelemptr, .getfieldptr, .func_addr => .ptr,
+            .getelemptr, .getfieldptr, .func_addr, .global_addr => .ptr,
             // Constants
             .const_i64 => .i64,
             .const_i32 => .i32,
@@ -3089,6 +3166,7 @@ pub const IrCodegen = struct {
             .const_f64 => try self.genConst64(inst, @bitCast(inst.operands[0].immediate_f64), .f64),
             .const_string => try self.genConstString(inst),
             .const_data => try self.genConstData(inst),
+            .global_addr => try self.genGlobalAddr(inst),
             .alloca => try self.genAlloca(inst),
             .alloca_sized => try self.genAllocaSized(inst),
             .alloca_dynamic => try self.genAllocaDynamic(inst),
@@ -3205,6 +3283,41 @@ pub const IrCodegen = struct {
         try self.enc.movRbpOffsetRax(offset);
         try self.setValueLocation(result, .{ .stack = offset }, .ptr);
         // Mark as indirect so loadArgs loads the value (the string pointer) rather than LEA
+        try self.markIndirect(result);
+    }
+
+    fn genGlobalAddr(self: *IrCodegen, inst: ir.Instruction) !void {
+        const result = inst.result.?;
+        const name = inst.operands[0].global_name;
+        const var_size: usize = @intCast(inst.operands[1].elem_size);
+
+        // Ensure the global variable is registered in our tracking table
+        if (!self.global_variables.contains(name)) {
+            try self.global_variables.put(self.allocator, name, .{
+                .size = var_size,
+                .offset = 0, // Will be set during generateGlobalData
+                .init_data = null,
+            });
+        }
+
+        // Allocate stack slot for the pointer
+        const offset = self.allocStackSlots(1);
+
+        // Emit LEA with placeholder RIP-relative offset (will be patched later)
+        // LEA RAX, [RIP + disp32]
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x05 }); // LEA RAX, [RIP + disp32]
+        // Record patch location (current position is where disp32 goes)
+        try self.global_var_patches.append(self.allocator, .{
+            .code_offset = self.code.items.len,
+            .name = name,
+        });
+        // Emit placeholder displacement
+        try self.enc.emit(&.{ 0x00, 0x00, 0x00, 0x00 });
+
+        // Store pointer to stack
+        try self.enc.movRbpOffsetRax(offset);
+        try self.setValueLocation(result, .{ .stack = offset }, .ptr);
+        // Mark as indirect because the slot contains a pointer that needs to be dereferenced
         try self.markIndirect(result);
     }
 

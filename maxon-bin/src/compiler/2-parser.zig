@@ -90,6 +90,8 @@ pub const Parser = struct {
         errdefer functions.deinit(self.allocator);
         var global_constants: std.ArrayListUnmanaged(ast.GlobalConstant) = .empty;
         errdefer global_constants.deinit(self.allocator);
+        var global_variables: std.ArrayListUnmanaged(ast.GlobalVariable) = .empty;
+        errdefer global_variables.deinit(self.allocator);
         var type_aliases: std.ArrayListUnmanaged(ast.TypeAliasDecl) = .empty;
         errdefer type_aliases.deinit(self.allocator);
 
@@ -109,8 +111,11 @@ pub const Parser = struct {
             } else if (self.check(.let)) {
                 // Top-level let declaration (non-exported)
                 try global_constants.append(self.allocator, try self.parseGlobalConstant(false));
+            } else if (self.check(.@"var")) {
+                // Top-level var declaration (non-exported)
+                try global_variables.append(self.allocator, try self.parseGlobalVariable(false));
             } else if (self.check(.@"export")) {
-                // Peek ahead to see if this is 'export type', 'export interface', 'export function', or 'export let'
+                // Peek ahead to see if this is 'export type', 'export interface', 'export function', 'export let', or 'export var'
                 if (self.peek(1)) |next| {
                     if (next.type == .type) {
                         try types.append(self.allocator, try self.parseTypeDecl());
@@ -128,6 +133,9 @@ pub const Parser = struct {
                     } else if (next.type == .let) {
                         _ = self.advance(); // skip 'export'
                         try global_constants.append(self.allocator, try self.parseGlobalConstant(true));
+                    } else if (next.type == .@"var") {
+                        _ = self.advance(); // skip 'export'
+                        try global_variables.append(self.allocator, try self.parseGlobalVariable(true));
                     } else if (next.type == .@"enum") {
                         _ = self.advance(); // skip 'export'
                         var enum_decl = try self.parseEnumDecl();
@@ -154,7 +162,7 @@ pub const Parser = struct {
                     token.text,
                     @tagName(token.type),
                 });
-                debug.parser("  Expected: 'type', 'enum', 'interface', 'function', or 'let' declaration\n", .{});
+                debug.parser("  Expected: 'type', 'enum', 'interface', 'function', 'let', or 'var' declaration\n", .{});
                 self.reportErrorWithDetails(.E002, token.text, @src());
                 return error.UnexpectedToken;
             }
@@ -168,6 +176,7 @@ pub const Parser = struct {
             .extensions = try extensions.toOwnedSlice(self.allocator),
             .functions = try functions.toOwnedSlice(self.allocator),
             .global_constants = try global_constants.toOwnedSlice(self.allocator),
+            .global_variables = try global_variables.toOwnedSlice(self.allocator),
             .type_aliases = try type_aliases.toOwnedSlice(self.allocator),
         };
     }
@@ -307,24 +316,47 @@ pub const Parser = struct {
             }
 
             // Check for method: export? static? function ...
-            // export followed by static or function is a method
+            // export followed by static function is a method
             // export followed by var or let is an exported field
+            // static followed by var or let is a static field
+            // static followed by function is a static method
             if (self.check(.@"export")) {
                 if (self.peek(1)) |next| {
-                    if (next.type == .static or next.type == .function) {
+                    if (next.type == .static) {
+                        // export static ... - check if function or field
+                        if (self.peek(2)) |after_static| {
+                            if (after_static.type == .function) {
+                                try methods.append(self.allocator, try self.parseMethodDecl());
+                                continue;
+                            }
+                            // export static var/let - static field
+                        }
+                    } else if (next.type == .function) {
                         try methods.append(self.allocator, try self.parseMethodDecl());
                         continue;
                     }
-                    // Otherwise fall through to field parsing (export var/let)
+                    // Otherwise fall through to field parsing (export var/let or export static var/let)
                 }
-            } else if (self.check(.static) or self.check(.function)) {
+            } else if (self.check(.static)) {
+                // static followed by function is a static method
+                if (self.peek(1)) |next| {
+                    if (next.type == .function) {
+                        try methods.append(self.allocator, try self.parseMethodDecl());
+                        continue;
+                    }
+                    // static var/let - static field, fall through to field parsing
+                }
+            } else if (self.check(.function)) {
                 try methods.append(self.allocator, try self.parseMethodDecl());
                 continue;
             }
 
-            // Parse field: export? let/var name [type] [= default_value]
+            // Parse field: export? static? let/var name [type] [= default_value]
             const field_is_export = self.check(.@"export");
             if (field_is_export) _ = self.advance();
+
+            const field_is_static = self.check(.static);
+            if (field_is_static) _ = self.advance();
 
             const is_mutable = self.check(.@"var");
             if (!is_mutable and !self.check(.let)) {
@@ -359,6 +391,7 @@ pub const Parser = struct {
                 .type_expr = field_type,
                 .is_mutable = is_mutable,
                 .is_export = field_is_export,
+                .is_static = field_is_static,
                 .default_value = default_value,
             });
 
@@ -404,6 +437,28 @@ pub const Parser = struct {
             .value = value_expr,
             .line = let_token.line,
             .column = let_token.column,
+        };
+    }
+
+    /// Parse a top-level mutable variable declaration: var NAME = expression
+    fn parseGlobalVariable(self: *Parser, is_export: bool) !ast.GlobalVariable {
+        const var_token = try self.expect(.@"var");
+        const name_token = try self.expect(.identifier);
+        _ = try self.expect(.equals);
+
+        const value_expr = try self.parseExpression() orelse {
+            self.reportError(.E003, @src());
+            return error.ExpectedExpression;
+        };
+
+        _ = try self.expect(.newline);
+
+        return .{
+            .name = name_token.text,
+            .is_export = is_export,
+            .value = value_expr,
+            .line = var_token.line,
+            .column = var_token.column,
         };
     }
 

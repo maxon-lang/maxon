@@ -1,0 +1,26 @@
+// Test: static-variables.static-var-basic.1
+type Counter
+    static var count = 0
+end 'Counter'
+
+function main() returns int
+    Counter.count = 42
+    return Counter.count
+end 'main'
+---
+ExitCode: 42
+---
+function main() -> i64 {
+entry_0:
+    %tmp_const = const.i64 i64 0
+    %tmp_globaladdr = global.addr ptr @global.Counter.count elemsize=8
+    store %tmp_globaladdr %tmp_const
+    %tmp_const.1 = const.i64 i64 42
+    %tmp_globaladdr.1 = global.addr ptr @global.Counter.count elemsize=8
+    store %tmp_globaladdr.1 %tmp_const.1
+    %tmp_globaladdr.2 = global.addr ptr @global.Counter.count elemsize=8
+    %tmp_load = load i64 %tmp_globaladdr.2
+    ret %tmp_load
+}
+
+---

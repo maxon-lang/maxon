@@ -1,0 +1,53 @@
+// Test: static-variables.static-var-bool.1
+var initialized = false
+
+function init()
+    initialized = true
+end 'init'
+
+function main() returns int
+    if initialized 'check1'
+        return 1
+    end 'check1'
+    init()
+    if initialized 'check2'
+        return 42
+    end 'check2'
+    return 0
+end 'main'
+---
+ExitCode: 42
+---
+function init() -> void {
+entry_0:
+    %tmp_const = const.i64 i64 1
+    %tmp_globaladdr = global.addr ptr @global.initialized elemsize=8
+    store %tmp_globaladdr %tmp_const
+    ret
+}
+
+function main() -> i64 {
+entry_0:
+    %tmp_const = const.i64 i64 0
+    %tmp_globaladdr = global.addr ptr @global.initialized elemsize=8
+    store %tmp_globaladdr %tmp_const
+    %tmp_globaladdr.1 = global.addr ptr @global.initialized elemsize=8
+    %tmp_load = load i64 %tmp_globaladdr.1
+    br.cond %tmp_load @then$check1_1 @end$check1_2
+then$check1_1:
+    %tmp_const.1 = const.i64 i64 1
+    ret %tmp_const.1
+end$check1_2:
+    call @init()
+    %tmp_globaladdr.2 = global.addr ptr @global.initialized elemsize=8
+    %tmp_load.2 = load i64 %tmp_globaladdr.2
+    br.cond %tmp_load.2 @then$check2_3 @end$check2_4
+then$check2_3:
+    %tmp_const.2 = const.i64 i64 42
+    ret %tmp_const.2
+end$check2_4:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+}
+
+---

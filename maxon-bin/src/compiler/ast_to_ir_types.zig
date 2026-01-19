@@ -333,6 +333,7 @@ pub const FieldInfo = struct {
     display_name: ?[]const u8 = null, // Human-readable type name (e.g., "Array of Point")
     is_mutable: bool = true,
     is_export: bool = false, // Whether field is accessible outside the type
+    is_static: bool = false, // Whether this is a static field (shared across instances)
 
     pub fn irType(self: FieldInfo) ir.Type {
         return self.value_type.toIrType();

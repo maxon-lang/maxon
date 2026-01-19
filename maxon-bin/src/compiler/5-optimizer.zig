@@ -275,6 +275,7 @@ fn tryFoldConstant(inst: ir.Instruction, constants: *std.AutoHashMapUnmanaged(ir
         .const_f64,
         .const_string,
         .const_data,
+        .global_addr,
         .alloca,
         .alloca_sized,
         .alloca_dynamic,
@@ -537,7 +538,7 @@ fn handleOther(
             },
             // none, immediate_*, block_ref, func_name, elem_size, string_data, etc:
             // These don't contain ir.Value references, so no propagation needed
-            .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .data_label, .extern_func => {},
+            .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .data_label, .extern_func, .global_name => {},
         }
     }
 
@@ -750,6 +751,7 @@ fn collectPointerMappings(func: *ir.Function, ctx: *DseContext) !void {
                     .call_indirect,
                     .extern_call,
                     .func_addr,
+                    .global_addr,
                     .param,
                     .memcpy,
                     .memcpy_dyn,
@@ -820,6 +822,14 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                 .heap_alloc => {
                     // Heap allocations return pointers that will be used elsewhere
                     // (e.g., string buffers that get loaded through derived pointers)
+                    // Stores to them must be preserved
+                    if (inst.result) |result| {
+                        try ctx.loaded_bases.put(ctx.allocator, result, {});
+                    }
+                },
+                .global_addr => {
+                    // Global variable addresses point to persistent storage that survives
+                    // across function calls and can be read from anywhere
                     // Stores to them must be preserved
                     if (inst.result) |result| {
                         try ctx.loaded_bases.put(ctx.allocator, result, {});
@@ -992,7 +1002,7 @@ fn deadCodeElimination(func: *ir.Function, allocator: std.mem.Allocator) !void {
                     },
                     // none, immediate_*, block_ref, func_name, elem_size, string_data, etc:
                     // These don't reference ir.Value, so nothing to mark as used
-                    .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .data_label, .extern_func => {},
+                    .none, .immediate_i32, .immediate_i64, .immediate_f64, .block_ref, .func_name, .elem_size, .string_data, .alloc_tag, .data_label, .extern_func, .global_name => {},
                 }
             }
         }
@@ -1091,6 +1101,7 @@ fn isDeadInstruction(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Va
         .param,
         .getelemptr,
         .func_addr,
+        .global_addr,
         => {},
     }
 

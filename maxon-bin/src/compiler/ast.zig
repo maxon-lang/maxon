@@ -48,6 +48,15 @@ pub const GlobalConstant = struct {
     column: u32,
 };
 
+/// A top-level mutable variable declaration: var NAME = expression
+pub const GlobalVariable = struct {
+    name: []const u8,
+    is_export: bool,
+    value: Expression,
+    line: u32,
+    column: u32,
+};
+
 pub const Program = struct {
     types: []TypeDecl,
     enums: []EnumDecl,
@@ -55,6 +64,7 @@ pub const Program = struct {
     extensions: []ExtensionDecl,
     functions: []FunctionDecl,
     global_constants: []GlobalConstant,
+    global_variables: []GlobalVariable,
     type_aliases: []TypeAliasDecl,
 };
 
@@ -157,6 +167,7 @@ pub const FieldDecl = struct {
     type_expr: TypeExpr,
     is_mutable: bool,
     is_export: bool = false, // Whether field is accessible outside the type
+    is_static: bool = false, // Whether this is a static field (shared across all instances)
     default_value: ?*const Expression = null, // Optional default value for field
 };
 
@@ -680,6 +691,11 @@ pub fn freeProgram(program: Program, allocator: std.mem.Allocator) void {
         freeExpressionArgs(constant.value, allocator);
     }
     allocator.free(program.global_constants);
+
+    for (program.global_variables) |variable| {
+        freeExpressionArgs(variable.value, allocator);
+    }
+    allocator.free(program.global_variables);
 }
 
 fn freeStatementArgs(stmt: Statement, allocator: std.mem.Allocator) void {

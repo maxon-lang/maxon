@@ -350,6 +350,9 @@ pub const Instruction = struct {
         // External DLL calls
         extern_call, // Call external DLL function: dll_name:func_name, args -> result
 
+        // Global variables
+        global_addr, // Get address of global variable: name -> ptr (stored in data section)
+
         pub fn format(self: Op) []const u8 {
             return switch (self) {
                 .const_i8 => "const.i8",
@@ -425,6 +428,7 @@ pub const Instruction = struct {
                 .track_incref => "track.incref",
                 .track_decref => "track.decref",
                 .extern_call => "extern.call",
+                .global_addr => "global.addr",
             };
         }
     };
@@ -440,6 +444,7 @@ pub const Instruction = struct {
         call_args: []const Value,
         elem_size: i32, // Element size for getelemptr
         string_data: []const u8, // String constant data
+        global_name: []const u8, // Global variable name (for global.addr)
         alloc_tag: []const u8, // Tag for heap allocations (for tracking)
         data_label: []const u8, // Label for const.data (for debugging)
         extern_func: struct { // External DLL function reference
@@ -612,6 +617,7 @@ pub const Function = struct {
             .const_f64 => "tmp_fconst",
             .const_string => "tmp_strconst",
             .const_data => "tmp_data",
+            .global_addr => "tmp_globaladdr",
             .alloca, .alloca_sized, .alloca_dynamic => "tmp_alloca",
             .load => "tmp_load",
             .store, .store_i8, .store_i32 => "tmp_store",
@@ -894,6 +900,12 @@ pub const Function = struct {
     pub fn emitTrackDecref(self: *Function, tag: []const u8, new_refcount: Value) !void {
         try self.emit(.{ .op = .track_decref, .operands = .{ .{ .alloc_tag = tag }, .{ .value = new_refcount }, .none } });
     }
+
+    // Global variable address - returns RawPtr to the global variable's storage
+    pub fn emitGlobalAddr(self: *Function, global_name: []const u8, var_size: i32) !RawPtr {
+        const val = try self.emitWithResult(.global_addr, .ptr, .{ .{ .global_name = global_name }, .{ .elem_size = var_size }, .none });
+        return .{ .val = val };
+    }
 };
 
 /// IR Module
@@ -1081,6 +1093,7 @@ fn printInstruction(writer: anytype, inst: Instruction, func: *const Function) !
                 // Show size only, label shown separately
                 try writer.print(" <{d} bytes>", .{str.len});
             },
+            .global_name => |name| try writer.print(" @global.{s}", .{name}),
             .alloc_tag => |tag| try writer.print(" tag=\"{s}\"", .{tag}),
             .data_label => |label| try writer.print(" label=\"{s}\"", .{label}),
             .extern_func => |ef| try writer.print(" @\"{s}:{s}\"", .{ ef.dll_name, ef.func_name }),
