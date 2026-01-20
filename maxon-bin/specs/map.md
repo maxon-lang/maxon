@@ -579,6 +579,21 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: multiline-map-literal -->
+```maxon
+function main() returns int
+    var m = [
+        1: 100,
+        2: 200,
+        3: 300
+    ]
+    return m.count()
+end 'main'
+```
+```exitcode
+3
+```
 ```stdout
 MOVE: managed
 ALLOC #1: 40 bytes (map buffer)

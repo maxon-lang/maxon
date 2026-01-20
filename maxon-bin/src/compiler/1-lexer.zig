@@ -134,422 +134,350 @@ pub const Lexer = struct {
             if (self.pos >= self.source.len) break;
 
             const c = self.source[self.pos];
+            const start_col = self.column;
 
-            // Newline token
-            if (c == '\n') {
-                try tokens.append(allocator, .{ .type = .newline, .text = "\n", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.line += 1;
-                self.column = 1;
-                continue;
-            }
-
-            // Stop at fragment separator "---" at start of line
-            if (c == '-' and self.column == 1 and self.pos + 2 < self.source.len and
-                self.source[self.pos + 1] == '-' and self.source[self.pos + 2] == '-')
-            {
-                break;
-            }
-
-            // Skip comments (but NOT doc comments - those are handled in '/' section)
-            if (c == '/' and self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') {
-                // Check if this is a doc comment (///) - if so, don't skip it here
-                if (self.pos + 2 < self.source.len and self.source[self.pos + 2] == '/') {
-                    // Fall through to '/' handling below which produces doc_comment tokens
-                } else {
-                    // Regular comment - skip
-                    while (self.pos < self.source.len and self.source[self.pos] != '\n') {
+            switch (c) {
+                '\n' => {
+                    try tokens.append(allocator, .{ .type = .newline, .text = "\n", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.line += 1;
+                    self.column = 1;
+                },
+                '(' => {
+                    try tokens.append(allocator, .{ .type = .lparen, .text = "(", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                ')' => {
+                    try tokens.append(allocator, .{ .type = .rparen, .text = ")", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '+' => {
+                    try tokens.append(allocator, .{ .type = .plus, .text = "+", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '*' => {
+                    try tokens.append(allocator, .{ .type = .star, .text = "*", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                ',' => {
+                    try tokens.append(allocator, .{ .type = .comma, .text = ",", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                ':' => {
+                    try tokens.append(allocator, .{ .type = .colon, .text = ":", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '.' => {
+                    try tokens.append(allocator, .{ .type = .dot, .text = ".", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '{' => {
+                    try tokens.append(allocator, .{ .type = .lbrace, .text = "{", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '}' => {
+                    try tokens.append(allocator, .{ .type = .rbrace, .text = "}", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '[' => {
+                    try tokens.append(allocator, .{ .type = .lbracket, .text = "[", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                ']' => {
+                    try tokens.append(allocator, .{ .type = .rbracket, .text = "]", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '&' => {
+                    try tokens.append(allocator, .{ .type = .ampersand, .text = "&", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '|' => {
+                    try tokens.append(allocator, .{ .type = .pipe, .text = "|", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '^' => {
+                    try tokens.append(allocator, .{ .type = .caret, .text = "^", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '-' => {
+                    // Check for fragment separator "---" at start of line
+                    if (self.column == 1 and self.pos + 2 < self.source.len and
+                        self.source[self.pos + 1] == '-' and self.source[self.pos + 2] == '-')
+                    {
+                        break;
+                    }
+                    try tokens.append(allocator, .{ .type = .minus, .text = "-", .line = self.line, .column = start_col });
+                    self.pos += 1;
+                    self.column += 1;
+                },
+                '=' => {
+                    if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                        try tokens.append(allocator, .{ .type = .equals_equals, .text = "==", .line = self.line, .column = start_col });
+                        self.pos += 2;
+                        self.column += 2;
+                    } else {
+                        try tokens.append(allocator, .{ .type = .equals, .text = "=", .line = self.line, .column = start_col });
                         self.pos += 1;
                         self.column += 1;
                     }
-                    continue;
-                }
-            }
+                },
+                '!' => {
+                    if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                        try tokens.append(allocator, .{ .type = .not_equals, .text = "!=", .line = self.line, .column = start_col });
+                        self.pos += 2;
+                        self.column += 2;
+                    } else {
+                        // Single ! not supported - skip
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                },
+                '<' => {
+                    if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '<') {
+                        try tokens.append(allocator, .{ .type = .left_shift, .text = "<<", .line = self.line, .column = start_col });
+                        self.pos += 2;
+                        self.column += 2;
+                    } else if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                        try tokens.append(allocator, .{ .type = .less_equals, .text = "<=", .line = self.line, .column = start_col });
+                        self.pos += 2;
+                        self.column += 2;
+                    } else {
+                        try tokens.append(allocator, .{ .type = .less_than, .text = "<", .line = self.line, .column = start_col });
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                },
+                '>' => {
+                    if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '>') {
+                        try tokens.append(allocator, .{ .type = .right_shift, .text = ">>", .line = self.line, .column = start_col });
+                        self.pos += 2;
+                        self.column += 2;
+                    } else if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
+                        try tokens.append(allocator, .{ .type = .greater_equals, .text = ">=", .line = self.line, .column = start_col });
+                        self.pos += 2;
+                        self.column += 2;
+                    } else {
+                        try tokens.append(allocator, .{ .type = .greater_than, .text = ">", .line = self.line, .column = start_col });
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                },
+                '/' => {
+                    if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') {
+                        // Check if it's a doc comment (///)
+                        if (self.pos + 2 < self.source.len and self.source[self.pos + 2] == '/') {
+                            const start_line = self.line;
+                            // Skip the ///
+                            self.pos += 3;
+                            self.column += 3;
+                            // Skip leading space if present
+                            if (self.pos < self.source.len and self.source[self.pos] == ' ') {
+                                self.pos += 1;
+                                self.column += 1;
+                            }
+                            const text_start = self.pos;
+                            // Collect the comment text until end of line
+                            while (self.pos < self.source.len and self.source[self.pos] != '\n') {
+                                self.pos += 1;
+                                self.column += 1;
+                            }
+                            const text = self.source[text_start..self.pos];
+                            try tokens.append(allocator, .{ .type = .doc_comment, .text = text, .line = start_line, .column = start_col });
+                        } else {
+                            // Regular comment - skip to end of line
+                            while (self.pos < self.source.len and self.source[self.pos] != '\n') {
+                                self.pos += 1;
+                                self.column += 1;
+                            }
+                        }
+                    } else {
+                        try tokens.append(allocator, .{ .type = .slash, .text = "/", .line = self.line, .column = start_col });
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                },
+                '\'' => {
+                    const start = self.pos + 1;
+                    self.pos += 1;
+                    self.column += 1;
+                    // UTF-8: scan bytes until closing quote, handling escape sequences
+                    while (self.pos < self.source.len and self.source[self.pos] != '\'') {
+                        if (self.source[self.pos] == '\\' and self.pos + 1 < self.source.len) {
+                            // Skip escape sequence
+                            self.pos += 2;
+                            self.column += 2;
+                        } else {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
+                    }
+                    const text = self.source[start..self.pos];
+                    self.pos += 1; // skip closing quote
+                    self.column += 1;
+                    try tokens.append(allocator, .{ .type = .char_literal, .text = text, .line = self.line, .column = start_col });
+                },
+                '"' => {
+                    const start = self.pos + 1;
+                    self.pos += 1;
+                    self.column += 1;
+                    var has_interpolation = false;
+                    // UTF-8: scan bytes until closing quote, handling escape sequences
+                    while (self.pos < self.source.len and self.source[self.pos] != '"') {
+                        if (self.source[self.pos] == '\\' and self.pos + 1 < self.source.len) {
+                            // Skip escape sequence (including \{ and \})
+                            self.pos += 2;
+                            self.column += 2;
+                        } else if (self.source[self.pos] == '{') {
+                            // Unescaped { means interpolation
+                            has_interpolation = true;
+                            self.pos += 1;
+                            self.column += 1;
+                        } else {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
+                    }
+                    const text = self.source[start..self.pos];
+                    self.pos += 1; // skip closing quote
+                    self.column += 1;
+                    const token_type: TokenType = if (has_interpolation) .string_interp else .string_literal;
+                    try tokens.append(allocator, .{ .type = token_type, .text = text, .line = self.line, .column = start_col });
+                },
+                '0'...'9' => {
+                    const start = self.pos;
 
-            // Single character tokens
-            if (c == '(') {
-                try tokens.append(allocator, .{ .type = .lparen, .text = "(", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-            if (c == ')') {
-                try tokens.append(allocator, .{ .type = .rparen, .text = ")", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-            if (c == '=') {
-                // Check for ==
-                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
-                    try tokens.append(allocator, .{ .type = .equals_equals, .text = "==", .line = self.line, .column = self.column });
-                    self.pos += 2;
-                    self.column += 2;
-                } else {
-                    try tokens.append(allocator, .{ .type = .equals, .text = "=", .line = self.line, .column = self.column });
-                    self.pos += 1;
-                    self.column += 1;
-                }
-                continue;
-            }
-            if (c == '!') {
-                // Check for !=
-                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
-                    try tokens.append(allocator, .{ .type = .not_equals, .text = "!=", .line = self.line, .column = self.column });
-                    self.pos += 2;
-                    self.column += 2;
-                    continue;
-                }
-                // Single ! not supported yet
-            }
-            if (c == '<') {
-                // Check for << or <=
-                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '<') {
-                    try tokens.append(allocator, .{ .type = .left_shift, .text = "<<", .line = self.line, .column = self.column });
-                    self.pos += 2;
-                    self.column += 2;
-                } else if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
-                    try tokens.append(allocator, .{ .type = .less_equals, .text = "<=", .line = self.line, .column = self.column });
-                    self.pos += 2;
-                    self.column += 2;
-                } else {
-                    try tokens.append(allocator, .{ .type = .less_than, .text = "<", .line = self.line, .column = self.column });
-                    self.pos += 1;
-                    self.column += 1;
-                }
-                continue;
-            }
-            if (c == '>') {
-                // Check for >> or >=
-                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '>') {
-                    try tokens.append(allocator, .{ .type = .right_shift, .text = ">>", .line = self.line, .column = self.column });
-                    self.pos += 2;
-                    self.column += 2;
-                } else if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '=') {
-                    try tokens.append(allocator, .{ .type = .greater_equals, .text = ">=", .line = self.line, .column = self.column });
-                    self.pos += 2;
-                    self.column += 2;
-                } else {
-                    try tokens.append(allocator, .{ .type = .greater_than, .text = ">", .line = self.line, .column = self.column });
-                    self.pos += 1;
-                    self.column += 1;
-                }
-                continue;
-            }
-            if (c == '+') {
-                try tokens.append(allocator, .{ .type = .plus, .text = "+", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-            if (c == '-') {
-                try tokens.append(allocator, .{ .type = .minus, .text = "-", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-            if (c == '*') {
-                try tokens.append(allocator, .{ .type = .star, .text = "*", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-            if (c == '/') {
-                // Check if it's a comment
-                if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '/') {
-                    // Check if it's a doc comment (///)
-                    if (self.pos + 2 < self.source.len and self.source[self.pos + 2] == '/') {
-                        const start_line = self.line;
-                        const start_col = self.column;
-                        // Skip the ///
-                        self.pos += 3;
-                        self.column += 3;
-                        // Skip leading space if present
-                        if (self.pos < self.source.len and self.source[self.pos] == ' ') {
+                    // Check for hex literal (0x or 0X)
+                    if (c == '0' and self.pos + 1 < self.source.len and
+                        (self.source[self.pos + 1] == 'x' or self.source[self.pos + 1] == 'X'))
+                    {
+                        self.pos += 2; // skip 0x
+                        self.column += 2;
+                        while (self.pos < self.source.len and (isHexDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
                             self.pos += 1;
                             self.column += 1;
                         }
-                        const text_start = self.pos;
-                        // Collect the comment text until end of line
-                        while (self.pos < self.source.len and self.source[self.pos] != '\n') {
-                            self.pos += 1;
-                            self.column += 1;
-                        }
-                        const text = self.source[text_start..self.pos];
-                        try tokens.append(allocator, .{ .type = .doc_comment, .text = text, .line = start_line, .column = start_col });
+                        try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
                         continue;
                     }
-                    // Regular comment - skip
-                    while (self.pos < self.source.len and self.source[self.pos] != '\n') {
-                        self.pos += 1;
-                        self.column += 1;
-                    }
-                    continue;
-                }
-                try tokens.append(allocator, .{ .type = .slash, .text = "/", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
 
-            // Bitwise operators
-            if (c == '&') {
-                try tokens.append(allocator, .{ .type = .ampersand, .text = "&", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-            if (c == '|') {
-                try tokens.append(allocator, .{ .type = .pipe, .text = "|", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-            if (c == '^') {
-                try tokens.append(allocator, .{ .type = .caret, .text = "^", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-
-            // Character literal (single quotes) - used for both char literals and end labels
-            // The parser distinguishes context (labels expect .char_literal after 'end')
-            if (c == '\'') {
-                const start_col = self.column;
-                const start = self.pos + 1;
-                self.pos += 1;
-                self.column += 1;
-                // UTF-8: scan bytes until closing quote, handling escape sequences
-                while (self.pos < self.source.len and self.source[self.pos] != '\'') {
-                    if (self.source[self.pos] == '\\' and self.pos + 1 < self.source.len) {
-                        // Skip escape sequence
-                        self.pos += 2;
+                    // Check for binary literal (0b or 0B)
+                    if (c == '0' and self.pos + 1 < self.source.len and
+                        (self.source[self.pos + 1] == 'b' or self.source[self.pos + 1] == 'B'))
+                    {
+                        self.pos += 2; // skip 0b
                         self.column += 2;
-                    } else {
-                        self.pos += 1;
-                        self.column += 1;
+                        while (self.pos < self.source.len and (isBinaryDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
+                        try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
+                        continue;
                     }
-                }
-                const text = self.source[start..self.pos];
-                self.pos += 1; // skip closing quote
-                self.column += 1;
-                try tokens.append(allocator, .{ .type = .char_literal, .text = text, .line = self.line, .column = start_col });
-                continue;
-            }
 
-            // Double-quoted string literal (may contain interpolation)
-            if (c == '"') {
-                const start_col = self.column;
-                const start = self.pos + 1;
-                self.pos += 1;
-                self.column += 1;
-                var has_interpolation = false;
-                // UTF-8: scan bytes until closing quote, handling escape sequences
-                while (self.pos < self.source.len and self.source[self.pos] != '"') {
-                    if (self.source[self.pos] == '\\' and self.pos + 1 < self.source.len) {
-                        // Skip escape sequence (including \{ and \})
-                        self.pos += 2;
+                    // Check for octal literal (0o or 0O)
+                    if (c == '0' and self.pos + 1 < self.source.len and
+                        (self.source[self.pos + 1] == 'o' or self.source[self.pos + 1] == 'O'))
+                    {
+                        self.pos += 2; // skip 0o
                         self.column += 2;
-                    } else if (self.source[self.pos] == '{') {
-                        // Unescaped { means interpolation
-                        has_interpolation = true;
-                        self.pos += 1;
-                        self.column += 1;
-                    } else {
-                        self.pos += 1;
-                        self.column += 1;
+                        while (self.pos < self.source.len and (isOctalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
+                        try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
+                        continue;
                     }
-                }
-                const text = self.source[start..self.pos];
-                self.pos += 1; // skip closing quote
-                self.column += 1;
-                const token_type: TokenType = if (has_interpolation) .string_interp else .string_literal;
-                try tokens.append(allocator, .{ .type = token_type, .text = text, .line = self.line, .column = start_col });
-                continue;
-            }
 
-            // Comma
-            if (c == ',') {
-                try tokens.append(allocator, .{ .type = .comma, .text = ",", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-
-            // Colon
-            if (c == ':') {
-                try tokens.append(allocator, .{ .type = .colon, .text = ":", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-
-            // Dot
-            if (c == '.') {
-                try tokens.append(allocator, .{ .type = .dot, .text = ".", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-
-            // Braces
-            if (c == '{') {
-                try tokens.append(allocator, .{ .type = .lbrace, .text = "{", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-            if (c == '}') {
-                try tokens.append(allocator, .{ .type = .rbrace, .text = "}", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-
-            // Brackets
-            if (c == '[') {
-                try tokens.append(allocator, .{ .type = .lbracket, .text = "[", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-            if (c == ']') {
-                try tokens.append(allocator, .{ .type = .rbracket, .text = "]", .line = self.line, .column = self.column });
-                self.pos += 1;
-                self.column += 1;
-                continue;
-            }
-
-            // Number literal (integer or float)
-            if (c >= '0' and c <= '9') {
-                const start = self.pos;
-                const start_col = self.column;
-
-                // Check for hex literal (0x or 0X)
-                if (c == '0' and self.pos + 1 < self.source.len and
-                    (self.source[self.pos + 1] == 'x' or self.source[self.pos + 1] == 'X'))
-                {
-                    self.pos += 2; // skip 0x
-                    self.column += 2;
-                    while (self.pos < self.source.len and (isHexDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
-                        self.pos += 1;
-                        self.column += 1;
-                    }
-                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
-                    continue;
-                }
-
-                // Check for binary literal (0b or 0B)
-                if (c == '0' and self.pos + 1 < self.source.len and
-                    (self.source[self.pos + 1] == 'b' or self.source[self.pos + 1] == 'B'))
-                {
-                    self.pos += 2; // skip 0b
-                    self.column += 2;
-                    while (self.pos < self.source.len and (isBinaryDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
-                        self.pos += 1;
-                        self.column += 1;
-                    }
-                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
-                    continue;
-                }
-
-                // Check for octal literal (0o or 0O)
-                if (c == '0' and self.pos + 1 < self.source.len and
-                    (self.source[self.pos + 1] == 'o' or self.source[self.pos + 1] == 'O'))
-                {
-                    self.pos += 2; // skip 0o
-                    self.column += 2;
-                    while (self.pos < self.source.len and (isOctalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
-                        self.pos += 1;
-                        self.column += 1;
-                    }
-                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
-                    continue;
-                }
-
-                // Decimal integer or float - allow underscores as separators
-                while (self.pos < self.source.len and (isDecimalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
-                    self.pos += 1;
-                    self.column += 1;
-                }
-                // Check for decimal point
-                var is_float = false;
-                if (self.pos < self.source.len and self.source[self.pos] == '.') {
-                    is_float = true;
-                    self.pos += 1;
-                    self.column += 1;
+                    // Decimal integer or float - allow underscores as separators
                     while (self.pos < self.source.len and (isDecimalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
                         self.pos += 1;
                         self.column += 1;
                     }
-                }
-                // Check for scientific notation (e.g., 1.5e10, 2.0e-3, 3.0E+5)
-                if (self.pos < self.source.len and (self.source[self.pos] == 'e' or self.source[self.pos] == 'E')) {
-                    is_float = true;
-                    self.pos += 1;
-                    self.column += 1;
-                    // Optional sign
-                    if (self.pos < self.source.len and (self.source[self.pos] == '+' or self.source[self.pos] == '-')) {
+                    // Check for decimal point
+                    var is_float = false;
+                    if (self.pos < self.source.len and self.source[self.pos] == '.') {
+                        is_float = true;
                         self.pos += 1;
                         self.column += 1;
+                        while (self.pos < self.source.len and (isDecimalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
                     }
-                    // Exponent digits
-                    while (self.pos < self.source.len and (isDecimalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
+                    // Check for scientific notation (e.g., 1.5e10, 2.0e-3, 3.0E+5)
+                    if (self.pos < self.source.len and (self.source[self.pos] == 'e' or self.source[self.pos] == 'E')) {
+                        is_float = true;
                         self.pos += 1;
                         self.column += 1;
+                        // Optional sign
+                        if (self.pos < self.source.len and (self.source[self.pos] == '+' or self.source[self.pos] == '-')) {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
+                        // Exponent digits
+                        while (self.pos < self.source.len and (isDecimalDigit(self.source[self.pos]) or self.source[self.pos] == '_')) {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
                     }
-                }
-                if (is_float) {
-                    try tokens.append(allocator, .{ .type = .float_literal, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
-                } else {
-                    try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
-                }
-                continue;
-            }
-
-            // Identifier or keyword
-            // Start: ASCII letter, underscore, or UTF-8 continuation byte (for unicode identifiers)
-            if (isIdentifierStart(c)) {
-                const start = self.pos;
-                const start_col = self.column;
-                self.pos += 1;
-                self.column += 1;
-                while (self.pos < self.source.len and isIdentifierContinue(self.source[self.pos])) {
-                    self.pos += 1;
-                    self.column += 1;
-                }
-                const text = self.source[start..self.pos];
-                const token_type = getKeyword(text) orelse .identifier;
-                try tokens.append(allocator, .{ .type = token_type, .text = text, .line = self.line, .column = start_col });
-                continue;
-            }
-
-            // UTF-8 multi-byte sequence (non-ASCII) - could be identifier
-            if (c >= 0x80) {
-                const start = self.pos;
-                const start_col = self.column;
-                // Skip UTF-8 sequence
-                const byte_len = utf8ByteLen(c);
-                self.pos += byte_len;
-                self.column += 1; // UTF-8 multi-byte counts as 1 column
-                // Continue while identifier characters
-                while (self.pos < self.source.len and isIdentifierContinue(self.source[self.pos])) {
-                    if (self.source[self.pos] >= 0x80) {
-                        self.pos += utf8ByteLen(self.source[self.pos]);
-                        self.column += 1;
+                    if (is_float) {
+                        try tokens.append(allocator, .{ .type = .float_literal, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
                     } else {
+                        try tokens.append(allocator, .{ .type = .integer, .text = self.source[start..self.pos], .line = self.line, .column = start_col });
+                    }
+                },
+                'a'...'z', 'A'...'Z', '_' => {
+                    const start = self.pos;
+                    self.pos += 1;
+                    self.column += 1;
+                    while (self.pos < self.source.len and isIdentifierContinue(self.source[self.pos])) {
                         self.pos += 1;
                         self.column += 1;
                     }
-                }
-                const text = self.source[start..self.pos];
-                try tokens.append(allocator, .{ .type = .identifier, .text = text, .line = self.line, .column = start_col });
-                continue;
+                    const text = self.source[start..self.pos];
+                    const token_type = getKeyword(text) orelse .identifier;
+                    try tokens.append(allocator, .{ .type = token_type, .text = text, .line = self.line, .column = start_col });
+                },
+                0x80...0xFF => {
+                    // UTF-8 multi-byte sequence (non-ASCII) - could be identifier
+                    const start = self.pos;
+                    // Skip UTF-8 sequence
+                    const byte_len = utf8ByteLen(c);
+                    self.pos += byte_len;
+                    self.column += 1; // UTF-8 multi-byte counts as 1 column
+                    // Continue while identifier characters
+                    while (self.pos < self.source.len and isIdentifierContinue(self.source[self.pos])) {
+                        if (self.source[self.pos] >= 0x80) {
+                            self.pos += utf8ByteLen(self.source[self.pos]);
+                            self.column += 1;
+                        } else {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
+                    }
+                    const text = self.source[start..self.pos];
+                    try tokens.append(allocator, .{ .type = .identifier, .text = text, .line = self.line, .column = start_col });
+                },
+                else => {
+                    // Unknown character - skip
+                    self.pos += 1;
+                    self.column += 1;
+                },
             }
-
-            // Unknown character - skip
-            self.pos += 1;
-            self.column += 1;
         }
 
         try tokens.append(allocator, .{ .type = .eof, .text = "", .line = self.line, .column = self.column });

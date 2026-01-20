@@ -1,21 +1,20 @@
 // Maxon Compiler - Lexer (Stage 1)
 // Tokenizes source code into a stream of tokens
 
-/// Token types needed for basic.maxon
-// export enum TokenType
-	// 	keywordFunction
-	// 	keywordReturns
-	// 	keywordReturn
-	// 	keywordEnd
-	// 	keywordInt
-	// 	identifier
-	// 	integer
-	// 	charLiteral
-	// 	lparen
-	// 	rparen
-	// 	newline
-	// 	eof
-// end 'TokenType'
+export enum TokenType
+	function
+	returns
+	return
+	end
+	int
+	identifier
+	integer
+	charLiteral
+	lparen
+	rparen
+	newline
+	eof
+end 'TokenType'
 
 export enum KeywordCategory
 	control
@@ -25,45 +24,39 @@ export enum KeywordCategory
 	type_keyword
 end 'KeywordCategory'
 
-
 export type KeywordInfo
 	export var text String
 	export var category KeywordCategory
 	export var description String
 	export var requiresLabel bool
-	end 'KeywordInfo'
+end 'KeywordInfo'
 
-// pub const keyword_map = .{
-//     .{ "function", TokenType.function, KeywordCategory.other, "Declares a function. Functions contain executable code and can return values.\n\nExample:\n```maxon\nfunction add(a int, b int) returns int\n    return a + b\nend 'add'\n```", false },
-//     .{ "returns", TokenType.returns, KeywordCategory.other, "Specifies the return type of a function.", false },
-//     .{ "return", TokenType.@"return", KeywordCategory.control, "Returns a value from a function and exits the function.", false },
-//     .{ "end", TokenType.end, KeywordCategory.control, "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", true },
+typealias TokenTypeMap is Map with (TokenType, KeywordInfo)
 
-export enum TokenType
-function(KeywordInfo{text: "function",category: KeywordCategory.other,description: "Declares a function. Functions contain executable code and can return values.\n\nExample:\n```maxon\nfunction add(a int, b int) returns int\n    return a + b\nend 'add'\n```",requiresLabel: false})
-returns
-return
-end
-int
-end 'TokenType'
+export let keyword_map = [
+TokenType.function: KeywordInfo{text: "function", category: KeywordCategory.other, description: "Declares a function. Functions contain executable code and can return values.", requiresLabel: false},
+TokenType.returns: KeywordInfo{text: "returns", category: KeywordCategory.other, description: "Specifies the return type of a function.", requiresLabel: false},
+TokenType.return: KeywordInfo{text: "return", category: KeywordCategory.control, description: "Returns a value from a function and exits the function.", requiresLabel: false},
+TokenType.end: KeywordInfo{text: "end", category: KeywordCategory.control, description: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", requiresLabel: true}
+]
 
 /// A single token with type, text, and position
 export type Token
-export var tokenType TokenType
+	export var tokenType TokenType
 	export var text String
 	export var line int
 	export var column int
 
 	export static function create(tokenType TokenType, text String, line int, column int) returns Token
-	return {tokenType: tokenType, text: text, line: line, column: column}
-		end 'create'
-	end 'Token'
+		return {tokenType: tokenType, text: text, line: line, column: column}
+	end 'create'
+end 'Token'
 
 export typealias TokenArray is Array with Token
 
 /// Lexer state for tokenizing source code
 export type Lexer
-var source String
+	var source String
 	var sourceFile String
 	var pos int
 	var line int
@@ -71,186 +64,200 @@ var source String
 	export var errors ErrorCollector
 
 	export static function init(source String, sourceFile String) returns Lexer
-	return {source: source, sourceFile: sourceFile, pos: 0, line: 1, column: 1, errors: ErrorCollector.create()}
-		end 'init'
+		return {source: source, sourceFile: sourceFile, pos: 0, line: 1, column: 1, errors: ErrorCollector.create()}
+	end 'init'
 
 	export function tokenize() returns TokenArray
-	var tokens = TokenArray{}
+		var tokens = TokenArray{}
+
 		while not isAtEnd() 'mainLoop'
-		skipWhitespaceExceptNewline()
+			skipWhitespaceExceptNewline()
+
 			if isAtEnd() 'checkEnd'
-			break 'mainLoop'
-				end 'checkEnd'
+				break 'mainLoop'
+			end 'checkEnd'
+
 			let c = peek()
+
 			if c == '\n' 'isNewline'
-			tokens.push(makeToken(TokenType.newline, text: "\n"))
+				tokens.push(makeToken(TokenType.newline, text: "\n"))
 				advance()
 				line = line + 1
 				column = 1
 				continue 'mainLoop'
-				end 'isNewline'
+			end 'isNewline'
+
 			// Skip comments
 			if c == '/' and peekNext() == '/' 'isComment'
-			skipToEndOfLine()
+				skipToEndOfLine()
 				continue 'mainLoop'
-				end 'isComment'
+			end 'isComment'
+
 			if c == '(' 'isLparen'
-			tokens.push(makeToken(TokenType.lparen, text: "("))
+				tokens.push(makeToken(TokenType.lparen, text: "("))
 				advance()
 				continue 'mainLoop'
-				end 'isLparen'
+			end 'isLparen'
+
 			if c == ')' 'isRparen'
-			tokens.push(makeToken(TokenType.rparen, text: ")"))
+				tokens.push(makeToken(TokenType.rparen, text: ")"))
 				advance()
 				continue 'mainLoop'
-				end 'isRparen'
+			end 'isRparen'
+
 			if c == '\'' 'isCharLit'
-			tokens.push(scanCharLiteral())
+				tokens.push(scanCharLiteral())
 				continue 'mainLoop'
-				end 'isCharLit'
+			end 'isCharLit'
+
 			if isDigit(c) 'isNumber'
-			tokens.push(scanNumber())
+				tokens.push(scanNumber())
 				continue 'mainLoop'
-				end 'isNumber'
+			end 'isNumber'
+
 			if isIdentifierStart(c) 'isIdent'
-			tokens.push(scanIdentifierOrKeyword())
+				tokens.push(scanIdentifierOrKeyword())
 				continue 'mainLoop'
-				end 'isIdent'
+			end 'isIdent'
+
 			errors.addErrorAt(ErrorCode.E1001, message: "invalid character", file: sourceFile, line: line, column: column)
+
 			advance()
-			end 'mainLoop'
+		end 'mainLoop'
+
 		tokens.push(makeToken(TokenType.eof, text: ""))
+
 		return tokens
-		end 'tokenize'
+	end 'tokenize'
 
 	function isAtEnd() returns bool
-	return pos >= source.byteLength()
-		end 'isAtEnd'
+		return pos >= source.byteLength()
+	end 'isAtEnd'
 
 	function peek() returns Character
-	if isAtEnd() 'atEnd'
-		return '\0'
-			end 'atEnd'
+		if isAtEnd() 'atEnd'
+			return '\0'
+		end 'atEnd'
 		return source.charAt(byteIndexToStringIndex(pos))
-		end 'peek'
+	end 'peek'
 
 	function peekNext() returns Character
-	let nextPos = pos + 1
+		let nextPos = pos + 1
 		if nextPos >= source.byteLength() 'atEnd'
-		return '\0'
-			end 'atEnd'
+			return '\0'
+		end 'atEnd'
 		return source.charAt(byteIndexToStringIndex(nextPos))
-		end 'peekNext'
+	end 'peekNext'
 
 	function byteIndexToStringIndex(byteIdx int) returns StringIndex
-	var idx = source.startIndex()
+		var idx = source.startIndex()
 		var i = 0
 		while i < byteIdx 'walk'
-		if let nextIdx = try source.indexAfter(idx) 'getNext'
-			idx = nextIdx
-				end 'getNext' else 'noMore'
-			break 'walk'
-				end 'noMore'
+			if let nextIdx = try source.indexAfter(idx) 'getNext'
+				idx = nextIdx
+			end 'getNext' else 'noMore'
+				break 'walk'
+			end 'noMore'
 			i = i + 1
-			end 'walk'
+		end 'walk'
 		return idx
-		end 'byteIndexToStringIndex'
+	end 'byteIndexToStringIndex'
 
 	function advance() returns Character
-	if isAtEnd() 'atEnd'
-		return '\0'
-			end 'atEnd'
+		if isAtEnd() 'atEnd'
+			return '\0'
+		end 'atEnd'
 		let c = peek()
 		pos = pos + 1
 		column = column + 1
 		return c
-		end 'advance'
+	end 'advance'
 
 	function skipWhitespaceExceptNewline()
-	while not isAtEnd() 'skipLoop'
-		let c = peek()
+		while not isAtEnd() 'skipLoop'
+			let c = peek()
 			if c == ' ' or c == '\t' or c == '\r' 'isWhitespace'
-			advance()
-				end 'isWhitespace' else 'notWhitespace'
-			break 'skipLoop'
-				end 'notWhitespace'
-			end 'skipLoop'
-		end 'skipWhitespaceExceptNewline'
+				advance()
+			end 'isWhitespace' else 'notWhitespace'
+				break 'skipLoop'
+			end 'notWhitespace'
+		end 'skipLoop'
+	end 'skipWhitespaceExceptNewline'
 
 	function skipToEndOfLine()
-	while not isAtEnd() and peek() != '\n' 'skipLoop'
-		advance()
-			end 'skipLoop'
-		end 'skipToEndOfLine'
+		while not isAtEnd() and peek() != '\n' 'skipLoop'
+			advance()
+		end 'skipLoop'
+	end 'skipToEndOfLine'
 
 	function makeToken(tokenType TokenType, text String) returns Token
-	return Token.create(tokenType, text: text, line: line, column: column)
-		end 'makeToken'
+		return Token.create(tokenType, text: text, line: line, column: column)
+	end 'makeToken'
 
 	function scanCharLiteral() returns Token
-	let startCol = column
+		let startCol = column
 		advance()
 		let textStart = pos
 		while not isAtEnd() and peek() != '\'' 'collectChars'
-		advance()
-			end 'collectChars'
+			advance()
+		end 'collectChars'
 		let text = extractSubstring(textStart, endPos: pos)
 		if not isAtEnd() and peek() == '\'' 'hasClose'
-		advance()
-			end 'hasClose' else 'noClose'
-		errors.addErrorAt(ErrorCode.E1002, message: "unterminated character literal", file: sourceFile, line: line, column: startCol)
-			end 'noClose'
+			advance()
+		end 'hasClose' else 'noClose'
+			errors.addErrorAt(ErrorCode.E1002, message: "unterminated character literal", file: sourceFile, line: line, column: startCol)
+		end 'noClose'
 		return Token.create(TokenType.charLiteral, text: text, line: line, column: startCol)
-		end 'scanCharLiteral'
+	end 'scanCharLiteral'
 
 	function scanNumber() returns Token
-	let startCol = column
+		let startCol = column
 		let startPos = pos
 		while not isAtEnd() and isDigit(peek()) 'digits'
-		advance()
-			end 'digits'
+			advance()
+		end 'digits'
 		let text = extractSubstring(startPos, endPos: pos)
 		return Token.create(TokenType.integer, text: text, line: line, column: startCol)
-		end 'scanNumber'
+	end 'scanNumber'
 
 	function scanIdentifierOrKeyword() returns Token
-	let startCol = column
+		let startCol = column
 		let startPos = pos
 		advance()
 		while not isAtEnd() and isIdentifierContinue(peek()) 'identChars'
-		advance()
-			end 'identChars'
+			advance()
+		end 'identChars'
 		let text = extractSubstring(startPos, endPos: pos)
 		let tokType = getKeywordType(text)
 		return Token.create(tokType, text: text, line: line, column: startCol)
-		end 'scanIdentifierOrKeyword'
+	end 'scanIdentifierOrKeyword'
 
 	function extractSubstring(startPos int, endPos int) returns String
-	let startIdx = byteIndexToStringIndex(startPos)
+		let startIdx = byteIndexToStringIndex(startPos)
 		let endIdx = byteIndexToStringIndex(endPos)
 		return source.slice(startIdx, endIndex: endIdx)
-		end 'extractSubstring'
+	end 'extractSubstring'
 
 	function isDigit(c Character) returns bool
-	return c >= '0' and c <= '9'
-		end 'isDigit'
+		return c >= '0' and c <= '9'
+	end 'isDigit'
 
 	function isIdentifierStart(c Character) returns bool
-	return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or c == '_'
-		end 'isIdentifierStart'
+		return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or c == '_'
+	end 'isIdentifierStart'
 
 	function isIdentifierContinue(c Character) returns bool
-	return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '_'
-		end 'isIdentifierContinue'
+		return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '_'
+	end 'isIdentifierContinue'
 
 	function getKeywordType(text String) returns TokenType
-	return match text 'keyword'
-		"function" gives TokenType.keywordFunction
+		return match text 'keyword'
+			"function" gives TokenType.keywordFunction
 			"returns" gives TokenType.keywordReturns
 			"return" gives TokenType.keywordReturn
 			"end" gives TokenType.keywordEnd
 			"int" gives TokenType.keywordInt
 			default gives TokenType.identifier
-			end 'keyword'
-		end 'getKeywordType'
-	end 'Lexer'
+		end 'keyword'
+	end 'getKeywordType'
+end 'Lexer'

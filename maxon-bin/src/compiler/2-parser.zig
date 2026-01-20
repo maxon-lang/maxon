@@ -2751,7 +2751,9 @@ pub const Parser = struct {
     }
 
     fn parseArrayLiteral(self: *Parser) ParseError!ast.Expression {
+        const start_line = self.current().line;
         _ = try self.expect(.lbracket);
+        self.skipNewlines();
 
         if (!self.check(.rbracket)) {
             // Parse first expression (could be array element or map key)
@@ -2762,7 +2764,7 @@ pub const Parser = struct {
 
             // Check if this is a map literal (key: value)
             if (self.check(.colon)) {
-                return try self.parseMapLiteralRest(first);
+                return try self.parseMapLiteralRest(first, start_line);
             }
 
             // Otherwise, continue parsing as array literal
@@ -2796,7 +2798,7 @@ pub const Parser = struct {
 
     /// Parse the rest of a map literal after the first key has been parsed.
     /// Called when we've seen `[key` and the next token is `:`.
-    fn parseMapLiteralRest(self: *Parser, first_key: ast.Expression) ParseError!ast.Expression {
+    fn parseMapLiteralRest(self: *Parser, first_key: ast.Expression, start_line: u32) ParseError!ast.Expression {
         var entries: std.ArrayListUnmanaged(ast.MapEntry) = .empty;
         errdefer entries.deinit(self.allocator);
 
@@ -2810,10 +2812,12 @@ pub const Parser = struct {
             .key = try self.createExpr(first_key),
             .value = try self.createExpr(first_value),
         });
+        self.skipNewlines();
 
         // Parse remaining entries
         while (self.check(.comma)) {
             _ = self.advance(); // consume ','
+            self.skipNewlines();
 
             const key = try self.parseExpression() orelse {
                 self.reportError(.E003, @src());
@@ -2828,11 +2832,15 @@ pub const Parser = struct {
                 .key = try self.createExpr(key),
                 .value = try self.createExpr(value),
             });
+            self.skipNewlines();
         }
 
+        const end_line = self.current().line;
         _ = try self.expect(.rbracket);
         return try self.parsePostfix(.{ .map_literal = .{
             .entries = try entries.toOwnedSlice(self.allocator),
+            .start_line = start_line,
+            .end_line = end_line,
         } });
     }
 

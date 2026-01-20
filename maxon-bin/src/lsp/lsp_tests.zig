@@ -1974,3 +1974,38 @@ test "formatting indents try-otherwise block correctly" {
     // Check that return 0 has one tab (inside function)
     try testing.expect(std.mem.indexOf(u8, new_text, "\treturn 0") != null);
 }
+
+test "formatting indents multiline map literal correctly" {
+    var client = try TestClient.init(test_allocator);
+    defer client.deinit();
+    _ = try client.initialize();
+
+    // Multiline map literal with no indentation - formatter should add proper indentation
+    const source =
+        \\function getConfig()
+        \\var config = [
+        \\"width": 100,
+        \\"height": 200
+        \\]
+        \\return config
+        \\end 'getConfig'
+    ;
+    try client.openDocument("file:///test.maxon", source);
+
+    var result = try client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    // Verify we got formatted text
+    try testing.expect(result.new_text.len > 0);
+    const new_text = result.new_text;
+
+    // Check that 'var config = [' is indented one level (inside function)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tvar config = [") != null);
+
+    // Check that map entries are indented two levels (inside function + inside map literal)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\t\"width\":") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\t\"height\":") != null);
+
+    // Check that closing ] has one tab (back to function level)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t]") != null);
+}

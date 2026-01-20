@@ -18,9 +18,10 @@ export function compile(sourceFile String, emitIr bool) returns int
 	var lexer = Lexer.init(source, sourceFile: sourceFile)
 	let tokens = lexer.tokenize()
 	Logger.info(LogCategory.lexer, message: "Lexed {tokens.count()} tokens")
-	if lexer.hasErrors() 'lexerErrors'
-		print("\nLexer errors:\n")
-		lexer.printErrors()
+	if lexer.errors.count() > 0 'lexerErrors'
+		for err in lexer.errors 'printErr'
+			Logger.error(LogCategory.lexer, message: err)
+		end 'printErr'
 		return 1
 	end 'lexerErrors'
 
@@ -28,9 +29,10 @@ export function compile(sourceFile String, emitIr bool) returns int
 	var parser = Parser.init(tokens, sourceFile: sourceFile)
 	let program = parser.parse()
 	Logger.info(LogCategory.parser, message: "Parsed {program.functions.count()} function(s)")
-	if parser.hasErrors() 'parserErrors'
-		print("\nParser errors:\n")
-		parser.printErrors()
+	if parser.errors.count() > 0 'parserErrors'
+		for err in parser.errors 'printErr'
+			Logger.error(LogCategory.parser, message: err)
+		end 'printErr'
 		return 1
 	end 'parserErrors'
 

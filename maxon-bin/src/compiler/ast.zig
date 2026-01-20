@@ -474,6 +474,8 @@ pub const MapEntry = struct {
 
 pub const MapLiteralExpr = struct {
     entries: []const MapEntry,
+    start_line: u32 = 0, // Line of opening '['
+    end_line: u32 = 0, // Line of closing ']'
 };
 
 pub const IndexExpr = struct {

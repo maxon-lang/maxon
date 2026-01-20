@@ -1621,6 +1621,14 @@ fn calculateDepthFromExpression(expr: ast.Expression, line: u32) u32 {
             }
             break :blk depth;
         },
+        .map_literal => |ml| blk: {
+            var depth: u32 = 0;
+            // Check if line is inside the map literal
+            if (ml.start_line < line and line < ml.end_line) {
+                depth += 1;
+            }
+            break :blk depth;
+        },
         // Recursively check sub-expressions that might contain match expressions
         .binary => |b| calculateDepthFromExpression(b.left.*, line) + calculateDepthFromExpression(b.right.*, line),
         .compare => |c| calculateDepthFromExpression(c.left.*, line) + calculateDepthFromExpression(c.right.*, line),
