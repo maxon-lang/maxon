@@ -16,8 +16,8 @@ export function compile(sourceFile String, emitIr bool) returns int
 
 	// Read source file
 	let source = try File.readText(sourceFile) otherwise 'noSource'
-		print("Error: Could not read source file: {sourceFile}\n")
-		return 1
+	print("Error: Could not read source file: {sourceFile}\n")
+	return 1
 	end 'noSource'
 
 	// Phase 1: Lexical Analysis
@@ -44,8 +44,42 @@ export function compile(sourceFile String, emitIr bool) returns int
 		return 1
 	end 'parserErrors'
 
-	// Phase 3-7: Not yet implemented
-	Logger.info(LogCategory.semantic, message: "[Stages 3-7 not yet implemented]")
+	// Phase 3: Semantic Analysis
+	var analyzer = SemanticAnalyzer.init(program, sourceFile: sourceFile, errors: errors)
+	analyzer.analyze()
+	Logger.info(LogCategory.semantic, message: "Semantic analysis complete")
+
+	// NOTE: Semantic analyzer has a pass-by-value bug where errors are not propagated back
+	if errors.hasAnyErrors() 'semanticErrors'
+		print("\nSemantic errors:\n")
+		errors.printAll()
+		return 1
+	end 'semanticErrors'
+
+	// Phase 4: AST to IR
+	var irBuilder = IrBuilder.init(errors, sourceFile: sourceFile)
+	let irOutput = irBuilder.convert(program)
+	Logger.info(LogCategory.ir, message: "Generated IR")
+
+	// Emit IR if requested
+	if emitIr 'showIr2'
+		let irFile = sourceFile.replace(".maxon", ".ir")
+		if let written = try File.writeText(irFile, content: irOutput) 'writeOk'
+			Logger.debug(LogCategory.ir, message: "Wrote IR to {irFile}")
+		end 'writeOk' else 'writeFailed'
+			print("Warning: Could not write IR file: {irFile}\n")
+		end 'writeFailed'
+	end 'showIr2'
+
+	// Check for IR errors
+	if errors.hasAnyErrors() 'irErrors'
+		print("\nIR generation errors:\n")
+		errors.printAll()
+		return 1
+	end 'irErrors'
+
+	// Phase 5-7: Not yet implemented
+	Logger.info(LogCategory.codegen, message: "[Stages 5-7 not yet implemented]")
 
 	return 0
 end 'compile'

@@ -5335,6 +5335,16 @@ pub const AstToIr = struct {
             }
         }
 
+        // Reject 'try ... otherwise ignore' in assignment context - the value would be undefined on error
+        if (decl.value == .try_expr) {
+            if (decl.value.try_expr.otherwise) |otherwise| {
+                if (otherwise.mode == .ignore) {
+                    self.reportError(.E022, "'otherwise ignore' cannot be used in assignment", @src());
+                    return error.SemanticError;
+                }
+            }
+        }
+
         const init_typed = try self.convertExpression(decl.value);
 
         // Function types need alloca for the function pointer

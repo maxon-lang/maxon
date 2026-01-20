@@ -1839,6 +1839,7 @@ pub const Parser = struct {
 
     /// Parse match expression: match <expr> 'label' ... end 'label'
     fn parseMatchExpression(self: *Parser) ParseError!ast.Expression {
+        const start_line = self.current().line;
         _ = try self.expect(.match);
 
         // Parse scrutinee expression
@@ -1908,6 +1909,7 @@ pub const Parser = struct {
             });
         }
 
+        const end_line = self.current().line;
         _ = try self.expectEndLabel(label.text);
 
         // Create the scrutinee pointer
@@ -1924,6 +1926,8 @@ pub const Parser = struct {
             .cases = try cases.toOwnedSlice(self.allocator),
             .default_expr = default_expr_ptr,
             .label = label.text,
+            .start_line = start_line,
+            .end_line = end_line,
         } });
     }
 

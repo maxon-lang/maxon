@@ -1900,3 +1900,39 @@ test "hover shows static method signature" {
     const content = result.contents;
     try testing.expect(std.mem.indexOf(u8, content, "fromCString") != null);
 }
+
+test "formatting indents match expression cases correctly" {
+    var client = try TestClient.init(test_allocator);
+    defer client.deinit();
+    _ = try client.initialize();
+
+    // Match expression with no indentation - formatter should add proper indentation
+    const source =
+        \\function dispatch(command String) returns int
+        \\return match command 'dispatch'
+        \\"compile" gives 1
+        \\"run" gives 2
+        \\default gives 0
+        \\end 'dispatch'
+        \\end 'dispatch'
+    ;
+    try client.openDocument("file:///test.maxon", source);
+
+    var result = try client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    // Verify we got formatted text
+    try testing.expect(result.new_text.len > 0);
+    const new_text = result.new_text;
+
+    // Check that 'return match' is indented one level (inside function)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\treturn match") != null);
+
+    // Check that match cases are indented two levels (inside function + inside match)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\t\"compile\" gives") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\t\"run\" gives") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\tdefault gives") != null);
+
+    // Check that end 'dispatch' for match has one tab (back to function level)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'dispatch'") != null);
+}

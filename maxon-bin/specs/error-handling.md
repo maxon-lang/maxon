@@ -476,3 +476,23 @@ end 'main'
 ```maxoncstderr
 error E058: specs/fragments/error-handling.error.otherwise-without-try.1.test:7:26: otherwise requires try expression
 ```
+
+<!-- test: error.otherwise-ignore-in-assignment -->
+```maxon
+// Using 'otherwise ignore' in an assignment is an error
+enum MyError is Error
+    failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+    throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+    let val = try mayFail() otherwise ignore
+    return val
+end 'main'
+```
+```maxoncstderr
+error E022: specs/fragments/error-handling.error.otherwise-ignore-in-assignment.1.test:12:5: type mismatch: ''otherwise ignore' cannot be used in assignment'
+```

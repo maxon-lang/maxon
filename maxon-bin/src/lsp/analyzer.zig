@@ -1592,7 +1592,43 @@ fn calculateDepthFromStatement(stmt: ast.Statement, line: u32) u32 {
         depth += calculateDepthFromStatements(child.statements, line);
     }
 
+    // Check for match expressions inside statements (e.g., return match ...)
+    depth += calculateDepthFromStatementExpressions(stmt, line);
+
     return depth;
+}
+
+/// Calculate depth from expressions that can contain blocks (match expressions)
+fn calculateDepthFromStatementExpressions(stmt: ast.Statement, line: u32) u32 {
+    return switch (stmt.kind) {
+        .@"return" => |ret| if (ret.value) |v| calculateDepthFromExpression(v, line) else 0,
+        .let_decl, .var_decl => |decl| calculateDepthFromExpression(decl.value, line),
+        .assign => |a| calculateDepthFromExpression(a.value, line),
+        .field_assign => |a| calculateDepthFromExpression(a.value, line),
+        .index_assign => |a| calculateDepthFromExpression(a.value, line),
+        else => 0,
+    };
+}
+
+/// Calculate depth from expressions that contain blocks (like match expressions)
+fn calculateDepthFromExpression(expr: ast.Expression, line: u32) u32 {
+    return switch (expr) {
+        .match_expr => |me| blk: {
+            var depth: u32 = 0;
+            // Check if line is inside the match expression block
+            if (me.start_line < line and line < me.end_line) {
+                depth += 1;
+            }
+            break :blk depth;
+        },
+        // Recursively check sub-expressions that might contain match expressions
+        .binary => |b| calculateDepthFromExpression(b.left.*, line) + calculateDepthFromExpression(b.right.*, line),
+        .compare => |c| calculateDepthFromExpression(c.left.*, line) + calculateDepthFromExpression(c.right.*, line),
+        .logical => |l| calculateDepthFromExpression(l.left.*, line) + calculateDepthFromExpression(l.right.*, line),
+        .unary => |u| calculateDepthFromExpression(u.operand.*, line),
+        .try_expr => |t| calculateDepthFromExpression(t.expr.*, line),
+        else => 0,
+    };
 }
 
 /// Find the end line of a function or method by name and start line

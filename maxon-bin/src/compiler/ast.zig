@@ -316,6 +316,8 @@ pub const MatchExpr = struct {
     cases: []const MatchExprCase,
     default_expr: ?*const Expression,
     label: []const u8,
+    start_line: u32 = 0, // Line of 'match' keyword
+    end_line: u32 = 0, // Line of 'end' keyword
 };
 
 pub const StatementKind = union(enum) {

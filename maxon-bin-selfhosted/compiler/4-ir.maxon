@@ -1,0 +1,93 @@
+// Maxon Compiler - IR Generation (Stage 4)
+// Simplified version that builds IR text directly
+
+export typealias StringArray is Array with String
+
+// ============================================================================
+// IR Builder - builds IR text directly without storing complex structures
+// ============================================================================
+
+export type IrBuilder
+	var errors ErrorCollector
+	var sourceFile String
+	var output String
+	var nextValue int
+	var currentBlockName String
+
+	/// Initialize the IR builder
+	export static function init(errors ErrorCollector, sourceFile String) returns IrBuilder
+		return {errors: errors, sourceFile: sourceFile, output: "", nextValue: 0, currentBlockName: ""}
+	end 'init'
+
+	/// Convert a program to IR text
+	export function convert(program Program) returns String
+		output = ""
+		var i = 0
+		while i < program.functions.count() 'funcLoop'
+			if let fn = try program.functions.get(i) 'gotFn'
+				convertFunction(fn)
+			end 'gotFn'
+			i = i + 1
+		end 'funcLoop'
+		return output
+	end 'convert'
+
+	/// Convert a function
+	function convertFunction(fn FunctionDecl)
+		nextValue = 0
+		let returnTypeName = mapTypeName(fn.returnType)
+
+		// Function header
+		output = "{output}function {fn.name}() -> {returnTypeName} \{\n"
+
+		// Entry block
+		currentBlockName = "entry"
+		output = "{output}{currentBlockName}_0:\n"
+
+		// Convert body
+		var i = 0
+		while i < fn.body.count() 'stmtLoop'
+			if let stmt = try fn.body.get(i) 'gotStmt'
+				convertStatement(stmt)
+			end 'gotStmt'
+			i = i + 1
+		end 'stmtLoop'
+
+		output = "{output}\}\n"
+	end 'convertFunction'
+
+	/// Convert a statement
+	function convertStatement(stmt Stmt)
+		if stmt.kind == StmtKind.returnStmt 'isReturn'
+			convertReturn(stmt)
+		end 'isReturn'
+	end 'convertStatement'
+
+	/// Convert a return statement
+	function convertReturn(stmt Stmt)
+		let value = convertExpression(stmt.expr)
+		output = "{output}    ret %{value}\n"
+	end 'convertReturn'
+
+	/// Convert an expression and return the value number
+	function convertExpression(expr Expr) returns int
+		if expr.kind == ExprKind.intLiteral 'isInt'
+			let result = nextValue
+			nextValue = nextValue + 1
+			output = "{output}    %{result} = const.i64 i64 {expr.intValue}\n"
+			return result
+		end 'isInt'
+		return 0
+	end 'convertExpression'
+
+	/// Map AST type to IR type name
+	function mapTypeName(astType TypeKind) returns String
+		if astType == TypeKind.typeInt 'isInt'
+			return "i64"
+		end 'isInt'
+		if astType == TypeKind.typeVoid 'isVoid'
+			return "void"
+		end 'isVoid'
+		return "void"
+	end 'mapTypeName'
+end 'IrBuilder'

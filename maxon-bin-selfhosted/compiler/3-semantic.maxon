@@ -1,0 +1,131 @@
+// Maxon Compiler - Semantic Analyzer (Stage 3)
+// Validates the AST for semantic correctness
+
+// ============================================================================
+// Semantic Analyzer
+// ============================================================================
+
+/// Semantic analysis result
+export enum SemanticResult
+	success
+	failure
+end 'SemanticResult'
+
+/// Semantic analyzer for validating the AST
+export type SemanticAnalyzer
+	var program Program
+	var errors ErrorCollector
+	var sourceFile String
+
+	/// Create a semantic analyzer for a program
+	export static function init(program Program, sourceFile String, errors ErrorCollector) returns SemanticAnalyzer
+		return {program: program, errors: errors, sourceFile: sourceFile}
+	end 'init'
+
+	/// Analyze the program for semantic correctness
+	/// For basic.maxon, we need:
+	/// - main function exists
+	/// - main returns int
+	/// - return statements have correct type
+	export function analyze() returns SemanticResult
+		// Check for main function
+		if not checkMainFunction() 'noMain'
+			return SemanticResult.failure
+		end 'noMain'
+
+		// Analyze each function
+		for fn in program.functions 'funcLoop'
+			analyzeFunction(fn)
+		end 'funcLoop'
+
+		if errors.hasAnyErrors() 'hasErrors'
+			return SemanticResult.failure
+		end 'hasErrors'
+
+		return SemanticResult.success
+	end 'analyze'
+
+	/// Check that main function exists and has correct signature
+	function checkMainFunction() returns bool
+		var foundMain = false
+
+		for fn in program.functions 'searchMain'
+			if fn.name == "main" 'isMain'
+				foundMain = true
+
+				// main must return int
+				if fn.returnType != TypeKind.typeInt 'notInt'
+					error(ErrorCode.E3003, message: "main function must return int", line: fn.line, column: fn.column)
+				end 'notInt'
+			end 'isMain'
+		end 'searchMain'
+
+		if not foundMain 'noMain'
+			// Use line 0 for "global" error
+			error(ErrorCode.E3008, message: "no main function defined", line: 0, column: 0)
+			return false
+		end 'noMain'
+
+		return true
+	end 'checkMainFunction'
+
+	/// Analyze a function for semantic correctness
+	function analyzeFunction(fn FunctionDecl)
+		// Check each statement in the function body
+		for stmt in fn.body 'stmtLoop'
+			analyzeStatement(stmt, fn: fn)
+		end 'stmtLoop'
+
+		// Check that function has a return statement if it returns a value
+		if fn.returnType != TypeKind.typeVoid 'needsReturn'
+			if not hasReturnStatement(fn) 'noReturn'
+				error(ErrorCode.E3004, message: "function '{fn.name}' must return a value", line: fn.line, column: fn.column)
+			end 'noReturn'
+		end 'needsReturn'
+	end 'analyzeFunction'
+
+	/// Check if a function has at least one return statement
+	function hasReturnStatement(fn FunctionDecl) returns bool
+		for stmt in fn.body 'checkLoop'
+			if stmt.kind == StmtKind.returnStmt 'isReturn'
+				return true
+			end 'isReturn'
+		end 'checkLoop'
+		return false
+	end 'hasReturnStatement'
+
+	/// Analyze a statement
+	function analyzeStatement(stmt Stmt, fn FunctionDecl)
+		if stmt.kind == StmtKind.returnStmt 'isReturn'
+			analyzeReturnStatement(stmt, fn: fn)
+		end 'isReturn'
+	end 'analyzeStatement'
+
+	/// Analyze a return statement
+	/// Verify the expression type matches the function return type
+	function analyzeReturnStatement(stmt Stmt, fn FunctionDecl)
+		let exprType = getExprType(stmt.expr)
+
+		// Check type compatibility
+		if fn.returnType == TypeKind.typeInt 'expectsInt'
+			if exprType != TypeKind.typeInt 'wrongType'
+				error(ErrorCode.E3003, message: "type mismatch: expected int, got void", line: stmt.line, column: stmt.column)
+			end 'wrongType'
+		end 'expectsInt'
+	end 'analyzeReturnStatement'
+
+	/// Get the type of an expression
+	/// For now, only int literals are supported
+	function getExprType(expr Expr) returns TypeKind
+		if expr.kind == ExprKind.intLiteral 'isInt'
+			return TypeKind.typeInt
+		end 'isInt'
+		// Unknown expression type
+		return TypeKind.typeVoid
+	end 'getExprType'
+
+	/// Report an error at a specific location
+	function error(code ErrorCode, message String, line int, column int)
+		errors.addErrorAt(code, message: message, file: sourceFile, line: line, column: column)
+	end 'error'
+end 'SemanticAnalyzer'
