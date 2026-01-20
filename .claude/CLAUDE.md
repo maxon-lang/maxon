@@ -11,6 +11,7 @@ Maxon is a statically-typed programming language with a custom native x86-64 bac
 
 ## Documentation
 
+- **`docs/QUICK_REFERENCE.md`** - Concise overview of the Maxon language
 - **`docs/LANGUAGE_REFERENCE.md`** - Complete Maxon language syntax and semantics
 - **`docs/SPECS.md`** - Spec file format, workflow, and how to write specs
 
@@ -32,7 +33,7 @@ See `docs/SPECS.md` for the complete spec file format and detailed workflow.
 ## Constraints
 
 ### CRITICAL: No Git Commands
-**NEVER use git commands.** This includes git status, git diff, git add, git commit, git log, git checkout, or any other git command. Do not suggest git commands to the user. If you need to understand changes, read the files directly. This constraint applies at all times, regardless of context or how long the session has been running.
+**NEVER use git commands.** This includes git status, git diff, git add, git commit, git log, git checkout, or any other git command. This constraint applies at all times, regardless of context or how long the session has been running.
 
 ### CRITICAL: Finish the plan.
 If you are implementing a plan then you must finish the plan.
@@ -46,12 +47,10 @@ If you are implementing a plan then you must finish the plan.
 - Don't create new documentation files unless instructed
 - Do not edit test fragments (in `maxon-bin/specs/fragments/`). These are generated from the spec files, edit the spec file.
 - Do not use "cmd /c" to run commands
-- There are no time constraints. Complexity doesn't matter. If you are fixing an issue then
-fix it properly. No workarounds.
+- There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it properly. No workarounds.
 
 ## Development Notes
 - Build system uses Zig build. The compiler is in the maxon-bin directory.
-- All tests must pass before commits to main
 - In zig use ArrayListUnmanaged instead of ArrayList
 
 ## Running Tests
@@ -65,3 +64,7 @@ fix it properly. No workarounds.
 
 ## Debugging
 When debugging an issue prefer adding more debug printing so you can see what is happening instead of trying to think through it.
+
+## The self hosted compiler
+- The source is in maxon-bin-selfhosted
+- To build it run `maxon build` in /maxon-bin-selfhosted

@@ -21,6 +21,11 @@ export enum StmtKind
 	returnStmt
 end 'StmtKind'
 
+/// Parse error for recoverable parsing failures
+export enum ParseError is Error
+	syntaxError
+end 'ParseError'
+
 /// An expression node
 export type Expr
 	var kind ExprKind
@@ -64,7 +69,7 @@ export typealias FunctionArray is Array with FunctionDecl
 
 /// The root AST node representing a complete program
 export type Program
-	var functions FunctionArray
+	export var functions FunctionArray
 
 	export static function create() returns Program
 		return {functions: FunctionArray{}}
@@ -115,20 +120,20 @@ export type Parser
 	/// function NAME() returns TYPE
 	///     BODY
 	/// end 'NAME'
-	function parseFunction() returns FunctionDecl?
+	function parseFunction() returns FunctionDecl throws ParseError
 		let startLine = currentToken().line
 		let startCol = currentToken().column
 
 		// 'function' keyword
 		if not consume(TokenType.keywordFunction) 'noFunc'
 			error(ErrorCode.E2001, message: "expected 'function'")
-			return nil
+			throw ParseError.syntaxError
 		end 'noFunc'
 
 		// function name
 		if not check(TokenType.identifier) 'noName'
 			error(ErrorCode.E2004, message: "expected function name")
-			return nil
+			throw ParseError.syntaxError
 		end 'noName'
 		let name = currentToken().text
 		advance()
@@ -136,17 +141,17 @@ export type Parser
 		// '(' ')'
 		if not consume(TokenType.lparen) 'noLparen'
 			error(ErrorCode.E2001, message: "expected '('")
-			return nil
+			throw ParseError.syntaxError
 		end 'noLparen'
 		if not consume(TokenType.rparen) 'noRparen'
 			error(ErrorCode.E2001, message: "expected ')'")
-			return nil
+			throw ParseError.syntaxError
 		end 'noRparen'
 
 		// 'returns' TYPE
 		if not consume(TokenType.keywordReturns) 'noReturns'
 			error(ErrorCode.E2001, message: "expected 'returns'")
-			return nil
+			throw ParseError.syntaxError
 		end 'noReturns'
 
 		let returnType = parseType()
@@ -154,7 +159,7 @@ export type Parser
 		// newline before body
 		if not consumeNewline() 'noNewline'
 			error(ErrorCode.E2003, message: "expected newline after function signature")
-			return nil
+			throw ParseError.syntaxError
 		end 'noNewline'
 
 		// Parse body statements
@@ -171,12 +176,12 @@ export type Parser
 		// 'end' 'NAME'
 		if not consume(TokenType.keywordEnd) 'noEnd'
 			error(ErrorCode.E2001, message: "expected 'end'")
-			return nil
+			throw ParseError.syntaxError
 		end 'noEnd'
 
 		if not check(TokenType.charLiteral) 'noBlockId'
 			error(ErrorCode.E2005, message: "expected block identifier after 'end'")
-			return nil
+			throw ParseError.syntaxError
 		end 'noBlockId'
 
 		let blockId = currentToken().text
@@ -201,59 +206,51 @@ export type Parser
 	end 'parseType'
 
 	/// Parse a statement
-	function parseStatement() returns Stmt?
+	function parseStatement() returns Stmt throws ParseError
 		if check(TokenType.keywordReturn) 'isReturn'
-			return parseReturnStatement()
+			return try parseReturnStatement()
 		end 'isReturn'
 		error(ErrorCode.E2001, message: "expected statement")
 		advance()
-		return nil
+		throw ParseError.syntaxError
 	end 'parseStatement'
 
 	/// Parse a return statement: return EXPR
-	function parseReturnStatement() returns Stmt?
+	function parseReturnStatement() returns Stmt throws ParseError
 		let startLine = currentToken().line
 		let startCol = currentToken().column
 
 		if not consume(TokenType.keywordReturn) 'noReturn'
-			return nil
+			throw ParseError.syntaxError
 		end 'noReturn'
 
-		if let expr = try parseExpression() 'gotExpr'
-			if not consumeNewline() 'noNewline'
-				error(ErrorCode.E2003, message: "expected newline after return statement")
-			end 'noNewline'
-			return Stmt.createReturn(expr, line: startLine, column: startCol)
-		end 'gotExpr'
-
-		error(ErrorCode.E2002, message: "expected expression after 'return'")
-		return nil
+		let expr = try parseExpression()
+		if not consumeNewline() 'noNewline'
+			error(ErrorCode.E2003, message: "expected newline after return statement")
+		end 'noNewline'
+		return Stmt.createReturn(expr, line: startLine, column: startCol)
 	end 'parseReturnStatement'
 
 	/// Parse an expression (only integer literals for now)
-	function parseExpression() returns Expr?
+	function parseExpression() returns Expr throws ParseError
 		if check(TokenType.integer) 'isInt'
 			let tok = currentToken()
 			let value = parseInt(tok.text)
 			advance()
 			return Expr.createIntLiteral(value, line: tok.line, column: tok.column)
 		end 'isInt'
-		return nil
+		error(ErrorCode.E2002, message: "expected expression")
+		throw ParseError.syntaxError
 	end 'parseExpression'
 
 	/// Parse an integer string to int
 	function parseInt(text String) returns int
 		var result = 0
-		var idx = text.startIndex()
-		while let c = try text.getCharacter(at: idx) 'parseLoop'
+		for c in text 'parseLoop'
 			if c >= '0' and c <= '9' 'isDigit'
-				result = result * 10 + (c.asInt() - 48)
+				let digitValue = (try c.asciiValue() otherwise ignore) - 48
+				result = result * 10 + digitValue
 			end 'isDigit'
-			if let nextIdx = try text.indexAfter(idx) 'advance'
-				idx = nextIdx
-			end 'advance' else 'done'
-				break 'parseLoop'
-			end 'done'
 		end 'parseLoop'
 		return result
 	end 'parseInt'

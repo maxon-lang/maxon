@@ -927,10 +927,14 @@ pub const AstToIr = struct {
             try self.type_decl_map.put(self.allocator, type_decl.name, type_decl);
         }
 
-        // Process top-level type aliases BEFORE registering types and functions
+        // Process top-level type aliases BEFORE registering types
         // Types may reference these aliases in their fields, and functions in parameters/return types
         // Note: Type aliases can reference generic types from stdlib (like Map) which are already
         // registered as external types before convert() is called
+        // Note: For type aliases that reference local types (like "StmtArray is Array with Stmt"),
+        // the local types have been pre-registered above with placeholder info (size=0).
+        // The monomorphization will create Array$Stmt with the placeholder element type.
+        // This is fine because the alias just needs to be registered so that types can reference it.
         for (program.type_aliases) |alias_decl| {
             if (alias_decl.type_args.len > 0) {
                 // Monomorphize to create the concrete type (e.g., Pair$String$int)
@@ -11905,22 +11909,17 @@ pub fn convertWithExternals(
 
     // Process external type aliases BEFORE registering external types
     // This is critical because types may have fields that use type aliases
-    // (e.g., Parser has field 'tokens: TokenArray' where TokenArray is a typealias)
+    // (e.g., FunctionDecl has field 'body: StmtArray' where StmtArray is a typealias)
     // Type aliases need element types to be pre-registered (done above) for monomorphization
     if (external_type_aliases) |ext_aliases| {
-        debug.astToIr("Processing {d} external type aliases", .{ext_aliases.len});
+        debug.astToIr("Processing {d} external type aliases (source_file={?s})", .{ ext_aliases.len, source_file });
         for (ext_aliases) |ext_alias| {
-            // Skip type aliases from the same source file - they will be processed in convert()
-            // after local types have been pre-registered (needed for forward references like
-            // "typealias FooArray is Array with Foo" where Foo is defined later in the same file)
-            if (ext_alias.source_path) |alias_src| {
-                if (source_file) |current_src| {
-                    if (std.mem.eql(u8, alias_src, current_src)) {
-                        debug.astToIr("Skipping type alias '{s}' (same source file)", .{ext_alias.type_alias_decl.name});
-                        continue;
-                    }
-                }
-            }
+            // NOTE: We process ALL external type aliases, including same-file ones.
+            // This is because external types from OTHER files may depend on type aliases
+            // from the current file. For example, when compiling 1-lexer.maxon:
+            // - TokenArray (from 1-lexer.maxon) must be registered
+            // - Parser (from 2-parser.maxon) depends on TokenArray
+            // If we skip TokenArray, Parser registration will fail.
             const alias_decl = ext_alias.type_alias_decl;
             debug.astToIr("Processing type alias '{s}' base={s} with {d} type args", .{ alias_decl.name, alias_decl.base_type, alias_decl.type_args.len });
             if (alias_decl.type_args.len > 0) {

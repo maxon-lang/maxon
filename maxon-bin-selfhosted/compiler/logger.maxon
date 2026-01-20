@@ -20,40 +20,37 @@ export enum LogCategory
 	pe
 end 'LogCategory'
 
-typealias LevelMap is Map with (LogCategory, LogLevel)
-
-var logLevels LevelMap = LevelMap{}
-
 /// Logger for compiler diagnostics
+/// Simplified: uses a global log level instead of per-category
 export type Logger
+	static var globalLevel = LogLevel.none
+
 	export static function setLevel(category LogCategory, level LogLevel)
-		logLevels.set(category, value: level)
+		// Simplified: we log category name but set global level
+		if Logger.globalLevel >= LogLevel.trace 'trace'
+			print("[Logger] Setting level for {category.name}\n")
+		end 'trace'
+		Logger.globalLevel = level
 	end 'setLevel'
 
 	export static function setAllLevels(level LogLevel)
-		for category in LogCategory 'setAll'
-			setLevel(category, level: level)
-		end 'setAll'
+		Logger.globalLevel = level
 	end 'setAllLevels'
 
-	static function getLevel(category LogCategory) returns LogLevel
-		return try logLevels.get(category) otherwise LogLevel.none
-	end 'getLevel'
-
 	export static function info(category LogCategory, message String)
-		if getLevel(category) >= LogLevel.info 'check'
+		if Logger.globalLevel >= LogLevel.info 'check'
 			print("[{category.name}] {message}\n")
 		end 'check'
 	end 'info'
 
 	export static function debug(category LogCategory, message String)
-		if getLevel(category) >= LogLevel.debug 'check'
+		if Logger.globalLevel >= LogLevel.debug 'check'
 			print("[{category.name}] {message}\n")
 		end 'check'
 	end 'debug'
 
 	export static function trace(category LogCategory, message String)
-		if getLevel(category) >= LogLevel.trace 'check'
+		if Logger.globalLevel >= LogLevel.trace 'check'
 			print("[{category.name}] {message}\n")
 		end 'check'
 	end 'trace'
