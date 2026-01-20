@@ -504,6 +504,7 @@ pub fn emitTypeAlloca(self: *AstToIr, type_name: []const u8) !ir.RawPtr {
 /// Copy a struct and handle refcount increment for types with __ManagedMemory.
 /// This is the single point of truth for struct copying with COW semantics.
 /// Handles String, Array$T, cstring, and any other type with __ManagedMemory at any offset.
+/// Also handles nested structs that contain managed buffers.
 pub fn emitStructCopy(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.StructPtr, size: i32, struct_name: ?[]const u8) !void {
     try self.func().emitMemcpy(dest_ptr.asRawPtr(), src_ptr.asRawPtr(), size);
 
@@ -516,10 +517,16 @@ pub fn emitStructCopy(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.Struct
         if (self.type_map.get(name)) |type_info| {
             if (type_info == .struct_type) {
                 const struct_info = &type_info.struct_type;
-                if (struct_info.has_managed_buffer) {
-                    // Get pointer to __ManagedMemory at the correct offset
+                // Check for multiple managed fields (nested structs with managed buffers)
+                if (struct_info.managed_field_offsets) |offsets| {
+                    // Incref all managed buffers
+                    for (offsets) |offset| {
+                        const managed_ptr = try getManagedMemoryPtr(self, dest_ptr.raw(), offset);
+                        try emitManagedMemoryIncref(self, managed_ptr, "<struct copy nested>");
+                    }
+                } else if (struct_info.has_managed_buffer) {
+                    // Single managed buffer at managed_buffer_offset
                     const managed_ptr = try getManagedMemoryPtr(self, dest_ptr.raw(), struct_info.managed_buffer_offset);
-                    // Incref the buffer since we're copying the struct
                     try emitManagedMemoryIncref(self, managed_ptr, "<struct copy>");
                 } else if (struct_info.is_cstring) {
                     // cstring has a managed pointer (offset 16) that may reference a __ManagedMemory.

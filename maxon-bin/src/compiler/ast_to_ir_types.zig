@@ -363,6 +363,42 @@ pub fn findManagedMemoryField(fields: []const FieldInfo) ?i32 {
     return null;
 }
 
+/// Collect all managed field offsets recursively from a struct's fields.
+/// This includes:
+/// - Direct __ManagedMemory fields
+/// - Nested structs that have has_managed_buffer=true (adds their nested offset)
+/// Returns null if there are no managed fields, otherwise returns an allocated slice.
+pub fn collectManagedFieldOffsets(allocator: std.mem.Allocator, fields: []const FieldInfo) !?[]const i32 {
+    var offsets = std.ArrayListUnmanaged(i32){};
+
+    for (fields) |field| {
+        if (field.value_type == .struct_type) {
+            const struct_info = field.value_type.struct_type;
+            if (std.mem.eql(u8, struct_info.name, "__ManagedMemory")) {
+                // Direct __ManagedMemory field
+                try offsets.append(allocator, field.offset);
+            } else if (struct_info.has_managed_buffer) {
+                // Nested struct with managed buffer - compute combined offset
+                if (struct_info.managed_field_offsets) |nested_offsets| {
+                    // Struct has multiple managed fields
+                    for (nested_offsets) |nested_offset| {
+                        try offsets.append(allocator, field.offset + nested_offset);
+                    }
+                } else {
+                    // Struct has single managed buffer at managed_buffer_offset
+                    try offsets.append(allocator, field.offset + struct_info.managed_buffer_offset);
+                }
+            }
+        }
+    }
+
+    if (offsets.items.len == 0) {
+        return null;
+    }
+    const slice = try offsets.toOwnedSlice(allocator);
+    return @as([]const i32, slice);
+}
+
 /// Struct type info
 pub const StructTypeInfo = struct {
     name: []const u8,
@@ -390,6 +426,11 @@ pub const StructTypeInfo = struct {
     /// Offset of __ManagedMemory field within the struct (if has_managed_buffer is true).
     /// Used to access the managed memory for cleanup/incref operations.
     managed_buffer_offset: i32 = 0,
+
+    /// List of offsets for all managed memory fields that need refcount handling.
+    /// Includes both direct __ManagedMemory fields and nested structs with managed buffers.
+    /// When non-null, copy/cleanup operations iterate this instead of using managed_buffer_offset.
+    managed_field_offsets: ?[]const i32 = null,
 
     /// True if this is the cstring type (data/length/managed pattern).
     /// Cleanup conditionally frees based on managed pointer being null.

@@ -444,3 +444,7 @@ maxon lsp-server             # Start LSP server for IDE integration
 |--------|-------------|
 | `--filter <pattern>` | Run tests matching pattern |
 | `--verbose` | Detailed test output |
+
+## The self hosted compiler (currently in development)
+- The source is in maxon-bin-selfhosted
+- To build it run `maxon build` in /maxon-bin-selfhosted

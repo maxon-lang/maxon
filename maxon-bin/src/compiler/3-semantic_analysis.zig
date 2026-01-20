@@ -639,6 +639,9 @@ pub const SemanticAnalyzer = struct {
         // Check if this type has COW semantics (__ManagedMemory field)
         const managed_offset = types.findManagedMemoryField(fields);
 
+        // Collect all managed field offsets (including nested structs with managed buffers)
+        const managed_field_offsets = try types.collectManagedFieldOffsets(self.allocator, fields);
+
         try self.type_map.put(self.allocator, ext_type.name, .{
             .struct_type = .{
                 .name = ext_type.name,
@@ -647,6 +650,7 @@ pub const SemanticAnalyzer = struct {
                 .needs_cleanup = fieldsNeedCleanup(fields),
                 .has_managed_buffer = managed_offset != null,
                 .managed_buffer_offset = managed_offset orelse 0,
+                .managed_field_offsets = managed_field_offsets,
             },
         });
 
@@ -1517,6 +1521,10 @@ pub const SemanticAnalyzer = struct {
                 false;
 
             const managed_offset = types.findManagedMemoryField(fields);
+
+            // Collect all managed field offsets (including nested structs with managed buffers)
+            const managed_field_offsets = try types.collectManagedFieldOffsets(self.allocator, fields);
+
             try self.type_map.put(self.allocator, mono_name, .{
                 .struct_type = .{
                     .name = mono_name,
@@ -1526,6 +1534,7 @@ pub const SemanticAnalyzer = struct {
                     .element_type_name = element_type_name,
                     .has_managed_buffer = managed_offset != null,
                     .managed_buffer_offset = managed_offset orelse 0,
+                    .managed_field_offsets = managed_field_offsets,
                     .element_has_managed_buffer = element_has_managed_buffer,
                 },
             });

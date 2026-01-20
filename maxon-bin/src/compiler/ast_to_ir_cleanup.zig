@@ -350,12 +350,23 @@ pub fn cleanupFieldBeforeReassign(self: *AstToIr, field_ptr: ir.StructPtr, field
 
 /// Clean up a struct by recursively cleaning up its fields that need cleanup.
 /// Uses mode-based dispatch for types with __ManagedMemory.
+/// Also handles nested structs that contain managed buffers via managed_field_offsets.
 fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types.StructTypeInfo, var_name: []const u8) ConvertError!void {
     const name = struct_info.name;
 
     // cstring has its own cleanup logic (special pattern with data/length/managed fields)
     if (std.mem.eql(u8, name, "cstring")) {
         try cstring.emitCstringCleanup(self, struct_ptr);
+        return;
+    }
+
+    // Check for multiple managed fields (nested structs with managed buffers)
+    if (struct_info.managed_field_offsets) |offsets| {
+        // Decref all managed buffers
+        for (offsets) |offset| {
+            const managed_ptr = try array_helpers.getManagedMemoryPtr(self, struct_ptr, offset);
+            try array_helpers.emitManagedMemoryDecref(self, managed_ptr, var_name, "nested struct cleanup");
+        }
         return;
     }
 

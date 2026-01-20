@@ -518,9 +518,18 @@ fn intrinsicManagedMemorySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!
     // slot now reference the buffer, so refcount must be incremented.
     // The source variable may still be cleaned up at scope exit (decref).
     // When the array is destroyed, it will decref each element.
-    if (value.ty == .struct_type and value.ty.struct_type.has_managed_buffer) {
-        const managed_ptr = try array.getManagedMemoryPtr(self, value.value, value.ty.struct_type.managed_buffer_offset);
-        try array.emitManagedMemoryIncref(self, managed_ptr, "<array_store>");
+    if (value.ty == .struct_type) {
+        const struct_info = value.ty.struct_type;
+        // Check for multiple managed fields (nested structs with managed buffers)
+        if (struct_info.managed_field_offsets) |offsets| {
+            for (offsets) |offset| {
+                const managed_ptr = try array.getManagedMemoryPtr(self, value.value, offset);
+                try array.emitManagedMemoryIncref(self, managed_ptr, "<array_store nested>");
+            }
+        } else if (struct_info.has_managed_buffer) {
+            const managed_ptr = try array.getManagedMemoryPtr(self, value.value, struct_info.managed_buffer_offset);
+            try array.emitManagedMemoryIncref(self, managed_ptr, "<array_store>");
+        }
     }
 
     return .{ .value = 0, .ty = .{ .primitive = .void } };
