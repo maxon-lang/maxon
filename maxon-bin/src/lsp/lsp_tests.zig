@@ -2009,3 +2009,35 @@ test "formatting indents multiline map literal correctly" {
     // Check that closing ] has one tab (back to function level)
     try testing.expect(std.mem.indexOf(u8, new_text, "\t]") != null);
 }
+
+test "formatting indents top-level multiline map literal correctly" {
+    var client = try TestClient.init(test_allocator);
+    defer client.deinit();
+    _ = try client.initialize();
+
+    // Top-level map literal with no indentation - formatter should add proper indentation
+    const source =
+        \\let config = [
+        \\"width": 100,
+        \\"height": 200
+        \\]
+    ;
+    try client.openDocument("file:///test.maxon", source);
+
+    var result = try client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    // Verify we got formatted text
+    try testing.expect(result.new_text.len > 0);
+    const new_text = result.new_text;
+
+    // Check that 'let config = [' is at top level (no indentation)
+    try testing.expect(std.mem.startsWith(u8, new_text, "let config = ["));
+
+    // Check that map entries are indented one level (inside map literal)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\"width\":") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\"height\":") != null);
+
+    // Check that closing ] is at top level (no indentation)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\n]") != null);
+}

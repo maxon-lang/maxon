@@ -34,10 +34,10 @@ end 'KeywordInfo'
 typealias TokenTypeMap is Map with (TokenType, KeywordInfo)
 
 export let keyword_map = [
-TokenType.function: KeywordInfo{text: "function", category: KeywordCategory.other, description: "Declares a function. Functions contain executable code and can return values.", requiresLabel: false},
-TokenType.returns: KeywordInfo{text: "returns", category: KeywordCategory.other, description: "Specifies the return type of a function.", requiresLabel: false},
-TokenType.return: KeywordInfo{text: "return", category: KeywordCategory.control, description: "Returns a value from a function and exits the function.", requiresLabel: false},
-TokenType.end: KeywordInfo{text: "end", category: KeywordCategory.control, description: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", requiresLabel: true}
+	TokenType.function: KeywordInfo{text: "function", category: KeywordCategory.other, description: "Declares a function. Functions contain executable code and can return values.", requiresLabel: false},
+	TokenType.returns: KeywordInfo{text: "returns", category: KeywordCategory.other, description: "Specifies the return type of a function.", requiresLabel: false},
+	TokenType.return: KeywordInfo{text: "return", category: KeywordCategory.control, description: "Returns a value from a function and exits the function.", requiresLabel: false},
+	TokenType.end: KeywordInfo{text: "end", category: KeywordCategory.control, description: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", requiresLabel: true}
 ]
 
 /// A single token with type, text, and position
@@ -79,56 +79,56 @@ export type Lexer
 
 			let c = peek()
 
-			if c == '\n' 'isNewline'
-				tokens.push(makeToken(TokenType.newline, text: "\n"))
-				advance()
-				line = line + 1
-				column = 1
-				continue 'mainLoop'
-			end 'isNewline'
-
-			// Skip comments
-			if c == '/' and peekNext() == '/' 'isComment'
-				skipToEndOfLine()
-				continue 'mainLoop'
-			end 'isComment'
-
-			if c == '(' 'isLparen'
-				tokens.push(makeToken(TokenType.lparen, text: "("))
-				advance()
-				continue 'mainLoop'
-			end 'isLparen'
-
-			if c == ')' 'isRparen'
-				tokens.push(makeToken(TokenType.rparen, text: ")"))
-				advance()
-				continue 'mainLoop'
-			end 'isRparen'
-
-			if c == '\'' 'isCharLit'
-				tokens.push(scanCharLiteral())
-				continue 'mainLoop'
-			end 'isCharLit'
-
-			if isDigit(c) 'isNumber'
-				tokens.push(scanNumber())
-				continue 'mainLoop'
-			end 'isNumber'
-
-			if isIdentifierStart(c) 'isIdent'
-				tokens.push(scanIdentifierOrKeyword())
-				continue 'mainLoop'
-			end 'isIdent'
-
-			errors.addErrorAt(ErrorCode.E1001, message: "invalid character", file: sourceFile, line: line, column: column)
-
-			advance()
+			match c 'dispatch'
+			'\n' then tokens.push(scanNewline())
+			'(' then tokens.push(scanSingleChar(TokenType.lparen, text: "("))
+			')' then tokens.push(scanSingleChar(TokenType.rparen, text: ")"))
+			'\'' then tokens.push(scanCharLiteral())
+			'/' then scanSlashOrComment(tokens)
+			default then scanDefaultCase(c, tokens: tokens)
+			end 'dispatch'
 		end 'mainLoop'
 
 		tokens.push(makeToken(TokenType.eof, text: ""))
 
 		return tokens
 	end 'tokenize'
+
+	function scanNewline() returns Token
+		let tok = makeToken(TokenType.newline, text: "\n")
+		advance()
+		line = line + 1
+		column = 1
+		return tok
+	end 'scanNewline'
+
+	function scanSingleChar(tokenType TokenType, text String) returns Token
+		let tok = makeToken(tokenType, text: text)
+		advance()
+		return tok
+	end 'scanSingleChar'
+
+	function scanSlashOrComment(tokens TokenArray)
+		if peekNext() == '/' 'isComment'
+			skipToEndOfLine()
+		end 'isComment' else 'notComment'
+			// Future: tokens.push(scanSingleChar(TokenType.slash, text: "/"))
+			advance()
+		end 'notComment'
+	end 'scanSlashOrComment'
+
+	function scanDefaultCase(c Character, tokens TokenArray)
+		if isDigit(c) 'number'
+			tokens.push(scanNumber())
+		end 'number' else 'notNumber'
+			if isIdentifierStart(c) 'ident'
+				tokens.push(scanIdentifierOrKeyword())
+			end 'ident' else 'notIdent'
+				errors.addErrorAt(ErrorCode.E1001, message: "invalid character", file: sourceFile, line: line, column: column)
+				advance()
+			end 'notIdent'
+		end 'notNumber'
+	end 'scanDefaultCase'
 
 	function isAtEnd() returns bool
 		return pos >= source.byteLength()

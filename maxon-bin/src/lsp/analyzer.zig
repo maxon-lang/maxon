@@ -1556,6 +1556,16 @@ fn calculateIndentDepth(program: ast.Program, line: u32) u32 {
         depth += calculateDepthFromStatements(func.body, line);
     }
 
+    // Check global constants for expressions containing blocks (e.g., multiline map literals)
+    for (program.global_constants) |global| {
+        depth += calculateDepthFromExpression(global.value, line);
+    }
+
+    // Check global variables for expressions containing blocks
+    for (program.global_variables) |global| {
+        depth += calculateDepthFromExpression(global.value, line);
+    }
+
     return depth;
 }
 
