@@ -1,0 +1,54 @@
+// Test: match-statements.match-range.multiple-ranges.1
+function main() returns int
+    var score = 85
+    match score 'grade'
+        90..=100 then return 65
+        80..<90 then return 66
+        70..<80 then return 67
+        default then return 70
+    end 'grade'
+end 'main'
+---
+ExitCode: 66
+---
+function main() -> i64 {
+entry_0:
+    %tmp_const = const.i64 i64 85
+    br @match_check_1
+match_check_1:
+    %tmp_const.4 = const.i64 i64 90
+    %tmp_icmp = icmp.ge i64 %tmp_const %tmp_const.4
+    %tmp_const.5 = const.i64 i64 100
+    %tmp_icmp.1 = icmp.le i64 %tmp_const %tmp_const.5
+    %tmp_band = band i64 %tmp_icmp %tmp_icmp.1
+    br.cond %tmp_band @match_body_2 @match_check_3
+match_body_2:
+    %tmp_const.6 = const.i64 i64 65
+    ret %tmp_const.6
+match_check_3:
+    %tmp_const.7 = const.i64 i64 80
+    %tmp_icmp.2 = icmp.ge i64 %tmp_const %tmp_const.7
+    %tmp_const.8 = const.i64 i64 90
+    %tmp_icmp.3 = icmp.lt i64 %tmp_const %tmp_const.8
+    %tmp_band.1 = band i64 %tmp_icmp.2 %tmp_icmp.3
+    br.cond %tmp_band.1 @match_body_4 @match_check_5
+match_body_4:
+    %tmp_const.9 = const.i64 i64 66
+    ret %tmp_const.9
+match_check_5:
+    %tmp_const.10 = const.i64 i64 70
+    %tmp_icmp.4 = icmp.ge i64 %tmp_const %tmp_const.10
+    %tmp_const.11 = const.i64 i64 80
+    %tmp_icmp.5 = icmp.lt i64 %tmp_const %tmp_const.11
+    %tmp_band.2 = band i64 %tmp_icmp.4 %tmp_icmp.5
+    br.cond %tmp_band.2 @match_body_6 @match_default_7
+match_body_6:
+    %tmp_const.12 = const.i64 i64 67
+    ret %tmp_const.12
+match_default_7:
+    %tmp_const.13 = const.i64 i64 70
+    ret %tmp_const.13
+match_merge_8:
+}
+
+---

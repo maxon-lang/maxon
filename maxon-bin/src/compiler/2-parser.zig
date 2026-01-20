@@ -1679,12 +1679,61 @@ pub const Parser = struct {
 
     /// Parse a match pattern, which may include bindings for associated values
     /// Examples: `empty`, `value(n)`, `pair(a, b)`, `Color.red`, `Color.value(n)`
+    /// Also handles range patterns: `1..=5`, `1..<5`, `1..`, `..=5`, `..<5`, `..`
     fn parseMatchPattern(self: *Parser) ParseError!MatchPatternResult {
+        // Check for prefix range patterns: ..=X, ..<X, ..
+        if (self.check(.dot_dot_equals)) {
+            _ = self.advance(); // consume '..='
+            // Parse upper bound
+            const upper = try self.parseRangePatternBound() orelse {
+                self.reportError(.E003, @src());
+                return error.ExpectedExpression;
+            };
+            return .{
+                .pattern = .{ .range_pattern = .{
+                    .lower = null,
+                    .upper = try self.createExpr(upper),
+                    .inclusive = true,
+                } },
+                .binding = null,
+            };
+        }
+        if (self.check(.dot_dot_less)) {
+            _ = self.advance(); // consume '..<'
+            // Parse upper bound
+            const upper = try self.parseRangePatternBound() orelse {
+                self.reportError(.E003, @src());
+                return error.ExpectedExpression;
+            };
+            return .{
+                .pattern = .{ .range_pattern = .{
+                    .lower = null,
+                    .upper = try self.createExpr(upper),
+                    .inclusive = false,
+                } },
+                .binding = null,
+            };
+        }
+        if (self.check(.dot_dot)) {
+            _ = self.advance(); // consume '..'
+            // This is the wildcard range pattern '..' (matches everything)
+            return .{
+                .pattern = .{
+                    .range_pattern = .{
+                        .lower = null,
+                        .upper = null,
+                        .inclusive = true, // doesn't matter for wildcard
+                    },
+                },
+                .binding = null,
+            };
+        }
+
         // Check for identifier possibly followed by bindings or field access
         if (self.check(.identifier)) {
             const ident_token = self.advance();
 
-            // Check if followed by '.' for field access (e.g., Color.red)
+            // Check if followed by '.' for field access (e.g., Color.red) OR range operator
             if (self.check(.dot)) {
                 _ = self.advance(); // consume '.'
                 const field_token = try self.expect(.identifier);
@@ -1711,6 +1760,11 @@ pub const Parser = struct {
                 };
             }
 
+            // Check if followed by range operator
+            if (self.check(.dot_dot_equals) or self.check(.dot_dot_less) or self.check(.dot_dot)) {
+                return self.parseRangeSuffix(.{ .identifier = ident_token.text });
+            }
+
             // Check if followed by '(' for bindings (bare identifier with bindings like `value(n)`)
             if (self.check(.lparen)) {
                 _ = self.advance(); // consume '('
@@ -1732,15 +1786,115 @@ pub const Parser = struct {
             };
         }
 
-        // Fall back to regular expression parsing for other patterns
-        const pattern = try self.parseLogicalAnd() orelse {
+        // Fall back to regular expression parsing for other patterns (integers, chars, etc.)
+        const pattern = try self.parseRangePatternBound() orelse {
             self.reportError(.E003, @src());
             return error.ExpectedExpression;
         };
+
+        // Check if followed by range operator
+        if (self.check(.dot_dot_equals) or self.check(.dot_dot_less) or self.check(.dot_dot)) {
+            return self.parseRangeSuffix(pattern);
+        }
+
         return .{
             .pattern = pattern,
             .binding = null,
         };
+    }
+
+    /// Parse a simple expression that can be a range bound (integer, char, float, negation, identifier)
+    fn parseRangePatternBound(self: *Parser) ParseError!?ast.Expression {
+        // Handle negation for negative numbers
+        if (self.check(.minus)) {
+            _ = self.advance();
+            const operand = try self.parseRangePatternBound() orelse {
+                return null;
+            };
+            return .{ .unary = .{
+                .op = .negate,
+                .operand = try self.createExpr(operand),
+            } };
+        }
+        if (self.check(.integer)) {
+            const token = self.advance();
+            const value = std.fmt.parseInt(i64, token.text, 0) catch {
+                self.reportError(.E001, @src());
+                return error.InvalidNumber;
+            };
+            return .{ .integer = value };
+        }
+        if (self.check(.float_literal)) {
+            const token = self.advance();
+            const value = std.fmt.parseFloat(f64, token.text) catch {
+                self.reportError(.E001, @src());
+                return error.InvalidNumber;
+            };
+            return .{ .float_lit = value };
+        }
+        if (self.check(.char_literal)) {
+            const token = self.advance();
+            return .{ .char_literal = token.text };
+        }
+        // Fallback to parseLogicalAnd for more complex expressions
+        return try self.parseLogicalAnd();
+    }
+
+    /// Parse the suffix part of a range pattern after the lower bound has been parsed
+    /// Handles: X..=Y, X..<Y, X..
+    fn parseRangeSuffix(self: *Parser, lower: ast.Expression) ParseError!MatchPatternResult {
+        const lower_ptr = try self.createExpr(lower);
+
+        if (self.check(.dot_dot_equals)) {
+            _ = self.advance(); // consume '..='
+            // Parse upper bound
+            const upper = try self.parseRangePatternBound() orelse {
+                self.reportError(.E003, @src());
+                return error.ExpectedExpression;
+            };
+            return .{
+                .pattern = .{ .range_pattern = .{
+                    .lower = lower_ptr,
+                    .upper = try self.createExpr(upper),
+                    .inclusive = true,
+                } },
+                .binding = null,
+            };
+        }
+        if (self.check(.dot_dot_less)) {
+            _ = self.advance(); // consume '..<'
+            // Parse upper bound
+            const upper = try self.parseRangePatternBound() orelse {
+                self.reportError(.E003, @src());
+                return error.ExpectedExpression;
+            };
+            return .{
+                .pattern = .{ .range_pattern = .{
+                    .lower = lower_ptr,
+                    .upper = try self.createExpr(upper),
+                    .inclusive = false,
+                } },
+                .binding = null,
+            };
+        }
+        if (self.check(.dot_dot)) {
+            _ = self.advance(); // consume '..'
+            // Open-ended upper bound: X..
+            return .{
+                .pattern = .{
+                    .range_pattern = .{
+                        .lower = lower_ptr,
+                        .upper = null,
+                        .inclusive = true, // doesn't matter for open-ended
+                    },
+                },
+                .binding = null,
+            };
+        }
+
+        // This shouldn't happen if called correctly
+        self.reportError(.E003, @src());
+        return error.ExpectedExpression;
     }
 
     /// Parse a single statement in a match case, handling 'and fallthrough'

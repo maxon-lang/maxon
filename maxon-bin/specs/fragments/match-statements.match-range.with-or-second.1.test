@@ -1,0 +1,38 @@
+// Test: match-statements.match-range.with-or-second.1
+function main() returns int
+    var x = 5
+    match x 'check'
+        1..=10 or 90..=100 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry_0:
+    %tmp_const = const.i64 i64 5
+    br @match_check_1
+match_check_1:
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_icmp = icmp.ge i64 %tmp_const %tmp_const.3
+    %tmp_const.4 = const.i64 i64 10
+    %tmp_icmp.1 = icmp.le i64 %tmp_const %tmp_const.4
+    %tmp_band = band i64 %tmp_icmp %tmp_icmp.1
+    %tmp_const.5 = const.i64 i64 90
+    %tmp_icmp.2 = icmp.ge i64 %tmp_const %tmp_const.5
+    %tmp_const.6 = const.i64 i64 100
+    %tmp_icmp.3 = icmp.le i64 %tmp_const %tmp_const.6
+    %tmp_band.1 = band i64 %tmp_icmp.2 %tmp_icmp.3
+    %tmp_bitor = bitor i64 %tmp_band %tmp_band.1
+    br.cond %tmp_bitor @match_body_2 @match_default_3
+match_body_2:
+    %tmp_const.7 = const.i64 i64 1
+    ret %tmp_const.7
+match_default_3:
+    %tmp_const.8 = const.i64 i64 0
+    ret %tmp_const.8
+match_merge_4:
+}
+
+---

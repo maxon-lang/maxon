@@ -580,6 +580,16 @@ pub const Expression = union(enum) {
     try_expr: TryExpr,
     // Match expressions
     match_expr: MatchExpr,
+    // Range patterns for match statements (e.g., 1..=5, 'a'..<'z', 10.., ..=0)
+    range_pattern: RangePattern,
+};
+
+/// Range pattern for interval matching in match statements/expressions
+/// Supports: 1..=5 (inclusive), 1..<5 (exclusive upper), 1.. (open upper), ..=5 (open lower), .. (wildcard)
+pub const RangePattern = struct {
+    lower: ?*const Expression, // null for open-ended lower (..=5, ..<5, ..)
+    upper: ?*const Expression, // null for open-ended upper (1.., ..)
+    inclusive: bool, // true for ..= (inclusive upper), false for ..< (exclusive upper)
 };
 
 // ============================================================================
@@ -910,6 +920,14 @@ fn freeExpressionArgs(expr: Expression, allocator: std.mem.Allocator) void {
                 freeExpressionArgs(arg, allocator);
             }
             allocator.free(ec.args);
+        },
+        .range_pattern => |rp| {
+            if (rp.lower) |lower| {
+                freeExpressionArgs(lower.*, allocator);
+            }
+            if (rp.upper) |upper| {
+                freeExpressionArgs(upper.*, allocator);
+            }
         },
         .integer, .float_lit, .bool_lit, .self_expr, .identifier, .string_literal, .char_literal => {},
     }

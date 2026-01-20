@@ -7321,8 +7321,13 @@ pub const AstToIr = struct {
             // Emit pattern comparisons in check block
             var cmp_result: ir.Value = undefined;
             for (child.match_patterns, 0..) |pattern, pi| {
-                const pattern_typed = try self.convertPatternExpression(pattern, scrutinee_typed.ty);
-                const this_cmp = try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
+                // Check if this is a range pattern
+                const this_cmp = if (pattern == .range_pattern)
+                    try self.emitRangePatternCompare(scrutinee_value, scrutinee_typed.ty, pattern.range_pattern)
+                else blk: {
+                    const pattern_typed = try self.convertPatternExpression(pattern, scrutinee_typed.ty);
+                    break :blk try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
+                };
                 cmp_result = if (pi == 0) this_cmp else try self.func().emitBinaryOp(.bitor, cmp_result, this_cmp, .i64);
             }
 
@@ -7484,6 +7489,20 @@ pub const AstToIr = struct {
                 }
             }
         }
+        // Range patterns don't go through normal expression conversion
+        // They're handled directly by emitRangePatternCompare
+        if (pattern == .range_pattern) {
+            // For type checking purposes, infer type from the bounds
+            const range = pattern.range_pattern;
+            if (range.lower) |lower| {
+                return self.convertExpression(lower.*);
+            }
+            if (range.upper) |upper| {
+                return self.convertExpression(upper.*);
+            }
+            // Wildcard range (..) - type matches the scrutinee
+            return .{ .value = try self.func().emitConstI64(0), .ty = scrutinee_ty };
+        }
         // Fall back to normal expression conversion
         return self.convertExpression(pattern);
     }
@@ -7519,6 +7538,75 @@ pub const AstToIr = struct {
             },
             else => error.TypeMismatch,
         };
+    }
+
+    /// Emit a comparison for a range pattern, returning a boolean value
+    /// Handles: 1..=5, 1..<5, 1.., ..=5, ..<5, ..
+    fn emitRangePatternCompare(self: *AstToIr, scrutinee: ir.Value, scrutinee_ty: ValueType, range: ast.RangePattern) ConvertError!ir.Value {
+        const is_float = scrutinee_ty == .primitive and scrutinee_ty.primitive.isFloatingPoint();
+        const is_comparable_struct = scrutinee_ty == .struct_type and self.typeConformsTo(scrutinee_ty.struct_type.name, "Comparable");
+
+        // Wildcard range '..' always matches
+        if (range.lower == null and range.upper == null) {
+            return try self.func().emitConstI64(1); // Always true
+        }
+
+        var lower_cmp: ?ir.Value = null;
+        var upper_cmp: ?ir.Value = null;
+
+        // Emit lower bound check: scrutinee >= lower
+        if (range.lower) |lower_expr| {
+            const lower_val = try self.convertExpression(lower_expr.*);
+            if (is_comparable_struct) {
+                // Call compare() method: scrutinee.compare(lower) >= 0
+                const compare_result = try self.emitMethodCallWithIrArgs(scrutinee_ty.struct_type.name, "compare", &.{lower_val.value}, scrutinee);
+                const zero = try self.func().emitConstI64(0);
+                lower_cmp = try self.func().emitBinaryOp(.icmp_ge, compare_result.value, zero, .i64);
+            } else if (is_float) {
+                lower_cmp = try self.func().emitBinaryOp(.fcmp_ge, scrutinee, lower_val.value, .f64);
+            } else {
+                lower_cmp = try self.func().emitBinaryOp(.icmp_ge, scrutinee, lower_val.value, .i64);
+            }
+        }
+
+        // Emit upper bound check: scrutinee <= upper (inclusive) or scrutinee < upper (exclusive)
+        if (range.upper) |upper_expr| {
+            const upper_val = try self.convertExpression(upper_expr.*);
+            if (is_comparable_struct) {
+                // Call compare() method: scrutinee.compare(upper) <= 0 or < 0
+                const compare_result = try self.emitMethodCallWithIrArgs(scrutinee_ty.struct_type.name, "compare", &.{upper_val.value}, scrutinee);
+                const zero = try self.func().emitConstI64(0);
+                if (range.inclusive) {
+                    upper_cmp = try self.func().emitBinaryOp(.icmp_le, compare_result.value, zero, .i64);
+                } else {
+                    upper_cmp = try self.func().emitBinaryOp(.icmp_lt, compare_result.value, zero, .i64);
+                }
+            } else if (is_float) {
+                if (range.inclusive) {
+                    upper_cmp = try self.func().emitBinaryOp(.fcmp_le, scrutinee, upper_val.value, .f64);
+                } else {
+                    upper_cmp = try self.func().emitBinaryOp(.fcmp_lt, scrutinee, upper_val.value, .f64);
+                }
+            } else {
+                if (range.inclusive) {
+                    upper_cmp = try self.func().emitBinaryOp(.icmp_le, scrutinee, upper_val.value, .i64);
+                } else {
+                    upper_cmp = try self.func().emitBinaryOp(.icmp_lt, scrutinee, upper_val.value, .i64);
+                }
+            }
+        }
+
+        // Combine checks with AND
+        if (lower_cmp != null and upper_cmp != null) {
+            return try self.func().emitBinaryOp(.band, lower_cmp.?, upper_cmp.?, .i64);
+        } else if (lower_cmp != null) {
+            return lower_cmp.?;
+        } else if (upper_cmp != null) {
+            return upper_cmp.?;
+        }
+
+        // Should not reach here
+        return try self.func().emitConstI64(0);
     }
 
     /// Convert a match expression to IR
@@ -7620,8 +7708,13 @@ pub const AstToIr = struct {
             // Emit pattern comparisons
             var cmp_result: ir.Value = undefined;
             for (match_case.patterns, 0..) |pattern, pi| {
-                const pattern_typed = try self.convertPatternExpression(pattern, scrutinee_typed.ty);
-                const this_cmp = try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
+                // Check if this is a range pattern
+                const this_cmp = if (pattern == .range_pattern)
+                    try self.emitRangePatternCompare(scrutinee_value, scrutinee_typed.ty, pattern.range_pattern)
+                else blk: {
+                    const pattern_typed = try self.convertPatternExpression(pattern, scrutinee_typed.ty);
+                    break :blk try self.emitPatternCompare(scrutinee_value, scrutinee_typed.ty, pattern_typed);
+                };
 
                 if (pi == 0) {
                     cmp_result = this_cmp;
@@ -7853,6 +7946,11 @@ pub const AstToIr = struct {
             .try_expr => |try_e| self.convertTryExpr(try_e),
             .match_expr => |me| self.convertMatchExpr(me),
             .enum_case => |ec| self.convertEnumCase(ec),
+            // Range patterns should only appear in match patterns, not as general expressions
+            .range_pattern => {
+                self.reportError(.E001, "range pattern used outside of match statement", @src());
+                return error.SemanticError;
+            },
         };
     }
 

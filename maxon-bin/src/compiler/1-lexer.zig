@@ -94,6 +94,9 @@ pub const TokenType = enum {
     caret, // ^
     left_shift, // <<
     right_shift, // >>
+    dot_dot, // ..
+    dot_dot_equals, // ..=
+    dot_dot_less, // ..<
 
     // Formatting
     newline,
@@ -174,9 +177,26 @@ pub const Lexer = struct {
                     self.column += 1;
                 },
                 '.' => {
-                    try tokens.append(allocator, .{ .type = .dot, .text = ".", .line = self.line, .column = start_col });
-                    self.pos += 1;
-                    self.column += 1;
+                    // Check for range operators: .., ..=, ..<
+                    if (self.pos + 1 < self.source.len and self.source[self.pos + 1] == '.') {
+                        if (self.pos + 2 < self.source.len and self.source[self.pos + 2] == '=') {
+                            try tokens.append(allocator, .{ .type = .dot_dot_equals, .text = "..=", .line = self.line, .column = start_col });
+                            self.pos += 3;
+                            self.column += 3;
+                        } else if (self.pos + 2 < self.source.len and self.source[self.pos + 2] == '<') {
+                            try tokens.append(allocator, .{ .type = .dot_dot_less, .text = "..<", .line = self.line, .column = start_col });
+                            self.pos += 3;
+                            self.column += 3;
+                        } else {
+                            try tokens.append(allocator, .{ .type = .dot_dot, .text = "..", .line = self.line, .column = start_col });
+                            self.pos += 2;
+                            self.column += 2;
+                        }
+                    } else {
+                        try tokens.append(allocator, .{ .type = .dot, .text = ".", .line = self.line, .column = start_col });
+                        self.pos += 1;
+                        self.column += 1;
+                    }
                 },
                 '{' => {
                     try tokens.append(allocator, .{ .type = .lbrace, .text = "{", .line = self.line, .column = start_col });
@@ -407,9 +427,11 @@ pub const Lexer = struct {
                         self.pos += 1;
                         self.column += 1;
                     }
-                    // Check for decimal point
+                    // Check for decimal point - but NOT if followed by another '.' (range operator)
                     var is_float = false;
-                    if (self.pos < self.source.len and self.source[self.pos] == '.') {
+                    if (self.pos < self.source.len and self.source[self.pos] == '.' and
+                        !(self.pos + 1 < self.source.len and self.source[self.pos + 1] == '.'))
+                    {
                         is_float = true;
                         self.pos += 1;
                         self.column += 1;

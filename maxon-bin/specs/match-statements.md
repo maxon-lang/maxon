@@ -144,6 +144,115 @@ end 'main'
 
 String matching uses the `equals` method from the `Equatable` interface, so any type that implements `Equatable` can be used as a match scrutinee.
 
+## Range Patterns
+
+Range patterns allow matching values within an interval. This is useful for numeric ranges, character classification, and grading systems.
+
+**Syntax:**
+- `1..=5` - inclusive range (matches 1, 2, 3, 4, 5)
+- `1..<5` - exclusive upper bound (matches 1, 2, 3, 4)
+- `1..` - from 1 to infinity (open-ended upper)
+- `..=5` - from negative infinity to 5 inclusive (open-ended lower)
+- `..<5` - from negative infinity to 5 exclusive (open-ended lower)
+- `..` - matches everything (wildcard)
+
+**Integer ranges:**
+
+```maxon
+function grade(score int) returns int
+    match score 'grade'
+        90..=100 then return 65  // 'A'
+        80..<90 then return 66   // 'B'
+        70..<80 then return 67   // 'C'
+        60..<70 then return 68   // 'D'
+        0..<60 then return 70    // 'F'
+        default then return 63   // '?'
+    end 'grade'
+end 'grade'
+
+function main() returns int
+    return grade(85)
+end 'main'
+```
+```exitcode
+66
+```
+
+**Character ranges:**
+
+Characters implement the `Comparable` interface, so they can be used in range patterns.
+The comparison is lexicographic (byte-by-byte).
+
+```maxon
+function charType(c Character) returns int
+    match c 'classify'
+        'a'..='z' then return 1  // lowercase
+        'A'..='Z' then return 2  // uppercase
+        '0'..='9' then return 3  // digit
+        default then return 0    // other
+    end 'classify'
+end 'charType'
+
+function main() returns int
+    return charType('G')
+end 'main'
+```
+```exitcode
+2
+```
+
+**Open-ended ranges:**
+
+```maxon
+function classify(age int) returns int
+    match age 'category'
+        ..<0 then return 0       // invalid (negative)
+        0..<18 then return 1     // minor
+        18.. then return 2       // adult
+    end 'category'
+end 'classify'
+
+function main() returns int
+    return classify(25)
+end 'main'
+```
+```exitcode
+2
+```
+
+**Range patterns in match expressions:**
+
+```maxon
+function main() returns int
+    var temp = 25
+    let category = match temp 'weather'
+        ..<0 gives 1      // freezing
+        0..<15 gives 2    // cold  
+        15..<25 gives 3   // mild
+        25.. gives 4      // warm
+    end 'weather'
+    return category
+end 'main'
+```
+```exitcode
+4
+```
+
+**Combining ranges with `or`:**
+
+```maxon
+function main() returns int
+    var x = 50
+    match x 'check'
+        1..=10 or 90..=100 then return 1   // extreme values
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+0
+```
+
 ## Rules
 
 - Block identifier required after `match <expression>` and on `end`
@@ -681,4 +790,251 @@ end 'main'
 ```
 ```exitcode
 200
+```
+
+<!-- test: match-range.inclusive -->
+```maxon
+function main() returns int
+    var x = 5
+    match x 'check'
+        1..=5 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.inclusive-boundary -->
+```maxon
+function main() returns int
+    var x = 1
+    match x 'check'
+        1..=5 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.exclusive -->
+```maxon
+function main() returns int
+    var x = 4
+    match x 'check'
+        1..<5 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.exclusive-boundary -->
+```maxon
+function main() returns int
+    var x = 5
+    match x 'check'
+        1..<5 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: match-range.open-upper -->
+```maxon
+function main() returns int
+    var x = 100
+    match x 'check'
+        10.. then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.open-lower-inclusive -->
+```maxon
+function main() returns int
+    var x = 5
+    match x 'check'
+        ..=5 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.open-lower-exclusive -->
+```maxon
+function main() returns int
+    var x = 5
+    match x 'check'
+        ..<5 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: match-range.wildcard -->
+```maxon
+function main() returns int
+    var x = 42
+    match x 'check'
+        .. then return 1
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.multiple-ranges -->
+```maxon
+function main() returns int
+    var score = 85
+    match score 'grade'
+        90..=100 then return 65
+        80..<90 then return 66
+        70..<80 then return 67
+        default then return 70
+    end 'grade'
+end 'main'
+```
+```exitcode
+66
+```
+
+<!-- test: match-range.negative -->
+```maxon
+function main() returns int
+    var x = -5
+    match x 'check'
+        -10..=-1 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.expression -->
+```maxon
+function main() returns int
+    var temp = 22
+    let category = match temp 'weather'
+        ..<0 gives 1
+        0..<15 gives 2
+        15..<25 gives 3
+        25.. gives 4
+    end 'weather'
+    return category
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: match-range.character -->
+```maxon
+function main() returns int
+    var c = 'G'
+    match c 'classify'
+        'a'..='z' then return 1
+        'A'..='Z' then return 2
+        '0'..='9' then return 3
+        default then return 0
+    end 'classify'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: match-range.character-lowercase -->
+```maxon
+function main() returns int
+    var c = 'm'
+    match c 'classify'
+        'a'..='z' then return 1
+        'A'..='Z' then return 2
+        default then return 0
+    end 'classify'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.character-digit -->
+```maxon
+function main() returns int
+    var c = '7'
+    match c 'classify'
+        'a'..='z' then return 1
+        'A'..='Z' then return 2
+        '0'..='9' then return 3
+        default then return 0
+    end 'classify'
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: match-range.with-or -->
+```maxon
+function main() returns int
+    var x = 95
+    match x 'check'
+        1..=10 or 90..=100 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.with-or-second -->
+```maxon
+function main() returns int
+    var x = 5
+    match x 'check'
+        1..=10 or 90..=100 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: match-range.float -->
+```maxon
+function main() returns int
+    var x = 2.5
+    match x 'check'
+        0.0..=5.0 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+```
+```exitcode
+1
 ```

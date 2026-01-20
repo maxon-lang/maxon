@@ -108,10 +108,14 @@ for char in string 'loop' ... end 'loop'
 match value 'label'
     1 then doSomething()
     2 or 3 then doOther()
+    1..=10 then inRange()          // range pattern: 1 to 10 inclusive
+    11..<20 then nearRange()       // range pattern: 11 to 19 (exclusive upper)
     pattern then action() and fallthrough
     default then fallback()
 end 'label'
 ```
+
+Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
 ### Match Expression
 ```maxon
@@ -324,7 +328,6 @@ for cp in s.codepoints() 'cp' ... end 'cp'   // codepoints
 
 // Explicit with 'as'
 var f = 5 as float
-var c = 65 as character    // 'A'
 var b = 1 as bool          // true
 var by = 255 as byte
 

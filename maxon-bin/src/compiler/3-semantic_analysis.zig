@@ -237,6 +237,15 @@ pub const MutationAnalyzer = struct {
                     self.checkExpressionForParamMutation(arg, param_indices, mutated);
                 }
             },
+            // Range pattern - check lower/upper bounds for mutations
+            .range_pattern => |rp| {
+                if (rp.lower) |lower| {
+                    self.checkExpressionForParamMutation(lower.*, param_indices, mutated);
+                }
+                if (rp.upper) |upper| {
+                    self.checkExpressionForParamMutation(upper.*, param_indices, mutated);
+                }
+            },
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
             .integer, .float_lit, .bool_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .init_from_array, .interpolated_string => {},
@@ -1394,6 +1403,15 @@ pub const SemanticAnalyzer = struct {
             .enum_case => |ec| {
                 for (ec.args) |arg| {
                     try self.discoverInExpression(arg);
+                }
+            },
+            // Range patterns - discover in bounds
+            .range_pattern => |rp| {
+                if (rp.lower) |lower| {
+                    try self.discoverInExpression(lower.*);
+                }
+                if (rp.upper) |upper| {
+                    try self.discoverInExpression(upper.*);
                 }
             },
             // Literals and simple expressions don't trigger monomorphization

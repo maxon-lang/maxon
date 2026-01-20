@@ -85,7 +85,9 @@ export type Lexer
 			')' then tokens.push(scanSingleChar(TokenType.rparen, text: ")"))
 			'\'' then tokens.push(scanCharLiteral())
 			'/' then scanSlashOrComment(tokens)
-			default then scanDefaultCase(c, tokens: tokens)
+			'0'..='9' then tokens.push(scanNumber())
+			'a'..='z' or 'A'..='Z' or '_' then tokens.push(scanIdentifierOrKeyword())
+			default then reportInvalidChar()
 			end 'dispatch'
 		end 'mainLoop'
 
@@ -93,6 +95,11 @@ export type Lexer
 
 		return tokens
 	end 'tokenize'
+
+	function reportInvalidChar()
+		errors.addErrorAt(ErrorCode.E1001, message: "invalid character", file: sourceFile, line: line, column: column)
+		advance()
+	end 'reportInvalidChar'
 
 	function scanNewline() returns Token
 		let tok = makeToken(TokenType.newline, text: "\n")
@@ -116,19 +123,6 @@ export type Lexer
 			advance()
 		end 'notComment'
 	end 'scanSlashOrComment'
-
-	function scanDefaultCase(c Character, tokens TokenArray)
-		if isDigit(c) 'number'
-			tokens.push(scanNumber())
-		end 'number' else 'notNumber'
-			if isIdentifierStart(c) 'ident'
-				tokens.push(scanIdentifierOrKeyword())
-			end 'ident' else 'notIdent'
-				errors.addErrorAt(ErrorCode.E1001, message: "invalid character", file: sourceFile, line: line, column: column)
-				advance()
-			end 'notIdent'
-		end 'notNumber'
-	end 'scanDefaultCase'
 
 	function isAtEnd() returns bool
 		return pos >= source.byteLength()
@@ -239,15 +233,17 @@ export type Lexer
 	end 'extractSubstring'
 
 	function isDigit(c Character) returns bool
-		return c >= '0' and c <= '9'
+		return match c 'check'
+			'0'..='9' gives true
+			default gives false
+		end 'check'
 	end 'isDigit'
 
-	function isIdentifierStart(c Character) returns bool
-		return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or c == '_'
-	end 'isIdentifierStart'
-
 	function isIdentifierContinue(c Character) returns bool
-		return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or (c >= '0' and c <= '9') or c == '_'
+		return match c 'check'
+			'A'..='Z' or 'a'..='z' or '0'..='9' or '_' gives true
+			default gives false
+		end 'check'
 	end 'isIdentifierContinue'
 
 	function getKeywordType(text String) returns TokenType

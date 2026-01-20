@@ -1,0 +1,32 @@
+// Test: match-statements.match-range.inclusive.1
+function main() returns int
+    var x = 5
+    match x 'check'
+        1..=5 then return 1
+        default then return 0
+    end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry_0:
+    %tmp_const = const.i64 i64 5
+    br @match_check_1
+match_check_1:
+    %tmp_const.2 = const.i64 i64 1
+    %tmp_icmp = icmp.ge i64 %tmp_const %tmp_const.2
+    %tmp_const.3 = const.i64 i64 5
+    %tmp_icmp.1 = icmp.le i64 %tmp_const %tmp_const.3
+    %tmp_band = band i64 %tmp_icmp %tmp_icmp.1
+    br.cond %tmp_band @match_body_2 @match_default_3
+match_body_2:
+    %tmp_const.4 = const.i64 i64 1
+    ret %tmp_const.4
+match_default_3:
+    %tmp_const.5 = const.i64 i64 0
+    ret %tmp_const.5
+match_merge_4:
+}
+
+---

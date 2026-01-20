@@ -1096,6 +1096,53 @@ end 'handle'
 - `default` must be the last case if present
 - Enum case patterns: `CaseName(binding1, binding2)` extracts associated values
 
+**Range Patterns:**
+
+Range patterns match numeric values within a range using Rust-style syntax:
+
+| Syntax | Meaning | Example |
+|--------|---------|---------|
+| `a..=b` | Inclusive range (a ≤ x ≤ b) | `1..=5` matches 1, 2, 3, 4, 5 |
+| `a..<b` | Exclusive upper (a ≤ x < b) | `1..<5` matches 1, 2, 3, 4 |
+| `a..` | Open upper bound (x ≥ a) | `100..` matches 100 and above |
+| `..=b` | Open lower, inclusive (x ≤ b) | `..=0` matches 0 and below |
+| `..<b` | Open lower, exclusive (x < b) | `..<0` matches negative numbers |
+| `..` | Wildcard (matches any value) | `..` equivalent to `default` |
+
+```maxon
+function classify(n int) returns int
+    match n 'check'
+        1..=5 then return 1      // 1 to 5 inclusive
+        6..<10 then return 2     // 6 to 9 (exclusive of 10)
+        10.. then return 3       // 10 and above
+        default then return 0    // negative numbers
+    end 'check'
+end 'classify'
+```
+
+Range patterns work with integers, floats, and any type implementing the `Comparable` interface (like `Character`):
+
+```maxon
+function charType(c Character) returns int
+    match c 'classify'
+        'a'..='z' then return 1  // lowercase letters
+        'A'..='Z' then return 2  // uppercase letters
+        '0'..='9' then return 3  // digits
+        default then return 0    // other
+    end 'classify'
+end 'charType'
+```
+
+Range patterns can be combined with `or`:
+
+```maxon
+match score 'grade'
+    90..=100 or 85..=89 then return "A"
+    70..=84 then return "B"
+    default then return "C"
+end 'grade'
+```
+
 ### Match Expression
 
 Match expressions return a value and can be assigned to variables. Use `gives` instead of `then`:
