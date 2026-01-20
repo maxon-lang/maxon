@@ -18,9 +18,19 @@ export type SemanticAnalyzer
 	var sourceFile String
 
 	/// Create a semantic analyzer for a program
-	export static function init(program Program, sourceFile String, errors ErrorCollector) returns SemanticAnalyzer
-		return {program: program, errors: errors, sourceFile: sourceFile}
+	export static function init(program Program, sourceFile String) returns SemanticAnalyzer
+		return {program: program, errors: ErrorCollector.create(), sourceFile: sourceFile}
 	end 'init'
+
+	/// Check if analysis produced any errors
+	export function hasErrors() returns bool
+		return errors.hasAnyErrors()
+	end 'hasErrors'
+
+	/// Print all errors to output
+	export function printErrors()
+		errors.printAll()
+	end 'printErrors'
 
 	/// Analyze the program for semantic correctness
 	/// For basic.maxon, we need:
@@ -87,6 +97,7 @@ export type SemanticAnalyzer
 	/// Check if a function has at least one return statement
 	function hasReturnStatement(fn FunctionDecl) returns bool
 		for stmt in fn.body 'checkLoop'
+			// WORKAROUND: Use string comparison because enum comparison is broken
 			if stmt.kind == StmtKind.returnStmt 'isReturn'
 				return true
 			end 'isReturn'
@@ -96,6 +107,7 @@ export type SemanticAnalyzer
 
 	/// Analyze a statement
 	function analyzeStatement(stmt Stmt, fn FunctionDecl)
+		// WORKAROUND: Use string comparison because enum comparison is broken
 		if stmt.kind == StmtKind.returnStmt 'isReturn'
 			analyzeReturnStatement(stmt, fn: fn)
 		end 'isReturn'

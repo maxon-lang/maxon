@@ -11,9 +11,6 @@ export function compile(sourceFile String, emitIr bool) returns int
 		Logger.debug(LogCategory.ir, message: "emit IR: enabled")
 	end 'showIr'
 
-	// Create shared error collector
-	var errors = ErrorCollector.create()
-
 	// Read source file
 	let source = try File.readText(sourceFile) otherwise 'noSource'
 	print("Error: Could not read source file: {sourceFile}\n")
@@ -21,43 +18,62 @@ export function compile(sourceFile String, emitIr bool) returns int
 	end 'noSource'
 
 	// Phase 1: Lexical Analysis
-	var lexer = Lexer.init(source, sourceFile: sourceFile, errors: errors)
+	var lexer = Lexer.init(source, sourceFile: sourceFile)
 	let tokens = lexer.tokenize()
 	Logger.info(LogCategory.lexer, message: "Lexed {tokens.count()} tokens")
 
-	// Check for lexer errors
-	if errors.hasAnyErrors() 'lexerErrors'
+	if lexer.hasErrors() 'lexerErrors'
 		print("\nLexer errors:\n")
-		errors.printAll()
+		lexer.printErrors()
 		return 1
 	end 'lexerErrors'
 
 	// Phase 2: Parsing
-	var parser = Parser.init(tokens, sourceFile: sourceFile, errors: errors)
+	var parser = Parser.init(tokens, sourceFile: sourceFile)
 	let program = parser.parse()
 	Logger.info(LogCategory.parser, message: "Parsed {program.functions.count()} function(s)")
 
-	// Check for parser errors
-	if errors.hasAnyErrors() 'parserErrors'
+	// Debug: print function details
+	var fi = 0
+	while fi < program.functions.count() 'debugFuncs'
+		if let fn = try program.functions.get(fi) 'gotFn'
+			print("DEBUG: Function '{fn.name}' has {fn.body.count()} statements\n")
+			var si = 0
+			while si < fn.body.count() 'debugStmts'
+				if let stmt = try fn.body.get(si) 'gotStmt'
+					print("DEBUG:   stmt {si} kind={stmt.kind.name}\n")
+				end 'gotStmt'
+				si = si + 1
+			end 'debugStmts'
+		end 'gotFn'
+		fi = fi + 1
+	end 'debugFuncs'
+
+	if parser.hasErrors() 'parserErrors'
 		print("\nParser errors:\n")
-		errors.printAll()
+		parser.printErrors()
 		return 1
 	end 'parserErrors'
 
 	// Phase 3: Semantic Analysis
-	var analyzer = SemanticAnalyzer.init(program, sourceFile: sourceFile, errors: errors)
+	print("DEBUG: Creating semantic analyzer\n")
+	var analyzer = SemanticAnalyzer.init(program, sourceFile: sourceFile)
+	print("DEBUG: Running analyze\n")
 	analyzer.analyze()
+	print("DEBUG: Analyze complete\n")
 	Logger.info(LogCategory.semantic, message: "Semantic analysis complete")
 
-	// NOTE: Semantic analyzer has a pass-by-value bug where errors are not propagated back
-	if errors.hasAnyErrors() 'semanticErrors'
+	print("DEBUG: Checking hasErrors\n")
+	if analyzer.hasErrors() 'semanticErrors'
 		print("\nSemantic errors:\n")
-		errors.printAll()
+		print("DEBUG: About to printErrors\n")
+		analyzer.printErrors()
 		return 1
 	end 'semanticErrors'
+	print("DEBUG: No semantic errors\n")
 
 	// Phase 4: AST to IR
-	var irBuilder = IrBuilder.init(errors, sourceFile: sourceFile)
+	var irBuilder = IrBuilder.init(sourceFile: sourceFile)
 	let irOutput = irBuilder.convert(program)
 	Logger.info(LogCategory.ir, message: "Generated IR")
 
@@ -71,10 +87,9 @@ export function compile(sourceFile String, emitIr bool) returns int
 		end 'writeFailed'
 	end 'showIr2'
 
-	// Check for IR errors
-	if errors.hasAnyErrors() 'irErrors'
+	if irBuilder.hasErrors() 'irErrors'
 		print("\nIR generation errors:\n")
-		errors.printAll()
+		irBuilder.printErrors()
 		return 1
 	end 'irErrors'
 

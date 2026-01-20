@@ -15,9 +15,19 @@ export type IrBuilder
 	var currentBlockName String
 
 	/// Initialize the IR builder
-	export static function init(errors ErrorCollector, sourceFile String) returns IrBuilder
-		return {errors: errors, sourceFile: sourceFile, output: "", nextValue: 0, currentBlockName: ""}
+	export static function init(sourceFile String) returns IrBuilder
+		return {errors: ErrorCollector.create(), sourceFile: sourceFile, output: "", nextValue: 0, currentBlockName: ""}
 	end 'init'
+
+	/// Check if IR generation produced any errors
+	export function hasErrors() returns bool
+		return errors.hasAnyErrors()
+	end 'hasErrors'
+
+	/// Print all errors to output
+	export function printErrors()
+		errors.printAll()
+	end 'printErrors'
 
 	/// Convert a program to IR text
 	export function convert(program Program) returns String

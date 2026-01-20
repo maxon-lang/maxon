@@ -91,9 +91,19 @@ export type Parser
 	var sourceFile String
 	var errors ErrorCollector
 
-	export static function init(tokens TokenArray, sourceFile String, errors ErrorCollector) returns Parser
-		return {tokens: tokens, pos: 0, sourceFile: sourceFile, errors: errors}
+	export static function init(tokens TokenArray, sourceFile String) returns Parser
+		return {tokens: tokens, pos: 0, sourceFile: sourceFile, errors: ErrorCollector.create()}
 	end 'init'
+
+	/// Check if parsing produced any errors
+	export function hasErrors() returns bool
+		return errors.hasAnyErrors()
+	end 'hasErrors'
+
+	/// Print all errors to output
+	export function printErrors()
+		errors.printAll()
+	end 'printErrors'
 
 	/// Parse all tokens into a Program AST
 	export function parse() returns Program

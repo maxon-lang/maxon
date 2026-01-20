@@ -40,9 +40,19 @@ export type Lexer
 	var column int
 	var errors ErrorCollector
 
-	export static function init(source String, sourceFile String, errors ErrorCollector) returns Lexer
-		return {source: source, sourceFile: sourceFile, pos: 0, line: 1, column: 1, errors: errors}
+	export static function init(source String, sourceFile String) returns Lexer
+		return {source: source, sourceFile: sourceFile, pos: 0, line: 1, column: 1, errors: ErrorCollector.create()}
 	end 'init'
+
+	/// Check if lexing produced any errors
+	export function hasErrors() returns bool
+		return errors.hasAnyErrors()
+	end 'hasErrors'
+
+	/// Print all errors to output
+	export function printErrors()
+		errors.printAll()
+	end 'printErrors'
 
 	export function tokenize() returns TokenArray
 		var tokens = TokenArray{}

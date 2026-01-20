@@ -83,7 +83,12 @@ export type CompileError
 
 	/// Print error to output
 	export function printError()
-		print("{format()}\n")
+		// Print parts individually to avoid complex string interpolation
+		if location.line > 0 'hasLoc'
+			print("error {code.name}: {location.file}:{location.line}:{location.column}: {message}\n")
+		end 'hasLoc' else 'noLoc'
+			print("error {code.name}: {message}\n")
+		end 'noLoc'
 	end 'printError'
 end 'CompileError'
 
@@ -92,18 +97,16 @@ export type ErrorCollector
 	typealias ErrorArray is Array with CompileError
 
 	export var errors ErrorArray
-	export var hasErrors bool
 
 	/// Create a new error collector
 	export static function create() returns ErrorCollector
-		return {errors: ErrorArray{}, hasErrors: false}
+		return {errors: ErrorArray{}}
 	end 'create'
 
 	/// Add an error with a pre-built source location
 	export function addError(code ErrorCode, message String, loc SourceLocation)
 		let err = CompileError.create(code, message: message, loc: loc)
 		errors.push(err)
-		hasErrors = true
 	end 'addError'
 
 	/// Add an error with file, line, and column
@@ -114,7 +117,7 @@ export type ErrorCollector
 
 	/// Check if any errors have been recorded
 	export function hasAnyErrors() returns bool
-		return hasErrors
+		return errors.count() > 0
 	end 'hasAnyErrors'
 
 	/// Get the number of errors
@@ -132,6 +135,5 @@ export type ErrorCollector
 	/// Clear all errors
 	export function clear()
 		errors = []
-		hasErrors = false
 	end 'clear'
 end 'ErrorCollector'
