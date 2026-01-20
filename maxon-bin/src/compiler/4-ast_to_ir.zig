@@ -6471,10 +6471,9 @@ pub const AstToIr = struct {
             try pre_loop_vars.put(self.allocator, entry.key_ptr.*, entry.value_ptr.state);
         }
 
-        // Extract the value from the error union result (offset 8)
-        // Error union layout: offset 0 = tag (0 = success, 1 = error), offset 8 = payload
-        const value_offset = try self.func().emitConstI64(8);
-        const value_ptr = try self.func().emitBinaryOp(.add, next_result.value, value_offset, .ptr);
+        // Extract the value from the error union result using proper field pointer
+        // This ensures correct type tracking and indirectness metadata
+        const value_ptr = try ErrorUnion.getValuePtr(self.func(), next_result.value);
 
         // Get element type from error union
         const element_info: struct { wrapped: ir.Type, wrapped_struct_type: ?[]const u8, wrapped_enum_type: ?[]const u8 } = switch (next_result.ty) {
@@ -6491,13 +6490,20 @@ pub const AstToIr = struct {
         };
 
         // Register the loop variable
-        // For struct types, use the pointer directly (struct data is inline in the error union)
+        // For struct types, copy to a new buffer for proper tracking
         // For primitive/enum types, load the value and store in a new slot
         const var_slot: ir.Value = if (element_info.wrapped_struct_type != null) blk: {
-            // For struct types, the payload is the struct data inline
-            break :blk value_ptr;
+            // For struct types, copy the data to a new properly-tracked buffer
+            const struct_name = element_info.wrapped_struct_type.?;
+            const struct_size = self.getStructSizeWithMonomorphization(self.resolveTypeName(struct_name)) orelse {
+                self.reportInternalError("unknown struct size in for-in loop", @src());
+                return error.SemanticError;
+            };
+            const struct_buffer = try self.func().emitAllocaSized(struct_size);
+            try self.func().emitMemcpy(ir.toRawPtr(struct_buffer.raw()), value_ptr.asRawPtr(), struct_size);
+            break :blk struct_buffer.raw();
         } else blk: {
-            const element_value = try self.func().emitLoad(value_ptr, element_info.wrapped);
+            const element_value = try self.func().emitLoad(value_ptr.raw(), element_info.wrapped);
             const slot = try self.func().emitAlloca(element_info.wrapped);
             try self.func().emitStore(slot.raw(), element_value);
             break :blk slot.raw();

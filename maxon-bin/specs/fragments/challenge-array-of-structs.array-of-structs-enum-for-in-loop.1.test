@@ -1,54 +1,75 @@
-// Test: stdlib-array.for-in-iteration.1
-typealias IntArray is Array with int
+// Test: challenge-array-of-structs.array-of-structs-enum-for-in-loop.1
+// Regression test: enum comparison works in for-in loop over struct array
+enum Status
+    pending
+    active
+    done
+end 'Status'
+
+type Task
+    export var status Status
+end 'Task'
+
+typealias TaskArray is Array with Task
 
 function main() returns int
-    var arr = IntArray{}
-    arr.push(10)
-    arr.push(20)
-    arr.push(30)
+    var tasks = TaskArray{}
+    tasks.push({status: Status.pending})
+    tasks.push({status: Status.active})
+    tasks.push({status: Status.done})
 
-    var sum = 0
-    for item in arr 'loop'
-        sum = sum + item
+    var activeCount = 0
+    for task in tasks 'loop'
+        if task.status == Status.active 'check'
+            activeCount = activeCount + 1
+        end 'check'
     end 'loop'
 
-    if sum != 60 'check'
-        return 1
-    end 'check'
-
-    return 0
+    return activeCount
 end 'main'
 ---
-ExitCode: 0
+ExitCode: 1
 ---
 function main() -> i64 {
 entry_0:
-    %arr = alloca.sized ptr 40
-    memset %arr 0 40
+    %tasks = alloca.sized ptr 40
+    memset %tasks 0 40
     %tmp_alloca.1 = alloca.sized ptr 40
-    %tmp_const = const.i64 i64 10
-    %tmp_call = call ptr @Array$int$push(%tmp_alloca.1, %arr, %tmp_const)
-    %tmp_alloca.2 = alloca.sized ptr 40
-    %tmp_const.1 = const.i64 i64 20
-    %tmp_call.1 = call ptr @Array$int$push(%tmp_alloca.2, %arr, %tmp_const.1)
+    %tmp_alloca.2 = alloca.sized ptr 8
+    memset %tmp_alloca.2 0 8
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.2 0
+    %tmp_const = const.i64 i64 0
+    store %tmp_fieldptr %tmp_const
+    %tmp_call = call ptr @Array$Task$push(%tmp_alloca.1, %tasks, %tmp_alloca.2)
     %tmp_alloca.3 = alloca.sized ptr 40
-    %tmp_const.2 = const.i64 i64 30
-    %tmp_call.2 = call ptr @Array$int$push(%tmp_alloca.3, %arr, %tmp_const.2)
-    %tmp_const.3 = const.i64 i64 0
-    %sum = alloca ptr
-    store %sum %tmp_const.3
+    %tmp_alloca.4 = alloca.sized ptr 8
+    memset %tmp_alloca.4 0 8
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca.4 0
+    %tmp_const.1 = const.i64 i64 1
+    store %tmp_fieldptr.1 %tmp_const.1
+    %tmp_call.1 = call ptr @Array$Task$push(%tmp_alloca.3, %tasks, %tmp_alloca.4)
     %tmp_alloca.5 = alloca.sized ptr 40
-    memcpy %tmp_alloca.5 %arr 40
-    %tmp_fieldptr = getfieldptr ptr %tmp_alloca.5 8
-    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 24
-    %tmp_load = load i32 %tmp_fieldptr.1
+    %tmp_alloca.6 = alloca.sized ptr 8
+    memset %tmp_alloca.6 0 8
+    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.6 0
+    %tmp_const.2 = const.i64 i64 2
+    store %tmp_fieldptr.2 %tmp_const.2
+    %tmp_call.2 = call ptr @Array$Task$push(%tmp_alloca.5, %tasks, %tmp_alloca.6)
+    %tmp_const.3 = const.i64 i64 0
+    %activeCount = alloca ptr
+    store %activeCount %tmp_const.3
+    %tmp_alloca.8 = alloca.sized ptr 40
+    memcpy %tmp_alloca.8 %tasks 40
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_alloca.8 8
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.3 24
+    %tmp_load = load i32 %tmp_fieldptr.4
     %tmp_const.4 = const.i32 i32 3
     %tmp_band = band i32 %tmp_load %tmp_const.4
     %tmp_const.5 = const.i32 i32 1
     %tmp_icmp = icmp.eq i32 %tmp_band %tmp_const.5
     br.cond %tmp_icmp @incref_1 @incref_end_2
 incref_1:
-    %tmp_load.1 = load ptr %tmp_fieldptr
+    %tmp_load.1 = load ptr %tmp_fieldptr.3
     %tmp_const.6 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.1 %tmp_const.6
     %tmp_load.2 = load i64 %tmp_sub
@@ -59,103 +80,77 @@ incref_1:
 incref_end_2:
     br @forcond_3
 forcond_3:
-    %tmp_alloca.6 = alloca.sized ptr 16
-    %tmp_call.3 = call ptr @Array$int$next(%tmp_alloca.6, %tmp_alloca.5)
-    %tmp_load.3 = load i64 %tmp_alloca.6
+    %tmp_alloca.9 = alloca.sized ptr 16
+    %tmp_call.3 = call ptr @Array$Task$next(%tmp_alloca.9, %tmp_alloca.8)
+    %tmp_load.3 = load i64 %tmp_alloca.9
     %tmp_const.8 = const.i64 i64 0
     %tmp_icmp.1 = icmp.eq i64 %tmp_load.3 %tmp_const.8
-    br.cond %tmp_icmp.1 @forbody_4 @forcont_5
+    br.cond %tmp_icmp.1 @forbody_4 @forcont_7
 forbody_4:
-    %tmp_fieldptr.2 = getfieldptr ptr %tmp_alloca.6 8
-    %tmp_load.4 = load i64 %tmp_fieldptr.2
-    %tmp_load.5 = load i64 %sum
-    %tmp_add.1 = add i64 %tmp_load.5 %tmp_load.4
-    store %sum %tmp_add.1
-    br @forcond_3
-forcont_5:
-    %tmp_load.7 = load i64 %sum
-    %tmp_const.9 = const.i64 i64 60
-    %tmp_icmp.2 = icmp.ne i64 %tmp_load.7 %tmp_const.9
-    br.cond %tmp_icmp.2 @then$check_6 @end$check_10
-then$check_6:
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_alloca.9 8
+    %tmp_alloca.10 = alloca.sized ptr 8
+    memcpy %tmp_alloca.10 %tmp_fieldptr.5 8
+    %tmp_fieldptr.6 = getfieldptr ptr %tmp_alloca.10 0
+    %tmp_load.4 = load i64 %tmp_fieldptr.6
+    %tmp_const.9 = const.i64 i64 1
+    %tmp_icmp.2 = icmp.eq i64 %tmp_load.4 %tmp_const.9
+    br.cond %tmp_icmp.2 @then$check_5 @end$check_6
+then$check_5:
+    %tmp_load.5 = load i64 %activeCount
     %tmp_const.10 = const.i64 i64 1
-    %tmp_alloca.8 = alloca ptr
-    store %tmp_alloca.8 %tmp_const.10
-    %tmp_fieldptr.3 = getfieldptr ptr %arr 8
-    %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.3 24
-    %tmp_load.8 = load i32 %tmp_fieldptr.4
+    %tmp_add.1 = add i64 %tmp_load.5 %tmp_const.10
+    store %activeCount %tmp_add.1
+    br @end$check_6
+end$check_6:
+    br @forcond_3
+forcont_7:
+    %tmp_load.6 = load i64 %activeCount
+    %tmp_alloca.11 = alloca ptr
+    store %tmp_alloca.11 %tmp_load.6
+    %tmp_fieldptr.7 = getfieldptr ptr %tasks 8
+    %tmp_fieldptr.8 = getfieldptr ptr %tmp_fieldptr.7 24
+    %tmp_load.7 = load i32 %tmp_fieldptr.8
     %tmp_const.11 = const.i32 i32 3
-    %tmp_band.1 = band i32 %tmp_load.8 %tmp_const.11
+    %tmp_band.1 = band i32 %tmp_load.7 %tmp_const.11
     %tmp_const.12 = const.i32 i32 1
     %tmp_icmp.3 = icmp.eq i32 %tmp_band.1 %tmp_const.12
-    br.cond %tmp_icmp.3 @decref_7 @decref_end_9
-decref_7:
-    %tmp_load.9 = load ptr %tmp_fieldptr.3
+    br.cond %tmp_icmp.3 @decref_8 @decref_end_10
+decref_8:
+    %tmp_load.8 = load ptr %tmp_fieldptr.7
     %tmp_const.13 = const.i64 i64 8
-    %tmp_sub.1 = sub ptr %tmp_load.9 %tmp_const.13
-    %tmp_load.10 = load i64 %tmp_sub.1
+    %tmp_sub.1 = sub ptr %tmp_load.8 %tmp_const.13
+    %tmp_load.9 = load i64 %tmp_sub.1
     %tmp_const.14 = const.i64 i64 1
-    %tmp_sub.2 = sub i64 %tmp_load.10 %tmp_const.14
+    %tmp_sub.2 = sub i64 %tmp_load.9 %tmp_const.14
     store %tmp_sub.1 %tmp_sub.2
     %tmp_const.15 = const.i64 i64 0
     %tmp_icmp.4 = icmp.eq i64 %tmp_sub.2 %tmp_const.15
-    br.cond %tmp_icmp.4 @decref_free_8 @decref_end_9
-decref_free_8:
-    %tmp_load.11 = load ptr %tmp_fieldptr.3
-    %tmp_sub.3 = sub ptr %tmp_load.11 %tmp_const.13
+    br.cond %tmp_icmp.4 @decref_free_9 @decref_end_10
+decref_free_9:
+    %tmp_load.10 = load ptr %tmp_fieldptr.7
+    %tmp_sub.3 = sub ptr %tmp_load.10 %tmp_const.13
     heap.free %tmp_sub.3 tag="array cleanup"
-    br @decref_end_9
-decref_end_9:
-    %tmp_load.12 = load i64 %tmp_alloca.8
-    ret %tmp_load.12
-end$check_10:
-    %tmp_const.16 = const.i64 i64 0
-    %tmp_alloca.9 = alloca ptr
-    store %tmp_alloca.9 %tmp_const.16
-    %tmp_fieldptr.5 = getfieldptr ptr %arr 8
-    %tmp_fieldptr.6 = getfieldptr ptr %tmp_fieldptr.5 24
-    %tmp_load.13 = load i32 %tmp_fieldptr.6
-    %tmp_const.17 = const.i32 i32 3
-    %tmp_band.2 = band i32 %tmp_load.13 %tmp_const.17
-    %tmp_const.18 = const.i32 i32 1
-    %tmp_icmp.5 = icmp.eq i32 %tmp_band.2 %tmp_const.18
-    br.cond %tmp_icmp.5 @decref_11 @decref_end_13
-decref_11:
-    %tmp_load.14 = load ptr %tmp_fieldptr.5
-    %tmp_const.19 = const.i64 i64 8
-    %tmp_sub.4 = sub ptr %tmp_load.14 %tmp_const.19
-    %tmp_load.15 = load i64 %tmp_sub.4
-    %tmp_const.20 = const.i64 i64 1
-    %tmp_sub.5 = sub i64 %tmp_load.15 %tmp_const.20
-    store %tmp_sub.4 %tmp_sub.5
-    %tmp_const.21 = const.i64 i64 0
-    %tmp_icmp.6 = icmp.eq i64 %tmp_sub.5 %tmp_const.21
-    br.cond %tmp_icmp.6 @decref_free_12 @decref_end_13
-decref_free_12:
-    %tmp_load.16 = load ptr %tmp_fieldptr.5
-    %tmp_sub.6 = sub ptr %tmp_load.16 %tmp_const.19
-    heap.free %tmp_sub.6 tag="array cleanup"
-    br @decref_end_13
-decref_end_13:
-    %tmp_load.17 = load i64 %tmp_alloca.9
-    ret %tmp_load.17
+    br @decref_end_10
+decref_end_10:
+    %tmp_load.11 = load i64 %tmp_alloca.11
+    ret %tmp_load.11
 }
 
-function Array$int$push() -> ptr {
+function Array$Task$push() -> ptr {
 entry_0:
     %tmp_param = param ptr 0
     %self = param ptr 1
-    %value = param i64 2
+    %value = param ptr 2
     %tmp_fieldptr = getfieldptr ptr %self 8
     %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 8
     %tmp_load = load i64 %tmp_fieldptr.1
     %tmp_const = const.i64 i64 1
     %tmp_add = add i64 %tmp_load %tmp_const
-    call @Array$int$ensureCapacity(%self, %tmp_add)
+    call @Array$Task$ensureCapacity(%self, %tmp_add)
     %tmp_fieldptr.2 = getfieldptr ptr %self 8
-    %tmp_load.4 = load ptr %tmp_fieldptr.2
-    %tmp_elemptr = getelemptr ptr %tmp_load.4 %tmp_load elemsize=8
-    store %tmp_elemptr %value
+    %tmp_load.3 = load ptr %tmp_fieldptr.2
+    %tmp_elemptr = getelemptr ptr %tmp_load.3 %tmp_load elemsize=8
+    memcpy %tmp_elemptr %value 8
     %tmp_fieldptr.3 = getfieldptr ptr %self 8
     %tmp_const.2 = const.i64 i64 1
     %tmp_add.1 = add i64 %tmp_load %tmp_const.2
@@ -165,7 +160,7 @@ entry_0:
     ret %tmp_param
 }
 
-function Array$int$ensureCapacity() -> void {
+function Array$Task$ensureCapacity() -> void {
 entry_0:
     %self = param ptr 0
     %requiredLen = param i64 1
@@ -243,7 +238,7 @@ end$grow_10:
     ret
 }
 
-function Array$int$next() -> ptr {
+function Array$Task$next() -> ptr {
 entry_0:
     %tmp_param = param ptr 0
     %self = param ptr 1
@@ -266,18 +261,17 @@ end$done_2:
     %tmp_fieldptr.5 = getfieldptr ptr %self 0
     %tmp_load.3 = load i64 %tmp_fieldptr.5
     %tmp_load.4 = load ptr %tmp_fieldptr.4
-    %tmp_elemptr = getelemptr ptr %tmp_load.4 %tmp_load.3 elemsize=8
-    %tmp_load.5 = load i64 %tmp_elemptr
+    %value = getelemptr ptr %tmp_load.4 %tmp_load.3 elemsize=8
     %tmp_fieldptr.6 = getfieldptr ptr %self 0
-    %tmp_load.6 = load i64 %tmp_fieldptr.6
+    %tmp_load.5 = load i64 %tmp_fieldptr.6
     %tmp_const.2 = const.i64 i64 1
-    %tmp_add = add i64 %tmp_load.6 %tmp_const.2
+    %tmp_add = add i64 %tmp_load.5 %tmp_const.2
     %tmp_fieldptr.7 = getfieldptr ptr %self 0
     store %tmp_fieldptr.7 %tmp_add
     %tmp_const.3 = const.i64 i64 0
     store %tmp_param %tmp_const.3
     %tmp_fieldptr.8 = getfieldptr ptr %tmp_param 8
-    store %tmp_fieldptr.8 %tmp_load.5
+    memcpy %tmp_fieldptr.8 %value 8
     ret %tmp_param
 }
 

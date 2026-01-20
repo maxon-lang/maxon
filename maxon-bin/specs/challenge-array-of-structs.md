@@ -51,3 +51,73 @@ end 'main'
 ```exitcode
 30
 ```
+
+<!-- test: array-of-structs-with-enum-field -->
+```maxon
+// Regression test: structs with enum fields stored correctly in arrays
+// Previously, 8-byte structs were stored by pointer instead of by value
+enum Color
+    red
+    green
+    blue
+end 'Color'
+
+type Item
+    export var color Color
+end 'Item'
+
+typealias ItemArray is Array with Item
+
+function main() returns int
+    var items = ItemArray{}
+    items.push({color: Color.red})
+    items.push({color: Color.green})
+    items.push({color: Color.blue})
+
+    // Verify enum values are stored correctly (not pointers)
+    var item0 = try items.get(0) otherwise Item{color: Color.blue}
+    var item1 = try items.get(1) otherwise Item{color: Color.blue}
+    var item2 = try items.get(2) otherwise Item{color: Color.red}
+
+    // red=0, green=1, blue=2
+    return item0.color.rawValue + item1.color.rawValue * 10 + item2.color.rawValue * 100
+end 'main'
+```
+```exitcode
+210
+```
+
+<!-- test: array-of-structs-enum-for-in-loop -->
+```maxon
+// Regression test: enum comparison works in for-in loop over struct array
+enum Status
+    pending
+    active
+    done
+end 'Status'
+
+type Task
+    export var status Status
+end 'Task'
+
+typealias TaskArray is Array with Task
+
+function main() returns int
+    var tasks = TaskArray{}
+    tasks.push({status: Status.pending})
+    tasks.push({status: Status.active})
+    tasks.push({status: Status.done})
+
+    var activeCount = 0
+    for task in tasks 'loop'
+        if task.status == Status.active 'check'
+            activeCount = activeCount + 1
+        end 'check'
+    end 'loop'
+
+    return activeCount
+end 'main'
+```
+```exitcode
+1
+```

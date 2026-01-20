@@ -2676,7 +2676,7 @@ pub const Parser = struct {
         while (true) {
             if (self.check(.dot)) {
                 _ = self.advance(); // consume '.'
-                const field_token = try self.expect(.identifier);
+                const field_token = self.advance();
                 // Check if this is a method call: .identifier(args)
                 if (self.check(.lparen)) {
                     _ = self.advance(); // consume '('
@@ -3057,6 +3057,16 @@ pub const Parser = struct {
         return null;
     }
 
+    /// Check if we're at the end of a block: "end 'label'"
+    fn isAtEndOfBlock(self: *Parser) bool {
+        if (!self.check(.end)) return false;
+        // "end" followed by a block label (char_literal) is end of block
+        if (self.peek(1)) |next_token| {
+            return next_token.type == .char_literal;
+        }
+        return false;
+    }
+
     fn advance(self: *Parser) Token {
         if (!self.isAtEnd()) {
             const token = self.tokens[self.pos];
@@ -3112,7 +3122,9 @@ pub const Parser = struct {
         var methods: std.ArrayListUnmanaged(ast.MethodDecl) = .empty;
         errdefer methods.deinit(self.allocator);
 
-        while (!self.check(.end) and !self.isAtEnd()) {
+        // Check if we're at the end of a block: "end 'label'"
+        // This is needed because 'end' can also be an enum member name
+        while (!self.isAtEndOfBlock() and !self.isAtEnd()) {
             // Skip blank lines
             if (self.check(.newline)) {
                 _ = self.advance();
@@ -3125,14 +3137,21 @@ pub const Parser = struct {
                 continue;
             }
 
-            // Check if this is a method (function keyword)
+            // Check if this is a method (function keyword followed by identifier)
+            // "function foo()" is a method, "function" or "function(...)" is an enum member
             if (self.check(.function)) {
-                const method = try self.parseMethodDecl();
-                try methods.append(self.allocator, method);
-                continue;
+                if (self.peek(1)) |next_token| {
+                    if (next_token.type == .identifier) {
+                        const method = try self.parseMethodDecl();
+                        try methods.append(self.allocator, method);
+                        continue;
+                    }
+                }
+                // Fall through to parse "function" as an enum member name
             }
 
-            // Parse member name - can be identifier, string literal, or char literal
+            // Parse member name - can be identifier, string literal, char literal, or keyword
+            // Inside an enum block, keywords are valid member names
             var member_name: []const u8 = undefined;
             var member_line: u32 = 0;
             var member_column: u32 = 0;
@@ -3152,10 +3171,19 @@ pub const Parser = struct {
                 member_column = token.column;
                 name_is_char_literal = true;
             } else {
-                const token = try self.expect(.identifier);
-                member_name = token.text;
-                member_line = token.line;
-                member_column = token.column;
+                // Accept any token with text as enum member name (identifier or keyword)
+                const token = self.current();
+                if (token.text.len > 0 and token.type != .newline and token.type != .eof) {
+                    _ = self.advance();
+                    member_name = token.text;
+                    member_line = token.line;
+                    member_column = token.column;
+                } else {
+                    const expected_token = try self.expect(.identifier);
+                    member_name = expected_token.text;
+                    member_line = expected_token.line;
+                    member_column = expected_token.column;
+                }
             }
 
             // Parse optional associated values (e.g., "value(n int)" or "pair(a int, b int)")

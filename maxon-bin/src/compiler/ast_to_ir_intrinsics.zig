@@ -500,7 +500,8 @@ fn intrinsicManagedMemorySetAt(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
     const elem_ptr = try self.func().emitGetElemPtr(ir.toRawPtr(buf_ptr), index.value, elem_size);
 
-    if (elem_info.is_struct and elem_size > 8) {
+    if (elem_info.is_struct) {
+        // Structs are always passed by pointer, so copy the data regardless of size
         try self.func().emitMemcpy(elem_ptr.asRawPtr(), ir.toRawPtr(value.value), @intCast(elem_size));
     } else if (elem_size == 1) {
         // For byte-sized elements, use i8 store to avoid writing 8 bytes

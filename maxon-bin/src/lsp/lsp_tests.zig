@@ -1936,3 +1936,41 @@ test "formatting indents match expression cases correctly" {
     // Check that end 'dispatch' for match has one tab (back to function level)
     try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'dispatch'") != null);
 }
+
+test "formatting indents try-otherwise block correctly" {
+    var client = try TestClient.init(test_allocator);
+    defer client.deinit();
+    _ = try client.initialize();
+
+    // try-otherwise block with no indentation - formatter should add proper indentation
+    const source =
+        \\function readFile(path String) returns int
+        \\let content = try File.readText(path) otherwise 'noFile'
+        \\print("Error reading file\n")
+        \\return 1
+        \\end 'noFile'
+        \\return 0
+        \\end 'readFile'
+    ;
+    try client.openDocument("file:///test.maxon", source);
+
+    var result = try client.formatting("file:///test.maxon", 4, false);
+    defer result.deinit();
+
+    // Verify we got formatted text
+    try testing.expect(result.new_text.len > 0);
+    const new_text = result.new_text;
+
+    // Check that 'let content' is indented one level (inside function)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tlet content = try") != null);
+
+    // Check that statements inside otherwise block are indented two levels
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\tprint(\"Error") != null);
+    try testing.expect(std.mem.indexOf(u8, new_text, "\t\treturn 1") != null);
+
+    // Check that end 'noFile' has one tab (back to function level, same as let)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\tend 'noFile'") != null);
+
+    // Check that return 0 has one tab (inside function)
+    try testing.expect(std.mem.indexOf(u8, new_text, "\treturn 0") != null);
+}

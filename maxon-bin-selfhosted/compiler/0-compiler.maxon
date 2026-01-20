@@ -6,22 +6,18 @@
 export function compile(sourceFile String, emitIr bool) returns int
 	let outputFile = sourceFile.replace(".maxon", ".exe")
 
-	Logger.info(LogCategory.ir, message: "Compiling: {sourceFile} -> {outputFile}")
-	if emitIr 'showIr'
-		Logger.debug(LogCategory.ir, message: "emit IR: enabled")
-	end 'showIr'
+	Logger.info(LogCategory.compiler, message: "Compiling: {sourceFile} -> {outputFile}")
 
 	// Read source file
 	let source = try File.readText(sourceFile) otherwise 'noSource'
-	print("Error: Could not read source file: {sourceFile}\n")
-	return 1
+		Logger.error(LogCategory.compiler, message: "Read source file: {sourceFile}")
+		return 1
 	end 'noSource'
 
 	// Phase 1: Lexical Analysis
 	var lexer = Lexer.init(source, sourceFile: sourceFile)
 	let tokens = lexer.tokenize()
 	Logger.info(LogCategory.lexer, message: "Lexed {tokens.count()} tokens")
-
 	if lexer.hasErrors() 'lexerErrors'
 		print("\nLexer errors:\n")
 		lexer.printErrors()
@@ -32,23 +28,6 @@ export function compile(sourceFile String, emitIr bool) returns int
 	var parser = Parser.init(tokens, sourceFile: sourceFile)
 	let program = parser.parse()
 	Logger.info(LogCategory.parser, message: "Parsed {program.functions.count()} function(s)")
-
-	// Debug: print function details
-	var fi = 0
-	while fi < program.functions.count() 'debugFuncs'
-		if let fn = try program.functions.get(fi) 'gotFn'
-			print("DEBUG: Function '{fn.name}' has {fn.body.count()} statements\n")
-			var si = 0
-			while si < fn.body.count() 'debugStmts'
-				if let stmt = try fn.body.get(si) 'gotStmt'
-					print("DEBUG:   stmt {si} kind={stmt.kind.name}\n")
-				end 'gotStmt'
-				si = si + 1
-			end 'debugStmts'
-		end 'gotFn'
-		fi = fi + 1
-	end 'debugFuncs'
-
 	if parser.hasErrors() 'parserErrors'
 		print("\nParser errors:\n")
 		parser.printErrors()
@@ -56,21 +35,14 @@ export function compile(sourceFile String, emitIr bool) returns int
 	end 'parserErrors'
 
 	// Phase 3: Semantic Analysis
-	print("DEBUG: Creating semantic analyzer\n")
 	var analyzer = SemanticAnalyzer.init(program, sourceFile: sourceFile)
-	print("DEBUG: Running analyze\n")
 	analyzer.analyze()
-	print("DEBUG: Analyze complete\n")
 	Logger.info(LogCategory.semantic, message: "Semantic analysis complete")
-
-	print("DEBUG: Checking hasErrors\n")
 	if analyzer.hasErrors() 'semanticErrors'
 		print("\nSemantic errors:\n")
-		print("DEBUG: About to printErrors\n")
 		analyzer.printErrors()
 		return 1
 	end 'semanticErrors'
-	print("DEBUG: No semantic errors\n")
 
 	// Phase 4: AST to IR
 	var irBuilder = IrBuilder.init(sourceFile: sourceFile)

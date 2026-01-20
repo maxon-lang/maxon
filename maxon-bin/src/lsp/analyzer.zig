@@ -1626,7 +1626,23 @@ fn calculateDepthFromExpression(expr: ast.Expression, line: u32) u32 {
         .compare => |c| calculateDepthFromExpression(c.left.*, line) + calculateDepthFromExpression(c.right.*, line),
         .logical => |l| calculateDepthFromExpression(l.left.*, line) + calculateDepthFromExpression(l.right.*, line),
         .unary => |u| calculateDepthFromExpression(u.operand.*, line),
-        .try_expr => |t| calculateDepthFromExpression(t.expr.*, line),
+        .try_expr => |t| blk: {
+            var depth: u32 = 0;
+            // Recursively check the expression being tried
+            depth += calculateDepthFromExpression(t.expr.*, line);
+            // Check otherwise block if present
+            if (t.otherwise) |otherwise| {
+                if (otherwise.mode == .block or otherwise.mode == .block_with_err) {
+                    // Check if line is inside the otherwise block
+                    if (otherwise.block.start_line < line and line < otherwise.block.end_line) {
+                        depth += 1;
+                    }
+                    // Recursively check statements inside the otherwise block
+                    depth += calculateDepthFromStatements(otherwise.body, line);
+                }
+            }
+            break :blk depth;
+        },
         else => 0,
     };
 }
