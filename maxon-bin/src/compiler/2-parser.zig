@@ -789,7 +789,7 @@ pub const Parser = struct {
 
     /// Convert a TypeExpr to a monomorphized string name
     /// Simple types: "int", "String"
-    /// Generic types: "Pair$String$int", "Array$int"
+    /// Monomorphized types: "MyType$String$int"
     fn typeExprToMonoName(self: *Parser, type_expr: ast.TypeExpr) ![]const u8 {
         switch (type_expr.expr) {
             .simple => |name| return name,

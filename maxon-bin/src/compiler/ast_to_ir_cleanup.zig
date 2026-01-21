@@ -464,13 +464,8 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
     // and ExprArray), we fall through to cleanupStructFields which properly recurses.
     if (struct_info.has_managed_buffer) {
         // First, clean up elements if this is a collection with element cleanup needs
-        // Use element_type_name from struct_info if available, otherwise parse from name
-        const elem_type_name = struct_info.element_type_name orelse blk: {
-            if (std.mem.startsWith(u8, name, "Array$")) {
-                break :blk name["Array$".len..];
-            }
-            break :blk null;
-        };
+        // element_type_name is set during monomorphization for all single-parameter generic types
+        const elem_type_name = struct_info.element_type_name;
 
         // Get pointer to __ManagedMemory at the correct offset
         const managed_ptr = try array_helpers.getManagedMemoryPtr(self, struct_ptr, struct_info.managed_buffer_offset);

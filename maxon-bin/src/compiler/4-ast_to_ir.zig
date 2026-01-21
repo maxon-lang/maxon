@@ -3684,24 +3684,50 @@ pub const AstToIr = struct {
         return switch (evt) {
             .primitive => |p| .{ .primitive = p },
             .struct_type => |name| blk: {
-                // First resolve the name through associated_type_aliases (e.g., StringArray -> Array$String)
+                // First resolve the name through associated_type_aliases
                 const resolved_name = self.resolveTypeName(name);
 
                 // Try normal lookup with resolved name
                 if (self.typeNameToValueTypeOpt(resolved_name)) |vt| {
                     break :blk vt;
                 }
-                // If not found and it's an Array type, trigger monomorphization
-                // BUT only if the element type is a concrete type (not a generic parameter like "Element")
-                if (std.mem.startsWith(u8, resolved_name, "Array$")) {
-                    const element_name = resolved_name["Array$".len..];
-                    // Skip if element type is a generic parameter (not a concrete type)
-                    // Concrete types are either primitives or registered in type_map
-                    const is_concrete = types.Primitive.fromString(element_name) != null or
-                        self.type_map.contains(element_name);
-                    if (is_concrete) {
-                        var type_args = [_][]const u8{element_name};
-                        const mono_name = self.getOrCreateMonomorphizedType("Array", &type_args) catch {
+                // If not found and it's a monomorphized type, trigger monomorphization
+                // BUT only if the type args are concrete types (not generic parameters like "Element")
+                if (std.mem.indexOf(u8, resolved_name, "$")) |first_dollar| {
+                    const base_type = resolved_name[0..first_dollar];
+                    const args_str = resolved_name[first_dollar + 1 ..];
+
+                    // Parse type arguments (split by $)
+                    var type_args_buf: [8][]const u8 = undefined;
+                    var arg_count: usize = 0;
+                    var all_concrete = true;
+                    var start: usize = 0;
+                    for (args_str, 0..) |c, i| {
+                        if (c == '$') {
+                            if (arg_count < 8) {
+                                const arg = args_str[start..i];
+                                type_args_buf[arg_count] = arg;
+                                arg_count += 1;
+                                // Check if concrete (primitive or registered type)
+                                if (types.Primitive.fromString(arg) == null and !self.type_map.contains(arg)) {
+                                    all_concrete = false;
+                                }
+                            }
+                            start = i + 1;
+                        }
+                    }
+                    // Add final argument
+                    if (arg_count < 8 and start < args_str.len) {
+                        const arg = args_str[start..];
+                        type_args_buf[arg_count] = arg;
+                        arg_count += 1;
+                        if (types.Primitive.fromString(arg) == null and !self.type_map.contains(arg)) {
+                            all_concrete = false;
+                        }
+                    }
+
+                    if (arg_count > 0 and all_concrete) {
+                        const mono_name = self.getOrCreateMonomorphizedType(base_type, type_args_buf[0..arg_count]) catch {
                             debug.astToIr("convertExternalValueType: failed to monomorphize {s}", .{resolved_name});
                             break :blk null;
                         };
@@ -3965,10 +3991,10 @@ pub const AstToIr = struct {
             break :blk false;
         };
 
-        // Determine element_type_name for collection types
+        // Set element_type_name for single-parameter generic types (Array, Set, etc.)
+        // Multi-parameter types don't have a single element type
         // This is used during cleanup to properly decref elements
-        const is_array = std.mem.eql(u8, base_type, "Array");
-        const element_type_name: ?[]const u8 = if (is_array and type_args.len > 0)
+        const element_type_name: ?[]const u8 = if (type_args.len == 1)
             type_args[0]
         else
             null;
@@ -4056,7 +4082,7 @@ pub const AstToIr = struct {
     }
 
     /// Get the size of a struct type, triggering monomorphization if needed.
-    /// For monomorphized types like "Array$String" or "Map$Key$Value", this will
+    /// For monomorphized types, this will
     /// ensure the type is registered before looking up its size.
     /// Returns the struct size, or null if the type cannot be resolved.
     pub fn getStructSizeWithMonomorphization(self: *AstToIr, struct_name: []const u8) ?i32 {
@@ -4071,21 +4097,35 @@ pub const AstToIr = struct {
         }
 
         // Not found - try to trigger monomorphization for generic types
-        if (std.mem.startsWith(u8, resolved_name, "Array$")) {
-            const elem_type = resolved_name["Array$".len..];
-            _ = self.getOrCreateMonomorphizedType("Array", &[_][]const u8{elem_type}) catch return null;
-        } else if (std.mem.startsWith(u8, resolved_name, "Map$")) {
-            // Parse Map$Key$Value
-            const rest = resolved_name["Map$".len..];
-            if (std.mem.indexOf(u8, rest, "$")) |sep| {
-                const key_type = rest[0..sep];
-                const val_type = rest[sep + 1 ..];
-                _ = self.getOrCreateMonomorphizedType("Map", &[_][]const u8{ key_type, val_type }) catch return null;
-            } else {
-                return null;
+        // Parse monomorphized type pattern: BaseType$Arg1$Arg2...
+        if (std.mem.indexOf(u8, resolved_name, "$")) |first_dollar| {
+            const base_type = resolved_name[0..first_dollar];
+            const args_str = resolved_name[first_dollar + 1 ..];
+
+            // Parse type arguments (split by $)
+            var type_args_buf: [8][]const u8 = undefined;
+            var arg_count: usize = 0;
+            var start: usize = 0;
+            for (args_str, 0..) |c, i| {
+                if (c == '$') {
+                    if (arg_count < 8) {
+                        type_args_buf[arg_count] = args_str[start..i];
+                        arg_count += 1;
+                    }
+                    start = i + 1;
+                }
+            }
+            // Add final argument
+            if (arg_count < 8 and start < args_str.len) {
+                type_args_buf[arg_count] = args_str[start..];
+                arg_count += 1;
+            }
+
+            if (arg_count > 0) {
+                _ = self.getOrCreateMonomorphizedType(base_type, type_args_buf[0..arg_count]) catch return null;
             }
         } else {
-            // Unknown monomorphized type pattern
+            // Not a monomorphized type pattern
             return null;
         }
 
@@ -4313,7 +4353,7 @@ pub const AstToIr = struct {
         bindings: []const PendingMethod.GenericBinding,
     ) !bool {
         // Get source file for the base type (for error reporting)
-        // type_name might be monomorphized like "Map$String$int", so extract base type "Map"
+        // type_name might be monomorphized, so extract base type
         const base_type = if (std.mem.indexOf(u8, type_name, "$")) |idx|
             type_name[0..idx]
         else
@@ -5133,9 +5173,9 @@ pub const AstToIr = struct {
                 const param_val = try self.func().emitParam(idx, .ptr);
                 try self.func().setValueName(param_val, param.name);
 
-                // For stdlib Array parameters, check if mutation transfers ownership
+                // For types with managed buffers, check if mutation transfers ownership
                 var owns_memory = false;
-                if (std.mem.startsWith(u8, struct_info.name, "Array$")) {
+                if (struct_info.has_managed_buffer) {
                     if (self.mutation_analyzer) |analyzer| {
                         if (self.current_func_name) |func_name| {
                             const source_param_idx: usize = if (self.sret_ptr != null)
@@ -6825,7 +6865,7 @@ pub const AstToIr = struct {
     /// Check if a type implements a specific BuiltinXxxLiteral interface.
     /// Types implementing these interfaces receive __ManagedMemory directly from the compiler.
     pub fn isBuiltinLiteralType(self: *AstToIr, type_name: []const u8, interface_name: []const u8) bool {
-        // Handle monomorphized names like "Array$int", "Map$String$int"
+        // Handle monomorphized names
         const base_name = if (std.mem.indexOf(u8, type_name, "$")) |dollar_pos|
             type_name[0..dollar_pos]
         else
@@ -6834,9 +6874,9 @@ pub const AstToIr = struct {
     }
 
     /// Check if a struct type conforms to the Indexed interface.
-    /// Handles monomorphized names (e.g., "Array$int" -> checks "Array" conforms to Indexed).
+    /// Handles monomorphized names by checking if the base type conforms to the interface.
     fn structConformsToIndexed(self: *AstToIr, type_name: []const u8) bool {
-        // Get base type name from monomorphized name (e.g., "Array$int" -> "Array")
+        // Get base type name from monomorphized name
         const base_name = if (std.mem.indexOf(u8, type_name, "$")) |pos|
             type_name[0..pos]
         else
@@ -6857,7 +6897,7 @@ pub const AstToIr = struct {
             const type_name = entry.key_ptr.*;
             const type_decl = entry.value_ptr.*;
 
-            // Skip monomorphized types (like Array$int) - we want the base type
+            // Skip monomorphized types we want the base type
             if (std.mem.indexOf(u8, type_name, "$") != null) continue;
 
             // Check if this type declares conformance to the target interface
@@ -11457,9 +11497,7 @@ pub const AstToIr = struct {
         // Handle __ManagedMemory indexing (stdlib only)
         if (base_typed.ty == .struct_type) {
             if (std.mem.eql(u8, base_typed.ty.struct_type.name, "__ManagedMemory")) {
-                // Extract variable name if base is an identifier
-                const var_name: ?[]const u8 = if (idx.base.* == .identifier) idx.base.identifier else null;
-                return array_helpers.convertManagedMemoryIndex(self, base_typed.value, idx.index.*, var_name);
+                return array_helpers.convertManagedMemoryIndex(self, base_typed.value, idx.index.*);
             }
             // Handle types implementing Indexed interface - call .get() method
             if (self.structConformsToIndexed(base_typed.ty.struct_type.name)) {
@@ -11497,7 +11535,7 @@ pub const AstToIr = struct {
         var mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_name, method_name });
         try self.module.trackString(mangled_name);
 
-        // If method not found, try to create the type on-demand (for generic types like Array$String)
+        // If method not found, try to create the type on-demand
         var func_info_opt = self.func_map.get(mangled_name);
         if (func_info_opt == null and std.mem.indexOf(u8, type_name, "$") != null) {
             // Type name has $, might be a monomorphized type that needs to be created
@@ -12663,7 +12701,7 @@ fn getExternalValueTypeForReturn(allocator: std.mem.Allocator, te: ast.TypeExpr)
 
 /// Helper: get struct name from TypeExpr if it's a struct type
 /// Get the struct name from a type expression.
-/// For generic types like "Array of String", returns the monomorphized name "Array$String".
+/// For generic types like "Array of String", returns the monomorphized name
 /// Returns a pointer to static string data for simple types, or null for primitives.
 /// For generic types, allocates a new string. If alloc_tracker is provided, the string is
 /// added to the list for later cleanup; otherwise the caller must free it.
@@ -12726,7 +12764,7 @@ fn getExternalValueTypeFromTypeExpr(allocator: std.mem.Allocator, te: ast.TypeEx
         .generic => |gen| blk: {
             // Build monomorphized name: BaseType$Arg1$Arg2...
             const name = getStructNameFromTypeExpr(allocator, .{ .expr = .{ .generic = gen } }, null) orelse break :blk .{ .struct_type = gen.base_type };
-            // Array types use struct_type with "Array$" prefix
+            // Generic types use struct_type with monomorphized names
             break :blk .{ .struct_type = name };
         },
         .error_union => |eu| blk: {

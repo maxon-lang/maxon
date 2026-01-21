@@ -386,7 +386,7 @@ pub const SemanticAnalyzer = struct {
         return switch (evt) {
             .primitive => |p| .{ .primitive = p },
             .struct_type => |name| blk: {
-                // Check if this is a monomorphized type like "Array$byte" or "Map$String$int"
+                // Check if this is a monomorphized type
                 if (std.mem.indexOf(u8, name, "$")) |dollar_pos| {
                     const base_type = name[0..dollar_pos];
                     // Parse type arguments (everything after base$)
@@ -1092,6 +1092,25 @@ pub const SemanticAnalyzer = struct {
         return ValueType{ .primitive = .ptr };
     }
 
+    /// Find the type that implements a BuiltinLiteral interface (e.g., BuiltinArrayLiteral)
+    fn findBuiltinLiteralType(self: *SemanticAnalyzer, interface_name: []const u8) ?[]const u8 {
+        var iter = self.type_decl_map.iterator();
+        while (iter.next()) |entry| {
+            const type_name = entry.key_ptr.*;
+            const type_decl = entry.value_ptr.*;
+
+            // Skip monomorphized types we want the base type
+            if (std.mem.indexOf(u8, type_name, "$") != null) continue;
+
+            for (type_decl.conformances) |conformance| {
+                if (std.mem.eql(u8, conformance.interface_name, interface_name)) {
+                    return type_name;
+                }
+            }
+        }
+        return null;
+    }
+
     /// Convert a TypeExpr to a human-readable display string (e.g., "Array of Point")
     fn typeExprToDisplayName(self: *SemanticAnalyzer, type_expr: ast.TypeExpr) ?[]const u8 {
         return switch (type_expr.expr) {
@@ -1292,13 +1311,14 @@ pub const SemanticAnalyzer = struct {
                 }
             },
             .array_literal => |arr| {
-                // Array literals create Array$ElementType
+                // Array literals create Type$ElementType using the BuiltinArrayLiteral implementor
+                const base_type = self.findBuiltinLiteralType("BuiltinArrayLiteral") orelse "Array";
                 if (arr.elements.len > 0) {
                     const elem_type = self.inferExpressionType(arr.elements[0]);
                     if (elem_type) |et| {
                         if (et.getTypeName()) |elem_name| {
                             var type_args = [_][]const u8{elem_name};
-                            _ = try self.getOrCreateMonomorphizedType("Array", &type_args);
+                            _ = try self.getOrCreateMonomorphizedType(base_type, &type_args);
                         }
                     }
                 }
@@ -1429,7 +1449,7 @@ pub const SemanticAnalyzer = struct {
     }
 
     /// Get or create a monomorphized version of a generic type.
-    /// Returns the monomorphized type name (e.g., "Array$int").
+    /// Returns the monomorphized type name
     fn getOrCreateMonomorphizedType(self: *SemanticAnalyzer, base_type: []const u8, type_args: []const []const u8) ![]const u8 {
         // Build the monomorphized name: TypeName$Arg1$Arg2
         var name_parts: std.ArrayListUnmanaged(u8) = .empty;
@@ -1477,7 +1497,7 @@ pub const SemanticAnalyzer = struct {
         var methods_registered = false;
         if (type_decl.methods.len > 0) {
             const first_method_name = type_decl.methods[0].name;
-            // Check if a method like "Array$int$push" exists
+            // Check if a monomorphized method  exists
             var method_name_buf: [256]u8 = undefined;
             const method_name = std.fmt.bufPrint(&method_name_buf, "{s}${s}", .{ name_parts.items, first_method_name }) catch "";
             methods_registered = self.func_map.contains(method_name);
@@ -1713,7 +1733,7 @@ pub const SemanticAnalyzer = struct {
                     // For loop variable - get element type from the iterable
                     if (self.inferExpressionType(for_s.iterable)) |iter_type| {
                         if (iter_type.isGenericInstance()) {
-                            // Extract element name from monomorphized type (e.g., "Array$Int" -> "Int")
+                            // Extract element name from monomorphized type
                             const struct_name = iter_type.struct_type.name;
                             if (types.parseFirstTypeParameter(struct_name)) |elem_name| {
                                 // Look up the element type
@@ -1763,19 +1783,22 @@ pub const SemanticAnalyzer = struct {
             .char_literal => self.typeNameToValueType("Character") orelse .{ .primitive = .ptr },
             .identifier => |name| self.typeNameToValueType(name),
             .array_literal => |arr| blk: {
+                // Find the type implementing BuiltinArrayLiteral interface
+                const base_type = self.findBuiltinLiteralType("BuiltinArrayLiteral") orelse "Array";
+
                 if (arr.elements.len > 0) {
                     if (self.inferExpressionType(arr.elements[0])) |elem_ty| {
                         const elem_name = elem_ty.getTypeName() orelse "int";
                         var type_args = [_][]const u8{elem_name};
-                        const mono_name = self.getOrCreateMonomorphizedType("Array", &type_args) catch break :blk null;
+                        const mono_name = self.getOrCreateMonomorphizedType(base_type, &type_args) catch break :blk null;
                         if (self.type_map.getPtr(mono_name)) |info_ptr| {
                             break :blk ValueType{ .struct_type = &info_ptr.struct_type };
                         }
                     }
                 }
-                // Default to Array$int for empty arrays
+                // Default element type for empty arrays
                 var type_args = [_][]const u8{"int"};
-                const mono_name = self.getOrCreateMonomorphizedType("Array", &type_args) catch break :blk null;
+                const mono_name = self.getOrCreateMonomorphizedType(base_type, &type_args) catch break :blk null;
                 if (self.type_map.getPtr(mono_name)) |info_ptr| {
                     break :blk ValueType{ .struct_type = &info_ptr.struct_type };
                 }
@@ -1836,17 +1859,24 @@ pub const SemanticAnalyzer = struct {
             .char_literal => "Character",
             .identifier => |name| name,
             .array_literal => |arr| blk: {
-                // Format as "Array of ElementType"
+                // Find the type implementing BuiltinArrayLiteral for display
+                const base_type = self.findBuiltinLiteralType("BuiltinArrayLiteral") orelse "Array";
+
                 if (arr.elements.len > 0) {
                     const elem_display = self.inferDisplayName(arr.elements[0]) orelse "int";
-                    const result = std.fmt.allocPrint(self.allocator, "Array of {s}", .{elem_display}) catch break :blk null;
+                    const result = std.fmt.allocPrint(self.allocator, "{s} of {s}", .{ base_type, elem_display }) catch break :blk null;
                     self.allocated_type_strings.append(self.allocator, result) catch {
                         self.allocator.free(result);
                         break :blk null;
                     };
                     break :blk result;
                 }
-                break :blk "Array of int";
+                const default_result = std.fmt.allocPrint(self.allocator, "{s} of int", .{base_type}) catch break :blk null;
+                self.allocated_type_strings.append(self.allocator, default_result) catch {
+                    self.allocator.free(default_result);
+                    break :blk null;
+                };
+                break :blk default_result;
             },
             .struct_init => |sinit| sinit.type_name,
             .binary => |bin| self.inferDisplayName(bin.left.*),

@@ -147,7 +147,6 @@ pub const Analyzer = struct {
 
         // Get type name for method lookup
         // struct_type and enum_type are pointers, access .name directly
-        // Arrays are struct_type with "Array$" prefix
         const type_name: []const u8 = switch (ty) {
             .primitive => |p| p.toMaxonName(),
             .struct_type => |s| s.name,
@@ -346,7 +345,6 @@ pub const Analyzer = struct {
             .primitive => |p| p.toMaxonName(),
             .struct_type => |s| blk: {
                 // For monomorphized generic types, extract base type name before '$'
-                // e.g., Array$Int -> Array, Map$String$Int -> Map, MyGeneric$Foo -> MyGeneric
                 if (std.mem.indexOfScalar(u8, s.name, '$')) |idx| {
                     break :blk s.name[0..idx];
                 }

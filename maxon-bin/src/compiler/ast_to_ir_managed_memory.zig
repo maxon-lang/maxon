@@ -717,30 +717,16 @@ fn emitCstringCopyIncref(self: *AstToIr, cstring_ptr: ir.StructPtr) !void {
 /// Index into a __ManagedMemory: managed[i]
 /// Returns the element as an error union (bounds-checked, throws ArrayError on out of bounds)
 /// Uses current_type_name or var_name context to determine element type
-pub fn convertManagedMemoryIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression, var_name: ?[]const u8) ConvertError!TypedValue {
+pub fn convertManagedMemoryIndex(self: *AstToIr, managed_ptr: ir.Value, index_expr: ast.Expression) ConvertError!TypedValue {
     const idx_typed = try self.convertExpression(index_expr);
 
-    // Extract element type from context
-    // 1. First try current_type_name (e.g., "Array$String" -> "String")
-    // 2. If that fails and we're in a Map context with a known var name, use the appropriate type param
+    // Extract element type from context using stored type metadata
     const elem_type_name: ?[]const u8 = blk: {
-        // Try Array$* pattern first
+        // Use stored element_type_name from type metadata
         if (self.current_type_name) |type_name| {
-            if (std.mem.startsWith(u8, type_name, "Array$")) {
-                break :blk type_name[6..]; // Skip "Array$" prefix
-            }
-        }
-        // Check for Map$K$V context with known var names
-        if (var_name) |vn| {
-            if (self.current_type_name) |type_name| {
-                if (std.mem.startsWith(u8, type_name, "Map$")) {
-                    // In Map$Key$Value, "keys" param has Key elements, "values" param has Value elements
-                    // Use generic_params to resolve to the actual types
-                    if (std.mem.eql(u8, vn, "keys")) {
-                        break :blk self.generic_params.get("Key");
-                    } else if (std.mem.eql(u8, vn, "values")) {
-                        break :blk self.generic_params.get("Value");
-                    }
+            if (self.type_map.get(type_name)) |type_info| {
+                if (type_info == .struct_type and type_info.struct_type.element_type_name != null) {
+                    break :blk type_info.struct_type.element_type_name;
                 }
             }
         }
@@ -756,7 +742,7 @@ pub fn convertManagedMemoryIndex(self: *AstToIr, managed_ptr: ir.Value, index_ex
                 break :blk ElemInfo{ .size = type_info.struct_type.size, .is_struct = true, .name = tn, .has_managed_buffer = type_info.struct_type.has_managed_buffer, .managed_buffer_offset = type_info.struct_type.managed_buffer_offset };
             }
         }
-        // Try with monomorphization for generic types like Array$String
+        // Try with monomorphization for generic types
         if (self.getStructSizeWithMonomorphization(tn)) |size| {
             // After monomorphization, look up has_managed_buffer and managed_buffer_offset
             const hmb = if (self.type_map.get(tn)) |ti| ti == .struct_type and ti.struct_type.has_managed_buffer else false;
@@ -1023,19 +1009,25 @@ pub fn convertInitableFromArrayLiteralImpl(self: *AstToIr, decl: ast.VarDecl, ty
     if (is_builtin_type) {
         init_arg = managed_ptr.raw();
     } else {
-        // Extract element type from the monomorphized type name (e.g., "Set$int" -> "int")
+        // Extract element type from the monomorphized type name
         const elem_type_name = if (std.mem.indexOf(u8, type_name, "$")) |dollar_pos|
             type_name[dollar_pos + 1 ..]
         else
             "int"; // Default to int for non-generic types
 
-        // Create an Array$ElementType by calling Array$ElementType$init(__ManagedMemory)
+        // Find the type implementing BuiltinArrayLiteral for creating the intermediate array
+        const array_base_type = self.findDefaultLiteralType("BuiltinArrayLiteral") orelse {
+            self.reportInternalError("no type implements BuiltinArrayLiteral", @src());
+            return error.SemanticError;
+        };
+
+        // Create an array-like type by calling its init(__ManagedMemory)
         var type_args = [_][]const u8{elem_type_name};
-        const array_type_name = try self.getOrCreateMonomorphizedType("Array", &type_args);
+        const array_type_name = try self.getOrCreateMonomorphizedType(array_base_type, &type_args);
         const array_init_name = try std.fmt.allocPrint(self.allocator, "{s}$init", .{array_type_name});
         try self.module.trackString(array_init_name);
         const array_func_info = self.func_map.get(array_init_name) orelse {
-            self.reportInternalError("Array init not found for InitableFromArrayLiteral", @src());
+            self.reportInternalError("BuiltinArrayLiteral init not found", @src());
             return error.UnknownFunction;
         };
 

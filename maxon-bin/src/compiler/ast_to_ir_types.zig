@@ -282,7 +282,7 @@ pub const ValueType = union(enum) {
 
     /// Get the canonical type name for this ValueType
     /// Returns the primitive name ("int", "float", etc.) or struct/enum type name
-    /// Arrays return their struct name (e.g., "Array$int")
+    /// Generic types return their monomorphized struct name
     pub fn getTypeName(self: ValueType) ?[]const u8 {
         return switch (self) {
             .primitive => |p| p.toMaxonName(),
@@ -441,7 +441,7 @@ pub const StructTypeInfo = struct {
     is_internal_type: bool = false,
 
     /// True if element type has COW semantics (has_managed_buffer = true).
-    /// Set for collections like Array$String, Array$Character, etc.
+    /// Set for collections
     element_has_managed_buffer: bool = false,
 };
 
@@ -537,7 +537,7 @@ pub const EnumTypeInfo = struct {
 };
 
 /// Type info - primitives, structs, or enums
-/// Arrays are represented as struct types with "Array$" prefix
+/// Generic types are represented as monomorphized struct types
 pub const TypeInfo = union(enum) {
     primitive: ir.Type,
     struct_type: StructTypeInfo,
@@ -583,7 +583,7 @@ pub const FuncInfo = struct {
 
 /// Pending method info for lazy generation of monomorphized type methods
 pub const PendingMethod = struct {
-    type_name: []const u8, // "Array$int" - the monomorphized type
+    type_name: []const u8, // The monomorphized type name
     method: ?*const ast.MethodDecl = null, // Pointer to method AST (for regular methods)
     extension_method: ?*const ast.ExtensionMethod = null, // Pointer to extension method AST
     extension_interface_name: ?[]const u8 = null, // For extension methods: interface name (to look up associated types)
@@ -659,7 +659,7 @@ pub const ParamType = struct {
 
 /// External value type representation - uses strings instead of pointers
 /// Used for cross-module type info before type_map is populated
-/// Arrays use struct_type with "Array$" prefix (e.g., "Array$int")
+/// Generic types use monomorphized struct type names
 pub const ExternalValueType = union(enum) {
     primitive: Primitive,
     struct_type: []const u8, // Type name (resolved to pointer during registration), includes arrays
@@ -977,7 +977,7 @@ pub const SemanticInfo = struct {
             self.allocator.free(self.stdlib_sources);
         }
 
-        // Free allocated type name strings (e.g., "Array$int")
+        // Free allocated type name strings
         for (self.allocated_type_strings.items) |str| {
             self.allocator.free(str);
         }
@@ -1009,11 +1009,11 @@ pub const SemanticInfo = struct {
 // ============================================================================
 // Array Type Helpers
 // ============================================================================
-// These functions extract element info from array type names like "Array$byte"
+// These functions extract element info from monomorphized type names
 // Used to treat arrays as regular struct types (like Map and Set)
 
 /// Parse the base type name from a monomorphized generic type
-/// e.g., "Array$Int" -> "Array", "Map$String$Int" -> "Map"
+/// Extracts the base type from a monomorphized type name
 /// Returns null if not a monomorphized type
 pub fn parseBaseTypeName(type_name: []const u8) ?[]const u8 {
     if (std.mem.indexOfScalar(u8, type_name, '$')) |idx| {
@@ -1023,7 +1023,7 @@ pub fn parseBaseTypeName(type_name: []const u8) ?[]const u8 {
 }
 
 /// Parse the first type parameter from a monomorphized generic type
-/// e.g., "Array$Int" -> "Int", "Map$String$Int" -> "String", "Set$Foo" -> "Foo"
+/// Extracts the first type parameter from a monomorphized type name
 /// Returns null if not a monomorphized type
 pub fn parseFirstTypeParameter(type_name: []const u8) ?[]const u8 {
     const start = (std.mem.indexOfScalar(u8, type_name, '$') orelse return null) + 1;
