@@ -1801,6 +1801,9 @@ pub const AstToIr = struct {
         // Check for __ManagedMemory field (for COW semantics)
         const managed_offset = types.findManagedMemoryField(field_result.fields);
 
+        // Collect all managed field offsets (for nested structs with managed buffers)
+        const managed_field_offsets = try types.collectManagedFieldOffsets(self.allocator, field_result.fields);
+
         try self.type_map.put(self.allocator, type_decl.name, .{
             .struct_type = .{
                 .name = type_decl.name,
@@ -1813,6 +1816,7 @@ pub const AstToIr = struct {
                 .needs_cleanup = needs_cleanup,
                 .has_managed_buffer = managed_offset != null,
                 .managed_buffer_offset = managed_offset orelse 0,
+                .managed_field_offsets = managed_field_offsets,
             },
         });
 
@@ -1901,6 +1905,9 @@ pub const AstToIr = struct {
         // Check for __ManagedMemory field (for COW semantics)
         const managed_offset = types.findManagedMemoryField(field_result.fields);
 
+        // Collect all managed field offsets (for nested structs with managed buffers)
+        const managed_field_offsets = try types.collectManagedFieldOffsets(self.allocator, field_result.fields);
+
         try self.type_map.put(self.allocator, ext_type.name, .{
             .struct_type = .{
                 .name = ext_type.name,
@@ -1910,6 +1917,7 @@ pub const AstToIr = struct {
                 .needs_cleanup = needs_cleanup,
                 .has_managed_buffer = managed_offset != null,
                 .managed_buffer_offset = managed_offset orelse 0,
+                .managed_field_offsets = managed_field_offsets,
             },
         });
 
@@ -3976,6 +3984,9 @@ pub const AstToIr = struct {
         // Find __ManagedMemory field offset
         const managed_offset = types.findManagedMemoryField(field_result.fields);
 
+        // Collect all managed field offsets (for nested structs with managed buffers)
+        const managed_field_offsets = try types.collectManagedFieldOffsets(self.allocator, field_result.fields);
+
         const struct_info = StructTypeInfo{
             .name = mono_name,
             .fields = field_result.fields,
@@ -3986,6 +3997,7 @@ pub const AstToIr = struct {
             .element_type_name = element_type_name,
             .has_managed_buffer = managed_offset != null,
             .managed_buffer_offset = managed_offset orelse 0,
+            .managed_field_offsets = managed_field_offsets,
             .element_has_managed_buffer = element_has_managed_buffer,
         };
 

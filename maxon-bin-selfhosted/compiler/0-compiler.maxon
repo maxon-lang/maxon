@@ -31,24 +31,18 @@ end 'compile'
 
 /// Compile with full options
 export function compileWithOptions(options CompilerOptions) returns int
-	print("DEBUG: Starting compilation\n")
 	Logger.info(LogCategory.compiler, message: "Compiling: {options.sourceFile}")
 
 	// Load source file
-	print("DEBUG: Loading file\n")
 	let source = try File.readText(options.sourceFile) otherwise ""
-	print("DEBUG: File loaded, len={source.byteLength()}\n")
 	if source == "" 'loadFailed'
 		Logger.error(LogCategory.compiler, message: "Failed to read source file: {options.sourceFile}")
 		return 1
 	end 'loadFailed'
 
 	// Phase 1: Lexical Analysis
-	print("DEBUG: Creating lexer\n")
 	var lexer = Lexer.init(source, sourceFile: options.sourceFile)
-	print("DEBUG: Calling tokenize\n")
 	let tokens = lexer.tokenize()
-	print("DEBUG: Tokenized {tokens.count()} tokens\n")
 	Logger.info(LogCategory.lexer, message: "Lexed {tokens.count()} tokens")
 
 	if lexer.errors.hasAnyErrors() 'lexerErrors'
@@ -56,19 +50,13 @@ export function compileWithOptions(options CompilerOptions) returns int
 	end 'lexerErrors'
 
 	// Phase 2: Parsing (error-tolerant)
-	print("DEBUG: Creating parser\n")
 	var parser = Parser.init(tokens, sourceFile: options.sourceFile)
-	print("DEBUG: Calling parse\n")
 	let ast = parser.parse()
-	print("DEBUG: Parse complete\n")
 	Logger.info(LogCategory.parser, message: "Parsed program")
 
 	// Phase 3: Semantic Analysis
-	print("DEBUG: Creating analyzer\n")
 	var analyzer = SemanticAnalyzer.init(ast, sourceFile: options.sourceFile)
-	print("DEBUG: Calling analyze\n")
 	var result = analyzer.analyze()
-	print("DEBUG: Analysis complete\n")
 
 	if result == SemanticResult.failure 'semFailed'
 		analyzer.printErrors()
@@ -76,17 +64,8 @@ export function compileWithOptions(options CompilerOptions) returns int
 	end 'semFailed'
 
 	// Phase 4: IR Generation
-	print("DEBUG: Creating IR builder\n")
 	var irBuilder = IrBuilder.init(options.sourceFile)
-	print("DEBUG: Calling convert\n")
 	let _ = irBuilder.convert(ast)
-	print("DEBUG: IR complete\n")
 
-	print("DEBUG: About to return 0\n")
-	print("DEBUG: tokens.count()={tokens.count()}\n")
-	print("DEBUG: Before return statement\n")
-	let retVal = 0
-	print("DEBUG: After creating retVal\n")
-	print("DEBUG: Returning now - cleanup will happen\n")
-	return retVal
+	return 0
 end 'compileWithOptions'
