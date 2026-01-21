@@ -1,0 +1,264 @@
+// Maxon Compiler - Incremental Compilation (Phase 5)
+// Manages incremental compilation with version tracking and cache invalidation
+
+import Workspace from "workspace.maxon"
+import Project, DependencyGraph from "project.maxon"
+import CompilationUnit, CompilationUnitArray from "unit.maxon"
+
+// ============================================================================
+// Incremental Compilation Manager
+// ============================================================================
+
+/// Manages incremental compilation state
+export type IncrementalManager
+export var workspace Workspace ref
+export var cache CompilationCache
+export var pendingInvalidations StringSet
+
+export static function create(workspace Workspace ref) returns IncrementalManager
+return {
+workspace: workspace,
+cache: CompilationCache.create(),
+pendingInvalidations: StringSet{}
+}
+end 'create'
+
+/// Notify that a file has changed
+export function fileChanged(filePath String)
+let project = workspace.findProjectForFile(filePath)
+if project == null 'noProject'
+return
+end 'noProject'
+
+let unit = project!.findUnit(filePath)
+if unit == null 'noUnit'
+return
+end 'noUnit'
+
+// Mark the unit as dirty
+unit!.isDirty = true
+unit!.version = unit!.version + 1
+
+// Invalidate cache for this file
+cache.invalidate(filePath)
+
+// Propagate invalidation to dependents
+propagateInvalidation(project!, filePath)
+end 'fileChanged'
+
+/// Propagate invalidation to files that depend on the changed file
+function propagateInvalidation(project Project ref, changedPath String)
+let dependents = project.dependencyGraph.getDependents(changedPath)
+
+for depPath in dependents 'each'
+if not pendingInvalidations.has(depPath) 'notPending'
+pendingInvalidations.add(depPath)
+
+let depUnit = project.findUnit(depPath)
+if depUnit != null 'hasUnit'
+depUnit!.isDirty = true
+cache.invalidate(depPath)
+
+// Recursively propagate
+propagateInvalidation(project, depPath)
+end 'hasUnit'
+end 'notPending'
+end 'each'
+end 'propagateInvalidation'
+
+/// Get files that need recompilation in dependency order
+export function getCompilationOrder(project Project ref) returns StringArray
+var dirtyPaths = StringArray{}
+
+// Collect all dirty files
+for unit in project.units 'each'
+if unit.isDirty 'dirty'
+dirtyPaths.push(unit.path)
+end 'dirty'
+end 'each'
+
+// Return in topological order
+let fullOrder = project.getCompilationOrder()
+var result = StringArray{}
+
+// Filter to only include dirty files, preserving order
+for path in fullOrder 'each'
+for dirtyPath in dirtyPaths 'checkDirty'
+if path == dirtyPath 'match'
+result.push(path)
+end 'match'
+end 'checkDirty'
+end 'each'
+
+return result
+end 'getCompilationOrder'
+
+/// Check if a file is up to date
+export function isUpToDate(filePath String) returns bool
+let unit = workspace.findUnit(filePath)
+if unit == null 'noUnit'
+return false
+end 'noUnit'
+
+// Check if cached version matches current version
+let cachedVersion = cache.getVersion(filePath)
+return cachedVersion != null and cachedVersion! == unit!.version and not unit!.isDirty
+end 'isUpToDate'
+
+/// Mark a file as successfully compiled
+export function markCompiled(filePath String)
+let unit = workspace.findUnit(filePath)
+if unit != null 'hasUnit'
+unit!.markClean()
+cache.setVersion(filePath, unit!.version)
+end 'hasUnit'
+
+// Remove from pending invalidations
+pendingInvalidations.remove(filePath)
+end 'markCompiled'
+
+/// Clear all invalidations
+export function clearInvalidations()
+pendingInvalidations = StringSet{}
+end 'clearInvalidations'
+
+/// Get stats about the compilation cache
+export function getCacheStats() returns CacheStats
+return cache.getStats()
+end 'getCacheStats'
+end 'IncrementalManager'
+
+// ============================================================================
+// Compilation Cache
+// ============================================================================
+
+/// Cache for compiled artifacts
+export type CompilationCache
+var versions Map          // path -> version number
+var artifacts Map         // path -> CachedArtifact
+var hitCount int
+var missCount int
+
+export static function create() returns CompilationCache
+return {
+versions: Map{},
+artifacts: Map{},
+hitCount: 0,
+missCount: 0
+}
+end 'create'
+
+/// Get cached version for a file
+export function getVersion(path String) returns int?
+if versions.has(path) 'hasVersion'
+return versions.get(path)!.toInt()
+end 'hasVersion'
+return null
+end 'getVersion'
+
+/// Set version for a file
+export function setVersion(path String, version int)
+versions.set(path, version.toString())
+end 'setVersion'
+
+/// Get cached artifact
+export function getArtifact(path String) returns CachedArtifact?
+if artifacts.has(path) 'hasArtifact'
+hitCount = hitCount + 1
+return artifacts.get(path)! as CachedArtifact
+end 'hasArtifact'
+missCount = missCount + 1
+return null
+end 'getArtifact'
+
+/// Store artifact in cache
+export function setArtifact(path String, artifact CachedArtifact)
+artifacts.set(path, artifact)
+end 'setArtifact'
+
+/// Invalidate a cached entry
+export function invalidate(path String)
+versions.delete(path)
+artifacts.delete(path)
+end 'invalidate'
+
+/// Clear entire cache
+export function clear()
+versions = Map{}
+artifacts = Map{}
+hitCount = 0
+missCount = 0
+end 'clear'
+
+/// Get cache statistics
+export function getStats() returns CacheStats
+return CacheStats.create(versions.size(), hitCount, missCount)
+end 'getStats'
+end 'CompilationCache'
+
+/// Cached compilation artifact
+export type CachedArtifact
+export var path String
+export var version int
+export var hirBytes Array with byte
+export var lirBytes Array with byte
+
+export static function create(path String, version int) returns CachedArtifact
+return {
+path: path,
+version: version,
+hirBytes: Array with byte {},
+lirBytes: Array with byte {}
+}
+end 'create'
+end 'CachedArtifact'
+
+/// Cache statistics
+export type CacheStats
+export var entries int
+export var hits int
+export var misses int
+
+export static function create(entries int, hits int, misses int) returns CacheStats
+return {entries: entries, hits: hits, misses: misses}
+end 'create'
+
+export function hitRate() returns float
+let total = hits + misses
+if total == 0 'noAccess'
+return 0.0
+end 'noAccess'
+return (hits as float) / (total as float)
+end 'hitRate'
+end 'CacheStats'
+
+// ============================================================================
+// Helper Types
+// ============================================================================
+
+/// Simple string set implementation
+export type StringSet
+var items Map
+
+export static function create() returns StringSet
+return {items: Map{}}
+end 'create'
+
+export function add(value String)
+items.set(value, "1")
+end 'add'
+
+export function has(value String) returns bool
+return items.has(value)
+end 'has'
+
+export function remove(value String)
+items.delete(value)
+end 'remove'
+
+export function clear()
+items = Map{}
+end 'clear'
+end 'StringSet'
+
+export typealias StringArray is Array with String

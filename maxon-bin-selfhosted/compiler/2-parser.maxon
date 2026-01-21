@@ -1,24 +1,75 @@
 // Maxon Compiler - Parser (Stage 2)
 // Parses tokens into an Abstract Syntax Tree
+// Supports error-tolerant parsing with partial AST recovery
 
 // ============================================================================
 // AST Node Types
 // ============================================================================
 
-/// Types supported in basic.maxon
+/// Types supported in Maxon
 export enum TypeKind
 	typeInt
+	typeFloat
+	typeBool
+	typeByte
+	typeString
 	typeVoid
+	typeUnknown  // For error recovery - type could not be determined
 end 'TypeKind'
 
 /// Expression kinds
 export enum ExprKind
 	intLiteral
+	floatLiteral
+	boolLiteral
+	stringLiteral
+	charLiteral
+	identifier
+	binaryOp
+	unaryOp
+	call
+	fieldAccess
+	indexAccess
+	errorExpr    // Placeholder for expressions with parse errors
 end 'ExprKind'
+
+/// Binary operators
+export enum BinaryOp
+	add
+	subtract
+	multiply
+	divide
+	modulo
+	equal
+	notEqual
+	less
+	lessEqual
+	greater
+	greaterEqual
+	logicalAnd
+	logicalOr
+end 'BinaryOp'
+
+/// Unary operators
+export enum UnaryOp
+	negate
+	logicalNot
+end 'UnaryOp'
 
 /// Statement kinds
 export enum StmtKind
 	returnStmt
+	letStmt
+	varStmt
+	assignStmt
+	ifStmt
+	whileStmt
+	forStmt
+	breakStmt
+	continueStmt
+	exprStmt
+	blockStmt
+	errorStmt    // Placeholder for statements with parse errors
 end 'StmtKind'
 
 /// Parse error for recoverable parsing failures
@@ -29,39 +80,186 @@ end 'ParseError'
 /// An expression node
 export type Expr
 	export var kind ExprKind
-	export var intValue int      // for intLiteral
+	export var intValue int          // for intLiteral
+	export var floatValue float      // for floatLiteral
+	export var boolValue bool        // for boolLiteral
+	export var stringValue String    // for stringLiteral, charLiteral, identifier
+	export var op BinaryOp           // for binaryOp
+	export var unaryOp UnaryOp       // for unaryOp
+	export var left Expr             // for binaryOp, unaryOp (operand), call (callee)
+	export var right Expr            // for binaryOp
+	export var args ExprArray        // for call
 	export var line int
 	export var column int
+	export var hasError bool         // true if this node or any child contains errors
 
 	export static function createIntLiteral(value int, line int, column int) returns Expr
-		return {kind: ExprKind.intLiteral, intValue: value, line: line, column: column}
+		return {kind: ExprKind.intLiteral, intValue: value, line: line, column: column, hasError: false}
 	end 'createIntLiteral'
+
+	export static function createFloatLiteral(value float, line int, column int) returns Expr
+		return {kind: ExprKind.floatLiteral, floatValue: value, line: line, column: column, hasError: false}
+	end 'createFloatLiteral'
+
+	export static function createBoolLiteral(value bool, line int, column int) returns Expr
+		return {kind: ExprKind.boolLiteral, boolValue: value, line: line, column: column, hasError: false}
+	end 'createBoolLiteral'
+
+	export static function createStringLiteral(value String, line int, column int) returns Expr
+		return {kind: ExprKind.stringLiteral, stringValue: value, line: line, column: column, hasError: false}
+	end 'createStringLiteral'
+
+	export static function createCharLiteral(value String, line int, column int) returns Expr
+		return {kind: ExprKind.charLiteral, stringValue: value, line: line, column: column, hasError: false}
+	end 'createCharLiteral'
+
+	export static function createIdentifier(name String, line int, column int) returns Expr
+		return {kind: ExprKind.identifier, stringValue: name, line: line, column: column, hasError: false}
+	end 'createIdentifier'
+
+	export static function createBinary(op BinaryOp, left Expr, right Expr, line int, column int) returns Expr
+		let childError = left.hasError or right.hasError
+		return {kind: ExprKind.binaryOp, op: op, left: left, right: right, line: line, column: column, hasError: childError}
+	end 'createBinary'
+
+	export static function createUnary(op UnaryOp, operand Expr, line int, column int) returns Expr
+		return {kind: ExprKind.unaryOp, unaryOp: op, left: operand, line: line, column: column, hasError: operand.hasError}
+	end 'createUnary'
+
+	export static function createCall(callee Expr, args ExprArray, line int, column int) returns Expr
+		var childError = callee.hasError
+		for arg in args 'checkArgs'
+			if arg.hasError 'hasErr'
+				childError = true
+			end 'hasErr'
+		end 'checkArgs'
+		return {kind: ExprKind.call, left: callee, args: args, line: line, column: column, hasError: childError}
+	end 'createCall'
+
+	export static function createError(line int, column int) returns Expr
+		return {kind: ExprKind.errorExpr, line: line, column: column, hasError: true}
+	end 'createError'
 end 'Expr'
+
+export typealias ExprArray is Array with Expr
 
 /// A statement node
 export type Stmt
 	export var kind StmtKind
-	export var expr Expr         // for returnStmt
+	export var expr Expr             // for returnStmt, exprStmt, assignStmt (rhs)
+	export var name String           // for letStmt, varStmt, assignStmt (lhs)
+	export var typeKind TypeKind     // for letStmt, varStmt
+	export var condition Expr        // for ifStmt, whileStmt
+	export var thenBranch StmtArray  // for ifStmt
+	export var elseBranch StmtArray  // for ifStmt
+	export var body StmtArray        // for whileStmt, forStmt, blockStmt
+	export var label String          // for labeled statements
 	export var line int
 	export var column int
+	export var hasError bool         // true if this node or any child contains errors
 
 	export static function createReturn(expr Expr, line int, column int) returns Stmt
-		return {kind: StmtKind.returnStmt, expr: expr, line: line, column: column}
+		return {kind: StmtKind.returnStmt, expr: expr, line: line, column: column, hasError: expr.hasError}
 	end 'createReturn'
+
+	export static function createLet(name String, typeKind TypeKind, expr Expr, line int, column int) returns Stmt
+		return {kind: StmtKind.letStmt, name: name, typeKind: typeKind, expr: expr, line: line, column: column, hasError: expr.hasError}
+	end 'createLet'
+
+	export static function createVar(name String, typeKind TypeKind, expr Expr, line int, column int) returns Stmt
+		return {kind: StmtKind.varStmt, name: name, typeKind: typeKind, expr: expr, line: line, column: column, hasError: expr.hasError}
+	end 'createVar'
+
+	export static function createAssign(name String, expr Expr, line int, column int) returns Stmt
+		return {kind: StmtKind.assignStmt, name: name, expr: expr, line: line, column: column, hasError: expr.hasError}
+	end 'createAssign'
+
+	export static function createIf(condition Expr, thenBranch StmtArray, elseBranch StmtArray, label String, line int, column int) returns Stmt
+		var childError = condition.hasError
+		for s in thenBranch 'checkThen'
+			if s.hasError 'hasErr'
+				childError = true
+			end 'hasErr'
+		end 'checkThen'
+		for s in elseBranch 'checkElse'
+			if s.hasError 'hasErr2'
+				childError = true
+			end 'hasErr2'
+		end 'checkElse'
+		return {kind: StmtKind.ifStmt, condition: condition, thenBranch: thenBranch, elseBranch: elseBranch, label: label, line: line, column: column, hasError: childError}
+	end 'createIf'
+
+	export static function createWhile(condition Expr, body StmtArray, label String, line int, column int) returns Stmt
+		var childError = condition.hasError
+		for s in body 'checkBody'
+			if s.hasError 'hasErr'
+				childError = true
+			end 'hasErr'
+		end 'checkBody'
+		return {kind: StmtKind.whileStmt, condition: condition, body: body, label: label, line: line, column: column, hasError: childError}
+	end 'createWhile'
+
+	export static function createBreak(label String, line int, column int) returns Stmt
+		return {kind: StmtKind.breakStmt, label: label, line: line, column: column, hasError: false}
+	end 'createBreak'
+
+	export static function createContinue(label String, line int, column int) returns Stmt
+		return {kind: StmtKind.continueStmt, label: label, line: line, column: column, hasError: false}
+	end 'createContinue'
+
+	export static function createExpr(expr Expr, line int, column int) returns Stmt
+		return {kind: StmtKind.exprStmt, expr: expr, line: line, column: column, hasError: expr.hasError}
+	end 'createExpr'
+
+	export static function createBlock(body StmtArray, label String, line int, column int) returns Stmt
+		var childError = false
+		for s in body 'checkBody'
+			if s.hasError 'hasErr'
+				childError = true
+			end 'hasErr'
+		end 'checkBody'
+		return {kind: StmtKind.blockStmt, body: body, label: label, line: line, column: column, hasError: childError}
+	end 'createBlock'
+
+	export static function createError(line int, column int) returns Stmt
+		return {kind: StmtKind.errorStmt, line: line, column: column, hasError: true}
+	end 'createError'
 end 'Stmt'
 
 export typealias StmtArray is Array with Stmt
 
+/// A parameter declaration
+export type ParamDecl
+	export var name String
+	export var typeKind TypeKind
+	export var line int
+	export var column int
+
+	export static function create(name String, typeKind TypeKind, line int, column int) returns ParamDecl
+		return {name: name, typeKind: typeKind, line: line, column: column}
+	end 'create'
+end 'ParamDecl'
+
+export typealias ParamArray is Array with ParamDecl
+
 /// A function declaration
 export type FunctionDecl
 	export var name String
+	export var params ParamArray
 	export var returnType TypeKind
 	export var body StmtArray
 	export var line int
 	export var column int
+	export var hasError bool         // true if this function contains parse errors
 
-	export static function create(name String, returnType TypeKind, body StmtArray, line int, column int) returns FunctionDecl
-		return {name: name, returnType: returnType, body: body, line: line, column: column}
+	export static function create(name String, params ParamArray, returnType TypeKind, body StmtArray, line int, column int) returns FunctionDecl
+		var childError = false
+		for s in body 'checkBody'
+			if s.hasError 'hasErr'
+				childError = true
+			end 'hasErr'
+		end 'checkBody'
+		return {name: name, params: params, returnType: returnType, body: body, line: line, column: column, hasError: childError}
 	end 'create'
 end 'FunctionDecl'
 
@@ -70,13 +268,17 @@ export typealias FunctionArray is Array with FunctionDecl
 /// The root AST node representing a complete program
 export type Program
 	export var functions FunctionArray
+	export var hasError bool         // true if any function has parse errors
 
 	export static function create() returns Program
-		return {functions: FunctionArray{}}
+		return {functions: FunctionArray{}, hasError: false}
 	end 'create'
 
 	export function addFunction(fn FunctionDecl)
 		functions.push(fn)
+		if fn.hasError 'propagate'
+			hasError = true
+		end 'propagate'
 	end 'addFunction'
 end 'Program'
 
@@ -89,11 +291,17 @@ export type Parser
 	var tokens TokenArray
 	var pos int
 	var sourceFile String
-	var errors ErrorCollector
+	export var errors ErrorCollector
+	var tolerant bool                // If true, continue parsing after errors
 
 	export static function init(tokens TokenArray, sourceFile String) returns Parser
-		return {tokens: tokens, pos: 0, sourceFile: sourceFile, errors: ErrorCollector.create()}
+		return {tokens: tokens, pos: 0, sourceFile: sourceFile, errors: ErrorCollector.create(), tolerant: true}
 	end 'init'
+
+	/// Create a parser in strict mode (stops on first error)
+	export static function initStrict(tokens TokenArray, sourceFile String) returns Parser
+		return {tokens: tokens, pos: 0, sourceFile: sourceFile, errors: ErrorCollector.create(), tolerant: false}
+	end 'initStrict'
 
 	/// Check if parsing produced any errors
 	export function hasErrors() returns bool
@@ -106,6 +314,7 @@ export type Parser
 	end 'printErrors'
 
 	/// Parse all tokens into a Program AST
+	/// In tolerant mode, returns partial AST even with errors
 	export function parse() returns Program
 		var program = Program.create()
 
@@ -115,7 +324,10 @@ export type Parser
 			if check(TokenType.keywordFunction) 'isFunc'
 				if let fn = try parseFunction() 'gotFunc'
 					program.addFunction(fn)
-				end 'gotFunc'
+				end 'gotFunc' else 'failedFunc'
+					// Synchronize to next function or end of file
+					synchronize()
+				end 'failedFunc'
 			end 'isFunc' else 'notFunc'
 				error(ErrorCode.E2001, message: "expected 'function' declaration")
 				advance()
@@ -126,13 +338,57 @@ export type Parser
 		return program
 	end 'parse'
 
+	/// Synchronize after error: skip tokens until we find a safe recovery point
+	/// Recovery points: function keyword, end keyword, newline at top level
+	function synchronize()
+		advance()
+
+		while not isAtEnd() 'syncLoop'
+			// After newline, check if next token starts a declaration
+			if check(TokenType.newline) 'newline'
+				advance()
+				skipNewlines()
+				// Check if we're at a function declaration
+				if check(TokenType.keywordFunction) 'atFunc'
+					return
+				end 'atFunc'
+				continue 'syncLoop'
+			end 'newline'
+
+			// Keywords that start new constructs
+			if check(TokenType.keywordFunction) 'atFunc2'
+				return
+			end 'atFunc2'
+
+			advance()
+		end 'syncLoop'
+	end 'synchronize'
+
+	/// Synchronize within a function body: skip to next statement
+	function synchronizeStatement()
+		while not isAtEnd() 'syncLoop'
+			// Newline typically ends a statement
+			if check(TokenType.newline) 'newline'
+				return
+			end 'newline'
+
+			// Keywords that start new statements
+			if check(TokenType.keywordReturn) or check(TokenType.keywordEnd) or check(TokenType.keywordIf) or check(TokenType.keywordWhile) or check(TokenType.keywordFor) or check(TokenType.keywordLet) or check(TokenType.keywordVar) 'atStmt'
+				return
+			end 'atStmt'
+
+			advance()
+		end 'syncLoop'
+	end 'synchronizeStatement'
+
 	/// Parse a function declaration
-	/// function NAME() returns TYPE
+	/// function NAME(params) returns TYPE
 	///     BODY
 	/// end 'NAME'
 	function parseFunction() returns FunctionDecl throws ParseError
 		let startLine = currentToken().line
 		let startCol = currentToken().column
+		var fnHasError = false
 
 		// 'function' keyword
 		if not consume(TokenType.keywordFunction) 'noFunc'
@@ -148,28 +404,44 @@ export type Parser
 		let name = currentToken().text
 		advance()
 
-		// '(' ')'
+		// Parse parameters
 		if not consume(TokenType.lparen) 'noLparen'
 			error(ErrorCode.E2001, message: "expected '('")
 			throw ParseError.syntaxError
 		end 'noLparen'
+
+		var params = ParamArray{}
+		if not check(TokenType.rparen) 'hasParams'
+			// Parse parameter list
+			if let paramList = try parseParameters() 'gotParams'
+				params = paramList
+			end 'gotParams' else 'failedParams'
+				fnHasError = true
+				// Try to recover by finding the closing paren
+				while not isAtEnd() and not check(TokenType.rparen) 'skipToRparen'
+					advance()
+				end 'skipToRparen'
+			end 'failedParams'
+		end 'hasParams'
+
 		if not consume(TokenType.rparen) 'noRparen'
 			error(ErrorCode.E2001, message: "expected ')'")
 			throw ParseError.syntaxError
 		end 'noRparen'
 
 		// 'returns' TYPE
-		if not consume(TokenType.keywordReturns) 'noReturns'
-			error(ErrorCode.E2001, message: "expected 'returns'")
-			throw ParseError.syntaxError
-		end 'noReturns'
-
-		let returnType = parseType()
+		var returnType = TypeKind.typeVoid
+		if consume(TokenType.keywordReturns) 'hasReturns'
+			returnType = parseType()
+		end 'hasReturns'
 
 		// newline before body
 		if not consumeNewline() 'noNewline'
 			error(ErrorCode.E2003, message: "expected newline after function signature")
-			throw ParseError.syntaxError
+			if not tolerant 'strict'
+				throw ParseError.syntaxError
+			end 'strict'
+			fnHasError = true
 		end 'noNewline'
 
 		// Parse body statements
@@ -179,40 +451,125 @@ export type Parser
 		while not isAtEnd() and not check(TokenType.keywordEnd) 'bodyLoop'
 			if let stmt = try parseStatement() 'gotStmt'
 				body.push(stmt)
-			end 'gotStmt'
+			end 'gotStmt' else 'failedStmt'
+				if tolerant 'tolerantMode'
+					// Add error placeholder and try to recover
+					body.push(Stmt.createError(currentToken().line, column: currentToken().column))
+					fnHasError = true
+					synchronizeStatement()
+				end 'tolerantMode' else 'strictMode'
+					throw ParseError.syntaxError
+				end 'strictMode'
+			end 'failedStmt'
 			skipNewlines()
 		end 'bodyLoop'
 
 		// 'end' 'NAME'
 		if not consume(TokenType.keywordEnd) 'noEnd'
 			error(ErrorCode.E2001, message: "expected 'end'")
-			throw ParseError.syntaxError
-		end 'noEnd'
-
-		if not check(TokenType.charLiteral) 'noBlockId'
-			error(ErrorCode.E2005, message: "expected block identifier after 'end'")
-			throw ParseError.syntaxError
-		end 'noBlockId'
-
-		let blockId = currentToken().text
-		if blockId != name 'mismatch'
-			error(ErrorCode.E2006, message: "block identifier '{blockId}' does not match function name '{name}'")
-		end 'mismatch'
-		advance()
+			if not tolerant 'strict2'
+				throw ParseError.syntaxError
+			end 'strict2'
+			fnHasError = true
+		end 'noEnd' else 'hasEnd'
+			if not check(TokenType.charLiteral) 'noBlockId'
+				error(ErrorCode.E2005, message: "expected block identifier after 'end'")
+				fnHasError = true
+			end 'noBlockId' else 'hasBlockId'
+				let blockId = currentToken().text
+				if blockId != name 'mismatch'
+					error(ErrorCode.E2006, message: "block identifier '{blockId}' does not match function name '{name}'")
+					fnHasError = true
+				end 'mismatch'
+				advance()
+			end 'hasBlockId'
+		end 'hasEnd'
 
 		consumeNewline()
 
-		return FunctionDecl.create(name, returnType: returnType, body: body, line: startLine, column: startCol)
+		var fn = FunctionDecl.create(name, params: params, returnType: returnType, body: body, line: startLine, column: startCol)
+		if fnHasError 'markError'
+			fn.hasError = true
+		end 'markError'
+		return fn
 	end 'parseFunction'
 
-	/// Parse a type (only 'int' for now)
+	/// Parse parameter list: name TYPE, name TYPE, ...
+	function parseParameters() returns ParamArray throws ParseError
+		var params = ParamArray{}
+
+		// First parameter
+		if let param = try parseParameter() 'gotFirst'
+			params.push(param)
+		end 'gotFirst' else 'noFirst'
+			throw ParseError.syntaxError
+		end 'noFirst'
+
+		// Additional parameters
+		while consume(TokenType.comma) 'moreParams'
+			if let param = try parseParameter() 'gotParam'
+				params.push(param)
+			end 'gotParam' else 'failedParam'
+				if tolerant 'tolerantMode'
+					// Skip to next comma or rparen
+					while not isAtEnd() and not check(TokenType.comma) and not check(TokenType.rparen) 'skipParam'
+						advance()
+					end 'skipParam'
+				end 'tolerantMode' else 'strictMode'
+					throw ParseError.syntaxError
+				end 'strictMode'
+			end 'failedParam'
+		end 'moreParams'
+
+		return params
+	end 'parseParameters'
+
+	/// Parse a single parameter: name TYPE
+	function parseParameter() returns ParamDecl throws ParseError
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		if not check(TokenType.identifier) 'noName'
+			error(ErrorCode.E2004, message: "expected parameter name")
+			throw ParseError.syntaxError
+		end 'noName'
+		let name = currentToken().text
+		advance()
+
+		let typeKind = parseType()
+
+		return ParamDecl.create(name, typeKind: typeKind, line: startLine, column: startCol)
+	end 'parseParameter'
+
+	/// Parse a type
 	function parseType() returns TypeKind
 		if check(TokenType.keywordInt) 'isInt'
 			advance()
 			return TypeKind.typeInt
 		end 'isInt'
+		if check(TokenType.keywordFloat) 'isFloat'
+			advance()
+			return TypeKind.typeFloat
+		end 'isFloat'
+		if check(TokenType.keywordBool) 'isBool'
+			advance()
+			return TypeKind.typeBool
+		end 'isBool'
+		if check(TokenType.keywordByte) 'isByte'
+			advance()
+			return TypeKind.typeByte
+		end 'isByte'
+		if check(TokenType.keywordString) 'isString'
+			advance()
+			return TypeKind.typeString
+		end 'isString'
+		if check(TokenType.identifier) 'isIdent'
+			// Could be a user-defined type, treat as unknown for now
+			advance()
+			return TypeKind.typeUnknown
+		end 'isIdent'
 		error(ErrorCode.E2001, message: "expected type")
-		return TypeKind.typeVoid
+		return TypeKind.typeUnknown
 	end 'parseType'
 
 	/// Parse a statement
@@ -220,9 +577,27 @@ export type Parser
 		if check(TokenType.keywordReturn) 'isReturn'
 			return try parseReturnStatement()
 		end 'isReturn'
-		error(ErrorCode.E2001, message: "expected statement")
-		advance()
-		throw ParseError.syntaxError
+		if check(TokenType.keywordLet) 'isLet'
+			return try parseLetStatement()
+		end 'isLet'
+		if check(TokenType.keywordVar) 'isVar'
+			return try parseVarStatement()
+		end 'isVar'
+		if check(TokenType.keywordIf) 'isIf'
+			return try parseIfStatement()
+		end 'isIf'
+		if check(TokenType.keywordWhile) 'isWhile'
+			return try parseWhileStatement()
+		end 'isWhile'
+		if check(TokenType.keywordBreak) 'isBreak'
+			return try parseBreakStatement()
+		end 'isBreak'
+		if check(TokenType.keywordContinue) 'isContinue'
+			return try parseContinueStatement()
+		end 'isContinue'
+
+		// Try to parse as expression statement
+		return try parseExpressionStatement()
 	end 'parseStatement'
 
 	/// Parse a return statement: return EXPR
@@ -234,24 +609,601 @@ export type Parser
 			throw ParseError.syntaxError
 		end 'noReturn'
 
-		let expr = try parseExpression()
-		if not consumeNewline() 'noNewline'
-			error(ErrorCode.E2003, message: "expected newline after return statement")
-		end 'noNewline'
-		return Stmt.createReturn(expr, line: startLine, column: startCol)
+		// Check if there's an expression or just a newline/eof
+		if check(TokenType.newline) or check(TokenType.eof) 'noExpr'
+			consumeNewline()
+			// Return with no value
+			return Stmt.createReturn(Expr.createError(startLine, column: startCol), line: startLine, column: startCol)
+		end 'noExpr'
+
+		if let expr = try parseExpression() 'gotExpr'
+			if not consumeNewline() 'noNewline'
+				error(ErrorCode.E2003, message: "expected newline after return statement")
+			end 'noNewline'
+			return Stmt.createReturn(expr, line: startLine, column: startCol)
+		end 'gotExpr' else 'noExpr2'
+			if tolerant 'tolerantMode'
+				synchronizeStatement()
+				return Stmt.createError(startLine, column: startCol)
+			end 'tolerantMode'
+			throw ParseError.syntaxError
+		end 'noExpr2'
 	end 'parseReturnStatement'
 
-	/// Parse an expression (only integer literals for now)
+	/// Parse a let statement: let NAME = EXPR or let NAME TYPE = EXPR
+	function parseLetStatement() returns Stmt throws ParseError
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		if not consume(TokenType.keywordLet) 'noLet'
+			throw ParseError.syntaxError
+		end 'noLet'
+
+		if not check(TokenType.identifier) 'noName'
+			error(ErrorCode.E2004, message: "expected variable name after 'let'")
+			throw ParseError.syntaxError
+		end 'noName'
+		let name = currentToken().text
+		advance()
+
+		// Optional type annotation
+		var typeKind = TypeKind.typeUnknown
+		if not check(TokenType.assign) 'hasType'
+			typeKind = parseType()
+		end 'hasType'
+
+		if not consume(TokenType.assign) 'noAssign'
+			error(ErrorCode.E2001, message: "expected '=' in let statement")
+			throw ParseError.syntaxError
+		end 'noAssign'
+
+		if let expr = try parseExpression() 'gotExpr'
+			consumeNewline()
+			return Stmt.createLet(name, typeKind: typeKind, expr: expr, line: startLine, column: startCol)
+		end 'gotExpr' else 'noExpr'
+			if tolerant 'tolerantMode'
+				synchronizeStatement()
+				return Stmt.createError(startLine, column: startCol)
+			end 'tolerantMode'
+			throw ParseError.syntaxError
+		end 'noExpr'
+	end 'parseLetStatement'
+
+	/// Parse a var statement: var NAME = EXPR or var NAME TYPE = EXPR
+	function parseVarStatement() returns Stmt throws ParseError
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		if not consume(TokenType.keywordVar) 'noVar'
+			throw ParseError.syntaxError
+		end 'noVar'
+
+		if not check(TokenType.identifier) 'noName'
+			error(ErrorCode.E2004, message: "expected variable name after 'var'")
+			throw ParseError.syntaxError
+		end 'noName'
+		let name = currentToken().text
+		advance()
+
+		// Optional type annotation
+		var typeKind = TypeKind.typeUnknown
+		if not check(TokenType.assign) 'hasType'
+			typeKind = parseType()
+		end 'hasType'
+
+		if not consume(TokenType.assign) 'noAssign'
+			error(ErrorCode.E2001, message: "expected '=' in var statement")
+			throw ParseError.syntaxError
+		end 'noAssign'
+
+		if let expr = try parseExpression() 'gotExpr'
+			consumeNewline()
+			return Stmt.createVar(name, typeKind: typeKind, expr: expr, line: startLine, column: startCol)
+		end 'gotExpr' else 'noExpr'
+			if tolerant 'tolerantMode'
+				synchronizeStatement()
+				return Stmt.createError(startLine, column: startCol)
+			end 'tolerantMode'
+			throw ParseError.syntaxError
+		end 'noExpr'
+	end 'parseVarStatement'
+
+	/// Parse if statement: if CONDITION 'label' ... end 'label'
+	function parseIfStatement() returns Stmt throws ParseError
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		if not consume(TokenType.keywordIf) 'noIf'
+			throw ParseError.syntaxError
+		end 'noIf'
+
+		var condition = Expr.createError(startLine, column: startCol)
+		if let expr = try parseExpression() 'gotCond'
+			condition = expr
+		end 'gotCond' else 'noCond'
+			error(ErrorCode.E2002, message: "expected condition after 'if'")
+			if not tolerant 'strict'
+				throw ParseError.syntaxError
+			end 'strict'
+		end 'noCond'
+
+		// Label
+		var label = ""
+		if check(TokenType.charLiteral) 'hasLabel'
+			label = currentToken().text
+			advance()
+		end 'hasLabel' else 'noLabel'
+			error(ErrorCode.E2005, message: "expected block label after condition")
+		end 'noLabel'
+
+		consumeNewline()
+		skipNewlines()
+
+		// Parse then branch
+		var thenBranch = StmtArray{}
+		while not isAtEnd() and not check(TokenType.keywordEnd) and not check(TokenType.keywordElse) 'thenLoop'
+			if let stmt = try parseStatement() 'gotStmt'
+				thenBranch.push(stmt)
+			end 'gotStmt' else 'failedStmt'
+				if tolerant 'tolerantMode'
+					thenBranch.push(Stmt.createError(currentToken().line, column: currentToken().column))
+					synchronizeStatement()
+				end 'tolerantMode' else 'strictMode'
+					throw ParseError.syntaxError
+				end 'strictMode'
+			end 'failedStmt'
+			skipNewlines()
+		end 'thenLoop'
+
+		// Parse else branch
+		var elseBranch = StmtArray{}
+		if consume(TokenType.keywordElse) 'hasElse'
+			// Skip optional label after else
+			if check(TokenType.charLiteral) 'elseLabel'
+				advance()
+			end 'elseLabel'
+			consumeNewline()
+			skipNewlines()
+
+			while not isAtEnd() and not check(TokenType.keywordEnd) 'elseLoop'
+				if let stmt = try parseStatement() 'gotStmt'
+					elseBranch.push(stmt)
+				end 'gotStmt' else 'failedStmt'
+					if tolerant 'tolerantMode'
+						elseBranch.push(Stmt.createError(currentToken().line, column: currentToken().column))
+						synchronizeStatement()
+					end 'tolerantMode' else 'strictMode'
+						throw ParseError.syntaxError
+					end 'strictMode'
+				end 'failedStmt'
+				skipNewlines()
+			end 'elseLoop'
+		end 'hasElse'
+
+		// end 'label'
+		if not consume(TokenType.keywordEnd) 'noEnd'
+			error(ErrorCode.E2001, message: "expected 'end'")
+			if not tolerant 'strict'
+				throw ParseError.syntaxError
+			end 'strict'
+		end 'noEnd' else 'hasEnd'
+			if check(TokenType.charLiteral) 'hasBlockId'
+				let blockId = currentToken().text
+				if label != "" and blockId != label 'mismatch'
+					error(ErrorCode.E2006, message: "block identifier '{blockId}' does not match label '{label}'")
+				end 'mismatch'
+				advance()
+			end 'hasBlockId'
+		end 'hasEnd'
+
+		consumeNewline()
+
+		return Stmt.createIf(condition, thenBranch: thenBranch, elseBranch: elseBranch, label: label, line: startLine, column: startCol)
+	end 'parseIfStatement'
+
+	/// Parse while statement: while CONDITION 'label' ... end 'label'
+	function parseWhileStatement() returns Stmt throws ParseError
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		if not consume(TokenType.keywordWhile) 'noWhile'
+			throw ParseError.syntaxError
+		end 'noWhile'
+
+		var condition = Expr.createError(startLine, column: startCol)
+		if let expr = try parseExpression() 'gotCond'
+			condition = expr
+		end 'gotCond' else 'noCond'
+			error(ErrorCode.E2002, message: "expected condition after 'while'")
+			if not tolerant 'strict'
+				throw ParseError.syntaxError
+			end 'strict'
+		end 'noCond'
+
+		// Label
+		var label = ""
+		if check(TokenType.charLiteral) 'hasLabel'
+			label = currentToken().text
+			advance()
+		end 'hasLabel' else 'noLabel'
+			error(ErrorCode.E2005, message: "expected block label after condition")
+		end 'noLabel'
+
+		consumeNewline()
+		skipNewlines()
+
+		// Parse body
+		var body = StmtArray{}
+		while not isAtEnd() and not check(TokenType.keywordEnd) 'bodyLoop'
+			if let stmt = try parseStatement() 'gotStmt'
+				body.push(stmt)
+			end 'gotStmt' else 'failedStmt'
+				if tolerant 'tolerantMode'
+					body.push(Stmt.createError(currentToken().line, column: currentToken().column))
+					synchronizeStatement()
+				end 'tolerantMode' else 'strictMode'
+					throw ParseError.syntaxError
+				end 'strictMode'
+			end 'failedStmt'
+			skipNewlines()
+		end 'bodyLoop'
+
+		// end 'label'
+		if not consume(TokenType.keywordEnd) 'noEnd'
+			error(ErrorCode.E2001, message: "expected 'end'")
+			if not tolerant 'strict'
+				throw ParseError.syntaxError
+			end 'strict'
+		end 'noEnd' else 'hasEnd'
+			if check(TokenType.charLiteral) 'hasBlockId'
+				let blockId = currentToken().text
+				if label != "" and blockId != label 'mismatch'
+					error(ErrorCode.E2006, message: "block identifier '{blockId}' does not match label '{label}'")
+				end 'mismatch'
+				advance()
+			end 'hasBlockId'
+		end 'hasEnd'
+
+		consumeNewline()
+
+		return Stmt.createWhile(condition, body: body, label: label, line: startLine, column: startCol)
+	end 'parseWhileStatement'
+
+	/// Parse break statement: break or break 'label'
+	function parseBreakStatement() returns Stmt throws ParseError
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		if not consume(TokenType.keywordBreak) 'noBreak'
+			throw ParseError.syntaxError
+		end 'noBreak'
+
+		var label = ""
+		if check(TokenType.charLiteral) 'hasLabel'
+			label = currentToken().text
+			advance()
+		end 'hasLabel'
+
+		consumeNewline()
+		return Stmt.createBreak(label, line: startLine, column: startCol)
+	end 'parseBreakStatement'
+
+	/// Parse continue statement: continue or continue 'label'
+	function parseContinueStatement() returns Stmt throws ParseError
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		if not consume(TokenType.keywordContinue) 'noContinue'
+			throw ParseError.syntaxError
+		end 'noContinue'
+
+		var label = ""
+		if check(TokenType.charLiteral) 'hasLabel'
+			label = currentToken().text
+			advance()
+		end 'hasLabel'
+
+		consumeNewline()
+		return Stmt.createContinue(label, line: startLine, column: startCol)
+	end 'parseContinueStatement'
+
+	/// Parse expression statement: EXPR (usually a function call)
+	function parseExpressionStatement() returns Stmt throws ParseError
+		let startLine = currentToken().line
+		let startCol = currentToken().column
+
+		if let expr = try parseExpression() 'gotExpr'
+			// Check for assignment: IDENT = EXPR
+			if expr.kind == ExprKind.identifier and check(TokenType.assign) 'isAssign'
+				advance()
+				if let rhs = try parseExpression() 'gotRhs'
+					consumeNewline()
+					return Stmt.createAssign(expr.stringValue, expr: rhs, line: startLine, column: startCol)
+				end 'gotRhs' else 'noRhs'
+					if tolerant 'tolerantMode'
+						synchronizeStatement()
+						return Stmt.createError(startLine, column: startCol)
+					end 'tolerantMode'
+					throw ParseError.syntaxError
+				end 'noRhs'
+			end 'isAssign'
+
+			consumeNewline()
+			return Stmt.createExpr(expr, line: startLine, column: startCol)
+		end 'gotExpr' else 'noExpr'
+			error(ErrorCode.E2002, message: "expected expression")
+			throw ParseError.syntaxError
+		end 'noExpr'
+	end 'parseExpressionStatement'
+
+	/// Parse an expression using precedence climbing
 	function parseExpression() returns Expr throws ParseError
+		return try parseOrExpression()
+	end 'parseExpression'
+
+	/// Parse logical OR: EXPR or EXPR
+	function parseOrExpression() returns Expr throws ParseError
+		var left = try parseAndExpression()
+
+		while check(TokenType.keywordOr) 'orLoop'
+			let opLine = currentToken().line
+			let opCol = currentToken().column
+			advance()
+			let right = try parseAndExpression()
+			left = Expr.createBinary(BinaryOp.logicalOr, left: left, right: right, line: opLine, column: opCol)
+		end 'orLoop'
+
+		return left
+	end 'parseOrExpression'
+
+	/// Parse logical AND: EXPR and EXPR
+	function parseAndExpression() returns Expr throws ParseError
+		var left = try parseComparisonExpression()
+
+		while check(TokenType.keywordAnd) 'andLoop'
+			let opLine = currentToken().line
+			let opCol = currentToken().column
+			advance()
+			let right = try parseComparisonExpression()
+			left = Expr.createBinary(BinaryOp.logicalAnd, left: left, right: right, line: opLine, column: opCol)
+		end 'andLoop'
+
+		return left
+	end 'parseAndExpression'
+
+	/// Parse comparison: EXPR == != < <= > >= EXPR
+	function parseComparisonExpression() returns Expr throws ParseError
+		var left = try parseAdditiveExpression()
+
+		while true 'compLoop'
+			var op = BinaryOp.equal
+			var hasOp = false
+
+			if check(TokenType.equalEqual) 'isEq'
+				op = BinaryOp.equal
+				hasOp = true
+			end 'isEq'
+			if check(TokenType.notEqual) 'isNeq'
+				op = BinaryOp.notEqual
+				hasOp = true
+			end 'isNeq'
+			if check(TokenType.less) 'isLt'
+				op = BinaryOp.less
+				hasOp = true
+			end 'isLt'
+			if check(TokenType.lessEqual) 'isLe'
+				op = BinaryOp.lessEqual
+				hasOp = true
+			end 'isLe'
+			if check(TokenType.greater) 'isGt'
+				op = BinaryOp.greater
+				hasOp = true
+			end 'isGt'
+			if check(TokenType.greaterEqual) 'isGe'
+				op = BinaryOp.greaterEqual
+				hasOp = true
+			end 'isGe'
+
+			if not hasOp 'noOp'
+				break 'compLoop'
+			end 'noOp'
+
+			let opLine = currentToken().line
+			let opCol = currentToken().column
+			advance()
+			let right = try parseAdditiveExpression()
+			left = Expr.createBinary(op, left: left, right: right, line: opLine, column: opCol)
+		end 'compLoop'
+
+		return left
+	end 'parseComparisonExpression'
+
+	/// Parse additive: EXPR + - EXPR
+	function parseAdditiveExpression() returns Expr throws ParseError
+		var left = try parseMultiplicativeExpression()
+
+		while true 'addLoop'
+			var op = BinaryOp.add
+			var hasOp = false
+
+			if check(TokenType.plus) 'isAdd'
+				op = BinaryOp.add
+				hasOp = true
+			end 'isAdd'
+			if check(TokenType.minus) 'isSub'
+				op = BinaryOp.subtract
+				hasOp = true
+			end 'isSub'
+
+			if not hasOp 'noOp'
+				break 'addLoop'
+			end 'noOp'
+
+			let opLine = currentToken().line
+			let opCol = currentToken().column
+			advance()
+			let right = try parseMultiplicativeExpression()
+			left = Expr.createBinary(op, left: left, right: right, line: opLine, column: opCol)
+		end 'addLoop'
+
+		return left
+	end 'parseAdditiveExpression'
+
+	/// Parse multiplicative: EXPR * / mod EXPR
+	function parseMultiplicativeExpression() returns Expr throws ParseError
+		var left = try parseUnaryExpression()
+
+		while true 'mulLoop'
+			var op = BinaryOp.multiply
+			var hasOp = false
+
+			if check(TokenType.star) 'isMul'
+				op = BinaryOp.multiply
+				hasOp = true
+			end 'isMul'
+			if check(TokenType.slash) 'isDiv'
+				op = BinaryOp.divide
+				hasOp = true
+			end 'isDiv'
+			if check(TokenType.keywordMod) 'isMod'
+				op = BinaryOp.modulo
+				hasOp = true
+			end 'isMod'
+
+			if not hasOp 'noOp'
+				break 'mulLoop'
+			end 'noOp'
+
+			let opLine = currentToken().line
+			let opCol = currentToken().column
+			advance()
+			let right = try parseUnaryExpression()
+			left = Expr.createBinary(op, left: left, right: right, line: opLine, column: opCol)
+		end 'mulLoop'
+
+		return left
+	end 'parseMultiplicativeExpression'
+
+	/// Parse unary: - not EXPR
+	function parseUnaryExpression() returns Expr throws ParseError
+		if check(TokenType.minus) 'isNeg'
+			let opLine = currentToken().line
+			let opCol = currentToken().column
+			advance()
+			let operand = try parseUnaryExpression()
+			return Expr.createUnary(UnaryOp.negate, operand: operand, line: opLine, column: opCol)
+		end 'isNeg'
+
+		if check(TokenType.keywordNot) 'isNot'
+			let opLine = currentToken().line
+			let opCol = currentToken().column
+			advance()
+			let operand = try parseUnaryExpression()
+			return Expr.createUnary(UnaryOp.logicalNot, operand: operand, line: opLine, column: opCol)
+		end 'isNot'
+
+		return try parseCallExpression()
+	end 'parseUnaryExpression'
+
+	/// Parse call expression: PRIMARY(args) or PRIMARY.field
+	function parseCallExpression() returns Expr throws ParseError
+		var expr = try parsePrimaryExpression()
+
+		while true 'postfixLoop'
+			if check(TokenType.lparen) 'isCall'
+				let callLine = currentToken().line
+				let callCol = currentToken().column
+				advance()
+
+				var args = ExprArray{}
+				if not check(TokenType.rparen) 'hasArgs'
+					// Parse first argument
+					if let arg = try parseExpression() 'gotArg'
+						args.push(arg)
+					end 'gotArg'
+
+					// Parse remaining arguments
+					while consume(TokenType.comma) 'moreArgs'
+						if let arg = try parseExpression() 'gotArg2'
+							args.push(arg)
+						end 'gotArg2'
+					end 'moreArgs'
+				end 'hasArgs'
+
+				if not consume(TokenType.rparen) 'noRparen'
+					error(ErrorCode.E2001, message: "expected ')' after arguments")
+				end 'noRparen'
+
+				expr = Expr.createCall(expr, args: args, line: callLine, column: callCol)
+				continue 'postfixLoop'
+			end 'isCall'
+
+			// No more postfix operators
+			break 'postfixLoop'
+		end 'postfixLoop'
+
+		return expr
+	end 'parseCallExpression'
+
+	/// Parse primary expression: literals, identifiers, parenthesized expressions
+	function parsePrimaryExpression() returns Expr throws ParseError
+		let tok = currentToken()
+
+		// Integer literal
 		if check(TokenType.integer) 'isInt'
-			let tok = currentToken()
 			let value = parseInt(tok.text)
 			advance()
 			return Expr.createIntLiteral(value, line: tok.line, column: tok.column)
 		end 'isInt'
+
+		// Float literal
+		if check(TokenType.float) 'isFloat'
+			let value = parseFloat(tok.text)
+			advance()
+			return Expr.createFloatLiteral(value, line: tok.line, column: tok.column)
+		end 'isFloat'
+
+		// Boolean literals
+		if check(TokenType.keywordTrue) 'isTrue'
+			advance()
+			return Expr.createBoolLiteral(true, line: tok.line, column: tok.column)
+		end 'isTrue'
+		if check(TokenType.keywordFalse) 'isFalse'
+			advance()
+			return Expr.createBoolLiteral(false, line: tok.line, column: tok.column)
+		end 'isFalse'
+
+		// String literal
+		if check(TokenType.string) 'isString'
+			advance()
+			return Expr.createStringLiteral(tok.text, line: tok.line, column: tok.column)
+		end 'isString'
+
+		// Character literal
+		if check(TokenType.charLiteral) 'isChar'
+			advance()
+			return Expr.createCharLiteral(tok.text, line: tok.line, column: tok.column)
+		end 'isChar'
+
+		// Identifier
+		if check(TokenType.identifier) 'isIdent'
+			advance()
+			return Expr.createIdentifier(tok.text, line: tok.line, column: tok.column)
+		end 'isIdent'
+
+		// Parenthesized expression
+		if check(TokenType.lparen) 'isParen'
+			advance()
+			let inner = try parseExpression()
+			if not consume(TokenType.rparen) 'noRparen'
+				error(ErrorCode.E2001, message: "expected ')' after expression")
+			end 'noRparen'
+			return inner
+		end 'isParen'
+
 		error(ErrorCode.E2002, message: "expected expression")
 		throw ParseError.syntaxError
-	end 'parseExpression'
+	end 'parsePrimaryExpression'
 
 	/// Parse an integer string to int
 	function parseInt(text String) returns int
@@ -264,6 +1216,33 @@ export type Parser
 		end 'parseLoop'
 		return result
 	end 'parseInt'
+
+	/// Parse a float string to float
+	function parseFloat(text String) returns float
+		// Simple float parsing: digits, dot, digits
+		var result = 0.0
+		var fraction = 0.0
+		var divisor = 1.0
+		var inFraction = false
+
+		for c in text 'parseLoop'
+			if c == '.' 'isDot'
+				inFraction = true
+			end 'isDot' else 'notDot'
+				if c >= '0' and c <= '9' 'isDigit'
+					let digitValue = ((try c.asciiValue() otherwise ignore) - 48) as float
+					if inFraction 'frac'
+						divisor = divisor * 10.0
+						fraction = fraction + digitValue / divisor
+					end 'frac' else 'whole'
+						result = result * 10.0 + digitValue
+					end 'whole'
+				end 'isDigit'
+			end 'notDot'
+		end 'parseLoop'
+
+		return result + fraction
+	end 'parseFloat'
 
 	// ========================================================================
 	// Token Helpers

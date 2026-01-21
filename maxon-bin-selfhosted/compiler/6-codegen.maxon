@@ -1,0 +1,433 @@
+// Maxon Compiler - Code Generator (Stage 6)
+// Converts LIR to x86-64 machine code
+
+import X86Encoder, X86Reg, x86RegNum, x86ArgReg, x86IsCalleeSaved from "6b-x86.maxon"
+import RegAllocator from "6a-regalloc.maxon"
+import LirModule, LirFunction, LirBlock, LirInstruction, LirOpcode,
+LirOperand, LirOperandKind from "5-lir.maxon"
+
+// ============================================================================
+// Code Generator
+// ============================================================================
+
+/// Compiled function with machine code
+export type CompiledFunction
+export var name String
+export var code Array with byte
+export var codeOffset int      // offset in final executable
+export var stackSize int
+export var usedCalleeSaved Array with X86Reg
+
+export static function create(name String) returns CompiledFunction
+return {
+name: name,
+code: Array with byte {},
+codeOffset: 0,
+stackSize: 0,
+usedCalleeSaved: Array with X86Reg {}
+}
+end 'create'
+end 'CompiledFunction'
+
+export typealias CompiledFunctionArray is Array with CompiledFunction
+
+/// Code generator for LIR -> x86-64
+export type Codegen
+var module_ LirModule ref
+export var functions CompiledFunctionArray
+var encoder X86Encoder
+var blockOffsets Map           // block label -> offset in code
+var pendingJumps Array with PendingJump
+
+export static function create(module_ LirModule ref) returns Codegen
+return {
+module_: module_,
+functions: CompiledFunctionArray{},
+encoder: X86Encoder.create(),
+blockOffsets: Map{},
+pendingJumps: Array with PendingJump {}
+}
+end 'create'
+
+/// Generate code for the entire module
+export function generate()
+for func in module_.functions 'eachFunc'
+let compiled = generateFunction(func ref)
+functions.push(compiled)
+end 'eachFunc'
+end 'generate'
+
+/// Generate code for a single function
+function generateFunction(func LirFunction ref) returns CompiledFunction
+var compiled = CompiledFunction.create(func.name)
+encoder = X86Encoder.create()
+blockOffsets = Map{}
+pendingJumps = Array with PendingJump {}
+
+// Run register allocation
+var allocator = RegAllocator.create(func)
+allocator.allocate()
+compiled.stackSize = func.stackSize
+
+// Collect used callee-saved registers
+let usedSet = allocator.getUsedCalleeSaved()
+for reg in [X86Reg.rbx, X86Reg.rsi, X86Reg.rdi, X86Reg.r12, X86Reg.r13, X86Reg.r14, X86Reg.r15] 'checkRegs'
+if usedSet.has(reg.toString()) 'used'
+compiled.usedCalleeSaved.push(reg)
+end 'used'
+end 'checkRegs'
+
+// Generate prologue
+generatePrologue(func, compiled)
+
+// Generate blocks
+for block in func.blocks 'eachBlock'
+// Record block offset
+blockOffsets.set(block.label, encoder.offset())
+
+for instr in block.instructions 'eachInstr'
+generateInstruction(instr)
+end 'eachInstr'
+end 'eachBlock'
+
+// Fix up jumps
+fixupJumps()
+
+// Copy generated code
+compiled.code = encoder.code
+
+return compiled
+end 'generateFunction'
+
+/// Generate function prologue
+function generatePrologue(func LirFunction ref, compiled CompiledFunction ref)
+// Save callee-saved registers
+for reg in compiled.usedCalleeSaved 'saveRegs'
+encoder.encodePush(reg)
+end 'saveRegs'
+
+// Set up stack frame
+encoder.encodePush(X86Reg.rbp)
+encoder.encodeMovRR(X86Reg.rbp, X86Reg.rsp)
+
+// Allocate stack space
+if func.stackSize > 0 'hasStack'
+encoder.encodeSubRI32(X86Reg.rsp, func.stackSize)
+end 'hasStack'
+end 'generatePrologue'
+
+/// Generate function epilogue
+function generateEpilogue(compiled CompiledFunction)
+// Deallocate stack space
+encoder.encodeMovRR(X86Reg.rsp, X86Reg.rbp)
+encoder.encodePop(X86Reg.rbp)
+
+// Restore callee-saved registers (reverse order)
+var i = compiled.usedCalleeSaved.count() - 1
+while i >= 0 'restoreLoop'
+encoder.encodePop(compiled.usedCalleeSaved[i])
+i = i - 1
+end 'restoreLoop'
+
+encoder.encodeRet()
+end 'generateEpilogue'
+
+/// Generate a single instruction
+function generateInstruction(instr LirInstruction)
+match instr.opcode 'op'
+LirOpcode.mov gives generateMov(instr)
+LirOpcode.add gives generateBinaryOp(instr, BinaryOpKind.add)
+LirOpcode.sub gives generateBinaryOp(instr, BinaryOpKind.sub)
+LirOpcode.mul gives generateMul(instr)
+LirOpcode.div gives generateDiv(instr)
+LirOpcode.cmp gives generateCmp(instr)
+LirOpcode.jmp gives generateJmp(instr)
+LirOpcode.je gives generateCondJmp(instr, CondKind.eq)
+LirOpcode.jne gives generateCondJmp(instr, CondKind.ne)
+LirOpcode.jlt gives generateCondJmp(instr, CondKind.lt)
+LirOpcode.jle gives generateCondJmp(instr, CondKind.le)
+LirOpcode.jgt gives generateCondJmp(instr, CondKind.gt)
+LirOpcode.jge gives generateCondJmp(instr, CondKind.ge)
+LirOpcode.call gives generateCall(instr)
+LirOpcode.ret gives generateRet(instr)
+LirOpcode.push gives generatePush(instr)
+LirOpcode.pop gives generatePopOp(instr)
+LirOpcode.sete gives generateSetCC(instr, CondKind.eq)
+LirOpcode.setne gives generateSetCC(instr, CondKind.ne)
+LirOpcode.setlt gives generateSetCC(instr, CondKind.lt)
+LirOpcode.setle gives generateSetCC(instr, CondKind.le)
+LirOpcode.setgt gives generateSetCC(instr, CondKind.gt)
+LirOpcode.setge gives generateSetCC(instr, CondKind.ge)
+LirOpcode.nop gives encoder.encodeNop()
+default gives {} // unknown opcode
+end 'op'
+end 'generateInstruction'
+
+/// Generate MOV instruction
+function generateMov(instr LirInstruction)
+if instr.dst == null or instr.src1 == null 'invalid'
+return
+end 'invalid'
+
+let dst = instr.dst!
+let src = instr.src1!
+
+if dst.kind == LirOperandKind.reg and src.kind == LirOperandKind.reg 'regToReg'
+encoder.encodeMovRR(getPhysReg(dst), getPhysReg(src))
+end 'regToReg' else if dst.kind == LirOperandKind.reg and src.kind == LirOperandKind.imm 'immToReg'
+let val = src.value
+if val >= -2147483648 and val <= 2147483647 'fits32'
+encoder.encodeMovRI32(getPhysReg(dst), val)
+end 'fits32' else 'needs64'
+encoder.encodeMovRI64(getPhysReg(dst), val)
+end 'needs64'
+end 'immToReg' else if dst.kind == LirOperandKind.reg and src.kind == LirOperandKind.stack 'stackToReg'
+encoder.encodeMovRM(getPhysReg(dst), X86Reg.rbp, -((src.value + 1) * 8))
+end 'stackToReg' else if dst.kind == LirOperandKind.stack and src.kind == LirOperandKind.reg 'regToStack'
+encoder.encodeMovMR(X86Reg.rbp, -((dst.value + 1) * 8), getPhysReg(src))
+end 'regToStack'
+end 'generateMov'
+
+/// Generate binary operation (add, sub)
+function generateBinaryOp(instr LirInstruction, kind BinaryOpKind)
+if instr.dst == null or instr.src1 == null or instr.src2 == null 'invalid'
+return
+end 'invalid'
+
+let dst = instr.dst!
+let src1 = instr.src1!
+let src2 = instr.src2!
+
+// Ensure dst == src1 (two-address form)
+if dst.kind == LirOperandKind.reg and src1.kind == LirOperandKind.reg 'regSrc1'
+if getPhysReg(dst) != getPhysReg(src1) 'needCopy'
+encoder.encodeMovRR(getPhysReg(dst), getPhysReg(src1))
+end 'needCopy'
+end 'regSrc1'
+
+if src2.kind == LirOperandKind.reg 'regSrc2'
+match kind 'which'
+BinaryOpKind.add gives encoder.encodeAddRR(getPhysReg(dst), getPhysReg(src2))
+BinaryOpKind.sub gives encoder.encodeSubRR(getPhysReg(dst), getPhysReg(src2))
+default gives {}
+end 'which'
+end 'regSrc2' else if src2.kind == LirOperandKind.imm 'immSrc2'
+match kind 'which'
+BinaryOpKind.add gives encoder.encodeAddRI32(getPhysReg(dst), src2.value)
+BinaryOpKind.sub gives encoder.encodeSubRI32(getPhysReg(dst), src2.value)
+default gives {}
+end 'which'
+end 'immSrc2'
+end 'generateBinaryOp'
+
+/// Generate IMUL instruction
+function generateMul(instr LirInstruction)
+if instr.dst == null or instr.src1 == null or instr.src2 == null 'invalid'
+return
+end 'invalid'
+
+let dst = instr.dst!
+let src1 = instr.src1!
+let src2 = instr.src2!
+
+// Move src1 to dst if needed
+if dst.kind == LirOperandKind.reg and src1.kind == LirOperandKind.reg 'regSrc1'
+if getPhysReg(dst) != getPhysReg(src1) 'needCopy'
+encoder.encodeMovRR(getPhysReg(dst), getPhysReg(src1))
+end 'needCopy'
+end 'regSrc1'
+
+if src2.kind == LirOperandKind.reg 'regSrc2'
+encoder.encodeImulRR(getPhysReg(dst), getPhysReg(src2))
+end 'regSrc2'
+end 'generateMul'
+
+/// Generate IDIV instruction (simplified - dividend in RAX, divisor in operand)
+function generateDiv(instr LirInstruction)
+// Division is complex - simplified implementation
+// RAX = dividend, operand = divisor, result in RAX
+// TODO: full division support
+end 'generateDiv'
+
+/// Generate CMP instruction
+function generateCmp(instr LirInstruction)
+if instr.src1 == null or instr.src2 == null 'invalid'
+return
+end 'invalid'
+
+let src1 = instr.src1!
+let src2 = instr.src2!
+
+if src1.kind == LirOperandKind.reg and src2.kind == LirOperandKind.reg 'regReg'
+encoder.encodeCmpRR(getPhysReg(src1), getPhysReg(src2))
+end 'regReg' else if src1.kind == LirOperandKind.reg and src2.kind == LirOperandKind.imm 'regImm'
+encoder.encodeCmpRI32(getPhysReg(src1), src2.value)
+end 'regImm'
+end 'generateCmp'
+
+/// Generate JMP instruction
+function generateJmp(instr LirInstruction)
+if instr.target == null 'noTarget'
+return
+end 'noTarget'
+
+// Record pending jump for fixup
+let jumpOffset = encoder.offset()
+encoder.encodeJmpRel32(0)  // placeholder
+pendingJumps.push(PendingJump.create(jumpOffset + 1, instr.target!, 4))
+end 'generateJmp'
+
+/// Generate conditional jump
+function generateCondJmp(instr LirInstruction, cond CondKind)
+if instr.target == null 'noTarget'
+return
+end 'noTarget'
+
+let jumpOffset = encoder.offset()
+
+match cond 'which'
+CondKind.eq gives encoder.encodeJeRel32(0)
+CondKind.ne gives encoder.encodeJneRel32(0)
+CondKind.lt gives encoder.encodeJlRel32(0)
+CondKind.le gives encoder.encodeJleRel32(0)
+CondKind.gt gives encoder.encodeJgRel32(0)
+CondKind.ge gives encoder.encodeJgeRel32(0)
+default gives {}
+end 'which'
+
+// Offset is at jumpOffset + 2 for conditional jumps (0F 8x xx xx xx xx)
+pendingJumps.push(PendingJump.create(jumpOffset + 2, instr.target!, 4))
+end 'generateCondJmp'
+
+/// Generate CALL instruction
+function generateCall(instr LirInstruction)
+if instr.target == null 'noTarget'
+return
+end 'noTarget'
+
+let callOffset = encoder.offset()
+encoder.encodeCallRel32(0)  // placeholder
+pendingJumps.push(PendingJump.create(callOffset + 1, instr.target!, 4))
+end 'generateCall'
+
+/// Generate RET instruction
+function generateRet(instr LirInstruction)
+// Move return value to RAX if present
+if instr.src1 != null 'hasRetVal'
+let src = instr.src1!
+if src.kind == LirOperandKind.reg 'regRet'
+if getPhysReg(src) != X86Reg.rax 'notRax'
+encoder.encodeMovRR(X86Reg.rax, getPhysReg(src))
+end 'notRax'
+end 'regRet' else if src.kind == LirOperandKind.imm 'immRet'
+encoder.encodeMovRI32(X86Reg.rax, src.value)
+end 'immRet'
+end 'hasRetVal'
+
+encoder.encodeRet()
+end 'generateRet'
+
+/// Generate PUSH instruction
+function generatePush(instr LirInstruction)
+if instr.src1 == null 'noSrc'
+return
+end 'noSrc'
+
+let src = instr.src1!
+if src.kind == LirOperandKind.reg 'regPush'
+encoder.encodePush(getPhysReg(src))
+end 'regPush'
+end 'generatePush'
+
+/// Generate POP instruction
+function generatePopOp(instr LirInstruction)
+if instr.dst == null 'noDst'
+return
+end 'noDst'
+
+let dst = instr.dst!
+if dst.kind == LirOperandKind.reg 'regPop'
+encoder.encodePop(getPhysReg(dst))
+end 'regPop'
+end 'generatePopOp'
+
+/// Generate SETcc instruction
+function generateSetCC(instr LirInstruction, cond CondKind)
+if instr.dst == null 'noDst'
+return
+end 'noDst'
+
+let dst = instr.dst!
+if dst.kind != LirOperandKind.reg 'notReg'
+return
+end 'notReg'
+
+let reg = getPhysReg(dst)
+
+// Zero the destination first
+encoder.encodeXorRR(reg, reg)
+
+match cond 'which'
+CondKind.eq gives encoder.encodeSeteR(reg)
+CondKind.ne gives encoder.encodeSetneR(reg)
+CondKind.lt gives encoder.encodeSetlR(reg)
+CondKind.le gives encoder.encodeSetleR(reg)
+CondKind.gt gives encoder.encodeSetgR(reg)
+CondKind.ge gives encoder.encodeSetgeR(reg)
+default gives {}
+end 'which'
+end 'generateSetCC'
+
+/// Get physical register from operand
+function getPhysReg(op LirOperand) returns X86Reg
+if op.kind == LirOperandKind.reg 'isReg'
+// Operand value is the register enum value
+return X86Reg.values()[op.value]
+end 'isReg'
+// Default to RAX for now
+return X86Reg.rax
+end 'getPhysReg'
+
+/// Fix up all pending jumps
+function fixupJumps()
+for jump in pendingJumps 'each'
+if blockOffsets.has(jump.target) 'hasTarget'
+let targetOffset = blockOffsets.get(jump.target)!.toInt()!
+let displacement = targetOffset - (jump.offset + jump.size)
+
+// Write displacement at jump.offset
+encoder.code[jump.offset] = (displacement mod 256) as byte
+encoder.code[jump.offset + 1] = ((displacement / 256) mod 256) as byte
+encoder.code[jump.offset + 2] = ((displacement / 65536) mod 256) as byte
+encoder.code[jump.offset + 3] = ((displacement / 16777216) mod 256) as byte
+end 'hasTarget'
+end 'each'
+end 'fixupJumps'
+end 'Codegen'
+
+/// Pending jump fixup
+type PendingJump
+var offset int       // offset in code where displacement should be written
+var target String    // target block label
+var size int         // displacement size (always 4 for rel32)
+
+static function create(offset int, target String, size int) returns PendingJump
+return {offset: offset, target: target, size: size}
+end 'create'
+end 'PendingJump'
+
+/// Binary operation kind
+enum BinaryOpKind
+add
+sub
+end 'BinaryOpKind'
+
+/// Condition kind for jumps and setcc
+enum CondKind
+eq
+ne
+lt
+le
+gt
+ge
+end 'CondKind'

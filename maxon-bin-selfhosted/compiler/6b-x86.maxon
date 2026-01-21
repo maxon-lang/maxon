@@ -1,0 +1,490 @@
+// Maxon Compiler - x86-64 Encoding (Stage 6b)
+// Encodes x86-64 machine instructions into bytes
+
+// ============================================================================
+// x86-64 Registers
+// ============================================================================
+
+/// x86-64 general-purpose registers
+export enum X86Reg
+rax
+rcx
+rdx
+rbx
+rsp
+rbp
+rsi
+rdi
+r8
+r9
+r10
+r11
+r12
+r13
+r14
+r15
+end 'X86Reg'
+
+/// Get the register number (0-15)
+export function x86RegNum(reg X86Reg) returns int
+return match reg 'num'
+rax gives 0
+rcx gives 1
+rdx gives 2
+rbx gives 3
+rsp gives 4
+rbp gives 5
+rsi gives 6
+rdi gives 7
+r8 gives 8
+r9 gives 9
+r10 gives 10
+r11 gives 11
+r12 gives 12
+r13 gives 13
+r14 gives 14
+r15 gives 15
+default gives 0
+end 'num'
+end 'x86RegNum'
+
+/// Check if register needs REX.B or REX.R extension
+export function x86RegNeedsRex(reg X86Reg) returns bool
+return x86RegNum(reg) >= 8
+end 'x86RegNeedsRex'
+
+/// Get the 3-bit register encoding
+export function x86RegEnc(reg X86Reg) returns int
+return x86RegNum(reg) mod 8
+end 'x86RegEnc'
+
+/// Get register name for debugging
+export function x86RegName(reg X86Reg) returns String
+return match reg 'name'
+rax gives "rax"
+rcx gives "rcx"
+rdx gives "rdx"
+rbx gives "rbx"
+rsp gives "rsp"
+rbp gives "rbp"
+rsi gives "rsi"
+rdi gives "rdi"
+r8 gives "r8"
+r9 gives "r9"
+r10 gives "r10"
+r11 gives "r11"
+r12 gives "r12"
+r13 gives "r13"
+r14 gives "r14"
+r15 gives "r15"
+default gives "?"
+end 'name'
+end 'x86RegName'
+
+// Windows x64 calling convention: first 4 args in RCX, RDX, R8, R9
+export function x86ArgReg(index int) returns X86Reg
+return match index 'reg'
+0 gives X86Reg.rcx
+1 gives X86Reg.rdx
+2 gives X86Reg.r8
+3 gives X86Reg.r9
+default gives X86Reg.rax
+end 'reg'
+end 'x86ArgReg'
+
+// Callee-saved registers (must be preserved across calls)
+export function x86IsCalleeSaved(reg X86Reg) returns bool
+return match reg 'check'
+rbx or rbp or rsi or rdi or r12 or r13 or r14 or r15 gives true
+default gives false
+end 'check'
+end 'x86IsCalleeSaved'
+
+// ============================================================================
+// x86-64 Instruction Encoding
+// ============================================================================
+
+export typealias ByteArray is Array with byte
+
+/// x86-64 instruction encoder
+export type X86Encoder
+export var code ByteArray
+var labelOffsets Map          // label -> offset
+var pendingFixups FixupArray  // fixups for forward references
+
+export static function create() returns X86Encoder
+return {code: ByteArray{}}
+end 'create'
+
+/// Get current code offset
+export function offset() returns int
+return code.count()
+end 'offset'
+
+/// Emit a single byte
+export function emit(b byte)
+code.push(b)
+end 'emit'
+
+/// Emit a 16-bit little-endian value
+export function emit16(value int)
+emit((value mod 256) as byte)
+emit(((value / 256) mod 256) as byte)
+end 'emit16'
+
+/// Emit a 32-bit little-endian value
+export function emit32(value int)
+emit((value mod 256) as byte)
+emit(((value / 256) mod 256) as byte)
+emit(((value / 65536) mod 256) as byte)
+emit(((value / 16777216) mod 256) as byte)
+end 'emit32'
+
+/// Emit a 64-bit little-endian value
+export function emit64(value int)
+emit32(value mod 4294967296)
+emit32(value / 4294967296)
+end 'emit64'
+
+/// Emit REX prefix if needed
+export function emitRex(w bool, r bool, x bool, b bool)
+var rex = 0x40
+if w 'setW' rex = rex + 0x08 end 'setW'
+if r 'setR' rex = rex + 0x04 end 'setR'
+if x 'setX' rex = rex + 0x02 end 'setX'
+if b 'setB' rex = rex + 0x01 end 'setB'
+if rex != 0x40 or w 'needsRex'
+emit(rex as byte)
+end 'needsRex'
+end 'emitRex'
+
+/// Emit ModR/M byte
+export function emitModRM(mod_ int, reg int, rm int)
+let byte = ((mod_ * 64) + (reg * 8) + rm) as byte
+emit(byte)
+end 'emitModRM'
+
+/// Emit SIB byte
+export function emitSIB(scale int, index int, base int)
+let byte = ((scale * 64) + (index * 8) + base) as byte
+emit(byte)
+end 'emitSIB'
+
+// ========================================================================
+// Common Instructions
+// ========================================================================
+
+/// NOP
+export function encodeNop()
+emit(0x90 as byte)
+end 'encodeNop'
+
+/// RET
+export function encodeRet()
+emit(0xC3 as byte)
+end 'encodeRet'
+
+/// PUSH reg64
+export function encodePush(reg X86Reg)
+if x86RegNeedsRex(reg) 'needsRex'
+emit(0x41 as byte)
+end 'needsRex'
+emit((0x50 + x86RegEnc(reg)) as byte)
+end 'encodePush'
+
+/// POP reg64
+export function encodePop(reg X86Reg)
+if x86RegNeedsRex(reg) 'needsRex'
+emit(0x41 as byte)
+end 'needsRex'
+emit((0x58 + x86RegEnc(reg)) as byte)
+end 'encodePop'
+
+/// MOV reg64, reg64
+export function encodeMovRR(dst X86Reg, src X86Reg)
+emitRex(true, x86RegNeedsRex(src), false, x86RegNeedsRex(dst))
+emit(0x89 as byte)
+emitModRM(3, x86RegEnc(src), x86RegEnc(dst))
+end 'encodeMovRR'
+
+/// MOV reg64, imm64
+export function encodeMovRI64(dst X86Reg, imm int)
+emitRex(true, false, false, x86RegNeedsRex(dst))
+emit((0xB8 + x86RegEnc(dst)) as byte)
+emit64(imm)
+end 'encodeMovRI64'
+
+/// MOV reg64, imm32 (sign-extended)
+export function encodeMovRI32(dst X86Reg, imm int)
+emitRex(true, false, false, x86RegNeedsRex(dst))
+emit(0xC7 as byte)
+emitModRM(3, 0, x86RegEnc(dst))
+emit32(imm)
+end 'encodeMovRI32'
+
+/// MOV reg64, [reg64 + offset]
+export function encodeMovRM(dst X86Reg, base X86Reg, offset int)
+emitRex(true, x86RegNeedsRex(dst), false, x86RegNeedsRex(base))
+emit(0x8B as byte)
+
+if offset == 0 and x86RegEnc(base) != 5 'noOffset'
+// [base]
+emitModRM(0, x86RegEnc(dst), x86RegEnc(base))
+end 'noOffset' else if offset >= -128 and offset <= 127 'smallOffset'
+// [base + disp8]
+emitModRM(1, x86RegEnc(dst), x86RegEnc(base))
+emit(offset as byte)
+end 'smallOffset' else 'largeOffset'
+// [base + disp32]
+emitModRM(2, x86RegEnc(dst), x86RegEnc(base))
+emit32(offset)
+end 'largeOffset'
+end 'encodeMovRM'
+
+/// MOV [reg64 + offset], reg64
+export function encodeMovMR(base X86Reg, offset int, src X86Reg)
+emitRex(true, x86RegNeedsRex(src), false, x86RegNeedsRex(base))
+emit(0x89 as byte)
+
+if offset == 0 and x86RegEnc(base) != 5 'noOffset'
+emitModRM(0, x86RegEnc(src), x86RegEnc(base))
+end 'noOffset' else if offset >= -128 and offset <= 127 'smallOffset'
+emitModRM(1, x86RegEnc(src), x86RegEnc(base))
+emit(offset as byte)
+end 'smallOffset' else 'largeOffset'
+emitModRM(2, x86RegEnc(src), x86RegEnc(base))
+emit32(offset)
+end 'largeOffset'
+end 'encodeMovMR'
+
+/// ADD reg64, reg64
+export function encodeAddRR(dst X86Reg, src X86Reg)
+emitRex(true, x86RegNeedsRex(src), false, x86RegNeedsRex(dst))
+emit(0x01 as byte)
+emitModRM(3, x86RegEnc(src), x86RegEnc(dst))
+end 'encodeAddRR'
+
+/// ADD reg64, imm32
+export function encodeAddRI32(dst X86Reg, imm int)
+emitRex(true, false, false, x86RegNeedsRex(dst))
+if dst == X86Reg.rax 'isRax'
+emit(0x05 as byte)
+emit32(imm)
+end 'isRax' else 'notRax'
+emit(0x81 as byte)
+emitModRM(3, 0, x86RegEnc(dst))
+emit32(imm)
+end 'notRax'
+end 'encodeAddRI32'
+
+/// SUB reg64, reg64
+export function encodeSubRR(dst X86Reg, src X86Reg)
+emitRex(true, x86RegNeedsRex(src), false, x86RegNeedsRex(dst))
+emit(0x29 as byte)
+emitModRM(3, x86RegEnc(src), x86RegEnc(dst))
+end 'encodeSubRR'
+
+/// SUB reg64, imm32
+export function encodeSubRI32(dst X86Reg, imm int)
+emitRex(true, false, false, x86RegNeedsRex(dst))
+if dst == X86Reg.rax 'isRax'
+emit(0x2D as byte)
+emit32(imm)
+end 'isRax' else 'notRax'
+emit(0x81 as byte)
+emitModRM(3, 5, x86RegEnc(dst))
+emit32(imm)
+end 'notRax'
+end 'encodeSubRI32'
+
+/// IMUL reg64, reg64
+export function encodeImulRR(dst X86Reg, src X86Reg)
+emitRex(true, x86RegNeedsRex(dst), false, x86RegNeedsRex(src))
+emit(0x0F as byte)
+emit(0xAF as byte)
+emitModRM(3, x86RegEnc(dst), x86RegEnc(src))
+end 'encodeImulRR'
+
+/// CMP reg64, reg64
+export function encodeCmpRR(dst X86Reg, src X86Reg)
+emitRex(true, x86RegNeedsRex(src), false, x86RegNeedsRex(dst))
+emit(0x39 as byte)
+emitModRM(3, x86RegEnc(src), x86RegEnc(dst))
+end 'encodeCmpRR'
+
+/// CMP reg64, imm32
+export function encodeCmpRI32(dst X86Reg, imm int)
+emitRex(true, false, false, x86RegNeedsRex(dst))
+if dst == X86Reg.rax 'isRax'
+emit(0x3D as byte)
+emit32(imm)
+end 'isRax' else 'notRax'
+emit(0x81 as byte)
+emitModRM(3, 7, x86RegEnc(dst))
+emit32(imm)
+end 'notRax'
+end 'encodeCmpRI32'
+
+/// TEST reg64, reg64
+export function encodeTestRR(dst X86Reg, src X86Reg)
+emitRex(true, x86RegNeedsRex(src), false, x86RegNeedsRex(dst))
+emit(0x85 as byte)
+emitModRM(3, x86RegEnc(src), x86RegEnc(dst))
+end 'encodeTestRR'
+
+/// XOR reg64, reg64 (useful for zeroing)
+export function encodeXorRR(dst X86Reg, src X86Reg)
+emitRex(true, x86RegNeedsRex(src), false, x86RegNeedsRex(dst))
+emit(0x31 as byte)
+emitModRM(3, x86RegEnc(src), x86RegEnc(dst))
+end 'encodeXorRR'
+
+/// NEG reg64
+export function encodeNegR(dst X86Reg)
+emitRex(true, false, false, x86RegNeedsRex(dst))
+emit(0xF7 as byte)
+emitModRM(3, 3, x86RegEnc(dst))
+end 'encodeNegR'
+
+/// JMP rel32
+export function encodeJmpRel32(offset int)
+emit(0xE9 as byte)
+emit32(offset)
+end 'encodeJmpRel32'
+
+/// JE rel32
+export function encodeJeRel32(offset int)
+emit(0x0F as byte)
+emit(0x84 as byte)
+emit32(offset)
+end 'encodeJeRel32'
+
+/// JNE rel32
+export function encodeJneRel32(offset int)
+emit(0x0F as byte)
+emit(0x85 as byte)
+emit32(offset)
+end 'encodeJneRel32'
+
+/// JL rel32
+export function encodeJlRel32(offset int)
+emit(0x0F as byte)
+emit(0x8C as byte)
+emit32(offset)
+end 'encodeJlRel32'
+
+/// JLE rel32
+export function encodeJleRel32(offset int)
+emit(0x0F as byte)
+emit(0x8E as byte)
+emit32(offset)
+end 'encodeJleRel32'
+
+/// JG rel32
+export function encodeJgRel32(offset int)
+emit(0x0F as byte)
+emit(0x8F as byte)
+emit32(offset)
+end 'encodeJgRel32'
+
+/// JGE rel32
+export function encodeJgeRel32(offset int)
+emit(0x0F as byte)
+emit(0x8D as byte)
+emit32(offset)
+end 'encodeJgeRel32'
+
+/// CALL rel32
+export function encodeCallRel32(offset int)
+emit(0xE8 as byte)
+emit32(offset)
+end 'encodeCallRel32'
+
+/// SETE r/m8
+export function encodeSeteR(dst X86Reg)
+if x86RegNeedsRex(dst) 'needsRex'
+emit(0x41 as byte)
+end 'needsRex'
+emit(0x0F as byte)
+emit(0x94 as byte)
+emitModRM(3, 0, x86RegEnc(dst))
+end 'encodeSeteR'
+
+/// SETNE r/m8
+export function encodeSetneR(dst X86Reg)
+if x86RegNeedsRex(dst) 'needsRex'
+emit(0x41 as byte)
+end 'needsRex'
+emit(0x0F as byte)
+emit(0x95 as byte)
+emitModRM(3, 0, x86RegEnc(dst))
+end 'encodeSetneR'
+
+/// SETL r/m8
+export function encodeSetlR(dst X86Reg)
+if x86RegNeedsRex(dst) 'needsRex'
+emit(0x41 as byte)
+end 'needsRex'
+emit(0x0F as byte)
+emit(0x9C as byte)
+emitModRM(3, 0, x86RegEnc(dst))
+end 'encodeSetlR'
+
+/// SETLE r/m8
+export function encodeSetleR(dst X86Reg)
+if x86RegNeedsRex(dst) 'needsRex'
+emit(0x41 as byte)
+end 'needsRex'
+emit(0x0F as byte)
+emit(0x9E as byte)
+emitModRM(3, 0, x86RegEnc(dst))
+end 'encodeSetleR'
+
+/// SETG r/m8
+export function encodeSetgR(dst X86Reg)
+if x86RegNeedsRex(dst) 'needsRex'
+emit(0x41 as byte)
+end 'needsRex'
+emit(0x0F as byte)
+emit(0x9F as byte)
+emitModRM(3, 0, x86RegEnc(dst))
+end 'encodeSetgR'
+
+/// SETGE r/m8
+export function encodeSetgeR(dst X86Reg)
+if x86RegNeedsRex(dst) 'needsRex'
+emit(0x41 as byte)
+end 'needsRex'
+emit(0x0F as byte)
+emit(0x9D as byte)
+emitModRM(3, 0, x86RegEnc(dst))
+end 'encodeSetgeR'
+
+/// LEA reg64, [base + offset]
+export function encodeLeaRM(dst X86Reg, base X86Reg, offset int)
+emitRex(true, x86RegNeedsRex(dst), false, x86RegNeedsRex(base))
+emit(0x8D as byte)
+
+if offset >= -128 and offset <= 127 'smallOffset'
+emitModRM(1, x86RegEnc(dst), x86RegEnc(base))
+emit(offset as byte)
+end 'smallOffset' else 'largeOffset'
+emitModRM(2, x86RegEnc(dst), x86RegEnc(base))
+emit32(offset)
+end 'largeOffset'
+end 'encodeLeaRM'
+end 'X86Encoder'
+
+/// Fixup for forward references
+export type Fixup
+export var offset int        // offset in code where fixup is needed
+export var label String      // target label name
+export var size int          // size of displacement (1, 2, or 4 bytes)
+export var relative bool     // true if RIP-relative
+
+export static function create(offset int, label String, size int, relative bool) returns Fixup
+return {offset: offset, label: label, size: size, relative: relative}
+end 'create'
+end 'Fixup'
+
+export typealias FixupArray is Array with Fixup

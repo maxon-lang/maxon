@@ -1,0 +1,137 @@
+// Maxon Compiler - Workspace Management (Phase 3)
+// Top-level workspace containing multiple projects
+
+import Project from "project.maxon"
+import CompilationUnit from "unit.maxon"
+
+// ============================================================================
+// Workspace
+// ============================================================================
+
+/// A workspace containing one or more projects
+export type Workspace
+export var rootPath String
+export var projects ProjectArray
+export var activeProject Project?
+
+export static function create(rootPath String) returns Workspace
+return {
+rootPath: rootPath,
+projects: ProjectArray{},
+activeProject: null
+}
+end 'create'
+
+/// Initialize workspace by discovering projects
+export function initialize()
+// Look for Build.maxon files to find projects
+let buildFile = rootPath + "/Build.maxon"
+if File.exists(buildFile) 'hasBuild'
+// This is a project root
+let project = Project.create(Directory.name(rootPath), rootPath)
+project.discoverFiles()
+projects.push(project)
+activeProject = project
+end 'hasBuild' else 'noBuild'
+// Look for projects in subdirectories
+let entries = Directory.list(rootPath)
+for entry in entries 'each'
+let subPath = rootPath + "/" + entry
+if Directory.isDirectory(subPath) 'isDir'
+let subBuildFile = subPath + "/Build.maxon"
+if File.exists(subBuildFile) 'hasSubBuild'
+let project = Project.create(entry, subPath)
+project.discoverFiles()
+projects.push(project)
+end 'hasSubBuild'
+end 'isDir'
+end 'each'
+
+// Set first project as active
+if projects.count() > 0 'hasProjects'
+activeProject = projects[0]
+end 'hasProjects'
+end 'noBuild'
+end 'initialize'
+
+/// Create a single-file workspace (for individual files)
+export static function singleFile(filePath String) returns Workspace
+var ws = Workspace.create(Directory.parent(filePath))
+let project = Project.singleFile(filePath)
+ws.projects.push(project)
+ws.activeProject = project
+return ws
+end 'singleFile'
+
+/// Find a project by name
+export function findProject(name String) returns Project?
+for proj in projects 'each'
+if proj.name == name 'found'
+return proj
+end 'found'
+end 'each'
+return null
+end 'findProject'
+
+/// Find the project containing a file path
+export function findProjectForFile(filePath String) returns Project?
+for proj in projects 'each'
+if filePath.startsWith(proj.rootPath) 'inProject'
+return proj
+end 'inProject'
+end 'each'
+return null
+end 'findProjectForFile'
+
+/// Find a compilation unit by file path
+export function findUnit(filePath String) returns CompilationUnit?
+let project = findProjectForFile(filePath)
+if project != null 'hasProject'
+return project!.findUnit(filePath)
+end 'hasProject'
+return null
+end 'findUnit'
+
+/// Add a project to the workspace
+export function addProject(project Project)
+projects.push(project)
+if activeProject == null 'setActive'
+activeProject = project
+end 'setActive'
+end 'addProject'
+
+/// Remove a project from the workspace
+export function removeProject(name String)
+var newProjects = ProjectArray{}
+for proj in projects 'each'
+if proj.name != name 'keep'
+newProjects.push(proj)
+end 'keep'
+end 'each'
+projects = newProjects
+
+// Update active project if needed
+if activeProject != null and activeProject!.name == name 'wasActive'
+if projects.count() > 0 'hasMore'
+activeProject = projects[0]
+end 'hasMore' else 'noMore'
+activeProject = null
+end 'noMore'
+end 'wasActive'
+end 'removeProject'
+
+/// Get all dirty units across all projects
+export function getAllDirtyUnits() returns CompilationUnitArray
+var result = CompilationUnitArray{}
+for proj in projects 'each'
+let dirty = proj.getDirtyUnits()
+for unit in dirty 'add'
+result.push(unit)
+end 'add'
+end 'each'
+return result
+end 'getAllDirtyUnits'
+end 'Workspace'
+
+export typealias ProjectArray is Array with Project
+import CompilationUnitArray from "unit.maxon"

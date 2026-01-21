@@ -1,0 +1,553 @@
+// Maxon Compiler - AST to HIR Lowering (Stage 3a)
+// Converts AST nodes to HIR with full type information
+// Error-tolerant: generates partial HIR even with syntax errors
+
+// ============================================================================
+// AST to HIR Converter
+// ============================================================================
+
+export type AstToHir
+	var sourceFile String
+	var errors ErrorCollector
+	var currentFunction HirFunction
+	var currentBlock HirBlock
+	var symbolTable HirSymbolTable
+	var tolerant bool                // Continue on errors if true
+
+	export static function init(sourceFile String) returns AstToHir
+		return {sourceFile: sourceFile, errors: ErrorCollector.create(), symbolTable: HirSymbolTable.create(), tolerant: true}
+	end 'init'
+
+	export static function initStrict(sourceFile String) returns AstToHir
+		return {sourceFile: sourceFile, errors: ErrorCollector.create(), symbolTable: HirSymbolTable.create(), tolerant: false}
+	end 'initStrict'
+
+	export function hasErrors() returns bool
+		return errors.hasAnyErrors()
+	end 'hasErrors'
+
+	export function printErrors()
+		errors.printAll()
+	end 'printErrors'
+
+	/// Convert a parsed program to HIR
+	export function convert(program Program) returns HirModule
+		var module = HirModule.create(extractModuleName(sourceFile), sourceFile: sourceFile)
+
+		// First pass: collect all function signatures for forward references
+		for fn in program.functions 'collectFuncs'
+			if not fn.hasError 'valid'
+				let funcType = buildFunctionType(fn)
+				let loc = makeSourceLoc(fn.line, column: fn.column)
+				symbolTable.define(HirSymbol.createFunction(fn.name, type_: funcType, loc: loc, isExported: false))
+			end 'valid'
+		end 'collectFuncs'
+
+		// Second pass: convert function bodies
+		for fn in program.functions 'convertFuncs'
+			let hirFn = convertFunction(fn)
+			module.addFunction(hirFn)
+		end 'convertFuncs'
+
+		return module
+	end 'convert'
+
+	/// Extract module name from file path
+	function extractModuleName(path String) returns String
+		// Simple extraction: use filename without extension
+		// Full implementation would parse the path properly
+		return path.replace(".maxon", "")
+	end 'extractModuleName'
+
+	/// Build a function type from a function declaration
+	function buildFunctionType(fn FunctionDecl) returns HirType
+		var paramTypes = HirTypeArray{}
+		for param in fn.params 'params'
+			paramTypes.push(convertTypeKind(param.typeKind))
+		end 'params'
+		let returnType = convertTypeKind(fn.returnType)
+		return HirType.function_(paramTypes, returnType: returnType)
+	end 'buildFunctionType'
+
+	/// Convert AST TypeKind to HIR type
+	function convertTypeKind(kind TypeKind) returns HirType
+		return match kind 'convert'
+			typeInt gives HirType.int_()
+			typeFloat gives HirType.float_()
+			typeBool gives HirType.bool_()
+			typeByte gives HirType.byte_()
+			typeString gives HirType.string_()
+			typeVoid gives HirType.void_()
+			default gives HirType.unknown()
+		end 'convert'
+	end 'convertTypeKind'
+
+	/// Convert a function declaration to HIR
+	function convertFunction(fn FunctionDecl) returns HirFunction
+		let loc = makeSourceLoc(fn.line, column: fn.column)
+		let returnType = convertTypeKind(fn.returnType)
+
+		currentFunction = HirFunction.create(fn.name, returnType: returnType, loc: loc)
+
+		// Create function-local symbol table
+		let outerSymbols = symbolTable
+		symbolTable = HirSymbolTable.createWithParent(outerSymbols)
+
+		// Add parameters
+		for param in fn.params 'addParams'
+			let paramType = convertTypeKind(param.typeKind)
+			let valueId = currentFunction.addParam(param.name, type_: paramType)
+			let paramLoc = makeSourceLoc(param.line, column: param.column)
+			symbolTable.define(HirSymbol.createParameter(param.name, type_: paramType, valueId: valueId, loc: paramLoc))
+		end 'addParams'
+
+		// Create entry block
+		currentBlock = currentFunction.newBlock("entry")
+
+		// Convert function body
+		for stmt in fn.body 'convertBody'
+			if not stmt.hasError 'valid'
+				convertStatement(stmt)
+			end 'valid' else 'hasError'
+				currentFunction.hasError = true
+			end 'hasError'
+		end 'convertBody'
+
+		// Restore outer symbol table
+		symbolTable = outerSymbols
+
+		// Check for missing return
+		if returnType.kind != HirTypeKind.hirVoid 'needsReturn'
+			// TODO: check if all paths return a value
+		end 'needsReturn'
+
+		return currentFunction
+	end 'convertFunction'
+
+	/// Convert a statement to HIR
+	function convertStatement(stmt Stmt)
+		match stmt.kind 'dispatch'
+		returnStmt then convertReturnStmt(stmt)
+		letStmt then convertLetStmt(stmt)
+		varStmt then convertVarStmt(stmt)
+		assignStmt then convertAssignStmt(stmt)
+		ifStmt then convertIfStmt(stmt)
+		whileStmt then convertWhileStmt(stmt)
+		breakStmt then convertBreakStmt(stmt)
+		continueStmt then convertContinueStmt(stmt)
+		exprStmt then convertExprStmt(stmt)
+		errorStmt then currentFunction.hasError = true
+		default then currentFunction.hasError = true
+		end 'dispatch'
+	end 'convertStatement'
+
+	/// Convert a return statement
+	function convertReturnStmt(stmt Stmt)
+		let loc = makeSourceLoc(stmt.line, column: stmt.column)
+
+		if stmt.expr.kind == ExprKind.errorExpr 'noValue'
+			// Return without value (or error)
+			let instr = HirInstruction.createReturn(HirValueId.invalid(), type_: currentFunction.returnType, loc: loc)
+			currentBlock.addInstruction(instr)
+		end 'noValue' else 'hasValue'
+			let valueId = convertExpression(stmt.expr)
+			let instr = HirInstruction.createReturn(valueId, type_: currentFunction.returnType, loc: loc)
+			currentBlock.addInstruction(instr)
+		end 'hasValue'
+	end 'convertReturnStmt'
+
+	/// Convert a let statement (immutable variable)
+	function convertLetStmt(stmt Stmt)
+		let loc = makeSourceLoc(stmt.line, column: stmt.column)
+
+		// Determine type from annotation or expression
+		var varType = convertTypeKind(stmt.typeKind)
+		if varType.kind == HirTypeKind.hirUnknown 'inferType'
+			varType = inferExprType(stmt.expr)
+		end 'inferType'
+
+		// Create alloca for the variable
+		let allocaId = currentFunction.addLocal(stmt.name, type_: varType, isMutable: false, loc: loc)
+
+		// Convert initializer expression
+		let valueId = convertExpression(stmt.expr)
+
+		// Store value
+		let storeInstr = HirInstruction.createStore(allocaId, value: valueId, loc: loc)
+		currentBlock.addInstruction(storeInstr)
+
+		// Add to symbol table
+		symbolTable.define(HirSymbol.createVariable(stmt.name, type_: varType, valueId: allocaId, loc: loc))
+	end 'convertLetStmt'
+
+	/// Convert a var statement (mutable variable)
+	function convertVarStmt(stmt Stmt)
+		let loc = makeSourceLoc(stmt.line, column: stmt.column)
+
+		// Determine type from annotation or expression
+		var varType = convertTypeKind(stmt.typeKind)
+		if varType.kind == HirTypeKind.hirUnknown 'inferType'
+			varType = inferExprType(stmt.expr)
+		end 'inferType'
+
+		// Create alloca for the variable
+		let allocaId = currentFunction.addLocal(stmt.name, type_: varType, isMutable: true, loc: loc)
+
+		// Convert initializer expression
+		let valueId = convertExpression(stmt.expr)
+
+		// Store value
+		let storeInstr = HirInstruction.createStore(allocaId, value: valueId, loc: loc)
+		currentBlock.addInstruction(storeInstr)
+
+		// Add to symbol table
+		symbolTable.define(HirSymbol.createVariable(stmt.name, type_: varType, valueId: allocaId, loc: loc))
+	end 'convertVarStmt'
+
+	/// Convert an assignment statement
+	function convertAssignStmt(stmt Stmt)
+		let loc = makeSourceLoc(stmt.line, column: stmt.column)
+
+		// Look up the variable
+		if let symbol = try symbolTable.lookup(stmt.name) 'found'
+			// Check mutability
+			if symbol.kind == SymbolKind.symbolVariable 'isVar'
+				if let local = try currentFunction.findLocal(stmt.name) 'foundLocal'
+					if not local.isMutable 'immutable'
+						error(ErrorCode.E3007, message: "cannot assign to immutable variable '{stmt.name}'", line: stmt.line, column: stmt.column)
+					end 'immutable'
+				end 'foundLocal'
+			end 'isVar'
+
+			// Convert RHS expression
+			let valueId = convertExpression(stmt.expr)
+
+			// Store value
+			let storeInstr = HirInstruction.createStore(symbol.valueId, value: valueId, loc: loc)
+			currentBlock.addInstruction(storeInstr)
+		end 'found' else 'notFound'
+			error(ErrorCode.E3001, message: "undefined variable '{stmt.name}'", line: stmt.line, column: stmt.column)
+		end 'notFound'
+	end 'convertAssignStmt'
+
+	/// Convert an if statement
+	function convertIfStmt(stmt Stmt)
+		let loc = makeSourceLoc(stmt.line, column: stmt.column)
+
+		// Convert condition
+		let condId = convertExpression(stmt.condition)
+
+		// Create blocks for then, else, and merge
+		let thenBlock = currentFunction.newBlock("then")
+		let mergeBlock = currentFunction.newBlock("merge")
+
+		var elseBlock = mergeBlock
+		if stmt.elseBranch.count() > 0 'hasElse'
+			elseBlock = currentFunction.newBlock("else")
+		end 'hasElse'
+
+		// Add conditional branch
+		let branchInstr = HirInstruction.createCondBranch(condId, thenTarget: HirValueId.create(thenBlock.id), elseTarget: HirValueId.create(elseBlock.id), loc: loc)
+		currentBlock.addInstruction(branchInstr)
+
+		// Convert then branch
+		currentBlock = thenBlock
+		for s in stmt.thenBranch 'thenBody'
+			if not s.hasError 'valid'
+				convertStatement(s)
+			end 'valid'
+		end 'thenBody'
+		// Branch to merge
+		let thenToMerge = HirInstruction.createBranch(HirValueId.create(mergeBlock.id), loc: loc)
+		currentBlock.addInstruction(thenToMerge)
+
+		// Convert else branch
+		if stmt.elseBranch.count() > 0 'hasElse2'
+			currentBlock = elseBlock
+			for s in stmt.elseBranch 'elseBody'
+				if not s.hasError 'valid'
+					convertStatement(s)
+				end 'valid'
+			end 'elseBody'
+			// Branch to merge
+			let elseToMerge = HirInstruction.createBranch(HirValueId.create(mergeBlock.id), loc: loc)
+			currentBlock.addInstruction(elseToMerge)
+		end 'hasElse2'
+
+		// Continue in merge block
+		currentBlock = mergeBlock
+	end 'convertIfStmt'
+
+	/// Convert a while statement
+	function convertWhileStmt(stmt Stmt)
+		let loc = makeSourceLoc(stmt.line, column: stmt.column)
+
+		// Create blocks for condition, body, and exit
+		let condBlock = currentFunction.newBlock("while.cond")
+		let bodyBlock = currentFunction.newBlock("while.body")
+		let exitBlock = currentFunction.newBlock("while.exit")
+
+		// Branch to condition block
+		let toCondInstr = HirInstruction.createBranch(HirValueId.create(condBlock.id), loc: loc)
+		currentBlock.addInstruction(toCondInstr)
+
+		// Convert condition
+		currentBlock = condBlock
+		let condId = convertExpression(stmt.condition)
+		let branchInstr = HirInstruction.createCondBranch(condId, thenTarget: HirValueId.create(bodyBlock.id), elseTarget: HirValueId.create(exitBlock.id), loc: loc)
+		currentBlock.addInstruction(branchInstr)
+
+		// Convert body
+		currentBlock = bodyBlock
+		for s in stmt.body 'bodyLoop'
+			if not s.hasError 'valid'
+				convertStatement(s)
+			end 'valid'
+		end 'bodyLoop'
+		// Loop back to condition
+		let backToCondInstr = HirInstruction.createBranch(HirValueId.create(condBlock.id), loc: loc)
+		currentBlock.addInstruction(backToCondInstr)
+
+		// Continue in exit block
+		currentBlock = exitBlock
+	end 'convertWhileStmt'
+
+	/// Convert a break statement
+	function convertBreakStmt(stmt Stmt)
+		let loc = makeSourceLoc(stmt.line, column: stmt.column)
+		// TODO: find the target loop's exit block based on label
+		// For now, create placeholder
+		currentFunction.hasError = true
+	end 'convertBreakStmt'
+
+	/// Convert a continue statement
+	function convertContinueStmt(stmt Stmt)
+		let loc = makeSourceLoc(stmt.line, column: stmt.column)
+		// TODO: find the target loop's condition block based on label
+		// For now, create placeholder
+		currentFunction.hasError = true
+	end 'convertContinueStmt'
+
+	/// Convert an expression statement
+	function convertExprStmt(stmt Stmt)
+		// Evaluate expression for side effects
+		convertExpression(stmt.expr)
+	end 'convertExprStmt'
+
+	/// Convert an expression to HIR, returns the value ID of the result
+	function convertExpression(expr Expr) returns HirValueId
+		let loc = makeSourceLoc(expr.line, column: expr.column)
+
+		return match expr.kind 'dispatch'
+			intLiteral gives convertIntLiteral(expr, loc: loc)
+			floatLiteral gives convertFloatLiteral(expr, loc: loc)
+			boolLiteral gives convertBoolLiteral(expr, loc: loc)
+			stringLiteral gives convertStringLiteral(expr, loc: loc)
+			identifier gives convertIdentifier(expr, loc: loc)
+			binaryOp gives convertBinaryOp(expr, loc: loc)
+			unaryOp gives convertUnaryOp(expr, loc: loc)
+			call gives convertCall(expr, loc: loc)
+			errorExpr gives HirValueId.invalid()
+			default gives HirValueId.invalid()
+		end 'dispatch'
+	end 'convertExpression'
+
+	function convertIntLiteral(expr Expr, loc HirSourceLoc) returns HirValueId
+		let id = currentFunction.newValueId()
+		let instr = HirInstruction.createConstInt(id, value: expr.intValue, loc: loc)
+		currentBlock.addInstruction(instr)
+		return id
+	end 'convertIntLiteral'
+
+	function convertFloatLiteral(expr Expr, loc HirSourceLoc) returns HirValueId
+		let id = currentFunction.newValueId()
+		let instr = HirInstruction.createConstFloat(id, value: expr.floatValue, loc: loc)
+		currentBlock.addInstruction(instr)
+		return id
+	end 'convertFloatLiteral'
+
+	function convertBoolLiteral(expr Expr, loc HirSourceLoc) returns HirValueId
+		let id = currentFunction.newValueId()
+		let instr = HirInstruction.createConstBool(id, value: expr.boolValue, loc: loc)
+		currentBlock.addInstruction(instr)
+		return id
+	end 'convertBoolLiteral'
+
+	function convertStringLiteral(expr Expr, loc HirSourceLoc) returns HirValueId
+		let id = currentFunction.newValueId()
+		let instr = HirInstruction.createConstString(id, value: expr.stringValue, loc: loc)
+		currentBlock.addInstruction(instr)
+		return id
+	end 'convertStringLiteral'
+
+	function convertIdentifier(expr Expr, loc HirSourceLoc) returns HirValueId
+		// Look up the variable
+		if let symbol = try symbolTable.lookup(expr.stringValue) 'found'
+			// Load the value
+			let id = currentFunction.newValueId()
+			let instr = HirInstruction.createLoad(id, type_: symbol.type_, addr: symbol.valueId, loc: loc)
+			currentBlock.addInstruction(instr)
+			return id
+		end 'found' else 'notFound'
+			error(ErrorCode.E3001, message: "undefined variable '{expr.stringValue}'", line: expr.line, column: expr.column)
+			return HirValueId.invalid()
+		end 'notFound'
+	end 'convertIdentifier'
+
+	function convertBinaryOp(expr Expr, loc HirSourceLoc) returns HirValueId
+		let leftId = convertExpression(expr.left)
+		let rightId = convertExpression(expr.right)
+
+		// Determine result type and HIR opcode
+		let leftType = inferExprType(expr.left)
+		let rightType = inferExprType(expr.right)
+		var resultType = leftType
+
+		let opcode = match expr.op 'mapOp'
+			add gives HirOpcode.hirAdd
+			subtract gives HirOpcode.hirSub
+			multiply gives HirOpcode.hirMul
+			divide gives HirOpcode.hirDiv
+			modulo gives HirOpcode.hirMod
+			equal gives HirOpcode.hirEq
+			notEqual gives HirOpcode.hirNe
+			less gives HirOpcode.hirLt
+			lessEqual gives HirOpcode.hirLe
+			greater gives HirOpcode.hirGt
+			greaterEqual gives HirOpcode.hirGe
+			logicalAnd gives HirOpcode.hirAnd
+			logicalOr gives HirOpcode.hirOr
+			default gives HirOpcode.hirError
+		end 'mapOp'
+
+		// Comparison operators return bool
+		if expr.op == BinaryOp.equal or expr.op == BinaryOp.notEqual or expr.op == BinaryOp.less or expr.op == BinaryOp.lessEqual or expr.op == BinaryOp.greater or expr.op == BinaryOp.greaterEqual 'isComparison'
+			resultType = HirType.bool_()
+		end 'isComparison'
+
+		// Logical operators require and return bool
+		if expr.op == BinaryOp.logicalAnd or expr.op == BinaryOp.logicalOr 'isLogical'
+			resultType = HirType.bool_()
+		end 'isLogical'
+
+		let id = currentFunction.newValueId()
+		let instr = HirInstruction.createBinary(id, opcode: opcode, type_: resultType, left: leftId, right: rightId, loc: loc)
+		currentBlock.addInstruction(instr)
+		return id
+	end 'convertBinaryOp'
+
+	function convertUnaryOp(expr Expr, loc HirSourceLoc) returns HirValueId
+		let operandId = convertExpression(expr.left)
+
+		let opcode = match expr.unaryOp 'mapOp'
+			negate gives HirOpcode.hirNeg
+			logicalNot gives HirOpcode.hirNot
+			default gives HirOpcode.hirError
+		end 'mapOp'
+
+		let resultType = inferExprType(expr.left)
+
+		let id = currentFunction.newValueId()
+		let instr = HirInstruction.createUnary(id, opcode: opcode, type_: resultType, operand: operandId, loc: loc)
+		currentBlock.addInstruction(instr)
+		return id
+	end 'convertUnaryOp'
+
+	function convertCall(expr Expr, loc HirSourceLoc) returns HirValueId
+		// Get function name from callee expression
+		var funcName = ""
+		if expr.left.kind == ExprKind.identifier 'isIdent'
+			funcName = expr.left.stringValue
+		end 'isIdent'
+
+		// Convert arguments
+		var argIds = HirValueIdArray{}
+		for arg in expr.args 'convertArgs'
+			let argId = convertExpression(arg)
+			argIds.push(argId)
+		end 'convertArgs'
+
+		// Look up function to get return type
+		var returnType = HirType.void_()
+		if let symbol = try symbolTable.lookup(funcName) 'found'
+			if symbol.type_.kind == HirTypeKind.hirFunction 'isFunc'
+				returnType = symbol.type_.returnType
+			end 'isFunc'
+		end 'found' else 'notFound'
+			// Built-in function or external (print, etc.)
+			// For now, assume void return
+		end 'notFound'
+
+		let id = currentFunction.newValueId()
+		let instr = HirInstruction.createCall(id, funcName: funcName, args: argIds, returnType: returnType, loc: loc)
+		currentBlock.addInstruction(instr)
+		return id
+	end 'convertCall'
+
+	/// Infer the type of an expression
+	function inferExprType(expr Expr) returns HirType
+		return match expr.kind 'infer'
+			intLiteral gives HirType.int_()
+			floatLiteral gives HirType.float_()
+			boolLiteral gives HirType.bool_()
+			stringLiteral gives HirType.string_()
+			charLiteral gives HirType.string_()  // char literal is a String type in Maxon
+			identifier gives inferIdentifierType(expr)
+			binaryOp gives inferBinaryOpType(expr)
+			unaryOp gives inferUnaryOpType(expr)
+			call gives inferCallType(expr)
+			errorExpr gives HirType.unknown()
+			default gives HirType.unknown()
+		end 'infer'
+	end 'inferExprType'
+
+	function inferIdentifierType(expr Expr) returns HirType
+		if let symbol = try symbolTable.lookup(expr.stringValue) 'found'
+			return symbol.type_
+		end 'found'
+		return HirType.unknown()
+	end 'inferIdentifierType'
+
+	function inferBinaryOpType(expr Expr) returns HirType
+		// Comparison operators return bool
+		if expr.op == BinaryOp.equal or expr.op == BinaryOp.notEqual or expr.op == BinaryOp.less or expr.op == BinaryOp.lessEqual or expr.op == BinaryOp.greater or expr.op == BinaryOp.greaterEqual 'isComparison'
+			return HirType.bool_()
+		end 'isComparison'
+
+		// Logical operators return bool
+		if expr.op == BinaryOp.logicalAnd or expr.op == BinaryOp.logicalOr 'isLogical'
+			return HirType.bool_()
+		end 'isLogical'
+
+		// Arithmetic operators return the type of the operands
+		return inferExprType(expr.left)
+	end 'inferBinaryOpType'
+
+	function inferUnaryOpType(expr Expr) returns HirType
+		if expr.unaryOp == UnaryOp.logicalNot 'isNot'
+			return HirType.bool_()
+		end 'isNot'
+		return inferExprType(expr.left)
+	end 'inferUnaryOpType'
+
+	function inferCallType(expr Expr) returns HirType
+		if expr.left.kind == ExprKind.identifier 'isIdent'
+			if let symbol = try symbolTable.lookup(expr.left.stringValue) 'found'
+				if symbol.type_.kind == HirTypeKind.hirFunction 'isFunc'
+					return symbol.type_.returnType
+				end 'isFunc'
+			end 'found'
+		end 'isIdent'
+		return HirType.unknown()
+	end 'inferCallType'
+
+	/// Create a source location from line and column
+	function makeSourceLoc(line int, column int) returns HirSourceLoc
+		return HirSourceLoc.create(sourceFile, line: line, column: column)
+	end 'makeSourceLoc'
+
+	/// Report an error
+	function error(code ErrorCode, message String, line int, column int)
+		errors.addErrorAt(code, message: message, file: sourceFile, line: line, column: column)
+	end 'error'
+end 'AstToHir'

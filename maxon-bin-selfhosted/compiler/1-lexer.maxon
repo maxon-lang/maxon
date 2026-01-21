@@ -2,18 +2,68 @@
 // Tokenizes source code into a stream of tokens
 
 export enum TokenType
-	function
-	returns
-	return
-	end
-	int
+	// Keywords
+	keywordFunction
+	keywordReturns
+	keywordReturn
+	keywordEnd
+	keywordInt
+	keywordFloat
+	keywordBool
+	keywordByte
+	keywordString
+	keywordLet
+	keywordVar
+	keywordIf
+	keywordElse
+	keywordWhile
+	keywordFor
+	keywordBreak
+	keywordContinue
+	keywordTrue
+	keywordFalse
+	keywordAnd
+	keywordOr
+	keywordNot
+	keywordMod
+	keywordIn
+	keywordExport
+
+	// Literals
 	identifier
 	integer
+	float
+	string
 	charLiteral
+
+	// Operators
+	plus
+	minus
+	star
+	slash
+	assign
+	equalEqual
+	notEqual
+	less
+	lessEqual
+	greater
+	greaterEqual
+	comma
+	colon
+	dot
+
+	// Delimiters
 	lparen
 	rparen
+	lbrace
+	rbrace
+	lbracket
+	rbracket
+
+	// Special
 	newline
 	eof
+	errorToken    // For error-tolerant lexing
 end 'TokenType'
 
 export enum KeywordCategory
@@ -34,10 +84,18 @@ end 'KeywordInfo'
 typealias TokenTypeMap is Map with (TokenType, KeywordInfo)
 
 export let keyword_map = [
-	TokenType.function: KeywordInfo{text: "function", category: KeywordCategory.other, description: "Declares a function. Functions contain executable code and can return values.", requiresLabel: false},
-	TokenType.returns: KeywordInfo{text: "returns", category: KeywordCategory.other, description: "Specifies the return type of a function.", requiresLabel: false},
-	TokenType.return: KeywordInfo{text: "return", category: KeywordCategory.control, description: "Returns a value from a function and exits the function.", requiresLabel: false},
-	TokenType.end: KeywordInfo{text: "end", category: KeywordCategory.control, description: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", requiresLabel: true}
+	TokenType.keywordFunction: KeywordInfo{text: "function", category: KeywordCategory.other, description: "Declares a function.", requiresLabel: false},
+	TokenType.keywordReturns: KeywordInfo{text: "returns", category: KeywordCategory.other, description: "Specifies the return type of a function.", requiresLabel: false},
+	TokenType.keywordReturn: KeywordInfo{text: "return", category: KeywordCategory.control, description: "Returns a value from a function.", requiresLabel: false},
+	TokenType.keywordEnd: KeywordInfo{text: "end", category: KeywordCategory.control, description: "Ends a block.", requiresLabel: true},
+	TokenType.keywordLet: KeywordInfo{text: "let", category: KeywordCategory.other, description: "Declares an immutable variable.", requiresLabel: false},
+	TokenType.keywordVar: KeywordInfo{text: "var", category: KeywordCategory.other, description: "Declares a mutable variable.", requiresLabel: false},
+	TokenType.keywordIf: KeywordInfo{text: "if", category: KeywordCategory.control, description: "Conditional statement.", requiresLabel: true},
+	TokenType.keywordElse: KeywordInfo{text: "else", category: KeywordCategory.control, description: "Alternative branch.", requiresLabel: false},
+	TokenType.keywordWhile: KeywordInfo{text: "while", category: KeywordCategory.control, description: "Loop statement.", requiresLabel: true},
+	TokenType.keywordFor: KeywordInfo{text: "for", category: KeywordCategory.control, description: "Iterator loop.", requiresLabel: true},
+	TokenType.keywordBreak: KeywordInfo{text: "break", category: KeywordCategory.control, description: "Exit a loop.", requiresLabel: false},
+	TokenType.keywordContinue: KeywordInfo{text: "continue", category: KeywordCategory.control, description: "Skip to next iteration.", requiresLabel: false}
 ]
 
 /// A single token with type, text, and position
@@ -83,11 +141,26 @@ export type Lexer
 			'\n' then tokens.push(scanNewline())
 			'(' then tokens.push(scanSingleChar(TokenType.lparen, text: "("))
 			')' then tokens.push(scanSingleChar(TokenType.rparen, text: ")"))
-			'\'' then tokens.push(scanCharLiteral())
+			'{' then tokens.push(scanSingleChar(TokenType.lbrace, text: "\{"))
+			'}' then tokens.push(scanSingleChar(TokenType.rbrace, text: "}"))
+			'[' then tokens.push(scanSingleChar(TokenType.lbracket, text: "["))
+			']' then tokens.push(scanSingleChar(TokenType.rbracket, text: "]"))
+			',' then tokens.push(scanSingleChar(TokenType.comma, text: ","))
+			':' then tokens.push(scanSingleChar(TokenType.colon, text: ":"))
+			'.' then tokens.push(scanSingleChar(TokenType.dot, text: "."))
+			'+' then tokens.push(scanSingleChar(TokenType.plus, text: "+"))
+			'-' then tokens.push(scanSingleChar(TokenType.minus, text: "-"))
+			'*' then tokens.push(scanSingleChar(TokenType.star, text: "*"))
 			'/' then scanSlashOrComment(tokens)
+			'=' then scanEquals(tokens)
+			'!' then scanBang(tokens)
+			'<' then scanLess(tokens)
+			'>' then scanGreater(tokens)
+			'\'' then tokens.push(scanCharLiteral())
+			'"' then tokens.push(scanString())
 			'0'..='9' then tokens.push(scanNumber())
 			'a'..='z' or 'A'..='Z' or '_' then tokens.push(scanIdentifierOrKeyword())
-			default then reportInvalidChar()
+			default then tokens.push(scanErrorToken())
 			end 'dispatch'
 		end 'mainLoop'
 
@@ -96,10 +169,12 @@ export type Lexer
 		return tokens
 	end 'tokenize'
 
-	function reportInvalidChar()
+	function scanErrorToken() returns Token
+		let tok = makeToken(TokenType.errorToken, text: "")
 		errors.addErrorAt(ErrorCode.E1001, message: "invalid character", file: sourceFile, line: line, column: column)
 		advance()
-	end 'reportInvalidChar'
+		return tok
+	end 'scanErrorToken'
 
 	function scanNewline() returns Token
 		let tok = makeToken(TokenType.newline, text: "\n")
@@ -119,10 +194,78 @@ export type Lexer
 		if peekNext() == '/' 'isComment'
 			skipToEndOfLine()
 		end 'isComment' else 'notComment'
-			// Future: tokens.push(scanSingleChar(TokenType.slash, text: "/"))
-			advance()
+			tokens.push(scanSingleChar(TokenType.slash, text: "/"))
 		end 'notComment'
 	end 'scanSlashOrComment'
+
+	function scanEquals(tokens TokenArray)
+		if peekNext() == '=' 'isEqualEqual'
+			let tok = makeToken(TokenType.equalEqual, text: "==")
+			advance()
+			advance()
+			tokens.push(tok)
+		end 'isEqualEqual' else 'isAssign'
+			tokens.push(scanSingleChar(TokenType.assign, text: "="))
+		end 'isAssign'
+	end 'scanEquals'
+
+	function scanBang(tokens TokenArray)
+		if peekNext() == '=' 'isNotEqual'
+			let tok = makeToken(TokenType.notEqual, text: "!=")
+			advance()
+			advance()
+			tokens.push(tok)
+		end 'isNotEqual' else 'error'
+			// Bare ! is not valid - 'not' is the keyword
+			tokens.push(scanErrorToken())
+		end 'error'
+	end 'scanBang'
+
+	function scanLess(tokens TokenArray)
+		if peekNext() == '=' 'isLessEqual'
+			let tok = makeToken(TokenType.lessEqual, text: "<=")
+			advance()
+			advance()
+			tokens.push(tok)
+		end 'isLessEqual' else 'isLess'
+			tokens.push(scanSingleChar(TokenType.less, text: "<"))
+		end 'isLess'
+	end 'scanLess'
+
+	function scanGreater(tokens TokenArray)
+		if peekNext() == '=' 'isGreaterEqual'
+			let tok = makeToken(TokenType.greaterEqual, text: ">=")
+			advance()
+			advance()
+			tokens.push(tok)
+		end 'isGreaterEqual' else 'isGreater'
+			tokens.push(scanSingleChar(TokenType.greater, text: ">"))
+		end 'isGreater'
+	end 'scanGreater'
+
+	function scanString() returns Token
+		let startCol = column
+		let startLine = line
+		advance()  // skip opening "
+		let textStart = pos
+		while not isAtEnd() and peek() != '"' and peek() != '\n' 'collectChars'
+			if peek() == '\\' 'isEscape'
+				advance()  // skip backslash
+				if not isAtEnd() 'hasEscaped'
+					advance()  // skip escaped char
+				end 'hasEscaped'
+			end 'isEscape' else 'normalChar'
+				advance()
+			end 'normalChar'
+		end 'collectChars'
+		let text = extractSubstring(textStart, endPos: pos)
+		if not isAtEnd() and peek() == '"' 'hasClose'
+			advance()  // skip closing "
+		end 'hasClose' else 'noClose'
+			errors.addErrorAt(ErrorCode.E1002, message: "unterminated string literal", file: sourceFile, line: startLine, column: startCol)
+		end 'noClose'
+		return Token.create(TokenType.string, text: text, line: startLine, column: startCol)
+	end 'scanString'
 
 	function isAtEnd() returns bool
 		return pos >= source.byteLength()
@@ -210,6 +353,17 @@ export type Lexer
 		while not isAtEnd() and isDigit(peek()) 'digits'
 			advance()
 		end 'digits'
+
+		// Check for decimal point (float)
+		if peek() == '.' and isDigit(peekNext()) 'isFloat'
+			advance()  // consume the dot
+			while not isAtEnd() and isDigit(peek()) 'fracDigits'
+				advance()
+			end 'fracDigits'
+			let text = extractSubstring(startPos, endPos: pos)
+			return Token.create(TokenType.float, text: text, line: line, column: startCol)
+		end 'isFloat'
+
 		let text = extractSubstring(startPos, endPos: pos)
 		return Token.create(TokenType.integer, text: text, line: line, column: startCol)
 	end 'scanNumber'
@@ -252,7 +406,27 @@ export type Lexer
 			"returns" gives TokenType.keywordReturns
 			"return" gives TokenType.keywordReturn
 			"end" gives TokenType.keywordEnd
+			"let" gives TokenType.keywordLet
+			"var" gives TokenType.keywordVar
+			"if" gives TokenType.keywordIf
+			"else" gives TokenType.keywordElse
+			"while" gives TokenType.keywordWhile
+			"for" gives TokenType.keywordFor
+			"break" gives TokenType.keywordBreak
+			"continue" gives TokenType.keywordContinue
+			"true" gives TokenType.keywordTrue
+			"false" gives TokenType.keywordFalse
+			"and" gives TokenType.keywordAnd
+			"or" gives TokenType.keywordOr
+			"not" gives TokenType.keywordNot
+			"mod" gives TokenType.keywordMod
+			"in" gives TokenType.keywordIn
+			"export" gives TokenType.keywordExport
 			"int" gives TokenType.keywordInt
+			"float" gives TokenType.keywordFloat
+			"bool" gives TokenType.keywordBool
+			"byte" gives TokenType.keywordByte
+			"String" gives TokenType.keywordString
 			default gives TokenType.identifier
 		end 'keyword'
 	end 'getKeywordType'

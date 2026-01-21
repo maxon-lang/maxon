@@ -1,0 +1,192 @@
+// Maxon Compiler - Project Infrastructure (Phase 3)
+// Defines Workspace, Project, and CompilationUnit types
+
+// ============================================================================
+// Compilation Unit
+// ============================================================================
+
+/// A single source file being compiled
+export type CompilationUnit
+export var path String               // absolute file path
+export var content String            // source code content
+export var version int               // version for incremental compilation
+export var isDirty bool              // needs recompilation
+export var namespace_ String         // derived namespace from path
+export var exports SymbolArray       // exported symbols
+export var imports ImportArray       // imported dependencies
+export var errors ErrorArray         // compilation errors
+export var ast AstModule?            // parsed AST (null if parse failed)
+export var hir HirModule?            // HIR representation
+export var lir LirModule?            // LIR representation
+
+export static function create(path String) returns CompilationUnit
+return {
+path: path,
+content: "",
+version: 0,
+isDirty: true,
+namespace_: deriveNamespace(path),
+exports: SymbolArray{},
+imports: ImportArray{},
+errors: ErrorArray{},
+ast: null,
+hir: null,
+lir: null
+}
+end 'create'
+
+/// Load content from file
+export function load() returns bool
+let result = File.read(path)
+if result.isOk() 'success'
+content = result.ok()!
+version = version + 1
+isDirty = true
+return true
+end 'success'
+return false
+end 'load'
+
+/// Update content (for LSP)
+export function updateContent(newContent String)
+content = newContent
+version = version + 1
+isDirty = true
+// Clear cached compilation artifacts
+ast = null
+hir = null
+lir = null
+end 'updateContent'
+
+/// Mark as clean after compilation
+export function markClean()
+isDirty = false
+end 'markClean'
+
+/// Check if this unit exports a symbol
+export function hasExport(name String) returns bool
+for sym in exports 'each'
+if sym.name == name 'found'
+return true
+end 'found'
+end 'each'
+return false
+end 'hasExport'
+end 'CompilationUnit'
+
+export typealias CompilationUnitArray is Array with CompilationUnit
+
+/// Derive namespace from file path
+function deriveNamespace(path String) returns String
+// Extract relative path from project root
+// e.g., "src/utils/string.maxon" -> "utils.string"
+var result = path
+
+// Remove file extension
+if result.endsWith(".maxon") 'hasExt'
+result = result.slice(0, result.byteLen() - 6)
+end 'hasExt'
+
+// Replace path separators with dots
+result = result.replace("/", ".").replace("\\", ".")
+
+// Remove leading "src." if present
+if result.startsWith("src.") 'hasSrc'
+result = result.slice(4, result.byteLen())
+end 'hasSrc'
+
+return result
+end 'deriveNamespace'
+
+// ============================================================================
+// Export Symbol
+// ============================================================================
+
+/// An exported symbol from a compilation unit
+export type ExportSymbol
+export var name String
+export var kind SymbolKind
+export var unit CompilationUnit ref
+
+export static function create(name String, kind SymbolKind, unit CompilationUnit ref) returns ExportSymbol
+return {name: name, kind: kind, unit: unit}
+end 'create'
+end 'ExportSymbol'
+
+export enum SymbolKind
+function_
+type_
+variable
+constant
+enum_
+end 'SymbolKind'
+
+export typealias SymbolArray is Array with ExportSymbol
+
+// ============================================================================
+// Import
+// ============================================================================
+
+/// An import dependency
+export type ImportDep
+export var name String           // imported symbol name
+export var source String         // source module path or name
+export var alias String?         // optional alias
+
+export static function create(name String, source String) returns ImportDep
+return {name: name, source: source, alias: null}
+end 'create'
+end 'ImportDep'
+
+export typealias ImportArray is Array with ImportDep
+
+// ============================================================================
+// Compilation Error
+// ============================================================================
+
+/// A compilation error
+export type CompilationError
+export var message String
+export var line int
+export var column int
+export var severity ErrorSeverity
+
+export static function create(message String, line int, column int, severity ErrorSeverity) returns CompilationError
+return {message: message, line: line, column: column, severity: severity}
+end 'create'
+end 'CompilationError'
+
+export enum ErrorSeverity
+error
+warning
+info
+hint
+end 'ErrorSeverity'
+
+export typealias ErrorArray is Array with CompilationError
+
+// ============================================================================
+// Forward declarations for AST/HIR/LIR modules
+// ============================================================================
+
+// These types are defined in their respective modules
+// For now, use opaque references
+
+export type AstModule
+export var stmts Array with Stmt
+export var hasError bool
+end 'AstModule'
+
+export type HirModule
+export var functions HirFunctionArray
+export var types HirTypeDefArray
+end 'HirModule'
+
+export type LirModule
+export var functions LirFunctionArray
+end 'LirModule'
+
+// Placeholder arrays - actual types defined in 3-hir.maxon and 5-lir.maxon
+export typealias HirFunctionArray is Array with any
+export typealias HirTypeDefArray is Array with any
+export typealias LirFunctionArray is Array with any

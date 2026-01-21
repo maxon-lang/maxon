@@ -1,0 +1,350 @@
+// Maxon Compiler - Project Management (Phase 3)
+// Manages a collection of source files in a project
+
+import CompilationUnit, CompilationUnitArray from "unit.maxon"
+
+// ============================================================================
+// Project
+// ============================================================================
+
+/// A Maxon project (collection of source files with shared configuration)
+export type Project
+export var name String
+export var rootPath String
+export var units CompilationUnitArray
+export var config ProjectConfig
+export var globalSymbols GlobalSymbolTable
+export var dependencyGraph DependencyGraph
+
+export static function create(name String, rootPath String) returns Project
+return {
+name: name,
+rootPath: rootPath,
+units: CompilationUnitArray{},
+config: ProjectConfig.default_(),
+globalSymbols: GlobalSymbolTable.create(),
+dependencyGraph: DependencyGraph.create()
+}
+end 'create'
+
+/// Create a single-file project
+export static function singleFile(filePath String) returns Project
+var project = Project.create("single-file", Directory.parent(filePath))
+let unit = CompilationUnit.create(filePath)
+project.units.push(unit)
+return project
+end 'singleFile'
+
+/// Discover all source files in the project
+export function discoverFiles()
+let srcPath = rootPath + "/src"
+discoverFilesInDir(srcPath)
+end 'discoverFiles'
+
+/// Recursively discover files in a directory
+function discoverFilesInDir(dirPath String)
+let entries = Directory.list(dirPath)
+for entry in entries 'each'
+let fullPath = dirPath + "/" + entry
+if entry.endsWith(".maxon") 'isMaxon'
+// Add as compilation unit
+let unit = CompilationUnit.create(fullPath)
+units.push(unit)
+end 'isMaxon' else if Directory.isDirectory(fullPath) 'isDir'
+// Recurse into subdirectory
+discoverFilesInDir(fullPath)
+end 'isDir'
+end 'each'
+end 'discoverFilesInDir'
+
+/// Find a compilation unit by path
+export function findUnit(path String) returns CompilationUnit?
+for unit in units 'each'
+if unit.path == path 'found'
+return unit
+end 'found'
+end 'each'
+return null
+end 'findUnit'
+
+/// Find a compilation unit by namespace
+export function findUnitByNamespace(ns String) returns CompilationUnit?
+for unit in units 'each'
+if unit.namespace_ == ns 'found'
+return unit
+end 'found'
+end 'each'
+return null
+end 'findUnitByNamespace'
+
+/// Add a new file to the project
+export function addFile(path String) returns CompilationUnit
+let existing = findUnit(path)
+if existing != null 'exists'
+return existing!
+end 'exists'
+
+let unit = CompilationUnit.create(path)
+units.push(unit)
+return unit
+end 'addFile'
+
+/// Remove a file from the project
+export function removeFile(path String)
+var newUnits = CompilationUnitArray{}
+for unit in units 'each'
+if unit.path != path 'keep'
+newUnits.push(unit)
+end 'keep'
+end 'each'
+units = newUnits
+end 'removeFile'
+
+/// Get all dirty units
+export function getDirtyUnits() returns CompilationUnitArray
+var result = CompilationUnitArray{}
+for unit in units 'each'
+if unit.isDirty 'dirty'
+result.push(unit)
+end 'dirty'
+end 'each'
+return result
+end 'getDirtyUnits'
+
+/// Build dependency graph for all units
+export function buildDependencyGraph()
+dependencyGraph = DependencyGraph.create()
+
+for unit in units 'eachUnit'
+dependencyGraph.addNode(unit.path)
+end 'eachUnit'
+
+for unit in units 'eachUnit2'
+for imp in unit.imports 'eachImport'
+// Find the unit that exports this symbol
+for other in units 'findExporter'
+if other.path != unit.path and other.hasExport(imp.name) 'exports'
+dependencyGraph.addEdge(unit.path, other.path)
+end 'exports'
+end 'findExporter'
+end 'eachImport'
+end 'eachUnit2'
+end 'buildDependencyGraph'
+
+/// Get compilation order (topological sort)
+export function getCompilationOrder() returns StringArray
+return dependencyGraph.topologicalSort()
+end 'getCompilationOrder'
+end 'Project'
+
+// ============================================================================
+// Project Configuration
+// ============================================================================
+
+/// Project build configuration
+export type ProjectConfig
+export var outputPath String
+export var outputType OutputType
+export var optimizationLevel int
+export var debugInfo bool
+export var targetArch TargetArch
+
+export static function default_() returns ProjectConfig
+return {
+outputPath: "bin",
+outputType: OutputType.executable,
+optimizationLevel: 0,
+debugInfo: true,
+targetArch: TargetArch.x86_64
+}
+end 'default_'
+end 'ProjectConfig'
+
+export enum OutputType
+executable
+library
+object
+end 'OutputType'
+
+export enum TargetArch
+x86_64
+end 'TargetArch'
+
+// ============================================================================
+// Global Symbol Table (Phase 4)
+// ============================================================================
+
+/// Cross-file global symbol table
+export type GlobalSymbolTable
+var symbols Map  // fully qualified name -> GlobalSymbol
+
+export static function create() returns GlobalSymbolTable
+return {symbols: Map{}}
+end 'create'
+
+/// Register an export from a unit
+export function registerExport(unit CompilationUnit ref, name String, kind SymbolKind)
+let fqn = unit.namespace_ + "." + name
+let symbol = GlobalSymbol.create(fqn, name, kind, unit)
+symbols.set(fqn, symbol)
+end 'registerExport'
+
+/// Find a symbol by fully qualified name
+export function findByFQN(fqn String) returns GlobalSymbol?
+if symbols.has(fqn) 'found'
+return symbols.get(fqn)! as GlobalSymbol
+end 'found'
+return null
+end 'findByFQN'
+
+/// Find a symbol by suffix (for unqualified imports)
+export function findBySuffix(suffix String) returns GlobalSymbolArray
+var results = GlobalSymbolArray{}
+for entry in symbols.entries() 'each'
+let symbol = entry.value as GlobalSymbol
+if symbol.shortName == suffix 'matches'
+results.push(symbol)
+end 'matches'
+end 'each'
+return results
+end 'findBySuffix'
+
+/// Clear all symbols from a unit (before re-registering)
+export function clearUnit(unit CompilationUnit ref)
+var toRemove = StringArray{}
+for entry in symbols.entries() 'each'
+let symbol = entry.value as GlobalSymbol
+if symbol.unit.path == unit.path 'fromUnit'
+toRemove.push(entry.key)
+end 'fromUnit'
+end 'each'
+for key in toRemove 'remove'
+symbols.delete(key)
+end 'remove'
+end 'clearUnit'
+end 'GlobalSymbolTable'
+
+/// A global symbol
+export type GlobalSymbol
+export var fqn String            // fully qualified name
+export var shortName String      // short name
+export var kind SymbolKind
+export var unit CompilationUnit ref
+
+export static function create(fqn String, shortName String, kind SymbolKind, unit CompilationUnit ref) returns GlobalSymbol
+return {fqn: fqn, shortName: shortName, kind: kind, unit: unit}
+end 'create'
+end 'GlobalSymbol'
+
+export typealias GlobalSymbolArray is Array with GlobalSymbol
+
+// Import symbol kind from unit.maxon
+import SymbolKind from "unit.maxon"
+
+// ============================================================================
+// Dependency Graph (Phase 4)
+// ============================================================================
+
+/// Dependency graph for compilation ordering
+export type DependencyGraph
+var nodes Map           // path -> DependencyNode
+var edges EdgeArray
+
+export static function create() returns DependencyGraph
+return {nodes: Map{}, edges: EdgeArray{}}
+end 'create'
+
+/// Add a node to the graph
+export function addNode(path String)
+if not nodes.has(path) 'new'
+nodes.set(path, DependencyNode.create(path))
+end 'new'
+end 'addNode'
+
+/// Add an edge (dependency) from -> to
+export function addEdge(from String, to String)
+edges.push(Edge.create(from, to))
+
+// Update in-degree
+if nodes.has(to) 'hasTo'
+let node = nodes.get(to)! as DependencyNode
+node.inDegree = node.inDegree + 1
+end 'hasTo'
+end 'addEdge'
+
+/// Topological sort using Kahn's algorithm
+export function topologicalSort() returns StringArray
+var result = StringArray{}
+var queue = StringArray{}
+
+// Find all nodes with in-degree 0
+for entry in nodes.entries() 'findZero'
+let node = entry.value as DependencyNode
+if node.inDegree == 0 'zero'
+queue.push(node.path)
+end 'zero'
+end 'findZero'
+
+// Process nodes
+while queue.count() > 0 'process'
+let current = queue.pop()!
+result.push(current)
+
+// Decrease in-degree for all dependents
+for edge in edges 'eachEdge'
+if edge.to == current 'isDependent'
+let fromNode = nodes.get(edge.from)! as DependencyNode
+fromNode.inDegree = fromNode.inDegree - 1
+if fromNode.inDegree == 0 'nowZero'
+queue.push(edge.from)
+end 'nowZero'
+end 'isDependent'
+end 'eachEdge'
+end 'process'
+
+return result
+end 'topologicalSort'
+
+/// Get direct dependencies of a path
+export function getDependencies(path String) returns StringArray
+var deps = StringArray{}
+for edge in edges 'each'
+if edge.from == path 'fromPath'
+deps.push(edge.to)
+end 'fromPath'
+end 'each'
+return deps
+end 'getDependencies'
+
+/// Get dependents (files that depend on this one)
+export function getDependents(path String) returns StringArray
+var deps = StringArray{}
+for edge in edges 'each'
+if edge.to == path 'toPath'
+deps.push(edge.from)
+end 'toPath'
+end 'each'
+return deps
+end 'getDependents'
+end 'DependencyGraph'
+
+type DependencyNode
+var path String
+var inDegree int
+
+static function create(path String) returns DependencyNode
+return {path: path, inDegree: 0}
+end 'create'
+end 'DependencyNode'
+
+type Edge
+var from String
+var to String
+
+static function create(from String, to String) returns Edge
+return {from: from, to: to}
+end 'create'
+end 'Edge'
+
+export typealias EdgeArray is Array with Edge
+export typealias StringArray is Array with String
