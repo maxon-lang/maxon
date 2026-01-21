@@ -841,6 +841,9 @@ fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     const pos = try self.convertExpression(call.args[1]);
     const len = try self.convertExpression(call.args[2]);
 
+    // Incref the parent buffer - Character slices share ownership with their source
+    try array.emitManagedMemoryIncref(self, ir.toManagedMemoryPtr(managed.value), "char parent");
+
     const char_ptr = try ManagedMemory.alloca(self.func());
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
@@ -851,9 +854,13 @@ fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     // Store len (offset 8, i64)
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(char_ptr.raw()), 8, len.value);
 
-    // Initialize slice metadata fields
+    // Initialize slice metadata fields with parent_off = source.parent_off + pos
+    // This ensures we can find the ORIGINAL parent buffer even when creating a char from a slice
+    const source_parent_off_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(managed.value), 28);
+    const source_parent_off_i32 = try self.func().emitLoad(source_parent_off_ptr.raw(), .i32);
     const pos_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, pos.value, .i32);
-    try initSliceArrayFields(self, char_ptr.raw(), pos_i32);
+    const new_parent_off = try self.func().emitBinaryOp(.add, source_parent_off_i32, pos_i32, .i32);
+    try initSliceArrayFields(self, char_ptr.raw(), new_parent_off);
 
     return .{ .value = char_ptr.raw(), .ty = try self.typeNameToValueType("Character") };
 }
@@ -876,6 +883,11 @@ fn intrinsicManagedMemoryByteAt(self: *AstToIr, call: ast.CallExpr) ConvertError
 /// Creates a slice view into the managed memory
 /// Returns a 32-byte __ManagedMemory with flags = 2 (slice mode)
 /// Layout: buffer(8) + len(8) + capacity(8) + flags(4) + parent_off(4)
+///
+/// IMPORTANT: If the parent is heap-allocated (mode=1), we incref the parent's
+/// buffer. Slices keep the parent alive via this incref. When the slice is
+/// cleaned up (decref), no free happens (mode=2), but the parent's eventual
+/// cleanup will decref and potentially free the buffer.
 fn intrinsicManagedMemorySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
 
@@ -895,6 +907,10 @@ fn intrinsicManagedMemorySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const start = try self.convertExpression(call.args[1]);
     const end = try self.convertExpression(call.args[2]);
 
+    // Incref the parent buffer if it's heap-allocated.
+    // This keeps the parent buffer alive as long as slices reference it.
+    try array.emitManagedMemoryIncref(self, ir.toManagedMemoryPtr(managed.value), "slice parent");
+
     const slice_ptr = try ManagedMemory.alloca(self.func());
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
@@ -906,9 +922,14 @@ fn intrinsicManagedMemorySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const len_i64 = try self.func().emitBinaryOp(.sub, end.value, start.value, .i64);
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(slice_ptr.raw()), 8, len_i64);
 
-    // Initialize slice metadata (flags=2, parent_off=start)
+    // Initialize slice metadata (flags=2, parent_off=source.parent_off + start)
+    // This ensures we can always find the ORIGINAL parent buffer for decref,
+    // even when creating a slice from another slice.
+    const source_parent_off_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(managed.value), 28);
+    const source_parent_off_i32 = try self.func().emitLoad(source_parent_off_ptr.raw(), .i32);
     const start_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, start.value, .i32);
-    try initSliceArrayFields(self, slice_ptr.raw(), start_i32);
+    const new_parent_off = try self.func().emitBinaryOp(.add, source_parent_off_i32, start_i32, .i32);
+    try initSliceArrayFields(self, slice_ptr.raw(), new_parent_off);
 
     return .{ .value = slice_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedMemory") };
 }

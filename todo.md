@@ -13,6 +13,7 @@ You *Are* Going To Read It
 - multiline string literals using multiple quotes
 
 ## TODO
+- add FilePath to stdlib
 - iterators with index
 - 2 types of Stringable, formatted and not formatted
 - // Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)

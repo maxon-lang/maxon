@@ -173,6 +173,23 @@ entry_0:
     memset %tmp_param 0 40
     %tmp_fieldptr = getfieldptr ptr %tmp_param 0
     memcpy %tmp_fieldptr %value 40
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_fieldptr 24
+    %tmp_load = load i32 %tmp_fieldptr.1
+    %tmp_const = const.i32 i32 3
+    %tmp_band = band i32 %tmp_load %tmp_const
+    %tmp_const.1 = const.i32 i32 1
+    %tmp_icmp = icmp.eq i32 %tmp_band %tmp_const.1
+    br.cond %tmp_icmp @incref_1 @incref_end_2
+incref_1:
+    %tmp_load.1 = load ptr %tmp_fieldptr
+    %tmp_const.2 = const.i64 i64 8
+    %tmp_sub = sub ptr %tmp_load.1 %tmp_const.2
+    %tmp_load.2 = load i64 %tmp_sub
+    %tmp_const.3 = const.i64 i64 1
+    %tmp_add = add i64 %tmp_load.2 %tmp_const.3
+    store %tmp_sub %tmp_add
+    br @incref_end_2
+incref_end_2:
     ret %tmp_param
 }
 

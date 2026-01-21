@@ -9663,11 +9663,32 @@ pub const AstToIr = struct {
                 // Struct fields are embedded inline - copy the data
                 // Use move semantics (no incref) when:
                 // - Source is a temporary (will be removed from cleanup)
-                // - Source is a variable (will be marked as moved by trackFieldOwnershipTransfer)
-                // Use copy semantics (with incref) only for non-variable expressions that persist
+                // - Source is an owned variable (will be marked as moved by trackFieldOwnershipTransfer)
+                // - Source is a parameter that won't be cleaned up by caller (e.g., __ManagedMemory)
+                // Use copy semantics (with incref) when:
+                // - Source is a borrowed parameter whose type will be cleaned up by caller
+                // - Source is a non-variable expression that persists
                 const is_temp = cleanup_helpers.isInTemporaries(self, field_val.value);
                 const is_variable = field_init.value.* == .identifier;
-                const needs_move = is_temp or is_variable;
+
+                // Check if the variable is a borrowed parameter that the caller will clean up
+                // Parameters of internal types (like __ManagedMemory) are not cleaned up by the caller
+                // Parameters of user-visible types (String, Array, etc.) ARE cleaned up by caller
+                const is_borrowed_param_with_cleanup = if (is_variable) blk: {
+                    const vi = self.var_map.get(field_init.value.identifier) orelse break :blk false;
+                    if (!vi.is_parameter) break :blk false;
+                    // Only needs copy semantics if the parameter type will be cleaned up by caller
+                    if (vi.ty != .struct_type) break :blk false;
+                    const param_struct = vi.ty.struct_type;
+                    // Internal types (like __ManagedMemory) are not cleaned up at the call site
+                    if (param_struct.is_internal_type) break :blk false;
+                    // Types without cleanup don't need incref
+                    if (!param_struct.needs_cleanup) break :blk false;
+                    break :blk true;
+                } else false;
+
+                // Move if temp or owned variable; copy if borrowed parameter with cleanup
+                const needs_move = is_temp or (is_variable and !is_borrowed_param_with_cleanup);
                 if (needs_move) {
                     // Move: ownership transfers, no incref needed
                     try array_helpers.emitStructMove(self, field_ptr, ir.toStructPtr(field_val.value), field_info.size);
@@ -9675,7 +9696,7 @@ pub const AstToIr = struct {
                         cleanup_helpers.removeFromTemporaries(self, field_val.value);
                     }
                 } else {
-                    // Copy: source will remain alive, incref needed
+                    // Copy: source will remain alive and be cleaned up by caller, incref needed
                     try array_helpers.emitStructCopy(self, field_ptr, ir.toStructPtr(field_val.value), field_info.size, field_info.structName());
                 }
             } else {
@@ -9722,6 +9743,16 @@ pub const AstToIr = struct {
         // Reference types are moved, not copied
         const is_reference = var_info.ty == .struct_type;
         if (!is_reference) return;
+
+        // Parameters with cleanup are borrowed (caller will clean up) - we used copy semantics
+        // Parameters of internal types (like __ManagedMemory) or non-cleanup types use move semantics
+        if (var_info.is_parameter) {
+            const param_struct = var_info.ty.struct_type;
+            // If caller will clean up this parameter, we used copy semantics - don't mark as moved
+            if (!param_struct.is_internal_type and param_struct.needs_cleanup) {
+                return;
+            }
+        }
 
         // Only error if moving immutable value into mutable field
         if (!var_info.is_mutable and dest_is_mutable) {

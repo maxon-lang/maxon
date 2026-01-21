@@ -290,9 +290,13 @@ fn emitArrayManagedElementsCleanup(self: *AstToIr, array_ptr: ir.Value, elem_str
     const offset = try self.func().emitBinaryOp(.mul, body_i, elem_size, .i64);
     const elem_ptr = try self.func().emitBinaryOp(.add, body_buf_ptr, offset, .ptr);
 
+    // Calculate pointer to __ManagedMemory within element using managed_buffer_offset
+    // For types like Token with String field at offset 8, the managed buffer is not at offset 0
+    const managed_offset = try self.func().emitConstI64(@intCast(elem_struct_info.managed_buffer_offset));
+    const managed_ptr = try self.func().emitBinaryOp(.add, elem_ptr, managed_offset, .ptr);
+
     // Check if heap mode: flags & 3 == 1
-    // The element contains __ManagedMemory at offset 0
-    const is_heap = try ManagedMemory.isHeapMode(self.func(), ir.toManagedMemoryPtr(elem_ptr));
+    const is_heap = try ManagedMemory.isHeapMode(self.func(), ir.toManagedMemoryPtr(managed_ptr));
 
     // Branch: if heap mode, go to decref block; otherwise go to next
     try self.func().blocks.items[body_block_idx].instructions.append(self.allocator, .{
@@ -309,8 +313,12 @@ fn emitArrayManagedElementsCleanup(self: *AstToIr, array_ptr: ir.Value, elem_str
     const decref_offset = try self.func().emitBinaryOp(.mul, decref_i, elem_size, .i64);
     const decref_elem_ptr = try self.func().emitBinaryOp(.add, decref_buf_ptr, decref_offset, .ptr);
 
-    // Buffer header refcount: load buf_ptr from element, subtract 8 to get header
-    const elem_buf_ptr = try self.func().emitLoad(decref_elem_ptr, .ptr);
+    // Add managed_buffer_offset to get the __ManagedMemory within the element
+    const decref_managed_offset = try self.func().emitConstI64(@intCast(elem_struct_info.managed_buffer_offset));
+    const decref_managed_ptr = try self.func().emitBinaryOp(.add, decref_elem_ptr, decref_managed_offset, .ptr);
+
+    // Buffer header refcount: load buf_ptr from __ManagedMemory, subtract 8 to get header
+    const elem_buf_ptr = try self.func().emitLoad(decref_managed_ptr, .ptr);
     const eight = try self.func().emitConstI64(8);
     const header_ptr = try self.func().emitBinaryOp(.sub, elem_buf_ptr, eight, .ptr);
     const old_ref = try self.func().emitLoad(header_ptr, .i64);
@@ -341,7 +349,12 @@ fn emitArrayManagedElementsCleanup(self: *AstToIr, array_ptr: ir.Value, elem_str
     const free_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const free_offset = try self.func().emitBinaryOp(.mul, free_i, elem_size, .i64);
     const free_elem_ptr = try self.func().emitBinaryOp(.add, free_buf_ptr, free_offset, .ptr);
-    const free_elem_buf_ptr = try self.func().emitLoad(free_elem_ptr, .ptr);
+
+    // Add managed_buffer_offset to get the __ManagedMemory within the element
+    const free_managed_offset = try self.func().emitConstI64(@intCast(elem_struct_info.managed_buffer_offset));
+    const free_managed_ptr = try self.func().emitBinaryOp(.add, free_elem_ptr, free_managed_offset, .ptr);
+
+    const free_elem_buf_ptr = try self.func().emitLoad(free_managed_ptr, .ptr);
     const free_eight = try self.func().emitConstI64(8);
     const free_header_ptr = try self.func().emitBinaryOp(.sub, free_elem_buf_ptr, free_eight, .ptr);
     try self.func().emitHeapFree(ir.toRawPtr(free_header_ptr), "element cleanup");

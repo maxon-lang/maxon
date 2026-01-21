@@ -212,6 +212,17 @@ pub const Analyzer = struct {
             return null;
         }
 
+        // Check if inside enum body - enum members don't need hover info
+        // AST uses 1-based lines
+        const ast_line = line + 1;
+        if (self.semantic_cache.get(uri)) |cache_info| {
+            if (cache_info.program) |prog| {
+                if (isInsideEnumBody(prog, ast_line)) {
+                    return null;
+                }
+            }
+        }
+
         const word = getWordAtPosition(doc.content, line, character) orelse {
             return null;
         };
@@ -1022,6 +1033,9 @@ pub const Analyzer = struct {
     pub fn getSemanticTokens(self: *Analyzer, uri: []const u8) ?[]u32 {
         const doc = self.documents.get(uri) orelse return null;
 
+        // Get AST program for context-aware highlighting
+        const program = if (self.semantic_cache.get(uri)) |info| info.program else null;
+
         var tokens: std.ArrayListUnmanaged(u32) = .empty;
         errdefer tokens.deinit(self.allocator);
 
@@ -1088,6 +1102,15 @@ pub const Analyzer = struct {
 
                     // Determine token type based on keyword category or context
                     const token_type: u32 = blk: {
+                        // Use AST to check if inside enum body
+                        // AST uses 1-based lines, current_line is 0-based
+                        const ast_line = current_line + 1;
+                        if (program) |prog| {
+                            if (isInsideEnumBody(prog, ast_line)) {
+                                break :blk 10; // enumMember
+                            }
+                        }
+
                         // Check if it's a keyword and get its category
                         inline for (lexer.Lexer.keyword_map) |entry| {
                             const keyword_text = entry[0];
@@ -1515,6 +1538,23 @@ fn collectFoldingFromStatement(allocator: std.mem.Allocator, stmt: ast.Statement
         // Recurse into child statements
         try collectFoldingFromStatements(allocator, child.statements, ranges);
     }
+}
+
+/// Check if a line (1-based) is inside an enum body (but not inside a method within the enum)
+fn isInsideEnumBody(program: ast.Program, line: u32) bool {
+    for (program.enums) |enum_decl| {
+        // Check if line is within the enum's block
+        if (enum_decl.block.start_line < line and line < enum_decl.block.end_line) {
+            // Make sure we're not inside a method within the enum
+            for (enum_decl.methods) |method| {
+                if (method.block.start_line <= line and line <= method.block.end_line) {
+                    return false; // Inside a method, not in the enum member area
+                }
+            }
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Calculate indentation depth for a line by counting containing blocks (1-based line)

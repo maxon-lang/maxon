@@ -129,7 +129,7 @@ pub fn Server(comptime TransportType: type) type {
                 .codeActionProvider = true,
                 .semanticTokensProvider = .{
                     .legend = .{
-                        .tokenTypes = &.{ "keyword", "function", "variable", "type", "string", "number", "comment", "operator", "property", "modifier" },
+                        .tokenTypes = &.{ "keyword", "function", "variable", "type", "string", "number", "comment", "operator", "property", "modifier", "enumMember" },
                         .tokenModifiers = &.{ "declaration", "definition", "readonly" },
                     },
                     .full = true,

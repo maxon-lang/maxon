@@ -2041,3 +2041,70 @@ test "formatting indents top-level multiline map literal correctly" {
     // Check that closing ] is at top level (no indentation)
     try testing.expect(std.mem.indexOf(u8, new_text, "\n]") != null);
 }
+
+test "semantic tokens treats enum members as enumMember not keywords" {
+    var client = try TestClient.init(test_allocator);
+    defer client.deinit();
+    _ = try client.initialize();
+
+    const source =
+        \\enum TokenType
+        \\    function
+        \\    returns
+        \\    identifier
+        \\end 'TokenType'
+    ;
+
+    try client.openDocument("file:///test.maxon", source);
+
+    var result = try client.semanticTokensFull("file:///test.maxon");
+    defer result.deinit();
+
+    // Semantic tokens format: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
+    // Token types: 0=keyword, 9=modifier, 10=enumMember
+    // We expect:
+    // - "enum" at line 0 to be modifier (9)
+    // - "function" at line 1 to be enumMember (10), NOT modifier (9)
+    // - "returns" at line 2 to be enumMember (10), NOT modifier (9)
+    // - "identifier" at line 3 to be enumMember (10)
+    // - "end" at line 4 to be keyword (0)
+
+    try testing.expect(result.data.len >= 25); // At least 5 tokens * 5 values each
+
+    // Find the token for "function" (line 1, which is delta 1 from line 0)
+    // Tokens are: enum(line0), TokenType(line0), function(line1), returns(line2), identifier(line3), end(line4), 'TokenType'(line4)
+    // We need to decode and check that "function" has tokenType 10 (enumMember)
+
+    var i: usize = 0;
+    var current_line: u32 = 0;
+    var found_function = false;
+    var found_returns = false;
+    while (i + 4 < result.data.len) {
+        const delta_line = result.data[i];
+        const delta_char = result.data[i + 1];
+        const length = result.data[i + 2];
+        const token_type = result.data[i + 3];
+        _ = delta_char;
+
+        current_line += delta_line;
+
+        // Line 1 should have "function" with length 8
+        if (current_line == 1 and length == 8) {
+            // Should be enumMember (10), not modifier (9)
+            try testing.expectEqual(@as(u32, 10), token_type);
+            found_function = true;
+        }
+
+        // Line 2 should have "returns" with length 7
+        if (current_line == 2 and length == 7) {
+            // Should be enumMember (10), not modifier (9)
+            try testing.expectEqual(@as(u32, 10), token_type);
+            found_returns = true;
+        }
+
+        i += 5;
+    }
+
+    try testing.expect(found_function);
+    try testing.expect(found_returns);
+}

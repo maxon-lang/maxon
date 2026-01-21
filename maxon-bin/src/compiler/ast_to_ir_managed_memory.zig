@@ -135,6 +135,15 @@ pub const ManagedMemory = struct {
         return func.emitBinaryOp(.icmp_eq, masked, one, .i32);
     }
 
+    /// Check if the ManagedMemory is in slice mode (flags & 3 == 2)
+    pub fn isSliceMode(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.Value {
+        const flags = try loadFlags(func, ptr);
+        const three = try func.emitConstI32(3);
+        const masked = try func.emitBinaryOp(.band, flags, three, .i32);
+        const two = try func.emitConstI32(2);
+        return func.emitBinaryOp(.icmp_eq, masked, two, .i32);
+    }
+
     /// Load the mode value (flags & 3)
     pub fn loadMode(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.Value {
         const flags = try loadFlags(func, ptr);
@@ -265,27 +274,33 @@ pub fn emitAllocRefcountedBuffer(self: *AstToIr, data_size: ir.Value, tag: []con
 /// Refcount is stored in the buffer header at (buffer_ptr - 8).
 /// This is shared by all ManagedMemory copies that reference the same buffer.
 pub fn emitManagedMemoryIncref(self: *AstToIr, ptr: ir.ManagedMemoryPtr, tag: []const u8) !void {
+    // Get heap mode flag in entry block
     const is_heap = try ManagedMemory.isHeapMode(self.func(), ptr);
 
-    // Create blocks for conditional incref
+    // Create all blocks upfront
     const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
-    const incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("incref");
+    const heap_incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("heap_incref");
+    const slice_check_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("slice_check");
+    const slice_incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("slice_incref");
     const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("incref_end");
 
-    // Defer end block
-    var deferred = try ast_to_ir.DeferredBlocks.init(self.allocator, 1);
+    // Defer blocks: end(0), slice_incref(1), slice_check(2), leaving heap_incref as current
+    var deferred = try ast_to_ir.DeferredBlocks.init(self.allocator, 3);
     defer deferred.deinit();
-    deferred.deferBlocks(self, 1);
+    deferred.deferBlocks(self, 3);
 
-    // Emit conditional branch from entry block
+    // Entry block: if heap mode -> heap_incref, else -> slice_check
     try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
         .op = .br_cond,
-        .operands = .{ .{ .value = is_heap }, .{ .block_ref = incref_block_idx }, .{ .block_ref = end_block_idx } },
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = heap_incref_block_idx }, .{ .block_ref = slice_check_block_idx } },
     });
 
-    // In incref block: increment refcount in buffer header (at buffer_ptr - 8)
+    // ===== HEAP INCREF BLOCK (current) =====
+    // Increment refcount in buffer header (at buffer_ptr - 8)
     const buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
     const eight = try self.func().emitConstI64(8);
     const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
@@ -294,16 +309,46 @@ pub fn emitManagedMemoryIncref(self: *AstToIr, ptr: ir.ManagedMemoryPtr, tag: []
     const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i64);
     try self.func().emitStore(header_ptr, new_ref);
 
-    // Emit tracking call for incref
     if (self.track_memory) {
         const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
         try self.func().emitTrackIncref(tag, new_ref_i32);
     }
 
-    // Branch to end
     try self.func().emitBr(end_block_idx);
 
-    // Restore end block
+    // ===== SLICE CHECK BLOCK =====
+    try deferred.restore(self, 2);
+
+    const is_slice = try ManagedMemory.isSliceMode(self.func(), ptr);
+    try self.func().emitBrCond(is_slice, slice_incref_block_idx, end_block_idx);
+
+    // ===== SLICE INCREF BLOCK =====
+    try deferred.restore(self, 1);
+
+    // For slices, incref the PARENT buffer
+    // Parent buffer = slice_buf - parent_off
+    const slice_buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
+    const parent_off_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(ptr.raw()), 28);
+    const parent_off_i32 = try self.func().emitLoad(parent_off_ptr.raw(), .i32);
+    const parent_off_i64 = try self.func().emitUnaryOp(.sext_i32_i64, parent_off_i32, .i64);
+    const parent_buf_ptr = try self.func().emitBinaryOp(.sub, slice_buf_ptr, parent_off_i64, .ptr);
+
+    // Incref parent header at parent_buf - 8
+    const eight2 = try self.func().emitConstI64(8);
+    const parent_header_ptr = try self.func().emitBinaryOp(.sub, parent_buf_ptr, eight2, .ptr);
+    const parent_old_ref = try self.func().emitLoad(parent_header_ptr, .i64);
+    const one2 = try self.func().emitConstI64(1);
+    const parent_new_ref = try self.func().emitBinaryOp(.add, parent_old_ref, one2, .i64);
+    try self.func().emitStore(parent_header_ptr, parent_new_ref);
+
+    if (self.track_memory) {
+        const parent_new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, parent_new_ref, .i32);
+        try self.func().emitTrackIncref("slice parent", parent_new_ref_i32);
+    }
+
+    try self.func().emitBr(end_block_idx);
+
+    // ===== END BLOCK =====
     try deferred.restore(self, 0);
 }
 
@@ -318,67 +363,113 @@ pub fn emitManagedMemoryIncref(self: *AstToIr, ptr: ir.ManagedMemoryPtr, tag: []
 /// `tag` is used for memory tracking (variable name).
 /// `cleanup_tag` is used for heap free description (e.g., "string cleanup", "array cleanup").
 pub fn emitManagedMemoryDecref(self: *AstToIr, ptr: ir.ManagedMemoryPtr, tag: []const u8, cleanup_tag: []const u8) !void {
+    // Get heap mode flag before creating any blocks (computed in entry block)
     const is_heap = try ManagedMemory.isHeapMode(self.func(), ptr);
 
-    // Create blocks for conditional decref
+    // Create all blocks upfront
     const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
-    const decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("decref");
-    const free_block_idx: u32 = @intCast(self.func().blocks.items.len);
-    _ = try self.func().addBlock("decref_free");
+    const heap_decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("heap_decref");
+    const heap_free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("heap_free");
+    const slice_decref_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("slice_decref");
+    const slice_free_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("slice_free");
+    const slice_check_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("slice_check");
     const end_block_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("decref_end");
 
-    // Defer end and free blocks
-    var deferred = try ast_to_ir.DeferredBlocks.init(self.allocator, 2);
+    // Defer all blocks except heap_decref (which becomes current)
+    // Order after deferBlocks(5): stored[0]=end, stored[1]=slice_check, stored[2]=slice_free, stored[3]=slice_decref, stored[4]=heap_free
+    var deferred = try ast_to_ir.DeferredBlocks.init(self.allocator, 5);
     defer deferred.deinit();
-    deferred.deferBlocks(self, 2);
+    deferred.deferBlocks(self, 5);
 
-    // Emit conditional branch from entry block to decref or end
+    // Entry block: if heap mode -> heap_decref, else -> slice_check
     try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
         .op = .br_cond,
-        .operands = .{ .{ .value = is_heap }, .{ .block_ref = decref_block_idx }, .{ .block_ref = end_block_idx } },
+        .operands = .{ .{ .value = is_heap }, .{ .block_ref = heap_decref_block_idx }, .{ .block_ref = slice_check_block_idx } },
     });
 
-    // In decref block: load buffer pointer, compute header address, decrement refcount
+    // ===== HEAP DECREF BLOCK (current) =====
     const buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
     const eight = try self.func().emitConstI64(8);
     const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
-
-    // Decrement the i64 refcount in the header
     const old_ref = try self.func().emitLoad(header_ptr, .i64);
     const one = try self.func().emitConstI64(1);
     const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i64);
     try self.func().emitStore(header_ptr, new_ref);
 
-    // Emit tracking call for decref
     if (self.track_memory) {
         const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
         try self.func().emitTrackDecref(tag, new_ref_i32);
     }
 
-    // Check if refcount is now zero
     const zero = try self.func().emitConstI64(0);
     const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i64);
+    try self.func().emitBrCond(is_zero, heap_free_block_idx, end_block_idx);
 
-    // Restore free block
-    try deferred.restore(self, 1);
+    // ===== HEAP FREE BLOCK =====
+    try deferred.restore(self, 4);
 
-    // Emit branch from decref block to free or end
-    try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
-        .op = .br_cond,
-        .operands = .{ .{ .value = is_zero }, .{ .block_ref = free_block_idx }, .{ .block_ref = end_block_idx } },
-    });
-
-    // In free block: free the buffer WITH header (header_ptr, not buf_ptr)
     const buf_ptr2 = try self.func().emitLoad(ptr.raw(), .ptr);
-    const header_ptr2 = try self.func().emitBinaryOp(.sub, buf_ptr2, eight, .ptr);
+    const eight2 = try self.func().emitConstI64(8);
+    const header_ptr2 = try self.func().emitBinaryOp(.sub, buf_ptr2, eight2, .ptr);
     try self.func().emitHeapFree(ir.toRawPtr(header_ptr2), cleanup_tag);
-
-    // Branch to end
     try self.func().emitBr(end_block_idx);
 
-    // Restore end block
+    // ===== SLICE DECREF BLOCK =====
+    try deferred.restore(self, 3);
+
+    // Compute parent buffer: slice_buf - parent_off
+    const slice_buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
+    const parent_off_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(ptr.raw()), 28);
+    const parent_off_i32 = try self.func().emitLoad(parent_off_ptr.raw(), .i32);
+    const parent_off_i64 = try self.func().emitUnaryOp(.sext_i32_i64, parent_off_i32, .i64);
+    const parent_buf_ptr = try self.func().emitBinaryOp(.sub, slice_buf_ptr, parent_off_i64, .ptr);
+
+    // Decref parent header at parent_buf - 8
+    const eight3 = try self.func().emitConstI64(8);
+    const parent_header_ptr = try self.func().emitBinaryOp(.sub, parent_buf_ptr, eight3, .ptr);
+    const parent_old_ref = try self.func().emitLoad(parent_header_ptr, .i64);
+    const one2 = try self.func().emitConstI64(1);
+    const parent_new_ref = try self.func().emitBinaryOp(.sub, parent_old_ref, one2, .i64);
+    try self.func().emitStore(parent_header_ptr, parent_new_ref);
+
+    if (self.track_memory) {
+        const parent_new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, parent_new_ref, .i32);
+        try self.func().emitTrackDecref("slice parent", parent_new_ref_i32);
+    }
+
+    const zero2 = try self.func().emitConstI64(0);
+    const parent_is_zero = try self.func().emitBinaryOp(.icmp_eq, parent_new_ref, zero2, .i64);
+    try self.func().emitBrCond(parent_is_zero, slice_free_block_idx, end_block_idx);
+
+    // ===== SLICE FREE BLOCK =====
+    try deferred.restore(self, 2);
+
+    // Free parent buffer at header - need to reload values
+    const slice_buf_ptr2 = try self.func().emitLoad(ptr.raw(), .ptr);
+    const parent_off_ptr2 = try self.func().emitGetFieldPtr(ir.toStructPtr(ptr.raw()), 28);
+    const parent_off_i32_2 = try self.func().emitLoad(parent_off_ptr2.raw(), .i32);
+    const parent_off_i64_2 = try self.func().emitUnaryOp(.sext_i32_i64, parent_off_i32_2, .i64);
+    const parent_buf_ptr2 = try self.func().emitBinaryOp(.sub, slice_buf_ptr2, parent_off_i64_2, .ptr);
+    const eight4 = try self.func().emitConstI64(8);
+    const parent_header_ptr2 = try self.func().emitBinaryOp(.sub, parent_buf_ptr2, eight4, .ptr);
+    try self.func().emitHeapFree(ir.toRawPtr(parent_header_ptr2), "slice parent cleanup");
+    try self.func().emitBr(end_block_idx);
+
+    // ===== SLICE CHECK BLOCK =====
+    try deferred.restore(self, 1);
+
+    // Compute is_slice HERE in slice_check block (not in entry block)
+    const is_slice = try ManagedMemory.isSliceMode(self.func(), ptr);
+    // Branch: if slice mode -> slice_decref, else -> end
+    try self.func().emitBrCond(is_slice, slice_decref_block_idx, end_block_idx);
+
+    // ===== END BLOCK =====
     try deferred.restore(self, 0);
 }
 
