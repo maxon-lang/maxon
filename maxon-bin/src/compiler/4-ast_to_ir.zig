@@ -46,14 +46,7 @@ pub const InterfaceInfo = types.InterfaceInfo;
 pub const PendingMethod = types.PendingMethod;
 pub const SemanticInfo = types.SemanticInfo;
 pub const SemanticVarInfo = types.SemanticVarInfo;
-
-/// Associated type alias for generic type instantiation.
-/// e.g., `associatedtype ElementArray is Array with Element` creates an alias
-/// where ElementArray resolves to Array$<resolved Element>.
-pub const AssociatedTypeAlias = struct {
-    base_type: []const u8, // e.g., "Array"
-    type_args: []const []const u8, // e.g., ["Element"] - these get substituted via generic_params
-};
+pub const AssociatedTypeAlias = types.AssociatedTypeAlias;
 
 /// Result of emitTypeInit - pointer to initialized struct and its type info
 const EmitTypeInitResult = struct {
@@ -3905,16 +3898,7 @@ pub const AstToIr = struct {
     /// e.g., "Container" + ["int"] -> "Container$int"
     pub fn getOrCreateMonomorphizedType(self: *AstToIr, base_type: []const u8, type_args: []const []const u8) ConvertError![]const u8 {
         // Build the monomorphized name: TypeName$Arg1$Arg2
-        var name_parts: std.ArrayListUnmanaged(u8) = .empty;
-        defer name_parts.deinit(self.allocator);
-
-        name_parts.appendSlice(self.allocator, base_type) catch return error.OutOfMemory;
-        for (type_args) |arg| {
-            name_parts.append(self.allocator, '$') catch return error.OutOfMemory;
-            name_parts.appendSlice(self.allocator, arg) catch return error.OutOfMemory;
-        }
-
-        const mono_name = self.allocator.dupe(u8, name_parts.items) catch return error.OutOfMemory;
+        const mono_name = types.buildMonomorphizedName(self.allocator, base_type, type_args) orelse return error.OutOfMemory;
         self.module.trackString(mono_name) catch {
             self.allocator.free(mono_name);
             return error.OutOfMemory;
@@ -9567,9 +9551,11 @@ pub const AstToIr = struct {
         return ctx.finalize(self);
     }
 
-    fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
-        // Determine type name - explicit or inferred from context
-        const type_name: []const u8 = if (sinit.type_name) |explicit_name| blk: {
+    /// Resolve the type name for a struct initialization expression.
+    /// Handles explicit names with optional type_args (monomorphization),
+    /// generic param resolution, expected type inference, and E059 errors.
+    fn resolveStructInitTypeName(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError![]const u8 {
+        if (sinit.type_name) |explicit_name| {
             // Build monomorphized type name if there are type arguments
             if (sinit.type_args.len > 0) {
                 // Resolve type arguments through generic_params (e.g., "Element" -> "int")
@@ -9578,9 +9564,7 @@ pub const AstToIr = struct {
                 for (sinit.type_args, 0..) |arg, i| {
                     resolved_args[i] = self.resolveTypeName(arg);
                 }
-                // Check if monomorphized version exists, if not create it
-                const mono_name = try self.getOrCreateMonomorphizedType(explicit_name, resolved_args);
-                break :blk mono_name;
+                return try self.getOrCreateMonomorphizedType(explicit_name, resolved_args);
             } else {
                 // No type args - check if expected_type provides the monomorphized version
                 // e.g., Pair{...} in a context expecting Pair$String$int
@@ -9605,20 +9589,23 @@ pub const AstToIr = struct {
                         }
                     }
                 }
-                break :blk self.resolveTypeName(explicit_name);
+                return self.resolveTypeName(explicit_name);
             }
-        } else blk: {
+        } else {
             // Anonymous struct literal - infer type from expected_type
             if (self.expected_type) |et| {
                 if (et == .struct_type) {
-                    break :blk et.struct_type.name;
+                    return et.struct_type.name;
                 }
             }
             // No expected type or not a struct type - error
             self.reportError(.E022, "anonymous struct literal requires type context", @src());
             return error.TypeMismatch;
-        };
+        }
+    }
 
+    fn convertStructInit(self: *AstToIr, sinit: ast.StructInitExpr) ConvertError!TypedValue {
+        const type_name = try self.resolveStructInitTypeName(sinit);
         const struct_info = try self.lookupStructInfo(type_name);
         const struct_ptr = try self.func().emitAllocaSized(struct_info.size);
         try self.initStructIntoResolved(sinit, struct_ptr.raw(), type_name);
@@ -9627,55 +9614,7 @@ pub const AstToIr = struct {
 
     /// Initialize struct fields into an existing pointer (used for sret returns)
     fn initStructInto(self: *AstToIr, sinit: ast.StructInitExpr, dest_ptr: ir.Value) ConvertError!void {
-        // Determine type name - explicit or inferred from context
-        const type_name: []const u8 = if (sinit.type_name) |explicit_name| blk: {
-            // Build monomorphized type name if there are type arguments
-            if (sinit.type_args.len > 0) {
-                // Resolve type arguments through generic_params (e.g., "Element" -> "int")
-                var resolved_args = try self.allocator.alloc([]const u8, sinit.type_args.len);
-                defer self.allocator.free(resolved_args);
-                for (sinit.type_args, 0..) |arg, i| {
-                    resolved_args[i] = self.resolveTypeName(arg);
-                }
-                const mono_name = try self.getOrCreateMonomorphizedType(explicit_name, resolved_args);
-                break :blk mono_name;
-            } else {
-                // No type args - check if expected_type provides the monomorphized version
-                // e.g., Pair{...} in a context expecting Pair$String$int
-                if (self.expected_type) |et| {
-                    if (et == .struct_type) {
-                        const expected_name = et.struct_type.name;
-                        // Check if expected type is a monomorphization of the explicit type
-                        if (std.mem.startsWith(u8, expected_name, explicit_name) and
-                            expected_name.len > explicit_name.len and
-                            expected_name[explicit_name.len] == '$')
-                        {
-                            // E059: explicit type is redundant when it can be inferred
-                            self.reportError(.E059, explicit_name, @src());
-                            return error.TypeMismatch;
-                        }
-                        // Check for exact or typealias match
-                        const resolved_name = self.resolveTypeName(explicit_name);
-                        if (std.mem.eql(u8, resolved_name, expected_name)) {
-                            // E059: explicit type is redundant when it can be inferred
-                            self.reportError(.E059, explicit_name, @src());
-                            return error.TypeMismatch;
-                        }
-                    }
-                }
-                break :blk self.resolveTypeName(explicit_name);
-            }
-        } else blk: {
-            // Anonymous struct literal - infer type from expected_type
-            if (self.expected_type) |et| {
-                if (et == .struct_type) {
-                    break :blk et.struct_type.name;
-                }
-            }
-            // No expected type or not a struct type - error
-            self.reportError(.E022, "anonymous struct literal requires type context", @src());
-            return error.TypeMismatch;
-        };
+        const type_name = try self.resolveStructInitTypeName(sinit);
         try self.initStructIntoResolved(sinit, dest_ptr, type_name);
     }
 
@@ -12522,21 +12461,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             if (return_type_name) |name| {
                 for (type_decl.associated_types) |assoc| {
                     if (std.mem.eql(u8, name, assoc.name)) {
-                        // Build monomorphized name: BaseType$Arg1$Arg2...
-                        var size: usize = assoc.base_type.len;
-                        for (assoc.type_args) |arg| {
-                            size += 1 + arg.len;
-                        }
-                        const buf = try allocator.alloc(u8, size);
-                        var pos: usize = 0;
-                        @memcpy(buf[pos..][0..assoc.base_type.len], assoc.base_type);
-                        pos += assoc.base_type.len;
-                        for (assoc.type_args) |arg| {
-                            buf[pos] = '$';
-                            pos += 1;
-                            @memcpy(buf[pos..][0..arg.len], arg);
-                            pos += arg.len;
-                        }
+                        const buf = types.buildMonomorphizedName(allocator, assoc.base_type, assoc.type_args) orelse break;
                         // Free old name and use resolved name
                         allocator.free(name);
                         return_type_name = buf;
@@ -12587,21 +12512,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                     const param_type_name = vt.struct_type;
                     for (type_decl.associated_types) |assoc| {
                         if (std.mem.eql(u8, param_type_name, assoc.name)) {
-                            // Build monomorphized name: BaseType$Arg1$Arg2...
-                            var size: usize = assoc.base_type.len;
-                            for (assoc.type_args) |arg| {
-                                size += 1 + arg.len;
-                            }
-                            const buf = allocator.alloc(u8, size) catch break;
-                            var pos: usize = 0;
-                            @memcpy(buf[pos..][0..assoc.base_type.len], assoc.base_type);
-                            pos += assoc.base_type.len;
-                            for (assoc.type_args) |arg| {
-                                buf[pos] = '$';
-                                pos += 1;
-                                @memcpy(buf[pos..][0..arg.len], arg);
-                                pos += arg.len;
-                            }
+                            const buf = types.buildMonomorphizedName(allocator, assoc.base_type, assoc.type_args) orelse break;
                             // Free old name and use resolved name
                             allocator.free(param_type_name);
                             vt = .{ .struct_type = buf };
@@ -12661,21 +12572,7 @@ fn getExternalValueTypeForReturn(allocator: std.mem.Allocator, te: ast.TypeExpr)
             break :blk .{ .struct_type = name };
         },
         .generic => |gen| blk: {
-            // Build monomorphized name: BaseType$Arg1$Arg2...
-            var size: usize = gen.base_type.len;
-            for (gen.type_args) |arg| {
-                size += 1 + arg.len; // '$' + arg
-            }
-            const buf = allocator.alloc(u8, size) catch break :blk null;
-            var pos: usize = 0;
-            @memcpy(buf[pos..][0..gen.base_type.len], gen.base_type);
-            pos += gen.base_type.len;
-            for (gen.type_args) |arg| {
-                buf[pos] = '$';
-                pos += 1;
-                @memcpy(buf[pos..][0..arg.len], arg);
-                pos += arg.len;
-            }
+            const buf = types.buildMonomorphizedName(allocator, gen.base_type, gen.type_args) orelse break :blk null;
             break :blk .{ .struct_type = buf };
         },
         .error_union => |eu| {
@@ -12719,22 +12616,7 @@ fn getStructNameFromTypeExpr(
             return name;
         },
         .generic => |gen| blk: {
-            // Build monomorphized name: BaseType$Arg1$Arg2...
-            // Calculate required size
-            var size: usize = gen.base_type.len;
-            for (gen.type_args) |arg| {
-                size += 1 + arg.len; // '$' + arg
-            }
-            const buf = allocator.alloc(u8, size) catch break :blk null;
-            var pos: usize = 0;
-            @memcpy(buf[pos..][0..gen.base_type.len], gen.base_type);
-            pos += gen.base_type.len;
-            for (gen.type_args) |arg| {
-                buf[pos] = '$';
-                pos += 1;
-                @memcpy(buf[pos..][0..arg.len], arg);
-                pos += arg.len;
-            }
+            const buf = types.buildMonomorphizedName(allocator, gen.base_type, gen.type_args) orelse break :blk null;
             // Track allocation for cleanup if tracker provided
             if (alloc_tracker) |tracker| {
                 tracker.append(allocator, buf) catch {};
@@ -12762,9 +12644,7 @@ fn getExternalValueTypeFromTypeExpr(allocator: std.mem.Allocator, te: ast.TypeEx
             break :blk .{ .struct_type = name_copy };
         },
         .generic => |gen| blk: {
-            // Build monomorphized name: BaseType$Arg1$Arg2...
             const name = getStructNameFromTypeExpr(allocator, .{ .expr = .{ .generic = gen } }, null) orelse break :blk .{ .struct_type = gen.base_type };
-            // Generic types use struct_type with monomorphized names
             break :blk .{ .struct_type = name };
         },
         .error_union => |eu| blk: {

@@ -268,13 +268,7 @@ pub const MutationAnalyzer = struct {
 // Semantic Analyzer - Type Analysis Pass
 // ============================================================================
 
-/// Associated type alias for generic type instantiation.
-/// e.g., `associatedtype ElementArray is Array with Element` creates an alias
-/// where ElementArray resolves to Array$<resolved Element>.
-const AssociatedTypeAlias = struct {
-    base_type: []const u8, // e.g., "Array"
-    type_args: []const []const u8, // e.g., ["Element"] - these get substituted via generic_params
-};
+const AssociatedTypeAlias = types.AssociatedTypeAlias;
 
 /// Performs semantic analysis: type registration, interface conformance checking,
 /// and variable collection. Runs before IR generation.
@@ -1451,19 +1445,15 @@ pub const SemanticAnalyzer = struct {
     /// Get or create a monomorphized version of a generic type.
     /// Returns the monomorphized type name
     fn getOrCreateMonomorphizedType(self: *SemanticAnalyzer, base_type: []const u8, type_args: []const []const u8) ![]const u8 {
-        // Build the monomorphized name: TypeName$Arg1$Arg2
-        var name_parts: std.ArrayListUnmanaged(u8) = .empty;
-        defer name_parts.deinit(self.allocator);
-
-        try name_parts.appendSlice(self.allocator, base_type);
-        for (type_args) |arg| {
-            // Resolve generic parameter if needed
-            const resolved = self.generic_params.get(arg) orelse arg;
-            try name_parts.append(self.allocator, '$');
-            try name_parts.appendSlice(self.allocator, resolved);
+        // Resolve generic parameters in type args
+        var resolved_args = try self.allocator.alloc([]const u8, type_args.len);
+        defer self.allocator.free(resolved_args);
+        for (type_args, 0..) |arg, i| {
+            resolved_args[i] = self.generic_params.get(arg) orelse arg;
         }
 
-        const mono_name = try self.allocator.dupe(u8, name_parts.items);
+        // Build the monomorphized name: TypeName$Arg1$Arg2
+        const mono_name = try types.buildMonomorphizedNameOrError(self.allocator, base_type, resolved_args);
         errdefer self.allocator.free(mono_name);
 
         // Check if already registered in type_map
@@ -1473,7 +1463,7 @@ pub const SemanticAnalyzer = struct {
         const existing_name: ?[]const u8 = if (type_already_exists) blk: {
             var iter = self.type_map.iterator();
             while (iter.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.*, name_parts.items)) {
+                if (std.mem.eql(u8, entry.key_ptr.*, mono_name)) {
                     break :blk entry.key_ptr.*;
                 }
             }
@@ -1499,7 +1489,7 @@ pub const SemanticAnalyzer = struct {
             const first_method_name = type_decl.methods[0].name;
             // Check if a monomorphized method  exists
             var method_name_buf: [256]u8 = undefined;
-            const method_name = std.fmt.bufPrint(&method_name_buf, "{s}${s}", .{ name_parts.items, first_method_name }) catch "";
+            const method_name = std.fmt.bufPrint(&method_name_buf, "{s}${s}", .{ mono_name, first_method_name }) catch "";
             methods_registered = self.func_map.contains(method_name);
         }
 

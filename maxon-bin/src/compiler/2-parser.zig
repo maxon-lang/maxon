@@ -6,6 +6,7 @@ const Lexer = lexer_mod.Lexer;
 const ast = @import("ast.zig");
 const debug = @import("debug.zig");
 const err = @import("error.zig");
+const ir_types = @import("ast_to_ir_types.zig");
 
 pub const ParseError = error{
     OutOfMemory,
@@ -794,31 +795,7 @@ pub const Parser = struct {
         switch (type_expr.expr) {
             .simple => |name| return name,
             .generic => |gen| {
-                // Build monomorphized name: "Pair$String$int"
-                var parts: std.ArrayListUnmanaged([]const u8) = .empty;
-                defer parts.deinit(self.allocator);
-                try parts.append(self.allocator, gen.base_type);
-                for (gen.type_args) |arg| {
-                    try parts.append(self.allocator, arg);
-                }
-                // Join with $
-                var total_len: usize = 0;
-                for (parts.items) |part| {
-                    total_len += part.len;
-                }
-                total_len += parts.items.len - 1; // for $ separators
-
-                const result = try self.allocator.alloc(u8, total_len);
-                var pos: usize = 0;
-                for (parts.items, 0..) |part, i| {
-                    if (i > 0) {
-                        result[pos] = '$';
-                        pos += 1;
-                    }
-                    @memcpy(result[pos .. pos + part.len], part);
-                    pos += part.len;
-                }
-                return result;
+                return ir_types.buildMonomorphizedNameOrError(self.allocator, gen.base_type, gen.type_args);
             },
             .function_type => {
                 // Function types in closures - not typically used as parameter types

@@ -1085,3 +1085,48 @@ pub fn getArrayElementInfo(type_name: []const u8) ?ArrayElementInfo {
         .struct_name = elem_name,
     };
 }
+
+// ============================================================================
+// Monomorphized Name Building
+// ============================================================================
+
+/// Associated type alias for generic type instantiation.
+/// e.g., `associatedtype ElementArray is Array with Element` creates an alias
+/// where ElementArray resolves to Array$<resolved Element>.
+pub const AssociatedTypeAlias = struct {
+    base_type: []const u8, // e.g., "Array"
+    type_args: []const []const u8, // e.g., ["Element"] - these get substituted via generic_params
+};
+
+/// Build a monomorphized type name: "BaseType$Arg1$Arg2$..."
+/// Returns allocated string or null on allocation failure.
+pub fn buildMonomorphizedName(
+    allocator: std.mem.Allocator,
+    base_type: []const u8,
+    type_args: []const []const u8,
+) ?[]const u8 {
+    var size: usize = base_type.len;
+    for (type_args) |arg| {
+        size += 1 + arg.len;
+    }
+    const buf = allocator.alloc(u8, size) catch return null;
+    var pos: usize = 0;
+    @memcpy(buf[pos..][0..base_type.len], base_type);
+    pos += base_type.len;
+    for (type_args) |arg| {
+        buf[pos] = '$';
+        pos += 1;
+        @memcpy(buf[pos..][0..arg.len], arg);
+        pos += arg.len;
+    }
+    return buf;
+}
+
+/// Error-returning variant for contexts using error unions.
+pub fn buildMonomorphizedNameOrError(
+    allocator: std.mem.Allocator,
+    base_type: []const u8,
+    type_args: []const []const u8,
+) error{OutOfMemory}![]const u8 {
+    return buildMonomorphizedName(allocator, base_type, type_args) orelse error.OutOfMemory;
+}
