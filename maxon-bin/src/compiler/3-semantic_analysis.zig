@@ -739,6 +739,12 @@ pub const SemanticAnalyzer = struct {
         const fields = try self.buildFieldInfos(type_decl.fields);
         const size = self.calculateStructSize(fields);
 
+        // Check if this type has COW semantics (__ManagedMemory field)
+        const managed_offset = types.findManagedMemoryField(fields);
+
+        // Collect all managed field offsets (including nested structs with managed buffers)
+        const managed_field_offsets = try types.collectManagedFieldOffsets(self.allocator, fields);
+
         // Clear associated type aliases
         for (type_decl.associated_types) |assoc| {
             _ = self.associated_type_aliases.remove(assoc.name);
@@ -756,6 +762,9 @@ pub const SemanticAnalyzer = struct {
                 .decl_line = type_decl.block.start_line,
                 .decl_column = type_decl.block.start_column,
                 .needs_cleanup = fieldsNeedCleanup(fields),
+                .has_managed_buffer = managed_offset != null,
+                .managed_buffer_offset = managed_offset orelse 0,
+                .managed_field_offsets = managed_field_offsets,
             },
         });
 

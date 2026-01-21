@@ -15,6 +15,7 @@ const ManagedMemory = array.ManagedMemory;
 const ast_to_ir = @import("4-ast_to_ir.zig");
 const AstToIr = ast_to_ir.AstToIr;
 const DeferredBlocks = ast_to_ir.DeferredBlocks;
+const BranchBuilder = ast_to_ir.BranchBuilder;
 
 // ============================================================================
 // Common Helper Functions
@@ -835,16 +836,64 @@ fn convertMakeCharIntrinsic(self: *AstToIr, call: ast.CallExpr) ConvertError!Typ
 
 /// __make_char_from_bytes(managed, pos, len) -> Character
 /// Creates a slice-mode Character struct (32 bytes)
+/// For static strings, creates a static-mode character (no refcounting needed)
 fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 3);
     const managed = try self.convertExpression(call.args[0]);
     const pos = try self.convertExpression(call.args[1]);
     const len = try self.convertExpression(call.args[2]);
 
+    // Allocate result char on stack BEFORE branching so both paths can use it
+    const char_ptr = try ManagedMemory.alloca(self.func());
+
+    // Check if source is STATIC mode - if so, don't incref and create static char
+    const source_mode = try ManagedMemory.loadMode(self.func(), ir.toManagedMemoryPtr(managed.value));
+    const three = try self.func().emitConstI32(3);
+    const is_static = try self.func().emitBinaryOp(.icmp_eq, source_mode, three, .i32);
+
+    // Create blocks - use manual approach since else block has nested block creation
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const static_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("char_static");
+    _ = try self.func().addBlock("char_refcounted");
+    _ = try self.func().addBlock("char_merge");
+
+    // Defer refcounted and merge blocks (stored[0]=merge, stored[1]=refcounted)
+    var deferred = try DeferredBlocks.init(self.allocator, 2);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 2);
+
+    // Entry block branches to static or refcounted
+    // We'll patch in refcounted index later after restoring it
+    // For now, emit conditional branch to static block (current)
+    // The refcounted block index will be known after we restore it
+
+    // ===== STATIC BLOCK (current) =====
+    // For static strings, just set flags=3 (static), no incref needed
+    const static_parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+    const static_slice_buf = try self.func().emitBinaryOp(.add, static_parent_buf_ptr, pos.value, .ptr);
+    try self.func().emitStore(char_ptr.raw(), static_slice_buf);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(char_ptr.raw()), 8, len.value);
+
+    // capacity = 0, flags = 3 (static), parent_off = 0
+    const zero_i64 = try self.func().emitConstI64(0);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(char_ptr.raw()), 16, zero_i64);
+    const three_i32 = try self.func().emitConstI32(3);
+    try struct_helpers.storeI32Field(self.func(), ir.toStructPtr(char_ptr.raw()), 24, three_i32);
+    const zero_i32 = try self.func().emitConstI32(0);
+    try struct_helpers.storeI32Field(self.func(), ir.toStructPtr(char_ptr.raw()), 28, zero_i32);
+
+    // Save static block end for later branch patching
+    const static_end_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+    // ===== REFCOUNTED BLOCK =====
+    try deferred.restore(self, 1); // restore refcounted
+    const refcounted_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
     // Incref the parent buffer - Character slices share ownership with their source
+    // NOTE: This creates nested blocks (heap_incref, slice_check, etc.)
     try array.emitManagedMemoryIncref(self, ir.toManagedMemoryPtr(managed.value), "char parent");
 
-    const char_ptr = try ManagedMemory.alloca(self.func());
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
     // Store slice buffer pointer (offset 0)
@@ -855,12 +904,37 @@ fn intrinsicMakeCharFromBytes(self: *AstToIr, call: ast.CallExpr) ConvertError!T
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(char_ptr.raw()), 8, len.value);
 
     // Initialize slice metadata fields with parent_off = source.parent_off + pos
-    // This ensures we can find the ORIGINAL parent buffer even when creating a char from a slice
     const source_parent_off_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(managed.value), 28);
     const source_parent_off_i32 = try self.func().emitLoad(source_parent_off_ptr.raw(), .i32);
     const pos_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, pos.value, .i32);
     const new_parent_off = try self.func().emitBinaryOp(.add, source_parent_off_i32, pos_i32, .i32);
     try initSliceArrayFields(self, char_ptr.raw(), new_parent_off);
+
+    // Save refcounted block end for branch
+    const refcounted_end_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+    // ===== MERGE BLOCK =====
+    try deferred.restore(self, 0); // restore merge
+    const merge_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+    // Now patch in all the branches with correct indices
+    // Entry: branch to static or refcounted
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_static }, .{ .block_ref = static_block_idx }, .{ .block_ref = refcounted_block_idx } },
+    });
+
+    // Static end: branch to merge
+    try self.func().blocks.items[static_end_block_idx].instructions.append(self.allocator, .{
+        .op = .br,
+        .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+    });
+
+    // Refcounted end: branch to merge
+    try self.func().blocks.items[refcounted_end_block_idx].instructions.append(self.allocator, .{
+        .op = .br,
+        .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+    });
 
     return .{ .value = char_ptr.raw(), .ty = try self.typeNameToValueType("Character") };
 }
@@ -907,11 +981,55 @@ fn intrinsicManagedMemorySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!
     const start = try self.convertExpression(call.args[1]);
     const end = try self.convertExpression(call.args[2]);
 
+    // Allocate result slice on stack BEFORE branching so both paths can use it
+    const slice_ptr = try ManagedMemory.alloca(self.func());
+
+    // Check if source is STATIC mode - if so, don't incref and create static slice
+    const source_mode = try ManagedMemory.loadMode(self.func(), ir.toManagedMemoryPtr(managed.value));
+    const three = try self.func().emitConstI32(3);
+    const is_static = try self.func().emitBinaryOp(.icmp_eq, source_mode, three, .i32);
+
+    // Create blocks - use manual approach since else block has nested block creation
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const static_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("slice_static");
+    _ = try self.func().addBlock("slice_refcounted");
+    _ = try self.func().addBlock("slice_merge");
+
+    // Defer refcounted and merge blocks (stored[0]=merge, stored[1]=refcounted)
+    var deferred = try DeferredBlocks.init(self.allocator, 2);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 2);
+
+    // ===== STATIC BLOCK (current) =====
+    // For static strings, just set flags=3 (static), no incref needed
+    const static_parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
+    const static_slice_buf = try self.func().emitBinaryOp(.add, static_parent_buf_ptr, start.value, .ptr);
+    try self.func().emitStore(slice_ptr.raw(), static_slice_buf);
+
+    const static_len_i64 = try self.func().emitBinaryOp(.sub, end.value, start.value, .i64);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(slice_ptr.raw()), 8, static_len_i64);
+
+    // capacity = 0, flags = 3 (static), parent_off = 0
+    const zero_i64 = try self.func().emitConstI64(0);
+    try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(slice_ptr.raw()), 16, zero_i64);
+    const three_i32 = try self.func().emitConstI32(3);
+    try struct_helpers.storeI32Field(self.func(), ir.toStructPtr(slice_ptr.raw()), 24, three_i32);
+    const zero_i32 = try self.func().emitConstI32(0);
+    try struct_helpers.storeI32Field(self.func(), ir.toStructPtr(slice_ptr.raw()), 28, zero_i32);
+
+    // Save static block end for later branch patching
+    const static_end_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+    // ===== REFCOUNTED BLOCK =====
+    try deferred.restore(self, 1); // restore refcounted
+    const refcounted_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
     // Incref the parent buffer if it's heap-allocated.
     // This keeps the parent buffer alive as long as slices reference it.
+    // NOTE: This creates nested blocks (heap_incref, slice_check, etc.)
     try array.emitManagedMemoryIncref(self, ir.toManagedMemoryPtr(managed.value), "slice parent");
 
-    const slice_ptr = try ManagedMemory.alloca(self.func());
     const parent_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
 
     // Store slice buffer = parent_buf_ptr + start (offset 0)
@@ -923,13 +1041,37 @@ fn intrinsicManagedMemorySlice(self: *AstToIr, call: ast.CallExpr) ConvertError!
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(slice_ptr.raw()), 8, len_i64);
 
     // Initialize slice metadata (flags=2, parent_off=source.parent_off + start)
-    // This ensures we can always find the ORIGINAL parent buffer for decref,
-    // even when creating a slice from another slice.
     const source_parent_off_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(managed.value), 28);
     const source_parent_off_i32 = try self.func().emitLoad(source_parent_off_ptr.raw(), .i32);
     const start_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, start.value, .i32);
     const new_parent_off = try self.func().emitBinaryOp(.add, source_parent_off_i32, start_i32, .i32);
     try initSliceArrayFields(self, slice_ptr.raw(), new_parent_off);
+
+    // Save refcounted block end for branch
+    const refcounted_end_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+    // ===== MERGE BLOCK =====
+    try deferred.restore(self, 0); // restore merge
+    const merge_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+    // Now patch in all the branches with correct indices
+    // Entry: branch to static or refcounted
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_static }, .{ .block_ref = static_block_idx }, .{ .block_ref = refcounted_block_idx } },
+    });
+
+    // Static end: branch to merge
+    try self.func().blocks.items[static_end_block_idx].instructions.append(self.allocator, .{
+        .op = .br,
+        .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+    });
+
+    // Refcounted end: branch to merge
+    try self.func().blocks.items[refcounted_end_block_idx].instructions.append(self.allocator, .{
+        .op = .br,
+        .operands = .{ .{ .block_ref = merge_block_idx }, .none, .none },
+    });
 
     return .{ .value = slice_ptr.raw(), .ty = try self.typeNameToValueType("__ManagedMemory") };
 }

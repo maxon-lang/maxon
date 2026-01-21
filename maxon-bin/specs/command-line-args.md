@@ -160,15 +160,15 @@ ALLOC #1: 4 bytes (command line arg)
 MOVE: managed
 ALLOC #2: 168 bytes (array grow)
 INCREF: array grow -> rc=1
-INCREF: <array_store> -> rc=2
+INCREF: <array_store nested> -> rc=2
 FREE #1: 4 bytes (cstring release)
 ALLOC #3: 4 bytes (command line arg)
 MOVE: managed
-INCREF: <array_store> -> rc=2
+INCREF: <array_store nested> -> rc=2
 FREE #3: 4 bytes (cstring release)
 ALLOC #4: 4 bytes (command line arg)
 MOVE: managed
-INCREF: <array_store> -> rc=2
+INCREF: <array_store nested> -> rc=2
 FREE #4: 4 bytes (cstring release)
 MOVE: result
 INCREF: <array element return> -> rc=3

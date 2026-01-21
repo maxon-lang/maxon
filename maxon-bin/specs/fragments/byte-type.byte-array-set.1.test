@@ -69,8 +69,8 @@ try_merge_3:
     %tmp_band.5 = band i32 %tmp_load.4 %tmp_const.14
     %tmp_const.15 = const.i32 i32 1
     %tmp_icmp.1 = icmp.eq i32 %tmp_band.5 %tmp_const.15
-    br.cond %tmp_icmp.1 @decref_4 @decref_end_6
-decref_4:
+    br.cond %tmp_icmp.1 @heap_decref_4 @slice_check_8
+heap_decref_4:
     %tmp_load.5 = load ptr %tmp_fieldptr.1
     %tmp_const.16 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.5 %tmp_const.16
@@ -80,15 +80,49 @@ decref_4:
     store %tmp_sub %tmp_sub.1
     %tmp_const.18 = const.i64 i64 0
     %tmp_icmp.2 = icmp.eq i64 %tmp_sub.1 %tmp_const.18
-    br.cond %tmp_icmp.2 @decref_free_5 @decref_end_6
-decref_free_5:
+    br.cond %tmp_icmp.2 @heap_free_5 @decref_end_9
+heap_free_5:
     %tmp_load.7 = load ptr %tmp_fieldptr.1
-    %tmp_sub.2 = sub ptr %tmp_load.7 %tmp_const.16
+    %tmp_const.19 = const.i64 i64 8
+    %tmp_sub.2 = sub ptr %tmp_load.7 %tmp_const.19
     heap.free %tmp_sub.2 tag="array cleanup"
-    br @decref_end_6
-decref_end_6:
-    %tmp_load.8 = load i64 %tmp_alloca.7
-    ret %tmp_load.8
+    br @decref_end_9
+slice_decref_6:
+    %tmp_load.8 = load ptr %tmp_fieldptr.1
+    %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.1 28
+    %tmp_load.9 = load i32 %tmp_fieldptr.3
+    %tmp_sext = sext.i32.i64 i64 %tmp_load.9
+    %tmp_sub.3 = sub ptr %tmp_load.8 %tmp_sext
+    %tmp_const.20 = const.i64 i64 8
+    %tmp_sub.4 = sub ptr %tmp_sub.3 %tmp_const.20
+    %tmp_load.10 = load i64 %tmp_sub.4
+    %tmp_const.21 = const.i64 i64 1
+    %tmp_sub.5 = sub i64 %tmp_load.10 %tmp_const.21
+    store %tmp_sub.4 %tmp_sub.5
+    %tmp_const.22 = const.i64 i64 0
+    %tmp_icmp.3 = icmp.eq i64 %tmp_sub.5 %tmp_const.22
+    br.cond %tmp_icmp.3 @slice_free_7 @decref_end_9
+slice_free_7:
+    %tmp_load.11 = load ptr %tmp_fieldptr.1
+    %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.1 28
+    %tmp_load.12 = load i32 %tmp_fieldptr.4
+    %tmp_sext.1 = sext.i32.i64 i64 %tmp_load.12
+    %tmp_sub.6 = sub ptr %tmp_load.11 %tmp_sext.1
+    %tmp_const.23 = const.i64 i64 8
+    %tmp_sub.7 = sub ptr %tmp_sub.6 %tmp_const.23
+    heap.free %tmp_sub.7 tag="slice parent cleanup"
+    br @decref_end_9
+slice_check_8:
+    %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.1 24
+    %tmp_load.13 = load i32 %tmp_fieldptr.5
+    %tmp_const.24 = const.i32 i32 3
+    %tmp_band.6 = band i32 %tmp_load.13 %tmp_const.24
+    %tmp_const.25 = const.i32 i32 2
+    %tmp_icmp.4 = icmp.eq i32 %tmp_band.6 %tmp_const.25
+    br.cond %tmp_icmp.4 @slice_decref_6 @decref_end_9
+decref_end_9:
+    %tmp_load.14 = load i64 %tmp_alloca.7
+    ret %tmp_load.14
 }
 
 function Array$byte$push() -> ptr {

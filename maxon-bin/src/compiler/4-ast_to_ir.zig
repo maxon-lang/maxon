@@ -1721,6 +1721,7 @@ pub const AstToIr = struct {
                                     .is_cstring = s.is_cstring,
                                     .is_internal_type = s.is_internal_type,
                                     .element_has_managed_buffer = s.element_has_managed_buffer,
+                                    .managed_field_offsets = s.managed_field_offsets,
                                 },
                             });
                             debug.astToIr("Registered type alias '{s}' -> '{s}' with size {d}", .{ type_decl.name, mono_name, s.size });
