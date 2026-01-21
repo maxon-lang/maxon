@@ -1,299 +1,92 @@
 // Maxon Compiler - Main entry point
-// Orchestrates all compilation phases using the two-stage IR system
+// Orchestrates all compilation phases for single-file compilation
 
-import Lexer from "1-lexer.maxon"
-import Parser from "2-parser.maxon"
-import AstToHir from "3a-ast-to-hir.maxon"
-	import HirToLir from "5a-hir-to-lir.maxon"
-	import Codegen from "6-codegen.maxon"
-	import buildPe from "7-pe.maxon"
-	import Workspace from "../project/workspace.maxon"
-	import Project from "../project/project.maxon"
-	import IncrementalManager from "../project/incremental.maxon"
-		import CompilationUnit from "../project/unit.maxon"
+// ============================================================================
+// Compiler Configuration
+// ============================================================================
 
-	// ============================================================================
-	// Compiler Configuration
-	// ============================================================================
-
-	/// Compiler options
-	export type CompilerOptions
+/// Compiler options
+export type CompilerOptions
 	export var sourceFile String
-		export var outputFile String
-			export var emitIr bool
-		export var emitHir bool
-		export var emitLir bool
-	export var debugInfo bool
-	export var optimizationLevel int
+	export var outputFile String
+	export var emitIr bool
 
 	export static function default_(sourceFile String) returns CompilerOptions
-	return {
-	sourceFile: sourceFile,
-	outputFile: sourceFile.replace(".maxon", ".exe"),
-		emitIr: false,
-			emitHir: false,
-		emitLir: false,
-		debugInfo: true,
-	optimizationLevel: 0
-	}
+		var outFile = sourceFile.replace(".maxon", ".ir")
+		return {sourceFile: sourceFile, outputFile: outFile, emitIr: false}
 	end 'default_'
-	end 'CompilerOptions'
+end 'CompilerOptions'
 
-	// ============================================================================
-	// Main Compilation Entry Points
-		// ============================================================================
+// ============================================================================
+// Main Compilation Entry Point
+// ============================================================================
 
-		/// Compile a single Maxon source file
-	/// Returns 0 on success, non-zero on error
-	export function compile(sourceFile String, emitIr bool) returns int
+/// Compile a single Maxon source file
+/// Returns 0 on success, non-zero on error
+export function compile(sourceFile String, emitIr bool) returns int
 	var options = CompilerOptions.default_(sourceFile)
 	options.emitIr = emitIr
 	return compileWithOptions(options)
-	end 'compile'
+end 'compile'
 
-	/// Compile with full options
-	export function compileWithOptions(options CompilerOptions) returns int
-		Logger.info(LogCategory.compiler, message: "Compiling: {options.sourceFile} -> {options.outputFile}")
-
-			// Create single-file workspace
-		var workspace = Workspace.singleFile(options.sourceFile)
-			let project = workspace.activeProject!
-		let unit = project.units[0] ref
+/// Compile with full options
+export function compileWithOptions(options CompilerOptions) returns int
+	print("DEBUG: Entered compileWithOptions\n")
+	Logger.info(LogCategory.compiler, message: "Compiling: {options.sourceFile}")
 
 	// Load source file
-	if not unit.load() 'loadFailed'
+	print("DEBUG: About to read file\n")
+	let source = try File.readText(options.sourceFile) otherwise ""
+	print("DEBUG: Read file, len={source.count()}\n")
+	if source == "" 'loadFailed'
 		Logger.error(LogCategory.compiler, message: "Failed to read source file: {options.sourceFile}")
 		return 1
-		end 'loadFailed'
+	end 'loadFailed'
 
-	// Compile the unit
-	let result = compileUnit(unit, options)
-	if result != 0 'failed'
-	return result
-	end 'failed'
+	// Phase 1: Lexical Analysis
+	print("DEBUG: Creating lexer\n")
+	var lexer = Lexer.init(source, sourceFile: options.sourceFile)
+	print("DEBUG: Tokenizing\n")
+	let tokens = lexer.tokenize()
+	print("DEBUG: Tokenized {tokens.count()} tokens\n")
+	Logger.info(LogCategory.lexer, message: "Lexed {tokens.count()} tokens")
 
-// Generate executable
-return generateExecutable(project, options)
+	if lexer.errors.hasAnyErrors() 'lexerErrors'
+		lexer.errors.printAll()
+	end 'lexerErrors'
+
+	// Phase 2: Parsing (error-tolerant)
+	print("DEBUG: Creating parser\n")
+	var parser = Parser.init(tokens, sourceFile: options.sourceFile)
+	print("DEBUG: Parsing\n")
+	let ast = parser.parse()
+	print("DEBUG: Parsed, hasError={ast.hasError}\n")
+	Logger.info(LogCategory.parser, message: "Parsed program")
+
+	print("DEBUG: After parser\n")
+
+	// Phase 3: Semantic Analysis
+	print("DEBUG: Creating semantic analyzer\n")
+	var analyzer = SemanticAnalyzer.init(ast, sourceFile: options.sourceFile)
+	print("DEBUG: Analyzing\n")
+	var result = analyzer.analyze()
+	print("DEBUG: Analysis done\n")
+
+	if result == SemanticResult.failure 'semFailed'
+		analyzer.printErrors()
+		return 1
+	end 'semFailed'
+
+	print("DEBUG: Semantic passed\n")
+
+	// Phase 4: IR Generation
+	print("DEBUG: Creating IR builder\n")
+	var irBuilder = IrBuilder.init(options.sourceFile)
+	print("DEBUG: Converting to IR\n")
+	var ir = irBuilder.convert(ast)
+	print("DEBUG: IR conversion done, len={ir.count()}\n")
+
+	print("DEBUG: About to return\n")
+	return 0
 end 'compileWithOptions'
 
-/// Compile a project (multi-file)
-export function compileProject(projectPath String, outputFile String) returns int
-Logger.info(LogCategory.compiler, message: "Compiling project: {projectPath}")
-
-// Create workspace and discover files
-var workspace = Workspace.create(projectPath)
-workspace.initialize()
-
-if workspace.activeProject == null 'noProject'
-Logger.error(LogCategory.compiler, message: "No project found at: {projectPath}")
-return 1
-end 'noProject'
-
-let project = workspace.activeProject! ref
-
-// Build dependency graph
-project.buildDependencyGraph()
-
-// Get compilation order
-let order = project.getCompilationOrder()
-
-// Compile each file in order
-var options = CompilerOptions.default_(outputFile)
-for path in order 'eachFile'
-let unit = project.findUnit(path)
-if unit != null 'hasUnit'
-if not unit!.load() 'loadFailed'
-Logger.error(LogCategory.compiler, message: "Failed to read: {path}")
-return 1
-end 'loadFailed'
-
-let result = compileUnit(unit! ref, options)
-if result != 0 'failed'
-return result
-end 'failed'
-end 'hasUnit'
-end 'eachFile'
-
-// Generate executable
-return generateExecutable(project, options)
-end 'compileProject'
-
-// ============================================================================
-// Unit Compilation
-// ============================================================================
-
-/// Compile a single compilation unit through all phases
-function compileUnit(unit CompilationUnit ref, options CompilerOptions) returns int
-Logger.info(LogCategory.compiler, message: "Compiling unit: {unit.path}")
-
-// Phase 1: Lexical Analysis
-var lexer = Lexer.init(unit.content, sourceFile: unit.path)
-let tokens = lexer.tokenize()
-Logger.info(LogCategory.lexer, message: "Lexed {tokens.count()} tokens")
-
-if lexer.errors.count() > 0 'lexerErrors'
-for err in lexer.errors 'printErr'
-Logger.error(LogCategory.lexer, message: err)
-end 'printErr'
-// Continue with error-tolerant parsing
-end 'lexerErrors'
-
-// Phase 2: Parsing (error-tolerant)
-var parser = Parser.init(tokens, sourceFile: unit.path)
-let ast = parser.parse()
-Logger.info(LogCategory.parser, message: "Parsed program")
-
-if parser.errors.count() > 0 'parserErrors'
-for err in parser.errors 'printErr'
-Logger.error(LogCategory.parser, message: err)
-end 'printErr'
-// Check if we can continue (for LSP)
-if ast.hasError and not options.emitIr 'tooManyErrors'
-return 1
-end 'tooManyErrors'
-end 'parserErrors'
-
-// Store AST in unit
-unit.ast = ast
-
-// Phase 3: AST to HIR
-var astToHir = AstToHir.create(unit.path)
-let hir = astToHir.convert(ast)
-Logger.info(LogCategory.semantic, message: "Lowered to HIR")
-
-if astToHir.hasErrors() 'hirErrors'
-astToHir.printErrors()
-return 1
-end 'hirErrors'
-
-// Store HIR in unit
-unit.hir = hir
-
-// Emit HIR if requested
-if options.emitHir 'emitHir'
-let hirFile = unit.path.replace(".maxon", ".hir")
-// TODO: Implement HIR text format
-Logger.debug(LogCategory.semantic, message: "HIR emit not yet implemented")
-end 'emitHir'
-
-// Phase 5: HIR to LIR
-var hirToLir = HirToLir.create()
-let lir = hirToLir.convert(hir)
-Logger.info(LogCategory.ir, message: "Lowered to LIR")
-
-// Store LIR in unit
-unit.lir = lir
-
-// Emit LIR if requested
-if options.emitLir 'emitLir'
-let lirFile = unit.path.replace(".maxon", ".lir")
-// TODO: Implement LIR text format
-Logger.debug(LogCategory.ir, message: "LIR emit not yet implemented")
-end 'emitLir'
-
-// Mark unit as compiled
-unit.markClean()
-
-return 0
-end 'compileUnit'
-
-// ============================================================================
-// Executable Generation
-// ============================================================================
-
-/// Generate executable from compiled project
-function generateExecutable(project Project ref, options CompilerOptions) returns int
-Logger.info(LogCategory.codegen, message: "Generating executable: {options.outputFile}")
-
-// Collect all LIR modules
-var allLir = LirModuleArray{}
-for unit in project.units 'each'
-if unit.lir != null 'hasLir'
-allLir.push(unit.lir!)
-end 'hasLir'
-end 'each'
-
-if allLir.count() == 0 'noLir'
-Logger.error(LogCategory.codegen, message: "No LIR modules to generate")
-return 1
-end 'noLir'
-
-// For now, just use the first LIR module
-// TODO: Link multiple modules
-let lir = allLir[0] ref
-
-// Phase 6: LIR to x86-64
-var codegen = Codegen.create(lir)
-codegen.generate()
-Logger.info(LogCategory.codegen, message: "Generated {codegen.functions.count()} function(s)")
-
-// Phase 7: Generate PE executable
-let peBytes = buildPe(codegen ref)
-Logger.info(LogCategory.codegen, message: "Generated PE ({peBytes.count()} bytes)")
-
-// Write executable
-let writeResult = File.writeBytes(options.outputFile, peBytes)
-if not writeResult.isOk() 'writeFailed'
-Logger.error(LogCategory.codegen, message: "Failed to write executable: {options.outputFile}")
-return 1
-end 'writeFailed'
-
-Logger.info(LogCategory.compiler, message: "Successfully compiled: {options.outputFile}")
-return 0
-end 'generateExecutable'
-
-// ============================================================================
-// Incremental Compilation
-// ============================================================================
-
-/// Incremental compilation manager for a workspace
-export type IncrementalCompiler
-var workspace Workspace ref
-var incremental IncrementalManager
-
-export static function create(workspace Workspace ref) returns IncrementalCompiler
-return {
-workspace: workspace,
-incremental: IncrementalManager.create(workspace)
-}
-end 'create'
-
-/// Notify that a file has changed
-export function fileChanged(filePath String)
-incremental.fileChanged(filePath)
-end 'fileChanged'
-
-/// Recompile changed files
-export function recompile() returns int
-let project = workspace.activeProject
-if project == null 'noProject'
-return 1
-end 'noProject'
-
-let order = incremental.getCompilationOrder(project! ref)
-var options = CompilerOptions.default_("")
-
-for path in order 'each'
-let unit = project!.findUnit(path)
-if unit != null 'hasUnit'
-let result = compileUnit(unit! ref, options)
-if result != 0 'failed'
-return result
-end 'failed'
-incremental.markCompiled(path)
-end 'hasUnit'
-end 'each'
-
-return 0
-end 'recompile'
-
-/// Get cache statistics
-export function getCacheStats() returns CacheStats
-return incremental.getCacheStats()
-end 'getCacheStats'
-end 'IncrementalCompiler'
-
-// Forward declarations for types from other modules
-import CacheStats from "../project/incremental.maxon"
-import LirModule from "5-lir.maxon"
-export typealias LirModuleArray is Array with LirModule

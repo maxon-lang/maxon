@@ -13,10 +13,11 @@ export type IrBuilder
 	var output String
 	var nextValue int
 	var currentBlockName String
+	var program Program    // Reference to program for expression pool access
 
 	/// Initialize the IR builder
 	export static function init(sourceFile String) returns IrBuilder
-		return {errors: ErrorCollector.create(), sourceFile: sourceFile, output: "", nextValue: 0, currentBlockName: ""}
+		return {errors: ErrorCollector.create(), sourceFile: sourceFile, output: "", nextValue: 0, currentBlockName: "", program: Program.create()}
 	end 'init'
 
 	/// Check if IR generation produced any errors
@@ -30,7 +31,8 @@ export type IrBuilder
 	end 'printErrors'
 
 	/// Convert a program to IR text
-	export function convert(program Program) returns String
+	export function convert(prog Program) returns String
+		program = prog
 		output = ""
 		var i = 0
 		while i < program.functions.count() 'funcLoop'
@@ -63,7 +65,7 @@ export type IrBuilder
 			i = i + 1
 		end 'stmtLoop'
 
-		output = "{output}\}\n"
+		output = "{output}}\n"
 	end 'convertFunction'
 
 	/// Convert a statement
@@ -75,7 +77,8 @@ export type IrBuilder
 
 	/// Convert a return statement
 	function convertReturn(stmt Stmt)
-		let value = convertExpression(stmt.expr)
+		let expr = program.getExpr(stmt.exprIndex)
+		let value = convertExpression(expr)
 		output = "{output}    ret %{value}\n"
 	end 'convertReturn'
 

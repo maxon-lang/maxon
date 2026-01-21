@@ -3,38 +3,37 @@
 
 export enum TokenType
 	// Keywords
-	keywordFunction
-	keywordReturns
-	keywordReturn
-	keywordEnd
-	keywordInt
-	keywordFloat
-	keywordBool
-	keywordByte
-	keywordString
-	keywordLet
-	keywordVar
-	keywordIf
-	keywordElse
-	keywordWhile
-	keywordFor
-	keywordBreak
-	keywordContinue
-	keywordTrue
-	keywordFalse
-	keywordAnd
-	keywordOr
-	keywordNot
-	keywordMod
-	keywordIn
-	keywordExport
+	function
+	returns
+	return
+	end
+	int
+	float
+	bool
+	byte
+	let
+	var
+	if
+	else
+	while
+	for
+	break
+	continue
+	true
+	false
+	and
+	or
+	not
+	mod
+	in
+	export
 
 	// Literals
 	identifier
-	integer
-	float
-	string
-	charLiteral
+	integerLiteral
+	floatLiteral
+	stringLiteral
+	characterLiteral
 
 	// Operators
 	plus
@@ -84,18 +83,18 @@ end 'KeywordInfo'
 typealias TokenTypeMap is Map with (TokenType, KeywordInfo)
 
 export let keyword_map = [
-	TokenType.keywordFunction: KeywordInfo{text: "function", category: KeywordCategory.other, description: "Declares a function.", requiresLabel: false},
-	TokenType.keywordReturns: KeywordInfo{text: "returns", category: KeywordCategory.other, description: "Specifies the return type of a function.", requiresLabel: false},
-	TokenType.keywordReturn: KeywordInfo{text: "return", category: KeywordCategory.control, description: "Returns a value from a function.", requiresLabel: false},
-	TokenType.keywordEnd: KeywordInfo{text: "end", category: KeywordCategory.control, description: "Ends a block.", requiresLabel: true},
-	TokenType.keywordLet: KeywordInfo{text: "let", category: KeywordCategory.other, description: "Declares an immutable variable.", requiresLabel: false},
-	TokenType.keywordVar: KeywordInfo{text: "var", category: KeywordCategory.other, description: "Declares a mutable variable.", requiresLabel: false},
-	TokenType.keywordIf: KeywordInfo{text: "if", category: KeywordCategory.control, description: "Conditional statement.", requiresLabel: true},
-	TokenType.keywordElse: KeywordInfo{text: "else", category: KeywordCategory.control, description: "Alternative branch.", requiresLabel: false},
-	TokenType.keywordWhile: KeywordInfo{text: "while", category: KeywordCategory.control, description: "Loop statement.", requiresLabel: true},
-	TokenType.keywordFor: KeywordInfo{text: "for", category: KeywordCategory.control, description: "Iterator loop.", requiresLabel: true},
-	TokenType.keywordBreak: KeywordInfo{text: "break", category: KeywordCategory.control, description: "Exit a loop.", requiresLabel: false},
-	TokenType.keywordContinue: KeywordInfo{text: "continue", category: KeywordCategory.control, description: "Skip to next iteration.", requiresLabel: false}
+	TokenType.function: KeywordInfo{text: "function", category: KeywordCategory.other, description: "Declares a function.", requiresLabel: false},
+	TokenType.returns: KeywordInfo{text: "returns", category: KeywordCategory.other, description: "Specifies the return type of a function.", requiresLabel: false},
+	TokenType.return: KeywordInfo{text: "return", category: KeywordCategory.control, description: "Returns a value from a function.", requiresLabel: false},
+	TokenType.end: KeywordInfo{text: "end", category: KeywordCategory.control, description: "Ends a block.", requiresLabel: true},
+	TokenType.let: KeywordInfo{text: "let", category: KeywordCategory.other, description: "Declares an immutable variable.", requiresLabel: false},
+	TokenType.var: KeywordInfo{text: "var", category: KeywordCategory.other, description: "Declares a mutable variable.", requiresLabel: false},
+	TokenType.if: KeywordInfo{text: "if", category: KeywordCategory.control, description: "Conditional statement.", requiresLabel: true},
+	TokenType.else: KeywordInfo{text: "else", category: KeywordCategory.control, description: "Alternative branch.", requiresLabel: false},
+	TokenType.while: KeywordInfo{text: "while", category: KeywordCategory.control, description: "Loop statement.", requiresLabel: true},
+	TokenType.for: KeywordInfo{text: "for", category: KeywordCategory.control, description: "Iterator loop.", requiresLabel: true},
+	TokenType.break: KeywordInfo{text: "break", category: KeywordCategory.control, description: "Exit a loop.", requiresLabel: false},
+	TokenType.continue: KeywordInfo{text: "continue", category: KeywordCategory.control, description: "Skip to next iteration.", requiresLabel: false}
 ]
 
 /// A single token with type, text, and position
@@ -157,7 +156,7 @@ export type Lexer
 			'<' then scanLess(tokens)
 			'>' then scanGreater(tokens)
 			'\'' then tokens.push(scanCharLiteral())
-			'"' then tokens.push(scanString())
+			'"' then tokens.push(scanStringLiteral())
 			'0'..='9' then tokens.push(scanNumber())
 			'a'..='z' or 'A'..='Z' or '_' then tokens.push(scanIdentifierOrKeyword())
 			default then tokens.push(scanErrorToken())
@@ -243,7 +242,7 @@ export type Lexer
 		end 'isGreater'
 	end 'scanGreater'
 
-	function scanString() returns Token
+	function scanStringLiteral() returns Token
 		let startCol = column
 		let startLine = line
 		advance()  // skip opening "
@@ -264,8 +263,8 @@ export type Lexer
 		end 'hasClose' else 'noClose'
 			errors.addErrorAt(ErrorCode.E1002, message: "unterminated string literal", file: sourceFile, line: startLine, column: startCol)
 		end 'noClose'
-		return Token.create(TokenType.string, text: text, line: startLine, column: startCol)
-	end 'scanString'
+		return Token.create(TokenType.stringLiteral, text: text, line: startLine, column: startCol)
+	end 'scanStringLiteral'
 
 	function isAtEnd() returns bool
 		return pos >= source.byteLength()
@@ -344,7 +343,7 @@ export type Lexer
 		end 'hasClose' else 'noClose'
 			errors.addErrorAt(ErrorCode.E1002, message: "unterminated character literal", file: sourceFile, line: line, column: startCol)
 		end 'noClose'
-		return Token.create(TokenType.charLiteral, text: text, line: line, column: startCol)
+		return Token.create(TokenType.characterLiteral, text: text, line: line, column: startCol)
 	end 'scanCharLiteral'
 
 	function scanNumber() returns Token
@@ -361,11 +360,11 @@ export type Lexer
 				advance()
 			end 'fracDigits'
 			let text = extractSubstring(startPos, endPos: pos)
-			return Token.create(TokenType.float, text: text, line: line, column: startCol)
+			return Token.create(TokenType.floatLiteral, text: text, line: line, column: startCol)
 		end 'isFloat'
 
 		let text = extractSubstring(startPos, endPos: pos)
-		return Token.create(TokenType.integer, text: text, line: line, column: startCol)
+		return Token.create(TokenType.integerLiteral, text: text, line: line, column: startCol)
 	end 'scanNumber'
 
 	function scanIdentifierOrKeyword() returns Token
@@ -376,7 +375,7 @@ export type Lexer
 			advance()
 		end 'identChars'
 		let text = extractSubstring(startPos, endPos: pos)
-		let tokType = getKeywordType(text)
+		let tokType = try TokenType.fromName(text) otherwise TokenType.identifier
 		return Token.create(tokType, text: text, line: line, column: startCol)
 	end 'scanIdentifierOrKeyword'
 
@@ -399,35 +398,4 @@ export type Lexer
 			default gives false
 		end 'check'
 	end 'isIdentifierContinue'
-
-	function getKeywordType(text String) returns TokenType
-		return match text 'keyword'
-			"function" gives TokenType.keywordFunction
-			"returns" gives TokenType.keywordReturns
-			"return" gives TokenType.keywordReturn
-			"end" gives TokenType.keywordEnd
-			"let" gives TokenType.keywordLet
-			"var" gives TokenType.keywordVar
-			"if" gives TokenType.keywordIf
-			"else" gives TokenType.keywordElse
-			"while" gives TokenType.keywordWhile
-			"for" gives TokenType.keywordFor
-			"break" gives TokenType.keywordBreak
-			"continue" gives TokenType.keywordContinue
-			"true" gives TokenType.keywordTrue
-			"false" gives TokenType.keywordFalse
-			"and" gives TokenType.keywordAnd
-			"or" gives TokenType.keywordOr
-			"not" gives TokenType.keywordNot
-			"mod" gives TokenType.keywordMod
-			"in" gives TokenType.keywordIn
-			"export" gives TokenType.keywordExport
-			"int" gives TokenType.keywordInt
-			"float" gives TokenType.keywordFloat
-			"bool" gives TokenType.keywordBool
-			"byte" gives TokenType.keywordByte
-			"String" gives TokenType.keywordString
-			default gives TokenType.identifier
-		end 'keyword'
-	end 'getKeywordType'
 end 'Lexer'

@@ -131,6 +131,90 @@ pub fn clearSliceBorrows(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmana
 }
 
 // ============================================================================
+// Array Element Cleanup with Refcount Check
+// ============================================================================
+
+/// Emit element cleanup only if we're the sole owner of the array buffer.
+/// This prevents double-free when arrays are shared via COW semantics.
+/// If refcount > 1, we're not the sole owner, so we just decref the container
+/// and let the final owner clean up the elements.
+fn emitConditionalElementCleanup(self: *AstToIr, managed_ptr: ir.ManagedMemoryPtr, elem_struct_info: *const types.StructTypeInfo) !void {
+    // Check if array is in heap mode (do this BEFORE creating new blocks)
+    const is_heap = try ManagedMemory.isHeapMode(self.func(), managed_ptr);
+
+    // Also check for null buffer (empty array)
+    const buf_ptr = try self.func().emitLoad(managed_ptr.raw(), .ptr);
+    const zero = try self.func().emitConstI64(0);
+    const not_null = try self.func().emitBinaryOp(.icmp_ne, buf_ptr, zero, .i64);
+    const should_check = try self.func().emitBinaryOp(.band, not_null, is_heap, .i64);
+
+    // Create blocks: entry -> check_refcount -> cleanup -> end
+    const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+    const check_refcount_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("elem_cleanup_check_rc");
+    const cleanup_block_idx: u32 = @intCast(self.func().blocks.items.len);
+    _ = try self.func().addBlock("elem_cleanup_do");
+    _ = try self.func().addBlock("elem_cleanup_end");
+
+    // Emit branch from entry block with placeholder end index (will be patched later)
+    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = should_check }, .{ .block_ref = check_refcount_block_idx }, .{ .block_ref = 0 } }, // end patched later
+    });
+
+    // Defer blocks in reverse order: end(0), cleanup(1)
+    var deferred = try DeferredBlocks.init(self.allocator, 2);
+    defer deferred.deinit();
+    deferred.deferBlocks(self, 2);
+
+    // Now we're in check_refcount block
+    // Check refcount block: load refcount and check if == 1
+    const buf_ptr2 = try self.func().emitLoad(managed_ptr.raw(), .ptr);
+    const eight = try self.func().emitConstI64(8);
+    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr2, eight, .ptr);
+    const refcount = try self.func().emitLoad(header_ptr, .i64);
+    const one = try self.func().emitConstI64(1);
+    const is_sole_owner = try self.func().emitBinaryOp(.icmp_eq, refcount, one, .i64);
+
+    // Branch: if sole owner (refcount == 1), do cleanup; otherwise skip to end
+    // NOTE: We use deferred.idx(0) for end block - the DeferredBlocks correctly calculates
+    // the FINAL index where the block will be when ALL deferred blocks are restored.
+    try self.func().blocks.items[check_refcount_block_idx].instructions.append(self.allocator, .{
+        .op = .br_cond,
+        .operands = .{ .{ .value = is_sole_owner }, .{ .block_ref = cleanup_block_idx }, .{ .block_ref = deferred.idx(0) } },
+    });
+
+    // Restore cleanup block (this makes it the current block)
+    try deferred.restore(self, 1);
+
+    // Do element cleanup - use appropriate method based on element type
+    if (elem_struct_info.has_managed_buffer) {
+        try emitArrayManagedElementsCleanup(self, managed_ptr.raw(), elem_struct_info);
+    } else {
+        try emitElementCleanup(self, managed_ptr.raw(), elem_struct_info);
+    }
+
+    // Restore end block FIRST, so we know its actual index
+    try deferred.restore(self, 0);
+    const end_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+    // Now go back and patch the branches that need to point to end_block_idx
+    // Entry block branch was emitted before we knew the final end_block_idx, so patch it
+    self.func().blocks.items[entry_block_idx].instructions.items[self.func().blocks.items[entry_block_idx].instructions.items.len - 1].operands[2] = .{ .block_ref = end_block_idx };
+
+    // Also patch the check_refcount branch
+    self.func().blocks.items[check_refcount_block_idx].instructions.items[self.func().blocks.items[check_refcount_block_idx].instructions.items.len - 1].operands[2] = .{ .block_ref = end_block_idx };
+
+    // Branch from cleanup's end block to our end block
+    // The cleanup functions left us in their final block, which is now the second-to-last block
+    const after_cleanup_block_idx: u32 = end_block_idx - 1;
+    try self.func().blocks.items[after_cleanup_block_idx].instructions.append(self.allocator, .{
+        .op = .br,
+        .operands = .{ .{ .block_ref = end_block_idx }, undefined, undefined },
+    });
+}
+
+// ============================================================================
 // Array Managed Elements Cleanup (for elements with COW semantics)
 // ============================================================================
 
@@ -350,7 +434,8 @@ pub fn cleanupFieldBeforeReassign(self: *AstToIr, field_ptr: ir.StructPtr, field
 
 /// Clean up a struct by recursively cleaning up its fields that need cleanup.
 /// Uses mode-based dispatch for types with __ManagedMemory.
-/// Also handles nested structs that contain managed buffers via managed_field_offsets.
+/// For composite structs (with multiple fields needing cleanup), uses cleanupStructFields
+/// to properly recurse through each field, including arrays with elements needing cleanup.
 fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types.StructTypeInfo, var_name: []const u8) ConvertError!void {
     const name = struct_info.name;
 
@@ -360,17 +445,10 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
         return;
     }
 
-    // Check for multiple managed fields (nested structs with managed buffers)
-    if (struct_info.managed_field_offsets) |offsets| {
-        // Decref all managed buffers
-        for (offsets) |offset| {
-            const managed_ptr = try array_helpers.getManagedMemoryPtr(self, struct_ptr, offset);
-            try array_helpers.emitManagedMemoryDecref(self, managed_ptr, var_name, "nested struct cleanup");
-        }
-        return;
-    }
-
     // Check if struct has __ManagedMemory field - use unified COW decref
+    // This handles String, Array$T, and similar single-managed-buffer types.
+    // For composite structs with multiple managed fields (like Program with FunctionArray
+    // and ExprArray), we fall through to cleanupStructFields which properly recurses.
     if (struct_info.has_managed_buffer) {
         // First, clean up elements if this is a collection with element cleanup needs
         // Use element_type_name from struct_info if available, otherwise parse from name
@@ -388,13 +466,123 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
             // Check if element type needs cleanup
             if (self.type_map.get(eln)) |elem_type_info| {
                 if (elem_type_info == .struct_type and elem_type_info.struct_type.needs_cleanup) {
-                    // Use specialized cleanup for elements with COW semantics (has_managed_buffer)
-                    // These have their own inline decref loop for efficient buffer management
+                    // Only clean elements if we're the sole owner of this array buffer.
+                    // If the array is shared via COW (refcount > 1), other copies still
+                    // reference the same elements IN the same buffer. We should only decref
+                    // the container, not the elements - the final owner will clean elements.
+                    //
+                    // We check: if heap mode AND refcount == 1, clean elements.
+                    // Otherwise skip element cleanup entirely.
+                    //
+                    // IMPORTANT: We must check heap mode FIRST before accessing the refcount,
+                    // because in non-heap modes (SSO, slice, static), the buffer_ptr may be
+                    // null or invalid, and dereferencing buf_ptr - 8 would crash.
+                    const is_heap = try ManagedMemory.isHeapMode(self.func(), managed_ptr);
+
+                    // Record entry block index BEFORE creating any new blocks
+                    const entry_block_idx = @as(u32, @intCast(self.func().blocks.items.len - 1));
+
+                    // Create a block to check the refcount (only entered if is_heap is true)
+                    const check_refcount_block_idx = @as(u32, @intCast(self.func().blocks.items.len));
+                    _ = try self.func().addBlock("elem_cleanup_check_refcount");
+
+                    // Create cleanup_block - this is where element cleanup code will go
+                    const cleanup_block_idx = @as(u32, @intCast(self.func().blocks.items.len));
+                    _ = try self.func().addBlock("elem_cleanup_if_owner");
+
+                    // Now in cleanup block (it's the last created) - do element cleanup
+                    // These functions may add many blocks internally
                     if (elem_type_info.struct_type.has_managed_buffer) {
                         try emitArrayManagedElementsCleanup(self, managed_ptr.raw(), &elem_type_info.struct_type);
                     } else {
                         try emitElementCleanup(self, managed_ptr.raw(), &elem_type_info.struct_type);
                     }
+
+                    // After cleanup, we're in whatever block the cleanup function left us in.
+                    // Record this for adding branch later.
+                    const after_cleanup_block_idx = @as(u32, @intCast(self.func().blocks.items.len - 1));
+
+                    // Create end block AFTER all cleanup code - now its index is stable
+                    const end_block_idx = @as(u32, @intCast(self.func().blocks.items.len));
+                    _ = try self.func().addBlock("elem_cleanup_done");
+
+                    // Now patch all the branches:
+                    // 1. Entry -> check_refcount (if is_heap) OR end (if not heap)
+                    try self.func().blocks.items[entry_block_idx].instructions.append(self.allocator, .{
+                        .op = .br_cond,
+                        .operands = .{ .{ .value = is_heap }, .{ .block_ref = check_refcount_block_idx }, .{ .block_ref = end_block_idx } },
+                    });
+
+                    // 2. Check refcount block: load refcount and branch to cleanup or end
+                    // Insert instructions at the BEGINNING of check_refcount_block (it's currently empty)
+                    const check_block = &self.func().blocks.items[check_refcount_block_idx];
+
+                    // Load buf_ptr, compute header_ptr = buf_ptr - 8, load refcount
+                    // We need to emit these into the check_refcount block
+                    // Unfortunately we can't easily emit into a non-current block, so we'll build the instructions manually
+
+                    // Emit the refcount check instructions into check_refcount_block
+                    const buf_ptr_val = self.func().newValue();
+                    try check_block.instructions.append(self.allocator, .{
+                        .op = .load,
+                        .operands = .{ .{ .value = managed_ptr.raw() }, undefined, undefined },
+                        .result = buf_ptr_val,
+                        .result_type = .ptr,
+                    });
+
+                    const eight_val = self.func().newValue();
+                    try check_block.instructions.append(self.allocator, .{
+                        .op = .const_i64,
+                        .operands = .{ .{ .immediate_i64 = 8 }, undefined, undefined },
+                        .result = eight_val,
+                        .result_type = .i64,
+                    });
+
+                    const header_ptr_val = self.func().newValue();
+                    try check_block.instructions.append(self.allocator, .{
+                        .op = .sub,
+                        .operands = .{ .{ .value = buf_ptr_val }, .{ .value = eight_val }, undefined },
+                        .result = header_ptr_val,
+                        .result_type = .ptr,
+                    });
+
+                    const refcount_val = self.func().newValue();
+                    try check_block.instructions.append(self.allocator, .{
+                        .op = .load,
+                        .operands = .{ .{ .value = header_ptr_val }, undefined, undefined },
+                        .result = refcount_val,
+                        .result_type = .i64,
+                    });
+
+                    const one_val = self.func().newValue();
+                    try check_block.instructions.append(self.allocator, .{
+                        .op = .const_i64,
+                        .operands = .{ .{ .immediate_i64 = 1 }, undefined, undefined },
+                        .result = one_val,
+                        .result_type = .i64,
+                    });
+
+                    const is_sole_owner_val = self.func().newValue();
+                    try check_block.instructions.append(self.allocator, .{
+                        .op = .icmp_eq,
+                        .operands = .{ .{ .value = refcount_val }, .{ .value = one_val }, undefined },
+                        .result = is_sole_owner_val,
+                        .result_type = .i64,
+                    });
+
+                    // Branch: if sole owner, cleanup; else skip to end
+                    try check_block.instructions.append(self.allocator, .{
+                        .op = .br_cond,
+                        .operands = .{ .{ .value = is_sole_owner_val }, .{ .block_ref = cleanup_block_idx }, .{ .block_ref = end_block_idx } },
+                    });
+
+                    // 3. After cleanup -> end
+                    try self.func().blocks.items[after_cleanup_block_idx].instructions.append(self.allocator, .{
+                        .op = .br,
+                        .operands = .{ .{ .block_ref = end_block_idx }, undefined, undefined },
+                    });
+
+                    // We're now in end block (it was just added, so it's the current block)
                 }
             }
         }
