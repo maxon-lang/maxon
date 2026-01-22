@@ -338,6 +338,8 @@ fn tryFoldConstant(inst: ir.Instruction, constants: *std.AutoHashMapUnmanaged(ir
         .track_move,
         .track_incref,
         .track_decref,
+        .track_copy,
+        .track_cleanup,
         => return null,
     }
 }
@@ -764,6 +766,8 @@ fn collectPointerMappings(func: *ir.Function, ctx: *DseContext) !void {
                     .track_move,
                     .track_incref,
                     .track_decref,
+                    .track_copy,
+                    .track_cleanup,
                     => null,
                 };
                 if (derivation) |d| {
@@ -923,6 +927,8 @@ fn collectLoadedPointers(func: *ir.Function, ctx: *DseContext) !void {
                 .track_move,
                 .track_incref,
                 .track_decref,
+                .track_copy,
+                .track_cleanup,
                 .func_addr,
                 => {},
             }
@@ -1046,6 +1052,8 @@ fn isDeadInstruction(inst: ir.Instruction, used: *std.AutoHashMapUnmanaged(ir.Va
         .track_move,
         .track_incref,
         .track_decref,
+        .track_copy,
+        .track_cleanup,
         => return false,
         // Pure instructions: can be eliminated if result is unused
         .const_i8,

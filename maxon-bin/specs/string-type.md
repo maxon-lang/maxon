@@ -1123,9 +1123,13 @@ INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 11
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #2: 12 bytes (temp cleanup)
+CLEANUP: b
+CLEANUP: a
+CLEANUP: s
 DECREF: s -> rc=0
 FREE #1: 20 bytes (string cleanup)
 
@@ -1136,6 +1140,8 @@ Leaked:    0 bytes
 Moves:     4
 Increfs:   3
 Decrefs:   3
+Copies:    0
+Cleanups:  4
 ```
 
 <!-- test: memory-tracking-chained-interp -->
@@ -1169,11 +1175,17 @@ INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 4
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #2: 11 bytes (temp cleanup)
+CLEANUP: b
+CLEANUP: a
+CLEANUP: c
+CLEANUP: s
 DECREF: s -> rc=0
 FREE #1: 13 bytes (string cleanup)
+CLEANUP: d
 
 === MEMORY STATS ===
 Allocated: 24 bytes
@@ -1182,6 +1194,8 @@ Leaked:    0 bytes
 Moves:     6
 Increfs:   3
 Decrefs:   3
+Copies:    0
+Cleanups:  6
 ```
 
 <!-- test: memory-tracking-loop-interp -->
@@ -1210,14 +1224,17 @@ MOVE: managed
 ALLOC #1: 10 bytes (string interpolation)
 INCREF: string interpolation -> rc=1
 MOVE: managed
+CLEANUP: s
 ALLOC #2: 11 bytes (string interpolation)
 INCREF: string interpolation -> rc=1
 MOVE: managed
+CLEANUP: s
 DECREF: s -> rc=0
 FREE #1: 10 bytes (string cleanup)
 ALLOC #3: 12 bytes (string interpolation)
 INCREF: string interpolation -> rc=1
 MOVE: managed
+CLEANUP: s
 DECREF: s -> rc=0
 FREE #2: 11 bytes (string cleanup)
 ALLOC #4: 11 bytes (string interpolation)
@@ -1225,9 +1242,12 @@ INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 3
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #4: 11 bytes (temp cleanup)
+CLEANUP: x
+CLEANUP: s
 DECREF: s -> rc=0
 FREE #3: 12 bytes (string cleanup)
 
@@ -1238,6 +1258,8 @@ Leaked:    0 bytes
 Moves:     6
 Increfs:   5
 Decrefs:   5
+Copies:    0
+Cleanups:  6
 ```
 
 <!-- test: memory-tracking-no-leak-scope-exit -->
@@ -1261,9 +1283,11 @@ INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 27
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #1: 12 bytes (temp cleanup)
+CLEANUP: temp
 
 === MEMORY STATS ===
 Allocated: 12 bytes
@@ -1272,6 +1296,8 @@ Leaked:    0 bytes
 Moves:     2
 Increfs:   2
 Decrefs:   2
+Copies:    0
+Cleanups:  2
 ```
 
 <!-- test: toLower -->

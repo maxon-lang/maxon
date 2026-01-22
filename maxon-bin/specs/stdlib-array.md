@@ -597,6 +597,7 @@ ALLOC #1: 168 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
 MOVE: managed
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 168 bytes (array cleanup)
 
@@ -607,6 +608,8 @@ Leaked:    0 bytes
 Moves:     3
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: push-self-assignment -->

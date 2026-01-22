@@ -168,13 +168,11 @@ fn emitConditionalElementCleanup(self: *AstToIr, managed_ptr: ir.ManagedMemoryPt
     deferred.deferBlocks(self, 2);
 
     // Now we're in check_refcount block
-    // Check refcount block: load refcount and check if == 1
-    const buf_ptr2 = try self.func().emitLoad(managed_ptr.raw(), .ptr);
-    const eight = try self.func().emitConstI64(8);
-    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr2, eight, .ptr);
-    const refcount = try self.func().emitLoad(header_ptr, .i64);
-    const one = try self.func().emitConstI64(1);
-    const is_sole_owner = try self.func().emitBinaryOp(.icmp_eq, refcount, one, .i64);
+    // Check refcount block: load refcount and check if == 1 using primitives
+    const buf_ptr2 = try ManagedMemory.loadBuffer(self.func(), managed_ptr);
+    const header_ptr = try ManagedMemory.getHeaderPtr(self.func(), buf_ptr2);
+    const refcount = try ManagedMemory.loadRefcount(self.func(), header_ptr);
+    const is_sole_owner = try ManagedMemory.isRefcountOne(self.func(), refcount);
 
     // Branch: if sole owner (refcount == 1), do cleanup; otherwise skip to end
     // NOTE: We use deferred.idx(0) for end block - the DeferredBlocks correctly calculates
@@ -317,23 +315,18 @@ fn emitArrayManagedElementsCleanup(self: *AstToIr, array_ptr: ir.Value, elem_str
     const decref_managed_offset = try self.func().emitConstI64(@intCast(elem_struct_info.managed_buffer_offset));
     const decref_managed_ptr = try self.func().emitBinaryOp(.add, decref_elem_ptr, decref_managed_offset, .ptr);
 
-    // Buffer header refcount: load buf_ptr from __ManagedMemory, subtract 8 to get header
-    const elem_buf_ptr = try self.func().emitLoad(decref_managed_ptr, .ptr);
-    const eight = try self.func().emitConstI64(8);
-    const header_ptr = try self.func().emitBinaryOp(.sub, elem_buf_ptr, eight, .ptr);
-    const old_ref = try self.func().emitLoad(header_ptr, .i64);
-    const one_ref = try self.func().emitConstI64(1);
-    const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one_ref, .i64);
-    try self.func().emitStore(header_ptr, new_ref);
+    // Use primitives to decrement refcount
+    const elem_buf_ptr = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(decref_managed_ptr));
+    const new_ref = try ManagedMemory.decrementRefcount(self.func(), elem_buf_ptr);
 
     // Emit tracking call for decref
     if (self.track_memory) {
-        try self.func().emitTrackDecref("<array element>", new_ref);
+        const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+        try self.func().emitTrackDecref("<array element>", new_ref_i32);
     }
 
-    // Check if refcount is now zero
-    const zero_ref = try self.func().emitConstI64(0);
-    const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero_ref, .i64);
+    // Check if refcount is now zero using primitive
+    const is_zero = try ManagedMemory.isRefcountZero(self.func(), new_ref);
 
     // Branch: if zero, go to heap_free; otherwise go to next
     try self.func().blocks.items[decref_block_idx].instructions.append(self.allocator, .{
@@ -344,7 +337,7 @@ fn emitArrayManagedElementsCleanup(self: *AstToIr, array_ptr: ir.Value, elem_str
     // Restore heap_free block
     try deferred.restore(self, 2);
 
-    // Heap free block: reload element ptr and free buffer (at header, which is buf_ptr - 8)
+    // Heap free block: reload element ptr and free buffer using primitives
     const free_buf_ptr = try self.func().emitLoad(array_ptr, .ptr);
     const free_i = try self.func().emitLoad(counter_ptr.raw(), .i64);
     const free_offset = try self.func().emitBinaryOp(.mul, free_i, elem_size, .i64);
@@ -354,10 +347,9 @@ fn emitArrayManagedElementsCleanup(self: *AstToIr, array_ptr: ir.Value, elem_str
     const free_managed_offset = try self.func().emitConstI64(@intCast(elem_struct_info.managed_buffer_offset));
     const free_managed_ptr = try self.func().emitBinaryOp(.add, free_elem_ptr, free_managed_offset, .ptr);
 
-    const free_elem_buf_ptr = try self.func().emitLoad(free_managed_ptr, .ptr);
-    const free_eight = try self.func().emitConstI64(8);
-    const free_header_ptr = try self.func().emitBinaryOp(.sub, free_elem_buf_ptr, free_eight, .ptr);
-    try self.func().emitHeapFree(ir.toRawPtr(free_header_ptr), "element cleanup");
+    // Free at header using primitive
+    const free_elem_buf_ptr = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(free_managed_ptr));
+    try ManagedMemory.freeAtHeader(self.func(), free_elem_buf_ptr, "element cleanup");
 
     // Branch to next
     try self.func().emitBr(next_block_idx);
@@ -452,6 +444,9 @@ pub fn cleanupFieldBeforeReassign(self: *AstToIr, field_ptr: ir.StructPtr, field
 fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types.StructTypeInfo, var_name: []const u8) ConvertError!void {
     const name = struct_info.name;
 
+    // Track cleanup operation for debugging
+    try self.func().emitTrackCleanup(var_name);
+
     // cstring has its own cleanup logic (special pattern with data/length/managed fields)
     if (std.mem.eql(u8, name, "cstring")) {
         try cstring.emitCstringCleanup(self, struct_ptr);
@@ -525,7 +520,7 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
                     // Insert instructions at the BEGINNING of check_refcount_block (it's currently empty)
                     const check_block = &self.func().blocks.items[check_refcount_block_idx];
 
-                    // Load buf_ptr, compute header_ptr = buf_ptr - 8, load refcount
+                    // Load buf_ptr, compute header_ptr = buf_ptr - HEADER_SIZE, load refcount
                     // We need to emit these into the check_refcount block
                     // Unfortunately we can't easily emit into a non-current block, so we'll build the instructions manually
 
@@ -538,18 +533,18 @@ fn cleanupStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types
                         .result_type = .ptr,
                     });
 
-                    const eight_val = self.func().newValue();
+                    const header_size_val = self.func().newValue();
                     try check_block.instructions.append(self.allocator, .{
                         .op = .const_i64,
-                        .operands = .{ .{ .immediate_i64 = 8 }, undefined, undefined },
-                        .result = eight_val,
+                        .operands = .{ .{ .immediate_i64 = ManagedMemory.HEADER_SIZE }, undefined, undefined },
+                        .result = header_size_val,
                         .result_type = .i64,
                     });
 
                     const header_ptr_val = self.func().newValue();
                     try check_block.instructions.append(self.allocator, .{
                         .op = .sub,
-                        .operands = .{ .{ .value = buf_ptr_val }, .{ .value = eight_val }, undefined },
+                        .operands = .{ .{ .value = buf_ptr_val }, .{ .value = header_size_val }, undefined },
                         .result = header_ptr_val,
                         .result_type = .ptr,
                     });

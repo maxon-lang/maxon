@@ -38,7 +38,9 @@ const TrackingDataField = enum(usize) {
     move_count = 32, // i64: number of ownership moves
     incref_count = 40, // i64: number of incref operations
     decref_count = 48, // i64: number of decref operations
-    table_base = 56, // start of tracking table (256 entries * 24 bytes each)
+    copy_count = 56, // i64: number of struct copy operations
+    cleanup_count = 64, // i64: number of cleanup operations
+    table_base = 72, // start of tracking table (256 entries * 24 bytes each)
 };
 
 /// Patch for RIP-relative access to tracking data
@@ -213,7 +215,7 @@ fn analyzeLiveness(allocator: std.mem.Allocator, func: *const ir.Function) !Live
             // These instructions all make internal/external calls that clobber caller-saved registers
             const is_call_like = switch (inst.op) {
                 .call, .call_indirect, .extern_call => true,
-                .track_incref, .track_decref, .track_move => true,
+                .track_incref, .track_decref, .track_move, .track_copy, .track_cleanup => true,
                 // heap operations call external DLL functions
                 .heap_alloc, .heap_free, .heap_realloc => true,
                 else => false,
@@ -1202,6 +1204,12 @@ pub const IrCodegen = struct {
 
         // __track_decref - tracks reference count decrement
         try self.generateTrackDecref();
+
+        // __track_copy - tracks struct copy
+        try self.generateTrackCopy();
+
+        // __track_cleanup - tracks cleanup start
+        try self.generateTrackCleanup();
     }
 
     /// Generate __enable_alloc_tracking function
@@ -1234,7 +1242,7 @@ pub const IrCodegen = struct {
         try self.enc.emit(&.{ 0x41, 0x55 }); // push r13
         try self.enc.emit(&.{ 0x41, 0x56 }); // push r14
         try self.enc.emit(&.{ 0x41, 0x57 }); // push r15
-        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00 }); // sub rsp, 160 (for buffer at rbp-160 to rbp-180)
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xA0, 0x00, 0x00, 0x00 }); // sub rsp, 160
 
         // Save RSI and RDI to stack (callee-saved on Windows x64)
         try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0x90 }); // mov [rbp-112], rsi
@@ -1245,17 +1253,11 @@ pub const IrCodegen = struct {
         try self.emitExternalCall("kernel32.dll", "GetStdHandle");
         try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (stdout handle)
 
-        // Load tracking values to stack
+        // Load allocated and freed for leak calculation
         try self.emitLoadTrackingField(.total_allocated);
-        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC8 }); // mov [rbp-56], rax
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC8 }); // mov [rbp-56], rax (allocated)
         try self.emitLoadTrackingField(.total_freed);
-        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC0 }); // mov [rbp-64], rax
-        try self.emitLoadTrackingField(.move_count);
-        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB0 }); // mov [rbp-80], rax
-        try self.emitLoadTrackingField(.incref_count);
-        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xA8 }); // mov [rbp-88], rax
-        try self.emitLoadTrackingField(.decref_count);
-        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xA0 }); // mov [rbp-96], rax
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xC0 }); // mov [rbp-64], rax (freed)
 
         // Calculate leaked = allocated - freed, store in [rbp-72]
         try self.enc.emit(&.{ 0x48, 0x8B, 0x4D, 0xC8 }); // mov rcx, [rbp-56] (allocated)
@@ -1280,19 +1282,39 @@ pub const IrCodegen = struct {
         try self.printNumberFromStack(-72);
         try self.printStaticString(" bytes\n");
 
-        // Print "Moves:     "
+        // Load and print Moves
+        try self.emitLoadTrackingField(.move_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB0 }); // mov [rbp-80], rax
         try self.printStaticString("Moves:     ");
         try self.printNumberFromStack(-80);
         try self.printStaticString("\n");
 
-        // Print "Increfs:   "
+        // Load and print Increfs
+        try self.emitLoadTrackingField(.incref_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB0 }); // mov [rbp-80], rax (reuse slot)
         try self.printStaticString("Increfs:   ");
-        try self.printNumberFromStack(-88);
+        try self.printNumberFromStack(-80);
         try self.printStaticString("\n");
 
-        // Print "Decrefs:   "
+        // Load and print Decrefs
+        try self.emitLoadTrackingField(.decref_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB0 }); // mov [rbp-80], rax (reuse slot)
         try self.printStaticString("Decrefs:   ");
-        try self.printNumberFromStack(-96);
+        try self.printNumberFromStack(-80);
+        try self.printStaticString("\n");
+
+        // Load and print Copies
+        try self.emitLoadTrackingField(.copy_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB0 }); // mov [rbp-80], rax (reuse slot)
+        try self.printStaticString("Copies:    ");
+        try self.printNumberFromStack(-80);
+        try self.printStaticString("\n");
+
+        // Load and print Cleanups
+        try self.emitLoadTrackingField(.cleanup_count);
+        try self.enc.emit(&.{ 0x48, 0x89, 0x45, 0xB0 }); // mov [rbp-80], rax (reuse slot)
+        try self.printStaticString("Cleanups:  ");
+        try self.printNumberFromStack(-80);
         try self.printStaticString("\n");
 
         // Epilogue - restore RSI/RDI from stack
@@ -1883,6 +1905,112 @@ pub const IrCodegen = struct {
         try self.printStaticString("\n");
 
         // Epilogue - restore callee-saved registers from stack slots
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xD8 }); // mov rsi, [rbp-40]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x7D, 0xE0 }); // mov r15, [rbp-32]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x75, 0xE8 }); // mov r14, [rbp-24]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x6D, 0xF0 }); // mov r13, [rbp-16]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x65, 0xF8 }); // mov r12, [rbp-8]
+        try self.enc.emit(&.{ 0x48, 0x89, 0xEC }); // mov rsp, rbp
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __track_copy(var_ptr, var_len)
+    /// Called when a struct/managed value is copied (e.g., struct assignment, pass by value)
+    /// Parameters: RCX = var name pointer, RDX = var name length
+    fn generateTrackCopy(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__track_copy", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00 }); // sub rsp, 192
+
+        // Save callee-saved registers
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x65, 0xF8 }); // mov [rbp-8], r12
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x6D, 0xF0 }); // mov [rbp-16], r13
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x75, 0xE8 }); // mov [rbp-24], r14
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x7D, 0xE0 }); // mov [rbp-32], r15
+        try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0xD8 }); // mov [rbp-40], rsi
+        try self.enc.emit(&.{ 0x48, 0x89, 0x7D, 0xC0 }); // mov [rbp-64], rdi
+
+        // Save inputs
+        try self.enc.emit(&.{ 0x49, 0x89, 0xCC }); // mov r12, rcx (var_ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xD0 }); // mov [rbp-48], rdx (var_len)
+
+        // Increment copy_count
+        try self.emitLoadTrackingField(.copy_count);
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
+        try self.emitStoreTrackingField(.copy_count);
+
+        // Get stdout handle
+        try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
+        try self.emitExternalCall("kernel32.dll", "GetStdHandle");
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (stdout handle)
+
+        // Print "COPY: "
+        try self.printStaticString("COPY: ");
+
+        // Print var name from R12
+        try self.printTagFromR12();
+
+        // Print newline
+        try self.printStaticString("\n");
+
+        // Epilogue - restore callee-saved registers
+        try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xD8 }); // mov rsi, [rbp-40]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x7D, 0xE0 }); // mov r15, [rbp-32]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x75, 0xE8 }); // mov r14, [rbp-24]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x6D, 0xF0 }); // mov r13, [rbp-16]
+        try self.enc.emit(&.{ 0x4C, 0x8B, 0x65, 0xF8 }); // mov r12, [rbp-8]
+        try self.enc.emit(&.{ 0x48, 0x89, 0xEC }); // mov rsp, rbp
+        try self.enc.popRbp();
+        try self.enc.ret();
+    }
+
+    /// Generate __track_cleanup(var_ptr, var_len)
+    /// Called when a struct/managed value is cleaned up (e.g., going out of scope)
+    /// Parameters: RCX = var name pointer, RDX = var name length
+    fn generateTrackCleanup(self: *IrCodegen) !void {
+        try self.func_offsets.put(self.allocator, "__track_cleanup", self.code.items.len);
+
+        // Prologue
+        try self.enc.pushRbp();
+        try self.enc.emit(&.{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try self.enc.emit(&.{ 0x48, 0x81, 0xEC, 0xC0, 0x00, 0x00, 0x00 }); // sub rsp, 192
+
+        // Save callee-saved registers
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x65, 0xF8 }); // mov [rbp-8], r12
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x6D, 0xF0 }); // mov [rbp-16], r13
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x75, 0xE8 }); // mov [rbp-24], r14
+        try self.enc.emit(&.{ 0x4C, 0x89, 0x7D, 0xE0 }); // mov [rbp-32], r15
+        try self.enc.emit(&.{ 0x48, 0x89, 0x75, 0xD8 }); // mov [rbp-40], rsi
+        try self.enc.emit(&.{ 0x48, 0x89, 0x7D, 0xC0 }); // mov [rbp-64], rdi
+
+        // Save inputs
+        try self.enc.emit(&.{ 0x49, 0x89, 0xCC }); // mov r12, rcx (var_ptr)
+        try self.enc.emit(&.{ 0x48, 0x89, 0x55, 0xD0 }); // mov [rbp-48], rdx (var_len)
+
+        // Increment cleanup_count
+        try self.emitLoadTrackingField(.cleanup_count);
+        try self.enc.emit(&.{ 0x48, 0xFF, 0xC0 }); // inc rax
+        try self.emitStoreTrackingField(.cleanup_count);
+
+        // Get stdout handle
+        try self.enc.movRcxImm32(-11); // STD_OUTPUT_HANDLE
+        try self.emitExternalCall("kernel32.dll", "GetStdHandle");
+        try self.enc.emit(&.{ 0x49, 0x89, 0xC7 }); // mov r15, rax (stdout handle)
+
+        // Print "CLEANUP: "
+        try self.printStaticString("CLEANUP: ");
+
+        // Print var name from R12
+        try self.printTagFromR12();
+
+        // Print newline
+        try self.printStaticString("\n");
+
+        // Epilogue - restore callee-saved registers
         try self.enc.emit(&.{ 0x48, 0x8B, 0x75, 0xD8 }); // mov rsi, [rbp-40]
         try self.enc.emit(&.{ 0x4C, 0x8B, 0x7D, 0xE0 }); // mov r15, [rbp-32]
         try self.enc.emit(&.{ 0x4C, 0x8B, 0x75, 0xE8 }); // mov r14, [rbp-24]
@@ -3207,6 +3335,8 @@ pub const IrCodegen = struct {
             .track_move => try self.genTrackMove(inst),
             .track_incref => try self.genTrackIncref(inst),
             .track_decref => try self.genTrackDecref(inst),
+            .track_copy => try self.genTrackCopy(inst),
+            .track_cleanup => try self.genTrackCleanup(inst),
             .extern_call => try self.genExternCall(inst),
             .fcmp_eq => try self.genFcmp(inst, .eq),
             .fcmp_ne => try self.genFcmp(inst, .ne),
@@ -5223,6 +5353,68 @@ pub const IrCodegen = struct {
         // Restore R13 and R12
         try self.enc.emit(&.{ 0x41, 0x5D }); // pop r13
         try self.enc.emit(&.{ 0x41, 0x5C }); // pop r12
+    }
+
+    fn genTrackCopy(self: *IrCodegen, inst: ir.Instruction) !void {
+        if (!self.track_memory) return;
+
+        const tag = inst.operands[0].alloc_tag;
+        debug.codegen("  TrackCopy: tag={s}", .{tag});
+
+        // Embed tag string after a jump
+        const jmp_offset = try self.enc.jmpRel32();
+        const tag_pos = self.code.items.len;
+        try self.code.appendSlice(self.allocator, tag);
+        const after_tag = self.code.items.len;
+
+        // Patch jump
+        const rel: i32 = @intCast(after_tag - jmp_offset - 4);
+        self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(rel & 0xFF)));
+        self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((rel >> 8) & 0xFF)));
+        self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((rel >> 16) & 0xFF)));
+        self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((rel >> 24) & 0xFF)));
+
+        // Call __track_copy(var_ptr=RCX, var_len=RDX)
+        const rip_offset: i32 = -@as(i32, @intCast(after_tag - tag_pos + 7));
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x0D }); // lea rcx, [rip+disp32]
+        try self.enc.emitI32(rip_offset);
+
+        // mov rdx, tag_len
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC2 }); // mov rdx, imm32
+        try self.enc.emitI32(@intCast(tag.len));
+
+        try self.emitInternalCall("__track_copy");
+    }
+
+    fn genTrackCleanup(self: *IrCodegen, inst: ir.Instruction) !void {
+        if (!self.track_memory) return;
+
+        const tag = inst.operands[0].alloc_tag;
+        debug.codegen("  TrackCleanup: tag={s}", .{tag});
+
+        // Embed tag string after a jump
+        const jmp_offset = try self.enc.jmpRel32();
+        const tag_pos = self.code.items.len;
+        try self.code.appendSlice(self.allocator, tag);
+        const after_tag = self.code.items.len;
+
+        // Patch jump
+        const rel: i32 = @intCast(after_tag - jmp_offset - 4);
+        self.code.items[jmp_offset] = @bitCast(@as(i8, @intCast(rel & 0xFF)));
+        self.code.items[jmp_offset + 1] = @bitCast(@as(i8, @intCast((rel >> 8) & 0xFF)));
+        self.code.items[jmp_offset + 2] = @bitCast(@as(i8, @intCast((rel >> 16) & 0xFF)));
+        self.code.items[jmp_offset + 3] = @bitCast(@as(i8, @intCast((rel >> 24) & 0xFF)));
+
+        // Call __track_cleanup(var_ptr=RCX, var_len=RDX)
+        const rip_offset: i32 = -@as(i32, @intCast(after_tag - tag_pos + 7));
+        try self.enc.emit(&.{ 0x48, 0x8D, 0x0D }); // lea rcx, [rip+disp32]
+        try self.enc.emitI32(rip_offset);
+
+        // mov rdx, tag_len
+        try self.enc.emit(&.{ 0x48, 0xC7, 0xC2 }); // mov rdx, imm32
+        try self.enc.emitI32(@intCast(tag.len));
+
+        try self.emitInternalCall("__track_cleanup");
     }
 
     fn emitTrackFreeCall(self: *IrCodegen, tag: []const u8) !void {

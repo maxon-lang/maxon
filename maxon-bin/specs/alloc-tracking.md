@@ -59,6 +59,7 @@ end 'main'
 ```stdout
 ALLOC #1: 88 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 88 bytes (array cleanup)
 
@@ -69,6 +70,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: no-alloc-empty-program -->
@@ -90,6 +93,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   0
 Decrefs:   0
+Copies:    0
+Cleanups:  0
 ```
 
 <!-- test: multiple-arrays -->
@@ -119,8 +124,10 @@ ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
 ALLOC #2: 88 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr1
 DECREF: arr1 -> rc=0
 FREE #1: 48 bytes (array cleanup)
+CLEANUP: arr2
 DECREF: arr2 -> rc=0
 FREE #2: 88 bytes (array cleanup)
 
@@ -131,6 +138,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   2
 Decrefs:   2
+Copies:    0
+Cleanups:  2
 ```
 
 <!-- test: array-early-return-true -->
@@ -155,6 +164,7 @@ end 'main'
 ```stdout
 ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -165,6 +175,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: array-early-return-false -->
@@ -189,6 +201,7 @@ end 'main'
 ```stdout
 ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -199,6 +212,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: array-passed-to-function -->
@@ -224,6 +239,7 @@ end 'main'
 ```stdout
 ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -234,6 +250,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: array-computed-size -->
@@ -256,6 +274,7 @@ end 'main'
 ```stdout
 ALLOC #1: 88 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 88 bytes (array cleanup)
 
@@ -266,6 +285,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: array-borrow-no-leak -->
@@ -293,6 +314,7 @@ end 'main'
 ```stdout
 ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -303,6 +325,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: array-borrow-multiple-times -->
@@ -333,6 +357,7 @@ end 'main'
 ```stdout
 ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -343,6 +368,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: array-in-loop -->
@@ -371,14 +398,17 @@ end 'main'
 ```stdout
 ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 ALLOC #2: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #2: 48 bytes (array cleanup)
 ALLOC #3: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #3: 48 bytes (array cleanup)
 
@@ -389,9 +419,47 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   3
 Decrefs:   3
+Copies:    0
+Cleanups:  3
 ```
 
-<!-- test: array-move-no-leak -->
+<!-- test: string-array-cleanup-void-main -->
+<!-- TrackMemory: true -->
+Array of strings should be properly cleaned up in a void main function.
+
+```maxon
+typealias StringArray is Array with String
+
+function main()
+    var arr = StringArray{}
+    arr.push("hi")
+    var s = try arr.get(0)! otherwise "oops"
+    print(s)
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+MOVE: managed
+ALLOC #1: 168 bytes (array grow)
+INCREF: array grow -> rc=1
+hiCLEANUP: cs
+CLEANUP: s
+CLEANUP: arr
+DECREF: arr -> rc=0
+FREE #1: 168 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 168 bytes
+Freed:     168 bytes
+Leaked:    0 bytes
+Moves:     1
+Increfs:   1
+Decrefs:   1
+Copies:    0
+Cleanups:  3
+```<!-- test: array-move-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
 typealias IntArray is Array with int
@@ -416,6 +484,7 @@ end 'main'
 ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: arr
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -426,6 +495,8 @@ Leaked:    0 bytes
 Moves:     1
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: array-move-chain -->
@@ -461,6 +532,7 @@ ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: arr
 MOVE: arr
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -471,6 +543,8 @@ Leaked:    0 bytes
 Moves:     2
 Increfs:   1
 Decrefs:   1
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: two-arrays-one-moved-one-borrowed -->
@@ -509,8 +583,10 @@ INCREF: array grow -> rc=1
 ALLOC #2: 48 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: arr2
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #2: 48 bytes (array cleanup)
+CLEANUP: arr1
 DECREF: arr1 -> rc=0
 FREE #1: 48 bytes (array cleanup)
 
@@ -521,6 +597,8 @@ Leaked:    0 bytes
 Moves:     1
 Increfs:   2
 Decrefs:   2
+Copies:    0
+Cleanups:  2
 ```
 
 <!-- test: array-zero-size-no-alloc -->
@@ -544,6 +622,7 @@ end 'main'
 42
 ```
 ```stdout
+CLEANUP: arr
 
 === MEMORY STATS ===
 Allocated: 0 bytes
@@ -552,6 +631,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   0
 Decrefs:   0
+Copies:    0
+Cleanups:  1
 ```
 
 <!-- test: heap-array-reassign -->
@@ -578,10 +659,12 @@ end 'main'
 ```stdout
 ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #1: 48 bytes (array cleanup)
 ALLOC #2: 48 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr
 DECREF: arr -> rc=0
 FREE #2: 48 bytes (array cleanup)
 
@@ -592,3 +675,45 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   2
 Decrefs:   2
+Copies:    0
+Cleanups:  2
+```
+
+<!-- test: string-array-cleanup -->
+<!-- TrackMemory: true -->
+Array of strings should be properly cleaned up when going out of scope.
+
+```maxon
+typealias StringArray is Array with String
+
+function main() returns int
+    var arr = StringArray{}
+    arr.push("hi")
+    var s = try arr.get(0)! otherwise "oops"
+    print(s)
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+MOVE: managed
+ALLOC #1: 168 bytes (array grow)
+INCREF: array grow -> rc=1
+hiCLEANUP: cs
+CLEANUP: s
+CLEANUP: arr
+DECREF: arr -> rc=0
+FREE #1: 168 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 168 bytes
+Freed:     168 bytes
+Leaked:    0 bytes
+Moves:     1
+Increfs:   1
+Decrefs:   1
+Copies:    0
+Cleanups:  3
+```

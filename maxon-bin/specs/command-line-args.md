@@ -161,34 +161,47 @@ MOVE: managed
 ALLOC #2: 168 bytes (array grow)
 INCREF: array grow -> rc=1
 INCREF: <array_store nested> -> rc=2
+CLEANUP: cstr
 FREE #1: 4 bytes (cstring release)
 ALLOC #3: 4 bytes (command line arg)
 MOVE: managed
 INCREF: <array_store nested> -> rc=2
+CLEANUP: cstr
 FREE #3: 4 bytes (cstring release)
 ALLOC #4: 4 bytes (command line arg)
 MOVE: managed
 INCREF: <array_store nested> -> rc=2
+CLEANUP: cstr
 FREE #4: 4 bytes (cstring release)
 MOVE: result
 INCREF: <array element return> -> rc=3
 INCREF: <array element return> -> rc=3
 INCREF: <array element return> -> rc=3
 INCREF: <cstr> -> rc=4
-fooDECREF: <cstr cleanup> -> rc=3
+fooCLEANUP: cs
+DECREF: <cstr cleanup> -> rc=3
 MOVE: managed
 
+CLEANUP: cs
 INCREF: <cstr> -> rc=4
-barDECREF: <cstr cleanup> -> rc=3
+barCLEANUP: cs
+DECREF: <cstr cleanup> -> rc=3
 MOVE: managed
 
+CLEANUP: cs
 INCREF: <cstr> -> rc=4
-bazDECREF: <cstr cleanup> -> rc=3
+bazCLEANUP: cs
+DECREF: <cstr cleanup> -> rc=3
 MOVE: managed
 
+CLEANUP: cs
+CLEANUP: arg1
 DECREF: arg1 -> rc=2
+CLEANUP: arg2
 DECREF: arg2 -> rc=2
+CLEANUP: arg3
 DECREF: arg3 -> rc=2
+CLEANUP: args
 DECREF: <array element> -> rc=1
 DECREF: <array element> -> rc=1
 DECREF: <array element> -> rc=1
@@ -202,6 +215,8 @@ Leaked:    0 bytes
 Moves:     7
 Increfs:   10
 Decrefs:   10
+Copies:    0
+Cleanups:  13
 ```
 
 <!-- test: iterate-args -->

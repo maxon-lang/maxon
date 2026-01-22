@@ -61,9 +61,12 @@ INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 hello
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #1: 15 bytes (temp cleanup)
+CLEANUP: s
+CLEANUP: sub
 
 === MEMORY STATS ===
 Allocated: 15 bytes
@@ -72,6 +75,8 @@ Leaked:    0 bytes
 Moves:     4
 Increfs:   2
 Decrefs:   2
+Copies:    0
+Cleanups:  3
 ```
 
 <!-- test: static-string-slice -->
@@ -100,9 +105,12 @@ INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 hello
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #1: 15 bytes (temp cleanup)
+CLEANUP: s
+CLEANUP: sub
 
 === MEMORY STATS ===
 Allocated: 15 bytes
@@ -111,6 +119,8 @@ Leaked:    0 bytes
 Moves:     4
 Increfs:   2
 Decrefs:   2
+Copies:    0
+Cleanups:  3
 ```
 
 <!-- test: slice-copy-increfs-parent -->
@@ -136,11 +146,13 @@ end 'main'
 MOVE: managed
 MOVE: managed
 MOVE: result
+COPY: String
 ALLOC #1: 15 bytes (string interpolation)
 INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 hello
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #1: 15 bytes (temp cleanup)
@@ -149,9 +161,13 @@ INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 hello
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #2: 15 bytes (temp cleanup)
+CLEANUP: s
+CLEANUP: sub1
+CLEANUP: sub2
 
 === MEMORY STATS ===
 Allocated: 30 bytes
@@ -160,6 +176,8 @@ Leaked:    0 bytes
 Moves:     5
 Increfs:   4
 Decrefs:   4
+Copies:    1
+Cleanups:  5
 ```
 
 <!-- test: nested-slice-memory -->
@@ -194,9 +212,13 @@ INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 he
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #1: 12 bytes (temp cleanup)
+CLEANUP: s
+CLEANUP: sub2
+CLEANUP: sub1
 
 === MEMORY STATS ===
 Allocated: 12 bytes
@@ -205,6 +227,8 @@ Leaked:    0 bytes
 Moves:     6
 Increfs:   2
 Decrefs:   2
+Copies:    0
+Cleanups:  4
 ```
 
 <!-- test: slice-parent-outlives-original -->
@@ -232,14 +256,17 @@ end 'main'
 MOVE: managed
 MOVE: managed
 MOVE: result
+CLEANUP: s
 ALLOC #1: 15 bytes (string interpolation)
 INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 hello
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #1: 15 bytes (temp cleanup)
+CLEANUP: sub
 
 === MEMORY STATS ===
 Allocated: 15 bytes
@@ -248,4 +275,6 @@ Leaked:    0 bytes
 Moves:     4
 Increfs:   2
 Decrefs:   2
+Copies:    0
+Cleanups:  3
 ```

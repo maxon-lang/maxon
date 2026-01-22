@@ -98,17 +98,16 @@ fn emitHeapAllocWin(self: *AstToIr, heap: ir.Value, size: ir.Value) ConvertError
 /// Allocate a refcounted buffer with 8-byte header for refcounting.
 /// Returns the DATA pointer (header is at returned_ptr - 8).
 fn emitAllocRefcountedBufferWin(self: *AstToIr, heap: ir.Value, data_size: ir.Value) ConvertError!ir.Value {
-    // Allocate data_size + 8 for header
-    const header_size = try self.func().emitConstI64(array.REFCOUNTED_BUFFER_HEADER_SIZE);
+    // Allocate data_size + HEADER_SIZE for header
+    const header_size = try self.func().emitConstI64(ManagedMemory.HEADER_SIZE);
     const total_size = try self.func().emitBinaryOp(.add, data_size, header_size, .i64);
     const buffer_with_header = try emitHeapAllocWin(self, heap, total_size);
 
     // Initialize refcount in header to 1
     try self.func().emitStore(buffer_with_header, try self.func().emitConstI64(1));
 
-    // Return data pointer (header + 8)
-    const eight = try self.func().emitConstI64(8);
-    return self.func().emitBinaryOp(.add, buffer_with_header, eight, .ptr);
+    // Return data pointer (header + HEADER_SIZE)
+    return self.func().emitBinaryOp(.add, buffer_with_header, header_size, .ptr);
 }
 
 fn emitGetCommandLineW(self: *AstToIr) ConvertError!ir.Value {
@@ -595,12 +594,12 @@ fn intrinsicManagedMemoryGrow(self: *AstToIr, call: ast.CallExpr) ConvertError!T
 
     // Realloc block
     try deferred.restore(self, 1); // Restore grow_realloc block
-    const eight = try self.func().emitConstI64(8);
-    const total_size = try self.func().emitBinaryOp(.add, data_size, eight, .i64);
-    const buf_ptr2 = try self.func().emitLoad(managed.value, .ptr);
-    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr2, eight, .ptr);
+    const header_size = try self.func().emitConstI64(ManagedMemory.HEADER_SIZE);
+    const total_size = try self.func().emitBinaryOp(.add, data_size, header_size, .i64);
+    const buf_ptr2 = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(managed.value));
+    const header_ptr = try ManagedMemory.getHeaderPtr(self.func(), buf_ptr2);
     const new_header = try self.func().emitHeapRealloc(ir.toRawPtr(header_ptr), total_size, "array grow");
-    const new_data_ptr = try self.func().emitBinaryOp(.add, new_header.raw(), eight, .ptr);
+    const new_data_ptr = try self.func().emitBinaryOp(.add, new_header.raw(), header_size, .ptr);
     try self.func().emitStore(managed.value, new_data_ptr);
     try struct_helpers.storeI64Field(self.func(), ir.toStructPtr(managed.value), 16, new_capacity.value);
     try self.func().emitBr(end_block_idx);
@@ -1207,14 +1206,9 @@ fn intrinsicManagedMemoryToCstring(self: *AstToIr, call: ast.CallExpr) ConvertEr
     const incref_block_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("cstr_incref");
 
-    // Increment refcount in buffer header (buf_ptr - 8)
-    const incref_buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const eight_incref = try self.func().emitConstI64(8);
-    const header_ptr = try self.func().emitBinaryOp(.sub, incref_buf_ptr, eight_incref, .ptr);
-    const old_ref = try self.func().emitLoad(header_ptr, .i64);
-    const one_ref = try self.func().emitConstI64(1);
-    const new_ref = try self.func().emitBinaryOp(.add, old_ref, one_ref, .i64);
-    try self.func().emitStore(header_ptr, new_ref);
+    // Increment refcount in buffer header using primitives
+    const incref_buf_ptr = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(managed.value));
+    const new_ref = try ManagedMemory.incrementRefcount(self.func(), incref_buf_ptr);
 
     // Emit tracking call for incref
     if (self.track_memory) {
@@ -1280,33 +1274,29 @@ fn intrinsicManagedMemoryIncref(self: *AstToIr, call: ast.CallExpr) ConvertError
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
-    // Load buffer pointer and compute header address (buf_ptr - 8)
-    const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const eight = try self.func().emitConstI64(8);
-    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
+    // Increment refcount using primitives
+    const buf_ptr = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(managed.value));
+    const new_ref = try ManagedMemory.incrementRefcount(self.func(), buf_ptr);
 
-    // Increment refcount in header
-    const old_ref = try self.func().emitLoad(header_ptr, .i64);
-    const one = try self.func().emitConstI64(1);
-    const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i64);
-    try self.func().emitStore(header_ptr, new_ref);
+    // Track the incref
+    if (self.track_memory) {
+        const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+        try self.func().emitTrackIncref("<incref intrinsic>", new_ref_i32);
+    }
 
     return .{ .value = 0, .ty = .{ .primitive = .void } };
 }
 
 /// __managed_memory_refcount(managed) -> int
-/// Returns the refcount from buffer header (buf_ptr - 8)
+/// Returns the refcount from buffer header (buf_ptr - HEADER_SIZE)
 fn intrinsicManagedMemoryRefcount(self: *AstToIr, call: ast.CallExpr) ConvertError!TypedValue {
     try expectArgCount(self, call, 1);
     const managed = try self.convertExpression(call.args[0]);
 
-    // Load buffer pointer and compute header address (buf_ptr - 8)
-    const buf_ptr = try self.func().emitLoad(managed.value, .ptr);
-    const eight = try self.func().emitConstI64(8);
-    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
-
-    // Load refcount from header
-    const refcount = try self.func().emitLoad(header_ptr, .i64);
+    // Load refcount using primitives
+    const buf_ptr = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(managed.value));
+    const header_ptr = try ManagedMemory.getHeaderPtr(self.func(), buf_ptr);
+    const refcount = try ManagedMemory.loadRefcount(self.func(), header_ptr);
 
     return .{ .value = refcount, .ty = .{ .primitive = .int } };
 }

@@ -25,15 +25,23 @@ INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
+CLEANUP: k
+CLEANUP: k
+CLEANUP: k
 MOVE: result
 FREE #1: 120 bytes (map literal keys cleanup)
 FREE #2: 24 bytes (map literal values cleanup)
 MOVE: managed
+CLEANUP: existing
 MOVE: managed
+CLEANUP: m
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #3: 648 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #4: 136 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #5: 136 bytes (array cleanup)
 
@@ -44,6 +52,8 @@ Leaked:    0 bytes
 Moves:     9
 Increfs:   3
 Decrefs:   3
+Copies:    0
+Cleanups:  8
 ```
 ---
 function main() -> i64 {
@@ -186,7 +196,9 @@ then$check_1:
     %tmp_const.28 = const.i64 i64 1
     %tmp_alloca.13 = alloca ptr
     store %tmp_alloca.13 %tmp_const.28
+    track.cleanup tag="m"
     %tmp_fieldptr.28 = getfieldptr ptr %m 0
+    track.cleanup tag="m"
     %tmp_fieldptr.29 = getfieldptr ptr %tmp_fieldptr.28 8
     %tmp_fieldptr.30 = getfieldptr ptr %tmp_fieldptr.29 24
     %tmp_load = load i32 %tmp_fieldptr.30
@@ -329,6 +341,7 @@ slice_check_15:
     br.cond %tmp_icmp.8 @slice_decref_13 @decref_end_16
 decref_end_16:
     %tmp_fieldptr.38 = getfieldptr ptr %m 40
+    track.cleanup tag="m"
     %tmp_fieldptr.39 = getfieldptr ptr %tmp_fieldptr.38 8
     %tmp_fieldptr.40 = getfieldptr ptr %tmp_fieldptr.39 24
     %tmp_load.25 = load i32 %tmp_fieldptr.40
@@ -389,6 +402,7 @@ slice_check_21:
     br.cond %tmp_icmp.12 @slice_decref_19 @decref_end_22
 decref_end_22:
     %tmp_fieldptr.44 = getfieldptr ptr %m 80
+    track.cleanup tag="m"
     %tmp_fieldptr.45 = getfieldptr ptr %tmp_fieldptr.44 8
     %tmp_fieldptr.46 = getfieldptr ptr %tmp_fieldptr.45 24
     %tmp_load.35 = load i32 %tmp_fieldptr.46
@@ -454,7 +468,9 @@ end$check_29:
     %tmp_call.8 = call i64 @Map$String$int$count(%m)
     %tmp_alloca.15 = alloca ptr
     store %tmp_alloca.15 %tmp_call.8
+    track.cleanup tag="m"
     %tmp_fieldptr.50 = getfieldptr ptr %m 0
+    track.cleanup tag="m"
     %tmp_fieldptr.51 = getfieldptr ptr %tmp_fieldptr.50 8
     %tmp_fieldptr.52 = getfieldptr ptr %tmp_fieldptr.51 24
     %tmp_load.46 = load i32 %tmp_fieldptr.52
@@ -597,6 +613,7 @@ slice_check_43:
     br.cond %tmp_icmp.25 @slice_decref_41 @decref_end_44
 decref_end_44:
     %tmp_fieldptr.60 = getfieldptr ptr %m 40
+    track.cleanup tag="m"
     %tmp_fieldptr.61 = getfieldptr ptr %tmp_fieldptr.60 8
     %tmp_fieldptr.62 = getfieldptr ptr %tmp_fieldptr.61 24
     %tmp_load.71 = load i32 %tmp_fieldptr.62
@@ -657,6 +674,7 @@ slice_check_49:
     br.cond %tmp_icmp.29 @slice_decref_47 @decref_end_50
 decref_end_50:
     %tmp_fieldptr.66 = getfieldptr ptr %m 80
+    track.cleanup tag="m"
     %tmp_fieldptr.67 = getfieldptr ptr %tmp_fieldptr.66 8
     %tmp_fieldptr.68 = getfieldptr ptr %tmp_fieldptr.67 24
     %tmp_load.81 = load i32 %tmp_fieldptr.68
@@ -841,6 +859,7 @@ incref_end_9:
     %tmp_const.15 = const.i64 i64 1
     %tmp_add.2 = add i64 %tmp_load.23 %tmp_const.15
     store %i %tmp_add.2
+    track.cleanup tag="k"
     %tmp_fieldptr.10 = getfieldptr ptr %k 24
     %tmp_load.24 = load i32 %tmp_fieldptr.10
     %tmp_const.16 = const.i32 i32 3
@@ -946,22 +965,22 @@ grow_alloc_2:
     %tmp_heap = heap.alloc ptr %tmp_add tag="array grow"
     %tmp_const.3 = const.i64 i64 1
     store %tmp_heap %tmp_const.3
-    %tmp_const.4 = const.i64 i64 8
-    %tmp_add.1 = add ptr %tmp_heap %tmp_const.4
+    %tmp_add.1 = add ptr %tmp_heap %tmp_const.2
     store %tmp_fieldptr.2 %tmp_add.1
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.3 %tmp_load.3
-    %tmp_const.5 = const.i32 i32 1
+    %tmp_const.4 = const.i32 i32 1
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.2 24
-    store.i32 %tmp_fieldptr.4 %tmp_const.5
+    store.i32 %tmp_fieldptr.4 %tmp_const.4
     br @grow_end_4
 grow_realloc_3:
-    %tmp_const.6 = const.i64 i64 8
-    %tmp_add.2 = add i64 %tmp_mul %tmp_const.6
+    %tmp_const.5 = const.i64 i64 8
+    %tmp_add.2 = add i64 %tmp_mul %tmp_const.5
     %tmp_load.5 = load ptr %tmp_fieldptr.2
+    %tmp_const.6 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.5 %tmp_const.6
     %tmp_realloc = heap.realloc ptr %tmp_sub %tmp_add.2 tag="array grow"
-    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.6
+    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.5
     store %tmp_fieldptr.2 %tmp_add.3
     %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.5 %tmp_load.3
@@ -1014,22 +1033,22 @@ grow_alloc_2:
     %tmp_heap = heap.alloc ptr %tmp_add tag="array grow"
     %tmp_const.3 = const.i64 i64 1
     store %tmp_heap %tmp_const.3
-    %tmp_const.4 = const.i64 i64 8
-    %tmp_add.1 = add ptr %tmp_heap %tmp_const.4
+    %tmp_add.1 = add ptr %tmp_heap %tmp_const.2
     store %tmp_fieldptr.2 %tmp_add.1
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.3 %tmp_load.3
-    %tmp_const.5 = const.i32 i32 1
+    %tmp_const.4 = const.i32 i32 1
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.2 24
-    store.i32 %tmp_fieldptr.4 %tmp_const.5
+    store.i32 %tmp_fieldptr.4 %tmp_const.4
     br @grow_end_4
 grow_realloc_3:
-    %tmp_const.6 = const.i64 i64 8
-    %tmp_add.2 = add i64 %tmp_mul %tmp_const.6
+    %tmp_const.5 = const.i64 i64 8
+    %tmp_add.2 = add i64 %tmp_mul %tmp_const.5
     %tmp_load.5 = load ptr %tmp_fieldptr.2
+    %tmp_const.6 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.5 %tmp_const.6
     %tmp_realloc = heap.realloc ptr %tmp_sub %tmp_add.2 tag="array grow"
-    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.6
+    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.5
     store %tmp_fieldptr.2 %tmp_add.3
     %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.5 %tmp_load.3
@@ -1082,22 +1101,22 @@ grow_alloc_2:
     %tmp_heap = heap.alloc ptr %tmp_add tag="array grow"
     %tmp_const.3 = const.i64 i64 1
     store %tmp_heap %tmp_const.3
-    %tmp_const.4 = const.i64 i64 8
-    %tmp_add.1 = add ptr %tmp_heap %tmp_const.4
+    %tmp_add.1 = add ptr %tmp_heap %tmp_const.2
     store %tmp_fieldptr.2 %tmp_add.1
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.3 %tmp_load.3
-    %tmp_const.5 = const.i32 i32 1
+    %tmp_const.4 = const.i32 i32 1
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.2 24
-    store.i32 %tmp_fieldptr.4 %tmp_const.5
+    store.i32 %tmp_fieldptr.4 %tmp_const.4
     br @grow_end_4
 grow_realloc_3:
-    %tmp_const.6 = const.i64 i64 8
-    %tmp_add.2 = add i64 %tmp_mul %tmp_const.6
+    %tmp_const.5 = const.i64 i64 8
+    %tmp_add.2 = add i64 %tmp_mul %tmp_const.5
     %tmp_load.5 = load ptr %tmp_fieldptr.2
+    %tmp_const.6 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.5 %tmp_const.6
     %tmp_realloc = heap.realloc ptr %tmp_sub %tmp_add.2 tag="array grow"
-    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.6
+    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.5
     store %tmp_fieldptr.2 %tmp_add.3
     %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.5 %tmp_load.3
@@ -1138,6 +1157,7 @@ then$init_empty_1:
     %tmp_const.3 = const.i64 i64 16
     %tmp_call.2 = call ptr @Array$SlotState$resize(%tmp_alloca.6, %newStates, %tmp_const.3)
     %tmp_fieldptr.1 = getfieldptr ptr %self 0
+    track.cleanup tag="keys"
     %tmp_fieldptr.2 = getfieldptr ptr %tmp_fieldptr.1 8
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 24
     %tmp_load.1 = load i32 %tmp_fieldptr.3
@@ -1279,6 +1299,7 @@ slice_check_15:
     %tmp_icmp.9 = icmp.eq i32 %tmp_band.3 %tmp_const.29
     br.cond %tmp_icmp.9 @slice_decref_13 @decref_end_16
 decref_end_16:
+    track.copy tag="Array$String"
     memcpy %tmp_fieldptr.1 %newKeys 40
     %tmp_fieldptr.11 = getfieldptr ptr %tmp_fieldptr.1 8
     %tmp_fieldptr.12 = getfieldptr ptr %tmp_fieldptr.11 24
@@ -1320,6 +1341,7 @@ slice_incref_19:
     br @incref_end_20
 incref_end_20:
     %tmp_fieldptr.15 = getfieldptr ptr %self 40
+    track.cleanup tag="values"
     %tmp_fieldptr.16 = getfieldptr ptr %tmp_fieldptr.15 8
     %tmp_fieldptr.17 = getfieldptr ptr %tmp_fieldptr.16 24
     %tmp_load.33 = load i32 %tmp_fieldptr.17
@@ -1379,6 +1401,7 @@ slice_check_25:
     %tmp_icmp.15 = icmp.eq i32 %tmp_band.7 %tmp_const.49
     br.cond %tmp_icmp.15 @slice_decref_23 @decref_end_26
 decref_end_26:
+    track.copy tag="Array$int"
     memcpy %tmp_fieldptr.15 %newValues 40
     %tmp_fieldptr.21 = getfieldptr ptr %tmp_fieldptr.15 8
     %tmp_fieldptr.22 = getfieldptr ptr %tmp_fieldptr.21 24
@@ -1420,6 +1443,7 @@ slice_incref_29:
     br @incref_end_30
 incref_end_30:
     %tmp_fieldptr.25 = getfieldptr ptr %self 80
+    track.cleanup tag="states"
     %tmp_fieldptr.26 = getfieldptr ptr %tmp_fieldptr.25 8
     %tmp_fieldptr.27 = getfieldptr ptr %tmp_fieldptr.26 24
     %tmp_load.50 = load i32 %tmp_fieldptr.27
@@ -1479,6 +1503,7 @@ slice_check_35:
     %tmp_icmp.21 = icmp.eq i32 %tmp_band.11 %tmp_const.69
     br.cond %tmp_icmp.21 @slice_decref_33 @decref_end_36
 decref_end_36:
+    track.copy tag="Array$SlotState"
     memcpy %tmp_fieldptr.25 %newStates 40
     %tmp_fieldptr.31 = getfieldptr ptr %tmp_fieldptr.25 8
     %tmp_fieldptr.32 = getfieldptr ptr %tmp_fieldptr.31 24
@@ -1669,6 +1694,7 @@ then$exists_59:
     %tmp_load.96 = load i64 %index
     %tmp_load.97 = load i64 %value.1
     call @Array$int$set(%tmp_fieldptr.50, %tmp_load.96, %tmp_load.97)
+    track.cleanup tag="existing"
     %tmp_fieldptr.51 = getfieldptr ptr %tmp_alloca.18 24
     %tmp_load.98 = load i32 %tmp_fieldptr.51
     %tmp_const.100 = const.i32 i32 3
@@ -1729,6 +1755,7 @@ slice_check_64:
 decref_end_65:
     ret
 end$exists_66:
+    track.cleanup tag="existing"
     %tmp_fieldptr.55 = getfieldptr ptr %tmp_alloca.18 24
     %tmp_load.108 = load i32 %tmp_fieldptr.55
     %tmp_const.112 = const.i32 i32 3
@@ -1854,6 +1881,7 @@ then$handle_zero_1:
 end$handle_zero_2:
     %tmp_fieldptr.1 = getfieldptr ptr %self 0
     %oldKeys = alloca.sized ptr 40
+    track.copy tag="Array$String"
     memcpy %oldKeys %tmp_fieldptr.1 40
     %tmp_fieldptr.2 = getfieldptr ptr %oldKeys 8
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 24
@@ -1896,6 +1924,7 @@ slice_incref_5:
 incref_end_6:
     %tmp_fieldptr.6 = getfieldptr ptr %self 40
     %oldValues = alloca.sized ptr 40
+    track.copy tag="Array$int"
     memcpy %oldValues %tmp_fieldptr.6 40
     %tmp_fieldptr.7 = getfieldptr ptr %oldValues 8
     %tmp_fieldptr.8 = getfieldptr ptr %tmp_fieldptr.7 24
@@ -1938,6 +1967,7 @@ slice_incref_9:
 incref_end_10:
     %tmp_fieldptr.11 = getfieldptr ptr %self 80
     %oldStates = alloca.sized ptr 40
+    track.copy tag="Array$SlotState"
     memcpy %oldStates %tmp_fieldptr.11 40
     %tmp_fieldptr.12 = getfieldptr ptr %oldStates 8
     %tmp_fieldptr.13 = getfieldptr ptr %tmp_fieldptr.12 24
@@ -1994,6 +2024,7 @@ incref_end_14:
     %tmp_load.26 = load i64 %newCapacity
     %tmp_call.2 = call ptr @Array$SlotState$resize(%tmp_alloca.10, %newStates, %tmp_load.26)
     %tmp_fieldptr.16 = getfieldptr ptr %self 0
+    track.cleanup tag="keys"
     %tmp_fieldptr.17 = getfieldptr ptr %tmp_fieldptr.16 8
     %tmp_fieldptr.18 = getfieldptr ptr %tmp_fieldptr.17 24
     %tmp_load.27 = load i32 %tmp_fieldptr.18
@@ -2135,6 +2166,7 @@ slice_check_28:
     %tmp_icmp.15 = icmp.eq i32 %tmp_band.9 %tmp_const.52
     br.cond %tmp_icmp.15 @slice_decref_26 @decref_end_29
 decref_end_29:
+    track.copy tag="Array$String"
     memcpy %tmp_fieldptr.16 %newKeys 40
     %tmp_fieldptr.26 = getfieldptr ptr %tmp_fieldptr.16 8
     %tmp_fieldptr.27 = getfieldptr ptr %tmp_fieldptr.26 24
@@ -2176,6 +2208,7 @@ slice_incref_32:
     br @incref_end_33
 incref_end_33:
     %tmp_fieldptr.30 = getfieldptr ptr %self 40
+    track.cleanup tag="values"
     %tmp_fieldptr.31 = getfieldptr ptr %tmp_fieldptr.30 8
     %tmp_fieldptr.32 = getfieldptr ptr %tmp_fieldptr.31 24
     %tmp_load.59 = load i32 %tmp_fieldptr.32
@@ -2235,6 +2268,7 @@ slice_check_38:
     %tmp_icmp.21 = icmp.eq i32 %tmp_band.13 %tmp_const.72
     br.cond %tmp_icmp.21 @slice_decref_36 @decref_end_39
 decref_end_39:
+    track.copy tag="Array$int"
     memcpy %tmp_fieldptr.30 %newValues 40
     %tmp_fieldptr.36 = getfieldptr ptr %tmp_fieldptr.30 8
     %tmp_fieldptr.37 = getfieldptr ptr %tmp_fieldptr.36 24
@@ -2276,6 +2310,7 @@ slice_incref_42:
     br @incref_end_43
 incref_end_43:
     %tmp_fieldptr.40 = getfieldptr ptr %self 80
+    track.cleanup tag="states"
     %tmp_fieldptr.41 = getfieldptr ptr %tmp_fieldptr.40 8
     %tmp_fieldptr.42 = getfieldptr ptr %tmp_fieldptr.41 24
     %tmp_load.76 = load i32 %tmp_fieldptr.42
@@ -2335,6 +2370,7 @@ slice_check_48:
     %tmp_icmp.27 = icmp.eq i32 %tmp_band.17 %tmp_const.92
     br.cond %tmp_icmp.27 @slice_decref_46 @decref_end_49
 decref_end_49:
+    track.copy tag="Array$SlotState"
     memcpy %tmp_fieldptr.40 %newStates 40
     %tmp_fieldptr.46 = getfieldptr ptr %tmp_fieldptr.40 8
     %tmp_fieldptr.47 = getfieldptr ptr %tmp_fieldptr.46 24
@@ -2546,6 +2582,7 @@ whilecont_76:
     %tmp_add.23 = add i64 %tmp_load.129 %tmp_const.121
     %tmp_fieldptr.63 = getfieldptr ptr %self 120
     store %tmp_fieldptr.63 %tmp_add.23
+    track.cleanup tag="key"
     %tmp_fieldptr.64 = getfieldptr ptr %key 24
     %tmp_load.130 = load i32 %tmp_fieldptr.64
     %tmp_const.122 = const.i32 i32 3
@@ -2612,6 +2649,268 @@ end$occupied_83:
     store %i %tmp_add.24
     br @whilecond_54
 whilecont_84:
+    track.cleanup tag="oldStates"
+    %tmp_fieldptr.68 = getfieldptr ptr %oldStates 8
+    %tmp_fieldptr.69 = getfieldptr ptr %tmp_fieldptr.68 24
+    %tmp_load.141 = load i32 %tmp_fieldptr.69
+    %tmp_const.135 = const.i32 i32 3
+    %tmp_band.22 = band i32 %tmp_load.141 %tmp_const.135
+    %tmp_const.136 = const.i32 i32 1
+    %tmp_icmp.43 = icmp.eq i32 %tmp_band.22 %tmp_const.136
+    br.cond %tmp_icmp.43 @heap_decref_85 @slice_check_89
+heap_decref_85:
+    %tmp_load.142 = load ptr %tmp_fieldptr.68
+    %tmp_const.137 = const.i64 i64 8
+    %tmp_sub.53 = sub ptr %tmp_load.142 %tmp_const.137
+    %tmp_load.143 = load i64 %tmp_sub.53
+    %tmp_const.138 = const.i64 i64 1
+    %tmp_sub.54 = sub i64 %tmp_load.143 %tmp_const.138
+    store %tmp_sub.53 %tmp_sub.54
+    %tmp_const.139 = const.i64 i64 0
+    %tmp_icmp.44 = icmp.eq i64 %tmp_sub.54 %tmp_const.139
+    br.cond %tmp_icmp.44 @heap_free_86 @decref_end_90
+heap_free_86:
+    %tmp_load.144 = load ptr %tmp_fieldptr.68
+    %tmp_const.140 = const.i64 i64 8
+    %tmp_sub.55 = sub ptr %tmp_load.144 %tmp_const.140
+    heap.free %tmp_sub.55 tag="array cleanup"
+    br @decref_end_90
+slice_decref_87:
+    %tmp_load.145 = load ptr %tmp_fieldptr.68
+    %tmp_fieldptr.70 = getfieldptr ptr %tmp_fieldptr.68 28
+    %tmp_load.146 = load i32 %tmp_fieldptr.70
+    %tmp_sext.14 = sext.i32.i64 i64 %tmp_load.146
+    %tmp_sub.56 = sub ptr %tmp_load.145 %tmp_sext.14
+    %tmp_const.141 = const.i64 i64 8
+    %tmp_sub.57 = sub ptr %tmp_sub.56 %tmp_const.141
+    %tmp_load.147 = load i64 %tmp_sub.57
+    %tmp_const.142 = const.i64 i64 1
+    %tmp_sub.58 = sub i64 %tmp_load.147 %tmp_const.142
+    store %tmp_sub.57 %tmp_sub.58
+    %tmp_const.143 = const.i64 i64 0
+    %tmp_icmp.45 = icmp.eq i64 %tmp_sub.58 %tmp_const.143
+    br.cond %tmp_icmp.45 @slice_free_88 @decref_end_90
+slice_free_88:
+    %tmp_load.148 = load ptr %tmp_fieldptr.68
+    %tmp_fieldptr.71 = getfieldptr ptr %tmp_fieldptr.68 28
+    %tmp_load.149 = load i32 %tmp_fieldptr.71
+    %tmp_sext.15 = sext.i32.i64 i64 %tmp_load.149
+    %tmp_sub.59 = sub ptr %tmp_load.148 %tmp_sext.15
+    %tmp_const.144 = const.i64 i64 8
+    %tmp_sub.60 = sub ptr %tmp_sub.59 %tmp_const.144
+    heap.free %tmp_sub.60 tag="slice parent cleanup"
+    br @decref_end_90
+slice_check_89:
+    %tmp_fieldptr.72 = getfieldptr ptr %tmp_fieldptr.68 24
+    %tmp_load.150 = load i32 %tmp_fieldptr.72
+    %tmp_const.145 = const.i32 i32 3
+    %tmp_band.23 = band i32 %tmp_load.150 %tmp_const.145
+    %tmp_const.146 = const.i32 i32 2
+    %tmp_icmp.46 = icmp.eq i32 %tmp_band.23 %tmp_const.146
+    br.cond %tmp_icmp.46 @slice_decref_87 @decref_end_90
+decref_end_90:
+    track.cleanup tag="oldKeys"
+    %tmp_fieldptr.73 = getfieldptr ptr %oldKeys 8
+    %tmp_fieldptr.74 = getfieldptr ptr %tmp_fieldptr.73 24
+    %tmp_load.151 = load i32 %tmp_fieldptr.74
+    %tmp_const.147 = const.i32 i32 3
+    %tmp_band.24 = band i32 %tmp_load.151 %tmp_const.147
+    %tmp_const.148 = const.i32 i32 1
+    %tmp_icmp.47 = icmp.eq i32 %tmp_band.24 %tmp_const.148
+    br.cond %tmp_icmp.47 @elem_cleanup_check_refcount_91 @elem_cleanup_done_99
+elem_cleanup_check_refcount_91:
+    %649 = load ptr %tmp_fieldptr.73
+    %650 = const.i64 i64 8
+    %651 = sub ptr %649 %650
+    %652 = load i64 %651
+    %653 = const.i64 i64 1
+    %654 = icmp.eq i64 %652 %653
+    br.cond %654 @elem_cleanup_if_owner_92 @elem_cleanup_done_99
+elem_cleanup_if_owner_92:
+    %tmp_fieldptr.75 = getfieldptr ptr %tmp_fieldptr.73 8
+    %tmp_load.152 = load i64 %tmp_fieldptr.75
+    %tmp_const.149 = const.i64 i64 0
+    %tmp_icmp.48 = icmp.eq i64 %tmp_load.152 %tmp_const.149
+    %tmp_alloca.28 = alloca ptr
+    store %tmp_alloca.28 %tmp_const.149
+    br.cond %tmp_icmp.48 @arr_managed_cleanup_end_98 @arr_managed_cleanup_cond_93
+arr_managed_cleanup_cond_93:
+    %tmp_fieldptr.76 = getfieldptr ptr %tmp_fieldptr.73 8
+    %tmp_load.153 = load i64 %tmp_fieldptr.76
+    %tmp_load.154 = load i64 %tmp_alloca.28
+    %tmp_icmp.49 = icmp.ge i64 %tmp_load.154 %tmp_load.153
+    br.cond %tmp_icmp.49 @arr_managed_cleanup_end_98 @arr_managed_cleanup_body_94
+arr_managed_cleanup_body_94:
+    %tmp_load.155 = load ptr %tmp_fieldptr.73
+    %tmp_load.156 = load i64 %tmp_alloca.28
+    %tmp_const.150 = const.i64 i64 40
+    %tmp_mul.4 = mul i64 %tmp_load.156 %tmp_const.150
+    %tmp_add.25 = add ptr %tmp_load.155 %tmp_mul.4
+    %tmp_const.151 = const.i64 i64 0
+    %tmp_add.26 = add ptr %tmp_add.25 %tmp_const.151
+    %tmp_fieldptr.77 = getfieldptr ptr %tmp_add.26 24
+    %tmp_load.157 = load i32 %tmp_fieldptr.77
+    %tmp_const.152 = const.i32 i32 3
+    %tmp_band.25 = band i32 %tmp_load.157 %tmp_const.152
+    %tmp_const.153 = const.i32 i32 1
+    %tmp_icmp.50 = icmp.eq i32 %tmp_band.25 %tmp_const.153
+    br.cond %tmp_icmp.50 @arr_managed_cleanup_decref_95 @arr_managed_cleanup_next_97
+arr_managed_cleanup_decref_95:
+    %tmp_load.158 = load ptr %tmp_fieldptr.73
+    %tmp_load.159 = load i64 %tmp_alloca.28
+    %tmp_mul.5 = mul i64 %tmp_load.159 %tmp_const.150
+    %tmp_add.27 = add ptr %tmp_load.158 %tmp_mul.5
+    %tmp_const.154 = const.i64 i64 0
+    %tmp_add.28 = add ptr %tmp_add.27 %tmp_const.154
+    %tmp_load.160 = load ptr %tmp_add.28
+    %tmp_const.155 = const.i64 i64 8
+    %tmp_sub.61 = sub ptr %tmp_load.160 %tmp_const.155
+    %tmp_load.161 = load i64 %tmp_sub.61
+    %tmp_const.156 = const.i64 i64 1
+    %tmp_sub.62 = sub i64 %tmp_load.161 %tmp_const.156
+    store %tmp_sub.61 %tmp_sub.62
+    %tmp_const.157 = const.i64 i64 0
+    %tmp_icmp.51 = icmp.eq i64 %tmp_sub.62 %tmp_const.157
+    br.cond %tmp_icmp.51 @arr_managed_cleanup_heap_free_96 @arr_managed_cleanup_next_97
+arr_managed_cleanup_heap_free_96:
+    %tmp_load.162 = load ptr %tmp_fieldptr.73
+    %tmp_load.163 = load i64 %tmp_alloca.28
+    %tmp_mul.6 = mul i64 %tmp_load.163 %tmp_const.150
+    %tmp_add.29 = add ptr %tmp_load.162 %tmp_mul.6
+    %tmp_const.158 = const.i64 i64 0
+    %tmp_add.30 = add ptr %tmp_add.29 %tmp_const.158
+    %tmp_load.164 = load ptr %tmp_add.30
+    %tmp_const.159 = const.i64 i64 8
+    %tmp_sub.63 = sub ptr %tmp_load.164 %tmp_const.159
+    heap.free %tmp_sub.63 tag="element cleanup"
+    br @arr_managed_cleanup_next_97
+arr_managed_cleanup_next_97:
+    %tmp_const.160 = const.i64 i64 1
+    %tmp_load.165 = load i64 %tmp_alloca.28
+    %tmp_add.31 = add i64 %tmp_load.165 %tmp_const.160
+    store %tmp_alloca.28 %tmp_add.31
+    br @arr_managed_cleanup_cond_93
+arr_managed_cleanup_end_98:
+    br @elem_cleanup_done_99
+elem_cleanup_done_99:
+    %tmp_fieldptr.78 = getfieldptr ptr %tmp_fieldptr.73 24
+    %tmp_load.166 = load i32 %tmp_fieldptr.78
+    %tmp_const.161 = const.i32 i32 3
+    %tmp_band.26 = band i32 %tmp_load.166 %tmp_const.161
+    %tmp_const.162 = const.i32 i32 1
+    %tmp_icmp.52 = icmp.eq i32 %tmp_band.26 %tmp_const.162
+    br.cond %tmp_icmp.52 @heap_decref_100 @slice_check_104
+heap_decref_100:
+    %tmp_load.167 = load ptr %tmp_fieldptr.73
+    %tmp_const.163 = const.i64 i64 8
+    %tmp_sub.64 = sub ptr %tmp_load.167 %tmp_const.163
+    %tmp_load.168 = load i64 %tmp_sub.64
+    %tmp_const.164 = const.i64 i64 1
+    %tmp_sub.65 = sub i64 %tmp_load.168 %tmp_const.164
+    store %tmp_sub.64 %tmp_sub.65
+    %tmp_const.165 = const.i64 i64 0
+    %tmp_icmp.53 = icmp.eq i64 %tmp_sub.65 %tmp_const.165
+    br.cond %tmp_icmp.53 @heap_free_101 @decref_end_105
+heap_free_101:
+    %tmp_load.169 = load ptr %tmp_fieldptr.73
+    %tmp_const.166 = const.i64 i64 8
+    %tmp_sub.66 = sub ptr %tmp_load.169 %tmp_const.166
+    heap.free %tmp_sub.66 tag="array cleanup"
+    br @decref_end_105
+slice_decref_102:
+    %tmp_load.170 = load ptr %tmp_fieldptr.73
+    %tmp_fieldptr.79 = getfieldptr ptr %tmp_fieldptr.73 28
+    %tmp_load.171 = load i32 %tmp_fieldptr.79
+    %tmp_sext.16 = sext.i32.i64 i64 %tmp_load.171
+    %tmp_sub.67 = sub ptr %tmp_load.170 %tmp_sext.16
+    %tmp_const.167 = const.i64 i64 8
+    %tmp_sub.68 = sub ptr %tmp_sub.67 %tmp_const.167
+    %tmp_load.172 = load i64 %tmp_sub.68
+    %tmp_const.168 = const.i64 i64 1
+    %tmp_sub.69 = sub i64 %tmp_load.172 %tmp_const.168
+    store %tmp_sub.68 %tmp_sub.69
+    %tmp_const.169 = const.i64 i64 0
+    %tmp_icmp.54 = icmp.eq i64 %tmp_sub.69 %tmp_const.169
+    br.cond %tmp_icmp.54 @slice_free_103 @decref_end_105
+slice_free_103:
+    %tmp_load.173 = load ptr %tmp_fieldptr.73
+    %tmp_fieldptr.80 = getfieldptr ptr %tmp_fieldptr.73 28
+    %tmp_load.174 = load i32 %tmp_fieldptr.80
+    %tmp_sext.17 = sext.i32.i64 i64 %tmp_load.174
+    %tmp_sub.70 = sub ptr %tmp_load.173 %tmp_sext.17
+    %tmp_const.170 = const.i64 i64 8
+    %tmp_sub.71 = sub ptr %tmp_sub.70 %tmp_const.170
+    heap.free %tmp_sub.71 tag="slice parent cleanup"
+    br @decref_end_105
+slice_check_104:
+    %tmp_fieldptr.81 = getfieldptr ptr %tmp_fieldptr.73 24
+    %tmp_load.175 = load i32 %tmp_fieldptr.81
+    %tmp_const.171 = const.i32 i32 3
+    %tmp_band.27 = band i32 %tmp_load.175 %tmp_const.171
+    %tmp_const.172 = const.i32 i32 2
+    %tmp_icmp.55 = icmp.eq i32 %tmp_band.27 %tmp_const.172
+    br.cond %tmp_icmp.55 @slice_decref_102 @decref_end_105
+decref_end_105:
+    track.cleanup tag="oldValues"
+    %tmp_fieldptr.82 = getfieldptr ptr %oldValues 8
+    %tmp_fieldptr.83 = getfieldptr ptr %tmp_fieldptr.82 24
+    %tmp_load.176 = load i32 %tmp_fieldptr.83
+    %tmp_const.173 = const.i32 i32 3
+    %tmp_band.28 = band i32 %tmp_load.176 %tmp_const.173
+    %tmp_const.174 = const.i32 i32 1
+    %tmp_icmp.56 = icmp.eq i32 %tmp_band.28 %tmp_const.174
+    br.cond %tmp_icmp.56 @heap_decref_106 @slice_check_110
+heap_decref_106:
+    %tmp_load.177 = load ptr %tmp_fieldptr.82
+    %tmp_const.175 = const.i64 i64 8
+    %tmp_sub.72 = sub ptr %tmp_load.177 %tmp_const.175
+    %tmp_load.178 = load i64 %tmp_sub.72
+    %tmp_const.176 = const.i64 i64 1
+    %tmp_sub.73 = sub i64 %tmp_load.178 %tmp_const.176
+    store %tmp_sub.72 %tmp_sub.73
+    %tmp_const.177 = const.i64 i64 0
+    %tmp_icmp.57 = icmp.eq i64 %tmp_sub.73 %tmp_const.177
+    br.cond %tmp_icmp.57 @heap_free_107 @decref_end_111
+heap_free_107:
+    %tmp_load.179 = load ptr %tmp_fieldptr.82
+    %tmp_const.178 = const.i64 i64 8
+    %tmp_sub.74 = sub ptr %tmp_load.179 %tmp_const.178
+    heap.free %tmp_sub.74 tag="array cleanup"
+    br @decref_end_111
+slice_decref_108:
+    %tmp_load.180 = load ptr %tmp_fieldptr.82
+    %tmp_fieldptr.84 = getfieldptr ptr %tmp_fieldptr.82 28
+    %tmp_load.181 = load i32 %tmp_fieldptr.84
+    %tmp_sext.18 = sext.i32.i64 i64 %tmp_load.181
+    %tmp_sub.75 = sub ptr %tmp_load.180 %tmp_sext.18
+    %tmp_const.179 = const.i64 i64 8
+    %tmp_sub.76 = sub ptr %tmp_sub.75 %tmp_const.179
+    %tmp_load.182 = load i64 %tmp_sub.76
+    %tmp_const.180 = const.i64 i64 1
+    %tmp_sub.77 = sub i64 %tmp_load.182 %tmp_const.180
+    store %tmp_sub.76 %tmp_sub.77
+    %tmp_const.181 = const.i64 i64 0
+    %tmp_icmp.58 = icmp.eq i64 %tmp_sub.77 %tmp_const.181
+    br.cond %tmp_icmp.58 @slice_free_109 @decref_end_111
+slice_free_109:
+    %tmp_load.183 = load ptr %tmp_fieldptr.82
+    %tmp_fieldptr.85 = getfieldptr ptr %tmp_fieldptr.82 28
+    %tmp_load.184 = load i32 %tmp_fieldptr.85
+    %tmp_sext.19 = sext.i32.i64 i64 %tmp_load.184
+    %tmp_sub.78 = sub ptr %tmp_load.183 %tmp_sext.19
+    %tmp_const.182 = const.i64 i64 8
+    %tmp_sub.79 = sub ptr %tmp_sub.78 %tmp_const.182
+    heap.free %tmp_sub.79 tag="slice parent cleanup"
+    br @decref_end_111
+slice_check_110:
+    %tmp_fieldptr.86 = getfieldptr ptr %tmp_fieldptr.82 24
+    %tmp_load.185 = load i32 %tmp_fieldptr.86
+    %tmp_const.183 = const.i32 i32 3
+    %tmp_band.29 = band i32 %tmp_load.185 %tmp_const.183
+    %tmp_const.184 = const.i32 i32 2
+    %tmp_icmp.59 = icmp.eq i32 %tmp_band.29 %tmp_const.184
+    br.cond %tmp_icmp.59 @slice_decref_108 @decref_end_111
+decref_end_111:
     ret
 }
 
@@ -3039,6 +3338,7 @@ then$found_14:
     %tmp_const.13 = const.i64 i64 1
     %tmp_alloca.10 = alloca ptr
     store %tmp_alloca.10 %tmp_const.13
+    track.cleanup tag="existing"
     %tmp_fieldptr.11 = getfieldptr ptr %tmp_alloca.9 24
     %tmp_load.20 = load i32 %tmp_fieldptr.11
     %tmp_const.14 = const.i32 i32 3
@@ -3100,6 +3400,7 @@ decref_end_20:
     %tmp_load.30 = load i64 %tmp_alloca.10
     ret %tmp_load.30
 end$found_21:
+    track.cleanup tag="existing"
     %tmp_fieldptr.15 = getfieldptr ptr %tmp_alloca.9 24
     %tmp_load.31 = load i32 %tmp_fieldptr.15
     %tmp_const.26 = const.i32 i32 3
@@ -3274,6 +3575,7 @@ then$found_14:
     %tmp_const.10 = const.i64 i64 1
     %tmp_alloca.10 = alloca ptr
     store %tmp_alloca.10 %tmp_const.10
+    track.cleanup tag="existing"
     %tmp_fieldptr.8 = getfieldptr ptr %tmp_alloca.9 24
     %tmp_load.18 = load i32 %tmp_fieldptr.8
     %tmp_const.11 = const.i32 i32 3
@@ -3335,6 +3637,7 @@ decref_end_20:
     %tmp_load.28 = load i64 %tmp_alloca.10
     ret %tmp_load.28
 end$found_21:
+    track.cleanup tag="existing"
     %tmp_fieldptr.12 = getfieldptr ptr %tmp_alloca.9 24
     %tmp_load.29 = load i32 %tmp_fieldptr.12
     %tmp_const.23 = const.i32 i32 3

@@ -22,8 +22,10 @@ ALLOC #1: 48 bytes (array grow)
 INCREF: array grow -> rc=1
 ALLOC #2: 88 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: arr1
 DECREF: arr1 -> rc=0
 FREE #1: 48 bytes (array cleanup)
+CLEANUP: arr2
 DECREF: arr2 -> rc=0
 FREE #2: 88 bytes (array cleanup)
 
@@ -34,6 +36,8 @@ Leaked:    0 bytes
 Moves:     0
 Increfs:   2
 Decrefs:   2
+Copies:    0
+Cleanups:  2
 ```
 ---
 function main() -> i64 {
@@ -98,6 +102,7 @@ try_merge_6:
     %tmp_add = add i64 %tmp_load.8 %tmp_load.7
     %tmp_alloca.12 = alloca ptr
     store %tmp_alloca.12 %tmp_add
+    track.cleanup tag="arr1"
     %tmp_fieldptr.2 = getfieldptr ptr %arr1 8
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 24
     %tmp_load.10 = load i32 %tmp_fieldptr.3
@@ -157,6 +162,7 @@ slice_check_11:
     %tmp_icmp.5 = icmp.eq i32 %tmp_band.1 %tmp_const.25
     br.cond %tmp_icmp.5 @slice_decref_9 @decref_end_12
 decref_end_12:
+    track.cleanup tag="arr2"
     %tmp_fieldptr.7 = getfieldptr ptr %arr2 8
     %tmp_fieldptr.8 = getfieldptr ptr %tmp_fieldptr.7 24
     %tmp_load.20 = load i32 %tmp_fieldptr.8
@@ -261,22 +267,22 @@ grow_alloc_2:
     %tmp_heap = heap.alloc ptr %tmp_add tag="array grow"
     %tmp_const.3 = const.i64 i64 1
     store %tmp_heap %tmp_const.3
-    %tmp_const.4 = const.i64 i64 8
-    %tmp_add.1 = add ptr %tmp_heap %tmp_const.4
+    %tmp_add.1 = add ptr %tmp_heap %tmp_const.2
     store %tmp_fieldptr.2 %tmp_add.1
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.3 %tmp_load.3
-    %tmp_const.5 = const.i32 i32 1
+    %tmp_const.4 = const.i32 i32 1
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.2 24
-    store.i32 %tmp_fieldptr.4 %tmp_const.5
+    store.i32 %tmp_fieldptr.4 %tmp_const.4
     br @grow_end_4
 grow_realloc_3:
-    %tmp_const.6 = const.i64 i64 8
-    %tmp_add.2 = add i64 %tmp_mul %tmp_const.6
+    %tmp_const.5 = const.i64 i64 8
+    %tmp_add.2 = add i64 %tmp_mul %tmp_const.5
     %tmp_load.5 = load ptr %tmp_fieldptr.2
+    %tmp_const.6 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.5 %tmp_const.6
     %tmp_realloc = heap.realloc ptr %tmp_sub %tmp_add.2 tag="array grow"
-    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.6
+    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.5
     store %tmp_fieldptr.2 %tmp_add.3
     %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.5 %tmp_load.3

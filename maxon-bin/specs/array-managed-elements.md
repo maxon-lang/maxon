@@ -48,17 +48,27 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
+COPY: String
 ALLOC #1: 200 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
+COPY: String
 ALLOC #2: 48 bytes (string interpolation)
 INCREF: string interpolation -> rc=1
 MOVE: managed
 INCREF: <cstr> -> rc=2
 hello world that needs heap allocation
+CLEANUP: cs
 DECREF: <cstr cleanup> -> rc=1
 DECREF: <temp> -> rc=0
 FREE #2: 48 bytes (temp cleanup)
+CLEANUP: first
+CLEANUP: first
+CLEANUP: items
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
 DECREF: items -> rc=0
 FREE #1: 200 bytes (array cleanup)
 
@@ -69,6 +79,8 @@ Leaked:    0 bytes
 Moves:     3
 Increfs:   3
 Decrefs:   3
+Copies:    2
+Cleanups:  8
 ```
 
 <!-- test: array-of-structs-cleanup-order -->
@@ -94,9 +106,15 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
+COPY: String
 MOVE: managed
+COPY: String
 ALLOC #1: 328 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: pairs
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
 DECREF: pairs -> rc=0
 FREE #1: 328 bytes (array cleanup)
 
@@ -107,6 +125,8 @@ Leaked:    0 bytes
 Moves:     2
 Increfs:   1
 Decrefs:   1
+Copies:    2
+Cleanups:  4
 ```
 
 <!-- test: struct-with-multiple-managed-fields -->
@@ -135,10 +155,18 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
+COPY: String
 MOVE: managed
+COPY: String
 MOVE: managed
+COPY: String
 ALLOC #1: 552 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: items
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
 DECREF: items -> rc=0
 FREE #1: 552 bytes (array cleanup)
 
@@ -149,4 +177,6 @@ Leaked:    0 bytes
 Moves:     3
 Increfs:   1
 Decrefs:   1
+Copies:    3
+Cleanups:  5
 ```

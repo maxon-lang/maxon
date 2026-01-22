@@ -190,6 +190,131 @@ pub const ManagedMemory = struct {
         fields[4] = .{ .name = "_parent_off", .offset = PARENT_OFF_OFFSET, .size = 4, .value_type = .{ .primitive = .int } };
         return fields;
     }
+
+    // ========================================================================
+    // Refcount Primitives - Centralized refcount manipulation
+    // ========================================================================
+
+    /// Size of refcounted buffer header (refcount as i64)
+    pub const HEADER_SIZE: i64 = 8;
+
+    /// Get pointer to refcount header (buf_ptr - 8)
+    pub fn getHeaderPtr(func: *ir.Function, buf_ptr: ir.Value) !ir.Value {
+        const eight = try func.emitConstI64(HEADER_SIZE);
+        return func.emitBinaryOp(.sub, buf_ptr, eight, .ptr);
+    }
+
+    /// Load refcount value from header
+    pub fn loadRefcount(func: *ir.Function, header_ptr: ir.Value) !ir.Value {
+        return func.emitLoad(header_ptr, .i64);
+    }
+
+    /// Store refcount value to header
+    pub fn storeRefcount(func: *ir.Function, header_ptr: ir.Value, refcount: ir.Value) !void {
+        try func.emitStore(header_ptr, refcount);
+    }
+
+    /// Increment refcount in buffer header, returns new refcount
+    /// buf_ptr is the DATA pointer (header is at buf_ptr - 8)
+    pub fn incrementRefcount(func: *ir.Function, buf_ptr: ir.Value) !ir.Value {
+        const header_ptr = try getHeaderPtr(func, buf_ptr);
+        const old_ref = try loadRefcount(func, header_ptr);
+        const one = try func.emitConstI64(1);
+        const new_ref = try func.emitBinaryOp(.add, old_ref, one, .i64);
+        try storeRefcount(func, header_ptr, new_ref);
+        return new_ref;
+    }
+
+    /// Decrement refcount in buffer header, returns new refcount
+    /// buf_ptr is the DATA pointer (header is at buf_ptr - 8)
+    pub fn decrementRefcount(func: *ir.Function, buf_ptr: ir.Value) !ir.Value {
+        const header_ptr = try getHeaderPtr(func, buf_ptr);
+        const old_ref = try loadRefcount(func, header_ptr);
+        const one = try func.emitConstI64(1);
+        const new_ref = try func.emitBinaryOp(.sub, old_ref, one, .i64);
+        try storeRefcount(func, header_ptr, new_ref);
+        return new_ref;
+    }
+
+    /// Check if refcount is zero
+    pub fn isRefcountZero(func: *ir.Function, refcount: ir.Value) !ir.Value {
+        const zero = try func.emitConstI64(0);
+        return func.emitBinaryOp(.icmp_eq, refcount, zero, .i64);
+    }
+
+    /// Check if refcount is one (sole owner)
+    pub fn isRefcountOne(func: *ir.Function, refcount: ir.Value) !ir.Value {
+        const one = try func.emitConstI64(1);
+        return func.emitBinaryOp(.icmp_eq, refcount, one, .i64);
+    }
+
+    /// Free buffer at header pointer (buf_ptr - 8)
+    pub fn freeAtHeader(func: *ir.Function, buf_ptr: ir.Value, tag: []const u8) !void {
+        const header_ptr = try getHeaderPtr(func, buf_ptr);
+        try func.emitHeapFree(ir.toRawPtr(header_ptr), tag);
+    }
+
+    // ========================================================================
+    // Allocation Primitives - Centralized buffer allocation
+    // ========================================================================
+
+    /// Allocate a refcounted buffer with header.
+    /// Returns the DATA pointer (header is at returned_ptr - 8).
+    /// Refcount is initialized to 1.
+    ///
+    /// Buffer layout:
+    ///   [refcount: i64] [data bytes...]
+    ///   ^               ^
+    ///   |               +-- returned data_ptr
+    ///   +-- allocation base (header)
+    pub fn allocBuffer(self: *AstToIr, data_size: ir.Value, tag: []const u8) !ir.RawPtr {
+        const func = self.func();
+        // Allocate data_size + 8 for header
+        const header_size = try func.emitConstI64(HEADER_SIZE);
+        const total_size = try func.emitBinaryOp(.add, data_size, header_size, .i64);
+        const buffer_with_header = try func.emitHeapAlloc(total_size, tag);
+
+        // Initialize refcount in header to 1
+        const one = try func.emitConstI64(1);
+        try func.emitStore(buffer_with_header.raw(), one);
+
+        // Track the initial refcount as an incref
+        if (self.track_memory) {
+            const one_i32 = try func.emitConstI32(1);
+            try func.emitTrackIncref(tag, one_i32);
+        }
+
+        // Return data pointer (header + 8)
+        const data_ptr = try func.emitBinaryOp(.add, buffer_with_header.raw(), header_size, .ptr);
+        return ir.toRawPtr(data_ptr);
+    }
+
+    /// Allocate and initialize a complete ManagedMemory struct with refcounted buffer.
+    /// Returns a stack-allocated ManagedMemory initialized with the new buffer.
+    pub fn allocManaged(self: *AstToIr, data_size: ir.Value, len: ir.Value, capacity: ir.Value, tag: []const u8) !ir.ManagedMemoryPtr {
+        const buffer = try allocBuffer(self, data_size, tag);
+        const ptr = try alloca(self.func());
+        const heap_flags = try self.func().emitConstI32(MODE_HEAP);
+        try init(self.func(), ptr, buffer, len, capacity, heap_flags);
+        return ptr;
+    }
+
+    /// Allocate empty ManagedMemory (null buffer, zero length)
+    pub fn allocEmpty(self: *AstToIr) !ir.ManagedMemoryPtr {
+        const ptr = try alloca(self.func());
+        try initEmpty(self.func(), ptr);
+        return ptr;
+    }
+
+    /// Get the parent buffer pointer for a slice.
+    /// For slices, the parent buffer is at: slice_buf - parent_off
+    pub fn getParentBuffer(func: *ir.Function, ptr: ir.ManagedMemoryPtr) !ir.Value {
+        const slice_buf_ptr = try loadBuffer(func, ptr);
+        const parent_off_ptr = try func.emitGetFieldPtr(ptr.asStructPtr(), PARENT_OFF_OFFSET);
+        const parent_off_i32 = try func.emitLoad(parent_off_ptr.raw(), .i32);
+        const parent_off_i64 = try func.emitUnaryOp(.sext_i32_i64, parent_off_i32, .i64);
+        return func.emitBinaryOp(.sub, slice_buf_ptr, parent_off_i64, .ptr);
+    }
 };
 // ============================================================================
 // ManagedMemory Helpers
@@ -232,7 +357,8 @@ pub fn emitRefcountedManagedMemory(self: *AstToIr, data_size: ir.Value, len: ir.
 }
 
 /// Size of refcounted buffer header (refcount as i64)
-pub const REFCOUNTED_BUFFER_HEADER_SIZE: i64 = 8;
+/// NOTE: Prefer using ManagedMemory.HEADER_SIZE for new code.
+pub const REFCOUNTED_BUFFER_HEADER_SIZE: i64 = ManagedMemory.HEADER_SIZE;
 
 /// Allocate a refcounted buffer with header.
 /// Returns the DATA pointer (header is at returned_ptr - 8).
@@ -244,27 +370,9 @@ pub const REFCOUNTED_BUFFER_HEADER_SIZE: i64 = 8;
 ///   +-- allocation base (header)
 ///
 /// The refcount is initialized to 1 (for the ManagedMemory being created).
+/// NOTE: This is now a thin wrapper around ManagedMemory.allocBuffer.
 pub fn emitAllocRefcountedBuffer(self: *AstToIr, data_size: ir.Value, tag: []const u8) !ir.RawPtr {
-    const func = self.func();
-    // Allocate data_size + 8 for header
-    const header_size = try func.emitConstI64(REFCOUNTED_BUFFER_HEADER_SIZE);
-    const total_size = try func.emitBinaryOp(.add, data_size, header_size, .i64);
-    const buffer_with_header = try func.emitHeapAlloc(total_size, tag);
-
-    // Initialize refcount in header to 1 (for the ManagedMemory being created)
-    const one = try func.emitConstI64(1);
-    try func.emitStore(buffer_with_header.raw(), one);
-
-    // Track the initial refcount as an incref
-    if (self.track_memory) {
-        const one_i32 = try func.emitConstI32(1);
-        try func.emitTrackIncref(tag, one_i32);
-    }
-
-    // Return data pointer (header + 8)
-    const eight = try func.emitConstI64(8);
-    const data_ptr = try func.emitBinaryOp(.add, buffer_with_header.raw(), eight, .ptr);
-    return ir.toRawPtr(data_ptr);
+    return ManagedMemory.allocBuffer(self, data_size, tag);
 }
 
 /// Emit incref for a ManagedMemory.
@@ -300,14 +408,9 @@ pub fn emitManagedMemoryIncref(self: *AstToIr, ptr: ir.ManagedMemoryPtr, tag: []
     });
 
     // ===== HEAP INCREF BLOCK (current) =====
-    // Increment refcount in buffer header (at buffer_ptr - 8)
-    const buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
-    const eight = try self.func().emitConstI64(8);
-    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
-    const old_ref = try self.func().emitLoad(header_ptr, .i64);
-    const one = try self.func().emitConstI64(1);
-    const new_ref = try self.func().emitBinaryOp(.add, old_ref, one, .i64);
-    try self.func().emitStore(header_ptr, new_ref);
+    // Increment refcount in buffer header using primitives
+    const buf_ptr = try ManagedMemory.loadBuffer(self.func(), ptr);
+    const new_ref = try ManagedMemory.incrementRefcount(self.func(), buf_ptr);
 
     if (self.track_memory) {
         const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
@@ -325,21 +428,9 @@ pub fn emitManagedMemoryIncref(self: *AstToIr, ptr: ir.ManagedMemoryPtr, tag: []
     // ===== SLICE INCREF BLOCK =====
     try deferred.restore(self, 1);
 
-    // For slices, incref the PARENT buffer
-    // Parent buffer = slice_buf - parent_off
-    const slice_buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
-    const parent_off_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(ptr.raw()), 28);
-    const parent_off_i32 = try self.func().emitLoad(parent_off_ptr.raw(), .i32);
-    const parent_off_i64 = try self.func().emitUnaryOp(.sext_i32_i64, parent_off_i32, .i64);
-    const parent_buf_ptr = try self.func().emitBinaryOp(.sub, slice_buf_ptr, parent_off_i64, .ptr);
-
-    // Incref parent header at parent_buf - 8
-    const eight2 = try self.func().emitConstI64(8);
-    const parent_header_ptr = try self.func().emitBinaryOp(.sub, parent_buf_ptr, eight2, .ptr);
-    const parent_old_ref = try self.func().emitLoad(parent_header_ptr, .i64);
-    const one2 = try self.func().emitConstI64(1);
-    const parent_new_ref = try self.func().emitBinaryOp(.add, parent_old_ref, one2, .i64);
-    try self.func().emitStore(parent_header_ptr, parent_new_ref);
+    // For slices, incref the PARENT buffer using primitives
+    const parent_buf_ptr = try ManagedMemory.getParentBuffer(self.func(), ptr);
+    const parent_new_ref = try ManagedMemory.incrementRefcount(self.func(), parent_buf_ptr);
 
     if (self.track_memory) {
         const parent_new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, parent_new_ref, .i32);
@@ -394,71 +485,47 @@ pub fn emitManagedMemoryDecref(self: *AstToIr, ptr: ir.ManagedMemoryPtr, tag: []
     });
 
     // ===== HEAP DECREF BLOCK (current) =====
-    const buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
-    const eight = try self.func().emitConstI64(8);
-    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
-    const old_ref = try self.func().emitLoad(header_ptr, .i64);
-    const one = try self.func().emitConstI64(1);
-    const new_ref = try self.func().emitBinaryOp(.sub, old_ref, one, .i64);
-    try self.func().emitStore(header_ptr, new_ref);
+    // Decrement refcount using primitives
+    const buf_ptr = try ManagedMemory.loadBuffer(self.func(), ptr);
+    const new_ref = try ManagedMemory.decrementRefcount(self.func(), buf_ptr);
 
     if (self.track_memory) {
         const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
         try self.func().emitTrackDecref(tag, new_ref_i32);
     }
 
-    const zero = try self.func().emitConstI64(0);
-    const is_zero = try self.func().emitBinaryOp(.icmp_eq, new_ref, zero, .i64);
+    const is_zero = try ManagedMemory.isRefcountZero(self.func(), new_ref);
     try self.func().emitBrCond(is_zero, heap_free_block_idx, end_block_idx);
 
     // ===== HEAP FREE BLOCK =====
     try deferred.restore(self, 4);
 
-    const buf_ptr2 = try self.func().emitLoad(ptr.raw(), .ptr);
-    const eight2 = try self.func().emitConstI64(8);
-    const header_ptr2 = try self.func().emitBinaryOp(.sub, buf_ptr2, eight2, .ptr);
-    try self.func().emitHeapFree(ir.toRawPtr(header_ptr2), cleanup_tag);
+    // Free buffer at header using primitives
+    const buf_ptr2 = try ManagedMemory.loadBuffer(self.func(), ptr);
+    try ManagedMemory.freeAtHeader(self.func(), buf_ptr2, cleanup_tag);
     try self.func().emitBr(end_block_idx);
 
     // ===== SLICE DECREF BLOCK =====
     try deferred.restore(self, 3);
 
-    // Compute parent buffer: slice_buf - parent_off
-    const slice_buf_ptr = try self.func().emitLoad(ptr.raw(), .ptr);
-    const parent_off_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(ptr.raw()), 28);
-    const parent_off_i32 = try self.func().emitLoad(parent_off_ptr.raw(), .i32);
-    const parent_off_i64 = try self.func().emitUnaryOp(.sext_i32_i64, parent_off_i32, .i64);
-    const parent_buf_ptr = try self.func().emitBinaryOp(.sub, slice_buf_ptr, parent_off_i64, .ptr);
-
-    // Decref parent header at parent_buf - 8
-    const eight3 = try self.func().emitConstI64(8);
-    const parent_header_ptr = try self.func().emitBinaryOp(.sub, parent_buf_ptr, eight3, .ptr);
-    const parent_old_ref = try self.func().emitLoad(parent_header_ptr, .i64);
-    const one2 = try self.func().emitConstI64(1);
-    const parent_new_ref = try self.func().emitBinaryOp(.sub, parent_old_ref, one2, .i64);
-    try self.func().emitStore(parent_header_ptr, parent_new_ref);
+    // Decref parent buffer using primitives
+    const parent_buf_ptr = try ManagedMemory.getParentBuffer(self.func(), ptr);
+    const parent_new_ref = try ManagedMemory.decrementRefcount(self.func(), parent_buf_ptr);
 
     if (self.track_memory) {
         const parent_new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, parent_new_ref, .i32);
         try self.func().emitTrackDecref("slice parent", parent_new_ref_i32);
     }
 
-    const zero2 = try self.func().emitConstI64(0);
-    const parent_is_zero = try self.func().emitBinaryOp(.icmp_eq, parent_new_ref, zero2, .i64);
+    const parent_is_zero = try ManagedMemory.isRefcountZero(self.func(), parent_new_ref);
     try self.func().emitBrCond(parent_is_zero, slice_free_block_idx, end_block_idx);
 
     // ===== SLICE FREE BLOCK =====
     try deferred.restore(self, 2);
 
-    // Free parent buffer at header - need to reload values
-    const slice_buf_ptr2 = try self.func().emitLoad(ptr.raw(), .ptr);
-    const parent_off_ptr2 = try self.func().emitGetFieldPtr(ir.toStructPtr(ptr.raw()), 28);
-    const parent_off_i32_2 = try self.func().emitLoad(parent_off_ptr2.raw(), .i32);
-    const parent_off_i64_2 = try self.func().emitUnaryOp(.sext_i32_i64, parent_off_i32_2, .i64);
-    const parent_buf_ptr2 = try self.func().emitBinaryOp(.sub, slice_buf_ptr2, parent_off_i64_2, .ptr);
-    const eight4 = try self.func().emitConstI64(8);
-    const parent_header_ptr2 = try self.func().emitBinaryOp(.sub, parent_buf_ptr2, eight4, .ptr);
-    try self.func().emitHeapFree(ir.toRawPtr(parent_header_ptr2), "slice parent cleanup");
+    // Free parent buffer at header using primitives
+    const parent_buf_ptr2 = try ManagedMemory.getParentBuffer(self.func(), ptr);
+    try ManagedMemory.freeAtHeader(self.func(), parent_buf_ptr2, "slice parent cleanup");
     try self.func().emitBr(end_block_idx);
 
     // ===== SLICE CHECK BLOCK =====
@@ -597,6 +664,13 @@ pub fn emitTypeAlloca(self: *AstToIr, type_name: []const u8) !ir.RawPtr {
 /// Handles String, Array$T, cstring, and any other type with __ManagedMemory at any offset.
 /// Also handles nested structs that contain managed buffers.
 pub fn emitStructCopy(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.StructPtr, size: i32, struct_name: ?[]const u8) !void {
+    // Track copy operation for debugging
+    if (struct_name) |name| {
+        if (!std.mem.eql(u8, name, "__ManagedMemory")) {
+            try self.func().emitTrackCopy(name);
+        }
+    }
+
     try self.func().emitMemcpy(dest_ptr.asRawPtr(), src_ptr.asRawPtr(), size);
 
     // Handle refcount for types with __ManagedMemory
@@ -650,10 +724,10 @@ pub fn emitStructMove(self: *AstToIr, dest_ptr: ir.StructPtr, src_ptr: ir.Struct
 /// cstring layout: data(8) + length(8) + managed(8)
 /// If managed != null and points to a heap-mode __ManagedMemory, incref its buffer.
 fn emitCstringCopyIncref(self: *AstToIr, cstring_ptr: ir.StructPtr) !void {
-    const cstring = @import("ast_to_ir_cstring.zig");
+    const cstring_mod = @import("ast_to_ir_cstring.zig");
 
     // Load the managed pointer (offset 16)
-    const managed_field = try self.func().emitGetFieldPtr(cstring_ptr, cstring.CString.MANAGED_OFFSET);
+    const managed_field = try self.func().emitGetFieldPtr(cstring_ptr, cstring_mod.CString.MANAGED_OFFSET);
     const managed_ptr = try self.func().emitLoad(managed_field.raw(), .ptr);
 
     // Check if managed != null
@@ -666,25 +740,21 @@ fn emitCstringCopyIncref(self: *AstToIr, cstring_ptr: ir.StructPtr) !void {
     const check_heap_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("cstr_copy_check_heap");
 
-    // Check if the managed memory is in heap mode (flags & 3 == 1)
-    const flags_ptr = try ManagedMemory.getFlagsPtr(self.func(), ir.toManagedMemoryPtr(managed_ptr));
-    const flags = try self.func().emitLoad(flags_ptr.raw(), .i32);
-    const three = try self.func().emitConstI32(3);
-    const mode = try self.func().emitBinaryOp(.band, flags, three, .i32);
-    const one = try self.func().emitConstI32(1);
-    const is_heap = try self.func().emitBinaryOp(.icmp_eq, mode, one, .i32);
+    // Check if the managed memory is in heap mode using primitive
+    const is_heap = try ManagedMemory.isHeapMode(self.func(), ir.toManagedMemoryPtr(managed_ptr));
 
     const do_incref_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("cstr_copy_incref");
 
-    // Incref: load buffer pointer, subtract 8 to get header, increment refcount
-    const buf_ptr = try self.func().emitLoad(managed_ptr, .ptr);
-    const eight = try self.func().emitConstI64(8);
-    const header_ptr = try self.func().emitBinaryOp(.sub, buf_ptr, eight, .ptr);
-    const old_ref = try self.func().emitLoad(header_ptr, .i64);
-    const one_i64 = try self.func().emitConstI64(1);
-    const new_ref = try self.func().emitBinaryOp(.add, old_ref, one_i64, .i64);
-    try self.func().emitStore(header_ptr, new_ref);
+    // Incref using primitive
+    const buf_ptr = try ManagedMemory.loadBuffer(self.func(), ir.toManagedMemoryPtr(managed_ptr));
+    const new_ref = try ManagedMemory.incrementRefcount(self.func(), buf_ptr);
+
+    // Track the incref
+    if (self.track_memory) {
+        const new_ref_i32 = try self.func().emitUnaryOp(.trunc_i64_i32, new_ref, .i32);
+        try self.func().emitTrackIncref("<cstr copy>", new_ref_i32);
+    }
 
     const end_idx: u32 = @intCast(self.func().blocks.items.len);
     _ = try self.func().addBlock("cstr_copy_end");

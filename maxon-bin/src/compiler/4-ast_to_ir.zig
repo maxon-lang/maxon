@@ -4814,7 +4814,18 @@ pub const AstToIr = struct {
             const needs_implicit_ret = block.instructions.items.len == 0 or
                 block.instructions.items[block.instructions.items.len - 1].op != .ret;
             if (needs_implicit_ret) {
-                try self.func().emitRet(null);
+                try cleanup_helpers.freeHeapAllocations(self);
+                // For main, return 0 as the exit code; for other void functions, return null
+                if (self.current_func_name) |name| {
+                    if (std.mem.eql(u8, name, "main")) {
+                        const zero = try self.func().emitConstI64(0);
+                        try self.func().emitRet(zero);
+                    } else {
+                        try self.func().emitRet(null);
+                    }
+                } else {
+                    try self.func().emitRet(null);
+                }
             }
         } else if (self.current_func_throws_type != null and self.sret_ptr != null) {
             // Void throwing function - ret_type is .ptr for sret, but original return was void

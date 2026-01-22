@@ -346,6 +346,8 @@ pub const Instruction = struct {
         track_move, // Track ownership transfer: tag_ptr, tag_len
         track_incref, // Track reference count increment: tag_ptr, tag_len, new_refcount
         track_decref, // Track reference count decrement: tag_ptr, tag_len, new_refcount
+        track_copy, // Track struct copy: tag_ptr, tag_len
+        track_cleanup, // Track cleanup start: tag_ptr, tag_len
 
         // External DLL calls
         extern_call, // Call external DLL function: dll_name:func_name, args -> result
@@ -427,6 +429,8 @@ pub const Instruction = struct {
                 .track_move => "track.move",
                 .track_incref => "track.incref",
                 .track_decref => "track.decref",
+                .track_copy => "track.copy",
+                .track_cleanup => "track.cleanup",
                 .extern_call => "extern.call",
                 .global_addr => "global.addr",
             };
@@ -669,6 +673,8 @@ pub const Function = struct {
             .track_move => "tmp_track",
             .track_incref => "tmp_track",
             .track_decref => "tmp_track",
+            .track_copy => "tmp_track",
+            .track_cleanup => "tmp_track",
         };
     }
 
@@ -899,6 +905,14 @@ pub const Function = struct {
 
     pub fn emitTrackDecref(self: *Function, tag: []const u8, new_refcount: Value) !void {
         try self.emit(.{ .op = .track_decref, .operands = .{ .{ .alloc_tag = tag }, .{ .value = new_refcount }, .none } });
+    }
+
+    pub fn emitTrackCopy(self: *Function, tag: []const u8) !void {
+        try self.emit(.{ .op = .track_copy, .operands = .{ .{ .alloc_tag = tag }, .none, .none } });
+    }
+
+    pub fn emitTrackCleanup(self: *Function, tag: []const u8) !void {
+        try self.emit(.{ .op = .track_cleanup, .operands = .{ .{ .alloc_tag = tag }, .none, .none } });
     }
 
     // Global variable address - returns RawPtr to the global variable's storage

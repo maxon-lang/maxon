@@ -352,14 +352,21 @@ INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
+CLEANUP: k
+CLEANUP: k
 MOVE: result
 FREE #1: 80 bytes (map literal keys cleanup)
 FREE #2: 16 bytes (map literal values cleanup)
 MOVE: managed
+CLEANUP: existing
+CLEANUP: m
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #3: 648 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #4: 136 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #5: 136 bytes (array cleanup)
 
@@ -370,6 +377,8 @@ Leaked:    0 bytes
 Moves:     7
 Increfs:   3
 Decrefs:   3
+Copies:    0
+Cleanups:  7
 ```
 
 <!-- test: string-keys-get-multiple -->
@@ -400,15 +409,25 @@ INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
+CLEANUP: k
+CLEANUP: k
+CLEANUP: existing
+CLEANUP: k
 MOVE: result
 FREE #1: 120 bytes (map literal keys cleanup)
 FREE #2: 24 bytes (map literal values cleanup)
 MOVE: managed
+CLEANUP: existing
 MOVE: managed
+CLEANUP: existing
+CLEANUP: m
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #3: 648 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #4: 136 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #5: 136 bytes (array cleanup)
 
@@ -419,6 +438,8 @@ Leaked:    0 bytes
 Moves:     9
 Increfs:   3
 Decrefs:   3
+Copies:    0
+Cleanups:  10
 ```
 
 <!-- test: string-keys-contains -->
@@ -449,14 +470,21 @@ INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
+CLEANUP: k
+CLEANUP: k
 MOVE: result
 FREE #1: 80 bytes (map literal keys cleanup)
 FREE #2: 16 bytes (map literal values cleanup)
 MOVE: managed
+CLEANUP: existing
+CLEANUP: m
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #3: 648 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #4: 136 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #5: 136 bytes (array cleanup)
 
@@ -467,6 +495,8 @@ Leaked:    0 bytes
 Moves:     7
 Increfs:   3
 Decrefs:   3
+Copies:    0
+Cleanups:  7
 ```
 
 <!-- test: string-keys-insert-update -->
@@ -495,15 +525,22 @@ INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
+CLEANUP: k
 MOVE: result
 FREE #1: 40 bytes (map literal keys cleanup)
 FREE #2: 8 bytes (map literal values cleanup)
 MOVE: managed
+CLEANUP: existing
 MOVE: managed
+CLEANUP: existing
+CLEANUP: m
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #3: 648 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #4: 136 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #5: 136 bytes (array cleanup)
 
@@ -514,6 +551,8 @@ Leaked:    0 bytes
 Moves:     7
 Increfs:   3
 Decrefs:   3
+Copies:    0
+Cleanups:  7
 ```
 
 <!-- test: string-keys-remove -->
@@ -546,15 +585,23 @@ INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
+CLEANUP: k
+CLEANUP: k
+CLEANUP: k
 MOVE: result
 FREE #1: 120 bytes (map literal keys cleanup)
 FREE #2: 24 bytes (map literal values cleanup)
 MOVE: managed
+CLEANUP: existing
 MOVE: managed
+CLEANUP: m
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #3: 648 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #4: 136 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #5: 136 bytes (array cleanup)
 
@@ -565,6 +612,8 @@ Leaked:    0 bytes
 Moves:     9
 Increfs:   3
 Decrefs:   3
+Copies:    0
+Cleanups:  8
 ```
 
 <!-- test: string-keys-early-return -->
@@ -608,10 +657,13 @@ MOVE: result
 FREE #1: 40 bytes (map literal keys cleanup)
 FREE #2: 8 bytes (map literal values cleanup)
 MOVE: managed
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #3: 648 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #4: 136 bytes (array cleanup)
+CLEANUP: m
 DECREF: m -> rc=0
 FREE #5: 136 bytes (array cleanup)
 

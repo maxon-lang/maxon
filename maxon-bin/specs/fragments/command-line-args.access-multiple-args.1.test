@@ -22,34 +22,47 @@ MOVE: managed
 ALLOC #2: 168 bytes (array grow)
 INCREF: array grow -> rc=1
 INCREF: <array_store nested> -> rc=2
+CLEANUP: cstr
 FREE #1: 4 bytes (cstring release)
 ALLOC #3: 4 bytes (command line arg)
 MOVE: managed
 INCREF: <array_store nested> -> rc=2
+CLEANUP: cstr
 FREE #3: 4 bytes (cstring release)
 ALLOC #4: 4 bytes (command line arg)
 MOVE: managed
 INCREF: <array_store nested> -> rc=2
+CLEANUP: cstr
 FREE #4: 4 bytes (cstring release)
 MOVE: result
 INCREF: <array element return> -> rc=3
 INCREF: <array element return> -> rc=3
 INCREF: <array element return> -> rc=3
 INCREF: <cstr> -> rc=4
-fooDECREF: <cstr cleanup> -> rc=3
+fooCLEANUP: cs
+DECREF: <cstr cleanup> -> rc=3
 MOVE: managed
 
+CLEANUP: cs
 INCREF: <cstr> -> rc=4
-barDECREF: <cstr cleanup> -> rc=3
+barCLEANUP: cs
+DECREF: <cstr cleanup> -> rc=3
 MOVE: managed
 
+CLEANUP: cs
 INCREF: <cstr> -> rc=4
-bazDECREF: <cstr cleanup> -> rc=3
+bazCLEANUP: cs
+DECREF: <cstr cleanup> -> rc=3
 MOVE: managed
 
+CLEANUP: cs
+CLEANUP: arg1
 DECREF: arg1 -> rc=2
+CLEANUP: arg2
 DECREF: arg2 -> rc=2
+CLEANUP: arg3
 DECREF: arg3 -> rc=2
+CLEANUP: args
 DECREF: <array element> -> rc=1
 DECREF: <array element> -> rc=1
 DECREF: <array element> -> rc=1
@@ -63,6 +76,8 @@ Leaked:    0 bytes
 Moves:     7
 Increfs:   10
 Decrefs:   10
+Copies:    0
+Cleanups:  13
 ```
 ---
 function main() -> i64 {
@@ -216,6 +231,7 @@ try_merge_9:
     %tmp_const.21 = const.i64 i64 0
     %tmp_alloca.19 = alloca ptr
     store %tmp_alloca.19 %tmp_const.21
+    track.cleanup tag="arg1"
     %tmp_fieldptr.27 = getfieldptr ptr %arg1 24
     %tmp_load.3 = load i32 %tmp_fieldptr.27
     %tmp_const.22 = const.i32 i32 3
@@ -274,6 +290,7 @@ slice_check_14:
     %tmp_icmp.6 = icmp.eq i32 %tmp_band.1 %tmp_const.33
     br.cond %tmp_icmp.6 @slice_decref_12 @decref_end_15
 decref_end_15:
+    track.cleanup tag="arg2"
     %tmp_fieldptr.31 = getfieldptr ptr %arg2 24
     %tmp_load.13 = load i32 %tmp_fieldptr.31
     %tmp_const.34 = const.i32 i32 3
@@ -332,6 +349,7 @@ slice_check_20:
     %tmp_icmp.10 = icmp.eq i32 %tmp_band.3 %tmp_const.45
     br.cond %tmp_icmp.10 @slice_decref_18 @decref_end_21
 decref_end_21:
+    track.cleanup tag="arg3"
     %tmp_fieldptr.35 = getfieldptr ptr %arg3 24
     %tmp_load.23 = load i32 %tmp_fieldptr.35
     %tmp_const.46 = const.i32 i32 3
@@ -390,6 +408,7 @@ slice_check_26:
     %tmp_icmp.14 = icmp.eq i32 %tmp_band.5 %tmp_const.57
     br.cond %tmp_icmp.14 @slice_decref_24 @decref_end_27
 decref_end_27:
+    track.cleanup tag="args"
     %tmp_fieldptr.39 = getfieldptr ptr %args 8
     %tmp_fieldptr.40 = getfieldptr ptr %tmp_fieldptr.39 24
     %tmp_load.33 = load i32 %tmp_fieldptr.40

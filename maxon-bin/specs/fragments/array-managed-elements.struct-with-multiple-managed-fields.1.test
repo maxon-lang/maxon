@@ -19,10 +19,18 @@ ExitCode: 0
 TrackMemory: true
 Stdout: ```
 MOVE: managed
+COPY: String
 MOVE: managed
+COPY: String
 MOVE: managed
+COPY: String
 ALLOC #1: 552 bytes (array grow)
 INCREF: array grow -> rc=1
+CLEANUP: items
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
 DECREF: items -> rc=0
 FREE #1: 552 bytes (array cleanup)
 
@@ -33,6 +41,8 @@ Leaked:    0 bytes
 Moves:     3
 Increfs:   1
 Decrefs:   1
+Copies:    3
+Cleanups:  5
 ```
 ---
 function main() -> i64 {
@@ -59,6 +69,7 @@ entry_0:
     store.i32 %tmp_fieldptr.4 %tmp_const.2
     %tmp_alloca.4 = alloca.sized ptr 40
     %tmp_call = call ptr @String$init(%tmp_alloca.4, %tmp_alloca.3)
+    track.copy tag="String"
     memcpy %tmp_fieldptr %tmp_alloca.4 40
     %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr 24
     %tmp_load = load i32 %tmp_fieldptr.5
@@ -118,6 +129,7 @@ incref_end_4:
     store.i32 %tmp_fieldptr.13 %tmp_const.14
     %tmp_alloca.6 = alloca.sized ptr 40
     %tmp_call.1 = call ptr @String$init(%tmp_alloca.6, %tmp_alloca.5)
+    track.copy tag="String"
     memcpy %tmp_fieldptr.9 %tmp_alloca.6 40
     %tmp_fieldptr.14 = getfieldptr ptr %tmp_fieldptr.9 24
     %tmp_load.7 = load i32 %tmp_fieldptr.14
@@ -177,6 +189,7 @@ incref_end_8:
     store.i32 %tmp_fieldptr.22 %tmp_const.26
     %tmp_alloca.8 = alloca.sized ptr 40
     %tmp_call.2 = call ptr @String$init(%tmp_alloca.8, %tmp_alloca.7)
+    track.copy tag="String"
     memcpy %tmp_fieldptr.18 %tmp_alloca.8 40
     %tmp_fieldptr.23 = getfieldptr ptr %tmp_fieldptr.18 24
     %tmp_load.14 = load i32 %tmp_fieldptr.23
@@ -220,6 +233,7 @@ incref_end_12:
     %tmp_const.35 = const.i64 i64 0
     %tmp_alloca.9 = alloca ptr
     store %tmp_alloca.9 %tmp_const.35
+    track.cleanup tag="items"
     %tmp_fieldptr.26 = getfieldptr ptr %items 8
     %tmp_fieldptr.27 = getfieldptr ptr %tmp_fieldptr.26 24
     %tmp_load.21 = load i32 %tmp_fieldptr.27
@@ -256,7 +270,9 @@ elem_cleanup_body_16:
     %tmp_const.39 = const.i64 i64 136
     %tmp_mul = mul i64 %tmp_load.26 %tmp_const.39
     %tmp_add.6 = add ptr %tmp_load.25 %tmp_mul
+    track.cleanup tag="<array element>"
     %tmp_fieldptr.30 = getfieldptr ptr %tmp_add.6 0
+    track.cleanup tag="<array element>"
     %tmp_fieldptr.31 = getfieldptr ptr %tmp_fieldptr.30 24
     %tmp_load.27 = load i32 %tmp_fieldptr.31
     %tmp_const.40 = const.i32 i32 3
@@ -316,6 +332,7 @@ slice_check_21:
     br.cond %tmp_icmp.12 @slice_decref_19 @decref_end_22
 decref_end_22:
     %tmp_fieldptr.35 = getfieldptr ptr %tmp_add.6 48
+    track.cleanup tag="<array element>"
     %tmp_fieldptr.36 = getfieldptr ptr %tmp_fieldptr.35 24
     %tmp_load.37 = load i32 %tmp_fieldptr.36
     %tmp_const.52 = const.i32 i32 3
@@ -375,6 +392,7 @@ slice_check_27:
     br.cond %tmp_icmp.16 @slice_decref_25 @decref_end_28
 decref_end_28:
     %tmp_fieldptr.40 = getfieldptr ptr %tmp_add.6 96
+    track.cleanup tag="<array element>"
     %tmp_fieldptr.41 = getfieldptr ptr %tmp_fieldptr.40 24
     %tmp_load.47 = load i32 %tmp_fieldptr.41
     %tmp_const.64 = const.i32 i32 3
@@ -700,22 +718,22 @@ grow_alloc_7:
     %tmp_heap = heap.alloc ptr %tmp_add tag="array grow"
     %tmp_const.6 = const.i64 i64 1
     store %tmp_heap %tmp_const.6
-    %tmp_const.7 = const.i64 i64 8
-    %tmp_add.1 = add ptr %tmp_heap %tmp_const.7
+    %tmp_add.1 = add ptr %tmp_heap %tmp_const.5
     store %tmp_fieldptr.2 %tmp_add.1
     %tmp_fieldptr.3 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.3 %tmp_load.8
-    %tmp_const.8 = const.i32 i32 1
+    %tmp_const.7 = const.i32 i32 1
     %tmp_fieldptr.4 = getfieldptr ptr %tmp_fieldptr.2 24
-    store.i32 %tmp_fieldptr.4 %tmp_const.8
+    store.i32 %tmp_fieldptr.4 %tmp_const.7
     br @grow_end_9
 grow_realloc_8:
-    %tmp_const.9 = const.i64 i64 8
-    %tmp_add.2 = add i64 %tmp_mul.1 %tmp_const.9
+    %tmp_const.8 = const.i64 i64 8
+    %tmp_add.2 = add i64 %tmp_mul.1 %tmp_const.8
     %tmp_load.10 = load ptr %tmp_fieldptr.2
+    %tmp_const.9 = const.i64 i64 8
     %tmp_sub = sub ptr %tmp_load.10 %tmp_const.9
     %tmp_realloc = heap.realloc ptr %tmp_sub %tmp_add.2 tag="array grow"
-    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.9
+    %tmp_add.3 = add ptr %tmp_realloc %tmp_const.8
     store %tmp_fieldptr.2 %tmp_add.3
     %tmp_fieldptr.5 = getfieldptr ptr %tmp_fieldptr.2 16
     store %tmp_fieldptr.5 %tmp_load.8

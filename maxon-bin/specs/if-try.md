@@ -422,24 +422,42 @@ end 'main'
 ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
+COPY: String
 MOVE: managed
+COPY: String
 MOVE: nums
+CLEANUP: item
+CLEANUP: item
 DECREF: item -> rc=0
 FREE #1: 40 bytes (array cleanup)
+CLEANUP: item
+CLEANUP: item
 ALLOC #2: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
+COPY: String
 MOVE: managed
+COPY: String
 MOVE: nums
+CLEANUP: item
+CLEANUP: item
 DECREF: item -> rc=0
 FREE #2: 40 bytes (array cleanup)
+CLEANUP: item
+CLEANUP: item
 ALLOC #3: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
+COPY: String
 MOVE: managed
+COPY: String
 MOVE: nums
+CLEANUP: item
+CLEANUP: item
 DECREF: item -> rc=0
 FREE #3: 40 bytes (array cleanup)
+CLEANUP: item
+CLEANUP: item
 
 === MEMORY STATS ===
 Allocated: 120 bytes
@@ -448,6 +466,8 @@ Leaked:    0 bytes
 Moves:     9
 Increfs:   3
 Decrefs:   3
+Copies:    6
+Cleanups:  12
 ```
 
 <!-- test: complex-nested-struct-cleanup -->
@@ -493,17 +513,27 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
+COPY: String
+COPY: Array$int
 ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
+COPY: String
+COPY: Array$String
 MOVE: inner
 MOVE: managed
 ALLOC #2: 168 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
 MOVE: outer
+CLEANUP: outer
+CLEANUP: outer
+CLEANUP: outer
+CLEANUP: outer
+CLEANUP: outer
 DECREF: outer -> rc=0
 FREE #1: 40 bytes (array cleanup)
+CLEANUP: outer
 DECREF: outer -> rc=0
 FREE #2: 168 bytes (array cleanup)
 
@@ -514,4 +544,6 @@ Leaked:    0 bytes
 Moves:     6
 Increfs:   2
 Decrefs:   2
+Copies:    4
+Cleanups:  6
 ```
