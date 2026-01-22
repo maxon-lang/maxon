@@ -6198,17 +6198,14 @@ pub const AstToIr = struct {
             false;
 
         // Remove binding from scope if it was added
-        // For bindings with managed buffer, emit decref before removing from scope
+        // For bindings with managed types, emit cleanup before removing from scope
         // But skip if block terminates (return cleanup already handles it)
         if (if_try.binding_name) |binding_name| {
             if (!then_terminates) {
                 if (self.var_map.get(binding_name)) |var_info| {
-                    if (var_info.ptr) |ptr| {
-                        if (var_info.ty == .struct_type and var_info.ty.struct_type.has_managed_buffer) {
-                            const managed_ptr = try array_helpers.getManagedMemoryPtr(self, ptr, var_info.ty.struct_type.managed_buffer_offset);
-                            try array_helpers.emitManagedMemoryDecref(self, managed_ptr, binding_name, "binding cleanup");
-                        }
-                    }
+                    // Use freeHeapVar to properly clean up all managed fields
+                    // This handles structs with multiple managed fields (e.g., IntArray + String + String)
+                    try cleanup_helpers.freeHeapVar(self, var_info, false, binding_name);
                 }
             }
             _ = self.var_map.remove(binding_name);

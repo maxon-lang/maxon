@@ -374,3 +374,78 @@ end 'main'
 ```maxoncstderr
 error E055: specs/fragments/if-try.error.if-try-non-throwing.1.test:7:5: try requires a throwing function: ''noThrow' does not throw'
 ```
+
+<!-- test: if-try-binding-struct-multiple-managed-fields -->
+<!-- TrackMemory: true -->
+When using if-let with a struct that has multiple managed fields (like Array and String fields),
+all managed fields must be properly cleaned up when the binding goes out of scope.
+
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+typealias IntArray is Array with int
+
+type MultiManaged
+    export var numbers IntArray
+    export var text String
+    export var tag String
+end 'MultiManaged'
+
+function mayFail(succeed bool) returns MultiManaged throws MyError
+    if not succeed 'check'
+        throw MyError.failed
+    end 'check'
+    var nums = IntArray{}
+    nums.push(10)
+    nums.push(20)
+    return {numbers: nums, text: "hello", tag: "world"}
+end 'mayFail'
+
+function main() returns int
+    var result = 0
+    var i = 0
+    while i < 3 'loop'
+        if let item = try mayFail(true) 'check'
+            result = result + (try item.numbers.get(0) otherwise 0)
+        end 'check'
+        i = i + 1
+    end 'loop'
+    return result
+end 'main'
+```
+```exitcode
+30
+```
+```stdout
+ALLOC #1: 40 bytes (array grow)
+INCREF: array grow -> rc=1
+MOVE: managed
+MOVE: managed
+MOVE: nums
+DECREF: item -> rc=0
+FREE #1: 40 bytes (array cleanup)
+ALLOC #2: 40 bytes (array grow)
+INCREF: array grow -> rc=1
+MOVE: managed
+MOVE: managed
+MOVE: nums
+DECREF: item -> rc=0
+FREE #2: 40 bytes (array cleanup)
+ALLOC #3: 40 bytes (array grow)
+INCREF: array grow -> rc=1
+MOVE: managed
+MOVE: managed
+MOVE: nums
+DECREF: item -> rc=0
+FREE #3: 40 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 120 bytes
+Freed:     120 bytes
+Leaked:    0 bytes
+Moves:     9
+Increfs:   3
+Decrefs:   3
+```
