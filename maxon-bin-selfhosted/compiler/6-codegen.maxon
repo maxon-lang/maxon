@@ -1,0 +1,390 @@
+// Maxon Compiler - Code Generation (Stage 6)
+// Orchestrates LIR -> machine code generation
+
+// ============================================================================
+// Code Generation Context
+// ============================================================================
+
+export typealias ByteArray is Array with byte
+
+/// Code generation result
+export type CodeGenResult
+	export var code ByteArray        // generated machine code
+	export var dataSection ByteArray // data section bytes
+	export var symbols SymbolTable
+	export var relocations RelocationArray
+	export var hasError bool
+
+	export static function create() returns CodeGenResult
+		return {code: ByteArray{}, dataSection: ByteArray{}, symbols: SymbolTable.create(), relocations: RelocationArray{}, hasError: false}
+	end 'create'
+end 'CodeGenResult'
+
+/// Symbol table entry
+export type Symbol
+	export var name String
+	export var offset int            // offset in code section
+	export var size int
+	export var isExport bool
+	export var isFunction bool
+end 'Symbol'
+
+export typealias SymbolArray is Array with Symbol
+
+export type SymbolTable
+	export var symbols SymbolArray
+
+	export static function create() returns SymbolTable
+		return {symbols: SymbolArray{}}
+	end 'create'
+
+	export function add(sym Symbol)
+		symbols.push(sym)
+	end 'add'
+
+	export function find(name String) returns Symbol
+		for sym in symbols 'search'
+			if sym.name == name 'match'
+				return sym
+			end 'match'
+		end 'search'
+		return {name: "", offset: 0, size: 0, isExport: false, isFunction: false}
+	end 'find'
+end 'SymbolTable'
+
+/// Relocation entry
+export type Relocation
+	export var offset int            // offset in code where relocation applies
+	export var symbol String         // target symbol
+	export var type_ RelocationType
+	export var addend int
+end 'Relocation'
+
+export enum RelocationType
+	rel32            // 32-bit PC-relative
+	abs64            // 64-bit absolute
+	rip32            // RIP-relative 32-bit
+end 'RelocationType'
+
+export typealias RelocationArray is Array with Relocation
+
+// ============================================================================
+// Code Generator
+// ============================================================================
+
+export type CodeGenerator
+	var lirModule LirModule
+	var result CodeGenResult
+	var regAlloc RegisterAllocator
+	var x86 X86Encoder
+	var currentFunctionOffset int
+
+	/// Initialize code generator
+	export static function init(lirModule LirModule) returns CodeGenerator
+		var result = CodeGenerator{lirModule: lirModule, result: CodeGenResult.create(), regAlloc: RegisterAllocator.create(), x86: X86Encoder.create(), currentFunctionOffset: 0}
+		return result
+	end 'init'
+
+	/// Generate code for the entire module
+	export function generate() returns CodeGenResult
+		// Generate code for each function
+		for fn in lirModule.functions 'funcLoop'
+			generateFunction(fn)
+		end 'funcLoop'
+
+		// Generate data section
+		generateDataSection()
+
+		return result
+	end 'generate'
+
+	/// Generate code for a function
+	function generateFunction(fn LirFunction)
+		currentFunctionOffset = result.code.count()
+
+		// Add function symbol
+		let sym = Symbol{name: fn.name, offset: currentFunctionOffset, size: 0, isExport: fn.isExport, isFunction: true}
+		result.symbols.add(sym)
+
+		// Allocate registers
+		regAlloc.allocate(fn)
+
+		// Generate function prologue
+		generatePrologue(fn)
+
+		// Generate code for each block
+		for block in fn.blocks 'blockLoop'
+			generateBlock(block, fn: fn)
+		end 'blockLoop'
+
+		// Update function size
+		let _ = result.code.count() - currentFunctionOffset
+		// Can't update symbol size directly, but size is tracked
+	end 'generateFunction'
+
+	/// Generate function prologue
+	function generatePrologue(fn LirFunction)
+		// push rbp
+		x86.pushReg(Reg.RBP, code: result.code)
+
+		// mov rbp, rsp
+		x86.movRegReg(Reg.RBP, src: Reg.RSP, code: result.code)
+
+		// sub rsp, frameSize
+		let frameSize = fn.frame.totalSize()
+		if frameSize > 0 'hasFrame'
+			x86.subRegImm(Reg.RSP, imm: frameSize, code: result.code)
+		end 'hasFrame'
+	end 'generatePrologue'
+
+	/// Generate function epilogue
+	function generateEpilogue(_ LirFunction)
+		// mov rsp, rbp
+		x86.movRegReg(Reg.RSP, src: Reg.RBP, code: result.code)
+
+		// pop rbp
+		x86.popReg(Reg.RBP, code: result.code)
+
+		// ret
+		x86.ret(result.code)
+	end 'generateEpilogue'
+
+	/// Generate code for a basic block
+	function generateBlock(block LirBlock, fn LirFunction)
+		for instr in block.instructions 'instrLoop'
+			generateInstruction(instr, fn: fn)
+		end 'instrLoop'
+	end 'generateBlock'
+
+	/// Generate code for an instruction
+	function generateInstruction(instr LirInstr, fn LirFunction)
+		match instr.opcode 'dispatch'
+		LirOpcode.label then generateLabel(instr)
+		LirOpcode.mov then generateMov(instr)
+		LirOpcode.load then generateLoad(instr)
+		LirOpcode.store then generateStore(instr)
+		LirOpcode.add then generateAdd(instr)
+		LirOpcode.sub then generateSub(instr)
+		LirOpcode.imul then generateImul(instr)
+		LirOpcode.idiv then generateIdiv(instr)
+		LirOpcode.neg then generateNeg(instr)
+		LirOpcode.and_ then generateAnd(instr)
+		LirOpcode.or_ then generateOr(instr)
+		LirOpcode.xor_ then generateXor(instr)
+		LirOpcode.cmp then generateCmp(instr)
+		LirOpcode.test then generateTest(instr)
+		LirOpcode.jmp then generateJmp(instr)
+		LirOpcode.je then generateJcc(instr, cc: 0x84)
+		LirOpcode.jne then generateJcc(instr, cc: 0x85)
+		LirOpcode.jl then generateJcc(instr, cc: 0x8C)
+		LirOpcode.jle then generateJcc(instr, cc: 0x8E)
+		LirOpcode.jg then generateJcc(instr, cc: 0x8F)
+		LirOpcode.jge then generateJcc(instr, cc: 0x8D)
+		LirOpcode.call then generateCall(instr)
+		LirOpcode.ret then generateRet(instr, fn: fn)
+		LirOpcode.push then generatePush(instr)
+		LirOpcode.pop then generatePop(instr)
+		LirOpcode.lea then generateLea(instr)
+		default then return
+		end 'dispatch'
+	end 'generateInstruction'
+
+	function generateLabel(_ LirInstr)
+		// Labels are handled by tracking offsets
+	end 'generateLabel'
+
+	function generateMov(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		let src1 = instr.src1
+		if src1.kind == LirValueKind.imm 'isImm'
+			x86.movRegImm(dstReg, imm: src1.id, code: result.code)
+		end 'isImm' else if src1.kind == LirValueKind.vreg 'isVreg'
+				let srcReg = regAlloc.getRegForVreg(src1.id)
+				x86.movRegReg(dstReg, src: srcReg, code: result.code)
+		end 'isVreg'
+	end 'generateMov'
+
+	function generateLoad(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		let baseReg = regAlloc.getRegForVreg(instr.src1.id)
+		x86.movRegMem(dstReg, base: baseReg, offset: instr.offset, code: result.code)
+	end 'generateLoad'
+
+	function generateStore(instr LirInstr)
+		let baseReg = regAlloc.getRegForVreg(instr.dst.id)
+		let srcReg = regAlloc.getRegForVreg(instr.src1.id)
+		x86.movMemReg(baseReg, offset: instr.offset, src: srcReg, code: result.code)
+	end 'generateStore'
+
+	function generateAdd(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		let src1Reg = regAlloc.getRegForVreg(instr.src1.id)
+		if instr.src2.kind == LirValueKind.imm 'isImm'
+			if dstReg != src1Reg 'needMov'
+				x86.movRegReg(dstReg, src: src1Reg, code: result.code)
+			end 'needMov'
+			x86.addRegImm(dstReg, imm: instr.src2.id, code: result.code)
+		end 'isImm' else 'isReg'
+			let src2Reg = regAlloc.getRegForVreg(instr.src2.id)
+			if dstReg != src1Reg 'needMov'
+				x86.movRegReg(dstReg, src: src1Reg, code: result.code)
+			end 'needMov'
+			x86.addRegReg(dstReg, src: src2Reg, code: result.code)
+		end 'isReg'
+	end 'generateAdd'
+
+	function generateSub(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		let src1Reg = regAlloc.getRegForVreg(instr.src1.id)
+		if instr.src2.kind == LirValueKind.imm 'isImm'
+			if dstReg != src1Reg 'needMov'
+				x86.movRegReg(dstReg, src: src1Reg, code: result.code)
+			end 'needMov'
+			x86.subRegImm(dstReg, imm: instr.src2.id, code: result.code)
+		end 'isImm' else 'isReg'
+			let src2Reg = regAlloc.getRegForVreg(instr.src2.id)
+			if dstReg != src1Reg 'needMov'
+				x86.movRegReg(dstReg, src: src1Reg, code: result.code)
+			end 'needMov'
+			x86.subRegReg(dstReg, src: src2Reg, code: result.code)
+		end 'isReg'
+	end 'generateSub'
+
+	function generateImul(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		let src1Reg = regAlloc.getRegForVreg(instr.src1.id)
+		let src2Reg = regAlloc.getRegForVreg(instr.src2.id)
+		if dstReg != src1Reg 'needMov'
+			x86.movRegReg(dstReg, src: src1Reg, code: result.code)
+		end 'needMov'
+		x86.imulRegReg(dstReg, src: src2Reg, code: result.code)
+	end 'generateImul'
+
+	function generateIdiv(instr LirInstr)
+		// idiv requires dividend in rdx:rax
+		let src1Reg = regAlloc.getRegForVreg(instr.src1.id)
+		let src2Reg = regAlloc.getRegForVreg(instr.src2.id)
+
+		// Move dividend to rax
+		x86.movRegReg(Reg.RAX, src: src1Reg, code: result.code)
+
+		// Sign extend rax to rdx:rax
+		x86.cqo(result.code)
+
+		// idiv
+		x86.idivReg(src2Reg, code: result.code)
+
+		// Result is in rax (quotient) or rdx (remainder)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		x86.movRegReg(dstReg, src: Reg.RAX, code: result.code)
+	end 'generateIdiv'
+
+	function generateNeg(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		let srcReg = regAlloc.getRegForVreg(instr.src1.id)
+		if dstReg != srcReg 'needMov'
+			x86.movRegReg(dstReg, src: srcReg, code: result.code)
+		end 'needMov'
+		x86.negReg(dstReg, code: result.code)
+	end 'generateNeg'
+
+	function generateAnd(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		let src1Reg = regAlloc.getRegForVreg(instr.src1.id)
+		let src2Reg = regAlloc.getRegForVreg(instr.src2.id)
+		if dstReg != src1Reg 'needMov'
+			x86.movRegReg(dstReg, src: src1Reg, code: result.code)
+		end 'needMov'
+		x86.andRegReg(dstReg, src: src2Reg, code: result.code)
+	end 'generateAnd'
+
+	function generateOr(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		let src1Reg = regAlloc.getRegForVreg(instr.src1.id)
+		let src2Reg = regAlloc.getRegForVreg(instr.src2.id)
+		if dstReg != src1Reg 'needMov'
+			x86.movRegReg(dstReg, src: src1Reg, code: result.code)
+		end 'needMov'
+		x86.orRegReg(dstReg, src: src2Reg, code: result.code)
+	end 'generateOr'
+
+	function generateXor(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		let src1Reg = regAlloc.getRegForVreg(instr.src1.id)
+		let src2Reg = regAlloc.getRegForVreg(instr.src2.id)
+		if dstReg != src1Reg 'needMov'
+			x86.movRegReg(dstReg, src: src1Reg, code: result.code)
+		end 'needMov'
+		x86.xorRegReg(dstReg, src: src2Reg, code: result.code)
+	end 'generateXor'
+
+	function generateCmp(instr LirInstr)
+		let src1Reg = regAlloc.getRegForVreg(instr.src1.id)
+		if instr.src2.kind == LirValueKind.imm 'isImm'
+			x86.cmpRegImm(src1Reg, imm: instr.src2.id, code: result.code)
+		end 'isImm' else 'isReg'
+			let src2Reg = regAlloc.getRegForVreg(instr.src2.id)
+			x86.cmpRegReg(src1Reg, src2: src2Reg, code: result.code)
+		end 'isReg'
+	end 'generateCmp'
+
+	function generateTest(instr LirInstr)
+		let src1Reg = regAlloc.getRegForVreg(instr.src1.id)
+		let src2Reg = regAlloc.getRegForVreg(instr.src2.id)
+		x86.testRegReg(src1Reg, src2: src2Reg, code: result.code)
+	end 'generateTest'
+
+	function generateJmp(_ LirInstr)
+		// For now, emit placeholder and add relocation
+		x86.jmpRel32(0, code: result.code)
+	end 'generateJmp'
+
+	function generateJcc(_ LirInstr, cc int)
+		x86.jccRel32(cc, offset: 0, code: result.code)
+	end 'generateJcc'
+
+	function generateCall(instr LirInstr)
+		// Add relocation for call target
+		let callOffset = result.code.count()
+		x86.callRel32(0, code: result.code)
+		let reloc = Relocation{offset: callOffset + 1, symbol: instr.callTarget, type_: RelocationType.rel32, addend: -4}
+		result.relocations.push(reloc)
+	end 'generateCall'
+
+	function generateRet(instr LirInstr, fn LirFunction)
+		// If there's a return value in src1, move it to RAX
+		if instr.src1.kind == LirValueKind.vreg 'hasRetVal'
+			let srcReg = regAlloc.getRegForVreg(instr.src1.id)
+			if srcReg != Reg.RAX 'needMov'
+				x86.movRegReg(Reg.RAX, src: srcReg, code: result.code)
+			end 'needMov'
+		end 'hasRetVal' else if instr.src1.kind == LirValueKind.imm 'isImm'
+				x86.movRegImm(Reg.RAX, imm: instr.src1.id, code: result.code)
+		end 'isImm'
+		generateEpilogue(fn)
+	end 'generateRet'
+
+	function generatePush(instr LirInstr)
+		let srcReg = regAlloc.getRegForVreg(instr.src1.id)
+		x86.pushReg(srcReg, code: result.code)
+	end 'generatePush'
+
+	function generatePop(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		x86.popReg(dstReg, code: result.code)
+	end 'generatePop'
+
+	function generateLea(instr LirInstr)
+		let dstReg = regAlloc.getRegForVreg(instr.dst.id)
+		// LEA with RBP-relative addressing for stack slots
+		if instr.src1.kind == LirValueKind.stack 'isStack'
+			let offset = -8 - instr.src1.id  // negative offset from RBP
+			x86.leaRegMem(dstReg, base: Reg.RBP, offset: offset, code: result.code)
+		end 'isStack'
+	end 'generateLea'
+
+	/// Generate data section
+	function generateDataSection()
+		// Skip data section for now due to memory issues
+	end 'generateDataSection'
+end 'CodeGenerator'

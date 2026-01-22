@@ -342,6 +342,11 @@ fn runFrontend(source: []const u8, allocator: std.mem.Allocator, options: Pipeli
                 &ir_error,
             ) catch |e| {
                 debug.astToIr("AST to IR error: {}\n", .{e});
+                // Debug: print the detailed error info
+                if (ir_error) |err| {
+                    debug.astToIr("  Location: {s}:{d}:{d}\n", .{ err.location.file orelse "unknown", err.location.line, err.location.column });
+                    debug.astToIr("  Message: {s}\n", .{err.message});
+                }
                 if (options.result) |result| {
                     result.error_info = ir_error;
                     // Duplicate error message and file path to parent allocator so they survive arena cleanup

@@ -1,0 +1,55 @@
+// Test: enums.fromRawValue-float-backed.1
+enum Weights
+    light = 1.5
+    medium = 2.5
+    heavy = 3.5
+end 'Weights'
+
+function main() returns int
+    var w = try Weights.fromRawValue(2.5) otherwise Weights.light
+    if w == Weights.medium 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+function main() -> i64 {
+entry_0:
+    %tmp_fconst = const.f64 f64 2.5
+    %tmp_bitcast = bitcast.f64.i64 i64 %tmp_fconst
+    %tmp_alloca = alloca.sized ptr 16
+    %tmp_const = const.i64 i64 0
+    store %tmp_alloca %tmp_const
+    %tmp_fieldptr = getfieldptr ptr %tmp_alloca 8
+    store %tmp_fieldptr %tmp_bitcast
+    %tmp_const.1 = const.i64 i64 0
+    %tmp_icmp = icmp.eq i64 %tmp_const %tmp_const.1
+    %tmp_alloca.1 = alloca ptr
+    br.cond %tmp_icmp @try_success_1 @try_default_2
+try_success_1:
+    %tmp_fieldptr.1 = getfieldptr ptr %tmp_alloca 8
+    %tmp_load.1 = load i64 %tmp_fieldptr.1
+    store %tmp_alloca.1 %tmp_load.1
+    br @try_merge_3
+try_default_2:
+    %tmp_fconst.1 = const.f64 f64 1.5
+    %tmp_bitcast.1 = bitcast.f64.i64 i64 %tmp_fconst.1
+    store %tmp_alloca.1 %tmp_bitcast.1
+    br @try_merge_3
+try_merge_3:
+    %tmp_load.2 = load i64 %tmp_alloca.1
+    %tmp_fconst.2 = const.f64 f64 2.5
+    %tmp_bitcast.2 = bitcast.f64.i64 i64 %tmp_fconst.2
+    %tmp_icmp.1 = icmp.eq i64 %tmp_load.2 %tmp_bitcast.2
+    br.cond %tmp_icmp.1 @then$check_4 @end$check_5
+then$check_4:
+    %tmp_const.2 = const.i64 i64 1
+    ret %tmp_const.2
+end$check_5:
+    %tmp_const.3 = const.i64 i64 0
+    ret %tmp_const.3
+}
+
+---

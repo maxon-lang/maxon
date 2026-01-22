@@ -1,0 +1,287 @@
+// Maxon Compiler - PE Executable Writer (Stage 7)
+// Generates Windows PE32+ executable files
+
+// ============================================================================
+// PE File Constants
+// ============================================================================
+
+// DOS Header magic
+let DOS_MAGIC = 0x5A4D          // "MZ"
+let PE_MAGIC = 0x00004550       // "PE\0\0"
+
+// Machine types
+let IMAGE_FILE_MACHINE_AMD64 = 0x8664
+
+// Characteristics
+let IMAGE_FILE_EXECUTABLE_IMAGE = 0x0002
+let IMAGE_FILE_LARGE_ADDRESS_AWARE = 0x0020
+let FILE_CHARACTERISTICS = 0x0022  // EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
+
+// PE32+ magic
+let PE32_PLUS_MAGIC = 0x20B
+
+// Subsystem
+let IMAGE_SUBSYSTEM_WINDOWS_CUI = 3   // Console application
+let IMAGE_SUBSYSTEM_WINDOWS_GUI = 2   // Windows application
+
+// Section characteristics
+let IMAGE_SCN_CNT_CODE = 0x00000020
+let IMAGE_SCN_CNT_INITIALIZED_DATA = 0x00000040
+let IMAGE_SCN_MEM_EXECUTE = 0x20000000
+let IMAGE_SCN_MEM_READ = 0x40000000
+let IMAGE_SCN_MEM_WRITE = 0x80000000
+
+// Combined section characteristics (precomputed to avoid bitor in complex expressions)
+let TEXT_SECTION_CHARACTERISTICS = 0x60000020   // CODE | EXECUTE | READ
+let RDATA_SECTION_CHARACTERISTICS = 0x40000040  // INITIALIZED_DATA | READ
+
+// Type aliases
+typealias ByteArray is Array with byte
+
+// ============================================================================
+// PE Writer
+// ============================================================================
+
+export type PEWriter
+	var code ByteArray
+	var data ByteArray
+	var relocations RelocationArray
+	var symbols SymbolTable
+	var imageBase int
+	var sectionAlignment int
+	var fileAlignment int
+	var entryPoint int
+
+	export static function create() returns PEWriter
+		return {code: ByteArray{}, data: ByteArray{}, relocations: RelocationArray{}, symbols: SymbolTable.create(), imageBase: 0x140000000, sectionAlignment: 0x1000, fileAlignment: 0x200, entryPoint: 0}
+	end 'create'
+
+	/// Set code and data from code generator result
+	export function setCodeGenResult(result CodeGenResult)
+		code = result.code
+		data = result.dataSection
+		relocations = result.relocations
+		symbols = result.symbols
+
+		// Find entry point (_start or main)
+		let startSym = symbols.find("_start")
+		if startSym.name != "" 'hasStart'
+			entryPoint = startSym.offset
+		end 'hasStart' else 'tryMain'
+			let mainSym = symbols.find("main")
+			if mainSym.name != "" 'hasMain'
+				entryPoint = mainSym.offset
+			end 'hasMain'
+		end 'tryMain'
+	end 'setCodeGenResult'
+
+	/// Write complete PE file
+	export function write() returns ByteArray
+		var output = ByteArray{}
+
+		// Calculate section sizes and offsets
+		let headerSize = 0x200  // DOS header + PE headers + section headers
+		let textRva = sectionAlignment
+		let textSize = alignUp(code.count(), fileAlignment)
+
+		// Only include rdata section if we have data
+		let hasRdata = data.count() > 0
+		var numSections = 1
+		var rdataRva = 0
+		var rdataSize = 0
+		if hasRdata 'calcRdata'
+			numSections = 2
+			rdataRva = alignUp(textRva + code.count(), sectionAlignment)
+			rdataSize = alignUp(data.count(), fileAlignment)
+		end 'calcRdata'
+
+		// DOS Header
+		writeDosHeader(output)
+
+		// PE Signature
+		writeU32(PE_MAGIC, output: output)
+
+		// COFF File Header
+		writeCoffHeader(numSections, output: output)
+
+		// Optional Header (PE32+)
+		writeOptionalHeader(textRva, textSize: code.count(), rdataRva: rdataRva, rdataSize: data.count(), output: output)
+
+		// Section Headers
+		writeSectionHeader(".text", virtualSize: code.count(), virtualAddress: textRva, rawSize: textSize, rawOffset: headerSize, characteristics: TEXT_SECTION_CHARACTERISTICS, output: output)
+		if hasRdata 'writeRdataHeader'
+			writeSectionHeader(".rdata", virtualSize: data.count(), virtualAddress: rdataRva, rawSize: rdataSize, rawOffset: headerSize + textSize, characteristics: RDATA_SECTION_CHARACTERISTICS, output: output)
+		end 'writeRdataHeader'
+
+		// Pad to file alignment
+		padToAlignment(fileAlignment, output: output)
+
+		// .text section
+		for b in code 'copyCode'
+			output.push(b)
+		end 'copyCode'
+		padToAlignment(fileAlignment, output: output)
+
+		// .rdata section (only if we have data)
+		if hasRdata 'writeRdataData'
+			for b in data 'copyData'
+				output.push(b)
+			end 'copyData'
+			padToAlignment(fileAlignment, output: output)
+		end 'writeRdataData'
+
+		return output
+	end 'write'
+
+	/// Write DOS header stub
+	function writeDosHeader(output ByteArray)
+		// DOS Header (64 bytes)
+		writeU16(DOS_MAGIC, output)     // e_magic
+		writeZeros(58, output)          // Rest of DOS header
+		writeU32(64, output)            // e_lfanew (offset to PE header)
+	end 'writeDosHeader'
+
+	/// Write COFF file header
+	function writeCoffHeader(numSections int, output ByteArray)
+		writeU16(IMAGE_FILE_MACHINE_AMD64, output)    // Machine
+		writeU16(numSections, output)                  // NumberOfSections
+		writeU32(0, output)                            // TimeDateStamp
+		writeU32(0, output)                            // PointerToSymbolTable
+		writeU32(0, output)                            // NumberOfSymbols
+		writeU16(240, output)                          // SizeOfOptionalHeader (PE32+)
+		writeU16(FILE_CHARACTERISTICS, output)         // Characteristics
+	end 'writeCoffHeader'
+
+	/// Write PE32+ optional header
+	function writeOptionalHeader(textRva int, textSize int, rdataRva int, rdataSize int, output ByteArray)
+		let headerSize = 0x200
+		// Calculate image size - if no rdata, use text section end
+		var imageSize = 0
+		if rdataRva > 0 'hasRdata'
+			imageSize = alignUp(rdataRva + rdataSize, sectionAlignment)
+		end 'hasRdata' else 'textOnly'
+			imageSize = alignUp(textRva + textSize, sectionAlignment)
+		end 'textOnly'
+
+		// Standard fields
+		writeU16(PE32_PLUS_MAGIC, output)   // Magic
+		writeU8(14, output)                 // MajorLinkerVersion
+		writeU8(0, output)                  // MinorLinkerVersion
+		writeU32(textSize, output)          // SizeOfCode
+		writeU32(rdataSize, output)         // SizeOfInitializedData
+		writeU32(0, output)                 // SizeOfUninitializedData
+		writeU32(textRva + entryPoint, output)  // AddressOfEntryPoint
+		writeU32(textRva, output)           // BaseOfCode
+
+		// Windows-specific fields
+		writeU64(imageBase, output)         // ImageBase
+		writeU32(sectionAlignment, output)  // SectionAlignment
+		writeU32(fileAlignment, output)     // FileAlignment
+		writeU16(6, output)                 // MajorOperatingSystemVersion
+		writeU16(0, output)                 // MinorOperatingSystemVersion
+		writeU16(0, output)                 // MajorImageVersion
+		writeU16(0, output)                 // MinorImageVersion
+		writeU16(6, output)                 // MajorSubsystemVersion
+		writeU16(0, output)                 // MinorSubsystemVersion
+		writeU32(0, output)                 // Win32VersionValue
+		writeU32(imageSize, output)         // SizeOfImage
+		writeU32(headerSize, output)        // SizeOfHeaders
+		writeU32(0, output)                 // CheckSum
+		writeU16(IMAGE_SUBSYSTEM_WINDOWS_CUI, output)  // Subsystem
+		writeU16(0x8100, output)            // DllCharacteristics: NX_COMPAT | TERMINAL_SERVER_AWARE (no DYNAMIC_BASE - requires relocs)
+		writeU64(0x100000, output)          // SizeOfStackReserve
+		writeU64(0x1000, output)            // SizeOfStackCommit
+		writeU64(0x100000, output)          // SizeOfHeapReserve
+		writeU64(0x1000, output)            // SizeOfHeapCommit
+		writeU32(0, output)                 // LoaderFlags
+		writeU32(16, output)                // NumberOfRvaAndSizes
+
+		// Data directories (16 entries, all zeros for now)
+		var i = 0
+		while i < 16 'dataDirs'
+			writeU32(0, output)  // VirtualAddress
+			writeU32(0, output)  // Size
+			i = i + 1
+		end 'dataDirs'
+	end 'writeOptionalHeader'
+
+	/// Write section header
+	function writeSectionHeader(name String, virtualSize int, virtualAddress int, rawSize int, rawOffset int, characteristics int, output ByteArray)
+		// Name (8 bytes, null-padded)
+		var nameBytes = 0
+		for c in name 'writeName'
+			if nameBytes < 8 'inRange'
+				let b = try c.asciiValue() otherwise 0
+				output.push(b as byte)
+				nameBytes = nameBytes + 1
+			end 'inRange'
+		end 'writeName'
+		while nameBytes < 8 'padName'
+			output.push(0 as byte)
+			nameBytes = nameBytes + 1
+		end 'padName'
+
+		writeU32(virtualSize, output)       // VirtualSize
+		writeU32(virtualAddress, output)    // VirtualAddress
+		writeU32(rawSize, output)           // SizeOfRawData
+		writeU32(rawOffset, output)         // PointerToRawData
+		writeU32(0, output)                 // PointerToRelocations
+		writeU32(0, output)                 // PointerToLinenumbers
+		writeU16(0, output)                 // NumberOfRelocations
+		writeU16(0, output)                 // NumberOfLinenumbers
+		writeU32(characteristics, output)   // Characteristics
+	end 'writeSectionHeader'
+
+	// ========================================================================
+	// Helper functions
+	// ========================================================================
+
+	function alignUp(value int, alignment int) returns int
+		let remainder = value mod alignment
+		if remainder == 0 'aligned'
+			return value
+		end 'aligned'
+		return value + alignment - remainder
+	end 'alignUp'
+
+	function padToAlignment(alignment int, output ByteArray)
+		while output.count() mod alignment != 0 'pad'
+			output.push(0 as byte)
+		end 'pad'
+	end 'padToAlignment'
+
+	function writeZeros(count int, output ByteArray)
+		var i = 0
+		while i < count 'zeros'
+			output.push(0 as byte)
+			i = i + 1
+		end 'zeros'
+	end 'writeZeros'
+
+	function writeU8(value int, output ByteArray)
+		output.push((value & 0xFF) as byte)
+	end 'writeU8'
+
+	function writeU16(value int, output ByteArray)
+		output.push((value & 0xFF) as byte)
+		output.push(((value >> 8) & 0xFF) as byte)
+	end 'writeU16'
+
+	function writeU32(value int, output ByteArray)
+		output.push((value & 0xFF) as byte)
+		output.push(((value >> 8) & 0xFF) as byte)
+		output.push(((value >> 16) & 0xFF) as byte)
+		output.push(((value >> 24) & 0xFF) as byte)
+	end 'writeU32'
+
+	function writeU64(value int, output ByteArray)
+		output.push((value & 0xFF) as byte)
+		output.push(((value >> 8) & 0xFF) as byte)
+		output.push(((value >> 16) & 0xFF) as byte)
+		output.push(((value >> 24) & 0xFF) as byte)
+		output.push(((value >> 32) & 0xFF) as byte)
+		output.push(((value >> 40) & 0xFF) as byte)
+		output.push(((value >> 48) & 0xFF) as byte)
+		output.push(((value >> 56) & 0xFF) as byte)
+	end 'writeU64'
+end 'PEWriter'

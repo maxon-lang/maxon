@@ -3922,6 +3922,7 @@ pub const AstToIr = struct {
         // Verify we have the right number of type arguments
         if (type_decl.generic_params.len != type_args.len) {
             self.reportError(.E011, base_type, @src());
+            debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
             return error.TypeMismatch;
         }
 
@@ -5539,6 +5540,7 @@ pub const AstToIr = struct {
                         const resolved_actual = self.resolveTypeName(actual);
                         if (!std.mem.eql(u8, resolved_actual, resolved_expected)) {
                             self.reportError(.E022, actual, @src());
+                            debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                             return error.TypeMismatch;
                         }
                     }
@@ -7061,6 +7063,14 @@ pub const AstToIr = struct {
         }
 
         // No conversion possible
+        debug.astToIr("TypeMismatch in '{?s}' at line {d}: cannot convert '{s}' ({s}) to '{s}' ({s})\n", .{
+            self.source_file,
+            self.current_line,
+            @tagName(source_ty),
+            if (source_ty.getTypeName()) |n| n else "?",
+            @tagName(target_ty),
+            if (target_ty.getTypeName()) |n| n else "?",
+        });
         return error.TypeMismatch;
     }
 
@@ -7571,6 +7581,7 @@ pub const AstToIr = struct {
                     const equals_result = try self.emitMethodCallWithIrArgs(struct_info.name, "equals", &.{pattern.value}, scrutinee);
                     return equals_result.value;
                 }
+                debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                 return error.TypeMismatch;
             },
             else => error.TypeMismatch,
@@ -8636,6 +8647,7 @@ pub const AstToIr = struct {
             // Unknown cast target type
             debug.astToIr("Unknown cast target type: {s}\n", .{target_type_name});
             self.reportError(.E006, target_type_name, @src());
+            debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
             return error.TypeMismatch;
         }
         const target_ty: ValueType = if (types.Primitive.fromString(target_type_name)) |prim|
@@ -8683,6 +8695,7 @@ pub const AstToIr = struct {
                             // Check for exact/typealias match
                             if (std.mem.eql(u8, resolved_name, exp_name)) {
                                 self.reportErrorAt(.E059, explicit_type, param.type_line, param.type_column, @src());
+                                debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                                 return error.TypeMismatch;
                             }
                             // Check for monomorphization match (e.g., "Pair" when expecting "Pair$String$int")
@@ -8691,6 +8704,7 @@ pub const AstToIr = struct {
                                 exp_name[explicit_type.len] == '$')
                             {
                                 self.reportErrorAt(.E059, explicit_type, param.type_line, param.type_column, @src());
+                                debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                                 return error.TypeMismatch;
                             }
                         }
@@ -8707,11 +8721,13 @@ pub const AstToIr = struct {
                     break :blk fn_type.param_types[i];
                 } else {
                     self.reportError(.E022, param.name, @src());
+                    debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                     return error.TypeMismatch;
                 }
             } else {
                 // No type annotation and no expected type - error
                 self.reportError(.E022, param.name, @src());
+                debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                 return error.TypeMismatch;
             };
 
@@ -9003,6 +9019,7 @@ pub const AstToIr = struct {
             // Check for int/float mismatch (either direction)
             if ((left_is_int and right_is_float) or (left_is_float and right_is_int)) {
                 self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
+                debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                 return error.TypeMismatch;
             }
 
@@ -9013,12 +9030,14 @@ pub const AstToIr = struct {
                     const lit_value = cmp.right.integer;
                     if (lit_value < 0 or lit_value > 255) {
                         self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
+                        debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                         return error.TypeMismatch;
                     }
                     // Literal is in range - allow the comparison
                 } else {
                     // Right is an int variable, not a literal - error
                     self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
+                    debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                     return error.TypeMismatch;
                 }
             } else if (right_is_byte and left_is_int) {
@@ -9027,12 +9046,14 @@ pub const AstToIr = struct {
                     const lit_value = cmp.left.integer;
                     if (lit_value < 0 or lit_value > 255) {
                         self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
+                        debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                         return error.TypeMismatch;
                     }
                     // Literal is in range - allow the comparison
                 } else {
                     // Left is an int variable, not a literal - error
                     self.reportError(.E022, std.fmt.allocPrint(self.allocator, "cannot compare {s} with {s}", .{ left_prim.?.toMaxonName(), right_prim.?.toMaxonName() }) catch "type mismatch in comparison", @src());
+                    debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                     return error.TypeMismatch;
                 }
             }
@@ -9578,6 +9599,7 @@ pub const AstToIr = struct {
                         {
                             // E059: explicit type is redundant when it can be inferred
                             self.reportError(.E059, explicit_name, @src());
+                            debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                             return error.TypeMismatch;
                         }
                         // Check for exact or typealias match
@@ -9585,6 +9607,7 @@ pub const AstToIr = struct {
                         if (std.mem.eql(u8, resolved_name, expected_name)) {
                             // E059: explicit type is redundant when it can be inferred
                             self.reportError(.E059, explicit_name, @src());
+                            debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                             return error.TypeMismatch;
                         }
                     }
@@ -9600,6 +9623,7 @@ pub const AstToIr = struct {
             }
             // No expected type or not a struct type - error
             self.reportError(.E022, "anonymous struct literal requires type context", @src());
+            debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
             return error.TypeMismatch;
         }
     }
@@ -10157,6 +10181,7 @@ pub const AstToIr = struct {
         // Verify it's a String type
         if (name_typed.ty != .struct_type or !std.mem.eql(u8, name_typed.ty.struct_type.name, "String")) {
             self.reportError(.E006, "fromName argument must be a String", @src());
+            debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
             return error.TypeMismatch;
         }
 
@@ -10287,6 +10312,379 @@ pub const AstToIr = struct {
             .value = eu_ptr.raw(),
             .ty = .{ .error_union_type = .{
                 .success_type = if (enum_info.has_associated_values) .ptr else .i64,
+                .success_enum_type = enum_info.name,
+                .error_enum_type = "EnumError",
+            } },
+        };
+    }
+
+    /// Emit EnumType.fromRawValue(value) - converts raw value to enum value.
+    /// Returns error union: enum value on success, EnumError.invalidName on failure.
+    /// For compile-time known values, validates and emits direct construction.
+    /// For runtime values, generates comparison chain against all member raw values.
+    fn emitEnumFromRawValue(
+        self: *AstToIr,
+        enum_info: *const types.EnumTypeInfo,
+        arg_exprs: []const ast.Expression,
+    ) ConvertError!TypedValue {
+        if (arg_exprs.len != 1) {
+            self.reportError(.E011, "fromRawValue requires exactly 1 argument", @src());
+            return error.WrongArgumentCount;
+        }
+
+        // fromRawValue is not supported for enums with associated values
+        if (enum_info.has_associated_values) {
+            self.reportError(.E003, "fromRawValue is not supported for enums with associated values", @src());
+            return error.SemanticError;
+        }
+
+        const num_members = enum_info.member_names_ordered.len;
+        if (num_members == 0) {
+            self.reportError(.E003, "empty enum has no cases", @src());
+            return error.SemanticError;
+        }
+
+        // Check if the value argument is a compile-time literal
+        const arg = arg_exprs[0];
+        const is_compile_time = switch (arg) {
+            .integer, .float_lit, .string_literal, .char_literal => true,
+            else => false,
+        };
+
+        if (is_compile_time) {
+            return self.emitEnumFromRawValueCompileTime(enum_info, arg);
+        }
+
+        // Runtime case - generate comparison chain
+        return self.emitEnumFromRawValueRuntime(enum_info, arg);
+    }
+
+    /// Emit fromRawValue with compile-time known value.
+    /// Validates the value matches a case, then emits direct construction.
+    fn emitEnumFromRawValueCompileTime(
+        self: *AstToIr,
+        enum_info: *const types.EnumTypeInfo,
+        arg: ast.Expression,
+    ) ConvertError!TypedValue {
+        // Find the matching case based on backing type
+        const found_case_name: ?[]const u8 = switch (enum_info.backing) {
+            .none, .int => blk: {
+                // For simple/int-backed enums, compare against ordinal/tag values
+                const search_value: i64 = switch (arg) {
+                    .integer => |v| v,
+                    else => {
+                        self.reportError(.E022, "expected int for fromRawValue", @src());
+                        return error.TypeMismatch;
+                    },
+                };
+                // Search through case_info for matching tag
+                var iter = enum_info.case_info.iterator();
+                while (iter.next()) |entry| {
+                    if (entry.value_ptr.tag == search_value) {
+                        break :blk entry.key_ptr.*;
+                    }
+                }
+                break :blk null;
+            },
+            .float => |float_map| blk: {
+                const search_value: f64 = switch (arg) {
+                    .float_lit => |v| v,
+                    else => {
+                        self.reportError(.E022, "expected float for fromRawValue", @src());
+                        return error.TypeMismatch;
+                    },
+                };
+                // Search through float_map for matching value
+                var iter = float_map.iterator();
+                while (iter.next()) |entry| {
+                    if (entry.value_ptr.* == search_value) {
+                        // Found the tag, now find the case name
+                        const tag = entry.key_ptr.*;
+                        var name_iter = enum_info.case_info.iterator();
+                        while (name_iter.next()) |name_entry| {
+                            if (name_entry.value_ptr.tag == tag) {
+                                break :blk name_entry.key_ptr.*;
+                            }
+                        }
+                    }
+                }
+                break :blk null;
+            },
+            .string => |string_map| blk: {
+                const search_value: []const u8 = switch (arg) {
+                    .string_literal => |v| v,
+                    else => {
+                        self.reportError(.E022, "expected String for fromRawValue", @src());
+                        return error.TypeMismatch;
+                    },
+                };
+                // Search through string_map for matching value
+                var iter = string_map.iterator();
+                while (iter.next()) |entry| {
+                    if (std.mem.eql(u8, entry.value_ptr.*, search_value)) {
+                        // Found the tag, now find the case name
+                        const tag = entry.key_ptr.*;
+                        var name_iter = enum_info.case_info.iterator();
+                        while (name_iter.next()) |name_entry| {
+                            if (name_entry.value_ptr.tag == tag) {
+                                break :blk name_entry.key_ptr.*;
+                            }
+                        }
+                    }
+                }
+                break :blk null;
+            },
+            .character => |char_map| blk: {
+                const search_value: []const u8 = switch (arg) {
+                    .char_literal => |v| v,
+                    else => {
+                        self.reportError(.E022, "expected Character for fromRawValue", @src());
+                        return error.TypeMismatch;
+                    },
+                };
+                // Search through char_map for matching value
+                var iter = char_map.iterator();
+                while (iter.next()) |entry| {
+                    if (std.mem.eql(u8, entry.value_ptr.*, search_value)) {
+                        // Found the tag, now find the case name
+                        const tag = entry.key_ptr.*;
+                        var name_iter = enum_info.case_info.iterator();
+                        while (name_iter.next()) |name_entry| {
+                            if (name_entry.value_ptr.tag == tag) {
+                                break :blk name_entry.key_ptr.*;
+                            }
+                        }
+                    }
+                }
+                break :blk null;
+            },
+        };
+
+        if (found_case_name == null) {
+            self.reportError(.E034, "no enum case matches the given raw value", @src());
+            return error.SemanticError;
+        }
+
+        const case_name = found_case_name.?;
+        const case_info = enum_info.case_info.get(case_name).?;
+
+        // Construct the enum value with proper representation based on backing type
+        // (must match how enum members are represented in convertFieldAccess)
+        const enum_value: ir.Value = switch (enum_info.backing) {
+            .none, .int => try self.func().emitConstI64(case_info.tag),
+            .float => |float_map| blk: {
+                const float_val = float_map.get(case_info.tag) orelse
+                    break :blk try self.func().emitConstI64(case_info.tag);
+                const f64_val = try self.func().emitConstF64(float_val);
+                break :blk try self.func().emitUnaryOp(.bitcast_f64_to_i64, f64_val, .i64);
+            },
+            .string => |string_map| blk: {
+                const string_val = string_map.get(case_info.tag) orelse
+                    break :blk try self.func().emitConstI64(case_info.tag);
+                const null_term_val = try self.allocator.alloc(u8, string_val.len + 1);
+                @memcpy(null_term_val[0..string_val.len], string_val);
+                null_term_val[string_val.len] = 0;
+                try self.module.trackString(null_term_val);
+                break :blk (try self.func().emitStringConstant(null_term_val, try self.sourceLabel())).raw();
+            },
+            .character => |char_map| blk: {
+                const char_val = char_map.get(case_info.tag) orelse
+                    break :blk try self.func().emitConstI64(case_info.tag);
+                const null_term_val = try self.allocator.alloc(u8, char_val.len + 1);
+                @memcpy(null_term_val[0..char_val.len], char_val);
+                null_term_val[char_val.len] = 0;
+                try self.module.trackString(null_term_val);
+                break :blk (try self.func().emitStringConstant(null_term_val, try self.sourceLabel())).raw();
+            },
+        };
+
+        // Wrap in error union (success case)
+        const eu_ptr = try self.func().emitAllocaSized(ErrorUnion.size());
+        try ErrorUnion.storeSuccess(self.func(), eu_ptr.raw(), enum_value);
+
+        return .{
+            .value = eu_ptr.raw(),
+            .ty = .{ .error_union_type = .{
+                .success_type = .i64,
+                .success_enum_type = enum_info.name,
+                .error_enum_type = "EnumError",
+            } },
+        };
+    }
+
+    /// Emit fromRawValue with runtime value comparison.
+    /// Generates a chain of comparisons against all member raw values.
+    fn emitEnumFromRawValueRuntime(
+        self: *AstToIr,
+        enum_info: *const types.EnumTypeInfo,
+        arg: ast.Expression,
+    ) ConvertError!TypedValue {
+        const num_members = enum_info.member_names_ordered.len;
+
+        // Allocate error union result: [tag: i64][value: i64]
+        const eu_ptr = try self.func().emitAllocaSized(ErrorUnion.size());
+
+        // Convert the value argument
+        const value_typed = try self.convertExpression(arg);
+
+        // Validate argument type matches backing type
+        switch (enum_info.backing) {
+            .none, .int => {
+                if (value_typed.ty != .primitive or value_typed.ty.primitive != .int) {
+                    self.reportError(.E022, "fromRawValue argument must be int", @src());
+                    return error.TypeMismatch;
+                }
+            },
+            .float => {
+                if (value_typed.ty != .primitive or value_typed.ty.primitive != .float) {
+                    self.reportError(.E022, "fromRawValue argument must be float", @src());
+                    return error.TypeMismatch;
+                }
+            },
+            .string => {
+                if (value_typed.ty != .struct_type or !std.mem.eql(u8, value_typed.ty.struct_type.name, "String")) {
+                    self.reportError(.E022, "fromRawValue argument must be String", @src());
+                    return error.TypeMismatch;
+                }
+            },
+            .character => {
+                if (value_typed.ty != .struct_type or !std.mem.eql(u8, value_typed.ty.struct_type.name, "Character")) {
+                    self.reportError(.E022, "fromRawValue argument must be Character", @src());
+                    return error.TypeMismatch;
+                }
+            },
+        }
+
+        // Create block structure similar to fromNameRuntime
+        const entry_block_idx: u32 = @intCast(self.func().blocks.items.len - 1);
+
+        var case_blocks = try self.allocator.alloc(u32, num_members);
+        defer self.allocator.free(case_blocks);
+        var check_blocks = try self.allocator.alloc(u32, num_members);
+        defer self.allocator.free(check_blocks);
+
+        check_blocks[0] = entry_block_idx;
+
+        for (1..num_members) |i| {
+            check_blocks[i] = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("frv_check");
+        }
+
+        for (0..num_members) |i| {
+            case_blocks[i] = @intCast(self.func().blocks.items.len);
+            _ = try self.func().addBlock("frv_case");
+        }
+
+        const error_block: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("frv_error");
+        const merge_block: u32 = @intCast(self.func().blocks.items.len);
+        _ = try self.func().addBlock("frv_merge");
+
+        const total_new_blocks = (num_members - 1) + num_members + 2;
+        var deferred = try DeferredBlocks.init(self.allocator, total_new_blocks);
+        defer deferred.deinit();
+        deferred.deferBlocks(self, total_new_blocks);
+
+        // Emit comparison chain
+        for (0..num_members) |i| {
+            const member_name = enum_info.member_names_ordered[i];
+            const case_info = enum_info.case_info.get(member_name).?;
+
+            // Generate comparison based on backing type
+            const is_match = switch (enum_info.backing) {
+                .none, .int => blk: {
+                    const expected = try self.func().emitConstI64(case_info.tag);
+                    break :blk try self.func().emitBinaryOp(.icmp_eq, value_typed.value, expected, .i64);
+                },
+                .float => |float_map| blk: {
+                    const float_val = float_map.get(case_info.tag) orelse 0.0;
+                    const expected = try self.func().emitConstF64(float_val);
+                    break :blk try self.func().emitBinaryOp(.fcmp_eq, value_typed.value, expected, .f64);
+                },
+                .string => |string_map| blk: {
+                    const string_val = string_map.get(case_info.tag) orelse "";
+                    const expected_string = try self.convertStringLiteral(string_val);
+                    const result = try self.emitMethodCallWithIrArgs("String", "equals", &.{expected_string.value}, value_typed.value);
+                    break :blk result.value;
+                },
+                .character => |char_map| blk: {
+                    const char_val = char_map.get(case_info.tag) orelse "";
+                    const expected_char = try self.convertCharLiteral(char_val);
+                    const result = try self.emitMethodCallWithIrArgs("Character", "equals", &.{expected_char.value}, value_typed.value);
+                    break :blk result.value;
+                },
+            };
+
+            const next_block = if (i + 1 < num_members) check_blocks[i + 1] else error_block;
+            try self.func().emitBrCond(is_match, case_blocks[i], next_block);
+
+            if (i + 1 < num_members) {
+                const check_restore_idx = total_new_blocks - i - 1;
+                try deferred.restore(self, check_restore_idx);
+            }
+        }
+
+        // Emit case blocks - each stores success and branches to merge
+        for (0..num_members) |i| {
+            const case_restore_idx = total_new_blocks - (num_members - 1) - 1 - i;
+            try deferred.restore(self, case_restore_idx);
+
+            const member_name = enum_info.member_names_ordered[i];
+            const case_info = enum_info.case_info.get(member_name).?;
+
+            // Construct the enum value with proper representation based on backing type
+            const enum_value: ir.Value = switch (enum_info.backing) {
+                .none, .int => try self.func().emitConstI64(case_info.tag),
+                .float => |float_map| blk: {
+                    const float_val = float_map.get(case_info.tag) orelse
+                        break :blk try self.func().emitConstI64(case_info.tag);
+                    const f64_val = try self.func().emitConstF64(float_val);
+                    break :blk try self.func().emitUnaryOp(.bitcast_f64_to_i64, f64_val, .i64);
+                },
+                .string => |string_map| blk: {
+                    const string_val = string_map.get(case_info.tag) orelse
+                        break :blk try self.func().emitConstI64(case_info.tag);
+                    const null_term_val = try self.allocator.alloc(u8, string_val.len + 1);
+                    @memcpy(null_term_val[0..string_val.len], string_val);
+                    null_term_val[string_val.len] = 0;
+                    try self.module.trackString(null_term_val);
+                    break :blk (try self.func().emitStringConstant(null_term_val, try self.sourceLabel())).raw();
+                },
+                .character => |char_map| blk: {
+                    const char_val = char_map.get(case_info.tag) orelse
+                        break :blk try self.func().emitConstI64(case_info.tag);
+                    const null_term_val = try self.allocator.alloc(u8, char_val.len + 1);
+                    @memcpy(null_term_val[0..char_val.len], char_val);
+                    null_term_val[char_val.len] = 0;
+                    try self.module.trackString(null_term_val);
+                    break :blk (try self.func().emitStringConstant(null_term_val, try self.sourceLabel())).raw();
+                },
+            };
+
+            try ErrorUnion.storeSuccess(self.func(), eu_ptr.raw(), enum_value);
+
+            try self.func().blocks.items[self.func().blocks.items.len - 1].instructions.append(self.allocator, .{
+                .op = .br,
+                .operands = .{ .{ .block_ref = merge_block }, .none, .none },
+            });
+        }
+
+        // Emit error block
+        try deferred.restore(self, 1);
+        const error_tag = try self.func().emitConstI64(0); // EnumError.invalidName
+        try ErrorUnion.storeError(self.func(), eu_ptr.raw(), error_tag);
+        try self.func().blocks.items[self.func().blocks.items.len - 1].instructions.append(self.allocator, .{
+            .op = .br,
+            .operands = .{ .{ .block_ref = merge_block }, .none, .none },
+        });
+
+        // Restore merge block
+        try deferred.restore(self, 0);
+
+        return .{
+            .value = eu_ptr.raw(),
+            .ty = .{ .error_union_type = .{
+                .success_type = .i64,
                 .success_enum_type = enum_info.name,
                 .error_enum_type = "EnumError",
             } },
@@ -10556,6 +10954,7 @@ pub const AstToIr = struct {
                 if (!self.areTypesEquivalent(actual, expected_type)) {
                     const msg = std.fmt.allocPrint(self.allocator, "expected {s}, got {s}", .{ expected_type, actual }) catch "type mismatch";
                     self.reportError(.E022, msg, @src());
+                    debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                     return error.TypeMismatch;
                 }
             }
@@ -10833,6 +11232,7 @@ pub const AstToIr = struct {
                 const param_ty = func_info.param_types[i].ty;
                 // Try implicit conversion if conversion is possible
                 if (self.canConvert(arg_ty, param_ty)) {
+                    debug.astToIr("Converting arg {s} from {s} to {s}\n", .{ func_info.param_types[i].name, @tagName(arg_ty), @tagName(param_ty) });
                     const converted = try self.convertType(arg_value, arg_ty, param_ty);
                     arg_value = converted.value;
                     arg_ty = converted.ty;
@@ -10859,6 +11259,7 @@ pub const AstToIr = struct {
                         },
                         .message_allocated = true,
                     };
+                    debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                     return error.TypeMismatch;
                 }
             }
@@ -11634,6 +12035,7 @@ pub const AstToIr = struct {
                                 },
                                 .message_allocated = true,
                             };
+                            debug.astToIr("TypeMismatch at line {d}\n", .{@src().line});
                             return error.TypeMismatch;
                         }
                     }
@@ -11771,6 +12173,12 @@ pub const AstToIr = struct {
                     if (std.mem.eql(u8, mcall.method_name, "fromName")) {
                         self.setMethodLocation(mcall);
                         return self.emitEnumFromName(&enum_info, mcall.args);
+                    }
+
+                    // Check for fromRawValue static method
+                    if (std.mem.eql(u8, mcall.method_name, "fromRawValue")) {
+                        self.setMethodLocation(mcall);
+                        return self.emitEnumFromRawValue(&enum_info, mcall.args);
                     }
 
                     // Check if method_name is an enum case with associated values

@@ -259,6 +259,48 @@ var opp = dir.opposite()    // Direction.south
 var vert = dir.isVertical() // true
 ```
 
+### fromRawValue
+
+The `fromRawValue` static method converts a raw value back to an enum. It returns an error union that succeeds with the enum value if the raw value matches a case, or fails with `EnumError.invalidName` if no match is found.
+
+For simple enums (no explicit backing values), the raw value is the ordinal (0, 1, 2, ...):
+
+```maxon
+enum Color
+    red     // ordinal 0
+    green   // ordinal 1
+    blue    // ordinal 2
+end 'Color'
+
+var c = try Color.fromRawValue(1) otherwise Color.red  // Color.green
+```
+
+For backed enums, the raw value is the explicit backing value:
+
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
+// status == HttpStatus.notFound
+```
+
+Works with all backing types (int, float, String, Character):
+
+```maxon
+enum Planet
+    earth = "Earth"
+    mars = "Mars"
+end 'Planet'
+
+var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
+// p == Planet.mars
+```
+
+Note: `fromRawValue` is not available for enums with associated values.
+
 ## Tests
 
 <!-- test: simple-enum -->
@@ -1427,4 +1469,199 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: fromRawValue-simple -->
+```maxon
+enum Color
+    red
+    green
+    blue
+end 'Color'
+
+function main() returns int
+    var c = try Color.fromRawValue(1) otherwise Color.red
+    if c == Color.green 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromRawValue-int-backed -->
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+    serverError = 500
+end 'HttpStatus'
+
+function main() returns int
+    var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
+    if status == HttpStatus.notFound 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromRawValue-float-backed -->
+```maxon
+enum Weights
+    light = 1.5
+    medium = 2.5
+    heavy = 3.5
+end 'Weights'
+
+function main() returns int
+    var w = try Weights.fromRawValue(2.5) otherwise Weights.light
+    if w == Weights.medium 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromRawValue-string-backed -->
+```maxon
+enum Planet
+    earth = "Earth"
+    mars = "Mars"
+end 'Planet'
+
+function main() returns int
+    var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
+    if p == Planet.mars 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromRawValue-char-backed -->
+```maxon
+enum Grade
+    excellent = 'A'
+    good = 'B'
+    average = 'C'
+end 'Grade'
+
+function main() returns int
+    var g = try Grade.fromRawValue('B') otherwise Grade.average
+    if g == Grade.good 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromRawValue-runtime -->
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+function getCode() returns int
+    return 404
+end 'getCode'
+
+function main() returns int
+    var code = getCode()
+    var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
+    if status == HttpStatus.notFound 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: fromRawValue-failure -->
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+function getCode() returns int
+    return 999
+end 'getCode'
+
+function main() returns int
+    var code = getCode()
+    var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
+    if status == HttpStatus.ok 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.fromRawValue-invalid-literal -->
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+function main() returns int
+    let _s = try HttpStatus.fromRawValue(999) otherwise HttpStatus.ok
+    return 0
+end 'main'
+```
+```stderr
+E034
+```
+
+<!-- test: error.fromRawValue-type-mismatch -->
+```maxon
+enum HttpStatus
+    ok = 200
+    notFound = 404
+end 'HttpStatus'
+
+function main() returns int
+    let _s = try HttpStatus.fromRawValue("404") otherwise HttpStatus.ok
+    return 0
+end 'main'
+```
+```stderr
+E022
+```
+
+<!-- test: error.fromRawValue-associated-values -->
+```maxon
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function main() returns int
+    let _c = try Container.fromRawValue(0) otherwise Container.empty
+    return 0
+end 'main'
+```
+```stderr
+E003
 ```

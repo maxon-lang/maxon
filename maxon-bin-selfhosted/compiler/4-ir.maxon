@@ -17,7 +17,7 @@ export type IrBuilder
 
 	/// Initialize the IR builder
 	export static function init(sourceFile String) returns IrBuilder
-		return {errors: ErrorCollector.create(), sourceFile: sourceFile, output: "", nextValue: 0, currentBlockName: "", program: Program.create()}
+		return {errors: ErrorCollector.create(), sourceFile: sourceFile, output: "", nextValue: 0, currentBlockName: "", program: Program.create(sourceFile)}
 	end 'init'
 
 	/// Check if IR generation produced any errors
@@ -47,7 +47,11 @@ export type IrBuilder
 	/// Convert a function
 	function convertFunction(fn FunctionDecl)
 		nextValue = 0
-		let returnTypeName = mapTypeName(fn.returnType)
+		var returnTypeName = "void"
+		if fn.returnType >= 0 'hasRetType'
+			let returnTypeRef = try program.typeRefs.get(fn.returnType) otherwise TypeRef{kind: TypeKind.typeVoid, name: "", elementType: -1, line: 0, column: 0}
+			returnTypeName = mapTypeName(returnTypeRef.kind)
+		end 'hasRetType'
 
 		// Function header
 		output = "{output}function {fn.name}() -> {returnTypeName} \{\n"
@@ -58,10 +62,10 @@ export type IrBuilder
 
 		// Convert body
 		var i = 0
-		while i < fn.body.count() 'stmtLoop'
-			if let stmt = try fn.body.get(i) 'gotStmt'
-				convertStatement(stmt)
-			end 'gotStmt'
+		while i < fn.bodyCount 'stmtLoop'
+			let stmtIdx = fn.bodyStart + i
+			let stmt = try program.statements.get(stmtIdx) otherwise Stmt{kind: StmtKind.exprStmt, exprIndex: -1, varName: "", typeRef: -1, thenStart: -1, thenCount: 0, elseStart: -1, elseCount: 0, label: "", line: 0, column: 0, hasError: true}
+			convertStatement(stmt)
 			i = i + 1
 		end 'stmtLoop'
 

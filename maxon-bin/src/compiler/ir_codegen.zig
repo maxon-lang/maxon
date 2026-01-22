@@ -3487,10 +3487,16 @@ pub const IrCodegen = struct {
             try self.enc.shlRaxImm8(1);
         } else if (elem_size == 1) {
             // No multiplication needed for byte access
-        } else {
-            // General case: imul rax, elem_size
+        } else if (elem_size < 128) {
+            // Small element sizes that fit in signed imm8: use imul rax, rax, imm8
+            // imm8 is sign-extended, so we can only safely use values 0-127
             try self.enc.emit(&.{ 0x48, 0x6B, 0xC0 }); // imul rax, rax, imm8
-            try self.enc.emit(&.{@as(u8, @intCast(@as(u32, @bitCast(elem_size)) & 0xFF))});
+            try self.enc.emit(&.{@as(u8, @intCast(elem_size))});
+        } else {
+            // Large element sizes: use imul rax, rax, imm32 to avoid sign-extension issues
+            try self.enc.emit(&.{ 0x48, 0x69, 0xC0 }); // imul rax, rax, imm32
+            const size_bytes = std.mem.toBytes(@as(i32, elem_size));
+            try self.enc.emit(&size_bytes);
         }
 
         // Add base: add rax, rcx

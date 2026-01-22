@@ -1,5 +1,5 @@
 // Maxon Compiler - Main entry point
-// Orchestrates all compilation phases for single-file compilation
+// Orchestrates all compilation phases using the new IR pipeline
 
 // ============================================================================
 // Compiler Configuration
@@ -9,11 +9,15 @@
 export type CompilerOptions
 	export var sourceFile String
 	export var outputFile String
-	export var emitIr bool
+	export var emitHir bool           // emit HIR for debugging
+	export var emitLir bool           // emit LIR for debugging
+	export var noCodegen bool         // stop before code generation
+	export var incremental bool       // use incremental compilation
+	export var projectPath String     // project root (for multi-file)
 
 	export static function createDefault(sourceFile String) returns CompilerOptions
-		var outFile = sourceFile.replace(".maxon", ".ir")
-		return {sourceFile: sourceFile, outputFile: outFile, emitIr: false}
+		var outFile = sourceFile.replace(".maxon", ".exe")
+		return {sourceFile: sourceFile, outputFile: outFile, emitHir: false, emitLir: false, noCodegen: false, incremental: false, projectPath: ""}
 	end 'createDefault'
 end 'CompilerOptions'
 
@@ -21,51 +25,161 @@ end 'CompilerOptions'
 // Main Compilation Entry Point
 // ============================================================================
 
-/// Compile a single Maxon source file
+/// Compile a single Maxon source file to executable
 /// Returns 0 on success, non-zero on error
-export function compile(sourceFile String, emitIr bool) returns int
-	var options = CompilerOptions.createDefault(sourceFile)
-	options.emitIr = emitIr
+export function compile(sourceFile String) returns int
+	let options = CompilerOptions.createDefault(sourceFile)
 	return compileWithOptions(options)
 end 'compile'
 
 /// Compile with full options
 export function compileWithOptions(options CompilerOptions) returns int
+	print("[1] Starting compilation\n")
 	Logger.info(LogCategory.compiler, message: "Compiling: {options.sourceFile}")
 
 	// Load source file
-	let source = try File.readText(options.sourceFile) otherwise ""
-	if source == "" 'loadFailed'
+	let rawSource = try File.readText(options.sourceFile) otherwise ""
+	print("[2] File loaded\n")
+	if rawSource == "" 'loadFailed'
 		Logger.error(LogCategory.compiler, message: "Failed to read source file: {options.sourceFile}")
 		return 1
 	end 'loadFailed'
 
+	// Normalize line endings: convert CRLF to LF for cross-platform compatibility
+	// Note: CRLF forms a single grapheme cluster in Unicode, so we must normalize
+	// before lexing to allow byte-level position tracking
+	let source = rawSource.replace("\r\n", "\n")
+	print("[3] Line endings normalized\n")
+
+	// ========================================================================
 	// Phase 1: Lexical Analysis
+	// ========================================================================
 	var lexer = Lexer.init(source, sourceFile: options.sourceFile)
+	print("[4] Lexer created\n")
 	let tokens = lexer.tokenize()
+	print("[5] Tokenized\n")
 	Logger.info(LogCategory.lexer, message: "Lexed {tokens.count()} tokens")
 
 	if lexer.errors.hasAnyErrors() 'lexerErrors'
 		lexer.errors.printAll()
-	end 'lexerErrors'
-
-	// Phase 2: Parsing (error-tolerant)
-	var parser = Parser.init(tokens, sourceFile: options.sourceFile)
-	let ast = parser.parse()
-	Logger.info(LogCategory.parser, message: "Parsed program")
-
-	// Phase 3: Semantic Analysis
-	var analyzer = SemanticAnalyzer.init(ast, sourceFile: options.sourceFile)
-	var result = analyzer.analyze()
-
-	if result == SemanticResult.failure 'semFailed'
-		analyzer.printErrors()
 		return 1
-	end 'semFailed'
+	end 'lexerErrors'
+	print("[6] No lexer errors\n")
 
-	// Phase 4: IR Generation
-	var irBuilder = IrBuilder.init(options.sourceFile)
-	let _ = irBuilder.convert(ast)
+	// ========================================================================
+	// Phase 2: Parsing (error-tolerant)
+	// ========================================================================
+	var parser = Parser.init(tokens, sourceFile: options.sourceFile)
+	print("[7] Parser created\n")
+	let ast = parser.parse()
+	print("[8] Parsed\n")
+	Logger.info(LogCategory.parser, message: "Parsed AST with {ast.functions.count()} functions")
 
-	return 0
+	// Report parse errors but continue if AST is usable
+	if parser.errors.hasAnyErrors() 'parseErrors'
+		parser.errors.printAll()
+		// For now, fail on parse errors
+		return 1
+	end 'parseErrors'
+	print("[9] No parser errors\n")
+
+	// ========================================================================
+	// Phase 3: AST to HIR
+	// ========================================================================
+	print("[10] Creating AstToHir\n")
+	var astToHir = AstToHir.init(ast)
+	print("[11] Lowering to HIR\n")
+	let hir = astToHir.lower()
+	print("[12] HIR created\n")
+	Logger.info(LogCategory.compiler, message: "Lowered to HIR with {hir.functions.count()} functions")
+
+	if options.emitHir 'dumpHir'
+		// TODO: HIR pretty printer
+		Logger.info(LogCategory.compiler, message: "HIR dump requested (not yet implemented)")
+	end 'dumpHir'
+
+	if hir.hasError 'hirErrors'
+		Logger.error(LogCategory.compiler, message: "HIR lowering failed with errors")
+		return 1
+	end 'hirErrors'
+	print("[13] No HIR errors\n")
+
+	// Stop here if no codegen requested
+	if options.noCodegen 'stopEarly'
+		Logger.info(LogCategory.compiler, message: "Stopping before codegen (--no-codegen)")
+		return 0
+	end 'stopEarly'
+
+	// ========================================================================
+	// Phase 4: HIR to LIR
+	// ========================================================================
+	print("[14] Creating HirToLir\n")
+	var hirToLir = HirToLir.init(hir)
+	print("[15] Lowering to LIR\n")
+	let lir = hirToLir.lower()
+	print("[16] LIR created\n")
+	Logger.info(LogCategory.compiler, message: "Lowered to LIR with {lir.functions.count()} functions")
+
+
+	if options.emitLir 'dumpLir'
+		// TODO: LIR pretty printer
+		Logger.info(LogCategory.compiler, message: "LIR dump requested (not yet implemented)")
+	end 'dumpLir'
+
+	// ========================================================================
+	// Phase 5: Code Generation
+	// ========================================================================
+	print("[17] Creating CodeGenerator\n")
+	var codegen = CodeGenerator.init(lir)
+	print("[18] Generating code\n")
+	let codeResult = codegen.generate()
+	print("[19] Code generated\n")
+	Logger.info(LogCategory.compiler, message: "Generated {codeResult.code.count()} bytes of code")
+
+	if codeResult.hasError 'codegenError'
+		Logger.error(LogCategory.compiler, message: "Code generation failed")
+		return 1
+	end 'codegenError'
+	print("[20] No codegen errors\n")
+
+	// ========================================================================
+	// Phase 6: Write PE Executable
+	// ========================================================================
+	print("[21] Creating PEWriter\n")
+	var peWriter = PEWriter.create()
+	print("[22] Setting codeResult\n")
+	peWriter.setCodeGenResult(codeResult)
+	print("[23] Writing PE\n")
+	let peBytes = peWriter.write()
+	print("[24] PE written\n")
+	Logger.info(LogCategory.compiler, message: "Generated PE executable: {peBytes.count()} bytes")
+
+	// Write output file
+	print("[25] Writing output file\n")
+	if try File.writeBinary(options.outputFile, content: peBytes) 'writeFile'
+		Logger.info(LogCategory.compiler, message: "Successfully wrote: {options.outputFile}")
+		print("Compiled: {options.outputFile}\n")
+		return 0
+	end 'writeFile'
+	print("[26] Failed to write file\n")
+	Logger.error(LogCategory.compiler, message: "Failed to create output file: {options.outputFile}")
+	return 1
 end 'compileWithOptions'
+
+// ============================================================================
+// Project/Multi-file Compilation (placeholder - not yet implemented)
+// ============================================================================
+
+/// Compile a project (multi-file with build.maxon)
+/// TODO: Implement multi-file compilation
+export function compileProject(_ String) returns int
+	Logger.error(LogCategory.compiler, message: "Multi-file compilation not yet implemented")
+	return 1
+end 'compileProject'
+
+/// Compile with incremental caching
+/// TODO: Implement incremental compilation
+export function compileIncremental(_ String) returns int
+	Logger.error(LogCategory.compiler, message: "Incremental compilation not yet implemented")
+	return 1
+end 'compileIncremental'

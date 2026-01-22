@@ -1,0 +1,324 @@
+// Maxon Compiler - Low-Level IR (Stage 5)
+// LIR is close to machine code - flat, explicit memory ops, register-like values
+
+// ============================================================================
+// LIR Types - Machine-level types
+// ============================================================================
+
+/// LIR primitive types - machine-level
+export enum LirType
+	i8           // 8-bit integer (byte)
+	i32          // 32-bit integer
+	i64          // 64-bit integer
+	f32          // 32-bit float
+	f64          // 64-bit float
+	ptr          // pointer (64-bit on x64)
+	void_        // no type
+end 'LirType'
+
+// ============================================================================
+// LIR Values
+// ============================================================================
+
+/// LIR value kinds
+export enum LirValueKind
+	vreg         // virtual register
+	imm          // immediate constant
+	label        // block label
+	stack        // stack slot
+	global       // global symbol
+end 'LirValueKind'
+
+/// A LIR value (operand)
+export type LirValue
+	export var kind LirValueKind
+	export var id int                // vreg id, imm value, label id, stack slot
+	export var type_ LirType
+	export var name String           // for globals/labels
+
+	export static function createVreg(id int, type_ LirType) returns LirValue
+		return {kind: LirValueKind.vreg, id: id, type_: type_, name: ""}
+	end 'createVreg'
+
+	export static function createImm(value int, type_ LirType) returns LirValue
+		return {kind: LirValueKind.imm, id: value, type_: type_, name: ""}
+	end 'createImm'
+
+	export static function createLabel(id int) returns LirValue
+		return {kind: LirValueKind.label, id: id, type_: LirType.void_, name: ""}
+	end 'createLabel'
+
+	export static function createStack(slot int, type_ LirType) returns LirValue
+		return {kind: LirValueKind.stack, id: slot, type_: type_, name: ""}
+	end 'createStack'
+
+	export static function createGlobal(name String, type_ LirType) returns LirValue
+		return {kind: LirValueKind.global, id: 0, type_: type_, name: name}
+	end 'createGlobal'
+end 'LirValue'
+
+export typealias LirValueArray is Array with LirValue
+
+// ============================================================================
+// LIR Instructions
+// ============================================================================
+
+/// LIR opcodes - close to x86-64 operations
+export enum LirOpcode
+	// Data movement
+	mov          // dst = src
+	load         // dst = [src + offset]
+	store        // [dst + offset] = src
+	lea          // dst = address of [src + offset]
+
+	// Arithmetic (integer)
+	add
+	sub
+	imul
+	idiv         // signed divide: rax = rdx:rax / src, rdx = remainder
+	neg          // dst = -src
+
+	// Bitwise
+	and_
+	or_
+	xor_
+	not_
+	shl          // shift left
+	shr          // shift right (logical)
+	sar          // shift right (arithmetic)
+
+	// Comparison (sets flags)
+	cmp
+	test
+
+	// Floating point
+	fadd
+	fsub
+	fmul
+	fdiv
+	fneg
+
+	// Control flow
+	jmp          // unconditional jump
+	je           // jump if equal (ZF=1)
+	jne          // jump if not equal (ZF=0)
+	jl           // jump if less (SF!=OF)
+	jle          // jump if less or equal (ZF=1 or SF!=OF)
+	jg           // jump if greater (ZF=0 and SF=OF)
+	jge          // jump if greater or equal (SF=OF)
+	ja           // jump if above (unsigned: CF=0 and ZF=0)
+	jae          // jump if above or equal (unsigned: CF=0)
+	jb           // jump if below (unsigned: CF=1)
+	jbe          // jump if below or equal (unsigned: CF=1 or ZF=1)
+
+	// Function calls
+	call         // call function
+	ret          // return from function
+
+	// Stack operations
+	push
+	pop
+
+	// Conversion
+	cvtsi2sd     // int to double
+	cvtsd2si     // double to int (truncate)
+	movsxd       // sign extend 32 to 64
+	movzx        // zero extend
+
+	// Special
+	label        // pseudo-op: defines a label
+	phi          // SSA phi (lowered before regalloc)
+	nop
+end 'LirOpcode'
+
+/// A LIR instruction
+export type LirInstr
+	export var opcode LirOpcode
+	export var dst LirValue          // destination operand
+	export var src1 LirValue         // first source operand
+	export var src2 LirValue         // second source operand
+	export var offset int            // memory offset for load/store
+	export var callTarget String     // function name for call
+	export var line int              // source line for debug info
+	export var column int
+
+	export static function createMov(dst LirValue, src LirValue, line int, column int) returns LirInstr
+		return {opcode: LirOpcode.mov, dst: dst, src1: src, src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: line, column: column}
+	end 'createMov'
+
+	export static function createLoad(dst LirValue, base LirValue, offset int, line int, column int) returns LirInstr
+		return {opcode: LirOpcode.load, dst: dst, src1: base, src2: LirValue.createImm(0, type_: LirType.void_), offset: offset, callTarget: "", line: line, column: column}
+	end 'createLoad'
+
+	export static function createStore(base LirValue, src LirValue, offset int, line int, column int) returns LirInstr
+		return {opcode: LirOpcode.store, dst: base, src1: src, src2: LirValue.createImm(0, type_: LirType.void_), offset: offset, callTarget: "", line: line, column: column}
+	end 'createStore'
+
+	export static function createBinary(opcode LirOpcode, dst LirValue, src1 LirValue, src2 LirValue, line int, column int) returns LirInstr
+		return {opcode: opcode, dst: dst, src1: src1, src2: src2, offset: 0, callTarget: "", line: line, column: column}
+	end 'createBinary'
+
+	export static function createUnary(opcode LirOpcode, dst LirValue, src LirValue, line int, column int) returns LirInstr
+		return {opcode: opcode, dst: dst, src1: src, src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: line, column: column}
+	end 'createUnary'
+
+	export static function createCmp(src1 LirValue, src2 LirValue, line int, column int) returns LirInstr
+		return {opcode: LirOpcode.cmp, dst: LirValue.createImm(0, type_: LirType.void_), src1: src1, src2: src2, offset: 0, callTarget: "", line: line, column: column}
+	end 'createCmp'
+
+	export static function createJump(opcode LirOpcode, target LirValue, line int, column int) returns LirInstr
+		return {opcode: opcode, dst: target, src1: LirValue.createImm(0, type_: LirType.void_), src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: line, column: column}
+	end 'createJump'
+
+	export static function createCall(target String, line int, column int) returns LirInstr
+		return {opcode: LirOpcode.call, dst: LirValue.createImm(0, type_: LirType.void_), src1: LirValue.createImm(0, type_: LirType.void_), src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: target, line: line, column: column}
+	end 'createCall'
+
+	export static function createRet(line int, column int) returns LirInstr
+		return {opcode: LirOpcode.ret, dst: LirValue.createImm(0, type_: LirType.void_), src1: LirValue.createImm(0, type_: LirType.void_), src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: line, column: column}
+	end 'createRet'
+
+	export static function createRetWithValue(value LirValue, line int, column int) returns LirInstr
+		return {opcode: LirOpcode.ret, dst: LirValue.createImm(0, type_: LirType.void_), src1: value, src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: line, column: column}
+	end 'createRetWithValue'
+
+	export static function createPush(src LirValue, line int, column int) returns LirInstr
+		return {opcode: LirOpcode.push, dst: LirValue.createImm(0, type_: LirType.void_), src1: src, src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: line, column: column}
+	end 'createPush'
+
+	export static function createPop(dst LirValue, line int, column int) returns LirInstr
+		return {opcode: LirOpcode.pop, dst: dst, src1: LirValue.createImm(0, type_: LirType.void_), src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: line, column: column}
+	end 'createPop'
+
+	export static function createLabel(id int, line int, column int) returns LirInstr
+		return {opcode: LirOpcode.label, dst: LirValue.createLabel(id), src1: LirValue.createImm(0, type_: LirType.void_), src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: line, column: column}
+	end 'createLabel'
+
+	export static function createNop(line int, column int) returns LirInstr
+		return {opcode: LirOpcode.nop, dst: LirValue.createImm(0, type_: LirType.void_), src1: LirValue.createImm(0, type_: LirType.void_), src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: line, column: column}
+	end 'createNop'
+end 'LirInstr'
+
+export typealias LirInstrArray is Array with LirInstr
+
+// ============================================================================
+// LIR Blocks and Functions
+// ============================================================================
+
+/// A LIR basic block
+export type LirBlock
+	export var id int
+	export var name String
+	export var instructions LirInstrArray
+
+	export static function create(id int, name String) returns LirBlock
+		return {id: id, name: name, instructions: LirInstrArray{}}
+	end 'create'
+
+	export function addInstr(instr LirInstr)
+		instructions.push(instr)
+	end 'addInstr'
+end 'LirBlock'
+
+export typealias LirBlockArray is Array with LirBlock
+
+/// Stack frame information
+export type LirStackFrame
+	export var localSize int         // size of local variables
+	export var spillSize int         // size of spill slots
+	export var argSize int           // size for outgoing call arguments
+	export var savedRegs IntArray    // callee-saved registers to preserve
+
+	export static function create() returns LirStackFrame
+		return {localSize: 0, spillSize: 0, argSize: 0, savedRegs: IntArray{}}
+	end 'create'
+
+	export function totalSize() returns int
+		// 16-byte aligned
+		let size = localSize + spillSize + argSize
+		let aligned = ((size + 15) / 16) * 16
+		return aligned
+	end 'totalSize'
+end 'LirStackFrame'
+
+/// A LIR function
+export type LirFunction
+	export var name String
+	export var blocks LirBlockArray
+	export var numParams int
+	export var frame LirStackFrame
+	export var nextVreg int          // next virtual register ID
+	export var isExport bool
+
+	export static function create(name String, isExport bool) returns LirFunction
+		return {name: name, blocks: LirBlockArray{}, numParams: 0, frame: LirStackFrame.create(), nextVreg: 0, isExport: isExport}
+	end 'create'
+
+	export function addBlock(block LirBlock)
+		blocks.push(block)
+	end 'addBlock'
+
+	export function freshVreg(type_ LirType) returns LirValue
+		let id = nextVreg
+		nextVreg = nextVreg + 1
+		return LirValue.createVreg(id, type_: type_)
+	end 'freshVreg'
+
+	export function allocStackSlot(size int) returns int
+		let slot = frame.localSize
+		frame.localSize = frame.localSize + size
+		return slot
+	end 'allocStackSlot'
+end 'LirFunction'
+
+export typealias LirFunctionArray is Array with LirFunction
+
+// ============================================================================
+// LIR Module
+// ============================================================================
+
+/// A LIR module - contains lowered functions ready for codegen
+export type LirModule
+	export var sourceFile String
+	export var functions LirFunctionArray
+	export var dataSection LirDataSection
+
+	export static function create(sourceFile String) returns LirModule
+		return {sourceFile: sourceFile, functions: LirFunctionArray{}, dataSection: LirDataSection.create()}
+	end 'create'
+end 'LirModule'
+
+/// Data section for string literals and constants
+export type LirDataItem
+	export var name String           // label name
+	export var data String           // for string literals
+	export var bytes IntArray        // for raw bytes
+	export var isString bool
+end 'LirDataItem'
+
+export typealias LirDataItemArray is Array with LirDataItem
+
+export type LirDataSection
+	export var items LirDataItemArray
+	var nextId int
+
+	export static function create() returns LirDataSection
+		return {items: LirDataItemArray{}, nextId: 0}
+	end 'create'
+
+	export function addString(value String) returns String
+		let result = ".str{nextId}"
+		nextId = nextId + 1
+		let item = LirDataItem{name: ".str{nextId - 1}", data: value, bytes: IntArray{}, isString: true}
+		items.push(item)
+		return result
+	end 'addString'
+
+	export function addBytes(data IntArray) returns String
+		let result = ".data{nextId}"
+		nextId = nextId + 1
+		let item = LirDataItem{name: ".data{nextId - 1}", data: "", bytes: data, isString: false}
+		items.push(item)
+		return result
+	end 'addBytes'
+end 'LirDataSection'

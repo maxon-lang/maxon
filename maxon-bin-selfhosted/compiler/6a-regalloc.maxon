@@ -1,0 +1,274 @@
+// Maxon Compiler - Register Allocator (Stage 6a)
+// Simple linear scan register allocation for x86-64
+
+// ============================================================================
+// x86-64 Register Set
+// ============================================================================
+
+export enum Reg
+	RAX = 0
+	RCX = 1
+	RDX = 2
+	RBX = 3
+	RSP = 4
+	RBP = 5
+	RSI = 6
+	RDI = 7
+	R8 = 8
+	R9 = 9
+	R10 = 10
+	R11 = 11
+	R12 = 12
+	R13 = 13
+	R14 = 14
+	R15 = 15
+end 'Reg'
+
+/// Get register encoding for ModR/M
+export function regCode(r Reg) returns int
+	return r.rawValue
+end 'regCode'
+
+/// Check if register needs REX.R or REX.B prefix
+export function needsRex(r Reg) returns bool
+	return r.rawValue >= 8
+end 'needsRex'
+
+// ============================================================================
+// Live Interval
+// ============================================================================
+
+export type LiveInterval
+	export var vreg int           // virtual register id
+	export var start int          // first use (instruction index)
+	export var end_ int           // last use (instruction index)
+	export var reg Reg            // assigned physical register
+	export var spilled bool       // whether spilled to stack
+	export var spillSlot int      // stack offset if spilled
+end 'LiveInterval'
+
+export typealias LiveIntervalArray is Array with LiveInterval
+typealias IntArray is Array with int
+
+// ============================================================================
+// Register Allocator
+// ============================================================================
+
+export type RegisterAllocator
+	var intervals LiveIntervalArray
+	var vregToReg IntArray      // maps vreg -> Reg
+	var spillCount int
+	var allocatedRegs IntArray  // which regs are in use
+
+	// Caller-saved registers available for allocation (Windows x64 ABI)
+	// RAX, RCX, RDX, R8-R11 are caller-saved
+	// RBX, RDI, RSI, R12-R15 are callee-saved (avoid for simplicity)
+	// RSP, RBP are reserved for stack
+
+	export static function create() returns RegisterAllocator
+		return {intervals: LiveIntervalArray{}, vregToReg: IntArray{}, spillCount: 0, allocatedRegs: IntArray{}}
+	end 'create'
+
+	/// Allocate registers for a function
+	export function allocate(fn LirFunction)
+		intervals.clear()
+		vregToReg.clear()
+		spillCount = 0
+		allocatedRegs.clear()
+
+		// Build live intervals
+		buildLiveIntervals(fn)
+
+		// Sort intervals by start point
+		sortIntervalsByStart()
+
+		// Linear scan allocation
+		linearScan()
+	end 'allocate'
+
+	/// Get physical register for a virtual register
+	export function getRegForVreg(vreg int) returns Reg
+		if vreg >= 0 and vreg < vregToReg.count() 'inRange'
+			let rawVal = try vregToReg.get(vreg) otherwise 0
+			return try Reg.fromRawValue(rawVal) otherwise Reg.RAX
+		end 'inRange'
+		// Default to RAX if not found
+		return Reg.RAX
+	end 'getRegForVreg'
+
+	/// Build live intervals from LIR
+	function buildLiveIntervals(fn LirFunction)
+		var instrIndex = 0
+
+		for block in fn.blocks 'blockLoop'
+			for instr in block.instructions 'instrLoop'
+				// Process definitions (dst)
+				if instr.dst.kind == LirValueKind.vreg 'hasDst'
+					updateOrCreateInterval(instr.dst.id, pos: instrIndex, isDef: true)
+				end 'hasDst'
+
+				// Process uses (src1, src2)
+				if instr.src1.kind == LirValueKind.vreg 'hasSrc1'
+					updateOrCreateInterval(instr.src1.id, pos: instrIndex, isDef: false)
+				end 'hasSrc1'
+
+				if instr.src2.kind == LirValueKind.vreg 'hasSrc2'
+					updateOrCreateInterval(instr.src2.id, pos: instrIndex, isDef: false)
+				end 'hasSrc2'
+
+				instrIndex = instrIndex + 1
+			end 'instrLoop'
+		end 'blockLoop'
+
+		// Initialize vregToReg array
+		var maxVreg = 0
+		for interval in intervals 'findMax'
+			if interval.vreg > maxVreg 'isLarger'
+				maxVreg = interval.vreg
+			end 'isLarger'
+		end 'findMax'
+
+		var i = 0
+		while i <= maxVreg 'initRegs'
+			vregToReg.push(0)  // default to RAX
+			i = i + 1
+		end 'initRegs'
+	end 'buildLiveIntervals'
+
+	/// Update or create a live interval
+	function updateOrCreateInterval(vreg int, pos int, isDef bool)
+		// Find existing interval by index so we can mutate
+		var idx = 0
+		while idx < intervals.count() 'search'
+			var interval = try intervals.get(idx) otherwise LiveInterval{vreg: 0, start: 0, end_: 0, reg: Reg.RAX, spilled: false, spillSlot: 0}
+			if interval.vreg == vreg 'found'
+				if isDef and pos < interval.start 'updateStart'
+					interval.start = pos
+				end 'updateStart'
+				if pos > interval.end_ 'updateEnd'
+					interval.end_ = pos
+				end 'updateEnd'
+				intervals.set(idx, interval)
+				return
+			end 'found'
+			idx = idx + 1
+		end 'search'
+
+		// Create new interval
+		let newInterval = LiveInterval{vreg: vreg, start: pos, end_: pos, reg: Reg.RAX, spilled: false, spillSlot: 0}
+		intervals.push(newInterval)
+	end 'updateOrCreateInterval'
+
+	/// Sort intervals by start position (simple bubble sort)
+	function sortIntervalsByStart()
+		var n = intervals.count()
+		var i = 0
+		while i < n - 1 'outer'
+			var j = 0
+			while j < n - i - 1 'inner'
+				let a = try intervals.get(j) otherwise LiveInterval{vreg: 0, start: 0, end_: 0, reg: Reg.RAX, spilled: false, spillSlot: 0}
+				let b = try intervals.get(j + 1) otherwise LiveInterval{vreg: 0, start: 0, end_: 0, reg: Reg.RAX, spilled: false, spillSlot: 0}
+				if a.start > b.start 'swap'
+					intervals.set(j, b)
+					intervals.set(j + 1, a)
+				end 'swap'
+				j = j + 1
+			end 'inner'
+			i = i + 1
+		end 'outer'
+	end 'sortIntervalsByStart'
+
+	/// Linear scan register allocation
+	function linearScan()
+		let availRegs = getAvailableRegs()
+		var activeIntervals = LiveIntervalArray{}
+		var usedRegs = IntArray{}  // tracks which regs are currently in use
+
+		var intervalIdx = 0
+		while intervalIdx < intervals.count() 'allocLoop'
+			var interval = try intervals.get(intervalIdx) otherwise LiveInterval{vreg: 0, start: 0, end_: 0, reg: Reg.RAX, spilled: false, spillSlot: 0}
+
+			// Expire old intervals
+			var activeIdx = 0
+			while activeIdx < activeIntervals.count() 'expireLoop'
+				let active = try activeIntervals.get(activeIdx) otherwise LiveInterval{vreg: 0, start: 0, end_: 0, reg: Reg.RAX, spilled: false, spillSlot: 0}
+				if active.end_ < interval.start 'expired'
+					// Remove from usedRegs
+					var regIdx = 0
+					while regIdx < usedRegs.count() 'findReg'
+						let usedReg = try usedRegs.get(regIdx) otherwise -1
+						if usedReg == active.reg.rawValue 'found'
+							let _ = try usedRegs.remove(regIdx) otherwise 0
+							// Don't increment, the array shifted
+						end 'found' else 'notFound'
+							regIdx = regIdx + 1
+						end 'notFound'
+					end 'findReg'
+					let _ = try activeIntervals.remove(activeIdx) otherwise LiveInterval{vreg: 0, start: 0, end_: 0, reg: Reg.RAX, spilled: false, spillSlot: 0}
+					// Don't increment, the array shifted
+				end 'expired' else 'notExpired'
+					activeIdx = activeIdx + 1
+				end 'notExpired'
+			end 'expireLoop'
+
+			// Find an available register
+			var assignedReg = -1
+			var regIdx = 0
+			while regIdx < availRegs.count() 'findFree'
+				let candidate = try availRegs.get(regIdx) otherwise 0
+				var inUse = false
+				var usedIdx = 0
+				while usedIdx < usedRegs.count() 'checkUsed'
+					let usedReg = try usedRegs.get(usedIdx) otherwise -1
+					if usedReg == candidate 'isUsed'
+						inUse = true
+					end 'isUsed'
+					usedIdx = usedIdx + 1
+				end 'checkUsed'
+				if not inUse 'notInUse'
+					assignedReg = candidate
+					regIdx = availRegs.count()  // break
+				end 'notInUse' else 'stillSearching'
+					regIdx = regIdx + 1
+				end 'stillSearching'
+			end 'findFree'
+
+			if assignedReg >= 0 'gotReg'
+				interval.reg = try Reg.fromRawValue(assignedReg) otherwise Reg.RAX
+				usedRegs.push(assignedReg)
+				activeIntervals.push(interval)
+				// Update vregToReg mapping
+				if interval.vreg < vregToReg.count() 'inRange'
+					vregToReg.set(interval.vreg, assignedReg)
+				end 'inRange'
+			end 'gotReg' else 'spillNeeded'
+				// Spill - for now just use RAX as fallback
+				interval.spilled = true
+				interval.spillSlot = spillCount
+				spillCount = spillCount + 1
+			end 'spillNeeded'
+
+			intervals.set(intervalIdx, interval)
+			intervalIdx = intervalIdx + 1
+		end 'allocLoop'
+	end 'linearScan'
+
+	/// Get available registers for allocation
+	function getAvailableRegs() returns IntArray
+		var regs = IntArray{}
+		// Use caller-saved registers (Windows x64)
+		regs.push(Reg.R11.rawValue)
+		regs.push(Reg.R10.rawValue)
+		regs.push(Reg.R9.rawValue)
+		regs.push(Reg.R8.rawValue)
+		regs.push(Reg.RDX.rawValue)
+		regs.push(Reg.RCX.rawValue)
+		regs.push(Reg.RAX.rawValue)
+		return regs
+	end 'getAvailableRegs'
+
+	/// Expire intervals that are no longer active
+	function expireOldIntervals(_ LiveIntervalArray, _ int, _ IntArray)
+		// Stubbed for now
+	end 'expireOldIntervals'
+end 'RegisterAllocator'
