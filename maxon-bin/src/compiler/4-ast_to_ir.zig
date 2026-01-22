@@ -5525,6 +5525,11 @@ pub const AstToIr = struct {
                                     try self.func().emitTrackMove(expr.identifier);
                                 }
                             }
+                        } else if (self.self_ptr != null and typed_val.ty == .struct_type and typed_val.ty.struct_type.needs_cleanup) {
+                            // Identifier not in var_map - might be a self field.
+                            // When returning a self field, incref all managed buffers in the copy
+                            // to prevent double-free when self is cleaned up.
+                            try cleanup_helpers.increfStruct(self, value_ptr.raw(), typed_val.ty.struct_type, "<return self field>");
                         }
                     }
                     try cleanup_helpers.freeHeapAllocations(self);
@@ -5549,7 +5554,9 @@ pub const AstToIr = struct {
                 try self.func().emitMemcpy(ir.toRawPtr(sret), ir.toRawPtr(typed_val.value), self.sret_size);
                 // Mark returned variable as moved so cleanup doesn't free its heap resources
                 if (expr == .identifier) {
+                    debug.astToIr("Return identifier '{s}', checking var_map...\n", .{expr.identifier});
                     if (self.var_map.getPtr(expr.identifier)) |var_info| {
+                        debug.astToIr("  Found in var_map, ty={s}\n", .{@tagName(var_info.ty)});
                         // Mark as moved for any type with heap resources (uses needs_cleanup flag)
                         if (var_info.ty == .struct_type and var_info.ty.struct_type.needs_cleanup) {
                             var_info.markMoved("return", self.current_line);
@@ -5557,7 +5564,20 @@ pub const AstToIr = struct {
                                 try self.func().emitTrackMove(expr.identifier);
                             }
                         }
+                    } else if (self.self_ptr != null and typed_val.ty == .struct_type and typed_val.ty.struct_type.needs_cleanup) {
+                        // Identifier not in var_map - might be a self field.
+                        // When returning a self field, we've memcpy'd the data to sret, but both
+                        // the original field (in self) and the returned copy share the same
+                        // managed buffer pointers. Without incref, cleanup would double-free.
+                        // Solution: incref all managed buffers in the sret copy so that when
+                        // self is cleaned up, the refcounts remain positive.
+                        debug.astToIr("  Not in var_map but have self_ptr, incref struct type '{s}'\n", .{typed_val.ty.struct_type.name});
+                        try cleanup_helpers.increfStruct(self, sret, typed_val.ty.struct_type, "<return self field>");
+                    } else {
+                        debug.astToIr("  Not in var_map and no self_ptr or not struct type\n", .{});
                     }
+                } else {
+                    debug.astToIr("Return expr is not identifier, is {s}\n", .{@tagName(expr)});
                 }
                 // If returning a type with managed buffer (including from interpolation), remove from temporaries
                 // since ownership transfers to caller via sret

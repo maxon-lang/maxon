@@ -23,7 +23,7 @@ export typealias ScopeArray is Array with LocalScope
 export type AstToHir
 	var program Program
 	var module HirModule
-	var errors ErrorCollector
+	export var errors ErrorCollector
 	var currentFunction HirFunction
 	var currentBlock HirBlock
 	var nextValueId int
@@ -33,22 +33,22 @@ export type AstToHir
 
 	/// Initialize the lowering context
 	export static function init(program Program) returns AstToHir
-		return {program: program, module: HirModule.create(program.sourceFile), errors: ErrorCollector.create(), currentFunction: HirFunction.create("", returnTypeIdx: -1, isExport: false, line: 0, column: 0), currentBlock: HirBlock.create(0, name: "entry"), nextValueId: 0, nextBlockId: 0, scopes: ScopeArray{}, currentScopeIdx: -1}
+		var module = HirModule.create(program.sourceFile)
+		var errors = ErrorCollector.create()
+		var currentFunction = HirFunction.create("", returnTypeIdx: -1, isExport: false, line: 0, column: 0)
+		var currentBlock = HirBlock.create(0, name: "entry")
+		return {program: program, module: module, errors: errors, currentFunction: currentFunction, currentBlock: currentBlock, nextValueId: 0, nextBlockId: 0, scopes: ScopeArray{}, currentScopeIdx: -1}
 	end 'init'
 
 	/// Convert the entire AST to HIR
 	export function lower() returns HirModule
-		// First pass: collect type declarations for forward references
+		// Test 4: + lowerFunction
 		collectTypeDeclarations()
 
-		// Second pass: lower function declarations
 		for fn in program.functions 'funcLoop'
 			if not fn.hasError 'noError'
 				lowerFunction(fn)
-			end 'noError' else 'hasError'
-				// Still register the function for LSP even with errors
-				registerFunctionSymbol(fn)
-			end 'hasError'
+			end 'noError'
 		end 'funcLoop'
 
 		return module
@@ -91,36 +91,21 @@ export type AstToHir
 	function lowerFunction(fn FunctionDecl)
 		let retTypeIdx = resolveTypeRef(fn.returnType)
 		currentFunction = HirFunction.create(fn.name, returnTypeIdx: retTypeIdx, isExport: fn.isExport, line: fn.line, column: fn.column)
+
+		// Reset per-function state
 		nextValueId = 0
 		nextBlockId = 0
 		scopes = ScopeArray{}
 		currentScopeIdx = -1
-
-		// Push function scope
 		pushScope()
 
-		// Process parameters
-		for param in fn.params 'paramLoop'
-			let paramTypeIdx = resolveTypeRef(param.typeRef)
-			let hirParam = HirParam{name: param.name, typeIdx: paramTypeIdx, line: param.line, column: param.column}
-			currentFunction.params.push(hirParam)
-
-			// Allocate parameter value and add to scope
-			let valueId = freshValue()
-			addLocal(param.name, valueId: valueId)
-
-			// Add symbol for LSP
-			let sym = HirSymbol{name: param.name, kind: "parameter", typeIdx: paramTypeIdx, definitionLine: param.line, definitionColumn: param.column, isExport: false}
-			module.addSymbol(sym)
-		end 'paramLoop'
-
-		// Create entry block
+		// Entry block
 		currentBlock = HirBlock.create(freshBlockId(), name: "entry")
 
 		// Lower body statements
 		var i = fn.bodyStart
-		let bodyEnd = fn.bodyStart + fn.bodyCount
-		while i < bodyEnd 'bodyLoop'
+		let endIdx = fn.bodyStart + fn.bodyCount
+		while i < endIdx 'bodyLoop'
 			let stmt = program.getStmt(i)
 			if not stmt.hasError 'noError'
 				lowerStatement(stmt)
@@ -128,13 +113,11 @@ export type AstToHir
 			i = i + 1
 		end 'bodyLoop'
 
-		// Finalize current block
+		// Add the final block (control-flow lowering may have already added earlier blocks)
 		currentFunction.addBlock(currentBlock)
-
-		// Pop function scope
-		popScope()
-
 		module.functions.push(currentFunction)
+
+		popScope()
 	end 'lowerFunction'
 
 	/// Lower a statement

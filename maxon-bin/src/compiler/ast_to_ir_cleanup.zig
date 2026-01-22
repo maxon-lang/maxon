@@ -720,6 +720,47 @@ fn cleanupStructFields(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const
     }
 }
 
+// ============================================================================
+// Struct Incref (for returning self fields)
+// ============================================================================
+
+/// Recursively incref all managed buffers in a struct.
+/// This is the inverse of cleanupStructFields - used when returning a self field
+/// to prevent double-free (the returned value gets its own reference).
+pub fn increfStruct(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types.StructTypeInfo, tag: []const u8) ConvertError!void {
+    debug.astToIr("increfStruct called for struct '{s}' with tag '{s}', has_managed_buffer={}, needs_cleanup={}\n", .{ struct_info.name, tag, struct_info.has_managed_buffer, struct_info.needs_cleanup });
+    // If struct has its own managed buffer (String, Array), incref it
+    if (struct_info.has_managed_buffer) {
+        const managed_ptr = try array_helpers.getManagedMemoryPtr(self, struct_ptr, struct_info.managed_buffer_offset);
+        try array_helpers.emitManagedMemoryIncref(self, managed_ptr, tag);
+    }
+
+    // Recursively incref fields with managed buffers
+    try increfStructFields(self, struct_ptr, struct_info, tag);
+}
+
+/// Recursively incref struct fields that have needs_cleanup = true.
+fn increfStructFields(self: *AstToIr, struct_ptr: ir.Value, struct_info: *const types.StructTypeInfo, tag: []const u8) ConvertError!void {
+    debug.astToIr("increfStructFields: struct '{s}' has {} fields\n", .{ struct_info.name, struct_info.fields.len });
+    for (struct_info.fields, 0..) |field, i| {
+        const fc = if (field.value_type == .struct_type) field.value_type.struct_type.needs_cleanup else false;
+        debug.astToIr("  field[{}]: '{s}', type={s}, needs_cleanup={}\n", .{ i, field.name, @tagName(field.value_type), fc });
+        if (field.value_type == .struct_type) {
+            const field_struct_info = field.value_type.struct_type;
+
+            if (field_struct_info.needs_cleanup) {
+                debug.astToIr("increfStructFields: incref field '{s}' of type '{s}'", .{ field.name, field_struct_info.name });
+
+                // Get pointer to the field
+                const field_ptr = try self.func().emitGetFieldPtr(ir.toStructPtr(struct_ptr), field.offset);
+
+                // Recursively incref the field
+                try increfStruct(self, field_ptr.raw(), field_struct_info, tag);
+            }
+        }
+    }
+}
+
 /// Free all heap variables in the current scope.
 pub fn freeHeapVars(self: *AstToIr, exclude_vars: ?*std.StringHashMapUnmanaged(OwnershipState)) !void {
     // Borrow checking: first clear borrows from slice variables that are going out of scope

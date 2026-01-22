@@ -449,3 +449,69 @@ Moves:     9
 Increfs:   3
 Decrefs:   3
 ```
+
+<!-- test: complex-nested-struct-cleanup -->
+<!-- TrackMemory: true -->
+Test cleanup of deeply nested structs with multiple managed fields at function return.
+
+```maxon
+enum MyError is Error
+    failed
+end 'MyError'
+
+typealias IntArray is Array with int
+typealias StringArray is Array with String
+
+type Inner
+    export var name String
+    export var values IntArray
+end 'Inner'
+
+type Outer
+    export var label String
+    export var inner Inner
+    export var tags StringArray
+end 'Outer'
+
+function createOuter() returns Outer
+    var inner = Inner{name: "test", values: IntArray{}}
+    inner.values.push(1)
+    inner.values.push(2)
+    var outer = Outer{label: "outer", inner: inner, tags: StringArray{}}
+    outer.tags.push("tag1")
+    outer.tags.push("tag2")
+    return outer
+end 'createOuter'
+
+function main() returns int
+    var outer = createOuter()
+    return try outer.inner.values.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+MOVE: managed
+ALLOC #1: 40 bytes (array grow)
+INCREF: array grow -> rc=1
+MOVE: managed
+MOVE: inner
+MOVE: managed
+ALLOC #2: 168 bytes (array grow)
+INCREF: array grow -> rc=1
+MOVE: managed
+MOVE: outer
+DECREF: outer -> rc=0
+FREE #1: 40 bytes (array cleanup)
+DECREF: outer -> rc=0
+FREE #2: 168 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 208 bytes
+Freed:     208 bytes
+Leaked:    0 bytes
+Moves:     6
+Increfs:   2
+Decrefs:   2
+```

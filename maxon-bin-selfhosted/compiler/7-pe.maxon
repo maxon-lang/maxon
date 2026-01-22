@@ -75,6 +75,15 @@ export type PEWriter
 		end 'tryMain'
 	end 'setCodeGenResult'
 
+	/// Set code and data directly (used when entry point is known)
+	export function setCodeAndData(codeIn ByteArray, dataIn ByteArray, entryPointIn int, hasEntryPointIn bool)
+		code = codeIn
+		data = dataIn
+		if hasEntryPointIn 'hasEntry'
+			entryPoint = entryPointIn
+		end 'hasEntry'
+	end 'setCodeAndData'
+
 	/// Write complete PE file
 	export function write() returns ByteArray
 		var output = ByteArray{}
@@ -132,6 +141,68 @@ export type PEWriter
 
 		return output
 	end 'write'
+
+	/// Write complete PE file directly to disk
+	export function writeToFile(path String) returns bool
+		var output = ByteArray{}
+
+		// Calculate section sizes and offsets
+		let headerSize = 0x200  // DOS header + PE headers + section headers
+		let textRva = sectionAlignment
+		let textSize = alignUp(code.count(), fileAlignment)
+
+		// Only include rdata section if we have data
+		let hasRdata = data.count() > 0
+		var numSections = 1
+		var rdataRva = 0
+		var rdataSize = 0
+		if hasRdata 'calcRdata'
+			numSections = 2
+			rdataRva = alignUp(textRva + code.count(), sectionAlignment)
+			rdataSize = alignUp(data.count(), fileAlignment)
+		end 'calcRdata'
+
+		// DOS Header
+		writeDosHeader(output)
+
+		// PE Signature
+		writeU32(PE_MAGIC, output: output)
+
+		// COFF File Header
+		writeCoffHeader(numSections, output: output)
+
+		// Optional Header (PE32+)
+		writeOptionalHeader(textRva, textSize: code.count(), rdataRva: rdataRva, rdataSize: data.count(), output: output)
+
+		// Section Headers
+		writeSectionHeader(".text", virtualSize: code.count(), virtualAddress: textRva, rawSize: textSize, rawOffset: headerSize, characteristics: TEXT_SECTION_CHARACTERISTICS, output: output)
+		if hasRdata 'writeRdataHeader'
+			writeSectionHeader(".rdata", virtualSize: data.count(), virtualAddress: rdataRva, rawSize: rdataSize, rawOffset: headerSize + textSize, characteristics: RDATA_SECTION_CHARACTERISTICS, output: output)
+		end 'writeRdataHeader'
+
+		// Pad to file alignment
+		padToAlignment(fileAlignment, output: output)
+
+		// .text section
+		for b in code 'copyCode'
+			output.push(b)
+		end 'copyCode'
+		padToAlignment(fileAlignment, output: output)
+
+		// .rdata section (only if we have data)
+		if hasRdata 'writeRdataData'
+			for b in data 'copyData'
+				output.push(b)
+			end 'copyData'
+			padToAlignment(fileAlignment, output: output)
+		end 'writeRdataData'
+
+		if let _ = try File.writeBinary(path, content: output) 'writeOk'
+			return true
+		end 'writeOk' else 'writeFail'
+			return false
+		end 'writeFail'
+	end 'writeToFile'
 
 	/// Write DOS header stub
 	function writeDosHeader(output ByteArray)

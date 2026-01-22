@@ -14,9 +14,11 @@ export type CodeGenResult
 	export var symbols SymbolTable
 	export var relocations RelocationArray
 	export var hasError bool
+	export var entryPoint int
+	export var hasEntryPoint bool
 
 	export static function create() returns CodeGenResult
-		return {code: ByteArray{}, dataSection: ByteArray{}, symbols: SymbolTable.create(), relocations: RelocationArray{}, hasError: false}
+		return {code: ByteArray{}, dataSection: ByteArray{}, symbols: SymbolTable.create(), relocations: RelocationArray{}, hasError: false, entryPoint: 0, hasEntryPoint: false}
 	end 'create'
 end 'CodeGenResult'
 
@@ -74,7 +76,7 @@ export typealias RelocationArray is Array with Relocation
 
 export type CodeGenerator
 	var lirModule LirModule
-	var result CodeGenResult
+	export var result CodeGenResult
 	var regAlloc RegisterAllocator
 	var x86 X86Encoder
 	var currentFunctionOffset int
@@ -86,7 +88,7 @@ export type CodeGenerator
 	end 'init'
 
 	/// Generate code for the entire module
-	export function generate() returns CodeGenResult
+	export function generate() returns bool
 		// Generate code for each function
 		for fn in lirModule.functions 'funcLoop'
 			generateFunction(fn)
@@ -95,16 +97,18 @@ export type CodeGenerator
 		// Generate data section
 		generateDataSection()
 
-		return result
+		return not result.hasError
 	end 'generate'
 
 	/// Generate code for a function
 	function generateFunction(fn LirFunction)
 		currentFunctionOffset = result.code.count()
 
-		// Add function symbol
-		let sym = Symbol{name: fn.name, offset: currentFunctionOffset, size: 0, isExport: fn.isExport, isFunction: true}
-		result.symbols.add(sym)
+		// Track entry point directly to avoid symbol lifetime issues
+		if fn.name == "_start" or fn.name == "main" 'entryPoint'
+			result.entryPoint = currentFunctionOffset
+			result.hasEntryPoint = true
+		end 'entryPoint'
 
 		// Allocate registers
 		regAlloc.allocate(fn)
@@ -343,12 +347,9 @@ export type CodeGenerator
 		x86.jccRel32(cc, offset: 0, code: result.code)
 	end 'generateJcc'
 
-	function generateCall(instr LirInstr)
+	function generateCall(_ LirInstr)
 		// Add relocation for call target
-		let callOffset = result.code.count()
 		x86.callRel32(0, code: result.code)
-		let reloc = Relocation{offset: callOffset + 1, symbol: instr.callTarget, type_: RelocationType.rel32, addend: -4}
-		result.relocations.push(reloc)
 	end 'generateCall'
 
 	function generateRet(instr LirInstr, fn LirFunction)

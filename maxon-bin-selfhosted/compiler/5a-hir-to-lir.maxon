@@ -28,11 +28,10 @@ export type HirToLir
 		let numFuncs = hirModule.functions.count()
 		var fi = 0
 		while fi < numFuncs 'funcLoop'
-			if let fn = try hirModule.functions.get(fi) 'gotFunc'
-				if not fn.hasError 'noError'
-					lowerFunction(fn)
-				end 'noError'
-			end 'gotFunc'
+			let fn = try hirModule.functions.get(fi) otherwise HirFunction.create("error", returnTypeIdx: 0, isExport: false, line: 0, column: 0)
+			if not fn.hasError 'noError'
+				lowerFunction(fn)
+			end 'noError'
 			fi = fi + 1
 		end 'funcLoop'
 
@@ -82,8 +81,9 @@ export type HirToLir
 		let numInstrs = block.instructions.count()
 		var i = 0
 		while i < numInstrs 'instrLoop'
-			let instr = try block.instructions.get(i) otherwise HirInstr{}
-			lowerInstruction(instr)
+			if let instr = try block.instructions.get(i) 'hasInstr'
+				lowerInstruction(instr)
+			end 'hasInstr'
 			i = i + 1
 		end 'instrLoop'
 
