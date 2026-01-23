@@ -13,6 +13,7 @@ public class CodeGenerator {
 	private static readonly Reg R1 = Reg.R10;
 	private static readonly Reg R2 = Reg.R11;
 
+
 	public byte[] Generate(LirModule module) {
 		_strings.AddRange(module.Strings);
 
