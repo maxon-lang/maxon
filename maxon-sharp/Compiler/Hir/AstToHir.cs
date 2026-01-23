@@ -4,58 +4,886 @@ namespace MaxonSharp.Hir;
 
 public class AstToHir {
 	private int _nextValueId;
+	private int _nextLabelId;
+	private readonly Dictionary<string, HirValue> _variableSlots = new(); // Maps var name to its stack slot pointer
+	private readonly Dictionary<string, HirType> _variableTypes = new();
+	private readonly Dictionary<string, HirStructDef> _structs = new();
+	private readonly Dictionary<string, HirEnumDef> _enums = new();
+	private readonly Dictionary<string, (int ParamIndex, HirType Type)> _params = new();
+	private readonly Dictionary<string, HirType> _functionReturnTypes = new(); // Function name -> return type
+	private string? _currentFunctionName;
+	private HirType? _currentReturnType;
+	private string? _currentTypeName; // For resolving implicit field accesses
 
 	public HirModule Lower(ProgramAst program) {
+		var structs = new List<HirStructDef>();
+		var enums = new List<HirEnumDef>();
+		var globals = new List<HirGlobalVar>();
 		var functions = new List<HirFunction>();
+
+		// First pass: collect struct and enum definitions
+		foreach (var type in program.Types) {
+			var structDef = LowerTypeDecl(type);
+			structs.Add(structDef);
+			_structs[type.Name] = structDef;
+		}
+
+		foreach (var enumDecl in program.Enums) {
+			var enumDef = LowerEnumDecl(enumDecl);
+			enums.Add(enumDef);
+			_enums[enumDecl.Name] = enumDef;
+		}
+
+		// Second pass: collect function signatures (return types)
+		foreach (var func in program.Functions) {
+			_functionReturnTypes[func.Name] = LowerType(func.ReturnType);
+		}
+		foreach (var type in program.Types) {
+			foreach (var method in type.Methods) {
+				var funcName = $"{type.Name}.{method.Name}";
+				_functionReturnTypes[funcName] = LowerType(method.ReturnType);
+			}
+		}
+
+		// Collect global constants and variables
+		foreach (var gc in program.GlobalConstants) {
+			var type = InferExprType(gc.Value);
+			globals.Add(new HirGlobalVar(gc.Name, type, null));
+		}
+		foreach (var gv in program.GlobalVariables) {
+			var type = InferExprType(gv.Value);
+			globals.Add(new HirGlobalVar(gv.Name, type, null));
+		}
+
+		// Lower functions
 		foreach (var func in program.Functions) {
 			functions.Add(LowerFunction(func));
 		}
-		return new HirModule(functions);
+
+		// Lower methods from types
+		foreach (var type in program.Types) {
+			foreach (var method in type.Methods) {
+				functions.Add(LowerMethod(type.Name, method));
+			}
+		}
+
+		return new HirModule(structs, enums, globals, functions);
+	}
+
+	private HirStructDef LowerTypeDecl(TypeDecl type) {
+		var fields = new List<HirStructField>();
+		var offset = 0;
+
+		foreach (var field in type.Fields) {
+			var fieldType = LowerType(field.Type);
+			fields.Add(new HirStructField(field.Name, fieldType, offset));
+			offset += fieldType.SizeInBytes;
+		}
+
+		return new HirStructDef(type.Name, fields);
+	}
+
+	private HirEnumDef LowerEnumDecl(EnumDecl enumDecl) {
+		var variants = new List<HirEnumVariant>();
+		var maxPayloadSize = 0;
+		var tag = 0;
+
+		foreach (var member in enumDecl.Members) {
+			var payloadFields = new List<HirStructField>();
+			var payloadOffset = 0;
+
+			foreach (var assoc in member.AssociatedValues) {
+				var fieldType = LowerType(assoc.Type);
+				payloadFields.Add(new HirStructField(assoc.Name, fieldType, payloadOffset));
+				payloadOffset += fieldType.SizeInBytes;
+			}
+
+			variants.Add(new HirEnumVariant(member.Name, tag++, payloadFields));
+			maxPayloadSize = Math.Max(maxPayloadSize, payloadOffset);
+		}
+
+		return new HirEnumDef(enumDecl.Name, variants, 4, maxPayloadSize);
 	}
 
 	private HirFunction LowerFunction(FunctionDecl func) {
 		_nextValueId = 0;
+		_nextLabelId = 0;
+		_variableSlots.Clear();
+		_variableTypes.Clear();
+		_params.Clear();
+		_currentFunctionName = func.Name;
+		_currentReturnType = LowerType(func.ReturnType);
+		_currentTypeName = null; // No implicit field access in top-level functions
 
-		var returnType = LowerType(func.ReturnType);
-		var instructions = new List<HirInstr>();
+		var parameters = new List<HirParam2>();
+		var entryInstrs = new List<HirInstr>();
 
-		foreach (var stmt in func.Body) {
-			LowerStatement(stmt, instructions);
+		// Lower parameters - allocate slots and store param values
+		for (var i = 0; i < func.Params.Count; i++) {
+			var param = func.Params[i];
+			var paramType = LowerType(param.Type);
+			parameters.Add(new HirParam2(param.Name, paramType));
+
+			var paramValue = NewValue();
+			entryInstrs.Add(new HirParam(paramValue, i, paramType));
+
+			// Allocate slot and store parameter
+			var slotPtr = NewValue();
+			entryInstrs.Add(new HirAlloca(slotPtr, paramType));
+			entryInstrs.Add(new HirStore(slotPtr, paramValue));
+			_variableSlots[param.Name] = slotPtr;
+			_variableTypes[param.Name] = paramType;
+			_params[param.Name] = (i, paramType);
 		}
 
-		var entryBlock = new HirBlock("entry", instructions);
-		return new HirFunction(func.Name, returnType, [entryBlock]);
+		// Lower body
+		var blocks = new List<HirBlock>();
+		LowerStatements(func.Body, entryInstrs);
+
+		// Ensure we have a return
+		if (entryInstrs.Count == 0 || entryInstrs[^1] is not HirRet) {
+			if (_currentReturnType is HirVoidType) {
+				entryInstrs.Add(new HirRet(null));
+			}
+		}
+
+		blocks.Add(new HirBlock("entry", entryInstrs));
+
+		return new HirFunction(func.Name, func.IsExport, parameters, _currentReturnType, blocks);
+	}
+
+	private HirFunction LowerMethod(string typeName, MethodDecl method) {
+		_nextValueId = 0;
+		_nextLabelId = 0;
+		_variableSlots.Clear();
+		_variableTypes.Clear();
+		_params.Clear();
+		_currentFunctionName = $"{typeName}.{method.Name}";
+		_currentReturnType = LowerType(method.ReturnType);
+		_currentTypeName = method.IsStatic ? null : typeName; // Track type for implicit field access
+
+		var parameters = new List<HirParam2>();
+		var entryInstrs = new List<HirInstr>();
+
+		// Add implicit 'self' parameter for instance methods
+		var paramIndex = 0;
+		if (!method.IsStatic) {
+			var selfType = new HirPtrType();
+			parameters.Add(new HirParam2("self", selfType));
+			var selfValue = NewValue();
+			entryInstrs.Add(new HirParam(selfValue, paramIndex++, selfType));
+
+			// Allocate slot for self
+			var selfSlot = NewValue();
+			entryInstrs.Add(new HirAlloca(selfSlot, selfType));
+			entryInstrs.Add(new HirStore(selfSlot, selfValue));
+			_variableSlots["self"] = selfSlot;
+			_variableTypes["self"] = selfType;
+		}
+
+		// Lower parameters
+		for (var i = 0; i < method.Params.Count; i++) {
+			var param = method.Params[i];
+			var paramType = LowerType(param.Type);
+			parameters.Add(new HirParam2(param.Name, paramType));
+
+			var paramValue = NewValue();
+			entryInstrs.Add(new HirParam(paramValue, paramIndex++, paramType));
+
+			// Allocate slot and store parameter
+			var slotPtr = NewValue();
+			entryInstrs.Add(new HirAlloca(slotPtr, paramType));
+			entryInstrs.Add(new HirStore(slotPtr, paramValue));
+			_variableSlots[param.Name] = slotPtr;
+			_variableTypes[param.Name] = paramType;
+			_params[param.Name] = (paramIndex - 1, paramType);
+		}
+
+		// Lower body
+		LowerStatements(method.Body, entryInstrs);
+
+		// Ensure we have a return
+		if (entryInstrs.Count == 0 || entryInstrs[^1] is not HirRet) {
+			if (_currentReturnType is HirVoidType) {
+				entryInstrs.Add(new HirRet(null));
+			}
+		}
+
+		var blocks = new List<HirBlock> { new("entry", entryInstrs) };
+
+		return new HirFunction(_currentFunctionName, method.IsExport, parameters, _currentReturnType, blocks);
+	}
+
+	private void LowerStatements(List<Stmt> statements, List<HirInstr> instructions) {
+		foreach (var stmt in statements) {
+			LowerStatement(stmt, instructions);
+		}
 	}
 
 	private void LowerStatement(Stmt stmt, List<HirInstr> instructions) {
 		switch (stmt) {
 			case ReturnStmt ret:
-				HirValue? value = null;
+				HirValue? retValue = null;
 				if (ret.Value != null) {
-					value = LowerExpression(ret.Value, instructions);
+					retValue = LowerExpression(ret.Value, instructions);
 				}
-				instructions.Add(new HirRet(value));
+				instructions.Add(new HirRet(retValue));
 				break;
+
+			case LetDeclStmt letDecl:
+			case VarDeclStmt varDecl: {
+					var name = stmt is LetDeclStmt l ? l.Name : ((VarDeclStmt)stmt).Name;
+					var value = stmt is LetDeclStmt ld ? ld.Value : ((VarDeclStmt)stmt).Value;
+
+					var exprValue = LowerExpression(value, instructions);
+					var inferredType = InferExprType(value);
+					_variableTypes[name] = inferredType;
+
+					// Allocate stack slot for variable
+					var slotPtr = NewValue();
+					instructions.Add(new HirAlloca(slotPtr, inferredType));
+					_variableSlots[name] = slotPtr;
+
+					// Store initial value
+					instructions.Add(new HirStore(slotPtr, exprValue));
+					break;
+				}
+
+			case AssignStmt assign: {
+					var value = LowerExpression(assign.Value, instructions);
+					if (_variableSlots.TryGetValue(assign.Target, out var slotPtr)) {
+						instructions.Add(new HirStore(slotPtr, value));
+					} else {
+						throw new Exception($"Unknown variable: {assign.Target}");
+					}
+					break;
+				}
+
+			case FieldAssignStmt fieldAssign: {
+					var basePtr = LowerExpression(fieldAssign.Base, instructions);
+					var value = LowerExpression(fieldAssign.Value, instructions);
+					var offset = GetFieldOffset(fieldAssign.Base, fieldAssign.FieldName);
+					var fieldPtr = NewValue();
+					instructions.Add(new HirGetFieldPtr(fieldPtr, basePtr, fieldAssign.FieldName, offset));
+					instructions.Add(new HirStore(fieldPtr, value));
+					break;
+				}
+
+			case ExprStmt exprStmt:
+				LowerExpression(exprStmt.Expression, instructions);
+				break;
+
+			case IfStmt ifStmt: {
+					var thenLabel = NewLabel("then");
+					var elseLabel = NewLabel("else");
+					var endLabel = NewLabel("endif");
+
+					var cond = LowerExpression(ifStmt.Condition, instructions);
+					instructions.Add(new HirBrCond(cond, thenLabel, ifStmt.ElseBody != null ? elseLabel : endLabel));
+
+					instructions.Add(new HirLabel(thenLabel));
+					LowerStatements(ifStmt.ThenBody, instructions);
+					instructions.Add(new HirBr(endLabel));
+
+					if (ifStmt.ElseBody != null) {
+						instructions.Add(new HirLabel(elseLabel));
+						LowerStatements(ifStmt.ElseBody, instructions);
+						instructions.Add(new HirBr(endLabel));
+					}
+
+					instructions.Add(new HirLabel(endLabel));
+					break;
+				}
+
+			case WhileStmt whileStmt: {
+					var condLabel = NewLabel("while_cond");
+					var bodyLabel = NewLabel("while_body");
+					var endLabel = NewLabel("while_end");
+
+					instructions.Add(new HirBr(condLabel));
+					instructions.Add(new HirLabel(condLabel));
+
+					var cond = LowerExpression(whileStmt.Condition, instructions);
+					instructions.Add(new HirBrCond(cond, bodyLabel, endLabel));
+
+					instructions.Add(new HirLabel(bodyLabel));
+					LowerStatements(whileStmt.Body, instructions);
+					instructions.Add(new HirBr(condLabel));
+
+					instructions.Add(new HirLabel(endLabel));
+					break;
+				}
+
+			case ForStmt forStmt: {
+					// Lower for loop to while loop with counter
+					var startLabel = NewLabel("for_start");
+					var bodyLabel = NewLabel("for_body");
+					var endLabel = NewLabel("for_end");
+
+					// Get range bounds from RangeExpr
+					HirValue startVal, endVal;
+					bool inclusive;
+					if (forStmt.Iterable is RangeExpr rangeExpr) {
+						startVal = LowerExpression(rangeExpr.Start, instructions);
+						endVal = LowerExpression(rangeExpr.End, instructions);
+						inclusive = rangeExpr.Inclusive;
+					} else {
+						throw new Exception($"For loop iterable must be a range expression (start..end), got {forStmt.Iterable.GetType().Name}");
+					}
+
+					// Allocate slot for loop variable and store initial value
+					var loopVarSlot = NewValue();
+					instructions.Add(new HirAlloca(loopVarSlot, new HirIntType()));
+					instructions.Add(new HirStore(loopVarSlot, startVal));
+					_variableSlots[forStmt.VarName] = loopVarSlot;
+					_variableTypes[forStmt.VarName] = new HirIntType();
+
+					// Store end value in a slot so it's stable across loop iterations
+					var endValSlot = NewValue();
+					instructions.Add(new HirAlloca(endValSlot, new HirIntType()));
+					instructions.Add(new HirStore(endValSlot, endVal));
+
+					instructions.Add(new HirBr(startLabel));
+					instructions.Add(new HirLabel(startLabel));
+
+					// Load current i value
+					var currentI = NewValue();
+					instructions.Add(new HirLoad(currentI, loopVarSlot, new HirIntType()));
+
+					// Load end value
+					var currentEnd = NewValue();
+					instructions.Add(new HirLoad(currentEnd, endValSlot, new HirIntType()));
+
+					// Check condition: i < end (exclusive) or i <= end (inclusive)
+					var condResult = NewValue();
+					if (inclusive) {
+						instructions.Add(new HirCmpLe(condResult, currentI, currentEnd));
+					} else {
+						instructions.Add(new HirCmpLt(condResult, currentI, currentEnd));
+					}
+					instructions.Add(new HirBrCond(condResult, bodyLabel, endLabel));
+
+					instructions.Add(new HirLabel(bodyLabel));
+					LowerStatements(forStmt.Body, instructions);
+
+					// Increment: i = i + 1
+					var currentIForIncr = NewValue();
+					instructions.Add(new HirLoad(currentIForIncr, loopVarSlot, new HirIntType()));
+					var one = NewValue();
+					instructions.Add(new HirConstInt(one, 1));
+					var nextI = NewValue();
+					instructions.Add(new HirAdd(nextI, currentIForIncr, one));
+					instructions.Add(new HirStore(loopVarSlot, nextI));
+
+					instructions.Add(new HirBr(startLabel));
+					instructions.Add(new HirLabel(endLabel));
+					break;
+				}
+
+			case MatchStmt matchStmt: {
+					var matchId = _nextLabelId++;
+					var endLabel = $"match_{matchId}_end";
+					var scrutinee = LowerExpression(matchStmt.Scrutinee, instructions);
+
+					// Pre-generate all labels for consistent naming
+					var caseLabels = new List<string>();
+					var checkLabels = new List<string>();
+					for (var i = 0; i < matchStmt.Cases.Count; i++) {
+						caseLabels.Add($"match_{matchId}_case_{i}");
+						checkLabels.Add($"match_{matchId}_check_{i}");
+					}
+					var defaultLabel = $"match_{matchId}_default";
+
+					for (var i = 0; i < matchStmt.Cases.Count; i++) {
+						var matchCase = matchStmt.Cases[i];
+						var caseLabel = caseLabels[i];
+						var nextLabel = i < matchStmt.Cases.Count - 1 ? checkLabels[i + 1] : (matchStmt.DefaultBody != null ? defaultLabel : endLabel);
+
+						// Emit check label for this case (except first which starts immediately)
+						instructions.Add(new HirLabel(checkLabels[i]));
+
+						// Check pattern (simplified: just check tag for enums)
+						var pattern = matchCase.Patterns[0];
+						if (pattern is IdentifierExpr { Name: var caseName }) {
+							// Assume enum case - compare tag
+							var tagPtr = NewValue();
+							instructions.Add(new HirGetFieldPtr(tagPtr, scrutinee, "_tag", 0));
+							var tag = NewValue();
+							instructions.Add(new HirLoad(tag, tagPtr, new HirIntType()));
+
+							// Get expected tag value
+							var enumType = InferExprType(matchStmt.Scrutinee);
+							var expectedTag = GetEnumTag(enumType, caseName);
+							var expectedVal = NewValue();
+							instructions.Add(new HirConstInt(expectedVal, expectedTag));
+
+							var cmp = NewValue();
+							instructions.Add(new HirCmpEq(cmp, tag, expectedVal));
+							instructions.Add(new HirBrCond(cmp, caseLabel, nextLabel));
+						}
+
+						instructions.Add(new HirLabel(caseLabel));
+
+						// Handle pattern bindings
+						var binding = matchCase.PatternBindings[0];
+						if (binding != null) {
+							for (var j = 0; j < binding.Bindings.Count; j++) {
+								var bindingName = binding.Bindings[j];
+								var payloadPtr = NewValue();
+								instructions.Add(new HirGetFieldPtr(payloadPtr, scrutinee, $"_payload_{j}", 4 + j * 8));
+								var payloadVal = NewValue();
+								instructions.Add(new HirLoad(payloadVal, payloadPtr, new HirIntType()));
+
+								// Allocate slot for binding and store value
+								var bindingSlot = NewValue();
+								instructions.Add(new HirAlloca(bindingSlot, new HirIntType()));
+								instructions.Add(new HirStore(bindingSlot, payloadVal));
+								_variableSlots[bindingName] = bindingSlot;
+								_variableTypes[bindingName] = new HirIntType();
+							}
+						}
+
+						LowerStatements(matchCase.Body, instructions);
+						instructions.Add(new HirBr(endLabel));
+					}
+
+					if (matchStmt.DefaultBody != null) {
+						instructions.Add(new HirLabel(defaultLabel));
+						LowerStatements(matchStmt.DefaultBody, instructions);
+						instructions.Add(new HirBr(endLabel));
+					}
+
+					instructions.Add(new HirLabel(endLabel));
+					break;
+				}
 		}
 	}
 
 	private HirValue LowerExpression(Expr expr, List<HirInstr> instructions) {
 		switch (expr) {
-			case IntLiteralExpr intLit:
-				var dest = new HirValue(_nextValueId++);
-				instructions.Add(new HirConstInt(dest, intLit.Value));
-				return dest;
+			case IntLiteralExpr intLit: {
+					var dest = NewValue();
+					instructions.Add(new HirConstInt(dest, intLit.Value));
+					return dest;
+				}
+
+			case FloatLiteralExpr floatLit: {
+					var dest = NewValue();
+					instructions.Add(new HirConstFloat(dest, floatLit.Value));
+					return dest;
+				}
+
+			case BoolLiteralExpr boolLit: {
+					var dest = NewValue();
+					instructions.Add(new HirConstBool(dest, boolLit.Value));
+					return dest;
+				}
+
+			case IdentifierExpr id: {
+					if (_variableSlots.TryGetValue(id.Name, out var slotPtr)) {
+						// Load value from stack slot
+						var varType = _variableTypes.GetValueOrDefault(id.Name, new HirIntType());
+						var dest = NewValue();
+						instructions.Add(new HirLoad(dest, slotPtr, varType));
+						return dest;
+					}
+
+					// Check if it's an implicit field access (inside instance method)
+					if (_currentTypeName != null && _structs.TryGetValue(_currentTypeName, out var structDef)) {
+						var field = structDef.Fields.Find(f => f.FieldName == id.Name);
+						if (field != null && _variableSlots.TryGetValue("self", out var selfSlotPtr)) {
+							// Load self first
+							var selfValue = NewValue();
+							instructions.Add(new HirLoad(selfValue, selfSlotPtr, new HirStructType(_currentTypeName, structDef.Fields)));
+							// Generate self.field access
+							var fieldPtr = NewValue();
+							instructions.Add(new HirGetFieldPtr(fieldPtr, selfValue, id.Name, field.Offset));
+							var dest = NewValue();
+							instructions.Add(new HirLoad(dest, fieldPtr, field.Type));
+							return dest;
+						}
+					}
+
+					throw new Exception($"Unknown variable: {id.Name}");
+				}
+
+			case BinaryExpr binary: {
+					var left = LowerExpression(binary.Left, instructions);
+					var right = LowerExpression(binary.Right, instructions);
+					var dest = NewValue();
+
+					var instr = binary.Op switch {
+						BinaryOp.Add => (HirInstr)new HirAdd(dest, left, right),
+						BinaryOp.Sub => new HirSub(dest, left, right),
+						BinaryOp.Mul => new HirMul(dest, left, right),
+						BinaryOp.Div => new HirDiv(dest, left, right),
+						BinaryOp.Mod => new HirMod(dest, left, right),
+						BinaryOp.Band => new HirBand(dest, left, right),
+						BinaryOp.Bor => new HirBor(dest, left, right),
+						BinaryOp.Bxor => new HirBxor(dest, left, right),
+						BinaryOp.Shl => new HirShl(dest, left, right),
+						BinaryOp.Shr => new HirShr(dest, left, right),
+						_ => throw new Exception($"Unknown binary op: {binary.Op}")
+					};
+					instructions.Add(instr);
+					return dest;
+				}
+
+			case CompareExpr compare: {
+					var left = LowerExpression(compare.Left, instructions);
+					var right = LowerExpression(compare.Right, instructions);
+					var dest = NewValue();
+
+					var instr = compare.Op switch {
+						CompareOp.Eq => (HirInstr)new HirCmpEq(dest, left, right),
+						CompareOp.Ne => new HirCmpNe(dest, left, right),
+						CompareOp.Lt => new HirCmpLt(dest, left, right),
+						CompareOp.Le => new HirCmpLe(dest, left, right),
+						CompareOp.Gt => new HirCmpGt(dest, left, right),
+						CompareOp.Ge => new HirCmpGe(dest, left, right),
+						_ => throw new Exception($"Unknown compare op: {compare.Op}")
+					};
+					instructions.Add(instr);
+					return dest;
+				}
+
+			case LogicalExpr logical: {
+					var left = LowerExpression(logical.Left, instructions);
+					var right = LowerExpression(logical.Right, instructions);
+					var dest = NewValue();
+
+					var instr = logical.Op switch {
+						LogicalOp.And => (HirInstr)new HirLogicalAnd(dest, left, right),
+						LogicalOp.Or => new HirLogicalOr(dest, left, right),
+						_ => throw new Exception($"Unknown logical op: {logical.Op}")
+					};
+					instructions.Add(instr);
+					return dest;
+				}
+
+			case UnaryExpr unary: {
+					var operand = LowerExpression(unary.Operand, instructions);
+					var dest = NewValue();
+
+					var instr = unary.Op switch {
+						UnaryOp.Negate => (HirInstr)new HirNeg(dest, operand),
+						UnaryOp.Not => new HirNot(dest, operand),
+						_ => throw new Exception($"Unknown unary op: {unary.Op}")
+					};
+					instructions.Add(instr);
+					return dest;
+				}
+
+			case CallExpr call: {
+					var args = new List<HirValue>();
+					foreach (var arg in call.Args) {
+						args.Add(LowerExpression(arg, instructions));
+					}
+					foreach (var namedArg in call.NamedArgs) {
+						args.Add(LowerExpression(namedArg.Value, instructions));
+					}
+
+					var retType = GetFunctionReturnType(call.FuncName);
+					HirValue? dest = retType is HirVoidType ? null : NewValue();
+
+					instructions.Add(new HirCall(dest, call.FuncName, args, retType));
+					return dest ?? NewValue();
+				}
+
+			case MethodCallExpr methodCall: {
+					var baseVal = LowerExpression(methodCall.Base, instructions);
+					var args = new List<HirValue> { baseVal };
+
+					foreach (var arg in methodCall.Args) {
+						args.Add(LowerExpression(arg, instructions));
+					}
+					foreach (var namedArg in methodCall.NamedArgs) {
+						args.Add(LowerExpression(namedArg.Value, instructions));
+					}
+
+					var baseType = InferExprType(methodCall.Base);
+					var funcName = $"{baseType.Name}.{methodCall.MethodName}";
+					var retType = GetMethodReturnType(baseType.Name, methodCall.MethodName);
+
+					HirValue? dest = retType is HirVoidType ? null : NewValue();
+					instructions.Add(new HirCall(dest, funcName, args, retType));
+					return dest ?? NewValue();
+				}
+
+			case FieldAccessExpr fieldAccess: {
+					// Check if this is an enum case access: EnumName.case (no args)
+					if (fieldAccess.Base is IdentifierExpr baseId && _enums.TryGetValue(baseId.Name, out var enumDef)) {
+						var variant = enumDef.Variants.Find(v => v.Name == fieldAccess.FieldName)
+							?? throw new Exception($"Unknown enum case: {fieldAccess.FieldName}");
+
+						var enumType = new HirEnumType(baseId.Name, enumDef.TagSize, enumDef.MaxPayloadSize);
+						var ptr = NewValue();
+						instructions.Add(new HirAlloca(ptr, enumType));
+
+						// Store tag
+						var tagVal = NewValue();
+						instructions.Add(new HirConstInt(tagVal, variant.Tag));
+						var tagPtr = NewValue();
+						instructions.Add(new HirGetFieldPtr(tagPtr, ptr, "_tag", 0));
+						instructions.Add(new HirStore(tagPtr, tagVal));
+
+						return ptr;
+					}
+
+					var baseVal = LowerExpression(fieldAccess.Base, instructions);
+					var offset = GetFieldOffset(fieldAccess.Base, fieldAccess.FieldName);
+					var fieldType = GetFieldType(fieldAccess.Base, fieldAccess.FieldName);
+
+					var fieldPtr = NewValue();
+					instructions.Add(new HirGetFieldPtr(fieldPtr, baseVal, fieldAccess.FieldName, offset));
+
+					var dest = NewValue();
+					instructions.Add(new HirLoad(dest, fieldPtr, fieldType));
+					return dest;
+				}
+
+			case StructInitExpr structInit: {
+					var typeName = structInit.TypeName ?? throw new Exception("Anonymous struct init not supported");
+					if (!_structs.TryGetValue(typeName, out var structDef)) {
+						throw new Exception($"Unknown struct type: {typeName}");
+					}
+
+					// Allocate space for struct
+					var structType = new HirStructType(typeName, structDef.Fields);
+					var ptr = NewValue();
+					instructions.Add(new HirAlloca(ptr, structType));
+
+					// Initialize fields
+					foreach (var fieldInit in structInit.Fields) {
+						var field = structDef.Fields.Find(f => f.FieldName == fieldInit.Name)
+							?? throw new Exception($"Unknown field: {fieldInit.Name}");
+
+						var value = LowerExpression(fieldInit.Value, instructions);
+						var fieldPtr = NewValue();
+						instructions.Add(new HirGetFieldPtr(fieldPtr, ptr, fieldInit.Name, field.Offset));
+						instructions.Add(new HirStore(fieldPtr, value));
+					}
+
+					return ptr;
+				}
+
+			case StaticCallExpr staticCall: {
+					// Check if it's an enum case
+					if (_enums.TryGetValue(staticCall.TypeName, out var enumDef)) {
+						var variant = enumDef.Variants.Find(v => v.Name == staticCall.MemberName)
+							?? throw new Exception($"Unknown enum case: {staticCall.MemberName}");
+
+						var enumType = new HirEnumType(staticCall.TypeName, enumDef.TagSize, enumDef.MaxPayloadSize);
+						var ptr = NewValue();
+						instructions.Add(new HirAlloca(ptr, enumType));
+
+						// Store tag
+						var tagVal = NewValue();
+						instructions.Add(new HirConstInt(tagVal, variant.Tag));
+						var tagPtr = NewValue();
+						instructions.Add(new HirGetFieldPtr(tagPtr, ptr, "_tag", 0));
+						instructions.Add(new HirStore(tagPtr, tagVal));
+
+						// Store payload
+						for (var i = 0; i < staticCall.Args.Count; i++) {
+							var argVal = LowerExpression(staticCall.Args[i], instructions);
+							var payloadPtr = NewValue();
+							instructions.Add(new HirGetFieldPtr(payloadPtr, ptr, $"_payload_{i}", enumDef.TagSize + i * 8));
+							instructions.Add(new HirStore(payloadPtr, argVal));
+						}
+
+						return ptr;
+					}
+
+					// Check if TypeName is actually a variable (e.g., p1.add(...) where p1 is a Point)
+					// In that case, treat this as a method call
+					if (_variableTypes.TryGetValue(staticCall.TypeName, out var varType)) {
+						// This is a method call on a variable
+						var baseIdent = new IdentifierExpr(staticCall.TypeName);
+						var baseVal = LowerExpression(baseIdent, instructions);
+						var args = new List<HirValue> { baseVal };
+
+						foreach (var arg in staticCall.Args) {
+							args.Add(LowerExpression(arg, instructions));
+						}
+						foreach (var namedArg in staticCall.NamedArgs) {
+							args.Add(LowerExpression(namedArg.Value, instructions));
+						}
+
+						var funcName = $"{varType.Name}.{staticCall.MemberName}";
+						var retType = GetMethodReturnType(varType.Name, staticCall.MemberName);
+
+						HirValue? dest = retType is HirVoidType ? null : NewValue();
+						instructions.Add(new HirCall(dest, funcName, args, retType));
+						return dest ?? NewValue();
+					}
+
+					// It's a static method call on a type
+					// Use dot notation to match function names (e.g., "Point.create")
+					var funcName2 = $"{staticCall.TypeName}.{staticCall.MemberName}";
+					var result = NewValue();
+
+					// Lower arguments
+					var argVals = new List<HirValue>();
+					foreach (var arg in staticCall.Args) {
+						argVals.Add(LowerExpression(arg, instructions));
+					}
+
+					var returnType = GetFunctionReturnType(funcName2);
+					instructions.Add(new HirCall(result, funcName2, argVals, returnType));
+					return result;
+				}
+
+			case EnumCaseExpr enumCase: {
+					// Create enum value with tag and payload
+					if (!_enums.TryGetValue(enumCase.EnumName, out var enumDef)) {
+						throw new Exception($"Unknown enum: {enumCase.EnumName}");
+					}
+
+					var variant = enumDef.Variants.Find(v => v.Name == enumCase.CaseName)
+						?? throw new Exception($"Unknown enum case: {enumCase.CaseName}");
+
+					var enumType = new HirEnumType(enumCase.EnumName, enumDef.TagSize, enumDef.MaxPayloadSize);
+					var ptr = NewValue();
+					instructions.Add(new HirAlloca(ptr, enumType));
+
+					// Store tag
+					var tagVal = NewValue();
+					instructions.Add(new HirConstInt(tagVal, variant.Tag));
+					var tagPtr = NewValue();
+					instructions.Add(new HirGetFieldPtr(tagPtr, ptr, "_tag", 0));
+					instructions.Add(new HirStore(tagPtr, tagVal));
+
+					// Store payload
+					for (var i = 0; i < enumCase.Args.Count; i++) {
+						var argVal = LowerExpression(enumCase.Args[i], instructions);
+						var payloadPtr = NewValue();
+						instructions.Add(new HirGetFieldPtr(payloadPtr, ptr, $"_payload_{i}", enumDef.TagSize + i * 8));
+						instructions.Add(new HirStore(payloadPtr, argVal));
+					}
+
+					return ptr;
+				}
+
+			case TryExpr tryExpr: {
+					// For now, just lower the inner expression
+					// Real implementation would check for errors
+					var innerVal = LowerExpression(tryExpr.Expression, instructions);
+
+					if (tryExpr.Otherwise != null) {
+						// Generate fallback logic if needed
+						// For simplicity, just return inner value for now
+					}
+
+					return innerVal;
+				}
 
 			default:
 				throw new Exception($"Unsupported expression type: {expr.GetType().Name}");
 		}
 	}
 
-	private static HirType LowerType(TypeRef? typeRef) {
+	private HirType InferExprType(Expr expr) {
+		return expr switch {
+			IntLiteralExpr => new HirIntType(),
+			FloatLiteralExpr => new HirFloatType(),
+			BoolLiteralExpr => new HirBoolType(),
+			CharLiteralExpr => new HirByteType(),
+			IdentifierExpr id => _variableTypes.GetValueOrDefault(id.Name, new HirIntType()),
+			BinaryExpr => new HirIntType(), // Simplified
+			CompareExpr => new HirBoolType(),
+			LogicalExpr => new HirBoolType(),
+			UnaryExpr u => InferExprType(u.Operand),
+			CallExpr call => GetFunctionReturnType(call.FuncName),
+			MethodCallExpr mc => GetMethodReturnType(InferExprType(mc.Base).Name, mc.MethodName),
+			FieldAccessExpr fa => GetFieldType(fa.Base, fa.FieldName),
+			StructInitExpr si => si.TypeName != null && _structs.TryGetValue(si.TypeName, out var sd)
+				? new HirStructType(si.TypeName, sd.Fields)
+				: new HirPtrType(),
+			StaticCallExpr sc => _enums.TryGetValue(sc.TypeName, out var ed)
+				? new HirEnumType(sc.TypeName, ed.TagSize, ed.MaxPayloadSize)
+				: _variableTypes.TryGetValue(sc.TypeName, out var varType)
+					? GetMethodReturnType(varType.Name, sc.MemberName)
+					: GetFunctionReturnType($"{sc.TypeName}.{sc.MemberName}"),
+			EnumCaseExpr ec => _enums.TryGetValue(ec.EnumName, out var ed2)
+				? new HirEnumType(ec.EnumName, ed2.TagSize, ed2.MaxPayloadSize)
+				: new HirPtrType(),
+			TryExpr te => InferExprType(te.Expression),
+			_ => new HirIntType()
+		};
+	}
+
+	private HirType LowerType(TypeRef? typeRef) {
 		return typeRef switch {
-			IntTypeRef => new HirIntType(),
+			SimpleTypeRef { Name: "int" } => new HirIntType(),
+			SimpleTypeRef { Name: "float" } => new HirFloatType(),
+			SimpleTypeRef { Name: "bool" } => new HirBoolType(),
+			SimpleTypeRef { Name: "byte" } => new HirByteType(),
+			SimpleTypeRef { Name: "string" } => new HirPtrType(),
+			SimpleTypeRef { Name: var name } when _structs.ContainsKey(name) =>
+				new HirStructType(name, _structs[name].Fields),
+			SimpleTypeRef { Name: var name } when _enums.ContainsKey(name) =>
+				new HirEnumType(name, _enums[name].TagSize, _enums[name].MaxPayloadSize),
+			SimpleTypeRef { Name: var name } => new HirPtrType(), // Default for unknown types
 			null => new HirVoidType(),
 			_ => throw new Exception($"Unsupported type: {typeRef.GetType().Name}")
 		};
 	}
+
+	private int GetFieldOffset(Expr baseExpr, string fieldName) {
+		var baseType = InferExprType(baseExpr);
+		if (baseType is HirStructType st) {
+			var field = st.Fields.Find(f => f.FieldName == fieldName);
+			return field?.Offset ?? 0;
+		}
+		if (baseType.Name is { } typeName && _structs.TryGetValue(typeName, out var structDef)) {
+			var field = structDef.Fields.Find(f => f.FieldName == fieldName);
+			return field?.Offset ?? 0;
+		}
+		return 0;
+	}
+
+	private HirType GetFieldType(Expr baseExpr, string fieldName) {
+		var baseType = InferExprType(baseExpr);
+		if (baseType is HirStructType st) {
+			var field = st.Fields.Find(f => f.FieldName == fieldName);
+			return field?.Type ?? new HirIntType();
+		}
+		if (baseType.Name is { } typeName && _structs.TryGetValue(typeName, out var structDef)) {
+			var field = structDef.Fields.Find(f => f.FieldName == fieldName);
+			return field?.Type ?? new HirIntType();
+		}
+		return new HirIntType();
+	}
+
+	private HirType GetFunctionReturnType(string funcName) {
+		// Built-in functions
+		if (funcName is "print") return new HirVoidType();
+		// Look up in collected function signatures
+		if (_functionReturnTypes.TryGetValue(funcName, out var retType)) {
+			return retType;
+		}
+		// Default to int for unknown functions
+		return new HirIntType();
+	}
+
+	private HirType GetMethodReturnType(string typeName, string methodName) {
+		var funcName = $"{typeName}.{methodName}";
+		if (_functionReturnTypes.TryGetValue(funcName, out var retType)) {
+			return retType;
+		}
+		// Default to int for unknown methods
+		return new HirIntType();
+	}
+
+	private int GetEnumTag(HirType type, string caseName) {
+		if (type is HirEnumType et && _enums.TryGetValue(et.EnumName, out var enumDef)) {
+			var variant = enumDef.Variants.Find(v => v.Name == caseName);
+			return variant?.Tag ?? 0;
+		}
+		return 0;
+	}
+
+	private HirValue NewValue() => new(_nextValueId++);
+	private string NewLabel(string prefix) => $"{prefix}_{_nextLabelId++}";
 }

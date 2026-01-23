@@ -36,7 +36,7 @@ public class Compiler {
 
 			// Stage 6: Code generation
 			var codeGen = new CodeGenerator();
-			var code = CodeGenerator.Generate(lirModule);
+			var code = codeGen.Generate(lirModule);
 
 			// Stage 7: PE Writer
 			var peWriter = new PeWriter();

@@ -1021,13 +1021,6 @@ for variable in iterable 'label'
 end 'label'
 ```
 
-**Range Iteration:**
-```maxon
-for i in range(0, end: 10) 'loop'
-    print("{i}")
-end 'loop'
-```
-
 **Notes:**
 - Loop variable is immutable (like `let`)
 - Currently supports ranges (`start..end`)
@@ -1875,7 +1868,7 @@ end 'forever'
 ### Array Iteration
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
-for i in range(start: 0, end: numbers.count()) 'iter'
+for i in numbers 'iter'
     var num = try numbers.get(i) otherwise 0
     print("{num}")
 end 'iter'
@@ -1997,13 +1990,6 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
    ```maxon
    var x = 5           // int
    var y = 5.0         // float (note decimal point)
-   ```
-
-6. **Use `for` loops for ranges**:
-   ```maxon
-   for i in range(0, end: 10) 'loop'
-       // i is 0, 1, 2, ..., 9
-   end 'loop'
    ```
 
 7. **Prefer `let` for immutability**:

@@ -95,10 +95,6 @@ continue 'loop'   // labeled continue
 
 ### For (iterator)
 ```maxon
-for i in range(0, end: 10) 'loop'
-    print("{i}")
-end 'loop'
-
 for item in array 'loop' ... end 'loop'
 for char in string 'loop' ... end 'loop'
 ```

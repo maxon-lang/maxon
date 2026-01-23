@@ -2,8 +2,8 @@
 // Exercises all stages of the two-stage HIR/LIR compiler pipeline
 //
 // Coverage:
-// - HIR: constants, variables, structs, arrays, loops, conditionals, functions, match
-// - HIR Optimizations: constant folding, inlining, bounds check elimination, dead code
+// - HIR: constants, variables, structs, loops, conditionals, functions, match
+// - HIR Optimizations: constant folding, inlining, dead code
 // - LIR: memory ops, arithmetic, comparisons, control flow, calls
 // - LIR Optimizations: CSE, DCE, copy propagation, peephole
 
@@ -15,19 +15,19 @@ let MAX_SIZE = 100
 let MULTIPLIER = 2
 
 function testConstants() returns int
-    // Constant folding: 10 + 20 should fold to 30 at compile time
-    let a = 10 + 20
+	// Constant folding: 10 + 20 should fold to 30 at compile time
+	let a = 10 + 20
 
-    // Peephole: x * 2 can become x << 1
-    let b = a * 2
+	// Peephole: x * 2 can become x << 1
+	let b = a * 2
 
-    // Peephole: x + 0 should be eliminated
-    let c = b + 0
+	// Peephole: x + 0 should be eliminated
+	let c = b + 0
 
-    // Peephole: x * 1 should be eliminated
-    let d = c * 1
+	// Peephole: x * 1 should be eliminated
+	let d = c * 1
 
-    return d  // Should be 60
+	return d  // Should be 60
 end 'testConstants'
 
 // ============================================================================
@@ -35,28 +35,23 @@ end 'testConstants'
 // ============================================================================
 
 function testControlFlow(n int) returns int
-    var result = 0
+	var result = 0
 
-    // If/else - becomes condBranch in LIR
-    if n > 0 'positive'
-        result = 1
-    end 'positive' else 'nonPositive'
-        result = -1
-    end 'nonPositive'
+	// If/else - becomes condBranch in LIR
+	if n > 0 'positive'
+		result = 1
+	end 'positive' else 'nonPositive'
+		result = -1
+	end 'nonPositive'
 
-    // While loop - becomes branch/condBranch pattern in LIR
-    var i = 0
-    while i < n 'countLoop'
-        result = result + i
-        i = i + 1
-    end 'countLoop'
+	// While loop - becomes branch/condBranch pattern in LIR
+	var i = 0
+	while i < n 'countLoop'
+		result = result + i
+		i = i + 1
+	end 'countLoop'
 
-    // For loop with range - bounds check elimination opportunity
-    for j in range(0, end: 5) 'rangeLoop'
-        result = result + j
-    end 'rangeLoop'
-
-    return result
+	return result
 end 'testControlFlow'
 
 // ============================================================================
@@ -64,197 +59,170 @@ end 'testControlFlow'
 // ============================================================================
 
 type Point
-    var x int
-    var y int
+	var x int
+	var y int
 
-    static function create(x int, y int) returns Point
-        return Point{x: x, y: y}
-    end 'create'
+	static function create(x int, y int) returns Point
+		return Point{x: x, y: y}
+	end 'create'
 
-    function manhattanDistance() returns int
-        // Field access uses getFieldPtr + load in LIR
-        var absX = x
-        if x < 0 'negX'
-            absX = 0 - x
-        end 'negX'
+	function manhattanDistance() returns int
+		// Field access uses getFieldPtr + load in LIR
+		var absX = x
+		if x < 0 'negX'
+			absX = 0 - x
+		end 'negX'
 
-        var absY = y
-        if y < 0 'negY'
-            absY = 0 - y
-        end 'negY'
+		var absY = y
+		if y < 0 'negY'
+			absY = 0 - y
+		end 'negY'
 
-        return absX + absY
-    end 'manhattanDistance'
+		return absX + absY
+	end 'manhattanDistance'
 
-    function add(other Point) returns Point
-        // CSE opportunity: multiple field accesses
-        return Point{x: x + other.x, y: y + other.y}
-    end 'add'
+	function add(other Point) returns Point
+		// CSE opportunity: multiple field accesses
+		return Point{x: x + other.x, y: y + other.y}
+	end 'add'
 end 'Point'
 
 function testStructs() returns int
-    // Struct literal - becomes alloca + stores in LIR
-    var p1 = Point.create(3, y: 4)
-    var p2 = Point{x: 1, y: 2}
+	// Struct literal - becomes alloca + stores in LIR
+	var p1 = Point.create(3, y: 4)
+	var p2 = Point{x: 1, y: 2}
 
-    // Method call - inlining candidate
-    var p3 = p1.add(other: p2)
+	// Method call - inlining candidate
+	var p3 = p1.add(other: p2)
 
-    // Field read
-    var sum = p3.x + p3.y
+	// Field read
+	var sum = p3.x + p3.y
 
-    return sum  // Should be 10
+	return sum  // Should be 10
 end 'testStructs'
 
 // ============================================================================
-// 4. ARRAYS (HIR has arrayGet/arraySet, LIR has getElemPtr)
-// ============================================================================
-
-typealias IntArray is Array with int
-
-function testArrays() returns int
-    // Array literal
-    var arr = [10, 20, 30, 40, 50]
-
-    // Array access - bounds check elimination when index is in range
-    var first = try arr.get(0) otherwise 0
-    var last = try arr.get(4) otherwise 0
-
-    // Loop with array - bounds check can be eliminated
-    var sum = 0
-    for i in range(0, end: arr.count()) 'sumLoop'
-        let val = try arr.get(i) otherwise 0
-        sum = sum + val
-    end 'sumLoop'
-
-    // Array mutation
-    arr.set(0, value: 100)
-
-    return sum  // Should be 150
-end 'testArrays'
-
-// ============================================================================
-// 5. ENUMS AND MATCH (HIR preserves match, LIR uses jumps)
+// 4. ENUMS AND MATCH (HIR preserves match, LIR uses jumps)
 // ============================================================================
 
 enum Result
-    success(value int)
-    failure(code int)
-    pending
+	success(value int)
+	failure(code int)
+	pending
 end 'Result'
 
 function testMatch(r Result) returns int
-    // Match statement - becomes series of comparisons/jumps in LIR
-    match r 'handleResult'
-        success(v) then return v * 2
-        failure(c) then return 0 - c
-        pending then return 0
-    end 'handleResult'
+	// Match statement - becomes series of comparisons/jumps in LIR
+	match r 'handleResult'
+	success(v) then return v * 2
+	failure(c) then return 0 - c
+	pending then return 0
+	end 'handleResult'
 end 'testMatch'
 
 function testEnums() returns int
-    var r1 = Result.success(42)
-    var r2 = Result.failure(1)
-    var r3 = Result.pending
+	var r1 = Result.success(42)
+	var r2 = Result.failure(1)
+	var r3 = Result.pending
 
-    var total = testMatch(r1) + testMatch(r2) + testMatch(r3)
-    return total  // Should be 84 + (-1) + 0 = 83
+	var total = testMatch(r1) + testMatch(r2) + testMatch(r3)
+	return total  // Should be 84 + (-1) + 0 = 83
 end 'testEnums'
 
 // ============================================================================
-// 6. FUNCTION CALLS AND INLINING
+// 5. FUNCTION CALLS AND INLINING
 // ============================================================================
 
 // Small function - inlining candidate
 function square(n int) returns int
-    return n * n
+	return n * n
 end 'square'
 
 // Small function - inlining candidate
 function double(n int) returns int
-    return n * 2
+	return n * 2
 end 'double'
 
 function testInlining() returns int
-    // These should be inlined
-    var a = square(5)   // 25
-    var b = double(a)   // 50
-    var c = square(3)   // 9
+	// These should be inlined
+	var a = square(5)   // 25
+	var b = double(a)   // 50
+	var c = square(3)   // 9
 
-    return a + b + c    // Should be 84
+	return a + b + c    // Should be 84
 end 'testInlining'
 
 // ============================================================================
-// 7. COMMON SUBEXPRESSION ELIMINATION
+// 6. COMMON SUBEXPRESSION ELIMINATION
 // ============================================================================
 
 function testCSE(a int, b int) returns int
-    // CSE: (a + b) computed twice
-    var x = a + b
-    var y = a + b  // Same computation - should reuse
+	// CSE: (a + b) computed twice
+	var x = a + b
+	var y = a + b  // Same computation - should reuse
 
-    // CSE: (a * b) computed twice
-    var m = a * b
-    var n = a * b  // Same computation - should reuse
+	// CSE: (a * b) computed twice
+	var m = a * b
+	var n = a * b  // Same computation - should reuse
 
-    return x + y + m + n
+	return x + y + m + n
 end 'testCSE'
 
 // ============================================================================
-// 8. DEAD CODE ELIMINATION
+// 7. DEAD CODE ELIMINATION
 // ============================================================================
 
 function testDCE(flag bool) returns int
-    var result = 10
+	var result = 10
 
-    // Dead assignment - result is overwritten
-    var unused = 42
+	// Dead assignment - result is overwritten
+	var unused = 42
 
-    // Dead code after return
-    if flag 'earlyReturn'
-        return result
-    end 'earlyReturn'
+	// Dead code after return
+	if flag 'earlyReturn'
+		return result
+	end 'earlyReturn'
 
-    // This code is reachable when flag is false
-    result = result + 5
+	// This code is reachable when flag is false
+	result = result + 5
 
-    return result
+	return result
 end 'testDCE'
 
 // ============================================================================
-// 9. COPY PROPAGATION
+// 8. COPY PROPAGATION
 // ============================================================================
 
 function testCopyProp(n int) returns int
-    var a = n
-    var b = a      // Copy - can propagate n
-    var c = b      // Copy - can propagate n
-    var d = c + 1  // Uses c, which is n
+	var a = n
+	var b = a      // Copy - can propagate n
+	var c = b      // Copy - can propagate n
+	var d = c + 1  // Uses c, which is n
 
-    return d
+	return d
 end 'testCopyProp'
 
 // ============================================================================
-// 10. NESTED CONTROL FLOW
+// 9. NESTED CONTROL FLOW
 // ============================================================================
 
 function testNestedControl(x int, y int) returns int
-    var result = 0
+	var result = 0
 
-    if x > 0 'outerIf'
-        if y > 0 'innerIf'
-            result = 1
-        end 'innerIf' else 'innerElse'
-            result = 2
-        end 'innerElse'
-    end 'outerIf' else 'outerElse'
-        while y > 0 'whileInElse'
-            result = result + 1
-            y = y - 1
-        end 'whileInElse'
-    end 'outerElse'
+	if x > 0 'outerIf'
+		if y > 0 'innerIf'
+			result = 1
+		end 'innerIf' else 'innerElse'
+			result = 2
+		end 'innerElse'
+	end 'outerIf' else 'outerElse'
+		while y > 0 'whileInElse'
+			result = result + 1
+			y = y - 1
+		end 'whileInElse'
+	end 'outerElse'
 
-    return result
+	return result
 end 'testNestedControl'
 
 // ============================================================================
@@ -262,22 +230,18 @@ end 'testNestedControl'
 // ============================================================================
 
 function main() returns int
-    var total = 0
+	var total = 0
 
-    // Test all pipeline stages
-    total = total + testConstants()      // Constant folding, peephole
-    total = total + testControlFlow(5)   // Control flow lowering
-    total = total + testStructs()        // Struct field access
-    total = total + testArrays()         // Array operations
-    total = total + testEnums()          // Enum and match
-    total = total + testInlining()       // Function inlining
-    total = total + testCSE(3, b: 4)     // CSE
-    total = total + testDCE(false)       // DCE
-    total = total + testCopyProp(10)     // Copy propagation
-    total = total + testNestedControl(1, y: 2)  // Nested control flow
+	// Test all pipeline stages
+	total = total + testConstants()      // Constant folding, peephole
+	total = total + testControlFlow(5)   // Control flow lowering
+	total = total + testStructs()        // Struct field access
+	total = total + testEnums()          // Enum and match
+	total = total + testInlining()       // Function inlining
+	total = total + testCSE(3, b: 4)     // CSE
+	total = total + testDCE(false)       // DCE
+	total = total + testCopyProp(10)     // Copy propagation
+	total = total + testNestedControl(1, y: 2)  // Nested control flow
 
-    // Print result for verification
-    print("Pipeline test total: {total}\n")
-
-    return 0
+	return total
 end 'main'

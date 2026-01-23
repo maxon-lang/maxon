@@ -147,7 +147,7 @@ Code examples in the **Documentation** section can be:
 1. **Illustrative only** - No `output` block, not extracted as tests
    ```markdown
    ```maxon
-   for i in range(0, 5) 'loop'
+   for i in numbers 'loop'
        print(i)
    end 'loop'
    ```

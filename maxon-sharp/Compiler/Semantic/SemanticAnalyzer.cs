@@ -12,7 +12,7 @@ public class SemanticAnalyzer {
 		}
 
 		// Check that main returns int
-		if (mainFunc.ReturnType is not IntTypeRef) {
+		if (mainFunc.ReturnType is not SimpleTypeRef { Name: "int" }) {
 			Console.Error.WriteLine("Error: 'main' function must return int");
 			return false;
 		}
