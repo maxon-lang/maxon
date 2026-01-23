@@ -9798,8 +9798,12 @@ pub const AstToIr = struct {
             }
         }
 
+        // Only transfer ownership for var fields, not let fields
+        // let fields borrow the value (no ownership transfer)
+        if (!dest_is_mutable) return;
+
         // Only error if moving immutable value into mutable field
-        if (!var_info.is_mutable and dest_is_mutable) {
+        if (!var_info.is_mutable) {
             debug.astToIr("cannot move immutable variable '{s}' into mutable field\n", .{var_name});
             self.reportError(.E010, var_name, @src());
             return error.ImmutableMove;

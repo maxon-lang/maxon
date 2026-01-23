@@ -25,24 +25,48 @@ pub const MutationAnalyzer = struct {
     allocator: std.mem.Allocator,
     /// Map: function name -> bitset of mutated parameter indices
     function_mutations: std.StringHashMapUnmanaged(MutatedParams),
+    /// Map: type name -> field info (for checking struct field mutability)
+    type_fields: std.StringHashMapUnmanaged([]const FieldMutability),
 
     const MutatedParams = struct {
         bits: u64, // Supports up to 64 parameters
+    };
+
+    const FieldMutability = struct {
+        name: []const u8,
+        is_mutable: bool,
     };
 
     pub fn init(allocator: std.mem.Allocator) MutationAnalyzer {
         return .{
             .allocator = allocator,
             .function_mutations = .{},
+            .type_fields = .{},
         };
     }
 
     pub fn deinit(self: *MutationAnalyzer) void {
         self.function_mutations.deinit(self.allocator);
+        // Free allocated field arrays
+        var iter = self.type_fields.valueIterator();
+        while (iter.next()) |fields| {
+            self.allocator.free(fields.*);
+        }
+        self.type_fields.deinit(self.allocator);
     }
 
     /// Analyze all functions in the program to determine parameter mutations
     pub fn analyze(self: *MutationAnalyzer, program: ast.Program) !void {
+        // First, collect type field information for struct_init analysis
+        for (program.types) |type_decl| {
+            const fields = try self.allocator.alloc(FieldMutability, type_decl.fields.len);
+            for (type_decl.fields, 0..) |field, i| {
+                fields[i] = .{ .name = field.name, .is_mutable = field.is_mutable };
+            }
+            try self.type_fields.put(self.allocator, type_decl.name, fields);
+        }
+
+        // Then analyze functions
         for (program.functions) |func| {
             try self.analyzeFunction(func);
         }
@@ -60,9 +84,16 @@ pub const MutationAnalyzer = struct {
             try param_indices.put(self.allocator, param.name, idx);
         }
 
+        // Get return type name for inferring anonymous struct literals in return statements
+        const return_type_name: ?[]const u8 = if (func.return_type) |rt| switch (rt.expr) {
+            .simple => |name| name,
+            .generic => |g| g.base_type,
+            else => null,
+        } else null;
+
         // Scan all statements for assignments to parameters
         for (func.body) |stmt| {
-            self.checkStatementForMutation(stmt, &param_indices, &mutated);
+            self.checkStatementForMutation(stmt, &param_indices, &mutated, return_type_name);
         }
 
         try self.function_mutations.put(self.allocator, func.name, mutated);
@@ -73,6 +104,7 @@ pub const MutationAnalyzer = struct {
         stmt: ast.Statement,
         param_indices: *std.StringHashMapUnmanaged(usize),
         mutated: *MutatedParams,
+        return_type_name: ?[]const u8,
     ) void {
         switch (stmt.kind) {
             .assign => |assign| {
@@ -87,12 +119,20 @@ pub const MutationAnalyzer = struct {
                 // Array index assignment - check if base is a parameter
                 self.checkExpressionForParamMutation(idx_assign.base.*, param_indices, mutated);
             },
-            .var_decl, .let_decl => {
-                // Variable declarations don't mutate existing parameters
-                // (they may shadow them, but that's a different concern)
+            .var_decl => |decl| {
+                // Variable declarations may transfer ownership if initializing with struct_init
+                self.checkExpressionForStructFieldMutation(decl.value, param_indices, mutated, null);
             },
-            .@"return" => {
-                // Return statements don't mutate parameters
+            .let_decl => |decl| {
+                // Let declarations may also transfer ownership
+                self.checkExpressionForStructFieldMutation(decl.value, param_indices, mutated, null);
+            },
+            .@"return" => |ret| {
+                // Return statements may contain struct_init that takes ownership
+                // Use the function's return type to infer type of anonymous struct literals
+                if (ret.value) |value| {
+                    self.checkExpressionForStructFieldMutation(value, param_indices, mutated, return_type_name);
+                }
             },
             .call => {
                 // Standalone call statements don't directly mutate parameters
@@ -116,13 +156,13 @@ pub const MutationAnalyzer = struct {
                     switch (child.role) {
                         .primary, .else_clause => {
                             for (child.statements) |body_stmt| {
-                                self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                                self.checkStatementForMutation(body_stmt, param_indices, mutated, return_type_name);
                             }
                         },
                         .else_if => {
                             // child.statements[0] is a nested if_stmt
                             if (child.statements.len > 0) {
-                                self.checkStatementForMutation(child.statements[0], param_indices, mutated);
+                                self.checkStatementForMutation(child.statements[0], param_indices, mutated, return_type_name);
                             }
                         },
                         else => {},
@@ -133,7 +173,7 @@ pub const MutationAnalyzer = struct {
                 // Check mutations inside while loop body
                 for (while_s.children) |child| {
                     for (child.statements) |body_stmt| {
-                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated, return_type_name);
                     }
                 }
             },
@@ -141,7 +181,7 @@ pub const MutationAnalyzer = struct {
                 // Check mutations inside for loop body
                 for (for_s.children) |child| {
                     for (child.statements) |body_stmt| {
-                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated, return_type_name);
                     }
                 }
             },
@@ -159,7 +199,7 @@ pub const MutationAnalyzer = struct {
                 // Check mutations inside match case bodies
                 for (match_s.children) |child| {
                     for (child.statements) |body_stmt| {
-                        self.checkStatementForMutation(body_stmt, param_indices, mutated);
+                        self.checkStatementForMutation(body_stmt, param_indices, mutated, return_type_name);
                     }
                 }
             },
@@ -213,8 +253,9 @@ pub const MutationAnalyzer = struct {
                         self.checkExpressionForParamMutation(default.*, param_indices, mutated);
                     }
                     // Check mutations in otherwise block body
+                    // Note: otherwise blocks can't return the function's return type, so pass null
                     for (otherwise.body) |stmt| {
-                        self.checkStatementForMutation(stmt, param_indices, mutated);
+                        self.checkStatementForMutation(stmt, param_indices, mutated, null);
                     }
                 }
             },
@@ -249,6 +290,62 @@ pub const MutationAnalyzer = struct {
             // Literals and compound expressions cannot be mutation targets
             // Only identifier, field_access, index can be mutated
             .integer, .float_lit, .bool_lit, .string_literal, .char_literal, .unary, .binary, .compare, .logical, .call, .struct_init, .array_literal, .map_literal, .init_from_array, .interpolated_string => {},
+        }
+    }
+
+    /// Check if a struct_init expression moves ownership of any parameters
+    /// by assigning them to mutable (var) fields
+    /// inferred_type: used for anonymous struct literals (e.g., `return {data: s}`)
+    fn checkExpressionForStructFieldMutation(
+        self: *MutationAnalyzer,
+        expr: ast.Expression,
+        param_indices: *std.StringHashMapUnmanaged(usize),
+        mutated: *MutatedParams,
+        inferred_type: ?[]const u8,
+    ) void {
+        switch (expr) {
+            .struct_init => |sinit| {
+                // Look up the type to check field mutability
+                // Use explicit type_name if present, otherwise fall back to inferred type
+                const type_name = sinit.type_name orelse inferred_type orelse return;
+                const fields = self.type_fields.get(type_name) orelse return;
+
+                // Check each field initialization
+                for (sinit.fields) |field_init| {
+                    // Find if this field is mutable
+                    var field_is_mutable = false;
+                    for (fields) |field| {
+                        if (std.mem.eql(u8, field.name, field_init.name)) {
+                            field_is_mutable = field.is_mutable;
+                            break;
+                        }
+                    }
+
+                    // If field is mutable and value is a parameter, mark as mutated
+                    if (field_is_mutable) {
+                        if (field_init.value.* == .identifier) {
+                            const var_name = field_init.value.identifier;
+                            if (param_indices.get(var_name)) |idx| {
+                                if (idx < 64) {
+                                    mutated.bits |= @as(u64, 1) << @intCast(idx);
+                                }
+                            }
+                        }
+                        // Recursively check nested struct_init in field value
+                        self.checkExpressionForStructFieldMutation(field_init.value.*, param_indices, mutated, null);
+                    }
+                }
+            },
+            // Recursively check other expression types that may contain struct_init
+            .call => |c| {
+                for (c.args) |arg| {
+                    self.checkExpressionForStructFieldMutation(arg, param_indices, mutated, null);
+                }
+            },
+            .try_expr => |te| {
+                self.checkExpressionForStructFieldMutation(te.expr.*, param_indices, mutated, inferred_type);
+            },
+            else => {},
         }
     }
 

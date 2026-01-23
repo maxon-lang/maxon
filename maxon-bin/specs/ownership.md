@@ -293,6 +293,71 @@ end 'main'
 error E010: specs/fragments/ownership.error.immutable-to-var-field.1.test:8:5: cannot move from immutable variable: 's'
 ```
 
+<!-- test: error.param-to-var-field-moves -->
+When a parameter is used in a `var` struct field, the caller's variable should be moved.
+```maxon
+type Wrapper
+    var data String
+end 'Wrapper'
+
+function wrap(s String) returns Wrapper
+    return {data: s}
+end 'wrap'
+
+function main() returns int
+    var text = "hello"
+    var w1 = wrap(text)
+    var w2 = wrap(text)
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E008: specs/fragments/ownership.error.param-to-var-field-moves.1.test:13:5: use after move: 'text'
+```
+
+<!-- test: param-to-let-field-borrows -->
+When a parameter is used in a `let` struct field, the caller's variable should be borrowed (no move).
+```maxon
+type Token
+    export let text String
+end 'Token'
+
+function tokenize(s String) returns Token
+    return {text: s}
+end 'tokenize'
+
+function main() returns int
+    var text = "hello"
+    var t1 = tokenize(text)
+    var t2 = tokenize(text)
+    return t1.text.byteLength() + t2.text.byteLength()
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: param-to-var-field-allowed -->
+A single use of parameter in `var` field should work.
+```maxon
+type Wrapper
+    export var data String
+end 'Wrapper'
+
+function wrap(s String) returns Wrapper
+    return {data: s}
+end 'wrap'
+
+function main() returns int
+    var text = "hello"
+    var w = wrap(text)
+    return w.data.byteLength()
+end 'main'
+```
+```exitcode
+5
+```
+
 ## Memory Safety Tests
 
 These tests verify that the borrow checker prevents use-after-free and double-free issues.
