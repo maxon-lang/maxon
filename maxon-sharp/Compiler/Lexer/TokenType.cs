@@ -1,25 +1,24 @@
 namespace MaxonSharp.Lexer;
 
-public enum TokenType
-{
-    // Keywords
-    Function,
-    Returns,
-    Return,
-    End,
-    Int,
+public enum TokenType {
+	// Keywords
+	Function,
+	Returns,
+	Return,
+	End,
+	Int,
 
-    // Literals
-    Identifier,
-    IntegerLiteral,
-    CharacterLiteral,
+	// Literals
+	Identifier,
+	IntegerLiteral,
+	CharacterLiteral,
 
-    // Delimiters
-    LeftParen,
-    RightParen,
-    Newline,
-    Eof,
+	// Delimiters
+	LeftParen,
+	RightParen,
+	Newline,
+	Eof,
 
-    // Special
-    Unknown
+	// Special
+	Unknown
 }
