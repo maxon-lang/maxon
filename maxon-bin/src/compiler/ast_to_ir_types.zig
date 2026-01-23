@@ -579,6 +579,7 @@ pub const FuncInfo = struct {
     is_external: bool = false, // true for external/stdlib functions (param type names are allocated)
     source_module: ?[]const u8 = null, // Module name for disambiguation (e.g., "math" from "math.maxon")
     ir_name: ?[]const u8 = null, // Actual IR function name (for qualified names, this is the unqualified name)
+    mutated_params: u64 = 0, // Bitset of mutated parameter indices (for ownership checking)
 };
 
 /// Pending method info for lazy generation of monomorphized type methods
@@ -609,6 +610,7 @@ pub const ExternalFuncSignature = struct {
     source_module: ?[]const u8 = null, // Module name derived from source_path (for disambiguation)
     param_types: []const ExternalParamType = &.{}, // Parameter types for type checking
     doc_comment: ?[]const u8 = null, // Doc comment (/// or /** */) from source
+    mutated_params: u64 = 0, // Bitset of mutated parameter indices (for ownership checking)
 };
 
 /// External type info - for cross-module compilation

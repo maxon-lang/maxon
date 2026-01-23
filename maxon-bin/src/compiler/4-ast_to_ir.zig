@@ -6109,6 +6109,20 @@ pub const AstToIr = struct {
             // else_block is at index 1 (second popped)
             try deferred.restore(self, 1);
 
+            // Restore ownership states before processing else block.
+            // The else block sees the state as it was before the then block executed,
+            // since only one of then/else actually runs at runtime.
+            var sit = saved_states.iterator();
+            while (sit.next()) |entry| {
+                if (self.var_map.getPtr(entry.key_ptr.*)) |var_info| {
+                    var_info.state = entry.value_ptr.*;
+                    if (entry.value_ptr.* == .owned) {
+                        var_info.moved_to = null;
+                        var_info.moved_line = 0;
+                    }
+                }
+            }
+
             // Check for else-if chain
             if (getElseIf(if_stmt.children)) |else_if| {
                 try self.convertIfStmt(else_if);
@@ -7382,11 +7396,37 @@ pub const AstToIr = struct {
         // body[i]: num_deferred - 1 - (2 * i)
         // check[i] for i >= 1: num_deferred - 1 - (2 * i - 1) = num_deferred - 2 * i
 
+        // Save ownership states before processing cases.
+        // Each case should start with the same ownership state as before the match.
+        var saved_states: std.StringHashMapUnmanaged(types.OwnershipState) = .empty;
+        defer saved_states.deinit(self.allocator);
+        {
+            var it = self.var_map.iterator();
+            while (it.next()) |entry| {
+                try saved_states.put(self.allocator, entry.key_ptr.*, entry.value_ptr.state);
+            }
+        }
+
         var case_idx: usize = 0;
         for (match_stmt.children) |child| {
             if (child.role != .match_case) continue;
             const i = case_idx;
             case_idx += 1;
+
+            // Restore ownership states before processing this case.
+            // Each case sees the state as it was before the match.
+            {
+                var sit = saved_states.iterator();
+                while (sit.next()) |entry| {
+                    if (self.var_map.getPtr(entry.key_ptr.*)) |var_info| {
+                        var_info.state = entry.value_ptr.*;
+                        if (entry.value_ptr.* == .owned) {
+                            var_info.moved_to = null;
+                            var_info.moved_line = 0;
+                        }
+                    }
+                }
+            }
 
             // Save temporary_strings length before pattern comparison
             // Temporaries created during pattern matching must be cleaned up before branching,
@@ -7479,6 +7519,20 @@ pub const AstToIr = struct {
         if (getDefaultCase(match_stmt.children)) |default| {
             try deferred.restore(self, 1); // default is at index 1
             actual_default_idx = @intCast(self.func().blocks.items.len - 1);
+
+            // Restore ownership states for default case
+            {
+                var sit = saved_states.iterator();
+                while (sit.next()) |entry| {
+                    if (self.var_map.getPtr(entry.key_ptr.*)) |var_info| {
+                        var_info.state = entry.value_ptr.*;
+                        if (entry.value_ptr.* == .owned) {
+                            var_info.moved_to = null;
+                            var_info.moved_line = 0;
+                        }
+                    }
+                }
+            }
 
             for (default) |stmt| try self.convertStatement(stmt);
 
@@ -11299,7 +11353,7 @@ pub const AstToIr = struct {
             args[i + arg_offset] = arg_value;
             // Only check ownership for explicitly provided args
             if (resolved_arg == .expr) {
-                try self.checkOwnershipTransfer(call.func_name, arg_expr, i);
+                try self.checkOwnershipTransfer(call.func_name, arg_expr, i, func_info.mutated_params);
             }
         }
 
@@ -11400,6 +11454,11 @@ pub const AstToIr = struct {
             }
 
             args[i + arg_offset] = arg_value;
+
+            // Check ownership transfer for explicitly provided args
+            if (resolved_arg == .expr) {
+                try self.checkOwnershipTransfer(qualified_name, arg_expr, i, func_info.mutated_params);
+            }
         }
 
         // Use ir_name if available (for qualified calls, this is the actual unqualified function name)
@@ -11489,9 +11548,25 @@ pub const AstToIr = struct {
         return .{ .value = result orelse 0, .ty = .{ .primitive = .void } };
     }
 
-    fn checkOwnershipTransfer(self: *AstToIr, func_name: []const u8, arg_expr: ast.Expression, param_idx: usize) ConvertError!void {
-        const analyzer = self.mutation_analyzer orelse return;
-        if (!analyzer.doesMutateParam(func_name, param_idx)) return;
+    fn checkOwnershipTransfer(self: *AstToIr, func_name: []const u8, arg_expr: ast.Expression, param_idx: usize, func_info_mutated_params: u64) ConvertError!void {
+        // Check if this parameter is mutated
+        // Moves apply to ALL variable types (primitives and reference types)
+        // First check func_info (which may have info from external functions)
+        // Then fall back to local mutation analyzer
+        var is_mutated = false;
+        debug.astToIr("checkOwnershipTransfer: func={s} param_idx={d} mutated_params=0b{b}", .{ func_name, param_idx, func_info_mutated_params });
+
+        if (param_idx < 64 and (func_info_mutated_params & (@as(u64, 1) << @intCast(param_idx))) != 0) {
+            is_mutated = true;
+            debug.astToIr("  -> mutated from func_info", .{});
+        } else if (self.mutation_analyzer) |analyzer| {
+            is_mutated = analyzer.doesMutateParam(func_name, param_idx);
+            if (is_mutated) {
+                debug.astToIr("  -> mutated from local analyzer", .{});
+            }
+        }
+
+        if (!is_mutated) return;
 
         if (arg_expr != .identifier) return;
         const var_name = arg_expr.identifier;
@@ -12079,6 +12154,10 @@ pub const AstToIr = struct {
 
                     args[arg_idx] = arg_value;
                     arg_idx += 1;
+
+                    // Check ownership transfer for this argument
+                    // param_index already accounts for self, so use it directly
+                    try self.checkOwnershipTransfer(mangled_name, arg_expr, param_index, func_info.mutated_params);
                 }
             },
             .ir_values => |vals| {
@@ -12641,6 +12720,7 @@ pub fn convertWithExternals(
                 .param_types = param_types,
                 .source_module = ext_func.source_module,
                 .ir_name = ir_name,
+                .mutated_params = ext_func.mutated_params,
             };
 
             // Check for collision (same name already registered from different module)
@@ -12787,6 +12867,11 @@ pub fn extractExtensionInfo(program: ast.Program, allocator: std.mem.Allocator) 
 /// Extract function signatures from a parsed program (for cross-module compilation)
 /// This includes methods from type declarations
 pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem.Allocator) ![]ExternalFuncSignature {
+    // Run mutation analysis to compute which parameters are mutated
+    var mutation_analyzer = semantic_analysis.MutationAnalyzer.init(allocator);
+    defer mutation_analyzer.deinit();
+    try mutation_analyzer.analyze(program);
+
     var signatures = std.ArrayListUnmanaged(ExternalFuncSignature){};
     errdefer {
         // Free allocated names, param_types (including struct_type strings), and return_type_name in case of error
@@ -12842,6 +12927,9 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
         // Allocate copy of name for uniform ownership (all names are owned)
         const name_copy = try allocator.dupe(u8, func.name);
 
+        // Get mutated params bitset from mutation analysis
+        const mutated_params = mutation_analyzer.getMutatedParams(func.name);
+
         try signatures.append(allocator, .{
             .name = name_copy,
             .return_type = return_type,
@@ -12850,6 +12938,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             .is_exported = func.is_export,
             .param_types = param_types,
             .doc_comment = func.doc_comment,
+            .mutated_params = mutated_params,
         });
     }
 
@@ -12970,6 +13059,15 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
             // For throwing methods, update return_type to ptr (sret)
             const effective_return_type: ir.Type = if (method.throws_type != null) .ptr else return_type;
 
+            // Get mutated params bitset for method (using mangled name)
+            // Note: mutation analysis uses original method params (without self)
+            // But signatures include implicit self at index 0 for instance methods
+            // So we need to shift the bits left by 1 for instance methods
+            var method_mutated_params = mutation_analyzer.getMutatedParams(mangled_name);
+            if (!method.is_static) {
+                method_mutated_params <<= 1; // Shift to account for implicit self
+            }
+
             // Methods inherit export status from their containing type
             try signatures.append(allocator, .{
                 .name = mangled_name,
@@ -12979,6 +13077,7 @@ pub fn extractFunctionSignaturesFromAst(program: ast.Program, allocator: std.mem
                 .is_exported = type_decl.is_export or method.is_export,
                 .param_types = param_types,
                 .doc_comment = method.doc_comment,
+                .mutated_params = method_mutated_params,
             });
         }
     }

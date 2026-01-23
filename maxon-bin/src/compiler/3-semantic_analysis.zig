@@ -29,7 +29,9 @@ pub const MutationAnalyzer = struct {
     type_fields: std.StringHashMapUnmanaged([]const FieldMutability),
 
     const MutatedParams = struct {
-        bits: u64, // Supports up to 64 parameters
+        /// Bitset of mutated parameter indices
+        /// Moves apply to ALL types (primitives and reference types)
+        bits: u64 = 0,
     };
 
     const FieldMutability = struct {
@@ -55,6 +57,28 @@ pub const MutationAnalyzer = struct {
         self.type_fields.deinit(self.allocator);
     }
 
+    /// Get the mutated parameter bitset for a function
+    /// Returns 0 if the function wasn't analyzed (e.g., external function)
+    pub fn getMutatedParams(self: *const MutationAnalyzer, func_name: []const u8) u64 {
+        if (self.function_mutations.get(func_name)) |mp| {
+            return mp.bits;
+        }
+        return 0;
+    }
+
+    /// Register external types for struct field mutability analysis
+    /// Call this before analyze() when compiling multi-file projects
+    pub fn registerExternalTypes(self: *MutationAnalyzer, external_types: []const ExternalTypeInfo) !void {
+        for (external_types) |ext_type| {
+            const type_decl = ext_type.type_decl;
+            const fields = try self.allocator.alloc(FieldMutability, type_decl.fields.len);
+            for (type_decl.fields, 0..) |field, i| {
+                fields[i] = .{ .name = field.name, .is_mutable = field.is_mutable };
+            }
+            try self.type_fields.put(self.allocator, type_decl.name, fields);
+        }
+    }
+
     /// Analyze all functions in the program to determine parameter mutations
     pub fn analyze(self: *MutationAnalyzer, program: ast.Program) !void {
         // First, collect type field information for struct_init analysis
@@ -68,35 +92,56 @@ pub const MutationAnalyzer = struct {
 
         // Then analyze functions
         for (program.functions) |func| {
-            try self.analyzeFunction(func);
+            try self.analyzeFunction(func.name, func.params, func.body, func.return_type);
+        }
+
+        // Also analyze methods (using mangled names Type$method)
+        for (program.types) |type_decl| {
+            for (type_decl.methods) |method| {
+                const mangled_name = try std.fmt.allocPrint(self.allocator, "{s}${s}", .{ type_decl.name, method.name });
+                try self.analyzeFunction(mangled_name, method.params, method.body, method.return_type);
+                // For instance methods, shift mutated_params left by 1 to account for implicit self
+                // This matches the shifting done in extractFunctionSignaturesFromAst
+                if (!method.is_static) {
+                    if (self.function_mutations.getPtr(mangled_name)) |mp| {
+                        mp.bits <<= 1;
+                    }
+                }
+            }
         }
     }
 
     /// Analyze a single function for parameter mutations
-    fn analyzeFunction(self: *MutationAnalyzer, func: ast.FunctionDecl) !void {
-        var mutated: MutatedParams = .{ .bits = 0 };
+    fn analyzeFunction(
+        self: *MutationAnalyzer,
+        name: []const u8,
+        params: []const ast.ParamDecl,
+        body: []const ast.Statement,
+        return_type: ?ast.TypeExpr,
+    ) !void {
+        var mutated: MutatedParams = .{};
 
         // Build map of parameter names to indices
         var param_indices: std.StringHashMapUnmanaged(usize) = .{};
         defer param_indices.deinit(self.allocator);
 
-        for (func.params, 0..) |param, idx| {
+        for (params, 0..) |param, idx| {
             try param_indices.put(self.allocator, param.name, idx);
         }
 
         // Get return type name for inferring anonymous struct literals in return statements
-        const return_type_name: ?[]const u8 = if (func.return_type) |rt| switch (rt.expr) {
-            .simple => |name| name,
+        const return_type_name: ?[]const u8 = if (return_type) |rt| switch (rt.expr) {
+            .simple => |n| n,
             .generic => |g| g.base_type,
             else => null,
         } else null;
 
         // Scan all statements for assignments to parameters
-        for (func.body) |stmt| {
+        for (body) |stmt| {
             self.checkStatementForMutation(stmt, &param_indices, &mutated, return_type_name);
         }
 
-        try self.function_mutations.put(self.allocator, func.name, mutated);
+        try self.function_mutations.put(self.allocator, name, mutated);
     }
 
     fn checkStatementForMutation(
@@ -139,7 +184,8 @@ pub const MutationAnalyzer = struct {
                 // (mutations happen inside the called function)
             },
             .method_call => |mcall| {
-                // Method calls like arr.push(x) mutate the base array
+                // Method calls on parameters mutate them, transferring ownership
+                // e.g., arr.push(x) mutates arr, so caller loses ownership
                 self.checkExpressionForParamMutation(mcall.base.*, param_indices, mutated);
             },
             .field_assign => |assign| {
@@ -206,6 +252,8 @@ pub const MutationAnalyzer = struct {
         }
     }
 
+    /// Check if an expression involves a parameter that's being mutated
+    /// (used for index_assign, field_assign contexts)
     fn checkExpressionForParamMutation(
         self: *MutationAnalyzer,
         expr: ast.Expression,
@@ -230,9 +278,8 @@ pub const MutationAnalyzer = struct {
                 // Index access mutation also mutates the base array
                 self.checkExpressionForParamMutation(idx.base.*, param_indices, mutated);
             },
-            .method_call => |mcall| {
-                // Method call like arr.push(x) mutates the base
-                self.checkExpressionForParamMutation(mcall.base.*, param_indices, mutated);
+            .method_call => {
+                // Method calls don't inherently mutate their receiver
             },
             // self_expr - treat like identifier but self cannot be mutated as a whole
             .self_expr => {},
@@ -321,7 +368,7 @@ pub const MutationAnalyzer = struct {
                         }
                     }
 
-                    // If field is mutable and value is a parameter, mark as mutated
+                    // If field is mutable and value is a parameter, mark as mutation
                     if (field_is_mutable) {
                         if (field_init.value.* == .identifier) {
                             const var_name = field_init.value.identifier;
@@ -645,7 +692,8 @@ pub const SemanticAnalyzer = struct {
         // 8. Discover and register monomorphized types
         try self.discoverMonomorphizedTypes(program);
 
-        // 9. Mutation analysis
+        // 9. Mutation analysis - register external types first for multi-file projects
+        try self.mutation_analyzer.registerExternalTypes(external_types);
         try self.mutation_analyzer.analyze(program);
 
         // 10. Collect variables from function and method bodies

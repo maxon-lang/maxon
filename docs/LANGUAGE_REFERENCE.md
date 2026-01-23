@@ -1772,9 +1772,9 @@ end 'bar'
 **How Ownership Works:**
 
 The compiler runs a mutation analysis pass that scans each function to determine which parameters it mutates:
-1. Direct assignment to a parameter (`z = ...`)
-2. Array element assignment (`arr[i] = ...` where `arr` is a parameter)
-3. Member assignment (`obj.field = ...` where `obj` is a parameter)
+1. Direct assignment to a parameter 
+2. Array element assignment 
+3. Member assignment 
 4. Passing to another function that mutates that parameter position
 
 During semantic analysis, each variable has an ownership state:

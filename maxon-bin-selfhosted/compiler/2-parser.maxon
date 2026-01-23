@@ -72,11 +72,11 @@ end 'TypeKind'
 
 /// A type reference in the AST
 export type TypeRef
-	export var kind TypeKind
-	export var name String           // for named types
-	export var elementType int       // index for array element type (-1 if none)
-	export var line int
-	export var column int
+	export let kind TypeKind
+	export let name String           // for named types
+	export let elementType int       // index for array element type (-1 if none)
+	export let line int
+	export let column int
 
 	export static function createSimple(kind TypeKind, line int, column int) returns TypeRef
 		return {kind: kind, name: "", elementType: -1, line: line, column: column}
@@ -91,20 +91,20 @@ export typealias TypeRefArray is Array with TypeRef
 
 /// An expression node - all fields are primitives, no recursive types
 export type Expr
-	export var kind ExprKind
-	export var intValue int          // for intLiteral
-	export var floatValue float      // for floatLiteral
-	export var boolValue bool        // for boolLiteral
-	export var stringValue String    // for identifier, stringLiteral
-	export var binaryOp BinaryOp     // for binaryOp
-	export var unaryOp UnaryOp       // for unaryOp
-	export var leftIndex int         // left operand / callee index
-	export var rightIndex int        // right operand index (-1 if none)
-	export var argsStart int         // start index in args pool for call
-	export var argsCount int         // number of arguments for call
-	export var line int
-	export var column int
-	export var hasError bool         // true if this node or children have errors
+	export let kind ExprKind
+	export let intValue int          // for intLiteral
+	export let floatValue float      // for floatLiteral
+	export let boolValue bool        // for boolLiteral
+	export let stringValue String    // for identifier, stringLiteral
+	export let binaryOp BinaryOp     // for binaryOp
+	export let unaryOp UnaryOp       // for unaryOp
+	export let leftIndex int         // left operand / callee index
+	export let rightIndex int        // right operand index (-1 if none)
+	export let argsStart int         // start index in args pool for call
+	export let argsCount int         // number of arguments for call
+	export let line int
+	export let column int
+	export var hasError bool         // true if this node or children have errors (mutable for error recovery)
 
 	export static function createIntLiteral(value int, line int, column int) returns Expr
 		return {kind: ExprKind.intLiteral, intValue: value, floatValue: 0.0, boolValue: false, stringValue: "", binaryOp: BinaryOp.add, unaryOp: UnaryOp.negate, leftIndex: -1, rightIndex: -1, argsStart: -1, argsCount: 0, line: line, column: column, hasError: false}
@@ -152,18 +152,18 @@ export typealias IntArray is Array with int
 
 /// A statement node - uses int index for expr reference
 export type Stmt
-	export var kind StmtKind
-	export var exprIndex int         // index into expressions array
-	export var varName String        // for let/var/assign
-	export var typeRef int           // index into types array (-1 if inferred)
-	export var thenStart int         // start index for then-block statements
-	export var thenCount int         // count of then-block statements
-	export var elseStart int         // start index for else-block statements
-	export var elseCount int         // count of else-block statements
-	export var label String          // block label
-	export var line int
-	export var column int
-	export var hasError bool         // true if this node or children have errors
+	export let kind StmtKind
+	export let exprIndex int         // index into expressions array
+	export let varName String        // for let/var/assign
+	export let typeRef int           // index into types array (-1 if inferred)
+	export let thenStart int         // start index for then-block statements
+	export let thenCount int         // count of then-block statements
+	export let elseStart int         // start index for else-block statements
+	export let elseCount int         // count of else-block statements
+	export let label String          // block label
+	export let line int
+	export let column int
+	export var hasError bool         // true if this node or children have errors (mutable for error recovery)
 
 	export static function createReturn(exprIndex int, line int, column int) returns Stmt
 		return {kind: StmtKind.returnStmt, exprIndex: exprIndex, varName: "", typeRef: -1, thenStart: -1, thenCount: 0, elseStart: -1, elseCount: 0, label: "", line: line, column: column, hasError: false}
@@ -351,8 +351,8 @@ end 'Program'
 // ============================================================================
 
 export type Parser
-	var tokens TokenArray
-	var sourceFile String
+	let tokens TokenArray
+	let sourceFile String
 	var pos int
 	export var errors ErrorCollector
 	var program Program

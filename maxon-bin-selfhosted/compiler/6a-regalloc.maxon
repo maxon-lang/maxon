@@ -142,11 +142,13 @@ export type RegisterAllocator
 		while idx < intervals.count() 'search'
 			var interval = try intervals.get(idx) otherwise LiveInterval{vreg: 0, start: 0, end_: 0, reg: Reg.RAX, spilled: false, spillSlot: 0}
 			if interval.vreg == vreg 'found'
-				if isDef and pos < interval.start 'updateStart'
-					interval.start = pos
+				var p = pos
+				if isDef and p < interval.start 'updateStart'
+					interval.start = p
 				end 'updateStart'
-				if pos > interval.end_ 'updateEnd'
-					interval.end_ = pos
+				p = pos
+				if p > interval.end_ 'updateEnd'
+					interval.end_ = p
 				end 'updateEnd'
 				intervals.set(idx, interval)
 				return
@@ -155,7 +157,9 @@ export type RegisterAllocator
 		end 'search'
 
 		// Create new interval
-		let newInterval = LiveInterval{vreg: vreg, start: pos, end_: pos, reg: Reg.RAX, spilled: false, spillSlot: 0}
+		var startPos = pos
+		var endPos = pos
+		let newInterval = LiveInterval{vreg: vreg, start: startPos, end_: endPos, reg: Reg.RAX, spilled: false, spillSlot: 0}
 		intervals.push(newInterval)
 	end 'updateOrCreateInterval'
 
