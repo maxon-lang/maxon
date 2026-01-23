@@ -20,6 +20,10 @@ public class RegisterAllocator {
 	public class Allocation {
 		public Dictionary<int, int> VRegToStackOffset { get; } = [];
 		public int StackSize { get; set; }
+		/// <summary>
+		/// Dedicated temporary slot for float immediate loading (avoids corrupting user variables)
+		/// </summary>
+		public int FloatTempOffset { get; set; }
 	}
 
 	public static Allocation Allocate(LirFunction func) {
@@ -28,6 +32,10 @@ public class RegisterAllocator {
 		// Start vreg allocation AFTER the alloca stack space
 		// func.StackSize is the space needed for HirAlloca'd variables
 		var nextOffset = func.StackSize;
+
+		// Reserve a dedicated slot for float temporaries
+		nextOffset += 8;
+		alloc.FloatTempOffset = -nextOffset;
 
 		// Collect all vreg definitions
 		var vregs = new HashSet<int>();

@@ -5,13 +5,12 @@ namespace MaxonSharp.Codegen;
 public class CodeGenerator {
 	private readonly X86Encoder _encoder = new();
 	private RegisterAllocator.Allocation _alloc = null!;
-	private readonly Dictionary<string, int> _functionOffsets = [];
 	private readonly List<LirStringData> _strings = [];
+	private int _divCheckCounter;
 
 	// Scratch registers
 	private static readonly Reg R0 = Reg.Rax;
 	private static readonly Reg R1 = Reg.R10;
-	private static readonly Reg R2 = Reg.R11;
 
 
 	public byte[] Generate(LirModule module) {
@@ -88,7 +87,7 @@ public class CodeGenerator {
 			case LirStore store:
 				LoadValue(R0, store.Ptr); // R0 = ptr
 				LoadValue(R1, store.Value); // R1 = value
-				_encoder.MovMemReg(R0, 0, R1); // [R0] = R1
+				_encoder.MovMemRegSized(R0, 0, R1, store.Size); // [R0] = R1 with proper size
 				break;
 
 			case LirLea lea:
@@ -133,6 +132,12 @@ public class CodeGenerator {
 				// idiv uses RDX:RAX / operand
 				LoadValue(Reg.Rax, div.Left);
 				LoadValue(R1, div.Right);
+				// Check for division by zero
+				_encoder.TestRegReg(R1, R1);
+				_encoder.JccRel32(CondCode.Ne, "_div_ok_" + _divCheckCounter);
+				// If zero, trigger a controlled crash (ud2 = undefined instruction)
+				_encoder.Ud2();
+				_encoder.DefineLabel("_div_ok_" + _divCheckCounter++);
 				_encoder.Cqo(); // Sign-extend RAX into RDX:RAX
 				_encoder.IDivReg(R1); // RAX = quotient, RDX = remainder
 				StoreToStack(div.Dest.Id, Reg.Rax);
@@ -142,6 +147,12 @@ public class CodeGenerator {
 				// Same as div but take remainder from RDX
 				LoadValue(Reg.Rax, mod.Left);
 				LoadValue(R1, mod.Right);
+				// Check for division by zero
+				_encoder.TestRegReg(R1, R1);
+				_encoder.JccRel32(CondCode.Ne, "_mod_ok_" + _divCheckCounter);
+				// If zero, trigger a controlled crash (ud2 = undefined instruction)
+				_encoder.Ud2();
+				_encoder.DefineLabel("_mod_ok_" + _divCheckCounter++);
 				_encoder.Cqo();
 				_encoder.IDivReg(R1);
 				StoreToStack(mod.Dest.Id, Reg.Rdx);
@@ -257,18 +268,24 @@ public class CodeGenerator {
 				}
 
 				// Stack args (if > 4)
+				var stackArgs = Math.Max(0, call.Args.Count - 4);
 				for (var i = call.Args.Count - 1; i >= 4; i--) {
 					LoadValue(R0, call.Args[i]);
 					_encoder.Push(R0);
 				}
 
+				// Allocate 32-byte shadow space (Windows x64 ABI requirement)
+				_encoder.SubRspImm8(32);
+
 				// Call function
 				_encoder.CallRel32(call.FuncName);
 
-				// Clean up stack args
-				var stackArgs = Math.Max(0, call.Args.Count - 4);
-				if (stackArgs > 0) {
-					_encoder.AddRspImm8((byte)(stackArgs * 8));
+				// Clean up shadow space + stack args
+				var stackCleanup = 32 + (stackArgs * 8);
+				if (stackCleanup <= 127) {
+					_encoder.AddRspImm8((byte)stackCleanup);
+				} else {
+					_encoder.AddRspImm32(stackCleanup);
 				}
 
 				// Store return value
@@ -397,12 +414,11 @@ public class CodeGenerator {
 				break;
 
 			case LirFloatImmediate fimm:
-				// Load float constant via memory
-				// For now, move bits as int and use memory
+				// Load float constant via dedicated temp slot (avoids corrupting user variables)
 				var bits = BitConverter.DoubleToInt64Bits(fimm.Value);
 				_encoder.MovRegImm(R0, bits);
-				_encoder.MovMemReg(Reg.Rbp, -8, R0); // Use temp stack slot
-				_encoder.MovsdXmmMem(xmm, Reg.Rbp, -8);
+				_encoder.MovMemReg(Reg.Rbp, _alloc.FloatTempOffset, R0);
+				_encoder.MovsdXmmMem(xmm, Reg.Rbp, _alloc.FloatTempOffset);
 				break;
 		}
 	}

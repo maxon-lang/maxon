@@ -20,7 +20,6 @@ public class Compiler {
 			var ast = parser.Parse();
 
 			// Stage 3: Semantic analysis
-			var analyzer = new SemanticAnalyzer();
 			if (!SemanticAnalyzer.Analyze(ast)) {
 				Console.Error.WriteLine("Semantic analysis failed");
 				return false;
@@ -112,7 +111,7 @@ public class Compiler {
 			Hir.HirConstBool c => $"{c.Dest} = const {c.Value}",
 			Hir.HirAlloca a => $"{a.Dest} = alloca {a.Type.Name}",
 			Hir.HirLoad l => $"{l.Dest} = load {l.Ptr}",
-			Hir.HirStore s => $"store {s.Ptr}, {s.Value}",
+			Hir.HirStore s => $"store {s.Ptr}, {s.Value} : {s.Type.Name}",
 			Hir.HirGetFieldPtr g => $"{g.Dest} = getfieldptr {g.Base}, .{g.FieldName} (+{g.Offset})",
 			Hir.HirAdd a => $"{a.Dest} = add {a.Left}, {a.Right}",
 			Hir.HirSub s => $"{s.Dest} = sub {s.Left}, {s.Right}",

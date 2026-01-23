@@ -79,7 +79,7 @@ public record HirConstString(HirValue Dest, string Value) : HirInstr;
 // Memory operations
 public record HirAlloca(HirValue Dest, HirType Type) : HirInstr;
 public record HirLoad(HirValue Dest, HirValue Ptr, HirType Type) : HirInstr;
-public record HirStore(HirValue Ptr, HirValue Value) : HirInstr;
+public record HirStore(HirValue Ptr, HirValue Value, HirType Type) : HirInstr;
 public record HirGetFieldPtr(HirValue Dest, HirValue Base, string FieldName, int Offset) : HirInstr;
 public record HirGetElemPtr(HirValue Dest, HirValue Base, HirValue Index, int ElemSize) : HirInstr;
 

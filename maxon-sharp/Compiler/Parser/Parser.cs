@@ -1375,7 +1375,7 @@ public class Parser(List<Token> tokens) {
 		return new MatchExprCase(patterns, patternBindings, result);
 	}
 
-	private Expr ParseInterpolatedString(string text, Token startToken) {
+	private static Expr ParseInterpolatedString(string text, Token startToken) {
 		var parts = new List<InterpolatedPart>();
 		var i = 0;
 
@@ -1433,7 +1433,7 @@ public class Parser(List<Token> tokens) {
 	// Helpers
 	// ============================================================================
 
-	private long ParseIntegerLiteral(string text) {
+	private static long ParseIntegerLiteral(string text) {
 		text = text.Replace("_", "");
 
 		if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) {

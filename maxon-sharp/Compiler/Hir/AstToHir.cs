@@ -130,7 +130,7 @@ public class AstToHir {
 			// Allocate slot and store parameter
 			var slotPtr = NewValue();
 			entryInstrs.Add(new HirAlloca(slotPtr, paramType));
-			entryInstrs.Add(new HirStore(slotPtr, paramValue));
+			entryInstrs.Add(new HirStore(slotPtr, paramValue, paramType));
 			_variableSlots[param.Name] = slotPtr;
 			_variableTypes[param.Name] = paramType;
 			_params[param.Name] = (i, paramType);
@@ -176,7 +176,7 @@ public class AstToHir {
 			// Allocate slot for self
 			var selfSlot = NewValue();
 			entryInstrs.Add(new HirAlloca(selfSlot, selfType));
-			entryInstrs.Add(new HirStore(selfSlot, selfValue));
+			entryInstrs.Add(new HirStore(selfSlot, selfValue, selfType));
 			_variableSlots["self"] = selfSlot;
 			_variableTypes["self"] = selfType;
 		}
@@ -193,7 +193,7 @@ public class AstToHir {
 			// Allocate slot and store parameter
 			var slotPtr = NewValue();
 			entryInstrs.Add(new HirAlloca(slotPtr, paramType));
-			entryInstrs.Add(new HirStore(slotPtr, paramValue));
+			entryInstrs.Add(new HirStore(slotPtr, paramValue, paramType));
 			_variableSlots[param.Name] = slotPtr;
 			_variableTypes[param.Name] = paramType;
 			_params[param.Name] = (paramIndex - 1, paramType);
@@ -245,14 +245,15 @@ public class AstToHir {
 					_variableSlots[name] = slotPtr;
 
 					// Store initial value
-					instructions.Add(new HirStore(slotPtr, exprValue));
+					instructions.Add(new HirStore(slotPtr, exprValue, inferredType));
 					break;
 				}
 
 			case AssignStmt assign: {
 					var value = LowerExpression(assign.Value, instructions);
 					if (_variableSlots.TryGetValue(assign.Target, out var slotPtr)) {
-						instructions.Add(new HirStore(slotPtr, value));
+						var varType = _variableTypes.GetValueOrDefault(assign.Target, new HirIntType());
+						instructions.Add(new HirStore(slotPtr, value, varType));
 					} else {
 						throw new Exception($"Unknown variable: {assign.Target}");
 					}
@@ -263,9 +264,10 @@ public class AstToHir {
 					var basePtr = LowerExpression(fieldAssign.Base, instructions);
 					var value = LowerExpression(fieldAssign.Value, instructions);
 					var offset = GetFieldOffset(fieldAssign.Base, fieldAssign.FieldName);
+					var fieldType = GetFieldType(fieldAssign.Base, fieldAssign.FieldName);
 					var fieldPtr = NewValue();
 					instructions.Add(new HirGetFieldPtr(fieldPtr, basePtr, fieldAssign.FieldName, offset));
-					instructions.Add(new HirStore(fieldPtr, value));
+					instructions.Add(new HirStore(fieldPtr, value, fieldType));
 					break;
 				}
 
@@ -334,14 +336,14 @@ public class AstToHir {
 					// Allocate slot for loop variable and store initial value
 					var loopVarSlot = NewValue();
 					instructions.Add(new HirAlloca(loopVarSlot, new HirIntType()));
-					instructions.Add(new HirStore(loopVarSlot, startVal));
+					instructions.Add(new HirStore(loopVarSlot, startVal, new HirIntType()));
 					_variableSlots[forStmt.VarName] = loopVarSlot;
 					_variableTypes[forStmt.VarName] = new HirIntType();
 
 					// Store end value in a slot so it's stable across loop iterations
 					var endValSlot = NewValue();
 					instructions.Add(new HirAlloca(endValSlot, new HirIntType()));
-					instructions.Add(new HirStore(endValSlot, endVal));
+					instructions.Add(new HirStore(endValSlot, endVal, new HirIntType()));
 
 					instructions.Add(new HirBr(startLabel));
 					instructions.Add(new HirLabel(startLabel));
@@ -373,7 +375,7 @@ public class AstToHir {
 					instructions.Add(new HirConstInt(one, 1));
 					var nextI = NewValue();
 					instructions.Add(new HirAdd(nextI, currentIForIncr, one));
-					instructions.Add(new HirStore(loopVarSlot, nextI));
+					instructions.Add(new HirStore(loopVarSlot, nextI, new HirIntType()));
 
 					instructions.Add(new HirBr(startLabel));
 					instructions.Add(new HirLabel(endLabel));
@@ -437,7 +439,7 @@ public class AstToHir {
 								// Allocate slot for binding and store value
 								var bindingSlot = NewValue();
 								instructions.Add(new HirAlloca(bindingSlot, new HirIntType()));
-								instructions.Add(new HirStore(bindingSlot, payloadVal));
+								instructions.Add(new HirStore(bindingSlot, payloadVal, new HirIntType()));
 								_variableSlots[bindingName] = bindingSlot;
 								_variableTypes[bindingName] = new HirIntType();
 							}
@@ -548,16 +550,35 @@ public class AstToHir {
 				}
 
 			case LogicalExpr logical: {
-					var left = LowerExpression(logical.Left, instructions);
-					var right = LowerExpression(logical.Right, instructions);
+					// Implement short-circuit evaluation with branches
 					var dest = NewValue();
+					var resultSlot = NewValue();
+					instructions.Add(new HirAlloca(resultSlot, new HirBoolType()));
 
-					var instr = logical.Op switch {
-						LogicalOp.And => (HirInstr)new HirLogicalAnd(dest, left, right),
-						LogicalOp.Or => new HirLogicalOr(dest, left, right),
-						_ => throw new Exception($"Unknown logical op: {logical.Op}")
-					};
-					instructions.Add(instr);
+					var left = LowerExpression(logical.Left, instructions);
+
+					var evalRight = NewLabel("logical_eval_right");
+					var done = NewLabel("logical_done");
+
+					if (logical.Op == LogicalOp.And) {
+						// Short-circuit AND: if left is false, result is false
+						// Store left result first (if false, this is the final result)
+						instructions.Add(new HirStore(resultSlot, left, new HirBoolType()));
+						instructions.Add(new HirBrCond(left, evalRight, done));
+					} else {
+						// Short-circuit OR: if left is true, result is true
+						instructions.Add(new HirStore(resultSlot, left, new HirBoolType()));
+						instructions.Add(new HirBrCond(left, done, evalRight));
+					}
+
+					// Evaluate right side
+					instructions.Add(new HirLabel(evalRight));
+					var right = LowerExpression(logical.Right, instructions);
+					instructions.Add(new HirStore(resultSlot, right, new HirBoolType()));
+					instructions.Add(new HirBr(done));
+
+					instructions.Add(new HirLabel(done));
+					instructions.Add(new HirLoad(dest, resultSlot, new HirBoolType()));
 					return dest;
 				}
 
@@ -625,7 +646,7 @@ public class AstToHir {
 						instructions.Add(new HirConstInt(tagVal, variant.Tag));
 						var tagPtr = NewValue();
 						instructions.Add(new HirGetFieldPtr(tagPtr, ptr, "_tag", 0));
-						instructions.Add(new HirStore(tagPtr, tagVal));
+						instructions.Add(new HirStore(tagPtr, tagVal, new HirIntType()));
 
 						return ptr;
 					}
@@ -661,7 +682,7 @@ public class AstToHir {
 						var value = LowerExpression(fieldInit.Value, instructions);
 						var fieldPtr = NewValue();
 						instructions.Add(new HirGetFieldPtr(fieldPtr, ptr, fieldInit.Name, field.Offset));
-						instructions.Add(new HirStore(fieldPtr, value));
+						instructions.Add(new HirStore(fieldPtr, value, field.Type));
 					}
 
 					return ptr;
@@ -682,14 +703,14 @@ public class AstToHir {
 						instructions.Add(new HirConstInt(tagVal, variant.Tag));
 						var tagPtr = NewValue();
 						instructions.Add(new HirGetFieldPtr(tagPtr, ptr, "_tag", 0));
-						instructions.Add(new HirStore(tagPtr, tagVal));
+						instructions.Add(new HirStore(tagPtr, tagVal, new HirIntType()));
 
 						// Store payload
 						for (var i = 0; i < staticCall.Args.Count; i++) {
 							var argVal = LowerExpression(staticCall.Args[i], instructions);
 							var payloadPtr = NewValue();
 							instructions.Add(new HirGetFieldPtr(payloadPtr, ptr, $"_payload_{i}", enumDef.TagSize + i * 8));
-							instructions.Add(new HirStore(payloadPtr, argVal));
+							instructions.Add(new HirStore(payloadPtr, argVal, new HirIntType()));
 						}
 
 						return ptr;
@@ -752,14 +773,14 @@ public class AstToHir {
 					instructions.Add(new HirConstInt(tagVal, variant.Tag));
 					var tagPtr = NewValue();
 					instructions.Add(new HirGetFieldPtr(tagPtr, ptr, "_tag", 0));
-					instructions.Add(new HirStore(tagPtr, tagVal));
+					instructions.Add(new HirStore(tagPtr, tagVal, new HirIntType()));
 
 					// Store payload
 					for (var i = 0; i < enumCase.Args.Count; i++) {
 						var argVal = LowerExpression(enumCase.Args[i], instructions);
 						var payloadPtr = NewValue();
 						instructions.Add(new HirGetFieldPtr(payloadPtr, ptr, $"_payload_{i}", enumDef.TagSize + i * 8));
-						instructions.Add(new HirStore(payloadPtr, argVal));
+						instructions.Add(new HirStore(payloadPtr, argVal, new HirIntType()));
 					}
 
 					return ptr;

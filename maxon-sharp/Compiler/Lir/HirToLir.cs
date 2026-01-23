@@ -111,7 +111,7 @@ public class HirToLir {
 			case HirStore store: {
 					var ptr = GetVReg(store.Ptr.Id);
 					var value = GetVReg(store.Value.Id);
-					instructions.Add(new LirStore(ptr, value, 8)); // TODO: proper size
+					instructions.Add(new LirStore(ptr, value, store.Type.SizeInBytes));
 					break;
 				}
 

@@ -143,6 +143,45 @@ public class X86Encoder {
 		EmitMemOperand((int)src & 7, baseReg, offset);
 	}
 
+	// mov [reg+offset], reg8 (byte store)
+	public void MovMemReg8(Reg baseReg, int offset, Reg src) {
+		// REX prefix needed for extended registers or to access SPL, BPL, SIL, DIL
+		byte rex = 0x40;
+		if ((int)src >= 8) rex |= 0x04; // REX.R
+		if ((int)baseReg >= 8) rex |= 0x01; // REX.B
+											// Always emit REX for consistent encoding with 64-bit mode
+		_code.Add(rex);
+		_code.Add(0x88); // MOV r/m8, r8
+		EmitMemOperand((int)src & 7, baseReg, offset);
+	}
+
+	// Sized memory store: writes 1, 2, 4, or 8 bytes depending on size
+	public void MovMemRegSized(Reg baseReg, int offset, Reg src, int size) {
+		switch (size) {
+			case 1:
+				MovMemReg8(baseReg, offset, src);
+				break;
+			case 2:
+				// 16-bit store: operand size prefix
+				_code.Add(0x66);
+				goto case 4; // Fall through to 32-bit encoding without REX.W
+			case 4:
+				// 32-bit store (no REX.W)
+				if ((int)src >= 8 || (int)baseReg >= 8) {
+					byte rex = 0x40;
+					if ((int)src >= 8) rex |= 0x04;
+					if ((int)baseReg >= 8) rex |= 0x01;
+					_code.Add(rex);
+				}
+				_code.Add(0x89); // MOV r/m32, r32
+				EmitMemOperand((int)src & 7, baseReg, offset);
+				break;
+			default: // 8 bytes
+				MovMemReg(baseReg, offset, src);
+				break;
+		}
+	}
+
 	// mov reg64, [reg+offset]
 	public void MovRegMem(Reg dest, Reg baseReg, int offset) {
 		byte rex = 0x48; // REX.W
@@ -385,6 +424,23 @@ public class X86Encoder {
 		_code.Add(ModRM(3, (int)right & 7, (int)left & 7));
 	}
 
+	// test reg64, reg64 (AND without storing result, sets flags)
+	public void TestRegReg(Reg left, Reg right) {
+		byte rex = 0x48;
+		if ((int)right >= 8) rex |= 0x04;
+		if ((int)left >= 8) rex |= 0x01;
+
+		_code.Add(rex);
+		_code.Add(0x85); // TEST r/m64, r64
+		_code.Add(ModRM(3, (int)right & 7, (int)left & 7));
+	}
+
+	// ud2 - undefined instruction, causes #UD exception (for controlled crash)
+	public void Ud2() {
+		_code.Add(0x0F);
+		_code.Add(0x0B);
+	}
+
 	// cmp reg64, imm32
 	public void CmpRegImm(Reg reg, int value) {
 		byte rex = 0x48;
@@ -400,17 +456,6 @@ public class X86Encoder {
 			_code.Add(ModRM(3, 7, (int)reg & 7));
 			EmitInt32(value);
 		}
-	}
-
-	// test reg64, reg64
-	public void TestRegReg(Reg left, Reg right) {
-		byte rex = 0x48;
-		if ((int)right >= 8) rex |= 0x04;
-		if ((int)left >= 8) rex |= 0x01;
-
-		_code.Add(rex);
-		_code.Add(0x85); // TEST r/m64, r64
-		_code.Add(ModRM(3, (int)right & 7, (int)left & 7));
 	}
 
 	// setcc reg8 (set byte based on condition)
@@ -497,10 +542,10 @@ public class X86Encoder {
 	// movsd xmm, [reg+offset]
 	public void MovsdXmmMem(int destXmm, Reg baseReg, int offset) {
 		_code.Add(0xF2);
-		byte rex = 0;
-		if (destXmm >= 8) rex |= 0x44;
-		if ((int)baseReg >= 8) rex |= 0x41;
-		if (rex != 0) _code.Add(rex);
+		byte rex = 0x40; // REX prefix base
+		if (destXmm >= 8) rex |= 0x04; // REX.R - extends reg field
+		if ((int)baseReg >= 8) rex |= 0x01; // REX.B - extends r/m field
+		if (rex != 0x40) _code.Add(rex); // Only emit if needed
 		_code.Add(0x0F);
 		_code.Add(0x10); // MOVSD xmm, m64
 		EmitMemOperand(destXmm & 7, baseReg, offset);
@@ -509,10 +554,10 @@ public class X86Encoder {
 	// movsd [reg+offset], xmm
 	public void MovsdMemXmm(Reg baseReg, int offset, int srcXmm) {
 		_code.Add(0xF2);
-		byte rex = 0;
-		if (srcXmm >= 8) rex |= 0x44;
-		if ((int)baseReg >= 8) rex |= 0x41;
-		if (rex != 0) _code.Add(rex);
+		byte rex = 0x40; // REX prefix base
+		if (srcXmm >= 8) rex |= 0x04; // REX.R - extends reg field
+		if ((int)baseReg >= 8) rex |= 0x01; // REX.B - extends r/m field
+		if (rex != 0x40) _code.Add(rex); // Only emit if needed
 		_code.Add(0x0F);
 		_code.Add(0x11); // MOVSD m64, xmm
 		EmitMemOperand(srcXmm & 7, baseReg, offset);
