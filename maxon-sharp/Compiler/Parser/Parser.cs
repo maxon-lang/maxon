@@ -500,7 +500,7 @@ public class Parser(List<Token> tokens) {
 		return null;
 	}
 
-	private TypeRef ParseTypeRef() {
+	private SimpleTypeRef ParseTypeRef() {
 		var startToken = Current();
 		var typeName = ExpectTypeName();
 
@@ -1034,7 +1034,7 @@ public class Parser(List<Token> tokens) {
 		return ParsePostfix(ParsePrimary());
 	}
 
-	private Expr ParseTryExpression() {
+	private TryExpr ParseTryExpression() {
 		var startToken = Expect(TokenType.Try);
 		var operand = ParseUnary();
 
@@ -1268,7 +1268,7 @@ public class Parser(List<Token> tokens) {
 		}
 	}
 
-	private Expr ParseArrayLiteral() {
+	private ArrayLiteralExpr ParseArrayLiteral() {
 		var startToken = Expect(TokenType.LeftBracket);
 		var elements = new List<Expr>();
 
@@ -1285,7 +1285,7 @@ public class Parser(List<Token> tokens) {
 		return new ArrayLiteralExpr(elements) { Location = new SourceLocation(startToken.Line, startToken.Column) };
 	}
 
-	private Expr ParseStructInit(string typeName) {
+	private StructInitExpr ParseStructInit(string typeName) {
 		var startToken = Expect(TokenType.LeftBrace);
 		var fields = new List<FieldInit>();
 
@@ -1302,7 +1302,7 @@ public class Parser(List<Token> tokens) {
 		return new StructInitExpr(typeName, [], fields) { Location = new SourceLocation(startToken.Line, startToken.Column) };
 	}
 
-	private Expr ParseAnonymousStructInit() {
+	private StructInitExpr ParseAnonymousStructInit() {
 		var startToken = Expect(TokenType.LeftBrace);
 		var fields = new List<FieldInit>();
 
@@ -1375,7 +1375,7 @@ public class Parser(List<Token> tokens) {
 		return new MatchExprCase(patterns, patternBindings, result);
 	}
 
-	private static Expr ParseInterpolatedString(string text, Token startToken) {
+	private static InterpolatedStringExpr ParseInterpolatedString(string text, Token startToken) {
 		var parts = new List<InterpolatedPart>();
 		var i = 0;
 

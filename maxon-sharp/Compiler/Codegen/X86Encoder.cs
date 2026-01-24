@@ -193,6 +193,43 @@ public class X86Encoder {
 		EmitMemOperand((int)dest & 7, baseReg, offset);
 	}
 
+	// movzx reg64, byte [reg+offset] - zero-extend 1 byte to 64 bits
+	public void MovzxReg64Mem8(Reg dest, Reg baseReg, int offset) {
+		byte rex = 0x48; // REX.W for 64-bit destination
+		if ((int)dest >= 8) rex |= 0x04; // REX.R
+		if ((int)baseReg >= 8) rex |= 0x01; // REX.B
+
+		_code.Add(rex);
+		_code.Add(0x0F);
+		_code.Add(0xB6); // MOVZX r64, r/m8
+		EmitMemOperand((int)dest & 7, baseReg, offset);
+	}
+
+	// movzx reg64, word [reg+offset] - zero-extend 2 bytes to 64 bits
+	public void MovzxReg64Mem16(Reg dest, Reg baseReg, int offset) {
+		byte rex = 0x48; // REX.W for 64-bit destination
+		if ((int)dest >= 8) rex |= 0x04; // REX.R
+		if ((int)baseReg >= 8) rex |= 0x01; // REX.B
+
+		_code.Add(rex);
+		_code.Add(0x0F);
+		_code.Add(0xB7); // MOVZX r64, r/m16
+		EmitMemOperand((int)dest & 7, baseReg, offset);
+	}
+
+	// mov reg32, [reg+offset] - load 32 bits (implicitly zero-extends to 64)
+	public void MovReg32Mem32(Reg dest, Reg baseReg, int offset) {
+		// No REX.W for 32-bit operand, but may need REX for extended registers
+		if ((int)dest >= 8 || (int)baseReg >= 8) {
+			byte rex = 0x40;
+			if ((int)dest >= 8) rex |= 0x04; // REX.R
+			if ((int)baseReg >= 8) rex |= 0x01; // REX.B
+			_code.Add(rex);
+		}
+		_code.Add(0x8B); // MOV r32, r/m32
+		EmitMemOperand((int)dest & 7, baseReg, offset);
+	}
+
 	// lea reg64, [reg+offset]
 	public void LeaRegMem(Reg dest, Reg baseReg, int offset) {
 		byte rex = 0x48; // REX.W

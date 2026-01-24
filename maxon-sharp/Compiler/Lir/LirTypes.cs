@@ -55,6 +55,7 @@ public abstract record LirInstr;
 public record LirMov(LirVReg Dest, LirValue Src) : LirInstr;
 public record LirLoad(LirVReg Dest, LirValue Ptr, int Size) : LirInstr;
 public record LirStore(LirValue Ptr, LirValue Value, int Size) : LirInstr;
+public record LirMemcpy(LirValue Dest, LirValue Src, int Size) : LirInstr;
 public record LirLea(LirVReg Dest, LirValue Addr) : LirInstr;
 
 // Integer arithmetic
@@ -132,7 +133,7 @@ public record LirBlock(string Label, List<LirInstr> Instructions);
 // LIR Function
 // ============================================================================
 
-public record LirParam(string Name, LirType Type, int Index);
+public record LirParam(string Name, LirType Type, int Index, int VRegId);
 
 public record LirFunction(
     string Name,

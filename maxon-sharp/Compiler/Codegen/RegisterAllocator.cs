@@ -72,6 +72,10 @@ public class RegisterAllocator {
 				AddValueVReg(store.Ptr, vregs);
 				AddValueVReg(store.Value, vregs);
 				break;
+			case LirMemcpy memcpy:
+				AddValueVReg(memcpy.Dest, vregs);
+				AddValueVReg(memcpy.Src, vregs);
+				break;
 			case LirLea lea:
 				vregs.Add(lea.Dest.Id);
 				break;

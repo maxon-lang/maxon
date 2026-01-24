@@ -33,16 +33,21 @@ public class HirToLir {
 		_nextVRegId = 0;
 		_stackOffset = 0;
 
+		// Track param index to vreg mapping
+		var paramToVReg = new Dictionary<int, int>();
+
+		var blocks = new List<LirBlock>();
+		foreach (var block in func.Blocks) {
+			blocks.Add(LowerBlock(block, paramToVReg));
+		}
+
+		// Build parameter list with vreg IDs
 		var parameters = new List<LirParam>();
 		for (var i = 0; i < func.Params.Count; i++) {
 			var p = func.Params[i];
 			var lirType = HirTypeToLirType(p.Type);
-			parameters.Add(new LirParam(p.Name, lirType, i));
-		}
-
-		var blocks = new List<LirBlock>();
-		foreach (var block in func.Blocks) {
-			blocks.Add(LowerBlock(block));
+			var vregId = paramToVReg.TryGetValue(i, out var vid) ? vid : -1;
+			parameters.Add(new LirParam(p.Name, lirType, i, vregId));
 		}
 
 		// Align stack to 16 bytes
@@ -53,17 +58,17 @@ public class HirToLir {
 		return new LirFunction(func.Name, func.IsExport, parameters, retType, stackSize, blocks);
 	}
 
-	private LirBlock LowerBlock(HirBlock block) {
+	private LirBlock LowerBlock(HirBlock block, Dictionary<int, int> paramToVReg) {
 		var instructions = new List<LirInstr>();
 
 		foreach (var instr in block.Instructions) {
-			LowerInstruction(instr, instructions);
+			LowerInstruction(instr, instructions, paramToVReg);
 		}
 
 		return new LirBlock(block.Label, instructions);
 	}
 
-	private void LowerInstruction(HirInstr instr, List<LirInstr> instructions) {
+	private void LowerInstruction(HirInstr instr, List<LirInstr> instructions, Dictionary<int, int> paramToVReg) {
 		switch (instr) {
 			// Constants
 			case HirConstInt constInt: {
@@ -112,6 +117,13 @@ public class HirToLir {
 					var ptr = GetVReg(store.Ptr.Id);
 					var value = GetVReg(store.Value.Id);
 					instructions.Add(new LirStore(ptr, value, store.Type.SizeInBytes));
+					break;
+				}
+
+			case HirMemcpy memcpy: {
+					var dest = GetVReg(memcpy.Dest.Id);
+					var src = GetVReg(memcpy.Src.Id);
+					instructions.Add(new LirMemcpy(dest, src, memcpy.Size));
 					break;
 				}
 
@@ -383,8 +395,9 @@ public class HirToLir {
 					// Params are passed in registers (Windows x64 ABI)
 					// RCX, RDX, R8, R9 for first 4, then stack
 					// The code generator handles storing params to their vreg slots
-					// Just register the vreg so it gets a stack slot
-					GetOrCreateVReg(param.Dest.Id);
+					// Register the vreg and record the param index -> vreg mapping
+					var vreg = GetOrCreateVReg(param.Dest.Id);
+					paramToVReg[param.Index] = vreg.Id;
 					break;
 				}
 

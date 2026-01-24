@@ -102,12 +102,12 @@ public class AstToHir {
 			maxPayloadSize = Math.Max(maxPayloadSize, payloadOffset);
 		}
 
-		return new HirEnumDef(enumDecl.Name, variants, 4, maxPayloadSize);
+		return new HirEnumDef(enumDecl.Name, variants, 8, maxPayloadSize);
 	}
 
 	private HirFunction LowerFunction(FunctionDecl func) {
 		_nextValueId = 0;
-		_nextLabelId = 0;
+		// NOTE: _nextLabelId is NOT reset - labels must be globally unique across all functions
 		_variableSlots.Clear();
 		_variableTypes.Clear();
 		_params.Clear();
@@ -130,7 +130,14 @@ public class AstToHir {
 			// Allocate slot and store parameter
 			var slotPtr = NewValue();
 			entryInstrs.Add(new HirAlloca(slotPtr, paramType));
-			entryInstrs.Add(new HirStore(slotPtr, paramValue, paramType));
+			// For struct/enum params, the paramValue is a pointer to the caller's copy - use memcpy
+			if (paramType is HirStructType structType) {
+				entryInstrs.Add(new HirMemcpy(slotPtr, paramValue, structType.SizeInBytes));
+			} else if (paramType is HirEnumType enumType) {
+				entryInstrs.Add(new HirMemcpy(slotPtr, paramValue, enumType.SizeInBytes));
+			} else {
+				entryInstrs.Add(new HirStore(slotPtr, paramValue, paramType));
+			}
 			_variableSlots[param.Name] = slotPtr;
 			_variableTypes[param.Name] = paramType;
 			_params[param.Name] = (i, paramType);
@@ -154,7 +161,7 @@ public class AstToHir {
 
 	private HirFunction LowerMethod(string typeName, MethodDecl method) {
 		_nextValueId = 0;
-		_nextLabelId = 0;
+		// NOTE: _nextLabelId is NOT reset - labels must be globally unique across all functions
 		_variableSlots.Clear();
 		_variableTypes.Clear();
 		_params.Clear();
@@ -193,7 +200,14 @@ public class AstToHir {
 			// Allocate slot and store parameter
 			var slotPtr = NewValue();
 			entryInstrs.Add(new HirAlloca(slotPtr, paramType));
-			entryInstrs.Add(new HirStore(slotPtr, paramValue, paramType));
+			// For struct/enum params, the paramValue is a pointer to the caller's copy - use memcpy
+			if (paramType is HirStructType structType) {
+				entryInstrs.Add(new HirMemcpy(slotPtr, paramValue, structType.SizeInBytes));
+			} else if (paramType is HirEnumType enumType) {
+				entryInstrs.Add(new HirMemcpy(slotPtr, paramValue, enumType.SizeInBytes));
+			} else {
+				entryInstrs.Add(new HirStore(slotPtr, paramValue, paramType));
+			}
 			_variableSlots[param.Name] = slotPtr;
 			_variableTypes[param.Name] = paramType;
 			_params[param.Name] = (paramIndex - 1, paramType);
@@ -235,7 +249,6 @@ public class AstToHir {
 					var name = stmt is LetDeclStmt l ? l.Name : ((VarDeclStmt)stmt).Name;
 					var value = stmt is LetDeclStmt ld ? ld.Value : ((VarDeclStmt)stmt).Value;
 
-					var exprValue = LowerExpression(value, instructions);
 					var inferredType = InferExprType(value);
 					_variableTypes[name] = inferredType;
 
@@ -244,16 +257,33 @@ public class AstToHir {
 					instructions.Add(new HirAlloca(slotPtr, inferredType));
 					_variableSlots[name] = slotPtr;
 
-					// Store initial value
-					instructions.Add(new HirStore(slotPtr, exprValue, inferredType));
+					// For struct and enum types, use memcpy to copy the contents
+					if (inferredType is HirStructType structType) {
+						var srcPtr = LowerExpressionAsAddress(value, instructions);
+						instructions.Add(new HirMemcpy(slotPtr, srcPtr, structType.SizeInBytes));
+					} else if (inferredType is HirEnumType enumType) {
+						var srcPtr = LowerExpressionAsAddress(value, instructions);
+						instructions.Add(new HirMemcpy(slotPtr, srcPtr, enumType.SizeInBytes));
+					} else {
+						var exprValue = LowerExpression(value, instructions);
+						instructions.Add(new HirStore(slotPtr, exprValue, inferredType));
+					}
 					break;
 				}
 
 			case AssignStmt assign: {
-					var value = LowerExpression(assign.Value, instructions);
 					if (_variableSlots.TryGetValue(assign.Target, out var slotPtr)) {
 						var varType = _variableTypes.GetValueOrDefault(assign.Target, new HirIntType());
-						instructions.Add(new HirStore(slotPtr, value, varType));
+						if (varType is HirStructType structType) {
+							var srcPtr = LowerExpressionAsAddress(assign.Value, instructions);
+							instructions.Add(new HirMemcpy(slotPtr, srcPtr, structType.SizeInBytes));
+						} else if (varType is HirEnumType enumType) {
+							var srcPtr = LowerExpressionAsAddress(assign.Value, instructions);
+							instructions.Add(new HirMemcpy(slotPtr, srcPtr, enumType.SizeInBytes));
+						} else {
+							var value = LowerExpression(assign.Value, instructions);
+							instructions.Add(new HirStore(slotPtr, value, varType));
+						}
 					} else {
 						throw new Exception($"Unknown variable: {assign.Target}");
 					}
@@ -429,10 +459,12 @@ public class AstToHir {
 						// Handle pattern bindings
 						var binding = matchCase.PatternBindings[0];
 						if (binding != null) {
+							var scrutineeType = InferExprType(matchStmt.Scrutinee);
+							var tagSize = scrutineeType is HirEnumType et ? et.TagSize : 8;
 							for (var j = 0; j < binding.Bindings.Count; j++) {
 								var bindingName = binding.Bindings[j];
 								var payloadPtr = NewValue();
-								instructions.Add(new HirGetFieldPtr(payloadPtr, scrutinee, $"_payload_{j}", 4 + j * 8));
+								instructions.Add(new HirGetFieldPtr(payloadPtr, scrutinee, $"_payload_{j}", tagSize + j * 8));
 								var payloadVal = NewValue();
 								instructions.Add(new HirLoad(payloadVal, payloadPtr, new HirIntType()));
 
@@ -483,8 +515,12 @@ public class AstToHir {
 
 			case IdentifierExpr id: {
 					if (_variableSlots.TryGetValue(id.Name, out var slotPtr)) {
-						// Load value from stack slot
 						var varType = _variableTypes.GetValueOrDefault(id.Name, new HirIntType());
+						// For struct and enum types, return the slot pointer directly (accessed via pointer)
+						if (varType is HirStructType or HirEnumType) {
+							return slotPtr;
+						}
+						// For primitive types, load the value from the stack slot
 						var dest = NewValue();
 						instructions.Add(new HirLoad(dest, slotPtr, varType));
 						return dest;
@@ -494,9 +530,9 @@ public class AstToHir {
 					if (_currentTypeName != null && _structs.TryGetValue(_currentTypeName, out var structDef)) {
 						var field = structDef.Fields.Find(f => f.FieldName == id.Name);
 						if (field != null && _variableSlots.TryGetValue("self", out var selfSlotPtr)) {
-							// Load self first
+							// Load self first (self is a pointer, so load it)
 							var selfValue = NewValue();
-							instructions.Add(new HirLoad(selfValue, selfSlotPtr, new HirStructType(_currentTypeName, structDef.Fields)));
+							instructions.Add(new HirLoad(selfValue, selfSlotPtr, new HirPtrType()));
 							// Generate self.field access
 							var fieldPtr = NewValue();
 							instructions.Add(new HirGetFieldPtr(fieldPtr, selfValue, id.Name, field.Offset));
@@ -612,17 +648,36 @@ public class AstToHir {
 				}
 
 			case MethodCallExpr methodCall: {
-					var baseVal = LowerExpression(methodCall.Base, instructions);
+					var baseType = InferExprType(methodCall.Base);
+
+					// For struct/enum types, pass pointer (address) as self, not the value
+					HirValue baseVal;
+					if (baseType is HirStructType or HirEnumType) {
+						baseVal = LowerExpressionAsAddress(methodCall.Base, instructions);
+					} else {
+						baseVal = LowerExpression(methodCall.Base, instructions);
+					}
 					var args = new List<HirValue> { baseVal };
 
 					foreach (var arg in methodCall.Args) {
-						args.Add(LowerExpression(arg, instructions));
+						var argType = InferExprType(arg);
+						// Pass struct/enum arguments by pointer
+						if (argType is HirStructType or HirEnumType) {
+							args.Add(LowerExpressionAsAddress(arg, instructions));
+						} else {
+							args.Add(LowerExpression(arg, instructions));
+						}
 					}
 					foreach (var namedArg in methodCall.NamedArgs) {
-						args.Add(LowerExpression(namedArg.Value, instructions));
+						var argType = InferExprType(namedArg.Value);
+						// Pass struct/enum arguments by pointer
+						if (argType is HirStructType or HirEnumType) {
+							args.Add(LowerExpressionAsAddress(namedArg.Value, instructions));
+						} else {
+							args.Add(LowerExpression(namedArg.Value, instructions));
+						}
 					}
 
-					var baseType = InferExprType(methodCall.Base);
 					var funcName = $"{baseType.Name}.{methodCall.MethodName}";
 					var retType = GetMethodReturnType(baseType.Name, methodCall.MethodName);
 
@@ -721,14 +776,33 @@ public class AstToHir {
 					if (_variableTypes.TryGetValue(staticCall.TypeName, out var varType)) {
 						// This is a method call on a variable
 						var baseIdent = new IdentifierExpr(staticCall.TypeName);
-						var baseVal = LowerExpression(baseIdent, instructions);
+
+						// For struct/enum types, pass pointer (address) as self, not the value
+						HirValue baseVal;
+						if (varType is HirStructType or HirEnumType) {
+							baseVal = LowerExpressionAsAddress(baseIdent, instructions);
+						} else {
+							baseVal = LowerExpression(baseIdent, instructions);
+						}
 						var args = new List<HirValue> { baseVal };
 
 						foreach (var arg in staticCall.Args) {
-							args.Add(LowerExpression(arg, instructions));
+							var argType = InferExprType(arg);
+							// Pass struct/enum arguments by pointer
+							if (argType is HirStructType or HirEnumType) {
+								args.Add(LowerExpressionAsAddress(arg, instructions));
+							} else {
+								args.Add(LowerExpression(arg, instructions));
+							}
 						}
 						foreach (var namedArg in staticCall.NamedArgs) {
-							args.Add(LowerExpression(namedArg.Value, instructions));
+							var argType = InferExprType(namedArg.Value);
+							// Pass struct/enum arguments by pointer
+							if (argType is HirStructType or HirEnumType) {
+								args.Add(LowerExpressionAsAddress(namedArg.Value, instructions));
+							} else {
+								args.Add(LowerExpression(namedArg.Value, instructions));
+							}
 						}
 
 						var funcName = $"{varType.Name}.{staticCall.MemberName}";
@@ -744,10 +818,13 @@ public class AstToHir {
 					var funcName2 = $"{staticCall.TypeName}.{staticCall.MemberName}";
 					var result = NewValue();
 
-					// Lower arguments
+					// Lower arguments (both positional and named)
 					var argVals = new List<HirValue>();
 					foreach (var arg in staticCall.Args) {
 						argVals.Add(LowerExpression(arg, instructions));
+					}
+					foreach (var namedArg in staticCall.NamedArgs) {
+						argVals.Add(LowerExpression(namedArg.Value, instructions));
 					}
 
 					var returnType = GetFunctionReturnType(funcName2);
@@ -817,6 +894,8 @@ public class AstToHir {
 			UnaryExpr u => InferExprType(u.Operand),
 			CallExpr call => GetFunctionReturnType(call.FuncName),
 			MethodCallExpr mc => GetMethodReturnType(InferExprType(mc.Base).Name, mc.MethodName),
+			FieldAccessExpr fa when fa.Base is IdentifierExpr baseId && _enums.ContainsKey(baseId.Name) =>
+				new HirEnumType(baseId.Name, _enums[baseId.Name].TagSize, _enums[baseId.Name].MaxPayloadSize),
 			FieldAccessExpr fa => GetFieldType(fa.Base, fa.FieldName),
 			StructInitExpr si => si.TypeName != null && _structs.TryGetValue(si.TypeName, out var sd)
 				? new HirStructType(si.TypeName, sd.Fields)
@@ -903,6 +982,41 @@ public class AstToHir {
 			return variant?.Tag ?? 0;
 		}
 		return 0;
+	}
+
+	/// <summary>
+	/// Gets the address of an lvalue expression (for passing structs by reference).
+	/// For variables, returns the slot pointer directly.
+	/// For other expressions, allocates a temp and returns its address.
+	/// </summary>
+	private HirValue LowerExpressionAsAddress(Expr expr, List<HirInstr> instructions) {
+		switch (expr) {
+			case IdentifierExpr id:
+				if (_variableSlots.TryGetValue(id.Name, out var slotPtr)) {
+					return slotPtr;
+				}
+				break;
+			case StructInitExpr structInit: {
+					// StructInitExpr already allocates a temp and returns its address
+					var initPtr = LowerExpression(expr, instructions);
+					return initPtr;
+				}
+		}
+		// Fallback: evaluate expression and store to temp
+		var value = LowerExpression(expr, instructions);
+		var exprType = InferExprType(expr);
+		var tempPtr = NewValue();
+		instructions.Add(new HirAlloca(tempPtr, exprType));
+		if (exprType is HirStructType structType) {
+			// The value is already a pointer to the struct data, use memcpy
+			instructions.Add(new HirMemcpy(tempPtr, value, structType.SizeInBytes));
+		} else if (exprType is HirEnumType enumType) {
+			// The value is already a pointer to the enum data, use memcpy
+			instructions.Add(new HirMemcpy(tempPtr, value, enumType.SizeInBytes));
+		} else {
+			instructions.Add(new HirStore(tempPtr, value, exprType));
+		}
+		return tempPtr;
 	}
 
 	private HirValue NewValue() => new(_nextValueId++);

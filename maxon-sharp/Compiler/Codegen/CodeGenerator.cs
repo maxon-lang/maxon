@@ -16,15 +16,21 @@ public class CodeGenerator {
 	public byte[] Generate(LirModule module) {
 		_strings.AddRange(module.Strings);
 
-		// Generate code for ALL functions
-		foreach (var func in module.Functions) {
-			_alloc = RegisterAllocator.Allocate(func);
-			GenerateFunction(func);
+		// Verify main exists
+		var mainFunc = module.Functions.Find(f => f.Name == "main");
+		if (mainFunc == null) {
+			throw new Exception("No main function found");
 		}
 
-		// Verify main exists
-		if (!module.Functions.Exists(f => f.Name == "main")) {
-			throw new Exception("No main function found");
+		// Generate main first so it's at the entry point
+		_alloc = RegisterAllocator.Allocate(mainFunc);
+		GenerateFunction(mainFunc);
+
+		// Generate all other functions
+		foreach (var func in module.Functions) {
+			if (func.Name == "main") continue;
+			_alloc = RegisterAllocator.Allocate(func);
+			GenerateFunction(func);
 		}
 
 		return _encoder.GetCode();
@@ -53,10 +59,11 @@ public class CodeGenerator {
 
 		// Store incoming parameters to stack slots
 		for (var i = 0; i < Math.Min(func.Params.Count, 4); i++) {
+			var param = func.Params[i];
 			// Windows x64: first 4 params in RCX, RDX, R8, R9
 			var paramReg = RegisterAllocator.ParamRegs[i];
-			// Parameters map to first vregs (0, 1, 2, 3)
-			if (_alloc.VRegToStackOffset.TryGetValue(i, out var offset)) {
+			// Use the vreg ID stored in the LirParam
+			if (param.VRegId >= 0 && _alloc.VRegToStackOffset.TryGetValue(param.VRegId, out var offset)) {
 				_encoder.MovMemReg(Reg.Rbp, offset, paramReg);
 			}
 		}
@@ -80,7 +87,21 @@ public class CodeGenerator {
 
 			case LirLoad load:
 				LoadValue(R0, load.Ptr); // R0 = ptr
-				_encoder.MovRegMem(R0, R0, 0); // R0 = [R0]
+										 // Use sized load to handle different data types
+				switch (load.Size) {
+					case 1:
+						_encoder.MovzxReg64Mem8(R0, R0, 0); // Zero-extend 1 byte
+						break;
+					case 2:
+						_encoder.MovzxReg64Mem16(R0, R0, 0); // Zero-extend 2 bytes
+						break;
+					case 4:
+						_encoder.MovReg32Mem32(R0, R0, 0); // 32-bit load (zero-extends)
+						break;
+					default:
+						_encoder.MovRegMem(R0, R0, 0); // 64-bit load
+						break;
+				}
 				StoreToStack(load.Dest.Id, R0);
 				break;
 
@@ -88,6 +109,16 @@ public class CodeGenerator {
 				LoadValue(R0, store.Ptr); // R0 = ptr
 				LoadValue(R1, store.Value); // R1 = value
 				_encoder.MovMemRegSized(R0, 0, R1, store.Size); // [R0] = R1 with proper size
+				break;
+
+			case LirMemcpy memcpy:
+				// Copy struct from src to dest, 8 bytes at a time
+				LoadValue(R0, memcpy.Dest); // R0 = dest ptr
+				LoadValue(R1, memcpy.Src);  // R1 = src ptr
+				for (var offset = 0; offset < memcpy.Size; offset += 8) {
+					_encoder.MovRegMem(Reg.R11, R1, offset);  // R11 = [src + offset]
+					_encoder.MovMemReg(R0, offset, Reg.R11);  // [dest + offset] = R11
+				}
 				break;
 
 			case LirLea lea:
