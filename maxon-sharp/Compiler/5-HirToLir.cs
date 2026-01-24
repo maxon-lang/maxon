@@ -46,7 +46,7 @@ public class HirToLir {
 	};
 
 	public LirModule Lower(HirModule hirModule) {
-		Logger.Info(LogCategory.Lir, "Starting HIR to LIR lowering");
+		Logger.Debug(LogCategory.Lir, "Starting HIR to LIR lowering");
 		var functions = new List<LirFunction>();
 
 		foreach (var func in hirModule.Functions) {
@@ -60,7 +60,7 @@ public class HirToLir {
 			globals.Add(new LirGlobalData(global.Name, new byte[global.Type.SizeInBytes]));
 		}
 
-		Logger.Info(LogCategory.Lir, $"LIR complete: {functions.Count} functions");
+		Logger.Debug(LogCategory.Lir, $"LIR complete: {functions.Count} functions");
 		return new LirModule(_stringList, globals, functions);
 	}
 

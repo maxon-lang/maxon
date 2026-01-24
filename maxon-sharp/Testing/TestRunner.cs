@@ -7,11 +7,10 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Executes tests from fragment files.
 /// </summary>
-public class TestRunner(string specDir, string fragmentDir, string tempDir, bool verbose = false, string? filter = null, int? workers = null) {
+public class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null) {
 	private readonly string _specDir = specDir;
 	private readonly string _fragmentDir = fragmentDir;
 	private readonly string _tempDir = tempDir;
-	private readonly bool _verbose = verbose;
 	private readonly string? _filter = filter;
 	private readonly int _workerCount = workers ?? Math.Max(1, Environment.ProcessorCount / 2);
 
@@ -22,10 +21,21 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 		var sw = Stopwatch.StartNew();
 
 		// Regenerate fragments if specs changed
-		Logger.Info(LogCategory.Testing, "Checking for spec changes...");
-		var generated = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir);
-		if (generated > 0) {
-			Logger.Info(LogCategory.Testing, $"Generated {generated} fragment(s)");
+		var genResult = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir);
+		if (genResult.Generated > 0) {
+			Logger.Info(LogCategory.Testing, $"Generated {genResult.Generated} fragment(s)");
+		}
+
+		// Abort if fragment generation had errors
+		if (genResult.Errors > 0) {
+			Logger.Error(LogCategory.Testing, $"Fragment generation failed with {genResult.Errors} error(s). Fix spec files before running tests.");
+			return new TestSummary {
+				Results = [],
+				Passed = 0,
+				Failed = genResult.Errors,
+				Total = genResult.Errors,
+				TotalDuration = sw.Elapsed
+			};
 		}
 
 		// Load all fragments
@@ -57,15 +67,14 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 			var result = RunTest(fragment);
 			results.Add(result);
 
-			if (_verbose || !result.Passed) {
-				var status = result.Passed ? "PASS" : "FAIL";
-				if (result.Passed) {
-					Logger.Info(LogCategory.Testing, $"[{status}] {result.TestName}");
-				} else {
-					Logger.Error(LogCategory.Testing, $"[{status}] {result.TestName}");
-					if (result.ErrorMessage != null) {
-						Logger.Error(LogCategory.Testing, $"  {result.ErrorMessage}");
-					}
+			if (result.Passed) {
+				// Passing tests only show at debug level
+				Logger.Debug(LogCategory.Testing, $"[PASS] {result.TestName}");
+			} else {
+				// Failing tests show at error level (always visible)
+				Logger.Error(LogCategory.Testing, $"[FAIL] {result.TestName}");
+				if (result.ErrorMessage != null) {
+					Logger.Error(LogCategory.Testing, $"  {result.ErrorMessage}");
 				}
 			}
 		});
@@ -198,6 +207,52 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 					}
 				}
 
+				// Check Required HIR (substring match)
+				if (successExpectation.RequiredHir != null) {
+					var hirResult = Compiler.Compiler.CompileToIr(fragment.Source);
+					if (!hirResult.Success) {
+						return new TestResult {
+							TestName = fragment.TestName,
+							Passed = false,
+							ErrorMessage = $"Failed to generate HIR: {hirResult.Error}",
+							Duration = sw.Elapsed
+						};
+					}
+
+					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredHir, hirResult.Hir!);
+					if (!Passed) {
+						return new TestResult {
+							TestName = fragment.TestName,
+							Passed = false,
+							ErrorMessage = $"Required HIR not found: {Message}",
+							Duration = sw.Elapsed
+						};
+					}
+				}
+
+				// Check Required LIR (substring match)
+				if (successExpectation.RequiredLir != null) {
+					var lirResult = Compiler.Compiler.CompileToIr(fragment.Source);
+					if (!lirResult.Success) {
+						return new TestResult {
+							TestName = fragment.TestName,
+							Passed = false,
+							ErrorMessage = $"Failed to generate LIR: {lirResult.Error}",
+							Duration = sw.Elapsed
+						};
+					}
+
+					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredLir, lirResult.Lir!);
+					if (!Passed) {
+						return new TestResult {
+							TestName = fragment.TestName,
+							Passed = false,
+							ErrorMessage = $"Required LIR not found: {Message}",
+							Duration = sw.Elapsed
+						};
+					}
+				}
+
 				// Run the executable if we have runtime expectations
 				if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null) {
 					var (ExitCode, Stdout, Stderr) = RunExecutable(tempExe);
@@ -303,5 +358,18 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 			.Select(l => l.Trim())
 			.Where(l => l.Length > 0);
 		return string.Join("\n", lines);
+	}
+
+	private static (bool Passed, string? Message) CheckRequiredIr(string required, string actual) {
+		// Normalize both for exact match
+		var requiredNorm = NormalizeIr(required);
+		var actualNorm = NormalizeIr(actual);
+
+		if (actualNorm == requiredNorm) {
+			return (true, null);
+		}
+
+		// Show what we expected vs what we got
+		return (false, $"IR mismatch.\nExpected:\n{requiredNorm}\n\nActual:\n{actualNorm}");
 	}
 }

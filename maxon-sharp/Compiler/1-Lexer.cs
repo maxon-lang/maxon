@@ -213,7 +213,7 @@ public class Lexer(string source) {
 	};
 
 	public List<Token> Tokenize() {
-		Logger.Info(LogCategory.Lexer, "Starting lexer");
+		Logger.Debug(LogCategory.Lexer, "Starting lexer");
 		var tokens = new List<Token>();
 
 		while (!IsAtEnd()) {
@@ -225,7 +225,7 @@ public class Lexer(string source) {
 		}
 
 		tokens.Add(new Token(TokenType.Eof, "", _line, _column));
-		Logger.Info(LogCategory.Lexer, $"Lexer complete: {tokens.Count} tokens");
+		Logger.Debug(LogCategory.Lexer, $"Lexer complete: {tokens.Count} tokens");
 		return tokens;
 	}
 
@@ -366,7 +366,7 @@ public class Lexer(string source) {
 				// Check for doc comment ///
 				if (Peek(2) == '/') {
 					Advance(); Advance(); Advance(); // Skip ///
-																					 // Skip leading space
+													 // Skip leading space
 					if (!IsAtEnd() && Current() == ' ') Advance();
 					var start = _pos;
 					while (!IsAtEnd() && Current() != '\n') Advance();

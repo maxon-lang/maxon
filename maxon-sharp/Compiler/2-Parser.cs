@@ -5,7 +5,7 @@ public class Parser(List<Token> tokens) {
 	private int _pos;
 
 	public ProgramAst Parse() {
-		Logger.Info(LogCategory.Parser, "Starting parser");
+		Logger.Debug(LogCategory.Parser, "Starting parser");
 		var types = new List<TypeDecl>();
 		var enums = new List<EnumDecl>();
 		var interfaces = new List<InterfaceDecl>();
@@ -26,7 +26,7 @@ public class Parser(List<Token> tokens) {
 			SkipNewlines();
 		}
 
-		Logger.Info(LogCategory.Parser, $"Parser complete: {functions.Count} functions, {types.Count} types");
+		Logger.Debug(LogCategory.Parser, $"Parser complete: {functions.Count} functions, {types.Count} types");
 		return new ProgramAst(types, enums, interfaces, extensions, functions, globalConstants, globalVariables, typeAliases);
 	}
 

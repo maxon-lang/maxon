@@ -35,7 +35,6 @@ class Program {
 		Console.WriteLine("  --emit-ir                Write .hir and .lir files");
 		Console.WriteLine();
 		Console.WriteLine("Spec test options:");
-		Console.WriteLine("  --verbose                Show all test results");
 		Console.WriteLine("  --filter=PATTERN         Run only tests matching regex pattern");
 		Console.WriteLine("  --workers=N              Number of parallel workers (default: CPU/2)");
 		Console.WriteLine();
@@ -44,7 +43,11 @@ class Program {
 		Console.WriteLine("  --log=CATEGORY:LEVEL     Set specific category to LEVEL");
 		Console.WriteLine();
 		Console.WriteLine("Log levels: none, error, info, debug, trace");
-		Console.WriteLine("Log categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
+		Console.WriteLine("Log categories: compiler, lexer, parser, semantic, hir, lir, optimizer, codegen, pe, testing");
+		Console.WriteLine();
+		Console.WriteLine("Testing log levels:");
+		Console.WriteLine("  info   - Show failures and summary only");
+		Console.WriteLine("  debug  - Also show each passing test");
 	}
 
 	static int HandleUnknownCommand(string command) {
@@ -276,14 +279,19 @@ class Program {
 	}
 
 	static int RunSpecTests(string[] args) {
-		var verbose = false;
+		// For spec-test, suppress compiler Info messages (e.g., "Successfully compiled to...")
+		// Errors are still shown. User can override with --log=compiler:info
+		Logger.SetLevel(LogCategory.Compiler, LogLevel.Error);
+
+		// Parse common options (logging) - allows user overrides
+		var (_, valid) = ParseCommonOptions(args);
+		if (!valid) return 1;
+
 		string? filter = null;
 		int? workers = null;
 
 		foreach (var arg in args) {
-			if (arg == "--verbose") {
-				verbose = true;
-			} else if (arg.StartsWith("--filter=")) {
+			if (arg.StartsWith("--filter=")) {
 				filter = arg["--filter=".Length..];
 			} else if (arg.StartsWith("--workers=")) {
 				if (int.TryParse(arg["--workers=".Length..], out var w)) {
@@ -305,7 +313,7 @@ class Program {
 
 		Logger.Info(LogCategory.Testing, "Running maxon-sharp spec tests...");
 
-		var runner = new TestRunner(specDir, fragmentDir, tempDir, verbose, filter, workers);
+		var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers);
 		var summary = runner.RunAllSpecTests();
 
 		Logger.Info(LogCategory.Testing, "");

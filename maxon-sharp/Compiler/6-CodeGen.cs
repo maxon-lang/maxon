@@ -20,7 +20,7 @@ public class CodeGen {
 
 
 	public byte[] Generate(LirModule module) {
-		Logger.Info(LogCategory.Codegen, "Starting code generation");
+		Logger.Debug(LogCategory.Codegen, "Starting code generation");
 		_strings.AddRange(module.Strings);
 
 		// Verify main exists
@@ -40,7 +40,7 @@ public class CodeGen {
 		}
 
 		var code = _encoder.GetCode();
-		Logger.Info(LogCategory.Codegen, $"Codegen complete: {code.Length} bytes");
+		Logger.Debug(LogCategory.Codegen, $"Codegen complete: {code.Length} bytes");
 		return code;
 	}
 

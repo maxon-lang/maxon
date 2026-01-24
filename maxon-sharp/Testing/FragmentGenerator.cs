@@ -3,6 +3,11 @@ using System.Text;
 namespace MaxonSharp.Testing;
 
 /// <summary>
+/// Result of fragment generation.
+/// </summary>
+public record FragmentGenerationResult(int Generated, int Errors);
+
+/// <summary>
 /// Generates .test fragment files from spec files.
 /// </summary>
 public static class FragmentGenerator {
@@ -12,17 +17,18 @@ public static class FragmentGenerator {
 	/// <param name="specDir">Directory containing spec files</param>
 	/// <param name="fragmentDir">Directory to output fragment files</param>
 	/// <param name="force">Force regeneration even if up to date</param>
-	/// <returns>Number of fragments generated</returns>
-	public static int GenerateFragments(string specDir, string fragmentDir, bool force = false) {
+	/// <returns>Result with number of fragments generated and error count</returns>
+	public static FragmentGenerationResult GenerateFragments(string specDir, string fragmentDir, bool force = false) {
 		if (!Directory.Exists(specDir)) {
 			Logger.Error(LogCategory.Testing, $"Spec directory not found: {specDir}");
-			return 0;
+			return new FragmentGenerationResult(0, 1);
 		}
 
 		Directory.CreateDirectory(fragmentDir);
 
 		var specs = SpecParser.ParseDirectory(specDir);
 		var generated = 0;
+		var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
 		var workerCount = Math.Max(1, Environment.ProcessorCount / 2);
 
 		Parallel.ForEach(specs, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, spec => {
@@ -39,17 +45,27 @@ public static class FragmentGenerator {
 					continue;
 				}
 
-				var content = GenerateFragmentContent(test);
+				var (content, error) = GenerateFragmentContent(test);
+				if (error != null) {
+					errors.Add($"{test.Name}: {error}");
+				}
 				File.WriteAllText(fragmentPath, content);
 				Interlocked.Increment(ref generated);
 			}
 		});
 
-		return generated;
+		// Report any compilation errors encountered during fragment generation
+		foreach (var error in errors) {
+			Logger.Error(LogCategory.Testing, $"Fragment generation error: {error}");
+		}
+
+		return new FragmentGenerationResult(generated, errors.Count);
 	}
 
-	private static string GenerateFragmentContent(TestCase test) {
+	private static (string Content, string? Error) GenerateFragmentContent(TestCase test) {
 		var sb = new StringBuilder();
+		string? error = null;
+
 		sb.AppendLine($"// Test: {test.Name}");
 		sb.AppendLine(test.Source);
 		sb.AppendLine("---");
@@ -63,23 +79,80 @@ public static class FragmentGenerator {
 				sb.AppendLine(success.Stdout);
 				sb.AppendLine("```");
 			}
-			if (success.ExpectedHir != null) {
-				sb.AppendLine("ExpectedHIR: ```");
-				sb.AppendLine(success.ExpectedHir);
-				sb.AppendLine("```");
+
+			// Check if this test uses required IR (must have both if either is present)
+			var hasRequiredIr = success.RequiredHir != null || success.RequiredLir != null;
+
+			if (hasRequiredIr) {
+				// Write required IR blocks (don't auto-generate expected IR for these tests)
+				if (success.RequiredHir != null) {
+					sb.AppendLine("RequiredHIR: ```");
+					sb.AppendLine(success.RequiredHir);
+					sb.AppendLine("```");
+				}
+				if (success.RequiredLir != null) {
+					sb.AppendLine("RequiredLIR: ```");
+					sb.AppendLine(success.RequiredLir);
+					sb.AppendLine("```");
+				}
+			} else {
+				// No required IR - auto-generate expected IR if not already specified
+				var (expectedHir, expectedLir, irError) = GetOrGenerateIr(test.Source, success.ExpectedHir, success.ExpectedLir);
+				if (irError != null) {
+					error = irError;
+				}
+
+				if (expectedHir != null) {
+					sb.AppendLine("ExpectedHIR: ```");
+					sb.AppendLine(expectedHir);
+					sb.AppendLine("```");
+				}
+				if (expectedLir != null) {
+					sb.AppendLine("ExpectedLIR: ```");
+					sb.AppendLine(expectedLir);
+					sb.AppendLine("```");
+				}
 			}
-			if (success.ExpectedLir != null) {
-				sb.AppendLine("ExpectedLIR: ```");
-				sb.AppendLine(success.ExpectedLir);
-				sb.AppendLine("```");
-			}
-		} else if (test.Expectation is CompilerErrorExpectation error) {
-			sb.AppendLine($"ExpectedError: {error.ExpectedError}");
+		} else if (test.Expectation is CompilerErrorExpectation compilerError) {
+			sb.AppendLine($"ExpectedError: {compilerError.ExpectedError}");
 		}
 
 		sb.AppendLine("---");
 
-		return sb.ToString();
+		// Append generated IR at the end (for informational purposes, like zig version)
+		if (test.Expectation is SuccessExpectation) {
+			var irResult = Compiler.Compiler.CompileToIr(test.Source);
+			if (irResult.Success) {
+				sb.AppendLine("// Generated HIR:");
+				sb.AppendLine(irResult.Hir);
+				sb.AppendLine("// Generated LIR:");
+				sb.AppendLine(irResult.Lir);
+			} else {
+				sb.AppendLine($"// IR generation failed: {irResult.Error}");
+				error ??= irResult.Error;
+			}
+		}
+
+		sb.AppendLine("---");
+
+		return (sb.ToString(), error);
+	}
+
+	private static (string? Hir, string? Lir, string? Error) GetOrGenerateIr(string source, string? existingHir, string? existingLir) {
+		// If both are already specified, use them
+		if (existingHir != null && existingLir != null) {
+			return (existingHir, existingLir, null);
+		}
+
+		// Generate IR from source
+		var irResult = Compiler.Compiler.CompileToIr(source);
+		if (!irResult.Success) {
+			// Compilation failed, return whatever was specified plus the error
+			return (existingHir, existingLir, irResult.Error);
+		}
+
+		// Use existing or generated
+		return (existingHir ?? irResult.Hir, existingLir ?? irResult.Lir, null);
 	}
 
 	/// <summary>
@@ -132,6 +205,8 @@ public static class FragmentGenerator {
 		string? stdout = null;
 		string? expectedHir = null;
 		string? expectedLir = null;
+		string? requiredHir = null;
+		string? requiredLir = null;
 		string? expectedError = null;
 
 		var i = 0;
@@ -151,6 +226,10 @@ public static class FragmentGenerator {
 				expectedHir = ExtractMultilineValue(lines, ref i);
 			} else if (line.StartsWith("ExpectedLIR: ```")) {
 				expectedLir = ExtractMultilineValue(lines, ref i);
+			} else if (line.StartsWith("RequiredHIR: ```")) {
+				requiredHir = ExtractMultilineValue(lines, ref i);
+			} else if (line.StartsWith("RequiredLIR: ```")) {
+				requiredLir = ExtractMultilineValue(lines, ref i);
 			}
 
 			i++;
@@ -166,7 +245,9 @@ public static class FragmentGenerator {
 			ExitCode = exitCode,
 			Stdout = stdout,
 			ExpectedHir = expectedHir,
-			ExpectedLir = expectedLir
+			ExpectedLir = expectedLir,
+			RequiredHir = requiredHir,
+			RequiredLir = requiredLir
 		};
 	}
 

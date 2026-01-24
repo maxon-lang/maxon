@@ -21,7 +21,7 @@ public class SemanticAnalyzer {
 	/// <param name="program">The program AST to analyze.</param>
 	/// <param name="requireMain">If true, requires a 'main' function to be present.</param>
 	public bool Analyze(ProgramAst program, bool requireMain) {
-		Logger.Info(LogCategory.Semantic, "Starting semantic analysis");
+		Logger.Debug(LogCategory.Semantic, "Starting semantic analysis");
 
 		if (requireMain) {
 			// Check that main function exists
@@ -45,7 +45,7 @@ public class SemanticAnalyzer {
 		_mutationAnalyzer = new MutationAnalyzer();
 		_mutationAnalyzer.Analyze(program);
 
-		Logger.Info(LogCategory.Semantic, "Semantic analysis complete");
+		Logger.Debug(LogCategory.Semantic, "Semantic analysis complete");
 		return true;
 	}
 

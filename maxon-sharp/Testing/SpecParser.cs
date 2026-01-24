@@ -83,6 +83,15 @@ public static partial class SpecParser {
 			var stderr = ExtractCodeBlock(testSection, "maxoncstderr");
 			var hir = ExtractCodeBlock(testSection, "hir");
 			var lir = ExtractCodeBlock(testSection, "lir");
+			var requiredHir = ExtractCodeBlock(testSection, "requiredhir");
+			var requiredLir = ExtractCodeBlock(testSection, "requiredlir");
+
+			// Validate: if either requiredHir or requiredLir is present, both must be present
+			if ((requiredHir != null) != (requiredLir != null)) {
+				var missing = requiredHir == null ? "requiredhir" : "requiredlir";
+				Logger.Error(LogCategory.Testing, $"Test '{testName}': if using required IR, both requiredhir and requiredlir must be specified (missing {missing})");
+				continue;
+			}
 
 			TestExpectation expectation;
 			if (stderr != null) {
@@ -94,7 +103,9 @@ public static partial class SpecParser {
 					ExitCode = exitCode != null ? int.Parse(exitCode.Trim()) : null,
 					Stdout = stdout,
 					ExpectedHir = hir,
-					ExpectedLir = lir
+					ExpectedLir = lir,
+					RequiredHir = requiredHir,
+					RequiredLir = requiredLir
 				};
 			}
 

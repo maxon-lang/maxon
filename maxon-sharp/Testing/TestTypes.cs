@@ -31,8 +31,12 @@ public abstract class TestExpectation { }
 public class SuccessExpectation : TestExpectation {
 	public int? ExitCode { get; init; }
 	public string? Stdout { get; init; }
+	// Reference only (auto-generated for regression review, not checked)
 	public string? ExpectedHir { get; init; }
 	public string? ExpectedLir { get; init; }
+	// Verified during test runs (substring match)
+	public string? RequiredHir { get; init; }
+	public string? RequiredLir { get; init; }
 }
 
 /// <summary>

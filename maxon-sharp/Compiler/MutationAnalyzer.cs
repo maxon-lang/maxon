@@ -22,7 +22,7 @@ public class MutationAnalyzer {
 	/// Analyze entire program, populate _mutatedParams.
 	/// </summary>
 	public void Analyze(ProgramAst program) {
-		Logger.Info(LogCategory.Semantic, "Starting mutation analysis");
+		Logger.Debug(LogCategory.Semantic, "Starting mutation analysis");
 
 		// First pass: collect function signatures
 		foreach (var func in program.Functions) {
@@ -55,7 +55,7 @@ public class MutationAnalyzer {
 			}
 		}
 
-		Logger.Info(LogCategory.Semantic, $"Mutation analysis complete: {_mutatedParams.Count(kv => kv.Value)} mutated params");
+		Logger.Debug(LogCategory.Semantic, $"Mutation analysis complete: {_mutatedParams.Count(kv => kv.Value)} mutated params");
 	}
 
 	/// <summary>

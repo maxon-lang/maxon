@@ -34,6 +34,9 @@ public class Compiler {
 			var astToHir = new AstToHir();
 			var hirModule = astToHir.Lower(ast, semanticAnalyzer.MutationAnalyzer);
 
+			// Stage 4.5: HIR Optimization
+			HirOptimizer.Optimize(hirModule);
+
 			// Write HIR to string
 			var hirWriter = new StringWriter();
 			WriteHir(hirWriter, hirModule);
@@ -42,6 +45,9 @@ public class Compiler {
 			// Stage 5: HIR to LIR
 			var hirToLir = new HirToLir();
 			var lirModule = hirToLir.Lower(hirModule);
+
+			// Stage 5.5: LIR Optimization
+			LirOptimizer.Optimize(lirModule);
 
 			// Write LIR to string
 			var lirWriter = new StringWriter();
@@ -61,10 +67,10 @@ public class Compiler {
 	/// </summary>
 	public static bool Compile(SourceFile[] sources, string outputPath, string? hirOutputPath = null, string? lirOutputPath = null) {
 		try {
-			Logger.Info(LogCategory.Compiler, $"Starting compilation ({sources.Length} file(s))");
+			Logger.Debug(LogCategory.Compiler, $"Starting compilation ({sources.Length} file(s))");
 
 			// Phase 1: Parse all source files
-			Logger.Info(LogCategory.Compiler, "Phase 1: Parsing");
+			Logger.Debug(LogCategory.Compiler, "Phase 1: Parsing");
 			var asts = new List<ProgramAst>();
 			int mainFileIndex = -1;
 
@@ -91,44 +97,52 @@ public class Compiler {
 			}
 
 			// Phase 2: Merge into single program (filter non-exports from non-main files)
-			Logger.Info(LogCategory.Compiler, "Phase 2: Merging ASTs");
+			Logger.Debug(LogCategory.Compiler, "Phase 2: Merging ASTs");
 			var program = ProgramAst.Merge(asts, mainFileIndex);
 
 			// Phase 3: Semantic analysis
-			Logger.Info(LogCategory.Compiler, "Phase 3: Semantic analysis");
+			Logger.Debug(LogCategory.Compiler, "Phase 3: Semantic analysis");
 			var semanticAnalyzer = new SemanticAnalyzer();
 			if (!semanticAnalyzer.Analyze(program)) {
 				return false;
 			}
 
 			// Phase 4: AST to HIR
-			Logger.Info(LogCategory.Compiler, "Phase 4: AST to HIR");
+			Logger.Debug(LogCategory.Compiler, "Phase 4: AST to HIR");
 			var astToHir = new AstToHir();
 			var hirModule = astToHir.Lower(program, semanticAnalyzer.MutationAnalyzer);
+
+			// Phase 4.5: HIR Optimization
+			Logger.Debug(LogCategory.Compiler, "Phase 4.5: HIR Optimization");
+			HirOptimizer.Optimize(hirModule);
 
 			if (hirOutputPath != null) {
 				WriteHirFile(hirOutputPath, hirModule);
 			}
 
 			// Phase 5: HIR to LIR
-			Logger.Info(LogCategory.Compiler, "Phase 5: HIR to LIR");
+			Logger.Debug(LogCategory.Compiler, "Phase 5: HIR to LIR");
 			var hirToLir = new HirToLir();
 			var lirModule = hirToLir.Lower(hirModule);
+
+			// Phase 5.5: LIR Optimization
+			Logger.Debug(LogCategory.Compiler, "Phase 5.5: LIR Optimization");
+			LirOptimizer.Optimize(lirModule);
 
 			if (lirOutputPath != null) {
 				WriteLirFile(lirOutputPath, lirModule);
 			}
 
 			// Phase 6: Code generation
-			Logger.Info(LogCategory.Compiler, "Phase 6: Code generation");
+			Logger.Debug(LogCategory.Compiler, "Phase 6: Code generation");
 			var codeGen = new CodeGen();
 			var code = codeGen.Generate(lirModule);
 
 			// Phase 7: PE Writer
-			Logger.Info(LogCategory.Compiler, "Phase 7: PE Writer");
+			Logger.Debug(LogCategory.Compiler, "Phase 7: PE Writer");
 			PeWriter.Write(outputPath, code);
 
-			Logger.Info(LogCategory.Compiler, "Compilation complete");
+			Logger.Debug(LogCategory.Compiler, "Compilation complete");
 			Logger.Info(LogCategory.Compiler, $"Successfully compiled to {outputPath}");
 			return true;
 		} catch (CompileError ex) {
@@ -143,13 +157,13 @@ public class Compiler {
 	private static void WriteHirFile(string path, HirModule module) {
 		using var writer = new StreamWriter(path);
 		WriteHir(writer, module);
-		Logger.Info(LogCategory.Compiler, $"Wrote {path}");
+		Logger.Debug(LogCategory.Compiler, $"Wrote {path}");
 	}
 
 	private static void WriteLirFile(string path, LirModule module) {
 		using var writer = new StreamWriter(path);
 		WriteLir(writer, module);
-		Logger.Info(LogCategory.Compiler, $"Wrote {path}");
+		Logger.Debug(LogCategory.Compiler, $"Wrote {path}");
 	}
 
 	private static void WriteHir(TextWriter w, HirModule module) {
@@ -202,6 +216,11 @@ public class Compiler {
 			HirMul m => $"{m.Dest} = mul {m.Left}, {m.Right}",
 			HirDiv d => $"{d.Dest} = div {d.Left}, {d.Right}",
 			HirMod m => $"{m.Dest} = mod {m.Left}, {m.Right}",
+			HirBand b => $"{b.Dest} = band {b.Left}, {b.Right}",
+			HirBor b => $"{b.Dest} = bor {b.Left}, {b.Right}",
+			HirBxor b => $"{b.Dest} = bxor {b.Left}, {b.Right}",
+			HirShl s => $"{s.Dest} = shl {s.Left}, {s.Right}",
+			HirShr s => $"{s.Dest} = shr {s.Left}, {s.Right}",
 			HirNeg n => $"{n.Dest} = neg {n.Operand}",
 			HirNot n => $"{n.Dest} = not {n.Operand}",
 			HirCmpEq c => $"{c.Dest} = eq {c.Left}, {c.Right}",

@@ -21,6 +21,7 @@ public enum LogCategory {
 	Semantic,
 	Hir,
 	Lir,
+	Optimizer,
 	Codegen,
 	Pe,
 	Testing
@@ -31,7 +32,7 @@ public enum LogCategory {
 /// </summary>
 public static class Logger {
 	private static readonly Dictionary<LogCategory, LogLevel> CategoryLevels = [];
-	private static LogLevel _globalLevel = LogLevel.None;
+	private static LogLevel _globalLevel = LogLevel.Info;
 
 	/// <summary>
 	/// Sets the global log level for all categories.
@@ -62,12 +63,26 @@ public static class Logger {
 		return level <= GetLevel(category);
 	}
 
+	private static string CategoryCode(LogCategory category) => category switch {
+		LogCategory.Compiler => "CMP",
+		LogCategory.Lexer => "LEX",
+		LogCategory.Parser => "PAR",
+		LogCategory.Semantic => "SEM",
+		LogCategory.Hir => "HIR",
+		LogCategory.Lir => "LIR",
+		LogCategory.Optimizer => "OPT",
+		LogCategory.Codegen => "GEN",
+		LogCategory.Pe => "PE ",
+		LogCategory.Testing => "TST",
+		_ => "???"
+	};
+
 	/// <summary>
 	/// Logs an error message.
 	/// </summary>
 	public static void Error(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Error)) {
-			Console.WriteLine($"[{category}] ERROR: {message}");
+			Console.WriteLine($"[{CategoryCode(category)}] ERROR: {message}");
 		}
 	}
 
@@ -76,7 +91,7 @@ public static class Logger {
 	/// </summary>
 	public static void Info(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Info)) {
-			Console.WriteLine($"[{category}] {message}");
+			Console.WriteLine($"[{CategoryCode(category)}] {message}");
 		}
 	}
 
@@ -85,7 +100,7 @@ public static class Logger {
 	/// </summary>
 	public static void Debug(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Debug)) {
-			Console.WriteLine($"[{category}] DEBUG: {message}");
+			Console.WriteLine($"[{CategoryCode(category)}] DEBUG: {message}");
 		}
 	}
 
@@ -94,7 +109,7 @@ public static class Logger {
 	/// </summary>
 	public static void Trace(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Trace)) {
-			Console.WriteLine($"[{category}] TRACE: {message}");
+			Console.WriteLine($"[{CategoryCode(category)}] TRACE: {message}");
 		}
 	}
 
@@ -144,11 +159,12 @@ public static class Logger {
 			"semantic" => LogCategory.Semantic,
 			"hir" => LogCategory.Hir,
 			"lir" => LogCategory.Lir,
+			"optimizer" => LogCategory.Optimizer,
 			"codegen" => LogCategory.Codegen,
 			"pe" => LogCategory.Pe,
 			"testing" => LogCategory.Testing,
 			_ => LogCategory.Compiler
 		};
-		return s.ToLowerInvariant() is "compiler" or "lexer" or "parser" or "semantic" or "hir" or "lir" or "codegen" or "pe" or "testing";
+		return s.ToLowerInvariant() is "compiler" or "lexer" or "parser" or "semantic" or "hir" or "lir" or "optimizer" or "codegen" or "pe" or "testing";
 	}
 }

@@ -1,0 +1,59 @@
+// Test: strength-reduction-mul-by-2
+function main() returns int
+    var x = 10
+    return x * 2
+end 'main'
+---
+ExitCode: 20
+RequiredHIR: ```
+fn main() -> int {
+entry:
+  %0 = alloca int
+  %1 = const 10
+  store %0, %1 : int
+  %2 = load %0
+  %5 = const 1
+  %4 = shl %2, %5
+  ret %4
+}
+```
+RequiredLIR: ```
+fn main() -> I64 [stack=16] {
+entry:
+  v0 = addressof [rbp-8]
+  v1 = mov 10
+  store v0, v1 (8)
+  v2 = load v0 (8)
+  v3 = mov 1
+  v4 = shl v2, v3
+  ret v4
+}
+```
+---
+// Generated HIR:
+
+fn main() -> int {
+entry:
+  %0 = alloca int
+  %1 = const 10
+  store %0, %1 : int
+  %2 = load %0
+  %5 = const 1
+  %4 = shl %2, %5
+  ret %4
+}
+
+// Generated LIR:
+
+fn main() -> I64 [stack=16] {
+entry:
+  v0 = addressof [rbp-8]
+  v1 = mov 10
+  store v0, v1 (8)
+  v2 = load v0 (8)
+  v3 = mov 1
+  v4 = shl v2, v3
+  ret v4
+}
+
+---

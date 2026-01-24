@@ -7,7 +7,7 @@ public class PeWriter {
 	private const ulong ImageBase = 0x140000000;   // Default for 64-bit
 
 	public static void Write(string path, byte[] code) {
-		Logger.Info(LogCategory.Pe, $"Writing PE file: {path}");
+		Logger.Debug(LogCategory.Pe, $"Writing PE file: {path}");
 		using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
 		using var writer = new BinaryWriter(fs);
 
@@ -116,7 +116,7 @@ public class PeWriter {
 			writer.Write(new byte[codePadding]);
 		}
 
-		Logger.Info(LogCategory.Pe, "PE write complete");
+		Logger.Debug(LogCategory.Pe, "PE write complete");
 	}
 
 	private static uint AlignUp(uint value, uint alignment) {

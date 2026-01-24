@@ -19,7 +19,7 @@ public class AstToHir {
 	private MutationAnalyzer _mutationAnalyzer = new();
 
 	public HirModule Lower(ProgramAst program, MutationAnalyzer? mutationAnalyzer = null) {
-		Logger.Info(LogCategory.Hir, "Starting AST to HIR lowering");
+		Logger.Debug(LogCategory.Hir, "Starting AST to HIR lowering");
 
 		// Use provided mutation analyzer or create a new one
 		if (mutationAnalyzer != null) {
@@ -84,7 +84,7 @@ public class AstToHir {
 			}
 		}
 
-		Logger.Info(LogCategory.Hir, $"HIR complete: {functions.Count} functions");
+		Logger.Debug(LogCategory.Hir, $"HIR complete: {functions.Count} functions");
 		return new HirModule(structs, enums, globals, functions);
 	}
 
