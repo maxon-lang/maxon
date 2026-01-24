@@ -136,9 +136,6 @@ public class Lexer(string source) {
 			case '*':
 				Advance();
 				return new Token(TokenType.Star, "*", startLine, startColumn);
-			case '%':
-				Advance();
-				return new Token(TokenType.Percent, "%", startLine, startColumn);
 			case ',':
 				Advance();
 				return new Token(TokenType.Comma, ",", startLine, startColumn);
@@ -225,7 +222,7 @@ public class Lexer(string source) {
 				// Check for doc comment ///
 				if (Peek(2) == '/') {
 					Advance(); Advance(); Advance(); // Skip ///
-													 // Skip leading space
+																					 // Skip leading space
 					if (!IsAtEnd() && Current() == ' ') Advance();
 					var start = _pos;
 					while (!IsAtEnd() && Current() != '\n') Advance();

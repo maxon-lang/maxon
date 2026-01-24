@@ -8,7 +8,62 @@ using MaxonSharp.Semantic;
 
 namespace MaxonSharp;
 
+/// <summary>
+/// Result of compiling source code to IR.
+/// </summary>
+public record CompileToIrResult(
+	string? Hir,
+	string? Lir,
+	bool Success,
+	string? Error
+);
+
 public class Compiler {
+	/// <summary>
+	/// Compile source code and return HIR and LIR as strings.
+	/// </summary>
+	public static CompileToIrResult CompileToIr(string source) {
+		try {
+			// Stage 1: Lexing
+			var lexer = new Lexer.Lexer(source);
+			var tokens = lexer.Tokenize();
+
+			// Stage 2: Parsing
+			var parser = new Parser.Parser(tokens);
+			var ast = parser.Parse();
+
+			// Stage 3: Semantic analysis
+			var semanticAnalyzer = new SemanticAnalyzer();
+			if (!semanticAnalyzer.Analyze(ast)) {
+				return new CompileToIrResult(null, null, false, "Semantic analysis failed");
+			}
+
+			// Stage 4: AST to HIR
+			var astToHir = new AstToHir();
+			var hirModule = astToHir.Lower(ast, semanticAnalyzer.MutationAnalyzer);
+
+			// Write HIR to string
+			var hirWriter = new StringWriter();
+			WriteHir(hirWriter, hirModule);
+			var hirString = hirWriter.ToString();
+
+			// Stage 5: HIR to LIR
+			var hirToLir = new HirToLir();
+			var lirModule = hirToLir.Lower(hirModule);
+
+			// Write LIR to string
+			var lirWriter = new StringWriter();
+			WriteLir(lirWriter, lirModule);
+			var lirString = lirWriter.ToString();
+
+			return new CompileToIrResult(hirString, lirString, true, null);
+		} catch (CompileError ex) {
+			return new CompileToIrResult(null, null, false, ex.Format());
+		} catch (Exception ex) {
+			return new CompileToIrResult(null, null, false, ex.Message);
+		}
+	}
+
 	public static bool Compile(string source, string outputPath, string? hirOutputPath = null, string? lirOutputPath = null) {
 		try {
 			Logger.Info(LogCategory.Compiler, "Starting compilation");

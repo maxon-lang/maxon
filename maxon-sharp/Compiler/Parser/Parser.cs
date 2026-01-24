@@ -996,7 +996,7 @@ public class Parser(List<Token> tokens) {
 				Advance();
 				var right = ParseUnary();
 				left = new BinaryExpr(left, BinaryOp.Div, right);
-			} else if (Check(TokenType.Percent)) {
+			} else if (Check(TokenType.Mod)) {
 				Advance();
 				var right = ParseUnary();
 				left = new BinaryExpr(left, BinaryOp.Mod, right);

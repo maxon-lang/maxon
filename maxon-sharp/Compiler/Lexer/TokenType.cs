@@ -88,7 +88,6 @@ public enum TokenType {
 	Minus,
 	Star,
 	Slash,
-	Percent,
 	Comma,
 	Colon,
 	Dot,
