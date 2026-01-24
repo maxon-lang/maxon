@@ -22,10 +22,10 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 		var sw = Stopwatch.StartNew();
 
 		// Regenerate fragments if specs changed
-		Console.WriteLine("Checking for spec changes...");
+		Logger.Info(LogCategory.Testing, "Checking for spec changes...");
 		var generated = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir);
 		if (generated > 0) {
-			Console.WriteLine($"Generated {generated} fragment(s)");
+			Logger.Info(LogCategory.Testing, $"Generated {generated} fragment(s)");
 		}
 
 		// Load all fragments
@@ -36,7 +36,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 		}
 
 		if (fragments.Count == 0) {
-			Console.WriteLine("No tests found");
+			Logger.Info(LogCategory.Testing, "No tests found");
 			return new TestSummary {
 				Results = [],
 				Passed = 0,
@@ -46,7 +46,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 			};
 		}
 
-		Console.WriteLine($"Running {fragments.Count} test(s) with {_workerCount} worker(s)...");
+		Logger.Info(LogCategory.Testing, $"Running {fragments.Count} test(s) with {_workerCount} worker(s)...");
 
 		// Ensure temp directory exists
 		Directory.CreateDirectory(_tempDir);
@@ -59,9 +59,13 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 
 			if (_verbose || !result.Passed) {
 				var status = result.Passed ? "PASS" : "FAIL";
-				Console.WriteLine($"[{status}] {result.TestName}");
-				if (!result.Passed && result.ErrorMessage != null) {
-					Console.WriteLine($"  {result.ErrorMessage}");
+				if (result.Passed) {
+					Logger.Info(LogCategory.Testing, $"[{status}] {result.TestName}");
+				} else {
+					Logger.Error(LogCategory.Testing, $"[{status}] {result.TestName}");
+					if (result.ErrorMessage != null) {
+						Logger.Error(LogCategory.Testing, $"  {result.ErrorMessage}");
+					}
 				}
 			}
 		});

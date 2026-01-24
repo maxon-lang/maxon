@@ -28,14 +28,14 @@ public class SemanticAnalyzer {
 			Logger.Debug(LogCategory.Semantic, "Checking for main function");
 			var mainFunc = program.Functions.Find(f => f.Name == "main");
 			if (mainFunc == null) {
-				Console.Error.WriteLine("Error: No 'main' function found");
+				Logger.Error(LogCategory.Semantic, "No 'main' function found");
 				return false;
 			}
 
 			// Check that main returns int
 			Logger.Debug(LogCategory.Semantic, "Validating main return type");
 			if (mainFunc.ReturnType is not SimpleTypeRef { Name: "int" }) {
-				Console.Error.WriteLine("Error: 'main' function must return int");
+				Logger.Error(LogCategory.Semantic, "'main' function must return int");
 				return false;
 			}
 		}

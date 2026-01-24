@@ -19,9 +19,9 @@ class Program {
 			} else if (arg.StartsWith("--log=")) {
 				var logValue = arg["--log=".Length..];
 				if (!Logger.ParseOption(logValue)) {
-					Console.Error.WriteLine($"Error: Invalid log option: {logValue}");
-					Console.Error.WriteLine("  Valid levels: none, error, info, debug, trace");
-					Console.Error.WriteLine("  Valid categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
+					Console.WriteLine($"Invalid log option: {logValue}");
+					Console.WriteLine("  Valid levels: none, error, info, debug, trace");
+					Console.WriteLine("  Valid categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
 					return 1;
 				}
 			} else if (!arg.StartsWith('-')) {
@@ -30,33 +30,33 @@ class Program {
 		}
 
 		if (sourceFile == null) {
-			Console.Error.WriteLine("Usage: MaxonSharp [options] <source-file-or-directory>");
-			Console.Error.WriteLine("       MaxonSharp test [test-options]");
-			Console.Error.WriteLine();
-			Console.Error.WriteLine("Options:");
-			Console.Error.WriteLine("  --emit-ir              Write .hir and .lir files");
-			Console.Error.WriteLine("  --log=LEVEL            Set all log categories to LEVEL");
-			Console.Error.WriteLine("  --log=CATEGORY:LEVEL   Set specific category to LEVEL");
-			Console.Error.WriteLine();
-			Console.Error.WriteLine("Test options:");
-			Console.Error.WriteLine("  --verbose              Show all test results");
-			Console.Error.WriteLine("  --filter=PATTERN       Run only tests matching regex pattern");
-			Console.Error.WriteLine("  --workers=N            Number of parallel workers (default: CPU/2)");
-			Console.Error.WriteLine();
-			Console.Error.WriteLine("Log levels: none, error, info, debug, trace");
-			Console.Error.WriteLine("Log categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
-			Console.Error.WriteLine();
-			Console.Error.WriteLine("Examples:");
-			Console.Error.WriteLine("  MaxonSharp test.maxon --log=debug");
-			Console.Error.WriteLine("  MaxonSharp examples/multifile/main.maxon  (multi-file project)");
-			Console.Error.WriteLine("  MaxonSharp test --verbose --filter=addition");
+			Console.WriteLine("Usage: MaxonSharp [options] <source-file-or-directory>");
+			Console.WriteLine("       MaxonSharp test [test-options]");
+			Console.WriteLine();
+			Console.WriteLine("Options:");
+			Console.WriteLine("  --emit-ir              Write .hir and .lir files");
+			Console.WriteLine("  --log=LEVEL            Set all log categories to LEVEL");
+			Console.WriteLine("  --log=CATEGORY:LEVEL   Set specific category to LEVEL");
+			Console.WriteLine();
+			Console.WriteLine("Test options:");
+			Console.WriteLine("  --verbose              Show all test results");
+			Console.WriteLine("  --filter=PATTERN       Run only tests matching regex pattern");
+			Console.WriteLine("  --workers=N            Number of parallel workers (default: CPU/2)");
+			Console.WriteLine();
+			Console.WriteLine("Log levels: none, error, info, debug, trace");
+			Console.WriteLine("Log categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
+			Console.WriteLine();
+			Console.WriteLine("Examples:");
+			Console.WriteLine("  MaxonSharp test.maxon --log=debug");
+			Console.WriteLine("  MaxonSharp examples/multifile/main.maxon  (multi-file project)");
+			Console.WriteLine("  MaxonSharp test --verbose --filter=addition");
 			return 1;
 		}
 
 		// Determine if this is a multi-file project
 		var sourceFiles = CollectProjectFiles(sourceFile);
 		if (sourceFiles == null) {
-			Console.Error.WriteLine($"Error: File or directory not found: {sourceFile}");
+			Console.WriteLine($"File or directory not found: {sourceFile}");
 			return 1;
 		}
 
@@ -171,7 +171,7 @@ class Program {
 		// Determine paths relative to the project
 		var projectDir = FindProjectRoot();
 		if (projectDir == null) {
-			Console.Error.WriteLine("Error: Could not find project root (looking for specs/ directory)");
+			Console.WriteLine("Could not find project root (looking for specs/ directory)");
 			return 1;
 		}
 
@@ -179,21 +179,17 @@ class Program {
 		var fragmentDir = Path.Combine(specDir, "fragments");
 		var tempDir = Path.Combine(projectDir, "temp");
 
-		Console.WriteLine("Running maxon-sharp spec tests...");
+		Logger.Info(LogCategory.Testing, "Running maxon-sharp spec tests...");
 
 		var runner = new TestRunner(specDir, fragmentDir, tempDir, verbose, filter, workers);
 		var summary = runner.RunAllTests();
 
-		Console.WriteLine();
+		Logger.Info(LogCategory.Testing, "");
 		if (summary.Failed == 0) {
-			Console.ForegroundColor = ConsoleColor.Green;
-			Console.WriteLine($"Tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
-			Console.ResetColor();
+			Logger.Info(LogCategory.Testing, $"Tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
 			return 0;
 		} else {
-			Console.ForegroundColor = ConsoleColor.Red;
-			Console.WriteLine($"Tests: {summary.Passed} passed, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
-			Console.ResetColor();
+			Logger.Error(LogCategory.Testing, $"Tests: {summary.Passed} passed, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
 			return 1;
 		}
 	}

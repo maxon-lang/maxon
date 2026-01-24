@@ -86,7 +86,7 @@ public class Compiler {
 			}
 
 			if (mainFileIndex < 0) {
-				Console.Error.WriteLine("Error: No 'main' function found in any source file");
+				Logger.Error(LogCategory.Compiler, "No 'main' function found in any source file");
 				return false;
 			}
 
@@ -129,13 +129,13 @@ public class Compiler {
 			PeWriter.Write(outputPath, code);
 
 			Logger.Info(LogCategory.Compiler, "Compilation complete");
-			Console.WriteLine($"Successfully compiled to {outputPath}");
+			Logger.Info(LogCategory.Compiler, $"Successfully compiled to {outputPath}");
 			return true;
 		} catch (CompileError ex) {
-			Console.Error.WriteLine(ex.Format());
+			Logger.Error(LogCategory.Compiler, ex.Format());
 			return false;
 		} catch (Exception ex) {
-			Console.Error.WriteLine($"Compilation error: {ex.Message}");
+			Logger.Error(LogCategory.Compiler, $"Compilation error: {ex.Message}");
 			return false;
 		}
 	}
@@ -143,13 +143,13 @@ public class Compiler {
 	private static void WriteHirFile(string path, HirModule module) {
 		using var writer = new StreamWriter(path);
 		WriteHir(writer, module);
-		Console.WriteLine($"Wrote {path}");
+		Logger.Info(LogCategory.Compiler, $"Wrote {path}");
 	}
 
 	private static void WriteLirFile(string path, LirModule module) {
 		using var writer = new StreamWriter(path);
 		WriteLir(writer, module);
-		Console.WriteLine($"Wrote {path}");
+		Logger.Info(LogCategory.Compiler, $"Wrote {path}");
 	}
 
 	private static void WriteHir(TextWriter w, HirModule module) {

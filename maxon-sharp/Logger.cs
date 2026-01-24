@@ -22,7 +22,8 @@ public enum LogCategory {
 	Hir,
 	Lir,
 	Codegen,
-	Pe
+	Pe,
+	Testing
 }
 
 /// <summary>
@@ -66,7 +67,7 @@ public static class Logger {
 	/// </summary>
 	public static void Error(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Error)) {
-			Console.Error.WriteLine($"[{category}] ERROR: {message}");
+			Console.WriteLine($"[{category}] ERROR: {message}");
 		}
 	}
 
@@ -75,7 +76,7 @@ public static class Logger {
 	/// </summary>
 	public static void Info(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Info)) {
-			Console.Error.WriteLine($"[{category}] {message}");
+			Console.WriteLine($"[{category}] {message}");
 		}
 	}
 
@@ -84,7 +85,7 @@ public static class Logger {
 	/// </summary>
 	public static void Debug(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Debug)) {
-			Console.Error.WriteLine($"[{category}] DEBUG: {message}");
+			Console.WriteLine($"[{category}] DEBUG: {message}");
 		}
 	}
 
@@ -93,7 +94,7 @@ public static class Logger {
 	/// </summary>
 	public static void Trace(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Trace)) {
-			Console.Error.WriteLine($"[{category}] TRACE: {message}");
+			Console.WriteLine($"[{category}] TRACE: {message}");
 		}
 	}
 
@@ -145,8 +146,9 @@ public static class Logger {
 			"lir" => LogCategory.Lir,
 			"codegen" => LogCategory.Codegen,
 			"pe" => LogCategory.Pe,
+			"testing" => LogCategory.Testing,
 			_ => LogCategory.Compiler
 		};
-		return s.ToLowerInvariant() is "compiler" or "lexer" or "parser" or "semantic" or "hir" or "lir" or "codegen" or "pe";
+		return s.ToLowerInvariant() is "compiler" or "lexer" or "parser" or "semantic" or "hir" or "lir" or "codegen" or "pe" or "testing";
 	}
 }

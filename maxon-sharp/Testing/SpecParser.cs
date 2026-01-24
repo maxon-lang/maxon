@@ -34,7 +34,7 @@ public static partial class SpecParser {
 				var spec = Parse(file);
 				specs.Add(spec);
 			} catch (Exception ex) {
-				Console.Error.WriteLine($"Warning: Failed to parse {file}: {ex.Message}");
+				Logger.Error(LogCategory.Testing, $"Failed to parse {file}: {ex.Message}");
 			}
 		}
 

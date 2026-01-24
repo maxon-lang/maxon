@@ -15,7 +15,7 @@ public static class FragmentGenerator {
 	/// <returns>Number of fragments generated</returns>
 	public static int GenerateFragments(string specDir, string fragmentDir, bool force = false) {
 		if (!Directory.Exists(specDir)) {
-			Console.Error.WriteLine($"Spec directory not found: {specDir}");
+			Logger.Error(LogCategory.Testing, $"Spec directory not found: {specDir}");
 			return 0;
 		}
 
