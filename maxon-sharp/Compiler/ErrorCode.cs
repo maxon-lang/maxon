@@ -44,6 +44,12 @@ public enum ErrorCode {
 	HirInvalidFieldAccess = 65,
 	HirInvalidMethodCall = 66,
 
+	// Ownership errors (E070-E079)
+	OwnershipUseAfterMove = 70,      // E008: Variable used after ownership transferred
+	OwnershipMoveFromImmutable = 71, // E010: Cannot move from immutable binding
+	OwnershipBranchConflict = 72,    // Variable moved in only one branch
+	OwnershipMoveInLoop = 73,        // Move in loop without reassignment
+
 	// LIR lowering errors (E080-E089)
 	LirUnsupportedInstruction = 80,
 

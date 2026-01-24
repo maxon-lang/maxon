@@ -23,17 +23,18 @@ public class Compiler {
 			var parser = new Parser.Parser(tokens);
 			var ast = parser.Parse();
 
-			// Stage 3: Semantic analysis
+			// Stage 3: Semantic analysis (includes mutation analysis)
 			Logger.Info(LogCategory.Compiler, "Stage 3: Semantic analysis");
-			if (!SemanticAnalyzer.Analyze(ast)) {
+			var semanticAnalyzer = new SemanticAnalyzer();
+			if (!semanticAnalyzer.Analyze(ast)) {
 				Console.Error.WriteLine("Semantic analysis failed");
 				return false;
 			}
 
-			// Stage 4: AST to HIR
+			// Stage 4: AST to HIR (with ownership tracking)
 			Logger.Info(LogCategory.Compiler, "Stage 4: AST to HIR");
 			var astToHir = new AstToHir();
-			var hirModule = astToHir.Lower(ast);
+			var hirModule = astToHir.Lower(ast, semanticAnalyzer.MutationAnalyzer);
 
 			if (hirOutputPath != null) {
 				WriteHirFile(hirOutputPath, hirModule);

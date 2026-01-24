@@ -1,4 +1,5 @@
 using MaxonSharp.Parser;
+using MaxonSharp.Semantic;
 
 namespace MaxonSharp.Hir;
 
@@ -15,8 +16,19 @@ public class AstToHir {
 	private HirType? _currentReturnType;
 	private string? _currentTypeName; // For resolving implicit field accesses
 
-	public HirModule Lower(ProgramAst program) {
+	// Ownership and memory management
+	private ResourceManager? _resources;
+	private BlockManager? _blocks;
+	private MutationAnalyzer _mutationAnalyzer = new();
+
+	public HirModule Lower(ProgramAst program, MutationAnalyzer? mutationAnalyzer = null) {
 		Logger.Info(LogCategory.Hir, "Starting AST to HIR lowering");
+
+		// Use provided mutation analyzer or create a new one
+		if (mutationAnalyzer != null) {
+			_mutationAnalyzer = mutationAnalyzer;
+		}
+
 		var structs = new List<HirStructDef>();
 		var enums = new List<HirEnumDef>();
 		var globals = new List<HirGlobalVar>();
@@ -124,8 +136,19 @@ public class AstToHir {
 		_currentReturnType = LowerType(func.ReturnType);
 		_currentTypeName = null; // No implicit field access in top-level functions
 
+		// Initialize ownership managers for this function
+		_blocks = new BlockManager();
+		_resources = new ResourceManager(_mutationAnalyzer, _blocks);
+
 		var parameters = new List<HirParam2>();
 		var entryInstrs = new List<HirInstr>();
+
+		// Set current block for resource manager cleanup emission
+		_resources.SetCurrentBlock(entryInstrs);
+
+		// Begin function scope
+		_resources.BeginScope();
+		_blocks.EnterBlock(BlockKind.Function, _resources.Snapshot());
 
 		// Lower parameters - allocate slots and store param values
 		for (var i = 0; i < func.Params.Count; i++) {
@@ -150,11 +173,18 @@ public class AstToHir {
 			_variableSlots[param.Name] = slotPtr;
 			_variableTypes[param.Name] = paramType;
 			_params[param.Name] = (i, paramType);
+
+			// Register parameter with resource manager (params are owned)
+			_resources.DeclareVariable(param.Name, paramType, isMutable: true, slotPtr);
 		}
 
 		// Lower body
 		var blocks = new List<HirBlock>();
 		LowerStatements(func.Body, entryInstrs);
+
+		// End function scope - cleanup owned resources
+		_blocks.ExitBlock();
+		_resources.EndScope();
 
 		// Ensure we have a return
 		if (entryInstrs.Count == 0 || entryInstrs[^1] is not HirRet) {
@@ -178,8 +208,19 @@ public class AstToHir {
 		_currentReturnType = LowerType(method.ReturnType);
 		_currentTypeName = method.IsStatic ? null : typeName; // Track type for implicit field access
 
+		// Initialize ownership managers for this method
+		_blocks = new BlockManager();
+		_resources = new ResourceManager(_mutationAnalyzer, _blocks);
+
 		var parameters = new List<HirParam2>();
 		var entryInstrs = new List<HirInstr>();
+
+		// Set current block for resource manager cleanup emission
+		_resources.SetCurrentBlock(entryInstrs);
+
+		// Begin function scope
+		_resources.BeginScope();
+		_blocks.EnterBlock(BlockKind.Function, _resources.Snapshot());
 
 		// Add implicit 'self' parameter for instance methods
 		var paramIndex = 0;
@@ -195,6 +236,9 @@ public class AstToHir {
 			entryInstrs.Add(new HirStore(selfSlot, selfValue, selfType));
 			_variableSlots["self"] = selfSlot;
 			_variableTypes["self"] = selfType;
+
+			// Register self with resource manager
+			_resources.DeclareVariable("self", selfType, isMutable: false, selfSlot);
 		}
 
 		// Lower parameters
@@ -220,10 +264,17 @@ public class AstToHir {
 			_variableSlots[param.Name] = slotPtr;
 			_variableTypes[param.Name] = paramType;
 			_params[param.Name] = (paramIndex - 1, paramType);
+
+			// Register parameter with resource manager
+			_resources.DeclareVariable(param.Name, paramType, isMutable: true, slotPtr);
 		}
 
 		// Lower body
 		LowerStatements(method.Body, entryInstrs);
+
+		// End function scope - cleanup owned resources
+		_blocks.ExitBlock();
+		_resources.EndScope();
 
 		// Ensure we have a return
 		if (entryInstrs.Count == 0 || entryInstrs[^1] is not HirRet) {
@@ -250,6 +301,8 @@ public class AstToHir {
 				if (ret.Value != null) {
 					retValue = LowerExpression(ret.Value, instructions);
 				}
+				// Mark block as terminating for ownership tracking
+				_blocks?.MarkTerminates();
 				instructions.Add(new HirRet(retValue));
 				break;
 
@@ -257,6 +310,7 @@ public class AstToHir {
 			case VarDeclStmt: {
 					var name = stmt is LetDeclStmt l ? l.Name : ((VarDeclStmt)stmt).Name;
 					var value = stmt is LetDeclStmt ld ? ld.Value : ((VarDeclStmt)stmt).Value;
+					var isMutable = stmt is VarDeclStmt;
 
 					var inferredType = InferExprType(value);
 					_variableTypes[name] = inferredType;
@@ -265,6 +319,9 @@ public class AstToHir {
 					var slotPtr = NewValue();
 					instructions.Add(new HirAlloca(slotPtr, inferredType));
 					_variableSlots[name] = slotPtr;
+
+					// Register with resource manager
+					_resources?.DeclareVariable(name, inferredType, isMutable, slotPtr);
 
 					// For struct and enum types, use memcpy to copy the contents
 					if (inferredType is HirStructType structType) {
@@ -282,6 +339,9 @@ public class AstToHir {
 
 			case AssignStmt assign: {
 					if (_variableSlots.TryGetValue(assign.Target, out var slotPtr)) {
+						// Record reassignment for ownership tracking
+						_resources?.Reassign(assign.Target);
+
 						var varType = _variableTypes.GetValueOrDefault(assign.Target, new HirIntType());
 						if (varType is HirStructType structType) {
 							var srcPtr = LowerExpressionAsAddress(assign.Value, instructions);
@@ -322,17 +382,35 @@ public class AstToHir {
 					var cond = LowerExpression(ifStmt.Condition, instructions);
 					instructions.Add(new HirBrCond(cond, thenLabel, ifStmt.ElseBody != null ? elseLabel : endLabel));
 
+					// Snapshot ownership state before branches
+					var beforeBranch = _resources?.Snapshot();
+
+					// Lower then branch
 					instructions.Add(new HirLabel(thenLabel));
+					_blocks?.EnterBlock(BlockKind.IfThen, beforeBranch ?? new OwnershipSnapshot());
 					LowerStatements(ifStmt.ThenBody, instructions);
+					var thenState = _blocks?.ExitBlock();
 					instructions.Add(new HirBr(endLabel));
 
+					BlockState? elseState = null;
 					if (ifStmt.ElseBody != null) {
+						// Restore state before else branch
+						if (beforeBranch != null) _resources?.Restore(beforeBranch);
+
 						instructions.Add(new HirLabel(elseLabel));
+						_blocks?.EnterBlock(BlockKind.IfElse, beforeBranch ?? new OwnershipSnapshot());
 						LowerStatements(ifStmt.ElseBody, instructions);
+						elseState = _blocks?.ExitBlock();
 						instructions.Add(new HirBr(endLabel));
 					}
 
 					instructions.Add(new HirLabel(endLabel));
+
+					// Merge ownership states from branches
+					if (_blocks != null && thenState != null) {
+						var merge = BlockManager.MergeBranches(thenState, elseState);
+						_resources?.ApplyMerge(merge);
+					}
 					break;
 				}
 
@@ -347,10 +425,19 @@ public class AstToHir {
 					var cond = LowerExpression(whileStmt.Condition, instructions);
 					instructions.Add(new HirBrCond(cond, bodyLabel, endLabel));
 
+					// Track loop body for move validation
+					var beforeLoop = _resources?.Snapshot();
 					instructions.Add(new HirLabel(bodyLabel));
+					_blocks?.EnterBlock(BlockKind.WhileLoop, beforeLoop ?? new OwnershipSnapshot());
 					LowerStatements(whileStmt.Body, instructions);
-					instructions.Add(new HirBr(condLabel));
+					var loopState = _blocks?.ExitBlock();
 
+					// Validate moves in loop body
+					if (_blocks != null && loopState != null) {
+						BlockManager.ValidateLoopBody(loopState);
+					}
+
+					instructions.Add(new HirBr(condLabel));
 					instructions.Add(new HirLabel(endLabel));
 					break;
 				}
@@ -379,6 +466,9 @@ public class AstToHir {
 					_variableSlots[forStmt.VarName] = loopVarSlot;
 					_variableTypes[forStmt.VarName] = new HirIntType();
 
+					// Register loop variable with resource manager
+					_resources?.DeclareVariable(forStmt.VarName, new HirIntType(), isMutable: true, loopVarSlot);
+
 					// Store end value in a slot so it's stable across loop iterations
 					var endValSlot = NewValue();
 					instructions.Add(new HirAlloca(endValSlot, new HirIntType()));
@@ -404,8 +494,17 @@ public class AstToHir {
 					}
 					instructions.Add(new HirBrCond(condResult, bodyLabel, endLabel));
 
+					// Track loop body for move validation
+					var beforeLoop = _resources?.Snapshot();
 					instructions.Add(new HirLabel(bodyLabel));
+					_blocks?.EnterBlock(BlockKind.ForLoop, beforeLoop ?? new OwnershipSnapshot());
 					LowerStatements(forStmt.Body, instructions);
+					var loopState = _blocks?.ExitBlock();
+
+					// Validate moves in loop body
+					if (_blocks != null && loopState != null) {
+						BlockManager.ValidateLoopBody(loopState);
+					}
 
 					// Increment: i = i + 1
 					var currentIForIncr = NewValue();
@@ -642,8 +741,15 @@ public class AstToHir {
 
 			case CallExpr call: {
 					var args = new List<HirValue>();
-					foreach (var arg in call.Args) {
+					for (var i = 0; i < call.Args.Count; i++) {
+						var arg = call.Args[i];
 						args.Add(LowerExpression(arg, instructions));
+
+						// Track ownership transfer for variable arguments
+						if (arg is IdentifierExpr argId && _resources?.HasVariable(argId.Name) == true) {
+							var loc = arg.Location ?? new SourceLocation(0, 0);
+							_resources.PassToFunction(argId.Name, call.FuncName, i, loc);
+						}
 					}
 					foreach (var namedArg in call.NamedArgs) {
 						args.Add(LowerExpression(namedArg.Value, instructions));
@@ -738,6 +844,9 @@ public class AstToHir {
 					var ptr = NewValue();
 					instructions.Add(new HirAlloca(ptr, structType));
 
+					// Begin struct literal for deferred move tracking
+					_resources?.BeginStructLiteral();
+
 					// Initialize fields
 					foreach (var fieldInit in structInit.Fields) {
 						var field = structDef.Fields.Find(f => f.FieldName == fieldInit.Name)
@@ -748,6 +857,9 @@ public class AstToHir {
 						instructions.Add(new HirGetFieldPtr(fieldPtr, ptr, fieldInit.Name, field.Offset));
 						instructions.Add(new HirStore(fieldPtr, value, field.Type));
 					}
+
+					// End struct literal - apply deferred moves
+					_resources?.EndStructLiteral();
 
 					return ptr;
 				}

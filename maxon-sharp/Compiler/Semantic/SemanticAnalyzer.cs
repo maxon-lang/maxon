@@ -3,7 +3,14 @@ using MaxonSharp.Parser;
 namespace MaxonSharp.Semantic;
 
 public class SemanticAnalyzer {
-	public static bool Analyze(ProgramAst program) {
+	private MutationAnalyzer? _mutationAnalyzer;
+
+	/// <summary>
+	/// Get the mutation analyzer after analysis is complete.
+	/// </summary>
+	public MutationAnalyzer? MutationAnalyzer => _mutationAnalyzer;
+
+	public bool Analyze(ProgramAst program) {
 		Logger.Info(LogCategory.Semantic, "Starting semantic analysis");
 
 		// Check that main function exists
@@ -21,7 +28,20 @@ public class SemanticAnalyzer {
 			return false;
 		}
 
+		// Run mutation analysis for ownership tracking
+		Logger.Debug(LogCategory.Semantic, "Running mutation analysis");
+		_mutationAnalyzer = new MutationAnalyzer();
+		_mutationAnalyzer.Analyze(program);
+
 		Logger.Info(LogCategory.Semantic, "Semantic analysis complete");
 		return true;
+	}
+
+	/// <summary>
+	/// Static helper for simple analysis without mutation tracking.
+	/// </summary>
+	public static bool AnalyzeSimple(ProgramAst program) {
+		var analyzer = new SemanticAnalyzer();
+		return analyzer.Analyze(program);
 	}
 }
