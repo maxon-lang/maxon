@@ -81,13 +81,20 @@ public class CodeGen {
 	private void GenerateInstruction(LirInstr instr) {
 		switch (instr) {
 			case LirMov mov:
-				LoadValue(R0, mov.Src);
-				StoreToStack(mov.Dest.Id, R0);
+				// Handle float immediates specially - store as raw bits
+				if (mov.Src is LirFloatImmediate fimm) {
+					var bits = BitConverter.DoubleToInt64Bits(fimm.Value);
+					_encoder.MovRegImm(R0, bits);
+					StoreToStack(mov.Dest.Id, R0);
+				} else {
+					LoadValue(R0, mov.Src);
+					StoreToStack(mov.Dest.Id, R0);
+				}
 				break;
 
 			case LirLoad load:
 				LoadValue(R0, load.Ptr); // R0 = ptr
-																 // Use sized load to handle different data types
+										 // Use sized load to handle different data types
 				switch (load.Size) {
 					case 1:
 						_encoder.MovzxReg64Mem8(R0, R0, 0); // Zero-extend 1 byte

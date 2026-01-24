@@ -8,22 +8,36 @@ public class SemanticAnalyzer {
 	/// </summary>
 	public MutationAnalyzer? MutationAnalyzer => _mutationAnalyzer;
 
+	/// <summary>
+	/// Analyze a program AST. Requires a 'main' function to be present.
+	/// </summary>
 	public bool Analyze(ProgramAst program) {
+		return Analyze(program, requireMain: true);
+	}
+
+	/// <summary>
+	/// Analyze a program AST.
+	/// </summary>
+	/// <param name="program">The program AST to analyze.</param>
+	/// <param name="requireMain">If true, requires a 'main' function to be present.</param>
+	public bool Analyze(ProgramAst program, bool requireMain) {
 		Logger.Info(LogCategory.Semantic, "Starting semantic analysis");
 
-		// Check that main function exists
-		Logger.Debug(LogCategory.Semantic, "Checking for main function");
-		var mainFunc = program.Functions.Find(f => f.Name == "main");
-		if (mainFunc == null) {
-			Console.Error.WriteLine("Error: No 'main' function found");
-			return false;
-		}
+		if (requireMain) {
+			// Check that main function exists
+			Logger.Debug(LogCategory.Semantic, "Checking for main function");
+			var mainFunc = program.Functions.Find(f => f.Name == "main");
+			if (mainFunc == null) {
+				Console.Error.WriteLine("Error: No 'main' function found");
+				return false;
+			}
 
-		// Check that main returns int
-		Logger.Debug(LogCategory.Semantic, "Validating main return type");
-		if (mainFunc.ReturnType is not SimpleTypeRef { Name: "int" }) {
-			Console.Error.WriteLine("Error: 'main' function must return int");
-			return false;
+			// Check that main returns int
+			Logger.Debug(LogCategory.Semantic, "Validating main return type");
+			if (mainFunc.ReturnType is not SimpleTypeRef { Name: "int" }) {
+				Console.Error.WriteLine("Error: 'main' function must return int");
+				return false;
+			}
 		}
 
 		// Run mutation analysis for ownership tracking

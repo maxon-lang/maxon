@@ -107,7 +107,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 
 			try {
 				// Compile the source
-				var (Success, Error) = CompileToExecutable(fragment.Source, tempExe);
+				var (Success, Error) = CompileToExecutable(fragment, tempExe);
 
 				if (fragment.Expectation is CompilerErrorExpectation errorExpectation) {
 					// Expect compilation to fail
@@ -242,9 +242,9 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 		}
 	}
 
-	private static (bool Success, string? Error) CompileToExecutable(string source, string outputPath) {
+	private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath) {
 		try {
-			var success = Compiler.Compiler.Compile(source, outputPath);
+			var success = Compiler.Compiler.Compile([new Compiler.SourceFile(fragment.FilePath, fragment.Source)], outputPath);
 			return (success, success ? null : "Compilation failed");
 		} catch (Exception ex) {
 			return (false, ex.Message);

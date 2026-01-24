@@ -18,6 +18,69 @@ public class AstToHir {
 	private BlockManager? _blocks;
 	private MutationAnalyzer _mutationAnalyzer = new();
 
+	/// <summary>
+	/// Registers external symbols (types, functions, enums) from other source files.
+	/// This allows cross-file type and function resolution during HIR lowering.
+	/// </summary>
+	public void RegisterExternalSymbols(ExternalSymbolsCollection symbols) {
+		// Register external types as HirStructDefs
+		foreach (var extType in symbols.Types) {
+			var fields = new List<HirStructField>();
+			var offset = 0;
+			foreach (var field in extType.Fields) {
+				var fieldType = ResolveTypeName(field.TypeName);
+				fields.Add(new HirStructField(field.Name, fieldType, offset));
+				offset += fieldType.SizeInBytes;
+			}
+			var structDef = new HirStructDef(extType.Name, fields);
+			_structs[extType.Name] = structDef;
+		}
+
+		// Register external enums as HirEnumDefs
+		foreach (var extEnum in symbols.Enums) {
+			var variants = new List<HirEnumVariant>();
+			var maxPayloadSize = 0;
+			var tag = 0;
+			foreach (var variant in extEnum.Variants) {
+				var payloadFields = new List<HirStructField>();
+				var payloadOffset = 0;
+				foreach (var field in variant.PayloadFields) {
+					var fieldType = ResolveTypeName(field.TypeName);
+					payloadFields.Add(new HirStructField(field.Name, fieldType, payloadOffset));
+					payloadOffset += fieldType.SizeInBytes;
+				}
+				variants.Add(new HirEnumVariant(variant.Name, tag++, payloadFields));
+				maxPayloadSize = Math.Max(maxPayloadSize, payloadOffset);
+			}
+			var enumDef = new HirEnumDef(extEnum.Name, variants, 8, maxPayloadSize);
+			_enums[extEnum.Name] = enumDef;
+		}
+
+		// Register external function signatures
+		foreach (var extFunc in symbols.Functions) {
+			var retType = extFunc.ReturnTypeName != null
+				? ResolveTypeName(extFunc.ReturnTypeName)
+				: new HirVoidType();
+			_functionReturnTypes[extFunc.Name] = retType;
+		}
+	}
+
+	/// <summary>
+	/// Resolves a type name string to an HirType.
+	/// </summary>
+	private HirType ResolveTypeName(string typeName) {
+		return typeName switch {
+			"int" => new HirIntType(),
+			"float" => new HirFloatType(),
+			"bool" => new HirBoolType(),
+			"byte" => new HirByteType(),
+			"string" => new HirPtrType(),
+			_ when _structs.ContainsKey(typeName) => new HirStructType(typeName, _structs[typeName].Fields),
+			_ when _enums.ContainsKey(typeName) => new HirEnumType(typeName, _enums[typeName].TagSize, _enums[typeName].MaxPayloadSize),
+			_ => new HirPtrType() // Default for unknown types
+		};
+	}
+
 	public HirModule Lower(ProgramAst program, MutationAnalyzer? mutationAnalyzer = null) {
 		Logger.Info(LogCategory.Hir, "Starting AST to HIR lowering");
 
@@ -655,19 +718,34 @@ public class AstToHir {
 					var right = LowerExpression(binary.Right, instructions);
 					var dest = NewValue();
 
-					var instr = binary.Op switch {
-						BinaryOp.Add => (HirInstr)new HirAdd(dest, left, right),
-						BinaryOp.Sub => new HirSub(dest, left, right),
-						BinaryOp.Mul => new HirMul(dest, left, right),
-						BinaryOp.Div => new HirDiv(dest, left, right),
-						BinaryOp.Mod => new HirMod(dest, left, right),
-						BinaryOp.Band => new HirBand(dest, left, right),
-						BinaryOp.Bor => new HirBor(dest, left, right),
-						BinaryOp.Bxor => new HirBxor(dest, left, right),
-						BinaryOp.Shl => new HirShl(dest, left, right),
-						BinaryOp.Shr => new HirShr(dest, left, right),
-						_ => throw new CompileError(ErrorCode.HirUnsupportedExpression, $"Unknown binary op: {binary.Op}")
-					};
+					// Check if operands are floats - use float arithmetic instructions
+					var leftType = InferExprType(binary.Left);
+					var isFloat = leftType is HirFloatType;
+
+					HirInstr instr;
+					if (isFloat) {
+						instr = binary.Op switch {
+							BinaryOp.Add => new HirFAdd(dest, left, right),
+							BinaryOp.Sub => new HirFSub(dest, left, right),
+							BinaryOp.Mul => new HirFMul(dest, left, right),
+							BinaryOp.Div => new HirFDiv(dest, left, right),
+							_ => throw new CompileError(ErrorCode.HirUnsupportedExpression, $"Float binary op not supported: {binary.Op}")
+						};
+					} else {
+						instr = binary.Op switch {
+							BinaryOp.Add => new HirAdd(dest, left, right),
+							BinaryOp.Sub => new HirSub(dest, left, right),
+							BinaryOp.Mul => new HirMul(dest, left, right),
+							BinaryOp.Div => new HirDiv(dest, left, right),
+							BinaryOp.Mod => new HirMod(dest, left, right),
+							BinaryOp.Band => new HirBand(dest, left, right),
+							BinaryOp.Bor => new HirBor(dest, left, right),
+							BinaryOp.Bxor => new HirBxor(dest, left, right),
+							BinaryOp.Shl => new HirShl(dest, left, right),
+							BinaryOp.Shr => new HirShr(dest, left, right),
+							_ => throw new CompileError(ErrorCode.HirUnsupportedExpression, $"Unknown binary op: {binary.Op}")
+						};
+					}
 					instructions.Add(instr);
 					return dest;
 				}
@@ -1006,7 +1084,7 @@ public class AstToHir {
 			BoolLiteralExpr => new HirBoolType(),
 			CharLiteralExpr => new HirByteType(),
 			IdentifierExpr id => _variableTypes.GetValueOrDefault(id.Name, new HirIntType()),
-			BinaryExpr => new HirIntType(), // Simplified
+			BinaryExpr b => InferExprType(b.Left), // Type is determined by operands
 			CompareExpr => new HirBoolType(),
 			LogicalExpr => new HirBoolType(),
 			UnaryExpr u => InferExprType(u.Operand),

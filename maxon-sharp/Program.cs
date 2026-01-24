@@ -1,3 +1,4 @@
+using MaxonSharp.Compiler;
 using MaxonSharp.Testing;
 
 namespace MaxonSharp;
@@ -29,7 +30,7 @@ class Program {
 		}
 
 		if (sourceFile == null) {
-			Console.Error.WriteLine("Usage: MaxonSharp [options] <source-file>");
+			Console.Error.WriteLine("Usage: MaxonSharp [options] <source-file-or-directory>");
 			Console.Error.WriteLine("       MaxonSharp test [test-options]");
 			Console.Error.WriteLine();
 			Console.Error.WriteLine("Options:");
@@ -47,28 +48,107 @@ class Program {
 			Console.Error.WriteLine();
 			Console.Error.WriteLine("Examples:");
 			Console.Error.WriteLine("  MaxonSharp test.maxon --log=debug");
-			Console.Error.WriteLine("  MaxonSharp test.maxon --log=lexer:trace");
+			Console.Error.WriteLine("  MaxonSharp examples/multifile/main.maxon  (multi-file project)");
 			Console.Error.WriteLine("  MaxonSharp test --verbose --filter=addition");
 			return 1;
 		}
 
-		if (!File.Exists(sourceFile)) {
-			Console.Error.WriteLine($"Error: File not found: {sourceFile}");
+		// Determine if this is a multi-file project
+		var sourceFiles = CollectProjectFiles(sourceFile);
+		if (sourceFiles == null) {
+			Console.Error.WriteLine($"Error: File or directory not found: {sourceFile}");
 			return 1;
 		}
 
-		var source = File.ReadAllText(sourceFile);
-		var outputPath = Path.ChangeExtension(sourceFile, ".exe");
+		// Find the main file to determine output path
+		var mainFile = FindMainFile(sourceFiles, sourceFile);
+		var outputPath = Path.ChangeExtension(mainFile, ".exe");
 		string? hirOutputPath = null;
 		string? lirOutputPath = null;
 		if (emitIr) {
-			hirOutputPath = Path.ChangeExtension(sourceFile, ".hir");
-			lirOutputPath = Path.ChangeExtension(sourceFile, ".lir");
+			hirOutputPath = Path.ChangeExtension(mainFile, ".hir");
+			lirOutputPath = Path.ChangeExtension(mainFile, ".lir");
 		}
 
-		var success = Compiler.Compiler.Compile(source, outputPath, hirOutputPath, lirOutputPath);
+		var success = Compiler.Compiler.Compile(sourceFiles, outputPath, hirOutputPath, lirOutputPath);
 
 		return success ? 0 : 1;
+	}
+
+	/// <summary>
+	/// Collects all .maxon files for a project.
+	/// If the path is a directory, recursively collects all .maxon files.
+	/// If the path is a file, checks if it's in a project directory (has sibling or child .maxon files).
+	/// </summary>
+	static SourceFile[]? CollectProjectFiles(string path) {
+		// Check if it's a directory
+		if (Directory.Exists(path)) {
+			return CollectFilesFromDirectory(path);
+		}
+
+		// Check if it's a file
+		if (!File.Exists(path)) {
+			return null;
+		}
+
+		// It's a file - check if it's part of a multi-file project
+		var directory = Path.GetDirectoryName(path);
+		if (string.IsNullOrEmpty(directory)) {
+			directory = ".";
+		}
+
+		// Collect all .maxon files from the directory and subdirectories
+		var allFiles = CollectFilesFromDirectory(directory);
+
+		// If there's only one file, return it as a single-file project
+		if (allFiles.Length <= 1) {
+			var content = File.ReadAllText(path);
+			return [new SourceFile(path, content)];
+		}
+
+		// Multi-file project
+		return allFiles;
+	}
+
+	/// <summary>
+	/// Recursively collects all .maxon files from a directory.
+	/// </summary>
+	static SourceFile[] CollectFilesFromDirectory(string directory) {
+		var files = new List<SourceFile>();
+
+		foreach (var file in Directory.GetFiles(directory, "*.maxon", SearchOption.AllDirectories)) {
+			var content = File.ReadAllText(file);
+			files.Add(new SourceFile(file, content));
+		}
+
+		return [.. files];
+	}
+
+	/// <summary>
+	/// Finds the main file (containing main function) or uses the originally specified file.
+	/// </summary>
+	static string FindMainFile(SourceFile[] files, string originalPath) {
+		// If original path was a file, prefer it
+		if (File.Exists(originalPath)) {
+			return originalPath;
+		}
+
+		// Look for a file containing 'function main'
+		foreach (var file in files) {
+			if (file.Content.Contains("function main")) {
+				return file.Path;
+			}
+		}
+
+		// Look for main.maxon
+		foreach (var file in files) {
+			if (Path.GetFileName(file.Path).Equals("main.maxon", StringComparison.OrdinalIgnoreCase)) {
+				return file.Path;
+			}
+		}
+
+		// Fall back to first file
+		return files.Length > 0 ? files[0].Path : originalPath;
 	}
 
 	static int RunTests(string[] args) {
