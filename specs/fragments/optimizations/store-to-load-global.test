@@ -1,0 +1,45 @@
+// Test: store-to-load-global
+var g = 0
+
+function main() returns int
+    g = 5
+    return g * 4
+end 'main'
+---
+ExitCode: 20
+RequiredMlir: ```
+module {
+  memref.global @global.g : i64 = 0 : i64
+
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 5
+      x86.lea_global rcx, @global.g
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, 20
+      x86.mov rax, rdx
+      x86.epilogue
+      x86.ret
+  }
+}
+```
+---
+// Generated X86 IR:
+module {
+  memref.global @global.g : i64 = 0 : i64
+  
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 5
+      x86.lea_global rcx, @global.g
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, 20
+      x86.mov rax, rdx
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

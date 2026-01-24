@@ -165,12 +165,8 @@ module {
   func.func @main() -> i64 {
     ^entry:
       x86.prologue stack_size=32
-      x86.mov rax, 42
-      x86.sub rsp, 8
-      x86.lea rcx, qword ptr [rsp]
-      x86.mov qword ptr [rcx], rax
-      x86.mov rdx, 0
-      x86.mov rax, rdx
+      x86.mov rax, 0
+      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -218,15 +214,8 @@ module {
   func.func @main() -> i64 {
     ^entry:
       x86.prologue stack_size=32
-      x86.mov rax, 10
-      x86.sub rsp, 8
-      x86.lea rcx, qword ptr [rsp]
-      x86.mov qword ptr [rcx], rax
-      x86.mov rdx, qword ptr [rcx]
-      x86.mov r8, 1
-      x86.mov r9, rdx
-      x86.shl r9, r8
-      x86.mov rax, r9
+      x86.mov rax, 20
+      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -248,15 +237,8 @@ module {
   func.func @main() -> i64 {
     ^entry:
       x86.prologue stack_size=32
-      x86.mov rax, 7
-      x86.sub rsp, 8
-      x86.lea rcx, qword ptr [rsp]
-      x86.mov qword ptr [rcx], rax
-      x86.mov rdx, qword ptr [rcx]
-      x86.mov r8, 2
-      x86.mov r9, rdx
-      x86.shl r9, r8
-      x86.mov rax, r9
+      x86.mov rax, 28
+      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -278,15 +260,8 @@ module {
   func.func @main() -> i64 {
     ^entry:
       x86.prologue stack_size=32
-      x86.mov rax, 5
-      x86.sub rsp, 8
-      x86.lea rcx, qword ptr [rsp]
-      x86.mov qword ptr [rcx], rax
-      x86.mov rdx, qword ptr [rcx]
-      x86.mov r8, 3
-      x86.mov r9, rdx
-      x86.shl r9, r8
-      x86.mov rax, r9
+      x86.mov rax, 40
+      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -300,7 +275,7 @@ function main() returns int
 end 'main'
 ```
 ```exitcode
-10
+15
 ```
 ```requiredmlir
 module {
@@ -362,9 +337,8 @@ module {
       x86.mov rax, 5
       x86.lea_global rcx, @global.g
       x86.mov qword ptr [rcx], rax
-      x86.lea_global rdx, @global.g
-      x86.mov r8, 20
-      x86.mov rax, r8
+      x86.mov rdx, 20
+      x86.mov rax, rdx
       x86.epilogue
       x86.ret
   }
