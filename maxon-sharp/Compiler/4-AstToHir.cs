@@ -1,7 +1,4 @@
-using MaxonSharp.Parser;
-using MaxonSharp.Semantic;
-
-namespace MaxonSharp.Hir;
+namespace MaxonSharp.Compiler;
 
 public class AstToHir {
 	private int _nextValueId;

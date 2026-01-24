@@ -1,6 +1,4 @@
-using MaxonSharp.Lexer;
-
-namespace MaxonSharp.Parser;
+namespace MaxonSharp.Compiler;
 
 public class Parser(List<Token> tokens) {
 	private readonly List<Token> _tokens = tokens;
@@ -1407,7 +1405,7 @@ public class Parser(List<Token> tokens) {
 				}
 
 				// Parse the expression
-				var exprLexer = new Lexer.Lexer(exprText);
+				var exprLexer = new Lexer(exprText);
 				var exprTokens = exprLexer.Tokenize();
 				var exprParser = new Parser(exprTokens);
 				var expr = exprParser.ParseExpression();

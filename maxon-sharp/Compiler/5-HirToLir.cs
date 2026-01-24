@@ -1,6 +1,4 @@
-using MaxonSharp.Hir;
-
-namespace MaxonSharp.Lir;
+namespace MaxonSharp.Compiler;
 
 public class HirToLir {
 	private readonly Dictionary<int, LirVReg> _valueMap = [];
@@ -293,7 +291,7 @@ public class HirToLir {
 					var left = GetVReg(cmp.Left.Id);
 					var right = GetVReg(cmp.Right.Id);
 					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, CondCode.Eq));
+					instructions.Add(new LirSetCC(dest, LirCondCode.Eq));
 					break;
 				}
 
@@ -302,7 +300,7 @@ public class HirToLir {
 					var left = GetVReg(cmp.Left.Id);
 					var right = GetVReg(cmp.Right.Id);
 					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, CondCode.Ne));
+					instructions.Add(new LirSetCC(dest, LirCondCode.Ne));
 					break;
 				}
 
@@ -311,7 +309,7 @@ public class HirToLir {
 					var left = GetVReg(cmp.Left.Id);
 					var right = GetVReg(cmp.Right.Id);
 					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, CondCode.Lt));
+					instructions.Add(new LirSetCC(dest, LirCondCode.Lt));
 					break;
 				}
 
@@ -320,7 +318,7 @@ public class HirToLir {
 					var left = GetVReg(cmp.Left.Id);
 					var right = GetVReg(cmp.Right.Id);
 					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, CondCode.Le));
+					instructions.Add(new LirSetCC(dest, LirCondCode.Le));
 					break;
 				}
 
@@ -329,7 +327,7 @@ public class HirToLir {
 					var left = GetVReg(cmp.Left.Id);
 					var right = GetVReg(cmp.Right.Id);
 					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, CondCode.Gt));
+					instructions.Add(new LirSetCC(dest, LirCondCode.Gt));
 					break;
 				}
 
@@ -338,7 +336,7 @@ public class HirToLir {
 					var left = GetVReg(cmp.Left.Id);
 					var right = GetVReg(cmp.Right.Id);
 					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, CondCode.Ge));
+					instructions.Add(new LirSetCC(dest, LirCondCode.Ge));
 					break;
 				}
 
@@ -378,7 +376,7 @@ public class HirToLir {
 					var cond = GetVReg(brCond.Cond.Id);
 					// Test the condition register
 					instructions.Add(new LirCmp(cond, new LirImmediate(0)));
-					instructions.Add(new LirJmpCC(CondCode.Ne, brCond.TrueLabel, brCond.FalseLabel));
+					instructions.Add(new LirJmpCC(LirCondCode.Ne, brCond.TrueLabel, brCond.FalseLabel));
 					break;
 				}
 

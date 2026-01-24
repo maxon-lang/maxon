@@ -66,7 +66,7 @@ class Program {
 			lirOutputPath = Path.ChangeExtension(sourceFile, ".lir");
 		}
 
-		var success = Compiler.Compile(source, outputPath, hirOutputPath, lirOutputPath);
+		var success = Compiler.Compiler.Compile(source, outputPath, hirOutputPath, lirOutputPath);
 
 		return success ? 0 : 1;
 	}

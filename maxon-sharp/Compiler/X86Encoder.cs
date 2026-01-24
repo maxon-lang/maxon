@@ -1,4 +1,4 @@
-namespace MaxonSharp.Codegen;
+namespace MaxonSharp.Compiler;
 
 public class X86Encoder {
 	private readonly List<byte> _code = [];
@@ -149,7 +149,7 @@ public class X86Encoder {
 		byte rex = 0x40;
 		if ((int)src >= 8) rex |= 0x04; // REX.R
 		if ((int)baseReg >= 8) rex |= 0x01; // REX.B
-											// Always emit REX for consistent encoding with 64-bit mode
+																				// Always emit REX for consistent encoding with 64-bit mode
 		_code.Add(rex);
 		_code.Add(0x88); // MOV r/m8, r8
 		EmitMemOperand((int)src & 7, baseReg, offset);

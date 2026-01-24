@@ -1,12 +1,4 @@
-using MaxonSharp.Codegen;
-using MaxonSharp.Hir;
-using MaxonSharp.Lexer;
-using MaxonSharp.Lir;
-using MaxonSharp.Parser;
-using MaxonSharp.Pe;
-using MaxonSharp.Semantic;
-
-namespace MaxonSharp;
+namespace MaxonSharp.Compiler;
 
 /// <summary>
 /// Result of compiling source code to IR.
@@ -25,11 +17,11 @@ public class Compiler {
 	public static CompileToIrResult CompileToIr(string source) {
 		try {
 			// Stage 1: Lexing
-			var lexer = new Lexer.Lexer(source);
+			var lexer = new Lexer(source);
 			var tokens = lexer.Tokenize();
 
 			// Stage 2: Parsing
-			var parser = new Parser.Parser(tokens);
+			var parser = new Parser(tokens);
 			var ast = parser.Parse();
 
 			// Stage 3: Semantic analysis
@@ -70,12 +62,12 @@ public class Compiler {
 
 			// Stage 1: Lexing
 			Logger.Info(LogCategory.Compiler, "Stage 1: Lexing");
-			var lexer = new Lexer.Lexer(source);
+			var lexer = new Lexer(source);
 			var tokens = lexer.Tokenize();
 
 			// Stage 2: Parsing
 			Logger.Info(LogCategory.Compiler, "Stage 2: Parsing");
-			var parser = new Parser.Parser(tokens);
+			var parser = new Parser(tokens);
 			var ast = parser.Parse();
 
 			// Stage 3: Semantic analysis (includes mutation analysis)
@@ -106,7 +98,7 @@ public class Compiler {
 
 			// Stage 6: Code generation
 			Logger.Info(LogCategory.Compiler, "Stage 6: Code generation");
-			var codeGen = new CodeGenerator();
+			var codeGen = new CodeGen();
 			var code = codeGen.Generate(lirModule);
 
 			// Stage 7: PE Writer
@@ -126,19 +118,19 @@ public class Compiler {
 		}
 	}
 
-	private static void WriteHirFile(string path, Hir.HirModule module) {
+	private static void WriteHirFile(string path, HirModule module) {
 		using var writer = new StreamWriter(path);
 		WriteHir(writer, module);
 		Console.WriteLine($"Wrote {path}");
 	}
 
-	private static void WriteLirFile(string path, Lir.LirModule module) {
+	private static void WriteLirFile(string path, LirModule module) {
 		using var writer = new StreamWriter(path);
 		WriteLir(writer, module);
 		Console.WriteLine($"Wrote {path}");
 	}
 
-	private static void WriteHir(TextWriter w, Hir.HirModule module) {
+	private static void WriteHir(TextWriter w, HirModule module) {
 		foreach (var s in module.Structs) {
 			w.WriteLine($"struct {s.Name} {{");
 			foreach (var f in s.Fields) {
@@ -173,42 +165,42 @@ public class Compiler {
 		}
 	}
 
-	private static string FormatHirInstr(Hir.HirInstr instr) {
+	private static string FormatHirInstr(HirInstr instr) {
 		return instr switch {
-			Hir.HirConstInt c => $"{c.Dest} = const {c.Value}",
-			Hir.HirConstFloat c => $"{c.Dest} = const {c.Value}f",
-			Hir.HirConstBool c => $"{c.Dest} = const {c.Value}",
-			Hir.HirAlloca a => $"{a.Dest} = alloca {a.Type.Name}",
-			Hir.HirLoad l => $"{l.Dest} = load {l.Ptr}",
-			Hir.HirStore s => $"store {s.Ptr}, {s.Value} : {s.Type.Name}",
-			Hir.HirMemcpy m => $"memcpy {m.Dest}, {m.Src} ({m.Size})",
-			Hir.HirGetFieldPtr g => $"{g.Dest} = getfieldptr {g.Base}, .{g.FieldName} (+{g.Offset})",
-			Hir.HirAdd a => $"{a.Dest} = add {a.Left}, {a.Right}",
-			Hir.HirSub s => $"{s.Dest} = sub {s.Left}, {s.Right}",
-			Hir.HirMul m => $"{m.Dest} = mul {m.Left}, {m.Right}",
-			Hir.HirDiv d => $"{d.Dest} = div {d.Left}, {d.Right}",
-			Hir.HirMod m => $"{m.Dest} = mod {m.Left}, {m.Right}",
-			Hir.HirNeg n => $"{n.Dest} = neg {n.Operand}",
-			Hir.HirNot n => $"{n.Dest} = not {n.Operand}",
-			Hir.HirCmpEq c => $"{c.Dest} = eq {c.Left}, {c.Right}",
-			Hir.HirCmpNe c => $"{c.Dest} = ne {c.Left}, {c.Right}",
-			Hir.HirCmpLt c => $"{c.Dest} = lt {c.Left}, {c.Right}",
-			Hir.HirCmpLe c => $"{c.Dest} = le {c.Left}, {c.Right}",
-			Hir.HirCmpGt c => $"{c.Dest} = gt {c.Left}, {c.Right}",
-			Hir.HirCmpGe c => $"{c.Dest} = ge {c.Left}, {c.Right}",
-			Hir.HirBr b => $"br {b.Label}",
-			Hir.HirBrCond b => $"brcond {b.Cond}, {b.TrueLabel}, {b.FalseLabel}",
-			Hir.HirRet r => r.Value != null ? $"ret {r.Value}" : "ret",
-			Hir.HirCall c => c.Dest != null
+			HirConstInt c => $"{c.Dest} = const {c.Value}",
+			HirConstFloat c => $"{c.Dest} = const {c.Value}f",
+			HirConstBool c => $"{c.Dest} = const {c.Value}",
+			HirAlloca a => $"{a.Dest} = alloca {a.Type.Name}",
+			HirLoad l => $"{l.Dest} = load {l.Ptr}",
+			HirStore s => $"store {s.Ptr}, {s.Value} : {s.Type.Name}",
+			HirMemcpy m => $"memcpy {m.Dest}, {m.Src} ({m.Size})",
+			HirGetFieldPtr g => $"{g.Dest} = getfieldptr {g.Base}, .{g.FieldName} (+{g.Offset})",
+			HirAdd a => $"{a.Dest} = add {a.Left}, {a.Right}",
+			HirSub s => $"{s.Dest} = sub {s.Left}, {s.Right}",
+			HirMul m => $"{m.Dest} = mul {m.Left}, {m.Right}",
+			HirDiv d => $"{d.Dest} = div {d.Left}, {d.Right}",
+			HirMod m => $"{m.Dest} = mod {m.Left}, {m.Right}",
+			HirNeg n => $"{n.Dest} = neg {n.Operand}",
+			HirNot n => $"{n.Dest} = not {n.Operand}",
+			HirCmpEq c => $"{c.Dest} = eq {c.Left}, {c.Right}",
+			HirCmpNe c => $"{c.Dest} = ne {c.Left}, {c.Right}",
+			HirCmpLt c => $"{c.Dest} = lt {c.Left}, {c.Right}",
+			HirCmpLe c => $"{c.Dest} = le {c.Left}, {c.Right}",
+			HirCmpGt c => $"{c.Dest} = gt {c.Left}, {c.Right}",
+			HirCmpGe c => $"{c.Dest} = ge {c.Left}, {c.Right}",
+			HirBr b => $"br {b.Label}",
+			HirBrCond b => $"brcond {b.Cond}, {b.TrueLabel}, {b.FalseLabel}",
+			HirRet r => r.Value != null ? $"ret {r.Value}" : "ret",
+			HirCall c => c.Dest != null
 				? $"{c.Dest} = call {c.FuncName}({string.Join(", ", c.Args)})"
 				: $"call {c.FuncName}({string.Join(", ", c.Args)})",
-			Hir.HirParam p => $"{p.Dest} = param {p.Index}",
-			Hir.HirLabel l => $"{l.Name}:",
+			HirParam p => $"{p.Dest} = param {p.Index}",
+			HirLabel l => $"{l.Name}:",
 			_ => instr.ToString() ?? "???"
 		};
 	}
 
-	private static void WriteLir(TextWriter w, Lir.LirModule module) {
+	private static void WriteLir(TextWriter w, LirModule module) {
 		foreach (var func in module.Functions) {
 			var export = func.IsExport ? "export " : "";
 			var paramStr = string.Join(", ", func.Params.Select(p => $"{p.Name}: {p.Type}"));
@@ -225,34 +217,34 @@ public class Compiler {
 		}
 	}
 
-	private static string FormatLirInstr(Lir.LirInstr instr) {
+	private static string FormatLirInstr(LirInstr instr) {
 		return instr switch {
-			Lir.LirMov m => $"{m.Dest} = mov {m.Src}",
-			Lir.LirLoad l => $"{l.Dest} = load {l.Ptr} ({l.Size})",
-			Lir.LirStore s => $"store {s.Ptr}, {s.Value} ({s.Size})",
-			Lir.LirMemcpy m => $"memcpy {m.Dest}, {m.Src} ({m.Size})",
-			Lir.LirLea l => $"{l.Dest} = lea {l.Addr}",
-			Lir.LirAdd a => $"{a.Dest} = add {a.Left}, {a.Right}",
-			Lir.LirSub s => $"{s.Dest} = sub {s.Left}, {s.Right}",
-			Lir.LirIMul m => $"{m.Dest} = imul {m.Left}, {m.Right}",
-			Lir.LirIDiv d => $"{d.Dest} = idiv {d.Left}, {d.Right}",
-			Lir.LirMod m => $"{m.Dest} = mod {m.Left}, {m.Right}",
-			Lir.LirNeg n => $"{n.Dest} = neg {n.Src}",
-			Lir.LirAnd a => $"{a.Dest} = and {a.Left}, {a.Right}",
-			Lir.LirOr o => $"{o.Dest} = or {o.Left}, {o.Right}",
-			Lir.LirXor x => $"{x.Dest} = xor {x.Left}, {x.Right}",
-			Lir.LirNot n => $"{n.Dest} = not {n.Src}",
-			Lir.LirShl s => $"{s.Dest} = shl {s.Left}, {s.Right}",
-			Lir.LirShr s => $"{s.Dest} = shr {s.Left}, {s.Right}",
-			Lir.LirCmp c => $"cmp {c.Left}, {c.Right}",
-			Lir.LirSetCC s => $"{s.Dest} = set{s.Cond}",
-			Lir.LirJmp j => $"jmp {j.Label}",
-			Lir.LirJmpCC j => $"j{j.Cond} {j.TrueLabel}, {j.FalseLabel}",
-			Lir.LirRet r => r.Value != null ? $"ret {r.Value}" : "ret",
-			Lir.LirCall c => c.Dest != null
+			LirMov m => $"{m.Dest} = mov {m.Src}",
+			LirLoad l => $"{l.Dest} = load {l.Ptr} ({l.Size})",
+			LirStore s => $"store {s.Ptr}, {s.Value} ({s.Size})",
+			LirMemcpy m => $"memcpy {m.Dest}, {m.Src} ({m.Size})",
+			LirLea l => $"{l.Dest} = lea {l.Addr}",
+			LirAdd a => $"{a.Dest} = add {a.Left}, {a.Right}",
+			LirSub s => $"{s.Dest} = sub {s.Left}, {s.Right}",
+			LirIMul m => $"{m.Dest} = imul {m.Left}, {m.Right}",
+			LirIDiv d => $"{d.Dest} = idiv {d.Left}, {d.Right}",
+			LirMod m => $"{m.Dest} = mod {m.Left}, {m.Right}",
+			LirNeg n => $"{n.Dest} = neg {n.Src}",
+			LirAnd a => $"{a.Dest} = and {a.Left}, {a.Right}",
+			LirOr o => $"{o.Dest} = or {o.Left}, {o.Right}",
+			LirXor x => $"{x.Dest} = xor {x.Left}, {x.Right}",
+			LirNot n => $"{n.Dest} = not {n.Src}",
+			LirShl s => $"{s.Dest} = shl {s.Left}, {s.Right}",
+			LirShr s => $"{s.Dest} = shr {s.Left}, {s.Right}",
+			LirCmp c => $"cmp {c.Left}, {c.Right}",
+			LirSetCC s => $"{s.Dest} = set{s.Cond}",
+			LirJmp j => $"jmp {j.Label}",
+			LirJmpCC j => $"j{j.Cond} {j.TrueLabel}, {j.FalseLabel}",
+			LirRet r => r.Value != null ? $"ret {r.Value}" : "ret",
+			LirCall c => c.Dest != null
 				? $"{c.Dest} = call {c.FuncName}({string.Join(", ", c.Args)})"
 				: $"call {c.FuncName}({string.Join(", ", c.Args)})",
-			Lir.LirAddressOf a => $"{a.Dest} = addressof {a.Slot}",
+			LirAddressOf a => $"{a.Dest} = addressof {a.Slot}",
 			_ => instr.ToString() ?? "???"
 		};
 	}

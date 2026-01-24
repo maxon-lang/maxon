@@ -1,8 +1,6 @@
-using MaxonSharp.Lir;
+namespace MaxonSharp.Compiler;
 
-namespace MaxonSharp.Codegen;
-
-public class CodeGenerator {
+public class CodeGen {
 	private readonly X86Encoder _encoder = new();
 	private RegisterAllocator.Allocation _alloc = null!;
 	private readonly List<LirStringData> _strings = [];
@@ -462,18 +460,18 @@ public class CodeGenerator {
 		}
 	}
 
-	private static CondCode LirCondToX86Cond(Lir.CondCode cond) {
+	private static CondCode LirCondToX86Cond(LirCondCode cond) {
 		return cond switch {
-			Lir.CondCode.Eq => CondCode.E,
-			Lir.CondCode.Ne => CondCode.Ne,
-			Lir.CondCode.Lt => CondCode.L,
-			Lir.CondCode.Le => CondCode.Le,
-			Lir.CondCode.Gt => CondCode.G,
-			Lir.CondCode.Ge => CondCode.Ge,
-			Lir.CondCode.LtU => CondCode.B,
-			Lir.CondCode.LeU => CondCode.Be,
-			Lir.CondCode.GtU => CondCode.A,
-			Lir.CondCode.GeU => CondCode.Ae,
+			LirCondCode.Eq => CondCode.E,
+			LirCondCode.Ne => CondCode.Ne,
+			LirCondCode.Lt => CondCode.L,
+			LirCondCode.Le => CondCode.Le,
+			LirCondCode.Gt => CondCode.G,
+			LirCondCode.Ge => CondCode.Ge,
+			LirCondCode.LtU => CondCode.B,
+			LirCondCode.LeU => CondCode.Be,
+			LirCondCode.GtU => CondCode.A,
+			LirCondCode.GeU => CondCode.Ae,
 			_ => throw new Exception($"Unknown condition code: {cond}")
 		};
 	}

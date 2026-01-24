@@ -150,7 +150,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 
 				// Check HIR if expected
 				if (successExpectation.ExpectedHir != null) {
-					var hirResult = Compiler.CompileToIr(fragment.Source);
+					var hirResult = Compiler.Compiler.CompileToIr(fragment.Source);
 					if (!hirResult.Success) {
 						return new TestResult {
 							TestName = fragment.TestName,
@@ -173,7 +173,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 
 				// Check LIR if expected
 				if (successExpectation.ExpectedLir != null) {
-					var lirResult = Compiler.CompileToIr(fragment.Source);
+					var lirResult = Compiler.Compiler.CompileToIr(fragment.Source);
 					if (!lirResult.Success) {
 						return new TestResult {
 							TestName = fragment.TestName,
@@ -244,7 +244,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 
 	private static (bool Success, string? Error) CompileToExecutable(string source, string outputPath) {
 		try {
-			var success = Compiler.Compile(source, outputPath);
+			var success = Compiler.Compiler.Compile(source, outputPath);
 			return (success, success ? null : "Compilation failed");
 		} catch (Exception ex) {
 			return (false, ex.Message);

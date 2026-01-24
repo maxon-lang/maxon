@@ -1,4 +1,4 @@
-namespace MaxonSharp;
+namespace MaxonSharp.Compiler;
 
 /// <summary>
 /// Structured error codes for the compiler.

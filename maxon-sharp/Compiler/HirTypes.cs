@@ -1,4 +1,4 @@
-namespace MaxonSharp.Hir;
+namespace MaxonSharp.Compiler;
 
 // ============================================================================
 // HIR Types

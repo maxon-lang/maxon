@@ -1,4 +1,4 @@
-namespace MaxonSharp.Parser;
+namespace MaxonSharp.Compiler;
 
 // ============================================================================
 // Source Location

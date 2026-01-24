@@ -1,6 +1,4 @@
-using MaxonSharp.Parser;
-
-namespace MaxonSharp.Semantic;
+namespace MaxonSharp.Compiler;
 
 /// <summary>
 /// Analyzes which function parameters are mutated.

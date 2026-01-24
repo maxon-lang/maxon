@@ -1,6 +1,4 @@
-using MaxonSharp.Parser;
-
-namespace MaxonSharp.Semantic;
+namespace MaxonSharp.Compiler;
 
 public class SemanticAnalyzer {
 	private MutationAnalyzer? _mutationAnalyzer;

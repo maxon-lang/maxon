@@ -1,4 +1,4 @@
-namespace MaxonSharp.Pe;
+namespace MaxonSharp.Compiler;
 
 public class PeWriter {
 	// PE constants

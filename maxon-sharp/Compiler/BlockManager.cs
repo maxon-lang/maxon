@@ -1,6 +1,4 @@
-using MaxonSharp.Parser;
-
-namespace MaxonSharp.Hir;
+namespace MaxonSharp.Compiler;
 
 /// <summary>
 /// Types of blocks for control flow tracking.
