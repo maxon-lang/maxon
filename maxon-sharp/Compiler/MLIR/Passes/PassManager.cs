@@ -47,17 +47,26 @@ public sealed class PassManager(MlirContext context) {
 		var result = new PassResult();
 		var startTime = DateTime.Now;
 
+		Logger.Debug(LogCategory.Mlir, $"Starting pass pipeline with {_passes.Count} passes");
+		Logger.Trace(LogCategory.Mlir, $"Module has {module.Functions.Count} functions, {module.Globals.Count} globals");
+
 		foreach (var pass in _passes) {
 			var passStart = DateTime.Now;
+			Logger.Debug(LogCategory.Mlir, $"Running pass: {pass.Name}");
 
 			try {
+				var opCountBefore = CountOperations(module);
 				var changed = pass.Run(module);
 				var passTime = DateTime.Now - passStart;
+				var opCountAfter = CountOperations(module);
 
 				Statistics.RecordPassRun(pass.Name, passTime, changed);
 
 				if (changed) {
 					result.ModifiedPasses.Add(pass.Name);
+					Logger.Debug(LogCategory.Mlir, $"  {pass.Name}: modified ({opCountBefore} -> {opCountAfter} ops, {passTime.TotalMilliseconds:F2}ms)");
+				} else {
+					Logger.Trace(LogCategory.Mlir, $"  {pass.Name}: unchanged ({passTime.TotalMilliseconds:F2}ms)");
 				}
 
 				if (PrintAfterAll) {
@@ -67,12 +76,17 @@ public sealed class PassManager(MlirContext context) {
 				if (VerifyAfterAll) {
 					var errors = VerifyModule(module);
 					if (errors.Count > 0) {
+						Logger.Error(LogCategory.Mlir, $"Verification failed after {pass.Name}: {errors.Count} errors");
+						foreach (var error in errors) {
+							Logger.Trace(LogCategory.Mlir, $"  {error}");
+						}
 						result.Success = false;
 						result.Errors.AddRange(errors.Select(e => $"[{pass.Name}] {e}"));
 						return result;
 					}
 				}
 			} catch (Exception ex) {
+				Logger.Error(LogCategory.Mlir, $"Pass {pass.Name} failed: {ex.Message}");
 				result.Success = false;
 				result.Errors.Add($"[{pass.Name}] {ex.Message}");
 				return result;
@@ -81,7 +95,18 @@ public sealed class PassManager(MlirContext context) {
 
 		result.TotalTime = DateTime.Now - startTime;
 		result.Success = true;
+		Logger.Debug(LogCategory.Mlir, $"Pass pipeline completed in {result.TotalTime.TotalMilliseconds:F2}ms");
 		return result;
+	}
+
+	private static int CountOperations(MlirModule module) {
+		int count = 0;
+		foreach (var func in module.Functions) {
+			foreach (var block in func.Body.Blocks) {
+				count += block.Operations.Count;
+			}
+		}
+		return count;
 	}
 
 	/// <summary>

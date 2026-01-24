@@ -16,21 +16,32 @@ public sealed class Mem2RegPass : FunctionPass {
 	protected override bool RunOnFunction(MlirFunction func) {
 		bool anyChanged = false;
 		bool changed;
+		int promotedCount = 0;
+		int iterations = 0;
+
+		Logger.Debug(LogCategory.Optimizer, $"mem2reg: processing {func.Name}");
 
 		// Iterate until no more changes (fixed-point)
 		do {
 			changed = false;
+			iterations++;
 			foreach (var block in func.Body.Blocks) {
 				var allocas = block.Operations.OfType<AllocaOp>().ToList();
 
 				foreach (var alloca in allocas) {
 					if (TryPromote(alloca, block)) {
+						Logger.Trace(LogCategory.Optimizer, $"  promoted alloca %{alloca.Result.Id} to SSA");
+						promotedCount++;
 						changed = true;
 					}
 				}
 			}
 			anyChanged |= changed;
 		} while (changed);
+
+		if (promotedCount > 0) {
+			Logger.Debug(LogCategory.Optimizer, $"  {func.Name}: promoted {promotedCount} allocas in {iterations} iteration(s)");
+		}
 
 		return anyChanged;
 	}

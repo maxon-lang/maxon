@@ -38,6 +38,8 @@ public sealed class X86CodeEmitter {
 		var offset = _data.Count;
 		_globalOffsets[name] = offset;
 
+		Logger.Trace(LogCategory.Codegen, $"DefineGlobal: {name} at offset {offset}, size {size}");
+
 		// Write initial value as bytes (little-endian)
 		for (int i = 0; i < size; i++) {
 			_data.Add((byte)(initialValue >> (i * 8)));
@@ -50,6 +52,7 @@ public sealed class X86CodeEmitter {
 	/// Emits machine code for an X86 operation.
 	/// </summary>
 	public void Emit(X86Op op) {
+		var startOffset = CurrentOffset;
 		switch (op) {
 			case MovOp mov:
 				EmitMov(mov);
@@ -133,6 +136,11 @@ public sealed class X86CodeEmitter {
 			default:
 				throw new NotSupportedException($"Unsupported X86 operation: {op.GetType().Name}");
 		}
+
+		var bytesEmitted = CurrentOffset - startOffset;
+		if (bytesEmitted > 0) {
+			Logger.Trace(LogCategory.Codegen, $"  {op.GetType().Name}: {bytesEmitted} bytes at offset 0x{startOffset:X}");
+		}
 	}
 
 	/// <summary>
@@ -173,6 +181,8 @@ public sealed class X86CodeEmitter {
 	/// Resolves all label references.
 	/// </summary>
 	public void ResolveLabels() {
+		Logger.Debug(LogCategory.Codegen, $"Resolving {_labelFixups.Count} label references");
+
 		foreach (var (offset, label, instrSize) in _labelFixups) {
 			if (!_labelOffsets.TryGetValue(label, out var targetOffset)) {
 				throw new InvalidOperationException($"Undefined label: {label}");
@@ -180,6 +190,8 @@ public sealed class X86CodeEmitter {
 
 			// Calculate relative offset (from end of instruction)
 			var relOffset = targetOffset - (offset + instrSize);
+
+			Logger.Trace(LogCategory.Codegen, $"  {label}: offset 0x{offset:X} -> target 0x{targetOffset:X} (rel {relOffset})");
 
 			// Patch the displacement (assuming 32-bit displacement at offset)
 			_code[offset] = (byte)relOffset;
@@ -195,6 +207,8 @@ public sealed class X86CodeEmitter {
 	/// </summary>
 	/// <param name="dataRvaOffset">The RVA offset of the data section relative to code section end</param>
 	public void ResolveGlobals(int dataRvaOffset) {
+		Logger.Debug(LogCategory.Codegen, $"Resolving {_globalFixups.Count} global references");
+
 		foreach (var (codeOffset, globalName, instrSize) in _globalFixups) {
 			if (!_globalOffsets.TryGetValue(globalName, out var globalOffset)) {
 				throw new InvalidOperationException($"Undefined global: {globalName}");
@@ -208,6 +222,8 @@ public sealed class X86CodeEmitter {
 			var targetAddr = codeEnd + dataRvaOffset + globalOffset;
 			var ripAtEnd = codeOffset + instrSize;
 			var relOffset = targetAddr - ripAtEnd;
+
+			Logger.Trace(LogCategory.Codegen, $"  {globalName}: code offset 0x{codeOffset:X} -> data offset 0x{globalOffset:X}");
 
 			// Patch the displacement
 			_code[codeOffset] = (byte)relOffset;
@@ -227,6 +243,7 @@ public sealed class X86CodeEmitter {
 	/// </summary>
 	public void DefineLabel(string name) {
 		_labelOffsets[name] = CurrentOffset;
+		Logger.Trace(LogCategory.Codegen, $"Label: {name} at offset 0x{CurrentOffset:X}");
 	}
 
 	// ========================================================================

@@ -11,15 +11,24 @@ public sealed class CommonSubexpressionEliminationPass : FunctionPass {
 
 	protected override bool RunOnFunction(MlirFunction func) {
 		bool changed = false;
+		int eliminatedCount = 0;
+
+		Logger.Debug(LogCategory.Optimizer, $"cse: processing {func.Name}");
 
 		foreach (var block in func.Body.Blocks) {
-			changed |= ProcessBlock(block);
+			var (blockChanged, count) = ProcessBlock(block);
+			changed |= blockChanged;
+			eliminatedCount += count;
+		}
+
+		if (eliminatedCount > 0) {
+			Logger.Debug(LogCategory.Optimizer, $"  {func.Name}: eliminated {eliminatedCount} common subexpressions");
 		}
 
 		return changed;
 	}
 
-	private static bool ProcessBlock(MlirBlock block) {
+	private static (bool changed, int eliminatedCount) ProcessBlock(MlirBlock block) {
 		bool changed = false;
 		var expressionMap = new Dictionary<ExpressionKey, MlirValue>();
 		var opsToRemove = new List<MlirOperation>();
@@ -36,6 +45,7 @@ public sealed class CommonSubexpressionEliminationPass : FunctionPass {
 
 			if (expressionMap.TryGetValue(key, out var existingValue)) {
 				// Found a common subexpression - mark for removal
+				Logger.Trace(LogCategory.Optimizer, $"  cse: {op.Mnemonic} result %{op.Results[0].Id} -> %{existingValue.Id}");
 				valueReplacements[op.Results[0]] = existingValue;
 				opsToRemove.Add(op);
 				changed = true;
@@ -59,7 +69,7 @@ public sealed class CommonSubexpressionEliminationPass : FunctionPass {
 			block.Operations.Remove(op);
 		}
 
-		return changed;
+		return (changed, opsToRemove.Count);
 	}
 
 	private static ExpressionKey? ComputeExpressionKey(MlirOperation op) {

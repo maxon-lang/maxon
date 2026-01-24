@@ -39,36 +39,45 @@ public sealed class AstToMaxonConverter {
 	/// Converts a program AST to the Maxon dialect.
 	/// </summary>
 	public MlirModule ConvertProgram(ProgramAst program) {
+		Logger.Debug(LogCategory.Mlir, $"AST->MLIR: Converting program with {program.Types.Count} types, {program.Functions.Count} functions");
+
 		// First pass: collect struct and enum definitions
 		foreach (var type in program.Types) {
+			Logger.Trace(LogCategory.Mlir, $"  Lowering type: {type.Name}");
 			LowerTypeDecl(type);
 		}
 
 		foreach (var enumDecl in program.Enums) {
+			Logger.Trace(LogCategory.Mlir, $"  Lowering enum: {enumDecl.Name}");
 			LowerEnumDecl(enumDecl);
 		}
 
 		// Second pass: lower global variables and constants
 		foreach (var globalVar in program.GlobalVariables) {
+			Logger.Trace(LogCategory.Mlir, $"  Lowering global var: {globalVar.Name}");
 			LowerGlobalVariable(globalVar);
 		}
 
 		foreach (var globalConst in program.GlobalConstants) {
+			Logger.Trace(LogCategory.Mlir, $"  Lowering global const: {globalConst.Name}");
 			LowerGlobalConstant(globalConst);
 		}
 
 		// Third pass: lower functions
 		foreach (var func in program.Functions) {
+			Logger.Debug(LogCategory.Mlir, $"  Lowering function: {func.Name}");
 			LowerFunction(func);
 		}
 
 		// Lower methods from types
 		foreach (var type in program.Types) {
 			foreach (var method in type.Methods) {
+				Logger.Debug(LogCategory.Mlir, $"  Lowering method: {type.Name}.{method.Name}");
 				LowerMethod(type.Name, method);
 			}
 		}
 
+		Logger.Debug(LogCategory.Mlir, $"AST->MLIR: Completed with {_module.Functions.Count} functions, {_module.Globals.Count} globals");
 		return _module;
 	}
 

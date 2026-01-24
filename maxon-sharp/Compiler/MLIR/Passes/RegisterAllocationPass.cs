@@ -40,13 +40,23 @@ public sealed class RegisterAllocationPass : FunctionPass {
 
 	protected override bool RunOnFunction(MlirFunction func) {
 		bool changed = false;
+		int totalAllocations = 0;
+
+		Logger.Debug(LogCategory.RegAlloc, $"register-allocation: processing {func.Name}");
+
 		foreach (var block in func.Body.Blocks) {
-			changed |= AllocateBlock(block);
+			var (blockChanged, allocCount) = AllocateBlock(block);
+			changed |= blockChanged;
+			totalAllocations += allocCount;
+		}
+
+		if (totalAllocations > 0) {
+			Logger.Debug(LogCategory.RegAlloc, $"  {func.Name}: allocated {totalAllocations} virtual registers");
 		}
 		return changed;
 	}
 
-	private bool AllocateBlock(MlirBlock block) {
+	private (bool changed, int allocationCount) AllocateBlock(MlirBlock block) {
 		// Map virtual register IDs to physical registers
 		var allocation = new Dictionary<int, X86Register>();
 		var nextGenReg = 0;
@@ -66,12 +76,17 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			}
 		}
 
+		// Log allocations at trace level
+		foreach (var (vregId, physReg) in allocation) {
+			Logger.Trace(LogCategory.RegAlloc, $"  v{vregId} -> {physReg}");
+		}
+
 		// Replace block operations
 		block.Operations.Clear();
 		foreach (var op in newOps) {
 			block.Operations.Add(op);
 		}
-		return changed;
+		return (changed, allocation.Count);
 	}
 
 	private X86Op AllocateOp(X86Op op, Dictionary<int, X86Register> allocation, ref int nextGenReg, ref int nextFloatReg) {

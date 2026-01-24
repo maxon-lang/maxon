@@ -11,23 +11,39 @@ public sealed class ConstantFoldingPass : FunctionPass {
 	public override string Name => "constant-folding";
 	public override string Description => "Folds constant arithmetic expressions";
 
+	private int _foldCount;
+	private int _strengthReductionCount;
+
 	protected override bool RunOnFunction(MlirFunction func) {
 		bool anyChanged = false;
 		bool changed;
+		int iterations = 0;
+		_foldCount = 0;
+		_strengthReductionCount = 0;
+
+		Logger.Debug(LogCategory.Optimizer, $"constant-folding: processing {func.Name}");
 
 		// Iterate until no more changes (fixed-point)
 		do {
 			changed = false;
+			iterations++;
 			foreach (var block in func.Body.Blocks) {
 				var opsToProcess = block.Operations.ToList();
 
 				foreach (var op in opsToProcess) {
-					if (TryFold(op, out var folded)) {
+					if (TryFold(op, out var folded, out var foldType)) {
 						// Replace the operation with the constant
 						var idx = block.Operations.IndexOf(op);
 						if (idx >= 0) {
 							block.Operations[idx] = folded;
 							changed = true;
+							if (foldType == FoldType.Constant) {
+								_foldCount++;
+								Logger.Trace(LogCategory.Optimizer, $"  folded: {op.Mnemonic} -> {folded.Mnemonic}");
+							} else if (foldType == FoldType.StrengthReduction) {
+								_strengthReductionCount++;
+								Logger.Trace(LogCategory.Optimizer, $"  strength-reduction: {op.Mnemonic} -> {folded.Mnemonic}");
+							}
 						}
 					}
 				}
@@ -35,32 +51,43 @@ public sealed class ConstantFoldingPass : FunctionPass {
 			anyChanged |= changed;
 		} while (changed);
 
+		if (_foldCount > 0 || _strengthReductionCount > 0) {
+			Logger.Debug(LogCategory.Optimizer, $"  {func.Name}: {_foldCount} folded, {_strengthReductionCount} strength-reduced in {iterations} iteration(s)");
+		}
+
 		return anyChanged;
 	}
 
-	private static bool TryFold(MlirOperation op, out MlirOperation folded) {
+	private enum FoldType { None, Constant, StrengthReduction }
+
+	private static bool TryFold(MlirOperation op, out MlirOperation folded, out FoldType foldType) {
 		folded = op;
+		foldType = FoldType.None;
 
 		switch (op) {
 			case AddIOp add when GetConstantValue(add.Lhs) is long lhs
 							 && GetConstantValue(add.Rhs) is long rhs:
 				folded = CreateConstantReplacement(new IntegerAttr(lhs + rhs), add.Result);
+				foldType = FoldType.Constant;
 				return true;
 
 			case SubIOp sub when GetConstantValue(sub.Lhs) is long lhs
 							 && GetConstantValue(sub.Rhs) is long rhs:
 				folded = CreateConstantReplacement(new IntegerAttr(lhs - rhs), sub.Result);
+				foldType = FoldType.Constant;
 				return true;
 
 			// Multiply by zero: x * 0 = 0, 0 * x = 0
 			case MulIOp mul when GetConstantValue(mul.Lhs) is 0 || GetConstantValue(mul.Rhs) is 0:
 				folded = CreateConstantReplacement(new IntegerAttr(0), mul.Result);
+				foldType = FoldType.Constant;
 				return true;
 
 			// Full constant folding for multiplication (must come before strength reduction)
 			case MulIOp mul when GetConstantValue(mul.Lhs) is long lhs
 							 && GetConstantValue(mul.Rhs) is long rhs:
 				folded = CreateConstantReplacement(new IntegerAttr(lhs * rhs), mul.Result);
+				foldType = FoldType.Constant;
 				return true;
 
 			// Strength reduction: x * 2^n -> x << n (when only rhs is constant power of 2)
@@ -68,6 +95,7 @@ public sealed class ConstantFoldingPass : FunctionPass {
 							  && GetConstantValue(mul.Rhs) is long rhs
 							  && rhs > 0 && IsPowerOfTwo(rhs):
 				folded = CreateShiftReplacement(mul.Lhs, mul, rhs, mul.Result);
+				foldType = FoldType.StrengthReduction;
 				return true;
 
 			// Strength reduction: 2^n * x -> x << n (when only lhs is constant power of 2)
@@ -75,36 +103,43 @@ public sealed class ConstantFoldingPass : FunctionPass {
 							  && GetConstantValue(mul.Lhs) is long lhs
 							  && lhs > 0 && IsPowerOfTwo(lhs):
 				folded = CreateShiftReplacement(mul.Rhs, mul, lhs, mul.Result);
+				foldType = FoldType.StrengthReduction;
 				return true;
 
 			case DivSIOp div when GetConstantValue(div.Lhs) is long lhs
 								&& GetConstantValue(div.Rhs) is long rhs && rhs != 0:
 				folded = CreateConstantReplacement(new IntegerAttr(lhs / rhs), div.Result);
+				foldType = FoldType.Constant;
 				return true;
 
 			case RemSIOp rem when GetConstantValue(rem.Lhs) is long lhs
 								&& GetConstantValue(rem.Rhs) is long rhs && rhs != 0:
 				folded = CreateConstantReplacement(new IntegerAttr(lhs % rhs), rem.Result);
+				foldType = FoldType.Constant;
 				return true;
 
 			case AddFOp add when GetConstantDoubleValue(add.Lhs) is double lhs
 							 && GetConstantDoubleValue(add.Rhs) is double rhs:
 				folded = CreateConstantReplacement(new FloatAttr(lhs + rhs), add.Result);
+				foldType = FoldType.Constant;
 				return true;
 
 			case SubFOp sub when GetConstantDoubleValue(sub.Lhs) is double lhs
 							 && GetConstantDoubleValue(sub.Rhs) is double rhs:
 				folded = CreateConstantReplacement(new FloatAttr(lhs - rhs), sub.Result);
+				foldType = FoldType.Constant;
 				return true;
 
 			case MulFOp mul when GetConstantDoubleValue(mul.Lhs) is double lhs
 							 && GetConstantDoubleValue(mul.Rhs) is double rhs:
 				folded = CreateConstantReplacement(new FloatAttr(lhs * rhs), mul.Result);
+				foldType = FoldType.Constant;
 				return true;
 
 			case DivFOp div when GetConstantDoubleValue(div.Lhs) is double lhs
 							 && GetConstantDoubleValue(div.Rhs) is double rhs:
 				folded = CreateConstantReplacement(new FloatAttr(lhs / rhs), div.Result);
+				foldType = FoldType.Constant;
 				return true;
 		}
 

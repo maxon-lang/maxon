@@ -11,6 +11,10 @@ public sealed class DeadCodeEliminationPass : FunctionPass {
 
 	protected override bool RunOnFunction(MlirFunction func) {
 		bool changed = false;
+		int removedOps = 0;
+		int removedBlocks = 0;
+
+		Logger.Debug(LogCategory.Optimizer, $"dead-code-elimination: processing {func.Name}");
 
 		// Collect all used values
 		var usedValues = new HashSet<MlirValue>();
@@ -55,13 +59,20 @@ public sealed class DeadCodeEliminationPass : FunctionPass {
 			}
 
 			foreach (var op in opsToRemove) {
+				Logger.Trace(LogCategory.Optimizer, $"  removing dead op: {op.Mnemonic}");
 				block.Operations.Remove(op);
+				removedOps++;
 				changed = true;
 			}
 		}
 
 		// Third pass: remove unreachable blocks
-		changed |= RemoveUnreachableBlocks(func);
+		var unreachableRemoved = RemoveUnreachableBlocks(func, out removedBlocks);
+		changed |= unreachableRemoved;
+
+		if (removedOps > 0 || removedBlocks > 0) {
+			Logger.Debug(LogCategory.Optimizer, $"  {func.Name}: removed {removedOps} dead ops, {removedBlocks} unreachable blocks");
+		}
 
 		return changed;
 	}
@@ -80,7 +91,8 @@ public sealed class DeadCodeEliminationPass : FunctionPass {
 		}
 	}
 
-	private static bool RemoveUnreachableBlocks(MlirFunction func) {
+	private static bool RemoveUnreachableBlocks(MlirFunction func, out int removedCount) {
+		removedCount = 0;
 		if (func.Body.Blocks.Count == 0) return false;
 
 		var reachable = new HashSet<MlirBlock>();
@@ -107,9 +119,11 @@ public sealed class DeadCodeEliminationPass : FunctionPass {
 		// Remove unreachable blocks
 		var unreachable = func.Body.Blocks.Where(b => !reachable.Contains(b)).ToList();
 		foreach (var block in unreachable) {
+			Logger.Trace(LogCategory.Optimizer, $"  removing unreachable block: {block.Name}");
 			func.Body.Blocks.Remove(block);
 		}
 
+		removedCount = unreachable.Count;
 		return unreachable.Count > 0;
 	}
 }

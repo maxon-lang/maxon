@@ -38,11 +38,18 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 	/// Runs the conversion on a module.
 	/// </summary>
 	public ConversionResult Run(MlirModule module) {
+		Logger.Debug(LogCategory.Mlir, $"Dialect conversion: processing {module.Functions.Count} functions");
+		Logger.Trace(LogCategory.Mlir, $"Legal dialects: {string.Join(", ", _legalDialects)}");
+
 		foreach (var func in module.Functions) {
 			var result = ConvertFunction(func);
-			if (result == ConversionResult.Failure)
+			if (result == ConversionResult.Failure) {
+				Logger.Error(LogCategory.Mlir, $"Conversion failed for function: {func.Name}");
 				return result;
+			}
 		}
+
+		Logger.Debug(LogCategory.Mlir, "Dialect conversion: completed successfully");
 		return ConversionResult.Success;
 	}
 
@@ -50,19 +57,27 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 	/// Runs the conversion on a function.
 	/// </summary>
 	public ConversionResult ConvertFunction(MlirFunction func) {
+		Logger.Trace(LogCategory.Mlir, $"Converting function: {func.Name} ({func.Body.Blocks.Count} blocks)");
+		int convertedCount = 0;
+
 		foreach (var block in func.Body.Blocks) {
-			var result = ConvertBlock(block);
+			var (result, count) = ConvertBlock(block);
 			if (result == ConversionResult.Failure)
 				return result;
+			convertedCount += count;
 		}
 
 		// After all blocks are converted, update value references
 		UpdateValueReferences(func);
 
+		if (convertedCount > 0) {
+			Logger.Debug(LogCategory.Mlir, $"  {func.Name}: converted {convertedCount} operations");
+		}
+
 		return ConversionResult.Success;
 	}
 
-	private ConversionResult ConvertBlock(MlirBlock block) {
+	private (ConversionResult result, int convertedCount) ConvertBlock(MlirBlock block) {
 		// Process operations in order, keeping track of which ones to remove
 		var toRemove = new List<MlirOperation>();
 		var allMappings = new Dictionary<MlirValue, MlirValue>();
@@ -80,6 +95,8 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 			foreach (var pattern in patterns) {
 				var rewriter = new ConversionPatternRewriter(block, i + 1);
 				if (pattern.MatchAndRewrite(op, rewriter)) {
+					Logger.Trace(LogCategory.Mlir, $"    {op.Mnemonic} -> {pattern.GetType().Name}");
+
 					// Collect mappings
 					foreach (var kv in rewriter.ValueMappings)
 						allMappings[kv.Key] = kv.Value;
@@ -95,7 +112,7 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 
 			if (!converted && !IsLegal(op)) {
 				// Operation couldn't be converted and isn't legal
-				// For now, we'll just skip it (partial conversion)
+				Logger.Trace(LogCategory.Mlir, $"    {op.Mnemonic}: no matching pattern (skipped)");
 			}
 		}
 
@@ -104,7 +121,7 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 			block.RemoveOperation(op);
 		}
 
-		return ConversionResult.Success;
+		return (ConversionResult.Success, toRemove.Count);
 	}
 
 	private static void UpdateValueReferences(MlirFunction func) {

@@ -12,6 +12,9 @@ public sealed class DeadFunctionEliminationPass : PassBase {
 	public override string Description => "Eliminates unreachable functions";
 
 	public override bool Run(MlirModule module) {
+		var initialCount = module.Functions.Count;
+		Logger.Debug(LogCategory.Optimizer, $"dead-function-elimination: analyzing {initialCount} functions");
+
 		// Find all called functions starting from main
 		var calledFunctions = new HashSet<string> { "main" };
 		var worklist = new Queue<string>();
@@ -41,7 +44,12 @@ public sealed class DeadFunctionEliminationPass : PassBase {
 			.ToList();
 
 		foreach (var func in toRemove) {
+			Logger.Trace(LogCategory.Optimizer, $"  eliminating dead function: {func.Name}");
 			module.Functions.Remove(func);
+		}
+
+		if (toRemove.Count > 0) {
+			Logger.Debug(LogCategory.Optimizer, $"dead-function-elimination: removed {toRemove.Count} unreachable functions ({initialCount} -> {module.Functions.Count})");
 		}
 
 		return toRemove.Count > 0;

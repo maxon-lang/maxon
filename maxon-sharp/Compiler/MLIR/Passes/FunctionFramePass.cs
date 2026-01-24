@@ -17,6 +17,7 @@ public sealed class FunctionFramePass : FunctionPass {
 
 		// Check if prologue already exists
 		if (entryBlock.Operations.Count > 0 && entryBlock.Operations[0] is PrologueOp) {
+			Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} already has prologue");
 			return false;
 		}
 
@@ -27,6 +28,7 @@ public sealed class FunctionFramePass : FunctionPass {
 
 		// Insert prologue at the beginning
 		entryBlock.Operations.Insert(0, new PrologueOp(stackSize));
+		Logger.Debug(LogCategory.Codegen, $"function-frame: {func.Name} stack size = {stackSize}");
 
 		return true;
 	}
