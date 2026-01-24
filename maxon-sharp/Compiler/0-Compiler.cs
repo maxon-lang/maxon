@@ -61,100 +61,71 @@ public class Compiler {
 	/// </summary>
 	public static bool Compile(SourceFile[] sources, string outputPath, string? hirOutputPath = null, string? lirOutputPath = null) {
 		try {
-			Logger.Info(LogCategory.Compiler, $"Starting multi-file compilation ({sources.Length} files)");
+			Logger.Info(LogCategory.Compiler, $"Starting compilation ({sources.Length} file(s))");
 
-			// Phase 1: Parse all source files and extract metadata
-			Logger.Info(LogCategory.Compiler, "Phase 1: Parsing all files");
-			var parsedFiles = new List<(SourceFile Source, ProgramAst Ast, SemanticAnalyzer Analyzer)>();
-			var allSymbols = new ExternalSymbolsCollection();
-			var foundMain = false;
+			// Phase 1: Parse all source files
+			Logger.Info(LogCategory.Compiler, "Phase 1: Parsing");
+			var asts = new List<ProgramAst>();
+			int mainFileIndex = -1;
 
-			foreach (var source in sources) {
+			for (int i = 0; i < sources.Length; i++) {
+				var source = sources[i];
 				Logger.Debug(LogCategory.Compiler, $"Parsing: {source.Path}");
 
-				// Lexing
 				var lexer = new Lexer(source.Content);
 				var tokens = lexer.Tokenize();
 
-				// Parsing
 				var parser = new Parser(tokens);
 				var ast = parser.Parse();
+				asts.Add(ast);
 
-				// Check if this file contains the main function
-				var hasMain = ast.Functions.Any(f => f.Name == "main");
-				if (hasMain) {
-					foundMain = true;
+				// Track which file has main()
+				if (ast.Functions.Any(f => f.Name == "main")) {
+					mainFileIndex = i;
 				}
-
-				// Semantic analysis - don't require main in each file for multi-file projects
-				var semanticAnalyzer = new SemanticAnalyzer();
-				if (!semanticAnalyzer.Analyze(ast, requireMain: sources.Length == 1)) {
-					Console.Error.WriteLine($"Semantic analysis failed for {source.Path}");
-					return false;
-				}
-
-				parsedFiles.Add((source, ast, semanticAnalyzer));
-
-				// Extract exported symbols
-				var symbols = MetadataExtractor.Extract(ast, source.Path);
-				allSymbols.Merge(symbols);
 			}
 
-			// Validate that at least one file has a main function
-			if (!foundMain) {
+			if (mainFileIndex < 0) {
 				Console.Error.WriteLine("Error: No 'main' function found in any source file");
 				return false;
 			}
 
-			// Phase 2: Lower each file to HIR with access to external symbols
-			Logger.Info(LogCategory.Compiler, "Phase 2: Lowering to HIR");
-			HirModule? mergedHir = null;
+			// Phase 2: Merge into single program (filter non-exports from non-main files)
+			Logger.Info(LogCategory.Compiler, "Phase 2: Merging ASTs");
+			var program = ProgramAst.Merge(asts, mainFileIndex);
 
-			foreach (var (source, ast, analyzer) in parsedFiles) {
-				Logger.Debug(LogCategory.Compiler, $"Lowering: {source.Path}");
-
-				var astToHir = new AstToHir();
-
-				// Register external symbols from OTHER files
-				var externalSymbols = allSymbols.ExcludingSource(source.Path);
-				astToHir.RegisterExternalSymbols(externalSymbols);
-
-				var hirModule = astToHir.Lower(ast, analyzer.MutationAnalyzer);
-
-				if (mergedHir == null) {
-					mergedHir = hirModule;
-				} else {
-					mergedHir = HirModule.Merge(mergedHir, hirModule);
-				}
-			}
-
-			if (mergedHir == null) {
-				Console.Error.WriteLine("No source files to compile");
+			// Phase 3: Semantic analysis
+			Logger.Info(LogCategory.Compiler, "Phase 3: Semantic analysis");
+			var semanticAnalyzer = new SemanticAnalyzer();
+			if (!semanticAnalyzer.Analyze(program)) {
 				return false;
 			}
 
+			// Phase 4: AST to HIR
+			Logger.Info(LogCategory.Compiler, "Phase 4: AST to HIR");
+			var astToHir = new AstToHir();
+			var hirModule = astToHir.Lower(program, semanticAnalyzer.MutationAnalyzer);
 
 			if (hirOutputPath != null) {
-				WriteHirFile(hirOutputPath, mergedHir);
+				WriteHirFile(hirOutputPath, hirModule);
 			}
 
-			// Phase 3: HIR to LIR
-			Logger.Info(LogCategory.Compiler, "Phase 3: HIR to LIR");
+			// Phase 5: HIR to LIR
+			Logger.Info(LogCategory.Compiler, "Phase 5: HIR to LIR");
 			var hirToLir = new HirToLir();
-			var lirModule = hirToLir.Lower(mergedHir);
+			var lirModule = hirToLir.Lower(hirModule);
 
 			if (lirOutputPath != null) {
 				WriteLirFile(lirOutputPath, lirModule);
 			}
 
-			// Phase 4: Code generation
-			Logger.Info(LogCategory.Compiler, "Phase 4: Code generation");
+			// Phase 6: Code generation
+			Logger.Info(LogCategory.Compiler, "Phase 6: Code generation");
 			var codeGen = new CodeGen();
 			var code = codeGen.Generate(lirModule);
 
-			// Phase 5: PE Writer
-			Logger.Info(LogCategory.Compiler, "Phase 5: PE Writer");
-			var peWriter = new PeWriter();
+			// Phase 7: PE Writer
+			Logger.Info(LogCategory.Compiler, "Phase 7: PE Writer");
 			PeWriter.Write(outputPath, code);
 
 			Logger.Info(LogCategory.Compiler, "Compilation complete");

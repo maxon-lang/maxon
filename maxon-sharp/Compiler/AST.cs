@@ -242,4 +242,38 @@ public record ProgramAst(
 	List<GlobalConstant> GlobalConstants,
 	List<GlobalVariable> GlobalVariables,
 	List<TypeAliasDecl> TypeAliases
-);
+) {
+	/// <summary>
+	/// Merges multiple ProgramAst objects into a single unified program.
+	/// Non-exported symbols from non-main files are filtered out (file-private).
+	/// </summary>
+	/// <param name="programs">List of parsed programs to merge</param>
+	/// <param name="mainFileIndex">Index of the main file (all its symbols are kept)</param>
+	public static ProgramAst Merge(List<ProgramAst> programs, int mainFileIndex) {
+		var types = new List<TypeDecl>();
+		var enums = new List<EnumDecl>();
+		var interfaces = new List<InterfaceDecl>();
+		var extensions = new List<ExtensionDecl>();
+		var functions = new List<FunctionDecl>();
+		var globalConstants = new List<GlobalConstant>();
+		var globalVariables = new List<GlobalVariable>();
+		var typeAliases = new List<TypeAliasDecl>();
+
+		for (int i = 0; i < programs.Count; i++) {
+			var p = programs[i];
+			var isMainFile = (i == mainFileIndex);
+
+			// Include all symbols from main file, only exported from others
+			types.AddRange(isMainFile ? p.Types : p.Types.Where(t => t.IsExport));
+			enums.AddRange(isMainFile ? p.Enums : p.Enums.Where(e => e.IsExport));
+			interfaces.AddRange(isMainFile ? p.Interfaces : p.Interfaces.Where(iface => iface.IsExport));
+			extensions.AddRange(isMainFile ? p.Extensions : p.Extensions.Where(e => e.IsExport));
+			functions.AddRange(isMainFile ? p.Functions : p.Functions.Where(f => f.IsExport));
+			globalConstants.AddRange(isMainFile ? p.GlobalConstants : p.GlobalConstants.Where(c => c.IsExport));
+			globalVariables.AddRange(isMainFile ? p.GlobalVariables : p.GlobalVariables.Where(v => v.IsExport));
+			typeAliases.AddRange(isMainFile ? p.TypeAliases : p.TypeAliases.Where(a => a.IsExport));
+		}
+
+		return new ProgramAst(types, enums, interfaces, extensions, functions, globalConstants, globalVariables, typeAliases);
+	}
+}

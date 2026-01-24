@@ -189,44 +189,4 @@ public record HirModule(
 	List<HirEnumDef> Enums,
 	List<HirGlobalVar> Globals,
 	List<HirFunction> Functions
-) {
-	/// <summary>
-	/// Merges two HIR modules into one. First definition wins for duplicates.
-	/// </summary>
-	public static HirModule Merge(HirModule a, HirModule b) {
-		var structs = new List<HirStructDef>(a.Structs);
-		var enums = new List<HirEnumDef>(a.Enums);
-		var globals = new List<HirGlobalVar>(a.Globals);
-		var functions = new List<HirFunction>(a.Functions);
-
-		// Track what's already defined
-		var structNames = new HashSet<string>(a.Structs.Select(s => s.Name));
-		var enumNames = new HashSet<string>(a.Enums.Select(e => e.Name));
-		var globalNames = new HashSet<string>(a.Globals.Select(g => g.Name));
-		var functionNames = new HashSet<string>(a.Functions.Select(f => f.Name));
-
-		// Add from b if not already present
-		foreach (var s in b.Structs) {
-			if (structNames.Add(s.Name)) {
-				structs.Add(s);
-			}
-		}
-		foreach (var e in b.Enums) {
-			if (enumNames.Add(e.Name)) {
-				enums.Add(e);
-			}
-		}
-		foreach (var g in b.Globals) {
-			if (globalNames.Add(g.Name)) {
-				globals.Add(g);
-			}
-		}
-		foreach (var f in b.Functions) {
-			if (functionNames.Add(f.Name)) {
-				functions.Add(f);
-			}
-		}
-
-		return new HirModule(structs, enums, globals, functions);
-	}
-}
+);
