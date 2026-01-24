@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MaxonSharp.Compiler;
 using MaxonSharp.Testing;
 
@@ -5,13 +6,56 @@ namespace MaxonSharp;
 
 class Program {
 	static int Main(string[] args) {
-		// Handle test subcommand
-		if (args.Length > 0 && args[0] == "spec-test") {
-			return RunSpecTests(args[1..]);
+		if (args.Length == 0) {
+			PrintUsage();
+			return 1;
 		}
 
+		var command = args[0];
+
+		return command switch {
+			"compile" => RunCompile(args[1..]),
+			"build" => RunBuild(args[1..]),
+			"run" => RunRun(args[1..]),
+			"spec-test" => RunSpecTests(args[1..]),
+			_ => HandleUnknownCommand(command)
+		};
+	}
+
+	static void PrintUsage() {
+		Console.WriteLine("Usage: maxonsharp <command> [options]");
+		Console.WriteLine();
+		Console.WriteLine("Commands:");
+		Console.WriteLine("  compile <file>           Compile a single .maxon file");
+		Console.WriteLine("  build [<directory>]      Build a project (default: current directory)");
+		Console.WriteLine("  run <file|directory>     Compile and run");
+		Console.WriteLine("  spec-test [options]      Run spec tests");
+		Console.WriteLine();
+		Console.WriteLine("Build options (compile, build, run):");
+		Console.WriteLine("  --emit-ir                Write .hir and .lir files");
+		Console.WriteLine();
+		Console.WriteLine("Spec test options:");
+		Console.WriteLine("  --verbose                Show all test results");
+		Console.WriteLine("  --filter=PATTERN         Run only tests matching regex pattern");
+		Console.WriteLine("  --workers=N              Number of parallel workers (default: CPU/2)");
+		Console.WriteLine();
+		Console.WriteLine("Logging (all commands):");
+		Console.WriteLine("  --log=LEVEL              Set all log categories to LEVEL");
+		Console.WriteLine("  --log=CATEGORY:LEVEL     Set specific category to LEVEL");
+		Console.WriteLine();
+		Console.WriteLine("Log levels: none, error, info, debug, trace");
+		Console.WriteLine("Log categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
+	}
+
+	static int HandleUnknownCommand(string command) {
+		Console.WriteLine($"Unknown command: {command}");
+		Console.WriteLine();
+		PrintUsage();
+		return 1;
+	}
+
+	static (bool emitIr, bool valid) ParseCommonOptions(string[] args) {
 		var emitIr = false;
-		string? sourceFile = null;
 
 		foreach (var arg in args) {
 			if (arg == "--emit-ir") {
@@ -22,43 +66,82 @@ class Program {
 					Console.WriteLine($"Invalid log option: {logValue}");
 					Console.WriteLine("  Valid levels: none, error, info, debug, trace");
 					Console.WriteLine("  Valid categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
-					return 1;
+					return (false, false);
 				}
-			} else if (!arg.StartsWith('-')) {
+			}
+		}
+
+		return (emitIr, true);
+	}
+
+	static int RunCompile(string[] args) {
+		var (emitIr, valid) = ParseCommonOptions(args);
+		if (!valid) return 1;
+
+		string? sourceFile = null;
+		foreach (var arg in args) {
+			if (!arg.StartsWith('-')) {
 				sourceFile = arg;
+				break;
 			}
 		}
 
 		if (sourceFile == null) {
-			Console.WriteLine("Usage: MaxonSharp [options] <source-file-or-directory>");
-			Console.WriteLine("       MaxonSharp spec-test [test-options]");
+			Console.WriteLine("Usage: maxonsharp compile [options] <file>");
 			Console.WriteLine();
-			Console.WriteLine("Options:");
-			Console.WriteLine("  --emit-ir              Write .hir and .lir files");
-			Console.WriteLine("  --log=LEVEL            Set all log categories to LEVEL");
-			Console.WriteLine("  --log=CATEGORY:LEVEL   Set specific category to LEVEL");
-			Console.WriteLine();
-			Console.WriteLine("Spec Test options:");
-			Console.WriteLine("  --verbose              Show all test results");
-			Console.WriteLine("  --filter=PATTERN       Run only tests matching regex pattern");
-			Console.WriteLine("  --workers=N            Number of parallel workers (default: CPU/2)");
-			Console.WriteLine();
-			Console.WriteLine("Log levels: none, error, info, debug, trace");
-			Console.WriteLine("Log categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
-			Console.WriteLine();
+			Console.WriteLine("Compile a single .maxon file to an executable.");
 			return 1;
 		}
 
-		// Determine if this is a multi-file project
-		var sourceFiles = CollectProjectFiles(sourceFile);
-		if (sourceFiles == null) {
-			Console.WriteLine($"File or directory not found: {sourceFile}");
+		if (!File.Exists(sourceFile)) {
+			Console.WriteLine($"File not found: {sourceFile}");
 			return 1;
 		}
 
-		// Find the main file to determine output path
-		var mainFile = FindMainFile(sourceFiles, sourceFile);
+		var content = File.ReadAllText(sourceFile);
+		var sources = new SourceFile[] { new(sourceFile, content) };
+		var outputPath = Path.ChangeExtension(sourceFile, ".exe");
+
+		string? hirOutputPath = null;
+		string? lirOutputPath = null;
+		if (emitIr) {
+			hirOutputPath = Path.ChangeExtension(sourceFile, ".hir");
+			lirOutputPath = Path.ChangeExtension(sourceFile, ".lir");
+		}
+
+		var success = Compiler.Compiler.Compile(sources, outputPath, hirOutputPath, lirOutputPath);
+		return success ? 0 : 1;
+	}
+
+	static int RunBuild(string[] args) {
+		var (emitIr, valid) = ParseCommonOptions(args);
+		if (!valid) return 1;
+
+		string? directory = null;
+		foreach (var arg in args) {
+			if (!arg.StartsWith('-')) {
+				directory = arg;
+				break;
+			}
+		}
+
+		// Default to current directory if not specified
+		directory ??= Directory.GetCurrentDirectory();
+
+		if (!Directory.Exists(directory)) {
+			Console.WriteLine($"Directory not found: {directory}");
+			return 1;
+		}
+
+		var sourceFiles = CollectFilesFromDirectory(directory);
+		if (sourceFiles.Length == 0) {
+			Console.WriteLine($"No .maxon files found in: {directory}");
+			return 1;
+		}
+
+		var mainFile = FindMainFile(sourceFiles, directory);
 		var outputPath = Path.ChangeExtension(mainFile, ".exe");
+
 		string? hirOutputPath = null;
 		string? lirOutputPath = null;
 		if (emitIr) {
@@ -67,43 +150,88 @@ class Program {
 		}
 
 		var success = Compiler.Compiler.Compile(sourceFiles, outputPath, hirOutputPath, lirOutputPath);
-
 		return success ? 0 : 1;
 	}
 
-	/// <summary>
-	/// Collects all .maxon files for a project.
-	/// If the path is a directory, recursively collects all .maxon files.
-	/// If the path is a file, checks if it's in a project directory (has sibling or child .maxon files).
-	/// </summary>
-	static SourceFile[]? CollectProjectFiles(string path) {
-		// Check if it's a directory
+	static int RunRun(string[] args) {
+		var (emitIr, valid) = ParseCommonOptions(args);
+		if (!valid) return 1;
+
+		string? path = null;
+		foreach (var arg in args) {
+			if (!arg.StartsWith('-')) {
+				path = arg;
+				break;
+			}
+		}
+
+		if (path == null) {
+			Console.WriteLine("Usage: maxonsharp run [options] <file|directory>");
+			Console.WriteLine();
+			Console.WriteLine("Compile and run a .maxon file or project.");
+			return 1;
+		}
+
+		SourceFile[] sourceFiles;
+		string mainFile;
+
 		if (Directory.Exists(path)) {
-			return CollectFilesFromDirectory(path);
-		}
-
-		// Check if it's a file
-		if (!File.Exists(path)) {
-			return null;
-		}
-
-		// It's a file - check if it's part of a multi-file project
-		var directory = Path.GetDirectoryName(path);
-		if (string.IsNullOrEmpty(directory)) {
-			directory = ".";
-		}
-
-		// Collect all .maxon files from the directory and subdirectories
-		var allFiles = CollectFilesFromDirectory(directory);
-
-		// If there's only one file, return it as a single-file project
-		if (allFiles.Length <= 1) {
+			sourceFiles = CollectFilesFromDirectory(path);
+			if (sourceFiles.Length == 0) {
+				Console.WriteLine($"No .maxon files found in: {path}");
+				return 1;
+			}
+			mainFile = FindMainFile(sourceFiles, path);
+		} else if (File.Exists(path)) {
 			var content = File.ReadAllText(path);
-			return [new SourceFile(path, content)];
+			sourceFiles = [new SourceFile(path, content)];
+			mainFile = path;
+		} else {
+			Console.WriteLine($"File or directory not found: {path}");
+			return 1;
 		}
 
-		// Multi-file project
-		return allFiles;
+		var outputPath = Path.ChangeExtension(mainFile, ".exe");
+
+		string? hirOutputPath = null;
+		string? lirOutputPath = null;
+		if (emitIr) {
+			hirOutputPath = Path.ChangeExtension(mainFile, ".hir");
+			lirOutputPath = Path.ChangeExtension(mainFile, ".lir");
+		}
+
+		var success = Compiler.Compiler.Compile(sourceFiles, outputPath, hirOutputPath, lirOutputPath);
+		if (!success) {
+			return 1;
+		}
+
+		// Run the compiled executable
+		var process = new Process {
+			StartInfo = new ProcessStartInfo {
+				FileName = outputPath,
+				UseShellExecute = false,
+				RedirectStandardOutput = true,
+				RedirectStandardError = true,
+				CreateNoWindow = true
+			}
+		};
+
+		process.Start();
+
+		// Read output streams
+		var stdout = process.StandardOutput.ReadToEnd();
+		var stderr = process.StandardError.ReadToEnd();
+
+		process.WaitForExit();
+
+		if (!string.IsNullOrEmpty(stdout)) {
+			Console.Write(stdout);
+		}
+		if (!string.IsNullOrEmpty(stderr)) {
+			Console.Error.Write(stderr);
+		}
+
+		return process.ExitCode;
 	}
 
 	/// <summary>
