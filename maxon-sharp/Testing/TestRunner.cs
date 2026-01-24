@@ -161,93 +161,25 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 				var successExpectation = (SuccessExpectation)fragment.Expectation;
 
-				// Check HIR if expected
-				if (successExpectation.ExpectedHir != null) {
-					var hirResult = Compiler.Compiler.CompileToIr(fragment.Source);
-					if (!hirResult.Success) {
+				// Check Required MLIR (must match exactly)
+				if (successExpectation.RequiredMlir != null) {
+					var mlirResult = Compiler.Compiler.CompileToMlir(fragment.Source);
+					if (!mlirResult.Success) {
 						return new TestResult {
 							TestName = fragment.TestName,
 							Passed = false,
-							ErrorMessage = $"Failed to generate HIR: {hirResult.Error}",
+							ErrorMessage = $"Failed to generate MLIR: {mlirResult.Error}",
 							Duration = sw.Elapsed
 						};
 					}
 
-					var (Passed, Message) = CompareIr(successExpectation.ExpectedHir, hirResult.Hir!);
+					// Get the final X86 IR as the output to check
+					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMlir, mlirResult.X86Ir!);
 					if (!Passed) {
 						return new TestResult {
 							TestName = fragment.TestName,
 							Passed = false,
-							ErrorMessage = $"HIR mismatch: {Message}",
-							Duration = sw.Elapsed
-						};
-					}
-				}
-
-				// Check LIR if expected
-				if (successExpectation.ExpectedLir != null) {
-					var lirResult = Compiler.Compiler.CompileToIr(fragment.Source);
-					if (!lirResult.Success) {
-						return new TestResult {
-							TestName = fragment.TestName,
-							Passed = false,
-							ErrorMessage = $"Failed to generate LIR: {lirResult.Error}",
-							Duration = sw.Elapsed
-						};
-					}
-
-					var (Passed, Message) = CompareIr(successExpectation.ExpectedLir, lirResult.Lir!);
-					if (!Passed) {
-						return new TestResult {
-							TestName = fragment.TestName,
-							Passed = false,
-							ErrorMessage = $"LIR mismatch: {Message}",
-							Duration = sw.Elapsed
-						};
-					}
-				}
-
-				// Check Required HIR (substring match)
-				if (successExpectation.RequiredHir != null) {
-					var hirResult = Compiler.Compiler.CompileToIr(fragment.Source);
-					if (!hirResult.Success) {
-						return new TestResult {
-							TestName = fragment.TestName,
-							Passed = false,
-							ErrorMessage = $"Failed to generate HIR: {hirResult.Error}",
-							Duration = sw.Elapsed
-						};
-					}
-
-					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredHir, hirResult.Hir!);
-					if (!Passed) {
-						return new TestResult {
-							TestName = fragment.TestName,
-							Passed = false,
-							ErrorMessage = $"Required HIR not found: {Message}",
-							Duration = sw.Elapsed
-						};
-					}
-				}
-
-				// Check Required LIR (substring match)
-				if (successExpectation.RequiredLir != null) {
-					var lirResult = Compiler.Compiler.CompileToIr(fragment.Source);
-					if (!lirResult.Success) {
-						return new TestResult {
-							TestName = fragment.TestName,
-							Passed = false,
-							ErrorMessage = $"Failed to generate LIR: {lirResult.Error}",
-							Duration = sw.Elapsed
-						};
-					}
-
-					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredLir, lirResult.Lir!);
-					if (!Passed) {
-						return new TestResult {
-							TestName = fragment.TestName,
-							Passed = false,
-							ErrorMessage = $"Required LIR not found: {Message}",
+							ErrorMessage = $"Required MLIR not found: {Message}",
 							Duration = sw.Elapsed
 						};
 					}

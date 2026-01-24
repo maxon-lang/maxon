@@ -5,47 +5,37 @@ function main() returns int
 end 'main'
 ---
 ExitCode: 0
-RequiredHIR: ```
-fn main() -> int {
-entry:
-  %0 = alloca int
-  %1 = const 42
-  store %0, %1 : int
-  %4 = const 0
-  ret %4
-}
-```
-RequiredLIR: ```
-fn main() -> I64 [stack=16] {
-entry:
-  v0 = addressof [rbp-8]
-  v1 = mov 42
-  store v0, v1 (8)
-  v2 = mov 0
-  ret v2
+RequiredMlir: ```
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 42
+      x86.sub rsp, 8
+      x86.lea rcx, qword ptr [rsp]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, 0
+      x86.mov rax, rdx
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 ---
-// Generated HIR:
-
-fn main() -> int {
-entry:
-  %0 = alloca int
-  %1 = const 42
-  store %0, %1 : int
-  %4 = const 0
-  ret %4
-}
-
-// Generated LIR:
-
-fn main() -> I64 [stack=16] {
-entry:
-  v0 = addressof [rbp-8]
-  v1 = mov 42
-  store v0, v1 (8)
-  v2 = mov 0
-  ret v2
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 42
+      x86.sub rsp, 8
+      x86.lea rcx, qword ptr [rsp]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, 0
+      x86.mov rax, rdx
+      x86.epilogue
+      x86.ret
+  }
 }
 
 ---

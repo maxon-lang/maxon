@@ -1,20 +1,27 @@
+using MaxonSharp.Compiler.Mlir.Conversion;
+using MaxonSharp.Compiler.Mlir.Core;
+using MaxonSharp.Compiler.Mlir.Dialects.X86;
+using MaxonSharp.Compiler.Mlir.Emit;
+using MaxonSharp.Compiler.Mlir.Passes;
+
 namespace MaxonSharp.Compiler;
 
 /// <summary>
-/// Result of compiling source code to IR.
+/// Result of compiling source code to MLIR.
 /// </summary>
-public record CompileToIrResult(
-	string? Hir,
-	string? Lir,
+public record CompileToMlirResult(
+	string? MaxonIr,
+	string? StandardIr,
+	string? X86Ir,
 	bool Success,
 	string? Error
 );
 
 public class Compiler {
 	/// <summary>
-	/// Compile source code and return HIR and LIR as strings.
+	/// Compile source code and return MLIR at various dialect levels.
 	/// </summary>
-	public static CompileToIrResult CompileToIr(string source) {
+	public static CompileToMlirResult CompileToMlir(string source) {
 		try {
 			// Stage 1: Lexing
 			var lexer = new Lexer(source);
@@ -27,123 +34,224 @@ public class Compiler {
 			// Stage 3: Semantic analysis
 			var semanticAnalyzer = new SemanticAnalyzer();
 			if (!semanticAnalyzer.Analyze(ast)) {
-				return new CompileToIrResult(null, null, false, "Semantic analysis failed");
+				return new CompileToMlirResult(null, null, null, false, "Semantic analysis failed");
 			}
 
-			// Stage 4: AST to HIR
-			var astToHir = new AstToHir();
-			var hirModule = astToHir.Lower(ast, semanticAnalyzer.MutationAnalyzer);
+			// Stage 4: AST to Maxon Dialect
+			var context = new MlirContext();
+			var converter = new AstToMaxonConverter(context);
+			var module = converter.ConvertProgram(ast);
 
-			// Stage 4.5: HIR Optimization
-			HirOptimizer.Optimize(hirModule);
+			// Run Maxon passes (borrow checker, dead function elimination)
+			var maxonPasses = new PassManager(context);
+			maxonPasses.AddPass(new MaxonBorrowChecker());
+			maxonPasses.AddPass(new DeadFunctionEliminationPass());
+			maxonPasses.Run(module);
 
-			// Write HIR to string
-			var hirWriter = new StringWriter();
-			WriteHir(hirWriter, hirModule);
-			var hirString = hirWriter.ToString();
+			// Write Maxon IR to string
+			var printer = new MlirPrinter();
+			module.Print(printer);
+			var maxonIr = printer.ToString();
 
-			// Stage 5: HIR to LIR
-			var hirToLir = new HirToLir();
-			var lirModule = hirToLir.Lower(hirModule);
+			// Lower Maxon → Standard dialects
+			var maxonToStandardPatterns = new ConversionPatternSet();
+			MaxonToStandardPatterns.PopulatePatterns(maxonToStandardPatterns);
+			var maxonToStandard = new DialectConversionPass(maxonToStandardPatterns);
+			maxonToStandard.AddLegalDialect("arith");
+			maxonToStandard.AddLegalDialect("memref");
+			maxonToStandard.AddLegalDialect("func");
+			maxonToStandard.AddLegalDialect("cf");
+			maxonToStandard.Run(module);
 
-			// Stage 5.5: LIR Optimization
-			LirOptimizer.Optimize(lirModule);
+			// Run Standard passes (mem2reg, constant folding, DCE)
+			var standardPasses = new PassManager(context);
+			standardPasses.AddPass(new Mem2RegPass());
+			standardPasses.AddPass(new ConstantFoldingPass());
+			standardPasses.AddPass(new DeadCodeEliminationPass());
+			standardPasses.Run(module);
 
-			// Write LIR to string
-			var lirWriter = new StringWriter();
-			WriteLir(lirWriter, lirModule);
-			var lirString = lirWriter.ToString();
+			// Print Standard IR
+			var standardPrinter = new MlirPrinter();
+			module.Print(standardPrinter);
+			var standardIr = standardPrinter.ToString();
 
-			return new CompileToIrResult(hirString, lirString, true, null);
+			// Lower Standard → X86 dialect
+			var standardToX86Patterns = new ConversionPatternSet();
+			StandardToX86Patterns.PopulatePatterns(standardToX86Patterns);
+			var standardToX86 = new DialectConversionPass(standardToX86Patterns);
+			standardToX86.AddLegalDialect("x86");
+			standardToX86.Run(module);
+
+			// Insert function frames (prologue/epilogue)
+			var framePass = new FunctionFramePass();
+			framePass.Run(module);
+
+			// Register allocation
+			var regAllocPass = new RegisterAllocationPass();
+			regAllocPass.Run(module);
+
+			// Print X86 IR
+			var x86Printer = new MlirPrinter();
+			module.Print(x86Printer);
+			var x86Ir = x86Printer.ToString();
+
+			return new CompileToMlirResult(maxonIr, standardIr, x86Ir, true, null);
 		} catch (CompileError ex) {
-			return new CompileToIrResult(null, null, false, ex.Format());
+			return new CompileToMlirResult(null, null, null, false, ex.Format());
 		} catch (Exception ex) {
-			return new CompileToIrResult(null, null, false, ex.Message);
+			return new CompileToMlirResult(null, null, null, false, ex.Message);
 		}
 	}
 
 	/// <summary>
-	/// Compile multiple source files into a single executable.
+	/// Compile using the new MLIR-based pipeline.
 	/// </summary>
-	public static bool Compile(SourceFile[] sources, string outputPath, string? hirOutputPath = null, string? lirOutputPath = null) {
+	public static bool CompileWithMlir(SourceFile[] sources, string outputPath, string? mlirOutputPath = null) {
 		try {
-			Logger.Debug(LogCategory.Compiler, $"Starting compilation ({sources.Length} file(s))");
+			Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
 
 			// Phase 1: Parse all source files
-			Logger.Debug(LogCategory.Compiler, "Phase 1: Parsing");
 			var asts = new List<ProgramAst>();
 			int mainFileIndex = -1;
 
 			for (int i = 0; i < sources.Length; i++) {
 				var source = sources[i];
-				Logger.Debug(LogCategory.Compiler, $"Parsing: {source.Path}");
-
 				var lexer = new Lexer(source.Content);
 				var tokens = lexer.Tokenize();
-
 				var parser = new Parser(tokens);
 				var ast = parser.Parse();
 				asts.Add(ast);
 
-				// Track which file has main()
 				if (ast.Functions.Any(f => f.Name == "main")) {
 					mainFileIndex = i;
 				}
 			}
 
 			if (mainFileIndex < 0) {
-				Logger.Error(LogCategory.Compiler, "No 'main' function found in any source file");
+				Logger.Error(LogCategory.Compiler, "No 'main' function found");
 				return false;
 			}
 
-			// Phase 2: Merge into single program (filter non-exports from non-main files)
-			Logger.Debug(LogCategory.Compiler, "Phase 2: Merging ASTs");
+			// Phase 2: Merge ASTs
 			var program = ProgramAst.Merge(asts, mainFileIndex);
 
 			// Phase 3: Semantic analysis
-			Logger.Debug(LogCategory.Compiler, "Phase 3: Semantic analysis");
 			var semanticAnalyzer = new SemanticAnalyzer();
 			if (!semanticAnalyzer.Analyze(program)) {
 				return false;
 			}
 
-			// Phase 4: AST to HIR
-			Logger.Debug(LogCategory.Compiler, "Phase 4: AST to HIR");
-			var astToHir = new AstToHir();
-			var hirModule = astToHir.Lower(program, semanticAnalyzer.MutationAnalyzer);
+			// Phase 4: AST → Maxon Dialect
+			Logger.Debug(LogCategory.Compiler, "Phase 4: AST to Maxon dialect");
+			var context = new MlirContext();
+			var converter = new AstToMaxonConverter(context);
+			var module = converter.ConvertProgram(program);
 
-			// Phase 4.5: HIR Optimization
-			Logger.Debug(LogCategory.Compiler, "Phase 4.5: HIR Optimization");
-			HirOptimizer.Optimize(hirModule);
+			// Phase 5: Run Maxon passes (borrow checker, dead function elimination)
+			Logger.Debug(LogCategory.Compiler, "Phase 5: Maxon dialect passes");
+			var passManager = new PassManager(context);
+			passManager.AddPass(new MaxonBorrowChecker());
+			passManager.AddPass(new DeadFunctionEliminationPass());
+			passManager.Run(module);
 
-			if (hirOutputPath != null) {
-				WriteHirFile(hirOutputPath, hirModule);
+			// Phase 6: Lower Maxon → Standard dialects
+			Logger.Debug(LogCategory.Compiler, "Phase 6: Lower Maxon to Standard");
+			var maxonToStandardPatterns = new ConversionPatternSet();
+			MaxonToStandardPatterns.PopulatePatterns(maxonToStandardPatterns);
+			var maxonToStandard = new DialectConversionPass(maxonToStandardPatterns);
+			maxonToStandard.AddLegalDialect("arith");
+			maxonToStandard.AddLegalDialect("memref");
+			maxonToStandard.AddLegalDialect("func");
+			maxonToStandard.AddLegalDialect("cf");
+			maxonToStandard.Run(module);
+
+			// Phase 7: Run Standard passes (mem2reg, constant folding, CSE, DCE)
+			Logger.Debug(LogCategory.Compiler, "Phase 7: Standard dialect passes");
+			var standardPasses = new PassManager(context);
+			standardPasses.AddPass(new Mem2RegPass());
+			standardPasses.AddPass(new ConstantFoldingPass());
+			standardPasses.AddPass(new DeadCodeEliminationPass());
+			standardPasses.Run(module);
+
+			// Phase 8: Lower Standard → X86 dialect
+			Logger.Debug(LogCategory.Compiler, "Phase 8: Lower Standard to X86");
+			var standardToX86Patterns = new ConversionPatternSet();
+			StandardToX86Patterns.PopulatePatterns(standardToX86Patterns);
+			var standardToX86 = new DialectConversionPass(standardToX86Patterns);
+			standardToX86.AddLegalDialect("x86");
+			standardToX86.Run(module);
+
+			// Phase 8.5: Insert function frames (prologue/epilogue)
+			Logger.Debug(LogCategory.Compiler, "Phase 8.5: Insert function frames");
+			var framePass = new FunctionFramePass();
+			framePass.Run(module);
+
+			// Phase 8.6: Register allocation
+			Logger.Debug(LogCategory.Compiler, "Phase 8.6: Register allocation");
+			var regAllocPass = new RegisterAllocationPass();
+			regAllocPass.Run(module);
+
+			// Write MLIR if requested
+			if (mlirOutputPath != null) {
+				using var writer = new StreamWriter(mlirOutputPath);
+				var printer = new MlirPrinter();
+				module.Print(printer);
+				writer.Write(printer.ToString());
 			}
 
-			// Phase 5: HIR to LIR
-			Logger.Debug(LogCategory.Compiler, "Phase 5: HIR to LIR");
-			var hirToLir = new HirToLir();
-			var lirModule = hirToLir.Lower(hirModule);
+			// Phase 9: Emit machine code
+			Logger.Debug(LogCategory.Compiler, "Phase 9: Emit X86 machine code");
+			var emitter = new X86CodeEmitter();
 
-			// Phase 5.5: LIR Optimization
-			Logger.Debug(LogCategory.Compiler, "Phase 5.5: LIR Optimization");
-			LirOptimizer.Optimize(lirModule);
-
-			if (lirOutputPath != null) {
-				WriteLirFile(lirOutputPath, lirModule);
+			// Emit globals (define them in the data section)
+			foreach (var global in module.Globals) {
+				var size = global.Type.SizeInBytes;
+				long initValue = 0;
+				if (global.InitValue is IntegerAttr intAttr) {
+					initValue = intAttr.Value;
+				}
+				emitter.DefineGlobal(global.Name, size, initValue);
 			}
 
-			// Phase 6: Code generation
-			Logger.Debug(LogCategory.Compiler, "Phase 6: Code generation");
-			var codeGen = new CodeGen();
-			var code = codeGen.Generate(lirModule);
+			// Emit main first (entry point must be at start of code section)
+			var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main");
+			if (mainFunc is null) {
+				Logger.Error(LogCategory.Compiler, "No 'main' function found");
+				return false;
+			}
 
-			// Phase 7: PE Writer
-			Logger.Debug(LogCategory.Compiler, "Phase 7: PE Writer");
-			PeWriter.Write(outputPath, code);
+			EmitFunction(emitter, mainFunc);
 
-			Logger.Debug(LogCategory.Compiler, "Compilation complete");
-			Logger.Info(LogCategory.Compiler, $"Successfully compiled to {outputPath}");
+			// Emit other functions
+			foreach (var func in module.Functions.Where(f => f.Name != "main")) {
+				EmitFunction(emitter, func);
+			}
+
+			emitter.ResolveLabels();
+
+			// Resolve global references - data section follows code at next section alignment
+			// For x86-64 PE, the data section RVA offset from code end is the difference between
+			// their virtual addresses (both at section alignment)
+			if (emitter.HasGlobals) {
+				// Code is aligned to section boundary, data follows at next section
+				// In RIP-relative addressing within code, we need the offset from instruction to data
+				// The PE layout is: headers | code (padded) | data (padded)
+				// Code section virtual address is 0x1000, data section virtual address is code_virt_end
+				// For simplicity, data starts right after code in virtual memory terms
+				var codeSize = (uint)emitter.GetCode().Length;
+				var codeSizeVirtual = AlignUp(codeSize, 0x1000); // Section alignment
+				var dataRvaOffset = (int)(codeSizeVirtual - codeSize);
+				emitter.ResolveGlobals(dataRvaOffset);
+			}
+
+			var code = emitter.GetCode();
+			var data = emitter.GetData();
+
+			// Phase 10: Write PE
+			Logger.Debug(LogCategory.Compiler, "Phase 10: Write PE executable");
+			PeWriter.Write(outputPath, code, data);
+			Logger.Info(LogCategory.Compiler, $"Wrote {code.Length} bytes code, {data.Length} bytes data to {outputPath}");
+
 			return true;
 		} catch (CompileError ex) {
 			Logger.Error(LogCategory.Compiler, ex.Format());
@@ -154,139 +262,34 @@ public class Compiler {
 		}
 	}
 
-	private static void WriteHirFile(string path, HirModule module) {
-		using var writer = new StreamWriter(path);
-		WriteHir(writer, module);
-		Logger.Debug(LogCategory.Compiler, $"Wrote {path}");
-	}
+	/// <summary>
+	/// Emits machine code for a single function.
+	/// </summary>
+	private static void EmitFunction(X86CodeEmitter emitter, MlirFunction func) {
+		emitter.DefineLabel(func.Name);
 
-	private static void WriteLirFile(string path, LirModule module) {
-		using var writer = new StreamWriter(path);
-		WriteLir(writer, module);
-		Logger.Debug(LogCategory.Compiler, $"Wrote {path}");
-	}
-
-	private static void WriteHir(TextWriter w, HirModule module) {
-		foreach (var s in module.Structs) {
-			w.WriteLine($"struct {s.Name} {{");
-			foreach (var f in s.Fields) {
-				w.WriteLine($"  {f.FieldName}: {f.Type.Name} (offset {f.Offset})");
+		foreach (var block in func.Body.Blocks) {
+			if (block.Name != "entry") {
+				emitter.DefineLabel(block.Name);
 			}
-			w.WriteLine("}");
-		}
 
-		foreach (var e in module.Enums) {
-			w.WriteLine($"enum {e.Name} {{");
-			foreach (var v in e.Variants) {
-				var payload = v.PayloadFields.Count > 0
-					? $"({string.Join(", ", v.PayloadFields.Select(f => $"{f.FieldName}: {f.Type.Name}"))})"
-					: "";
-				w.WriteLine($"  {v.Name}{payload} = {v.Tag}");
-			}
-			w.WriteLine("}");
-		}
-
-		foreach (var func in module.Functions) {
-			var export = func.IsExport ? "export " : "";
-			var paramStr = string.Join(", ", func.Params.Select(p => $"{p.Name}: {p.Type.Name}"));
-			w.WriteLine($"\n{export}fn {func.Name}({paramStr}) -> {func.ReturnType.Name} {{");
-
-			foreach (var block in func.Blocks) {
-				w.WriteLine($"{block.Label}:");
-				foreach (var instr in block.Instructions) {
-					w.WriteLine($"  {FormatHirInstr(instr)}");
+			foreach (var op in block.Operations) {
+				if (op is X86Op x86Op) {
+					emitter.Emit(x86Op);
 				}
 			}
-			w.WriteLine("}");
 		}
 	}
 
-	private static string FormatHirInstr(HirInstr instr) {
-		return instr switch {
-			HirConstInt c => $"{c.Dest} = const {c.Value}",
-			HirConstFloat c => $"{c.Dest} = const {c.Value}f",
-			HirConstBool c => $"{c.Dest} = const {c.Value}",
-			HirAlloca a => $"{a.Dest} = alloca {a.Type.Name}",
-			HirLoad l => $"{l.Dest} = load {l.Ptr}",
-			HirStore s => $"store {s.Ptr}, {s.Value} : {s.Type.Name}",
-			HirMemcpy m => $"memcpy {m.Dest}, {m.Src} ({m.Size})",
-			HirGetFieldPtr g => $"{g.Dest} = getfieldptr {g.Base}, .{g.FieldName} (+{g.Offset})",
-			HirAdd a => $"{a.Dest} = add {a.Left}, {a.Right}",
-			HirSub s => $"{s.Dest} = sub {s.Left}, {s.Right}",
-			HirMul m => $"{m.Dest} = mul {m.Left}, {m.Right}",
-			HirDiv d => $"{d.Dest} = div {d.Left}, {d.Right}",
-			HirMod m => $"{m.Dest} = mod {m.Left}, {m.Right}",
-			HirBand b => $"{b.Dest} = band {b.Left}, {b.Right}",
-			HirBor b => $"{b.Dest} = bor {b.Left}, {b.Right}",
-			HirBxor b => $"{b.Dest} = bxor {b.Left}, {b.Right}",
-			HirShl s => $"{s.Dest} = shl {s.Left}, {s.Right}",
-			HirShr s => $"{s.Dest} = shr {s.Left}, {s.Right}",
-			HirNeg n => $"{n.Dest} = neg {n.Operand}",
-			HirNot n => $"{n.Dest} = not {n.Operand}",
-			HirCmpEq c => $"{c.Dest} = eq {c.Left}, {c.Right}",
-			HirCmpNe c => $"{c.Dest} = ne {c.Left}, {c.Right}",
-			HirCmpLt c => $"{c.Dest} = lt {c.Left}, {c.Right}",
-			HirCmpLe c => $"{c.Dest} = le {c.Left}, {c.Right}",
-			HirCmpGt c => $"{c.Dest} = gt {c.Left}, {c.Right}",
-			HirCmpGe c => $"{c.Dest} = ge {c.Left}, {c.Right}",
-			HirBr b => $"br {b.Label}",
-			HirBrCond b => $"brcond {b.Cond}, {b.TrueLabel}, {b.FalseLabel}",
-			HirRet r => r.Value != null ? $"ret {r.Value}" : "ret",
-			HirCall c => c.Dest != null
-				? $"{c.Dest} = call {c.FuncName}({string.Join(", ", c.Args)})"
-				: $"call {c.FuncName}({string.Join(", ", c.Args)})",
-			HirParam p => $"{p.Dest} = param {p.Index}",
-			HirLabel l => $"{l.Name}:",
-			_ => instr.ToString() ?? "???"
-		};
+	/// <summary>
+	/// Compile multiple source files into a single executable.
+	/// Uses the MLIR-based compilation pipeline.
+	/// </summary>
+	public static bool Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null) {
+		return CompileWithMlir(sources, outputPath, mlirOutputPath);
 	}
 
-	private static void WriteLir(TextWriter w, LirModule module) {
-		foreach (var func in module.Functions) {
-			var export = func.IsExport ? "export " : "";
-			var paramStr = string.Join(", ", func.Params.Select(p => $"{p.Name}: {p.Type}"));
-			var retType = func.ReturnType?.ToString() ?? "void";
-			w.WriteLine($"\n{export}fn {func.Name}({paramStr}) -> {retType} [stack={func.StackSize}] {{");
-
-			foreach (var block in func.Blocks) {
-				w.WriteLine($"{block.Label}:");
-				foreach (var instr in block.Instructions) {
-					w.WriteLine($"  {FormatLirInstr(instr)}");
-				}
-			}
-			w.WriteLine("}");
-		}
-	}
-
-	private static string FormatLirInstr(LirInstr instr) {
-		return instr switch {
-			LirMov m => $"{m.Dest} = mov {m.Src}",
-			LirLoad l => $"{l.Dest} = load {l.Ptr} ({l.Size})",
-			LirStore s => $"store {s.Ptr}, {s.Value} ({s.Size})",
-			LirMemcpy m => $"memcpy {m.Dest}, {m.Src} ({m.Size})",
-			LirLea l => $"{l.Dest} = lea {l.Addr}",
-			LirAdd a => $"{a.Dest} = add {a.Left}, {a.Right}",
-			LirSub s => $"{s.Dest} = sub {s.Left}, {s.Right}",
-			LirIMul m => $"{m.Dest} = imul {m.Left}, {m.Right}",
-			LirIDiv d => $"{d.Dest} = idiv {d.Left}, {d.Right}",
-			LirMod m => $"{m.Dest} = mod {m.Left}, {m.Right}",
-			LirNeg n => $"{n.Dest} = neg {n.Src}",
-			LirAnd a => $"{a.Dest} = and {a.Left}, {a.Right}",
-			LirOr o => $"{o.Dest} = or {o.Left}, {o.Right}",
-			LirXor x => $"{x.Dest} = xor {x.Left}, {x.Right}",
-			LirNot n => $"{n.Dest} = not {n.Src}",
-			LirShl s => $"{s.Dest} = shl {s.Left}, {s.Right}",
-			LirShr s => $"{s.Dest} = shr {s.Left}, {s.Right}",
-			LirCmp c => $"cmp {c.Left}, {c.Right}",
-			LirSetCC s => $"{s.Dest} = set{s.Cond}",
-			LirJmp j => $"jmp {j.Label}",
-			LirJmpCC j => $"j{j.Cond} {j.TrueLabel}, {j.FalseLabel}",
-			LirRet r => r.Value != null ? $"ret {r.Value}" : "ret",
-			LirCall c => c.Dest != null
-				? $"{c.Dest} = call {c.FuncName}({string.Join(", ", c.Args)})"
-				: $"call {c.FuncName}({string.Join(", ", c.Args)})",
-			LirAddressOf a => $"{a.Dest} = addressof {a.Slot}",
-			_ => instr.ToString() ?? "???"
-		};
+	private static uint AlignUp(uint value, uint alignment) {
+		return (value + alignment - 1) & ~(alignment - 1);
 	}
 }

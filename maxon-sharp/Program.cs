@@ -32,7 +32,7 @@ class Program {
 		Console.WriteLine("  spec-test [options]      Run spec tests");
 		Console.WriteLine();
 		Console.WriteLine("Build options (compile, build, run):");
-		Console.WriteLine("  --emit-ir                Write .hir and .lir files");
+		Console.WriteLine("  --emit-ir                Write .mlir file");
 		Console.WriteLine();
 		Console.WriteLine("Spec test options:");
 		Console.WriteLine("  --filter=PATTERN         Run only tests matching regex pattern");
@@ -105,14 +105,12 @@ class Program {
 		var sources = new SourceFile[] { new(sourceFile, content) };
 		var outputPath = Path.ChangeExtension(sourceFile, ".exe");
 
-		string? hirOutputPath = null;
-		string? lirOutputPath = null;
+		string? mlirOutputPath = null;
 		if (emitIr) {
-			hirOutputPath = Path.ChangeExtension(sourceFile, ".hir");
-			lirOutputPath = Path.ChangeExtension(sourceFile, ".lir");
+			mlirOutputPath = Path.ChangeExtension(sourceFile, ".mlir");
 		}
 
-		var success = Compiler.Compiler.Compile(sources, outputPath, hirOutputPath, lirOutputPath);
+		var success = Compiler.Compiler.Compile(sources, outputPath, mlirOutputPath);
 		return success ? 0 : 1;
 	}
 
@@ -145,14 +143,12 @@ class Program {
 		var mainFile = FindMainFile(sourceFiles, directory);
 		var outputPath = Path.ChangeExtension(mainFile, ".exe");
 
-		string? hirOutputPath = null;
-		string? lirOutputPath = null;
+		string? mlirOutputPath = null;
 		if (emitIr) {
-			hirOutputPath = Path.ChangeExtension(mainFile, ".hir");
-			lirOutputPath = Path.ChangeExtension(mainFile, ".lir");
+			mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
 		}
 
-		var success = Compiler.Compiler.Compile(sourceFiles, outputPath, hirOutputPath, lirOutputPath);
+		var success = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath);
 		return success ? 0 : 1;
 	}
 
@@ -196,14 +192,12 @@ class Program {
 
 		var outputPath = Path.ChangeExtension(mainFile, ".exe");
 
-		string? hirOutputPath = null;
-		string? lirOutputPath = null;
+		string? mlirOutputPath = null;
 		if (emitIr) {
-			hirOutputPath = Path.ChangeExtension(mainFile, ".hir");
-			lirOutputPath = Path.ChangeExtension(mainFile, ".lir");
+			mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
 		}
 
-		var success = Compiler.Compiler.Compile(sourceFiles, outputPath, hirOutputPath, lirOutputPath);
+		var success = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath);
 		if (!success) {
 			return 1;
 		}

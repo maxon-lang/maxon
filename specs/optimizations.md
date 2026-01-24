@@ -10,19 +10,11 @@ category: compiler
 
 The Maxon compiler includes optimization passes that improve code efficiency:
 
-### HIR Optimizations (High-level)
+### MLIR Optimizations
 
 1. **Constant Folding** - Evaluates constant expressions at compile time
 2. **Dead Code Elimination** - Removes unused variables and computations
 3. **Dead Function Elimination** - Removes functions never called from main
-4. **Peephole Optimizations** - Strength reduction (e.g., `x * 2` → `x << 1`)
-
-### LIR Optimizations (Low-level)
-
-1. **Common Subexpression Elimination (CSE)** - Reuses computed values
-2. **Copy Propagation** - Eliminates redundant moves
-3. **Dead Code Elimination** - Removes unused instructions
-4. **Peephole Optimizations** - Identity elimination and strength reduction
 
 ## Tests
 
@@ -35,18 +27,16 @@ end 'main'
 ```exitcode
 30
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %2 = const 30
-  ret %2
-}
-```
-```requiredlir
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 30
-  ret v0
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 30
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -59,18 +49,16 @@ end 'main'
 ```exitcode
 16
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %4 = const 16
-  ret %4
-}
-```
-```requiredlir
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 16
-  ret v0
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 16
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -83,18 +71,16 @@ end 'main'
 ```exitcode
 75
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %2 = const 75
-  ret %2
-}
-```
-```requiredlir
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 75
-  ret v0
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 75
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -107,18 +93,16 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %2 = const 42
-  ret %2
-}
-```
-```requiredlir
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 42
-  ret v0
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 42
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -131,18 +115,16 @@ end 'main'
 ```exitcode
 25
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %2 = const 25
-  ret %2
-}
-```
-```requiredlir
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 25
-  ret v0
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 25
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -155,18 +137,16 @@ end 'main'
 ```exitcode
 2
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %2 = const 2
-  ret %2
-}
-```
-```requiredlir
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 2
-  ret v0
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 2
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -180,24 +160,20 @@ end 'main'
 ```exitcode
 0
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %0 = alloca int
-  %1 = const 42
-  store %0, %1 : int
-  %4 = const 0
-  ret %4
-}
-```
-```requiredlir
-fn main() -> I64 [stack=16] {
-entry:
-  v0 = addressof [rbp-8]
-  v1 = mov 42
-  store v0, v1 (8)
-  v2 = mov 0
-  ret v2
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 42
+      x86.sub rsp, 8
+      x86.lea rcx, qword ptr [rsp]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, 0
+      x86.mov rax, rdx
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -214,18 +190,16 @@ end 'main'
 ```exitcode
 42
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %0 = const 42
-  ret %0
-}
-```
-```requiredlir
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 42
-  ret v0
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 42
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -239,28 +213,23 @@ end 'main'
 ```exitcode
 20
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %0 = alloca int
-  %1 = const 10
-  store %0, %1 : int
-  %2 = load %0
-  %5 = const 1
-  %4 = shl %2, %5
-  ret %4
-}
-```
-```requiredlir
-fn main() -> I64 [stack=16] {
-entry:
-  v0 = addressof [rbp-8]
-  v1 = mov 10
-  store v0, v1 (8)
-  v2 = load v0 (8)
-  v3 = mov 1
-  v4 = shl v2, v3
-  ret v4
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 10
+      x86.sub rsp, 8
+      x86.lea rcx, qword ptr [rsp]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, qword ptr [rcx]
+      x86.mov r8, 1
+      x86.mov r9, rdx
+      x86.shl r9, r8
+      x86.mov rax, r9
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -274,28 +243,23 @@ end 'main'
 ```exitcode
 28
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %0 = alloca int
-  %1 = const 7
-  store %0, %1 : int
-  %2 = load %0
-  %5 = const 2
-  %4 = shl %2, %5
-  ret %4
-}
-```
-```requiredlir
-fn main() -> I64 [stack=16] {
-entry:
-  v0 = addressof [rbp-8]
-  v1 = mov 7
-  store v0, v1 (8)
-  v2 = load v0 (8)
-  v3 = mov 2
-  v4 = shl v2, v3
-  ret v4
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 7
+      x86.sub rsp, 8
+      x86.lea rcx, qword ptr [rsp]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, qword ptr [rcx]
+      x86.mov r8, 2
+      x86.mov r9, rdx
+      x86.shl r9, r8
+      x86.mov rax, r9
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
@@ -309,51 +273,100 @@ end 'main'
 ```exitcode
 40
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %0 = alloca int
-  %1 = const 5
-  store %0, %1 : int
-  %2 = load %0
-  %5 = const 3
-  %4 = shl %2, %5
-  ret %4
-}
-```
-```requiredlir
-fn main() -> I64 [stack=16] {
-entry:
-  v0 = addressof [rbp-8]
-  v1 = mov 5
-  store v0, v1 (8)
-  v2 = load v0 (8)
-  v3 = mov 3
-  v4 = shl v2, v3
-  ret v4
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 5
+      x86.sub rsp, 8
+      x86.lea rcx, qword ptr [rsp]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, qword ptr [rcx]
+      x86.mov r8, 3
+      x86.mov r9, rdx
+      x86.shl r9, r8
+      x86.mov rax, r9
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 
 <!-- test: complex-constant-expression -->
 ```maxon
 function main() returns int
-    return ((2 + 3) * 4) - 10
+    return ((2 + 3) * 4) - 5
 end 'main'
 ```
 ```exitcode
 10
 ```
-```requiredhir
-fn main() -> int {
-entry:
-  %6 = const 10
-  ret %6
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 15
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
-```requiredlir
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 10
-  ret v0
+
+<!-- test: constant-folding-chained -->
+```maxon
+function main() returns int
+    var a = 2 + 3
+    var b = a * 4
+    return b
+end 'main'
+```
+```exitcode
+20
+```
+```requiredmlir
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 20
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
+}
+```
+
+<!-- test: store-to-load-global -->
+Store-to-load forwarding propagates constants through global variable stores and loads.
+```maxon
+var g = 0
+
+function main() returns int
+    g = 5
+    return g * 4
+end 'main'
+```
+```exitcode
+20
+```
+```requiredmlir
+module {
+  memref.global @global.g : i64 = 0 : i64
+
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 5
+      x86.lea_global rcx, @global.g
+      x86.mov qword ptr [rcx], rax
+      x86.lea_global rdx, @global.g
+      x86.mov r8, 20
+      x86.mov rax, r8
+      x86.epilogue
+      x86.ret
+  }
 }
 ```

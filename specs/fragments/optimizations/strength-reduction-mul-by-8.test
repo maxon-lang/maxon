@@ -5,55 +5,43 @@ function main() returns int
 end 'main'
 ---
 ExitCode: 40
-RequiredHIR: ```
-fn main() -> int {
-entry:
-  %0 = alloca int
-  %1 = const 5
-  store %0, %1 : int
-  %2 = load %0
-  %5 = const 3
-  %4 = shl %2, %5
-  ret %4
-}
-```
-RequiredLIR: ```
-fn main() -> I64 [stack=16] {
-entry:
-  v0 = addressof [rbp-8]
-  v1 = mov 5
-  store v0, v1 (8)
-  v2 = load v0 (8)
-  v3 = mov 3
-  v4 = shl v2, v3
-  ret v4
+RequiredMlir: ```
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 5
+      x86.sub rsp, 8
+      x86.lea rcx, qword ptr [rsp]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, qword ptr [rcx]
+      x86.mov r8, 3
+      x86.mov r9, rdx
+      x86.shl r9, r8
+      x86.mov rax, r9
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 ---
-// Generated HIR:
-
-fn main() -> int {
-entry:
-  %0 = alloca int
-  %1 = const 5
-  store %0, %1 : int
-  %2 = load %0
-  %5 = const 3
-  %4 = shl %2, %5
-  ret %4
-}
-
-// Generated LIR:
-
-fn main() -> I64 [stack=16] {
-entry:
-  v0 = addressof [rbp-8]
-  v1 = mov 5
-  store v0, v1 (8)
-  v2 = load v0 (8)
-  v3 = mov 3
-  v4 = shl v2, v3
-  ret v4
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 5
+      x86.sub rsp, 8
+      x86.lea rcx, qword ptr [rsp]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rdx, qword ptr [rcx]
+      x86.mov r8, 3
+      x86.mov r9, rdx
+      x86.shl r9, r8
+      x86.mov rax, r9
+      x86.epilogue
+      x86.ret
+  }
 }
 
 ---

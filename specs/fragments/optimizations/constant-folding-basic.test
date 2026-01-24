@@ -4,35 +4,29 @@ function main() returns int
 end 'main'
 ---
 ExitCode: 30
-RequiredHIR: ```
-fn main() -> int {
-entry:
-  %2 = const 30
-  ret %2
-}
-```
-RequiredLIR: ```
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 30
-  ret v0
+RequiredMlir: ```
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 30
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 ```
 ---
-// Generated HIR:
-
-fn main() -> int {
-entry:
-  %2 = const 30
-  ret %2
-}
-
-// Generated LIR:
-
-fn main() -> I64 [stack=0] {
-entry:
-  v0 = mov 30
-  ret v0
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 30
+      x86.mov rax, rax
+      x86.epilogue
+      x86.ret
+  }
 }
 
 ---

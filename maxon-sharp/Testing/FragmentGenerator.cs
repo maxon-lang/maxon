@@ -80,38 +80,11 @@ public static class FragmentGenerator {
 				sb.AppendLine("```");
 			}
 
-			// Check if this test uses required IR (must have both if either is present)
-			var hasRequiredIr = success.RequiredHir != null || success.RequiredLir != null;
-
-			if (hasRequiredIr) {
-				// Write required IR blocks (don't auto-generate expected IR for these tests)
-				if (success.RequiredHir != null) {
-					sb.AppendLine("RequiredHIR: ```");
-					sb.AppendLine(success.RequiredHir);
-					sb.AppendLine("```");
-				}
-				if (success.RequiredLir != null) {
-					sb.AppendLine("RequiredLIR: ```");
-					sb.AppendLine(success.RequiredLir);
-					sb.AppendLine("```");
-				}
-			} else {
-				// No required IR - auto-generate expected IR if not already specified
-				var (expectedHir, expectedLir, irError) = GetOrGenerateIr(test.Source, success.ExpectedHir, success.ExpectedLir);
-				if (irError != null) {
-					error = irError;
-				}
-
-				if (expectedHir != null) {
-					sb.AppendLine("ExpectedHIR: ```");
-					sb.AppendLine(expectedHir);
-					sb.AppendLine("```");
-				}
-				if (expectedLir != null) {
-					sb.AppendLine("ExpectedLIR: ```");
-					sb.AppendLine(expectedLir);
-					sb.AppendLine("```");
-				}
+			// Write required MLIR if specified
+			if (success.RequiredMlir != null) {
+				sb.AppendLine("RequiredMlir: ```");
+				sb.AppendLine(success.RequiredMlir);
+				sb.AppendLine("```");
 			}
 		} else if (test.Expectation is CompilerErrorExpectation compilerError) {
 			sb.AppendLine($"ExpectedError: {compilerError.ExpectedError}");
@@ -119,40 +92,21 @@ public static class FragmentGenerator {
 
 		sb.AppendLine("---");
 
-		// Append generated IR at the end (for informational purposes, like zig version)
+		// Append generated MLIR at the end (for informational purposes)
 		if (test.Expectation is SuccessExpectation) {
-			var irResult = Compiler.Compiler.CompileToIr(test.Source);
-			if (irResult.Success) {
-				sb.AppendLine("// Generated HIR:");
-				sb.AppendLine(irResult.Hir);
-				sb.AppendLine("// Generated LIR:");
-				sb.AppendLine(irResult.Lir);
+			var mlirResult = Compiler.Compiler.CompileToMlir(test.Source);
+			if (mlirResult.Success) {
+				sb.AppendLine("// Generated X86 IR:");
+				sb.AppendLine(mlirResult.X86Ir);
 			} else {
-				sb.AppendLine($"// IR generation failed: {irResult.Error}");
-				error ??= irResult.Error;
+				sb.AppendLine($"// MLIR generation failed: {mlirResult.Error}");
+				error ??= mlirResult.Error;
 			}
 		}
 
 		sb.AppendLine("---");
 
 		return (sb.ToString(), error);
-	}
-
-	private static (string? Hir, string? Lir, string? Error) GetOrGenerateIr(string source, string? existingHir, string? existingLir) {
-		// If both are already specified, use them
-		if (existingHir != null && existingLir != null) {
-			return (existingHir, existingLir, null);
-		}
-
-		// Generate IR from source
-		var irResult = Compiler.Compiler.CompileToIr(source);
-		if (!irResult.Success) {
-			// Compilation failed, return whatever was specified plus the error
-			return (existingHir, existingLir, irResult.Error);
-		}
-
-		// Use existing or generated
-		return (existingHir ?? irResult.Hir, existingLir ?? irResult.Lir, null);
 	}
 
 	/// <summary>
@@ -203,10 +157,8 @@ public static class FragmentGenerator {
 		var lines = section.Split('\n');
 		int? exitCode = null;
 		string? stdout = null;
-		string? expectedHir = null;
-		string? expectedLir = null;
-		string? requiredHir = null;
-		string? requiredLir = null;
+		string? expectedMlir = null;
+		string? requiredMlir = null;
 		string? expectedError = null;
 
 		var i = 0;
@@ -222,14 +174,10 @@ public static class FragmentGenerator {
 				expectedError = line["ExpectedError:".Length..].Trim();
 			} else if (line.StartsWith("Stdout: ```")) {
 				stdout = ExtractMultilineValue(lines, ref i);
-			} else if (line.StartsWith("ExpectedHIR: ```")) {
-				expectedHir = ExtractMultilineValue(lines, ref i);
-			} else if (line.StartsWith("ExpectedLIR: ```")) {
-				expectedLir = ExtractMultilineValue(lines, ref i);
-			} else if (line.StartsWith("RequiredHIR: ```")) {
-				requiredHir = ExtractMultilineValue(lines, ref i);
-			} else if (line.StartsWith("RequiredLIR: ```")) {
-				requiredLir = ExtractMultilineValue(lines, ref i);
+			} else if (line.StartsWith("ExpectedMlir: ```")) {
+				expectedMlir = ExtractMultilineValue(lines, ref i);
+			} else if (line.StartsWith("RequiredMlir: ```")) {
+				requiredMlir = ExtractMultilineValue(lines, ref i);
 			}
 
 			i++;
@@ -244,10 +192,8 @@ public static class FragmentGenerator {
 		return new SuccessExpectation {
 			ExitCode = exitCode,
 			Stdout = stdout,
-			ExpectedHir = expectedHir,
-			ExpectedLir = expectedLir,
-			RequiredHir = requiredHir,
-			RequiredLir = requiredLir
+			ExpectedMlir = expectedMlir,
+			RequiredMlir = requiredMlir
 		};
 	}
 
