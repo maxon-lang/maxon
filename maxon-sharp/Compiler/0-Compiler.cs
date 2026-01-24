@@ -90,6 +90,10 @@ public class Compiler {
 			var regAllocPass = new RegisterAllocationPass();
 			regAllocPass.Run(module);
 
+			// Peephole optimization (clean up redundant instructions)
+			var peepholePass = new PeepholeOptimizationPass();
+			peepholePass.Run(module);
+
 			// Print X86 IR
 			var x86Printer = new MlirPrinter();
 			module.Print(x86Printer);
@@ -190,6 +194,11 @@ public class Compiler {
 			Logger.Debug(LogCategory.Compiler, "Phase 8.6: Register allocation");
 			var regAllocPass = new RegisterAllocationPass();
 			regAllocPass.Run(module);
+
+			// Phase 8.7: Peephole optimization (clean up redundant instructions)
+			Logger.Debug(LogCategory.Compiler, "Phase 8.7: Peephole optimization");
+			var peepholePass = new PeepholeOptimizationPass();
+			peepholePass.Run(module);
 
 			// Write MLIR if requested
 			if (mlirOutputPath != null) {

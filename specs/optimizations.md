@@ -15,6 +15,7 @@ The Maxon compiler includes optimization passes that improve code efficiency:
 1. **Constant Folding** - Evaluates constant expressions at compile time
 2. **Dead Code Elimination** - Removes unused variables and computations
 3. **Dead Function Elimination** - Removes functions never called from main
+4. **Peephole Optimization** - Eliminates redundant instructions (self-moves, unnecessary copies)
 
 ## Tests
 
@@ -33,7 +34,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 30
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -55,7 +55,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 16
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -77,7 +76,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 75
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -99,7 +97,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 42
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -121,7 +118,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 25
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -143,7 +139,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 2
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -166,7 +161,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 0
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -192,7 +186,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 42
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -215,7 +208,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 20
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -238,7 +230,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 28
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -261,7 +252,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 40
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -283,7 +273,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 15
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -307,7 +296,6 @@ module {
     ^entry:
       x86.prologue stack_size=32
       x86.mov rax, 20
-      x86.mov rax, rax
       x86.epilogue
       x86.ret
   }
@@ -337,8 +325,7 @@ module {
       x86.mov rax, 5
       x86.lea_global rcx, @global.g
       x86.mov qword ptr [rcx], rax
-      x86.mov rdx, 20
-      x86.mov rax, rdx
+      x86.mov rax, 20
       x86.epilogue
       x86.ret
   }
