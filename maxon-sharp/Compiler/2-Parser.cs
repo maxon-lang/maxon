@@ -17,51 +17,49 @@ public class Parser(List<Token> tokens) {
 
 		SkipNewlines();
 		while (!IsAtEnd() && Current().Type != TokenType.Eof) {
-			if (Check(TokenType.Type)) {
-				types.Add(ParseTypeDecl(false));
-			} else if (Check(TokenType.TypeAlias)) {
-				typeAliases.Add(ParseTypeAliasDecl(false));
-			} else if (Check(TokenType.Interface)) {
-				interfaces.Add(ParseInterfaceDecl(false));
-			} else if (Check(TokenType.Extension)) {
-				extensions.Add(ParseExtensionDecl(false));
-			} else if (Check(TokenType.Enum)) {
-				enums.Add(ParseEnumDecl(false));
-			} else if (Check(TokenType.Let)) {
-				globalConstants.Add(ParseGlobalConstant(false));
-			} else if (Check(TokenType.Var)) {
-				globalVariables.Add(ParseGlobalVariable(false));
-			} else if (Check(TokenType.Function)) {
-				functions.Add(ParseFunction(false));
-			} else if (Check(TokenType.Export)) {
-				Advance(); // skip 'export'
-				if (Check(TokenType.Type)) {
-					types.Add(ParseTypeDecl(true));
-				} else if (Check(TokenType.TypeAlias)) {
-					typeAliases.Add(ParseTypeAliasDecl(true));
-				} else if (Check(TokenType.Interface)) {
-					interfaces.Add(ParseInterfaceDecl(true));
-				} else if (Check(TokenType.Extension)) {
-					extensions.Add(ParseExtensionDecl(true));
-				} else if (Check(TokenType.Enum)) {
-					enums.Add(ParseEnumDecl(true));
-				} else if (Check(TokenType.Let)) {
-					globalConstants.Add(ParseGlobalConstant(true));
-				} else if (Check(TokenType.Var)) {
-					globalVariables.Add(ParseGlobalVariable(true));
-				} else if (Check(TokenType.Function)) {
-					functions.Add(ParseFunction(true));
-				} else {
-					throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Unexpected token after export: {Current().Type}", Current().Line, Current().Column);
-				}
-			} else {
-				throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Unexpected token {Current().Type}", Current().Line, Current().Column);
+			var isExport = false;
+			if (Check(TokenType.Export)) {
+				Advance();
+				isExport = true;
 			}
+			ParseTopLevelDecl(isExport, types, enums, interfaces, extensions, functions, globalConstants, globalVariables, typeAliases);
 			SkipNewlines();
 		}
 
 		Logger.Info(LogCategory.Parser, $"Parser complete: {functions.Count} functions, {types.Count} types");
 		return new ProgramAst(types, enums, interfaces, extensions, functions, globalConstants, globalVariables, typeAliases);
+	}
+
+	private void ParseTopLevelDecl(
+		bool isExport,
+		List<TypeDecl> types,
+		List<EnumDecl> enums,
+		List<InterfaceDecl> interfaces,
+		List<ExtensionDecl> extensions,
+		List<FunctionDecl> functions,
+		List<GlobalConstant> globalConstants,
+		List<GlobalVariable> globalVariables,
+		List<TypeAliasDecl> typeAliases) {
+		if (Check(TokenType.Type)) {
+			types.Add(ParseTypeDecl(isExport));
+		} else if (Check(TokenType.TypeAlias)) {
+			typeAliases.Add(ParseTypeAliasDecl(isExport));
+		} else if (Check(TokenType.Interface)) {
+			interfaces.Add(ParseInterfaceDecl(isExport));
+		} else if (Check(TokenType.Extension)) {
+			extensions.Add(ParseExtensionDecl(isExport));
+		} else if (Check(TokenType.Enum)) {
+			enums.Add(ParseEnumDecl(isExport));
+		} else if (Check(TokenType.Let)) {
+			globalConstants.Add(ParseGlobalConstant(isExport));
+		} else if (Check(TokenType.Var)) {
+			globalVariables.Add(ParseGlobalVariable(isExport));
+		} else if (Check(TokenType.Function)) {
+			functions.Add(ParseFunction(isExport));
+		} else {
+			var msg = isExport ? $"Unexpected token after export: {Current().Type}" : $"Unexpected token {Current().Type}";
+			throw new CompileError(ErrorCode.ParserUnexpectedToken, msg, Current().Line, Current().Column);
+		}
 	}
 
 	// ============================================================================

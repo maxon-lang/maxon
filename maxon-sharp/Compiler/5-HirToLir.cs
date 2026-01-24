@@ -9,6 +9,42 @@ public class HirToLir {
 	private int _stackOffset;
 	private readonly Dictionary<string, int> _localOffsets = [];
 
+	// Mapping from HIR binary operation types to their corresponding LIR instruction factory
+	private static readonly Dictionary<Type, Func<LirVReg, LirValue, LirValue, LirInstr>> BinaryOpMap = new() {
+		[typeof(HirAdd)] = (d, l, r) => new LirAdd(d, l, r),
+		[typeof(HirSub)] = (d, l, r) => new LirSub(d, l, r),
+		[typeof(HirMul)] = (d, l, r) => new LirIMul(d, l, r),
+		[typeof(HirDiv)] = (d, l, r) => new LirIDiv(d, l, r),
+		[typeof(HirMod)] = (d, l, r) => new LirMod(d, l, r),
+		[typeof(HirBand)] = (d, l, r) => new LirAnd(d, l, r),
+		[typeof(HirBor)] = (d, l, r) => new LirOr(d, l, r),
+		[typeof(HirBxor)] = (d, l, r) => new LirXor(d, l, r),
+		[typeof(HirShl)] = (d, l, r) => new LirShl(d, l, r),
+		[typeof(HirShr)] = (d, l, r) => new LirShr(d, l, r),
+		[typeof(HirFAdd)] = (d, l, r) => new LirFAdd(d, l, r),
+		[typeof(HirFSub)] = (d, l, r) => new LirFSub(d, l, r),
+		[typeof(HirFMul)] = (d, l, r) => new LirFMul(d, l, r),
+		[typeof(HirFDiv)] = (d, l, r) => new LirFDiv(d, l, r),
+		[typeof(HirLogicalAnd)] = (d, l, r) => new LirAnd(d, l, r),
+		[typeof(HirLogicalOr)] = (d, l, r) => new LirOr(d, l, r),
+	};
+
+	// Mapping from HIR comparison types to their LIR condition codes
+	private static readonly Dictionary<Type, LirCondCode> CmpOpMap = new() {
+		[typeof(HirCmpEq)] = LirCondCode.Eq,
+		[typeof(HirCmpNe)] = LirCondCode.Ne,
+		[typeof(HirCmpLt)] = LirCondCode.Lt,
+		[typeof(HirCmpLe)] = LirCondCode.Le,
+		[typeof(HirCmpGt)] = LirCondCode.Gt,
+		[typeof(HirCmpGe)] = LirCondCode.Ge,
+	};
+
+	// Mapping from HIR unary operation types to their corresponding LIR instruction factory
+	private static readonly Dictionary<Type, Func<LirVReg, LirValue, LirInstr>> UnaryOpMap = new() {
+		[typeof(HirNeg)] = (d, o) => new LirNeg(d, o),
+		[typeof(HirNot)] = (d, o) => new LirNot(d, o),
+	};
+
 	public LirModule Lower(HirModule hirModule) {
 		Logger.Info(LogCategory.Lir, "Starting HIR to LIR lowering");
 		var functions = new List<LirFunction>();
@@ -70,7 +106,45 @@ public class HirToLir {
 		return new LirBlock(block.Label, instructions);
 	}
 
+	private bool TryLowerBinaryOp(HirInstr instr, List<LirInstr> instructions) {
+		if (instr is not IHirBinaryOp binOp) return false;
+		if (!BinaryOpMap.TryGetValue(instr.GetType(), out var factory)) return false;
+
+		var dest = GetOrCreateVReg(binOp.Dest.Id);
+		var left = GetVReg(binOp.Left.Id);
+		var right = GetVReg(binOp.Right.Id);
+		instructions.Add(factory(dest, left, right));
+		return true;
+	}
+
+	private bool TryLowerCmpOp(HirInstr instr, List<LirInstr> instructions) {
+		if (instr is not IHirCmpOp cmpOp) return false;
+		if (!CmpOpMap.TryGetValue(instr.GetType(), out var condCode)) return false;
+
+		var dest = GetOrCreateVReg(cmpOp.Dest.Id);
+		var left = GetVReg(cmpOp.Left.Id);
+		var right = GetVReg(cmpOp.Right.Id);
+		instructions.Add(new LirCmp(left, right));
+		instructions.Add(new LirSetCC(dest, condCode));
+		return true;
+	}
+
+	private bool TryLowerUnaryOp(HirInstr instr, List<LirInstr> instructions) {
+		if (instr is not IHirUnaryOp unaryOp) return false;
+		if (!UnaryOpMap.TryGetValue(instr.GetType(), out var factory)) return false;
+
+		var dest = GetOrCreateVReg(unaryOp.Dest.Id);
+		var operand = GetVReg(unaryOp.Operand.Id);
+		instructions.Add(factory(dest, operand));
+		return true;
+	}
+
 	private void LowerInstruction(HirInstr instr, List<LirInstr> instructions, Dictionary<int, int> paramToVReg) {
+		// Try pattern-based lowering first
+		if (TryLowerBinaryOp(instr, instructions)) return;
+		if (TryLowerCmpOp(instr, instructions)) return;
+		if (TryLowerUnaryOp(instr, instructions)) return;
+
 		switch (instr) {
 			// Constants
 			case HirConstInt constInt: {
@@ -152,208 +226,6 @@ public class HirToLir {
 					var headerOffset = NewVReg();
 					instructions.Add(new LirAdd(headerOffset, scaledIdx, new LirImmediate(16)));
 					instructions.Add(new LirAdd(dest, baseVal, headerOffset));
-					break;
-				}
-
-			// Integer arithmetic
-			case HirAdd add: {
-					var dest = GetOrCreateVReg(add.Dest.Id);
-					var left = GetVReg(add.Left.Id);
-					var right = GetVReg(add.Right.Id);
-					instructions.Add(new LirAdd(dest, left, right));
-					break;
-				}
-
-			case HirSub sub: {
-					var dest = GetOrCreateVReg(sub.Dest.Id);
-					var left = GetVReg(sub.Left.Id);
-					var right = GetVReg(sub.Right.Id);
-					instructions.Add(new LirSub(dest, left, right));
-					break;
-				}
-
-			case HirMul mul: {
-					var dest = GetOrCreateVReg(mul.Dest.Id);
-					var left = GetVReg(mul.Left.Id);
-					var right = GetVReg(mul.Right.Id);
-					instructions.Add(new LirIMul(dest, left, right));
-					break;
-				}
-
-			case HirDiv div: {
-					var dest = GetOrCreateVReg(div.Dest.Id);
-					var left = GetVReg(div.Left.Id);
-					var right = GetVReg(div.Right.Id);
-					instructions.Add(new LirIDiv(dest, left, right));
-					break;
-				}
-
-			case HirMod mod: {
-					var dest = GetOrCreateVReg(mod.Dest.Id);
-					var left = GetVReg(mod.Left.Id);
-					var right = GetVReg(mod.Right.Id);
-					instructions.Add(new LirMod(dest, left, right));
-					break;
-				}
-
-			// Bitwise operations
-			case HirBand band: {
-					var dest = GetOrCreateVReg(band.Dest.Id);
-					var left = GetVReg(band.Left.Id);
-					var right = GetVReg(band.Right.Id);
-					instructions.Add(new LirAnd(dest, left, right));
-					break;
-				}
-
-			case HirBor bor: {
-					var dest = GetOrCreateVReg(bor.Dest.Id);
-					var left = GetVReg(bor.Left.Id);
-					var right = GetVReg(bor.Right.Id);
-					instructions.Add(new LirOr(dest, left, right));
-					break;
-				}
-
-			case HirBxor bxor: {
-					var dest = GetOrCreateVReg(bxor.Dest.Id);
-					var left = GetVReg(bxor.Left.Id);
-					var right = GetVReg(bxor.Right.Id);
-					instructions.Add(new LirXor(dest, left, right));
-					break;
-				}
-
-			case HirShl shl: {
-					var dest = GetOrCreateVReg(shl.Dest.Id);
-					var left = GetVReg(shl.Left.Id);
-					var right = GetVReg(shl.Right.Id);
-					instructions.Add(new LirShl(dest, left, right));
-					break;
-				}
-
-			case HirShr shr: {
-					var dest = GetOrCreateVReg(shr.Dest.Id);
-					var left = GetVReg(shr.Left.Id);
-					var right = GetVReg(shr.Right.Id);
-					instructions.Add(new LirShr(dest, left, right));
-					break;
-				}
-
-			// Float arithmetic
-			case HirFAdd fadd: {
-					var dest = GetOrCreateVReg(fadd.Dest.Id);
-					var left = GetVReg(fadd.Left.Id);
-					var right = GetVReg(fadd.Right.Id);
-					instructions.Add(new LirFAdd(dest, left, right));
-					break;
-				}
-
-			case HirFSub fsub: {
-					var dest = GetOrCreateVReg(fsub.Dest.Id);
-					var left = GetVReg(fsub.Left.Id);
-					var right = GetVReg(fsub.Right.Id);
-					instructions.Add(new LirFSub(dest, left, right));
-					break;
-				}
-
-			case HirFMul fmul: {
-					var dest = GetOrCreateVReg(fmul.Dest.Id);
-					var left = GetVReg(fmul.Left.Id);
-					var right = GetVReg(fmul.Right.Id);
-					instructions.Add(new LirFMul(dest, left, right));
-					break;
-				}
-
-			case HirFDiv fdiv: {
-					var dest = GetOrCreateVReg(fdiv.Dest.Id);
-					var left = GetVReg(fdiv.Left.Id);
-					var right = GetVReg(fdiv.Right.Id);
-					instructions.Add(new LirFDiv(dest, left, right));
-					break;
-				}
-
-			// Unary operations
-			case HirNeg neg: {
-					var dest = GetOrCreateVReg(neg.Dest.Id);
-					var operand = GetVReg(neg.Operand.Id);
-					instructions.Add(new LirNeg(dest, operand));
-					break;
-				}
-
-			case HirNot not: {
-					var dest = GetOrCreateVReg(not.Dest.Id);
-					var operand = GetVReg(not.Operand.Id);
-					instructions.Add(new LirNot(dest, operand));
-					break;
-				}
-
-			// Comparisons
-			case HirCmpEq cmp: {
-					var dest = GetOrCreateVReg(cmp.Dest.Id);
-					var left = GetVReg(cmp.Left.Id);
-					var right = GetVReg(cmp.Right.Id);
-					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, LirCondCode.Eq));
-					break;
-				}
-
-			case HirCmpNe cmp: {
-					var dest = GetOrCreateVReg(cmp.Dest.Id);
-					var left = GetVReg(cmp.Left.Id);
-					var right = GetVReg(cmp.Right.Id);
-					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, LirCondCode.Ne));
-					break;
-				}
-
-			case HirCmpLt cmp: {
-					var dest = GetOrCreateVReg(cmp.Dest.Id);
-					var left = GetVReg(cmp.Left.Id);
-					var right = GetVReg(cmp.Right.Id);
-					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, LirCondCode.Lt));
-					break;
-				}
-
-			case HirCmpLe cmp: {
-					var dest = GetOrCreateVReg(cmp.Dest.Id);
-					var left = GetVReg(cmp.Left.Id);
-					var right = GetVReg(cmp.Right.Id);
-					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, LirCondCode.Le));
-					break;
-				}
-
-			case HirCmpGt cmp: {
-					var dest = GetOrCreateVReg(cmp.Dest.Id);
-					var left = GetVReg(cmp.Left.Id);
-					var right = GetVReg(cmp.Right.Id);
-					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, LirCondCode.Gt));
-					break;
-				}
-
-			case HirCmpGe cmp: {
-					var dest = GetOrCreateVReg(cmp.Dest.Id);
-					var left = GetVReg(cmp.Left.Id);
-					var right = GetVReg(cmp.Right.Id);
-					instructions.Add(new LirCmp(left, right));
-					instructions.Add(new LirSetCC(dest, LirCondCode.Ge));
-					break;
-				}
-
-			// Logical operations (already short-circuit in HIR, just AND/OR the bools)
-			case HirLogicalAnd land: {
-					var dest = GetOrCreateVReg(land.Dest.Id);
-					var left = GetVReg(land.Left.Id);
-					var right = GetVReg(land.Right.Id);
-					instructions.Add(new LirAnd(dest, left, right));
-					break;
-				}
-
-			case HirLogicalOr lor: {
-					var dest = GetOrCreateVReg(lor.Dest.Id);
-					var left = GetVReg(lor.Left.Id);
-					var right = GetVReg(lor.Right.Id);
-					instructions.Add(new LirOr(dest, left, right));
 					break;
 				}
 

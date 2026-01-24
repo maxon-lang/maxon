@@ -10,6 +10,14 @@ public class CodeGen {
 	private static readonly Reg R0 = Reg.Rax;
 	private static readonly Reg R1 = Reg.R10;
 
+	// Mapping from float binary operation types to their encoder methods
+	private static readonly Dictionary<Type, Action<X86Encoder, int, int>> FloatBinaryOpMap = new() {
+		[typeof(LirFAdd)] = (enc, d, s) => enc.AddsdXmmXmm(d, s),
+		[typeof(LirFSub)] = (enc, d, s) => enc.SubsdXmmXmm(d, s),
+		[typeof(LirFMul)] = (enc, d, s) => enc.MulsdXmmXmm(d, s),
+		[typeof(LirFDiv)] = (enc, d, s) => enc.DivsdXmmXmm(d, s),
+	};
+
 
 	public byte[] Generate(LirModule module) {
 		Logger.Info(LogCategory.Codegen, "Starting code generation");
@@ -78,7 +86,36 @@ public class CodeGen {
 		}
 	}
 
+	private void GenerateDivision(LirValue left, LirValue right, int destId, bool isModulo) {
+		LoadValue(Reg.Rax, left);
+		LoadValue(R1, right);
+		// Check for division by zero
+		_encoder.TestRegReg(R1, R1);
+		var label = isModulo ? "_mod_ok_" : "_div_ok_";
+		_encoder.JccRel32(CondCode.Ne, label + _divCheckCounter);
+		// If zero, trigger a controlled crash (ud2 = undefined instruction)
+		_encoder.Ud2();
+		_encoder.DefineLabel(label + _divCheckCounter++);
+		_encoder.Cqo(); // Sign-extend RAX into RDX:RAX
+		_encoder.IDivReg(R1); // RAX = quotient, RDX = remainder
+		StoreToStack(destId, isModulo ? Reg.Rdx : Reg.Rax);
+	}
+
+	private bool TryGenerateFloatBinaryOp(LirInstr instr) {
+		if (instr is not ILirBinaryOp binOp) return false;
+		if (!FloatBinaryOpMap.TryGetValue(instr.GetType(), out var encodeOp)) return false;
+
+		LoadValueToXmm(0, binOp.Left);
+		LoadValueToXmm(1, binOp.Right);
+		encodeOp(_encoder, 0, 1);
+		StoreFromXmm(binOp.Dest.Id, 0);
+		return true;
+	}
+
 	private void GenerateInstruction(LirInstr instr) {
+		// Try float binary operations first
+		if (TryGenerateFloatBinaryOp(instr)) return;
+
 		switch (instr) {
 			case LirMov mov:
 				// Handle float immediates specially - store as raw bits
@@ -167,33 +204,11 @@ public class CodeGen {
 				break;
 
 			case LirIDiv div:
-				// idiv uses RDX:RAX / operand
-				LoadValue(Reg.Rax, div.Left);
-				LoadValue(R1, div.Right);
-				// Check for division by zero
-				_encoder.TestRegReg(R1, R1);
-				_encoder.JccRel32(CondCode.Ne, "_div_ok_" + _divCheckCounter);
-				// If zero, trigger a controlled crash (ud2 = undefined instruction)
-				_encoder.Ud2();
-				_encoder.DefineLabel("_div_ok_" + _divCheckCounter++);
-				_encoder.Cqo(); // Sign-extend RAX into RDX:RAX
-				_encoder.IDivReg(R1); // RAX = quotient, RDX = remainder
-				StoreToStack(div.Dest.Id, Reg.Rax);
+				GenerateDivision(div.Left, div.Right, div.Dest.Id, isModulo: false);
 				break;
 
 			case LirMod mod:
-				// Same as div but take remainder from RDX
-				LoadValue(Reg.Rax, mod.Left);
-				LoadValue(R1, mod.Right);
-				// Check for division by zero
-				_encoder.TestRegReg(R1, R1);
-				_encoder.JccRel32(CondCode.Ne, "_mod_ok_" + _divCheckCounter);
-				// If zero, trigger a controlled crash (ud2 = undefined instruction)
-				_encoder.Ud2();
-				_encoder.DefineLabel("_mod_ok_" + _divCheckCounter++);
-				_encoder.Cqo();
-				_encoder.IDivReg(R1);
-				StoreToStack(mod.Dest.Id, Reg.Rdx);
+				GenerateDivision(mod.Left, mod.Right, mod.Dest.Id, isModulo: true);
 				break;
 
 			case LirNeg neg:
@@ -345,36 +360,6 @@ public class CodeGen {
 			case LirAddressOf addr:
 				_encoder.LeaRegMem(R0, Reg.Rbp, addr.Slot.Offset);
 				StoreToStack(addr.Dest.Id, R0);
-				break;
-
-			// Float operations (basic support)
-			case LirFAdd fadd:
-				// Load to XMM registers
-				LoadValueToXmm(0, fadd.Left);
-				LoadValueToXmm(1, fadd.Right);
-				_encoder.AddsdXmmXmm(0, 1);
-				StoreFromXmm(fadd.Dest.Id, 0);
-				break;
-
-			case LirFSub fsub:
-				LoadValueToXmm(0, fsub.Left);
-				LoadValueToXmm(1, fsub.Right);
-				_encoder.SubsdXmmXmm(0, 1);
-				StoreFromXmm(fsub.Dest.Id, 0);
-				break;
-
-			case LirFMul fmul:
-				LoadValueToXmm(0, fmul.Left);
-				LoadValueToXmm(1, fmul.Right);
-				_encoder.MulsdXmmXmm(0, 1);
-				StoreFromXmm(fmul.Dest.Id, 0);
-				break;
-
-			case LirFDiv fdiv:
-				LoadValueToXmm(0, fdiv.Left);
-				LoadValueToXmm(1, fdiv.Right);
-				_encoder.DivsdXmmXmm(0, 1);
-				StoreFromXmm(fdiv.Dest.Id, 0);
 				break;
 
 			case LirIntToFloat itof:

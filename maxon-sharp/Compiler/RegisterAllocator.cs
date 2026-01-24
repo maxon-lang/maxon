@@ -76,6 +76,23 @@ public class RegisterAllocator {
 	}
 
 	private static void CollectVRegs(LirInstr instr, HashSet<int> vregs) {
+		// Handle binary operations (covers LirAdd, LirSub, LirIMul, LirIDiv, LirMod,
+		// LirAnd, LirOr, LirXor, LirShl, LirShr, LirFAdd, LirFSub, LirFMul, LirFDiv)
+		if (instr is ILirBinaryOp binOp) {
+			vregs.Add(binOp.Dest.Id);
+			AddValueVReg(binOp.Left, vregs);
+			AddValueVReg(binOp.Right, vregs);
+			return;
+		}
+
+		// Handle unary operations (covers LirNeg, LirNot, LirFNeg, LirIntToFloat, LirFloatToInt)
+		if (instr is ILirUnaryOp unaryOp) {
+			vregs.Add(unaryOp.Dest.Id);
+			AddValueVReg(unaryOp.Src, vregs);
+			return;
+		}
+
+		// Handle remaining special cases
 		switch (instr) {
 			case LirMov mov:
 				vregs.Add(mov.Dest.Id);
@@ -96,67 +113,13 @@ public class RegisterAllocator {
 			case LirLea lea:
 				vregs.Add(lea.Dest.Id);
 				break;
-			case LirAdd add:
-				vregs.Add(add.Dest.Id);
-				AddValueVReg(add.Left, vregs);
-				AddValueVReg(add.Right, vregs);
-				break;
-			case LirSub sub:
-				vregs.Add(sub.Dest.Id);
-				AddValueVReg(sub.Left, vregs);
-				AddValueVReg(sub.Right, vregs);
-				break;
-			case LirIMul mul:
-				vregs.Add(mul.Dest.Id);
-				AddValueVReg(mul.Left, vregs);
-				AddValueVReg(mul.Right, vregs);
-				break;
-			case LirIDiv div:
-				vregs.Add(div.Dest.Id);
-				AddValueVReg(div.Left, vregs);
-				AddValueVReg(div.Right, vregs);
-				break;
-			case LirMod mod:
-				vregs.Add(mod.Dest.Id);
-				AddValueVReg(mod.Left, vregs);
-				AddValueVReg(mod.Right, vregs);
-				break;
-			case LirNeg neg:
-				vregs.Add(neg.Dest.Id);
-				AddValueVReg(neg.Src, vregs);
-				break;
-			case LirAnd and:
-				vregs.Add(and.Dest.Id);
-				AddValueVReg(and.Left, vregs);
-				AddValueVReg(and.Right, vregs);
-				break;
-			case LirOr or:
-				vregs.Add(or.Dest.Id);
-				AddValueVReg(or.Left, vregs);
-				AddValueVReg(or.Right, vregs);
-				break;
-			case LirXor xor:
-				vregs.Add(xor.Dest.Id);
-				AddValueVReg(xor.Left, vregs);
-				AddValueVReg(xor.Right, vregs);
-				break;
-			case LirNot not:
-				vregs.Add(not.Dest.Id);
-				AddValueVReg(not.Src, vregs);
-				break;
-			case LirShl shl:
-				vregs.Add(shl.Dest.Id);
-				AddValueVReg(shl.Left, vregs);
-				AddValueVReg(shl.Right, vregs);
-				break;
-			case LirShr shr:
-				vregs.Add(shr.Dest.Id);
-				AddValueVReg(shr.Left, vregs);
-				AddValueVReg(shr.Right, vregs);
-				break;
 			case LirCmp cmp:
 				AddValueVReg(cmp.Left, vregs);
 				AddValueVReg(cmp.Right, vregs);
+				break;
+			case LirFCmp fcmp:
+				AddValueVReg(fcmp.Left, vregs);
+				AddValueVReg(fcmp.Right, vregs);
 				break;
 			case LirSetCC setcc:
 				vregs.Add(setcc.Dest.Id);
@@ -174,36 +137,16 @@ public class RegisterAllocator {
 			case LirPop pop:
 				vregs.Add(pop.Dest.Id);
 				break;
-			case LirIntToFloat itof:
-				vregs.Add(itof.Dest.Id);
-				AddValueVReg(itof.Src, vregs);
-				break;
-			case LirFloatToInt ftoi:
-				vregs.Add(ftoi.Dest.Id);
-				AddValueVReg(ftoi.Src, vregs);
-				break;
-			case LirFAdd fadd:
-				vregs.Add(fadd.Dest.Id);
-				AddValueVReg(fadd.Left, vregs);
-				AddValueVReg(fadd.Right, vregs);
-				break;
-			case LirFSub fsub:
-				vregs.Add(fsub.Dest.Id);
-				AddValueVReg(fsub.Left, vregs);
-				AddValueVReg(fsub.Right, vregs);
-				break;
-			case LirFMul fmul:
-				vregs.Add(fmul.Dest.Id);
-				AddValueVReg(fmul.Left, vregs);
-				AddValueVReg(fmul.Right, vregs);
-				break;
-			case LirFDiv fdiv:
-				vregs.Add(fdiv.Dest.Id);
-				AddValueVReg(fdiv.Left, vregs);
-				AddValueVReg(fdiv.Right, vregs);
-				break;
 			case LirAddressOf addr:
 				vregs.Add(addr.Dest.Id);
+				break;
+			case LirSignExtend signExt:
+				vregs.Add(signExt.Dest.Id);
+				AddValueVReg(signExt.Src, vregs);
+				break;
+			case LirZeroExtend zeroExt:
+				vregs.Add(zeroExt.Dest.Id);
+				AddValueVReg(zeroExt.Src, vregs);
 				break;
 		}
 	}

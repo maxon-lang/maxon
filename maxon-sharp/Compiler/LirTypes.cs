@@ -51,6 +51,18 @@ public record LirStringRef(int Id, string Value) : LirValue {
 
 public abstract record LirInstr;
 
+// Interfaces for instruction patterns
+public interface ILirBinaryOp {
+	LirVReg Dest { get; }
+	LirValue Left { get; }
+	LirValue Right { get; }
+}
+
+public interface ILirUnaryOp {
+	LirVReg Dest { get; }
+	LirValue Src { get; }
+}
+
 // Data movement
 public record LirMov(LirVReg Dest, LirValue Src) : LirInstr;
 public record LirLoad(LirVReg Dest, LirValue Ptr, int Size) : LirInstr;
@@ -59,27 +71,27 @@ public record LirMemcpy(LirValue Dest, LirValue Src, int Size) : LirInstr;
 public record LirLea(LirVReg Dest, LirValue Addr) : LirInstr;
 
 // Integer arithmetic
-public record LirAdd(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirSub(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirIMul(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirIDiv(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirMod(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirNeg(LirVReg Dest, LirValue Src) : LirInstr;
+public record LirAdd(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirSub(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirIMul(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirIDiv(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirMod(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirNeg(LirVReg Dest, LirValue Src) : LirInstr, ILirUnaryOp;
 
 // Bitwise operations
-public record LirAnd(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirOr(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirXor(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirNot(LirVReg Dest, LirValue Src) : LirInstr;
-public record LirShl(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirShr(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
+public record LirAnd(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirOr(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirXor(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirNot(LirVReg Dest, LirValue Src) : LirInstr, ILirUnaryOp;
+public record LirShl(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirShr(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
 
 // Floating point arithmetic
-public record LirFAdd(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirFSub(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirFMul(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirFDiv(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr;
-public record LirFNeg(LirVReg Dest, LirValue Src) : LirInstr;
+public record LirFAdd(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirFSub(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirFMul(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirFDiv(LirVReg Dest, LirValue Left, LirValue Right) : LirInstr, ILirBinaryOp;
+public record LirFNeg(LirVReg Dest, LirValue Src) : LirInstr, ILirUnaryOp;
 
 // Comparisons (set flags or result register)
 public record LirCmp(LirValue Left, LirValue Right) : LirInstr;
@@ -98,8 +110,8 @@ public record LirPush(LirValue Value) : LirInstr;
 public record LirPop(LirVReg Dest) : LirInstr;
 
 // Conversions
-public record LirIntToFloat(LirVReg Dest, LirValue Src) : LirInstr;
-public record LirFloatToInt(LirVReg Dest, LirValue Src) : LirInstr;
+public record LirIntToFloat(LirVReg Dest, LirValue Src) : LirInstr, ILirUnaryOp;
+public record LirFloatToInt(LirVReg Dest, LirValue Src) : LirInstr, ILirUnaryOp;
 public record LirSignExtend(LirVReg Dest, LirValue Src, int FromSize, int ToSize) : LirInstr;
 public record LirZeroExtend(LirVReg Dest, LirValue Src, int FromSize, int ToSize) : LirInstr;
 

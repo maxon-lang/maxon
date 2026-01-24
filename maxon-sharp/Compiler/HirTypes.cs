@@ -70,6 +70,24 @@ public record HirValue(int Id) {
 
 public abstract record HirInstr;
 
+// Interfaces for instruction patterns
+public interface IHirBinaryOp {
+	HirValue Dest { get; }
+	HirValue Left { get; }
+	HirValue Right { get; }
+}
+
+public interface IHirCmpOp {
+	HirValue Dest { get; }
+	HirValue Left { get; }
+	HirValue Right { get; }
+}
+
+public interface IHirUnaryOp {
+	HirValue Dest { get; }
+	HirValue Operand { get; }
+}
+
 // Constants
 public record HirConstInt(HirValue Dest, long Value) : HirInstr;
 public record HirConstFloat(HirValue Dest, double Value) : HirInstr;
@@ -85,40 +103,40 @@ public record HirGetFieldPtr(HirValue Dest, HirValue Base, string FieldName, int
 public record HirGetElemPtr(HirValue Dest, HirValue Base, HirValue Index, int ElemSize) : HirInstr;
 
 // Integer arithmetic
-public record HirAdd(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirSub(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirMul(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirDiv(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirMod(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
+public record HirAdd(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirSub(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirMul(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirDiv(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirMod(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
 
 // Bitwise operations
-public record HirBand(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirBor(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirBxor(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirShl(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirShr(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
+public record HirBand(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirBor(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirBxor(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirShl(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirShr(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
 
 // Float arithmetic
-public record HirFAdd(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirFSub(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirFMul(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirFDiv(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
+public record HirFAdd(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirFSub(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirFMul(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirFDiv(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
 
 // Unary operations
-public record HirNeg(HirValue Dest, HirValue Operand) : HirInstr;
-public record HirNot(HirValue Dest, HirValue Operand) : HirInstr;
+public record HirNeg(HirValue Dest, HirValue Operand) : HirInstr, IHirUnaryOp;
+public record HirNot(HirValue Dest, HirValue Operand) : HirInstr, IHirUnaryOp;
 
 // Integer comparisons
-public record HirCmpEq(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirCmpNe(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirCmpLt(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirCmpLe(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirCmpGt(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirCmpGe(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
+public record HirCmpEq(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirCmpOp;
+public record HirCmpNe(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirCmpOp;
+public record HirCmpLt(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirCmpOp;
+public record HirCmpLe(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirCmpOp;
+public record HirCmpGt(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirCmpOp;
+public record HirCmpGe(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirCmpOp;
 
 // Logical operations (short-circuiting)
-public record HirLogicalAnd(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
-public record HirLogicalOr(HirValue Dest, HirValue Left, HirValue Right) : HirInstr;
+public record HirLogicalAnd(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
+public record HirLogicalOr(HirValue Dest, HirValue Left, HirValue Right) : HirInstr, IHirBinaryOp;
 
 // Control flow
 public record HirRet(HirValue? Value) : HirInstr;

@@ -6,8 +6,8 @@ namespace MaxonSharp;
 class Program {
 	static int Main(string[] args) {
 		// Handle test subcommand
-		if (args.Length > 0 && args[0] == "test") {
-			return RunTests(args[1..]);
+		if (args.Length > 0 && args[0] == "spec-test") {
+			return RunSpecTests(args[1..]);
 		}
 
 		var emitIr = false;
@@ -31,14 +31,14 @@ class Program {
 
 		if (sourceFile == null) {
 			Console.WriteLine("Usage: MaxonSharp [options] <source-file-or-directory>");
-			Console.WriteLine("       MaxonSharp test [test-options]");
+			Console.WriteLine("       MaxonSharp spec-test [test-options]");
 			Console.WriteLine();
 			Console.WriteLine("Options:");
 			Console.WriteLine("  --emit-ir              Write .hir and .lir files");
 			Console.WriteLine("  --log=LEVEL            Set all log categories to LEVEL");
 			Console.WriteLine("  --log=CATEGORY:LEVEL   Set specific category to LEVEL");
 			Console.WriteLine();
-			Console.WriteLine("Test options:");
+			Console.WriteLine("Spec Test options:");
 			Console.WriteLine("  --verbose              Show all test results");
 			Console.WriteLine("  --filter=PATTERN       Run only tests matching regex pattern");
 			Console.WriteLine("  --workers=N            Number of parallel workers (default: CPU/2)");
@@ -46,10 +46,6 @@ class Program {
 			Console.WriteLine("Log levels: none, error, info, debug, trace");
 			Console.WriteLine("Log categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
 			Console.WriteLine();
-			Console.WriteLine("Examples:");
-			Console.WriteLine("  MaxonSharp test.maxon --log=debug");
-			Console.WriteLine("  MaxonSharp examples/multifile/main.maxon  (multi-file project)");
-			Console.WriteLine("  MaxonSharp test --verbose --filter=addition");
 			return 1;
 		}
 
@@ -151,7 +147,7 @@ class Program {
 		return files.Length > 0 ? files[0].Path : originalPath;
 	}
 
-	static int RunTests(string[] args) {
+	static int RunSpecTests(string[] args) {
 		var verbose = false;
 		string? filter = null;
 		int? workers = null;
@@ -182,7 +178,7 @@ class Program {
 		Logger.Info(LogCategory.Testing, "Running maxon-sharp spec tests...");
 
 		var runner = new TestRunner(specDir, fragmentDir, tempDir, verbose, filter, workers);
-		var summary = runner.RunAllTests();
+		var summary = runner.RunAllSpecTests();
 
 		Logger.Info(LogCategory.Testing, "");
 		if (summary.Failed == 0) {

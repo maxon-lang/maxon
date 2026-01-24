@@ -18,7 +18,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, bool
 	/// <summary>
 	/// Run all tests and return summary.
 	/// </summary>
-	public TestSummary RunAllTests() {
+	public TestSummary RunAllSpecTests() {
 		var sw = Stopwatch.StartNew();
 
 		// Regenerate fragments if specs changed
