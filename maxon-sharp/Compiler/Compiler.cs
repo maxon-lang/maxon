@@ -11,21 +11,27 @@ namespace MaxonSharp;
 public class Compiler {
 	public static bool Compile(string source, string outputPath, string? hirOutputPath = null, string? lirOutputPath = null) {
 		try {
+			Logger.Info(LogCategory.Compiler, "Starting compilation");
+
 			// Stage 1: Lexing
+			Logger.Info(LogCategory.Compiler, "Stage 1: Lexing");
 			var lexer = new Lexer.Lexer(source);
 			var tokens = lexer.Tokenize();
 
 			// Stage 2: Parsing
+			Logger.Info(LogCategory.Compiler, "Stage 2: Parsing");
 			var parser = new Parser.Parser(tokens);
 			var ast = parser.Parse();
 
 			// Stage 3: Semantic analysis
+			Logger.Info(LogCategory.Compiler, "Stage 3: Semantic analysis");
 			if (!SemanticAnalyzer.Analyze(ast)) {
 				Console.Error.WriteLine("Semantic analysis failed");
 				return false;
 			}
 
 			// Stage 4: AST to HIR
+			Logger.Info(LogCategory.Compiler, "Stage 4: AST to HIR");
 			var astToHir = new AstToHir();
 			var hirModule = astToHir.Lower(ast);
 
@@ -34,6 +40,7 @@ public class Compiler {
 			}
 
 			// Stage 5: HIR to LIR
+			Logger.Info(LogCategory.Compiler, "Stage 5: HIR to LIR");
 			var hirToLir = new HirToLir();
 			var lirModule = hirToLir.Lower(hirModule);
 
@@ -42,15 +49,21 @@ public class Compiler {
 			}
 
 			// Stage 6: Code generation
+			Logger.Info(LogCategory.Compiler, "Stage 6: Code generation");
 			var codeGen = new CodeGenerator();
 			var code = codeGen.Generate(lirModule);
 
 			// Stage 7: PE Writer
+			Logger.Info(LogCategory.Compiler, "Stage 7: PE Writer");
 			var peWriter = new PeWriter();
 			PeWriter.Write(outputPath, code);
 
+			Logger.Info(LogCategory.Compiler, "Compilation complete");
 			Console.WriteLine($"Successfully compiled to {outputPath}");
 			return true;
+		} catch (CompileError ex) {
+			Console.Error.WriteLine(ex.Format());
+			return false;
 		} catch (Exception ex) {
 			Console.Error.WriteLine($"Compilation error: {ex.Message}");
 			return false;

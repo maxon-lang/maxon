@@ -12,9 +12,11 @@ public class HirToLir {
 	private readonly Dictionary<string, int> _localOffsets = [];
 
 	public LirModule Lower(HirModule hirModule) {
+		Logger.Info(LogCategory.Lir, "Starting HIR to LIR lowering");
 		var functions = new List<LirFunction>();
 
 		foreach (var func in hirModule.Functions) {
+			Logger.Debug(LogCategory.Lir, $"Lowering function: {func.Name}");
 			functions.Add(LowerFunction(func));
 		}
 
@@ -24,6 +26,7 @@ public class HirToLir {
 			globals.Add(new LirGlobalData(global.Name, new byte[global.Type.SizeInBytes]));
 		}
 
+		Logger.Info(LogCategory.Lir, $"LIR complete: {functions.Count} functions");
 		return new LirModule(_stringList, globals, functions);
 	}
 
@@ -52,6 +55,7 @@ public class HirToLir {
 
 		// Align stack to 16 bytes
 		var stackSize = ((_stackOffset + 15) / 16) * 16;
+		Logger.Debug(LogCategory.Lir, $"Stack size: {stackSize}");
 
 		LirType? retType = func.ReturnType is HirVoidType ? null : HirTypeToLirType(func.ReturnType);
 

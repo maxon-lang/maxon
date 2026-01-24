@@ -69,16 +69,19 @@ public class Lexer(string source) {
 	};
 
 	public List<Token> Tokenize() {
+		Logger.Info(LogCategory.Lexer, "Starting lexer");
 		var tokens = new List<Token>();
 
 		while (!IsAtEnd()) {
 			var token = NextToken();
 			if (token != null) {
 				tokens.Add(token);
+				Logger.Trace(LogCategory.Lexer, $"Token: {token.Type} '{token.Value}' at {token.Line}:{token.Column}");
 			}
 		}
 
 		tokens.Add(new Token(TokenType.Eof, "", _line, _column));
+		Logger.Info(LogCategory.Lexer, $"Lexer complete: {tokens.Count} tokens");
 		return tokens;
 	}
 
@@ -222,7 +225,7 @@ public class Lexer(string source) {
 				// Check for doc comment ///
 				if (Peek(2) == '/') {
 					Advance(); Advance(); Advance(); // Skip ///
-																					 // Skip leading space
+													 // Skip leading space
 					if (!IsAtEnd() && Current() == ' ') Advance();
 					var start = _pos;
 					while (!IsAtEnd() && Current() != '\n') Advance();
@@ -328,6 +331,9 @@ public class Lexer(string source) {
 		var value = _source[start.._pos];
 
 		var type = Keywords.TryGetValue(value, out var keyword) ? keyword : TokenType.Identifier;
+		if (type != TokenType.Identifier) {
+			Logger.Debug(LogCategory.Lexer, $"Recognized keyword: {value}");
+		}
 		return new Token(type, value, startLine, startColumn);
 	}
 

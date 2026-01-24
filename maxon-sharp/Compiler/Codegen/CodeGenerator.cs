@@ -14,26 +14,28 @@ public class CodeGenerator {
 
 
 	public byte[] Generate(LirModule module) {
+		Logger.Info(LogCategory.Codegen, "Starting code generation");
 		_strings.AddRange(module.Strings);
 
 		// Verify main exists
-		var mainFunc = module.Functions.Find(f => f.Name == "main");
-		if (mainFunc == null) {
-			throw new Exception("No main function found");
-		}
+		var mainFunc = module.Functions.Find(f => f.Name == "main") ?? throw new CompileError(ErrorCode.CodegenNoMain, "No main function found");
 
 		// Generate main first so it's at the entry point
+		Logger.Debug(LogCategory.Codegen, $"Generating code for: {mainFunc.Name}");
 		_alloc = RegisterAllocator.Allocate(mainFunc);
 		GenerateFunction(mainFunc);
 
 		// Generate all other functions
 		foreach (var func in module.Functions) {
 			if (func.Name == "main") continue;
+			Logger.Debug(LogCategory.Codegen, $"Generating code for: {func.Name}");
 			_alloc = RegisterAllocator.Allocate(func);
 			GenerateFunction(func);
 		}
 
-		return _encoder.GetCode();
+		var code = _encoder.GetCode();
+		Logger.Info(LogCategory.Codegen, $"Codegen complete: {code.Length} bytes");
+		return code;
 	}
 
 	private void GenerateFunction(LirFunction func) {
@@ -87,7 +89,7 @@ public class CodeGenerator {
 
 			case LirLoad load:
 				LoadValue(R0, load.Ptr); // R0 = ptr
-										 // Use sized load to handle different data types
+																 // Use sized load to handle different data types
 				switch (load.Size) {
 					case 1:
 						_encoder.MovzxReg64Mem8(R0, R0, 0); // Zero-extend 1 byte
@@ -127,7 +129,7 @@ public class CodeGenerator {
 				if (lea.Addr is LirStackSlot slot) {
 					_encoder.LeaRegMem(R0, Reg.Rbp, slot.Offset);
 					StoreToStack(lea.Dest.Id, R0);
-				} else if (lea.Addr is LirStringRef strRef) {
+				} else if (lea.Addr is LirStringRef) {
 					// TODO: proper string handling
 					_encoder.MovRegImm(R0, 0);
 					StoreToStack(lea.Dest.Id, R0);

@@ -5,36 +5,41 @@ namespace MaxonSharp.Hir;
 public class AstToHir {
 	private int _nextValueId;
 	private int _nextLabelId;
-	private readonly Dictionary<string, HirValue> _variableSlots = new(); // Maps var name to its stack slot pointer
-	private readonly Dictionary<string, HirType> _variableTypes = new();
-	private readonly Dictionary<string, HirStructDef> _structs = new();
-	private readonly Dictionary<string, HirEnumDef> _enums = new();
-	private readonly Dictionary<string, (int ParamIndex, HirType Type)> _params = new();
-	private readonly Dictionary<string, HirType> _functionReturnTypes = new(); // Function name -> return type
+	private readonly Dictionary<string, HirValue> _variableSlots = []; // Maps var name to its stack slot pointer
+	private readonly Dictionary<string, HirType> _variableTypes = [];
+	private readonly Dictionary<string, HirStructDef> _structs = [];
+	private readonly Dictionary<string, HirEnumDef> _enums = [];
+	private readonly Dictionary<string, (int ParamIndex, HirType Type)> _params = [];
+	private readonly Dictionary<string, HirType> _functionReturnTypes = []; // Function name -> return type
 	private string? _currentFunctionName;
 	private HirType? _currentReturnType;
 	private string? _currentTypeName; // For resolving implicit field accesses
 
 	public HirModule Lower(ProgramAst program) {
+		Logger.Info(LogCategory.Hir, "Starting AST to HIR lowering");
 		var structs = new List<HirStructDef>();
 		var enums = new List<HirEnumDef>();
 		var globals = new List<HirGlobalVar>();
 		var functions = new List<HirFunction>();
 
 		// First pass: collect struct and enum definitions
+		Logger.Debug(LogCategory.Hir, "Pass 1: Collecting struct/enum definitions");
 		foreach (var type in program.Types) {
+			Logger.Debug(LogCategory.Hir, $"Lowering type: {type.Name}");
 			var structDef = LowerTypeDecl(type);
 			structs.Add(structDef);
 			_structs[type.Name] = structDef;
 		}
 
 		foreach (var enumDecl in program.Enums) {
+			Logger.Debug(LogCategory.Hir, $"Lowering enum: {enumDecl.Name}");
 			var enumDef = LowerEnumDecl(enumDecl);
 			enums.Add(enumDef);
 			_enums[enumDecl.Name] = enumDef;
 		}
 
 		// Second pass: collect function signatures (return types)
+		Logger.Debug(LogCategory.Hir, "Pass 2: Collecting function signatures");
 		foreach (var func in program.Functions) {
 			_functionReturnTypes[func.Name] = LowerType(func.ReturnType);
 		}
@@ -56,17 +61,21 @@ public class AstToHir {
 		}
 
 		// Lower functions
+		Logger.Debug(LogCategory.Hir, "Pass 3: Lowering functions");
 		foreach (var func in program.Functions) {
+			Logger.Debug(LogCategory.Hir, $"Lowering function: {func.Name}");
 			functions.Add(LowerFunction(func));
 		}
 
 		// Lower methods from types
 		foreach (var type in program.Types) {
 			foreach (var method in type.Methods) {
+				Logger.Debug(LogCategory.Hir, $"Lowering method: {type.Name}.{method.Name}");
 				functions.Add(LowerMethod(type.Name, method));
 			}
 		}
 
+		Logger.Info(LogCategory.Hir, $"HIR complete: {functions.Count} functions");
 		return new HirModule(structs, enums, globals, functions);
 	}
 
@@ -244,8 +253,8 @@ public class AstToHir {
 				instructions.Add(new HirRet(retValue));
 				break;
 
-			case LetDeclStmt letDecl:
-			case VarDeclStmt varDecl: {
+			case LetDeclStmt:
+			case VarDeclStmt: {
 					var name = stmt is LetDeclStmt l ? l.Name : ((VarDeclStmt)stmt).Name;
 					var value = stmt is LetDeclStmt ld ? ld.Value : ((VarDeclStmt)stmt).Value;
 
@@ -285,7 +294,7 @@ public class AstToHir {
 							instructions.Add(new HirStore(slotPtr, value, varType));
 						}
 					} else {
-						throw new Exception($"Unknown variable: {assign.Target}");
+						throw new CompileError(ErrorCode.HirUndefinedVariable, $"Unknown variable: {assign.Target}");
 					}
 					break;
 				}
@@ -360,7 +369,7 @@ public class AstToHir {
 						endVal = LowerExpression(rangeExpr.End, instructions);
 						inclusive = rangeExpr.Inclusive;
 					} else {
-						throw new Exception($"For loop iterable must be a range expression (start..end), got {forStmt.Iterable.GetType().Name}");
+						throw new CompileError(ErrorCode.HirUnsupportedExpression, $"For loop iterable must be a range expression (start..end), got {forStmt.Iterable.GetType().Name}");
 					}
 
 					// Allocate slot for loop variable and store initial value
@@ -542,7 +551,7 @@ public class AstToHir {
 						}
 					}
 
-					throw new Exception($"Unknown variable: {id.Name}");
+					throw new CompileError(ErrorCode.HirUndefinedVariable, $"Unknown variable: {id.Name}");
 				}
 
 			case BinaryExpr binary: {
@@ -561,7 +570,7 @@ public class AstToHir {
 						BinaryOp.Bxor => new HirBxor(dest, left, right),
 						BinaryOp.Shl => new HirShl(dest, left, right),
 						BinaryOp.Shr => new HirShr(dest, left, right),
-						_ => throw new Exception($"Unknown binary op: {binary.Op}")
+						_ => throw new CompileError(ErrorCode.HirUnsupportedExpression, $"Unknown binary op: {binary.Op}")
 					};
 					instructions.Add(instr);
 					return dest;
@@ -579,7 +588,7 @@ public class AstToHir {
 						CompareOp.Le => new HirCmpLe(dest, left, right),
 						CompareOp.Gt => new HirCmpGt(dest, left, right),
 						CompareOp.Ge => new HirCmpGe(dest, left, right),
-						_ => throw new Exception($"Unknown compare op: {compare.Op}")
+						_ => throw new CompileError(ErrorCode.HirUnsupportedExpression, $"Unknown compare op: {compare.Op}")
 					};
 					instructions.Add(instr);
 					return dest;
@@ -625,7 +634,7 @@ public class AstToHir {
 					var instr = unary.Op switch {
 						UnaryOp.Negate => (HirInstr)new HirNeg(dest, operand),
 						UnaryOp.Not => new HirNot(dest, operand),
-						_ => throw new Exception($"Unknown unary op: {unary.Op}")
+						_ => throw new CompileError(ErrorCode.HirUnsupportedExpression, $"Unknown unary op: {unary.Op}")
 					};
 					instructions.Add(instr);
 					return dest;
@@ -690,7 +699,7 @@ public class AstToHir {
 					// Check if this is an enum case access: EnumName.case (no args)
 					if (fieldAccess.Base is IdentifierExpr baseId && _enums.TryGetValue(baseId.Name, out var enumDef)) {
 						var variant = enumDef.Variants.Find(v => v.Name == fieldAccess.FieldName)
-							?? throw new Exception($"Unknown enum case: {fieldAccess.FieldName}");
+							?? throw new CompileError(ErrorCode.HirUndefinedVariable, $"Unknown enum case: {fieldAccess.FieldName}");
 
 						var enumType = new HirEnumType(baseId.Name, enumDef.TagSize, enumDef.MaxPayloadSize);
 						var ptr = NewValue();
@@ -719,9 +728,9 @@ public class AstToHir {
 				}
 
 			case StructInitExpr structInit: {
-					var typeName = structInit.TypeName ?? throw new Exception("Anonymous struct init not supported");
+					var typeName = structInit.TypeName ?? throw new CompileError(ErrorCode.HirUnsupportedExpression, "Anonymous struct init not supported");
 					if (!_structs.TryGetValue(typeName, out var structDef)) {
-						throw new Exception($"Unknown struct type: {typeName}");
+						throw new CompileError(ErrorCode.HirUndefinedType, $"Unknown struct type: {typeName}");
 					}
 
 					// Allocate space for struct
@@ -732,7 +741,7 @@ public class AstToHir {
 					// Initialize fields
 					foreach (var fieldInit in structInit.Fields) {
 						var field = structDef.Fields.Find(f => f.FieldName == fieldInit.Name)
-							?? throw new Exception($"Unknown field: {fieldInit.Name}");
+							?? throw new CompileError(ErrorCode.HirInvalidFieldAccess, $"Unknown field: {fieldInit.Name}");
 
 						var value = LowerExpression(fieldInit.Value, instructions);
 						var fieldPtr = NewValue();
@@ -747,7 +756,7 @@ public class AstToHir {
 					// Check if it's an enum case
 					if (_enums.TryGetValue(staticCall.TypeName, out var enumDef)) {
 						var variant = enumDef.Variants.Find(v => v.Name == staticCall.MemberName)
-							?? throw new Exception($"Unknown enum case: {staticCall.MemberName}");
+							?? throw new CompileError(ErrorCode.HirUndefinedVariable, $"Unknown enum case: {staticCall.MemberName}");
 
 						var enumType = new HirEnumType(staticCall.TypeName, enumDef.TagSize, enumDef.MaxPayloadSize);
 						var ptr = NewValue();
@@ -835,11 +844,11 @@ public class AstToHir {
 			case EnumCaseExpr enumCase: {
 					// Create enum value with tag and payload
 					if (!_enums.TryGetValue(enumCase.EnumName, out var enumDef)) {
-						throw new Exception($"Unknown enum: {enumCase.EnumName}");
+						throw new CompileError(ErrorCode.HirUndefinedType, $"Unknown enum: {enumCase.EnumName}");
 					}
 
 					var variant = enumDef.Variants.Find(v => v.Name == enumCase.CaseName)
-						?? throw new Exception($"Unknown enum case: {enumCase.CaseName}");
+						?? throw new CompileError(ErrorCode.HirUndefinedVariable, $"Unknown enum case: {enumCase.CaseName}");
 
 					var enumType = new HirEnumType(enumCase.EnumName, enumDef.TagSize, enumDef.MaxPayloadSize);
 					var ptr = NewValue();
@@ -877,7 +886,7 @@ public class AstToHir {
 				}
 
 			default:
-				throw new Exception($"Unsupported expression type: {expr.GetType().Name}");
+				throw new CompileError(ErrorCode.HirUnsupportedExpression, $"Unsupported expression type: {expr.GetType().Name}");
 		}
 	}
 
@@ -924,9 +933,9 @@ public class AstToHir {
 				new HirStructType(name, _structs[name].Fields),
 			SimpleTypeRef { Name: var name } when _enums.ContainsKey(name) =>
 				new HirEnumType(name, _enums[name].TagSize, _enums[name].MaxPayloadSize),
-			SimpleTypeRef { Name: var name } => new HirPtrType(), // Default for unknown types
+			SimpleTypeRef { Name: _ } => new HirPtrType(), // Default for unknown types
 			null => new HirVoidType(),
-			_ => throw new Exception($"Unsupported type: {typeRef.GetType().Name}")
+			_ => throw new CompileError(ErrorCode.HirUndefinedType, $"Unsupported type: {typeRef.GetType().Name}")
 		};
 	}
 
@@ -996,7 +1005,7 @@ public class AstToHir {
 					return slotPtr;
 				}
 				break;
-			case StructInitExpr structInit: {
+			case StructInitExpr: {
 					// StructInitExpr already allocates a temp and returns its address
 					var initPtr = LowerExpression(expr, instructions);
 					return initPtr;

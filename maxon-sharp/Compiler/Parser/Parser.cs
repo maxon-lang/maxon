@@ -7,6 +7,7 @@ public class Parser(List<Token> tokens) {
 	private int _pos;
 
 	public ProgramAst Parse() {
+		Logger.Info(LogCategory.Parser, "Starting parser");
 		var types = new List<TypeDecl>();
 		var enums = new List<EnumDecl>();
 		var interfaces = new List<InterfaceDecl>();
@@ -53,14 +54,15 @@ public class Parser(List<Token> tokens) {
 				} else if (Check(TokenType.Function)) {
 					functions.Add(ParseFunction(true));
 				} else {
-					throw new Exception($"Unexpected token after export: {Current().Type} at {Current().Line}:{Current().Column}");
+					throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Unexpected token after export: {Current().Type}", Current().Line, Current().Column);
 				}
 			} else {
-				throw new Exception($"Unexpected token {Current().Type} at {Current().Line}:{Current().Column}");
+				throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Unexpected token {Current().Type}", Current().Line, Current().Column);
 			}
 			SkipNewlines();
 		}
 
+		Logger.Info(LogCategory.Parser, $"Parser complete: {functions.Count} functions, {types.Count} types");
 		return new ProgramAst(types, enums, interfaces, extensions, functions, globalConstants, globalVariables, typeAliases);
 	}
 
@@ -71,6 +73,7 @@ public class Parser(List<Token> tokens) {
 	private FunctionDecl ParseFunction(bool isExport) {
 		var startToken = Expect(TokenType.Function);
 		var name = Expect(TokenType.Identifier).Value;
+		Logger.Debug(LogCategory.Parser, $"Parsing function: {name}");
 		Expect(TokenType.LeftParen);
 		var parameters = ParseParamList();
 		var returnType = ParseOptionalReturnType();
@@ -88,6 +91,7 @@ public class Parser(List<Token> tokens) {
 	private TypeDecl ParseTypeDecl(bool isExport) {
 		var startToken = Expect(TokenType.Type);
 		var name = Expect(TokenType.Identifier).Value;
+		Logger.Debug(LogCategory.Parser, $"Parsing type: {name}");
 
 		var genericParams = new List<string>();
 		if (Check(TokenType.Uses)) {
@@ -126,7 +130,7 @@ public class Parser(List<Token> tokens) {
 			} else if (Check(TokenType.Static) || Check(TokenType.Function)) {
 				methods.Add(ParseMethodDecl());
 			} else {
-				throw new Exception($"Expected field or method in type, got {Current().Type} at {Current().Line}:{Current().Column}");
+				throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected field or method in type, got {Current().Type}", Current().Line, Current().Column);
 			}
 			SkipNewlines();
 		}
@@ -142,6 +146,7 @@ public class Parser(List<Token> tokens) {
 	private EnumDecl ParseEnumDecl(bool isExport) {
 		var startToken = Expect(TokenType.Enum);
 		var name = Expect(TokenType.Identifier).Value;
+		Logger.Debug(LogCategory.Parser, $"Parsing enum: {name}");
 
 		var conformances = new List<InterfaceConformance>();
 		if (Check(TokenType.Is)) {
@@ -153,7 +158,7 @@ public class Parser(List<Token> tokens) {
 			}
 		}
 
-		SkipNewlines();
+		SkipNewlines(); ;
 
 		var members = new List<EnumMember>();
 		var methods = new List<MethodDecl>();
@@ -167,7 +172,7 @@ public class Parser(List<Token> tokens) {
 			} else if (Check(TokenType.Identifier)) {
 				members.Add(ParseEnumMember());
 			} else {
-				throw new Exception($"Expected enum member or method, got {Current().Type} at {Current().Line}:{Current().Column}");
+				throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected enum member or method, got {Current().Type}", Current().Line, Current().Column);
 			}
 			SkipNewlines();
 		}
@@ -243,7 +248,7 @@ public class Parser(List<Token> tokens) {
 			} else if (Check(TokenType.Static) || Check(TokenType.Function)) {
 				methods.Add(ParseInterfaceMethod());
 			} else {
-				throw new Exception($"Expected method in interface, got {Current().Type} at {Current().Line}:{Current().Column}");
+				throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected method in interface, got {Current().Type}", Current().Line, Current().Column);
 			}
 			SkipNewlines();
 		}
@@ -291,7 +296,7 @@ public class Parser(List<Token> tokens) {
 			} else if (Check(TokenType.Function)) {
 				methods.Add(ParseExtensionMethod());
 			} else {
-				throw new Exception($"Expected method in extension, got {Current().Type} at {Current().Line}:{Current().Column}");
+				throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected method in extension, got {Current().Type}", Current().Line, Current().Column);
 			}
 			SkipNewlines();
 		}
@@ -484,7 +489,7 @@ public class Parser(List<Token> tokens) {
 		};
 	}
 
-	private TypeRef? ParseOptionalReturnType() {
+	private SimpleTypeRef? ParseOptionalReturnType() {
 		if (Check(TokenType.Returns)) {
 			Advance();
 			return ParseTypeRef();
@@ -523,7 +528,7 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.SelfType)) return Advance().Value;
 		if (Check(TokenType.Identifier)) return Advance().Value;
 
-		throw new Exception($"Expected type name at {Current().Line}:{Current().Column}");
+		throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name", Current().Line, Current().Column);
 	}
 
 	// ============================================================================
@@ -637,7 +642,7 @@ public class Parser(List<Token> tokens) {
 				return new IndexAssignStmt(indexExpr.Base, indexExpr.Index, value) { Location = new SourceLocation(startToken.Line, startToken.Column) };
 			}
 
-			throw new Exception($"Invalid assignment target at {startToken.Line}:{startToken.Column}");
+			throw new CompileError(ErrorCode.ParserInvalidAssignment, "Invalid assignment target", startToken.Line, startToken.Column);
 		}
 
 		return new ExprStmt(expr) { Location = new SourceLocation(startToken.Line, startToken.Column) };
@@ -1206,7 +1211,7 @@ public class Parser(List<Token> tokens) {
 			return new IdentifierExpr(name) { Location = new SourceLocation(token.Line, token.Column) };
 		}
 
-		throw new Exception($"Expected expression at {startToken.Line}:{startToken.Column}, got {startToken.Type}");
+		throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got {startToken.Type}", startToken.Line, startToken.Column);
 	}
 
 	private Expr ParsePostfix(Expr expr) {
@@ -1262,7 +1267,7 @@ public class Parser(List<Token> tokens) {
 			namedArgs.Add(new NamedArg(name, value));
 		} else {
 			if (namedArgs.Count > 0) {
-				throw new Exception($"Positional argument after named argument at {Current().Line}:{Current().Column}");
+				throw new CompileError(ErrorCode.ParserUnexpectedToken, "Positional argument after named argument", Current().Line, Current().Column);
 			}
 			args.Add(ParseExpression());
 		}
@@ -1459,7 +1464,7 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.CharacterLiteral)) {
 			var label = Advance().Value;
 			if (label != expectedLabel) {
-				throw new Exception($"Mismatched end label: expected '{expectedLabel}', got '{label}' at {endToken.Line}:{endToken.Column}");
+				throw new CompileError(ErrorCode.ParserMismatchedEndLabel, $"Mismatched end label: expected '{expectedLabel}', got '{label}'", endToken.Line, endToken.Column);
 			}
 		}
 		return endToken.Line;
@@ -1487,7 +1492,7 @@ public class Parser(List<Token> tokens) {
 
 	private Token Expect(TokenType type) {
 		if (!Check(type)) {
-			throw new Exception($"Expected {type} but got {Current().Type} at {Current().Line}:{Current().Column}");
+			throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected {type} but got {Current().Type}", Current().Line, Current().Column);
 		}
 		return Advance();
 	}
