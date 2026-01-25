@@ -63,12 +63,16 @@ public class Compiler {
 			maxonToStandard.AddLegalDialect("cf");
 			maxonToStandard.Run(module);
 
-			// Run Standard passes (mem2reg, constant folding, DCE)
+			// Run Standard passes (mem2reg, constant folding, DCE, dead store elimination)
 			var standardPasses = new PassManager(context);
 			standardPasses.AddPass(new Mem2RegPass());
 			standardPasses.AddPass(new ConstantFoldingPass());
 			standardPasses.AddPass(new DeadCodeEliminationPass());
 			standardPasses.Run(module);
+
+			// Dead store elimination (runs after DCE removes unused loads)
+			var deadStorePass = new DeadStoreEliminationPass();
+			deadStorePass.Run(module);
 
 			// Print Standard IR
 			var standardPrinter = new MlirPrinter();
@@ -176,6 +180,11 @@ public class Compiler {
 			standardPasses.AddPass(new ConstantFoldingPass());
 			standardPasses.AddPass(new DeadCodeEliminationPass());
 			standardPasses.Run(module);
+
+			// Phase 7.5: Dead store elimination (after DCE removes unused loads)
+			Logger.Debug(LogCategory.Compiler, "Phase 7.5: Dead store elimination");
+			var deadStorePass = new DeadStoreEliminationPass();
+			deadStorePass.Run(module);
 
 			// Phase 8: Lower Standard → X86 dialect
 			Logger.Debug(LogCategory.Compiler, "Phase 8: Lower Standard to X86");

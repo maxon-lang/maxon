@@ -15,7 +15,8 @@ The Maxon compiler includes optimization passes that improve code efficiency:
 1. **Constant Folding** - Evaluates constant expressions at compile time
 2. **Dead Code Elimination** - Removes unused variables and computations
 3. **Dead Function Elimination** - Removes functions never called from main
-4. **Peephole Optimization** - Eliminates redundant instructions (self-moves, unnecessary copies)
+4. **Dead Store Elimination** - Removes stores to memory that is never read
+5. **Peephole Optimization** - Eliminates redundant instructions (self-moves, dead moves, unnecessary copies)
 
 ## Tests
 
@@ -304,6 +305,7 @@ module {
 
 <!-- test: store-to-load-global -->
 Store-to-load forwarding propagates constants through global variable stores and loads.
+Dead store elimination then removes the unused global and its store.
 ```maxon
 var g = 0
 
@@ -317,14 +319,9 @@ end 'main'
 ```
 ```requiredmlir
 module {
-  memref.global @global.g : i64 = 0 : i64
-
   func.func @main() -> i64 {
     ^entry:
       x86.prologue stack_size=32
-      x86.mov rax, 5
-      x86.lea_global rcx, @global.g
-      x86.mov qword ptr [rcx], rax
       x86.mov rax, 20
       x86.epilogue
       x86.ret
