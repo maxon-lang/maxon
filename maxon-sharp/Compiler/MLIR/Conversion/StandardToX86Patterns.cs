@@ -33,6 +33,7 @@ public static class StandardToX86Patterns {
 		patterns.Add<LowerFPToSIOp>();
 		patterns.Add<LowerSIToFPOp>();
 		patterns.Add<LowerCmpFOp>();
+		patterns.Add<LowerNegFOp>();
 
 		// Math patterns
 		patterns.Add<LowerSqrtOp>();
@@ -630,6 +631,34 @@ public sealed class LowerMaxFOp : ConversionPattern<MaxFOp> {
 		// MAXSD: dst = max(dst, src), so copy lhs to dst first
 		rewriter.Insert(new MovsdOp(dst, lhs));
 		rewriter.Insert(new MaxsdOp(dst, rhs));
+		return true;
+	}
+}
+/// <summary>
+/// Lowers arith.negf to x86.xorpd with a constant mask.
+/// The negation of a float is computed by flipping the sign bit.
+/// For f64: XOR with 0x8000000000000000 to flip the sign bit.
+/// We load the mask constant into an XMM register via GPR, then use XORPD.
+/// </summary>
+public sealed class LowerNegFOp : ConversionPattern<NegFOp> {
+	protected override bool MatchAndRewrite(NegFOp op, ConversionPatternRewriter rewriter) {
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var src = new VRegOperand(op.Operand.Id, IsFloat: true);
+
+		// Load the mask 0x8000000000000000 into a temp GPR, then move to XMM
+		// Use unique negative IDs for temp vregs (based on result ID)
+		var tempGpr = new VRegOperand(-op.Result.Id - 4000, IsFloat: false);
+		var maskXmm = new VRegOperand(-op.Result.Id - 5000, IsFloat: true);
+
+		// Load mask constant into GPR (unchecked to handle sign bit constant)
+		rewriter.Insert(new MovOp(tempGpr, new ImmOperand(unchecked((long)0x8000000000000000))));
+		// Transfer to XMM register
+		rewriter.Insert(new MovqOp(maskXmm, tempGpr));
+		// Copy source to destination first
+		rewriter.Insert(new MovsdOp(dst, src));
+		// XOR with mask to flip sign bit
+		rewriter.Insert(new XorpdOp(dst, maskXmm));
+
 		return true;
 	}
 }

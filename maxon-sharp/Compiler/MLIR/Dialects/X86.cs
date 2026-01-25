@@ -839,6 +839,27 @@ public sealed class AndpdOp : X86Op {
 	}
 }
 
+/// <summary>
+/// Bitwise XOR of packed doubles: x86.xorpd dst, src
+/// Encoding: 66 0F 57 /r
+/// Used for negation by XORing with a mask that flips the sign bit.
+/// </summary>
+public sealed class XorpdOp : X86Op {
+	public override string Mnemonic => "xorpd";
+
+	public X86Operand Dst => X86Operands[0];
+	public X86Operand Src => X86Operands[1];
+
+	public XorpdOp(X86Operand dst, X86Operand src) {
+		X86Operands.Add(dst);
+		X86Operands.Add(src);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"x86.xorpd {Dst}, {Src}");
+	}
+}
+
 // ============================================================================
 // Function Prologue/Epilogue
 // ============================================================================

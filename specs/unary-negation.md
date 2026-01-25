@@ -75,3 +75,27 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: unary-negate-float -->
+```maxon
+function main() returns int
+    var f = 3.5
+    var g = -f
+    return trunc(g + 45.5)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: unary-double-negate-float -->
+```maxon
+function main() returns int
+    var f = 42.0
+    var g = --f
+    return trunc(g)
+end 'main'
+```
+```exitcode
+42
+```

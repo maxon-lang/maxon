@@ -172,6 +172,9 @@ public sealed class X86CodeEmitter {
 			case AndpdOp andpd:
 				EmitAndpd(andpd);
 				break;
+			case XorpdOp xorpd:
+				EmitXorpd(xorpd);
+				break;
 			case PrologueOp prologue:
 				EmitPrologue(prologue);
 				break;
@@ -727,9 +730,10 @@ public sealed class X86CodeEmitter {
 
 	private void EmitCvtOp(X86Operand dst, X86Operand src, byte opcode, string name) {
 		// F2 REX.W 0F xx /r - CVT* instructions
+		// reg field = dst, rm field = src
 		if (dst is RegOperand dstReg && src is RegOperand srcReg) {
 			EmitByte(0xF2);
-			EmitRexW(srcReg.Register, dstReg.Register);
+			EmitRexW(dstReg.Register, srcReg.Register);
 			EmitBytes(0x0F, opcode);
 			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
 		} else {
@@ -740,9 +744,10 @@ public sealed class X86CodeEmitter {
 	private void EmitMovq(MovqOp op) {
 		// 66 REX.W 0F 6E /r - MOVQ xmm, r/m64
 		// Move 64-bit value from GPR to XMM register
+		// reg field = dst (XMM), rm field = src (GPR)
 		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
 			EmitByte(0x66);
-			EmitRexW(srcReg.Register, dstReg.Register);
+			EmitRexW(dstReg.Register, srcReg.Register);
 			EmitBytes(0x0F, 0x6E);
 			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
 		} else {
@@ -806,6 +811,20 @@ public sealed class X86CodeEmitter {
 			EmitMemOperand(dstRegOp.Register, srcMem);
 		} else {
 			throw new NotSupportedException($"Unsupported ANDPD operand combination");
+		}
+	}
+
+	private void EmitXorpd(XorpdOp op) {
+		// 66 0F 57 /r - XORPD xmm1, xmm2/m128
+		// Bitwise XOR of packed doubles
+		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
+			EmitBytes(0x66, 0x0F, 0x57);
+			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
+		} else if (op.Dst is RegOperand dstRegOp && op.Src is MemOperand srcMem) {
+			EmitBytes(0x66, 0x0F, 0x57);
+			EmitMemOperand(dstRegOp.Register, srcMem);
+		} else {
+			throw new NotSupportedException($"Unsupported XORPD operand combination");
 		}
 	}
 

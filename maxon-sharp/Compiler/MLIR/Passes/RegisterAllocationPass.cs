@@ -325,7 +325,9 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			MinsdOp minsd => new MinsdOp(ctx.Alloc(minsd.Dst), ctx.Alloc(minsd.Src)),
 			MaxsdOp maxsd => new MaxsdOp(ctx.Alloc(maxsd.Dst), ctx.Alloc(maxsd.Src)),
 			AndpdOp andpd => new AndpdOp(ctx.Alloc(andpd.Dst), ctx.Alloc(andpd.Src)),
+			XorpdOp xorpd => new XorpdOp(ctx.Alloc(xorpd.Dst), ctx.Alloc(xorpd.Src)),
 			_ => op
 		};
 	}
 }
+

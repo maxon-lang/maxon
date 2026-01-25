@@ -2,24 +2,13 @@
 
 This document tracks progress implementing Maxon language features in maxon-sharp. Each phase builds on the previous, with spec tests run after each phase to validate correctness.
 
-## Current Status
+## How to Use This Plan
 
-- **Current Phase**: Phase 2 Complete, Ready for Phase 3
-- **Last Updated**: 2026-01-24
-- **Tests Passing**: 137/137
-
-## Phase Overview
-
-| Phase | Focus | Status | Specs Passing |
-|-------|-------|--------|---------------|
-| 1 | Primitives & Variables | ✅ Complete | 57/57 |
-| 2 | Operators & Functions | ✅ Complete | 137/137 |
-| 3 | Control Flow, Types & Inference | ⬜ Not Started | 0/~12 |
-| 4 | Enums & Interfaces | ⬜ Not Started | 0/4 |
-| 5 | Strings & Collections | ⬜ Not Started | 0/8 |
-| 6 | Error Handling & Closures | ⬜ Not Started | 0/4 |
-| 7 | Modules & Stdlib | ⬜ Not Started | 0/~10 |
-| 8 | Advanced Features | ⬜ Not Started | 0/6 |
+Each phase involves:
+1. **Move spec files** from `specs/archive/` to `specs/`
+2. **Run `maxonsharp spec-test`** to see failing tests
+3. **Implement compiler functionality** to make tests pass
+4. **Repeat** until all tests in the phase pass
 
 ---
 
@@ -108,27 +97,25 @@ This document tracks progress implementing Maxon language features in maxon-shar
 | max.md | max() | ✅ | Uses maxsd instruction |
 | trunc.md | trunc() | ✅ | Float-to-int conversion |
 
-#### Math Functions (Require CRT - Deferred)
+#### Math Functions (Require CRT - )
 
 | Spec | Description | Status | Notes |
 |------|-------------|--------|-------|
-| pow.md | pow() | ⏸️ Deferred | Requires PE import table for CRT calls |
-| log.md | log() | ⏸️ Deferred | Requires PE import table |
-| log2.md | log2() | ⏸️ Deferred | Requires PE import table |
-| log10.md | log10() | ⏸️ Deferred | Requires PE import table |
-| exp.md | exp() | ⏸️ Deferred | Requires PE import table |
-| sin.md | sin() | ⏸️ Deferred | Requires PE import table |
-| cos.md | cos() | ⏸️ Deferred | Requires PE import table |
-| tan.md | tan() | ⏸️ Deferred | Requires PE import table |
-| atan2.md | atan2() | ⏸️ Deferred | Requires PE import table |
-
-#### Deferred to Later Phases
+| pow.md | pow() | ⬜  | Requires PE import table for CRT calls |
+| log.md | log() | ⬜  | Requires PE import table |
+| log2.md | log2() | ⬜  | Requires PE import table |
+| log10.md | log10() | ⬜  | Requires PE import table |
+| exp.md | exp() | ⬜  | Requires PE import table |
+| sin.md | sin() | ⬜  | Requires PE import table |
+| cos.md | cos() | ⬜  | Requires PE import table |
+| tan.md | tan() | ⬜  | Requires PE import table |
+| atan2.md | atan2() | ⬜  | Requires PE import table |
 
 | Spec | Description | Status | Notes |
 |------|-------------|--------|-------|
-| many-args.md | Functions with many parameters | ⏸️ Deferred | Requires register spilling |
-| unused-parameters.md | Discard params with `_` | ⏸️ Deferred | Requires unused variable detection |
-| print-function.md | Built-in print function | ⏸️ Deferred | Requires string support |
+| many-args.md | Functions with many parameters | ⬜  | Requires register spilling |
+| unused-parameters.md | Discard params with `_` | ⬜  | Requires unused variable detection |
+| print-function.md | Built-in print function | ⬜  | Requires string support |
 
 ### Implementation Completed
 
@@ -147,15 +134,6 @@ This document tracks progress implementing Maxon language features in maxon-shar
 - [x] SSE math intrinsics (sqrt, floor, ceil, round, abs, min, max)
 - [x] X86 bitwise operations (and, or, xor, shl, shr, sar)
 - [x] Integer promotion for min/max functions
-
-### Notes
-
-- Implemented Math dialect with unary (Sqrt, Floor, Ceil, Round, AbsF) and binary (Min, Max) ops
-- Added SSE instruction emission: sqrtsd, roundsd, minsd, maxsd, andpd
-- Logical operators use control flow blocks for short-circuit evaluation
-- Bitwise ops lower from arith dialect (andi, ori, xori, shli, shrsi, shrui) to X86
-- CRT-based math functions (sin, cos, tan, log, exp, pow) require PE import table support which is not yet implemented
-- Float negation (NegFOp) has no X86 pattern yet - requires xorpd with sign bit mask
 
 ---
 
@@ -210,8 +188,6 @@ This document tracks progress implementing Maxon language features in maxon-shar
 - [ ] Bidirectional type inference
 - [ ] Numeric promotion rules
 
-### Notes
-<!-- Add implementation notes here as you work -->
 
 ---
 
@@ -244,8 +220,6 @@ This document tracks progress implementing Maxon language features in maxon-shar
 - [ ] Pattern exhaustiveness checking
 - [ ] Match code generation
 
-### Notes
-<!-- Add implementation notes here as you work -->
 
 ---
 
@@ -267,6 +241,8 @@ This document tracks progress implementing Maxon language features in maxon-shar
 | collection.md | Collection interface | ⬜ | |
 | map.md | Hash map type | ⬜ | |
 | set.md | Hash set type | ⬜ | |
+| character-type.md |  | ⬜ | |
+| byte-type.md |  | ⬜ | |
 
 ### Implementation Tasks
 
@@ -282,8 +258,6 @@ This document tracks progress implementing Maxon language features in maxon-shar
 - [ ] Map bucket layout
 - [ ] Set implementation
 
-### Notes
-<!-- Add implementation notes here as you work -->
 
 ---
 
@@ -314,8 +288,6 @@ This document tracks progress implementing Maxon language features in maxon-shar
 - [ ] Closure struct generation
 - [ ] Closure call convention
 
-### Notes
-<!-- Add implementation notes here as you work -->
 
 ---
 
@@ -360,9 +332,6 @@ This document tracks progress implementing Maxon language features in maxon-shar
 - [ ] Directory syscalls
 - [ ] Command line argument passing
 
-### Notes
-<!-- Add implementation notes here as you work -->
-
 ---
 
 ## Phase 8: Advanced Features
@@ -393,62 +362,9 @@ This document tracks progress implementing Maxon language features in maxon-shar
 - [ ] Crash isolation (structured exception handling)
 - [ ] Allocation tracking infrastructure
 
-### Notes
-<!-- Add implementation notes here as you work -->
 
 ---
 
-## Implementation Log
-
-Record significant changes, decisions, and blockers here.
-
-### 2026-01-24 (Phase 2)
-- **Phase 2 Complete**: 137 spec tests passing
-- Implemented X86 bitwise operations:
-  - Added emission code for AndOp, OrOp, XorOp, NotOp, SarOp, ShrOp
-  - Added lowering patterns: LowerAndIOp, LowerOrIOp, LowerXOrIOp, LowerShRSIOp, LowerShRUIOp
-- Implemented short-circuit logical operators (and/or):
-  - Added LowerLogicalExpr in AstToMaxonDialect.cs
-  - Uses control flow blocks for lazy evaluation
-  - Fixed Mem2RegPass to handle cross-block allocas
-- Implemented Math dialect with SSE intrinsics:
-  - Created MathOps.cs with SqrtOp, FloorOp, CeilOp, RoundOp, AbsFOp, MinFOp, MaxFOp
-  - Added X86 SSE ops: SqrtsdOp, RoundsdOp, MinsdOp, MaxsdOp, AndpdOp
-  - Added emission code for all new SSE instructions
-- Implemented function enhancements:
-  - Named arguments with any-order support
-  - Default parameter values
-  - Validation for unknown parameter names
-- Added register allocation support for new ops
-- Fixed int-to-float promotion for min/max functions
-- Moved operator specs from archive: comparison-operators.md, bitwise-operators.md, unary-operators.md, unary-negation.md
-- Created new math specs: floor.md, ceil.md, round.md, abs.md, trunc.md, min.md, max.md, sqrt.md
-- Deferred CRT-based math functions (sin, cos, tan, log, exp, pow) - require PE import table
-
-### 2026-01-24 (Phase 1)
-- Created implementation plan
-- **Phase 1 Complete**: All 57 spec tests passing
-- Implemented liveness-aware register allocation:
-  - `AnalyzeLiveAcrossCalls()` detects vregs live across function calls
-  - Values live across calls allocated to callee-saved registers (RBX, R12-R15)
-  - `InsertCalleeSavedSaveRestore()` adds push/pop in prologue/epilogue
-- Fixed `UpdateValueReferences` in DialectConversionPass
-- Added parameter copying from ABI registers in FunctionFramePass
-- Added float support: `MovqOp` for GPR→XMM transfer, `VRegOperand.IsFloat` for register class tracking
-- Added `trunc` builtin and `CvttsdOp` for float-to-int conversion
-- Fixed spec parser to extract exit codes from docs examples
-
----
-
-## Architecture Notes
-
-### Key Files to Modify
-
-- `Compiler/SemanticAnalyzer.cs` - Type checking and validation
-- `Compiler/MLIR/Conversion/AstToMaxonDialect.cs` - AST to MLIR conversion
-- `Compiler/MLIR/Conversion/MaxonToStandard.cs` - Lowering passes
-- `Compiler/MLIR/Conversion/StandardToX86Patterns.cs` - X86 lowering patterns
-- `Compiler/MLIR/Emit/X86CodeEmitter.cs` - X86 code emission
 
 ### Testing Strategy
 
