@@ -1,0 +1,38 @@
+// Test: bitwise-with-logical
+function main() returns int
+    // Logical operators have lower precedence than bitwise
+    var a = 5 & 3        // 1
+    if a > 0 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rcx, 3
+      x86.mov rdx, 5
+      x86.and rdx, rcx
+      x86.mov r8, 0
+      x86.cmp rdx, r8
+      x86.setg r9
+      x86.test r9, r9
+      x86.jne then
+      x86.jmp merge
+    ^then:
+      x86.mov rax, 1
+      x86.epilogue
+      x86.ret
+    ^merge:
+      x86.mov rax, 0
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

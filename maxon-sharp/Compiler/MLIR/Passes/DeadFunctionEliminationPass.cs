@@ -1,6 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.Func;
-using MaxonDialect = MaxonSharp.Compiler.Mlir.Dialects.Maxon;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
@@ -8,7 +7,7 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// Eliminates functions that are never called.
 /// Keeps 'main' and any functions reachable from it.
 /// </summary>
-public sealed class DeadFunctionEliminationPass : PassBase {
+public sealed class DeadFunctionEliminationPass : AbstractPassBase {
 	public override string Name => "dead-function-elimination";
 	public override string Description => "Eliminates unreachable functions";
 
@@ -30,8 +29,8 @@ public sealed class DeadFunctionEliminationPass : PassBase {
 			foreach (var block in func.Body.Blocks) {
 				foreach (var op in block.Operations) {
 					string? callee = op switch {
-						CallOp call => call.Callee,
-						MaxonDialect.CallOp maxonCall => maxonCall.Callee,
+						FuncCallOp call => call.Callee,
+						MaxonCallOp maxonCall => maxonCall.Callee,
 						_ => null
 					};
 					if (callee is not null && !calledFunctions.Contains(callee)) {

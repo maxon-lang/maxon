@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler.Mlir.Dialects.X86;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir;
 

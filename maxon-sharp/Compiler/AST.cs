@@ -53,7 +53,20 @@ public record UnaryExpr(UnaryOp Op, Expr Operand) : Expr;
 
 // Calls and member access
 public record NamedArg(string Name, Expr Value);
-public record CallExpr(string FuncName, List<Expr> Args, List<NamedArg> NamedArgs) : Expr;
+
+public enum BuiltinOp {
+	None = 0,
+	Trunc,
+	Sqrt,
+	Floor,
+	Ceil,
+	Round,
+	Abs,
+	Min,
+	Max
+}
+
+public record CallExpr(string FuncName, List<Expr> Args, List<NamedArg> NamedArgs, BuiltinOp Builtin = BuiltinOp.None) : Expr;
 public record MethodCallExpr(Expr Base, string MethodName, List<Expr> Args, List<NamedArg> NamedArgs) : Expr;
 public record FieldAccessExpr(Expr Base, string FieldName) : Expr;
 public record IndexExpr(Expr Base, Expr Index) : Expr;

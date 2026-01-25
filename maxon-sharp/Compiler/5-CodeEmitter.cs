@@ -1,5 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.X86;
+using MaxonSharp.Compiler.Mlir.Dialects;
 using MaxonSharp.Compiler.Mlir.Emit;
 
 namespace MaxonSharp.Compiler;

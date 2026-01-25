@@ -4,6 +4,17 @@ public class Parser(List<Token> tokens) {
 	private readonly List<Token> _tokens = tokens;
 	private int _pos;
 
+	private static readonly Dictionary<string, BuiltinOp> BuiltinFunctions = new() {
+		["trunc"] = BuiltinOp.Trunc,
+		["sqrt"] = BuiltinOp.Sqrt,
+		["floor"] = BuiltinOp.Floor,
+		["ceil"] = BuiltinOp.Ceil,
+		["round"] = BuiltinOp.Round,
+		["abs"] = BuiltinOp.Abs,
+		["min"] = BuiltinOp.Min,
+		["max"] = BuiltinOp.Max,
+	};
+
 	public ProgramAst Parse() {
 		Logger.Debug(LogCategory.Parser, "Starting parser");
 		var types = new List<TypeDecl>();
@@ -1143,16 +1154,6 @@ public class Parser(List<Token> tokens) {
 			return expr;
 		}
 
-		// Print function call (built-in)
-		if (Check(TokenType.Print)) {
-			var printToken = Advance();
-			Expect(TokenType.LeftParen);
-			var args = new List<Expr>();
-			var namedArgs = new List<NamedArg>();
-			ParseCallArgs(args, namedArgs);
-			return new CallExpr("print", args, namedArgs) { Location = new SourceLocation(printToken.Line, printToken.Column) };
-		}
-
 		// Self type (for Self{...} in methods)
 		if (Check(TokenType.SelfType)) {
 			var token = Advance();
@@ -1200,7 +1201,8 @@ public class Parser(List<Token> tokens) {
 				var args = new List<Expr>();
 				var namedArgs = new List<NamedArg>();
 				ParseCallArgs(args, namedArgs);
-				return new CallExpr(name, args, namedArgs) { Location = new SourceLocation(token.Line, token.Column) };
+				var builtin = BuiltinFunctions.GetValueOrDefault(name, BuiltinOp.None);
+				return new CallExpr(name, args, namedArgs, builtin) { Location = new SourceLocation(token.Line, token.Column) };
 			}
 
 			return new IdentifierExpr(name) { Location = new SourceLocation(token.Line, token.Column) };

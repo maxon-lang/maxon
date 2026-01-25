@@ -6,7 +6,7 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// Manages and runs a pipeline of passes on MLIR modules.
 /// </summary>
 public sealed class PassManager(MlirContext context) {
-	private readonly List<IPass> _passes = [];
+	private readonly List<AbstractPassBase> _passes = [];
 	private readonly MlirContext _context = context;
 
 	/// <summary>
@@ -27,7 +27,7 @@ public sealed class PassManager(MlirContext context) {
 	/// <summary>
 	/// Adds a pass to the pipeline.
 	/// </summary>
-	public PassManager AddPass<T>() where T : IPass, new() {
+	public PassManager AddPass<T>() where T : AbstractPassBase, new() {
 		_passes.Add(new T());
 		return this;
 	}
@@ -35,7 +35,7 @@ public sealed class PassManager(MlirContext context) {
 	/// <summary>
 	/// Adds a pass instance to the pipeline.
 	/// </summary>
-	public PassManager AddPass(IPass pass) {
+	public PassManager AddPass(AbstractPassBase pass) {
 		_passes.Add(pass);
 		return this;
 	}

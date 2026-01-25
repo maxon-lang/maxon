@@ -4,16 +4,16 @@ This document tracks progress implementing Maxon language features in maxon-shar
 
 ## Current Status
 
-- **Current Phase**: Phase 1 Complete, Ready for Phase 2
-- **Last Updated**: 2025-01-24
-- **Tests Passing**: 57/57
+- **Current Phase**: Phase 2 Complete, Ready for Phase 3
+- **Last Updated**: 2026-01-24
+- **Tests Passing**: 137/137
 
 ## Phase Overview
 
 | Phase | Focus | Status | Specs Passing |
 |-------|-------|--------|---------------|
 | 1 | Primitives & Variables | ✅ Complete | 57/57 |
-| 2 | Operators & Functions | ⬜ Not Started | 0/~25 |
+| 2 | Operators & Functions | ✅ Complete | 137/137 |
 | 3 | Control Flow, Types & Inference | ⬜ Not Started | 0/~12 |
 | 4 | Enums & Interfaces | ⬜ Not Started | 0/4 |
 | 5 | Strings & Collections | ⬜ Not Started | 0/8 |
@@ -74,65 +74,88 @@ This document tracks progress implementing Maxon language features in maxon-shar
 
 **Dependencies**: Phase 1 (primitives)
 
-### Specs to Implement
+**Status**: ✅ Complete
+
+### Specs Implemented
 
 #### Operators
 
 | Spec | Description | Status | Notes |
 |------|-------------|--------|-------|
-| arithmetic-operators.md | +, -, *, /, mod | ⬜ | |
-| comparison-operators.md | ==, !=, <, <=, >, >= | ⬜ | |
-| bitwise-operators.md | band, bor, bxor, shl, shr | ⬜ | |
-| unary-operators.md | not, - | ⬜ | |
-| negation.md | Negation operator | ⬜ | |
+| comparison-operators.md | ==, !=, <, <=, >, >= | ✅ | All comparisons for int and float |
+| bitwise-operators.md | band, bor, bxor, shl, shr | ✅ | Added X86 emission for and/or/xor/shl/shr/sar |
+| unary-operators.md | not, - | ✅ | Integer negation via sub 0, x |
+| unary-negation.md | Unary minus operator | ✅ | Float negation not yet implemented |
 
 #### Functions
 
 | Spec | Description | Status | Notes |
 |------|-------------|--------|-------|
-| functions.md | Function syntax, parameters, returns | ⬜ | |
-| return.md | Return statements | ⬜ | |
-| named-arguments.md | Named arguments (a: value) | ⬜ | |
-| many-parameters.md | Functions with many parameters | ⬜ | |
-| discarded-parameters.md | Discard params with `_` | ⬜ | |
-| print.md | Built-in print function | ⬜ | |
+| function-declaration.md | Function syntax, parameters, returns | ✅ | Renamed from functions.md |
+| return-statement.md | Return statements | ✅ | Renamed from return.md |
+| parameter-labels.md | Named arguments (a: value) | ✅ | Renamed from named-arguments.md |
 
-#### Math Functions (batch)
+#### Math Functions (SSE-based)
 
 | Spec | Description | Status | Notes |
 |------|-------------|--------|-------|
-| floor.md | floor() | ⬜ | |
-| ceil.md | ceil() | ⬜ | |
-| round.md | round() | ⬜ | |
-| sqrt.md | sqrt() | ⬜ | |
-| pow.md | pow() | ⬜ | |
-| abs.md | abs() | ⬜ | |
-| min.md | min() | ⬜ | |
-| max.md | max() | ⬜ | |
-| log.md | log() | ⬜ | |
-| exp.md | exp() | ⬜ | |
-| sin.md | sin() | ⬜ | |
-| cos.md | cos() | ⬜ | |
-| tan.md | tan() | ⬜ | |
-| atan2.md | atan2() | ⬜ | |
+| floor.md | floor() | ✅ | Uses roundsd mode 0x09 |
+| ceil.md | ceil() | ✅ | Uses roundsd mode 0x0A |
+| round.md | round() | ✅ | Uses roundsd mode 0x08 (banker's rounding) |
+| sqrt.md | sqrt() | ✅ | Uses sqrtsd instruction |
+| abs.md | abs() | ✅ | Uses andpd with sign bit mask |
+| min.md | min() | ✅ | Uses minsd instruction |
+| max.md | max() | ✅ | Uses maxsd instruction |
+| trunc.md | trunc() | ✅ | Float-to-int conversion |
 
-### Implementation Tasks
+#### Math Functions (Require CRT - Deferred)
 
-- [ ] Binary operator semantic analysis
-- [ ] Unary operator semantic analysis
-- [ ] Type checking for operator operands
-- [ ] MLIR generation for all operators
-- [ ] Function declaration semantic analysis
-- [ ] Parameter binding and type checking
-- [ ] Return type validation
-- [ ] Function call semantic analysis
-- [ ] Named argument resolution
-- [ ] MLIR generation for function calls
-- [ ] Calling convention implementation
-- [ ] Math intrinsics (x87 or SSE)
+| Spec | Description | Status | Notes |
+|------|-------------|--------|-------|
+| pow.md | pow() | ⏸️ Deferred | Requires PE import table for CRT calls |
+| log.md | log() | ⏸️ Deferred | Requires PE import table |
+| log2.md | log2() | ⏸️ Deferred | Requires PE import table |
+| log10.md | log10() | ⏸️ Deferred | Requires PE import table |
+| exp.md | exp() | ⏸️ Deferred | Requires PE import table |
+| sin.md | sin() | ⏸️ Deferred | Requires PE import table |
+| cos.md | cos() | ⏸️ Deferred | Requires PE import table |
+| tan.md | tan() | ⏸️ Deferred | Requires PE import table |
+| atan2.md | atan2() | ⏸️ Deferred | Requires PE import table |
+
+#### Deferred to Later Phases
+
+| Spec | Description | Status | Notes |
+|------|-------------|--------|-------|
+| many-args.md | Functions with many parameters | ⏸️ Deferred | Requires register spilling |
+| unused-parameters.md | Discard params with `_` | ⏸️ Deferred | Requires unused variable detection |
+| print-function.md | Built-in print function | ⏸️ Deferred | Requires string support |
+
+### Implementation Completed
+
+- [x] Binary operator semantic analysis
+- [x] Unary operator semantic analysis (integer negation)
+- [x] Type checking for operator operands
+- [x] MLIR generation for all operators
+- [x] Short-circuit logical operators (and/or) with control flow
+- [x] Function declaration semantic analysis
+- [x] Parameter binding and type checking
+- [x] Return type validation
+- [x] Function call semantic analysis
+- [x] Named argument resolution (any order, defaults)
+- [x] MLIR generation for function calls
+- [x] Windows x64 calling convention
+- [x] SSE math intrinsics (sqrt, floor, ceil, round, abs, min, max)
+- [x] X86 bitwise operations (and, or, xor, shl, shr, sar)
+- [x] Integer promotion for min/max functions
 
 ### Notes
-<!-- Add implementation notes here as you work -->
+
+- Implemented Math dialect with unary (Sqrt, Floor, Ceil, Round, AbsF) and binary (Min, Max) ops
+- Added SSE instruction emission: sqrtsd, roundsd, minsd, maxsd, andpd
+- Logical operators use control flow blocks for short-circuit evaluation
+- Bitwise ops lower from arith dialect (andi, ori, xori, shli, shrsi, shrui) to X86
+- CRT-based math functions (sin, cos, tan, log, exp, pow) require PE import table support which is not yet implemented
+- Float negation (NegFOp) has no X86 pattern yet - requires xorpd with sign bit mask
 
 ---
 
@@ -379,9 +402,32 @@ This document tracks progress implementing Maxon language features in maxon-shar
 
 Record significant changes, decisions, and blockers here.
 
-### 2026-01-24
+### 2026-01-24 (Phase 2)
+- **Phase 2 Complete**: 137 spec tests passing
+- Implemented X86 bitwise operations:
+  - Added emission code for AndOp, OrOp, XorOp, NotOp, SarOp, ShrOp
+  - Added lowering patterns: LowerAndIOp, LowerOrIOp, LowerXOrIOp, LowerShRSIOp, LowerShRUIOp
+- Implemented short-circuit logical operators (and/or):
+  - Added LowerLogicalExpr in AstToMaxonDialect.cs
+  - Uses control flow blocks for lazy evaluation
+  - Fixed Mem2RegPass to handle cross-block allocas
+- Implemented Math dialect with SSE intrinsics:
+  - Created MathOps.cs with SqrtOp, FloorOp, CeilOp, RoundOp, AbsFOp, MinFOp, MaxFOp
+  - Added X86 SSE ops: SqrtsdOp, RoundsdOp, MinsdOp, MaxsdOp, AndpdOp
+  - Added emission code for all new SSE instructions
+- Implemented function enhancements:
+  - Named arguments with any-order support
+  - Default parameter values
+  - Validation for unknown parameter names
+- Added register allocation support for new ops
+- Fixed int-to-float promotion for min/max functions
+- Moved operator specs from archive: comparison-operators.md, bitwise-operators.md, unary-operators.md, unary-negation.md
+- Created new math specs: floor.md, ceil.md, round.md, abs.md, trunc.md, min.md, max.md, sqrt.md
+- Deferred CRT-based math functions (sin, cos, tan, log, exp, pow) - require PE import table
+
+### 2026-01-24 (Phase 1)
 - Created implementation plan
-- **Phase 1 Complete**: All 52 spec tests passing
+- **Phase 1 Complete**: All 57 spec tests passing
 - Implemented liveness-aware register allocation:
   - `AnalyzeLiveAcrossCalls()` detects vregs live across function calls
   - Values live across calls allocated to callee-saved registers (RBX, R12-R15)
@@ -399,25 +445,26 @@ Record significant changes, decisions, and blockers here.
 ### Key Files to Modify
 
 - `Compiler/SemanticAnalyzer.cs` - Type checking and validation
-- `Compiler/MLIR/MaxonDialect.cs` - MLIR operation generation
-- `Compiler/MLIR/MaxonToStandard.cs` - Lowering passes
-- `Compiler/CodeEmitter.cs` - X86 code generation
+- `Compiler/MLIR/Conversion/AstToMaxonDialect.cs` - AST to MLIR conversion
+- `Compiler/MLIR/Conversion/MaxonToStandard.cs` - Lowering passes
+- `Compiler/MLIR/Conversion/StandardToX86Patterns.cs` - X86 lowering patterns
+- `Compiler/MLIR/Emit/X86CodeEmitter.cs` - X86 code emission
 
 ### Testing Strategy
 
 Run spec tests after each phase:
 ```powershell
 cd maxon-sharp
-dotnet test --filter "Category=PhaseN"  # When test categories are set up
+.\bin\Debug\net8.0\win-x64\maxonsharp.exe spec-test
 ```
 
-Or run individual spec tests:
+Or run filtered spec tests:
 ```powershell
-dotnet test --filter "FullyQualifiedName~SpecName"
+.\bin\Debug\net8.0\win-x64\maxonsharp.exe spec-test --filter=floor
 ```
 
 ### Debugging Tips
 
-- Use `--verbosity detailed` for test output
-- MLIR dumps: Set `MAXON_DUMP_MLIR=1`
-- AST dumps: Set `MAXON_DUMP_AST=1`
+- Use `--log=mlir:debug` for MLIR dumps
+- Use `--log=codegen:debug` for X86 codegen dumps
+- Use `--log=regalloc:debug` for register allocation details

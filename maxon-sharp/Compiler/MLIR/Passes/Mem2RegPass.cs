@@ -1,6 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.Arith;
-using MaxonSharp.Compiler.Mlir.Dialects.MemRef;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
@@ -29,7 +28,7 @@ public sealed class Mem2RegPass : FunctionPass {
 				var allocas = block.Operations.OfType<AllocaOp>().ToList();
 
 				foreach (var alloca in allocas) {
-					if (TryPromote(alloca, block)) {
+					if (TryPromote(alloca, block, func)) {
 						Logger.Trace(LogCategory.Optimizer, $"  promoted alloca %{alloca.Result.Id} to SSA");
 						promotedCount++;
 						changed = true;
@@ -49,21 +48,25 @@ public sealed class Mem2RegPass : FunctionPass {
 	/// <summary>
 	/// Tries to promote an alloca to SSA form.
 	/// Returns true if the alloca was promoted and removed.
+	/// Only promotes allocas where all uses are in the same block (simple case).
+	/// Cross-block allocas require phi insertion which is not yet implemented.
 	/// </summary>
-	private static bool TryPromote(AllocaOp alloca, MlirBlock block) {
-		// Collect all uses of this alloca
-		var loads = new List<LoadOp>();
-		var stores = new List<StoreOp>();
+	private static bool TryPromote(AllocaOp alloca, MlirBlock allocaBlock, MlirFunction func) {
+		// Collect all uses of this alloca across ALL blocks
+		var loads = new List<(LoadOp op, MlirBlock block)>();
+		var stores = new List<(StoreOp op, MlirBlock block)>();
 		var otherUses = new List<MlirOperation>();
 
-		foreach (var op in block.Operations) {
-			if (op is LoadOp load && load.MemRef == alloca.Result && load.Indices.Count == 0) {
-				loads.Add(load);
-			} else if (op is StoreOp store && store.MemRef == alloca.Result && store.Indices.Count == 0) {
-				stores.Add(store);
-			} else if (UsesValue(op, alloca.Result) && op != alloca) {
-				// Some other use (e.g., passing address to a function)
-				otherUses.Add(op);
+		foreach (var block in func.Body.Blocks) {
+			foreach (var op in block.Operations) {
+				if (op is LoadOp load && load.MemRef == alloca.Result && load.Indices.Count == 0) {
+					loads.Add((load, block));
+				} else if (op is StoreOp store && store.MemRef == alloca.Result && store.Indices.Count == 0) {
+					stores.Add((store, block));
+				} else if (UsesValue(op, alloca.Result) && op != alloca) {
+					// Some other use (e.g., passing address to a function)
+					otherUses.Add(op);
+				}
 			}
 		}
 
@@ -77,17 +80,25 @@ public sealed class Mem2RegPass : FunctionPass {
 			return false;
 		}
 
+		// For now, only promote if ALL uses are in the same block as the alloca
+		// Cross-block promotion requires phi insertion which is complex
+		bool allUsesInSameBlock = stores.All(s => s.block == allocaBlock)
+									&& loads.All(l => l.block == allocaBlock);
+		if (!allUsesInSameBlock) {
+			return false;
+		}
+
 		// Build a mapping from each load to the value that should replace it
 		// For simple straight-line code, this is just the most recent store's value
 		var loadReplacements = new Dictionary<LoadOp, MlirValue>();
 
-		foreach (var load in loads) {
-			var loadIdx = block.Operations.IndexOf(load);
+		foreach (var (load, _) in loads) {
+			var loadIdx = allocaBlock.Operations.IndexOf(load);
 			MlirValue? lastStoredValue = null;
 
 			// Walk backwards from the load to find the most recent store
 			for (int i = loadIdx - 1; i >= 0; i--) {
-				var op = block.Operations[i];
+				var op = allocaBlock.Operations[i];
 				if (op is StoreOp store && store.MemRef == alloca.Result && store.Indices.Count == 0) {
 					lastStoredValue = store.Value;
 					break;
@@ -105,21 +116,21 @@ public sealed class Mem2RegPass : FunctionPass {
 		// Now perform the promotion:
 		// 1. Replace all load results with the stored values
 		foreach (var (load, replacement) in loadReplacements) {
-			ReplaceAllUses(load.Result, replacement, block);
+			ReplaceAllUses(load.Result, replacement, func);
 		}
 
 		// 2. Remove all loads
-		foreach (var load in loads) {
-			block.Operations.Remove(load);
+		foreach (var (load, _) in loads) {
+			allocaBlock.Operations.Remove(load);
 		}
 
 		// 3. Remove all stores
-		foreach (var store in stores) {
-			block.Operations.Remove(store);
+		foreach (var (store, _) in stores) {
+			allocaBlock.Operations.Remove(store);
 		}
 
 		// 4. Remove the alloca
-		block.Operations.Remove(alloca);
+		allocaBlock.Operations.Remove(alloca);
 
 		return true;
 	}
@@ -132,13 +143,15 @@ public sealed class Mem2RegPass : FunctionPass {
 	}
 
 	/// <summary>
-	/// Replaces all uses of oldValue with newValue in the block.
+	/// Replaces all uses of oldValue with newValue in the function.
 	/// </summary>
-	private static void ReplaceAllUses(MlirValue oldValue, MlirValue newValue, MlirBlock block) {
-		foreach (var op in block.Operations) {
-			for (int i = 0; i < op.Operands.Count; i++) {
-				if (op.Operands[i] == oldValue) {
-					op.Operands[i] = newValue;
+	private static void ReplaceAllUses(MlirValue oldValue, MlirValue newValue, MlirFunction func) {
+		foreach (var block in func.Body.Blocks) {
+			foreach (var op in block.Operations) {
+				for (int i = 0; i < op.Operands.Count; i++) {
+					if (op.Operands[i] == oldValue) {
+						op.Operands[i] = newValue;
+					}
 				}
 			}
 		}

@@ -1,6 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.Maxon;
-using MaxonSharp.Compiler.Mlir.Dialects.MemRef;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
@@ -96,7 +95,7 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 				CheckDrop(drop, state);
 				break;
 
-			case CallOp call:
+			case MaxonCallOp call:
 				CheckCall(call, state);
 				break;
 
@@ -203,7 +202,7 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 		state.MarkDropped(value);
 	}
 
-	private void CheckCall(CallOp call, BorrowCheckState state) {
+	private void CheckCall(MaxonCallOp call, BorrowCheckState state) {
 		// Check argument ownership matches parameter expectations
 		for (int i = 0; i < call.Operands.Count; i++) {
 			var arg = call.Operands[i];

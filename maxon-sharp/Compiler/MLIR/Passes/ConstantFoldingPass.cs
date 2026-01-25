@@ -1,6 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.Arith;
-using MaxonSharp.Compiler.Mlir.Dialects.MemRef;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
@@ -92,16 +91,16 @@ public sealed class ConstantFoldingPass : FunctionPass {
 
 			// Strength reduction: x * 2^n -> x << n (when only rhs is constant power of 2)
 			case MulIOp mul when GetConstantValue(mul.Lhs) is null
-							  && GetConstantValue(mul.Rhs) is long rhs
-							  && rhs > 0 && IsPowerOfTwo(rhs):
+								&& GetConstantValue(mul.Rhs) is long rhs
+								&& rhs > 0 && IsPowerOfTwo(rhs):
 				folded = CreateShiftReplacement(mul.Lhs, mul, rhs, mul.Result);
 				foldType = FoldType.StrengthReduction;
 				return true;
 
 			// Strength reduction: 2^n * x -> x << n (when only lhs is constant power of 2)
 			case MulIOp mul when GetConstantValue(mul.Rhs) is null
-							  && GetConstantValue(mul.Lhs) is long lhs
-							  && lhs > 0 && IsPowerOfTwo(lhs):
+								&& GetConstantValue(mul.Lhs) is long lhs
+								&& lhs > 0 && IsPowerOfTwo(lhs):
 				folded = CreateShiftReplacement(mul.Rhs, mul, lhs, mul.Result);
 				foldType = FoldType.StrengthReduction;
 				return true;

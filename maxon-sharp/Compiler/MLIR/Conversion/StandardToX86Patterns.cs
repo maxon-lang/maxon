@@ -1,13 +1,6 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.Arith;
-using MaxonSharp.Compiler.Mlir.Dialects.Builtin;
-using MaxonSharp.Compiler.Mlir.Dialects.Cf;
-using MaxonSharp.Compiler.Mlir.Dialects.Maxon;
-using MaxonSharp.Compiler.Mlir.Dialects.MemRef;
-using MaxonSharp.Compiler.Mlir.Dialects.X86;
+using MaxonSharp.Compiler.Mlir.Dialects;
 using MaxonSharp.Compiler.Mlir.Passes;
-
-using FuncDialectOps = MaxonSharp.Compiler.Mlir.Dialects.Func;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
@@ -28,6 +21,11 @@ public static class StandardToX86Patterns {
 		patterns.Add<LowerRemSIOp>();
 		patterns.Add<LowerCmpIOp>();
 		patterns.Add<LowerShLIOp>();
+		patterns.Add<LowerShRSIOp>();
+		patterns.Add<LowerShRUIOp>();
+		patterns.Add<LowerAndIOp>();
+		patterns.Add<LowerOrIOp>();
+		patterns.Add<LowerXOrIOp>();
 		patterns.Add<LowerAddFOp>();
 		patterns.Add<LowerSubFOp>();
 		patterns.Add<LowerMulFOp>();
@@ -35,6 +33,15 @@ public static class StandardToX86Patterns {
 		patterns.Add<LowerFPToSIOp>();
 		patterns.Add<LowerSIToFPOp>();
 		patterns.Add<LowerCmpFOp>();
+
+		// Math patterns
+		patterns.Add<LowerSqrtOp>();
+		patterns.Add<LowerFloorOp>();
+		patterns.Add<LowerCeilOp>();
+		patterns.Add<LowerRoundOp>();
+		patterns.Add<LowerAbsFOp>();
+		patterns.Add<LowerMinFOp>();
+		patterns.Add<LowerMaxFOp>();
 
 		// Func patterns
 		patterns.Add<LowerFuncCallOp>();
@@ -140,12 +147,12 @@ public sealed class LowerConstantOp : ConversionPattern<ConstantOp> {
 /// <summary>
 /// Lowers arith.addi to x86.add.
 /// </summary>
-public sealed class LowerAddIOp : IntBinaryPattern<AddIOp, Dialects.X86.AddOp>;
+public sealed class LowerAddIOp : IntBinaryPattern<AddIOp, AddOp>;
 
 /// <summary>
 /// Lowers arith.subi to x86.sub.
 /// </summary>
-public sealed class LowerSubIOp : IntBinaryPattern<SubIOp, Dialects.X86.SubOp>;
+public sealed class LowerSubIOp : IntBinaryPattern<SubIOp, SubOp>;
 
 /// <summary>
 /// Lowers arith.muli to x86.imul.
@@ -174,7 +181,32 @@ public sealed class LowerRemSIOp() : DivisionPattern<RemSIOp>(X86Register.RDX);
 /// <summary>
 /// Lowers arith.shli to x86.shl.
 /// </summary>
-public sealed class LowerShLIOp : IntBinaryPattern<ShLIOp, Dialects.X86.ShlOp>;
+public sealed class LowerShLIOp : IntBinaryPattern<ShLIOp, ShlOp>;
+
+/// <summary>
+/// Lowers arith.shrsi (arithmetic shift right) to x86.sar.
+/// </summary>
+public sealed class LowerShRSIOp : IntBinaryPattern<ShRSIOp, SarOp>;
+
+/// <summary>
+/// Lowers arith.shrui (logical shift right) to x86.shr.
+/// </summary>
+public sealed class LowerShRUIOp : IntBinaryPattern<ShRUIOp, ShrOp>;
+
+/// <summary>
+/// Lowers arith.andi to x86.and.
+/// </summary>
+public sealed class LowerAndIOp : IntBinaryPattern<AndIOp, AndOp>;
+
+/// <summary>
+/// Lowers arith.ori to x86.or.
+/// </summary>
+public sealed class LowerOrIOp : IntBinaryPattern<OrIOp, OrOp>;
+
+/// <summary>
+/// Lowers arith.xori to x86.xor.
+/// </summary>
+public sealed class LowerXOrIOp : IntBinaryPattern<XOrIOp, XorOp>;
 
 public sealed class LowerCmpIOp : ConversionPattern<CmpIOp> {
 	protected override bool MatchAndRewrite(CmpIOp op, ConversionPatternRewriter rewriter) {
@@ -292,8 +324,8 @@ public sealed class LowerSIToFPOp : ConversionPattern<SIToFPOp> {
 /// <summary>
 /// Lowers func.call to x86.call with ABI handling.
 /// </summary>
-public sealed class LowerFuncCallOp : ConversionPattern<FuncDialectOps.CallOp> {
-	protected override bool MatchAndRewrite(FuncDialectOps.CallOp op, ConversionPatternRewriter rewriter) {
+public sealed class LowerFuncCallOp : ConversionPattern<FuncCallOp> {
+	protected override bool MatchAndRewrite(FuncCallOp op, ConversionPatternRewriter rewriter) {
 		for (int i = 0; i < op.Operands.Count; i++) {
 			var operand = op.Operands[i];
 			bool isFloat = operand.Type is FloatType;
@@ -313,7 +345,7 @@ public sealed class LowerFuncCallOp : ConversionPattern<FuncDialectOps.CallOp> {
 			}
 		}
 
-		rewriter.Insert(new Dialects.X86.CallOp(op.Callee));
+		rewriter.Insert(new X86CallOp(op.Callee));
 
 		// Result handling: floats return in XMM0, integers in RAX
 		if (op.Result is not null) {
@@ -333,8 +365,8 @@ public sealed class LowerFuncCallOp : ConversionPattern<FuncDialectOps.CallOp> {
 /// <summary>
 /// Lowers func.return to x86.epilogue + x86.ret.
 /// </summary>
-public sealed class LowerReturnOp : ConversionPattern<FuncDialectOps.ReturnOp> {
-	protected override bool MatchAndRewrite(FuncDialectOps.ReturnOp op, ConversionPatternRewriter rewriter) {
+public sealed class LowerReturnOp : ConversionPattern<ReturnOp> {
+	protected override bool MatchAndRewrite(ReturnOp op, ConversionPatternRewriter rewriter) {
 		if (op.ReturnValues.Count > 0) {
 			var retVal = op.ReturnValues[0];
 			bool isFloat = retVal.Type is FloatType;
@@ -447,7 +479,7 @@ public sealed class LowerAllocaOp : ConversionPattern<AllocaOp> {
 		Logger.Debug(LogCategory.Codegen, $"Alloca v{op.Result.Id} without frame offset - using legacy stack allocation");
 
 		// Allocate on stack
-		rewriter.Insert(new Dialects.X86.SubOp(rsp, new ImmOperand(size)));
+		rewriter.Insert(new SubOp(rsp, new ImmOperand(size)));
 		// Get pointer to allocated space
 		rewriter.Insert(new LeaOp(dst, new MemOperand(Base: rsp)));
 
@@ -481,6 +513,123 @@ public sealed class LowerFieldPtrOp : ConversionPattern<FieldPtrOp> {
 		var mem = new MemOperand(Base: basePtr, Displacement: op.Offset);
 		rewriter.Insert(new LeaOp(dst, mem));
 
+		return true;
+	}
+}
+
+// ============================================================================
+// Math to X86 Patterns
+// ============================================================================
+
+/// <summary>
+/// Lowers math.sqrt to x86.sqrtsd.
+/// </summary>
+public sealed class LowerSqrtOp : ConversionPattern<SqrtOp> {
+	protected override bool MatchAndRewrite(SqrtOp op, ConversionPatternRewriter rewriter) {
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var src = new VRegOperand(op.Operand.Id, IsFloat: true);
+
+		rewriter.Insert(new SqrtsdOp(dst, src));
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers math.floor to x86.roundsd with floor mode.
+/// </summary>
+public sealed class LowerFloorOp : ConversionPattern<FloorOp> {
+	protected override bool MatchAndRewrite(FloorOp op, ConversionPatternRewriter rewriter) {
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var src = new VRegOperand(op.Operand.Id, IsFloat: true);
+
+		rewriter.Insert(new RoundsdOp(dst, src, RoundingMode.Floor));
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers math.ceil to x86.roundsd with ceil mode.
+/// </summary>
+public sealed class LowerCeilOp : ConversionPattern<CeilOp> {
+	protected override bool MatchAndRewrite(CeilOp op, ConversionPatternRewriter rewriter) {
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var src = new VRegOperand(op.Operand.Id, IsFloat: true);
+
+		rewriter.Insert(new RoundsdOp(dst, src, RoundingMode.Ceil));
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers math.round to x86.roundsd with nearest mode.
+/// </summary>
+public sealed class LowerRoundOp : ConversionPattern<RoundOp> {
+	protected override bool MatchAndRewrite(RoundOp op, ConversionPatternRewriter rewriter) {
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var src = new VRegOperand(op.Operand.Id, IsFloat: true);
+
+		rewriter.Insert(new RoundsdOp(dst, src, RoundingMode.Nearest));
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers math.absf to x86.andpd with a constant mask.
+/// The absolute value of a float is computed by clearing the sign bit.
+/// For f64: AND with 0x7FFFFFFFFFFFFFFF to clear the sign bit.
+/// We load the mask constant into an XMM register via GPR, then use ANDPD.
+/// </summary>
+public sealed class LowerAbsFOp : ConversionPattern<AbsFOp> {
+	protected override bool MatchAndRewrite(AbsFOp op, ConversionPatternRewriter rewriter) {
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var src = new VRegOperand(op.Operand.Id, IsFloat: true);
+
+		// Load the mask 0x7FFFFFFFFFFFFFFF into a temp GPR, then move to XMM
+		// Use a unique negative ID for the temp vreg (based on result ID)
+		var tempGpr = new VRegOperand(-op.Result.Id - 2000, IsFloat: false);
+		var maskXmm = new VRegOperand(-op.Result.Id - 3000, IsFloat: true);
+
+		// Load mask constant into GPR
+		rewriter.Insert(new MovOp(tempGpr, new ImmOperand(0x7FFFFFFFFFFFFFFF)));
+		// Transfer to XMM register
+		rewriter.Insert(new MovqOp(maskXmm, tempGpr));
+		// Copy source to destination first
+		rewriter.Insert(new MovsdOp(dst, src));
+		// AND with mask to clear sign bit
+		rewriter.Insert(new AndpdOp(dst, maskXmm));
+
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers math.minf to x86.minsd.
+/// </summary>
+public sealed class LowerMinFOp : ConversionPattern<MinFOp> {
+	protected override bool MatchAndRewrite(MinFOp op, ConversionPatternRewriter rewriter) {
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var lhs = new VRegOperand(op.Lhs.Id, IsFloat: true);
+		var rhs = new VRegOperand(op.Rhs.Id, IsFloat: true);
+
+		// MINSD: dst = min(dst, src), so copy lhs to dst first
+		rewriter.Insert(new MovsdOp(dst, lhs));
+		rewriter.Insert(new MinsdOp(dst, rhs));
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers math.maxf to x86.maxsd.
+/// </summary>
+public sealed class LowerMaxFOp : ConversionPattern<MaxFOp> {
+	protected override bool MatchAndRewrite(MaxFOp op, ConversionPatternRewriter rewriter) {
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var lhs = new VRegOperand(op.Lhs.Id, IsFloat: true);
+		var rhs = new VRegOperand(op.Rhs.Id, IsFloat: true);
+
+		// MAXSD: dst = max(dst, src), so copy lhs to dst first
+		rewriter.Insert(new MovsdOp(dst, lhs));
+		rewriter.Insert(new MaxsdOp(dst, rhs));
 		return true;
 	}
 }

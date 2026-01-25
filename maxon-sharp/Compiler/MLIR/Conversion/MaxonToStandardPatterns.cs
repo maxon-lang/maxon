@@ -1,12 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.Arith;
-using MaxonSharp.Compiler.Mlir.Dialects.Builtin;
-using MaxonSharp.Compiler.Mlir.Dialects.Cf;
-using MaxonSharp.Compiler.Mlir.Dialects.Maxon;
-using MaxonSharp.Compiler.Mlir.Dialects.MemRef;
-
-using FuncDialectOps = MaxonSharp.Compiler.Mlir.Dialects.Func;
-using MaxonDialectOps = MaxonSharp.Compiler.Mlir.Dialects.Maxon;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
@@ -210,10 +203,10 @@ public sealed class LowerArrayLenOp : ConversionPattern<ArrayLenOp> {
 /// <summary>
 /// Lowers maxon.call to func.call (strips ownership annotations).
 /// </summary>
-public sealed class LowerMaxonCallOp : ConversionPattern<MaxonDialectOps.CallOp> {
-	protected override bool MatchAndRewrite(MaxonDialectOps.CallOp op, ConversionPatternRewriter rewriter) {
+public sealed class LowerMaxonCallOp : ConversionPattern<MaxonCallOp> {
+	protected override bool MatchAndRewrite(MaxonCallOp op, ConversionPatternRewriter rewriter) {
 		// Convert to standard func.call
-		var call = new FuncDialectOps.CallOp(op.Callee, op.Operands, op.Result?.Type);
+		var call = new FuncCallOp(op.Callee, op.Operands, op.Result?.Type);
 		rewriter.Insert(call);
 		if (op.Result is not null && call.Result is not null) {
 			rewriter.ReplaceOpWithValue(op, call.Result);

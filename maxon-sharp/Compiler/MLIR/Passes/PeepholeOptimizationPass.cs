@@ -1,5 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.X86;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
@@ -185,7 +185,7 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 				}
 
 				// If this is a terminator or side-effectful op that could observe the register, stop
-				if (op.IsTerminator || op is CallOp or RetOp or PrologueOp or EpilogueOp) {
+				if (op.IsTerminator || op is X86CallOp or RetOp or PrologueOp or EpilogueOp) {
 					break;
 				}
 			}

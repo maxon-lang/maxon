@@ -1,5 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.X86;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
@@ -60,7 +60,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			for (int opIdx = 0; opIdx < block.Operations.Count; opIdx++) {
 				var op = block.Operations[opIdx];
 
-				if (op is CallOp) {
+				if (op is X86CallOp) {
 					callLocations.Add((blockIdx, opIdx));
 				}
 
@@ -278,7 +278,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 	private static X86Op AllocateOp(X86Op op, AllocationContext ctx) {
 		return op switch {
 			MovOp mov => new MovOp(ctx.Alloc(mov.Dst), ctx.Alloc(mov.Src)),
-			Dialects.X86.AddOp add => new Dialects.X86.AddOp(ctx.Alloc(add.Dst), ctx.Alloc(add.Src)),
+			AddOp add => new AddOp(ctx.Alloc(add.Dst), ctx.Alloc(add.Src)),
 			SubOp sub => new SubOp(ctx.Alloc(sub.Dst), ctx.Alloc(sub.Src)),
 			ImulOp imul => imul.Src2 is not null
 				? new ImulOp(ctx.Alloc(imul.Dst), ctx.Alloc(imul.Src1), ctx.Alloc(imul.Src2))
@@ -291,8 +291,17 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			PopOp pop => new PopOp(ctx.Alloc(pop.Dst)),
 			LeaOp lea => new LeaOp(ctx.Alloc(lea.Dst), ctx.Alloc(lea.Src)),
 			LeaGlobalOp leaGlobal => new LeaGlobalOp(ctx.Alloc(leaGlobal.Dst), leaGlobal.GlobalName),
+			// Shift ops
 			ShlOp shl => new ShlOp(ctx.Alloc(shl.Dst), ctx.Alloc(shl.Count)),
-			CallOp call => call,
+			ShrOp shr => new ShrOp(ctx.Alloc(shr.Dst), ctx.Alloc(shr.Count)),
+			SarOp sar => new SarOp(ctx.Alloc(sar.Dst), ctx.Alloc(sar.Count)),
+			// Bitwise ops
+			AndOp and => new AndOp(ctx.Alloc(and.Dst), ctx.Alloc(and.Src)),
+			OrOp or => new OrOp(ctx.Alloc(or.Dst), ctx.Alloc(or.Src)),
+			XorOp xor => new XorOp(ctx.Alloc(xor.Dst), ctx.Alloc(xor.Src)),
+			NotOp not => new NotOp(ctx.Alloc(not.Dst)),
+			// Control flow and misc
+			X86CallOp call => call,
 			JmpOp jmp => jmp,
 			JccOp jcc => jcc,
 			RetOp ret => ret,
@@ -310,6 +319,12 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			CvttsdOp cvttsd => new CvttsdOp(ctx.Alloc(cvttsd.Dst), ctx.Alloc(cvttsd.Src)),
 			CvtsiOp cvtsi => new CvtsiOp(ctx.Alloc(cvtsi.Dst), ctx.Alloc(cvtsi.Src)),
 			ComiOp comi => new ComiOp(ctx.Alloc(comi.Left), ctx.Alloc(comi.Right)),
+			// SSE math instructions
+			SqrtsdOp sqrtsd => new SqrtsdOp(ctx.Alloc(sqrtsd.Dst), ctx.Alloc(sqrtsd.Src)),
+			RoundsdOp roundsd => new RoundsdOp(ctx.Alloc(roundsd.Dst), ctx.Alloc(roundsd.Src), roundsd.Mode),
+			MinsdOp minsd => new MinsdOp(ctx.Alloc(minsd.Dst), ctx.Alloc(minsd.Src)),
+			MaxsdOp maxsd => new MaxsdOp(ctx.Alloc(maxsd.Dst), ctx.Alloc(maxsd.Src)),
+			AndpdOp andpd => new AndpdOp(ctx.Alloc(andpd.Dst), ctx.Alloc(andpd.Src)),
 			_ => op
 		};
 	}

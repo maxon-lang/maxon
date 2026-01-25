@@ -1,0 +1,41 @@
+// Test: docs-example-1
+function add(a int, b int) returns int
+    return a + b
+end 'add'
+
+function main() returns int
+    return add(3, b: 4)
+end 'main'
+
+---
+ExitCode: 7
+---
+// Generated X86 IR:
+module {
+  func.func @add(%a: i64, %b: i64) -> i64 {
+    ^entry(%a: i64, %b: i64):
+      x86.prologue stack_size=32
+      x86.mov rax, rcx
+      x86.mov rcx, rdx
+      x86.mov rdx, rax
+      x86.add rdx, rcx
+      x86.mov rax, rdx
+      x86.epilogue
+      x86.ret
+  }
+  
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 3
+      x86.mov rcx, rax
+      x86.mov rdx, 4
+      x86.call add
+      x86.mov rdx, rax
+      x86.mov rax, rdx
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

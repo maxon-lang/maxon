@@ -1,5 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.MemRef;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
@@ -11,11 +11,11 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// 1. The memory location (alloca or global) is never loaded from, OR
 /// 2. The store is overwritten before any load occurs
 /// </summary>
-public sealed class DeadStoreEliminationPass : IPass {
-	public string Name => "dead-store-elimination";
-	public string Description => "Removes stores to memory locations that are never loaded";
+public sealed class DeadStoreEliminationPass : AbstractPassBase {
+	public override string Name => "dead-store-elimination";
+	public override string Description => "Removes stores to memory locations that are never loaded";
 
-	public bool Run(MlirModule module) {
+	public override bool Run(MlirModule module) {
 		bool changed = false;
 		int removedStores = 0;
 		int removedAllocas = 0;

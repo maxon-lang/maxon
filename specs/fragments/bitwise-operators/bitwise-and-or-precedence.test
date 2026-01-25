@@ -1,0 +1,27 @@
+// Test: bitwise-and-or-precedence
+function main() returns int
+    // & has higher precedence than |
+    // 12 & 10 = 8, then 8 | 1 = 9
+    return 12 & 10 | 1
+end 'main'
+---
+ExitCode: 9
+---
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rcx, 10
+      x86.mov rdx, 12
+      x86.and rdx, rcx
+      x86.mov r8, 1
+      x86.mov r9, rdx
+      x86.or r9, r8
+      x86.mov rax, r9
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

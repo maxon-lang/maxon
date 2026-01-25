@@ -1,0 +1,34 @@
+// Test: greater-than
+function main() returns int
+    if 5 > 3 'check'
+        return 42
+    end 'check'
+    return 0
+end 'main'
+---
+ExitCode: 42
+---
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 5
+      x86.mov rcx, 3
+      x86.cmp rax, rcx
+      x86.setg rdx
+      x86.test rdx, rdx
+      x86.jne then
+      x86.jmp merge
+    ^then:
+      x86.mov rax, 42
+      x86.epilogue
+      x86.ret
+    ^merge:
+      x86.mov rax, 0
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

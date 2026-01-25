@@ -1,0 +1,29 @@
+// Test: sqrt.precision
+function main() returns int
+    var x = sqrt(2.0)
+    // sqrt(2) * sqrt(2) should be approximately 2
+    var check = x * x
+    // Trunc to get integer 2
+    return trunc(check)
+end 'main'
+---
+ExitCode: 2
+---
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 4611686018427387904
+      x86.movq xmm0, rax
+      x86.sqrtsd xmm1, xmm0
+      x86.movsd xmm2, xmm1
+      x86.mulsd xmm2, xmm1
+      x86.cvttsd2si rcx, xmm2
+      x86.mov rax, rcx
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

@@ -1,18 +1,10 @@
-using MaxonSharp.Compiler.Mlir.Dialects;
-
 namespace MaxonSharp.Compiler.Mlir.Core;
 
 /// <summary>
-/// MLIR context - holds type uniquing, dialect registration, and global state.
+/// MLIR context - holds type uniquing and global state.
 /// </summary>
 public sealed class MlirContext {
 	private readonly Dictionary<string, MlirType> _typeCache = [];
-	private readonly DialectRegistry _dialectRegistry = new();
-
-	/// <summary>
-	/// Registered dialects.
-	/// </summary>
-	public DialectRegistry Dialects => _dialectRegistry;
 
 	/// <summary>
 	/// Gets or creates a uniqued type.

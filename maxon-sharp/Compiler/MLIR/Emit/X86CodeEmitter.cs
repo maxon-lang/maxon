@@ -1,5 +1,4 @@
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.X86;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Emit;
 
@@ -84,7 +83,7 @@ public sealed class X86CodeEmitter {
 			case JccOp jcc:
 				EmitJcc(jcc);
 				break;
-			case CallOp call:
+			case X86CallOp call:
 				EmitCall(call);
 				break;
 			case RetOp:
@@ -110,6 +109,24 @@ public sealed class X86CodeEmitter {
 				break;
 			case ShlOp shl:
 				EmitShl(shl);
+				break;
+			case ShrOp shr:
+				EmitShr(shr);
+				break;
+			case SarOp sar:
+				EmitSar(sar);
+				break;
+			case AndOp and:
+				EmitAnd(and);
+				break;
+			case OrOp or:
+				EmitOr(or);
+				break;
+			case XorOp xor:
+				EmitXor(xor);
+				break;
+			case NotOp not:
+				EmitNot(not);
 				break;
 			// Floating point
 			case MovsdOp movsd:
@@ -138,6 +155,22 @@ public sealed class X86CodeEmitter {
 				break;
 			case ComiOp comi:
 				EmitComisd(comi);
+				break;
+			// SSE Math operations
+			case SqrtsdOp sqrtsd:
+				EmitSqrtsd(sqrtsd);
+				break;
+			case RoundsdOp roundsd:
+				EmitRoundsd(roundsd);
+				break;
+			case MinsdOp minsd:
+				EmitMinsd(minsd);
+				break;
+			case MaxsdOp maxsd:
+				EmitMaxsd(maxsd);
+				break;
+			case AndpdOp andpd:
+				EmitAndpd(andpd);
 				break;
 			case PrologueOp prologue:
 				EmitPrologue(prologue);
@@ -499,7 +532,7 @@ public sealed class X86CodeEmitter {
 		EmitImm32(0);
 	}
 
-	private void EmitCall(CallOp op) {
+	private void EmitCall(X86CallOp op) {
 		EmitByte(0xE8);
 		_labelFixups.Add((CurrentOffset, op.Target, 4));
 		EmitImm32(0);
@@ -575,6 +608,75 @@ public sealed class X86CodeEmitter {
 			EmitByte((byte)imm.Value);
 		} else {
 			throw new NotSupportedException($"Unsupported SHL operands: {op.Dst}, {op.Count}");
+		}
+	}
+
+	private void EmitShr(ShrOp op) {
+		// SHR r/m64, CL (when count is in CL register)
+		// SHR r/m64, imm8 (when count is immediate)
+		if (op.Dst is RegOperand dst && op.Count is RegOperand count) {
+			// Shift by CL: D3 /5 (SHR r/m64, CL)
+			if (count.Register != X86Register.RCX && count.Register != X86Register.CL) {
+				// mov rcx, count
+				EmitRexW(count.Register, X86Register.RCX);
+				EmitByte(0x89);
+				EmitByte(ModRM(0b11, GetRegCode(count.Register), GetRegCode(X86Register.RCX)));
+			}
+			// shr dst, cl
+			EmitRexW(rm: dst.Register);
+			EmitByte(0xD3);
+			EmitByte(ModRM(0b11, 5, GetRegCode(dst.Register)));
+		} else if (op.Dst is RegOperand dstReg && op.Count is ImmOperand imm) {
+			// Shift by immediate: C1 /5 ib (SHR r/m64, imm8)
+			EmitRexW(rm: dstReg.Register);
+			EmitByte(0xC1);
+			EmitByte(ModRM(0b11, 5, GetRegCode(dstReg.Register)));
+			EmitByte((byte)imm.Value);
+		} else {
+			throw new NotSupportedException($"Unsupported SHR operands: {op.Dst}, {op.Count}");
+		}
+	}
+
+	private void EmitSar(SarOp op) {
+		// SAR r/m64, CL (when count is in CL register)
+		// SAR r/m64, imm8 (when count is immediate)
+		if (op.Dst is RegOperand dst && op.Count is RegOperand count) {
+			// Shift by CL: D3 /7 (SAR r/m64, CL)
+			if (count.Register != X86Register.RCX && count.Register != X86Register.CL) {
+				// mov rcx, count
+				EmitRexW(count.Register, X86Register.RCX);
+				EmitByte(0x89);
+				EmitByte(ModRM(0b11, GetRegCode(count.Register), GetRegCode(X86Register.RCX)));
+			}
+			// sar dst, cl
+			EmitRexW(rm: dst.Register);
+			EmitByte(0xD3);
+			EmitByte(ModRM(0b11, 7, GetRegCode(dst.Register)));
+		} else if (op.Dst is RegOperand dstReg && op.Count is ImmOperand imm) {
+			// Shift by immediate: C1 /7 ib (SAR r/m64, imm8)
+			EmitRexW(rm: dstReg.Register);
+			EmitByte(0xC1);
+			EmitByte(ModRM(0b11, 7, GetRegCode(dstReg.Register)));
+			EmitByte((byte)imm.Value);
+		} else {
+			throw new NotSupportedException($"Unsupported SAR operands: {op.Dst}, {op.Count}");
+		}
+	}
+
+	private void EmitAnd(AndOp op) => EmitAluOp(op.Dst, op.Src, regOpcode: 0x21, immModRmReg: 4);
+
+	private void EmitOr(OrOp op) => EmitAluOp(op.Dst, op.Src, regOpcode: 0x09, immModRmReg: 1);
+
+	private void EmitXor(XorOp op) => EmitAluOp(op.Dst, op.Src, regOpcode: 0x31, immModRmReg: 6);
+
+	private void EmitNot(NotOp op) {
+		// NOT r/m64: REX.W F7 /2
+		if (op.Dst is RegOperand dst) {
+			EmitRexW(rm: dst.Register);
+			EmitByte(0xF7);
+			EmitByte(ModRM(0b11, 2, GetRegCode(dst.Register)));
+		} else {
+			throw new NotSupportedException($"Unsupported NOT operand: {op.Dst}");
 		}
 	}
 
@@ -659,6 +761,51 @@ public sealed class X86CodeEmitter {
 			EmitMemOperand(leftReg.Register, rightMem);
 		} else {
 			throw new NotSupportedException($"Unsupported COMISD operand combination: {op.Left}, {op.Right}");
+		}
+	}
+
+	private void EmitSqrtsd(SqrtsdOp op) {
+		// F2 0F 51 /r - SQRTSD xmm1, xmm2/m64
+		EmitSseArith(0x51, op.Dst, op.Src);
+	}
+
+	private void EmitRoundsd(RoundsdOp op) {
+		// 66 0F 3A 0B /r imm8 - ROUNDSD xmm1, xmm2/m64, imm8
+		// imm8: 0x08 = nearest, 0x09 = floor, 0x0A = ceil, 0x0B = truncate
+		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
+			EmitBytes(0x66, 0x0F, 0x3A, 0x0B);
+			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
+			EmitByte((byte)op.Mode);
+		} else if (op.Dst is RegOperand dstRegOp && op.Src is MemOperand srcMem) {
+			EmitBytes(0x66, 0x0F, 0x3A, 0x0B);
+			EmitMemOperand(dstRegOp.Register, srcMem);
+			EmitByte((byte)op.Mode);
+		} else {
+			throw new NotSupportedException($"Unsupported ROUNDSD operand combination");
+		}
+	}
+
+	private void EmitMinsd(MinsdOp op) {
+		// F2 0F 5D /r - MINSD xmm1, xmm2/m64
+		EmitSseArith(0x5D, op.Dst, op.Src);
+	}
+
+	private void EmitMaxsd(MaxsdOp op) {
+		// F2 0F 5F /r - MAXSD xmm1, xmm2/m64
+		EmitSseArith(0x5F, op.Dst, op.Src);
+	}
+
+	private void EmitAndpd(AndpdOp op) {
+		// 66 0F 54 /r - ANDPD xmm1, xmm2/m128
+		// Bitwise AND of packed doubles
+		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
+			EmitBytes(0x66, 0x0F, 0x54);
+			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
+		} else if (op.Dst is RegOperand dstRegOp && op.Src is MemOperand srcMem) {
+			EmitBytes(0x66, 0x0F, 0x54);
+			EmitMemOperand(dstRegOp.Register, srcMem);
+		} else {
+			throw new NotSupportedException($"Unsupported ANDPD operand combination");
 		}
 	}
 

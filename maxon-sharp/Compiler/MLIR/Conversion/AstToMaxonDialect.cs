@@ -1,12 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects.Arith;
-using MaxonSharp.Compiler.Mlir.Dialects.Builtin;
-using MaxonSharp.Compiler.Mlir.Dialects.Cf;
-using MaxonSharp.Compiler.Mlir.Dialects.Maxon;
-using MaxonSharp.Compiler.Mlir.Dialects.MemRef;
-
-using FuncDialectOps = MaxonSharp.Compiler.Mlir.Dialects.Func;
-using MaxonDialectOps = MaxonSharp.Compiler.Mlir.Dialects.Maxon;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
@@ -24,6 +17,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private readonly Dictionary<string, MlirType> _enumTypes = [];
 	private readonly Dictionary<string, MlirGlobal> _globals = [];
 	private readonly Dictionary<string, MlirType> _functionReturnTypes = [];
+	private readonly Dictionary<string, List<ParamDecl>> _functionParams = [];
 	private readonly Stack<(MlirBlock continueBlock, MlirBlock exitBlock)> _loopContextStack = new();
 
 	/// <summary>
@@ -59,10 +53,11 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			LowerGlobalConstant(globalConst);
 		}
 
-		// Collect function return types before lowering (for call site type lookup)
+		// Collect function return types and parameters before lowering (for call site type lookup)
 		foreach (var func in program.Functions) {
 			var returnType = func.ReturnType != null ? ConvertTypeRef(func.ReturnType) : NoneType.Instance;
 			_functionReturnTypes[func.Name] = returnType;
+			_functionParams[func.Name] = func.Params;
 		}
 
 		// Third pass: lower functions
@@ -371,6 +366,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			IdentifierExpr ident => GetVariable(ident.Name),
 			BinaryExpr binary => LowerBinaryExpr(binary),
 			CompareExpr compare => LowerCompareExpr(compare),
+			LogicalExpr logical => LowerLogicalExpr(logical),
 			UnaryExpr unary => LowerUnaryExpr(unary),
 			CallExpr call => LowerCallExpr(call) ?? throw new InvalidOperationException("Call must return a value"),
 			_ => throw new NotSupportedException($"Unsupported expression: {expr.GetType().Name}")
@@ -434,6 +430,49 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	/// <summary>
+	/// Lowers a logical expression with short-circuit evaluation.
+	/// For `a and b`: if a is false, skip evaluating b and return false.
+	/// For `a or b`: if a is true, skip evaluating b and return true.
+	///
+	/// Uses a stack variable for the result since phi elimination isn't implemented yet.
+	/// Pattern: result = left; if (should_eval_right) result = right;
+	/// </summary>
+	private MlirValue LowerLogicalExpr(LogicalExpr logical) {
+		// Allocate a stack slot for the result
+		var resultSlot = EmitAlloca(IntegerType.I1);
+
+		// Evaluate left operand in the current block
+		var left = LowerExpression(logical.Left);
+
+		// Store left value as initial result
+		EmitStore(left, resultSlot);
+
+		// Create blocks for short-circuit evaluation
+		var evalRightBlock = CreateBlock(logical.Op == LogicalOp.And ? "and.right" : "or.right");
+		var mergeBlock = CreateBlock(logical.Op == LogicalOp.And ? "and.merge" : "or.merge");
+
+		// For 'and': if left is true, evaluate right and use that as result
+		// For 'or': if left is false, evaluate right and use that as result
+		if (logical.Op == LogicalOp.And) {
+			// and: only evaluate right if left is true
+			EmitCondBranch(left, evalRightBlock, mergeBlock);
+		} else {
+			// or: only evaluate right if left is false
+			EmitCondBranch(left, mergeBlock, evalRightBlock);
+		}
+
+		// Evaluate right operand and store result
+		SetInsertionPoint(evalRightBlock);
+		var right = LowerExpression(logical.Right);
+		EmitStore(right, resultSlot);
+		EmitBranch(mergeBlock);
+
+		// Continue in merge block, load the result
+		SetInsertionPoint(mergeBlock);
+		return EmitLoad(resultSlot);
+	}
+
+	/// <summary>
 	/// Lowers binary operands with automatic type promotion to float if needed.
 	/// </summary>
 	private (MlirValue left, MlirValue right, bool isFloat) LowerBinaryOperands(Expr leftExpr, Expr rightExpr) {
@@ -470,11 +509,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			return builtinResult;
 		}
 
+		// Resolve arguments: combine positional args with named args in the correct order
+		var resolvedArgs = ResolveCallArguments(call);
+
 		var args = new List<MlirValue>();
 		var ownership = new List<ArgumentOwnership>();
 
-		for (int i = 0; i < call.Args.Count; i++) {
-			var arg = call.Args[i];
+		for (int i = 0; i < resolvedArgs.Count; i++) {
+			var arg = resolvedArgs[i];
 			args.Add(LowerExpression(arg));
 
 			// Determine ownership based on mutation analysis
@@ -492,21 +534,118 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	/// <summary>
+	/// Resolves call arguments by combining positional and named arguments in the correct parameter order.
+	/// </summary>
+	private List<Expr> ResolveCallArguments(CallExpr call) {
+		// If we don't have parameter info for this function, just use positional args
+		if (!_functionParams.TryGetValue(call.FuncName, out var paramDecls)) {
+			Logger.Trace(LogCategory.Mlir, $"No param info for {call.FuncName}, using positional args only");
+			return call.Args;
+		}
+
+		// Validate: only the first argument can be positional, rest must be named
+		if (call.Args.Count > 1) {
+			throw new CompileError(
+				ErrorCode.SemanticTypeMismatch,
+				"Second and subsequent arguments must be named. Use 'name: value' syntax",
+				call.Location?.Line ?? 0,
+				call.Location?.Column ?? 0);
+		}
+
+		// Build the resolved argument list in parameter order
+		var resolvedArgs = new Expr?[paramDecls.Count];
+
+		// First, place positional arguments (only allowed for first parameter)
+		for (int i = 0; i < call.Args.Count && i < paramDecls.Count; i++) {
+			resolvedArgs[i] = call.Args[i];
+		}
+
+		// Then, place named arguments in their correct positions
+		foreach (var namedArg in call.NamedArgs) {
+			int paramIndex = -1;
+			for (int i = 0; i < paramDecls.Count; i++) {
+				if (paramDecls[i].Name == namedArg.Name) {
+					paramIndex = i;
+					break;
+				}
+			}
+
+			if (paramIndex < 0) {
+				throw new CompileError(
+					ErrorCode.SemanticUndefinedVariable,
+					$"unknown parameter name: '{namedArg.Name}'",
+					namedArg.Value.Location?.Line ?? 0,
+					namedArg.Value.Location?.Column ?? 0);
+			}
+
+			resolvedArgs[paramIndex] = namedArg.Value;
+		}
+
+		// Fill in default values for any missing arguments
+		var result = new List<Expr>();
+		for (int i = 0; i < paramDecls.Count; i++) {
+			if (resolvedArgs[i] != null) {
+				result.Add(resolvedArgs[i]!);
+			} else if (paramDecls[i].DefaultValue != null) {
+				result.Add(paramDecls[i].DefaultValue!);
+			} else {
+				throw new CompileError(
+					ErrorCode.SemanticTypeMismatch,
+					$"missing argument for parameter '{paramDecls[i].Name}'",
+					call.Location?.Line ?? 0,
+					call.Location?.Column ?? 0);
+			}
+		}
+
+		return result;
+	}
+
+	/// <summary>
 	/// Attempts to lower a builtin function call. Returns null if not a builtin.
 	/// </summary>
 	private MlirValue? TryLowerBuiltinCall(CallExpr call) {
-		switch (call.FuncName) {
-			case "trunc":
-				// trunc(float) -> int: truncate float to integer
-				if (call.Args.Count != 1) {
-					throw new ArgumentException("trunc() requires exactly 1 argument");
-				}
-				var floatArg = LowerExpression(call.Args[0]);
-				return Emit<FPToSIOp>(floatArg, IntegerType.I64);
+		return call.Builtin switch {
+			BuiltinOp.None => null,
+			BuiltinOp.Trunc => LowerTrunc(call),
+			BuiltinOp.Sqrt => LowerUnaryMath<SqrtOp>(call),
+			BuiltinOp.Floor => LowerUnaryMath<FloorOp>(call),
+			BuiltinOp.Ceil => LowerUnaryMath<CeilOp>(call),
+			BuiltinOp.Round => LowerUnaryMath<RoundOp>(call),
+			BuiltinOp.Abs => LowerUnaryMath<AbsFOp>(call),
+			BuiltinOp.Min => LowerBinaryMath<MinFOp>(call),
+			BuiltinOp.Max => LowerBinaryMath<MaxFOp>(call),
+			_ => throw new InvalidOperationException($"Unknown builtin: {call.Builtin}")
+		};
+	}
 
-			default:
-				return null;
-		}
+	private MlirValue LowerTrunc(CallExpr call) {
+		if (call.Args.Count != 1)
+			throw new ArgumentException($"{call.FuncName}() requires exactly 1 argument");
+		var arg = LowerExpression(call.Args[0]);
+		return Emit<FPToSIOp>(arg, IntegerType.I64);
+	}
+
+	private MlirValue LowerUnaryMath<T>(CallExpr call) where T : MlirOperation {
+		if (call.Args.Count != 1)
+			throw new ArgumentException($"{call.FuncName}() requires exactly 1 argument");
+		var arg = LowerExpression(call.Args[0]);
+		return EmitUnary<T>(arg);
+	}
+
+	private MlirValue LowerBinaryMath<T>(CallExpr call) where T : MlirOperation {
+		if (call.Args.Count != 2)
+			throw new ArgumentException($"{call.FuncName}() requires exactly 2 arguments");
+		var (lhs, rhs, _) = LowerBinaryOperands(call.Args[0], call.Args[1]);
+		return Emit<T>(lhs, rhs);
+	}
+
+	/// <summary>
+	/// Emits a unary operation of type T. The operation must have a constructor (MlirValue).
+	/// </summary>
+	private MlirValue EmitUnary<T>(MlirValue operand) where T : MlirOperation {
+		var op = (T)Activator.CreateInstance(typeof(T), operand)!;
+		InsertOp(op);
+		return op.Results[0];
 	}
 
 	// ========================================================================
@@ -861,7 +1000,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Emits a return.
 	/// </summary>
 	public void EmitReturn(params MlirValue[] values) {
-		var op = new FuncDialectOps.ReturnOp([.. values]);
+		var op = new ReturnOp([.. values]);
 		InsertOp(op);
 	}
 
@@ -873,7 +1012,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Emits a function call.
 	/// </summary>
 	public MlirValue? EmitCall(string callee, List<MlirValue> args, MlirType? returnType = null) {
-		var op = new FuncDialectOps.CallOp(callee, args, returnType);
+		var op = new FuncCallOp(callee, args, returnType);
 		InsertOp(op);
 		return op.Result;
 	}
@@ -882,7 +1021,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Emits a function call with ownership annotations.
 	/// </summary>
 	public MlirValue? EmitMaxonCall(string callee, List<MlirValue> args, List<ArgumentOwnership> ownership, MlirType? returnType = null) {
-		var op = new MaxonDialectOps.CallOp(callee, args, ownership, returnType);
+		var op = new MaxonCallOp(callee, args, ownership, returnType);
 		InsertOp(op);
 		return op.Result;
 	}

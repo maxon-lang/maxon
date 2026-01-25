@@ -52,8 +52,6 @@ public enum TokenType {
 	Then,
 	Fallthrough,
 	Default,
-	// Built-in functions
-	Print,
 
 	// Types
 	Int,
@@ -187,7 +185,6 @@ public class Lexer(string source) {
 		{ "then", new(TokenType.Then, KeywordCategory.Control, "Used in match expressions to separate pattern from result.", true) },
 		{ "fallthrough", new(TokenType.Fallthrough, KeywordCategory.Control, "Falls through to the next case in a match statement.", false) },
 		{ "default", new(TokenType.Default, KeywordCategory.Control, "Default case in a match statement.", false) },
-		{ "print", new(TokenType.Print, KeywordCategory.Other, "Built-in function to print values to the console.", false) },
 	};
 
 	// Operator map: { operator_text, TokenType, OperatorCategory, help_text }
