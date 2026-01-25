@@ -59,16 +59,17 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 	public ConversionResult ConvertFunction(MlirFunction func) {
 		Logger.Trace(LogCategory.Mlir, $"Converting function: {func.Name} ({func.Body.Blocks.Count} blocks)");
 		int convertedCount = 0;
+		var valueMappings = new Dictionary<MlirValue, MlirValue>();
 
 		foreach (var block in func.Body.Blocks) {
-			var (result, count) = ConvertBlock(block);
+			var (result, count) = ConvertBlock(block, valueMappings);
 			if (result == ConversionResult.Failure)
 				return result;
 			convertedCount += count;
 		}
 
 		// After all blocks are converted, update value references
-		UpdateValueReferences(func);
+		UpdateValueReferences(func, valueMappings);
 
 		if (convertedCount > 0) {
 			Logger.Debug(LogCategory.Mlir, $"  {func.Name}: converted {convertedCount} operations");
@@ -77,10 +78,9 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 		return ConversionResult.Success;
 	}
 
-	private (ConversionResult result, int convertedCount) ConvertBlock(MlirBlock block) {
+	private (ConversionResult result, int convertedCount) ConvertBlock(MlirBlock block, Dictionary<MlirValue, MlirValue> globalMappings) {
 		// Process operations in order, keeping track of which ones to remove
 		var toRemove = new List<MlirOperation>();
-		var allMappings = new Dictionary<MlirValue, MlirValue>();
 
 		for (int i = 0; i < block.Operations.Count; i++) {
 			var op = block.Operations[i];
@@ -99,7 +99,7 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 
 					// Collect mappings
 					foreach (var kv in rewriter.ValueMappings)
-						allMappings[kv.Key] = kv.Value;
+						globalMappings[kv.Key] = kv.Value;
 
 					toRemove.Add(op);
 					converted = true;
@@ -124,8 +124,23 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 		return (ConversionResult.Success, toRemove.Count);
 	}
 
-	private static void UpdateValueReferences(MlirFunction func) {
-		// This is a simplified implementation
-		// A full implementation would walk all operands and update mapped values
+	private static void UpdateValueReferences(MlirFunction func, Dictionary<MlirValue, MlirValue> mappings) {
+		if (mappings.Count == 0) return;
+
+		// Walk all blocks and update operands
+		foreach (var block in func.Body.Blocks) {
+			foreach (var op in block.Operations) {
+				for (int i = 0; i < op.Operands.Count; i++) {
+					// Follow the mapping chain to get the final value
+					var operand = op.Operands[i];
+					while (mappings.TryGetValue(operand, out var mapped)) {
+						operand = mapped;
+					}
+					if (operand != op.Operands[i]) {
+						op.Operands[i] = operand;
+					}
+				}
+			}
+		}
 	}
 }

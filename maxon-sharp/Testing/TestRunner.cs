@@ -81,6 +81,9 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 		sw.Stop();
 
+		// Clean up generated .exe files in fragment directories
+		CleanupExecutables(_fragmentDir);
+
 		var resultList = results.ToList();
 		var passed = resultList.Count(r => r.Passed);
 		var failed = resultList.Count(r => !r.Passed);
@@ -92,6 +95,31 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 			Total = resultList.Count,
 			TotalDuration = sw.Elapsed
 		};
+	}
+
+	/// <summary>
+	/// Recursively clean up .exe files from the fragment directory and its subdirectories.
+	/// </summary>
+	private static void CleanupExecutables(string directory) {
+		if (!Directory.Exists(directory)) return;
+
+		try {
+			// Delete .exe files in this directory
+			foreach (var exeFile in Directory.GetFiles(directory, "*.exe")) {
+				try {
+					File.Delete(exeFile);
+				} catch {
+					// Ignore deletion errors (file may be locked)
+				}
+			}
+
+			// Recurse into subdirectories
+			foreach (var subDir in Directory.GetDirectories(directory)) {
+				CleanupExecutables(subDir);
+			}
+		} catch {
+			// Ignore directory access errors
+		}
 	}
 
 	private List<Fragment> LoadAllFragments() {

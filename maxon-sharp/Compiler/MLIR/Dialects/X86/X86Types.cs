@@ -108,8 +108,11 @@ public sealed record RegOperand(X86Register Register) : X86Operand {
 /// <summary>
 /// Virtual register operand (pre-register allocation).
 /// </summary>
-public sealed record VRegOperand(int Id, int Size = 8) : X86Operand {
-	public override string ToString() => $"v{Id}";
+/// <param name="Id">Unique identifier for the virtual register.</param>
+/// <param name="Size">Size in bytes (default 8).</param>
+/// <param name="IsFloat">True if this vreg holds a floating-point value (uses XMM register).</param>
+public sealed record VRegOperand(int Id, int Size = 8, bool IsFloat = false) : X86Operand {
+	public override string ToString() => IsFloat ? $"vf{Id}" : $"v{Id}";
 }
 
 /// <summary>

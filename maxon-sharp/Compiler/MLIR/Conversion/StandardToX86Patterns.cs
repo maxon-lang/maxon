@@ -30,6 +30,7 @@ public static class StandardToX86Patterns {
 		patterns.Add<LowerSubFOp>();
 		patterns.Add<LowerMulFOp>();
 		patterns.Add<LowerDivFOp>();
+		patterns.Add<LowerFPToSIOp>();
 
 		// Func patterns
 		patterns.Add<LowerFuncCallOp>();
@@ -52,19 +53,26 @@ public static class StandardToX86Patterns {
 // ============================================================================
 
 /// <summary>
-/// Lowers arith.constant to x86.mov.
+/// Lowers arith.constant to x86.mov (for integers) or mov + movq (for floats).
+/// Float constants require loading bits into a GPR first, then transferring to XMM.
 /// </summary>
 public sealed class LowerConstantOp : ConversionPattern<ConstantOp> {
 	protected override bool MatchAndRewrite(ConstantOp op, ConversionPatternRewriter rewriter) {
-		var vreg = new VRegOperand(op.Result.Id);
-		var value = op.Value switch {
-			IntegerAttr ia => new ImmOperand(ia.Value),
-			FloatAttr fa => new ImmOperand(BitConverter.DoubleToInt64Bits(fa.Value)),
-			_ => throw new NotSupportedException($"Unsupported constant type: {op.Value.GetType()}")
-		};
+		if (op.Value is IntegerAttr ia) {
+			// Integer: simple mov to GPR
+			var vreg = new VRegOperand(op.Result.Id);
+			rewriter.Insert(new MovOp(vreg, new ImmOperand(ia.Value)));
+		} else if (op.Value is FloatAttr fa) {
+			// Float: load bits into temp GPR, then transfer to XMM via movq
+			var tempGpr = new VRegOperand(-op.Result.Id - 1000, IsFloat: false);
+			var floatVreg = new VRegOperand(op.Result.Id, IsFloat: true);
+			var bits = BitConverter.DoubleToInt64Bits(fa.Value);
+			rewriter.Insert(new MovOp(tempGpr, new ImmOperand(bits)));
+			rewriter.Insert(new MovqOp(floatVreg, tempGpr));
+		} else {
+			throw new NotSupportedException($"Unsupported constant type: {op.Value.GetType()}");
+		}
 
-		var mov = new MovOp(vreg, value);
-		rewriter.Insert(mov);
 		return true;
 	}
 }
@@ -211,9 +219,9 @@ public sealed class LowerCmpIOp : ConversionPattern<CmpIOp> {
 /// </summary>
 public sealed class LowerAddFOp : ConversionPattern<AddFOp> {
 	protected override bool MatchAndRewrite(AddFOp op, ConversionPatternRewriter rewriter) {
-		var dst = new VRegOperand(op.Result.Id);
-		var lhs = new VRegOperand(op.Lhs.Id);
-		var rhs = new VRegOperand(op.Rhs.Id);
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var lhs = new VRegOperand(op.Lhs.Id, IsFloat: true);
+		var rhs = new VRegOperand(op.Rhs.Id, IsFloat: true);
 
 		rewriter.Insert(new MovsdOp(dst, lhs));
 		rewriter.Insert(new AddsdOp(dst, rhs));
@@ -226,9 +234,9 @@ public sealed class LowerAddFOp : ConversionPattern<AddFOp> {
 /// </summary>
 public sealed class LowerSubFOp : ConversionPattern<SubFOp> {
 	protected override bool MatchAndRewrite(SubFOp op, ConversionPatternRewriter rewriter) {
-		var dst = new VRegOperand(op.Result.Id);
-		var lhs = new VRegOperand(op.Lhs.Id);
-		var rhs = new VRegOperand(op.Rhs.Id);
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var lhs = new VRegOperand(op.Lhs.Id, IsFloat: true);
+		var rhs = new VRegOperand(op.Rhs.Id, IsFloat: true);
 
 		rewriter.Insert(new MovsdOp(dst, lhs));
 		rewriter.Insert(new SubsdOp(dst, rhs));
@@ -241,9 +249,9 @@ public sealed class LowerSubFOp : ConversionPattern<SubFOp> {
 /// </summary>
 public sealed class LowerMulFOp : ConversionPattern<MulFOp> {
 	protected override bool MatchAndRewrite(MulFOp op, ConversionPatternRewriter rewriter) {
-		var dst = new VRegOperand(op.Result.Id);
-		var lhs = new VRegOperand(op.Lhs.Id);
-		var rhs = new VRegOperand(op.Rhs.Id);
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var lhs = new VRegOperand(op.Lhs.Id, IsFloat: true);
+		var rhs = new VRegOperand(op.Rhs.Id, IsFloat: true);
 
 		rewriter.Insert(new MovsdOp(dst, lhs));
 		rewriter.Insert(new MulsdOp(dst, rhs));
@@ -256,12 +264,26 @@ public sealed class LowerMulFOp : ConversionPattern<MulFOp> {
 /// </summary>
 public sealed class LowerDivFOp : ConversionPattern<DivFOp> {
 	protected override bool MatchAndRewrite(DivFOp op, ConversionPatternRewriter rewriter) {
-		var dst = new VRegOperand(op.Result.Id);
-		var lhs = new VRegOperand(op.Lhs.Id);
-		var rhs = new VRegOperand(op.Rhs.Id);
+		var dst = new VRegOperand(op.Result.Id, IsFloat: true);
+		var lhs = new VRegOperand(op.Lhs.Id, IsFloat: true);
+		var rhs = new VRegOperand(op.Rhs.Id, IsFloat: true);
 
 		rewriter.Insert(new MovsdOp(dst, lhs));
 		rewriter.Insert(new DivsdOp(dst, rhs));
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers arith.fptosi to x86.cvttsd2si.
+/// </summary>
+public sealed class LowerFPToSIOp : ConversionPattern<FPToSIOp> {
+	protected override bool MatchAndRewrite(FPToSIOp op, ConversionPatternRewriter rewriter) {
+		// dst is integer (GPR), src is float (XMM)
+		var dst = new VRegOperand(op.Result.Id, IsFloat: false);
+		var src = new VRegOperand(op.Operand.Id, IsFloat: true);
+
+		rewriter.Insert(new CvttsdOp(dst, src));
 		return true;
 	}
 }

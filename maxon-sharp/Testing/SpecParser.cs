@@ -116,16 +116,29 @@ public static partial class SpecParser {
 			var docsSection = content[docsStart..docsEnd];
 
 			var exampleIndex = 0;
-			foreach (Match codeMatch in MaxonCodeBlockRegex().Matches(docsSection)) {
+			var codeMatches = MaxonCodeBlockRegex().Matches(docsSection);
+			foreach (Match codeMatch in codeMatches) {
 				var code = codeMatch.Groups[1].Value;
 				// Only include examples that have a main function (executable)
 				if (code.Contains("function main()")) {
 					exampleIndex++;
+
+					// Look for an exitcode block immediately following this code block
+					var afterCode = docsSection[(codeMatch.Index + codeMatch.Length)..];
+					var exitCodeMatch = ExitCodeBlockRegex().Match(afterCode);
+					int? exitCode = 0;
+					if (exitCodeMatch.Success && exitCodeMatch.Index < 20) {
+						// exitcode block found close to the code block
+						if (int.TryParse(exitCodeMatch.Groups[1].Value.Trim(), out var parsedCode)) {
+							exitCode = parsedCode;
+						}
+					}
+
 					tests.Add(new TestCase {
 						Name = $"docs-example-{exampleIndex}",
 						Source = code,
 						Expectation = new SuccessExpectation {
-							ExitCode = 0
+							ExitCode = exitCode
 						}
 					});
 				}
@@ -155,4 +168,7 @@ public static partial class SpecParser {
 
 	[GeneratedRegex(@"```maxon\r?\n(.*?)```", RegexOptions.Singleline)]
 	private static partial Regex MaxonCodeBlockRegex();
+
+	[GeneratedRegex(@"```exitcode\r?\n(\d+)\r?\n```", RegexOptions.Singleline)]
+	private static partial Regex ExitCodeBlockRegex();
 }

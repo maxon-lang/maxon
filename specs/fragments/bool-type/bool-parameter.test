@@ -1,0 +1,48 @@
+// Test: bool-parameter
+function test_bool_param(flag bool) returns int
+    if flag 'check'
+        return 1
+    end 'check' else 'else_check'
+        return 0
+    end 'else_check'
+end 'test_bool_param'
+
+function main() returns int
+    return test_bool_param(true)
+end 'main'
+---
+ExitCode: 1
+---
+// Generated X86 IR:
+module {
+  func.func @test_bool_param(%flag: i1) -> i64 {
+    ^entry(%flag: i1):
+      x86.prologue stack_size=32
+      x86.mov rax, rcx
+      x86.test rax, rax
+      x86.jne then
+      x86.jmp else
+    ^then:
+      x86.mov rax, 1
+      x86.epilogue
+      x86.ret
+    ^else:
+      x86.mov rax, 0
+      x86.epilogue
+      x86.ret
+  }
+  
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 1
+      x86.mov rcx, rax
+      x86.call test_bool_param
+      x86.mov rcx, rax
+      x86.mov rax, rcx
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

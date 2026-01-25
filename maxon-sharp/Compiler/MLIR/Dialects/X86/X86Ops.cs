@@ -414,6 +414,28 @@ public sealed class MovsdOp : X86Op {
 }
 
 /// <summary>
+/// Move quadword between GPR and XMM: x86.movq dst, src
+/// Used to transfer 64-bit values between general purpose and XMM registers.
+/// - movq xmm, r/m64: 66 REX.W 0F 6E /r
+/// - movq r/m64, xmm: 66 REX.W 0F 7E /r
+/// </summary>
+public sealed class MovqOp : X86Op {
+	public override string Mnemonic => "movq";
+
+	public X86Operand Dst => X86Operands[0];
+	public X86Operand Src => X86Operands[1];
+
+	public MovqOp(X86Operand dst, X86Operand src) {
+		X86Operands.Add(dst);
+		X86Operands.Add(src);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"x86.movq {Dst}, {Src}");
+	}
+}
+
+/// <summary>
 /// Add scalar double: x86.addsd dst, src
 /// </summary>
 public sealed class AddsdOp : X86Op {

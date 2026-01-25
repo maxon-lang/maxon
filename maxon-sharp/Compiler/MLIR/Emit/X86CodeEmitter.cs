@@ -127,6 +127,12 @@ public sealed class X86CodeEmitter {
 			case DivsdOp divsd:
 				EmitDivsd(divsd);
 				break;
+			case MovqOp movq:
+				EmitMovq(movq);
+				break;
+			case CvttsdOp cvttsd:
+				EmitCvttsd2si(cvttsd);
+				break;
 			case PrologueOp prologue:
 				EmitPrologue(prologue);
 				break;
@@ -619,6 +625,32 @@ public sealed class X86CodeEmitter {
 	private void EmitDivsd(DivsdOp op) {
 		// F2 0F 5E /r - DIVSD xmm1, xmm2/m64
 		EmitSseArith(0x5E, op.Dst, op.Src);
+	}
+
+	private void EmitCvttsd2si(CvttsdOp op) {
+		// F2 REX.W 0F 2C /r - CVTTSD2SI r64, xmm/m64
+		// Convert with truncation from double to 64-bit signed integer
+		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
+			EmitByte(0xF2);
+			EmitRexW(srcReg.Register, dstReg.Register);
+			EmitBytes(0x0F, 0x2C);
+			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
+		} else {
+			throw new NotSupportedException($"Unsupported CVTTSD2SI operand combination");
+		}
+	}
+
+	private void EmitMovq(MovqOp op) {
+		// 66 REX.W 0F 6E /r - MOVQ xmm, r/m64
+		// Move 64-bit value from GPR to XMM register
+		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
+			EmitByte(0x66);
+			EmitRexW(srcReg.Register, dstReg.Register);
+			EmitBytes(0x0F, 0x6E);
+			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
+		} else {
+			throw new NotSupportedException($"Unsupported MOVQ operand combination: {op.Dst?.GetType().Name} <- {op.Src?.GetType().Name}");
+		}
 	}
 
 	private void EmitSseArith(byte opcode, X86Operand dst, X86Operand src) {

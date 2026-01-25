@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 
 namespace MaxonSharp.Testing;
@@ -11,6 +12,22 @@ public record FragmentGenerationResult(int Generated, int Errors);
 /// Generates .test fragment files from spec files.
 /// </summary>
 public static class FragmentGenerator {
+	/// <summary>
+	/// Get the modification time of the compiler executable.
+	/// </summary>
+	private static DateTime GetCompilerMtime() {
+		var assemblyLocation = Assembly.GetExecutingAssembly().Location;
+		if (string.IsNullOrEmpty(assemblyLocation)) {
+			// Fallback for single-file deployments
+			assemblyLocation = Environment.ProcessPath;
+		}
+		if (!string.IsNullOrEmpty(assemblyLocation) && File.Exists(assemblyLocation)) {
+			return new FileInfo(assemblyLocation).LastWriteTimeUtc;
+		}
+		// If we can't determine compiler mtime, return max value to force regeneration
+		return DateTime.MaxValue;
+	}
+
 	/// <summary>
 	/// Generate fragment files from all specs in the given directory.
 	/// </summary>
@@ -30,6 +47,7 @@ public static class FragmentGenerator {
 		var generated = 0;
 		var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
 		var workerCount = Math.Max(1, Environment.ProcessorCount / 2);
+		var compilerMtime = GetCompilerMtime();
 
 		Parallel.ForEach(specs, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, spec => {
 			var specFile = new FileInfo(spec.FilePath);
@@ -41,8 +59,10 @@ public static class FragmentGenerator {
 				var exePath = Path.Combine(featureFragmentDir, $"{test.Name}.exe");
 				var fragmentFile = new FileInfo(fragmentPath);
 
-				// Skip if fragment is newer than spec (unless force)
-				if (!force && fragmentFile.Exists && fragmentFile.LastWriteTimeUtc > specFile.LastWriteTimeUtc) {
+				// Skip if fragment is newer than both spec and compiler (unless force)
+				if (!force && fragmentFile.Exists &&
+					fragmentFile.LastWriteTimeUtc > specFile.LastWriteTimeUtc &&
+					fragmentFile.LastWriteTimeUtc > compilerMtime) {
 					continue;
 				}
 

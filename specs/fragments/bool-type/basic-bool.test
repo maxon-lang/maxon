@@ -1,0 +1,34 @@
+// Test: basic-bool
+function main() returns int
+    var x = true
+
+    if x 'check'
+        return 1
+    end 'check' else 'else_check'
+        return 0
+    end 'else_check'
+end 'main'
+---
+ExitCode: 1
+---
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 1
+      x86.test rax, rax
+      x86.jne then
+      x86.jmp else
+    ^then:
+      x86.mov rax, 1
+      x86.epilogue
+      x86.ret
+    ^else:
+      x86.mov rax, 0
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

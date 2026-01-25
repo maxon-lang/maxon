@@ -1,0 +1,62 @@
+// Test: docs-example-1
+function isPositive(x int) returns bool
+    if x > 0 'check'
+        return true
+    end 'check'
+    return false
+end 'isPositive'
+
+function main() returns int
+    if isPositive(5) 'test'
+        return 1
+    end 'test'
+    return 0
+end 'main'
+
+---
+ExitCode: 1
+---
+// Generated X86 IR:
+module {
+  func.func @isPositive(%x: i64) -> i1 {
+    ^entry(%x: i64):
+      x86.prologue stack_size=32
+      x86.mov rax, rcx
+      x86.mov rcx, 0
+      x86.cmp rax, rcx
+      x86.setg rdx
+      x86.test rdx, rdx
+      x86.jne then
+      x86.jmp merge
+    ^then:
+      x86.mov rax, 1
+      x86.epilogue
+      x86.ret
+    ^merge:
+      x86.mov rax, 0
+      x86.epilogue
+      x86.ret
+  }
+  
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=32
+      x86.mov rax, 5
+      x86.mov rcx, rax
+      x86.call isPositive
+      x86.mov rcx, rax
+      x86.test rcx, rcx
+      x86.jne then
+      x86.jmp merge
+    ^then:
+      x86.mov rax, 1
+      x86.epilogue
+      x86.ret
+    ^merge:
+      x86.mov rax, 0
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

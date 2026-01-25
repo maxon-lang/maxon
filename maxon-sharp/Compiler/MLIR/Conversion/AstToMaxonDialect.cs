@@ -435,6 +435,12 @@ public sealed class AstToMaxonConverter {
 	}
 
 	private MlirValue? LowerCallExpr(CallExpr call) {
+		// Handle builtin functions first
+		var builtinResult = TryLowerBuiltinCall(call);
+		if (builtinResult != null) {
+			return builtinResult;
+		}
+
 		var args = new List<MlirValue>();
 		var ownership = new List<ArgumentOwnership>();
 
@@ -454,6 +460,24 @@ public sealed class AstToMaxonConverter {
 		MlirType? returnType = IntegerType.I64;
 
 		return EmitMaxonCall(call.FuncName, args, ownership, returnType);
+	}
+
+	/// <summary>
+	/// Attempts to lower a builtin function call. Returns null if not a builtin.
+	/// </summary>
+	private MlirValue? TryLowerBuiltinCall(CallExpr call) {
+		switch (call.FuncName) {
+			case "trunc":
+				// trunc(float) -> int: truncate float to integer
+				if (call.Args.Count != 1) {
+					throw new ArgumentException("trunc() requires exactly 1 argument");
+				}
+				var floatArg = LowerExpression(call.Args[0]);
+				return EmitFPToSI(floatArg, IntegerType.I64);
+
+			default:
+				return null;
+		}
 	}
 
 	// ========================================================================
@@ -741,6 +765,15 @@ public sealed class AstToMaxonConverter {
 	public MlirValue EmitNotI(MlirValue operand) {
 		var allOnes = EmitConstantInt(-1, operand.Type);
 		return EmitXorI(operand, allOnes);
+	}
+
+	/// <summary>
+	/// Emits a float-to-signed-integer conversion (truncation).
+	/// </summary>
+	public MlirValue EmitFPToSI(MlirValue operand, IntegerType targetType) {
+		var op = new FPToSIOp(operand, targetType);
+		InsertOp(op);
+		return op.Result;
 	}
 
 	// ========================================================================

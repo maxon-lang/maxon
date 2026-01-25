@@ -68,11 +68,26 @@ public class MlirPipeline {
 
 		// Lower Standard → X86 dialect
 		Logger.Debug(LogCategory.Compiler, "Lowering Standard to X86 dialect");
+
+		// Debug: print IR before lowering
+		if (Logger.GetLevel(LogCategory.Compiler) <= LogLevel.Trace) {
+			var prePrinter = new MlirPrinter();
+			module.Print(prePrinter);
+			Logger.Trace(LogCategory.Compiler, $"Before StandardToX86:\n{prePrinter}");
+		}
+
 		var standardToX86Patterns = new ConversionPatternSet();
 		StandardToX86Patterns.PopulatePatterns(standardToX86Patterns);
 		var standardToX86 = new DialectConversionPass(standardToX86Patterns);
 		standardToX86.AddLegalDialect("x86");
 		standardToX86.Run(module);
+
+		// Debug: print IR after lowering, before frame insertion
+		if (Logger.GetLevel(LogCategory.Compiler) <= LogLevel.Trace) {
+			var postPrinter = new MlirPrinter();
+			module.Print(postPrinter);
+			Logger.Trace(LogCategory.Compiler, $"After StandardToX86 (before frame):\n{postPrinter}");
+		}
 
 		// Insert function frames (prologue/epilogue)
 		Logger.Debug(LogCategory.Compiler, "Inserting function frames");
@@ -83,6 +98,13 @@ public class MlirPipeline {
 		Logger.Debug(LogCategory.Compiler, "Allocating registers");
 		var regAllocPass = new RegisterAllocationPass();
 		regAllocPass.Run(module);
+
+		// Debug: print IR after register allocation
+		if (Logger.GetLevel(LogCategory.Compiler) <= LogLevel.Trace) {
+			var postRegPrinter = new MlirPrinter();
+			module.Print(postRegPrinter);
+			Logger.Trace(LogCategory.Compiler, $"After RegisterAllocation:\n{postRegPrinter}");
+		}
 
 		// Peephole optimization (clean up redundant instructions)
 		Logger.Debug(LogCategory.Compiler, "Running peephole optimization");
