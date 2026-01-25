@@ -38,6 +38,7 @@ public static class FragmentGenerator {
 
 			foreach (var test in spec.Tests) {
 				var fragmentPath = Path.Combine(featureFragmentDir, $"{test.Name}.test");
+				var exePath = Path.Combine(featureFragmentDir, $"{test.Name}.exe");
 				var fragmentFile = new FileInfo(fragmentPath);
 
 				// Skip if fragment is newer than spec (unless force)
@@ -45,7 +46,7 @@ public static class FragmentGenerator {
 					continue;
 				}
 
-				var (content, error) = GenerateFragmentContent(test);
+				var (content, error) = GenerateFragmentContent(test, exePath);
 				if (error != null) {
 					errors.Add($"{test.Name}: {error}");
 				}
@@ -62,7 +63,7 @@ public static class FragmentGenerator {
 		return new FragmentGenerationResult(generated, errors.Count);
 	}
 
-	private static (string Content, string? Error) GenerateFragmentContent(TestCase test) {
+	private static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath) {
 		var sb = new StringBuilder();
 		string? error = null;
 
@@ -92,15 +93,16 @@ public static class FragmentGenerator {
 
 		sb.AppendLine("---");
 
-		// Append generated MLIR at the end (for informational purposes)
+		// Compile to executable and capture IR (for success expectations only)
 		if (test.Expectation is SuccessExpectation) {
-			var mlirResult = Compiler.Compiler.CompileToMlir(test.Source);
-			if (mlirResult.Success) {
+			var sources = new[] { new Compiler.SourceFile("test.mx", test.Source) };
+			var result = Compiler.Compiler.CompileWithMlir(sources, exePath, returnIr: true);
+			if (result.Success) {
 				sb.AppendLine("// Generated X86 IR:");
-				sb.AppendLine(mlirResult.X86Ir);
+				sb.AppendLine(result.X86Ir);
 			} else {
-				sb.AppendLine($"// MLIR generation failed: {mlirResult.Error}");
-				error ??= mlirResult.Error;
+				sb.AppendLine($"// Compilation failed: {result.Error}");
+				error ??= result.Error;
 			}
 		}
 
@@ -145,12 +147,48 @@ public static class FragmentGenerator {
 		var expectationSection = string.Join("\n", lines[(separatorIndex + 1)..secondSeparatorIndex]);
 		var expectation = ParseExpectation(expectationSection);
 
+		// Parse generated IR (between second --- and third ---)
+		string? generatedIr = null;
+		if (secondSeparatorIndex < lines.Length) {
+			var thirdSeparatorIndex = Array.FindIndex(lines, secondSeparatorIndex + 1, l => l.Trim() == "---");
+			if (thirdSeparatorIndex < 0) {
+				thirdSeparatorIndex = lines.Length;
+			}
+			var irSection = lines[(secondSeparatorIndex + 1)..thirdSeparatorIndex];
+			generatedIr = ExtractGeneratedIr(irSection);
+		}
+
 		return new Fragment {
 			FilePath = fragmentPath,
 			TestName = testName,
 			Source = source,
-			Expectation = expectation
+			Expectation = expectation,
+			GeneratedIr = generatedIr
 		};
+	}
+
+	private static string? ExtractGeneratedIr(string[] lines) {
+		var sb = new StringBuilder();
+		var foundIr = false;
+
+		foreach (var line in lines) {
+			if (line.TrimStart().StartsWith("// Generated X86 IR:")) {
+				foundIr = true;
+				continue;
+			}
+			if (line.TrimStart().StartsWith("// Compilation failed:")) {
+				return null;
+			}
+			if (foundIr) {
+				sb.AppendLine(line);
+			}
+		}
+
+		if (!foundIr) {
+			return null;
+		}
+
+		return sb.ToString().TrimEnd();
 	}
 
 	private static TestExpectation ParseExpectation(string section) {

@@ -52,6 +52,10 @@ public class Fragment {
 	public required string TestName { get; init; }
 	public required string Source { get; init; }
 	public required TestExpectation Expectation { get; init; }
+	/// <summary>
+	/// The generated X86 IR from compilation (parsed from fragment file).
+	/// </summary>
+	public string? GeneratedIr { get; init; }
 }
 
 /// <summary>

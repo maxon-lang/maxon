@@ -115,16 +115,54 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 		var sw = Stopwatch.StartNew();
 
 		try {
-			// Create a unique temp file for this test
-			var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Environment.CurrentManagedThreadId}.exe");
+			// Check for pre-compiled executable alongside the fragment
+			var fragmentDir = Path.GetDirectoryName(fragment.FilePath)!;
+			var precompiledExe = Path.Combine(fragmentDir, $"{fragment.TestName}.exe");
+			var fragmentFile = new FileInfo(fragment.FilePath);
+
+			// Determine which executable to use
+			string exePath;
+			bool needsCleanup;
+			string? compileError = null;
+
+			if (File.Exists(precompiledExe)) {
+				var exeFile = new FileInfo(precompiledExe);
+				if (exeFile.LastWriteTimeUtc >= fragmentFile.LastWriteTimeUtc) {
+					// Use pre-compiled executable
+					exePath = precompiledExe;
+					needsCleanup = false;
+				} else {
+					// Exe is stale, compile fresh
+					var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Environment.CurrentManagedThreadId}.exe");
+					var result = CompileToExecutable(fragment, tempExe);
+					compileError = result.Error;
+					exePath = tempExe;
+					needsCleanup = true;
+				}
+			} else {
+				// No pre-compiled exe, compile fresh
+				var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Environment.CurrentManagedThreadId}.exe");
+				var result = CompileToExecutable(fragment, tempExe);
+				compileError = result.Error;
+				exePath = tempExe;
+				needsCleanup = true;
+			}
 
 			try {
-				// Compile the source
-				var (Success, Error) = CompileToExecutable(fragment, tempExe);
-
 				if (fragment.Expectation is CompilerErrorExpectation errorExpectation) {
-					// Expect compilation to fail
-					if (Success) {
+					// Expect compilation to fail - need to compile to check for error
+					if (compileError == null && !needsCleanup) {
+						// Pre-compiled exe exists, but we expect an error - compile to get the error
+						var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Environment.CurrentManagedThreadId}.exe");
+						var result = CompileToExecutable(fragment, tempExe);
+						compileError = result.Error;
+						if (File.Exists(tempExe)) {
+							try { File.Delete(tempExe); } catch { /* ignore */ }
+						}
+					}
+
+					var compiledSuccessfully = compileError == null;
+					if (compiledSuccessfully) {
 						return new TestResult {
 							TestName = fragment.TestName,
 							Passed = false,
@@ -133,11 +171,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 						};
 					}
 
-					if (Error != null && !Error.Contains(errorExpectation.ExpectedError)) {
+					if (compileError != null && !compileError.Contains(errorExpectation.ExpectedError)) {
 						return new TestResult {
 							TestName = fragment.TestName,
 							Passed = false,
-							ErrorMessage = $"Expected error containing '{errorExpectation.ExpectedError}', got: {Error}",
+							ErrorMessage = $"Expected error containing '{errorExpectation.ExpectedError}', got: {compileError}",
 							Duration = sw.Elapsed
 						};
 					}
@@ -150,31 +188,29 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 				}
 
 				// Expect compilation to succeed
-				if (!Success) {
+				if (compileError != null) {
 					return new TestResult {
 						TestName = fragment.TestName,
 						Passed = false,
-						ErrorMessage = $"Compilation failed: {Error}",
+						ErrorMessage = $"Compilation failed: {compileError}",
 						Duration = sw.Elapsed
 					};
 				}
 
 				var successExpectation = (SuccessExpectation)fragment.Expectation;
 
-				// Check Required MLIR (must match exactly)
+				// Check Required MLIR using GeneratedIr from fragment
 				if (successExpectation.RequiredMlir != null) {
-					var mlirResult = Compiler.Compiler.CompileToMlir(fragment.Source);
-					if (!mlirResult.Success) {
+					if (fragment.GeneratedIr == null) {
 						return new TestResult {
 							TestName = fragment.TestName,
 							Passed = false,
-							ErrorMessage = $"Failed to generate MLIR: {mlirResult.Error}",
+							ErrorMessage = "RequiredMlir specified but no generated IR found in fragment",
 							Duration = sw.Elapsed
 						};
 					}
 
-					// Get the final X86 IR as the output to check
-					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMlir, mlirResult.X86Ir!);
+					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMlir, fragment.GeneratedIr);
 					if (!Passed) {
 						return new TestResult {
 							TestName = fragment.TestName,
@@ -187,7 +223,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 				// Run the executable if we have runtime expectations
 				if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null) {
-					var (ExitCode, Stdout, Stderr) = RunExecutable(tempExe);
+					var (ExitCode, Stdout, Stderr) = RunExecutable(exePath);
 
 					if (successExpectation.ExitCode.HasValue && ExitCode != successExpectation.ExitCode.Value) {
 						return new TestResult {
@@ -218,9 +254,9 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 					Duration = sw.Elapsed
 				};
 			} finally {
-				// Cleanup temp file
-				if (File.Exists(tempExe)) {
-					try { File.Delete(tempExe); } catch { /* ignore */ }
+				// Cleanup temp file if we created one
+				if (needsCleanup && File.Exists(exePath)) {
+					try { File.Delete(exePath); } catch { /* ignore */ }
 				}
 			}
 		} catch (Exception ex) {
@@ -235,8 +271,10 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 	private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath) {
 		try {
-			var success = Compiler.Compiler.Compile([new Compiler.SourceFile(fragment.FilePath, fragment.Source)], outputPath);
-			return (success, success ? null : "Compilation failed");
+			var result = Compiler.Compiler.CompileWithMlir(
+				[new Compiler.SourceFile(fragment.FilePath, fragment.Source)],
+				outputPath);
+			return (result.Success, result.Error);
 		} catch (Exception ex) {
 			return (false, ex.Message);
 		}
@@ -257,31 +295,6 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 		process.WaitForExit(TimeSpan.FromMilliseconds(30000));
 
 		return (process.ExitCode, stdout, stderr);
-	}
-
-	private static (bool Passed, string? Message) CompareIr(string expected, string actual) {
-		// Normalize whitespace for comparison
-		var expectedNorm = NormalizeIr(expected);
-		var actualNorm = NormalizeIr(actual);
-
-		if (expectedNorm == actualNorm) {
-			return (true, null);
-		}
-
-		// Find first difference
-		var expectedLines = expectedNorm.Split('\n');
-		var actualLines = actualNorm.Split('\n');
-
-		for (var i = 0; i < Math.Max(expectedLines.Length, actualLines.Length); i++) {
-			var expLine = i < expectedLines.Length ? expectedLines[i] : "<missing>";
-			var actLine = i < actualLines.Length ? actualLines[i] : "<missing>";
-
-			if (expLine != actLine) {
-				return (false, $"Line {i + 1}: expected '{expLine}', got '{actLine}'");
-			}
-		}
-
-		return (false, "Unknown difference");
 	}
 
 	private static string NormalizeIr(string ir) {

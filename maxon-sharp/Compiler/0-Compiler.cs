@@ -7,114 +7,23 @@ using MaxonSharp.Compiler.Mlir.Passes;
 namespace MaxonSharp.Compiler;
 
 /// <summary>
-/// Result of compiling source code to MLIR.
+/// Result of compilation.
 /// </summary>
-public record CompileToMlirResult(
-	string? MaxonIr,
-	string? StandardIr,
-	string? X86Ir,
+public record CompileResult(
 	bool Success,
-	string? Error
+	string? Error,
+	string? X86Ir = null
 );
 
 public class Compiler {
 	/// <summary>
-	/// Compile source code and return MLIR at various dialect levels.
+	/// Compile using the MLIR-based pipeline.
 	/// </summary>
-	public static CompileToMlirResult CompileToMlir(string source) {
-		try {
-			// Stage 1: Lexing
-			var lexer = new Lexer(source);
-			var tokens = lexer.Tokenize();
-
-			// Stage 2: Parsing
-			var parser = new Parser(tokens);
-			var ast = parser.Parse();
-
-			// Stage 3: Semantic analysis
-			var semanticAnalyzer = new SemanticAnalyzer();
-			if (!semanticAnalyzer.Analyze(ast)) {
-				return new CompileToMlirResult(null, null, null, false, "Semantic analysis failed");
-			}
-
-			// Stage 4: AST to Maxon Dialect
-			var context = new MlirContext();
-			var converter = new AstToMaxonConverter(context);
-			var module = converter.ConvertProgram(ast);
-
-			// Run Maxon passes (borrow checker, dead function elimination)
-			var maxonPasses = new PassManager(context);
-			maxonPasses.AddPass(new MaxonBorrowChecker());
-			maxonPasses.AddPass(new DeadFunctionEliminationPass());
-			maxonPasses.Run(module);
-
-			// Write Maxon IR to string
-			var printer = new MlirPrinter();
-			module.Print(printer);
-			var maxonIr = printer.ToString();
-
-			// Lower Maxon → Standard dialects
-			var maxonToStandardPatterns = new ConversionPatternSet();
-			MaxonToStandardPatterns.PopulatePatterns(maxonToStandardPatterns);
-			var maxonToStandard = new DialectConversionPass(maxonToStandardPatterns);
-			maxonToStandard.AddLegalDialect("arith");
-			maxonToStandard.AddLegalDialect("memref");
-			maxonToStandard.AddLegalDialect("func");
-			maxonToStandard.AddLegalDialect("cf");
-			maxonToStandard.Run(module);
-
-			// Run Standard passes (mem2reg, constant folding, DCE, dead store elimination)
-			var standardPasses = new PassManager(context);
-			standardPasses.AddPass(new Mem2RegPass());
-			standardPasses.AddPass(new ConstantFoldingPass());
-			standardPasses.AddPass(new DeadCodeEliminationPass());
-			standardPasses.Run(module);
-
-			// Dead store elimination (runs after DCE removes unused loads)
-			var deadStorePass = new DeadStoreEliminationPass();
-			deadStorePass.Run(module);
-
-			// Print Standard IR
-			var standardPrinter = new MlirPrinter();
-			module.Print(standardPrinter);
-			var standardIr = standardPrinter.ToString();
-
-			// Lower Standard → X86 dialect
-			var standardToX86Patterns = new ConversionPatternSet();
-			StandardToX86Patterns.PopulatePatterns(standardToX86Patterns);
-			var standardToX86 = new DialectConversionPass(standardToX86Patterns);
-			standardToX86.AddLegalDialect("x86");
-			standardToX86.Run(module);
-
-			// Insert function frames (prologue/epilogue)
-			var framePass = new FunctionFramePass();
-			framePass.Run(module);
-
-			// Register allocation
-			var regAllocPass = new RegisterAllocationPass();
-			regAllocPass.Run(module);
-
-			// Peephole optimization (clean up redundant instructions)
-			var peepholePass = new PeepholeOptimizationPass();
-			peepholePass.Run(module);
-
-			// Print X86 IR
-			var x86Printer = new MlirPrinter();
-			module.Print(x86Printer);
-			var x86Ir = x86Printer.ToString();
-
-			return new CompileToMlirResult(maxonIr, standardIr, x86Ir, true, null);
-		} catch (CompileError ex) {
-			return new CompileToMlirResult(null, null, null, false, ex.Format());
-		} catch (Exception ex) {
-			return new CompileToMlirResult(null, null, null, false, ex.Message);
-		}
-	}
-
-	/// <summary>
-	/// Compile using the new MLIR-based pipeline.
-	/// </summary>
-	public static bool CompileWithMlir(SourceFile[] sources, string outputPath, string? mlirOutputPath = null) {
+	/// <param name="sources">Source files to compile</param>
+	/// <param name="outputPath">Path for the output executable</param>
+	/// <param name="mlirOutputPath">Optional path to write MLIR output</param>
+	/// <param name="returnIr">If true, include X86 IR in the result</param>
+	public static CompileResult CompileWithMlir(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false) {
 		try {
 			Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
 
@@ -137,7 +46,7 @@ public class Compiler {
 
 			if (mainFileIndex < 0) {
 				Logger.Error(LogCategory.Compiler, "No 'main' function found");
-				return false;
+				return new CompileResult(false, "No 'main' function found");
 			}
 
 			// Phase 2: Merge ASTs
@@ -146,7 +55,7 @@ public class Compiler {
 			// Phase 3: Semantic analysis
 			var semanticAnalyzer = new SemanticAnalyzer();
 			if (!semanticAnalyzer.Analyze(program)) {
-				return false;
+				return new CompileResult(false, "Semantic analysis failed");
 			}
 
 			// Phase 4: AST → Maxon Dialect
@@ -209,6 +118,14 @@ public class Compiler {
 			var peepholePass = new PeepholeOptimizationPass();
 			peepholePass.Run(module);
 
+			// Capture X86 IR if requested
+			string? x86Ir = null;
+			if (returnIr) {
+				var irPrinter = new MlirPrinter();
+				module.Print(irPrinter);
+				x86Ir = irPrinter.ToString();
+			}
+
 			// Write MLIR if requested
 			if (mlirOutputPath != null) {
 				using var writer = new StreamWriter(mlirOutputPath);
@@ -235,7 +152,7 @@ public class Compiler {
 			var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main");
 			if (mainFunc is null) {
 				Logger.Error(LogCategory.Compiler, "No 'main' function found");
-				return false;
+				return new CompileResult(false, "No 'main' function found");
 			}
 
 			EmitFunction(emitter, mainFunc);
@@ -270,13 +187,13 @@ public class Compiler {
 			PeWriter.Write(outputPath, code, data);
 			Logger.Info(LogCategory.Compiler, $"Wrote {code.Length} bytes code, {data.Length} bytes data to {outputPath}");
 
-			return true;
+			return new CompileResult(true, null, x86Ir);
 		} catch (CompileError ex) {
 			Logger.Error(LogCategory.Compiler, ex.Format());
-			return false;
+			return new CompileResult(false, ex.Format());
 		} catch (Exception ex) {
 			Logger.Error(LogCategory.Compiler, $"Compilation error: {ex.Message}");
-			return false;
+			return new CompileResult(false, ex.Message);
 		}
 	}
 
@@ -304,7 +221,7 @@ public class Compiler {
 	/// Uses the MLIR-based compilation pipeline.
 	/// </summary>
 	public static bool Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null) {
-		return CompileWithMlir(sources, outputPath, mlirOutputPath);
+		return CompileWithMlir(sources, outputPath, mlirOutputPath).Success;
 	}
 
 	private static uint AlignUp(uint value, uint alignment) {
