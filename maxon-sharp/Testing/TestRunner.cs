@@ -162,16 +162,16 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 				} else {
 					// Exe is stale, compile fresh
 					var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Environment.CurrentManagedThreadId}.exe");
-					var result = CompileToExecutable(fragment, tempExe);
-					compileError = result.Error;
+					var (Success, Error) = CompileToExecutable(fragment, tempExe);
+					compileError = Error;
 					exePath = tempExe;
 					needsCleanup = true;
 				}
 			} else {
 				// No pre-compiled exe, compile fresh
 				var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Environment.CurrentManagedThreadId}.exe");
-				var result = CompileToExecutable(fragment, tempExe);
-				compileError = result.Error;
+				var (Success, Error) = CompileToExecutable(fragment, tempExe);
+				compileError = Error;
 				exePath = tempExe;
 				needsCleanup = true;
 			}
@@ -182,8 +182,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 					if (compileError == null && !needsCleanup) {
 						// Pre-compiled exe exists, but we expect an error - compile to get the error
 						var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Environment.CurrentManagedThreadId}.exe");
-						var result = CompileToExecutable(fragment, tempExe);
-						compileError = result.Error;
+						var (Success, Error) = CompileToExecutable(fragment, tempExe);
+						compileError = Error;
 						if (File.Exists(tempExe)) {
 							try { File.Delete(tempExe); } catch { /* ignore */ }
 						}

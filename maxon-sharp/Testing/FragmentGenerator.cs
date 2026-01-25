@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text;
 
 namespace MaxonSharp.Testing;
@@ -16,13 +15,9 @@ public static class FragmentGenerator {
 	/// Get the modification time of the compiler executable.
 	/// </summary>
 	private static DateTime GetCompilerMtime() {
-		var assemblyLocation = Assembly.GetExecutingAssembly().Location;
-		if (string.IsNullOrEmpty(assemblyLocation)) {
-			// Fallback for single-file deployments
-			assemblyLocation = Environment.ProcessPath;
-		}
-		if (!string.IsNullOrEmpty(assemblyLocation) && File.Exists(assemblyLocation)) {
-			return new FileInfo(assemblyLocation).LastWriteTimeUtc;
+		var exePath = Environment.ProcessPath;
+		if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath)) {
+			return new FileInfo(exePath).LastWriteTimeUtc;
 		}
 		// If we can't determine compiler mtime, return max value to force regeneration
 		return DateTime.MaxValue;

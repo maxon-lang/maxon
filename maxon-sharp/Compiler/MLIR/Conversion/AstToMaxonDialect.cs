@@ -14,25 +14,17 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 /// Converts AST nodes to Maxon dialect operations.
 /// This is the entry point for the new IR pipeline.
 /// </summary>
-public sealed class AstToMaxonConverter {
-	private readonly MlirContext _context;
-	private readonly MlirModule _module;
-	private readonly MutationAnalyzer _mutationAnalyzer;
+public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
+	private readonly MlirModule _module = new();
+	private readonly MutationAnalyzer _mutationAnalyzer = mutationAnalyzer;
 	private MlirBlock? _currentBlock;
 	private MlirFunction? _currentFunction;
-	private int _valueId;
-	private readonly Dictionary<string, MlirValue> _namedValues = new();
-	private readonly Dictionary<string, MlirType> _structTypes = new();
-	private readonly Dictionary<string, MlirType> _enumTypes = new();
-	private readonly Dictionary<string, MlirGlobal> _globals = new();
-	// Track variable mutability for ownership checking
-	private readonly Dictionary<string, bool> _variableMutability = new();
-
-	public AstToMaxonConverter(MlirContext context, MutationAnalyzer mutationAnalyzer) {
-		_context = context;
-		_mutationAnalyzer = mutationAnalyzer;
-		_module = new MlirModule();
-	}
+	private readonly Dictionary<string, MlirValue> _namedValues = [];
+	private readonly Dictionary<string, MlirType> _structTypes = [];
+	private readonly Dictionary<string, MlirType> _enumTypes = [];
+	private readonly Dictionary<string, MlirGlobal> _globals = [];
+	private readonly Dictionary<string, MlirType> _functionReturnTypes = [];
+	private readonly Stack<(MlirBlock continueBlock, MlirBlock exitBlock)> _loopContextStack = new();
 
 	/// <summary>
 	/// Gets the generated module.
@@ -67,6 +59,12 @@ public sealed class AstToMaxonConverter {
 			LowerGlobalConstant(globalConst);
 		}
 
+		// Collect function return types before lowering (for call site type lookup)
+		foreach (var func in program.Functions) {
+			var returnType = func.ReturnType != null ? ConvertTypeRef(func.ReturnType) : NoneType.Instance;
+			_functionReturnTypes[func.Name] = returnType;
+		}
+
 		// Third pass: lower functions
 		foreach (var func in program.Functions) {
 			Logger.Debug(LogCategory.Mlir, $"  Lowering function: {func.Name}");
@@ -85,35 +83,23 @@ public sealed class AstToMaxonConverter {
 		return _module;
 	}
 
-	private void LowerGlobalVariable(GlobalVariable globalVar) {
-		// Evaluate the initial value to determine type
-		var initValue = EvaluateConstantExpr(globalVar.Value);
-		var type = initValue.type;
+	private void LowerGlobalVariable(GlobalVariable globalVar) =>
+		LowerGlobal(globalVar.Name, globalVar.Value, isConstant: false);
 
-		var global = new MlirGlobal($"global.{globalVar.Name}", type) {
-			IsConstant = false,
-			InitValue = initValue.attr
+	private void LowerGlobalConstant(GlobalConstant globalConst) =>
+		LowerGlobal(globalConst.Name, globalConst.Value, isConstant: true);
+
+	private void LowerGlobal(string name, Expr value, bool isConstant) {
+		var (type, attr) = EvaluateConstantExpr(value);
+		var global = new MlirGlobal($"global.{name}", type) {
+			IsConstant = isConstant,
+			InitValue = attr
 		};
-
 		_module.Globals.Add(global);
-		_globals[globalVar.Name] = global;
+		_globals[name] = global;
 	}
 
-	private void LowerGlobalConstant(GlobalConstant globalConst) {
-		// Evaluate the initial value to determine type
-		var initValue = EvaluateConstantExpr(globalConst.Value);
-		var type = initValue.type;
-
-		var global = new MlirGlobal($"global.{globalConst.Name}", type) {
-			IsConstant = true,
-			InitValue = initValue.attr
-		};
-
-		_module.Globals.Add(global);
-		_globals[globalConst.Name] = global;
-	}
-
-	private (MlirType type, MlirAttribute? attr) EvaluateConstantExpr(Expr expr) {
+	private static (MlirType type, MlirAttribute? attr) EvaluateConstantExpr(Expr expr) {
 		return expr switch {
 			IntLiteralExpr intLit => (IntegerType.I64, new IntegerAttr(intLit.Value)),
 			FloatLiteralExpr floatLit => (FloatType.F64, new FloatAttr(floatLit.Value)),
@@ -165,61 +151,36 @@ public sealed class AstToMaxonConverter {
 	}
 
 	private void LowerFunction(FunctionDecl func) {
-		var parameters = new List<(string name, string type)>();
-		foreach (var param in func.Params) {
-			parameters.Add((param.Name, GetTypeString(param.Type)));
-		}
-
-		var returnType = GetTypeString(func.ReturnType);
-		BeginFunction(func.Name, parameters, returnType);
-
-		// Lower function body
-		foreach (var stmt in func.Body) {
-			LowerStatement(stmt);
-		}
-
-		// If the block isn't terminated, add a return
-		if (_currentBlock is not null && !_currentBlock.IsTerminated) {
-			if (func.ReturnType is null || GetTypeString(func.ReturnType) == "void") {
-				EmitReturn();
-			}
-		}
-
-		EndFunction();
+		var parameters = func.Params.Select(p => (p.Name, GetTypeString(p.Type))).ToList();
+		LowerFunctionBody(func.Name, parameters, func.ReturnType, func.Body);
 	}
 
 	private void LowerMethod(string typeName, MethodDecl method) {
 		var parameters = new List<(string name, string type)>();
-
-		// Add 'self' parameter for instance methods
 		if (!method.IsStatic) {
 			parameters.Add(("self", typeName));
 		}
+		parameters.AddRange(method.Params.Select(p => (p.Name, GetTypeString(p.Type))));
 
-		foreach (var param in method.Params) {
-			parameters.Add((param.Name, GetTypeString(param.Type)));
-		}
+		LowerFunctionBody($"{typeName}.{method.Name}", parameters, method.ReturnType, method.Body);
+	}
 
-		var returnType = GetTypeString(method.ReturnType);
-		var funcName = $"{typeName}.{method.Name}";
-		BeginFunction(funcName, parameters, returnType);
+	private void LowerFunctionBody(string name, List<(string name, string type)> parameters, TypeRef? returnType, List<Stmt> body) {
+		var returnTypeStr = GetTypeString(returnType);
+		BeginFunction(name, parameters, returnTypeStr);
 
-		// Lower method body
-		foreach (var stmt in method.Body) {
+		foreach (var stmt in body) {
 			LowerStatement(stmt);
 		}
 
-		// If the block isn't terminated, add a return
-		if (_currentBlock is not null && !_currentBlock.IsTerminated) {
-			if (method.ReturnType is null || GetTypeString(method.ReturnType) == "void") {
-				EmitReturn();
-			}
+		if (_currentBlock is not null && !_currentBlock.IsTerminated && returnTypeStr == "void") {
+			EmitReturn();
 		}
 
 		EndFunction();
 	}
 
-	private string GetTypeString(TypeRef? typeRef) {
+	private static string GetTypeString(TypeRef? typeRef) {
 		return typeRef switch {
 			null => "void",
 			SimpleTypeRef simple => simple.Name,
@@ -248,17 +209,11 @@ public sealed class AstToMaxonConverter {
 				break;
 
 			case LetDeclStmt let:
-				var letValue = LowerExpression(let.Value);
-				var letType = letValue.Type;
-				var letSlot = DeclareVariable(let.Name, letType);
-				EmitStore(letValue, letSlot);
+				LowerVariableDecl(let.Name, let.Value);
 				break;
 
 			case VarDeclStmt varDecl:
-				var varValue = LowerExpression(varDecl.Value);
-				var varType = varValue.Type;
-				var varSlot = DeclareVariable(varDecl.Name, varType);
-				EmitStore(varValue, varSlot);
+				LowerVariableDecl(varDecl.Name, varDecl.Value);
 				break;
 
 			case AssignStmt assign:
@@ -283,16 +238,30 @@ public sealed class AstToMaxonConverter {
 				break;
 
 			case BreakStmt:
-				// TODO: Handle labeled breaks and loop break targets
+				if (_loopContextStack.Count == 0) {
+					throw new InvalidOperationException("Break statement outside of loop");
+				}
+				var (_, breakExit) = _loopContextStack.Peek();
+				EmitBranch(breakExit);
 				break;
 
 			case ContinueStmt:
-				// TODO: Handle labeled continues and loop continue targets
+				if (_loopContextStack.Count == 0) {
+					throw new InvalidOperationException("Continue statement outside of loop");
+				}
+				var (continueTarget, _) = _loopContextStack.Peek();
+				EmitBranch(continueTarget);
 				break;
 
 			default:
 				throw new NotSupportedException($"Unsupported statement: {stmt.GetType().Name}");
 		}
+	}
+
+	private void LowerVariableDecl(string name, Expr value) {
+		var mlirValue = LowerExpression(value);
+		var slot = DeclareVariable(name, mlirValue.Type);
+		EmitStore(mlirValue, slot);
 	}
 
 	private void LowerIfStatement(IfStmt ifStmt) {
@@ -339,12 +308,19 @@ public sealed class AstToMaxonConverter {
 		var condition = LowerExpression(whileStmt.Condition);
 		EmitCondBranch(condition, bodyBlock, exitBlock);
 
-		// Body block
+		// Body block - push loop context for break/continue
 		SetInsertionPoint(bodyBlock);
+		_loopContextStack.Push((condBlock, exitBlock));
+
 		foreach (var stmt in whileStmt.Body) {
 			LowerStatement(stmt);
+			// Stop if we hit a terminator (break/continue/return)
+			if (_currentBlock?.IsTerminated == true) break;
 		}
-		if (!bodyBlock.IsTerminated) {
+
+		_loopContextStack.Pop();
+
+		if (_currentBlock is not null && !_currentBlock.IsTerminated) {
 			EmitBranch(condBlock);
 		}
 
@@ -352,12 +328,37 @@ public sealed class AstToMaxonConverter {
 	}
 
 	private void LowerForStatement(ForStmt forStmt) {
-		// For now, just create the structure
-		// TODO: Lower for-range loops properly
+		// TODO: Implement for-range loop lowering properly
+		// For now, create the structure with loop context for break/continue
+		var condBlock = CreateBlock("for.cond");
 		var bodyBlock = CreateBlock("for.body");
+		var stepBlock = CreateBlock("for.step");
 		var exitBlock = CreateBlock("for.exit");
 
-		EmitBranch(exitBlock); // Skip for now
+		EmitBranch(condBlock);
+
+		// Condition block (placeholder - jumps to exit)
+		SetInsertionPoint(condBlock);
+		EmitBranch(exitBlock);
+
+		// Body block with loop context
+		SetInsertionPoint(bodyBlock);
+		_loopContextStack.Push((stepBlock, exitBlock));
+
+		foreach (var stmt in forStmt.Body) {
+			LowerStatement(stmt);
+			if (_currentBlock?.IsTerminated == true) break;
+		}
+
+		_loopContextStack.Pop();
+
+		if (_currentBlock is not null && !_currentBlock.IsTerminated) {
+			EmitBranch(stepBlock);
+		}
+
+		// Step block
+		SetInsertionPoint(stepBlock);
+		EmitBranch(condBlock);
 
 		SetInsertionPoint(exitBlock);
 	}
@@ -377,38 +378,48 @@ public sealed class AstToMaxonConverter {
 	}
 
 	private MlirValue LowerBinaryExpr(BinaryExpr binary) {
-		var left = LowerExpression(binary.Left);
-		var right = LowerExpression(binary.Right);
+		var (left, right, isFloat) = LowerBinaryOperands(binary.Left, binary.Right);
 
-		// Check if floating point
-		if (left.Type is FloatType) {
+		if (isFloat) {
 			return binary.Op switch {
-				BinaryOp.Add => EmitAddF(left, right),
-				BinaryOp.Sub => EmitSubF(left, right),
-				BinaryOp.Mul => EmitMulF(left, right),
-				BinaryOp.Div => EmitDivF(left, right),
+				BinaryOp.Add => Emit<AddFOp>(left, right),
+				BinaryOp.Sub => Emit<SubFOp>(left, right),
+				BinaryOp.Mul => Emit<MulFOp>(left, right),
+				BinaryOp.Div => Emit<DivFOp>(left, right),
 				_ => throw new NotSupportedException($"Unsupported binary op for float: {binary.Op}")
 			};
 		}
 
 		return binary.Op switch {
-			BinaryOp.Add => EmitAddI(left, right),
-			BinaryOp.Sub => EmitSubI(left, right),
-			BinaryOp.Mul => EmitMulI(left, right),
-			BinaryOp.Div => EmitDivSI(left, right),
-			BinaryOp.Mod => EmitRemSI(left, right),
-			BinaryOp.Band => EmitAndI(left, right),
-			BinaryOp.Bor => EmitOrI(left, right),
-			BinaryOp.Bxor => EmitXorI(left, right),
-			BinaryOp.Shl => EmitShlI(left, right),
-			BinaryOp.Shr => EmitShrSI(left, right),
+			BinaryOp.Add => Emit<AddIOp>(left, right),
+			BinaryOp.Sub => Emit<SubIOp>(left, right),
+			BinaryOp.Mul => Emit<MulIOp>(left, right),
+			BinaryOp.Div => Emit<DivSIOp>(left, right),
+			BinaryOp.Mod => Emit<RemSIOp>(left, right),
+			BinaryOp.Band => Emit<AndIOp>(left, right),
+			BinaryOp.Bor => Emit<OrIOp>(left, right),
+			BinaryOp.Bxor => Emit<XOrIOp>(left, right),
+			BinaryOp.Shl => Emit<ShLIOp>(left, right),
+			BinaryOp.Shr => Emit<ShRSIOp>(left, right),
 			_ => throw new NotSupportedException($"Unsupported binary op: {binary.Op}")
 		};
 	}
 
 	private MlirValue LowerCompareExpr(CompareExpr compare) {
-		var left = LowerExpression(compare.Left);
-		var right = LowerExpression(compare.Right);
+		var (left, right, isFloat) = LowerBinaryOperands(compare.Left, compare.Right);
+
+		if (isFloat) {
+			var floatPredicate = compare.Op switch {
+				CompareOp.Eq => CmpFPredicate.Oeq,
+				CompareOp.Ne => CmpFPredicate.One,
+				CompareOp.Lt => CmpFPredicate.Olt,
+				CompareOp.Le => CmpFPredicate.Ole,
+				CompareOp.Gt => CmpFPredicate.Ogt,
+				CompareOp.Ge => CmpFPredicate.Oge,
+				_ => throw new NotSupportedException($"Unsupported float compare op: {compare.Op}")
+			};
+			return EmitCmpF(floatPredicate, left, right);
+		}
 
 		var predicate = compare.Op switch {
 			CompareOp.Eq => CmpIPredicate.Eq,
@@ -419,8 +430,26 @@ public sealed class AstToMaxonConverter {
 			CompareOp.Ge => CmpIPredicate.Sge,
 			_ => throw new NotSupportedException($"Unsupported compare op: {compare.Op}")
 		};
-
 		return EmitCmpI(predicate, left, right);
+	}
+
+	/// <summary>
+	/// Lowers binary operands with automatic type promotion to float if needed.
+	/// </summary>
+	private (MlirValue left, MlirValue right, bool isFloat) LowerBinaryOperands(Expr leftExpr, Expr rightExpr) {
+		var left = LowerExpression(leftExpr);
+		var right = LowerExpression(rightExpr);
+
+		bool isFloat = left.Type is FloatType || right.Type is FloatType;
+		if (isFloat) {
+			if (left.Type is not FloatType) {
+				left = Emit<SIToFPOp>(left, FloatType.F64);
+			}
+			if (right.Type is not FloatType) {
+				right = Emit<SIToFPOp>(right, FloatType.F64);
+			}
+		}
+		return (left, right, isFloat);
 	}
 
 	private MlirValue LowerUnaryExpr(UnaryExpr unary) {
@@ -456,8 +485,8 @@ public sealed class AstToMaxonConverter {
 			}
 		}
 
-		// Try to infer return type - for now assume i64
-		MlirType? returnType = IntegerType.I64;
+		// Look up the function's return type
+		MlirType? returnType = _functionReturnTypes.TryGetValue(call.FuncName, out var rt) ? rt : IntegerType.I64;
 
 		return EmitMaxonCall(call.FuncName, args, ownership, returnType);
 	}
@@ -473,7 +502,7 @@ public sealed class AstToMaxonConverter {
 					throw new ArgumentException("trunc() requires exactly 1 argument");
 				}
 				var floatArg = LowerExpression(call.Args[0]);
-				return EmitFPToSI(floatArg, IntegerType.I64);
+				return Emit<FPToSIOp>(floatArg, IntegerType.I64);
 
 			default:
 				return null;
@@ -500,9 +529,7 @@ public sealed class AstToMaxonConverter {
 			"bool" or "Bool" => IntegerType.I1,
 			"float" or "Float" or "f64" => FloatType.F64,
 			"float32" or "Float32" or "f32" => FloatType.F32,
-			"char" or "Char" => IntegerType.I32,
 			"void" or "Void" => NoneType.Instance,
-			"string" or "String" => new PtrType(IntegerType.I8),
 			_ when _structTypes.TryGetValue(typeName, out var st) => st,
 			_ when _enumTypes.TryGetValue(typeName, out var et) => et,
 			_ => throw new NotSupportedException($"Unknown type: {typeName}")
@@ -608,39 +635,21 @@ public sealed class AstToMaxonConverter {
 	}
 
 	/// <summary>
-	/// Emits an integer addition.
+	/// Emits a binary operation of type T. The operation must have a constructor (MlirValue, MlirValue).
 	/// </summary>
-	public MlirValue EmitAddI(MlirValue lhs, MlirValue rhs) {
-		var op = new AddIOp(lhs, rhs);
+	private MlirValue Emit<T>(MlirValue lhs, MlirValue rhs) where T : MlirOperation {
+		var op = (T)Activator.CreateInstance(typeof(T), lhs, rhs)!;
 		InsertOp(op);
-		return op.Result;
+		return op.Results[0];
 	}
 
 	/// <summary>
-	/// Emits an integer subtraction.
+	/// Emits a conversion operation of type T. The operation must have a constructor (MlirValue, MlirType).
 	/// </summary>
-	public MlirValue EmitSubI(MlirValue lhs, MlirValue rhs) {
-		var op = new SubIOp(lhs, rhs);
+	private MlirValue Emit<T>(MlirValue operand, MlirType targetType) where T : MlirOperation {
+		var op = (T)Activator.CreateInstance(typeof(T), operand, targetType)!;
 		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits an integer multiplication.
-	/// </summary>
-	public MlirValue EmitMulI(MlirValue lhs, MlirValue rhs) {
-		var op = new MulIOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a signed integer division.
-	/// </summary>
-	public MlirValue EmitDivSI(MlirValue lhs, MlirValue rhs) {
-		var op = new DivSIOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
+		return op.Results[0];
 	}
 
 	/// <summary>
@@ -653,91 +662,10 @@ public sealed class AstToMaxonConverter {
 	}
 
 	/// <summary>
-	/// Emits a floating point addition.
+	/// Emits a floating-point comparison.
 	/// </summary>
-	public MlirValue EmitAddF(MlirValue lhs, MlirValue rhs) {
-		var op = new AddFOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a floating point subtraction.
-	/// </summary>
-	public MlirValue EmitSubF(MlirValue lhs, MlirValue rhs) {
-		var op = new SubFOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a floating point multiplication.
-	/// </summary>
-	public MlirValue EmitMulF(MlirValue lhs, MlirValue rhs) {
-		var op = new MulFOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a floating point division.
-	/// </summary>
-	public MlirValue EmitDivF(MlirValue lhs, MlirValue rhs) {
-		var op = new DivFOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a signed integer remainder.
-	/// </summary>
-	public MlirValue EmitRemSI(MlirValue lhs, MlirValue rhs) {
-		var op = new RemSIOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a bitwise AND.
-	/// </summary>
-	public MlirValue EmitAndI(MlirValue lhs, MlirValue rhs) {
-		var op = new AndIOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a bitwise OR.
-	/// </summary>
-	public MlirValue EmitOrI(MlirValue lhs, MlirValue rhs) {
-		var op = new OrIOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a bitwise XOR.
-	/// </summary>
-	public MlirValue EmitXorI(MlirValue lhs, MlirValue rhs) {
-		var op = new XOrIOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a left shift.
-	/// </summary>
-	public MlirValue EmitShlI(MlirValue lhs, MlirValue rhs) {
-		var op = new ShLIOp(lhs, rhs);
-		InsertOp(op);
-		return op.Result;
-	}
-
-	/// <summary>
-	/// Emits a signed right shift.
-	/// </summary>
-	public MlirValue EmitShrSI(MlirValue lhs, MlirValue rhs) {
-		var op = new ShRSIOp(lhs, rhs);
+	public MlirValue EmitCmpF(CmpFPredicate predicate, MlirValue lhs, MlirValue rhs) {
+		var op = new CmpFOp(predicate, lhs, rhs);
 		InsertOp(op);
 		return op.Result;
 	}
@@ -747,7 +675,7 @@ public sealed class AstToMaxonConverter {
 	/// </summary>
 	public MlirValue EmitNegI(MlirValue operand) {
 		var zero = EmitConstantInt(0, operand.Type);
-		return EmitSubI(zero, operand);
+		return Emit<SubIOp>(zero, operand);
 	}
 
 	/// <summary>
@@ -764,16 +692,7 @@ public sealed class AstToMaxonConverter {
 	/// </summary>
 	public MlirValue EmitNotI(MlirValue operand) {
 		var allOnes = EmitConstantInt(-1, operand.Type);
-		return EmitXorI(operand, allOnes);
-	}
-
-	/// <summary>
-	/// Emits a float-to-signed-integer conversion (truncation).
-	/// </summary>
-	public MlirValue EmitFPToSI(MlirValue operand, IntegerType targetType) {
-		var op = new FPToSIOp(operand, targetType);
-		InsertOp(op);
-		return op.Result;
+		return Emit<XOrIOp>(operand, allOnes);
 	}
 
 	// ========================================================================
@@ -933,7 +852,7 @@ public sealed class AstToMaxonConverter {
 	/// Emits a conditional branch.
 	/// </summary>
 	public void EmitCondBranch(MlirValue condition, MlirBlock trueBlock, MlirBlock falseBlock,
-							   List<MlirValue>? trueArgs = null, List<MlirValue>? falseArgs = null) {
+								 List<MlirValue>? trueArgs = null, List<MlirValue>? falseArgs = null) {
 		var op = new CondBranchOp(condition, trueBlock, falseBlock, trueArgs ?? [], falseArgs ?? []);
 		InsertOp(op);
 	}
@@ -1034,6 +953,4 @@ public sealed class AstToMaxonConverter {
 			throw new InvalidOperationException("No current block for operation insertion");
 		_currentBlock.AddOp(op);
 	}
-
-	private int NextValueId() => _valueId++;
 }

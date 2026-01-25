@@ -4,15 +4,15 @@ This document tracks progress implementing Maxon language features in maxon-shar
 
 ## Current Status
 
-- **Current Phase**: Phase 1 (In Progress)
-- **Last Updated**: 2026-01-24
-- **Tests Passing**: 52/52
+- **Current Phase**: Phase 1 Complete, Ready for Phase 2
+- **Last Updated**: 2025-01-24
+- **Tests Passing**: 57/57
 
 ## Phase Overview
 
 | Phase | Focus | Status | Specs Passing |
 |-------|-------|--------|---------------|
-| 1 | Primitives & Variables | 🔄 In Progress | 52/52 (partial) |
+| 1 | Primitives & Variables | ✅ Complete | 57/57 |
 | 2 | Operators & Functions | ⬜ Not Started | 0/~25 |
 | 3 | Control Flow, Types & Inference | ⬜ Not Started | 0/~12 |
 | 4 | Enums & Interfaces | ⬜ Not Started | 0/4 |
@@ -29,7 +29,7 @@ This document tracks progress implementing Maxon language features in maxon-shar
 
 **Dependencies**: None (foundational)
 
-**Status**: 🔄 In Progress (int/bool done, float/byte/char pending)
+**Status**: ✅ Complete
 
 ### Specs Implemented
 
@@ -41,19 +41,12 @@ This document tracks progress implementing Maxon language features in maxon-shar
 | variables.md | `let`/`var` declarations | ✅ | |
 | arithmetic.md | Basic arithmetic operators | ✅ | +, -, *, /, mod |
 | optimizations.md | Compiler optimizations | ✅ | Constant folding, DCE, strength reduction |
-
-### Specs Still Pending
-
-| Spec | Description | Status | Notes |
-|------|-------------|--------|-------|
-| float-type.md | 64-bit floating-point type | ⬜ | In archive |
-| byte-type.md | 8-bit unsigned byte type | ⬜ | In archive |
-| character-type.md | Unicode character type | ⬜ | In archive |
+| float-type.md | 64-bit floating-point type | ✅ | SSE codegen, int↔float promotion |
 
 ### Implementation Completed
 
 - [x] Semantic analysis for literal expressions
-- [x] Type checking for primitive types (int, bool)
+- [x] Type checking for primitive types (int, bool, float)
 - [x] Variable declaration semantic analysis
 - [x] MLIR generation for literals
 - [x] MLIR generation for variable load/store
@@ -61,18 +54,17 @@ This document tracks progress implementing Maxon language features in maxon-shar
 - [x] Callee-saved register preservation across calls
 - [x] Function prologue/epilogue generation
 - [x] Recursive function support
-
-### Implementation Remaining
-
-- [ ] Float type semantic analysis and codegen
-- [ ] Byte type semantic analysis and codegen
-- [ ] Character type semantic analysis and codegen
+- [x] Float SSE codegen (movsd, addsd, subsd, mulsd, divsd)
+- [x] Int-to-float promotion (arith.sitofp → x86.cvtsi2sd)
+- [x] Float-to-int truncation (arith.fptosi → x86.cvttsd2si)
+- [x] Float function parameters and return values (XMM0-XMM3 ABI)
+- [x] Function return type lookup for proper call codegen
 
 ### Notes
 - Implemented liveness analysis to detect values live across function calls
 - Values live across calls are allocated to callee-saved registers (RBX, R12-R15)
 - Push/pop of callee-saved registers inserted in prologue/epilogue
-- Float SSE infrastructure exists (MovqOp, addsd, etc.) but float type spec not yet moved from archive
+- byte-type.md and character-type.md moved to Phase 5 (require arrays/strings infrastructure)
 
 ---
 

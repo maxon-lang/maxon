@@ -29,6 +29,7 @@ public static class MaxonToStandardPatterns {
 		patterns.Add<LowerArraySetOp>();
 		patterns.Add<LowerArrayLenOp>();
 		patterns.Add<LowerMaxonCallOp>();
+		// Note: FieldPtrOp is lowered by StandardToX86Patterns, not here
 	}
 }
 
@@ -109,27 +110,49 @@ public sealed class LowerStructInitOp : ConversionPattern<StructInitOp> {
 }
 
 /// <summary>
-/// Lowers maxon.field_get to load from computed offset.
+/// Lowers maxon.field_get to field_ptr + load.
 /// </summary>
 public sealed class LowerFieldGetOp : ConversionPattern<FieldGetOp> {
 	protected override bool MatchAndRewrite(FieldGetOp op, ConversionPatternRewriter rewriter) {
-		// For now, assume struct is a memref and compute offset
-		// A more complete implementation would handle struct types properly
+		var fieldPtr = EmitFieldPtr(op.Struct, op.FieldName, rewriter);
 
-		var load = new LoadOp(op.Struct);
+		var load = new LoadOp(fieldPtr.Result);
 		rewriter.Insert(load);
+
 		rewriter.ReplaceOpWithValue(op, load.Result);
 		return true;
 	}
+
+	internal static FieldPtrOp EmitFieldPtr(MlirValue structValue, string fieldName, ConversionPatternRewriter rewriter) {
+		var structType = GetStructType(structValue.Type)
+			?? throw new InvalidOperationException($"Expected struct type, got {structValue.Type}");
+		var offset = structType.GetFieldOffset(fieldName);
+		var field = structType.GetField(fieldName)
+			?? throw new InvalidOperationException($"Field '{fieldName}' not found in struct '{structType.Name}'");
+
+		var fieldPtr = new FieldPtrOp(structValue, fieldName, offset, field.Type);
+		rewriter.Insert(fieldPtr);
+		return fieldPtr;
+	}
+
+	private static MaxonStructType? GetStructType(MlirType type) => type switch {
+		MaxonStructType st => st,
+		MemRefType mrt when mrt.ElementType is MaxonStructType st => st,
+		PtrType pt when pt.ElementType is MaxonStructType st => st,
+		_ => null
+	};
 }
 
 /// <summary>
-/// Lowers maxon.field_set to store at computed offset.
+/// Lowers maxon.field_set to field_ptr + store.
 /// </summary>
 public sealed class LowerFieldSetOp : ConversionPattern<FieldSetOp> {
 	protected override bool MatchAndRewrite(FieldSetOp op, ConversionPatternRewriter rewriter) {
-		var store = new StoreOp(op.Value, op.Struct);
+		var fieldPtr = LowerFieldGetOp.EmitFieldPtr(op.Struct, op.FieldName, rewriter);
+
+		var store = new StoreOp(op.Value, fieldPtr.Result);
 		rewriter.Insert(store);
+
 		return true;
 	}
 }
@@ -198,3 +221,4 @@ public sealed class LowerMaxonCallOp : ConversionPattern<MaxonDialectOps.CallOp>
 		return true;
 	}
 }
+

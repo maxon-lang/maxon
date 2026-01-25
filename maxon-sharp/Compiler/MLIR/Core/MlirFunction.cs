@@ -45,9 +45,28 @@ public sealed class MlirFunction(string name) {
 	public Dictionary<string, MlirAttribute> Attributes { get; } = [];
 
 	/// <summary>
+	/// Arbitrary metadata for passes to communicate information.
+	/// </summary>
+	public Dictionary<string, object> Metadata { get; } = [];
+
+	/// <summary>
 	/// Source location for error reporting.
 	/// </summary>
 	public SourceLocation? Location { get; set; }
+
+	/// <summary>
+	/// Sets metadata on this function.
+	/// </summary>
+	public void SetMetadata<T>(string key, T value) where T : notnull {
+		Metadata[key] = value;
+	}
+
+	/// <summary>
+	/// Gets metadata from this function.
+	/// </summary>
+	public T? GetMetadata<T>(string key) where T : class {
+		return Metadata.TryGetValue(key, out var value) ? value as T : null;
+	}
 
 	/// <summary>
 	/// Adds a parameter and returns its type.

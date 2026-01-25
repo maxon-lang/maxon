@@ -11,36 +11,6 @@ public sealed class RegisterAllocationPass : FunctionPass {
 	public override string Name => "register-allocation";
 	public override string Description => "Allocates virtual registers to physical x86-64 registers";
 
-	// Caller-saved (volatile) registers - clobbered by calls
-	private static readonly X86Register[] VolatileRegs = [
-		X86Register.RAX,
-		X86Register.RCX,
-		X86Register.RDX,
-		X86Register.R8,
-		X86Register.R9,
-		X86Register.R10,
-		X86Register.R11,
-	];
-
-	// Callee-saved (non-volatile) registers - preserved across calls
-	private static readonly X86Register[] NonVolatileRegs = [
-		X86Register.RBX,
-		X86Register.R12,
-		X86Register.R13,
-		X86Register.R14,
-		X86Register.R15,
-	];
-
-	// SSE registers for floating point
-	private static readonly X86Register[] FloatRegs = [
-		X86Register.XMM0,
-		X86Register.XMM1,
-		X86Register.XMM2,
-		X86Register.XMM3,
-		X86Register.XMM4,
-		X86Register.XMM5,
-	];
-
 	protected override bool RunOnFunction(MlirFunction func) {
 		bool changed = false;
 
@@ -53,8 +23,9 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		// - vregs live across calls get callee-saved (non-volatile) registers
 		// - other vregs get caller-saved (volatile) registers
 		var allocation = new Dictionary<int, X86Register>();
-		var usedNonVolatile = new HashSet<X86Register>();
-		var ctx = new AllocationContext(allocation, liveAcrossCalls, usedNonVolatile);
+		var usedNonVolatileGpr = new HashSet<X86Register>();
+		var usedNonVolatileXmm = new HashSet<X86Register>();
+		var ctx = new AllocationContext(allocation, liveAcrossCalls, usedNonVolatileGpr, usedNonVolatileXmm);
 
 		foreach (var block in func.Body.Blocks) {
 			var (blockChanged, _) = AllocateBlock(block, ctx);
@@ -62,12 +33,12 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		}
 
 		// Step 3: Insert save/restore of callee-saved registers in prologue/epilogue
-		if (ctx.UsedNonVolatile.Count > 0) {
-			InsertCalleeSavedSaveRestore(func, ctx.UsedNonVolatile);
+		if (ctx.UsedNonVolatileGpr.Count > 0 || ctx.UsedNonVolatileXmm.Count > 0) {
+			InsertCalleeSavedSaveRestore(func, ctx.UsedNonVolatileGpr, ctx.UsedNonVolatileXmm);
 		}
 
 		if (allocation.Count > 0) {
-			Logger.Debug(LogCategory.RegAlloc, $"  {func.Name}: allocated {allocation.Count} virtual registers ({ctx.UsedNonVolatile.Count} callee-saved)");
+			Logger.Debug(LogCategory.RegAlloc, $"  {func.Name}: allocated {allocation.Count} virtual registers ({ctx.UsedNonVolatileGpr.Count} callee-saved GPRs, {ctx.UsedNonVolatileXmm.Count} callee-saved XMMs)");
 		}
 		return changed;
 	}
@@ -138,8 +109,13 @@ public sealed class RegisterAllocationPass : FunctionPass {
 	/// <summary>
 	/// Inserts push/pop of callee-saved registers in prologue/epilogue.
 	/// </summary>
-	private static void InsertCalleeSavedSaveRestore(MlirFunction func, HashSet<X86Register> usedNonVolatile) {
-		var regsToSave = usedNonVolatile.OrderBy(r => r).ToList();
+	private static void InsertCalleeSavedSaveRestore(
+		MlirFunction func,
+		HashSet<X86Register> usedNonVolatileGpr,
+		HashSet<X86Register> usedNonVolatileXmm) {
+
+		var gprsToSave = usedNonVolatileGpr.OrderBy(r => r).ToList();
+		var xmmsToSave = usedNonVolatileXmm.OrderBy(r => r).ToList();
 
 		// Find prologue in entry block and insert pushes after it
 		var entryBlock = func.Body.Blocks[0];
@@ -154,8 +130,14 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		if (prologueIdx >= 0) {
 			// Insert pushes after prologue (in order)
 			int insertIdx = prologueIdx + 1;
-			foreach (var reg in regsToSave) {
+			foreach (var reg in gprsToSave) {
 				entryBlock.Operations.Insert(insertIdx++, new PushOp(new RegOperand(reg)));
+			}
+
+			// For XMM registers, we would need to save to stack with movaps/movups
+			// For now, just log that they're used (full implementation would require stack space)
+			if (xmmsToSave.Count > 0) {
+				Logger.Trace(LogCategory.RegAlloc, $"  XMM save/restore not yet implemented for: {string.Join(", ", xmmsToSave)}");
 			}
 		}
 
@@ -164,7 +146,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			for (int i = 0; i < block.Operations.Count; i++) {
 				if (block.Operations[i] is EpilogueOp) {
 					// Insert pops before epilogue (in reverse order)
-					foreach (var reg in regsToSave.AsEnumerable().Reverse()) {
+					foreach (var reg in gprsToSave.AsEnumerable().Reverse()) {
 						block.Operations.Insert(i++, new PopOp(new RegOperand(reg)));
 					}
 					break;
@@ -173,7 +155,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		}
 	}
 
-	private (bool changed, int allocationCount) AllocateBlock(
+	private static (bool changed, int allocationCount) AllocateBlock(
 		MlirBlock block,
 		AllocationContext ctx) {
 
@@ -212,36 +194,25 @@ public sealed class RegisterAllocationPass : FunctionPass {
 	private sealed class AllocationContext(
 		Dictionary<int, X86Register> allocation,
 		HashSet<int> liveAcrossCalls,
-		HashSet<X86Register> usedNonVolatile) {
+		HashSet<X86Register> usedNonVolatileGpr,
+		HashSet<X86Register> usedNonVolatileXmm) {
 
-		public int NextVolatileReg;
-		public int NextNonVolatileReg;
-		public int NextFloatReg;
+		public int NextVolatileGpr;
+		public int NextNonVolatileGpr;
+		public int NextVolatileXmm;
+		public int NextNonVolatileXmm;
 
 		public int AllocationCount => allocation.Count;
-		public IEnumerable<KeyValuePair<int, X86Register>> GetAllocations() => allocation;
-		public HashSet<X86Register> UsedNonVolatile => usedNonVolatile;
+		public Dictionary<int, X86Register> GetAllocations() => allocation;
+		public HashSet<X86Register> UsedNonVolatileGpr => usedNonVolatileGpr;
+		public HashSet<X86Register> UsedNonVolatileXmm => usedNonVolatileXmm;
 
 		public X86Operand Alloc(X86Operand operand) {
 			if (operand is VRegOperand vreg) {
 				if (!allocation.TryGetValue(vreg.Id, out var physReg)) {
-					if (vreg.IsFloat) {
-						if (NextFloatReg >= FloatRegs.Length) {
-							throw new InvalidOperationException($"Ran out of XMM registers for vreg vf{vreg.Id}. Spilling not yet implemented.");
-						}
-						physReg = FloatRegs[NextFloatReg++];
-					} else if (liveAcrossCalls.Contains(vreg.Id)) {
-						if (NextNonVolatileReg >= NonVolatileRegs.Length) {
-							throw new InvalidOperationException($"Ran out of callee-saved registers for vreg v{vreg.Id}. Spilling not yet implemented.");
-						}
-						physReg = NonVolatileRegs[NextNonVolatileReg++];
-						usedNonVolatile.Add(physReg);
-					} else {
-						if (NextVolatileReg >= VolatileRegs.Length) {
-							throw new InvalidOperationException($"Ran out of registers for vreg v{vreg.Id}. Spilling not yet implemented.");
-						}
-						physReg = VolatileRegs[NextVolatileReg++];
-					}
+					physReg = vreg.IsFloat
+						? AllocXmm(vreg.Id)
+						: AllocGpr(vreg.Id);
 					allocation[vreg.Id] = physReg;
 				}
 				return new RegOperand(physReg);
@@ -258,6 +229,49 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			}
 
 			return operand;
+		}
+
+		private X86Register AllocGpr(int vregId) {
+			if (liveAcrossCalls.Contains(vregId)) {
+				return AllocFromPool(
+					ref NextNonVolatileGpr,
+					WindowsX64Abi.NonVolatileGprs,
+					usedNonVolatileGpr,
+					$"callee-saved GPRs for v{vregId}");
+			}
+			return AllocFromPool(
+				ref NextVolatileGpr,
+				WindowsX64Abi.VolatileGprs,
+				usedRegs: null,
+				$"volatile GPRs for v{vregId}");
+		}
+
+		private X86Register AllocXmm(int vregId) {
+			if (liveAcrossCalls.Contains(vregId)) {
+				return AllocFromPool(
+					ref NextNonVolatileXmm,
+					WindowsX64Abi.NonVolatileXmm,
+					usedNonVolatileXmm,
+					$"callee-saved XMM registers for vf{vregId}");
+			}
+			return AllocFromPool(
+				ref NextVolatileXmm,
+				WindowsX64Abi.VolatileXmm,
+				usedRegs: null,
+				$"volatile XMM registers for vf{vregId}");
+		}
+
+		private static X86Register AllocFromPool(
+			ref int nextIndex,
+			X86Register[] pool,
+			HashSet<X86Register>? usedRegs,
+			string description) {
+			if (nextIndex >= pool.Length) {
+				throw new InvalidOperationException($"Ran out of {description}. Spilling not yet implemented.");
+			}
+			var reg = pool[nextIndex++];
+			usedRegs?.Add(reg);
+			return reg;
 		}
 	}
 
@@ -294,6 +308,8 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			MulsdOp mulsd => new MulsdOp(ctx.Alloc(mulsd.Dst), ctx.Alloc(mulsd.Src)),
 			DivsdOp divsd => new DivsdOp(ctx.Alloc(divsd.Dst), ctx.Alloc(divsd.Src)),
 			CvttsdOp cvttsd => new CvttsdOp(ctx.Alloc(cvttsd.Dst), ctx.Alloc(cvttsd.Src)),
+			CvtsiOp cvtsi => new CvtsiOp(ctx.Alloc(cvtsi.Dst), ctx.Alloc(cvtsi.Src)),
+			ComiOp comi => new ComiOp(ctx.Alloc(comi.Left), ctx.Alloc(comi.Right)),
 			_ => op
 		};
 	}

@@ -133,6 +133,12 @@ public sealed class X86CodeEmitter {
 			case CvttsdOp cvttsd:
 				EmitCvttsd2si(cvttsd);
 				break;
+			case CvtsiOp cvtsi:
+				EmitCvtsi2sd(cvtsi);
+				break;
+			case ComiOp comi:
+				EmitComisd(comi);
+				break;
 			case PrologueOp prologue:
 				EmitPrologue(prologue);
 				break;
@@ -316,6 +322,34 @@ public sealed class X86CodeEmitter {
 	private static byte ModRM(byte mod, byte reg, byte rm) =>
 		(byte)((mod << 6) | (reg << 3) | rm);
 
+	private static byte GetSetccOpcode(X86CondCode cc) => cc switch {
+		X86CondCode.E => 0x94,
+		X86CondCode.NE => 0x95,
+		X86CondCode.L => 0x9C,
+		X86CondCode.LE => 0x9E,
+		X86CondCode.G => 0x9F,
+		X86CondCode.GE => 0x9D,
+		X86CondCode.B => 0x92,
+		X86CondCode.BE => 0x96,
+		X86CondCode.A => 0x97,
+		X86CondCode.AE => 0x93,
+		_ => throw new NotSupportedException($"Unsupported condition: {cc}")
+	};
+
+	private static byte GetJccOpcode(X86CondCode cc) => cc switch {
+		X86CondCode.E => 0x84,
+		X86CondCode.NE => 0x85,
+		X86CondCode.L => 0x8C,
+		X86CondCode.LE => 0x8E,
+		X86CondCode.G => 0x8F,
+		X86CondCode.GE => 0x8D,
+		X86CondCode.B => 0x82,
+		X86CondCode.BE => 0x86,
+		X86CondCode.A => 0x87,
+		X86CondCode.AE => 0x83,
+		_ => throw new NotSupportedException($"Unsupported condition: {cc}")
+	};
+
 	// ========================================================================
 	// Instruction encodings
 	// ========================================================================
@@ -373,28 +407,19 @@ public sealed class X86CodeEmitter {
 		}
 	}
 
-	private void EmitAdd(AddOp op) {
-		if (op.Dst is RegOperand dst && op.Src is RegOperand src) {
-			EmitRexW(src.Register, dst.Register);
-			EmitByte(0x01);
-			EmitByte(ModRM(0b11, GetRegCode(src.Register), GetRegCode(dst.Register)));
-		} else if (op.Dst is RegOperand dstReg && op.Src is ImmOperand imm) {
-			EmitRexW(rm: dstReg.Register);
-			EmitByte(0x81);
-			EmitByte(ModRM(0b11, 0, GetRegCode(dstReg.Register)));
-			EmitImm32((int)imm.Value);
-		}
-	}
+	private void EmitAdd(AddOp op) => EmitAluOp(op.Dst, op.Src, regOpcode: 0x01, immModRmReg: 0);
 
-	private void EmitSub(SubOp op) {
-		if (op.Dst is RegOperand dst && op.Src is RegOperand src) {
-			EmitRexW(src.Register, dst.Register);
-			EmitByte(0x29);
-			EmitByte(ModRM(0b11, GetRegCode(src.Register), GetRegCode(dst.Register)));
-		} else if (op.Dst is RegOperand dstReg && op.Src is ImmOperand imm) {
-			EmitRexW(rm: dstReg.Register);
+	private void EmitSub(SubOp op) => EmitAluOp(op.Dst, op.Src, regOpcode: 0x29, immModRmReg: 5);
+
+	private void EmitAluOp(X86Operand dst, X86Operand src, byte regOpcode, byte immModRmReg) {
+		if (dst is RegOperand dstReg && src is RegOperand srcReg) {
+			EmitRexW(srcReg.Register, dstReg.Register);
+			EmitByte(regOpcode);
+			EmitByte(ModRM(0b11, GetRegCode(srcReg.Register), GetRegCode(dstReg.Register)));
+		} else if (dst is RegOperand dstRegOp && src is ImmOperand imm) {
+			EmitRexW(rm: dstRegOp.Register);
 			EmitByte(0x81);
-			EmitByte(ModRM(0b11, 5, GetRegCode(dstReg.Register)));
+			EmitByte(ModRM(0b11, immModRmReg, GetRegCode(dstRegOp.Register)));
 			EmitImm32((int)imm.Value);
 		}
 	}
@@ -439,40 +464,21 @@ public sealed class X86CodeEmitter {
 		}
 	}
 
-	private void EmitCmp(CmpOp op) {
-		if (op.Left is RegOperand left && op.Right is RegOperand right) {
-			EmitRexW(right.Register, left.Register);
-			EmitByte(0x39);
-			EmitByte(ModRM(0b11, GetRegCode(right.Register), GetRegCode(left.Register)));
-		}
-	}
+	private void EmitCmp(CmpOp op) => EmitRegRegOp(op.Left, op.Right, 0x39);
 
-	private void EmitTest(TestOp op) {
-		if (op.Left is RegOperand left && op.Right is RegOperand right) {
-			EmitRexW(right.Register, left.Register);
-			EmitByte(0x85);
-			EmitByte(ModRM(0b11, GetRegCode(right.Register), GetRegCode(left.Register)));
+	private void EmitTest(TestOp op) => EmitRegRegOp(op.Left, op.Right, 0x85);
+
+	private void EmitRegRegOp(X86Operand left, X86Operand right, byte opcode) {
+		if (left is RegOperand leftReg && right is RegOperand rightReg) {
+			EmitRexW(rightReg.Register, leftReg.Register);
+			EmitByte(opcode);
+			EmitByte(ModRM(0b11, GetRegCode(rightReg.Register), GetRegCode(leftReg.Register)));
 		}
 	}
 
 	private void EmitSetcc(SetccOp op) {
 		if (op.Dst is not RegOperand dst) return;
-
-		byte cc = op.Condition switch {
-			X86CondCode.E => 0x94,
-			X86CondCode.NE => 0x95,
-			X86CondCode.L => 0x9C,
-			X86CondCode.LE => 0x9E,
-			X86CondCode.G => 0x9F,
-			X86CondCode.GE => 0x9D,
-			X86CondCode.B => 0x92,
-			X86CondCode.BE => 0x96,
-			X86CondCode.A => 0x97,
-			X86CondCode.AE => 0x93,
-			_ => throw new NotSupportedException($"Unsupported condition: {op.Condition}")
-		};
-
-		EmitBytes(0x0F, cc);
+		EmitBytes(0x0F, GetSetccOpcode(op.Condition));
 		EmitByte(ModRM(0b11, 0, GetRegCode(dst.Register)));
 	}
 
@@ -483,21 +489,7 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitJcc(JccOp op) {
-		byte cc = op.Condition switch {
-			X86CondCode.E => 0x84,
-			X86CondCode.NE => 0x85,
-			X86CondCode.L => 0x8C,
-			X86CondCode.LE => 0x8E,
-			X86CondCode.G => 0x8F,
-			X86CondCode.GE => 0x8D,
-			X86CondCode.B => 0x82,
-			X86CondCode.BE => 0x86,
-			X86CondCode.A => 0x87,
-			X86CondCode.AE => 0x83,
-			_ => throw new NotSupportedException($"Unsupported condition: {op.Condition}")
-		};
-
-		EmitBytes(0x0F, cc);
+		EmitBytes(0x0F, GetJccOpcode(op.Condition));
 		_labelFixups.Add((CurrentOffset, op.TrueTarget, 4));
 		EmitImm32(0);
 
@@ -627,16 +619,19 @@ public sealed class X86CodeEmitter {
 		EmitSseArith(0x5E, op.Dst, op.Src);
 	}
 
-	private void EmitCvttsd2si(CvttsdOp op) {
-		// F2 REX.W 0F 2C /r - CVTTSD2SI r64, xmm/m64
-		// Convert with truncation from double to 64-bit signed integer
-		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
+	private void EmitCvttsd2si(CvttsdOp op) => EmitCvtOp(op.Dst, op.Src, 0x2C, "CVTTSD2SI");
+
+	private void EmitCvtsi2sd(CvtsiOp op) => EmitCvtOp(op.Dst, op.Src, 0x2A, "CVTSI2SD");
+
+	private void EmitCvtOp(X86Operand dst, X86Operand src, byte opcode, string name) {
+		// F2 REX.W 0F xx /r - CVT* instructions
+		if (dst is RegOperand dstReg && src is RegOperand srcReg) {
 			EmitByte(0xF2);
 			EmitRexW(srcReg.Register, dstReg.Register);
-			EmitBytes(0x0F, 0x2C);
+			EmitBytes(0x0F, opcode);
 			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
 		} else {
-			throw new NotSupportedException($"Unsupported CVTTSD2SI operand combination");
+			throw new NotSupportedException($"Unsupported {name} operand combination");
 		}
 	}
 
@@ -650,6 +645,20 @@ public sealed class X86CodeEmitter {
 			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
 		} else {
 			throw new NotSupportedException($"Unsupported MOVQ operand combination: {op.Dst?.GetType().Name} <- {op.Src?.GetType().Name}");
+		}
+	}
+
+	private void EmitComisd(ComiOp op) {
+		// 66 0F 2F /r - COMISD xmm1, xmm2/m64
+		// Compares two doubles and sets EFLAGS (ZF, PF, CF)
+		if (op.Left is RegOperand left && op.Right is RegOperand right) {
+			EmitBytes(0x66, 0x0F, 0x2F);
+			EmitByte(ModRM(0b11, GetRegCode(left.Register), GetRegCode(right.Register)));
+		} else if (op.Left is RegOperand leftReg && op.Right is MemOperand rightMem) {
+			EmitBytes(0x66, 0x0F, 0x2F);
+			EmitMemOperand(leftReg.Register, rightMem);
+		} else {
+			throw new NotSupportedException($"Unsupported COMISD operand combination: {op.Left}, {op.Right}");
 		}
 	}
 

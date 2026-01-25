@@ -62,7 +62,7 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 		var valueMappings = new Dictionary<MlirValue, MlirValue>();
 
 		foreach (var block in func.Body.Blocks) {
-			var (result, count) = ConvertBlock(block, valueMappings);
+			var (result, count) = ConvertBlock(block, valueMappings, func);
 			if (result == ConversionResult.Failure)
 				return result;
 			convertedCount += count;
@@ -78,7 +78,7 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 		return ConversionResult.Success;
 	}
 
-	private (ConversionResult result, int convertedCount) ConvertBlock(MlirBlock block, Dictionary<MlirValue, MlirValue> globalMappings) {
+	private (ConversionResult result, int convertedCount) ConvertBlock(MlirBlock block, Dictionary<MlirValue, MlirValue> globalMappings, MlirFunction? func = null) {
 		// Process operations in order, keeping track of which ones to remove
 		var toRemove = new List<MlirOperation>();
 
@@ -93,7 +93,7 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 			bool converted = false;
 
 			foreach (var pattern in patterns) {
-				var rewriter = new ConversionPatternRewriter(block, i + 1);
+				var rewriter = new ConversionPatternRewriter(block, i + 1, func);
 				if (pattern.MatchAndRewrite(op, rewriter)) {
 					Logger.Trace(LogCategory.Mlir, $"    {op.Mnemonic} -> {pattern.GetType().Name}");
 

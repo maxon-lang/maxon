@@ -32,7 +32,7 @@ public class MlirPipeline {
 	public MlirPipelineResult Run(ProgramAst program, MutationAnalyzer mutationAnalyzer, bool returnIr = false) {
 		// AST → Maxon Dialect
 		Logger.Debug(LogCategory.Compiler, "Converting AST to Maxon dialect");
-		var converter = new AstToMaxonConverter(_context, mutationAnalyzer);
+		var converter = new AstToMaxonConverter(mutationAnalyzer);
 		var module = converter.ConvertProgram(program);
 
 		// Maxon passes (borrow checker, dead function elimination)

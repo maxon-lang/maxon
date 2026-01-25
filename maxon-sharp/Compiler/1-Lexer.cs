@@ -60,7 +60,6 @@ public enum TokenType {
 	Float,
 	Bool,
 	Byte,
-	String,
 
 	// Literals
 	Identifier,
@@ -164,7 +163,6 @@ public class Lexer(string source) {
 		{ "float", new(TokenType.Float, KeywordCategory.TypeKeyword, "Primitive floating-point type (64-bit double precision).", false) },
 		{ "bool", new(TokenType.Bool, KeywordCategory.TypeKeyword, "Primitive boolean type (true or false).", false) },
 		{ "byte", new(TokenType.Byte, KeywordCategory.TypeKeyword, "Primitive byte type (8-bit unsigned integer).", false) },
-		{ "string", new(TokenType.String, KeywordCategory.TypeKeyword, "Primitive string type.", false) },
 		{ "uses", new(TokenType.Uses, KeywordCategory.Other, "Declares associated types in an interface.", false) },
 		{ "typealias", new(TokenType.TypeAlias, KeywordCategory.Other, "Declares a type alias for an existing type or associated type in an interface.", false) },
 		{ "is", new(TokenType.Is, KeywordCategory.Logical, "Specifies that a type conforms to an interface.", false) },

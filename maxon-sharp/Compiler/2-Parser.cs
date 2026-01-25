@@ -520,7 +520,6 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.Float)) return Advance().Value;
 		if (Check(TokenType.Bool)) return Advance().Value;
 		if (Check(TokenType.Byte)) return Advance().Value;
-		if (Check(TokenType.String)) return Advance().Value;
 		if (Check(TokenType.SelfType)) return Advance().Value;
 		if (Check(TokenType.Identifier)) return Advance().Value;
 
