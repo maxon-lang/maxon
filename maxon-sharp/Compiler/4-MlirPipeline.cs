@@ -27,11 +27,12 @@ public class MlirPipeline {
 	/// Runs the full MLIR pipeline from AST to X86 dialect.
 	/// </summary>
 	/// <param name="program">The program AST to compile</param>
+	/// <param name="mutationAnalyzer">Mutation analysis results for ownership tracking</param>
 	/// <param name="returnIr">If true, include X86 IR in the result</param>
-	public MlirPipelineResult Run(ProgramAst program, bool returnIr = false) {
+	public MlirPipelineResult Run(ProgramAst program, MutationAnalyzer mutationAnalyzer, bool returnIr = false) {
 		// AST → Maxon Dialect
 		Logger.Debug(LogCategory.Compiler, "Converting AST to Maxon dialect");
-		var converter = new AstToMaxonConverter(_context);
+		var converter = new AstToMaxonConverter(_context, mutationAnalyzer);
 		var module = converter.ConvertProgram(program);
 
 		// Maxon passes (borrow checker, dead function elimination)

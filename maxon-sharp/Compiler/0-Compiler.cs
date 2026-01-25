@@ -54,7 +54,7 @@ public class Compiler {
 
 			// MLIR pipeline (AST → Maxon → Standard → X86 dialect)
 			var pipeline = new MlirPipeline();
-			var mlirResult = pipeline.Run(program, returnIr);
+			var mlirResult = pipeline.Run(program, semanticAnalyzer.MutationAnalyzer!, returnIr);
 
 			// Write MLIR if requested
 			if (mlirOutputPath != null) {

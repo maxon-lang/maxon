@@ -174,7 +174,11 @@ public sealed class MlirStructDef(string name) {
 /// <summary>
 /// Field definition within a struct.
 /// </summary>
-public record MlirFieldDef(string Name, MlirType Type, int Offset);
+/// <param name="Name">Field name</param>
+/// <param name="Type">Field type</param>
+/// <param name="Offset">Byte offset within struct</param>
+/// <param name="IsMutable">True if declared with 'var', false if 'let'</param>
+public record MlirFieldDef(string Name, MlirType Type, int Offset, bool IsMutable = false);
 
 /// <summary>
 /// Enum type definition.

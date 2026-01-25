@@ -1,5 +1,6 @@
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects.Func;
+using MaxonDialect = MaxonSharp.Compiler.Mlir.Dialects.Maxon;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
@@ -25,14 +26,17 @@ public sealed class DeadFunctionEliminationPass : PassBase {
 			var func = module.Functions.FirstOrDefault(f => f.Name == funcName);
 			if (func is null) continue;
 
-			// Find all call operations in this function
+			// Find all call operations in this function (check both Func and Maxon dialects)
 			foreach (var block in func.Body.Blocks) {
 				foreach (var op in block.Operations) {
-					if (op is CallOp call) {
-						if (!calledFunctions.Contains(call.Callee)) {
-							calledFunctions.Add(call.Callee);
-							worklist.Enqueue(call.Callee);
-						}
+					string? callee = op switch {
+						CallOp call => call.Callee,
+						MaxonDialect.CallOp maxonCall => maxonCall.Callee,
+						_ => null
+					};
+					if (callee is not null && !calledFunctions.Contains(callee)) {
+						calledFunctions.Add(callee);
+						worklist.Enqueue(callee);
 					}
 				}
 			}

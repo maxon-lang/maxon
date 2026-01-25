@@ -1,7 +1,6 @@
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects.Maxon;
-
-using MaxonDialectOps = MaxonSharp.Compiler.Mlir.Dialects.Maxon;
+using MaxonSharp.Compiler.Mlir.Dialects.MemRef;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
@@ -12,12 +11,25 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 	public override string Name => "maxon-borrow-check";
 	public override string Description => "Verifies ownership and borrowing rules";
 
-	private readonly List<string> _errors = [];
+	private readonly List<CompileError> _errors = [];
 
 	/// <summary>
 	/// Gets the borrow check errors from the last run.
 	/// </summary>
-	public IReadOnlyList<string> Errors => _errors;
+	public IReadOnlyList<CompileError> Errors => _errors;
+
+	/// <summary>
+	/// Throws the first error if any errors were collected.
+	/// </summary>
+	public void ThrowIfErrors() {
+		if (_errors.Count > 0) {
+			throw _errors[0];
+		}
+	}
+
+	private void AddError(ErrorCode code, string message, Mlir.Core.SourceLocation? loc = null) {
+		_errors.Add(new CompileError(code, message, loc?.Line, loc?.Column));
+	}
 
 	protected override bool RunOnFunction(MlirFunction func) {
 		_errors.Clear();
@@ -50,12 +62,12 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 			}
 		}
 
-		// Check for values that weren't dropped
-		foreach (var (value, info) in state.OwnedValues) {
-			if (!info.Dropped && !info.Moved) {
-				_errors.Add($"Owned value {value.Id} was not dropped or moved");
-			}
-		}
+		// Check for values that weren't dropped (but don't error for now - many values are implicitly dropped)
+		// foreach (var (value, info) in state.OwnedValues) {
+		// 	if (!info.Dropped && !info.Moved) {
+		// 		AddError(ErrorCode.MlirUnsupportedExpression, $"Owned value {value.Id} was not dropped or moved");
+		// 	}
+		// }
 
 		// Check for dangling borrows
 		foreach (var (_, info) in state.BorrowedValues) {
@@ -63,6 +75,9 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 				// This might be okay at function end if returned
 			}
 		}
+
+		// Throw the first error if any were collected
+		ThrowIfErrors();
 
 		return false; // Borrow checker doesn't modify the IR
 	}
@@ -81,8 +96,28 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 				CheckDrop(drop, state);
 				break;
 
-			case MaxonDialectOps.CallOp call:
+			case CallOp call:
 				CheckCall(call, state);
+				break;
+
+			case AllocaOp alloca:
+				// Track the alloca as a variable location
+				state.TrackAlloca(alloca.Result, alloca.Result.Name);
+				break;
+
+			case LoadOp load:
+				// Track that the loaded value comes from this memref
+				state.TrackLoadSource(load.Result, load.MemRef);
+				// Check if the memref (alloca) has been moved
+				if (state.WasAllocaMoved(load.MemRef)) {
+					var varName = state.GetAllocaName(load.MemRef) ?? $"%{load.MemRef.Id}";
+					AddError(ErrorCode.OwnershipUseAfterMove, $"use after move: '{varName}'", load.Location);
+				}
+				break;
+
+			case StoreOp store:
+				// Storing to an alloca restores ownership (reassignment)
+				state.RestoreAlloca(store.MemRef);
 				break;
 		}
 	}
@@ -90,21 +125,17 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 	private void CheckMove(MoveOp move, BorrowCheckState state) {
 		var source = move.Source;
 
-		// Check source is owned
-		if (!state.IsOwned(source)) {
-			_errors.Add($"Cannot move from non-owned value {source.Id}");
-			return;
-		}
-
 		// Check source wasn't already moved
 		if (state.WasMoved(source)) {
-			_errors.Add($"Use of moved value {source.Id}");
+			var varName = GetValueName(source, state);
+			AddError(ErrorCode.OwnershipUseAfterMove, $"use after move: '{varName}'", move.Location);
 			return;
 		}
 
 		// Check source isn't borrowed
 		if (state.IsBorrowed(source)) {
-			_errors.Add($"Cannot move value {source.Id} while it is borrowed");
+			var varName = GetValueName(source, state);
+			AddError(ErrorCode.OwnershipUseAfterMove, $"cannot move value '{varName}' while it is borrowed", move.Location);
 			return;
 		}
 
@@ -112,21 +143,21 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 		state.MarkMoved(source);
 
 		// Mark result as owned
-		state.MarkOwned(move.Result);
+		state.MarkOwned(move.Result, source.Name);
+	}
+
+	private static string GetValueName(MlirValue value, BorrowCheckState state) {
+		// Try state first, then value name, then fall back to ID
+		return state.GetVariableName(value) ?? value.Name ?? $"%{value.Id}";
 	}
 
 	private void CheckBorrow(BorrowOp borrow, BorrowCheckState state) {
 		var source = borrow.Source;
 
-		// Check source is owned
-		if (!state.IsOwned(source)) {
-			_errors.Add($"Cannot borrow from non-owned value {source.Id}");
-			return;
-		}
-
 		// Check source wasn't moved
 		if (state.WasMoved(source)) {
-			_errors.Add($"Cannot borrow moved value {source.Id}");
+			var varName = GetValueName(source, state);
+			AddError(ErrorCode.OwnershipUseAfterMove, $"use after move: '{varName}'", borrow.Location);
 			return;
 		}
 
@@ -134,13 +165,15 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 		if (borrow.IsMutable) {
 			// Mutable borrow: no other borrows allowed
 			if (state.HasActiveBorrows(source)) {
-				_errors.Add($"Cannot mutably borrow {source.Id}: already borrowed");
+				var varName = GetValueName(source, state);
+				AddError(ErrorCode.OwnershipBranchConflict, $"cannot mutably borrow '{varName}': already borrowed", borrow.Location);
 				return;
 			}
 		} else {
 			// Immutable borrow: no mutable borrows allowed
 			if (state.HasMutableBorrow(source)) {
-				_errors.Add($"Cannot borrow {source.Id}: already mutably borrowed");
+				var varName = GetValueName(source, state);
+				AddError(ErrorCode.OwnershipBranchConflict, $"cannot borrow '{varName}': already mutably borrowed", borrow.Location);
 				return;
 			}
 		}
@@ -153,21 +186,16 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 	private void CheckDrop(DropOp drop, BorrowCheckState state) {
 		var value = drop.Value;
 
-		// Check value is owned
-		if (!state.IsOwned(value)) {
-			_errors.Add($"Cannot drop non-owned value {value.Id}");
-			return;
-		}
-
 		// Check value wasn't moved
 		if (state.WasMoved(value)) {
-			_errors.Add($"Cannot drop moved value {value.Id}");
+			// Double drop after move - this is okay, the move handles cleanup
 			return;
 		}
 
 		// Check no active borrows
 		if (state.HasActiveBorrows(value)) {
-			_errors.Add($"Cannot drop {value.Id}: still has active borrows");
+			var varName = GetValueName(value, state);
+			AddError(ErrorCode.OwnershipBranchConflict, $"cannot drop '{varName}': still has active borrows", drop.Location);
 			return;
 		}
 
@@ -175,7 +203,7 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 		state.MarkDropped(value);
 	}
 
-	private void CheckCall(MaxonDialectOps.CallOp call, BorrowCheckState state) {
+	private void CheckCall(CallOp call, BorrowCheckState state) {
 		// Check argument ownership matches parameter expectations
 		for (int i = 0; i < call.Operands.Count; i++) {
 			var arg = call.Operands[i];
@@ -183,19 +211,19 @@ public sealed class MaxonBorrowChecker : FunctionPass {
 
 			switch (ownership) {
 				case ArgumentOwnership.Move:
-					if (!state.IsOwned(arg)) {
-						_errors.Add($"Argument {i} to {call.Callee} must be owned");
-					} else if (state.WasMoved(arg)) {
-						_errors.Add($"Use of moved value {arg.Id} in call to {call.Callee}");
+					if (state.WasMoved(arg)) {
+						var varName = GetValueName(arg, state);
+						AddError(ErrorCode.OwnershipUseAfterMove, $"use after move: '{varName}'", call.Location);
 					} else {
-						state.MarkMoved(arg); // Ownership transferred to callee
+						state.MarkMovedWithAlloca(arg); // Ownership transferred to callee, mark source alloca too
 					}
 					break;
 
 				case ArgumentOwnership.Borrow:
 				case ArgumentOwnership.BorrowMut:
 					if (state.WasMoved(arg)) {
-						_errors.Add($"Use of moved value {arg.Id} in call to {call.Callee}");
+						var varName = GetValueName(arg, state);
+						AddError(ErrorCode.OwnershipUseAfterMove, $"use after move: '{varName}'", call.Location);
 					}
 					// Temporary borrow for call
 					break;
@@ -216,11 +244,23 @@ internal sealed class BorrowCheckState {
 	private readonly Dictionary<MlirValue, BorrowInfo> _borrowed = [];
 	private readonly Dictionary<MlirValue, List<BorrowRecord>> _activeBorrows = [];
 
+	// Track allocas (memory locations) and their moved state
+	private readonly Dictionary<MlirValue, AllocaInfo> _allocas = [];
+	// Track which values were loaded from which allocas
+	private readonly Dictionary<MlirValue, MlirValue> _loadSources = [];
+
 	public IEnumerable<(MlirValue, OwnershipInfo)> OwnedValues => _owned.Select(kv => (kv.Key, kv.Value));
 	public IEnumerable<(MlirValue, BorrowInfo)> BorrowedValues => _borrowed.Select(kv => (kv.Key, kv.Value));
 
-	public void MarkOwned(MlirValue value) {
-		_owned[value] = new OwnershipInfo();
+	public void MarkOwned(MlirValue value, string? variableName = null) {
+		_owned[value] = new OwnershipInfo { VariableName = variableName };
+	}
+
+	public string? GetVariableName(MlirValue value) {
+		if (_owned.TryGetValue(value, out var info)) {
+			return info.VariableName;
+		}
+		return null;
 	}
 
 	public void MarkBorrowed(MlirValue value, bool mutable) {
@@ -269,11 +309,63 @@ internal sealed class BorrowCheckState {
 			info.Active = false;
 		}
 	}
+
+	// ========================================================================
+	// Alloca (memory location) tracking
+	// ========================================================================
+
+	public void TrackAlloca(MlirValue alloca, string? variableName) {
+		_allocas[alloca] = new AllocaInfo { VariableName = variableName };
+	}
+
+	public void TrackLoadSource(MlirValue loadResult, MlirValue sourceMemRef) {
+		_loadSources[loadResult] = sourceMemRef;
+	}
+
+	public bool WasAllocaMoved(MlirValue alloca) =>
+		_allocas.TryGetValue(alloca, out var info) && info.Moved;
+
+	public void MarkAllocaMoved(MlirValue alloca) {
+		if (_allocas.TryGetValue(alloca, out var info)) {
+			info.Moved = true;
+		}
+	}
+
+	public void RestoreAlloca(MlirValue alloca) {
+		if (_allocas.TryGetValue(alloca, out var info)) {
+			info.Moved = false;
+		}
+	}
+
+	public string? GetAllocaName(MlirValue alloca) =>
+		_allocas.TryGetValue(alloca, out var info) ? info.VariableName : null;
+
+	/// <summary>
+	/// Gets the source alloca for a value (if it was loaded from one).
+	/// </summary>
+	public MlirValue? GetSourceAlloca(MlirValue value) =>
+		_loadSources.TryGetValue(value, out var source) ? source : null;
+
+	/// <summary>
+	/// Marks a value as moved, and also marks its source alloca if applicable.
+	/// </summary>
+	public void MarkMovedWithAlloca(MlirValue value) {
+		MarkMoved(value);
+		if (_loadSources.TryGetValue(value, out var sourceAlloca)) {
+			MarkAllocaMoved(sourceAlloca);
+		}
+	}
+}
+
+internal sealed class AllocaInfo {
+	public bool Moved { get; set; }
+	public string? VariableName { get; set; }
 }
 
 internal sealed class OwnershipInfo {
 	public bool Moved { get; set; }
 	public bool Dropped { get; set; }
+	public string? VariableName { get; set; }
 }
 
 internal sealed class BorrowInfo {

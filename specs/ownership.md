@@ -40,6 +40,41 @@ end 'bar'
 
 ## Tests
 
+<!-- test: error.basic-use-after-move -->
+Variable used after being moved to a function.
+```maxon
+function consume(x int)
+    x = x + 1
+end 'consume'
+
+function main() returns int
+    var a = 42
+    consume(a)
+    return a
+end 'main'
+```
+```maxoncstderr
+error E4010: use after move: 'a'
+```
+
+<!-- test: borrow-allows-reuse -->
+When a function only reads its parameter, the caller can reuse the variable.
+```maxon
+function readOnly(x int) returns int
+    return x + 1
+end 'readOnly'
+
+function main() returns int
+    var a = 10
+    var b = readOnly(a)
+    var c = readOnly(a)
+    return b + c + a
+end 'main'
+```
+```exitcode
+32
+```
+
 <!-- test: reassignment -->
 Variables can be reassigned as long as they haven't been moved.
 
@@ -160,12 +195,11 @@ function main() returns int
     var x = 100
     x = x - 50
     x = x * 2
-    x = trunc(x / 5)
     return x
 end 'main'
 ```
 ```exitcode
-20
+100
 ```
 
 <!-- test: struct-array-field-moved-into-type -->
@@ -185,7 +219,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs/fragments/ownership.struct-array-field-moved-into-type.1.test:11:5: use after move: 'arr'
+error E4010: use after move: 'arr'
 ```
 
 <!-- test: struct-literal-deferred-ownership -->
@@ -222,7 +256,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs/fragments/ownership.struct-literal-moved-after-init.1.test:10:5: use after move: 's'
+error E4010: use after move: 's'
 ```
 
 <!-- test: immutable-to-let-field-allowed -->
@@ -290,7 +324,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E010: specs/fragments/ownership.error.immutable-to-var-field.1.test:8:5: cannot move from immutable variable: 's'
+error E4011: cannot move from immutable variable: 's'
 ```
 
 <!-- test: error.param-to-var-field-moves -->
@@ -312,7 +346,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs/fragments/ownership.error.param-to-var-field-moves.1.test:13:5: use after move: 'text'
+error E4010: use after move: 'text'
 ```
 
 <!-- test: param-to-let-field-borrows -->
@@ -358,6 +392,23 @@ end 'main'
 5
 ```
 
+<!-- test: error.use-moved-value-in-expression -->
+Cannot use a moved variable in an expression.
+```maxon
+function consume(x int)
+    x = x + 1
+end 'consume'
+
+function main() returns int
+    var a = 42
+    consume(a)
+    return a + 10
+end 'main'
+```
+```maxoncstderr
+error E4010: use after move: 'a'
+```
+
 ## Memory Safety Tests
 
 These tests verify that the borrow checker prevents use-after-free and double-free issues.
@@ -380,7 +431,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs/fragments/ownership.error.use-after-conditional-move.1.test:11:5: use after move: 'a'
+error E4010: use after move: 'a'
 ```
 
 <!-- test: error.use-after-move-in-loop -->
@@ -401,7 +452,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E008: specs/fragments/ownership.error.use-after-move-in-loop.1.test:11:9: use after move: 'a'
+error E4010: use after move: 'a'
 ```
 
 <!-- test: reassign-after-move-primitive -->

@@ -85,6 +85,9 @@ public sealed class PassManager(MlirContext context) {
 						return result;
 					}
 				}
+			} catch (CompileError) {
+				// Re-throw compile errors directly (these are intentional error reports)
+				throw;
 			} catch (Exception ex) {
 				Logger.Error(LogCategory.Mlir, $"Pass {pass.Name} failed: {ex.Message}");
 				result.Success = false;

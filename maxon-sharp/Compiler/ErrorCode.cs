@@ -2,63 +2,66 @@ namespace MaxonSharp.Compiler;
 
 /// <summary>
 /// Structured error codes for the compiler.
-/// Format: E followed by 3 digits, grouped by phase.
+/// Format: E followed by 4 digits, grouped by compilation stage.
+/// - 1xxx: Lexer errors (Stage 1)
+/// - 2xxx: Parser errors (Stage 2)
+/// - 3xxx: Semantic analysis errors (Stage 3)
+/// - 4xxx: MLIR pipeline errors (Stage 4)
+/// - 5xxx: Code emitter errors (Stage 5)
+/// - 6xxx: PE writer errors (Stage 6)
 /// </summary>
 public enum ErrorCode {
-	// General errors (E000-E009)
+	// General errors (0xxx)
 	Unknown = 0,
 
-	// Lexer errors (E010-E019)
-	LexerUnexpectedCharacter = 10,
-	LexerUnterminatedString = 11,
-	LexerUnterminatedChar = 12,
-	LexerInvalidEscape = 13,
-	LexerInvalidNumber = 14,
+	// Lexer errors (1xxx) - Stage 1
+	LexerUnexpectedCharacter = 1001,
+	LexerUnterminatedString = 1002,
+	LexerUnterminatedChar = 1003,
+	LexerInvalidEscape = 1004,
+	LexerInvalidNumber = 1005,
 
-	// Parser errors (E020-E039)
-	ParserUnexpectedToken = 20,
-	ParserExpectedIdentifier = 21,
-	ParserExpectedType = 22,
-	ParserExpectedExpression = 23,
-	ParserExpectedStatement = 24,
-	ParserExpectedEnd = 25,
-	ParserUnexpectedEof = 26,
-	ParserMismatchedEndLabel = 27,
-	ParserInvalidAssignment = 28,
-	ParserExpectedToken = 29,
+	// Parser errors (2xxx) - Stage 2
+	ParserUnexpectedToken = 2001,
+	ParserExpectedIdentifier = 2002,
+	ParserExpectedType = 2003,
+	ParserExpectedExpression = 2004,
+	ParserExpectedStatement = 2005,
+	ParserExpectedEnd = 2006,
+	ParserUnexpectedEof = 2007,
+	ParserMismatchedEndLabel = 2008,
+	ParserInvalidAssignment = 2009,
+	ParserExpectedToken = 2010,
 
-	// Semantic errors (E040-E059)
-	SemanticNoMain = 40,
-	SemanticMainWrongReturnType = 41,
-	SemanticUndefinedVariable = 42,
-	SemanticUndefinedFunction = 43,
-	SemanticTypeMismatch = 44,
-	SemanticDuplicateDefinition = 45,
+	// Semantic errors (3xxx) - Stage 3
+	SemanticNoMain = 3001,
+	SemanticMainWrongReturnType = 3002,
+	SemanticUndefinedVariable = 3003,
+	SemanticUndefinedFunction = 3004,
+	SemanticTypeMismatch = 3005,
+	SemanticDuplicateDefinition = 3006,
 
-	// HIR lowering errors (E060-E079)
-	HirUnsupportedExpression = 60,
-	HirUnsupportedStatement = 61,
-	HirUndefinedType = 62,
-	HirUndefinedVariable = 63,
-	HirUndefinedFunction = 64,
-	HirInvalidFieldAccess = 65,
-	HirInvalidMethodCall = 66,
+	// MLIR pipeline errors (4xxx) - Stage 4
+	MlirUnsupportedExpression = 4001,
+	MlirUnsupportedStatement = 4002,
+	MlirUndefinedType = 4003,
+	MlirUndefinedVariable = 4004,
+	MlirUndefinedFunction = 4005,
+	MlirInvalidFieldAccess = 4006,
+	MlirInvalidMethodCall = 4007,
+	MlirUnsupportedInstruction = 4008,
+	// Ownership errors (checked in MLIR borrow checker pass)
+	OwnershipUseAfterMove = 4010,
+	OwnershipMoveFromImmutable = 4011,
+	OwnershipBranchConflict = 4012,
+	OwnershipMoveInLoop = 4013,
 
-	// Ownership errors (E070-E079)
-	OwnershipUseAfterMove = 70,      // E008: Variable used after ownership transferred
-	OwnershipMoveFromImmutable = 71, // E010: Cannot move from immutable binding
-	OwnershipBranchConflict = 72,    // Variable moved in only one branch
-	OwnershipMoveInLoop = 73,        // Move in loop without reassignment
+	// Code emitter errors (5xxx) - Stage 5
+	CodeEmitterNoMain = 5001,
+	CodeEmitterUnsupportedInstruction = 5002,
 
-	// LIR lowering errors (E080-E089)
-	LirUnsupportedInstruction = 80,
-
-	// Codegen errors (E090-E099)
-	CodegenNoMain = 90,
-	CodegenUnsupportedInstruction = 91,
-
-	// PE writer errors (E100-E109)
-	PeWriteError = 100
+	// PE writer errors (6xxx) - Stage 6
+	PeWriteError = 6001
 }
 
 /// <summary>
@@ -66,9 +69,9 @@ public enum ErrorCode {
 /// </summary>
 public static class ErrorCodeExtensions {
 	/// <summary>
-	/// Formats an error code as "E001", "E020", etc.
+	/// Formats an error code as "E1001", "E2001", etc.
 	/// </summary>
 	public static string Format(this ErrorCode code) {
-		return $"E{(int)code:D3}";
+		return $"E{(int)code:D4}";
 	}
 }

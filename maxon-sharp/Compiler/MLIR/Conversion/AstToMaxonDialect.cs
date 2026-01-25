@@ -17,6 +17,7 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 public sealed class AstToMaxonConverter {
 	private readonly MlirContext _context;
 	private readonly MlirModule _module;
+	private readonly MutationAnalyzer _mutationAnalyzer;
 	private MlirBlock? _currentBlock;
 	private MlirFunction? _currentFunction;
 	private int _valueId;
@@ -24,9 +25,12 @@ public sealed class AstToMaxonConverter {
 	private readonly Dictionary<string, MlirType> _structTypes = new();
 	private readonly Dictionary<string, MlirType> _enumTypes = new();
 	private readonly Dictionary<string, MlirGlobal> _globals = new();
+	// Track variable mutability for ownership checking
+	private readonly Dictionary<string, bool> _variableMutability = new();
 
-	public AstToMaxonConverter(MlirContext context) {
+	public AstToMaxonConverter(MlirContext context, MutationAnalyzer mutationAnalyzer) {
 		_context = context;
+		_mutationAnalyzer = mutationAnalyzer;
 		_module = new MlirModule();
 	}
 
@@ -119,10 +123,10 @@ public sealed class AstToMaxonConverter {
 	}
 
 	private void LowerTypeDecl(TypeDecl type) {
-		var fields = new List<(string name, MlirType type)>();
+		var fields = new List<(string name, MlirType type, bool isMutable)>();
 		foreach (var field in type.Fields) {
 			var fieldType = ConvertTypeRef(field.Type);
-			fields.Add((field.Name, fieldType));
+			fields.Add((field.Name, fieldType, field.IsMutable));
 		}
 		RegisterStruct(type.Name, fields);
 	}
@@ -137,7 +141,8 @@ public sealed class AstToMaxonConverter {
 
 			foreach (var assoc in member.AssociatedValues) {
 				var fieldType = ConvertTypeRef(assoc.Type);
-				payloadFields.Add(new MaxonFieldInfo(assoc.Name, fieldType, offset));
+				// Enum associated values are immutable by default
+				payloadFields.Add(new MaxonFieldInfo(assoc.Name, fieldType, offset, IsMutable: false));
 				offset += fieldType.SizeInBytes;
 			}
 
@@ -152,7 +157,7 @@ public sealed class AstToMaxonConverter {
 		foreach (var variant in variants) {
 			var vdef = new MlirVariantDef(variant.Name, variant.Tag);
 			foreach (var field in variant.PayloadFields) {
-				vdef.PayloadFields.Add(new MlirFieldDef(field.Name, field.Type, field.Offset));
+				vdef.PayloadFields.Add(new MlirFieldDef(field.Name, field.Type, field.Offset, field.IsMutable));
 			}
 			def.Variants.Add(vdef);
 		}
@@ -431,14 +436,24 @@ public sealed class AstToMaxonConverter {
 
 	private MlirValue? LowerCallExpr(CallExpr call) {
 		var args = new List<MlirValue>();
-		foreach (var arg in call.Args) {
+		var ownership = new List<ArgumentOwnership>();
+
+		for (int i = 0; i < call.Args.Count; i++) {
+			var arg = call.Args[i];
 			args.Add(LowerExpression(arg));
+
+			// Determine ownership based on mutation analysis
+			if (_mutationAnalyzer.IsMutated(call.FuncName, i)) {
+				ownership.Add(ArgumentOwnership.Move);
+			} else {
+				ownership.Add(ArgumentOwnership.Borrow);
+			}
 		}
 
 		// Try to infer return type - for now assume i64
 		MlirType? returnType = IntegerType.I64;
 
-		return EmitCall(call.FuncName, args, returnType);
+		return EmitMaxonCall(call.FuncName, args, ownership, returnType);
 	}
 
 	// ========================================================================
@@ -735,10 +750,13 @@ public sealed class AstToMaxonConverter {
 	/// <summary>
 	/// Emits a stack allocation.
 	/// </summary>
-	public MlirValue EmitAlloca(MlirType elementType) {
+	public MlirValue EmitAlloca(MlirType elementType, string? variableName = null) {
 		var memrefType = new MemRefType(elementType);
 		var op = new AllocaOp(memrefType);
 		InsertOp(op);
+		if (variableName is not null) {
+			op.Result.Name = variableName;
+		}
 		return op.Result;
 	}
 
@@ -816,12 +834,12 @@ public sealed class AstToMaxonConverter {
 	/// <summary>
 	/// Registers a struct type.
 	/// </summary>
-	public MaxonStructType RegisterStruct(string name, List<(string name, MlirType type)> fields) {
+	public MaxonStructType RegisterStruct(string name, List<(string name, MlirType type, bool isMutable)> fields) {
 		// Convert tuples to MaxonFieldInfo with calculated offsets
 		var fieldInfos = new List<MaxonFieldInfo>();
 		int offset = 0;
-		foreach (var (fname, ftype) in fields) {
-			fieldInfos.Add(new MaxonFieldInfo(fname, ftype, offset));
+		foreach (var (fname, ftype, isMutable) in fields) {
+			fieldInfos.Add(new MaxonFieldInfo(fname, ftype, offset, isMutable));
 			offset += ftype.SizeInBytes;
 		}
 
@@ -831,8 +849,8 @@ public sealed class AstToMaxonConverter {
 		// Add to module
 		var def = new MlirStructDef(name);
 		offset = 0;
-		foreach (var (fname, ftype) in fields) {
-			def.Fields.Add(new MlirFieldDef(fname, ftype, offset));
+		foreach (var (fname, ftype, isMutable) in fields) {
+			def.Fields.Add(new MlirFieldDef(fname, ftype, offset, isMutable));
 			offset += ftype.SizeInBytes;
 		}
 		_module.StructDefs.Add(def);
@@ -925,7 +943,7 @@ public sealed class AstToMaxonConverter {
 	/// Declares a local variable (allocates stack space).
 	/// </summary>
 	public MlirValue DeclareVariable(string name, MlirType type) {
-		var alloca = EmitAlloca(type);
+		var alloca = EmitAlloca(type, name);
 		_namedValues[name] = alloca;
 		return alloca;
 	}

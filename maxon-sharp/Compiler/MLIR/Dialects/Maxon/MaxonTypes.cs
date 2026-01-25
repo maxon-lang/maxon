@@ -37,7 +37,11 @@ public sealed record MaxonStructType(string Name, IReadOnlyList<MaxonFieldInfo> 
 /// <summary>
 /// Information about a struct field.
 /// </summary>
-public sealed record MaxonFieldInfo(string Name, MlirType Type, int Offset);
+/// <param name="Name">Field name</param>
+/// <param name="Type">Field type</param>
+/// <param name="Offset">Byte offset within struct</param>
+/// <param name="IsMutable">True if declared with 'var', false if 'let'</param>
+public sealed record MaxonFieldInfo(string Name, MlirType Type, int Offset, bool IsMutable);
 
 // ============================================================================
 // Maxon Enum Type

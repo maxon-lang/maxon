@@ -39,7 +39,7 @@ public class CodeEmitter {
 		// Emit main first (entry point must be at start of code section)
 		var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main");
 		if (mainFunc is null) {
-			throw new CompileError(ErrorCode.CodegenNoMain, "No 'main' function found");
+			throw new CompileError(ErrorCode.CodeEmitterNoMain, "No 'main' function found");
 		}
 
 		EmitFunction(emitter, mainFunc);
