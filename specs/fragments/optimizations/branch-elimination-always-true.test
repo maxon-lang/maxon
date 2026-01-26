@@ -1,0 +1,28 @@
+// Test: branch-elimination-always-true
+function main() returns int
+    if true 'check'
+        return 42
+    end 'check' else 'else'
+        return 99
+    end 'else'
+end 'main'
+---
+ExitCode: 42
+RequiredMlir: ```
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+---

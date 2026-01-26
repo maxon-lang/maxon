@@ -12,6 +12,7 @@ public sealed class ConstantFoldingPass : FunctionPass {
 
 	private int _foldCount;
 	private int _strengthReductionCount;
+	private int _branchEliminationCount;
 
 	protected override bool RunOnFunction(MlirFunction func) {
 		bool anyChanged = false;
@@ -19,6 +20,7 @@ public sealed class ConstantFoldingPass : FunctionPass {
 		int iterations = 0;
 		_foldCount = 0;
 		_strengthReductionCount = 0;
+		_branchEliminationCount = 0;
 
 		Logger.Debug(LogCategory.Optimizer, $"constant-folding: processing {func.Name}");
 
@@ -46,12 +48,18 @@ public sealed class ConstantFoldingPass : FunctionPass {
 						}
 					}
 				}
+
+				// Handle branch elimination for the terminator
+				if (block.Terminator is CondBranchOp condBr && TryEliminateBranch(condBr, block)) {
+					changed = true;
+					_branchEliminationCount++;
+				}
 			}
 			anyChanged |= changed;
 		} while (changed);
 
-		if (_foldCount > 0 || _strengthReductionCount > 0) {
-			Logger.Debug(LogCategory.Optimizer, $"  {func.Name}: {_foldCount} folded, {_strengthReductionCount} strength-reduced in {iterations} iteration(s)");
+		if (_foldCount > 0 || _strengthReductionCount > 0 || _branchEliminationCount > 0) {
+			Logger.Debug(LogCategory.Optimizer, $"  {func.Name}: {_foldCount} folded, {_strengthReductionCount} strength-reduced, {_branchEliminationCount} branches eliminated in {iterations} iteration(s)");
 		}
 
 		return anyChanged;
@@ -59,11 +67,63 @@ public sealed class ConstantFoldingPass : FunctionPass {
 
 	private enum FoldType { None, Constant, StrengthReduction }
 
+	/// <summary>
+	/// Tries to eliminate a conditional branch with a constant condition.
+	/// Replaces cf.cond_br with cf.br to the appropriate target.
+	/// </summary>
+	private static bool TryEliminateBranch(CondBranchOp condBr, MlirBlock block) {
+		var condValue = GetConstantBoolValue(condBr.Condition);
+		if (condValue is null) return false;
+
+		Logger.Trace(LogCategory.Optimizer, $"  branch elimination: cond_br with constant {condValue.Value} -> br");
+
+		// Replace with unconditional branch to the appropriate target
+		MlirBlock targetBlock;
+		IReadOnlyList<MlirValue> targetArgs;
+
+		if (condValue.Value) {
+			targetBlock = condBr.TrueBlock;
+			targetArgs = condBr.TrueArguments;
+		} else {
+			targetBlock = condBr.FalseBlock;
+			targetArgs = condBr.FalseArguments;
+		}
+
+		var branchOp = new BranchOp(targetBlock, [.. targetArgs]);
+
+		// Replace the terminator
+		var idx = block.Operations.IndexOf(condBr);
+		if (idx >= 0) {
+			block.Operations[idx] = branchOp;
+			return true;
+		}
+
+		return false;
+	}
+
+	/// <summary>
+	/// Gets the constant boolean value (0 or non-0) from a value.
+	/// </summary>
+	private static bool? GetConstantBoolValue(MlirValue value) {
+		if (value.DefiningOp is ConstantOp constOp && constOp.Value is IntegerAttr intAttr) {
+			return intAttr.Value != 0;
+		}
+		return null;
+	}
+
 	private static bool TryFold(MlirOperation op, out MlirOperation folded, out FoldType foldType) {
 		folded = op;
 		foldType = FoldType.None;
 
 		switch (op) {
+			// Comparison folding - fold comparisons of two constants
+			case CmpIOp cmp when GetConstantValue(cmp.Lhs) is long lhs
+							  && GetConstantValue(cmp.Rhs) is long rhs:
+				bool result = EvaluateComparison(cmp.Predicate, lhs, rhs);
+				folded = CreateConstantReplacement(new IntegerAttr(result ? 1 : 0, 1), cmp.Result);
+				foldType = FoldType.Constant;
+				return true;
+
 			case AddIOp add when GetConstantValue(add.Lhs) is long lhs
 							 && GetConstantValue(add.Rhs) is long rhs:
 				folded = CreateConstantReplacement(new IntegerAttr(lhs + rhs), add.Result);
@@ -240,5 +300,21 @@ public sealed class ConstantFoldingPass : FunctionPass {
 		// Update DefiningOp
 		originalResult.DefiningOp = shlOp;
 		return shlOp;
+	}
+
+	private static bool EvaluateComparison(CmpIPredicate predicate, long lhs, long rhs) {
+		return predicate switch {
+			CmpIPredicate.Eq => lhs == rhs,
+			CmpIPredicate.Ne => lhs != rhs,
+			CmpIPredicate.Slt => lhs < rhs,
+			CmpIPredicate.Sle => lhs <= rhs,
+			CmpIPredicate.Sgt => lhs > rhs,
+			CmpIPredicate.Sge => lhs >= rhs,
+			CmpIPredicate.Ult => (ulong)lhs < (ulong)rhs,
+			CmpIPredicate.Ule => (ulong)lhs <= (ulong)rhs,
+			CmpIPredicate.Ugt => (ulong)lhs > (ulong)rhs,
+			CmpIPredicate.Uge => (ulong)lhs >= (ulong)rhs,
+			_ => throw new NotSupportedException($"Unsupported comparison predicate: {predicate}")
+		};
 	}
 }

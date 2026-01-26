@@ -590,6 +590,83 @@ func.func @main() -> i64 {
 }
 ```
 
+### Branch Elimination
+
+When a branch condition is a compile-time constant, the branch can be replaced with
+an unconditional jump to the appropriate target.
+
+<!-- test: branch-elimination-always-true -->
+When an if condition is always true, the else branch is eliminated.
+```maxon
+function main() returns int
+    if true 'check'
+        return 42
+    end 'check' else 'else'
+        return 99
+    end 'else'
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: branch-elimination-always-false -->
+When an if condition is always false, the then branch is eliminated.
+```maxon
+function main() returns int
+    if false 'check'
+        return 42
+    end 'check' else 'else'
+        return 99
+    end 'else'
+end 'main'
+```
+```exitcode
+99
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 99
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: branch-elimination-constant-comparison -->
+When a comparison is between two constants, the branch is eliminated.
+```maxon
+function main() returns int
+    if 5 > 3 'check'
+        return 1
+    end 'check' else 'else'
+        return 0
+    end 'else'
+end 'main'
+```
+```exitcode
+1
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+}
+```
+
 <!-- test: mem2reg-loop-conditional-update -->
 Variable with conditional update inside a loop requires block arguments at the internal
 merge block (where then/else paths rejoin) in addition to the loop header.

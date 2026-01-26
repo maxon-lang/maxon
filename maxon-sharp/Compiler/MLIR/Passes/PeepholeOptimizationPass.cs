@@ -19,8 +19,14 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 		int removedSelfMoves = 0;
 		int propagatedConstants = 0;
 		int removedDeadMoves = 0;
+		int mergedBlocks = 0;
 
 		Logger.Debug(LogCategory.Optimizer, $"peephole-optimization: processing {func.Name}");
+
+		// Block-level optimization: merge blocks connected by unconditional jumps
+		var (changed0, count0) = MergeBlocks(func);
+		anyChanged |= changed0;
+		mergedBlocks = count0;
 
 		foreach (var block in func.Body.Blocks) {
 			// Pattern 1: Remove self-moves (mov reg, reg)
@@ -39,11 +45,99 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 			removedDeadMoves += count3;
 		}
 
-		if (removedSelfMoves > 0 || propagatedConstants > 0 || removedDeadMoves > 0) {
-			Logger.Debug(LogCategory.Optimizer, $"  {func.Name}: removed {removedSelfMoves} self-moves, propagated {propagatedConstants} constants, removed {removedDeadMoves} dead moves");
+		if (removedSelfMoves > 0 || propagatedConstants > 0 || removedDeadMoves > 0 || mergedBlocks > 0) {
+			Logger.Debug(LogCategory.Optimizer, $"  {func.Name}: merged {mergedBlocks} blocks, removed {removedSelfMoves} self-moves, propagated {propagatedConstants} constants, removed {removedDeadMoves} dead moves");
 		}
 
 		return anyChanged;
+	}
+
+	/// <summary>
+	/// Merges blocks when a block ends with an unconditional jump to a block that has a single predecessor.
+	/// This eliminates unnecessary jumps and simplifies the CFG.
+	/// </summary>
+	private static (bool changed, int count) MergeBlocks(MlirFunction func) {
+		bool changed = false;
+		int count = 0;
+
+		// Build predecessor map
+		var predecessors = new Dictionary<string, List<MlirBlock>>();
+		foreach (var block in func.Body.Blocks) {
+			predecessors[block.Name] = [];
+		}
+		foreach (var block in func.Body.Blocks) {
+			if (block.Terminator is JmpOp jmp) {
+				if (predecessors.TryGetValue(jmp.Target, out var preds)) {
+					preds.Add(block);
+				}
+			} else if (block.Terminator is JccOp jcc) {
+				if (predecessors.TryGetValue(jcc.TrueTarget, out var truePreds)) {
+					truePreds.Add(block);
+				}
+				if (predecessors.TryGetValue(jcc.FalseTarget, out var falsePreds)) {
+					falsePreds.Add(block);
+				}
+			}
+		}
+
+		// Find and merge blocks
+		bool madeChange;
+		do {
+			madeChange = false;
+			for (int i = 0; i < func.Body.Blocks.Count; i++) {
+				var block = func.Body.Blocks[i];
+
+				// Check if this block ends with an unconditional jump
+				if (block.Terminator is not JmpOp jmp) continue;
+
+				// Find the target block
+				var targetBlock = func.Body.Blocks.FirstOrDefault(b => b.Name == jmp.Target);
+				if (targetBlock is null || targetBlock == block) continue;
+
+				// Check if target has exactly one predecessor (this block)
+				if (!predecessors.TryGetValue(targetBlock.Name, out var targetPreds) || targetPreds.Count != 1)
+					continue;
+
+				// Check target block has no arguments (block parameters)
+				if (targetBlock.Arguments.Count > 0) continue;
+
+				// Merge: remove the jmp from current block and append target block's ops
+				Logger.Trace(LogCategory.Optimizer, $"  merging block {block.Name} -> {targetBlock.Name}");
+
+				// Remove the jmp instruction
+				block.Operations.Remove(jmp);
+
+				// Add all operations from the target block
+				foreach (var op in targetBlock.Operations) {
+					block.Operations.Add(op);
+				}
+
+				// Remove the target block
+				func.Body.Blocks.Remove(targetBlock);
+
+				// Update predecessor map for any blocks that the target jumped to
+				foreach (var otherBlock in func.Body.Blocks) {
+					if (predecessors.TryGetValue(otherBlock.Name, out var preds)) {
+						preds.Remove(targetBlock);
+						// If target jumped to otherBlock, add current block as predecessor
+						if (block.Terminator is JmpOp newJmp && newJmp.Target == otherBlock.Name) {
+							if (!preds.Contains(block)) preds.Add(block);
+						} else if (block.Terminator is JccOp newJcc) {
+							if ((newJcc.TrueTarget == otherBlock.Name || newJcc.FalseTarget == otherBlock.Name) && !preds.Contains(block)) {
+								preds.Add(block);
+							}
+						}
+					}
+				}
+
+				madeChange = true;
+				changed = true;
+				count++;
+				break; // Restart from beginning after modification
+			}
+		} while (madeChange);
+
+		return (changed, count);
 	}
 
 	/// <summary>

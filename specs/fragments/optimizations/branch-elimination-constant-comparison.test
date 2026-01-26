@@ -1,0 +1,28 @@
+// Test: branch-elimination-constant-comparison
+function main() returns int
+    if 5 > 3 'check'
+        return 1
+    end 'check' else 'else'
+        return 0
+    end 'else'
+end 'main'
+---
+ExitCode: 1
+RequiredMlir: ```
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+}
+```
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+}
+---
