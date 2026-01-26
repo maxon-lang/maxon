@@ -314,6 +314,9 @@ class Program {
 		var fragmentDir = Path.Combine(specDir, "fragments");
 		var tempDir = Path.Combine(projectDir, "temp");
 
+		// Set project root for error formatting
+		Compiler.CompileError.ProjectRoot = projectDir;
+
 		Logger.Info(LogCategory.Testing, "Running maxon-sharp spec tests...");
 
 		var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers);

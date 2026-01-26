@@ -76,6 +76,10 @@ public class Compiler {
 
 			return new CompileResult(true, null, mlirResult.X86Ir);
 		} catch (CompileError ex) {
+			// For single-file compilation, add file path to error if not already set
+			if (ex.FilePath == null && sources.Length == 1) {
+				ex.FilePath = sources[0].Path;
+			}
 			return new CompileResult(false, ex.Format());
 		} catch (Exception ex) {
 			return new CompileResult(false, ex.Message);
