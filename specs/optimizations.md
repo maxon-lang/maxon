@@ -308,6 +308,11 @@ if/else branches are promoted from stack to SSA form with block arguments at mer
 points. Loop variables remain on the stack due to complex register allocation
 requirements for loop-carried values.
 
+> **TODO**: When command-line argument support is implemented, update these tests
+> to pass the condition value as a command-line argument. Currently these tests use
+> function parameters, but interprocedural constant propagation could still optimize
+> them away. Command-line arguments are truly runtime values that cannot be folded.
+
 <!-- test: mem2reg-loop-variable -->
 Loop counter variable modified each iteration - candidate for SSA promotion.
 ```maxon
@@ -364,36 +369,51 @@ func.func @main() -> i64 {
 
 <!-- test: mem2reg-conditional-assignment -->
 Variable assigned different values in if/else branches - promoted to block arguments at merge.
+Uses a runtime condition (comparison) to prevent constant folding from eliminating branches.
 ```maxon
-function main() returns int
+function test(cond int) returns int
     var x = 0
-    if true 'check'
+    if cond > 0 'check'
         x = 10
     end 'check' else 'else'
         x = 20
     end 'else'
     return x
+end 'test'
+
+function main() returns int
+    return test(1)
 end 'main'
 ```
 ```exitcode
 10
 ```
 ```requiredmlir
-func.func @main() -> i64 {
-  ^entry:
+func.func @test(%cond: i64) -> i64 {
+  ^entry(%cond: i64):
     x86.prologue stack_size=32
-    x86.mov rax, 1
-    x86.test rax, rax
+    x86.mov rax, rcx
+    x86.mov rcx, 0
+    x86.cmp rax, rcx
+    x86.setg rcx
+    x86.test rcx, rcx
     x86.jne then
     x86.jmp else
   ^then:
-    x86.mov rcx, 10
+    x86.mov rax, 10
     x86.jmp merge
   ^else:
-    x86.mov rcx, 20
+    x86.mov rax, 20
     x86.jmp merge
-  ^merge(%6: i64):
-    x86.mov rax, rcx
+  ^merge(%11: i64):
+    x86.epilogue
+    x86.ret
+}
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 1
+    x86.call test
     x86.epilogue
     x86.ret
 }
@@ -402,35 +422,49 @@ func.func @main() -> i64 {
 <!-- test: mem2reg-conditional-assignment-false -->
 Same pattern with false condition to verify both branches work.
 ```maxon
-function main() returns int
+function test(cond int) returns int
     var x = 0
-    if false 'check'
+    if cond > 0 'check'
         x = 10
     end 'check' else 'else'
         x = 20
     end 'else'
     return x
+end 'test'
+
+function main() returns int
+    return test(0)
 end 'main'
 ```
 ```exitcode
 20
 ```
 ```requiredmlir
-func.func @main() -> i64 {
-  ^entry:
+func.func @test(%cond: i64) -> i64 {
+  ^entry(%cond: i64):
     x86.prologue stack_size=32
-    x86.mov rax, 0
-    x86.test rax, rax
+    x86.mov rax, rcx
+    x86.mov rcx, 0
+    x86.cmp rax, rcx
+    x86.setg rcx
+    x86.test rcx, rcx
     x86.jne then
     x86.jmp else
   ^then:
-    x86.mov rcx, 10
+    x86.mov rax, 10
     x86.jmp merge
   ^else:
-    x86.mov rcx, 20
+    x86.mov rax, 20
     x86.jmp merge
-  ^merge(%6: i64):
-    x86.mov rax, rcx
+  ^merge(%11: i64):
+    x86.epilogue
+    x86.ret
+}
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 0
+    x86.call test
     x86.epilogue
     x86.ret
 }
@@ -438,34 +472,51 @@ func.func @main() -> i64 {
 
 <!-- test: mem2reg-cross-block-read -->
 Variable assigned in one block and read in another - requires cross-block promotion.
+Uses a runtime condition to prevent constant folding.
 ```maxon
-function main() returns int
+function test(cond int) returns int
     var result = 0
-    if true 'check'
+    if cond > 0 'check'
         result = 42
     end 'check'
     return result
+end 'test'
+
+function main() returns int
+    return test(1)
 end 'main'
 ```
 ```exitcode
 42
 ```
 ```requiredmlir
+func.func @test(%cond: i64) -> i64 {
+  ^entry(%cond: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, 0
+    x86.mov rdx, 0
+    x86.cmp rax, rdx
+    x86.setg rdx
+    x86.test rdx, rdx
+    x86.jne then
+    x86.jmp merge.args
+  merge.args:
+    x86.mov rdx, rcx
+    x86.jmp merge
+  ^then:
+    x86.mov rdx, 42
+    x86.jmp merge
+  ^merge(%10: i64):
+    x86.mov rax, rdx
+    x86.epilogue
+    x86.ret
+}
 func.func @main() -> i64 {
   ^entry:
     x86.prologue stack_size=32
     x86.mov rcx, 1
-    x86.test rcx, rcx
-    x86.jne then
-    x86.jmp merge.args
-  merge.args:
-    x86.mov rcx, 0
-    x86.jmp merge
-  ^then:
-    x86.mov rcx, 42
-    x86.jmp merge
-  ^merge(%5: i64):
-    x86.mov rax, rcx
+    x86.call test
     x86.epilogue
     x86.ret
 }

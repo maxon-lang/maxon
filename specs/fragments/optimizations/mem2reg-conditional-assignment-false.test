@@ -1,51 +1,76 @@
 // Test: mem2reg-conditional-assignment-false
-function main() returns int
+function test(cond int) returns int
     var x = 0
-    if false 'check'
+    if cond > 0 'check'
         x = 10
     end 'check' else 'else'
         x = 20
     end 'else'
     return x
+end 'test'
+
+function main() returns int
+    return test(0)
 end 'main'
 ---
 ExitCode: 20
 RequiredMlir: ```
-func.func @main() -> i64 {
-  ^entry:
+func.func @test(%cond: i64) -> i64 {
+  ^entry(%cond: i64):
     x86.prologue stack_size=32
-    x86.mov rax, 0
-    x86.test rax, rax
+    x86.mov rax, rcx
+    x86.mov rcx, 0
+    x86.cmp rax, rcx
+    x86.setg rcx
+    x86.test rcx, rcx
     x86.jne then
     x86.jmp else
   ^then:
-    x86.mov rcx, 10
+    x86.mov rax, 10
     x86.jmp merge
   ^else:
-    x86.mov rcx, 20
+    x86.mov rax, 20
     x86.jmp merge
-  ^merge(%6: i64):
-    x86.mov rax, rcx
+  ^merge(%11: i64):
+    x86.epilogue
+    x86.ret
+}
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 0
+    x86.call test
     x86.epilogue
     x86.ret
 }
 ```
 ---
-func.func @main() -> i64 {
-  ^entry:
+func.func @test(%cond: i64) -> i64 {
+  ^entry(%cond: i64):
     x86.prologue stack_size=32
-    x86.mov rax, 0
-    x86.test rax, rax
+    x86.mov rax, rcx
+    x86.mov rcx, 0
+    x86.cmp rax, rcx
+    x86.setg rcx
+    x86.test rcx, rcx
     x86.jne then
     x86.jmp else
   ^then:
-    x86.mov rcx, 10
+    x86.mov rax, 10
     x86.jmp merge
   ^else:
-    x86.mov rcx, 20
+    x86.mov rax, 20
     x86.jmp merge
-  ^merge(%6: i64):
-    x86.mov rax, rcx
+  ^merge(%11: i64):
+    x86.epilogue
+    x86.ret
+}
+
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 0
+    x86.call test
     x86.epilogue
     x86.ret
 }
