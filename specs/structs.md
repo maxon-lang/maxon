@@ -129,7 +129,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E4009: specs/fragments/structs/error.let-field-assign.test:8:5: cannot assign to immutable field: 'version'
+error E4009: specs/fragments/structs/error.let-field-assign.test:8:5: cannot assign to field 'Config.version' because it is immutable (declare with 'var' to make it mutable)
 ```
 
 <!-- test: simple-type -->

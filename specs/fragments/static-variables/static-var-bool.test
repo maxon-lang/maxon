@@ -1,0 +1,59 @@
+// Test: static-var-bool
+var initialized = false
+
+function init()
+    initialized = true
+end 'init'
+
+function main() returns int
+    if initialized 'check1'
+        return 1
+    end 'check1'
+    init()
+    if initialized 'check2'
+        return 42
+    end 'check2'
+    return 0
+end 'main'
+---
+ExitCode: 42
+---
+func.func @init() {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 1
+    x86.lea_global rcx, @global.initialized
+    x86.mov byte ptr [rcx], rax
+    x86.epilogue
+    x86.ret
+}
+
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.lea_global rax, @global.initialized
+    x86.mov rcx, byte ptr [rax]
+    x86.test rcx, rcx
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  ^merge:
+    x86.call init
+    x86.lea_global rcx, @global.initialized
+    x86.mov rax, byte ptr [rcx]
+    x86.test rax, rax
+    x86.jne then_1
+    x86.jmp merge_1
+  ^then_1:
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+  ^merge_1:
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+}
+---

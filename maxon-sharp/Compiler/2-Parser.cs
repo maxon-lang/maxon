@@ -132,9 +132,9 @@ public class Parser(List<Token> tokens) {
 
 			if (Check(TokenType.TypeAlias)) {
 				associatedTypes.Add(ParseTypeAliasDecl(false));
-			} else if (Check(TokenType.Var) || Check(TokenType.Let) || Check(TokenType.Export)) {
+			} else if (IsFieldStart()) {
 				fields.Add(ParseFieldDecl());
-			} else if (Check(TokenType.Static) || Check(TokenType.Function)) {
+			} else if (IsMethodStart()) {
 				methods.Add(ParseMethodDecl());
 			} else {
 				throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected field or method in type, got {Current().Type}", Current().Line, Current().Column);
@@ -1457,6 +1457,41 @@ public class Parser(List<Token> tokens) {
 	// ============================================================================
 	// Helpers
 	// ============================================================================
+
+	/// <summary>
+	/// Checks if the current position starts a field declaration.
+	/// Handles: var, let, export var, export let, static var, static let, export static var, export static let
+	/// </summary>
+	private bool IsFieldStart() {
+		var offset = 0;
+
+		// Skip optional export
+		if (Peek(offset)?.Type == TokenType.Export) offset++;
+
+		// Skip optional static
+		if (Peek(offset)?.Type == TokenType.Static) offset++;
+
+		// Must be var or let
+		var tokenType = Peek(offset)?.Type;
+		return tokenType == TokenType.Var || tokenType == TokenType.Let;
+	}
+
+	/// <summary>
+	/// Checks if the current position starts a method declaration.
+	/// Handles: function, static function, export function, export static function
+	/// </summary>
+	private bool IsMethodStart() {
+		var offset = 0;
+
+		// Skip optional export
+		if (Peek(offset)?.Type == TokenType.Export) offset++;
+
+		// Skip optional static
+		if (Peek(offset)?.Type == TokenType.Static) offset++;
+
+		// Must be function
+		return Peek(offset)?.Type == TokenType.Function;
+	}
 
 	private static long ParseIntegerLiteral(string text) {
 		text = text.Replace("_", "");

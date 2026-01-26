@@ -1,0 +1,49 @@
+// Test: static-method-basic
+type Box
+    export var value int
+
+    static function make(v int) returns Box
+        return {value: v}
+    end 'make'
+end 'Box'
+
+function main() returns int
+    var b = Box.make(42)
+    return b.value
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.mov rax, 42
+    x86.lea rbx, qword ptr [rbp-40]
+    x86.mov r10, rbx
+    x86.mov r11, rax
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Box.make
+    x86.lea rax, qword ptr [rbp-48]
+    x86.mov qword ptr [rax], rbx
+    x86.mov rcx, qword ptr [rax]
+    x86.lea rax, qword ptr [rcx]
+    x86.mov rcx, qword ptr [rax]
+    x86.mov rax, rcx
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Box.make(%__sret: ptr<!maxon.struct<Box>>, %v: i64) {
+  ^entry(%__sret: ptr<!maxon.struct<Box>>, %v: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, rdx
+    x86.lea rdx, qword ptr [rax]
+    x86.mov qword ptr [rdx], rcx
+    x86.epilogue
+    x86.ret
+}
+---

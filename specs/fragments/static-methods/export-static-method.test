@@ -1,0 +1,88 @@
+// Test: export-static-method
+type Factory
+    export var id int
+
+    export static function create(val int) returns Factory
+        return {id: val}
+    end 'create'
+
+    export static function zero() returns Factory
+        return Factory.create(0)
+    end 'zero'
+end 'Factory'
+
+function main() returns int
+    var f1 = Factory.create(100)
+    var f2 = Factory.zero()
+    return f1.id + f2.id
+end 'main'
+---
+ExitCode: 100
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=64
+    x86.push rbx
+    x86.push r12
+    x86.mov rax, 100
+    x86.lea rbx, qword ptr [rbp-40]
+    x86.mov r10, rbx
+    x86.mov r11, rax
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Factory.create
+    x86.lea r12, qword ptr [rbp-48]
+    x86.mov qword ptr [r12], rbx
+    x86.lea rbx, qword ptr [rbp-56]
+    x86.mov rcx, rbx
+    x86.call Factory.zero
+    x86.lea rax, qword ptr [rbp-64]
+    x86.mov qword ptr [rax], rbx
+    x86.mov rcx, qword ptr [r12]
+    x86.lea rdx, qword ptr [rcx]
+    x86.mov rcx, qword ptr [rdx]
+    x86.mov rdx, qword ptr [rax]
+    x86.lea rax, qword ptr [rdx]
+    x86.mov rdx, qword ptr [rax]
+    x86.mov rax, rcx
+    x86.add rax, rdx
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Factory.create(%__sret: ptr<!maxon.struct<Factory>>, %val: i64) {
+  ^entry(%__sret: ptr<!maxon.struct<Factory>>, %val: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, rdx
+    x86.lea rdx, qword ptr [rax]
+    x86.mov qword ptr [rdx], rcx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Factory.zero(%__sret: ptr<!maxon.struct<Factory>>) {
+  ^entry(%__sret: ptr<!maxon.struct<Factory>>):
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.push r12
+    x86.mov rbx, rcx
+    x86.mov rax, 0
+    x86.lea r12, qword ptr [rbp-40]
+    x86.mov r10, r12
+    x86.mov r11, rax
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Factory.create
+    x86.lea rax, qword ptr [r12]
+    x86.mov rcx, qword ptr [rax]
+    x86.lea rax, qword ptr [rbx]
+    x86.mov qword ptr [rax], rcx
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+---

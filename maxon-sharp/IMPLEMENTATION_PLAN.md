@@ -2,8 +2,6 @@
 
 | Spec | Description | Status | Notes |
 |------|-------------|--------|-------|
-| static-methods.md | Static methods | ⬜ | |
-| static-fields.md | Static fields, top-level var | ⬜ | |
 | self.md | self reference in methods | ⬜ | |
 | type-casting.md | `as` operator for casts | ⬜ | |
 

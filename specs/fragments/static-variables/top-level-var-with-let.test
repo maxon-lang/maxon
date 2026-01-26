@@ -1,0 +1,28 @@
+// Test: top-level-var-with-let
+let BASE = 40
+var offset = 0
+
+function main() returns int
+    offset = 2
+    return BASE + offset
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 2
+    x86.lea_global rcx, @global.offset
+    x86.mov qword ptr [rcx], rax
+    x86.lea_global rcx, @global.BASE
+    x86.mov rax, qword ptr [rcx]
+    x86.lea_global rcx, @global.offset
+    x86.mov rdx, qword ptr [rcx]
+    x86.mov rcx, rax
+    x86.add rcx, rdx
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+---

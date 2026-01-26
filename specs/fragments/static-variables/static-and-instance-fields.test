@@ -1,0 +1,78 @@
+// Test: static-and-instance-fields
+type Thing
+    static var created = 0
+    export var id int
+
+    static function make(n int) returns Thing
+        Thing.created = Thing.created + 1
+        return {id: n}
+    end 'make'
+end 'Thing'
+
+function main() returns int
+    var a = Thing.make(10)
+    var b = Thing.make(20)
+    return Thing.created + a.id + b.id
+end 'main'
+---
+ExitCode: 32
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=64
+    x86.push rbx
+    x86.push r12
+    x86.mov rax, 10
+    x86.lea rbx, qword ptr [rbp-40]
+    x86.mov r10, rbx
+    x86.mov r11, rax
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Thing.make
+    x86.lea r12, qword ptr [rbp-48]
+    x86.mov qword ptr [r12], rbx
+    x86.mov rax, 20
+    x86.lea rbx, qword ptr [rbp-56]
+    x86.mov r10, rbx
+    x86.mov r11, rax
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Thing.make
+    x86.lea rax, qword ptr [rbp-64]
+    x86.mov qword ptr [rax], rbx
+    x86.lea_global rcx, @global.Thing.created
+    x86.mov rdx, qword ptr [rcx]
+    x86.mov rcx, qword ptr [r12]
+    x86.lea r8, qword ptr [rcx]
+    x86.mov rcx, qword ptr [r8]
+    x86.mov r8, rdx
+    x86.add r8, rcx
+    x86.mov rcx, qword ptr [rax]
+    x86.lea rax, qword ptr [rcx]
+    x86.mov rcx, qword ptr [rax]
+    x86.mov rax, r8
+    x86.add rax, rcx
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Thing.make(%__sret: ptr<!maxon.struct<Thing>>, %n: i64) {
+  ^entry(%__sret: ptr<!maxon.struct<Thing>>, %n: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, rdx
+    x86.lea_global rdx, @global.Thing.created
+    x86.mov r8, qword ptr [rdx]
+    x86.mov rdx, 1
+    x86.mov r9, r8
+    x86.add r9, rdx
+    x86.lea_global rdx, @global.Thing.created
+    x86.mov qword ptr [rdx], r9
+    x86.lea r9, qword ptr [rax]
+    x86.mov qword ptr [r9], rcx
+    x86.epilogue
+    x86.ret
+}
+---

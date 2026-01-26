@@ -93,7 +93,7 @@ public sealed class DeadStoreEliminationPass : AbstractPassBase {
 		// Remove allocas that are never loaded (and now have no stores)
 		// Also check that the alloca result is not used as a value elsewhere
 		foreach (var (block, alloca) in allAllocas) {
-			if (!loadedMemRefs.Contains(alloca.Result)) {
+			if (!loadedMemRefs.Contains(alloca.Result) && !escapedAllocas.Contains(alloca.Result)) {
 				// Check if there are any remaining stores to this alloca
 				bool hasStores = block.Operations.OfType<StoreOp>().Any(s => s.MemRef == alloca.Result);
 				// Check if the alloca result is used as a value (e.g., stored to another location)

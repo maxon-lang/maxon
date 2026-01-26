@@ -136,7 +136,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	private void LowerTypeDecl(TypeDecl type) {
-		var fields = new List<(string name, MlirType type, bool isMutable, Expr? defaultValue)>();
+		var instanceFields = new List<(string name, MlirType type, bool isMutable, Expr? defaultValue)>();
 
 		foreach (var field in type.Fields) {
 			MlirType fieldType;
@@ -147,10 +147,40 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			} else {
 				throw new InvalidOperationException($"Field '{field.Name}' has no type annotation and no default value");
 			}
-			fields.Add((field.Name, fieldType, field.IsMutable, field.DefaultValue));
+
+			if (field.IsStatic) {
+				// Static fields are registered as globals with name "TypeName.fieldName"
+				LowerStaticField(type.Name, field.Name, fieldType, field.DefaultValue, isConstant: !field.IsMutable);
+			} else {
+				instanceFields.Add((field.Name, fieldType, field.IsMutable, field.DefaultValue));
+			}
 		}
 
-		RegisterStruct(type.Name, fields);
+		RegisterStruct(type.Name, instanceFields);
+	}
+
+	private void LowerStaticField(string typeName, string fieldName, MlirType fieldType, Expr? defaultValue, bool isConstant) {
+		var globalName = $"{typeName}.{fieldName}";
+
+		MlirAttribute? initValue;
+		if (defaultValue != null) {
+			var (_, attr) = EvaluateConstantExpr(defaultValue);
+			initValue = attr;
+		} else {
+			// Default initialize to zero
+			initValue = fieldType switch {
+				IntegerType => new IntegerAttr(0),
+				FloatType => new FloatAttr(0.0),
+				_ => throw new NotSupportedException($"Cannot default-initialize static field of type: {fieldType}")
+			};
+		}
+
+		var global = new MlirGlobal($"global.{globalName}", fieldType) {
+			IsConstant = isConstant,
+			InitValue = initValue
+		};
+		_module.Globals.Add(global);
+		_globals[globalName] = global;
 	}
 
 	private void LowerEnumDecl(EnumDecl enumDecl) {
@@ -1097,59 +1127,97 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		return EmitStructInit(structType, fieldValues);
 	}
 
-	private MlirValue LowerFieldAccessExpr(FieldAccessExpr fieldAccess) {
-		// Lower the base expression to get the struct value
-		var baseValue = LowerExpression(fieldAccess.Base);
+	/// <summary>
+	/// Checks if a base expression refers to a type name (for static field access).
+	/// Returns the type name if static, null otherwise.
+	/// </summary>
+	private string? TryGetStaticFieldTypeName(Expr baseExpr) {
+		if (baseExpr is IdentifierExpr ident &&
+			_structTypes.ContainsKey(ident.Name) &&
+			!_namedValues.ContainsKey(ident.Name)) {
+			return ident.Name;
+		}
+		return null;
+	}
 
-		// Get the struct type from the base value
+	/// <summary>
+	/// Resolves an instance field access, returning the base value and field info.
+	/// </summary>
+	private (MlirValue baseValue, MaxonFieldInfo fieldInfo) ResolveInstanceField(
+		Expr baseExpr, string fieldName, int? line, int? column) {
+
+		var baseValue = LowerExpression(baseExpr);
+
 		if (baseValue.Type is not MaxonStructType structType) {
 			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
-				$"Cannot access field '{fieldAccess.FieldName}' on non-struct type: {baseValue.Type}",
+				$"Cannot access field '{fieldName}' on non-struct type: {baseValue.Type}",
+				line, column);
+		}
+
+		var fieldInfo = structType.GetField(fieldName)
+			?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+				$"Struct '{structType.Name}' does not have a field '{fieldName}'",
+				line, column);
+
+		return (baseValue, fieldInfo);
+	}
+
+	private MlirValue LowerFieldAccessExpr(FieldAccessExpr fieldAccess) {
+		var typeName = TryGetStaticFieldTypeName(fieldAccess.Base);
+		if (typeName != null) {
+			var staticFieldName = $"{typeName}.{fieldAccess.FieldName}";
+			if (_globals.TryGetValue(staticFieldName, out var global)) {
+				return EmitLoad(EmitGetGlobal(global));
+			}
+			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+				$"Type '{typeName}' does not have a static field '{fieldAccess.FieldName}'",
 				fieldAccess.Location?.Line, fieldAccess.Location?.Column);
 		}
 
-		// Look up the field info to get the field type
-		var fieldInfo = structType.GetField(fieldAccess.FieldName) ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
-				$"Struct '{structType.Name}' does not have a field '{fieldAccess.FieldName}'",
-				fieldAccess.Location?.Line, fieldAccess.Location?.Column);
+		var (baseValue, fieldInfo) = ResolveInstanceField(
+			fieldAccess.Base, fieldAccess.FieldName,
+			fieldAccess.Location?.Line, fieldAccess.Location?.Column);
+
 		return EmitGetField(baseValue, fieldAccess.FieldName, fieldInfo.Type);
 	}
 
 	private void LowerFieldAssign(FieldAssignStmt fieldAssign) {
-		// Check if the base is an immutable variable
-		if (fieldAssign.Base is IdentifierExpr idExpr && _immutableVariables.Contains(idExpr.Name)) {
-			throw new CompileError(ErrorCode.ImmutableVariable,
-				$"cannot assign to immutable variable: '{idExpr.Name}'",
-				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
-		}
-
-		// Lower the base expression to get the struct value
-		var baseValue = LowerExpression(fieldAssign.Base);
-
-		// Get the struct type from the base value
-		if (baseValue.Type is not MaxonStructType structType) {
+		var typeName = TryGetStaticFieldTypeName(fieldAssign.Base);
+		if (typeName != null) {
+			var staticFieldName = $"{typeName}.{fieldAssign.FieldName}";
+			if (_globals.TryGetValue(staticFieldName, out var global)) {
+				if (global.IsConstant) {
+					throw new CompileError(ErrorCode.ImmutableVariable,
+						$"cannot assign to static field '{staticFieldName}' because it is immutable (declare with 'var' to make it mutable)",
+						fieldAssign.Location?.Line, fieldAssign.Location?.Column);
+				}
+				EmitStore(LowerExpression(fieldAssign.Value), EmitGetGlobal(global));
+				return;
+			}
 			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
-				$"Cannot assign to field '{fieldAssign.FieldName}' on non-struct type: {baseValue.Type}",
+				$"Type '{typeName}' does not have a static field '{fieldAssign.FieldName}'",
 				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
 		}
 
-		// Look up the field info
-		var fieldInfo = structType.GetField(fieldAssign.FieldName) ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
-				$"Struct '{structType.Name}' does not have a field '{fieldAssign.FieldName}'",
-				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
-
-		// Check if the field is immutable (declared with 'let')
-		if (!fieldInfo.IsMutable) {
+		// Check if the base is an immutable variable
+		if (fieldAssign.Base is IdentifierExpr ident && _immutableVariables.Contains(ident.Name)) {
 			throw new CompileError(ErrorCode.ImmutableVariable,
-				$"cannot assign to immutable field: '{fieldAssign.FieldName}'",
+				$"cannot assign to immutable variable: '{ident.Name}'",
 				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
 		}
 
-		// Lower the value being assigned
-		var value = LowerExpression(fieldAssign.Value);
+		var (baseValue, fieldInfo) = ResolveInstanceField(
+			fieldAssign.Base, fieldAssign.FieldName,
+			fieldAssign.Location?.Line, fieldAssign.Location?.Column);
 
-		// Emit the field set operation
-		EmitSetField(baseValue, fieldAssign.FieldName, value);
+		if (!fieldInfo.IsMutable) {
+			var structType = (MaxonStructType)baseValue.Type;
+			throw new CompileError(ErrorCode.ImmutableVariable,
+				$"cannot assign to field '{structType.Name}.{fieldAssign.FieldName}' because it is immutable (declare with 'var' to make it mutable)",
+				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
+		}
+
+		EmitSetField(baseValue, fieldAssign.FieldName, LowerExpression(fieldAssign.Value));
 	}
 
 	// ========================================================================

@@ -1,0 +1,45 @@
+// Test: static-var-increment
+type Counter
+    static var count = 0
+
+    static function increment()
+        Counter.count = Counter.count + 1
+    end 'increment'
+end 'Counter'
+
+function main() returns int
+    Counter.increment()
+    Counter.increment()
+    Counter.increment()
+    return Counter.count
+end 'main'
+---
+ExitCode: 3
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.call Counter.increment
+    x86.call Counter.increment
+    x86.call Counter.increment
+    x86.lea_global rax, @global.Counter.count
+    x86.mov rcx, qword ptr [rax]
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Counter.increment() {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.lea_global rax, @global.Counter.count
+    x86.mov rcx, qword ptr [rax]
+    x86.mov rax, 1
+    x86.mov rdx, rcx
+    x86.add rdx, rax
+    x86.lea_global rax, @global.Counter.count
+    x86.mov qword ptr [rax], rdx
+    x86.epilogue
+    x86.ret
+}
+---

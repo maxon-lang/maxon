@@ -1,0 +1,22 @@
+// Test: top-level-var-basic
+var counter = 0
+
+function main() returns int
+    counter = 42
+    return counter
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.lea_global rcx, @global.counter
+    x86.mov qword ptr [rcx], rax
+    x86.lea_global rcx, @global.counter
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+---
