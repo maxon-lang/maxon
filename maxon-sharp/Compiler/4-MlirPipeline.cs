@@ -35,10 +35,11 @@ public class MlirPipeline {
 		var converter = new AstToMaxonConverter(mutationAnalyzer);
 		var module = converter.ConvertProgram(program);
 
-		// Maxon passes (borrow checker, dead function elimination)
+		// Maxon passes (borrow checker, inlining, dead function elimination)
 		Logger.Debug(LogCategory.Compiler, "Running Maxon dialect passes");
 		var passManager = new PassManager(_context);
 		passManager.AddPass(new MaxonBorrowChecker());
+		passManager.AddPass(new InliningPass());
 		passManager.AddPass(new DeadFunctionEliminationPass());
 		passManager.Run(module);
 
@@ -68,11 +69,14 @@ public class MlirPipeline {
 			Logger.Trace(LogCategory.Compiler, $"After MaxonToStandard (before standard passes):\n{postMaxonPrinter}");
 		}
 
-		// Standard passes (mem2reg, constant folding, CSE, DCE)
+		// Standard passes (mem2reg, LICM, constant folding, jump threading, GVN, DCE)
 		Logger.Debug(LogCategory.Compiler, "Running Standard dialect passes");
 		var standardPasses = new PassManager(_context);
 		standardPasses.AddPass(new Mem2RegPass());
+		standardPasses.AddPass(new LICMPass());
 		standardPasses.AddPass(new ConstantFoldingPass());
+		standardPasses.AddPass(new JumpThreadingPass()); // Re-enabled for testing
+		standardPasses.AddPass(new GVNPass());
 		standardPasses.AddPass(new DeadCodeEliminationPass());
 		standardPasses.Run(module);
 
@@ -80,6 +84,11 @@ public class MlirPipeline {
 		Logger.Debug(LogCategory.Compiler, "Running dead store elimination");
 		var deadStorePass = new DeadStoreEliminationPass();
 		deadStorePass.Run(module);
+
+		// Tail call optimization (mark tail calls before lowering)
+		Logger.Debug(LogCategory.Compiler, "Running tail call optimization");
+		var tailCallPass = new TailCallOptimizationPass();
+		tailCallPass.Run(module);
 
 		// Analyze allocas and compute frame layout BEFORE lowering
 		// This must happen before StandardToX86 so LowerAllocaOp can use the computed offsets

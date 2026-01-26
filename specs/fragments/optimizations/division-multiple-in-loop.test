@@ -1,0 +1,61 @@
+// Test: division-multiple-in-loop
+function main() returns int
+    var sum = 0
+    var i = 1
+    while i <= 10 'loop'
+        sum = sum + (i / 2) + (i mod 3)
+        i = i + 1
+    end 'loop'
+    return sum
+end 'main'
+---
+ExitCode: 35
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.push rbx
+    x86.push r12
+    x86.push r13
+    x86.mov rax, 0
+    x86.mov rcx, 1
+    x86.mov r8, 10
+    x86.mov r9, 2
+    x86.mov r10, 3
+    x86.mov r11, rax
+    x86.mov rbx, rcx
+    x86.jmp while.cond
+  ^while.cond(%21: i64, %24: i64):
+    x86.cmp rbx, r8
+    x86.setle rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov r12, r9
+    x86.mov rax, rbx
+    x86.cdq
+    x86.idiv r12
+    x86.mov rdx, rax
+    x86.mov r12, r11
+    x86.add r12, rdx
+    x86.mov r13, r10
+    x86.mov rax, rbx
+    x86.cdq
+    x86.idiv r13
+    x86.mov rax, r12
+    x86.add rax, rdx
+    x86.mov rdx, rbx
+    x86.add rdx, rcx
+    x86.mov r11, rax
+    x86.mov rbx, rdx
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, r11
+    x86.pop r13
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+---

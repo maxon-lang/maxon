@@ -1,0 +1,64 @@
+// Test: tco-accumulator-pattern
+function sum_to_helper(n int, acc int) returns int
+    if n <= 0 'done'
+        return acc
+    end 'done'
+    return sum_to_helper(n - 1, acc: acc + n)
+end 'sum_to_helper'
+
+function sum_to(n int) returns int
+    return sum_to_helper(n, acc: 0)
+end 'sum_to'
+
+function main() returns int
+    return sum_to(5)
+end 'main'
+---
+ExitCode: 15
+---
+func.func @sum_to_helper(%n: i64, %acc: i64) -> i64 {
+  ^entry(%n: i64, %acc: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.cmp rcx, rax
+    x86.setle rax
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, rdx
+    x86.epilogue
+    x86.ret
+  ^merge:
+    x86.mov rax, 1
+    x86.mov r8, rcx
+    x86.sub r8, rax
+    x86.mov rax, rdx
+    x86.add rax, rcx
+    x86.mov r10, r8
+    x86.mov r11, rax
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call sum_to_helper
+    x86.mov rcx, rax
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 5
+    x86.mov rcx, 0
+    x86.mov r10, rax
+    x86.mov r11, rcx
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call sum_to_helper
+    x86.mov rcx, rax
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+---

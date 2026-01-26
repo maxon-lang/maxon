@@ -22,8 +22,12 @@ func.func @main() -> i64 {
     x86.mov rax, 0
     x86.lea rcx, qword ptr [rbp-40]
     x86.mov qword ptr [rcx], rax
-    x86.jmp while.cond_2
-  ^while.cond_2:
+    x86.jmp while.body_2
+  ^while.exit:
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+  ^while.body_2:
     x86.mov rax, qword ptr [rcx]
     x86.mov rdx, 1
     x86.mov r8, rax
@@ -34,13 +38,7 @@ func.func @main() -> i64 {
     x86.cmp r8, rdx
     x86.sete r8
     x86.test r8, r8
-    x86.jne then
-    x86.jmp merge
-  ^then:
-    x86.mov rax, qword ptr [rcx]
-    x86.epilogue
-    x86.ret
-  ^merge:
-    x86.jmp while.cond_2
+    x86.jne while.exit
+    x86.jmp while.body_2
 }
 ---

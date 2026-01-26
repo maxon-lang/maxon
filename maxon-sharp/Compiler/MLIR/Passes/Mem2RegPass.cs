@@ -37,17 +37,6 @@ public sealed class Mem2RegPass : FunctionPass {
 	}
 
 	/// <summary>
-	/// Represents a detected natural loop in the CFG.
-	/// </summary>
-	private sealed class LoopInfo {
-		public required MlirBlock Header { get; init; }
-		public required MlirBlock Latch { get; init; }
-		public required MlirBlock? Exit { get; init; }
-		public required HashSet<MlirBlock> Body { get; init; }
-		public required MlirBlock? Preheader { get; init; }
-	}
-
-	/// <summary>
 	/// Information about an alloca that can be promoted within a loop.
 	/// </summary>
 	private sealed class LoopAllocaInfo {
@@ -186,8 +175,8 @@ public sealed class Mem2RegPass : FunctionPass {
 		var elementType = allocaType.ElementType;
 
 		// Try loop-aware promotion first
-		var loops = DetectLoops(func);
-		var containingLoop = FindContainingLoop(loops, uses.AllUsedBlocks);
+		var loops = LoopAnalysis.DetectLoops(func);
+		var containingLoop = LoopAnalysis.FindContainingLoop(loops, uses.AllUsedBlocks);
 
 		if (containingLoop != null) {
 			var loopAlloca = AnalyzeLoopAlloca(alloca, containingLoop, uses, func);
@@ -238,126 +227,6 @@ public sealed class Mem2RegPass : FunctionPass {
 
 		ApplyPromotion(uses, loadReplacements, allocaBlock, alloca, func);
 		return true;
-	}
-
-	// ============================================================================
-	// Loop Detection
-	// ============================================================================
-
-	private static List<LoopInfo> DetectLoops(MlirFunction func) {
-		var loops = new List<LoopInfo>();
-		var blockIndices = BuildBlockIndexMap(func);
-		var backEdgesByHeader = FindBackEdges(func, blockIndices);
-
-		foreach (var (header, latches) in backEdgesByHeader) {
-			// Skip exit blocks masquerading as loop headers
-			if (header.Name.Contains("exit")) {
-				Logger.Trace(LogCategory.Optimizer, $"    skipping spurious loop with exit block as header: ^{header.Name}");
-				continue;
-			}
-
-			var loop = BuildLoopInfo(header, latches, func);
-			if (loop != null) {
-				loops.Add(loop);
-				Logger.Trace(LogCategory.Optimizer, $"    detected loop: header=^{loop.Header.Name}, latches={latches.Count}, body={loop.Body.Count} blocks");
-			}
-		}
-
-		return loops;
-	}
-
-	private static Dictionary<MlirBlock, int> BuildBlockIndexMap(MlirFunction func) {
-		var indices = new Dictionary<MlirBlock, int>();
-		for (int i = 0; i < func.Body.Blocks.Count; i++) {
-			indices[func.Body.Blocks[i]] = i;
-		}
-		return indices;
-	}
-
-	private static Dictionary<MlirBlock, List<MlirBlock>> FindBackEdges(MlirFunction func, Dictionary<MlirBlock, int> blockIndices) {
-		var backEdgesByHeader = new Dictionary<MlirBlock, List<MlirBlock>>();
-
-		foreach (var block in func.Body.Blocks) {
-			foreach (var succ in block.Successors) {
-				if (blockIndices[succ] <= blockIndices[block]) {
-					if (!backEdgesByHeader.TryGetValue(succ, out var latches)) {
-						latches = [];
-						backEdgesByHeader[succ] = latches;
-					}
-					latches.Add(block);
-				}
-			}
-		}
-
-		return backEdgesByHeader;
-	}
-
-	private static LoopInfo? BuildLoopInfo(MlirBlock header, List<MlirBlock> latches, MlirFunction func) {
-		var body = CollectLoopBody(header, latches);
-		var exit = FindLoopExit(header, body);
-		var preheader = FindLoopPreheader(header, body);
-
-		return new LoopInfo {
-			Header = header,
-			Latch = latches[^1],
-			Exit = exit,
-			Body = body,
-			Preheader = preheader
-		};
-	}
-
-	private static HashSet<MlirBlock> CollectLoopBody(MlirBlock header, List<MlirBlock> latches) {
-		var body = new HashSet<MlirBlock> { header };
-		var worklist = new Stack<MlirBlock>();
-
-		foreach (var latch in latches) {
-			worklist.Push(latch);
-		}
-
-		while (worklist.Count > 0) {
-			var block = worklist.Pop();
-			if (body.Add(block)) {
-				foreach (var pred in block.Predecessors) {
-					if (!body.Contains(pred)) {
-						worklist.Push(pred);
-					}
-				}
-			}
-		}
-
-		return body;
-	}
-
-	private static MlirBlock? FindLoopExit(MlirBlock header, HashSet<MlirBlock> body) {
-		foreach (var succ in header.Successors) {
-			if (!body.Contains(succ)) return succ;
-		}
-		return null;
-	}
-
-	private static MlirBlock? FindLoopPreheader(MlirBlock header, HashSet<MlirBlock> body) {
-		foreach (var pred in header.Predecessors) {
-			if (!body.Contains(pred)) return pred;
-		}
-		return null;
-	}
-
-	private static LoopInfo? FindContainingLoop(List<LoopInfo> loops, HashSet<MlirBlock> blocks) {
-		LoopInfo? best = null;
-		int bestSize = int.MaxValue;
-
-		foreach (var loop in loops) {
-			var validBlocks = loop.Body.ToHashSet();
-			if (loop.Preheader != null) validBlocks.Add(loop.Preheader);
-			if (loop.Exit != null) validBlocks.Add(loop.Exit);
-
-			if (blocks.All(b => validBlocks.Contains(b)) && loop.Body.Count < bestSize) {
-				best = loop;
-				bestSize = loop.Body.Count;
-			}
-		}
-
-		return best;
 	}
 
 	// ============================================================================
@@ -446,7 +315,7 @@ public sealed class Mem2RegPass : FunctionPass {
 	}
 
 	private static bool HasStoresInNestedLoop(AllocaUses uses, LoopInfo loop, MlirFunction func) {
-		var allLoops = DetectLoops(func);
+		var allLoops = LoopAnalysis.DetectLoops(func);
 
 		foreach (var innerLoop in allLoops) {
 			if (innerLoop.Header == loop.Header) continue;

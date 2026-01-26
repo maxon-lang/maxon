@@ -119,21 +119,25 @@ public abstract class FloatBinaryPattern<TArith, TX86> : ConversionPattern<TArit
 
 /// <summary>
 /// Base pattern for idiv-based operations (division and remainder).
+/// Uses a fresh virtual register for the divisor to avoid clobbering live values.
 /// </summary>
 public abstract class DivisionPattern<T>(X86Register resultReg) : ConversionPattern<T>
 	where T : MlirOperation {
 
 	protected override bool MatchAndRewrite(T op, ConversionPatternRewriter rewriter) {
 		var rax = new RegOperand(X86Register.RAX);
-		var r11 = new RegOperand(X86Register.R11);
 		var lhs = new VRegOperand(op.Operands[0].Id);
 		var rhs = new VRegOperand(op.Operands[1].Id);
 		var dst = new VRegOperand(op.Results[0].Id);
 
-		rewriter.Insert(new MovOp(r11, rhs));
+		// Use a fresh virtual register for the divisor instead of hardcoding R11
+		// This avoids clobbering loop variables that might be allocated to R11
+		var divisorVreg = ConversionPatternRewriter.CreateVReg();
+
+		rewriter.Insert(new MovOp(divisorVreg, rhs));
 		rewriter.Insert(new MovOp(rax, lhs));
 		rewriter.Insert(new CdqOp());
-		rewriter.Insert(new IdivOp(r11));
+		rewriter.Insert(new IdivOp(divisorVreg));
 		rewriter.Insert(new MovOp(dst, new RegOperand(resultReg)));
 		return true;
 	}
@@ -405,21 +409,23 @@ public sealed class LowerCondBranchOp : ConversionPattern<CondBranchOp> {
 		bool hasTrueArgs = op.TrueArguments.Count > 0;
 		bool hasFalseArgs = op.FalseArguments.Count > 0;
 
-		string trueDest = hasTrueArgs ? $"{op.TrueBlock.Name}.args" : op.TrueBlock.Name;
-		string falseDest = hasFalseArgs ? $"{op.FalseBlock.Name}.args" : op.FalseBlock.Name;
+		// Use source block name to create unique .args labels when multiple branches target same block
+		string sourceBlockName = op.ParentBlock?.Name ?? "unknown";
+		string trueDest = hasTrueArgs ? $"{op.TrueBlock.Name}.args.from.{sourceBlockName}" : op.TrueBlock.Name;
+		string falseDest = hasFalseArgs ? $"{op.FalseBlock.Name}.args.from.{sourceBlockName}" : op.FalseBlock.Name;
 
 		rewriter.Insert(new TestOp(cond, cond));
 		rewriter.Insert(new JccOp(X86CondCode.NE, trueDest, falseDest));
 
 		// Emit intermediate blocks for argument passing (critical edge splitting)
 		if (hasFalseArgs) {
-			rewriter.Insert(new LabelOp($"{op.FalseBlock.Name}.args"));
+			rewriter.Insert(new LabelOp($"{op.FalseBlock.Name}.args.from.{sourceBlockName}"));
 			StandardToX86Patterns.EmitBlockArgumentMoves(op.FalseArguments, op.FalseBlock, rewriter);
 			rewriter.Insert(new JmpOp(op.FalseBlock.Name));
 		}
 
 		if (hasTrueArgs) {
-			rewriter.Insert(new LabelOp($"{op.TrueBlock.Name}.args"));
+			rewriter.Insert(new LabelOp($"{op.TrueBlock.Name}.args.from.{sourceBlockName}"));
 			StandardToX86Patterns.EmitBlockArgumentMoves(op.TrueArguments, op.TrueBlock, rewriter);
 			rewriter.Insert(new JmpOp(op.TrueBlock.Name));
 		}

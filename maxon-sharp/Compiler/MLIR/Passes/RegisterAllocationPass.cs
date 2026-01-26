@@ -22,7 +22,11 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		// Step 2: Analyze which vregs are live across function calls
 		var liveAcrossCalls = AnalyzeLiveAcrossCalls(func);
 
-		// Step 3: Allocate registers with liveness-based reuse
+		// Step 3: Analyze which vregs are live across explicit physical register writes
+		// (e.g., division sequence uses mov rax, X; cdq; idiv which clobbers RAX/RDX)
+		AnalyzePhysicalRegisterConstraints(func, livenessInfo);
+
+		// Step 4: Allocate registers with liveness-based reuse
 		var allocation = new Dictionary<int, X86Register>();
 		var usedNonVolatileGpr = new HashSet<X86Register>();
 		var usedNonVolatileXmm = new HashSet<X86Register>();
@@ -33,7 +37,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			changed |= blockChanged;
 		}
 
-		// Step 4: Insert save/restore of callee-saved registers in prologue/epilogue
+		// Step 5: Insert save/restore of callee-saved registers in prologue/epilogue
 		if (ctx.UsedNonVolatileGpr.Count > 0 || ctx.UsedNonVolatileXmm.Count > 0) {
 			InsertCalleeSavedSaveRestore(func, ctx.UsedNonVolatileGpr, ctx.UsedNonVolatileXmm);
 		}
@@ -68,6 +72,15 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		/// These cannot be freed until after the loop exits.
 		/// </summary>
 		public HashSet<int> LiveThroughLoop { get; } = [];
+
+		/// <summary>
+		/// Maps physical registers to the set of vregs that cannot use that register.
+		/// A vreg cannot use a physical register if:
+		/// - The vreg is defined before an explicit write to that physical register
+		/// - The vreg is used after that explicit write
+		/// This handles patterns like division where RAX/RDX are explicitly used.
+		/// </summary>
+		public Dictionary<X86Register, HashSet<int>> VregsConstrainedFrom { get; } = [];
 	}
 
 	/// <summary>
@@ -109,16 +122,24 @@ public sealed class RegisterAllocationPass : FunctionPass {
 
 		// Second pass: detect back-edges and mark loop-live vregs
 		// A vreg is loop-live if it's defined BEFORE the loop header AND used inside the loop
+		// Note: we scan ALL control flow ops in each block, not just the terminator,
+		// because inline .args blocks may contain additional JmpOps after a JccOp
 		for (int blockIdx = 0; blockIdx < func.Body.Blocks.Count; blockIdx++) {
 			var block = func.Body.Blocks[blockIdx];
-			var terminator = block.Operations.LastOrDefault();
 
-			// Find successor block indices
-			var successorNames = terminator switch {
-				JmpOp jmp => [jmp.Target],
-				JccOp jcc => [jcc.TrueTarget, jcc.FalseTarget],
-				_ => Array.Empty<string>()
-			};
+			// Collect ALL successor names from ALL control flow ops in the block
+			var successorNames = new List<string>();
+			foreach (var op in block.Operations) {
+				switch (op) {
+					case JmpOp jmp:
+						successorNames.Add(jmp.Target);
+						break;
+					case JccOp jcc:
+						successorNames.Add(jcc.TrueTarget);
+						successorNames.Add(jcc.FalseTarget);
+						break;
+				}
+			}
 
 			foreach (var succName in successorNames) {
 				if (blockNames.TryGetValue(succName, out var succIdx) && succIdx <= blockIdx) {
@@ -219,6 +240,109 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		}
 
 		return liveAcrossCalls;
+	}
+
+	/// <summary>
+	/// Analyzes which vregs are live across explicit physical register writes.
+	/// When code like "mov rax, vreg" explicitly writes to a physical register,
+	/// any vreg that's defined before and used after cannot be allocated to that register.
+	/// This is essential for patterns like division where RAX/RDX are explicitly used.
+	/// </summary>
+	private static void AnalyzePhysicalRegisterConstraints(MlirFunction func, LivenessInfo livenessInfo) {
+		// Collect vreg definitions, uses, and physical register write locations
+		var vregDefs = new Dictionary<int, (int blockIdx, int opIdx)>();
+		var vregUses = new List<(int vregId, int blockIdx, int opIdx)>();
+		var physRegWrites = new List<(X86Register reg, int blockIdx, int opIdx)>();
+
+		for (int blockIdx = 0; blockIdx < func.Body.Blocks.Count; blockIdx++) {
+			var block = func.Body.Blocks[blockIdx];
+			for (int opIdx = 0; opIdx < block.Operations.Count; opIdx++) {
+				var op = block.Operations[opIdx];
+				if (op is not X86Op x86Op) continue;
+
+				// Check for explicit physical register writes
+				// MovOp where destination is a physical register (not vreg)
+				if (op is MovOp mov && mov.Dst is RegOperand dstReg) {
+					physRegWrites.Add((dstReg.Register, blockIdx, opIdx));
+				}
+
+				// CdqOp implicitly writes to RDX (sign extension)
+				if (op is CdqOp) {
+					physRegWrites.Add((X86Register.RDX, blockIdx, opIdx));
+				}
+
+				// IdivOp writes to both RAX (quotient) and RDX (remainder)
+				if (op is IdivOp) {
+					physRegWrites.Add((X86Register.RAX, blockIdx, opIdx));
+					physRegWrites.Add((X86Register.RDX, blockIdx, opIdx));
+				}
+
+				// Collect vreg defs and uses
+				foreach (var operand in x86Op.X86Operands) {
+					CollectVregDefsAndUsesForConstraints(operand, blockIdx, opIdx, vregDefs, vregUses);
+				}
+			}
+		}
+
+		// For each physical register write, find vregs that are live across it
+		foreach (var (physReg, writeBlockIdx, writeOpIdx) in physRegWrites) {
+			if (!livenessInfo.VregsConstrainedFrom.ContainsKey(physReg)) {
+				livenessInfo.VregsConstrainedFrom[physReg] = [];
+			}
+
+			foreach (var kvp in vregDefs) {
+				var vregId = kvp.Key;
+				var (defBlockIdx, defOpIdx) = kvp.Value;
+
+				// Is vreg defined before the physical register write?
+				bool definedBefore = defBlockIdx < writeBlockIdx ||
+					(defBlockIdx == writeBlockIdx && defOpIdx < writeOpIdx);
+
+				if (!definedBefore) continue;
+
+				// Is vreg used after the physical register write?
+				bool usedAfter = vregUses.Any(u =>
+					u.vregId == vregId &&
+					(u.blockIdx > writeBlockIdx ||
+					(u.blockIdx == writeBlockIdx && u.opIdx > writeOpIdx)));
+
+				if (usedAfter) {
+					livenessInfo.VregsConstrainedFrom[physReg].Add(vregId);
+				}
+			}
+		}
+
+		// Log constraints
+		foreach (var (physReg, constrainedVregs) in livenessInfo.VregsConstrainedFrom) {
+			if (constrainedVregs.Count > 0) {
+				Logger.Trace(LogCategory.RegAlloc, $"  Vregs constrained from {physReg}: {string.Join(", ", constrainedVregs.Select(v => $"v{v}"))}");
+			}
+		}
+	}
+
+	/// <summary>
+	/// Collects vreg definitions and uses for constraint analysis.
+	/// </summary>
+	private static void CollectVregDefsAndUsesForConstraints(
+		X86Operand operand,
+		int blockIdx,
+		int opIdx,
+		Dictionary<int, (int blockIdx, int opIdx)> defs,
+		List<(int vregId, int blockIdx, int opIdx)> uses) {
+
+		if (operand is VRegOperand vreg) {
+			if (!defs.ContainsKey(vreg.Id)) {
+				defs[vreg.Id] = (blockIdx, opIdx);
+			}
+			uses.Add((vreg.Id, blockIdx, opIdx));
+		} else if (operand is MemOperand mem) {
+			if (mem.Base is not null) {
+				CollectVregDefsAndUsesForConstraints(mem.Base, blockIdx, opIdx, defs, uses);
+			}
+			if (mem.Index is not null) {
+				CollectVregDefsAndUsesForConstraints(mem.Index, blockIdx, opIdx, defs, uses);
+			}
+		}
 	}
 
 	/// <summary>
@@ -498,7 +622,25 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			bool needsNonVolatile = liveAcrossCalls.Contains(vregId);
 			_vregIsNonVolatile[vregId] = needsNonVolatile;
 
+			// Collect registers this vreg cannot use due to explicit physical register writes
+			var constrainedRegs = new HashSet<X86Register>();
+			foreach (var (physReg, constrainedVregs) in livenessInfo.VregsConstrainedFrom) {
+				if (constrainedVregs.Contains(vregId)) {
+					constrainedRegs.Add(physReg);
+				}
+			}
+
 			if (needsNonVolatile) {
+				// Filter out constrained registers from non-volatile set
+				var available = _freeNonVolatileGprs.Where(r => !constrainedRegs.Contains(r)).ToHashSet();
+				if (available.Count > 0) {
+					return AllocFromFreeSetFiltered(
+						_freeNonVolatileGprs,
+						available,
+						usedNonVolatileGpr,
+						$"callee-saved GPRs for v{vregId}");
+				}
+				// Fall back to any available non-volatile (shouldn't happen often)
 				return AllocFromFreeSet(
 					_freeNonVolatileGprs,
 					usedNonVolatileGpr,
@@ -508,8 +650,10 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			// For loop-live vregs, avoid RAX/RDX which are clobbered by idiv
 			// These registers can be reused mid-loop but a loop-live vreg must survive the entire loop
 			if (livenessInfo.LiveThroughLoop.Contains(vregId)) {
-				// Try volatile registers except RAX/RDX
-				var safeVolatile = _freeVolatileGprs.Where(r => r != X86Register.RAX && r != X86Register.RDX).ToList();
+				// Try volatile registers except RAX/RDX and any constrained registers
+				var safeVolatile = _freeVolatileGprs
+					.Where(r => r != X86Register.RAX && r != X86Register.RDX && !constrainedRegs.Contains(r))
+					.ToList();
 				if (safeVolatile.Count > 0) {
 					var reg = safeVolatile.First();
 					_freeVolatileGprs.Remove(reg);
@@ -518,10 +662,41 @@ public sealed class RegisterAllocationPass : FunctionPass {
 
 				// Fall back to callee-saved for loop-live vregs
 				_vregIsNonVolatile[vregId] = true;
+				var availableNonVol = _freeNonVolatileGprs.Where(r => !constrainedRegs.Contains(r)).ToHashSet();
+				if (availableNonVol.Count > 0) {
+					return AllocFromFreeSetFiltered(
+						_freeNonVolatileGprs,
+						availableNonVol,
+						usedNonVolatileGpr,
+						$"GPRs for loop-live v{vregId} (avoiding RAX/RDX)");
+				}
 				return AllocFromFreeSet(
 					_freeNonVolatileGprs,
 					usedNonVolatileGpr,
 					$"GPRs for loop-live v{vregId} (avoiding RAX/RDX)");
+			}
+
+			// Check if this vreg is constrained from any registers
+			if (constrainedRegs.Count > 0) {
+				// Try volatile registers that aren't constrained
+				var safeVolatile = _freeVolatileGprs.Where(r => !constrainedRegs.Contains(r)).ToList();
+				if (safeVolatile.Count > 0) {
+					var reg = safeVolatile.First();
+					_freeVolatileGprs.Remove(reg);
+					Logger.Trace(LogCategory.RegAlloc, $"  v{vregId} constrained from {string.Join(",", constrainedRegs)}, using {reg}");
+					return reg;
+				}
+
+				// Try non-volatile that aren't constrained
+				var safeNonVolatile = _freeNonVolatileGprs.Where(r => !constrainedRegs.Contains(r)).ToList();
+				if (safeNonVolatile.Count > 0) {
+					_vregIsNonVolatile[vregId] = true;
+					var reg = safeNonVolatile.First();
+					_freeNonVolatileGprs.Remove(reg);
+					usedNonVolatileGpr.Add(reg);
+					Logger.Trace(LogCategory.RegAlloc, $"  v{vregId} constrained from {string.Join(",", constrainedRegs)}, using callee-saved {reg}");
+					return reg;
+				}
 			}
 
 			// Try volatile first, then fall back to non-volatile
@@ -535,6 +710,23 @@ public sealed class RegisterAllocationPass : FunctionPass {
 				_freeNonVolatileGprs,
 				usedNonVolatileGpr,
 				$"GPRs for v{vregId} (spilled to callee-saved)");
+		}
+
+		/// <summary>
+		/// Allocates from a filtered subset of the free set.
+		/// </summary>
+		private static X86Register AllocFromFreeSetFiltered(
+			HashSet<X86Register> freeSet,
+			HashSet<X86Register> available,
+			HashSet<X86Register>? usedSet,
+			string description) {
+			if (available.Count == 0) {
+				throw new InvalidOperationException($"Ran out of {description}. Spilling not yet implemented.");
+			}
+			var reg = available.First();
+			freeSet.Remove(reg);
+			usedSet?.Add(reg);
+			return reg;
 		}
 
 		private X86Register AllocXmm(int vregId) {

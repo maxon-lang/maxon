@@ -1,0 +1,46 @@
+// Test: tco-simple-tail-recursion
+function countdown(n int) returns int
+    if n <= 0 'done'
+        return 0
+    end 'done'
+    return countdown(n - 1)
+end 'countdown'
+
+function main() returns int
+    return countdown(10)
+end 'main'
+---
+ExitCode: 0
+---
+func.func @countdown(%n: i64) -> i64 {
+  ^entry(%n: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.cmp rcx, rax
+    x86.setle rax
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+  ^merge:
+    x86.mov rax, 1
+    x86.mov rdx, rcx
+    x86.sub rdx, rax
+    x86.mov rcx, rdx
+    x86.call countdown
+    x86.epilogue
+    x86.ret
+}
+
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 10
+    x86.call countdown
+    x86.epilogue
+    x86.ret
+}
+---

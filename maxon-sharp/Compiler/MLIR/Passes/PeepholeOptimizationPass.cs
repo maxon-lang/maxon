@@ -19,14 +19,12 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 		int removedSelfMoves = 0;
 		int propagatedConstants = 0;
 		int removedDeadMoves = 0;
-		int mergedBlocks = 0;
-
 		Logger.Debug(LogCategory.Optimizer, $"peephole-optimization: processing {func.Name}");
 
 		// Block-level optimization: merge blocks connected by unconditional jumps
 		var (changed0, count0) = MergeBlocks(func);
 		anyChanged |= changed0;
-		mergedBlocks = count0;
+		int mergedBlocks = count0;
 
 		foreach (var block in func.Body.Blocks) {
 			// Pattern 1: Remove self-moves (mov reg, reg)
@@ -60,22 +58,29 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 		bool changed = false;
 		int count = 0;
 
-		// Build predecessor map
-		var predecessors = new Dictionary<string, List<MlirBlock>>();
+		// Build predecessor map - counts how many blocks jump TO each block
+		// Note: we scan ALL control flow ops in each block, not just terminators,
+		// because inline .args blocks contain JmpOps that are not the block terminator
+		var predecessorCount = new Dictionary<string, int>();
 		foreach (var block in func.Body.Blocks) {
-			predecessors[block.Name] = [];
+			predecessorCount[block.Name] = 0;
 		}
 		foreach (var block in func.Body.Blocks) {
-			if (block.Terminator is JmpOp jmp) {
-				if (predecessors.TryGetValue(jmp.Target, out var preds)) {
-					preds.Add(block);
-				}
-			} else if (block.Terminator is JccOp jcc) {
-				if (predecessors.TryGetValue(jcc.TrueTarget, out var truePreds)) {
-					truePreds.Add(block);
-				}
-				if (predecessors.TryGetValue(jcc.FalseTarget, out var falsePreds)) {
-					falsePreds.Add(block);
+			foreach (var op in block.Operations) {
+				if (op is JmpOp jmp) {
+					if (predecessorCount.TryGetValue(jmp.Target, out int value)) {
+						predecessorCount[jmp.Target] = ++value;
+					}
+				} else if (op is JccOp jcc) {
+					if (predecessorCount.TryGetValue(jcc.TrueTarget, out int value)) {
+						predecessorCount[jcc.TrueTarget] = ++value;
+					}
+					if (predecessorCount.ContainsKey(jcc.FalseTarget)) {
+						// Don't double-count if both branches go to same target
+						if (jcc.TrueTarget != jcc.FalseTarget) {
+							predecessorCount[jcc.FalseTarget]++;
+						}
+					}
 				}
 			}
 		}
@@ -95,11 +100,27 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 				if (targetBlock is null || targetBlock == block) continue;
 
 				// Check if target has exactly one predecessor (this block)
-				if (!predecessors.TryGetValue(targetBlock.Name, out var targetPreds) || targetPreds.Count != 1)
+				if (!predecessorCount.TryGetValue(targetBlock.Name, out var predCount) || predCount != 1)
 					continue;
 
 				// Check target block has no arguments (block parameters)
 				if (targetBlock.Arguments.Count > 0) continue;
+
+				// Safety: verify target block is not referenced by name from anywhere else
+				// This includes LabelOps and any JmpOp/JccOp that references the block by name
+				bool hasOtherReference = func.Body.Blocks.Any(b => {
+					if (b == block || b == targetBlock) return false;
+					foreach (var op in b.Operations) {
+						if (op is LabelOp labelOp && labelOp.Name == targetBlock.Name)
+							return true;
+						if (op is JmpOp jmpOp && jmpOp.Target == targetBlock.Name)
+							return true;
+						if (op is JccOp jccOp && (jccOp.TrueTarget == targetBlock.Name || jccOp.FalseTarget == targetBlock.Name))
+							return true;
+					}
+					return false;
+				});
+				if (hasOtherReference) continue;
 
 				// Merge: remove the jmp from current block and append target block's ops
 				Logger.Trace(LogCategory.Optimizer, $"  merging block {block.Name} -> {targetBlock.Name}");
@@ -110,25 +131,23 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 				// Add all operations from the target block
 				foreach (var op in targetBlock.Operations) {
 					block.Operations.Add(op);
+					op.ParentBlock = block;
 				}
 
-				// Remove the target block
+				// Update predecessor counts for target's successors
+				if (targetBlock.Terminator is JmpOp targetJmp) {
+					// The jump target now has one fewer predecessor (target is gone)
+					// but same count since current block now jumps there
+					// Net effect: no change in predecessor count
+				} else if (targetBlock.Terminator is JccOp targetJcc) {
+					// Same logic - predecessor counts stay the same
+				}
+
+				// Remove the target block from predecessor count tracking
+				predecessorCount.Remove(targetBlock.Name);
+
+				// Remove the target block from the function
 				func.Body.Blocks.Remove(targetBlock);
-
-				// Update predecessor map for any blocks that the target jumped to
-				foreach (var otherBlock in func.Body.Blocks) {
-					if (predecessors.TryGetValue(otherBlock.Name, out var preds)) {
-						preds.Remove(targetBlock);
-						// If target jumped to otherBlock, add current block as predecessor
-						if (block.Terminator is JmpOp newJmp && newJmp.Target == otherBlock.Name) {
-							if (!preds.Contains(block)) preds.Add(block);
-						} else if (block.Terminator is JccOp newJcc) {
-							if ((newJcc.TrueTarget == otherBlock.Name || newJcc.FalseTarget == otherBlock.Name) && !preds.Contains(block)) {
-								preds.Add(block);
-							}
-						}
-					}
-				}
 
 				madeChange = true;
 				changed = true;
@@ -162,7 +181,9 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 
 	/// <summary>
 	/// Propagates immediate values through register copies.
-	/// Transforms: mov reg1, imm; mov reg2, reg1 -> mov reg2, imm (when reg1 has no other uses)
+	/// Transforms: mov reg1, imm; mov reg2, reg1 -> mov reg2, imm (when reg1 has no other uses in the block)
+	/// NOTE: This only removes the mov reg, imm if the register is not used elsewhere in the block.
+	/// If the register is live out of the block (used in other blocks), we keep both movs.
 	/// </summary>
 	private static (bool changed, int count) PropagateConstants(MlirBlock block) {
 		bool changed = false;
@@ -171,8 +192,12 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 		// Track: register -> immediate value mappings from mov reg, imm instructions
 		var regToImm = new Dictionary<X86Register, (long value, int index)>();
 
-		// Track which registers are used after their definition
+		// Track which registers are used after their definition IN THIS BLOCK
 		var regUseCounts = CountRegisterUses(block);
+
+		// Track which registers might be live-out (used in successor blocks)
+		// For safety, don't remove the defining mov if the register might be used later
+		var liveOutRegs = GetPotentiallyLiveOutRegisters(block);
 
 		// Process operations
 		var ops = block.Operations.ToList();
@@ -187,8 +212,10 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 				// Check if this is a mov destReg, srcReg where srcReg was loaded from imm
 				else if (mov.Dst is RegOperand destReg && mov.Src is RegOperand srcReg) {
 					if (regToImm.TryGetValue(srcReg.Register, out var immInfo)) {
-						// Check if srcReg is only used once (this mov is its only use)
-						if (regUseCounts.TryGetValue(srcReg.Register, out var useCount) && useCount == 1) {
+						// Check if srcReg is only used once in this block (this mov is its only use)
+						// AND the register is not potentially live-out (used in other blocks)
+						if (regUseCounts.TryGetValue(srcReg.Register, out var useCount) && useCount == 1
+							&& !liveOutRegs.Contains(srcReg.Register)) {
 							// Replace this mov with mov destReg, imm
 							var newMov = new MovOp(destReg, new ImmOperand(immInfo.value));
 							block.Operations[i] = newMov;
@@ -211,6 +238,38 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 		}
 
 		return (changed, count);
+	}
+
+	/// <summary>
+	/// Returns the set of registers that are potentially live-out from this block.
+	/// A register is live-out if it might be used by a successor block.
+	/// For safety, we consider any register that is defined but not consumed within
+	/// the same block as potentially live-out, if the block has successors.
+	/// </summary>
+	private static HashSet<X86Register> GetPotentiallyLiveOutRegisters(MlirBlock block) {
+		var liveOut = new HashSet<X86Register>();
+
+		// If block ends with a return, nothing is live-out (function is ending)
+		if (block.Terminator is RetOp) {
+			return liveOut;
+		}
+
+		// Collect all registers that are defined in this block
+		var defined = new HashSet<X86Register>();
+		foreach (var op in block.Operations) {
+			if (op is X86Op x86Op && x86Op.X86Operands.Count > 0) {
+				// Most X86 ops have destination as first operand
+				if (x86Op.X86Operands[0] is RegOperand dstReg) {
+					// For cmp/test, first operand is not a destination
+					if (op is not CmpOp and not TestOp) {
+						defined.Add(dstReg.Register);
+					}
+				}
+			}
+		}
+
+		// All defined registers are potentially live-out since the block has successors
+		return defined;
 	}
 
 	/// <summary>
@@ -305,8 +364,15 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 		}
 
 		// idiv implicitly reads RAX and RDX (dividend is RDX:RAX)
-		if (op is IdivOp && (reg == X86Register.RAX || reg == X86Register.RDX)) {
-			return true;
+		// and also reads its explicit operand (the divisor)
+		if (op is IdivOp idiv) {
+			if (reg == X86Register.RAX || reg == X86Register.RDX) {
+				return true;
+			}
+			// The divisor operand is read, not written
+			if (OperandReadsRegister(idiv.Divisor, reg)) {
+				return true;
+			}
 		}
 
 		// For mov, only the source is read (index 1)

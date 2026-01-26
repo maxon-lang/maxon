@@ -17,41 +17,39 @@ ExitCode: 12
 func.func @main() -> i64 {
   ^entry:
     x86.prologue stack_size=32
-    x86.mov r8, 0
-    x86.mov r9, 0
+    x86.mov rax, 0
+    x86.mov rcx, 5
+    x86.mov r8, 1
+    x86.mov r9, 3
+    x86.mov r10, rax
+    x86.mov r11, rax
     x86.jmp while.cond
   ^while.cond(%18: i64, %21: i64):
-    x86.mov rdx, 5
-    x86.cmp r9, rdx
+    x86.cmp r11, rcx
     x86.setl rdx
     x86.test rdx, rdx
     x86.jne while.body
-    x86.jmp while.exit.args
-    while.exit.args:
-    x86.mov rdx, r8
     x86.jmp while.exit
   ^while.body:
-    x86.mov rax, 1
-    x86.mov rcx, r9
-    x86.add rcx, rax
-    x86.mov rax, 3
-    x86.cmp rcx, rax
+    x86.mov rdx, r11
+    x86.add rdx, r8
+    x86.cmp rdx, r9
     x86.sete rax
     x86.test rax, rax
-    x86.jne then
+    x86.jne while.cond.args.from.while.body
     x86.jmp merge
-  ^while.exit(%19: i64):
-    x86.mov rax, rdx
+    while.cond.args.from.while.body:
+    x86.mov r11, rdx
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, r10
     x86.epilogue
     x86.ret
-  ^then:
-    x86.mov r9, rcx
-    x86.jmp while.cond
   ^merge:
-    x86.mov rdx, r8
-    x86.add rdx, rcx
-    x86.mov r8, rdx
-    x86.mov r9, rcx
+    x86.mov rax, r10
+    x86.add rax, rdx
+    x86.mov r10, rax
+    x86.mov r11, rdx
     x86.jmp while.cond
 }
 ---

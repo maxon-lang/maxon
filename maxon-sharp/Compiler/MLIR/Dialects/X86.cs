@@ -195,7 +195,8 @@ public sealed class ImulOp : X86Op {
 
 /// <summary>
 /// Signed divide: x86.idiv src (divides rdx:rax by src)
-/// Note: Clobbers RAX/RDX but we handle this by not allocating loop-live vregs to those registers.
+/// Note: The DivisionPattern sets up RAX/RDX before idiv and reads the results after.
+/// The register allocator must avoid allocating vregs to RAX/RDX when they're live across division.
 /// </summary>
 public sealed class IdivOp : X86Op {
 	public override string Mnemonic => "idiv";
@@ -349,6 +350,10 @@ public sealed class ShlOp : X86Op {
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Count => X86Operands[1];
 
+	// x86 SHL uses CL (RCX) for variable shift counts
+	public override IReadOnlyList<X86Register> ClobberedRegisters =>
+		Count is VRegOperand ? [X86Register.RCX] : [];
+
 	public ShlOp(X86Operand dst, X86Operand count) {
 		X86Operands.Add(dst);
 		X86Operands.Add(count);
@@ -368,6 +373,10 @@ public sealed class ShrOp : X86Op {
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Count => X86Operands[1];
 
+	// x86 SHR uses CL (RCX) for variable shift counts
+	public override IReadOnlyList<X86Register> ClobberedRegisters =>
+		Count is VRegOperand ? [X86Register.RCX] : [];
+
 	public ShrOp(X86Operand dst, X86Operand count) {
 		X86Operands.Add(dst);
 		X86Operands.Add(count);
@@ -386,6 +395,10 @@ public sealed class SarOp : X86Op {
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Count => X86Operands[1];
+
+	// x86 SAR uses CL (RCX) for variable shift counts
+	public override IReadOnlyList<X86Register> ClobberedRegisters =>
+		Count is VRegOperand ? [X86Register.RCX] : [];
 
 	public SarOp(X86Operand dst, X86Operand count) {
 		X86Operands.Add(dst);

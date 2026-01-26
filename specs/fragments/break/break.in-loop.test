@@ -15,27 +15,25 @@ ExitCode: 5
 func.func @main() -> i64 {
   ^entry:
     x86.prologue stack_size=32
-    x86.mov rcx, 0
+    x86.mov rax, 0
+    x86.mov rcx, 1
+    x86.mov r8, 5
+    x86.mov r9, rax
     x86.jmp while.cond
   ^while.cond(%11: i64):
-    x86.mov rax, 1
-    x86.mov r8, rcx
-    x86.add r8, rax
-    x86.mov rdx, 5
-    x86.cmp r8, rdx
-    x86.sete rdx
-    x86.test rdx, rdx
-    x86.jne then
-    x86.jmp merge
-  ^while.exit(%12: i64):
+    x86.mov rdx, r9
+    x86.add rdx, rcx
+    x86.cmp rdx, r8
+    x86.sete rax
+    x86.test rax, rax
+    x86.jne while.exit
+    x86.jmp while.cond.args.from.while.body
+    while.cond.args.from.while.body:
+    x86.mov r9, rdx
+    x86.jmp while.cond
+  ^while.exit:
     x86.mov rax, rdx
     x86.epilogue
     x86.ret
-  ^then:
-    x86.mov rdx, r8
-    x86.jmp while.exit
-  ^merge:
-    x86.mov rcx, r8
-    x86.jmp while.cond
 }
 ---
