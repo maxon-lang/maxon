@@ -389,10 +389,24 @@ public sealed class InliningPass : AbstractPassBase {
 			SubFOp subf => CloneBinaryOp<SubFOp>(subf, valueMap),
 			MulFOp mulf => CloneBinaryOp<MulFOp>(mulf, valueMap),
 			DivFOp divf => CloneBinaryOp<DivFOp>(divf, valueMap),
+			RemFOp remf => CloneBinaryOp<RemFOp>(remf, valueMap),
 			CmpFOp cmpf => CloneCmpFOp(cmpf, valueMap),
 			NegFOp negf => CloneUnaryOp<NegFOp>(negf, valueMap),
 			SIToFPOp sitofp => CloneCastOp<SIToFPOp>(sitofp, valueMap),
-			FPToSIOp fptosi => CloneCastOp<FPToSIOp>(fptosi, valueMap),
+			ExtFOp extf => CloneFloatCastOp<ExtFOp>(extf, valueMap),
+			TruncFOp truncf => CloneFloatCastOp<TruncFOp>(truncf, valueMap),
+			IndexCastOp indexCast => CloneIndexCastOp(indexCast, valueMap),
+			SelectOp select => CloneSelectOp(select, valueMap),
+
+			// Math operations
+			SqrtOp sqrt => CloneMathUnaryOp<SqrtOp>(sqrt, valueMap),
+			FloorOp floor => CloneMathUnaryOp<FloorOp>(floor, valueMap),
+			CeilOp ceil => CloneMathUnaryOp<CeilOp>(ceil, valueMap),
+			RoundOp round => CloneMathUnaryOp<RoundOp>(round, valueMap),
+			AbsFOp absf => CloneMathUnaryOp<AbsFOp>(absf, valueMap),
+			MinFOp minf => CloneMathBinaryOp<MinFOp>(minf, valueMap),
+			MaxFOp maxf => CloneMathBinaryOp<MaxFOp>(maxf, valueMap),
+			TruncOp trunc => CloneMathTruncOp(trunc, valueMap),
 
 			// Memory operations
 			AllocaOp alloca => CloneAllocaOp(alloca),
@@ -499,6 +513,7 @@ public sealed class InliningPass : AbstractPassBase {
 			nameof(SubFOp) => (TBinaryOp)(object)new SubFOp(lhs, rhs),
 			nameof(MulFOp) => (TBinaryOp)(object)new MulFOp(lhs, rhs),
 			nameof(DivFOp) => (TBinaryOp)(object)new DivFOp(lhs, rhs),
+			nameof(RemFOp) => (TBinaryOp)(object)new RemFOp(lhs, rhs),
 			_ => throw new NotSupportedException($"Unsupported binary op type: {typeof(TBinaryOp).Name}")
 		};
 	}
@@ -549,9 +564,63 @@ public sealed class InliningPass : AbstractPassBase {
 
 		return typeof(TCastOp).Name switch {
 			nameof(SIToFPOp) => (TCastOp)(object)new SIToFPOp(operand, (FloatType)resultType),
-			nameof(FPToSIOp) => (TCastOp)(object)new FPToSIOp(operand, (IntegerType)resultType),
 			_ => throw new NotSupportedException($"Unsupported cast op type: {typeof(TCastOp).Name}")
 		};
+	}
+
+	private static TMathOp CloneMathUnaryOp<TMathOp>(FloatUnaryOp original, Dictionary<MlirValue, MlirValue> valueMap)
+		where TMathOp : FloatUnaryOp {
+		var operand = RemapValue(original.Operand, valueMap);
+
+		return typeof(TMathOp).Name switch {
+			nameof(SqrtOp) => (TMathOp)(object)new SqrtOp(operand),
+			nameof(FloorOp) => (TMathOp)(object)new FloorOp(operand),
+			nameof(CeilOp) => (TMathOp)(object)new CeilOp(operand),
+			nameof(RoundOp) => (TMathOp)(object)new RoundOp(operand),
+			nameof(AbsFOp) => (TMathOp)(object)new AbsFOp(operand),
+			_ => throw new NotSupportedException($"Unsupported math unary op type: {typeof(TMathOp).Name}")
+		};
+	}
+
+	private static TMathOp CloneMathBinaryOp<TMathOp>(FloatBinaryMathOp original, Dictionary<MlirValue, MlirValue> valueMap)
+		where TMathOp : FloatBinaryMathOp {
+		var lhs = RemapValue(original.Lhs, valueMap);
+		var rhs = RemapValue(original.Rhs, valueMap);
+
+		return typeof(TMathOp).Name switch {
+			nameof(MinFOp) => (TMathOp)(object)new MinFOp(lhs, rhs),
+			nameof(MaxFOp) => (TMathOp)(object)new MaxFOp(lhs, rhs),
+			_ => throw new NotSupportedException($"Unsupported math binary op type: {typeof(TMathOp).Name}")
+		};
+	}
+
+	private static TruncOp CloneMathTruncOp(TruncOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var operand = RemapValue(original.Operand, valueMap);
+		return new TruncOp(operand, (IntegerType)original.Result.Type);
+	}
+
+	private static TFloatCastOp CloneFloatCastOp<TFloatCastOp>(MlirOperation original, Dictionary<MlirValue, MlirValue> valueMap)
+		where TFloatCastOp : MlirOperation {
+		var operand = RemapValue(original.Operands[0], valueMap);
+		var resultType = (FloatType)original.Results[0].Type;
+
+		return typeof(TFloatCastOp).Name switch {
+			nameof(ExtFOp) => (TFloatCastOp)(object)new ExtFOp(operand, resultType),
+			nameof(TruncFOp) => (TFloatCastOp)(object)new TruncFOp(operand, resultType),
+			_ => throw new NotSupportedException($"Unsupported float cast op type: {typeof(TFloatCastOp).Name}")
+		};
+	}
+
+	private static IndexCastOp CloneIndexCastOp(IndexCastOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var operand = RemapValue(original.Operand, valueMap);
+		return new IndexCastOp(operand, original.Result.Type);
+	}
+
+	private static SelectOp CloneSelectOp(SelectOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var condition = RemapValue(original.Condition, valueMap);
+		var trueValue = RemapValue(original.TrueValue, valueMap);
+		var falseValue = RemapValue(original.FalseValue, valueMap);
+		return new SelectOp(condition, trueValue, falseValue);
 	}
 
 	private static AllocaOp CloneAllocaOp(AllocaOp original) {

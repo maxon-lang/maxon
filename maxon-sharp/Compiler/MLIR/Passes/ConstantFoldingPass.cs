@@ -115,93 +115,97 @@ public sealed class ConstantFoldingPass : FunctionPass {
 		folded = op;
 		foldType = FoldType.None;
 
-		switch (op) {
-			// Comparison folding - fold comparisons of two constants
-			case CmpIOp cmp when GetConstantValue(cmp.Lhs) is long lhs
-							  && GetConstantValue(cmp.Rhs) is long rhs:
-				bool result = EvaluateComparison(cmp.Predicate, lhs, rhs);
-				folded = CreateConstantReplacement(new IntegerAttr(result ? 1 : 0, 1), cmp.Result);
-				foldType = FoldType.Constant;
-				return true;
+		// Special handling for MulIOp with load propagation
+		// Check multiply by zero using pass's GetConstantValue (which propagates through loads)
+		if (op is MulIOp mul) {
+			var lConst = GetConstantValue(mul.Lhs);
+			var rConst = GetConstantValue(mul.Rhs);
 
-			case AddIOp add when GetConstantValue(add.Lhs) is long lhs
-							 && GetConstantValue(add.Rhs) is long rhs:
-				folded = CreateConstantReplacement(new IntegerAttr(lhs + rhs), add.Result);
-				foldType = FoldType.Constant;
-				return true;
-
-			case SubIOp sub when GetConstantValue(sub.Lhs) is long lhs
-							 && GetConstantValue(sub.Rhs) is long rhs:
-				folded = CreateConstantReplacement(new IntegerAttr(lhs - rhs), sub.Result);
-				foldType = FoldType.Constant;
-				return true;
-
-			// Multiply by zero: x * 0 = 0, 0 * x = 0
-			case MulIOp mul when GetConstantValue(mul.Lhs) is 0 || GetConstantValue(mul.Rhs) is 0:
+			// x * 0 = 0 (with load propagation)
+			if (lConst is 0 || rConst is 0) {
 				folded = CreateConstantReplacement(new IntegerAttr(0), mul.Result);
 				foldType = FoldType.Constant;
 				return true;
+			}
 
-			// Full constant folding for multiplication (must come before strength reduction)
-			case MulIOp mul when GetConstantValue(mul.Lhs) is long lhs
-							 && GetConstantValue(mul.Rhs) is long rhs:
-				folded = CreateConstantReplacement(new IntegerAttr(lhs * rhs), mul.Result);
+			// Full constant folding (with load propagation)
+			if (lConst is long l && rConst is long r) {
+				folded = CreateConstantReplacement(new IntegerAttr(l * r), mul.Result);
 				foldType = FoldType.Constant;
 				return true;
+			}
 
-			// Strength reduction: x * 2^n -> x << n (when only rhs is constant power of 2)
-			case MulIOp mul when GetConstantValue(mul.Lhs) is null
-								&& GetConstantValue(mul.Rhs) is long rhs
-								&& rhs > 0 && IsPowerOfTwo(rhs):
-				folded = CreateShiftReplacement(mul.Lhs, mul, rhs, mul.Result);
+			// Strength reduction
+			if (TryStrengthReduceMul(mul, out var shifted)) {
+				folded = shifted;
 				foldType = FoldType.StrengthReduction;
 				return true;
-
-			// Strength reduction: 2^n * x -> x << n (when only lhs is constant power of 2)
-			case MulIOp mul when GetConstantValue(mul.Rhs) is null
-								&& GetConstantValue(mul.Lhs) is long lhs
-								&& lhs > 0 && IsPowerOfTwo(lhs):
-				folded = CreateShiftReplacement(mul.Rhs, mul, lhs, mul.Result);
-				foldType = FoldType.StrengthReduction;
-				return true;
-
-			case DivSIOp div when GetConstantValue(div.Lhs) is long lhs
-								&& GetConstantValue(div.Rhs) is long rhs && rhs != 0:
-				folded = CreateConstantReplacement(new IntegerAttr(lhs / rhs), div.Result);
-				foldType = FoldType.Constant;
-				return true;
-
-			case RemSIOp rem when GetConstantValue(rem.Lhs) is long lhs
-								&& GetConstantValue(rem.Rhs) is long rhs && rhs != 0:
-				folded = CreateConstantReplacement(new IntegerAttr(lhs % rhs), rem.Result);
-				foldType = FoldType.Constant;
-				return true;
-
-			case AddFOp add when GetConstantDoubleValue(add.Lhs) is double lhs
-							 && GetConstantDoubleValue(add.Rhs) is double rhs:
-				folded = CreateConstantReplacement(new FloatAttr(lhs + rhs), add.Result);
-				foldType = FoldType.Constant;
-				return true;
-
-			case SubFOp sub when GetConstantDoubleValue(sub.Lhs) is double lhs
-							 && GetConstantDoubleValue(sub.Rhs) is double rhs:
-				folded = CreateConstantReplacement(new FloatAttr(lhs - rhs), sub.Result);
-				foldType = FoldType.Constant;
-				return true;
-
-			case MulFOp mul when GetConstantDoubleValue(mul.Lhs) is double lhs
-							 && GetConstantDoubleValue(mul.Rhs) is double rhs:
-				folded = CreateConstantReplacement(new FloatAttr(lhs * rhs), mul.Result);
-				foldType = FoldType.Constant;
-				return true;
-
-			case DivFOp div when GetConstantDoubleValue(div.Lhs) is double lhs
-							 && GetConstantDoubleValue(div.Rhs) is double rhs:
-				folded = CreateConstantReplacement(new FloatAttr(lhs / rhs), div.Result);
-				foldType = FoldType.Constant;
-				return true;
+			}
 		}
 
+		// Comparison folding - fold comparisons of two constants (with load propagation)
+		if (op is CmpIOp cmp && GetConstantValue(cmp.Lhs) is long lhs && GetConstantValue(cmp.Rhs) is long rhs) {
+			bool result = EvaluateComparison(cmp.Predicate, lhs, rhs);
+			folded = CreateConstantReplacement(new IntegerAttr(result ? 1 : 0, 1), cmp.Result);
+			foldType = FoldType.Constant;
+			return true;
+		}
+
+		// Dispatch to Math dialect operations' fold methods
+		if (op is FloatUnaryOp unaryMath) {
+			var result = unaryMath.TryFold();
+			if (result != null) {
+				folded = result;
+				foldType = FoldType.Constant;
+				return true;
+			}
+		}
+
+		if (op is FloatBinaryMathOp binaryMath) {
+			var result = binaryMath.TryFold();
+			if (result != null) {
+				folded = result;
+				foldType = FoldType.Constant;
+				return true;
+			}
+		}
+
+		if (op is TruncOp truncOp) {
+			var result = truncOp.TryFold();
+			if (result != null) {
+				folded = result;
+				foldType = FoldType.Constant;
+				return true;
+			}
+		}
+
+		// Dispatch to other IFoldable operations
+		if (op is IFoldable foldable) {
+			var result = foldable.TryFold();
+			if (result != null) {
+				folded = result;
+				foldType = FoldType.Constant;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private static bool TryStrengthReduceMul(MulIOp mul, out MlirOperation shifted) {
+		shifted = mul;
+		var lConst = GetConstantValue(mul.Lhs);
+		var rConst = GetConstantValue(mul.Rhs);
+
+		// x * 2^n -> x << n (only when x is not constant)
+		if (lConst is null && rConst is long r && r > 0 && IsPowerOfTwo(r)) {
+			shifted = CreateShiftReplacement(mul.Lhs, mul, r, mul.Result);
+			return true;
+		}
+		if (rConst is null && lConst is long l && l > 0 && IsPowerOfTwo(l)) {
+			shifted = CreateShiftReplacement(mul.Rhs, mul, l, mul.Result);
+			return true;
+		}
 		return false;
 	}
 

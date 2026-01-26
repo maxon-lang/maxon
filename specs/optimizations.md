@@ -301,6 +301,122 @@ func.func @main() -> i64 {
 }
 ```
 
+### Math Builtin Constant Folding
+
+<!-- test: constant-folding-abs -->
+```maxon
+function main() returns int
+    return trunc(abs(-5.5))
+end 'main'
+```
+```exitcode
+5
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 5
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: constant-folding-sqrt -->
+```maxon
+function main() returns int
+    return trunc(sqrt(16.0))
+end 'main'
+```
+```exitcode
+4
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 4
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: constant-folding-floor-ceil -->
+```maxon
+function main() returns int
+    return trunc(floor(3.7)) + trunc(ceil(2.1))
+end 'main'
+```
+```exitcode
+6
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 6
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: constant-folding-round -->
+```maxon
+function main() returns int
+    return trunc(round(2.5)) + trunc(round(3.5))
+end 'main'
+```
+```exitcode
+6
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 6
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: constant-folding-min-max -->
+```maxon
+function main() returns int
+    return trunc(min(5.0, 3.0)) + trunc(max(2.0, 7.0))
+end 'main'
+```
+```exitcode
+10
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 10
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: constant-folding-trunc -->
+```maxon
+function main() returns int
+    return trunc(9.9)
+end 'main'
+```
+```exitcode
+9
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 9
+    x86.epilogue
+    x86.ret
+}
+```
+
 ### Mem2Reg Cross-Block Promotion
 
 These tests verify cross-block SSA promotion using block arguments. Variables in

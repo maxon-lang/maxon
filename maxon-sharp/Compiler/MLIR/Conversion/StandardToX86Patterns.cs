@@ -27,12 +27,12 @@ public static class StandardToX86Patterns {
 		patterns.Add<LowerSubFOp>();
 		patterns.Add<LowerMulFOp>();
 		patterns.Add<LowerDivFOp>();
-		patterns.Add<LowerFPToSIOp>();
 		patterns.Add<LowerSIToFPOp>();
 		patterns.Add<LowerCmpFOp>();
 		patterns.Add<LowerNegFOp>();
 
 		// Math patterns
+		patterns.Add<LowerTruncOp>();
 		patterns.Add<LowerSqrtOp>();
 		patterns.Add<LowerFloorOp>();
 		patterns.Add<LowerCeilOp>();
@@ -284,8 +284,8 @@ public sealed class LowerCmpFOp : ConversionPattern<CmpFOp> {
 	};
 }
 
-public sealed class LowerFPToSIOp : ConversionPattern<FPToSIOp> {
-	protected override bool MatchAndRewrite(FPToSIOp op, ConversionPatternRewriter rewriter) {
+public sealed class LowerTruncOp : ConversionPattern<TruncOp> {
+	protected override bool MatchAndRewrite(TruncOp op, ConversionPatternRewriter rewriter) {
 		rewriter.Insert(new CvttsdOp(
 			new VRegOperand(op.Result.Id, IsFloat: false),
 			new VRegOperand(op.Operand.Id, IsFloat: true)));

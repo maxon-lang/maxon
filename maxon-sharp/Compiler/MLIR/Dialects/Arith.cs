@@ -37,6 +37,18 @@ public abstract class IntBinaryOp : ArithOp {
 			return $"{FullName} requires integer operands, got {Lhs.Type}";
 		return null;
 	}
+
+	protected static long? GetConstantValue(MlirValue value) {
+		if (value.DefiningOp is ConstantOp constOp && constOp.Value is IntegerAttr intAttr)
+			return intAttr.Value;
+		return null;
+	}
+
+	protected ConstantOp CreateConstantReplacement(IntegerAttr value) {
+		var constOp = new ConstantOp(value, Result.Type) { Results = { [0] = Result } };
+		Result.DefiningOp = constOp;
+		return constOp;
+	}
 }
 
 /// <summary>
@@ -61,6 +73,18 @@ public abstract class FloatBinaryOp : ArithOp {
 		if (Lhs.Type is not FloatType)
 			return $"{FullName} requires float operands, got {Lhs.Type}";
 		return null;
+	}
+
+	protected static double? GetConstantDoubleValue(MlirValue value) {
+		if (value.DefiningOp is ConstantOp constOp && constOp.Value is FloatAttr floatAttr)
+			return floatAttr.Value;
+		return null;
+	}
+
+	protected ConstantOp CreateConstantReplacement(FloatAttr value) {
+		var constOp = new ConstantOp(value, Result.Type) { Results = { [0] = Result } };
+		Result.DefiningOp = constOp;
+		return constOp;
 	}
 }
 
@@ -111,29 +135,62 @@ public sealed class ConstantOp : ArithOp {
 /// <summary>
 /// Integer addition: %result = arith.addi %lhs, %rhs : type
 /// </summary>
-public sealed class AddIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs) {
+public sealed class AddIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs), IFoldable {
 	public override string Mnemonic => "addi";
+
+	public MlirOperation? TryFold() {
+		if (GetConstantValue(Lhs) is long l && GetConstantValue(Rhs) is long r)
+			return CreateConstantReplacement(new IntegerAttr(l + r));
+		return null;
+	}
 }
 
 /// <summary>
 /// Integer subtraction: %result = arith.subi %lhs, %rhs : type
 /// </summary>
-public sealed class SubIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs) {
+public sealed class SubIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs), IFoldable {
 	public override string Mnemonic => "subi";
+
+	public MlirOperation? TryFold() {
+		if (GetConstantValue(Lhs) is long l && GetConstantValue(Rhs) is long r)
+			return CreateConstantReplacement(new IntegerAttr(l - r));
+		return null;
+	}
 }
 
 /// <summary>
 /// Integer multiplication: %result = arith.muli %lhs, %rhs : type
 /// </summary>
-public sealed class MulIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs) {
+public sealed class MulIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs), IFoldable {
 	public override string Mnemonic => "muli";
+
+	public MlirOperation? TryFold() {
+		var lConst = GetConstantValue(Lhs);
+		var rConst = GetConstantValue(Rhs);
+
+		// x * 0 = 0
+		if (lConst is 0 || rConst is 0)
+			return CreateConstantReplacement(new IntegerAttr(0));
+
+		// Full constant folding
+		if (lConst is long l && rConst is long r)
+			return CreateConstantReplacement(new IntegerAttr(l * r));
+
+		return null;
+	}
 }
 
 /// <summary>
 /// Signed integer division: %result = arith.divsi %lhs, %rhs : type
 /// </summary>
-public sealed class DivSIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs) {
+public sealed class DivSIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs), IFoldable {
 	public override string Mnemonic => "divsi";
+
+	public MlirOperation? TryFold() {
+		if (GetConstantValue(Lhs) is long l && GetConstantValue(Rhs) is long r && r != 0)
+			return CreateConstantReplacement(new IntegerAttr(l / r));
+		return null;
+	}
 }
 
 /// <summary>
@@ -146,8 +203,14 @@ public sealed class DivUIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs
 /// <summary>
 /// Signed integer remainder: %result = arith.remsi %lhs, %rhs : type
 /// </summary>
-public sealed class RemSIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs) {
+public sealed class RemSIOp(MlirValue lhs, MlirValue rhs) : IntBinaryOp(lhs, rhs), IFoldable {
 	public override string Mnemonic => "remsi";
+
+	public MlirOperation? TryFold() {
+		if (GetConstantValue(Lhs) is long l && GetConstantValue(Rhs) is long r && r != 0)
+			return CreateConstantReplacement(new IntegerAttr(l % r));
+		return null;
+	}
 }
 
 /// <summary>
@@ -255,29 +318,53 @@ public sealed class CmpIOp : ArithOp {
 /// <summary>
 /// Float addition: %result = arith.addf %lhs, %rhs : type
 /// </summary>
-public sealed class AddFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryOp(lhs, rhs) {
+public sealed class AddFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryOp(lhs, rhs), IFoldable {
 	public override string Mnemonic => "addf";
+
+	public MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r)
+			return CreateConstantReplacement(new FloatAttr(l + r));
+		return null;
+	}
 }
 
 /// <summary>
 /// Float subtraction: %result = arith.subf %lhs, %rhs : type
 /// </summary>
-public sealed class SubFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryOp(lhs, rhs) {
+public sealed class SubFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryOp(lhs, rhs), IFoldable {
 	public override string Mnemonic => "subf";
+
+	public MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r)
+			return CreateConstantReplacement(new FloatAttr(l - r));
+		return null;
+	}
 }
 
 /// <summary>
 /// Float multiplication: %result = arith.mulf %lhs, %rhs : type
 /// </summary>
-public sealed class MulFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryOp(lhs, rhs) {
+public sealed class MulFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryOp(lhs, rhs), IFoldable {
 	public override string Mnemonic => "mulf";
+
+	public MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r)
+			return CreateConstantReplacement(new FloatAttr(l * r));
+		return null;
+	}
 }
 
 /// <summary>
 /// Float division: %result = arith.divf %lhs, %rhs : type
 /// </summary>
-public sealed class DivFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryOp(lhs, rhs) {
+public sealed class DivFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryOp(lhs, rhs), IFoldable {
 	public override string Mnemonic => "divf";
+
+	public MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r && r != 0)
+			return CreateConstantReplacement(new FloatAttr(l / r));
+		return null;
+	}
 }
 
 /// <summary>
@@ -412,21 +499,6 @@ public sealed class SIToFPOp : ArithOp {
 	public MlirValue Result => Results[0];
 
 	public SIToFPOp(MlirValue operand, FloatType targetType) {
-		Operands.Add(operand);
-		CreateResult(targetType);
-	}
-}
-
-/// <summary>
-/// Float to signed int: %result = arith.fptosi %operand : from to to
-/// </summary>
-public sealed class FPToSIOp : ArithOp {
-	public override string Mnemonic => "fptosi";
-
-	public MlirValue Operand => Operands[0];
-	public MlirValue Result => Results[0];
-
-	public FPToSIOp(MlirValue operand, IntegerType targetType) {
 		Operands.Add(operand);
 		CreateResult(targetType);
 	}

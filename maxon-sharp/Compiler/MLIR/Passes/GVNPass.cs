@@ -268,23 +268,8 @@ public sealed class GVNPass : FunctionPass {
 						}
 					}
 
-					// Also update successor block arguments in terminators
-					if (op.IsTerminator) {
-						ReplaceBlockArguments(op);
 					}
-				}
 			}
-		}
-
-		/// <summary>
-		/// Replaces values in terminator block arguments.
-		/// </summary>
-		private void ReplaceBlockArguments(MlirOperation terminator) {
-			// Handle branch operations with block arguments
-			// Replacements are already applied via Operands in ApplyReplacements
-			// This method is kept for completeness but currently the operand replacement
-			// in ApplyReplacements handles all cases since BranchOp and CondBranchOp
-			// store their block arguments in the Operands list.
 		}
 
 		/// <summary>

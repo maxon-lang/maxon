@@ -1064,7 +1064,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		if (call.Args.Count != 1)
 			throw new ArgumentException($"{call.FuncName}() requires exactly 1 argument");
 		var arg = LowerExpression(call.Args[0]);
-		return Emit<FPToSIOp>(arg, IntegerType.I64);
+		return Emit<TruncOp>(arg, IntegerType.I64);
 	}
 
 	private MlirValue LowerUnaryMath<T>(CallExpr call) where T : MlirOperation {

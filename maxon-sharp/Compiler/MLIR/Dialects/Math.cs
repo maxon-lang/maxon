@@ -37,6 +37,24 @@ public abstract class FloatUnaryOp : MathOp {
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"{Result} = {FullName} {Operand} : {Operand.Type}");
 	}
+
+	protected static double? GetConstantDoubleValue(MlirValue value) {
+		if (value.DefiningOp is ConstantOp constOp && constOp.Value is FloatAttr floatAttr)
+			return floatAttr.Value;
+		return null;
+	}
+
+	protected ConstantOp CreateConstantReplacement(FloatAttr value) {
+		var constOp = new ConstantOp(value, Result.Type) { Results = { [0] = Result } };
+		Result.DefiningOp = constOp;
+		return constOp;
+	}
+
+	/// <summary>
+	/// Attempts to fold this operation to a constant. Must be implemented by all subclasses.
+	/// Return null if folding is not possible.
+	/// </summary>
+	public abstract MlirOperation? TryFold();
 }
 
 /// <summary>
@@ -66,6 +84,24 @@ public abstract class FloatBinaryMathOp : MathOp {
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"{Result} = {FullName} {Lhs}, {Rhs} : {Lhs.Type}");
 	}
+
+	protected static double? GetConstantDoubleValue(MlirValue value) {
+		if (value.DefiningOp is ConstantOp constOp && constOp.Value is FloatAttr floatAttr)
+			return floatAttr.Value;
+		return null;
+	}
+
+	protected ConstantOp CreateConstantReplacement(FloatAttr value) {
+		var constOp = new ConstantOp(value, Result.Type) { Results = { [0] = Result } };
+		Result.DefiningOp = constOp;
+		return constOp;
+	}
+
+	/// <summary>
+	/// Attempts to fold this operation to a constant. Must be implemented by all subclasses.
+	/// Return null if folding is not possible.
+	/// </summary>
+	public abstract MlirOperation? TryFold();
 }
 
 // ============================================================================
@@ -77,6 +113,12 @@ public abstract class FloatBinaryMathOp : MathOp {
 /// </summary>
 public sealed class SqrtOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "sqrt";
+
+	public override MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Operand) is double v && v >= 0)
+			return CreateConstantReplacement(new FloatAttr(Math.Sqrt(v)));
+		return null;
+	}
 }
 
 /// <summary>
@@ -85,6 +127,12 @@ public sealed class SqrtOp(MlirValue operand) : FloatUnaryOp(operand) {
 /// </summary>
 public sealed class FloorOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "floor";
+
+	public override MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Operand) is double v)
+			return CreateConstantReplacement(new FloatAttr(Math.Floor(v)));
+		return null;
+	}
 }
 
 /// <summary>
@@ -93,6 +141,12 @@ public sealed class FloorOp(MlirValue operand) : FloatUnaryOp(operand) {
 /// </summary>
 public sealed class CeilOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "ceil";
+
+	public override MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Operand) is double v)
+			return CreateConstantReplacement(new FloatAttr(Math.Ceiling(v)));
+		return null;
+	}
 }
 
 /// <summary>
@@ -101,6 +155,12 @@ public sealed class CeilOp(MlirValue operand) : FloatUnaryOp(operand) {
 /// </summary>
 public sealed class RoundOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "round";
+
+	public override MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Operand) is double v)
+			return CreateConstantReplacement(new FloatAttr(Math.Round(v, MidpointRounding.ToEven)));
+		return null;
+	}
 }
 
 /// <summary>
@@ -108,6 +168,12 @@ public sealed class RoundOp(MlirValue operand) : FloatUnaryOp(operand) {
 /// </summary>
 public sealed class AbsFOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "absf";
+
+	public override MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Operand) is double v)
+			return CreateConstantReplacement(new FloatAttr(Math.Abs(v)));
+		return null;
+	}
 }
 
 // ============================================================================
@@ -120,6 +186,12 @@ public sealed class AbsFOp(MlirValue operand) : FloatUnaryOp(operand) {
 /// </summary>
 public sealed class MinFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryMathOp(lhs, rhs) {
 	public override string Mnemonic => "minf";
+
+	public override MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r)
+			return CreateConstantReplacement(new FloatAttr(Math.Min(l, r)));
+		return null;
+	}
 }
 
 /// <summary>
@@ -128,4 +200,55 @@ public sealed class MinFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryMathOp(lhs
 /// </summary>
 public sealed class MaxFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryMathOp(lhs, rhs) {
 	public override string Mnemonic => "maxf";
+
+	public override MlirOperation? TryFold() {
+		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r)
+			return CreateConstantReplacement(new FloatAttr(Math.Max(l, r)));
+		return null;
+	}
+}
+
+// ============================================================================
+// Conversion Operations
+// ============================================================================
+
+/// <summary>
+/// Truncate float to integer: %result = math.trunc %operand : f64 -> i64
+/// Converts a floating-point value to a signed integer by truncating toward zero.
+/// </summary>
+public sealed class TruncOp : MathOp {
+	public override string Mnemonic => "trunc";
+
+	public MlirValue Operand => Operands[0];
+	public MlirValue Result => Results[0];
+
+	public TruncOp(MlirValue operand, IntegerType targetType) {
+		Operands.Add(operand);
+		CreateResult(targetType);
+	}
+
+	public override string? Verify() {
+		if (Operands.Count != 1)
+			return $"{FullName} requires exactly 1 operand";
+		if (Operand.Type is not FloatType)
+			return $"{FullName} requires float operand, got {Operand.Type}";
+		if (Result.Type is not IntegerType)
+			return $"{FullName} requires integer result, got {Result.Type}";
+		return null;
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = {FullName} {Operand} : {Operand.Type} -> {Result.Type}");
+	}
+
+	public MlirOperation? TryFold() {
+		if (Operand.DefiningOp is ConstantOp constOp && constOp.Value is FloatAttr floatAttr) {
+			var constResult = new ConstantOp(new IntegerAttr((long)floatAttr.Value), Result.Type) {
+				Results = { [0] = Result }
+			};
+			Result.DefiningOp = constResult;
+			return constResult;
+		}
+		return null;
+	}
 }
