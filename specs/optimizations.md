@@ -300,3 +300,264 @@ func.func @main() -> i64 {
     x86.ret
 }
 ```
+
+### Mem2Reg Cross-Block Promotion
+
+These tests verify correctness for patterns that would benefit from cross-block SSA
+promotion (phi/block-argument insertion). Currently these use stack variables; once
+mem2reg supports cross-block promotion, these could be optimized further.
+
+<!-- test: mem2reg-loop-variable -->
+Loop counter variable modified each iteration - candidate for SSA promotion.
+```maxon
+function main() returns int
+    var sum = 0
+    var i = 1
+    while i <= 5 'loop'
+        sum = sum + i
+        i = i + 1
+    end 'loop'
+    return sum
+end 'main'
+```
+```exitcode
+15
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov rax, 1
+    x86.lea r8, qword ptr [rbp-48]
+    x86.mov qword ptr [r8], rax
+    x86.jmp while.cond
+  ^while.cond:
+    x86.mov rdx, qword ptr [r8]
+    x86.mov rax, 5
+    x86.cmp rdx, rax
+    x86.setle rax
+    x86.test rax, rax
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rdx, qword ptr [r8]
+    x86.mov r9, rax
+    x86.add r9, rdx
+    x86.mov qword ptr [rcx], r9
+    x86.mov r9, qword ptr [r8]
+    x86.mov rdx, 1
+    x86.mov rax, r9
+    x86.add rax, rdx
+    x86.mov qword ptr [r8], rax
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: mem2reg-conditional-assignment -->
+Variable assigned different values in if/else branches - candidate for block arguments at merge.
+```maxon
+function main() returns int
+    var x = 0
+    if true 'check'
+        x = 10
+    end 'check' else 'else'
+        x = 20
+    end 'else'
+    return x
+end 'main'
+```
+```exitcode
+10
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov rax, 1
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp else
+  ^then:
+    x86.mov rax, 10
+    x86.mov qword ptr [rcx], rax
+    x86.jmp merge
+  ^else:
+    x86.mov rax, 20
+    x86.mov qword ptr [rcx], rax
+    x86.jmp merge
+  ^merge:
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: mem2reg-conditional-assignment-false -->
+Same pattern with false condition to verify both branches work.
+```maxon
+function main() returns int
+    var x = 0
+    if false 'check'
+        x = 10
+    end 'check' else 'else'
+        x = 20
+    end 'else'
+    return x
+end 'main'
+```
+```exitcode
+20
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov rax, 0
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp else
+  ^then:
+    x86.mov rax, 10
+    x86.mov qword ptr [rcx], rax
+    x86.jmp merge
+  ^else:
+    x86.mov rax, 20
+    x86.mov qword ptr [rcx], rax
+    x86.jmp merge
+  ^merge:
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: mem2reg-cross-block-read -->
+Variable assigned in one block and read in another - requires cross-block promotion.
+```maxon
+function main() returns int
+    var result = 0
+    if true 'check'
+        result = 42
+    end 'check'
+    return result
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov rax, 1
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, 42
+    x86.mov qword ptr [rcx], rax
+    x86.jmp merge
+  ^merge:
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: mem2reg-nested-loops -->
+Nested loop with multiple variables - stress test for cross-block promotion.
+```maxon
+function main() returns int
+    var total = 0
+    var i = 1
+    while i <= 3 'outer'
+        var j = 1
+        while j <= 3 'inner'
+            total = total + i * j
+            j = j + 1
+        end 'inner'
+        i = i + 1
+    end 'outer'
+    return total
+end 'main'
+```
+```exitcode
+36
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=64
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov rax, 1
+    x86.lea r8, qword ptr [rbp-48]
+    x86.mov qword ptr [r8], rax
+    x86.jmp while.cond
+  ^while.cond:
+    x86.mov rdx, qword ptr [r8]
+    x86.mov rax, 3
+    x86.cmp rdx, rax
+    x86.setle rax
+    x86.test rax, rax
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rax, 1
+    x86.lea r9, qword ptr [rbp-56]
+    x86.mov qword ptr [r9], rax
+    x86.jmp while.cond_1
+  ^while.exit:
+    x86.mov rdx, qword ptr [rcx]
+    x86.mov rax, rdx
+    x86.epilogue
+    x86.ret
+  ^while.cond_1:
+    x86.mov rdx, qword ptr [r9]
+    x86.mov rax, 3
+    x86.cmp rdx, rax
+    x86.setle rax
+    x86.test rax, rax
+    x86.jne while.body_1
+    x86.jmp while.exit_1
+  ^while.body_1:
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rdx, qword ptr [r8]
+    x86.mov r10, qword ptr [r9]
+    x86.imul r11, rdx, r10
+    x86.mov r10, rax
+    x86.add r10, r11
+    x86.mov qword ptr [rcx], r10
+    x86.mov r10, qword ptr [r9]
+    x86.mov r11, 1
+    x86.mov rax, r10
+    x86.add rax, r11
+    x86.mov qword ptr [r9], rax
+    x86.jmp while.cond_1
+  ^while.exit_1:
+    x86.mov rax, qword ptr [r8]
+    x86.mov r11, 1
+    x86.mov r10, rax
+    x86.add r10, r11
+    x86.mov qword ptr [r8], r10
+    x86.jmp while.cond
+}
+```

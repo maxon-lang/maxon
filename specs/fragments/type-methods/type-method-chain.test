@@ -1,0 +1,90 @@
+// Test: type-method-chain
+type Value
+    var n int
+
+    function add(x int)
+        n = n + x
+    end 'add'
+
+    function get() returns int
+        return n
+    end 'get'
+end 'Value'
+
+function main() returns int
+    var v = Value{n: 0}
+    v.add(10)
+    v.add(20)
+    v.add(12)
+    return v.get()
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov rdx, 0
+    x86.lea r8, qword ptr [rcx+rdx]
+    x86.mov qword ptr [r8], rax
+    x86.lea rbx, qword ptr [rbp-48]
+    x86.mov qword ptr [rbx], rcx
+    x86.mov rcx, qword ptr [rbx]
+    x86.mov r8, 10
+    x86.mov r10, rcx
+    x86.mov r11, r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Value.add
+    x86.mov r8, qword ptr [rbx]
+    x86.mov rcx, 20
+    x86.mov r10, r8
+    x86.mov r11, rcx
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Value.add
+    x86.mov rcx, qword ptr [rbx]
+    x86.mov r8, 12
+    x86.mov r10, rcx
+    x86.mov r11, r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Value.add
+    x86.mov r8, qword ptr [rbx]
+    x86.mov rcx, r8
+    x86.call Value.get
+    x86.mov r8, rax
+    x86.mov rax, r8
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Value.add(%self: !maxon.struct<Value>, %x: i64) {
+  ^entry(%self: !maxon.struct<Value>, %x: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, rdx
+    x86.lea rdx, qword ptr [rax]
+    x86.mov r8, qword ptr [rdx]
+    x86.mov rdx, r8
+    x86.add rdx, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov qword ptr [rcx], rdx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Value.get(%self: !maxon.struct<Value>) -> i64 {
+  ^entry(%self: !maxon.struct<Value>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+---

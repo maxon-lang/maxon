@@ -1,0 +1,90 @@
+// Test: self-with-params
+type Accumulator
+    var total int
+
+    function add(value int)
+        self.total = self.total + value
+    end 'add'
+
+    function getTotal() returns int
+        return self.total
+    end 'getTotal'
+end 'Accumulator'
+
+function main() returns int
+    var acc = Accumulator{total: 0}
+    acc.add(10)
+    acc.add(20)
+    acc.add(12)
+    return acc.getTotal()
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov rdx, 0
+    x86.lea r8, qword ptr [rcx+rdx]
+    x86.mov qword ptr [r8], rax
+    x86.lea rbx, qword ptr [rbp-48]
+    x86.mov qword ptr [rbx], rcx
+    x86.mov rcx, qword ptr [rbx]
+    x86.mov r8, 10
+    x86.mov r10, rcx
+    x86.mov r11, r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Accumulator.add
+    x86.mov r8, qword ptr [rbx]
+    x86.mov rcx, 20
+    x86.mov r10, r8
+    x86.mov r11, rcx
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Accumulator.add
+    x86.mov rcx, qword ptr [rbx]
+    x86.mov r8, 12
+    x86.mov r10, rcx
+    x86.mov r11, r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Accumulator.add
+    x86.mov r8, qword ptr [rbx]
+    x86.mov rcx, r8
+    x86.call Accumulator.getTotal
+    x86.mov r8, rax
+    x86.mov rax, r8
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Accumulator.add(%self: !maxon.struct<Accumulator>, %value: i64) {
+  ^entry(%self: !maxon.struct<Accumulator>, %value: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, rdx
+    x86.lea rdx, qword ptr [rax]
+    x86.mov r8, qword ptr [rdx]
+    x86.mov rdx, r8
+    x86.add rdx, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov qword ptr [rcx], rdx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Accumulator.getTotal(%self: !maxon.struct<Accumulator>) -> i64 {
+  ^entry(%self: !maxon.struct<Accumulator>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+---

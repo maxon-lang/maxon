@@ -520,6 +520,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			FloatLiteralExpr floatLit => EmitConstantFloat(floatLit.Value),
 			BoolLiteralExpr boolLit => EmitConstantBool(boolLit.Value),
 			IdentifierExpr ident => GetVariable(ident.Name),
+			SelfExpr => GetVariable("self"),
 			BinaryExpr binary => LowerBinaryExpr(binary),
 			CompareExpr compare => LowerCompareExpr(compare),
 			LogicalExpr logical => LowerLogicalExpr(logical),
@@ -594,9 +595,6 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Lowers a logical expression with short-circuit evaluation.
 	/// For `a and b`: if a is false, skip evaluating b and return false.
 	/// For `a or b`: if a is true, skip evaluating b and return true.
-	///
-	/// Uses a stack variable for the result since phi elimination isn't implemented yet.
-	/// Pattern: result = left; if (should_eval_right) result = right;
 	/// </summary>
 	private MlirValue LowerLogicalExpr(LogicalExpr logical) {
 		// Allocate a stack slot for the result

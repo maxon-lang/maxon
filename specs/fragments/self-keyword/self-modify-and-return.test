@@ -1,0 +1,68 @@
+// Test: self-modify-and-return
+type Value
+    var n int
+
+    function double()
+        self.n = self.n * 2
+    end 'double'
+
+    function get() returns int
+        return self.n
+    end 'get'
+end 'Value'
+
+function main() returns int
+    var v = Value{n: 21}
+    v.double()
+    return v.get()
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.mov rax, 21
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov rdx, 0
+    x86.lea r8, qword ptr [rcx+rdx]
+    x86.mov qword ptr [r8], rax
+    x86.lea rbx, qword ptr [rbp-48]
+    x86.mov qword ptr [rbx], rcx
+    x86.mov rcx, qword ptr [rbx]
+    x86.call Value.double
+    x86.mov rcx, qword ptr [rbx]
+    x86.call Value.get
+    x86.mov rcx, rax
+    x86.mov rax, rcx
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Value.double(%self: !maxon.struct<Value>) {
+  ^entry(%self: !maxon.struct<Value>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rdx, qword ptr [rcx]
+    x86.mov rcx, 1
+    x86.mov r8, rdx
+    x86.shl r8, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov qword ptr [rcx], r8
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Value.get(%self: !maxon.struct<Value>) -> i64 {
+  ^entry(%self: !maxon.struct<Value>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+---

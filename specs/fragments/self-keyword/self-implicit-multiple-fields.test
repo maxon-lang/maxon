@@ -1,0 +1,54 @@
+// Test: self-implicit-multiple-fields
+type Rectangle
+    var width int
+    var height int
+
+    function area() returns int
+        return width * height
+    end 'area'
+end 'Rectangle'
+
+function main() returns int
+    var r = Rectangle{width: 6, height: 7}
+    return r.area()
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=64
+    x86.mov rax, 6
+    x86.mov rcx, 7
+    x86.lea rdx, qword ptr [rbp-48]
+    x86.mov r8, 0
+    x86.lea r9, qword ptr [rdx+r8]
+    x86.mov qword ptr [r9], rax
+    x86.mov r9, 8
+    x86.lea rax, qword ptr [rdx+r9]
+    x86.mov qword ptr [rax], rcx
+    x86.lea rcx, qword ptr [rbp-64]
+    x86.mov qword ptr [rcx], rdx
+    x86.mov rdx, [rcx]
+    x86.mov rcx, rdx
+    x86.call Rectangle.area
+    x86.mov rdx, rax
+    x86.mov rax, rdx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Rectangle.area(%self: !maxon.struct<Rectangle>) -> i64 {
+  ^entry(%self: !maxon.struct<Rectangle>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rdx, qword ptr [rcx]
+    x86.lea rcx, qword ptr [rax+8]
+    x86.mov rax, qword ptr [rcx]
+    x86.imul rcx, rdx, rax
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+---

@@ -1,0 +1,62 @@
+// Test: mem2reg-conditional-assignment-false
+function main() returns int
+    var x = 0
+    if false 'check'
+        x = 10
+    end 'check' else 'else'
+        x = 20
+    end 'else'
+    return x
+end 'main'
+---
+ExitCode: 20
+RequiredMlir: ```
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov rax, 0
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp else
+  ^then:
+    x86.mov rax, 10
+    x86.mov qword ptr [rcx], rax
+    x86.jmp merge
+  ^else:
+    x86.mov rax, 20
+    x86.mov qword ptr [rcx], rax
+    x86.jmp merge
+  ^merge:
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+```
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov rax, 0
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp else
+  ^then:
+    x86.mov rax, 10
+    x86.mov qword ptr [rcx], rax
+    x86.jmp merge
+  ^else:
+    x86.mov rax, 20
+    x86.mov qword ptr [rcx], rax
+    x86.jmp merge
+  ^merge:
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+---
