@@ -36,7 +36,7 @@ internal sealed class WindowsJobObject : IDisposable {
 	}
 
 	public bool AssignProcess(IntPtr processHandle) {
-		if (_disposed) throw new ObjectDisposedException(nameof(WindowsJobObject));
+		ObjectDisposedException.ThrowIf(_disposed, this);
 		return AssignProcessToJobObject(_handle, processHandle);
 	}
 
@@ -90,6 +90,7 @@ internal sealed class WindowsJobObject : IDisposable {
 	}
 
 	[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+#pragma warning disable SYSLIB1054 // Use 'LibraryImportAttribute' instead of 'DllImportAttribute' to generate P/Invoke marshalling code at compile time
 	private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string? lpName);
 
 	[DllImport("kernel32.dll", SetLastError = true)]
@@ -100,4 +101,6 @@ internal sealed class WindowsJobObject : IDisposable {
 
 	[DllImport("kernel32.dll", SetLastError = true)]
 	private static extern bool CloseHandle(IntPtr hObject);
+
+#pragma warning restore SYSLIB1054 // Use 'LibraryImportAttribute' instead of 'DllImportAttribute' to generate P/Invoke marshalling code at compile time
 }

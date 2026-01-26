@@ -109,12 +109,13 @@ public static class FragmentGenerator {
 
 		Parallel.ForEach(specs, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, spec => {
 			var specFile = new FileInfo(spec.FilePath);
-			var featureFragmentDir = Path.Combine(fragmentDir, spec.Feature);
-			Directory.CreateDirectory(featureFragmentDir);
+			var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
+			var specFragmentDir = Path.Combine(fragmentDir, specName);
+			Directory.CreateDirectory(specFragmentDir);
 
 			foreach (var test in spec.Tests) {
-				var fragmentPath = Path.Combine(featureFragmentDir, $"{test.Name}.test");
-				var exePath = Path.Combine(featureFragmentDir, $"{test.Name}.exe");
+				var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
+				var exePath = Path.Combine(specFragmentDir, $"{test.Name}.exe");
 				var fragmentFile = new FileInfo(fragmentPath);
 
 				// Skip if fragment is newer than both spec and compiler (unless force)
@@ -183,8 +184,8 @@ public static class FragmentGenerator {
 			var sources = new[] { new Compiler.SourceFile("test.mx", test.Source) };
 			var result = Compiler.Compiler.Compile(sources, exePath, returnIr: true);
 			if (result.Success) {
-				sb.AppendLine("// Generated X86 IR:");
-				sb.AppendLine(result.X86Ir);
+				sb.Append(result.X86Ir?.TrimEnd());
+				sb.AppendLine();
 			} else {
 				sb.AppendLine($"// Compilation failed: {result.Error}");
 				error ??= result.Error;
@@ -253,27 +254,13 @@ public static class FragmentGenerator {
 	}
 
 	private static string? ExtractGeneratedIr(string[] lines) {
-		var sb = new StringBuilder();
-		var foundIr = false;
-
 		foreach (var line in lines) {
-			if (line.TrimStart().StartsWith("// Generated X86 IR:")) {
-				foundIr = true;
-				continue;
-			}
 			if (line.TrimStart().StartsWith("// Compilation failed:")) {
 				return null;
 			}
-			if (foundIr) {
-				sb.AppendLine(line);
-			}
 		}
 
-		if (!foundIr) {
-			return null;
-		}
-
-		return sb.ToString().TrimEnd();
+		return string.Join('\n', lines).TrimEnd();
 	}
 
 	private static TestExpectation ParseExpectation(string section) {

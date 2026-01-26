@@ -30,14 +30,12 @@ end 'main'
 30
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 30
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 30
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -51,14 +49,12 @@ end 'main'
 16
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 16
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 16
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -72,14 +68,12 @@ end 'main'
 75
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 75
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 75
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -93,14 +87,12 @@ end 'main'
 42
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 42
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -114,14 +106,12 @@ end 'main'
 25
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 25
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 25
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -135,14 +125,12 @@ end 'main'
 2
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 2
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 2
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -157,14 +145,12 @@ end 'main'
 0
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 0
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -182,14 +168,12 @@ end 'main'
 42
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 42
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -204,14 +188,12 @@ end 'main'
 20
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 20
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 20
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -226,14 +208,12 @@ end 'main'
 28
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 28
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 28
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -248,14 +228,12 @@ end 'main'
 40
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 40
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 40
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -269,14 +247,12 @@ end 'main'
 15
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 15
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 15
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -292,14 +268,12 @@ end 'main'
 20
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 20
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 20
+    x86.epilogue
+    x86.ret
 }
 ```
 
@@ -318,13 +292,11 @@ end 'main'
 20
 ```
 ```requiredmlir
-module {
-  func.func @main() -> i64 {
-    ^entry:
-      x86.prologue stack_size=32
-      x86.mov rax, 20
-      x86.epilogue
-      x86.ret
-  }
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 20
+    x86.epilogue
+    x86.ret
 }
 ```

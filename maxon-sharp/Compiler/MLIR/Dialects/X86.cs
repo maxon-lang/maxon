@@ -605,15 +605,11 @@ public sealed class ComiOp : X86Op {
 /// <summary>
 /// Unconditional jump: x86.jmp target
 /// </summary>
-public sealed class JmpOp : X86Op {
+public sealed class JmpOp(string target) : X86Op {
 	public override string Mnemonic => "jmp";
 	public override bool IsTerminator => true;
 
-	public string Target { get; }
-
-	public JmpOp(string target) {
-		Target = target;
-	}
+	public string Target { get; } = target;
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"x86.jmp {Target}");
@@ -623,19 +619,13 @@ public sealed class JmpOp : X86Op {
 /// <summary>
 /// Conditional jump: x86.jcc cond, target
 /// </summary>
-public sealed class JccOp : X86Op {
+public sealed class JccOp(X86CondCode condition, string trueTarget, string falseTarget) : X86Op {
 	public override string Mnemonic => $"j{Condition.ToString().ToLowerInvariant()}";
 	public override bool IsTerminator => true;
 
-	public X86CondCode Condition { get; }
-	public string TrueTarget { get; }
-	public string FalseTarget { get; }
-
-	public JccOp(X86CondCode condition, string trueTarget, string falseTarget) {
-		Condition = condition;
-		TrueTarget = trueTarget;
-		FalseTarget = falseTarget;
-	}
+	public X86CondCode Condition { get; } = condition;
+	public string TrueTarget { get; } = trueTarget;
+	public string FalseTarget { get; } = falseTarget;
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"x86.j{Condition.ToString().ToLowerInvariant()} {TrueTarget}");
@@ -646,14 +636,10 @@ public sealed class JccOp : X86Op {
 /// <summary>
 /// Call: x86.call target
 /// </summary>
-public sealed class X86CallOp : X86Op {
+public sealed class X86CallOp(string target) : X86Op {
 	public override string Mnemonic => "call";
 
-	public string Target { get; }
-
-	public X86CallOp(string target) {
-		Target = target;
-	}
+	public string Target { get; } = target;
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"x86.call {Target}");
@@ -677,15 +663,11 @@ public sealed class RetOp : X86Op {
 /// <summary>
 /// Label definition: label:
 /// </summary>
-public sealed class LabelOp : X86Op {
+public sealed class LabelOp(string name) : X86Op {
 	public override string Mnemonic => "label";
 	public override bool HasSideEffects => false;
 
-	public string Name { get; }
-
-	public LabelOp(string name) {
-		Name = name;
-	}
+	public string Name { get; } = name;
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"{Name}:");
@@ -898,13 +880,9 @@ public sealed class XorpdOp : X86Op {
 /// <summary>
 /// Function prologue: push rbp; mov rbp, rsp; sub rsp, N
 /// </summary>
-public sealed class PrologueOp : X86Op {
+public sealed class PrologueOp(int stackSize = 32) : X86Op {
 	public override string Mnemonic => "prologue";
-	public int StackSize { get; }
-
-	public PrologueOp(int stackSize = 32) {
-		StackSize = stackSize;
-	}
+	public int StackSize { get; } = stackSize;
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"x86.prologue stack_size={StackSize}");
@@ -1061,11 +1039,14 @@ public sealed record MemOperand(
 			var idxStr = Scale != 1 ? $"{Index}*{Scale}" : Index.ToString()!;
 			parts.Add(idxStr);
 		}
-		if (Displacement != 0 || parts.Count == 0) {
-			if (Displacement >= 0 && parts.Count > 0)
-				parts.Add($"+{Displacement}");
+		var addr = string.Join("+", parts);
+		if (Displacement != 0) {
+			if (Displacement > 0)
+				addr = parts.Count > 0 ? $"{addr}+{Displacement}" : Displacement.ToString();
 			else
-				parts.Add(Displacement.ToString());
+				addr = parts.Count > 0 ? $"{addr}{Displacement}" : Displacement.ToString();
+		} else if (parts.Count == 0) {
+			addr = "0";
 		}
 		var sizePrefix = Size switch {
 			1 => "byte ptr ",
@@ -1074,7 +1055,7 @@ public sealed record MemOperand(
 			8 => "qword ptr ",
 			_ => ""
 		};
-		return $"{sizePrefix}[{string.Join("", parts)}]";
+		return $"{sizePrefix}[{addr}]";
 	}
 }
 

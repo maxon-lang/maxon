@@ -400,12 +400,22 @@ public class Parser(List<Token> tokens) {
 		else Expect(TokenType.Let);
 
 		var name = Expect(TokenType.Identifier).Value;
-		var type = ParseTypeRef();
+
+		// Type is optional when followed by `=` (type will be inferred from default value)
+		TypeRef? type = null;
+		if (!Check(TokenType.Equals)) {
+			type = ParseTypeRef();
+		}
 
 		Expr? defaultValue = null;
 		if (Check(TokenType.Equals)) {
 			Advance();
 			defaultValue = ParseExpression();
+		}
+
+		// If no type and no default value, that's an error
+		if (type == null && defaultValue == null) {
+			throw new CompileError(ErrorCode.ParserExpectedType, "Field must have either a type annotation or a default value", Current().Line, Current().Column);
 		}
 
 		return new FieldDecl(name, type, isMutable, isExport, isStatic, defaultValue);

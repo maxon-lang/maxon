@@ -150,7 +150,7 @@ public record ParamDecl(string Name, TypeRef Type, Expr? DefaultValue = null) {
 	public SourceLocation? Location { get; init; }
 }
 
-public record FieldDecl(string Name, TypeRef Type, bool IsMutable, bool IsExport = false, bool IsStatic = false, Expr? DefaultValue = null);
+public record FieldDecl(string Name, TypeRef? Type, bool IsMutable, bool IsExport = false, bool IsStatic = false, Expr? DefaultValue = null);
 
 public record MethodDecl(
 	string Name,

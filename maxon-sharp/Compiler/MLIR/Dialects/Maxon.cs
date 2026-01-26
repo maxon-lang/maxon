@@ -1,3 +1,4 @@
+using MaxonSharp.Compiler;
 using MaxonSharp.Compiler.Mlir.Core;
 
 namespace MaxonSharp.Compiler.Mlir.Dialects;
@@ -461,7 +462,8 @@ public sealed record MaxonStructType(string Name, IReadOnlyList<MaxonFieldInfo> 
 /// <param name="Type">Field type</param>
 /// <param name="Offset">Byte offset within struct</param>
 /// <param name="IsMutable">True if declared with 'var', false if 'let'</param>
-public sealed record MaxonFieldInfo(string Name, MlirType Type, int Offset, bool IsMutable);
+/// <param name="DefaultValue">Optional default value expression</param>
+public sealed record MaxonFieldInfo(string Name, MlirType Type, int Offset, bool IsMutable, Expr? DefaultValue = null);
 
 // ============================================================================
 // Maxon Enum Type

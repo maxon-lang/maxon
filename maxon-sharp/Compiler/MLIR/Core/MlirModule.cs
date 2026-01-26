@@ -90,40 +90,10 @@ public sealed class MlirModule {
 	/// Print this module in MLIR textual format.
 	/// </summary>
 	public void Print(MlirPrinter printer) {
-		if (Name is not null) {
-			printer.PrintLine($"module @{Name} {{");
-			printer.Indent();
-		} else {
-			printer.PrintLine("module {");
-			printer.Indent();
-		}
-
-		// Print struct definitions
-		foreach (var structDef in StructDefs) {
-			structDef.Print(printer);
-			printer.PrintLine();
-		}
-
-		// Print enum definitions
-		foreach (var enumDef in EnumDefs) {
-			enumDef.Print(printer);
-			printer.PrintLine();
-		}
-
-		// Print globals
-		foreach (var global in Globals) {
-			global.Print(printer);
-			printer.PrintLine();
-		}
-
-		// Print functions
 		for (int i = 0; i < Functions.Count; i++) {
 			if (i > 0) printer.PrintLine();
 			Functions[i].Print(printer);
 		}
-
-		printer.Dedent();
-		printer.PrintLine("}");
 	}
 
 	public override string ToString() {
@@ -166,8 +136,6 @@ public sealed class MlirStructDef(string name) {
 	public int SizeInBytes => Fields.Sum(f => f.Type.SizeInBytes);
 
 	public void Print(MlirPrinter printer) {
-		var fieldStrs = Fields.Select(f => $"{f.Name}: {f.Type}");
-		printer.PrintLine($"// struct {Name} {{ {string.Join(", ", fieldStrs)} }}");
 	}
 }
 

@@ -1,0 +1,69 @@
+// Test: struct-field-default
+type Counter
+	export var value = 0
+	export var step = 1
+end 'Counter'
+
+function main() returns int
+	var c1 = Counter{}
+	var c2 = Counter{value: 40}
+	var c3 = Counter{value: 10, step: 2}
+	return c1.value + c2.value + c3.step
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=128
+    x86.mov rax, 0
+    x86.mov rcx, 1
+    x86.lea rdx, qword ptr [rbp-48]
+    x86.mov r8, 0
+    x86.lea r9, qword ptr [rdx+r8]
+    x86.mov qword ptr [r9], rax
+    x86.mov r9, 8
+    x86.lea rax, qword ptr [rdx+r9]
+    x86.mov qword ptr [rax], rcx
+    x86.lea rcx, qword ptr [rbp-64]
+    x86.mov qword ptr [rcx], rdx
+    x86.mov rdx, 40
+    x86.mov rax, 1
+    x86.lea r9, qword ptr [rbp-80]
+    x86.mov r8, 0
+    x86.lea r10, qword ptr [r9+r8]
+    x86.mov qword ptr [r10], rdx
+    x86.mov r10, 8
+    x86.lea rdx, qword ptr [r9+r10]
+    x86.mov qword ptr [rdx], rax
+    x86.lea rdx, qword ptr [rbp-96]
+    x86.mov qword ptr [rdx], r9
+    x86.mov r9, 10
+    x86.mov rax, 2
+    x86.lea r10, qword ptr [rbp-112]
+    x86.mov r8, 0
+    x86.lea r11, qword ptr [r10+r8]
+    x86.mov qword ptr [r11], r9
+    x86.mov r11, 8
+    x86.lea r9, qword ptr [r10+r11]
+    x86.mov qword ptr [r9], rax
+    x86.lea r9, qword ptr [rbp-128]
+    x86.mov qword ptr [r9], r10
+    x86.mov r10, [rcx]
+    x86.lea rcx, qword ptr [r10]
+    x86.mov r10, qword ptr [rcx]
+    x86.mov rcx, [rdx]
+    x86.lea rdx, qword ptr [rcx]
+    x86.mov rcx, qword ptr [rdx]
+    x86.mov rdx, r10
+    x86.add rdx, rcx
+    x86.mov rcx, [r9]
+    x86.lea r9, qword ptr [rcx+8]
+    x86.mov rcx, qword ptr [r9]
+    x86.mov r9, rdx
+    x86.add r9, rcx
+    x86.mov rax, r9
+    x86.epilogue
+    x86.ret
+}
+---

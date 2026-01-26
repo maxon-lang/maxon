@@ -481,28 +481,7 @@ public sealed class LowerCondBranchOp : ConversionPattern<CondBranchOp> {
 /// </summary>
 public sealed class LowerLoadOp : ConversionPattern<LoadOp> {
 	protected override bool MatchAndRewrite(LoadOp op, ConversionPatternRewriter rewriter) {
-		var dst = new VRegOperand(op.Result.Id);
-		var ptr = new VRegOperand(op.MemRef.Id);
-
-		MemOperand mem;
-		if (op.Indices.Count == 1) {
-			// Single index - compute effective address with LEA, then load
-			// LEA tmp, [ptr + index]; MOV dst, [tmp]
-			var idx = new VRegOperand(op.Indices[0].Id);
-			var tmpValue = new MlirValue(IntegerType.I64);
-			var tmp = new VRegOperand(tmpValue.Id);
-			var sibMem = new MemOperand(Base: ptr, Index: idx, Size: 8);
-			rewriter.Insert(new LeaOp(tmp, sibMem));
-			mem = new MemOperand(Base: tmp, Size: op.Result.Type.SizeInBytes);
-		} else if (op.Indices.Count == 0) {
-			// No indices - just base pointer
-			mem = new MemOperand(Base: ptr, Size: op.Result.Type.SizeInBytes);
-		} else {
-			throw new NotSupportedException($"LoadOp with {op.Indices.Count} indices not supported");
-		}
-
-		rewriter.Insert(new MovOp(dst, mem));
-		return true;
+		return LowerLoadOrStoreOp.MatchAndRewrite(op.Result, op.MemRef, op.Indices, rewriter, "Load");
 	}
 }
 
@@ -511,27 +490,37 @@ public sealed class LowerLoadOp : ConversionPattern<LoadOp> {
 /// </summary>
 public sealed class LowerStoreOp : ConversionPattern<StoreOp> {
 	protected override bool MatchAndRewrite(StoreOp op, ConversionPatternRewriter rewriter) {
-		var val = new VRegOperand(op.Value.Id);
-		var ptr = new VRegOperand(op.MemRef.Id);
+		return LowerLoadOrStoreOp.MatchAndRewrite(op.Value, op.MemRef, op.Indices, rewriter, "Store");
+	}
+}
+
+public sealed class LowerLoadOrStoreOp {
+	public static bool MatchAndRewrite(MlirValue value, MlirValue memref, IReadOnlyList<MlirValue> indices, ConversionPatternRewriter rewriter, string name) {
+		var isFloat = value.Type is FloatType;
+		var ptr = new VRegOperand(memref.Id);
 
 		MemOperand mem;
-		if (op.Indices.Count == 1) {
-			// Single index - compute effective address with LEA, then store
-			// LEA tmp, [ptr + index]; MOV [tmp], val
-			var idx = new VRegOperand(op.Indices[0].Id);
+		if (indices.Count == 1) {
+			var idx = new VRegOperand(indices[0].Id);
 			var tmpValue = new MlirValue(IntegerType.I64);
 			var tmp = new VRegOperand(tmpValue.Id);
 			var sibMem = new MemOperand(Base: ptr, Index: idx, Size: 8);
 			rewriter.Insert(new LeaOp(tmp, sibMem));
-			mem = new MemOperand(Base: tmp, Size: op.Value.Type.SizeInBytes);
-		} else if (op.Indices.Count == 0) {
-			// No indices - just base pointer
-			mem = new MemOperand(Base: ptr, Size: op.Value.Type.SizeInBytes);
+			mem = new MemOperand(Base: tmp, Size: value.Type.SizeInBytes);
+		} else if (indices.Count == 0) {
+			mem = new MemOperand(Base: ptr, Size: value.Type.SizeInBytes);
 		} else {
-			throw new NotSupportedException($"StoreOp with {op.Indices.Count} indices not supported");
+			throw new NotSupportedException($"{name}Op with {indices.Count} indices not supported");
 		}
 
-		rewriter.Insert(new MovOp(mem, val));
+		// Use movsd for float types, mov for integer types
+		var dst = (name == "Load") ? new VRegOperand(value.Id, IsFloat: isFloat) : mem as X86Operand;
+		var src = (name == "Load") ? mem as X86Operand : new VRegOperand(value.Id, IsFloat: isFloat);
+		if (isFloat) {
+			rewriter.Insert(new MovsdOp(dst, src));
+		} else {
+			rewriter.Insert(new MovOp(dst, src));
+		}
 		return true;
 	}
 }
@@ -560,19 +549,7 @@ public sealed class LowerAllocaOp : ConversionPattern<AllocaOp> {
 			}
 		}
 
-		// Fallback: immediate allocation (legacy behavior for backwards compatibility)
-		// This should only happen if FunctionFramePass hasn't run yet
-		var size = op.MemRefType.ElementType.SizeInBytes;
-		var rsp = new RegOperand(X86Register.RSP);
-
-		Logger.Debug(LogCategory.Codegen, $"Alloca v{op.Result.Id} without frame offset - using legacy stack allocation");
-
-		// Allocate on stack
-		rewriter.Insert(new SubOp(rsp, new ImmOperand(size)));
-		// Get pointer to allocated space
-		rewriter.Insert(new LeaOp(dst, new MemOperand(Base: rsp)));
-
-		return true;
+		throw new InvalidOperationException("AllocaOp without frame offset");
 	}
 }
 

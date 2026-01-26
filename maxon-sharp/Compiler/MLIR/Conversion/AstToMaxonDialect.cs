@@ -105,12 +105,34 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		};
 	}
 
+	/// <summary>
+	/// Infers the MLIR type from an expression AST node.
+	/// Used for type inference when no explicit type annotation is provided.
+	/// </summary>
+	private static MlirType InferTypeFromExpr(Expr expr) {
+		return expr switch {
+			IntLiteralExpr => IntegerType.I64,
+			FloatLiteralExpr => FloatType.F64,
+			BoolLiteralExpr => IntegerType.I1,
+			_ => throw new NotSupportedException($"Cannot infer type from expression: {expr.GetType().Name}. Please provide an explicit type annotation.")
+		};
+	}
+
 	private void LowerTypeDecl(TypeDecl type) {
-		var fields = new List<(string name, MlirType type, bool isMutable)>();
+		var fields = new List<(string name, MlirType type, bool isMutable, Expr? defaultValue)>();
+
 		foreach (var field in type.Fields) {
-			var fieldType = ConvertTypeRef(field.Type);
-			fields.Add((field.Name, fieldType, field.IsMutable));
+			MlirType fieldType;
+			if (field.Type != null) {
+				fieldType = ConvertTypeRef(field.Type);
+			} else if (field.DefaultValue != null) {
+				fieldType = InferTypeFromExpr(field.DefaultValue);
+			} else {
+				throw new InvalidOperationException($"Field '{field.Name}' has no type annotation and no default value");
+			}
+			fields.Add((field.Name, fieldType, field.IsMutable, field.DefaultValue));
 		}
+
 		RegisterStruct(type.Name, fields);
 	}
 
@@ -767,6 +789,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			fieldValues[field.Name] = value;
 		}
 
+		// Fill in default values for any missing fields
+		foreach (var fieldInfo in structType.Fields) {
+			if (!fieldValues.ContainsKey(fieldInfo.Name) && fieldInfo.DefaultValue != null) {
+				fieldValues[fieldInfo.Name] = LowerExpression(fieldInfo.DefaultValue);
+			}
+		}
+
 		return EmitStructInit(structType, fieldValues);
 	}
 
@@ -1119,12 +1148,12 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// <summary>
 	/// Registers a struct type.
 	/// </summary>
-	public MaxonStructType RegisterStruct(string name, List<(string name, MlirType type, bool isMutable)> fields) {
+	public MaxonStructType RegisterStruct(string name, List<(string name, MlirType type, bool isMutable, Expr? defaultValue)> fields) {
 		// Convert tuples to MaxonFieldInfo with calculated offsets
 		var fieldInfos = new List<MaxonFieldInfo>();
 		int offset = 0;
-		foreach (var (fname, ftype, isMutable) in fields) {
-			fieldInfos.Add(new MaxonFieldInfo(fname, ftype, offset, isMutable));
+		foreach (var (fname, ftype, isMutable, defaultValue) in fields) {
+			fieldInfos.Add(new MaxonFieldInfo(fname, ftype, offset, isMutable, defaultValue));
 			offset += ftype.SizeInBytes;
 		}
 
@@ -1134,7 +1163,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Add to module
 		var def = new MlirStructDef(name);
 		offset = 0;
-		foreach (var (fname, ftype, isMutable) in fields) {
+		foreach (var (fname, ftype, isMutable, _) in fields) {
 			def.Fields.Add(new MlirFieldDef(fname, ftype, offset, isMutable));
 			offset += ftype.SizeInBytes;
 		}
