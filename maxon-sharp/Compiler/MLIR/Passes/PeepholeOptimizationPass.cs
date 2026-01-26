@@ -33,7 +33,7 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 			removedSelfMoves += count1;
 
 			// Pattern 2: Propagate constants through single-use copies
-			var (changed2, count2) = PropagateConstants(block);
+			var (changed2, count2) = PropagateConstants(block, func);
 			anyChanged |= changed2;
 			propagatedConstants += count2;
 
@@ -185,7 +185,7 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 	/// NOTE: This only removes the mov reg, imm if the register is not used elsewhere in the block.
 	/// If the register is live out of the block (used in other blocks), we keep both movs.
 	/// </summary>
-	private static (bool changed, int count) PropagateConstants(MlirBlock block) {
+	private static (bool changed, int count) PropagateConstants(MlirBlock block, MlirFunction func) {
 		bool changed = false;
 		int count = 0;
 
@@ -197,7 +197,7 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 
 		// Track which registers might be live-out (used in successor blocks)
 		// For safety, don't remove the defining mov if the register might be used later
-		var liveOutRegs = GetPotentiallyLiveOutRegisters(block);
+		var liveOutRegs = GetPotentiallyLiveOutRegisters(block, func);
 
 		// Process operations
 		var ops = block.Operations.ToList();
@@ -242,11 +242,10 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 
 	/// <summary>
 	/// Returns the set of registers that are potentially live-out from this block.
-	/// A register is live-out if it might be used by a successor block.
-	/// For safety, we consider any register that is defined but not consumed within
-	/// the same block as potentially live-out, if the block has successors.
+	/// A register is live-out if it might be used by a successor block (transitively)
+	/// before being redefined.
 	/// </summary>
-	private static HashSet<X86Register> GetPotentiallyLiveOutRegisters(MlirBlock block) {
+	private static HashSet<X86Register> GetPotentiallyLiveOutRegisters(MlirBlock block, MlirFunction func) {
 		var liveOut = new HashSet<X86Register>();
 
 		// If block ends with a return, nothing is live-out (function is ending)
@@ -254,22 +253,107 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 			return liveOut;
 		}
 
-		// Collect all registers that are defined in this block
-		var defined = new HashSet<X86Register>();
-		foreach (var op in block.Operations) {
-			if (op is X86Op x86Op && x86Op.X86Operands.Count > 0) {
-				// Most X86 ops have destination as first operand
-				if (x86Op.X86Operands[0] is RegOperand dstReg) {
-					// For cmp/test, first operand is not a destination
+		// Get successor block names from the terminator
+		var successorNames = new HashSet<string>();
+		if (block.Terminator is JmpOp jmp) {
+			successorNames.Add(jmp.Target);
+		} else if (block.Terminator is JccOp jcc) {
+			successorNames.Add(jcc.TrueTarget);
+			successorNames.Add(jcc.FalseTarget);
+		}
+
+		// If no successors, nothing is live-out
+		if (successorNames.Count == 0) {
+			return liveOut;
+		}
+
+		// For each successor, compute what registers it needs on entry
+		// (transitively through the CFG until they're redefined)
+		var visited = new HashSet<string>();
+		var worklist = new Queue<string>(successorNames);
+
+		while (worklist.Count > 0) {
+			var blockName = worklist.Dequeue();
+			if (visited.Contains(blockName)) continue;
+			visited.Add(blockName);
+
+			var currentBlock = func.Body.Blocks.FirstOrDefault(b => b.Name == blockName);
+			if (currentBlock is null) continue;
+
+			var defsInBlock = new HashSet<X86Register>();
+			var usesBeforeDefs = new HashSet<X86Register>();
+
+			// Scan the block to find uses before defs
+			foreach (var op in currentBlock.Operations) {
+				if (op is not X86Op x86Op) continue;
+
+				// Collect uses (sources)
+				for (int i = 1; i < x86Op.X86Operands.Count; i++) {
+					CollectUsedRegistersInto(x86Op.X86Operands[i], usesBeforeDefs, defsInBlock);
+				}
+				// For cmp/test, first operand is also a source
+				if (op is CmpOp or TestOp && x86Op.X86Operands.Count > 0) {
+					CollectUsedRegistersInto(x86Op.X86Operands[0], usesBeforeDefs, defsInBlock);
+				}
+
+				// Collect defs (destinations) - track after uses so we know what's used before def
+				if (x86Op.X86Operands.Count > 0 && x86Op.X86Operands[0] is RegOperand dstReg) {
 					if (op is not CmpOp and not TestOp) {
-						defined.Add(dstReg.Register);
+						defsInBlock.Add(dstReg.Register);
 					}
 				}
 			}
+
+			// Add uses-before-defs to liveOut
+			foreach (var reg in usesBeforeDefs) {
+				liveOut.Add(reg);
+			}
+
+			// Add successors to worklist for registers that weren't killed (def'd) in this block
+			// Only if this block's terminator can reach them
+			if (currentBlock.Terminator is JmpOp jmp2) {
+				worklist.Enqueue(jmp2.Target);
+			} else if (currentBlock.Terminator is JccOp jcc2) {
+				worklist.Enqueue(jcc2.TrueTarget);
+				worklist.Enqueue(jcc2.FalseTarget);
+			}
 		}
 
-		// All defined registers are potentially live-out since the block has successors
-		return defined;
+		return liveOut;
+	}
+
+	/// <summary>
+	/// Collects used registers, but only if they haven't been defined yet in this block.
+	/// </summary>
+	private static void CollectUsedRegistersInto(X86Operand operand, HashSet<X86Register> uses, HashSet<X86Register> defs) {
+		if (operand is RegOperand reg) {
+			if (!defs.Contains(reg.Register)) {
+				uses.Add(reg.Register);
+			}
+		} else if (operand is MemOperand mem) {
+			if (mem.Base is RegOperand baseReg && !defs.Contains(baseReg.Register)) {
+				uses.Add(baseReg.Register);
+			}
+			if (mem.Index is RegOperand indexReg && !defs.Contains(indexReg.Register)) {
+				uses.Add(indexReg.Register);
+			}
+		}
+	}
+
+	/// <summary>
+	/// Recursively collects all registers used in an operand.
+	/// </summary>
+	private static void CollectUsedRegisters(X86Operand operand, HashSet<X86Register> registers) {
+		if (operand is RegOperand reg) {
+			registers.Add(reg.Register);
+		} else if (operand is MemOperand mem) {
+			if (mem.Base is RegOperand baseReg) {
+				registers.Add(baseReg.Register);
+			}
+			if (mem.Index is RegOperand indexReg) {
+				registers.Add(indexReg.Register);
+			}
+		}
 	}
 
 	/// <summary>

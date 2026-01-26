@@ -333,30 +333,27 @@ end 'main'
 func.func @main() -> i64 {
   ^entry:
     x86.prologue stack_size=32
-    x86.mov r8, 0
-    x86.mov r9, 1
+    x86.mov rcx, 1
+    x86.mov r8, 5
+    x86.mov r9, 0
+    x86.mov r10, rcx
     x86.jmp while.cond
   ^while.cond(%15: i64, %18: i64):
-    x86.mov rdx, 5
-    x86.cmp r9, rdx
+    x86.cmp r10, r8
     x86.setle rdx
     x86.test rdx, rdx
     x86.jne while.body
-    x86.jmp while.exit.args
-    while.exit.args:
-    x86.mov rdx, r8
     x86.jmp while.exit
   ^while.body:
-    x86.mov rax, r8
-    x86.add rax, r9
-    x86.mov rcx, 1
-    x86.mov r10, r9
-    x86.add r10, rcx
-    x86.mov r8, rax
-    x86.mov r9, r10
+    x86.mov rdx, r9
+    x86.add rdx, r10
+    x86.mov rax, r10
+    x86.add rax, rcx
+    x86.mov r9, rdx
+    x86.mov r10, rax
     x86.jmp while.cond
-  ^while.exit(%16: i64):
-    x86.mov rax, rdx
+  ^while.exit:
+    x86.mov rax, r9
     x86.epilogue
     x86.ret
 }
@@ -490,20 +487,18 @@ func.func @test(%cond: i64) -> i64 {
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.mov rcx, 0
-    x86.mov rdx, 0
-    x86.cmp rax, rdx
-    x86.setg rdx
-    x86.test rdx, rdx
+    x86.cmp rax, rcx
+    x86.setg rax
+    x86.test rax, rax
     x86.jne then
-    x86.jmp merge.args
-  merge.args:
-    x86.mov rdx, rcx
+    x86.jmp merge.args.from.entry
+  merge.args.from.entry:
+    x86.mov rax, rcx
     x86.jmp merge
   ^then:
-    x86.mov rdx, 42
+    x86.mov rax, 42
     x86.jmp merge
   ^merge(%10: i64):
-    x86.mov rax, rdx
     x86.epilogue
     x86.ret
 }
@@ -543,49 +538,50 @@ end 'main'
 func.func @main() -> i64 {
   ^entry:
     x86.prologue stack_size=48
+    x86.push rbx
     x86.mov rax, 0
     x86.lea rcx, qword ptr [rbp-40]
     x86.mov qword ptr [rcx], rax
-    x86.mov rax, 1
-    x86.mov r8, rax
+    x86.mov r8, 1
+    x86.mov r9, 3
+    x86.mov r10, r8
     x86.jmp while.cond
   ^while.cond(%25: i64):
-    x86.mov rdx, 3
-    x86.cmp r8, rdx
-    x86.setle rdx
-    x86.test rdx, rdx
+    x86.cmp r10, r9
+    x86.setle rax
+    x86.test rax, rax
     x86.jne while.body
     x86.jmp while.exit
   ^while.body:
-    x86.mov r9, 1
+    x86.mov r11, 1
     x86.jmp while.cond_1
   ^while.exit:
-    x86.mov rax, qword ptr [rcx]
+    x86.mov rdx, qword ptr [rcx]
+    x86.mov rax, rdx
+    x86.pop rbx
     x86.epilogue
     x86.ret
   ^while.cond_1(%27: i64):
-    x86.mov rax, 3
-    x86.cmp r9, rax
-    x86.setle rax
-    x86.test rax, rax
+    x86.cmp r11, r9
+    x86.setle rdx
+    x86.test rdx, rdx
     x86.jne while.body_1
     x86.jmp while.exit_1
   ^while.body_1:
-    x86.mov rax, qword ptr [rcx]
-    x86.imul rdx, r8, r9
-    x86.mov r10, rax
-    x86.add r10, rdx
-    x86.mov qword ptr [rcx], r10
-    x86.mov r10, 1
-    x86.mov rdx, r9
-    x86.add rdx, r10
-    x86.mov r9, rdx
+    x86.mov rdx, qword ptr [rcx]
+    x86.imul rax, r10, r11
+    x86.mov rbx, rdx
+    x86.add rbx, rax
+    x86.mov qword ptr [rcx], rbx
+    x86.mov rax, 1
+    x86.mov rdx, r11
+    x86.add rdx, rax
+    x86.mov r11, rdx
     x86.jmp while.cond_1
   ^while.exit_1:
-    x86.mov rdx, 1
-    x86.mov r10, r8
-    x86.add r10, rdx
-    x86.mov r8, r10
+    x86.mov rdx, r10
+    x86.add rdx, r8
+    x86.mov r10, rdx
     x86.jmp while.cond
 }
 ```
@@ -693,49 +689,835 @@ end 'main'
 func.func @main() -> i64 {
   ^entry:
     x86.prologue stack_size=32
-    x86.mov r8, 0
-    x86.mov r9, 0
+    x86.push rbx
+    x86.push r12
+    x86.mov r8, 10
+    x86.mov r9, 1
+    x86.mov r10, 1
+    x86.mov r11, 5
+    x86.mov rbx, 0
+    x86.mov r12, 0
     x86.jmp while.cond
   ^while.cond(%18: i64, %20: i1):
-    x86.mov rdx, 10
-    x86.cmp r8, rdx
+    x86.cmp rbx, r8
     x86.setl rdx
     x86.test rdx, rdx
     x86.jne while.body
-    x86.jmp while.exit.args
-    while.exit.args:
-    x86.mov rdx, r9
     x86.jmp while.exit
   ^while.body:
-    x86.mov rax, 5
-    x86.cmp r8, rax
-    x86.sete rax
-    x86.test rax, rax
-    x86.jne then
-    x86.jmp merge.args
-    merge.args:
-    x86.mov rax, r9
-    x86.jmp merge
-  ^while.exit(%21: i1):
+    x86.cmp rbx, r11
+    x86.sete rdx
     x86.test rdx, rdx
+    x86.jne merge
+    x86.jmp merge
+  ^while.exit:
+    x86.test r12, r12
     x86.jne then_1
     x86.jmp merge_1
-  ^then:
-    x86.mov rax, 1
-    x86.jmp merge
-  ^merge(%22: i1):
-    x86.mov rdx, 1
-    x86.mov rcx, r8
-    x86.add rcx, rdx
-    x86.mov r8, rcx
-    x86.mov r9, rax
+  ^merge:
+    x86.mov rdx, rbx
+    x86.add rdx, r9
+    x86.mov rbx, rdx
+    x86.mov r12, r10
     x86.jmp while.cond
   ^then_1:
     x86.mov rax, 1
+    x86.pop r12
+    x86.pop rbx
     x86.epilogue
     x86.ret
   ^merge_1:
     x86.mov rax, 0
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+```
+
+### Loop Invariant Code Motion (LICM)
+
+LICM hoists loop-invariant computations from loop bodies to loop preheaders,
+reducing redundant computation when the loop executes multiple iterations.
+
+<!-- test: licm-constant-hoisting -->
+Constants used inside loops are hoisted to the entry block.
+```maxon
+function main() returns int
+    var sum = 0
+    var i = 0
+    while i < 5 'loop'
+        sum = sum + 10
+        i = i + 1
+    end 'loop'
+    return sum
+end 'main'
+```
+```exitcode
+50
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.mov rcx, 5
+    x86.mov r8, 10
+    x86.mov r9, 1
+    x86.mov r10, rax
+    x86.mov r11, rax
+    x86.jmp while.cond
+  ^while.cond(%15: i64, %18: i64):
+    x86.cmp r11, rcx
+    x86.setl rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rdx, r10
+    x86.add rdx, r8
+    x86.mov rax, r11
+    x86.add rax, r9
+    x86.mov r10, rdx
+    x86.mov r11, rax
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, r10
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: licm-no-hoist-load-with-store -->
+Loads from memory locations that have stores in the loop are NOT hoisted.
+This test verifies that `y` is read fresh each iteration since it's modified in the loop.
+```maxon
+function main() returns int
+    var y = 0
+    var i = 0
+    while i < 3 'loop'
+        y = y + 1
+        i = i + 1
+    end 'loop'
+    return y
+end 'main'
+```
+```exitcode
+3
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.mov rcx, 3
+    x86.mov r8, 1
+    x86.mov r9, rax
+    x86.mov r10, rax
+    x86.jmp while.cond
+  ^while.cond(%15: i64, %18: i64):
+    x86.cmp r10, rcx
+    x86.setl rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rdx, r9
+    x86.add rdx, r8
+    x86.mov rax, r10
+    x86.add rax, r8
+    x86.mov r9, rdx
+    x86.mov r10, rax
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, r9
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: licm-nested-loop-invariant -->
+In nested loops, values from outer loop headers are NOT invariant for inner loops
+because they change per outer loop iteration.
+```maxon
+function main() returns int
+    var total = 0
+    var i = 1
+    while i <= 3 'outer'
+        var j = 1
+        while j <= 2 'inner'
+            total = total + i
+            j = j + 1
+        end 'inner'
+        i = i + 1
+    end 'outer'
+    return total
+end 'main'
+```
+```exitcode
+12
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov r8, 1
+    x86.mov r9, 3
+    x86.mov r10, 2
+    x86.mov r11, r8
+    x86.jmp while.cond
+  ^while.cond(%23: i64):
+    x86.cmp r11, r9
+    x86.setle rax
+    x86.test rax, rax
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rbx, 1
+    x86.jmp while.cond_1
+  ^while.exit:
+    x86.mov rax, qword ptr [rcx]
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+  ^while.cond_1(%25: i64):
+    x86.cmp rbx, r10
+    x86.setle rax
+    x86.test rax, rax
+    x86.jne while.body_1
+    x86.jmp while.exit_1
+  ^while.body_1:
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rdx, rax
+    x86.add rdx, r11
+    x86.mov qword ptr [rcx], rdx
+    x86.mov rdx, 1
+    x86.mov rax, rbx
+    x86.add rax, rdx
+    x86.mov rbx, rax
+    x86.jmp while.cond_1
+  ^while.exit_1:
+    x86.mov rax, r11
+    x86.add rax, r8
+    x86.mov r11, rax
+    x86.jmp while.cond
+}
+```
+
+<!-- test: licm-deeply-nested-correctness -->
+LICM only hoists from outermost loops to avoid register pressure issues.
+Inner loop computations remain in place.
+```maxon
+function main() returns int
+    var result = 0
+    var a = 0
+    while a < 2 'outer'
+        var b = 0
+        while b < 2 'middle'
+            var c = 0
+            while c < 2 'inner'
+                result = result + 1
+                c = c + 1
+            end 'inner'
+            b = b + 1
+        end 'middle'
+        a = a + 1
+    end 'outer'
+    return result
+end 'main'
+```
+```exitcode
+8
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.push r12
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov r8, 2
+    x86.mov r9, 1
+    x86.mov r10, rax
+    x86.jmp while.cond
+  ^while.cond(%31: i64):
+    x86.cmp r10, r8
+    x86.setl rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov r11, 0
+    x86.jmp while.cond_1
+  ^while.exit:
+    x86.mov rax, qword ptr [rcx]
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+  ^while.cond_1(%33: i64):
+    x86.cmp r11, r8
+    x86.setl rax
+    x86.test rax, rax
+    x86.jne while.body_1
+    x86.jmp while.exit_1
+  ^while.body_1:
+    x86.mov rax, 0
+    x86.lea rbx, qword ptr [rbp-48]
+    x86.mov qword ptr [rbx], rax
+    x86.jmp while.cond_2
+  ^while.exit_1:
+    x86.mov rax, r10
+    x86.add rax, r9
+    x86.mov r10, rax
+    x86.jmp while.cond
+  ^while.cond_2:
+    x86.mov rax, qword ptr [rbx]
+    x86.mov rdx, 2
+    x86.cmp rax, rdx
+    x86.setl rdx
+    x86.test rdx, rdx
+    x86.jne while.body_2
+    x86.jmp while.exit_2
+  ^while.body_2:
+    x86.mov rdx, qword ptr [rcx]
+    x86.mov rax, 1
+    x86.mov r12, rdx
+    x86.add r12, rax
+    x86.mov qword ptr [rcx], r12
+    x86.mov rax, qword ptr [rbx]
+    x86.mov rdx, 1
+    x86.mov r12, rax
+    x86.add r12, rdx
+    x86.mov qword ptr [rbx], r12
+    x86.jmp while.cond_2
+  ^while.exit_2:
+    x86.mov rdx, 1
+    x86.mov rax, r11
+    x86.add rax, rdx
+    x86.mov r11, rax
+    x86.jmp while.cond_1
+}
+```
+
+### Jump Threading
+
+Jump threading eliminates empty blocks and threads jumps through blocks
+when branch conditions can be determined from the control flow path.
+
+<!-- test: jump-threading-preserve-block-args -->
+Empty blocks with block arguments are NOT eliminated because they carry
+phi-like values that need to be preserved for SSA correctness.
+```maxon
+function main() returns int
+    var x = 0
+    var i = 0
+    while i < 5 'loop'
+        x = x + i
+        i = i + 1
+    end 'loop'
+    return x
+end 'main'
+```
+```exitcode
+10
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.mov rcx, 5
+    x86.mov r8, 1
+    x86.mov r9, rax
+    x86.mov r10, rax
+    x86.jmp while.cond
+  ^while.cond(%15: i64, %18: i64):
+    x86.cmp r10, rcx
+    x86.setl rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rdx, r9
+    x86.add rdx, r10
+    x86.mov rax, r10
+    x86.add rax, r8
+    x86.mov r9, rdx
+    x86.mov r10, rax
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, r9
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: jump-threading-empty-block-removal -->
+Empty blocks without arguments can be safely removed by redirecting predecessors.
+```maxon
+function test(x int) returns int
+    if x > 0 'check'
+        return 1
+    end 'check'
+    return 0
+end 'test'
+
+function main() returns int
+    return test(5) + test(0)
+end 'main'
+```
+```exitcode
+1
+```
+```requiredmlir
+func.func @test(%x: i64) -> i64 {
+  ^entry(%x: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, 0
+    x86.cmp rax, rcx
+    x86.setg rcx
+    x86.test rcx, rcx
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  ^merge:
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+}
+
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.push rbx
+    x86.mov rax, 5
+    x86.mov rcx, rax
+    x86.call test
+    x86.mov rbx, rax
+    x86.mov rax, 0
+    x86.mov rcx, rax
+    x86.call test
+    x86.mov rcx, rbx
+    x86.add rcx, rax
+    x86.mov rax, rcx
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+```
+
+### Function Inlining
+
+The inlining pass replaces function calls with the function body when beneficial,
+eliminating call overhead for small functions.
+
+<!-- test: inlining-simple-function -->
+Small helper functions are inlined at call sites.
+```maxon
+function add(a int, b int) returns int
+    return a + b
+end 'add'
+
+function main() returns int
+    return add(3, b: 4)
+end 'main'
+```
+```exitcode
+7
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 7
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: inlining-multiple-calls -->
+Functions called multiple times are inlined at each call site.
+```maxon
+function square(x int) returns int
+    return x * x
+end 'square'
+
+function main() returns int
+    return square(3) + square(4)
+end 'main'
+```
+```exitcode
+25
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 25
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: inlining-nested-calls -->
+Nested function calls are inlined from innermost to outermost.
+```maxon
+function double(x int) returns int
+    return x * 2
+end 'double'
+
+function quadruple(x int) returns int
+    return double(double(x))
+end 'quadruple'
+
+function main() returns int
+    return quadruple(5)
+end 'main'
+```
+```exitcode
+20
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 20
+    x86.epilogue
+    x86.ret
+}
+```
+
+### Global Value Numbering (GVN)
+
+GVN eliminates redundant computations by identifying expressions that compute
+the same value and reusing the first result.
+
+<!-- test: gvn-redundant-computation -->
+Redundant computations of the same expression are eliminated.
+```maxon
+function main() returns int
+    var a = 5
+    var b = 3
+    var x = a + b
+    var y = a + b
+    return x + y
+end 'main'
+```
+```exitcode
+16
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 16
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: gvn-common-subexpression -->
+Common subexpressions in complex expressions are computed only once.
+```maxon
+function main() returns int
+    var a = 2
+    var b = 3
+    return (a * b) + (a * b) + (a * b)
+end 'main'
+```
+```exitcode
+18
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 18
+    x86.epilogue
+    x86.ret
+}
+```
+
+### Tail Call Optimization
+
+Tail call optimization identifies calls in tail position and marks them for
+optimized calling convention, enabling efficient recursion without stack growth.
+
+<!-- test: tco-simple-tail-recursion -->
+Simple tail-recursive functions are optimized.
+```maxon
+function countdown(n int) returns int
+    if n <= 0 'done'
+        return 0
+    end 'done'
+    return countdown(n - 1)
+end 'countdown'
+
+function main() returns int
+    return countdown(10)
+end 'main'
+```
+```exitcode
+0
+```
+```requiredmlir
+func.func @countdown(%n: i64) -> i64 {
+  ^entry(%n: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.cmp rcx, rax
+    x86.setle rax
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+  ^merge:
+    x86.mov rax, 1
+    x86.mov rdx, rcx
+    x86.sub rdx, rax
+    x86.mov rcx, rdx
+    x86.call countdown
+    x86.epilogue
+    x86.ret
+}
+
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 10
+    x86.call countdown
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: tco-accumulator-pattern -->
+Tail recursion with accumulator pattern is optimized.
+```maxon
+function sum_to_helper(n int, acc int) returns int
+    if n <= 0 'done'
+        return acc
+    end 'done'
+    return sum_to_helper(n - 1, acc: acc + n)
+end 'sum_to_helper'
+
+function sum_to(n int) returns int
+    return sum_to_helper(n, acc: 0)
+end 'sum_to'
+
+function main() returns int
+    return sum_to(5)
+end 'main'
+```
+```exitcode
+15
+```
+```requiredmlir
+func.func @sum_to_helper(%n: i64, %acc: i64) -> i64 {
+  ^entry(%n: i64, %acc: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.cmp rcx, rax
+    x86.setle rax
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, rdx
+    x86.epilogue
+    x86.ret
+  ^merge:
+    x86.mov rax, 1
+    x86.mov r8, rcx
+    x86.sub r8, rax
+    x86.mov rax, rdx
+    x86.add rax, rcx
+    x86.mov r10, r8
+    x86.mov r11, rax
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call sum_to_helper
+    x86.mov rcx, rax
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 5
+    x86.mov rcx, 0
+    x86.mov r10, rax
+    x86.mov r11, rcx
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call sum_to_helper
+    x86.mov rcx, rax
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+```
+
+### Division with Virtual Registers
+
+Division operations use virtual registers instead of hardcoded physical registers,
+allowing the register allocator to avoid conflicts with loop variables.
+
+<!-- test: division-in-nested-loop -->
+Division inside nested loops works correctly without clobbering loop variables.
+```maxon
+function main() returns int
+    var result = 0
+    var i = 0
+    while i < 3 'outer'
+        var j = 0
+        while j < 3 'inner'
+            result = result + ((i + j) mod 2)
+            j = j + 1
+        end 'inner'
+        i = i + 1
+    end 'outer'
+    return result
+end 'main'
+```
+```exitcode
+4
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.push r12
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov r8, 3
+    x86.mov r9, 1
+    x86.mov r10, rax
+    x86.jmp while.cond
+  ^while.cond(%27: i64):
+    x86.cmp r10, r8
+    x86.setl rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov r11, 0
+    x86.jmp while.cond_1
+  ^while.exit:
+    x86.mov rax, qword ptr [rcx]
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+  ^while.cond_1(%29: i64):
+    x86.cmp r11, r8
+    x86.setl rax
+    x86.test rax, rax
+    x86.jne while.body_1
+    x86.jmp while.exit_1
+  ^while.body_1:
+    x86.mov rbx, qword ptr [rcx]
+    x86.mov rax, r10
+    x86.add rax, r11
+    x86.mov rdx, 2
+    x86.mov r12, rdx
+    x86.cdq
+    x86.idiv r12
+    x86.mov rax, rdx
+    x86.mov rdx, rbx
+    x86.add rdx, rax
+    x86.mov qword ptr [rcx], rdx
+    x86.mov rdx, 1
+    x86.mov rax, r11
+    x86.add rax, rdx
+    x86.mov r11, rax
+    x86.jmp while.cond_1
+  ^while.exit_1:
+    x86.mov rax, r10
+    x86.add rax, r9
+    x86.mov r10, rax
+    x86.jmp while.cond
+}
+```
+
+<!-- test: division-multiple-in-loop -->
+Multiple division operations in the same loop body work correctly.
+```maxon
+function main() returns int
+    var sum = 0
+    var i = 1
+    while i <= 10 'loop'
+        sum = sum + (i / 2) + (i mod 3)
+        i = i + 1
+    end 'loop'
+    return sum
+end 'main'
+```
+```exitcode
+35
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.push rbx
+    x86.push r12
+    x86.push r13
+    x86.mov rcx, 1
+    x86.mov r8, 10
+    x86.mov r9, 2
+    x86.mov r10, 3
+    x86.mov r11, 0
+    x86.mov rbx, rcx
+    x86.jmp while.cond
+  ^while.cond(%21: i64, %24: i64):
+    x86.cmp rbx, r8
+    x86.setle rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov r12, r9
+    x86.mov rax, rbx
+    x86.cdq
+    x86.idiv r12
+    x86.mov rdx, rax
+    x86.mov r12, r11
+    x86.add r12, rdx
+    x86.mov r13, r10
+    x86.mov rax, rbx
+    x86.cdq
+    x86.idiv r13
+    x86.mov rax, r12
+    x86.add rax, rdx
+    x86.mov rdx, rbx
+    x86.add rdx, rcx
+    x86.mov r11, rax
+    x86.mov rbx, rdx
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, r11
+    x86.pop r13
+    x86.pop r12
+    x86.pop rbx
     x86.epilogue
     x86.ret
 }

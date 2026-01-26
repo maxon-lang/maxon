@@ -10,6 +10,37 @@ function main() returns int
 end 'main'
 ---
 ExitCode: 50
+RequiredMlir: ```
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.mov rcx, 5
+    x86.mov r8, 10
+    x86.mov r9, 1
+    x86.mov r10, rax
+    x86.mov r11, rax
+    x86.jmp while.cond
+  ^while.cond(%15: i64, %18: i64):
+    x86.cmp r11, rcx
+    x86.setl rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rdx, r10
+    x86.add rdx, r8
+    x86.mov rax, r11
+    x86.add rax, r9
+    x86.mov r10, rdx
+    x86.mov r11, rax
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, r10
+    x86.epilogue
+    x86.ret
+}
+```
 ---
 func.func @main() -> i64 {
   ^entry:

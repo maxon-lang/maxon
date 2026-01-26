@@ -14,6 +14,64 @@ function main() returns int
 end 'main'
 ---
 ExitCode: 4
+RequiredMlir: ```
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.push r12
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov r8, 3
+    x86.mov r9, 1
+    x86.mov r10, rax
+    x86.jmp while.cond
+  ^while.cond(%27: i64):
+    x86.cmp r10, r8
+    x86.setl rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov r11, 0
+    x86.jmp while.cond_1
+  ^while.exit:
+    x86.mov rax, qword ptr [rcx]
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+  ^while.cond_1(%29: i64):
+    x86.cmp r11, r8
+    x86.setl rax
+    x86.test rax, rax
+    x86.jne while.body_1
+    x86.jmp while.exit_1
+  ^while.body_1:
+    x86.mov rbx, qword ptr [rcx]
+    x86.mov rax, r10
+    x86.add rax, r11
+    x86.mov rdx, 2
+    x86.mov r12, rdx
+    x86.cdq
+    x86.idiv r12
+    x86.mov rax, rdx
+    x86.mov rdx, rbx
+    x86.add rdx, rax
+    x86.mov qword ptr [rcx], rdx
+    x86.mov rdx, 1
+    x86.mov rax, r11
+    x86.add rax, rdx
+    x86.mov r11, rax
+    x86.jmp while.cond_1
+  ^while.exit_1:
+    x86.mov rax, r10
+    x86.add rax, r9
+    x86.mov r10, rax
+    x86.jmp while.cond
+}
+```
 ---
 func.func @main() -> i64 {
   ^entry:
@@ -34,8 +92,7 @@ func.func @main() -> i64 {
     x86.jne while.body
     x86.jmp while.exit
   ^while.body:
-    x86.mov rdx, 0
-    x86.mov r11, rdx
+    x86.mov r11, 0
     x86.jmp while.cond_1
   ^while.exit:
     x86.mov rax, qword ptr [rcx]
