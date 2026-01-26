@@ -12,6 +12,9 @@ namespace MaxonSharp.Compiler.Mlir.Dialects;
 public abstract class MathOp : MlirOperation {
 	public override string Dialect => "math";
 	public override bool HasSideEffects => false;
+
+	public abstract MlirOperation Clone(Func<MlirValue, MlirValue> remapValue);
+	public abstract MlirOperation? TryFold();
 }
 
 /// <summary>
@@ -49,12 +52,6 @@ public abstract class FloatUnaryOp : MathOp {
 		Result.DefiningOp = constOp;
 		return constOp;
 	}
-
-	/// <summary>
-	/// Attempts to fold this operation to a constant. Must be implemented by all subclasses.
-	/// Return null if folding is not possible.
-	/// </summary>
-	public abstract MlirOperation? TryFold();
 }
 
 /// <summary>
@@ -96,12 +93,6 @@ public abstract class FloatBinaryMathOp : MathOp {
 		Result.DefiningOp = constOp;
 		return constOp;
 	}
-
-	/// <summary>
-	/// Attempts to fold this operation to a constant. Must be implemented by all subclasses.
-	/// Return null if folding is not possible.
-	/// </summary>
-	public abstract MlirOperation? TryFold();
 }
 
 // ============================================================================
@@ -113,6 +104,9 @@ public abstract class FloatBinaryMathOp : MathOp {
 /// </summary>
 public sealed class SqrtOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "sqrt";
+
+	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
+		=> new SqrtOp(remapValue(Operand));
 
 	public override MlirOperation? TryFold() {
 		if (GetConstantDoubleValue(Operand) is double v && v >= 0)
@@ -128,6 +122,9 @@ public sealed class SqrtOp(MlirValue operand) : FloatUnaryOp(operand) {
 public sealed class FloorOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "floor";
 
+	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
+		=> new FloorOp(remapValue(Operand));
+
 	public override MlirOperation? TryFold() {
 		if (GetConstantDoubleValue(Operand) is double v)
 			return CreateConstantReplacement(new FloatAttr(Math.Floor(v)));
@@ -141,6 +138,9 @@ public sealed class FloorOp(MlirValue operand) : FloatUnaryOp(operand) {
 /// </summary>
 public sealed class CeilOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "ceil";
+
+	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
+		=> new CeilOp(remapValue(Operand));
 
 	public override MlirOperation? TryFold() {
 		if (GetConstantDoubleValue(Operand) is double v)
@@ -156,6 +156,9 @@ public sealed class CeilOp(MlirValue operand) : FloatUnaryOp(operand) {
 public sealed class RoundOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "round";
 
+	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
+		=> new RoundOp(remapValue(Operand));
+
 	public override MlirOperation? TryFold() {
 		if (GetConstantDoubleValue(Operand) is double v)
 			return CreateConstantReplacement(new FloatAttr(Math.Round(v, MidpointRounding.ToEven)));
@@ -168,6 +171,9 @@ public sealed class RoundOp(MlirValue operand) : FloatUnaryOp(operand) {
 /// </summary>
 public sealed class AbsFOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override string Mnemonic => "absf";
+
+	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
+		=> new AbsFOp(remapValue(Operand));
 
 	public override MlirOperation? TryFold() {
 		if (GetConstantDoubleValue(Operand) is double v)
@@ -187,6 +193,9 @@ public sealed class AbsFOp(MlirValue operand) : FloatUnaryOp(operand) {
 public sealed class MinFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryMathOp(lhs, rhs) {
 	public override string Mnemonic => "minf";
 
+	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
+		=> new MinFOp(remapValue(Lhs), remapValue(Rhs));
+
 	public override MlirOperation? TryFold() {
 		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r)
 			return CreateConstantReplacement(new FloatAttr(Math.Min(l, r)));
@@ -200,6 +209,9 @@ public sealed class MinFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryMathOp(lhs
 /// </summary>
 public sealed class MaxFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryMathOp(lhs, rhs) {
 	public override string Mnemonic => "maxf";
+
+	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
+		=> new MaxFOp(remapValue(Lhs), remapValue(Rhs));
 
 	public override MlirOperation? TryFold() {
 		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r)
@@ -241,7 +253,10 @@ public sealed class TruncOp : MathOp {
 		printer.PrintLine($"{Result} = {FullName} {Operand} : {Operand.Type} -> {Result.Type}");
 	}
 
-	public MlirOperation? TryFold() {
+	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
+		=> new TruncOp(remapValue(Operand), (IntegerType)Result.Type);
+
+	public override MlirOperation? TryFold() {
 		if (Operand.DefiningOp is ConstantOp constOp && constOp.Value is FloatAttr floatAttr) {
 			var constResult = new ConstantOp(new IntegerAttr((long)floatAttr.Value), Result.Type) {
 				Results = { [0] = Result }

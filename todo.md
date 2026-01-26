@@ -2,6 +2,10 @@
 You *Are* Going To Read It
 
 ## Priorities
+- implement stdlib
+- implement command line params
+- add new tests that actually test builtins at runtime (abs, trunc, etc) because the
+  current tests get optimized to nothing
 - range()
 - return {errors: [], hasErrors: false} gives a confusing error
 - change "typealias foo is bar" to "typealias foo = bar"

@@ -779,6 +779,30 @@ func.func @main() -> i64 {
 }
 ```
 
+<!-- test: branch-elimination-float-comparison -->
+When a float comparison involves constant-folded values (like abs(0.0) == 0.0), the branch is eliminated.
+```maxon
+function main() returns int
+    var x = abs(0.0)
+    if x == 0.0 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+```
+```exitcode
+0
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+}
+```
+
 <!-- test: mem2reg-loop-conditional-update -->
 Variable with conditional update inside a loop requires block arguments at the internal
 merge block (where then/else paths rejoin) in addition to the loop header.

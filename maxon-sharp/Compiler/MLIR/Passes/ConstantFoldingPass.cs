@@ -143,17 +143,9 @@ public sealed class ConstantFoldingPass : FunctionPass {
 			}
 		}
 
-		// Comparison folding - fold comparisons of two constants (with load propagation)
-		if (op is CmpIOp cmp && GetConstantValue(cmp.Lhs) is long lhs && GetConstantValue(cmp.Rhs) is long rhs) {
-			bool result = EvaluateComparison(cmp.Predicate, lhs, rhs);
-			folded = CreateConstantReplacement(new IntegerAttr(result ? 1 : 0, 1), cmp.Result);
-			foldType = FoldType.Constant;
-			return true;
-		}
-
 		// Dispatch to Math dialect operations' fold methods
-		if (op is FloatUnaryOp unaryMath) {
-			var result = unaryMath.TryFold();
+		if (op is MathOp mathOp) {
+			var result = mathOp.TryFold();
 			if (result != null) {
 				folded = result;
 				foldType = FoldType.Constant;
@@ -161,27 +153,9 @@ public sealed class ConstantFoldingPass : FunctionPass {
 			}
 		}
 
-		if (op is FloatBinaryMathOp binaryMath) {
-			var result = binaryMath.TryFold();
-			if (result != null) {
-				folded = result;
-				foldType = FoldType.Constant;
-				return true;
-			}
-		}
-
-		if (op is TruncOp truncOp) {
-			var result = truncOp.TryFold();
-			if (result != null) {
-				folded = result;
-				foldType = FoldType.Constant;
-				return true;
-			}
-		}
-
-		// Dispatch to other IFoldable operations
-		if (op is IFoldable foldable) {
-			var result = foldable.TryFold();
+		// Dispatch to Arith dialect operations' fold methods
+		if (op is ArithOp arithOp) {
+			var result = arithOp.TryFold();
 			if (result != null) {
 				folded = result;
 				foldType = FoldType.Constant;
@@ -304,21 +278,5 @@ public sealed class ConstantFoldingPass : FunctionPass {
 		// Update DefiningOp
 		originalResult.DefiningOp = shlOp;
 		return shlOp;
-	}
-
-	private static bool EvaluateComparison(CmpIPredicate predicate, long lhs, long rhs) {
-		return predicate switch {
-			CmpIPredicate.Eq => lhs == rhs,
-			CmpIPredicate.Ne => lhs != rhs,
-			CmpIPredicate.Slt => lhs < rhs,
-			CmpIPredicate.Sle => lhs <= rhs,
-			CmpIPredicate.Sgt => lhs > rhs,
-			CmpIPredicate.Sge => lhs >= rhs,
-			CmpIPredicate.Ult => (ulong)lhs < (ulong)rhs,
-			CmpIPredicate.Ule => (ulong)lhs <= (ulong)rhs,
-			CmpIPredicate.Ugt => (ulong)lhs > (ulong)rhs,
-			CmpIPredicate.Uge => (ulong)lhs >= (ulong)rhs,
-			_ => throw new NotSupportedException($"Unsupported comparison predicate: {predicate}")
-		};
 	}
 }
