@@ -202,11 +202,14 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 						};
 					}
 
-					if (compileError != null && !compileError.Contains(errorExpectation.ExpectedError)) {
+					// Normalize and compare stderr exactly
+					var expectedNorm = NormalizeStderr(errorExpectation.ExpectedStderr);
+					var actualNorm = NormalizeStderr(compileError!);
+					if (expectedNorm != actualNorm) {
 						return new TestResult {
 							TestName = fragment.TestName,
 							Passed = false,
-							ErrorMessage = $"Expected error containing '{errorExpectation.ExpectedError}', got: {compileError}",
+							ErrorMessage = $"Stderr mismatch.\nExpected:\n  {expectedNorm}\nActual:\n  {actualNorm}",
 							Duration = sw.Elapsed
 						};
 					}
@@ -367,5 +370,17 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 		// Show what we expected vs what we got
 		return (false, $"IR mismatch.\nExpected:\n{requiredNorm}\n\nActual:\n{actualNorm}");
+	}
+
+	/// <summary>
+	/// Normalize stderr for comparison: CRLF -> LF, trim, backslash -> forward slash in paths.
+	/// </summary>
+	private static string NormalizeStderr(string stderr) {
+		// Normalize line endings (CRLF -> LF)
+		var normalized = stderr.Replace("\r\n", "\n");
+		// Normalize path separators (backslash -> forward slash)
+		normalized = normalized.Replace('\\', '/');
+		// Trim whitespace
+		return normalized.Trim();
 	}
 }

@@ -255,10 +255,8 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:11:5: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
-
-<!-- test: method-named-args-any-order -->
 ```maxon
 type Calculator
     var result int
@@ -311,5 +309,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/method-calls/error-static-method-unnamed-args.test:8:12: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```

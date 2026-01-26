@@ -174,7 +174,9 @@ public static class FragmentGenerator {
 				sb.AppendLine("```");
 			}
 		} else if (test.Expectation is CompilerErrorExpectation compilerError) {
-			sb.AppendLine($"ExpectedError: {compilerError.ExpectedError}");
+			sb.AppendLine("MaxoncStderr: ```");
+			sb.AppendLine(compilerError.ExpectedStderr);
+			sb.AppendLine("```");
 		}
 
 		sb.AppendLine("---");
@@ -280,8 +282,8 @@ public static class FragmentGenerator {
 				if (int.TryParse(value, out var code)) {
 					exitCode = code;
 				}
-			} else if (line.StartsWith("ExpectedError:")) {
-				expectedError = line["ExpectedError:".Length..].Trim();
+			} else if (line.StartsWith("MaxoncStderr: ```")) {
+				expectedError = ExtractMultilineValue(lines, ref i);
 			} else if (line.StartsWith("Stdout: ```")) {
 				stdout = ExtractMultilineValue(lines, ref i);
 			} else if (line.StartsWith("ExpectedMlir: ```")) {
@@ -295,7 +297,7 @@ public static class FragmentGenerator {
 
 		if (expectedError != null) {
 			return new CompilerErrorExpectation {
-				ExpectedError = expectedError
+				ExpectedStderr = expectedError
 			};
 		}
 

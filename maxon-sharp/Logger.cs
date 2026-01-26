@@ -86,7 +86,7 @@ public static class Logger {
 	/// </summary>
 	public static void Error(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Error)) {
-			Console.WriteLine($"[{CategoryCode(category)}] ERROR: {message}");
+			Console.Error.WriteLine($"[{CategoryCode(category)}] ERROR: {message}");
 		}
 	}
 
@@ -95,7 +95,7 @@ public static class Logger {
 	/// </summary>
 	public static void Info(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Info)) {
-			Console.WriteLine($"[{CategoryCode(category)}] {message}");
+			Console.Error.WriteLine($"[{CategoryCode(category)}] {message}");
 		}
 	}
 
@@ -104,7 +104,7 @@ public static class Logger {
 	/// </summary>
 	public static void Debug(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Debug)) {
-			Console.WriteLine($"[{CategoryCode(category)}] DEBUG: {message}");
+			Console.Error.WriteLine($"[{CategoryCode(category)}] DEBUG: {message}");
 		}
 	}
 
@@ -113,7 +113,7 @@ public static class Logger {
 	/// </summary>
 	public static void Trace(LogCategory category, string message) {
 		if (IsEnabled(category, LogLevel.Trace)) {
-			Console.WriteLine($"[{CategoryCode(category)}] TRACE: {message}");
+			Console.Error.WriteLine($"[{CategoryCode(category)}] TRACE: {message}");
 		}
 	}
 

@@ -38,10 +38,10 @@ public class SuccessExpectation : TestExpectation {
 }
 
 /// <summary>
-/// Expectation for a compiler error.
+/// Expectation for a compiler error (stderr output).
 /// </summary>
 public class CompilerErrorExpectation : TestExpectation {
-	public required string ExpectedError { get; init; }
+	public required string ExpectedStderr { get; init; }
 }
 
 /// <summary>

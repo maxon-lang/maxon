@@ -94,7 +94,7 @@ public static partial class SpecParser {
 			TestExpectation expectation;
 			if (stderr != null) {
 				expectation = new CompilerErrorExpectation {
-					ExpectedError = stderr
+					ExpectedStderr = stderr
 				};
 			} else {
 				expectation = new SuccessExpectation {
