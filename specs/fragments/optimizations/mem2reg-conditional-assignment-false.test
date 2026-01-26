@@ -13,24 +13,19 @@ ExitCode: 20
 RequiredMlir: ```
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.mov rax, 0
-    x86.lea rcx, qword ptr [rbp-40]
-    x86.mov qword ptr [rcx], rax
+    x86.prologue stack_size=32
     x86.mov rax, 0
     x86.test rax, rax
     x86.jne then
     x86.jmp else
   ^then:
-    x86.mov rax, 10
-    x86.mov qword ptr [rcx], rax
+    x86.mov rcx, 10
     x86.jmp merge
   ^else:
-    x86.mov rax, 20
-    x86.mov qword ptr [rcx], rax
+    x86.mov rcx, 20
     x86.jmp merge
-  ^merge:
-    x86.mov rax, qword ptr [rcx]
+  ^merge(%6: i64):
+    x86.mov rax, rcx
     x86.epilogue
     x86.ret
 }
@@ -38,24 +33,19 @@ func.func @main() -> i64 {
 ---
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.mov rax, 0
-    x86.lea rcx, qword ptr [rbp-40]
-    x86.mov qword ptr [rcx], rax
+    x86.prologue stack_size=32
     x86.mov rax, 0
     x86.test rax, rax
     x86.jne then
     x86.jmp else
   ^then:
-    x86.mov rax, 10
-    x86.mov qword ptr [rcx], rax
+    x86.mov rcx, 10
     x86.jmp merge
   ^else:
-    x86.mov rax, 20
-    x86.mov qword ptr [rcx], rax
+    x86.mov rcx, 20
     x86.jmp merge
-  ^merge:
-    x86.mov rax, qword ptr [rcx]
+  ^merge(%6: i64):
+    x86.mov rax, rcx
     x86.epilogue
     x86.ret
 }

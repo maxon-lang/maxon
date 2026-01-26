@@ -303,9 +303,10 @@ func.func @main() -> i64 {
 
 ### Mem2Reg Cross-Block Promotion
 
-These tests verify correctness for patterns that would benefit from cross-block SSA
-promotion (phi/block-argument insertion). Currently these use stack variables; once
-mem2reg supports cross-block promotion, these could be optimized further.
+These tests verify cross-block SSA promotion using block arguments. Variables in
+if/else branches are promoted from stack to SSA form with block arguments at merge
+points. Loop variables remain on the stack due to complex register allocation
+requirements for loop-carried values.
 
 <!-- test: mem2reg-loop-variable -->
 Loop counter variable modified each iteration - candidate for SSA promotion.
@@ -362,7 +363,7 @@ func.func @main() -> i64 {
 ```
 
 <!-- test: mem2reg-conditional-assignment -->
-Variable assigned different values in if/else branches - candidate for block arguments at merge.
+Variable assigned different values in if/else branches - promoted to block arguments at merge.
 ```maxon
 function main() returns int
     var x = 0
@@ -380,24 +381,19 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.mov rax, 0
-    x86.lea rcx, qword ptr [rbp-40]
-    x86.mov qword ptr [rcx], rax
+    x86.prologue stack_size=32
     x86.mov rax, 1
     x86.test rax, rax
     x86.jne then
     x86.jmp else
   ^then:
-    x86.mov rax, 10
-    x86.mov qword ptr [rcx], rax
+    x86.mov rcx, 10
     x86.jmp merge
   ^else:
-    x86.mov rax, 20
-    x86.mov qword ptr [rcx], rax
+    x86.mov rcx, 20
     x86.jmp merge
-  ^merge:
-    x86.mov rax, qword ptr [rcx]
+  ^merge(%6: i64):
+    x86.mov rax, rcx
     x86.epilogue
     x86.ret
 }
@@ -422,24 +418,19 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.mov rax, 0
-    x86.lea rcx, qword ptr [rbp-40]
-    x86.mov qword ptr [rcx], rax
+    x86.prologue stack_size=32
     x86.mov rax, 0
     x86.test rax, rax
     x86.jne then
     x86.jmp else
   ^then:
-    x86.mov rax, 10
-    x86.mov qword ptr [rcx], rax
+    x86.mov rcx, 10
     x86.jmp merge
   ^else:
-    x86.mov rax, 20
-    x86.mov qword ptr [rcx], rax
+    x86.mov rcx, 20
     x86.jmp merge
-  ^merge:
-    x86.mov rax, qword ptr [rcx]
+  ^merge(%6: i64):
+    x86.mov rax, rcx
     x86.epilogue
     x86.ret
 }
@@ -462,20 +453,19 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.mov rax, 0
-    x86.lea rcx, qword ptr [rbp-40]
-    x86.mov qword ptr [rcx], rax
-    x86.mov rax, 1
-    x86.test rax, rax
+    x86.prologue stack_size=32
+    x86.mov rcx, 1
+    x86.test rcx, rcx
     x86.jne then
+    x86.jmp merge.args
+  merge.args:
+    x86.mov rcx, 0
     x86.jmp merge
   ^then:
-    x86.mov rax, 42
-    x86.mov qword ptr [rcx], rax
+    x86.mov rcx, 42
     x86.jmp merge
-  ^merge:
-    x86.mov rax, qword ptr [rcx]
+  ^merge(%5: i64):
+    x86.mov rax, rcx
     x86.epilogue
     x86.ret
 }
