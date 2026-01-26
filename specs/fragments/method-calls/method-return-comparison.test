@@ -1,0 +1,59 @@
+// Test: method-return-comparison
+type Value
+    var n int
+
+    function isPositive() returns int
+        if n > 0 'positive'
+            return 1
+        end 'positive'
+        return 0
+    end 'isPositive'
+end 'Value'
+
+function main() returns int
+    var v = Value{n: 42}
+    return v.isPositive()
+end 'main'
+---
+ExitCode: 1
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.mov rax, 42
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov rdx, 0
+    x86.lea r8, qword ptr [rcx+rdx]
+    x86.mov qword ptr [r8], rax
+    x86.lea r8, qword ptr [rbp-48]
+    x86.mov qword ptr [r8], rcx
+    x86.mov rcx, qword ptr [r8]
+    x86.call Value.isPositive
+    x86.mov rcx, rax
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Value.isPositive(%self: !maxon.struct<Value>) -> i64 {
+  ^entry(%self: !maxon.struct<Value>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rcx, 0
+    x86.cmp rax, rcx
+    x86.setg rcx
+    x86.test rcx, rcx
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  ^merge:
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+}
+---

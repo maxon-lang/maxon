@@ -1,0 +1,71 @@
+// Test: method-call-on-same-type-parameter
+type Foo
+    var x int
+    
+    function bar() returns int
+        return x
+    end 'bar'
+    
+    function callBarOn(other Foo) returns int
+        return other.bar()
+    end 'callBarOn'
+end 'Foo'
+
+function main() returns int
+    var f1 = Foo{x: 10}
+    var f2 = Foo{x: 42}
+    return f1.callBarOn(f2)
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=64
+    x86.mov rax, 10
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov rdx, 0
+    x86.lea r8, qword ptr [rcx+rdx]
+    x86.mov qword ptr [r8], rax
+    x86.lea r8, qword ptr [rbp-48]
+    x86.mov qword ptr [r8], rcx
+    x86.mov rcx, 42
+    x86.lea rax, qword ptr [rbp-56]
+    x86.mov rdx, 0
+    x86.lea r9, qword ptr [rax+rdx]
+    x86.mov qword ptr [r9], rcx
+    x86.lea r9, qword ptr [rbp-64]
+    x86.mov qword ptr [r9], rax
+    x86.mov rax, qword ptr [r8]
+    x86.mov r8, qword ptr [r9]
+    x86.mov r10, rax
+    x86.mov r11, r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Foo.callBarOn
+    x86.mov r8, rax
+    x86.mov rax, r8
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Foo.bar(%self: !maxon.struct<Foo>) -> i64 {
+  ^entry(%self: !maxon.struct<Foo>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Foo.callBarOn(%self: !maxon.struct<Foo>, %other: !maxon.struct<Foo>) -> i64 {
+  ^entry(%self: !maxon.struct<Foo>, %other: !maxon.struct<Foo>):
+    x86.prologue stack_size=32
+    x86.mov rax, rdx
+    x86.mov rcx, rax
+    x86.call Foo.bar
+    x86.epilogue
+    x86.ret
+}
+---

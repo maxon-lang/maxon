@@ -1,0 +1,93 @@
+// Test: method-modify-multiple-fields
+type Point
+    var x int
+    var y int
+
+    function moveBy(dx int, dy int)
+        x = x + dx
+        y = y + dy
+    end 'moveBy'
+
+    function sum() returns int
+        return x + y
+    end 'sum'
+end 'Point'
+
+function main() returns int
+    var p = Point{x: 10, y: 10}
+    p.moveBy(10, dy: 12)
+    return p.sum()
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=64
+    x86.push rbx
+    x86.mov rax, 10
+    x86.mov rcx, 10
+    x86.lea rdx, qword ptr [rbp-48]
+    x86.mov r8, 0
+    x86.lea r9, qword ptr [rdx+r8]
+    x86.mov qword ptr [r9], rax
+    x86.mov r9, 8
+    x86.lea rax, qword ptr [rdx+r9]
+    x86.mov qword ptr [rax], rcx
+    x86.lea rbx, qword ptr [rbp-64]
+    x86.mov qword ptr [rbx], rdx
+    x86.mov rdx, [rbx]
+    x86.mov rcx, 10
+    x86.mov rax, 12
+    x86.mov r10, rdx
+    x86.mov r11, rcx
+    x86.push rax
+    x86.pop r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Point.moveBy
+    x86.mov rax, [rbx]
+    x86.mov rcx, rax
+    x86.call Point.sum
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Point.moveBy(%self: !maxon.struct<Point>, %dx: i64, %dy: i64) {
+  ^entry(%self: !maxon.struct<Point>, %dx: i64, %dy: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, rdx
+    x86.mov rdx, r8
+    x86.lea r8, qword ptr [rax]
+    x86.mov r9, qword ptr [r8]
+    x86.mov r8, r9
+    x86.add r8, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov qword ptr [rcx], r8
+    x86.lea r8, qword ptr [rax+8]
+    x86.mov rcx, qword ptr [r8]
+    x86.mov r8, rcx
+    x86.add r8, rdx
+    x86.lea rdx, qword ptr [rax+8]
+    x86.mov qword ptr [rdx], r8
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Point.sum(%self: !maxon.struct<Point>) -> i64 {
+  ^entry(%self: !maxon.struct<Point>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rdx, qword ptr [rcx]
+    x86.lea rcx, qword ptr [rax+8]
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rcx, rdx
+    x86.add rcx, rax
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+---

@@ -129,7 +129,7 @@ end 'Adder'
 function main() returns int
     var a = Adder{value: 100}
     var b = Adder{value: 50}
-    return a.delegateAdd(b, 7)
+    return a.delegateAdd(b, n: 7)
 end 'main'
 ```
 ```exitcode

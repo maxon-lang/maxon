@@ -155,7 +155,7 @@ end 'Calculator'
 
 function main() returns int
     var calc = Calculator{result: 0}
-    calc.addTwo(20, 22)
+    calc.addTwo(20, b: 22)
     return calc.get()
 end 'main'
 ```
@@ -208,7 +208,7 @@ end 'Point'
 
 function main() returns int
     var p = Point{x: 10, y: 10}
-    p.moveBy(10, 12)
+    p.moveBy(10, dy: 12)
     return p.sum()
 end 'main'
 ```
@@ -236,4 +236,80 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: error-method-unnamed-args -->
+```maxon
+type Adder
+    var total int
+
+    function addTwo(a int, b int)
+        total = total + a + b
+    end 'addTwo'
+end 'Adder'
+
+function main() returns int
+    var x = Adder{total: 0}
+    x.addTwo(10, 20)
+    return 0
+end 'main'
+```
+```maxoncstderr
+Second and subsequent arguments must be named. Use 'name: value' syntax
+```
+
+<!-- test: method-named-args-any-order -->
+```maxon
+type Calculator
+    var result int
+
+    function compute(a int, b int, c int)
+        result = a + b * c
+    end 'compute'
+
+    function get() returns int
+        return result
+    end 'get'
+end 'Calculator'
+
+function main() returns int
+    var calc = Calculator{result: 0}
+    calc.compute(10, c: 4, b: 8)
+    return calc.get()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: static-method-named-args -->
+```maxon
+type Factory
+    static function create(x int, y int) returns int
+        return x * 10 + y
+    end 'create'
+end 'Factory'
+
+function main() returns int
+    return Factory.create(4, y: 2)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error-static-method-unnamed-args -->
+```maxon
+type Factory
+    static function create(x int, y int) returns int
+        return x * 10 + y
+    end 'create'
+end 'Factory'
+
+function main() returns int
+    return Factory.create(4, 2)
+end 'main'
+```
+```maxoncstderr
+Second and subsequent arguments must be named. Use 'name: value' syntax
 ```

@@ -1195,21 +1195,23 @@ public class Parser(List<Token> tokens) {
 			}
 
 			// Check for static call or field access: TypeName.member
+			// Note: At parse time we can't distinguish Type.method() from var.method()
+			// so we create StaticCallExpr and resolve it in MLIR lowering
 			if (Check(TokenType.Dot)) {
 				Advance();
 				var memberName = Expect(TokenType.Identifier).Value;
 
-				// Check for static call with args: TypeName.member(args)
+				// Check for call with args: name.member(args)
 				if (Check(TokenType.LeftParen)) {
 					Advance();
 					var args = new List<Expr>();
 					var namedArgs = new List<NamedArg>();
 					ParseCallArgs(args, namedArgs);
-					// Could be static method or enum case - resolved in HIR
+					// Could be static method, enum case, or instance method - resolved in MLIR lowering
 					return new StaticCallExpr(name, memberName, args, namedArgs) { Location = new SourceLocation(token.Line, token.Column) };
 				}
 
-				// Static member or field access continues in parsePostfix
+				// Field access continues in parsePostfix
 				return ParsePostfix(new FieldAccessExpr(
 					new IdentifierExpr(name) { Location = new SourceLocation(token.Line, token.Column) },
 					memberName

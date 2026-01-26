@@ -186,15 +186,9 @@ public sealed class RegisterAllocationPass : FunctionPass {
 				}
 
 				if (op is X86Op x86Op) {
-					// Record definitions (first operand for most ops)
+					// Record definitions and uses for all operands
 					foreach (var operand in x86Op.X86Operands) {
-						if (operand is VRegOperand vreg) {
-							// First occurrence is a definition
-							if (!allDefs.ContainsKey(vreg.Id)) {
-								allDefs[vreg.Id] = (blockIdx, opIdx);
-							}
-							allUses.Add((vreg.Id, blockIdx, opIdx));
-						}
+						CollectVregDefsAndUses(operand, blockIdx, opIdx, allDefs, allUses);
 					}
 				}
 			}
@@ -225,6 +219,33 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		}
 
 		return liveAcrossCalls;
+	}
+
+	/// <summary>
+	/// Collects vreg definitions and uses from an operand, including vregs inside memory operands.
+	/// </summary>
+	private static void CollectVregDefsAndUses(
+		X86Operand operand,
+		int blockIdx,
+		int opIdx,
+		Dictionary<int, (int blockIndex, int opIndex)> allDefs,
+		List<(int vregId, int blockIndex, int opIndex)> allUses) {
+
+		if (operand is VRegOperand vreg) {
+			// First occurrence is a definition
+			if (!allDefs.ContainsKey(vreg.Id)) {
+				allDefs[vreg.Id] = (blockIdx, opIdx);
+			}
+			allUses.Add((vreg.Id, blockIdx, opIdx));
+		} else if (operand is MemOperand mem) {
+			// Also check vregs used inside memory operands (base/index)
+			if (mem.Base is not null) {
+				CollectVregDefsAndUses(mem.Base, blockIdx, opIdx, allDefs, allUses);
+			}
+			if (mem.Index is not null) {
+				CollectVregDefsAndUses(mem.Index, blockIdx, opIdx, allDefs, allUses);
+			}
+		}
 	}
 
 	/// <summary>

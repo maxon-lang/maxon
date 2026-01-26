@@ -1,0 +1,80 @@
+// Test: method-named-args-any-order
+type Calculator
+    var result int
+
+    function compute(a int, b int, c int)
+        result = a + b * c
+    end 'compute'
+
+    function get() returns int
+        return result
+    end 'get'
+end 'Calculator'
+
+function main() returns int
+    var calc = Calculator{result: 0}
+    calc.compute(10, c: 4, b: 8)
+    return calc.get()
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.mov rax, 0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov rdx, 0
+    x86.lea r8, qword ptr [rcx+rdx]
+    x86.mov qword ptr [r8], rax
+    x86.lea rbx, qword ptr [rbp-48]
+    x86.mov qword ptr [rbx], rcx
+    x86.mov rcx, qword ptr [rbx]
+    x86.mov rax, 8
+    x86.mov rdx, 4
+    x86.mov r10, rcx
+    x86.mov r11, 10
+    x86.push rax
+    x86.push rdx
+    x86.pop r9
+    x86.pop r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Calculator.compute
+    x86.mov rdx, qword ptr [rbx]
+    x86.mov rcx, rdx
+    x86.call Calculator.get
+    x86.mov rdx, rax
+    x86.mov rax, rdx
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Calculator.compute(%self: !maxon.struct<Calculator>, %a: i64, %b: i64, %c: i64) {
+  ^entry(%self: !maxon.struct<Calculator>, %a: i64, %b: i64, %c: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, rdx
+    x86.mov rdx, r8
+    x86.mov r8, r9
+    x86.imul r9, rdx, r8
+    x86.mov r8, rcx
+    x86.add r8, r9
+    x86.lea r9, qword ptr [rax]
+    x86.mov qword ptr [r9], r8
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Calculator.get(%self: !maxon.struct<Calculator>) -> i64 {
+  ^entry(%self: !maxon.struct<Calculator>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+---

@@ -1,0 +1,67 @@
+// Test: sibling-method-call-still-works
+type Calculator
+    var base int
+    
+    function double() returns int
+        return base * 2
+    end 'double'
+    
+    function quadruple() returns int
+        // Sibling call - calls self.double()
+        return double() * 2
+    end 'quadruple'
+end 'Calculator'
+
+function main() returns int
+    var calc = Calculator{base: 5}
+    return calc.quadruple()
+end 'main'
+---
+ExitCode: 20
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=48
+    x86.mov rax, 5
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov rdx, 0
+    x86.lea r8, qword ptr [rcx+rdx]
+    x86.mov qword ptr [r8], rax
+    x86.lea r8, qword ptr [rbp-48]
+    x86.mov qword ptr [r8], rcx
+    x86.mov rcx, qword ptr [r8]
+    x86.call Calculator.quadruple
+    x86.mov rcx, rax
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Calculator.double(%self: !maxon.struct<Calculator>) -> i64 {
+  ^entry(%self: !maxon.struct<Calculator>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rcx, 1
+    x86.mov rdx, rax
+    x86.shl rdx, rcx
+    x86.mov rax, rdx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Calculator.quadruple(%self: !maxon.struct<Calculator>) -> i64 {
+  ^entry(%self: !maxon.struct<Calculator>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, rax
+    x86.call Calculator.double
+    x86.mov rcx, 1
+    x86.mov rdx, rax
+    x86.shl rdx, rcx
+    x86.mov rax, rdx
+    x86.epilogue
+    x86.ret
+}
+---

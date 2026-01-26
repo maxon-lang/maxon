@@ -1,0 +1,69 @@
+// Test: method-call-on-field-access
+type Inner
+    var value int
+
+    function get() returns int
+        return value
+    end 'get'
+end 'Inner'
+
+type Outer
+    var inner Inner
+
+    function getInnerValue() returns int
+        return inner.get()
+    end 'getInnerValue'
+end 'Outer'
+
+function main() returns int
+    var o = Outer{inner: Inner{value: 42}}
+    return o.getInnerValue()
+end 'main'
+---
+ExitCode: 42
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=64
+    x86.mov rax, 42
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov rdx, 0
+    x86.lea r8, qword ptr [rcx+rdx]
+    x86.mov qword ptr [r8], rax
+    x86.lea r8, qword ptr [rbp-48]
+    x86.mov rax, 0
+    x86.lea rdx, qword ptr [r8+rax]
+    x86.mov qword ptr [rdx], rcx
+    x86.lea rdx, qword ptr [rbp-56]
+    x86.mov qword ptr [rdx], r8
+    x86.mov r8, qword ptr [rdx]
+    x86.mov rcx, r8
+    x86.call Outer.getInnerValue
+    x86.mov r8, rax
+    x86.mov rax, r8
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Inner.get(%self: !maxon.struct<Inner>) -> i64 {
+  ^entry(%self: !maxon.struct<Inner>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Outer.getInnerValue(%self: !maxon.struct<Outer>) -> i64 {
+  ^entry(%self: !maxon.struct<Outer>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rcx, rax
+    x86.call Inner.get
+    x86.epilogue
+    x86.ret
+}
+---

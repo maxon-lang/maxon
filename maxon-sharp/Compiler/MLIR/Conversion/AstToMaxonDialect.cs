@@ -21,6 +21,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private readonly Dictionary<string, List<ParamDecl>> _functionParams = [];
 	private readonly Stack<(MlirBlock continueBlock, MlirBlock exitBlock, string? label)> _loopContextStack = new();
 	private MlirValue? _structReturnPtr; // Hidden sret parameter for struct returns
+	private MaxonStructType? _currentMethodStructType; // The struct type when inside a method body
 
 	/// <summary>
 	/// Gets the generated module.
@@ -60,6 +61,22 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			var returnType = func.ReturnType != null ? ConvertTypeRef(func.ReturnType) : NoneType.Instance;
 			_functionReturnTypes[func.Name] = returnType;
 			_functionParams[func.Name] = func.Params;
+		}
+
+		// Collect method return types and parameters
+		foreach (var type in program.Types) {
+			foreach (var method in type.Methods) {
+				var methodName = $"{type.Name}.{method.Name}";
+				var returnType = method.ReturnType != null ? ConvertTypeRef(method.ReturnType) : NoneType.Instance;
+				_functionReturnTypes[methodName] = returnType;
+				// For methods, add 'self' as first parameter (unless static)
+				var methodParams = new List<ParamDecl>();
+				if (!method.IsStatic) {
+					methodParams.Add(new ParamDecl("self", new SimpleTypeRef(type.Name)));
+				}
+				methodParams.AddRange(method.Params);
+				_functionParams[methodName] = methodParams;
+			}
 		}
 
 		// Third pass: lower functions
@@ -178,10 +195,18 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		var parameters = new List<(string name, string type)>();
 		if (!method.IsStatic) {
 			parameters.Add(("self", typeName));
+			// Set the current method struct type for field resolution
+			if (_structTypes.TryGetValue(typeName, out var structType) && structType is MaxonStructType mst) {
+				_currentMethodStructType = mst;
+			}
 		}
 		parameters.AddRange(method.Params.Select(p => (p.Name, GetTypeString(p.Type))));
 
-		LowerFunctionBody($"{typeName}.{method.Name}", parameters, method.ReturnType, method.Body);
+		try {
+			LowerFunctionBody($"{typeName}.{method.Name}", parameters, method.ReturnType, method.Body);
+		} finally {
+			_currentMethodStructType = null;
+		}
 	}
 
 	private void LowerFunctionBody(string name, List<(string name, string type)> parameters, TypeRef? returnType, List<Stmt> body) {
@@ -459,7 +484,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	private MlirValue LowerExpression(Expr expr, MlirType? expectedType = null) {
-		return expr switch {
+		Logger.Trace(LogCategory.Mlir, $"LowerExpression: {expr.GetType().Name}");
+		var result = expr switch {
 			IntLiteralExpr intLit => EmitConstantInt(intLit.Value),
 			FloatLiteralExpr floatLit => EmitConstantFloat(floatLit.Value),
 			BoolLiteralExpr boolLit => EmitConstantBool(boolLit.Value),
@@ -468,11 +494,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			CompareExpr compare => LowerCompareExpr(compare),
 			LogicalExpr logical => LowerLogicalExpr(logical),
 			UnaryExpr unary => LowerUnaryExpr(unary),
-			CallExpr call => LowerCallExpr(call) ?? throw new InvalidOperationException("Call must return a value"),
+			CallExpr call => LowerCallExpr(call),
+			MethodCallExpr methodCall => LowerMethodCallExpr(methodCall),
+			StaticCallExpr staticCall => LowerStaticCallExpr(staticCall),
 			StructInitExpr structInit => LowerStructInitExpr(structInit, expectedType),
 			FieldAccessExpr fieldAccess => LowerFieldAccessExpr(fieldAccess),
 			_ => throw new NotSupportedException($"Unsupported expression: {expr.GetType().Name}")
 		};
+		return result!;
 	}
 
 	private MlirValue LowerBinaryExpr(BinaryExpr binary) {
@@ -611,6 +640,53 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			return builtinResult;
 		}
 
+		// Check for sibling method call (calling another method of same type without self.)
+		// If we're inside a method and the function name matches a method of the current type,
+		// treat it as self.methodName()
+		if (_currentMethodStructType != null && _namedValues.TryGetValue("self", out var selfValue)) {
+			var siblingMethodName = $"{_currentMethodStructType.Name}.{call.FuncName}";
+			if (_functionParams.ContainsKey(siblingMethodName)) {
+				Logger.Trace(LogCategory.Mlir, $"LowerCallExpr: resolved sibling method call {call.FuncName} -> {siblingMethodName}");
+
+				// Get parameter info for this method
+				_functionParams.TryGetValue(siblingMethodName, out List<ParamDecl>? methodParamDecls);
+
+				// Build argument list: self + method arguments
+				var methodArgs = new List<MlirValue> { selfValue };
+				var methodOwnership = new List<ArgumentOwnership> { ArgumentOwnership.Borrow };
+
+				// Use positional args directly for sibling calls
+				for (int i = 0; i < call.Args.Count; i++) {
+					var arg = call.Args[i];
+
+					// Get expected type from parameter declaration (offset by 1 for 'self')
+					MlirType? expectedType = null;
+					if (methodParamDecls != null && i + 1 < methodParamDecls.Count) {
+						try {
+							expectedType = ConvertTypeRef(methodParamDecls[i + 1].Type);
+						} catch {
+							// If type conversion fails, continue without expected type
+						}
+					}
+
+					methodArgs.Add(LowerExpression(arg, expectedType));
+
+					// Determine ownership based on mutation analysis (offset by 1 for 'self')
+					if (_mutationAnalyzer.IsMutated(siblingMethodName, i + 1)) {
+						methodOwnership.Add(ArgumentOwnership.Move);
+					} else {
+						methodOwnership.Add(ArgumentOwnership.Borrow);
+					}
+				}
+
+				// Look up the method's return type
+				MlirType? methodReturnType = _functionReturnTypes.TryGetValue(siblingMethodName, out var mrt) ? mrt : IntegerType.I64;
+
+				return EmitMaxonCall(siblingMethodName, methodArgs, methodOwnership, methodReturnType);
+			}
+		}
+
+		// Regular function call
 		// Resolve arguments: combine positional args with named args in the correct order
 		var resolvedArgs = ResolveCallArguments(call);
 
@@ -650,34 +726,211 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	/// <summary>
-	/// Resolves call arguments by combining positional and named arguments in the correct parameter order.
+	/// Lowers a method call expression (e.g., obj.method(args)).
+	/// The base expression is evaluated and passed as the first argument (self).
 	/// </summary>
-	private List<Expr> ResolveCallArguments(CallExpr call) {
-		// If we don't have parameter info for this function, just use positional args
-		if (!_functionParams.TryGetValue(call.FuncName, out var paramDecls)) {
-			Logger.Trace(LogCategory.Mlir, $"No param info for {call.FuncName}, using positional args only");
-			return call.Args;
+	private MlirValue? LowerMethodCallExpr(MethodCallExpr methodCall) {
+		// Evaluate the base expression to get the receiver
+		var baseValue = LowerExpression(methodCall.Base);
+
+		Logger.Trace(LogCategory.Mlir, $"LowerMethodCallExpr: base type = {baseValue.Type}, methodName = {methodCall.MethodName}");
+
+		// Get the struct type from the base value to determine the method name
+		if (baseValue.Type is not MaxonStructType structType) {
+			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+				$"Cannot call method '{methodCall.MethodName}' on non-struct type: {baseValue.Type}",
+				methodCall.Location?.Line, methodCall.Location?.Column);
 		}
 
+		// Build the fully qualified method name
+		var methodName = $"{structType.Name}.{methodCall.MethodName}";
+		Logger.Trace(LogCategory.Mlir, $"LowerMethodCallExpr: qualified method name = {methodName}");
+
+		// Get parameter info for this method
+		_functionParams.TryGetValue(methodName, out List<ParamDecl>? paramDecls);
+
+		// Build argument list: self + method arguments
+		var args = new List<MlirValue> { baseValue };
+		var ownership = new List<ArgumentOwnership> { ArgumentOwnership.Borrow };
+
+		// Resolve remaining arguments (skip first param which is 'self')
+		var resolvedArgs = ResolveMethodCallArguments(methodCall, paramDecls);
+		for (int i = 0; i < resolvedArgs.Count; i++) {
+			var arg = resolvedArgs[i];
+
+			// Get expected type from parameter declaration (offset by 1 for 'self')
+			MlirType? expectedType = null;
+			if (paramDecls != null && i + 1 < paramDecls.Count) {
+				try {
+					expectedType = ConvertTypeRef(paramDecls[i + 1].Type);
+				} catch {
+					// If type conversion fails, continue without expected type
+				}
+			}
+
+			args.Add(LowerExpression(arg, expectedType));
+
+			// Determine ownership based on mutation analysis (offset by 1 for 'self')
+			if (_mutationAnalyzer.IsMutated(methodName, i + 1)) {
+				ownership.Add(ArgumentOwnership.Move);
+			} else {
+				ownership.Add(ArgumentOwnership.Borrow);
+			}
+		}
+
+		// Look up the method's return type
+		MlirType? returnType = _functionReturnTypes.TryGetValue(methodName, out var rt) ? rt : IntegerType.I64;
+
+		return EmitMaxonCall(methodName, args, ownership, returnType);
+	}
+
+	/// <summary>
+	/// Lowers a static call expression (e.g., Type.method(args)).
+	/// The parser creates StaticCallExpr for any "name.member(args)" pattern.
+	/// At lowering time, we check if "name" refers to a variable (instance method call)
+	/// or a type (true static call).
+	/// </summary>
+	private MlirValue? LowerStaticCallExpr(StaticCallExpr staticCall) {
+		// Check if TypeName is actually a variable (instance method call)
+		// If so, treat it as a method call on that variable
+		MlirValue? baseValue = null;
+		MaxonStructType? structType = null;
+		if (_namedValues.TryGetValue(staticCall.TypeName, out _)) {
+			// This is actually an instance method call: variable.method(args)
+			baseValue = GetVariable(staticCall.TypeName);
+			if (baseValue.Type is MaxonStructType st) {
+				structType = st;
+			}
+		} else if (_currentMethodStructType != null) {
+			// Check if TypeName is a field of the current method's struct (e.g., inner.get() inside a method)
+			var fieldInfo = _currentMethodStructType.GetField(staticCall.TypeName);
+			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfValue)) {
+				// Access the field from self
+				baseValue = EmitGetField(selfValue, staticCall.TypeName, fieldInfo.Type);
+				if (baseValue.Type is MaxonStructType st) {
+					structType = st;
+				}
+				Logger.Trace(LogCategory.Mlir, $"LowerStaticCallExpr: resolved field '{staticCall.TypeName}' of self to instance method call");
+			}
+		}
+
+		if (baseValue != null && structType != null) {
+
+			// Build the fully qualified method name
+			var methodName = $"{structType.Name}.{staticCall.MemberName}";
+			Logger.Trace(LogCategory.Mlir, $"LowerStaticCallExpr: resolved variable '{staticCall.TypeName}' to instance method call {methodName}");
+
+			// Get parameter info for this method
+			_functionParams.TryGetValue(methodName, out List<ParamDecl>? paramDecls);
+
+			// Build argument list: self + method arguments
+			var args = new List<MlirValue> { baseValue };
+			var ownership = new List<ArgumentOwnership> { ArgumentOwnership.Borrow };
+
+			// Resolve arguments (skip first param which is 'self') - validates named args requirement
+			var resolvedArgs = ResolveInstanceMethodCallArguments(staticCall, paramDecls);
+			for (int i = 0; i < resolvedArgs.Count; i++) {
+				var arg = resolvedArgs[i];
+
+				// Get expected type from parameter declaration (offset by 1 for 'self')
+				MlirType? expectedType = null;
+				if (paramDecls != null && i + 1 < paramDecls.Count) {
+					try {
+						expectedType = ConvertTypeRef(paramDecls[i + 1].Type);
+					} catch {
+						// If type conversion fails, continue without expected type
+					}
+				}
+
+				args.Add(LowerExpression(arg, expectedType));
+
+				// Determine ownership based on mutation analysis (offset by 1 for 'self')
+				if (_mutationAnalyzer.IsMutated(methodName, i + 1)) {
+					ownership.Add(ArgumentOwnership.Move);
+				} else {
+					ownership.Add(ArgumentOwnership.Borrow);
+				}
+			}
+
+			// Look up the method's return type
+			MlirType? returnType = _functionReturnTypes.TryGetValue(methodName, out var rt) ? rt : IntegerType.I64;
+
+			return EmitMaxonCall(methodName, args, ownership, returnType);
+		}
+
+		// True static call: Type.method(args)
+		var staticMethodName = $"{staticCall.TypeName}.{staticCall.MemberName}";
+		Logger.Trace(LogCategory.Mlir, $"LowerStaticCallExpr: static call {staticMethodName}");
+
+		// Get parameter info for this method
+		_functionParams.TryGetValue(staticMethodName, out List<ParamDecl>? staticParamDecls);
+
+		// Build argument list
+		var staticArgs = new List<MlirValue>();
+		var staticOwnership = new List<ArgumentOwnership>();
+
+
+		// Resolve arguments
+		var staticResolvedArgs = ResolveStaticCallArguments(staticCall, staticParamDecls);
+		for (int i = 0; i < staticResolvedArgs.Count; i++) {
+			var arg = staticResolvedArgs[i];
+
+			// Get expected type from parameter declaration
+			MlirType? expectedType = null;
+			if (staticParamDecls != null && i < staticParamDecls.Count) {
+				try {
+					expectedType = ConvertTypeRef(staticParamDecls[i].Type);
+				} catch {
+					// If type conversion fails, continue without expected type
+				}
+			}
+
+			staticArgs.Add(LowerExpression(arg, expectedType));
+
+			// Determine ownership based on mutation analysis
+			if (_mutationAnalyzer.IsMutated(staticMethodName, i)) {
+				staticOwnership.Add(ArgumentOwnership.Move);
+			} else {
+				staticOwnership.Add(ArgumentOwnership.Borrow);
+			}
+		}
+
+		// Look up the method's return type
+		MlirType? staticReturnType = _functionReturnTypes.TryGetValue(staticMethodName, out var srt) ? srt : IntegerType.I64;
+
+		return EmitMaxonCall(staticMethodName, staticArgs, staticOwnership, staticReturnType);
+	}
+
+	/// <summary>
+	/// Core argument resolution logic shared by all call types.
+	/// Validates named argument requirements and resolves arguments in parameter order.
+	/// </summary>
+	private static List<Expr> ResolveArgumentsCore(
+		List<Expr> positionalArgs,
+		List<NamedArg> namedArgs,
+		List<ParamDecl> paramDecls,
+		int? line,
+		int? column) {
+
 		// Validate: only the first argument can be positional, rest must be named
-		if (call.Args.Count > 1) {
+		if (positionalArgs.Count > 1) {
 			throw new CompileError(
 				ErrorCode.SemanticTypeMismatch,
 				"Second and subsequent arguments must be named. Use 'name: value' syntax",
-				call.Location?.Line ?? 0,
-				call.Location?.Column ?? 0);
+				line ?? 0,
+				column ?? 0);
 		}
 
 		// Build the resolved argument list in parameter order
 		var resolvedArgs = new Expr?[paramDecls.Count];
 
-		// First, place positional arguments (only allowed for first parameter)
-		for (int i = 0; i < call.Args.Count && i < paramDecls.Count; i++) {
-			resolvedArgs[i] = call.Args[i];
+		// First, place positional arguments
+		for (int i = 0; i < positionalArgs.Count && i < paramDecls.Count; i++) {
+			resolvedArgs[i] = positionalArgs[i];
 		}
 
 		// Then, place named arguments in their correct positions
-		foreach (var namedArg in call.NamedArgs) {
+		foreach (var namedArg in namedArgs) {
 			int paramIndex = -1;
 			for (int i = 0; i < paramDecls.Count; i++) {
 				if (paramDecls[i].Name == namedArg.Name) {
@@ -708,12 +961,57 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				throw new CompileError(
 					ErrorCode.SemanticTypeMismatch,
 					$"missing argument for parameter '{paramDecls[i].Name}'",
-					call.Location?.Line ?? 0,
-					call.Location?.Column ?? 0);
+					line ?? 0,
+					column ?? 0);
 			}
 		}
 
 		return result;
+	}
+
+	/// <summary>
+	/// Resolves method call arguments by combining positional and named arguments.
+	/// </summary>
+	private static List<Expr> ResolveMethodCallArguments(MethodCallExpr methodCall, List<ParamDecl>? paramDecls) {
+		if (paramDecls == null || paramDecls.Count <= 1) {
+			return methodCall.Args;
+		}
+		// Skip 'self' parameter for argument resolution
+		var methodParamDecls = paramDecls.Skip(1).ToList();
+		return ResolveArgumentsCore(methodCall.Args, methodCall.NamedArgs, methodParamDecls, methodCall.Location?.Line, methodCall.Location?.Column);
+	}
+
+	/// <summary>
+	/// Resolves instance method call arguments when called via StaticCallExpr syntax (var.method(args)).
+	/// </summary>
+	private static List<Expr> ResolveInstanceMethodCallArguments(StaticCallExpr staticCall, List<ParamDecl>? paramDecls) {
+		if (paramDecls == null || paramDecls.Count <= 1) {
+			return staticCall.Args;
+		}
+		// Skip 'self' parameter for argument resolution
+		var methodParamDecls = paramDecls.Skip(1).ToList();
+		return ResolveArgumentsCore(staticCall.Args, staticCall.NamedArgs, methodParamDecls, staticCall.Location?.Line, staticCall.Location?.Column);
+	}
+
+	/// <summary>
+	/// Resolves static call arguments by combining positional and named arguments.
+	/// </summary>
+	private static List<Expr> ResolveStaticCallArguments(StaticCallExpr staticCall, List<ParamDecl>? paramDecls) {
+		if (paramDecls == null || paramDecls.Count == 0) {
+			return staticCall.Args;
+		}
+		return ResolveArgumentsCore(staticCall.Args, staticCall.NamedArgs, paramDecls, staticCall.Location?.Line, staticCall.Location?.Column);
+	}
+
+	/// <summary>
+	/// Resolves call arguments by combining positional and named arguments in the correct parameter order.
+	/// </summary>
+	private List<Expr> ResolveCallArguments(CallExpr call) {
+		if (!_functionParams.TryGetValue(call.FuncName, out var paramDecls)) {
+			Logger.Trace(LogCategory.Mlir, $"No param info for {call.FuncName}, using positional args only");
+			return call.Args;
+		}
+		return ResolveArgumentsCore(call.Args, call.NamedArgs, paramDecls, call.Location?.Line, call.Location?.Column);
 	}
 
 	/// <summary>
@@ -1307,7 +1605,23 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			return EmitGetGlobal(global);
 		}
 
+		// Note: This throws here because callers expect an address.
+		// Field access via self is handled separately in GetVariable/SetVariable.
 		throw new InvalidOperationException($"Undefined variable: {name}");
+	}
+
+	/// <summary>
+	/// Tries to get a field from self when inside a method.
+	/// </summary>
+	private MlirValue? TryGetFieldFromSelf(string name) {
+		// Check if we're inside a method and the name is a field of the current type
+		if (_currentMethodStructType != null) {
+			var fieldInfo = _currentMethodStructType.GetField(name);
+			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfValue)) {
+				return EmitGetField(selfValue, name, fieldInfo.Type);
+			}
+		}
+		return null;
 	}
 
 	/// <summary>
@@ -1324,6 +1638,12 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Gets a variable's value (loads it).
 	/// </summary>
 	public MlirValue GetVariable(string name) {
+		// First check if this is a field access on self (when inside a method)
+		var selfField = TryGetFieldFromSelf(name);
+		if (selfField != null) {
+			return selfField;
+		}
+
 		var addr = GetVariableAddress(name);
 		if (addr.Type is MemRefType)
 			return EmitLoad(addr);
@@ -1334,8 +1654,28 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Sets a variable's value (stores it).
 	/// </summary>
 	public void SetVariable(string name, MlirValue value) {
+		// First check if this is a field assignment on self (when inside a method)
+		if (TrySetFieldOnSelf(name, value)) {
+			return;
+		}
+
 		var addr = GetVariableAddress(name);
 		EmitStore(value, addr);
+	}
+
+	/// <summary>
+	/// Tries to set a field on self when inside a method.
+	/// </summary>
+	private bool TrySetFieldOnSelf(string name, MlirValue value) {
+		// Check if we're inside a method and the name is a field of the current type
+		if (_currentMethodStructType != null) {
+			var fieldInfo = _currentMethodStructType.GetField(name);
+			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfValue)) {
+				EmitSetField(selfValue, name, value);
+				return true;
+			}
+		}
+		return false;
 	}
 
 	// ========================================================================

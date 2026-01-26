@@ -132,11 +132,7 @@ public record MlirStringData(int Id, string Value) {
 public sealed class MlirStructDef(string name) {
 	public string Name { get; set; } = name;
 	public List<MlirFieldDef> Fields { get; } = [];
-
 	public int SizeInBytes => Fields.Sum(f => f.Type.SizeInBytes);
-
-	public void Print(MlirPrinter printer) {
-	}
 }
 
 /// <summary>

@@ -265,7 +265,6 @@ end 'Point'
 - Methods access type fields directly without explicit `self`
 - Use `export` keyword before `function` to export individual methods
 - Methods are called using dot notation: `instance.method(args)`
-- Method parameters support named arguments just like regular functions
 
 ### Calling Methods
 
@@ -274,7 +273,7 @@ Methods are called using dot notation on instances. The receiver (`self`) is imp
 ```maxon
 var p1 = Point{x: 10, y: 20}
 var p2 = Point{x: 5, y: 10}
-var p3 = p1.add(other: p2)          // Named argument (required)
+var p3 = p1.add(p2)
 var mag = p1.magnitude()
 ```
 

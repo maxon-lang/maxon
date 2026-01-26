@@ -2,9 +2,6 @@
 
 | Spec | Description | Status | Notes |
 |------|-------------|--------|-------|
-| structs.md | Type declarations with fields | ⬜ | |
-| methods.md | Instance method calls | ⬜ | |
-| method-declarations.md | Methods on types | ⬜ | |
 | static-methods.md | Static methods | ⬜ | |
 | static-fields.md | Static fields, top-level var | ⬜ | |
 | self.md | self reference in methods | ⬜ | |
@@ -20,7 +17,6 @@
 
 ### Implementation Tasks
 
-- [ ] Break/continue with label tracking
 - [ ] Struct type registration
 - [ ] Field access semantic analysis
 - [ ] Struct layout computation
