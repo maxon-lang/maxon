@@ -16,9 +16,50 @@ public sealed class Mem2RegPass : FunctionPass {
 	public override string Name => "mem2reg";
 	public override string Description => "Promotes memory allocations to SSA values";
 
-	// Limit cross-block promotions to avoid register pressure and value clobbering
-	// (until proper parallel copy handling is implemented)
+	// Limit cross-block promotions to avoid register pressure
 	private const int MaxCrossBlockPromotions = 2;
+
+	// ============================================================================
+	// Types
+	// ============================================================================
+
+	/// <summary>
+	/// Holds collected uses of an alloca across a function.
+	/// </summary>
+	private sealed class AllocaUses {
+		public List<(LoadOp Op, MlirBlock Block)> Loads { get; } = [];
+		public List<(StoreOp Op, MlirBlock Block)> Stores { get; } = [];
+		public List<MlirOperation> OtherUses { get; } = [];
+
+		public HashSet<MlirBlock> BlocksWithStores => [.. Stores.Select(s => s.Block).Distinct()];
+		public HashSet<MlirBlock> BlocksWithLoads => [.. Loads.Select(l => l.Block).Distinct()];
+		public HashSet<MlirBlock> AllUsedBlocks => [.. BlocksWithStores.Union(BlocksWithLoads)];
+	}
+
+	/// <summary>
+	/// Represents a detected natural loop in the CFG.
+	/// </summary>
+	private sealed class LoopInfo {
+		public required MlirBlock Header { get; init; }
+		public required MlirBlock Latch { get; init; }
+		public required MlirBlock? Exit { get; init; }
+		public required HashSet<MlirBlock> Body { get; init; }
+		public required MlirBlock? Preheader { get; init; }
+	}
+
+	/// <summary>
+	/// Information about an alloca that can be promoted within a loop.
+	/// </summary>
+	private sealed class LoopAllocaInfo {
+		public required AllocaOp Alloca { get; init; }
+		public required MlirValue InitialValue { get; init; }
+		public required LoopInfo Loop { get; init; }
+		public required bool EscapesLoop { get; init; }
+	}
+
+	// ============================================================================
+	// Entry Point
+	// ============================================================================
 
 	protected override bool RunOnFunction(MlirFunction func) {
 		bool anyChanged = false;
@@ -57,33 +98,17 @@ public sealed class Mem2RegPass : FunctionPass {
 	}
 
 	// ============================================================================
-	// Alloca Use Collection
+	// Alloca Use Analysis
 	// ============================================================================
 
-	/// <summary>
-	/// Holds collected uses of an alloca across a function.
-	/// </summary>
-	private sealed class AllocaUses {
-		public List<(LoadOp Op, MlirBlock Block)> Loads { get; } = [];
-		public List<(StoreOp Op, MlirBlock Block)> Stores { get; } = [];
-		public List<MlirOperation> OtherUses { get; } = [];
-
-		public HashSet<MlirBlock> BlocksWithStores => [.. Stores.Select(s => s.Block).Distinct()];
-		public HashSet<MlirBlock> BlocksWithLoads => [.. Loads.Select(l => l.Block).Distinct()];
-		public HashSet<MlirBlock> AllUsedBlocks => [.. BlocksWithStores.Union(BlocksWithLoads)];
-	}
-
-	/// <summary>
-	/// Collects all uses of an alloca across the function.
-	/// </summary>
 	private static AllocaUses CollectAllocaUses(AllocaOp alloca, MlirFunction func) {
 		var uses = new AllocaUses();
 
 		foreach (var block in func.Body.Blocks) {
 			foreach (var op in block.Operations) {
-				if (op is LoadOp load && IsAllocaAccess(load.MemRef, load.Indices, alloca)) {
+				if (op is LoadOp load && IsSimpleAllocaAccess(load.MemRef, load.Indices, alloca)) {
 					uses.Loads.Add((load, block));
-				} else if (op is StoreOp store && IsAllocaAccess(store.MemRef, store.Indices, alloca)) {
+				} else if (op is StoreOp store && IsSimpleAllocaAccess(store.MemRef, store.Indices, alloca)) {
 					uses.Stores.Add((store, block));
 				} else if (op.Operands.Contains(alloca.Result) && op != alloca) {
 					uses.OtherUses.Add(op);
@@ -94,56 +119,47 @@ public sealed class Mem2RegPass : FunctionPass {
 		return uses;
 	}
 
-	/// <summary>
-	/// Checks if a memory access is a simple scalar access to the given alloca.
-	/// </summary>
-	private static bool IsAllocaAccess(MlirValue memRef, IReadOnlyList<MlirValue> indices, AllocaOp alloca) {
+	private static bool IsSimpleAllocaAccess(MlirValue memRef, IReadOnlyList<MlirValue> indices, AllocaOp alloca) {
 		return memRef == alloca.Result && indices.Count == 0;
 	}
 
+	private static bool CanPromoteType(AllocaUses uses) {
+		foreach (var (store, _) in uses.Stores) {
+			if (store.Value.Type is MemRefType or PtrType) return false;
+		}
+		return true;
+	}
+
 	// ============================================================================
-	// Promotion
+	// Promotion Entry Point
 	// ============================================================================
 
-	/// <summary>
-	/// Tries to promote an alloca to SSA form.
-	/// Handles both single-block and cross-block cases.
-	/// </summary>
 	private static bool TryPromote(AllocaOp alloca, MlirBlock allocaBlock, MlirFunction func,
 		bool skipCrossBlock, out bool isCrossBlock) {
 
 		isCrossBlock = false;
-
 		var uses = CollectAllocaUses(alloca, func);
 
-		// Can't promote if address escapes
+		// Reject if address escapes or uninitialized
 		if (uses.OtherUses.Count > 0) return false;
-
-		// Can't promote if there are no stores (uninitialized variable)
 		if (uses.Stores.Count == 0 && uses.Loads.Count > 0) return false;
+		if (!CanPromoteType(uses)) return false;
 
-		// Can't promote pointer/memref types
-		foreach (var (store, _) in uses.Stores) {
-			if (store.Value.Type is MemRefType or PtrType) return false;
-		}
-
-		// Single-block case: all uses in the alloca's block
-		bool isSingleBlock = uses.AllUsedBlocks.All(b => b == allocaBlock);
-
-		if (isSingleBlock) {
+		// Single-block: all uses in the alloca's block
+		if (uses.AllUsedBlocks.All(b => b == allocaBlock)) {
 			return TryPromoteSingleBlock(uses, allocaBlock, alloca, func);
 		}
 
-		// Cross-block case
+		// Cross-block
 		if (skipCrossBlock) return false;
-
 		isCrossBlock = true;
 		return TryPromoteCrossBlock(uses, allocaBlock, alloca, func);
 	}
 
-	/// <summary>
-	/// Promotes an alloca where all uses are in a single block.
-	/// </summary>
+	// ============================================================================
+	// Single-Block Promotion
+	// ============================================================================
+
 	private static bool TryPromoteSingleBlock(AllocaUses uses, MlirBlock allocaBlock,
 		AllocaOp alloca, MlirFunction func) {
 
@@ -159,22 +175,40 @@ public sealed class Mem2RegPass : FunctionPass {
 		return true;
 	}
 
-	/// <summary>
-	/// Promotes an alloca that spans multiple blocks using block arguments.
-	/// </summary>
+	// ============================================================================
+	// Cross-Block Promotion
+	// ============================================================================
+
 	private static bool TryPromoteCrossBlock(AllocaUses uses, MlirBlock allocaBlock,
 		AllocaOp alloca, MlirFunction func) {
 
 		if (alloca.Result.Type is not MemRefType allocaType) return false;
 		var elementType = allocaType.ElementType;
 
-		// Find merge points needing block arguments
+		// Try loop-aware promotion first
+		var loops = DetectLoops(func);
+		var containingLoop = FindContainingLoop(loops, uses.AllUsedBlocks);
+
+		if (containingLoop != null) {
+			var loopAlloca = AnalyzeLoopAlloca(alloca, containingLoop, uses, func);
+			if (loopAlloca != null) {
+				return TryPromoteLoopVariable(alloca, allocaBlock, uses, loopAlloca, func);
+			}
+		}
+
+		// Fall back to non-loop cross-block promotion
+		return TryPromoteNonLoopCrossBlock(uses, allocaBlock, alloca, elementType, func);
+	}
+
+	private static bool TryPromoteNonLoopCrossBlock(AllocaUses uses, MlirBlock allocaBlock,
+		AllocaOp alloca, MlirType elementType, MlirFunction func) {
+
 		var mergeBlocks = FindMergeBlocks(func, uses.BlocksWithStores, uses.BlocksWithLoads);
 
-		// Skip if involves loops (back-edges cause value clobbering issues)
+		// Reject loops (back-edges cause issues without loop-aware handling)
 		if (HasBackEdges(mergeBlocks)) return false;
 
-		// Verify all loads can be resolved before modifying IR
+		// Verify all loads can be resolved
 		foreach (var (load, loadBlock) in uses.Loads) {
 			if (!CanResolveLoad(load, loadBlock, alloca, mergeBlocks, func)) {
 				Logger.Debug(LogCategory.Optimizer, $"    cannot promote: no reaching definition for load in ^{loadBlock.Name}");
@@ -182,7 +216,7 @@ public sealed class Mem2RegPass : FunctionPass {
 			}
 		}
 
-		// Insert block arguments at merge blocks
+		// Insert block arguments at merge points
 		var blockArguments = new Dictionary<MlirBlock, MlirValue>();
 		foreach (var mergeBlock in mergeBlocks) {
 			var arg = mergeBlock.AddArgument(elementType);
@@ -193,7 +227,7 @@ public sealed class Mem2RegPass : FunctionPass {
 		var reachingDefs = ComputeReachingDefinitions(func, alloca, blockArguments);
 		UpdateBranchOperands(func, alloca, mergeBlocks, reachingDefs);
 
-		// Build load replacements
+		// Build and apply load replacements
 		var loadReplacements = new Dictionary<LoadOp, MlirValue>();
 		foreach (var (load, loadBlock) in uses.Loads) {
 			var reachingValue = GetReachingValueAtLoad(load, loadBlock, alloca, reachingDefs);
@@ -206,54 +240,532 @@ public sealed class Mem2RegPass : FunctionPass {
 		return true;
 	}
 
-	/// <summary>
-	/// Finds the last store to an alloca before a given load in the same block.
-	/// </summary>
-	private static MlirValue? FindLastStoreBefore(MlirBlock block, LoadOp load, AllocaOp alloca) {
-		var loadIdx = block.Operations.IndexOf(load);
-		for (int i = loadIdx - 1; i >= 0; i--) {
-			if (block.Operations[i] is StoreOp store && IsAllocaAccess(store.MemRef, store.Indices, alloca)) {
-				return store.Value;
+	// ============================================================================
+	// Loop Detection
+	// ============================================================================
+
+	private static List<LoopInfo> DetectLoops(MlirFunction func) {
+		var loops = new List<LoopInfo>();
+		var blockIndices = BuildBlockIndexMap(func);
+		var backEdgesByHeader = FindBackEdges(func, blockIndices);
+
+		foreach (var (header, latches) in backEdgesByHeader) {
+			// Skip exit blocks masquerading as loop headers
+			if (header.Name.Contains("exit")) {
+				Logger.Trace(LogCategory.Optimizer, $"    skipping spurious loop with exit block as header: ^{header.Name}");
+				continue;
+			}
+
+			var loop = BuildLoopInfo(header, latches, func);
+			if (loop != null) {
+				loops.Add(loop);
+				Logger.Trace(LogCategory.Optimizer, $"    detected loop: header=^{loop.Header.Name}, latches={latches.Count}, body={loop.Body.Count} blocks");
 			}
 		}
-		return null;
+
+		return loops;
 	}
 
-	/// <summary>
-	/// Applies the promotion by replacing loads, removing stores, and removing the alloca.
-	/// </summary>
-	private static void ApplyPromotion(AllocaUses uses, Dictionary<LoadOp, MlirValue> loadReplacements,
-		MlirBlock allocaBlock, AllocaOp alloca, MlirFunction func) {
-
-		foreach (var (load, replacement) in loadReplacements) {
-			ReplaceAllUses(load.Result, replacement, func);
+	private static Dictionary<MlirBlock, int> BuildBlockIndexMap(MlirFunction func) {
+		var indices = new Dictionary<MlirBlock, int>();
+		for (int i = 0; i < func.Body.Blocks.Count; i++) {
+			indices[func.Body.Blocks[i]] = i;
 		}
-
-		foreach (var (load, loadBlock) in uses.Loads) {
-			loadBlock.Operations.Remove(load);
-		}
-
-		foreach (var (store, storeBlock) in uses.Stores) {
-			storeBlock.Operations.Remove(store);
-		}
-
-		allocaBlock.Operations.Remove(alloca);
+		return indices;
 	}
 
-	private static void ReplaceAllUses(MlirValue oldValue, MlirValue newValue, MlirFunction func) {
+	private static Dictionary<MlirBlock, List<MlirBlock>> FindBackEdges(MlirFunction func, Dictionary<MlirBlock, int> blockIndices) {
+		var backEdgesByHeader = new Dictionary<MlirBlock, List<MlirBlock>>();
+
 		foreach (var block in func.Body.Blocks) {
-			foreach (var op in block.Operations) {
-				for (int i = 0; i < op.Operands.Count; i++) {
-					if (op.Operands[i] == oldValue) {
-						op.Operands[i] = newValue;
+			foreach (var succ in block.Successors) {
+				if (blockIndices[succ] <= blockIndices[block]) {
+					if (!backEdgesByHeader.TryGetValue(succ, out var latches)) {
+						latches = [];
+						backEdgesByHeader[succ] = latches;
+					}
+					latches.Add(block);
+				}
+			}
+		}
+
+		return backEdgesByHeader;
+	}
+
+	private static LoopInfo? BuildLoopInfo(MlirBlock header, List<MlirBlock> latches, MlirFunction func) {
+		var body = CollectLoopBody(header, latches);
+		var exit = FindLoopExit(header, body);
+		var preheader = FindLoopPreheader(header, body);
+
+		return new LoopInfo {
+			Header = header,
+			Latch = latches[^1],
+			Exit = exit,
+			Body = body,
+			Preheader = preheader
+		};
+	}
+
+	private static HashSet<MlirBlock> CollectLoopBody(MlirBlock header, List<MlirBlock> latches) {
+		var body = new HashSet<MlirBlock> { header };
+		var worklist = new Stack<MlirBlock>();
+
+		foreach (var latch in latches) {
+			worklist.Push(latch);
+		}
+
+		while (worklist.Count > 0) {
+			var block = worklist.Pop();
+			if (body.Add(block)) {
+				foreach (var pred in block.Predecessors) {
+					if (!body.Contains(pred)) {
+						worklist.Push(pred);
 					}
 				}
 			}
 		}
+
+		return body;
+	}
+
+	private static MlirBlock? FindLoopExit(MlirBlock header, HashSet<MlirBlock> body) {
+		foreach (var succ in header.Successors) {
+			if (!body.Contains(succ)) return succ;
+		}
+		return null;
+	}
+
+	private static MlirBlock? FindLoopPreheader(MlirBlock header, HashSet<MlirBlock> body) {
+		foreach (var pred in header.Predecessors) {
+			if (!body.Contains(pred)) return pred;
+		}
+		return null;
+	}
+
+	private static LoopInfo? FindContainingLoop(List<LoopInfo> loops, HashSet<MlirBlock> blocks) {
+		LoopInfo? best = null;
+		int bestSize = int.MaxValue;
+
+		foreach (var loop in loops) {
+			var validBlocks = loop.Body.ToHashSet();
+			if (loop.Preheader != null) validBlocks.Add(loop.Preheader);
+			if (loop.Exit != null) validBlocks.Add(loop.Exit);
+
+			if (blocks.All(b => validBlocks.Contains(b)) && loop.Body.Count < bestSize) {
+				best = loop;
+				bestSize = loop.Body.Count;
+			}
+		}
+
+		return best;
 	}
 
 	// ============================================================================
-	// Cross-Block Analysis
+	// Loop Alloca Analysis
+	// ============================================================================
+
+	private static LoopAllocaInfo? AnalyzeLoopAlloca(AllocaOp alloca, LoopInfo loop, AllocaUses uses, MlirFunction func) {
+		bool hasLoopStore = uses.Stores.Any(s => loop.Body.Contains(s.Block));
+		if (!hasLoopStore) return null;
+
+		bool escapesLoop = uses.Loads.Any(l => !loop.Body.Contains(l.Block));
+		var initialValue = FindInitialValue(alloca, loop, func);
+
+		if (initialValue == null) {
+			Logger.Trace(LogCategory.Optimizer, $"    cannot promote loop var: no initial value found");
+			return null;
+		}
+
+		return new LoopAllocaInfo {
+			Alloca = alloca,
+			InitialValue = initialValue,
+			Loop = loop,
+			EscapesLoop = escapesLoop
+		};
+	}
+
+	private static MlirValue? FindInitialValue(AllocaOp alloca, LoopInfo loop, MlirFunction func) {
+		// Look in preheader first
+		if (loop.Preheader != null) {
+			foreach (var op in loop.Preheader.Operations) {
+				if (op is StoreOp store && IsSimpleAllocaAccess(store.MemRef, store.Indices, alloca)) {
+					return store.Value;
+				}
+			}
+		}
+
+		// Fall back to entry block
+		var entryBlock = func.Body.Blocks[0];
+		foreach (var op in entryBlock.Operations) {
+			if (op is StoreOp store && IsSimpleAllocaAccess(store.MemRef, store.Indices, alloca)) {
+				return store.Value;
+			}
+		}
+
+		return null;
+	}
+
+	// ============================================================================
+	// Loop Variable Promotion
+	// ============================================================================
+
+	private static bool TryPromoteLoopVariable(AllocaOp alloca, MlirBlock allocaBlock,
+		AllocaUses uses, LoopAllocaInfo loopAlloca, MlirFunction func) {
+
+		var loop = loopAlloca.Loop;
+		if (alloca.Result.Type is not MemRefType allocaType) return false;
+		var elementType = allocaType.ElementType;
+
+		// Check for stores in nested inner loops (can't promote these yet)
+		if (HasStoresInNestedLoop(uses, loop, func)) {
+			return false;
+		}
+
+		Logger.Trace(LogCategory.Optimizer, $"    promoting loop variable %{alloca.Result.Id} (escapes={loopAlloca.EscapesLoop})");
+
+		// Verify exit values can be computed before modifying IR
+		if (!VerifyLoopExitValues(alloca, loop, elementType, func)) {
+			return false;
+		}
+
+		// Insert block arguments
+		var (headerArg, exitArg, blockArguments) = InsertLoopBlockArguments(loop, loopAlloca, elementType, alloca);
+
+		// Update branch operands
+		if (!UpdateLoopBranchOperands(func, alloca, loop, loopAlloca.InitialValue, headerArg, exitArg, blockArguments)) {
+			Logger.Debug(LogCategory.Optimizer, $"    cannot promote: failed to update branch operands");
+			return false;
+		}
+
+		// Build and apply load replacements
+		var loadReplacements = BuildLoopLoadReplacements(uses, alloca, loop, headerArg, exitArg, blockArguments);
+		if (loadReplacements == null) return false;
+
+		ApplyPromotion(uses, loadReplacements, allocaBlock, alloca, func);
+		return true;
+	}
+
+	private static bool HasStoresInNestedLoop(AllocaUses uses, LoopInfo loop, MlirFunction func) {
+		var allLoops = DetectLoops(func);
+
+		foreach (var innerLoop in allLoops) {
+			if (innerLoop.Header == loop.Header) continue;
+			if (!loop.Body.Contains(innerLoop.Header)) continue;
+
+			bool hasInnerStore = uses.Stores.Any(s => innerLoop.Body.Contains(s.Block));
+			if (hasInnerStore) {
+				bool flowsThroughInnerHeader = uses.Loads.Any(l =>
+					innerLoop.Body.Contains(l.Block) && l.Block != innerLoop.Header);
+
+				if (flowsThroughInnerHeader) {
+					Logger.Trace(LogCategory.Optimizer, $"    cannot promote: variable has stores in nested inner loop ^{innerLoop.Header.Name}");
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	private static bool VerifyLoopExitValues(AllocaOp alloca, LoopInfo loop, MlirType elementType, MlirFunction func) {
+		var tempBlockArgs = new Dictionary<MlirBlock, MlirValue>();
+		var placeholderArg = new MlirValue(elementType);
+		tempBlockArgs[loop.Header] = placeholderArg;
+
+		foreach (var block in func.Body.Blocks) {
+			if (!loop.Body.Contains(block) && block != loop.Preheader) continue;
+
+			var terminator = block.Terminator;
+			if (terminator == null) continue;
+
+			bool branchesToHeader = terminator switch {
+				BranchOp br => br.Destination == loop.Header,
+				CondBranchOp condBr => condBr.TrueBlock == loop.Header || condBr.FalseBlock == loop.Header,
+				_ => false
+			};
+
+			if (branchesToHeader && loop.Body.Contains(block)) {
+				var exitValue = GetLoopBlockExitValue(block, alloca, loop, placeholderArg, tempBlockArgs);
+				if (exitValue == null) {
+					Logger.Debug(LogCategory.Optimizer, $"    cannot promote: no exit value for branch ^{block.Name} -> ^{loop.Header.Name}");
+					return false;
+				}
+			}
+		}
+
+		return true;
+	}
+
+	private static (MlirValue headerArg, MlirValue? exitArg, Dictionary<MlirBlock, MlirValue> blockArguments)
+		InsertLoopBlockArguments(LoopInfo loop, LoopAllocaInfo loopAlloca, MlirType elementType, AllocaOp alloca) {
+
+		var headerArg = loop.Header.AddArgument(elementType);
+		Logger.Trace(LogCategory.Optimizer, $"    inserted header arg %{headerArg.Id} at ^{loop.Header.Name}");
+
+		MlirValue? exitArg = null;
+		if (loopAlloca.EscapesLoop && loop.Exit != null) {
+			exitArg = loop.Exit.AddArgument(elementType);
+			Logger.Trace(LogCategory.Optimizer, $"    inserted exit arg %{exitArg.Id} at ^{loop.Exit.Name}");
+		}
+
+		var blockArguments = new Dictionary<MlirBlock, MlirValue> { [loop.Header] = headerArg };
+		if (exitArg != null && loop.Exit != null) {
+			blockArguments[loop.Exit] = exitArg;
+		}
+
+		// Find and insert internal merge block arguments
+		var internalMergeBlocks = FindInternalMergeBlocks(alloca, loop, headerArg, blockArguments);
+		foreach (var mergeBlock in internalMergeBlocks) {
+			var mergeArg = mergeBlock.AddArgument(elementType);
+			blockArguments[mergeBlock] = mergeArg;
+			Logger.Trace(LogCategory.Optimizer, $"    inserted merge arg %{mergeArg.Id} at ^{mergeBlock.Name}");
+		}
+
+		return (headerArg, exitArg, blockArguments);
+	}
+
+	private static HashSet<MlirBlock> FindInternalMergeBlocks(AllocaOp alloca, LoopInfo loop,
+		MlirValue headerArg, Dictionary<MlirBlock, MlirValue> blockArguments) {
+
+		var mergeBlocks = new HashSet<MlirBlock>();
+
+		foreach (var block in loop.Body) {
+			if (block == loop.Header) continue;
+
+			var preds = block.Predecessors.Where(p => loop.Body.Contains(p)).ToList();
+			if (preds.Count < 2) continue;
+
+			var predValues = new HashSet<MlirValue>();
+			foreach (var pred in preds) {
+				var exitVal = GetLoopBlockExitValue(pred, alloca, loop, headerArg, blockArguments);
+				if (exitVal != null) predValues.Add(exitVal);
+			}
+
+			if (predValues.Count > 1) {
+				mergeBlocks.Add(block);
+			}
+		}
+
+		return mergeBlocks;
+	}
+
+	private static Dictionary<LoadOp, MlirValue>? BuildLoopLoadReplacements(AllocaUses uses, AllocaOp alloca,
+		LoopInfo loop, MlirValue headerArg, MlirValue? exitArg, Dictionary<MlirBlock, MlirValue> blockArguments) {
+
+		var loadReplacements = new Dictionary<LoadOp, MlirValue>();
+
+		foreach (var (load, loadBlock) in uses.Loads) {
+			var reachingValue = GetLoopReachingValue(load, loadBlock, alloca, loop, headerArg, exitArg, blockArguments);
+			if (reachingValue != null) {
+				loadReplacements[load] = reachingValue;
+			} else {
+				Logger.Error(LogCategory.Optimizer, $"    failed to find reaching value for load in ^{loadBlock.Name}");
+				return null;
+			}
+		}
+
+		return loadReplacements;
+	}
+
+	// ============================================================================
+	// Loop Branch Operand Updates
+	// ============================================================================
+
+	private static bool UpdateLoopBranchOperands(MlirFunction func, AllocaOp alloca,
+		LoopInfo loop, MlirValue initialValue, MlirValue headerArg, MlirValue? exitArg,
+		Dictionary<MlirBlock, MlirValue> blockArguments) {
+
+		var internalMergeBlocks = blockArguments.Keys
+			.Where(b => b != loop.Header && b != loop.Exit)
+			.ToHashSet();
+
+		foreach (var block in func.Body.Blocks) {
+			var terminator = block.Terminator;
+			if (terminator == null) continue;
+
+			var exitValue = GetLoopBlockExitValue(block, alloca, loop, headerArg, blockArguments);
+
+			if (terminator is BranchOp br) {
+				if (!TryUpdateBranchOp(block, br, loop, initialValue, exitValue, exitArg, internalMergeBlocks)) {
+					return false;
+				}
+			} else if (terminator is CondBranchOp condBr) {
+				TryUpdateCondBranchOp(block, condBr, loop, initialValue, exitValue, exitArg, internalMergeBlocks);
+			}
+		}
+
+		return true;
+	}
+
+	private static bool TryUpdateBranchOp(MlirBlock block, BranchOp br, LoopInfo loop,
+		MlirValue initialValue, MlirValue? exitValue, MlirValue? exitArg, HashSet<MlirBlock> internalMergeBlocks) {
+
+		var newArgs = br.BlockArguments.ToList();
+		bool needsUpdate = false;
+
+		if (br.Destination == loop.Header) {
+			if (!loop.Body.Contains(block)) {
+				newArgs.Add(initialValue);
+				Logger.Trace(LogCategory.Optimizer, $"    branch ^{block.Name} -> ^{loop.Header.Name}: added initial value");
+			} else {
+				if (exitValue != null) {
+					newArgs.Add(exitValue);
+					Logger.Trace(LogCategory.Optimizer, $"    branch ^{block.Name} -> ^{loop.Header.Name}: added exit value %{exitValue.Id}");
+				} else {
+					Logger.Error(LogCategory.Optimizer, $"    branch ^{block.Name} -> ^{loop.Header.Name}: no exit value for loop variable");
+					return false;
+				}
+			}
+			needsUpdate = true;
+		} else if (exitArg != null && br.Destination == loop.Exit && exitValue != null) {
+			newArgs.Add(exitValue);
+			needsUpdate = true;
+		} else if (internalMergeBlocks.Contains(br.Destination) && exitValue != null) {
+			newArgs.Add(exitValue);
+			Logger.Trace(LogCategory.Optimizer, $"    branch ^{block.Name} -> ^{br.Destination.Name}: added merge value %{exitValue.Id}");
+			needsUpdate = true;
+		}
+
+		if (needsUpdate) {
+			ReplaceBranchOp(block, br, new BranchOp(br.Destination, [.. newArgs]));
+		}
+
+		return true;
+	}
+
+	private static void TryUpdateCondBranchOp(MlirBlock block, CondBranchOp condBr, LoopInfo loop,
+		MlirValue initialValue, MlirValue? exitValue, MlirValue? exitArg, HashSet<MlirBlock> internalMergeBlocks) {
+
+		var newTrueArgs = condBr.TrueArguments.ToList();
+		var newFalseArgs = condBr.FalseArguments.ToList();
+		bool needsUpdate = false;
+
+		// True branch updates
+		if (condBr.TrueBlock == loop.Header) {
+			if (!loop.Body.Contains(block)) {
+				newTrueArgs.Add(initialValue);
+			} else if (exitValue != null) {
+				newTrueArgs.Add(exitValue);
+			}
+			needsUpdate = true;
+		}
+		if (exitArg != null && condBr.TrueBlock == loop.Exit && exitValue != null) {
+			newTrueArgs.Add(exitValue);
+			needsUpdate = true;
+		}
+		if (internalMergeBlocks.Contains(condBr.TrueBlock) && exitValue != null) {
+			newTrueArgs.Add(exitValue);
+			Logger.Trace(LogCategory.Optimizer, $"    condbr ^{block.Name} true-> ^{condBr.TrueBlock.Name}: added merge value %{exitValue.Id}");
+			needsUpdate = true;
+		}
+
+		// False branch updates
+		if (condBr.FalseBlock == loop.Header) {
+			if (!loop.Body.Contains(block)) {
+				newFalseArgs.Add(initialValue);
+			} else if (exitValue != null) {
+				newFalseArgs.Add(exitValue);
+			}
+			needsUpdate = true;
+		}
+		if (exitArg != null && condBr.FalseBlock == loop.Exit && exitValue != null) {
+			newFalseArgs.Add(exitValue);
+			needsUpdate = true;
+		}
+		if (internalMergeBlocks.Contains(condBr.FalseBlock) && exitValue != null) {
+			newFalseArgs.Add(exitValue);
+			Logger.Trace(LogCategory.Optimizer, $"    condbr ^{block.Name} false-> ^{condBr.FalseBlock.Name}: added merge value %{exitValue.Id}");
+			needsUpdate = true;
+		}
+
+		if (needsUpdate) {
+			ReplaceBranchOp(block, condBr, new CondBranchOp(condBr.Condition, condBr.TrueBlock, condBr.FalseBlock, newTrueArgs, newFalseArgs));
+		}
+	}
+
+	// ============================================================================
+	// Loop Value Tracking
+	// ============================================================================
+
+	private static MlirValue? GetLoopBlockExitValue(MlirBlock block, AllocaOp alloca,
+		LoopInfo loop, MlirValue headerArg, Dictionary<MlirBlock, MlirValue> blockArguments,
+		HashSet<MlirBlock>? visited = null) {
+
+		visited ??= [];
+		if (!visited.Add(block)) return null;
+
+		// Start with reaching definition at block entry
+		MlirValue? value = null;
+
+		if (block == loop.Header) {
+			value = headerArg;
+		} else if (blockArguments.TryGetValue(block, out var blockArg)) {
+			value = blockArg;
+		}
+
+		// Scan for stores
+		foreach (var op in block.Operations) {
+			if (op is StoreOp store && IsSimpleAllocaAccess(store.MemRef, store.Indices, alloca)) {
+				value = store.Value;
+			}
+		}
+
+		// If no value, check predecessors
+		if (value == null) {
+			var preds = block.Predecessors.Where(p => loop.Body.Contains(p) || p == loop.Preheader).ToList();
+
+			if (preds.Count == 1) {
+				value = GetLoopBlockExitValue(preds[0], alloca, loop, headerArg, blockArguments, visited);
+			} else if (preds.Count > 1) {
+				foreach (var pred in preds) {
+					var predValue = GetLoopBlockExitValue(pred, alloca, loop, headerArg, blockArguments, visited);
+					if (predValue != null) {
+						value = predValue;
+						break;
+					}
+				}
+			}
+		}
+
+		// Fallback for loop body blocks
+		if (value == null && loop.Body.Contains(block)) {
+			value = headerArg;
+		}
+
+		return value;
+	}
+
+	private static MlirValue? GetLoopReachingValue(LoadOp load, MlirBlock loadBlock,
+		AllocaOp alloca, LoopInfo loop, MlirValue headerArg, MlirValue? exitArg,
+		Dictionary<MlirBlock, MlirValue> blockArguments) {
+
+		var lastStore = FindLastStoreBefore(loadBlock, load, alloca);
+		if (lastStore != null) return lastStore;
+
+		if (loadBlock == loop.Header) return headerArg;
+
+		if (loop.Body.Contains(loadBlock)) {
+			if (blockArguments.TryGetValue(loadBlock, out var blockArg)) {
+				return blockArg;
+			}
+
+			var preds = loadBlock.Predecessors.Where(p => loop.Body.Contains(p)).ToList();
+			if (preds.Count == 1) {
+				return GetLoopBlockExitValue(preds[0], alloca, loop, headerArg, blockArguments);
+			}
+
+			return headerArg;
+		}
+
+		if (loadBlock == loop.Exit && exitArg != null) {
+			return exitArg;
+		}
+
+		return null;
+	}
+
+	// ============================================================================
+	// Non-Loop Cross-Block Analysis
 	// ============================================================================
 
 	private static HashSet<MlirBlock> FindMergeBlocks(MlirFunction func,
@@ -265,7 +777,6 @@ public sealed class Mem2RegPass : FunctionPass {
 		foreach (var block in func.Body.Blocks) {
 			if (block.Predecessors.Count() < 2) continue;
 
-			// Block needs argument if: multiple predecessors, variable is live, reachable from store
 			if (blocksReachingLoads.Contains(block) && CanReachFromBlocks(block, blocksWithStores)) {
 				mergeBlocks.Add(block);
 			}
@@ -336,10 +847,9 @@ public sealed class Mem2RegPass : FunctionPass {
 
 		var reachingDefs = new Dictionary<MlirBlock, MlirValue>(blockArguments);
 
-		// Find initial value (first store in entry block)
 		var entryBlock = func.Body.Blocks[0];
 		foreach (var op in entryBlock.Operations) {
-			if (op is StoreOp store && IsAllocaAccess(store.MemRef, store.Indices, alloca)) {
+			if (op is StoreOp store && IsSimpleAllocaAccess(store.MemRef, store.Indices, alloca)) {
 				reachingDefs[entryBlock] = store.Value;
 				break;
 			}
@@ -359,8 +869,7 @@ public sealed class Mem2RegPass : FunctionPass {
 			if (exitValue == null) continue;
 
 			if (terminator is BranchOp br && mergeBlocks.Contains(br.Destination)) {
-				var newBr = new BranchOp(br.Destination, [.. br.BlockArguments, exitValue]);
-				ReplaceBranchOp(block, br, newBr);
+				ReplaceBranchOp(block, br, new BranchOp(br.Destination, [.. br.BlockArguments, exitValue]));
 			} else if (terminator is CondBranchOp condBr) {
 				var newTrueArgs = condBr.TrueArguments.ToList();
 				var newFalseArgs = condBr.FalseArguments.ToList();
@@ -376,8 +885,7 @@ public sealed class Mem2RegPass : FunctionPass {
 				}
 
 				if (needsUpdate) {
-					var newCondBr = new CondBranchOp(condBr.Condition, condBr.TrueBlock, condBr.FalseBlock, newTrueArgs, newFalseArgs);
-					ReplaceBranchOp(block, condBr, newCondBr);
+					ReplaceBranchOp(block, condBr, new CondBranchOp(condBr.Condition, condBr.TrueBlock, condBr.FalseBlock, newTrueArgs, newFalseArgs));
 				}
 			}
 		}
@@ -389,7 +897,7 @@ public sealed class Mem2RegPass : FunctionPass {
 		MlirValue? value = reachingDefs.GetValueOrDefault(block);
 
 		foreach (var op in block.Operations) {
-			if (op is StoreOp store && IsAllocaAccess(store.MemRef, store.Indices, alloca)) {
+			if (op is StoreOp store && IsSimpleAllocaAccess(store.MemRef, store.Indices, alloca)) {
 				value = store.Value;
 			}
 		}
@@ -420,15 +928,6 @@ public sealed class Mem2RegPass : FunctionPass {
 		}
 
 		return null;
-	}
-
-	private static void ReplaceBranchOp(MlirBlock block, MlirOperation oldOp, MlirOperation newOp) {
-		var idx = block.Operations.IndexOf(oldOp);
-		if (idx >= 0) {
-			block.Operations[idx] = newOp;
-			newOp.ParentBlock = block;
-			oldOp.ParentBlock = null;
-		}
 	}
 
 	// ============================================================================
@@ -468,12 +967,64 @@ public sealed class Mem2RegPass : FunctionPass {
 			return true;
 		}
 
-		// No predecessors (entry block)
 		return BlockHasStoreToAlloca(func.Body.Blocks[0], alloca);
 	}
 
 	private static bool BlockHasStoreToAlloca(MlirBlock block, AllocaOp alloca) {
 		return block.Operations.Any(op =>
-			op is StoreOp store && IsAllocaAccess(store.MemRef, store.Indices, alloca));
+			op is StoreOp store && IsSimpleAllocaAccess(store.MemRef, store.Indices, alloca));
+	}
+
+	// ============================================================================
+	// Utilities
+	// ============================================================================
+
+	private static MlirValue? FindLastStoreBefore(MlirBlock block, LoadOp load, AllocaOp alloca) {
+		var loadIdx = block.Operations.IndexOf(load);
+		for (int i = loadIdx - 1; i >= 0; i--) {
+			if (block.Operations[i] is StoreOp store && IsSimpleAllocaAccess(store.MemRef, store.Indices, alloca)) {
+				return store.Value;
+			}
+		}
+		return null;
+	}
+
+	private static void ApplyPromotion(AllocaUses uses, Dictionary<LoadOp, MlirValue> loadReplacements,
+		MlirBlock allocaBlock, AllocaOp alloca, MlirFunction func) {
+
+		foreach (var (load, replacement) in loadReplacements) {
+			ReplaceAllUses(load.Result, replacement, func);
+		}
+
+		foreach (var (load, loadBlock) in uses.Loads) {
+			loadBlock.Operations.Remove(load);
+		}
+
+		foreach (var (store, storeBlock) in uses.Stores) {
+			storeBlock.Operations.Remove(store);
+		}
+
+		allocaBlock.Operations.Remove(alloca);
+	}
+
+	private static void ReplaceAllUses(MlirValue oldValue, MlirValue newValue, MlirFunction func) {
+		foreach (var block in func.Body.Blocks) {
+			foreach (var op in block.Operations) {
+				for (int i = 0; i < op.Operands.Count; i++) {
+					if (op.Operands[i] == oldValue) {
+						op.Operands[i] = newValue;
+					}
+				}
+			}
+		}
+	}
+
+	private static void ReplaceBranchOp(MlirBlock block, MlirOperation oldOp, MlirOperation newOp) {
+		var idx = block.Operations.IndexOf(oldOp);
+		if (idx >= 0) {
+			block.Operations[idx] = newOp;
+			newOp.ParentBlock = block;
+			oldOp.ParentBlock = null;
+		}
 	}
 }

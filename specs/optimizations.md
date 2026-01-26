@@ -304,9 +304,8 @@ func.func @main() -> i64 {
 ### Mem2Reg Cross-Block Promotion
 
 These tests verify cross-block SSA promotion using block arguments. Variables in
-if/else branches are promoted from stack to SSA form with block arguments at merge
-points. Loop variables remain on the stack due to complex register allocation
-requirements for loop-carried values.
+if/else branches and loops are promoted from stack to SSA form with block arguments
+at merge points and loop headers.
 
 > **TODO**: When command-line argument support is implemented, update these tests
 > to pass the condition value as a command-line argument. Currently these tests use
@@ -314,7 +313,8 @@ requirements for loop-carried values.
 > them away. Command-line arguments are truly runtime values that cannot be folded.
 
 <!-- test: mem2reg-loop-variable -->
-Loop counter variable modified each iteration - candidate for SSA promotion.
+Loop counter variables promoted to SSA with block arguments at loop header.
+The `sum` and `i` variables are passed through block arguments instead of using stack.
 ```maxon
 function main() returns int
     var sum = 0
@@ -332,36 +332,31 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.mov rax, 0
-    x86.lea rcx, qword ptr [rbp-40]
-    x86.mov qword ptr [rcx], rax
-    x86.mov rax, 1
-    x86.lea r8, qword ptr [rbp-48]
-    x86.mov qword ptr [r8], rax
+    x86.prologue stack_size=32
+    x86.mov r8, 0
+    x86.mov r9, 1
     x86.jmp while.cond
-  ^while.cond:
-    x86.mov rdx, qword ptr [r8]
-    x86.mov rax, 5
-    x86.cmp rdx, rax
-    x86.setle rax
-    x86.test rax, rax
+  ^while.cond(%15: i64, %18: i64):
+    x86.mov rdx, 5
+    x86.cmp r9, rdx
+    x86.setle rdx
+    x86.test rdx, rdx
     x86.jne while.body
+    x86.jmp while.exit.args
+    while.exit.args:
+    x86.mov rdx, r8
     x86.jmp while.exit
   ^while.body:
-    x86.mov rax, qword ptr [rcx]
-    x86.mov rdx, qword ptr [r8]
-    x86.mov r9, rax
-    x86.add r9, rdx
-    x86.mov qword ptr [rcx], r9
-    x86.mov r9, qword ptr [r8]
-    x86.mov rdx, 1
-    x86.mov rax, r9
-    x86.add rax, rdx
-    x86.mov qword ptr [r8], rax
+    x86.mov rax, r8
+    x86.add rax, r9
+    x86.mov rcx, 1
+    x86.mov r10, r9
+    x86.add r10, rcx
+    x86.mov r8, rax
+    x86.mov r9, r10
     x86.jmp while.cond
-  ^while.exit:
-    x86.mov rax, qword ptr [rcx]
+  ^while.exit(%16: i64):
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
 }
@@ -524,6 +519,8 @@ func.func @main() -> i64 {
 
 <!-- test: mem2reg-nested-loops -->
 Nested loop with multiple variables - stress test for cross-block promotion.
+Loop counter variables `i` and `j` are promoted to SSA. The `total` variable remains
+on the stack because it spans nested loops with stores in the inner loop.
 ```maxon
 function main() returns int
     var total = 0
@@ -545,60 +542,124 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=48
     x86.mov rax, 0
     x86.lea rcx, qword ptr [rbp-40]
     x86.mov qword ptr [rcx], rax
     x86.mov rax, 1
-    x86.lea r8, qword ptr [rbp-48]
-    x86.mov qword ptr [r8], rax
+    x86.mov r8, rax
     x86.jmp while.cond
-  ^while.cond:
-    x86.mov rdx, qword ptr [r8]
-    x86.mov rax, 3
-    x86.cmp rdx, rax
-    x86.setle rax
-    x86.test rax, rax
+  ^while.cond(%25: i64):
+    x86.mov rdx, 3
+    x86.cmp r8, rdx
+    x86.setle rdx
+    x86.test rdx, rdx
     x86.jne while.body
     x86.jmp while.exit
   ^while.body:
-    x86.mov rax, 1
-    x86.lea r9, qword ptr [rbp-56]
-    x86.mov qword ptr [r9], rax
+    x86.mov r9, 1
     x86.jmp while.cond_1
   ^while.exit:
-    x86.mov rdx, qword ptr [rcx]
-    x86.mov rax, rdx
+    x86.mov rax, qword ptr [rcx]
     x86.epilogue
     x86.ret
-  ^while.cond_1:
-    x86.mov rdx, qword ptr [r9]
+  ^while.cond_1(%27: i64):
     x86.mov rax, 3
-    x86.cmp rdx, rax
+    x86.cmp r9, rax
     x86.setle rax
     x86.test rax, rax
     x86.jne while.body_1
     x86.jmp while.exit_1
   ^while.body_1:
     x86.mov rax, qword ptr [rcx]
-    x86.mov rdx, qword ptr [r8]
-    x86.mov r10, qword ptr [r9]
-    x86.imul r11, rdx, r10
+    x86.imul rdx, r8, r9
     x86.mov r10, rax
-    x86.add r10, r11
+    x86.add r10, rdx
     x86.mov qword ptr [rcx], r10
-    x86.mov r10, qword ptr [r9]
-    x86.mov r11, 1
-    x86.mov rax, r10
-    x86.add rax, r11
-    x86.mov qword ptr [r9], rax
+    x86.mov r10, 1
+    x86.mov rdx, r9
+    x86.add rdx, r10
+    x86.mov r9, rdx
     x86.jmp while.cond_1
   ^while.exit_1:
-    x86.mov rax, qword ptr [r8]
-    x86.mov r11, 1
-    x86.mov r10, rax
-    x86.add r10, r11
-    x86.mov qword ptr [r8], r10
+    x86.mov rdx, 1
+    x86.mov r10, r8
+    x86.add r10, rdx
+    x86.mov r8, r10
     x86.jmp while.cond
+}
+```
+
+<!-- test: mem2reg-loop-conditional-update -->
+Variable with conditional update inside a loop requires block arguments at the internal
+merge block (where then/else paths rejoin) in addition to the loop header.
+```maxon
+function main() returns int
+    var i = 0
+    var found = false
+    while i < 10 'search'
+        if i == 5 'check'
+            found = true
+        end 'check'
+        i = i + 1
+    end 'search'
+    if found 'result'
+        return 1
+    end 'result'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov r8, 0
+    x86.mov r9, 0
+    x86.jmp while.cond
+  ^while.cond(%18: i64, %20: i1):
+    x86.mov rdx, 10
+    x86.cmp r8, rdx
+    x86.setl rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit.args
+    while.exit.args:
+    x86.mov rdx, r9
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rax, 5
+    x86.cmp r8, rax
+    x86.sete rax
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp merge.args
+    merge.args:
+    x86.mov rax, r9
+    x86.jmp merge
+  ^while.exit(%21: i1):
+    x86.test rdx, rdx
+    x86.jne then_1
+    x86.jmp merge_1
+  ^then:
+    x86.mov rax, 1
+    x86.jmp merge
+  ^merge(%22: i1):
+    x86.mov rdx, 1
+    x86.mov rcx, r8
+    x86.add rcx, rdx
+    x86.mov r8, rcx
+    x86.mov r9, rax
+    x86.jmp while.cond
+  ^then_1:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  ^merge_1:
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
 }
 ```

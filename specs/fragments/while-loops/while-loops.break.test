@@ -14,37 +14,36 @@ ExitCode: 11
 ---
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.mov rax, 5
-    x86.lea rcx, qword ptr [rbp-40]
-    x86.mov qword ptr [rcx], rax
+    x86.prologue stack_size=32
+    x86.mov rcx, 5
     x86.jmp while.cond
-  ^while.cond:
+  ^while.cond(%11: i64):
     x86.mov rax, 1
     x86.test rax, rax
     x86.jne while.body
+    x86.jmp while.exit.args
+    while.exit.args:
+    x86.mov r8, rcx
     x86.jmp while.exit
   ^while.body:
-    x86.mov rax, qword ptr [rcx]
-    x86.mov rdx, 2
-    x86.mov r8, rax
-    x86.add r8, rdx
-    x86.mov qword ptr [rcx], r8
-    x86.mov r8, qword ptr [rcx]
+    x86.mov rax, 2
+    x86.mov r9, rcx
+    x86.add r9, rax
     x86.mov rdx, 11
-    x86.cmp r8, rdx
-    x86.sete r8
-    x86.test r8, r8
+    x86.cmp r9, rdx
+    x86.sete rdx
+    x86.test rdx, rdx
     x86.jne then
     x86.jmp merge
-  ^while.exit:
-    x86.mov r8, qword ptr [rcx]
+  ^while.exit(%12: i64):
     x86.mov rax, r8
     x86.epilogue
     x86.ret
   ^then:
+    x86.mov r8, r9
     x86.jmp while.exit
   ^merge:
+    x86.mov rcx, r9
     x86.jmp while.cond
 }
 ---

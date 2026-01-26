@@ -24,86 +24,84 @@ ExitCode: 12
 ---
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=48
+    x86.push rbx
+    x86.push r12
     x86.mov rax, 0
     x86.lea rcx, qword ptr [rbp-40]
     x86.mov qword ptr [rcx], rax
     x86.mov rax, 0
-    x86.lea r8, qword ptr [rbp-48]
-    x86.mov qword ptr [r8], rax
+    x86.mov r8, rax
     x86.jmp while.cond
-  ^while.cond:
-    x86.mov rdx, qword ptr [r8]
-    x86.mov rax, 2
-    x86.cmp rdx, rax
-    x86.setl rax
-    x86.test rax, rax
+  ^while.cond(%34: i64):
+    x86.mov rdx, 2
+    x86.cmp r8, rdx
+    x86.setl rdx
+    x86.test rdx, rdx
     x86.jne while.body
     x86.jmp while.exit
   ^while.body:
-    x86.mov rax, qword ptr [r8]
     x86.mov rdx, 1
-    x86.mov r9, rax
+    x86.mov r9, r8
     x86.add r9, rdx
-    x86.mov qword ptr [r8], r9
-    x86.mov r9, 0
-    x86.lea r10, qword ptr [rbp-56]
-    x86.mov qword ptr [r10], r9
+    x86.mov r10, 0
     x86.jmp while.cond_1
   ^while.exit:
     x86.mov rdx, qword ptr [rcx]
     x86.mov rax, rdx
+    x86.pop r12
+    x86.pop rbx
     x86.epilogue
     x86.ret
-  ^while.cond_1:
-    x86.mov rdx, qword ptr [r10]
-    x86.mov rax, 3
-    x86.cmp rdx, rax
+  ^while.cond_1(%36: i64):
+    x86.mov rdx, 3
+    x86.cmp r10, rdx
     x86.setl rdx
     x86.test rdx, rdx
     x86.jne while.body_1
     x86.jmp while.exit_1
   ^while.body_1:
-    x86.mov rdx, qword ptr [r10]
-    x86.mov rax, 1
-    x86.mov r9, rdx
-    x86.add r9, rax
-    x86.mov qword ptr [r10], r9
-    x86.mov r9, 0
-    x86.lea r11, qword ptr [rbp-64]
-    x86.mov qword ptr [r11], r9
+    x86.mov rdx, 1
+    x86.mov r11, r10
+    x86.add r11, rdx
+    x86.mov rax, 0
+    x86.lea rbx, qword ptr [rbp-48]
+    x86.mov qword ptr [rbx], rax
     x86.jmp while.cond_2
   ^while.exit_1:
+    x86.mov r8, r9
     x86.jmp while.cond
   ^while.cond_2:
-    x86.mov rax, qword ptr [r11]
+    x86.mov rax, qword ptr [rbx]
     x86.mov rdx, 4
     x86.cmp rax, rdx
-    x86.setl rax
-    x86.test rax, rax
+    x86.setl rdx
+    x86.test rdx, rdx
     x86.jne while.body_2
     x86.jmp while.exit_2
   ^while.body_2:
-    x86.mov rax, qword ptr [r11]
+    x86.mov rdx, qword ptr [rbx]
+    x86.mov rax, 1
+    x86.mov r12, rdx
+    x86.add r12, rax
+    x86.mov qword ptr [rbx], r12
+    x86.mov rax, qword ptr [rcx]
     x86.mov rdx, 1
-    x86.mov r9, rax
-    x86.add r9, rdx
-    x86.mov qword ptr [r11], r9
-    x86.mov r9, qword ptr [rcx]
-    x86.mov rdx, 1
-    x86.mov rax, r9
-    x86.add rax, rdx
-    x86.mov qword ptr [rcx], rax
-    x86.mov rax, qword ptr [r11]
-    x86.mov rdx, 2
-    x86.cmp rax, rdx
-    x86.sete rax
-    x86.test rax, rax
+    x86.mov r12, rax
+    x86.add r12, rdx
+    x86.mov qword ptr [rcx], r12
+    x86.mov rdx, qword ptr [rbx]
+    x86.mov rax, 2
+    x86.cmp rdx, rax
+    x86.sete rdx
+    x86.test rdx, rdx
     x86.jne then
     x86.jmp merge
   ^while.exit_2:
+    x86.mov r10, r11
     x86.jmp while.cond_1
   ^then:
+    x86.mov r10, r11
     x86.jmp while.cond_1
   ^merge:
     x86.jmp while.cond_2

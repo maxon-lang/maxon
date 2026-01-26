@@ -13,6 +13,7 @@ You *Are* Going To Read It
 - multiline string literals using multiple quotes
 
 ## TODO
+- advent of compiler optimization
 - register allocator
 - add FilePath to stdlib
 - iterators with index
