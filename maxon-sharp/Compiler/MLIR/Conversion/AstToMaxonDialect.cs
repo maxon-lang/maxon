@@ -13,12 +13,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private MlirBlock? _currentBlock;
 	private MlirFunction? _currentFunction;
 	private readonly Dictionary<string, MlirValue> _namedValues = [];
+	private readonly HashSet<string> _immutableVariables = [];
 	private readonly Dictionary<string, MlirType> _structTypes = [];
 	private readonly Dictionary<string, MlirType> _enumTypes = [];
 	private readonly Dictionary<string, MlirGlobal> _globals = [];
 	private readonly Dictionary<string, MlirType> _functionReturnTypes = [];
 	private readonly Dictionary<string, List<ParamDecl>> _functionParams = [];
-	private readonly Stack<(MlirBlock continueBlock, MlirBlock exitBlock)> _loopContextStack = new();
+	private readonly Stack<(MlirBlock continueBlock, MlirBlock exitBlock, string? label)> _loopContextStack = new();
+	private MlirValue? _structReturnPtr; // Hidden sret parameter for struct returns
 
 	/// <summary>
 	/// Gets the generated module.
@@ -162,13 +164,31 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 	private void LowerFunctionBody(string name, List<(string name, string type)> parameters, TypeRef? returnType, List<Stmt> body) {
 		var returnTypeStr = GetTypeString(returnType);
-		BeginFunction(name, parameters, returnTypeStr);
+
+		// Check if return type is a struct (needs sret parameter)
+		MlirType? returnMlirType = null;
+		if (returnType != null) {
+			try {
+				returnMlirType = ConvertTypeRef(returnType);
+			} catch {
+				// If conversion fails, treat as non-struct
+			}
+		}
+
+		// For struct returns, use sret calling convention (hidden pointer parameter)
+		if (returnMlirType is MaxonStructType structType) {
+			BeginFunction(name, parameters, "void", sretType: structType);
+		} else {
+			BeginFunction(name, parameters, returnTypeStr);
+		}
 
 		foreach (var stmt in body) {
 			LowerStatement(stmt);
 		}
 
-		if (_currentBlock is not null && !_currentBlock.IsTerminated && returnTypeStr == "void") {
+		// For void functions (or struct returns using sret), add implicit return if needed
+		bool isEffectivelyVoid = returnTypeStr == "void" || returnMlirType is MaxonStructType;
+		if (_currentBlock is not null && !_currentBlock.IsTerminated && isEffectivelyVoid) {
 			EmitReturn();
 		}
 
@@ -196,19 +216,51 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		switch (stmt) {
 			case ReturnStmt ret:
 				if (ret.Value is not null) {
-					var value = LowerExpression(ret.Value);
-					EmitReturn(value);
+					// For struct returns with sret, get the expected struct type
+					MlirType? expectedType;
+					if (_structReturnPtr != null && _structReturnPtr.Type is PtrType pt) {
+						expectedType = pt.ElementType;
+					} else {
+						expectedType = _currentFunction?.ResultTypes.FirstOrDefault();
+					}
+
+					// If sret return with struct literal, store fields directly to sret pointer
+					if (_structReturnPtr != null && ret.Value is StructInitExpr structInit) {
+						var structType = expectedType as MaxonStructType
+							?? throw new InvalidOperationException("Expected struct type for sret return");
+
+						// Store each field value directly to the sret pointer
+						foreach (var fieldInit in structInit.Fields) {
+							var fieldValue = LowerExpression(fieldInit.Value);
+							var fieldInfo = structType.GetField(fieldInit.Name)
+								?? throw new InvalidOperationException($"Field '{fieldInit.Name}' not found");
+
+							var fieldPtr = new FieldPtrOp(_structReturnPtr, fieldInit.Name, fieldInfo.Offset, fieldInfo.Type);
+							InsertOp(fieldPtr);
+							var storeOp = new StoreOp(fieldValue, fieldPtr.Result);
+							InsertOp(storeOp);
+						}
+						EmitReturn();
+					} else if (_structReturnPtr != null) {
+						// sret return with existing struct variable - copy it
+						var value = LowerExpression(ret.Value, expectedType);
+						EmitStructCopy(_structReturnPtr, value);
+						EmitReturn();
+					} else {
+						var value = LowerExpression(ret.Value, expectedType);
+						EmitReturn(value);
+					}
 				} else {
 					EmitReturn();
 				}
 				break;
 
 			case LetDeclStmt let:
-				LowerVariableDecl(let.Name, let.Value);
+				LowerVariableDecl(let.Name, let.Value, isImmutable: true);
 				break;
 
 			case VarDeclStmt varDecl:
-				LowerVariableDecl(varDecl.Name, varDecl.Value);
+				LowerVariableDecl(varDecl.Name, varDecl.Value, isImmutable: false);
 				break;
 
 			case AssignStmt assign:
@@ -232,20 +284,24 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				LowerForStatement(forStmt);
 				break;
 
-			case BreakStmt:
+			case BreakStmt breakStmt:
 				if (_loopContextStack.Count == 0) {
 					throw new InvalidOperationException("Break statement outside of loop");
 				}
-				var (_, breakExit) = _loopContextStack.Peek();
+				var breakExit = FindLoopContext(breakStmt.Label).exitBlock;
 				EmitBranch(breakExit);
 				break;
 
-			case ContinueStmt:
+			case ContinueStmt continueStmt:
 				if (_loopContextStack.Count == 0) {
 					throw new InvalidOperationException("Continue statement outside of loop");
 				}
-				var (continueTarget, _) = _loopContextStack.Peek();
+				var continueTarget = FindLoopContext(continueStmt.Label).continueBlock;
 				EmitBranch(continueTarget);
+				break;
+
+			case FieldAssignStmt fieldAssign:
+				LowerFieldAssign(fieldAssign);
 				break;
 
 			default:
@@ -253,10 +309,32 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 	}
 
-	private void LowerVariableDecl(string name, Expr value) {
+	private void LowerVariableDecl(string name, Expr value, bool isImmutable) {
 		var mlirValue = LowerExpression(value);
 		var slot = DeclareVariable(name, mlirValue.Type);
 		EmitStore(mlirValue, slot);
+		if (isImmutable) {
+			_immutableVariables.Add(name);
+		}
+	}
+
+	/// <summary>
+	/// Finds the loop context for the given label. If label is null, returns the innermost loop.
+	/// </summary>
+	private (MlirBlock continueBlock, MlirBlock exitBlock, string? label) FindLoopContext(string? targetLabel) {
+		if (targetLabel is null) {
+			// No label - use innermost loop
+			return _loopContextStack.Peek();
+		}
+
+		// Search for matching label
+		foreach (var ctx in _loopContextStack) {
+			if (ctx.label == targetLabel) {
+				return ctx;
+			}
+		}
+
+		throw new InvalidOperationException($"No loop found with label '{targetLabel}'");
 	}
 
 	private void LowerIfStatement(IfStmt ifStmt) {
@@ -303,9 +381,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		var condition = LowerExpression(whileStmt.Condition);
 		EmitCondBranch(condition, bodyBlock, exitBlock);
 
-		// Body block - push loop context for break/continue
+		// Body block - push loop context for break/continue (including label)
 		SetInsertionPoint(bodyBlock);
-		_loopContextStack.Push((condBlock, exitBlock));
+		_loopContextStack.Push((condBlock, exitBlock, whileStmt.Block.Identifier));
 
 		foreach (var stmt in whileStmt.Body) {
 			LowerStatement(stmt);
@@ -336,9 +414,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		SetInsertionPoint(condBlock);
 		EmitBranch(exitBlock);
 
-		// Body block with loop context
+		// Body block with loop context (including label)
 		SetInsertionPoint(bodyBlock);
-		_loopContextStack.Push((stepBlock, exitBlock));
+		_loopContextStack.Push((stepBlock, exitBlock, forStmt.Block.Identifier));
 
 		foreach (var stmt in forStmt.Body) {
 			LowerStatement(stmt);
@@ -358,7 +436,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		SetInsertionPoint(exitBlock);
 	}
 
-	private MlirValue LowerExpression(Expr expr) {
+	private MlirValue LowerExpression(Expr expr, MlirType? expectedType = null) {
 		return expr switch {
 			IntLiteralExpr intLit => EmitConstantInt(intLit.Value),
 			FloatLiteralExpr floatLit => EmitConstantFloat(floatLit.Value),
@@ -369,6 +447,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			LogicalExpr logical => LowerLogicalExpr(logical),
 			UnaryExpr unary => LowerUnaryExpr(unary),
 			CallExpr call => LowerCallExpr(call) ?? throw new InvalidOperationException("Call must return a value"),
+			StructInitExpr structInit => LowerStructInitExpr(structInit, expectedType),
+			FieldAccessExpr fieldAccess => LowerFieldAccessExpr(fieldAccess),
 			_ => throw new NotSupportedException($"Unsupported expression: {expr.GetType().Name}")
 		};
 	}
@@ -512,12 +592,26 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Resolve arguments: combine positional args with named args in the correct order
 		var resolvedArgs = ResolveCallArguments(call);
 
+		// Get parameter types for expected type inference
+		_functionParams.TryGetValue(call.FuncName, out List<ParamDecl>? paramDecls);
+
 		var args = new List<MlirValue>();
 		var ownership = new List<ArgumentOwnership>();
 
 		for (int i = 0; i < resolvedArgs.Count; i++) {
 			var arg = resolvedArgs[i];
-			args.Add(LowerExpression(arg));
+
+			// Get expected type from parameter declaration for anonymous struct inference
+			MlirType? expectedType = null;
+			if (paramDecls != null && i < paramDecls.Count) {
+				try {
+					expectedType = ConvertTypeRef(paramDecls[i].Type);
+				} catch {
+					// If type conversion fails, continue without expected type
+				}
+			}
+
+			args.Add(LowerExpression(arg, expectedType));
 
 			// Determine ownership based on mutation analysis
 			if (_mutationAnalyzer.IsMutated(call.FuncName, i)) {
@@ -648,6 +742,89 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		return op.Results[0];
 	}
 
+	private MlirValue LowerStructInitExpr(StructInitExpr structInit, MlirType? expectedType = null) {
+		MaxonStructType? structType;
+		if (structInit.TypeName != null) {
+			// Explicit type name provided
+			if (!_structTypes.TryGetValue(structInit.TypeName, out var mlirType) || mlirType is not MaxonStructType st) {
+				throw new CompileError(ErrorCode.MlirUndefinedType, $"Unknown struct type: {structInit.TypeName}",
+					structInit.Location?.Line, structInit.Location?.Column);
+			}
+			structType = st;
+		} else if (expectedType is MaxonStructType expected) {
+			// Anonymous struct literal - infer type from context
+			structType = expected;
+		} else {
+			throw new CompileError(ErrorCode.MlirUndefinedType,
+				"Struct initialization requires a type name or type context",
+				structInit.Location?.Line, structInit.Location?.Column);
+		}
+
+		// Lower each field initializer expression
+		var fieldValues = new Dictionary<string, MlirValue>();
+		foreach (var field in structInit.Fields) {
+			var value = LowerExpression(field.Value);
+			fieldValues[field.Name] = value;
+		}
+
+		return EmitStructInit(structType, fieldValues);
+	}
+
+	private MlirValue LowerFieldAccessExpr(FieldAccessExpr fieldAccess) {
+		// Lower the base expression to get the struct value
+		var baseValue = LowerExpression(fieldAccess.Base);
+
+		// Get the struct type from the base value
+		if (baseValue.Type is not MaxonStructType structType) {
+			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+				$"Cannot access field '{fieldAccess.FieldName}' on non-struct type: {baseValue.Type}",
+				fieldAccess.Location?.Line, fieldAccess.Location?.Column);
+		}
+
+		// Look up the field info to get the field type
+		var fieldInfo = structType.GetField(fieldAccess.FieldName) ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+				$"Struct '{structType.Name}' does not have a field '{fieldAccess.FieldName}'",
+				fieldAccess.Location?.Line, fieldAccess.Location?.Column);
+		return EmitGetField(baseValue, fieldAccess.FieldName, fieldInfo.Type);
+	}
+
+	private void LowerFieldAssign(FieldAssignStmt fieldAssign) {
+		// Check if the base is an immutable variable
+		if (fieldAssign.Base is IdentifierExpr idExpr && _immutableVariables.Contains(idExpr.Name)) {
+			throw new CompileError(ErrorCode.ImmutableVariable,
+				$"cannot assign to immutable variable: '{idExpr.Name}'",
+				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
+		}
+
+		// Lower the base expression to get the struct value
+		var baseValue = LowerExpression(fieldAssign.Base);
+
+		// Get the struct type from the base value
+		if (baseValue.Type is not MaxonStructType structType) {
+			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+				$"Cannot assign to field '{fieldAssign.FieldName}' on non-struct type: {baseValue.Type}",
+				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
+		}
+
+		// Look up the field info
+		var fieldInfo = structType.GetField(fieldAssign.FieldName) ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+				$"Struct '{structType.Name}' does not have a field '{fieldAssign.FieldName}'",
+				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
+
+		// Check if the field is immutable (declared with 'let')
+		if (!fieldInfo.IsMutable) {
+			throw new CompileError(ErrorCode.ImmutableVariable,
+				$"cannot assign to immutable field: '{fieldAssign.FieldName}'",
+				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
+		}
+
+		// Lower the value being assigned
+		var value = LowerExpression(fieldAssign.Value);
+
+		// Emit the field set operation
+		EmitSetField(baseValue, fieldAssign.FieldName, value);
+	}
+
 	// ========================================================================
 	// Type Conversion
 	// ========================================================================
@@ -682,8 +859,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// <summary>
 	/// Starts conversion of a function.
 	/// </summary>
-	public MlirFunction BeginFunction(string name, List<(string name, string type)> parameters, string returnType) {
+	public MlirFunction BeginFunction(string name, List<(string name, string type)> parameters, string returnType, MlirType? sretType = null) {
 		var func = new MlirFunction(name);
+
+		// If we have a struct return type, add hidden sret parameter first
+		if (sretType != null) {
+			var sretPtrType = new PtrType(sretType);
+			func.AddParam("__sret", sretPtrType);
+		}
 
 		foreach (var (pname, ptype) in parameters) {
 			func.AddParam(pname, ConvertType(ptype));
@@ -695,6 +878,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 		_currentFunction = func;
 		_namedValues.Clear();
+		_immutableVariables.Clear();
 
 		// Create entry block with parameters
 		var entry = func.CreateEntryBlock();
@@ -702,8 +886,18 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 		// Map parameter names to values
 		var paramValues = func.GetParamValues();
+		int paramIndex = 0;
+
+		// Handle sret parameter
+		if (sretType != null) {
+			_structReturnPtr = paramValues[paramIndex++];
+			// Don't add sret to named values - it's internal
+		} else {
+			_structReturnPtr = null;
+		}
+
 		for (int i = 0; i < parameters.Count; i++) {
-			_namedValues[parameters[i].name] = paramValues[i];
+			_namedValues[parameters[i].name] = paramValues[paramIndex++];
 		}
 
 		_module.Functions.Add(func);
@@ -1002,6 +1196,38 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	public void EmitReturn(params MlirValue[] values) {
 		var op = new ReturnOp([.. values]);
 		InsertOp(op);
+	}
+
+	/// <summary>
+	/// Copies a struct from source pointer to destination pointer.
+	/// </summary>
+	private void EmitStructCopy(MlirValue destPtr, MlirValue srcPtr) {
+		// Get the struct type to know the fields
+		MaxonStructType? structType = null;
+		if (destPtr.Type is PtrType pt && pt.ElementType is MaxonStructType st) {
+			structType = st;
+		} else if (srcPtr.Type is MemRefType mrt && mrt.ElementType is MaxonStructType st2) {
+			structType = st2;
+		}
+
+		if (structType == null) {
+			throw new InvalidOperationException("EmitStructCopy requires struct type pointers");
+		}
+
+		// Copy each field
+		foreach (var field in structType.Fields) {
+			// Load from source
+			var srcFieldPtr = new FieldPtrOp(srcPtr, field.Name, field.Offset, field.Type);
+			InsertOp(srcFieldPtr);
+			var loadOp = new LoadOp(srcFieldPtr.Result);
+			InsertOp(loadOp);
+
+			// Store to destination
+			var dstFieldPtr = new FieldPtrOp(destPtr, field.Name, field.Offset, field.Type);
+			InsertOp(dstFieldPtr);
+			var storeOp = new StoreOp(loadOp.Result, dstFieldPtr.Result);
+			InsertOp(storeOp);
+		}
 	}
 
 	// ========================================================================

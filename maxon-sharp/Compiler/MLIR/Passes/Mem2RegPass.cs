@@ -80,6 +80,14 @@ public sealed class Mem2RegPass : FunctionPass {
 			return false;
 		}
 
+		// Can't promote if the stored value is a pointer/memref type
+		// This prevents breaking struct allocations where a struct alloca is stored to a variable
+		foreach (var (store, _) in stores) {
+			if (store.Value.Type is MemRefType or PtrType) {
+				return false;
+			}
+		}
+
 		// For now, only promote if ALL uses are in the same block as the alloca
 		// Cross-block promotion requires phi insertion which is complex
 		bool allUsesInSameBlock = stores.All(s => s.block == allocaBlock)

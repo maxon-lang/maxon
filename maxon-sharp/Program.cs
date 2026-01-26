@@ -110,8 +110,11 @@ class Program {
 			mlirOutputPath = Path.ChangeExtension(sourceFile, ".mlir");
 		}
 
-		var success = Compiler.Compiler.Compile(sources, outputPath, mlirOutputPath);
-		return success ? 0 : 1;
+		var result = Compiler.Compiler.Compile(sources, outputPath, mlirOutputPath);
+		if (!result.Success && result.Error != null) {
+			Logger.Error(LogCategory.Compiler, result.Error);
+		}
+		return result.Success ? 0 : 1;
 	}
 
 	static int RunBuild(string[] args) {
@@ -148,8 +151,11 @@ class Program {
 			mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
 		}
 
-		var success = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath);
-		return success ? 0 : 1;
+		var result = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath);
+		if (!result.Success && result.Error != null) {
+			Logger.Error(LogCategory.Compiler, result.Error);
+		}
+		return result.Success ? 0 : 1;
 	}
 
 	static int RunRun(string[] args) {
@@ -197,8 +203,11 @@ class Program {
 			mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
 		}
 
-		var success = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath);
-		if (!success) {
+		var result = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath);
+		if (!result.Success) {
+			if (result.Error != null) {
+				Logger.Error(LogCategory.Compiler, result.Error);
+			}
 			return 1;
 		}
 
@@ -311,7 +320,10 @@ class Program {
 		var summary = runner.RunAllSpecTests();
 
 		Logger.Info(LogCategory.Testing, "");
-		if (summary.Failed == 0) {
+		if (summary.FragmentGenerationErrors > 0) {
+			Logger.Error(LogCategory.Testing, $"Fragment generation failed: {summary.FragmentGenerationErrors} error(s) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
+			return 1;
+		} else if (summary.Failed == 0) {
 			Logger.Info(LogCategory.Testing, $"Tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
 			return 0;
 		} else {

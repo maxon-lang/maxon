@@ -1,0 +1,46 @@
+// Test: var-field-assign
+type Config
+    export let version int
+    export var count int
+end 'Config'
+
+function main() returns int
+    var c = Config{version: 1, count: 0}
+    c.count = 5
+    return c.count
+end 'main'
+---
+ExitCode: 5
+---
+// Generated X86 IR:
+module {
+  // struct Config { version: i64, count: i64 }
+  
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=64
+      x86.mov rax, 1
+      x86.mov rcx, 0
+      x86.lea rdx, qword ptr [rbp-48]
+      x86.mov r8, 0
+      x86.lea r9, qword ptr [rdxr8]
+      x86.mov qword ptr [r9], rax
+      x86.mov r9, 8
+      x86.lea rax, qword ptr [rdxr9]
+      x86.mov qword ptr [rax], rcx
+      x86.lea rcx, qword ptr [rbp-64]
+      x86.mov qword ptr [rcx], rdx
+      x86.mov rdx, [rcx]
+      x86.mov rax, 5
+      x86.lea r9, qword ptr [rdx+8]
+      x86.mov qword ptr [r9], rax
+      x86.mov r9, [rcx]
+      x86.lea rcx, qword ptr [r9+8]
+      x86.mov r9, qword ptr [rcx]
+      x86.mov rax, r9
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

@@ -23,27 +23,15 @@ public sealed class FunctionFramePass : FunctionPass {
 			return false;
 		}
 
-		// Collect all allocas and calculate total stack size
-		var allocaInfos = CollectAllocas(func);
-		int localVarsSize = allocaInfos.Sum(a => WindowsX64Abi.AlignTo(a.Size, 8));
+		// Get pre-computed alloca info from FrameLayoutAnalysisPass
+		// This should have been computed before StandardToX86 lowering
+		var allocaInfos = func.GetMetadata<List<StackAllocaInfo>>("alloca_offsets");
+		int localVarsSize = allocaInfos?.Sum(a => WindowsX64Abi.AlignTo(a.Size, 8)) ?? 0;
 
 		// Windows x64 requires 32 bytes shadow space + locals, aligned to 16
 		int stackSize = WindowsX64Abi.AlignTo(
 			WindowsX64Abi.ShadowSpaceSize + localVarsSize,
 			WindowsX64Abi.StackAlignment);
-
-		// Assign frame offsets to allocas (negative from RBP)
-		// Start after shadow space
-		int currentOffset = -WindowsX64Abi.ShadowSpaceSize;
-		foreach (var info in allocaInfos) {
-			int alignedSize = WindowsX64Abi.AlignTo(info.Size, 8);
-			currentOffset -= alignedSize;
-			info.FrameOffset = currentOffset;
-			Logger.Trace(LogCategory.Codegen, $"function-frame: alloca v{info.ResultId} size={info.Size} -> [rbp{info.FrameOffset}]");
-		}
-
-		// Store alloca info on the function for later use by LowerAllocaOp
-		func.SetMetadata("alloca_offsets", allocaInfos);
 
 		// Build list of ops to insert: prologue first, then parameter copies
 		var insertOps = new List<MlirOperation> {

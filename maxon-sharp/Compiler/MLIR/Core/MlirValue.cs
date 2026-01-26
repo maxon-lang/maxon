@@ -5,6 +5,7 @@ namespace MaxonSharp.Compiler.Mlir.Core;
 /// Values are produced by operations or block arguments.
 /// </summary>
 public sealed class MlirValue {
+	[ThreadStatic]
 	private static int _nextId;
 
 	/// <summary>

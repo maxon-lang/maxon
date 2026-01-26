@@ -5,6 +5,7 @@ namespace MaxonSharp.Compiler.Mlir.Core;
 /// Blocks can have arguments (replacing PHI nodes from traditional SSA).
 /// </summary>
 public sealed class MlirBlock(string? name = null) {
+	[ThreadStatic]
 	private static int _nextId;
 
 	/// <summary>

@@ -676,19 +676,30 @@ public class Parser(List<Token> tokens) {
 
 		if (Check(TokenType.Else)) {
 			var elseStartToken = Advance();
-			var elseLabel = ExpectBlockLabel();
-			SkipNewlines();
 
-			elseBody = [];
-			while (!Check(TokenType.End) && !IsAtEnd()) {
+			// Check for else-if chain: "else if <condition> 'label'"
+			if (Check(TokenType.If)) {
+				// Parse the nested if as the single statement in the else body
+				var nestedIf = ParseIfStatement();
+				elseBody = [nestedIf];
+				// Use the nested if's end line for the else block info
+				var endLine = nestedIf.ElseBlock?.EndLine ?? nestedIf.ThenBlock.EndLine;
+				elseBlock = new BlockInfo(elseStartToken.Line, elseStartToken.Column, endLine, null);
+			} else {
+				var elseLabel = ExpectBlockLabel();
 				SkipNewlines();
-				if (Check(TokenType.End)) break;
-				elseBody.Add(ParseStatement());
-				SkipNewlines();
+
+				elseBody = [];
+				while (!Check(TokenType.End) && !IsAtEnd()) {
+					SkipNewlines();
+					if (Check(TokenType.End)) break;
+					elseBody.Add(ParseStatement());
+					SkipNewlines();
+				}
+
+				var elseEndLine = ExpectEndLabel(elseLabel);
+				elseBlock = new BlockInfo(elseStartToken.Line, elseStartToken.Column, elseEndLine, elseLabel);
 			}
-
-			var elseEndLine = ExpectEndLabel(elseLabel);
-			elseBlock = new BlockInfo(elseStartToken.Line, elseStartToken.Column, elseEndLine, elseLabel);
 		}
 
 		return new IfStmt(condition, thenBody, thenBlock, elseBody, elseBlock) {

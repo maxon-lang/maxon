@@ -355,6 +355,14 @@ public sealed class X86CodeEmitter {
 		EmitByte(rex);
 	}
 
+	private void EmitRexW(X86Register r, X86Register baseReg, X86Register indexReg) {
+		byte rex = 0x48; // REX.W
+		if (NeedsRex(r)) rex |= 0x04; // REX.R
+		if (NeedsRex(indexReg)) rex |= 0x02; // REX.X (for SIB index)
+		if (NeedsRex(baseReg)) rex |= 0x01; // REX.B (for SIB base)
+		EmitByte(rex);
+	}
+
 	private static byte ModRM(byte mod, byte reg, byte rm) =>
 		(byte)((mod << 6) | (reg << 3) | rm);
 
@@ -422,25 +430,50 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitMovRegMem(X86Register dst, MemOperand src) {
-		// Simplified: assume [base + disp32]
-		if (src.Base is RegOperand baseReg) {
-			EmitRexW(dst, baseReg.Register);
+		if (src.Base is RegOperand baseReg && src.Index is RegOperand indexReg) {
+			// [base + index*scale + disp] - requires SIB byte
+			EmitRexW(dst, baseReg.Register, indexReg.Register);
 			EmitByte(0x8B);
-			EmitByte(ModRM(0b10, GetRegCode(dst), GetRegCode(baseReg.Register)));
-			if (GetRegCode(baseReg.Register) == 4) EmitByte(0x24); // SIB for RSP
+			EmitByte(ModRM(0b10, GetRegCode(dst), 0b100)); // rm=4 means SIB follows
+			EmitByte(SIB(src.Scale, GetRegCode(indexReg.Register), GetRegCode(baseReg.Register)));
+			EmitImm32(src.Displacement);
+		} else if (src.Base is RegOperand baseOnly) {
+			// [base + disp32]
+			EmitRexW(dst, baseOnly.Register);
+			EmitByte(0x8B);
+			EmitByte(ModRM(0b10, GetRegCode(dst), GetRegCode(baseOnly.Register)));
+			if (GetRegCode(baseOnly.Register) == 4) EmitByte(0x24); // SIB for RSP
 			EmitImm32(src.Displacement);
 		}
 	}
 
 	private void EmitMovMemReg(MemOperand dst, X86Register src) {
-		// Simplified: assume [base + disp32]
-		if (dst.Base is RegOperand baseReg) {
-			EmitRexW(src, baseReg.Register);
+		if (dst.Base is RegOperand baseReg && dst.Index is RegOperand indexReg) {
+			// [base + index*scale + disp] - requires SIB byte
+			EmitRexW(src, baseReg.Register, indexReg.Register);
 			EmitByte(0x89);
-			EmitByte(ModRM(0b10, GetRegCode(src), GetRegCode(baseReg.Register)));
-			if (GetRegCode(baseReg.Register) == 4) EmitByte(0x24);
+			EmitByte(ModRM(0b10, GetRegCode(src), 0b100)); // rm=4 means SIB follows
+			EmitByte(SIB(dst.Scale, GetRegCode(indexReg.Register), GetRegCode(baseReg.Register)));
+			EmitImm32(dst.Displacement);
+		} else if (dst.Base is RegOperand baseOnly) {
+			// [base + disp32]
+			EmitRexW(src, baseOnly.Register);
+			EmitByte(0x89);
+			EmitByte(ModRM(0b10, GetRegCode(src), GetRegCode(baseOnly.Register)));
+			if (GetRegCode(baseOnly.Register) == 4) EmitByte(0x24);
 			EmitImm32(dst.Displacement);
 		}
+	}
+
+	private static byte SIB(int scale, byte index, byte baseReg) {
+		byte scaleBits = scale switch {
+			1 => 0b00,
+			2 => 0b01,
+			4 => 0b10,
+			8 => 0b11,
+			_ => 0b00
+		};
+		return (byte)((scaleBits << 6) | (index << 3) | baseReg);
 	}
 
 	private void EmitAdd(AddOp op) => EmitAluOp(op.Dst, op.Src, regOpcode: 0x01, immModRmReg: 0);
@@ -514,8 +547,14 @@ public sealed class X86CodeEmitter {
 
 	private void EmitSetcc(SetccOp op) {
 		if (op.Dst is not RegOperand dst) return;
+		// Set the low byte based on condition
+		if (NeedsRex(dst.Register)) EmitByte(0x41); // REX.B for r8-r15
 		EmitBytes(0x0F, GetSetccOpcode(op.Condition));
 		EmitByte(ModRM(0b11, 0, GetRegCode(dst.Register)));
+		// Zero-extend byte to 64-bit with MOVZX r64, r8
+		EmitRexW(dst.Register, dst.Register);
+		EmitBytes(0x0F, 0xB6); // MOVZX r64, r/m8
+		EmitByte(ModRM(0b11, GetRegCode(dst.Register), GetRegCode(dst.Register)));
 	}
 
 	private void EmitJmp(JmpOp op) {
@@ -565,11 +604,21 @@ public sealed class X86CodeEmitter {
 
 	private void EmitLea(LeaOp op) {
 		if (op.Dst is RegOperand dst && op.Src is MemOperand src && src.Base is RegOperand baseReg) {
-			EmitRexW(dst.Register, baseReg.Register);
-			EmitByte(0x8D);
-			EmitByte(ModRM(0b10, GetRegCode(dst.Register), GetRegCode(baseReg.Register)));
-			if (GetRegCode(baseReg.Register) == 4) EmitByte(0x24);
-			EmitImm32(src.Displacement);
+			if (src.Index is RegOperand indexReg) {
+				// LEA with SIB: [base + index*scale + disp]
+				EmitRexW(dst.Register, baseReg.Register, indexReg.Register);
+				EmitByte(0x8D);
+				EmitByte(ModRM(0b10, GetRegCode(dst.Register), 0b100)); // rm=4 means SIB follows
+				EmitByte(SIB(src.Scale, GetRegCode(indexReg.Register), GetRegCode(baseReg.Register)));
+				EmitImm32(src.Displacement);
+			} else {
+				// LEA without index: [base + disp]
+				EmitRexW(dst.Register, baseReg.Register);
+				EmitByte(0x8D);
+				EmitByte(ModRM(0b10, GetRegCode(dst.Register), GetRegCode(baseReg.Register)));
+				if (GetRegCode(baseReg.Register) == 4) EmitByte(0x24); // SIB for RSP
+				EmitImm32(src.Displacement);
+			}
 		}
 	}
 

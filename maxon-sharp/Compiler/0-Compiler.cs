@@ -1,3 +1,5 @@
+using MaxonSharp.Compiler.Mlir.Core;
+
 namespace MaxonSharp.Compiler;
 
 /// <summary>
@@ -11,14 +13,18 @@ public record CompileResult(
 
 public class Compiler {
 	/// <summary>
-	/// Compile using the MLIR-based pipeline.
+	/// Compile source files using the MLIR-based pipeline.
 	/// </summary>
 	/// <param name="sources">Source files to compile</param>
 	/// <param name="outputPath">Path for the output executable</param>
 	/// <param name="mlirOutputPath">Optional path to write MLIR output</param>
 	/// <param name="returnIr">If true, include X86 IR in the result</param>
-	public static CompileResult CompileWithMlir(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false) {
+	public static CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false) {
 		try {
+			// Reset global ID counters for each compilation (important for parallel test runs)
+			MlirValue.ResetIdCounter();
+			MlirBlock.ResetIdCounter();
+
 			Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
 
 			// Stage 1: Parse all source files
@@ -70,19 +76,9 @@ public class Compiler {
 
 			return new CompileResult(true, null, mlirResult.X86Ir);
 		} catch (CompileError ex) {
-			Logger.Error(LogCategory.Compiler, ex.Format());
 			return new CompileResult(false, ex.Format());
 		} catch (Exception ex) {
-			Logger.Error(LogCategory.Compiler, $"Compilation error: {ex.Message}");
 			return new CompileResult(false, ex.Message);
 		}
-	}
-
-	/// <summary>
-	/// Compile multiple source files into a single executable.
-	/// Uses the MLIR-based compilation pipeline.
-	/// </summary>
-	public static bool Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null) {
-		return CompileWithMlir(sources, outputPath, mlirOutputPath).Success;
 	}
 }

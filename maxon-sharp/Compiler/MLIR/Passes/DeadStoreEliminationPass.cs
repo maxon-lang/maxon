@@ -39,16 +39,47 @@ public sealed class DeadStoreEliminationPass : AbstractPassBase {
 			}
 		}
 
+		// Track allocas whose addresses are used as values (address escapes)
+		var escapedAllocas = new HashSet<MlirValue>();
+		foreach (var (_, store, _, _) in allStores) {
+			// If an alloca's result is stored somewhere, its address escapes
+			if (store.Value.Type is MemRefType or PtrType) {
+				escapedAllocas.Add(store.Value);
+			}
+		}
+
+		// Also track allocas passed to function calls (address escapes to callee)
+		foreach (var func in module.Functions) {
+			foreach (var block in func.Body.Blocks) {
+				foreach (var op in block.Operations) {
+					if (op is FuncCallOp call) {
+						foreach (var arg in call.Operands) {
+							if (arg.Type is MemRefType or PtrType) {
+								escapedAllocas.Add(arg);
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// Remove stores to memory that is never loaded
 		foreach (var (block, store, memref, globalName) in allStores) {
 			bool isDead = false;
+
+			// Don't eliminate stores to derived pointers (e.g., field_ptr results)
+			// because we can't track aliasing through pointer arithmetic
+			if (memref.Type is PtrType) {
+				continue;
+			}
 
 			if (globalName != null) {
 				// Store to global - dead if global is never loaded
 				isDead = !loadedGlobals.Contains(globalName);
 			} else {
 				// Store to local - dead if memref is never loaded
-				isDead = !loadedMemRefs.Contains(memref);
+				// BUT don't remove stores to allocas whose addresses escape
+				isDead = !loadedMemRefs.Contains(memref) && !escapedAllocas.Contains(memref);
 			}
 
 			if (isDead) {
@@ -60,11 +91,14 @@ public sealed class DeadStoreEliminationPass : AbstractPassBase {
 		}
 
 		// Remove allocas that are never loaded (and now have no stores)
+		// Also check that the alloca result is not used as a value elsewhere
 		foreach (var (block, alloca) in allAllocas) {
 			if (!loadedMemRefs.Contains(alloca.Result)) {
 				// Check if there are any remaining stores to this alloca
 				bool hasStores = block.Operations.OfType<StoreOp>().Any(s => s.MemRef == alloca.Result);
-				if (!hasStores) {
+				// Check if the alloca result is used as a value (e.g., stored to another location)
+				bool isUsedAsValue = block.Operations.OfType<StoreOp>().Any(s => s.Value == alloca.Result);
+				if (!hasStores && !isUsedAsValue) {
 					Logger.Trace(LogCategory.Optimizer, $"  removing dead alloca {alloca.Result}");
 					block.Operations.Remove(alloca);
 					removedAllocas++;

@@ -29,12 +29,30 @@ public sealed class MlirRegion {
 	}
 
 	/// <summary>
-	/// Creates and adds a new block with the given name.
+	/// Creates and adds a new block with a unique name based on the given base name.
 	/// </summary>
-	public MlirBlock CreateBlock(string? name = null) {
-		var block = new MlirBlock(name);
+	public MlirBlock CreateBlock(string? baseName = null) {
+		var uniqueName = GetUniqueName(baseName);
+		var block = new MlirBlock(uniqueName);
 		AddBlock(block);
 		return block;
+	}
+
+	/// <summary>
+	/// Generates a unique name by appending a suffix if needed.
+	/// </summary>
+	private string GetUniqueName(string? baseName) {
+		if (baseName is null) return $"bb{Blocks.Count}";
+
+		// Check if name already exists
+		var existingNames = new HashSet<string>(Blocks.Select(b => b.Name));
+		if (!existingNames.Contains(baseName)) return baseName;
+
+		// Find unique suffix
+		for (int i = 1; ; i++) {
+			var candidate = $"{baseName}_{i}";
+			if (!existingNames.Contains(candidate)) return candidate;
+		}
 	}
 
 	/// <summary>

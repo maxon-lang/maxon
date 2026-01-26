@@ -1,0 +1,81 @@
+// Test: break.labeled-break-inner
+function main() returns int
+    var x = 0
+    var y = 0
+    while x < 5 'outer'
+        x = x + 1
+        while y < 10 'inner'
+            y = y + 1
+            if y == 3 'check'
+                break 'inner'
+            end 'check'
+        end 'inner'
+    end 'outer'
+    return x
+end 'main'
+---
+ExitCode: 5
+---
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=48
+      x86.mov rax, 0
+      x86.lea rcx, qword ptr [rbp-40]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rax, 0
+      x86.lea r8, qword ptr [rbp-48]
+      x86.mov qword ptr [r8], rax
+      x86.jmp while.cond
+    ^while.cond:
+      x86.mov rdx, qword ptr [rcx]
+      x86.mov rax, 5
+      x86.cmp rdx, rax
+      x86.setl rax
+      x86.test rax, rax
+      x86.jne while.body
+      x86.jmp while.exit
+    ^while.body:
+      x86.mov rax, qword ptr [rcx]
+      x86.mov rdx, 1
+      x86.mov r9, rax
+      x86.add r9, rdx
+      x86.mov qword ptr [rcx], r9
+      x86.jmp while.cond_1
+    ^while.exit:
+      x86.mov r9, qword ptr [rcx]
+      x86.mov rax, r9
+      x86.epilogue
+      x86.ret
+    ^while.cond_1:
+      x86.mov r9, qword ptr [r8]
+      x86.mov rdx, 10
+      x86.cmp r9, rdx
+      x86.setl r9
+      x86.test r9, r9
+      x86.jne while.body_1
+      x86.jmp while.exit_1
+    ^while.body_1:
+      x86.mov r9, qword ptr [r8]
+      x86.mov rdx, 1
+      x86.mov rax, r9
+      x86.add rax, rdx
+      x86.mov qword ptr [r8], rax
+      x86.mov rax, qword ptr [r8]
+      x86.mov rdx, 3
+      x86.cmp rax, rdx
+      x86.sete rax
+      x86.test rax, rax
+      x86.jne then
+      x86.jmp merge
+    ^while.exit_1:
+      x86.jmp while.cond
+    ^then:
+      x86.jmp while.exit_1
+    ^merge:
+      x86.jmp while.cond_1
+  }
+}
+
+---

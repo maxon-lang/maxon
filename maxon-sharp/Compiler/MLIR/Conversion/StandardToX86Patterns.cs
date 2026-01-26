@@ -103,18 +103,23 @@ public abstract class FloatBinaryPattern<TArith, TX86> : ConversionPattern<TArit
 
 /// <summary>
 /// Base pattern for idiv-based operations (division and remainder).
+/// Uses R11 as a scratch register for the divisor to avoid RAX/RDX conflicts.
 /// </summary>
 public abstract class DivisionPattern<T>(X86Register resultReg) : ConversionPattern<T>
 	where T : MlirOperation {
 	protected override bool MatchAndRewrite(T op, ConversionPatternRewriter rewriter) {
 		var rax = new RegOperand(X86Register.RAX);
+		var r11 = new RegOperand(X86Register.R11);
 		var lhs = new VRegOperand(op.Operands[0].Id);
 		var rhs = new VRegOperand(op.Operands[1].Id);
 		var dst = new VRegOperand(op.Results[0].Id);
 
+		// Copy divisor to R11 first (safe scratch register, not RAX/RDX)
+		// Then load dividend into RAX, sign-extend to RDX:RAX, and divide
+		rewriter.Insert(new MovOp(r11, rhs));
 		rewriter.Insert(new MovOp(rax, lhs));
 		rewriter.Insert(new CdqOp());
-		rewriter.Insert(new IdivOp(rhs));
+		rewriter.Insert(new IdivOp(r11));
 		rewriter.Insert(new MovOp(dst, new RegOperand(resultReg)));
 		return true;
 	}
@@ -324,26 +329,77 @@ public sealed class LowerSIToFPOp : ConversionPattern<SIToFPOp> {
 
 /// <summary>
 /// Lowers func.call to x86.call with ABI handling.
+/// Uses scratch registers (R10, R11) as intermediate storage to avoid clobbering
+/// source vregs that might be in argument registers.
 /// </summary>
 public sealed class LowerFuncCallOp : ConversionPattern<FuncCallOp> {
+	// Scratch registers for argument setup (not used for passing args)
+	private static readonly X86Register[] ScratchRegs = [X86Register.R10, X86Register.R11];
+
 	protected override bool MatchAndRewrite(FuncCallOp op, ConversionPatternRewriter rewriter) {
-		for (int i = 0; i < op.Operands.Count; i++) {
+		var intArgs = new List<(int index, VRegOperand arg)>();
+		var floatArgs = new List<(int index, VRegOperand arg)>();
+
+		// Categorize arguments
+		for (int i = 0; i < op.Operands.Count && i < WindowsX64Abi.IntArgRegs.Length; i++) {
 			var operand = op.Operands[i];
 			bool isFloat = operand.Type is FloatType;
 			var arg = new VRegOperand(operand.Id, IsFloat: isFloat);
 
-			if (i < WindowsX64Abi.IntArgRegs.Length) {
-				if (isFloat) {
-					// Float arg goes in XMM register
-					rewriter.Insert(new MovsdOp(new RegOperand(WindowsX64Abi.FloatArgRegs[i]), arg));
-				} else {
-					// Integer arg goes in GPR
-					rewriter.Insert(new MovOp(new RegOperand(WindowsX64Abi.IntArgRegs[i]), arg));
-				}
+			if (isFloat) {
+				floatArgs.Add((i, arg));
 			} else {
-				// Push remaining args on stack (right to left)
-				rewriter.Insert(new PushOp(arg));
+				intArgs.Add((i, arg));
 			}
+		}
+
+		// For multiple int arguments, copy to scratch registers first to avoid clobbering
+		// This handles the case where arg vregs are allocated to argument registers
+		if (intArgs.Count >= 2) {
+			// Copy all args to scratch/temp first
+			var temps = new List<(int index, X86Operand temp)>();
+			for (int j = 0; j < intArgs.Count; j++) {
+				var (i, arg) = intArgs[j];
+				if (j < ScratchRegs.Length) {
+					// Use scratch register
+					var scratch = new RegOperand(ScratchRegs[j]);
+					rewriter.Insert(new MovOp(scratch, arg));
+					temps.Add((i, scratch));
+				} else {
+					// For more than 2 args, use stack
+					rewriter.Insert(new PushOp(arg));
+					temps.Add((i, null!)); // Will pop later
+				}
+			}
+
+			// Now move from temps to actual argument registers
+			for (int j = temps.Count - 1; j >= 0; j--) {
+				var (i, temp) = temps[j];
+				var argReg = new RegOperand(WindowsX64Abi.IntArgRegs[i]);
+				if (temp is null) {
+					rewriter.Insert(new PopOp(argReg));
+				} else {
+					rewriter.Insert(new MovOp(argReg, temp));
+				}
+			}
+		} else {
+			// Single arg or no args - direct move is safe
+			foreach (var (i, arg) in intArgs) {
+				rewriter.Insert(new MovOp(new RegOperand(WindowsX64Abi.IntArgRegs[i]), arg));
+			}
+		}
+
+		// Float args (XMM registers don't overlap with GPR args)
+		foreach (var (i, arg) in floatArgs) {
+			rewriter.Insert(new MovsdOp(new RegOperand(WindowsX64Abi.FloatArgRegs[i]), arg));
+		}
+
+		// Handle remaining args that go on stack (if any)
+		for (int i = WindowsX64Abi.IntArgRegs.Length; i < op.Operands.Count; i++) {
+			var operand = op.Operands[i];
+			bool isFloat = operand.Type is FloatType;
+			var arg = new VRegOperand(operand.Id, IsFloat: isFloat);
+			rewriter.Insert(new PushOp(arg));
 		}
 
 		rewriter.Insert(new X86CallOp(op.Callee));
@@ -427,7 +483,23 @@ public sealed class LowerLoadOp : ConversionPattern<LoadOp> {
 	protected override bool MatchAndRewrite(LoadOp op, ConversionPatternRewriter rewriter) {
 		var dst = new VRegOperand(op.Result.Id);
 		var ptr = new VRegOperand(op.MemRef.Id);
-		var mem = new MemOperand(Base: ptr, Size: op.Result.Type.SizeInBytes);
+
+		MemOperand mem;
+		if (op.Indices.Count == 1) {
+			// Single index - compute effective address with LEA, then load
+			// LEA tmp, [ptr + index]; MOV dst, [tmp]
+			var idx = new VRegOperand(op.Indices[0].Id);
+			var tmpValue = new MlirValue(IntegerType.I64);
+			var tmp = new VRegOperand(tmpValue.Id);
+			var sibMem = new MemOperand(Base: ptr, Index: idx, Size: 8);
+			rewriter.Insert(new LeaOp(tmp, sibMem));
+			mem = new MemOperand(Base: tmp, Size: op.Result.Type.SizeInBytes);
+		} else if (op.Indices.Count == 0) {
+			// No indices - just base pointer
+			mem = new MemOperand(Base: ptr, Size: op.Result.Type.SizeInBytes);
+		} else {
+			throw new NotSupportedException($"LoadOp with {op.Indices.Count} indices not supported");
+		}
 
 		rewriter.Insert(new MovOp(dst, mem));
 		return true;
@@ -441,7 +513,23 @@ public sealed class LowerStoreOp : ConversionPattern<StoreOp> {
 	protected override bool MatchAndRewrite(StoreOp op, ConversionPatternRewriter rewriter) {
 		var val = new VRegOperand(op.Value.Id);
 		var ptr = new VRegOperand(op.MemRef.Id);
-		var mem = new MemOperand(Base: ptr, Size: op.Value.Type.SizeInBytes);
+
+		MemOperand mem;
+		if (op.Indices.Count == 1) {
+			// Single index - compute effective address with LEA, then store
+			// LEA tmp, [ptr + index]; MOV [tmp], val
+			var idx = new VRegOperand(op.Indices[0].Id);
+			var tmpValue = new MlirValue(IntegerType.I64);
+			var tmp = new VRegOperand(tmpValue.Id);
+			var sibMem = new MemOperand(Base: ptr, Index: idx, Size: 8);
+			rewriter.Insert(new LeaOp(tmp, sibMem));
+			mem = new MemOperand(Base: tmp, Size: op.Value.Type.SizeInBytes);
+		} else if (op.Indices.Count == 0) {
+			// No indices - just base pointer
+			mem = new MemOperand(Base: ptr, Size: op.Value.Type.SizeInBytes);
+		} else {
+			throw new NotSupportedException($"StoreOp with {op.Indices.Count} indices not supported");
+		}
 
 		rewriter.Insert(new MovOp(mem, val));
 		return true;

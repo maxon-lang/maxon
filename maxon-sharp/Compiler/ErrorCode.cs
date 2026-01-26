@@ -50,6 +50,7 @@ public enum ErrorCode {
 	MlirInvalidFieldAccess = 4006,
 	MlirInvalidMethodCall = 4007,
 	MlirUnsupportedInstruction = 4008,
+	ImmutableVariable = 4009,
 	// Ownership errors (checked in MLIR borrow checker pass)
 	OwnershipUseAfterMove = 4010,
 	OwnershipMoveFromImmutable = 4011,

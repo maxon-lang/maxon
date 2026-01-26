@@ -1,0 +1,91 @@
+// Test: break.labeled-continue-outer
+function main() returns int
+    var x = 0
+    var count = 0
+    while x < 3 'outer'
+        x = x + 1
+        var y = 0
+        while y < 5 'inner'
+            y = y + 1
+            count = count + 1
+            if y == 2 'check'
+                continue 'outer'
+            end 'check'
+        end 'inner'
+    end 'outer'
+    return count
+end 'main'
+---
+ExitCode: 6
+---
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=64
+      x86.mov rax, 0
+      x86.lea rcx, qword ptr [rbp-40]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rax, 0
+      x86.lea r8, qword ptr [rbp-48]
+      x86.mov qword ptr [r8], rax
+      x86.jmp while.cond
+    ^while.cond:
+      x86.mov rdx, qword ptr [rcx]
+      x86.mov rax, 3
+      x86.cmp rdx, rax
+      x86.setl rax
+      x86.test rax, rax
+      x86.jne while.body
+      x86.jmp while.exit
+    ^while.body:
+      x86.mov rax, qword ptr [rcx]
+      x86.mov rdx, 1
+      x86.mov r9, rax
+      x86.add r9, rdx
+      x86.mov qword ptr [rcx], r9
+      x86.mov r9, 0
+      x86.lea r10, qword ptr [rbp-56]
+      x86.mov qword ptr [r10], r9
+      x86.jmp while.cond_1
+    ^while.exit:
+      x86.mov rdx, qword ptr [r8]
+      x86.mov rax, rdx
+      x86.epilogue
+      x86.ret
+    ^while.cond_1:
+      x86.mov rdx, qword ptr [r10]
+      x86.mov rax, 5
+      x86.cmp rdx, rax
+      x86.setl rdx
+      x86.test rdx, rdx
+      x86.jne while.body_1
+      x86.jmp while.exit_1
+    ^while.body_1:
+      x86.mov rdx, qword ptr [r10]
+      x86.mov rax, 1
+      x86.mov r9, rdx
+      x86.add r9, rax
+      x86.mov qword ptr [r10], r9
+      x86.mov r9, qword ptr [r8]
+      x86.mov rax, 1
+      x86.mov rdx, r9
+      x86.add rdx, rax
+      x86.mov qword ptr [r8], rdx
+      x86.mov rdx, qword ptr [r10]
+      x86.mov rax, 2
+      x86.cmp rdx, rax
+      x86.sete rdx
+      x86.test rdx, rdx
+      x86.jne then
+      x86.jmp merge
+    ^while.exit_1:
+      x86.jmp while.cond
+    ^then:
+      x86.jmp while.cond
+    ^merge:
+      x86.jmp while.cond_1
+  }
+}
+
+---

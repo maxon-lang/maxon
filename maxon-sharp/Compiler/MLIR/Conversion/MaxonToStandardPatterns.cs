@@ -205,11 +205,31 @@ public sealed class LowerArrayLenOp : ConversionPattern<ArrayLenOp> {
 /// </summary>
 public sealed class LowerMaxonCallOp : ConversionPattern<MaxonCallOp> {
 	protected override bool MatchAndRewrite(MaxonCallOp op, ConversionPatternRewriter rewriter) {
-		// Convert to standard func.call
-		var call = new FuncCallOp(op.Callee, op.Operands, op.Result?.Type);
-		rewriter.Insert(call);
-		if (op.Result is not null && call.Result is not null) {
-			rewriter.ReplaceOpWithValue(op, call.Result);
+		// Check if return type is a struct (needs caller-allocated return space)
+		if (op.Result?.Type is MaxonStructType structType) {
+			// Allocate space for the return struct on caller's stack
+			var memRefType = new MemRefType(IntegerType.I8, [structType.SizeInBytes]);
+			var alloca = new AllocaOp(memRefType);
+			rewriter.Insert(alloca);
+
+			// Pass the return pointer as a hidden first argument
+			var args = new List<MlirValue> { alloca.Result };
+			args.AddRange(op.Operands);
+
+			// Call with void return (struct is written to the pointer)
+			var call = new FuncCallOp(op.Callee, args, null);
+			rewriter.Insert(call);
+
+			// Result is the alloca pointer (now points to the filled struct)
+			rewriter.ReplaceOpWithValue(op, alloca.Result);
+			return true;
+		}
+
+		// Non-struct return: standard call
+		var standardCall = new FuncCallOp(op.Callee, op.Operands, op.Result?.Type);
+		rewriter.Insert(standardCall);
+		if (op.Result is not null && standardCall.Result is not null) {
+			rewriter.ReplaceOpWithValue(op, standardCall.Result);
 		}
 		return true;
 	}

@@ -1,0 +1,57 @@
+// Test: struct-literal-as-arg
+type Point
+    export var x int
+    export var y int
+end 'Point'
+
+function acceptPoint(p Point) returns int
+    return p.x + p.y
+end 'acceptPoint'
+
+function main() returns int
+    return acceptPoint({x: 3, y: 4})
+end 'main'
+---
+ExitCode: 7
+---
+// Generated X86 IR:
+module {
+  // struct Point { x: i64, y: i64 }
+  
+  func.func @acceptPoint(%p: !maxon.struct<Point>) -> i64 {
+    ^entry(%p: !maxon.struct<Point>):
+      x86.prologue stack_size=32
+      x86.mov rax, rcx
+      x86.lea rcx, qword ptr [rax]
+      x86.mov rdx, qword ptr [rcx]
+      x86.lea rcx, qword ptr [rax+8]
+      x86.mov rax, qword ptr [rcx]
+      x86.mov rcx, rdx
+      x86.add rcx, rax
+      x86.mov rax, rcx
+      x86.epilogue
+      x86.ret
+  }
+  
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=48
+      x86.mov rax, 3
+      x86.mov rcx, 4
+      x86.lea rdx, qword ptr [rbp-48]
+      x86.mov r8, 0
+      x86.lea r9, qword ptr [rdxr8]
+      x86.mov qword ptr [r9], rax
+      x86.mov r9, 8
+      x86.lea rax, qword ptr [rdxr9]
+      x86.mov qword ptr [rax], rcx
+      x86.mov rcx, rdx
+      x86.call acceptPoint
+      x86.mov rdx, rax
+      x86.mov rax, rdx
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

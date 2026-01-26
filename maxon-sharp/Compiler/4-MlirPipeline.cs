@@ -44,6 +44,14 @@ public class MlirPipeline {
 
 		// Lower Maxon → Standard dialects
 		Logger.Debug(LogCategory.Compiler, "Lowering Maxon to Standard dialects");
+
+		// Debug: print IR before Maxon->Standard lowering
+		if (Logger.GetLevel(LogCategory.Compiler) <= LogLevel.Trace) {
+			var preMaxonPrinter = new MlirPrinter();
+			module.Print(preMaxonPrinter);
+			Logger.Trace(LogCategory.Compiler, $"Before MaxonToStandard:\n{preMaxonPrinter}");
+		}
+
 		var maxonToStandardPatterns = new ConversionPatternSet();
 		MaxonToStandardPatterns.PopulatePatterns(maxonToStandardPatterns);
 		var maxonToStandard = new DialectConversionPass(maxonToStandardPatterns);
@@ -52,6 +60,13 @@ public class MlirPipeline {
 		maxonToStandard.AddLegalDialect("func");
 		maxonToStandard.AddLegalDialect("cf");
 		maxonToStandard.Run(module);
+
+		// Debug: print IR after Maxon->Standard lowering
+		if (Logger.GetLevel(LogCategory.Compiler) <= LogLevel.Trace) {
+			var postMaxonPrinter = new MlirPrinter();
+			module.Print(postMaxonPrinter);
+			Logger.Trace(LogCategory.Compiler, $"After MaxonToStandard (before standard passes):\n{postMaxonPrinter}");
+		}
 
 		// Standard passes (mem2reg, constant folding, CSE, DCE)
 		Logger.Debug(LogCategory.Compiler, "Running Standard dialect passes");
@@ -65,6 +80,12 @@ public class MlirPipeline {
 		Logger.Debug(LogCategory.Compiler, "Running dead store elimination");
 		var deadStorePass = new DeadStoreEliminationPass();
 		deadStorePass.Run(module);
+
+		// Analyze allocas and compute frame layout BEFORE lowering
+		// This must happen before StandardToX86 so LowerAllocaOp can use the computed offsets
+		Logger.Debug(LogCategory.Compiler, "Computing stack frame layout");
+		var frameLayoutPass = new FrameLayoutAnalysisPass();
+		frameLayoutPass.Run(module);
 
 		// Lower Standard → X86 dialect
 		Logger.Debug(LogCategory.Compiler, "Lowering Standard to X86 dialect");

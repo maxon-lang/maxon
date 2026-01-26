@@ -17,6 +17,12 @@ public abstract class X86Op : MlirOperation {
 	/// Get the operands as X86Operand types.
 	/// </summary>
 	public List<X86Operand> X86Operands { get; } = [];
+
+	/// <summary>
+	/// Returns registers that are clobbered (destroyed) by this operation.
+	/// Used by register allocation to save/restore live values.
+	/// </summary>
+	public virtual IReadOnlyList<X86Register> ClobberedRegisters => [];
 }
 
 // ============================================================================
@@ -189,6 +195,7 @@ public sealed class ImulOp : X86Op {
 
 /// <summary>
 /// Signed divide: x86.idiv src (divides rdx:rax by src)
+/// Note: Clobbers RAX/RDX but we handle this by not allocating loop-live vregs to those registers.
 /// </summary>
 public sealed class IdivOp : X86Op {
 	public override string Mnemonic => "idiv";
@@ -598,11 +605,15 @@ public sealed class ComiOp : X86Op {
 /// <summary>
 /// Unconditional jump: x86.jmp target
 /// </summary>
-public sealed class JmpOp(string target) : X86Op {
+public sealed class JmpOp : X86Op {
 	public override string Mnemonic => "jmp";
 	public override bool IsTerminator => true;
 
-	public string Target { get; } = target;
+	public string Target { get; }
+
+	public JmpOp(string target) {
+		Target = target;
+	}
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"x86.jmp {Target}");
@@ -612,13 +623,19 @@ public sealed class JmpOp(string target) : X86Op {
 /// <summary>
 /// Conditional jump: x86.jcc cond, target
 /// </summary>
-public sealed class JccOp(X86CondCode condition, string trueTarget, string falseTarget) : X86Op {
+public sealed class JccOp : X86Op {
 	public override string Mnemonic => $"j{Condition.ToString().ToLowerInvariant()}";
 	public override bool IsTerminator => true;
 
-	public X86CondCode Condition { get; } = condition;
-	public string TrueTarget { get; } = trueTarget;
-	public string FalseTarget { get; } = falseTarget;
+	public X86CondCode Condition { get; }
+	public string TrueTarget { get; }
+	public string FalseTarget { get; }
+
+	public JccOp(X86CondCode condition, string trueTarget, string falseTarget) {
+		Condition = condition;
+		TrueTarget = trueTarget;
+		FalseTarget = falseTarget;
+	}
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"x86.j{Condition.ToString().ToLowerInvariant()} {TrueTarget}");
@@ -629,10 +646,14 @@ public sealed class JccOp(X86CondCode condition, string trueTarget, string false
 /// <summary>
 /// Call: x86.call target
 /// </summary>
-public sealed class X86CallOp(string target) : X86Op {
+public sealed class X86CallOp : X86Op {
 	public override string Mnemonic => "call";
 
-	public string Target { get; } = target;
+	public string Target { get; }
+
+	public X86CallOp(string target) {
+		Target = target;
+	}
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"x86.call {Target}");
@@ -646,6 +667,8 @@ public sealed class RetOp : X86Op {
 	public override string Mnemonic => "ret";
 	public override bool IsTerminator => true;
 
+	public RetOp() { }
+
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine("x86.ret");
 	}
@@ -654,11 +677,15 @@ public sealed class RetOp : X86Op {
 /// <summary>
 /// Label definition: label:
 /// </summary>
-public sealed class LabelOp(string name) : X86Op {
+public sealed class LabelOp : X86Op {
 	public override string Mnemonic => "label";
 	public override bool HasSideEffects => false;
 
-	public string Name { get; } = name;
+	public string Name { get; }
+
+	public LabelOp(string name) {
+		Name = name;
+	}
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"{Name}:");
@@ -709,9 +736,13 @@ public sealed class CvttsdOp : X86Op {
 
 /// <summary>
 /// Sign extend EAX to EDX:EAX: x86.cdq
+/// Note: cdq clobbers RDX but we don't mark it here because cdq is always
+/// immediately followed by idiv which handles the save/restore of RDX.
 /// </summary>
 public sealed class CdqOp : X86Op {
 	public override string Mnemonic => "cdq";
+
+	public CdqOp() { }
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine("x86.cdq");
@@ -867,9 +898,13 @@ public sealed class XorpdOp : X86Op {
 /// <summary>
 /// Function prologue: push rbp; mov rbp, rsp; sub rsp, N
 /// </summary>
-public sealed class PrologueOp(int stackSize = 32) : X86Op {
+public sealed class PrologueOp : X86Op {
 	public override string Mnemonic => "prologue";
-	public int StackSize { get; } = stackSize;
+	public int StackSize { get; }
+
+	public PrologueOp(int stackSize = 32) {
+		StackSize = stackSize;
+	}
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"x86.prologue stack_size={StackSize}");
@@ -881,6 +916,8 @@ public sealed class PrologueOp(int stackSize = 32) : X86Op {
 /// </summary>
 public sealed class EpilogueOp : X86Op {
 	public override string Mnemonic => "epilogue";
+
+	public EpilogueOp() { }
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine("x86.epilogue");

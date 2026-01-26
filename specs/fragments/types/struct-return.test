@@ -1,0 +1,67 @@
+// Test: struct-return
+type Pair
+    export var first int
+    export var second int
+end 'Pair'
+
+function makePair(a int, b int) returns Pair
+    return { first: a, second: b }
+end 'makePair'
+
+function main() returns int
+    var p = makePair(5, b: 7)
+    return p.first + p.second
+end 'main'
+---
+ExitCode: 12
+---
+// Generated X86 IR:
+module {
+  // struct Pair { first: i64, second: i64 }
+  
+  func.func @makePair(%__sret: ptr<!maxon.struct<Pair>>, %a: i64, %b: i64) {
+    ^entry(%__sret: ptr<!maxon.struct<Pair>>, %a: i64, %b: i64):
+      x86.prologue stack_size=32
+      x86.mov rax, rcx
+      x86.mov rcx, rdx
+      x86.mov rdx, r8
+      x86.lea r8, qword ptr [rax]
+      x86.mov qword ptr [r8], rcx
+      x86.lea r8, qword ptr [rax+8]
+      x86.mov qword ptr [r8], rdx
+      x86.epilogue
+      x86.ret
+  }
+  
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=64
+      x86.push rbx
+      x86.mov rax, 5
+      x86.mov rcx, 7
+      x86.lea rbx, qword ptr [rbp-48]
+      x86.mov r10, rbx
+      x86.mov r11, rax
+      x86.push rcx
+      x86.pop r8
+      x86.mov rdx, r11
+      x86.mov rcx, r10
+      x86.call makePair
+      x86.lea rcx, qword ptr [rbp-64]
+      x86.mov qword ptr [rcx], rbx
+      x86.mov rax, [rcx]
+      x86.lea rdx, qword ptr [rax]
+      x86.mov rax, qword ptr [rdx]
+      x86.mov rdx, [rcx]
+      x86.lea rcx, qword ptr [rdx+8]
+      x86.mov rdx, qword ptr [rcx]
+      x86.mov rcx, rax
+      x86.add rcx, rdx
+      x86.mov rax, rcx
+      x86.pop rbx
+      x86.epilogue
+      x86.ret
+  }
+}
+
+---

@@ -205,9 +205,24 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 	private static bool OperationReadsRegister(MlirOperation op, X86Register reg) {
 		if (op is not X86Op x86Op) return false;
 
+		// cdq implicitly reads RAX (sign extends EAX to EDX:EAX)
+		if (op is CdqOp && reg == X86Register.RAX) {
+			return true;
+		}
+
+		// idiv implicitly reads RAX and RDX (dividend is RDX:RAX)
+		if (op is IdivOp && (reg == X86Register.RAX || reg == X86Register.RDX)) {
+			return true;
+		}
+
 		// For mov, only the source is read (index 1)
 		if (op is MovOp mov) {
 			return OperandReadsRegister(mov.Src, reg);
+		}
+
+		// Push reads its source operand (index 0)
+		if (op is PushOp push) {
+			return OperandReadsRegister(push.Src, reg);
 		}
 
 		// For most other ops, check all operands except the first (destination)

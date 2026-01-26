@@ -11,6 +11,8 @@ public record FragmentGenerationResult(int Generated, int Errors);
 /// Generates .test fragment files from spec files.
 /// </summary>
 public static class FragmentGenerator {
+	private const string SpecCountFileName = ".spec_count";
+
 	/// <summary>
 	/// Get the modification time of the compiler executable.
 	/// </summary>
@@ -21,6 +23,58 @@ public static class FragmentGenerator {
 		}
 		// If we can't determine compiler mtime, return max value to force regeneration
 		return DateTime.MaxValue;
+	}
+
+	/// <summary>
+	/// Check if fragments need regeneration based on the .spec_count flag file.
+	/// Returns true if regeneration is needed.
+	/// </summary>
+	private static bool NeedsRegeneration(string fragmentDir, int specCount, int testCount) {
+		var flagPath = Path.Combine(fragmentDir, SpecCountFileName);
+		if (!File.Exists(flagPath)) {
+			return true;
+		}
+
+		try {
+			var content = File.ReadAllText(flagPath).Trim();
+			var parts = content.Split(':');
+			if (parts.Length != 2) return true;
+
+			if (!int.TryParse(parts[0], out var savedSpecCount)) return true;
+			if (!int.TryParse(parts[1], out var savedTestCount)) return true;
+
+			return savedSpecCount != specCount || savedTestCount != testCount;
+		} catch {
+			return true;
+		}
+	}
+
+	/// <summary>
+	/// Write the .spec_count flag file to indicate successful generation.
+	/// </summary>
+	private static void WriteSpecCountFlag(string fragmentDir, int specCount, int testCount) {
+		var flagPath = Path.Combine(fragmentDir, SpecCountFileName);
+		File.WriteAllText(flagPath, $"{specCount}:{testCount}");
+	}
+
+	/// <summary>
+	/// Delete the .spec_count flag file (on generation failure).
+	/// </summary>
+	private static void DeleteSpecCountFlag(string fragmentDir) {
+		var flagPath = Path.Combine(fragmentDir, SpecCountFileName);
+		if (File.Exists(flagPath)) {
+			try { File.Delete(flagPath); } catch { /* ignore */ }
+		}
+	}
+
+	/// <summary>
+	/// Clean the fragments directory by deleting and recreating it.
+	/// </summary>
+	private static void CleanFragmentsDirectory(string fragmentDir) {
+		if (Directory.Exists(fragmentDir)) {
+			try { Directory.Delete(fragmentDir, recursive: true); } catch { /* ignore */ }
+		}
+		Directory.CreateDirectory(fragmentDir);
 	}
 
 	/// <summary>
@@ -39,6 +93,15 @@ public static class FragmentGenerator {
 		Directory.CreateDirectory(fragmentDir);
 
 		var specs = SpecParser.ParseDirectory(specDir);
+		var totalTests = specs.Sum(s => s.Tests.Count);
+
+		// Check if we need to regenerate based on spec/test count changes
+		if (NeedsRegeneration(fragmentDir, specs.Count, totalTests)) {
+			// Clean the fragments directory to remove stale fragments
+			CleanFragmentsDirectory(fragmentDir);
+			force = true;
+		}
+
 		var generated = 0;
 		var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
 		var workerCount = Math.Max(1, Environment.ProcessorCount / 2);
@@ -73,6 +136,13 @@ public static class FragmentGenerator {
 		// Report any compilation errors encountered during fragment generation
 		foreach (var error in errors) {
 			Logger.Error(LogCategory.Testing, $"Fragment generation error: {error}");
+		}
+
+		// Update or delete the flag file based on success/failure
+		if (errors.IsEmpty) {
+			WriteSpecCountFlag(fragmentDir, specs.Count, totalTests);
+		} else {
+			DeleteSpecCountFlag(fragmentDir);
 		}
 
 		return new FragmentGenerationResult(generated, errors.Count);
@@ -111,7 +181,7 @@ public static class FragmentGenerator {
 		// Compile to executable and capture IR (for success expectations only)
 		if (test.Expectation is SuccessExpectation) {
 			var sources = new[] { new Compiler.SourceFile("test.mx", test.Source) };
-			var result = Compiler.Compiler.CompileWithMlir(sources, exePath, returnIr: true);
+			var result = Compiler.Compiler.Compile(sources, exePath, returnIr: true);
 			if (result.Success) {
 				sb.AppendLine("// Generated X86 IR:");
 				sb.AppendLine(result.X86Ir);

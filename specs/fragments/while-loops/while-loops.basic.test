@@ -1,0 +1,66 @@
+// Test: while-loops.basic
+function main() returns int
+var x = 5
+var i = 3
+while i > 0 'loop'
+x = x + 2
+i = i - 1
+if i == 0 'check'
+break
+end 'check'
+end 'loop'
+return x
+end 'main'
+---
+ExitCode: 11
+---
+// Generated X86 IR:
+module {
+  func.func @main() -> i64 {
+    ^entry:
+      x86.prologue stack_size=48
+      x86.mov rax, 5
+      x86.lea rcx, qword ptr [rbp-40]
+      x86.mov qword ptr [rcx], rax
+      x86.mov rax, 3
+      x86.lea r8, qword ptr [rbp-48]
+      x86.mov qword ptr [r8], rax
+      x86.jmp while.cond
+    ^while.cond:
+      x86.mov rdx, qword ptr [r8]
+      x86.mov rax, 0
+      x86.cmp rdx, rax
+      x86.setg rax
+      x86.test rax, rax
+      x86.jne while.body
+      x86.jmp while.exit
+    ^while.body:
+      x86.mov rax, qword ptr [rcx]
+      x86.mov rdx, 2
+      x86.mov r9, rax
+      x86.add r9, rdx
+      x86.mov qword ptr [rcx], r9
+      x86.mov r9, qword ptr [r8]
+      x86.mov rdx, 1
+      x86.mov rax, r9
+      x86.sub rax, rdx
+      x86.mov qword ptr [r8], rax
+      x86.mov rax, qword ptr [r8]
+      x86.mov rdx, 0
+      x86.cmp rax, rdx
+      x86.sete rax
+      x86.test rax, rax
+      x86.jne then
+      x86.jmp merge
+    ^while.exit:
+      x86.mov rax, qword ptr [rcx]
+      x86.epilogue
+      x86.ret
+    ^then:
+      x86.jmp while.exit
+    ^merge:
+      x86.jmp while.cond
+  }
+}
+
+---

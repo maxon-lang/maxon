@@ -80,22 +80,22 @@ Each phase involves:
 
 | Spec | Description | Status | Notes |
 |------|-------------|--------|-------|
-| function-declaration.md | Function syntax, parameters, returns | ✅ | Renamed from functions.md |
-| return-statement.md | Return statements | ✅ | Renamed from return.md |
-| parameter-labels.md | Named arguments (a: value) | ✅ | Renamed from named-arguments.md |
+| function-declaration.md | Function syntax, parameters, returns | ⬜ | Renamed from functions.md |
+| return-statement.md | Return statements | ⬜ | Renamed from return.md |
+| parameter-labels.md | Named arguments (a: value) | ⬜ | Renamed from named-arguments.md |
 
 #### Math Functions (SSE-based)
 
 | Spec | Description | Status | Notes |
 |------|-------------|--------|-------|
-| floor.md | floor() | ✅ | Uses roundsd mode 0x09 |
-| ceil.md | ceil() | ✅ | Uses roundsd mode 0x0A |
-| round.md | round() | ✅ | Uses roundsd mode 0x08 (banker's rounding) |
-| sqrt.md | sqrt() | ✅ | Uses sqrtsd instruction |
-| abs.md | abs() | ✅ | Uses andpd with sign bit mask |
-| min.md | min() | ✅ | Uses minsd instruction |
-| max.md | max() | ✅ | Uses maxsd instruction |
-| trunc.md | trunc() | ✅ | Float-to-int conversion |
+| floor.md | floor() | ⬜ | Uses roundsd mode 0x09 |
+| ceil.md | ceil() | ⬜ | Uses roundsd mode 0x0A |
+| round.md | round() | ⬜ | Uses roundsd mode 0x08 (banker's rounding) |
+| sqrt.md | sqrt() | ⬜ | Uses sqrtsd instruction |
+| abs.md | abs() | ⬜ | Uses andpd with sign bit mask |
+| min.md | min() | ⬜ | Uses minsd instruction |
+| max.md | max() | ⬜ | Uses maxsd instruction |
+| trunc.md | trunc() | ⬜ | Float-to-int conversion |
 
 #### Math Functions (Require CRT - )
 

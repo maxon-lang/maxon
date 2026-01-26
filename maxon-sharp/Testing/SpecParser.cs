@@ -25,6 +25,7 @@ public static partial class SpecParser {
 
 	/// <summary>
 	/// Parse all spec files in a directory.
+	/// Skips specs with status: draft.
 	/// </summary>
 	public static List<SpecFile> ParseDirectory(string specDir) {
 		var specs = new List<SpecFile>();
@@ -32,6 +33,10 @@ public static partial class SpecParser {
 		foreach (var file in Directory.GetFiles(specDir, "*.md")) {
 			try {
 				var spec = Parse(file);
+				if (spec.Status == "draft") {
+					Logger.Debug(LogCategory.Testing, $"Skipping draft spec: {Path.GetFileName(file)}");
+					continue;
+				}
 				specs.Add(spec);
 			} catch (Exception ex) {
 				Logger.Error(LogCategory.Testing, $"Failed to parse {file}: {ex.Message}");

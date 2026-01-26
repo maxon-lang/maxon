@@ -29,12 +29,15 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 		// Abort if fragment generation had errors
 		if (genResult.Errors > 0) {
 			Logger.Error(LogCategory.Testing, $"Fragment generation failed with {genResult.Errors} error(s). Fix spec files before running tests.");
+			// Clean up any executables that were generated before the error
+			CleanupExecutables(_fragmentDir);
 			return new TestSummary {
 				Results = [],
 				Passed = 0,
-				Failed = genResult.Errors,
-				Total = genResult.Errors,
-				TotalDuration = sw.Elapsed
+				Failed = 0,
+				Total = 0,
+				TotalDuration = sw.Elapsed,
+				FragmentGenerationErrors = genResult.Errors
 			};
 		}
 
@@ -299,7 +302,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 	private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath) {
 		try {
-			var result = Compiler.Compiler.CompileWithMlir(
+			var result = Compiler.Compiler.Compile(
 				[new Compiler.SourceFile(fragment.FilePath, fragment.Source)],
 				outputPath);
 			return (result.Success, result.Error);
@@ -307,6 +310,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 			return (false, ex.Message);
 		}
 	}
+
+	private const int TestTimeoutMs = 1000;
 
 	private static (int ExitCode, string Stdout, string Stderr) RunExecutable(string exePath) {
 		var psi = new ProcessStartInfo {
@@ -317,10 +322,28 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 			CreateNoWindow = true
 		};
 
+		// Use a job object to ensure child processes are killed on timeout
+		using var job = new WindowsJobObject();
 		using var process = Process.Start(psi)!;
-		var stdout = process.StandardOutput.ReadToEnd();
-		var stderr = process.StandardError.ReadToEnd();
-		process.WaitForExit(TimeSpan.FromMilliseconds(30000));
+
+		// Assign process to job object for guaranteed cleanup
+		job.AssignProcess(process.Handle);
+
+		// Read stdout/stderr asynchronously to avoid deadlocks
+		var stdoutTask = process.StandardOutput.ReadToEndAsync();
+		var stderrTask = process.StandardError.ReadToEndAsync();
+
+		bool exited = process.WaitForExit(TestTimeoutMs);
+		if (!exited) {
+			// Process timed out - kill it via job object (happens automatically on dispose)
+			// but also explicitly kill to ensure we don't hang on ReadToEndAsync
+			try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+			return (-1, "", "Process timed out");
+		}
+
+		// Process exited normally - wait for async reads to complete
+		var stdout = stdoutTask.GetAwaiter().GetResult();
+		var stderr = stderrTask.GetAwaiter().GetResult();
 
 		return (process.ExitCode, stdout, stderr);
 	}

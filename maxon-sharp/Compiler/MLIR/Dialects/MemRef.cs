@@ -100,6 +100,7 @@ public sealed class DeallocOp : MemRefOp {
 
 /// <summary>
 /// Load from memory: %result = memref.load %memref[%indices...] : type
+/// Supports both MemRefType and PtrType operands.
 /// </summary>
 public sealed class LoadOp : MemRefOp {
 	public override string Mnemonic => "load";
@@ -110,13 +111,16 @@ public sealed class LoadOp : MemRefOp {
 	public MlirValue Result => Results[0];
 
 	public LoadOp(MlirValue memref, params MlirValue[] indices) {
-		if (memref.Type is not MemRefType mrt)
-			throw new ArgumentException($"Expected memref type, got {memref.Type}");
+		MlirType elementType = memref.Type switch {
+			MemRefType mrt => mrt.ElementType,
+			PtrType pt => pt.ElementType ?? throw new ArgumentException("Cannot load from untyped pointer"),
+			_ => throw new ArgumentException($"Expected memref or ptr type, got {memref.Type}")
+		};
 
 		Operands.Add(memref);
 		foreach (var idx in indices)
 			Operands.Add(idx);
-		CreateResult(mrt.ElementType);
+		CreateResult(elementType);
 	}
 
 	public override void Print(MlirPrinter printer) {

@@ -77,4 +77,8 @@ public class TestSummary {
 	public required int Failed { get; init; }
 	public required int Total { get; init; }
 	public required TimeSpan TotalDuration { get; init; }
+	/// <summary>
+	/// Number of fragment generation errors (compilation failures during fragment generation).
+	/// </summary>
+	public int FragmentGenerationErrors { get; init; }
 }
