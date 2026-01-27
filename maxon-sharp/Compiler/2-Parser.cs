@@ -546,8 +546,9 @@ public class Parser(List<Token> tokens) {
 		// Check for generic type: TypeName with TypeArg or TypeName with TypeArg1, TypeArg2
 		if (Check(TokenType.With)) {
 			Advance();
-			var typeArgs = new List<string>();
-			typeArgs.Add(ExpectTypeName());
+			var typeArgs = new List<string> {
+				ExpectTypeName()
+			};
 			while (Check(TokenType.Comma)) {
 				Advance();
 				typeArgs.Add(ExpectTypeName());

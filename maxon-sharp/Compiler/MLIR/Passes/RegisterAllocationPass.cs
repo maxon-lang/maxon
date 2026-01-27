@@ -1143,8 +1143,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		private X86Register AllocFromFreeSetWithSpilling(
 			HashSet<X86Register> freeSet,
 			HashSet<X86Register>? usedSet,
-			bool isFloat,
-			string? description = null) {
+			bool isFloat) {
 			if (freeSet.Count == 0) {
 				// Need to spill - find the best candidate and spill it
 				var victimVreg = FindSpillCandidate(isFloat);
@@ -1258,7 +1257,9 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			MaxsdOp maxsd => new MaxsdOp(ctx.Alloc(maxsd.Dst), ctx.Alloc(maxsd.Src)),
 			AndpdOp andpd => new AndpdOp(ctx.Alloc(andpd.Dst), ctx.Alloc(andpd.Src)),
 			XorpdOp xorpd => new XorpdOp(ctx.Alloc(xorpd.Dst), ctx.Alloc(xorpd.Src)),
-			_ => op
+			CldOp cld => cld,
+			RepMovsbOp repMovsb => repMovsb,
+			_ => throw new NotSupportedException($"Unsupported X86Op type for allocation: {op.GetType()}")
 		};
 	}
 }

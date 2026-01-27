@@ -95,6 +95,7 @@ public sealed class LowerDropOp : ConversionPattern<DropOp> {
 
 /// <summary>
 /// Lowers maxon.struct_init to alloca + stores.
+/// Uses StoreSemantics to ensure correct store/memcpy choice for struct vs primitive fields.
 /// </summary>
 public sealed class LowerStructInitOp : ConversionPattern<StructInitOp> {
 	protected override bool MatchAndRewrite(StructInitOp op, ConversionPatternRewriter rewriter) {
@@ -111,18 +112,9 @@ public sealed class LowerStructInitOp : ConversionPattern<StructInitOp> {
 				var fieldPtr = new FieldPtrOp(alloca.Result, field.Name, offset, field.Type);
 				rewriter.Insert(fieldPtr);
 
-				// If the value is a struct (value.Type is a pointer to struct), copy it with memcpy
-				if (field.Type is MaxonStructType structType) {
-					// value is a pointer to the source struct, copy its contents
-					var sizeConst = ConstantOp.Int(structType.SizeInBytes, IntegerType.I64);
-					rewriter.Insert(sizeConst);
-					var memcpy = new MemCpyOp(fieldPtr.Result, value, sizeConst.Result);
-					rewriter.Insert(memcpy);
-				} else {
-					// Simple value, just store it
-					var store = new StoreOp(value, fieldPtr.Result);
-					rewriter.Insert(store);
-				}
+				// Use StoreSemantics to determine store vs memcpy
+				var storeAction = StoreSemantics.DetermineStoreAction(value, field.Type);
+				StoreSemantics.EmitStore(storeAction, fieldPtr.Result, rewriter);
 			}
 			offset += field.Type.SizeInBytes;
 		}
@@ -133,24 +125,14 @@ public sealed class LowerStructInitOp : ConversionPattern<StructInitOp> {
 }
 
 /// <summary>
-/// Lowers maxon.field_get to field_ptr + load.
-/// For struct-typed fields, returns the field pointer directly (no load).
+/// Lowers maxon.field_get to field_ptr + load (for primitives) or just field_ptr (for structs).
+/// Uses ValueSemantics.Load to ensure correct handling of struct vs primitive fields.
 /// </summary>
 public sealed class LowerFieldGetOp : ConversionPattern<FieldGetOp> {
 	protected override bool MatchAndRewrite(FieldGetOp op, ConversionPatternRewriter rewriter) {
 		var fieldPtr = EmitFieldPtr(op.Struct, op.FieldName, rewriter);
-
-		// For struct-typed fields, return the pointer (structs are passed by reference)
-		// For primitive types, load the value
-		if (op.Result.Type is MaxonStructType) {
-			rewriter.ReplaceOpWithValue(op, fieldPtr.Result);
-			return true;
-		}
-
-		var load = new LoadOp(fieldPtr.Result);
-		rewriter.Insert(load);
-
-		rewriter.ReplaceOpWithValue(op, load.Result);
+		var result = ValueSemantics.Load(fieldPtr.Result, op.Result.Type, rewriter);
+		rewriter.ReplaceOpWithValue(op, result.Unwrap());
 		return true;
 	}
 
@@ -202,13 +184,18 @@ public sealed class LowerArrayNewOp : ConversionPattern<ArrayNewOp> {
 }
 
 /// <summary>
-/// Lowers maxon.array_get to memref.load.
+/// Lowers maxon.array_get to load (for primitives) or element pointer (for structs).
+/// Uses ValueSemantics.Load to ensure correct handling of struct vs primitive elements.
 /// </summary>
 public sealed class LowerArrayGetOp : ConversionPattern<ArrayGetOp> {
 	protected override bool MatchAndRewrite(ArrayGetOp op, ConversionPatternRewriter rewriter) {
-		var load = new LoadOp(op.Array, op.Index);
-		rewriter.Insert(load);
-		rewriter.ReplaceOpWithValue(op, load.Result);
+		// Get pointer to the array element
+		var elemPtr = new ArrayPtrOp(op.Array, op.Index, op.Result.Type);
+		rewriter.Insert(elemPtr);
+
+		// Use ValueSemantics to decide: return pointer for structs, load for primitives
+		var result = ValueSemantics.Load(elemPtr.Result, op.Result.Type, rewriter);
+		rewriter.ReplaceOpWithValue(op, result.Unwrap());
 		return true;
 	}
 }
@@ -390,44 +377,43 @@ public sealed class LowerErrorUnionIsErrorOp : ConversionPattern<ErrorUnionIsErr
 }
 
 /// <summary>
-/// Lowers maxon.error_union_get_value to load from offset 8.
+/// Lowers maxon.error_union_get_value to access the value at offset 8.
+/// Uses ValueSemantics.Load to ensure correct handling of struct vs primitive values.
 /// </summary>
 public sealed class LowerErrorUnionGetValueOp : ConversionPattern<ErrorUnionGetValueOp> {
 	protected override bool MatchAndRewrite(ErrorUnionGetValueOp op, ConversionPatternRewriter rewriter) {
 		// Get the remapped value (in case it was replaced by LowerMaxonCallOp)
 		var unionPtr = rewriter.GetRemapped(op.Union);
 
-		// Load value from the error union at offset 8
-		// We use a FieldPtrOp to compute the address at offset 8
+		// Get pointer to value from the error union at offset 8
 		var valueOffset = 8;
 		var fieldPtr = new FieldPtrOp(unionPtr, "_value", valueOffset, op.Result.Type);
 		rewriter.Insert(fieldPtr);
 
-		var load = new LoadOp(fieldPtr.Result);
-		rewriter.Insert(load);
-
-		rewriter.ReplaceOpWithValue(op, load.Result);
+		// Use ValueSemantics to decide: return pointer for structs, load for primitives
+		var result = ValueSemantics.Load(fieldPtr.Result, op.Result.Type, rewriter);
+		rewriter.ReplaceOpWithValue(op, result.Unwrap());
 		return true;
 	}
 }
 
 /// <summary>
-/// Lowers maxon.error_union_get_error to load from offset 8.
+/// Lowers maxon.error_union_get_error to access the error at offset 8.
+/// Uses ValueSemantics.Load to ensure correct handling of struct vs primitive errors.
 /// </summary>
 public sealed class LowerErrorUnionGetErrorOp : ConversionPattern<ErrorUnionGetErrorOp> {
 	protected override bool MatchAndRewrite(ErrorUnionGetErrorOp op, ConversionPatternRewriter rewriter) {
 		// Get the remapped value (in case it was replaced by LowerMaxonCallOp)
 		var unionPtr = rewriter.GetRemapped(op.Union);
 
-		// Load error from the error union at offset 8 (same offset as value)
+		// Get pointer to error from the error union at offset 8 (same offset as value)
 		var errorOffset = 8;
 		var fieldPtr = new FieldPtrOp(unionPtr, "_error", errorOffset, op.Result.Type);
 		rewriter.Insert(fieldPtr);
 
-		var load = new LoadOp(fieldPtr.Result);
-		rewriter.Insert(load);
-
-		rewriter.ReplaceOpWithValue(op, load.Result);
+		// Use ValueSemantics to decide: return pointer for structs, load for primitives
+		var result = ValueSemantics.Load(fieldPtr.Result, op.Result.Type, rewriter);
+		rewriter.ReplaceOpWithValue(op, result.Unwrap());
 		return true;
 	}
 }
@@ -443,10 +429,7 @@ public sealed class LowerErrorUnionGetErrorOp : ConversionPattern<ErrorUnionGetE
 /// </summary>
 public sealed class LowerEnumInitOp : ConversionPattern<EnumInitOp> {
 	protected override bool MatchAndRewrite(EnumInitOp op, ConversionPatternRewriter rewriter) {
-		var variant = op.EnumType.GetVariant(op.VariantName);
-		if (variant is null) {
-			throw new InvalidOperationException($"Unknown enum variant: {op.EnumType.Name}::{op.VariantName}");
-		}
+		var variant = op.EnumType.GetVariant(op.VariantName) ?? throw new InvalidOperationException($"Unknown enum variant: {op.EnumType.Name}::{op.VariantName}");
 
 		// For simple enums without payload, the value is just the tag
 		if (variant.PayloadFields.Count == 0) {
@@ -565,7 +548,8 @@ public sealed class LowerManagedMemoryCapacityOp : ConversionPattern<ManagedMemo
 }
 
 /// <summary>
-/// Lowers maxon.managed_memory_get_unchecked to buffer[index * elemSize] load.
+/// Lowers maxon.managed_memory_get_unchecked to buffer[index * elemSize] access.
+/// Uses ValueSemantics.Load to ensure correct handling of struct vs primitive elements.
 /// </summary>
 public sealed class LowerManagedMemoryGetUncheckedOp : ConversionPattern<ManagedMemoryGetUncheckedOp> {
 	protected override bool MatchAndRewrite(ManagedMemoryGetUncheckedOp op, ConversionPatternRewriter rewriter) {
@@ -585,10 +569,9 @@ public sealed class LowerManagedMemoryGetUncheckedOp : ConversionPattern<Managed
 		var elemPtr = new PtrAddOp(bufferLoad.Result, offset.Result, new PtrType(op.ElementType));
 		rewriter.Insert(elemPtr);
 
-		// Load element
-		var load = new LoadOp(elemPtr.Result);
-		rewriter.Insert(load);
-		rewriter.ReplaceOpWithValue(op, load.Result);
+		// Use ValueSemantics to decide: return pointer for structs, load for primitives
+		var result = ValueSemantics.Load(elemPtr.Result, op.ElementType, rewriter);
+		rewriter.ReplaceOpWithValue(op, result.Unwrap());
 		return true;
 	}
 }

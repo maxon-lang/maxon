@@ -12,7 +12,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private readonly MutationAnalyzer _mutationAnalyzer = mutationAnalyzer;
 	private MlirBlock? _currentBlock;
 	private MlirFunction? _currentFunction;
-	private readonly Dictionary<string, MlirValue> _namedValues = [];
+	private readonly Dictionary<string, VariableBinding> _namedValues = [];
 	private readonly HashSet<string> _immutableVariables = [];
 	private readonly Dictionary<string, MlirType> _structTypes = [];
 	private readonly Dictionary<string, MlirType> _enumTypes = [];
@@ -348,7 +348,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		};
 	}
 
-	private MlirType ConvertFunctionTypeRef(FunctionTypeRef funcType) {
+	private FunctionPtrType ConvertFunctionTypeRef(FunctionTypeRef funcType) {
 		var paramTypes = funcType.ParamTypes.Select(ConvertTypeRef).ToList();
 		var returnType = funcType.ReturnType != null ? ConvertTypeRef(funcType.ReturnType) : NoneType.Instance;
 		return new FunctionPtrType(paramTypes, returnType);
@@ -649,7 +649,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			StructInitExpr structInit => LowerStructInitExpr(structInit, expectedType),
 			FieldAccessExpr fieldAccess => LowerFieldAccessExpr(fieldAccess),
 			CastExpr cast => LowerCastExpr(cast),
-			TryExpr tryExpr => LowerTryExpr(tryExpr, expectedType),
+			TryExpr tryExpr => LowerTryExpr(tryExpr),
 			EnumCaseExpr enumCase => LowerEnumCaseExpr(enumCase),
 			ArrayLiteralExpr arrayLit => LowerArrayLiteralExpr(arrayLit),
 			_ => throw new NotSupportedException($"Unsupported expression: {expr.GetType().Name}")
@@ -844,12 +844,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 
 		// Verify the case exists
-		var variant = maxonEnumType.GetVariant(enumCase.CaseName);
-		if (variant == null) {
-			throw new CompileError(ErrorCode.SemanticUndefinedVariable,
+		var variant = maxonEnumType.GetVariant(enumCase.CaseName) ?? throw new CompileError(ErrorCode.SemanticUndefinedVariable,
 				$"Enum '{enumCase.EnumName}' has no case '{enumCase.CaseName}'",
 				enumCase.Location?.Line, enumCase.Location?.Column);
-		}
 
 		// Lower any associated values (args)
 		var payloadValues = enumCase.Args.Select(arg => LowerExpression(arg)).ToList();
@@ -861,7 +858,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		return enumInitOp.Result;
 	}
 
-	private MlirValue LowerTryExpr(TryExpr tryExpr, MlirType? expectedType) {
+	private MlirValue LowerTryExpr(TryExpr tryExpr) {
 		// The inner expression must be a call to a throwing function
 		// For now, we evaluate the expression which will return an error union
 		var errorUnionValue = LowerExpression(tryExpr.Expression);
@@ -1005,10 +1002,17 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Check for sibling method call (calling another method of same type without self.)
 		// If we're inside a method and the function name matches a method of the current type,
 		// treat it as self.methodName()
-		if (_currentMethodStructType != null && _namedValues.TryGetValue("self", out var selfValue)) {
+		if (_currentMethodStructType != null && _namedValues.TryGetValue("self", out var selfBinding)) {
 			var siblingMethodName = $"{_currentMethodStructType.Name}.{call.FuncName}";
 			if (_functionParams.ContainsKey(siblingMethodName)) {
 				Logger.Trace(LogCategory.Mlir, $"LowerCallExpr: resolved sibling method call {call.FuncName} -> {siblingMethodName}");
+
+				// Get the self value from binding
+				var selfValue = selfBinding switch {
+					VariableBinding.Direct d => d.Value,
+					VariableBinding.StackSlot s => s.Address,
+					_ => throw new InvalidOperationException("Unknown VariableBinding variant for self")
+				};
 
 				// Get parameter info for this method
 				_functionParams.TryGetValue(siblingMethodName, out List<ParamDecl>? methodParamDecls);
@@ -1035,14 +1039,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 					methodArgs.Add(loweredArg);
 
 					// Determine ownership based on type and mutation analysis (offset by 1 for 'self').
-					// Copy types (primitives) are always passed by copy.
-					if (loweredArg.Type.IsCopyType) {
-						methodOwnership.Add(ArgumentOwnership.Copy);
-					} else if (_mutationAnalyzer.IsMutated(siblingMethodName, i + 1)) {
-						methodOwnership.Add(ArgumentOwnership.Move);
-					} else {
-						methodOwnership.Add(ArgumentOwnership.Borrow);
-					}
+					var argOwnership = ArgumentSemantics.DetermineOwnership(loweredArg, siblingMethodName, i + 1, _mutationAnalyzer);
+					methodOwnership.Add(argOwnership.Ownership);
 				}
 
 				// Look up the method's return type
@@ -1082,14 +1080,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			args.Add(loweredArg);
 
 			// Determine ownership based on type and mutation analysis.
-			// Copy types (primitives) are always passed by copy.
-			if (loweredArg.Type.IsCopyType) {
-				ownership.Add(ArgumentOwnership.Copy);
-			} else if (_mutationAnalyzer.IsMutated(call.FuncName, i)) {
-				ownership.Add(ArgumentOwnership.Move);
-			} else {
-				ownership.Add(ArgumentOwnership.Borrow);
-			}
+			var argOwnership = ArgumentSemantics.DetermineOwnership(loweredArg, call.FuncName, i, _mutationAnalyzer);
+			ownership.Add(argOwnership.Ownership);
 		}
 
 		// Look up the function's return type
@@ -1145,14 +1137,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			args.Add(loweredArg);
 
 			// Determine ownership based on type and mutation analysis (offset by 1 for 'self').
-			// Copy types (primitives) are always passed by copy.
-			if (loweredArg.Type.IsCopyType) {
-				ownership.Add(ArgumentOwnership.Copy);
-			} else if (_mutationAnalyzer.IsMutated(methodName, i + 1)) {
-				ownership.Add(ArgumentOwnership.Move);
-			} else {
-				ownership.Add(ArgumentOwnership.Borrow);
-			}
+			var argOwnership = ArgumentSemantics.DetermineOwnership(loweredArg, methodName, i + 1, _mutationAnalyzer);
+			ownership.Add(argOwnership.Ownership);
 		}
 
 		// Look up the method's return type
@@ -1175,7 +1161,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// If so, treat it as a method call on that variable
 		MlirValue? baseValue = null;
 		MaxonStructType? structType = null;
-		if (_namedValues.TryGetValue(staticCall.TypeName, out _)) {
+		if (_namedValues.ContainsKey(staticCall.TypeName)) {
 			// This is actually an instance method call: variable.method(args)
 			baseValue = GetVariable(staticCall.TypeName);
 			if (baseValue.Type is MaxonStructType st) {
@@ -1184,7 +1170,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		} else if (_currentMethodStructType != null) {
 			// Check if TypeName is a field of the current method's struct (e.g., inner.get() inside a method)
 			var fieldInfo = _currentMethodStructType.GetField(staticCall.TypeName);
-			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfValue)) {
+			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfBinding)) {
+				// Get self value from binding
+				var selfValue = selfBinding switch {
+					VariableBinding.Direct d => d.Value,
+					VariableBinding.StackSlot s => s.Address,
+					_ => throw new InvalidOperationException("Unknown VariableBinding variant for self")
+				};
 				// Access the field from self
 				baseValue = EmitGetField(selfValue, staticCall.TypeName, fieldInfo.Type);
 				if (baseValue.Type is MaxonStructType st) {
@@ -1226,14 +1218,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				args.Add(loweredArg);
 
 				// Determine ownership based on type and mutation analysis (offset by 1 for 'self').
-				// Copy types (primitives) are always passed by copy.
-				if (loweredArg.Type.IsCopyType) {
-					ownership.Add(ArgumentOwnership.Copy);
-				} else if (_mutationAnalyzer.IsMutated(methodName, i + 1)) {
-					ownership.Add(ArgumentOwnership.Move);
-				} else {
-					ownership.Add(ArgumentOwnership.Borrow);
-				}
+				var argOwnership = ArgumentSemantics.DetermineOwnership(loweredArg, methodName, i + 1, _mutationAnalyzer);
+				ownership.Add(argOwnership.Ownership);
 			}
 
 			// Look up the method's return type
@@ -1276,14 +1262,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			staticArgs.Add(loweredArg);
 
 			// Determine ownership based on type and mutation analysis.
-			// Copy types (primitives) are always passed by copy.
-			if (loweredArg.Type.IsCopyType) {
-				staticOwnership.Add(ArgumentOwnership.Copy);
-			} else if (_mutationAnalyzer.IsMutated(staticMethodName, i)) {
-				staticOwnership.Add(ArgumentOwnership.Move);
-			} else {
-				staticOwnership.Add(ArgumentOwnership.Borrow);
-			}
+			var argOwnership = ArgumentSemantics.DetermineOwnership(loweredArg, staticMethodName, i, _mutationAnalyzer);
+			staticOwnership.Add(argOwnership.Ownership);
 		}
 
 		// Look up the method's return type
@@ -1467,7 +1447,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			// When inside a monomorphized Array method, _currentMethodStructType has the element type info
 			// For Array$int, extract "int" from the name
 			if (_currentMethodStructType != null && _currentMethodStructType.Name.StartsWith("Array$")) {
-				var elemTypeName = _currentMethodStructType.Name.Substring("Array$".Length);
+				var elemTypeName = _currentMethodStructType.Name["Array$".Length..];
 				return ConvertType(elemTypeName);
 			}
 			// Default to i64 if we can't determine the type
@@ -1482,7 +1462,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				var fieldInfo = _currentMethodStructType.GetField(ident.Name);
 				if (fieldInfo != null && fieldInfo.Type is MaxonStructType fieldStructType
 					&& fieldStructType.Name == "__ManagedMemory"
-					&& _namedValues.TryGetValue("self", out var selfValue)) {
+					&& _namedValues.TryGetValue("self", out var selfBinding)) {
+					// Get self value from binding
+					var selfValue = selfBinding switch {
+						VariableBinding.Direct d => d.Value,
+						VariableBinding.StackSlot s => s.Address,
+						_ => throw new InvalidOperationException("Unknown VariableBinding variant for self")
+					};
 					// Emit field_ptr to get the address of the managed memory field
 					Logger.Debug(LogCategory.Mlir, $"GetManagedMemoryPointer: Case 1 - self.{ident.Name}");
 					return EmitFieldPtr(selfValue, ident.Name, fieldInfo.Offset, fieldInfo.Type);
@@ -1495,7 +1481,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				if (fieldAccess.Base is IdentifierExpr baseIdent) {
 					Logger.Debug(LogCategory.Mlir, $"GetManagedMemoryPointer: Case 2 - checking {baseIdent.Name}.{fieldAccess.FieldName}");
 					// Get the base variable's address (not its value)
-					if (_namedValues.TryGetValue(baseIdent.Name, out var baseAddr)) {
+					if (_namedValues.TryGetValue(baseIdent.Name, out var baseBinding) && baseBinding is VariableBinding.StackSlot slot) {
+						var baseAddr = slot.Address;
 						Logger.Debug(LogCategory.Mlir, $"  Found {baseIdent.Name} with type {baseAddr.Type}");
 						if (baseAddr.Type is MemRefType memRef) {
 							Logger.Debug(LogCategory.Mlir, $"  MemRefType element: {memRef.ElementType}");
@@ -1513,19 +1500,19 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 							}
 						}
 					} else {
-						Logger.Debug(LogCategory.Mlir, $"  Variable {baseIdent.Name} not found in _namedValues");
+						Logger.Debug(LogCategory.Mlir, $"  Variable {baseIdent.Name} not found in _namedValues or not a StackSlot");
 					}
 				}
 			}
 
 			// Case 3: Direct identifier for a standalone __ManagedMemory variable
 			if (arg is IdentifierExpr standaloneIdent) {
-				if (_namedValues.TryGetValue(standaloneIdent.Name, out var addr) && addr.Type is MemRefType memRef) {
+				if (_namedValues.TryGetValue(standaloneIdent.Name, out var standaloneBinding) && standaloneBinding is VariableBinding.StackSlot standaloneSlot && standaloneSlot.Address.Type is MemRefType memRef) {
 					if (memRef.ElementType is MaxonStructType structType && structType.Name == "__ManagedMemory") {
 						Logger.Debug(LogCategory.Mlir, $"GetManagedMemoryPointer: Case 3 - loading standalone {standaloneIdent.Name}");
 						// Load the pointer to ManagedMemory from the variable
 						// The variable stores a pointer to the ManagedMemory struct (from __managed_memory_create)
-						return EmitLoad(addr);
+						return EmitLoad(standaloneSlot.Address);
 					}
 				}
 			}
@@ -1889,20 +1876,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 		foreach (var param in genericType.GenericParams) {
 			// Find a field that uses this parameter
-			var fieldName = fieldToParam.FirstOrDefault(kv => kv.Value == param).Key;
-			if (fieldName == null) {
-				throw new CompileError(ErrorCode.MlirUndefinedType,
+			var fieldName = fieldToParam.FirstOrDefault(kv => kv.Value == param).Key ?? throw new CompileError(ErrorCode.MlirUndefinedType,
 					$"Cannot infer type argument for '{param}' - no field uses this type parameter",
 					structInit.Location?.Line, structInit.Location?.Column);
-			}
 
 			// Find the initializer for this field
-			var fieldInit = structInit.Fields.FirstOrDefault(f => f.Name == fieldName);
-			if (fieldInit == null) {
-				throw new CompileError(ErrorCode.MlirUndefinedType,
-					$"Cannot infer type argument for '{param}' - field '{fieldName}' not initialized",
-					structInit.Location?.Line, structInit.Location?.Column);
-			}
+			var fieldInit = structInit.Fields.FirstOrDefault(f => f.Name == fieldName) ?? throw new CompileError(ErrorCode.MlirUndefinedType,
+						$"Cannot infer type argument for '{param}' - field '{fieldName}' not initialized",
+						structInit.Location?.Line, structInit.Location?.Column);
 
 			// Infer the type from the expression
 			var inferredType = InferTypeFromExpr(fieldInit.Value);
@@ -1970,12 +1951,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			_enumTypes.TryGetValue(ident.Name, out var enumType) &&
 			enumType is MaxonEnumType maxonEnumType) {
 			// Verify the case exists
-			var variant = maxonEnumType.GetVariant(fieldAccess.FieldName);
-			if (variant == null) {
-				throw new CompileError(ErrorCode.SemanticUndefinedVariable,
-					$"Enum '{ident.Name}' has no case '{fieldAccess.FieldName}'",
-					fieldAccess.Location?.Line, fieldAccess.Location?.Column);
-			}
+			_ = maxonEnumType.GetVariant(fieldAccess.FieldName) ?? throw new CompileError(ErrorCode.SemanticUndefinedVariable,
+						$"Enum '{ident.Name}' has no case '{fieldAccess.FieldName}'",
+						fieldAccess.Location?.Line, fieldAccess.Location?.Column);
 			// Enum case without associated values
 			var enumInitOp = new EnumInitOp(maxonEnumType, fieldAccess.FieldName, null);
 			InsertOp(enumInitOp);
@@ -2084,7 +2062,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Extract param types (between "fn(" and ")")
 		var paramsStart = 3; // len("fn(")
 		var paramsEnd = typeStr.IndexOf(')');
-		var paramsStr = typeStr.Substring(paramsStart, paramsEnd - paramsStart);
+		var paramsStr = typeStr[paramsStart..paramsEnd];
 
 		var paramTypes = new List<MlirType>();
 		if (!string.IsNullOrEmpty(paramsStr)) {
@@ -2094,7 +2072,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 
 		// Extract return type
-		var returnTypeStr = typeStr.Substring(arrowIndex + 2);
+		var returnTypeStr = typeStr[(arrowIndex + 2)..];
 		var returnType = ConvertType(returnTypeStr);
 
 		return new FunctionPtrType(paramTypes, returnType);
@@ -2169,9 +2147,10 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			var paramName = parameters[i].name;
 
 			// Struct parameters are passed by reference - use them directly without allocas.
+			// Struct parameters are passed by reference - use them directly without allocas.
 			// Creating an alloca for a struct param would create a pointer-to-pointer situation.
 			if (paramType is MaxonStructType) {
-				_namedValues[paramName] = paramValue;
+				_namedValues[paramName] = new VariableBinding.Direct(paramValue);
 				continue;
 			}
 
@@ -2182,7 +2161,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			EmitStore(paramValue, alloca);
 
 			// Map the parameter name to the alloca (not the raw parameter value)
-			_namedValues[paramName] = alloca;
+			_namedValues[paramName] = new VariableBinding.StackSlot(alloca);
 		}
 
 		_module.Functions.Add(func);
@@ -2575,7 +2554,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Save current function context (for on-demand lowering during another function's lowering)
 		var savedFunction = _currentFunction;
 		var savedBlock = _currentBlock;
-		var savedNamedValues = new Dictionary<string, MlirValue>(_namedValues);
+		var savedNamedValues = new Dictionary<string, VariableBinding>(_namedValues);
 		var savedImmutableVariables = new HashSet<string>(_immutableVariables);
 		var savedStructReturnPtr = _structReturnPtr;
 		var savedErrorUnionReturnPtr = _errorUnionReturnPtr;
@@ -2647,11 +2626,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Find the method in the generic type
 		// Try exact match first, then try matching by base name (for interface methods)
 		var (genericType, paramMap) = typeInfo;
-		var method = genericType.Methods.FirstOrDefault(m => m.Name == methodName);
-		if (method == null) {
-			// Try matching by base name (e.g., "count" should match "Sized.count")
-			method = genericType.Methods.FirstOrDefault(m => m.Name.EndsWith($".{methodName}"));
-		}
+		var method = genericType.Methods.FirstOrDefault(m => m.Name == methodName) ?? genericType.Methods.FirstOrDefault(m => m.Name.EndsWith($".{methodName}"));
 		if (method == null) {
 			return;
 		}
@@ -2689,10 +2664,10 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			SimpleTypeRef simple => simple,
 			GenericTypeRef generic => new GenericTypeRef(
 				generic.BaseName,
-				generic.TypeArgs.Select(arg => paramMap.TryGetValue(arg, out var sub) ? sub : arg).ToList()
+				[.. generic.TypeArgs.Select(arg => paramMap.TryGetValue(arg, out var sub) ? sub : arg)]
 			),
 			FunctionTypeRef func => new FunctionTypeRef(
-				func.ParamTypes.Select(p => SubstituteTypeRefInTypeRef(p, paramMap)).ToList(),
+				[.. func.ParamTypes.Select(p => SubstituteTypeRefInTypeRef(p, paramMap))],
 				func.ReturnType != null ? SubstituteTypeRefInTypeRef(func.ReturnType, paramMap) : null
 			),
 			_ => typeRef
@@ -2834,7 +2809,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// </summary>
 	public MlirValue DeclareVariable(string name, MlirType type) {
 		var alloca = EmitAlloca(type, name);
-		_namedValues[name] = alloca;
+		_namedValues[name] = new VariableBinding.StackSlot(alloca);
 		return alloca;
 	}
 
@@ -2843,8 +2818,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// </summary>
 	public MlirValue GetVariableAddress(string name) {
 		// Check local variables first
-		if (_namedValues.TryGetValue(name, out var value))
-			return value;
+		if (_namedValues.TryGetValue(name, out var binding))
+			return binding.GetAddress();
 
 		// Check global variables
 		if (_globals.TryGetValue(name, out var global)) {
@@ -2863,7 +2838,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Check if we're inside a method and the name is a field of the current type
 		if (_currentMethodStructType != null) {
 			var fieldInfo = _currentMethodStructType.GetField(name);
-			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfValue)) {
+			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfBinding)) {
+				// Self is always a Direct binding (struct passed by ref)
+				var selfValue = selfBinding switch {
+					VariableBinding.Direct d => d.Value,
+					VariableBinding.StackSlot s => s.Address,
+					_ => throw new InvalidOperationException("Unknown VariableBinding variant for self")
+				};
 				return EmitGetField(selfValue, name, fieldInfo.Type);
 			}
 		}
@@ -2890,10 +2871,21 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			return selfField;
 		}
 
-		var addr = GetVariableAddress(name);
-		if (addr.Type is MemRefType)
-			return EmitLoad(addr);
-		return addr; // Already a value (e.g., function parameter)
+		// Use the VariableBinding union to determine if we need to load
+		if (_namedValues.TryGetValue(name, out var binding)) {
+			return binding switch {
+				VariableBinding.StackSlot slot => EmitLoad(slot.Address),
+				VariableBinding.Direct direct => direct.Value,
+				_ => throw new InvalidOperationException($"Unknown VariableBinding variant for {name}")
+			};
+		}
+
+		// Check global variables
+		if (_globals.TryGetValue(name, out var global)) {
+			return EmitLoad(EmitGetGlobal(global));
+		}
+
+		throw new InvalidOperationException($"Undefined variable: {name}");
 	}
 
 	/// <summary>
@@ -2916,7 +2908,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Check if we're inside a method and the name is a field of the current type
 		if (_currentMethodStructType != null) {
 			var fieldInfo = _currentMethodStructType.GetField(name);
-			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfValue)) {
+			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfBinding)) {
+				// Self is always a Direct binding (struct passed by ref)
+				var selfValue = selfBinding switch {
+					VariableBinding.Direct d => d.Value,
+					VariableBinding.StackSlot s => s.Address,
+					_ => throw new InvalidOperationException("Unknown VariableBinding variant for self")
+				};
 				EmitSetField(selfValue, name, value);
 				return true;
 			}

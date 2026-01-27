@@ -316,8 +316,6 @@ public sealed class LowerSIToFPOp : ConversionPattern<SIToFPOp> {
 
 public sealed class LowerExtUIOp : ConversionPattern<ExtUIOp> {
 	protected override bool MatchAndRewrite(ExtUIOp op, ConversionPatternRewriter rewriter) {
-		var srcType = op.Operand.Type as IntegerType ?? throw new InvalidOperationException("ExtUI source must be an integer type");
-		var dstType = op.Result.Type as IntegerType ?? throw new InvalidOperationException("ExtUI result must be an integer type");
 		var dst = new VRegOperand(op.Result.Id, IsFloat: false);
 		var src = new VRegOperand(op.Operand.Id, IsFloat: false);
 
@@ -748,11 +746,11 @@ public sealed class LowerMemCpyOp : ConversionPattern<MemCpyOp> {
 		Logger.Trace(LogCategory.Mlir, $"  Inserted: {push2.GetType().Name}");
 
 		// Load destination to RDI
-		var movDst = rewriter.Insert(new MovOp(new RegOperand(X86Register.RDI), new VRegOperand(op.Destination.Id)));
+		_ = rewriter.Insert(new MovOp(new RegOperand(X86Register.RDI), new VRegOperand(op.Destination.Id)));
 		Logger.Trace(LogCategory.Mlir, $"  Inserted: mov rdi, v{op.Destination.Id}");
 
 		// Load source to RSI
-		var movSrc = rewriter.Insert(new MovOp(new RegOperand(X86Register.RSI), new VRegOperand(op.Source.Id)));
+		_ = rewriter.Insert(new MovOp(new RegOperand(X86Register.RSI), new VRegOperand(op.Source.Id)));
 		Logger.Trace(LogCategory.Mlir, $"  Inserted: mov rsi, v{op.Source.Id}");
 
 		// Load length to RCX

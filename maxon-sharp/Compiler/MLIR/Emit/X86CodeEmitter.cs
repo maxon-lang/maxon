@@ -512,16 +512,18 @@ public sealed class X86CodeEmitter {
 		EmitByte(0x51);
 
 		// push r10
+#pragma warning disable IDE0230 // Use UTF-8 string literal
 		EmitBytes(0x41, 0x52);
+#pragma warning restore IDE0230 // Use UTF-8 string literal
 
 		// mov rcx, rax
 		EmitBytes(0x48, 0x89, 0xC1);
 
 		// mov r10, rsp
 		EmitBytes(0x4C, 0x89, 0xD4);  // This should be mov r10, rsp
-		// Actually: 49 89 E2 = mov r10, rsp (wrong direction)
-		// Correct: 4C 8B D4 = mov r10, rsp
-		// Let me fix this
+																	// Actually: 49 89 E2 = mov r10, rsp (wrong direction)
+																	// Correct: 4C 8B D4 = mov r10, rsp
+																	// Let me fix this
 		_code.RemoveRange(_code.Count - 3, 3);
 		EmitBytes(0x4C, 0x8B, 0xD4);  // mov r10, rsp
 
@@ -558,7 +560,9 @@ public sealed class X86CodeEmitter {
 		_code[jbPatchOffset] = (byte)(doneOffset - jbPatchOffset - 1);
 
 		// pop r10
+#pragma warning disable IDE0230 // Use UTF-8 string literal
 		EmitBytes(0x41, 0x5A);
+#pragma warning restore IDE0230 // Use UTF-8 string literal
 
 		// pop rcx
 		EmitByte(0x59);

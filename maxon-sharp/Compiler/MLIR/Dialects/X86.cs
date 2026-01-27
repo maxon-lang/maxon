@@ -1076,16 +1076,11 @@ public sealed class RepMovsbOp : X86Op {
 /// The callee-saved register pushes happen BEFORE sub rsp to ensure shadow space
 /// doesn't overlap with saved registers.
 /// </summary>
-public sealed class PrologueOp : X86Op {
+public sealed class PrologueOp(int stackSize = 32, IReadOnlyList<X86Register>? calleeSavedGprs = null) : X86Op {
 	public override string Mnemonic => "prologue";
 	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
-	public int StackSize { get; }
-	public IReadOnlyList<X86Register> CalleeSavedGprs { get; }
-
-	public PrologueOp(int stackSize = 32, IReadOnlyList<X86Register>? calleeSavedGprs = null) {
-		StackSize = stackSize;
-		CalleeSavedGprs = calleeSavedGprs ?? [];
-	}
+	public int StackSize { get; } = stackSize;
+	public IReadOnlyList<X86Register> CalleeSavedGprs { get; } = calleeSavedGprs ?? [];
 
 	public override void Print(MlirPrinter printer) {
 		if (CalleeSavedGprs.Count > 0) {
@@ -1100,14 +1095,10 @@ public sealed class PrologueOp : X86Op {
 /// Function epilogue: [pop callee-saved regs in reverse]; mov rsp, rbp; pop rbp
 /// The callee-saved register pops happen BEFORE mov rsp, rbp to match prologue order.
 /// </summary>
-public sealed class EpilogueOp : X86Op {
+public sealed class EpilogueOp(IReadOnlyList<X86Register>? calleeSavedGprs = null) : X86Op {
 	public override string Mnemonic => "epilogue";
 	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
-	public IReadOnlyList<X86Register> CalleeSavedGprs { get; }
-
-	public EpilogueOp(IReadOnlyList<X86Register>? calleeSavedGprs = null) {
-		CalleeSavedGprs = calleeSavedGprs ?? [];
-	}
+	public IReadOnlyList<X86Register> CalleeSavedGprs { get; } = calleeSavedGprs ?? [];
 
 	public override void Print(MlirPrinter printer) {
 		if (CalleeSavedGprs.Count > 0) {
