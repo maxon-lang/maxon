@@ -16,6 +16,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private readonly HashSet<string> _immutableVariables = [];
 	private readonly Dictionary<string, MlirType> _structTypes = [];
 	private readonly Dictionary<string, MlirType> _enumTypes = [];
+	private readonly Dictionary<string, TypeDecl> _genericTypes = []; // Generic type declarations for monomorphization
 	private readonly Dictionary<string, MlirGlobal> _globals = [];
 	private readonly Dictionary<string, MlirType> _functionReturnTypes = [];
 	private readonly Dictionary<string, List<ParamDecl>> _functionParams = [];
@@ -136,6 +137,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	private void LowerTypeDecl(TypeDecl type) {
+		// If this is a generic type (has type parameters), store it for later monomorphization
+		if (type.GenericParams.Count > 0) {
+			Logger.Debug(LogCategory.Mlir, $"  Storing generic type: {type.Name} with params: {string.Join(", ", type.GenericParams)}");
+			_genericTypes[type.Name] = type;
+			return;
+		}
+
 		var instanceFields = new List<(string name, MlirType type, bool isMutable, Expr? defaultValue)>();
 
 		foreach (var field in type.Fields) {
@@ -276,7 +284,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		return typeRef switch {
 			null => "void",
 			SimpleTypeRef simple => simple.Name,
-			GenericTypeRef generic => generic.BaseName,
+			GenericTypeRef generic => $"{generic.BaseName}${string.Join("$", generic.TypeArgs)}",
 			_ => throw new NotSupportedException($"Unsupported type ref: {typeRef}")
 		};
 	}
@@ -284,7 +292,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private MlirType ConvertTypeRef(TypeRef typeRef) {
 		return typeRef switch {
 			SimpleTypeRef simple => ConvertType(simple.Name),
-			GenericTypeRef generic => ConvertType(generic.BaseName),
+			GenericTypeRef generic => GetOrCreateMonomorphizedType(generic.BaseName, generic.TypeArgs),
 			_ => throw new NotSupportedException($"Unsupported type ref: {typeRef}")
 		};
 	}
@@ -1167,11 +1175,16 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		MaxonStructType? structType;
 		if (structInit.TypeName != null) {
 			// Explicit type name provided
-			if (!_structTypes.TryGetValue(structInit.TypeName, out var mlirType) || mlirType is not MaxonStructType st) {
+			if (_structTypes.TryGetValue(structInit.TypeName, out var mlirType) && mlirType is MaxonStructType st) {
+				// Found as a concrete struct type
+				structType = st;
+			} else if (_genericTypes.TryGetValue(structInit.TypeName, out var genericType)) {
+				// This is a generic type - infer type arguments from field values
+				structType = InferAndCreateMonomorphizedType(genericType, structInit);
+			} else {
 				throw new CompileError(ErrorCode.MlirUndefinedType, $"Unknown struct type: {structInit.TypeName}",
 					structInit.Location?.Line, structInit.Location?.Column);
 			}
-			structType = st;
 		} else if (expectedType is MaxonStructType expected) {
 			// Anonymous struct literal - infer type from context
 			structType = expected;
@@ -1196,6 +1209,65 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 
 		return EmitStructInit(structType, fieldValues);
+	}
+
+	/// <summary>
+	/// Infers type arguments for a generic type from field initializer expressions
+	/// and creates the monomorphized type.
+	/// </summary>
+	private MaxonStructType InferAndCreateMonomorphizedType(TypeDecl genericType, StructInitExpr structInit) {
+		// Build a map from field name to its type parameter (if it uses one)
+		var fieldToParam = new Dictionary<string, string>();
+		foreach (var field in genericType.Fields) {
+			if (field.Type is SimpleTypeRef simple && genericType.GenericParams.Contains(simple.Name)) {
+				fieldToParam[field.Name] = simple.Name;
+			}
+		}
+
+		// Infer type arguments from field values
+		var typeArgs = new List<string>();
+		var paramToType = new Dictionary<string, string>();
+
+		foreach (var param in genericType.GenericParams) {
+			// Find a field that uses this parameter
+			var fieldName = fieldToParam.FirstOrDefault(kv => kv.Value == param).Key;
+			if (fieldName == null) {
+				throw new CompileError(ErrorCode.MlirUndefinedType,
+					$"Cannot infer type argument for '{param}' - no field uses this type parameter",
+					structInit.Location?.Line, structInit.Location?.Column);
+			}
+
+			// Find the initializer for this field
+			var fieldInit = structInit.Fields.FirstOrDefault(f => f.Name == fieldName);
+			if (fieldInit == null) {
+				throw new CompileError(ErrorCode.MlirUndefinedType,
+					$"Cannot infer type argument for '{param}' - field '{fieldName}' not initialized",
+					structInit.Location?.Line, structInit.Location?.Column);
+			}
+
+			// Infer the type from the expression
+			var inferredType = InferTypeFromExpr(fieldInit.Value);
+			var typeName = MlirTypeToTypeName(inferredType);
+			typeArgs.Add(typeName);
+			paramToType[param] = typeName;
+		}
+
+		return GetOrCreateMonomorphizedType(genericType.Name, typeArgs);
+	}
+
+	/// <summary>
+	/// Converts an MlirType back to a type name string.
+	/// </summary>
+	private static string MlirTypeToTypeName(MlirType type) {
+		return type switch {
+			IntegerType it when it == IntegerType.I64 => "int",
+			IntegerType it when it == IntegerType.I32 => "int32",
+			IntegerType it when it == IntegerType.I1 => "bool",
+			FloatType ft when ft == FloatType.F64 => "float",
+			FloatType ft when ft == FloatType.F32 => "float32",
+			MaxonStructType st => st.Name,
+			_ => throw new NotSupportedException($"Cannot convert type {type} to type name")
+		};
 	}
 
 	/// <summary>
@@ -1629,6 +1701,64 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		_module.StructDefs.Add(def);
 
 		return structType;
+	}
+
+	/// <summary>
+	/// Gets or creates a monomorphized version of a generic type.
+	/// For example, Pair with (int, int) becomes Pair$int$int.
+	/// </summary>
+	public MaxonStructType GetOrCreateMonomorphizedType(string baseName, List<string> typeArgs) {
+		// Build monomorphized name: TypeName$Arg1$Arg2
+		var monoName = $"{baseName}${string.Join("$", typeArgs)}";
+
+		// Check if already registered
+		if (_structTypes.TryGetValue(monoName, out var existingType)) {
+			return (MaxonStructType)existingType;
+		}
+
+		// Look up the generic type declaration
+		if (!_genericTypes.TryGetValue(baseName, out var genericType)) {
+			throw new InvalidOperationException($"Unknown generic type: {baseName}");
+		}
+
+		// Verify correct number of type arguments
+		if (typeArgs.Count != genericType.GenericParams.Count) {
+			throw new InvalidOperationException(
+				$"Generic type '{baseName}' expects {genericType.GenericParams.Count} type arguments, but got {typeArgs.Count}");
+		}
+
+		// Build parameter substitution map
+		var paramMap = new Dictionary<string, string>();
+		for (int i = 0; i < genericType.GenericParams.Count; i++) {
+			paramMap[genericType.GenericParams[i]] = typeArgs[i];
+		}
+
+		// Create fields with substituted types
+		var instanceFields = new List<(string name, MlirType type, bool isMutable, Expr? defaultValue)>();
+
+		foreach (var field in genericType.Fields) {
+			if (field.IsStatic) continue; // Skip static fields for now
+
+			MlirType fieldType;
+			if (field.Type != null) {
+				// Substitute type parameters
+				var typeName = GetTypeString(field.Type);
+				if (paramMap.TryGetValue(typeName, out var substituted)) {
+					fieldType = ConvertType(substituted);
+				} else {
+					fieldType = ConvertTypeRef(field.Type);
+				}
+			} else if (field.DefaultValue != null) {
+				fieldType = InferTypeFromExpr(field.DefaultValue);
+			} else {
+				throw new InvalidOperationException($"Field '{field.Name}' has no type annotation and no default value");
+			}
+
+			instanceFields.Add((field.Name, fieldType, field.IsMutable, field.DefaultValue));
+		}
+
+		Logger.Debug(LogCategory.Mlir, $"  Creating monomorphized type: {monoName}");
+		return RegisterStruct(monoName, instanceFields);
 	}
 
 	/// <summary>
