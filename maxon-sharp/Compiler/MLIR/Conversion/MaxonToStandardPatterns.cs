@@ -630,8 +630,8 @@ public sealed class LowerManagedMemoryGrowOp : ConversionPattern<ManagedMemoryGr
 		var oldSize = new MulIOp(capLoad.Result, elemSize.Result);
 		rewriter.Insert(oldSize);
 
-		// Reallocate (will be lowered to realloc call)
-		var realloc = new HeapReallocOp(bufferLoad.Result, newSize.Result);
+		// Reallocate (use safe version that handles NULL)
+		var realloc = new HeapReallocOrAllocOp(bufferLoad.Result, newSize.Result);
 		rewriter.Insert(realloc);
 
 		// Store new buffer pointer
@@ -693,8 +693,8 @@ public sealed class LowerManagedMemoryGrowByRefOp : ConversionPattern<ManagedMem
 		var newSize = new MulIOp(op.NewCapacity, elemSize.Result);
 		rewriter.Insert(newSize);
 
-		// Reallocate
-		var realloc = new HeapReallocOp(bufferLoad.Result, newSize.Result);
+		// Reallocate (use safe version that handles NULL)
+		var realloc = new HeapReallocOrAllocOp(bufferLoad.Result, newSize.Result);
 		rewriter.Insert(realloc);
 
 		// Store new buffer pointer back

@@ -307,6 +307,7 @@ public sealed class HeapAllocOp : MemRefOp {
 /// <summary>
 /// Heap reallocation: %result = memref.heap_realloc %ptr, %newSize : !ptr<i8>
 /// Reallocates the buffer to a new size.
+/// NOTE: This does NOT handle NULL pointers on Windows. Use HeapReallocOrAllocOp for safe realloc.
 /// </summary>
 public sealed class HeapReallocOp : MemRefOp {
 	public override string Mnemonic => "heap_realloc";
@@ -324,6 +325,30 @@ public sealed class HeapReallocOp : MemRefOp {
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"{Result} = memref.heap_realloc {Ptr}, {NewSize} : !ptr<i8>");
+	}
+}
+
+/// <summary>
+/// Safe heap reallocation that handles NULL pointers: %result = memref.heap_realloc_or_alloc %ptr, %newSize : !ptr<i8>
+/// If ptr is NULL, allocates new memory. Otherwise, reallocates.
+/// This is needed because Windows HeapReAlloc doesn't handle NULL like Unix realloc.
+/// </summary>
+public sealed class HeapReallocOrAllocOp : MemRefOp {
+	public override string Mnemonic => "heap_realloc_or_alloc";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Ptr => Operands[0];
+	public MlirValue NewSize => Operands[1];
+	public MlirValue Result => Results[0];
+
+	public HeapReallocOrAllocOp(MlirValue ptr, MlirValue newSize) {
+		Operands.Add(ptr);
+		Operands.Add(newSize);
+		CreateResult(new PtrType(IntegerType.I8));
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = memref.heap_realloc_or_alloc {Ptr}, {NewSize} : !ptr<i8>");
 	}
 }
 

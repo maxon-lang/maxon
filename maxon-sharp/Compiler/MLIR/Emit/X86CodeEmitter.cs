@@ -91,6 +91,9 @@ public sealed class X86CodeEmitter {
 			case JmpOp jmp:
 				EmitJmp(jmp);
 				break;
+			case JzOp jz:
+				EmitJz(jz);
+				break;
 			case JccOp jcc:
 				EmitJcc(jcc);
 				break;
@@ -952,6 +955,13 @@ public sealed class X86CodeEmitter {
 
 	private void EmitJmp(JmpOp op) {
 		EmitByte(0xE9);
+		_labelFixups.Add((CurrentOffset, ScopedLabel(op.Target), 4));
+		EmitImm32(0); // Placeholder
+	}
+
+	private void EmitJz(JzOp op) {
+		// JZ rel32 (jump if zero/equal): 0F 84 rel32
+		EmitBytes(0x0F, 0x84);
 		_labelFixups.Add((CurrentOffset, ScopedLabel(op.Target), 4));
 		EmitImm32(0); // Placeholder
 	}

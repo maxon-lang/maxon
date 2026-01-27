@@ -730,6 +730,22 @@ public sealed class JmpOp(string target) : X86Op {
 }
 
 /// <summary>
+/// Simple conditional jump on zero: x86.jz target
+/// Used for inline conditional code (not block terminators).
+/// </summary>
+public sealed class JzOp(string target) : X86Op {
+	public override string Mnemonic => "jz";
+	public override bool IsTerminator => false; // Not a block terminator, just inline conditional
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
+
+	public string Target { get; } = target;
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"x86.jz {Target}");
+	}
+}
+
+/// <summary>
 /// Conditional jump: x86.jcc cond, target
 /// </summary>
 public sealed class JccOp(X86CondCode condition, string trueTarget, string falseTarget) : X86Op {

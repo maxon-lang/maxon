@@ -1234,6 +1234,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			// Control flow and misc
 			X86CallOp call => call,
 			JmpOp jmp => jmp,
+			JzOp jz => jz,
 			JccOp jcc => jcc,
 			RetOp ret => ret,
 			LabelOp label => label,

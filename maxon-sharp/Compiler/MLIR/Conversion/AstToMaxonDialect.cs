@@ -19,6 +19,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private readonly Dictionary<string, TypeDecl> _genericTypes = []; // Generic type declarations for monomorphization
 	private readonly HashSet<string> _loweredMonomorphizedMethods = []; // Track which monomorphized methods have been lowered (by full method name)
 	private readonly Dictionary<string, (TypeDecl genericType, Dictionary<string, string> paramMap)> _pendingMonomorphizedTypes = []; // For on-demand method lowering
+	private readonly Dictionary<string, (string baseName, List<string> typeArgs)> _typeAliases = []; // Type alias mappings (e.g., IntArray -> (Array, [int]))
 	private readonly Dictionary<string, MlirGlobal> _globals = [];
 	private readonly Dictionary<string, MlirType> _functionReturnTypes = [];
 	private readonly Dictionary<string, List<ParamDecl>> _functionParams = [];
@@ -51,6 +52,12 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		foreach (var enumDecl in program.Enums) {
 			Logger.Trace(LogCategory.Mlir, $"  Lowering enum: {enumDecl.Name}");
 			LowerEnumDecl(enumDecl);
+		}
+
+		// Process type aliases (must be after generic types are registered)
+		foreach (var typeAlias in program.TypeAliases) {
+			Logger.Trace(LogCategory.Mlir, $"  Registering type alias: {typeAlias.Name} -> {typeAlias.BaseType} with ({string.Join(", ", typeAlias.TypeArgs)})");
+			_typeAliases[typeAlias.Name] = (typeAlias.BaseType, typeAlias.TypeArgs);
 		}
 
 		// Second pass: lower global variables and constants
@@ -1759,15 +1766,28 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private MlirValue LowerStructInitExpr(StructInitExpr structInit, MlirType? expectedType = null) {
 		MaxonStructType? structType;
 		if (structInit.TypeName != null) {
-			// Explicit type name provided
-			if (_structTypes.TryGetValue(structInit.TypeName, out var mlirType) && mlirType is MaxonStructType st) {
+			var typeName = structInit.TypeName;
+
+			// Check for type alias first (e.g., typealias IntArray is Array with int)
+			if (_typeAliases.TryGetValue(typeName, out var alias)) {
+				if (alias.typeArgs.Count > 0) {
+					// Generic alias: creates monomorphized type (e.g., Array$int)
+					structType = GetOrCreateMonomorphizedType(alias.baseName, alias.typeArgs);
+				} else if (_structTypes.TryGetValue(alias.baseName, out var aliasedType) && aliasedType is MaxonStructType ast) {
+					// Simple alias to a concrete type
+					structType = ast;
+				} else {
+					throw new CompileError(ErrorCode.MlirUndefinedType, $"Unknown struct type: {alias.baseName}",
+						structInit.Location?.Line, structInit.Location?.Column);
+				}
+			} else if (_structTypes.TryGetValue(typeName, out var mlirType) && mlirType is MaxonStructType st) {
 				// Found as a concrete struct type
 				structType = st;
-			} else if (_genericTypes.TryGetValue(structInit.TypeName, out var genericType)) {
+			} else if (_genericTypes.TryGetValue(typeName, out var genericType)) {
 				// This is a generic type - infer type arguments from field values
 				structType = InferAndCreateMonomorphizedType(genericType, structInit);
 			} else {
-				throw new CompileError(ErrorCode.MlirUndefinedType, $"Unknown struct type: {structInit.TypeName}",
+				throw new CompileError(ErrorCode.MlirUndefinedType, $"Unknown struct type: {typeName}",
 					structInit.Location?.Line, structInit.Location?.Column);
 			}
 		} else if (expectedType is MaxonStructType expected) {
@@ -2025,6 +2045,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Converts an AST type to an MLIR type.
 	/// </summary>
 	public MlirType ConvertType(string typeName) {
+		// Check for type alias first (e.g., typealias IntArray is Array with int)
+		if (_typeAliases.TryGetValue(typeName, out var alias)) {
+			if (alias.typeArgs.Count > 0) {
+				return GetOrCreateMonomorphizedType(alias.baseName, alias.typeArgs);
+			}
+			typeName = alias.baseName;
+		}
+
 		// Handle function pointer type strings: fn(params)->returnType
 		if (typeName.StartsWith("fn(")) {
 			return ParseFunctionPtrTypeString(typeName);

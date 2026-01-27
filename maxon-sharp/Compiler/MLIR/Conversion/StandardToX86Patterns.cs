@@ -62,6 +62,7 @@ public static class StandardToX86Patterns {
 		// Heap operations (for managed memory)
 		patterns.Add<LowerHeapAllocOp>();
 		patterns.Add<LowerHeapReallocOp>();
+		patterns.Add<LowerHeapReallocOrAllocOp>();
 		patterns.Add<LowerHeapFreeOp>();
 		patterns.Add<LowerPtrAddOp>();
 		patterns.Add<LowerMemMoveOp>();
@@ -645,6 +646,71 @@ public sealed class LowerHeapReallocOp : ConversionPattern<HeapReallocOp> {
 
 		// Call HeapReAlloc
 		rewriter.Insert(new X86CallOp("HeapReAlloc", isExternal: true, dllName: "kernel32.dll"));
+
+		// Move result from RAX to destination
+		rewriter.Insert(new MovOp(new VRegOperand(op.Result.Id), new RegOperand(X86Register.RAX)));
+
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers heap_realloc_or_alloc to conditional HeapAlloc (if NULL) or HeapReAlloc (if non-NULL).
+/// This handles the Windows quirk where HeapReAlloc doesn't work with NULL pointers.
+/// </summary>
+public sealed class LowerHeapReallocOrAllocOp : ConversionPattern<HeapReallocOrAllocOp> {
+	private static int _labelCounter = 0;
+
+	protected override bool MatchAndRewrite(HeapReallocOrAllocOp op, ConversionPatternRewriter rewriter) {
+		var labelId = _labelCounter++;
+		var allocLabel = $"heap_alloc_{labelId}";
+		var doneLabel = $"heap_done_{labelId}";
+
+		// Save ptr in R10 and newSize in R11 (caller-saved scratch registers)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R10), new VRegOperand(op.Ptr.Id)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R11), new VRegOperand(op.NewSize.Id)));
+
+		// Check if ptr is NULL - if so, use HeapAlloc instead of HeapReAlloc
+		rewriter.Insert(new TestOp(new RegOperand(X86Register.R10), new RegOperand(X86Register.R10)));
+		rewriter.Insert(new JzOp(allocLabel));
+
+		// --- HeapReAlloc path (ptr != NULL) ---
+		// Call GetProcessHeap() -> RAX = hHeap
+		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
+
+		// Set up HeapReAlloc arguments:
+		// RCX = hHeap (from RAX)
+		// RDX = dwFlags (0)
+		// R8 = lpMem (ptr)
+		// R9 = dwBytes (newSize)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8), new RegOperand(X86Register.R10)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R9), new RegOperand(X86Register.R11)));
+
+		// Call HeapReAlloc
+		rewriter.Insert(new X86CallOp("HeapReAlloc", isExternal: true, dllName: "kernel32.dll"));
+		rewriter.Insert(new JmpOp(doneLabel));
+
+		// --- HeapAlloc path (ptr == NULL) ---
+		rewriter.Insert(new LabelOp(allocLabel));
+
+		// Call GetProcessHeap() -> RAX = hHeap
+		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
+
+		// Set up HeapAlloc arguments:
+		// RCX = hHeap (from RAX)
+		// RDX = dwFlags (0)
+		// R8 = dwBytes (newSize)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8), new RegOperand(X86Register.R11)));
+
+		// Call HeapAlloc
+		rewriter.Insert(new X86CallOp("HeapAlloc", isExternal: true, dllName: "kernel32.dll"));
+
+		// --- Done ---
+		rewriter.Insert(new LabelOp(doneLabel));
 
 		// Move result from RAX to destination
 		rewriter.Insert(new MovOp(new VRegOperand(op.Result.Id), new RegOperand(X86Register.RAX)));
