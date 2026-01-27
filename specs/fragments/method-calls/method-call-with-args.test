@@ -23,11 +23,10 @@ ExitCode: 42
 ---
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.push rbx
+    x86.prologue stack_size=56 saved_gprs=[RBX]
     x86.mov rax, 0
     x86.lea rcx, qword ptr [rbp-40]
-    x86.lea rdx, qword ptr [rcx+rax]
+    x86.lea rdx, qword ptr [rcx]
     x86.mov qword ptr [rdx], rax
     x86.lea rbx, qword ptr [rbp-48]
     x86.mov qword ptr [rbx], rcx
@@ -57,8 +56,7 @@ func.func @main() -> i64 {
     x86.call Adder.get
     x86.mov rdx, rax
     x86.mov rax, rdx
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX]
     x86.ret
 }
 

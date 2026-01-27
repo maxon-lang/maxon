@@ -3,6 +3,11 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler.Mlir.Emit;
 
 /// <summary>
+/// Represents an imported function.
+/// </summary>
+public record ImportEntry(string DllName, string FunctionName);
+
+/// <summary>
 /// Emits machine code from X86 dialect operations.
 /// </summary>
 public sealed class X86CodeEmitter {
@@ -15,6 +20,11 @@ public sealed class X86CodeEmitter {
 	private readonly List<byte> _data = [];
 	private readonly Dictionary<string, int> _globalOffsets = [];
 	private readonly List<(int codeOffset, string globalName, int instrSize)> _globalFixups = [];
+
+	// Import table support
+	private readonly List<ImportEntry> _imports = [];
+	private readonly Dictionary<string, int> _importIndices = [];  // function name -> index in _imports
+	private readonly List<(int codeOffset, int importIndex, int instrSize)> _importFixups = [];
 
 	/// <summary>
 	/// Gets the emitted machine code.
@@ -176,11 +186,29 @@ public sealed class X86CodeEmitter {
 			case XorpdOp xorpd:
 				EmitXorpd(xorpd);
 				break;
+			case MovzxOp movzx:
+				EmitMovzx(movzx);
+				break;
+			case MovsxOp movsx:
+				EmitMovsx(movsx);
+				break;
+			case MovsxdOp movsxd:
+				EmitMovsxd(movsxd);
+				break;
 			case PrologueOp prologue:
 				EmitPrologue(prologue);
 				break;
-			case EpilogueOp:
-				EmitEpilogue();
+			case EpilogueOp epilogue:
+				EmitEpilogue(epilogue);
+				break;
+			case CldOp:
+				EmitCld();
+				break;
+			case StdOp:
+				EmitStd();
+				break;
+			case RepMovsbOp:
+				EmitRepMovsb();
 				break;
 			default:
 				throw new NotSupportedException($"Unsupported X86 operation: {op.GetType().Name}");
@@ -193,7 +221,10 @@ public sealed class X86CodeEmitter {
 	}
 
 	/// <summary>
-	/// Emits function prologue: push rbp; mov rbp, rsp; sub rsp, N
+	/// Emits function prologue: push rbp; mov rbp, rsp; [push callee-saved]; sub rsp, N
+	/// Callee-saved register pushes happen BEFORE sub rsp to ensure shadow space
+	/// for outgoing calls doesn't overlap with saved registers.
+	/// For stack allocations >= 4096 bytes, calls __chkstk to probe stack pages.
 	/// </summary>
 	private void EmitPrologue(PrologueOp op) {
 		// push rbp
@@ -204,8 +235,26 @@ public sealed class X86CodeEmitter {
 		EmitByte(0x89);
 		EmitByte(ModRM(0b11, GetRegCode(X86Register.RSP), GetRegCode(X86Register.RBP)));
 
-		// sub rsp, N
+		// Push callee-saved GPRs (before sub rsp)
+		foreach (var reg in op.CalleeSavedGprs) {
+			EmitPushReg(reg);
+		}
+
+		// sub rsp, N (with __chkstk for large allocations)
 		if (op.StackSize > 0) {
+			if (op.StackSize >= 4096) {
+				// Large stack allocation: call __chkstk first
+				// mov eax, stackSize (32-bit immediate is sufficient for stack sizes)
+				EmitByte(0xB8);
+				EmitImm32(op.StackSize);
+
+				// call __chkstk (relative call, will be patched later)
+				EmitByte(0xE8);
+				RecordChkstkCall();
+				EmitImm32(0);  // Placeholder for displacement
+			}
+
+			// sub rsp, N
 			EmitRexW(rm: X86Register.RSP);
 			if (op.StackSize <= 127) {
 				// sub rsp, imm8 (0x83 /5)
@@ -222,16 +271,43 @@ public sealed class X86CodeEmitter {
 	}
 
 	/// <summary>
-	/// Emits function epilogue: mov rsp, rbp; pop rbp
+	/// Emits function epilogue to match the prologue layout:
+	/// Prologue: push rbp; mov rbp,rsp; push callee-saved; sub rsp,N
+	/// Epilogue: lea rsp,[rbp-K]; pop callee-saved; pop rbp; ret
+	/// where K = number of callee-saved GPRs * 8
 	/// </summary>
-	private void EmitEpilogue() {
-		// mov rsp, rbp (REX.W + MOV r/m64, r64)
-		EmitRexW(X86Register.RBP, X86Register.RSP);
-		EmitByte(0x89);
-		EmitByte(ModRM(0b11, GetRegCode(X86Register.RBP), GetRegCode(X86Register.RSP)));
+	private void EmitEpilogue(EpilogueOp op) {
+		if (op.CalleeSavedGprs.Count > 0) {
+			// lea rsp, [rbp - K] where K = callee-saved count * 8
+			// This restores RSP to point to the topmost callee-saved register
+			int offset = op.CalleeSavedGprs.Count * 8;
+			EmitRexW(X86Register.RBP, X86Register.RSP);
+			EmitByte(0x8D);  // LEA
+			if (offset <= 127) {
+				EmitByte(ModRM(0b01, GetRegCode(X86Register.RSP), GetRegCode(X86Register.RBP)));  // [rbp + disp8]
+				EmitByte((byte)(-offset));  // Negative displacement
+			} else {
+				EmitByte(ModRM(0b10, GetRegCode(X86Register.RSP), GetRegCode(X86Register.RBP)));  // [rbp + disp32]
+				EmitImm32(-offset);  // Negative displacement
+			}
 
-		// pop rbp
-		EmitByte(0x5D);
+			// Pop callee-saved GPRs in reverse order
+			for (int i = op.CalleeSavedGprs.Count - 1; i >= 0; i--) {
+				EmitPopReg(op.CalleeSavedGprs[i]);
+			}
+
+			// pop rbp (RSP now points to saved rbp after all callee-saved pops)
+			EmitByte(0x5D);
+		} else {
+			// No callee-saved registers, use simple epilogue
+			// mov rsp, rbp (REX.W + MOV r/m64, r64)
+			EmitRexW(X86Register.RBP, X86Register.RSP);
+			EmitByte(0x89);
+			EmitByte(ModRM(0b11, GetRegCode(X86Register.RBP), GetRegCode(X86Register.RSP)));
+
+			// pop rbp
+			EmitByte(0x5D);
+		}
 	}
 
 	/// <summary>
@@ -291,9 +367,49 @@ public sealed class X86CodeEmitter {
 	}
 
 	/// <summary>
+	/// Resolves all import fixups.
+	/// Must be called after code emission is complete and import table addresses are known.
+	/// </summary>
+	/// <param name="iatRvaOffset">The RVA offset of the IAT relative to code section end</param>
+	public void ResolveImports(int iatRvaOffset) {
+		Logger.Debug(LogCategory.Codegen, $"Resolving {_importFixups.Count} import references");
+
+		foreach (var (codeOffset, importIndex, instrSize) in _importFixups) {
+			// Each IAT entry is 8 bytes (64-bit pointer)
+			var iatEntryOffset = importIndex * 8;
+
+			// RIP-relative addressing: displacement is from end of instruction to target
+			// Target = code_end + iatRvaOffset + iatEntryOffset
+			// RIP at instruction end = codeOffset + instrSize
+			var codeEnd = _code.Count;
+			var targetAddr = codeEnd + iatRvaOffset + iatEntryOffset;
+			var ripAtEnd = codeOffset + instrSize;
+			var relOffset = targetAddr - ripAtEnd;
+
+			Logger.Trace(LogCategory.Codegen, $"  import[{importIndex}]: code offset 0x{codeOffset:X} -> IAT offset 0x{iatEntryOffset:X}");
+
+			// Patch the displacement
+			_code[codeOffset] = (byte)relOffset;
+			_code[codeOffset + 1] = (byte)(relOffset >> 8);
+			_code[codeOffset + 2] = (byte)(relOffset >> 16);
+			_code[codeOffset + 3] = (byte)(relOffset >> 24);
+		}
+	}
+
+	/// <summary>
 	/// Gets whether there are any globals defined.
 	/// </summary>
 	public bool HasGlobals => _data.Count > 0;
+
+	/// <summary>
+	/// Gets whether there are any imports.
+	/// </summary>
+	public bool HasImports => _imports.Count > 0;
+
+	/// <summary>
+	/// Gets the list of imported functions.
+	/// </summary>
+	public IReadOnlyList<ImportEntry> Imports => _imports;
 
 	/// <summary>
 	/// Defines a label at the current position.
@@ -315,6 +431,168 @@ public sealed class X86CodeEmitter {
 	/// </summary>
 	public string ScopedLabel(string blockName) {
 		return $"{_currentFunction}.{blockName}";
+	}
+
+	// ========================================================================
+	// Runtime functions (emitted as raw machine code)
+	// ========================================================================
+
+	// Track __chkstk call sites for patching
+	private readonly List<int> _chkstkCallFixups = [];
+	private int _chkstkOffset = -1;
+
+	/// <summary>
+	/// Emits the _start wrapper that calls main and ExitProcess.
+	/// This must be emitted first at offset 0 (the entry point).
+	/// </summary>
+	public void EmitStartWrapper() {
+		DefineLabel("_start");
+		Logger.Debug(LogCategory.Codegen, "Emitting _start wrapper");
+
+		// push rbp
+		EmitByte(0x55);
+
+		// mov rbp, rsp
+		EmitBytes(0x48, 0x89, 0xE5);
+
+		// sub rsp, 32 (shadow space)
+		EmitBytes(0x48, 0x83, 0xEC, 0x20);
+
+		// call main (relative call, will be patched)
+		EmitByte(0xE8);
+		_labelFixups.Add((CurrentOffset, "main", 4));
+		EmitImm32(0);
+
+		// mov rcx, rax (pass main's return value to ExitProcess)
+		EmitBytes(0x48, 0x89, 0xC1);
+
+		// call ExitProcess (external call via IAT)
+		EmitByte(0xFF);
+		EmitByte(0x15);
+		if (!_importIndices.TryGetValue("ExitProcess", out var importIndex)) {
+			importIndex = _imports.Count;
+			_imports.Add(new ImportEntry("kernel32.dll", "ExitProcess"));
+			_importIndices["ExitProcess"] = importIndex;
+		}
+		_importFixups.Add((CurrentOffset, importIndex, 4));
+		EmitImm32(0);
+
+		// Note: ExitProcess never returns, so no epilogue needed
+	}
+
+	/// <summary>
+	/// Emits the __chkstk function for Windows x64 stack probing.
+	/// Input: RAX = number of bytes to allocate.
+	/// Probes each page and preserves all registers.
+	/// </summary>
+	public void EmitChkstk() {
+		_chkstkOffset = CurrentOffset;
+		DefineLabel("__chkstk");
+		Logger.Debug(LogCategory.Codegen, $"Emitting __chkstk at offset 0x{_chkstkOffset:X}");
+
+		// Algorithm:
+		//   push rcx
+		//   push r10
+		//   mov rcx, rax          ; rcx = bytes to probe
+		//   mov r10, rsp
+		//   add r10, 24           ; adjust for return addr + 2 pushes
+		// loop:
+		//   cmp rcx, 0x1000
+		//   jb done
+		//   sub r10, 0x1000       ; move to next page
+		//   test [r10], r10       ; touch the page
+		//   sub rcx, 0x1000
+		//   jmp loop
+		// done:
+		//   pop r10
+		//   pop rcx
+		//   ret
+
+		// push rcx
+		EmitByte(0x51);
+
+		// push r10
+		EmitBytes(0x41, 0x52);
+
+		// mov rcx, rax
+		EmitBytes(0x48, 0x89, 0xC1);
+
+		// mov r10, rsp
+		EmitBytes(0x4C, 0x89, 0xD4);  // This should be mov r10, rsp
+		// Actually: 49 89 E2 = mov r10, rsp (wrong direction)
+		// Correct: 4C 8B D4 = mov r10, rsp
+		// Let me fix this
+		_code.RemoveRange(_code.Count - 3, 3);
+		EmitBytes(0x4C, 0x8B, 0xD4);  // mov r10, rsp
+
+		// add r10, 24 (adjust for return address + 2 pushes = 8 + 8 + 8 = 24)
+		EmitBytes(0x49, 0x83, 0xC2, 0x18);
+
+		// loop: (record offset for jmp back)
+		var loopOffset = CurrentOffset;
+
+		// cmp rcx, 0x1000
+		EmitBytes(0x48, 0x81, 0xF9, 0x00, 0x10, 0x00, 0x00);
+
+		// jb done (short jump, will patch)
+		EmitByte(0x72);
+		var jbPatchOffset = CurrentOffset;
+		EmitByte(0x00);  // placeholder
+
+		// sub r10, 0x1000
+		EmitBytes(0x49, 0x81, 0xEA, 0x00, 0x10, 0x00, 0x00);
+
+		// test [r10], r10d (just touch the memory, using 32-bit for efficiency)
+		EmitBytes(0x45, 0x85, 0x12);
+
+		// sub rcx, 0x1000
+		EmitBytes(0x48, 0x81, 0xE9, 0x00, 0x10, 0x00, 0x00);
+
+		// jmp loop (short jump back)
+		EmitByte(0xEB);
+		var jmpBackDisp = loopOffset - (CurrentOffset + 1);
+		EmitByte((byte)jmpBackDisp);
+
+		// done:
+		var doneOffset = CurrentOffset;
+		_code[jbPatchOffset] = (byte)(doneOffset - jbPatchOffset - 1);
+
+		// pop r10
+		EmitBytes(0x41, 0x5A);
+
+		// pop rcx
+		EmitByte(0x59);
+
+		// ret
+		EmitByte(0xC3);
+	}
+
+	/// <summary>
+	/// Patches all __chkstk call sites with the actual offset.
+	/// Must be called after EmitChkstk().
+	/// </summary>
+	public void PatchChkstkCalls() {
+		if (_chkstkOffset < 0) return;
+
+		foreach (var callOffset in _chkstkCallFixups) {
+			// callOffset points to the 4-byte displacement after E8
+			// Target = callOffset + 4 + displacement, so displacement = target - callOffset - 4
+			var displacement = _chkstkOffset - callOffset - 4;
+			_code[callOffset] = (byte)displacement;
+			_code[callOffset + 1] = (byte)(displacement >> 8);
+			_code[callOffset + 2] = (byte)(displacement >> 16);
+			_code[callOffset + 3] = (byte)(displacement >> 24);
+		}
+
+		Logger.Debug(LogCategory.Codegen, $"Patched {_chkstkCallFixups.Count} __chkstk call sites");
+	}
+
+	/// <summary>
+	/// Records a __chkstk call fixup for the current offset.
+	/// Used by EmitPrologue when stack size >= 4096.
+	/// </summary>
+	public void RecordChkstkCall() {
+		_chkstkCallFixups.Add(CurrentOffset);
 	}
 
 	// ========================================================================
@@ -452,6 +730,66 @@ public sealed class X86CodeEmitter {
 		}
 	}
 
+	private void EmitMovzx(MovzxOp op) {
+		// MOVZX r64, r/m8 or r/m16
+		// For i8 to i64: 0F B6 /r (zero-extend byte to qword)
+		// For i16 to i64: 0F B7 /r (zero-extend word to qword)
+		if (op.Dst is RegOperand dst && op.Src is RegOperand src) {
+			EmitRexW(dst.Register, src.Register);
+			EmitByte(0x0F);
+			EmitByte(op.IsByte ? (byte)0xB6 : (byte)0xB7);
+			EmitByte(ModRM(0b11, GetRegCode(dst.Register), GetRegCode(src.Register)));
+		} else if (op.Dst is RegOperand dstReg && op.Src is MemOperand srcMem && srcMem.Base is RegOperand baseReg) {
+			EmitRexW(dstReg.Register, baseReg.Register);
+			EmitByte(0x0F);
+			EmitByte(op.IsByte ? (byte)0xB6 : (byte)0xB7);
+			EmitByte(ModRM(0b10, GetRegCode(dstReg.Register), GetRegCode(baseReg.Register)));
+			if (GetRegCode(baseReg.Register) == 4) EmitByte(0x24);
+			EmitImm32(srcMem.Displacement);
+		} else {
+			throw new NotSupportedException($"Unsupported MOVZX operands: {op.Dst}, {op.Src}");
+		}
+	}
+
+	private void EmitMovsx(MovsxOp op) {
+		// MOVSX r64, r/m8 or r/m16
+		// For i8 to i64: REX.W + 0F BE /r (sign-extend byte to qword)
+		// For i16 to i64: REX.W + 0F BF /r (sign-extend word to qword)
+		if (op.Dst is RegOperand dst && op.Src is RegOperand src) {
+			EmitRexW(dst.Register, src.Register);
+			EmitByte(0x0F);
+			EmitByte(op.IsByte ? (byte)0xBE : (byte)0xBF);
+			EmitByte(ModRM(0b11, GetRegCode(dst.Register), GetRegCode(src.Register)));
+		} else if (op.Dst is RegOperand dstReg && op.Src is MemOperand srcMem && srcMem.Base is RegOperand baseReg) {
+			EmitRexW(dstReg.Register, baseReg.Register);
+			EmitByte(0x0F);
+			EmitByte(op.IsByte ? (byte)0xBE : (byte)0xBF);
+			EmitByte(ModRM(0b10, GetRegCode(dstReg.Register), GetRegCode(baseReg.Register)));
+			if (GetRegCode(baseReg.Register) == 4) EmitByte(0x24);
+			EmitImm32(srcMem.Displacement);
+		} else {
+			throw new NotSupportedException($"Unsupported MOVSX operands: {op.Dst}, {op.Src}");
+		}
+	}
+
+	private void EmitMovsxd(MovsxdOp op) {
+		// MOVSXD r64, r/m32
+		// REX.W + 63 /r (sign-extend dword to qword)
+		if (op.Dst is RegOperand dst && op.Src is RegOperand src) {
+			EmitRexW(dst.Register, src.Register);
+			EmitByte(0x63);
+			EmitByte(ModRM(0b11, GetRegCode(dst.Register), GetRegCode(src.Register)));
+		} else if (op.Dst is RegOperand dstReg && op.Src is MemOperand srcMem && srcMem.Base is RegOperand baseReg) {
+			EmitRexW(dstReg.Register, baseReg.Register);
+			EmitByte(0x63);
+			EmitByte(ModRM(0b10, GetRegCode(dstReg.Register), GetRegCode(baseReg.Register)));
+			if (GetRegCode(baseReg.Register) == 4) EmitByte(0x24);
+			EmitImm32(srcMem.Displacement);
+		} else {
+			throw new NotSupportedException($"Unsupported MOVSXD operands: {op.Dst}, {op.Src}");
+		}
+	}
+
 	private void EmitMovRegMem(X86Register dst, MemOperand src) {
 		if (src.Base is RegOperand baseReg && src.Index is RegOperand indexReg) {
 			// [base + index*scale + disp] - requires SIB byte
@@ -471,21 +809,49 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitMovMemReg(MemOperand dst, X86Register src) {
+		// Determine opcode based on operand size
+		// For byte stores: 0x88 (MOV r/m8, r8)
+		// For word/dword/qword stores: 0x89 (MOV r/m16/32/64, r16/32/64) with REX.W for 64-bit
+		byte opcode = dst.Size == 1 ? (byte)0x88 : (byte)0x89;
+
 		if (dst.Base is RegOperand baseReg && dst.Index is RegOperand indexReg) {
 			// [base + index*scale + disp] - requires SIB byte
-			EmitRexW(src, baseReg.Register, indexReg.Register);
-			EmitByte(0x89);
+			if (dst.Size == 1) {
+				// Byte store doesn't need REX.W, but may need REX for r8-r15
+				if (NeedsRex(src) || NeedsRex(baseReg.Register) || NeedsRex(indexReg.Register)) {
+					EmitByte(Rex(false, src, baseReg.Register, indexReg.Register));
+				}
+			} else {
+				EmitRexW(src, baseReg.Register, indexReg.Register);
+			}
+			EmitByte(opcode);
 			EmitByte(ModRM(0b10, GetRegCode(src), 0b100)); // rm=4 means SIB follows
 			EmitByte(SIB(dst.Scale, GetRegCode(indexReg.Register), GetRegCode(baseReg.Register)));
 			EmitImm32(dst.Displacement);
 		} else if (dst.Base is RegOperand baseOnly) {
 			// [base + disp32]
-			EmitRexW(src, baseOnly.Register);
-			EmitByte(0x89);
+			if (dst.Size == 1) {
+				// Byte store doesn't need REX.W, but may need REX for r8-r15
+				if (NeedsRex(src) || NeedsRex(baseOnly.Register)) {
+					EmitByte(Rex(false, src, baseOnly.Register));
+				}
+			} else {
+				EmitRexW(src, baseOnly.Register);
+			}
+			EmitByte(opcode);
 			EmitByte(ModRM(0b10, GetRegCode(src), GetRegCode(baseOnly.Register)));
 			if (GetRegCode(baseOnly.Register) == 4) EmitByte(0x24);
 			EmitImm32(dst.Displacement);
 		}
+	}
+
+	private static byte Rex(bool w, X86Register reg, X86Register rm, X86Register? index = null) {
+		int rex = 0x40;
+		if (w) rex |= 0x08;
+		if (NeedsRex(reg)) rex |= 0x04; // REX.R
+		if (index != null && NeedsRex(index.Value)) rex |= 0x02; // REX.X
+		if (NeedsRex(rm)) rex |= 0x01; // REX.B
+		return (byte)rex;
 	}
 
 	private static byte SIB(int scale, byte index, byte baseReg) {
@@ -598,27 +964,70 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitCall(X86CallOp op) {
-		EmitByte(0xE8);
-		_labelFixups.Add((CurrentOffset, op.Target, 4));
-		EmitImm32(0);
+		if (op.IsExternal) {
+			// External call: use indirect call through IAT
+			// CALL [RIP + disp32] = FF 15 disp32
+			EmitByte(0xFF);
+			EmitByte(0x15);
+
+			// Track this import
+			if (!_importIndices.TryGetValue(op.Target, out var importIndex)) {
+				importIndex = _imports.Count;
+				_imports.Add(new ImportEntry(op.DllName ?? "kernel32.dll", op.Target));
+				_importIndices[op.Target] = importIndex;
+			}
+
+			// Record fixup for the displacement (will be resolved when IAT address is known)
+			_importFixups.Add((CurrentOffset, importIndex, 4));
+			EmitImm32(0);  // Placeholder
+		} else {
+			// Internal call: direct relative call
+			EmitByte(0xE8);
+			_labelFixups.Add((CurrentOffset, op.Target, 4));
+			EmitImm32(0);
+		}
 	}
 
 	private void EmitRet() {
 		EmitByte(0xC3);
 	}
 
+	private void EmitCld() {
+		// cld - clear direction flag (opcode: FC)
+		EmitByte(0xFC);
+	}
+
+	private void EmitStd() {
+		// std - set direction flag (opcode: FD)
+		EmitByte(0xFD);
+	}
+
+	private void EmitRepMovsb() {
+		// rep movsb - copy RCX bytes from [RSI] to [RDI] (opcode: F3 A4)
+		EmitByte(0xF3);
+		EmitByte(0xA4);
+	}
+
 	private void EmitPush(PushOp op) {
 		if (op.Src is RegOperand reg) {
-			if (NeedsRex(reg.Register)) EmitByte(0x41);
-			EmitByte((byte)(0x50 + GetRegCode(reg.Register)));
+			EmitPushReg(reg.Register);
 		}
+	}
+
+	private void EmitPushReg(X86Register reg) {
+		if (NeedsRex(reg)) EmitByte(0x41);
+		EmitByte((byte)(0x50 + GetRegCode(reg)));
 	}
 
 	private void EmitPop(PopOp op) {
 		if (op.Dst is RegOperand reg) {
-			if (NeedsRex(reg.Register)) EmitByte(0x41);
-			EmitByte((byte)(0x58 + GetRegCode(reg.Register)));
+			EmitPopReg(reg.Register);
 		}
+	}
+
+	private void EmitPopReg(X86Register reg) {
+		if (NeedsRex(reg)) EmitByte(0x41);
+		EmitByte((byte)(0x58 + GetRegCode(reg)));
 	}
 
 	private void EmitCdq() {

@@ -118,6 +118,30 @@ public sealed record FunctionType(IReadOnlyList<MlirType> Inputs, IReadOnlyList<
 }
 
 // ============================================================================
+// Function Pointer Type
+// ============================================================================
+
+/// <summary>
+/// Function pointer type - represents a pointer to a function.
+/// Used for first-class functions and callbacks.
+/// </summary>
+public sealed record FunctionPtrType(IReadOnlyList<MlirType> ParamTypes, MlirType ReturnType) : MlirType, IFunctionResultType {
+	public override string? Dialect => null;
+	public override string Mnemonic => "fn_ptr";
+	public override int SizeInBytes => 8; // 64-bit function pointer
+	public override bool IsCopyType => true; // Function pointers are copied, not moved
+
+	public override string ToString() {
+		var paramsStr = ParamTypes.Count switch {
+			0 => "()",
+			1 => $"({ParamTypes[0]})",
+			_ => $"({string.Join(", ", ParamTypes)})"
+		};
+		return $"fn{paramsStr} -> {ReturnType}";
+	}
+}
+
+// ============================================================================
 // Tuple Type
 // ============================================================================
 

@@ -435,14 +435,25 @@ public class Parser(List<Token> tokens) {
 		}
 
 		var startToken = Expect(TokenType.Function);
+
+		// Parse method name: could be simple "init" or qualified "InterfaceName.methodName"
 		var name = Expect(TokenType.Identifier).Value;
+		var endLabelName = name; // For end label, use the final method name part
+		if (Check(TokenType.Dot)) {
+			// Qualified name: Interface.method
+			Advance();
+			var methodName = Expect(TokenType.Identifier).Value;
+			name = $"{name}.{methodName}";
+			endLabelName = methodName; // End label uses just the method name
+		}
+
 		Expect(TokenType.LeftParen);
 		var parameters = ParseParamList();
 		var returnType = ParseOptionalReturnType();
 		var throwsType = ParseOptionalThrowsClause();
 		SkipNewlines();
 		var body = ParseBodyUntilEnd();
-		var endLine = ExpectEndLabel(name);
+		var endLine = ExpectEndLabel(endLabelName);
 
 		return new MethodDecl(
 			name, isStatic, isExport, parameters, returnType, throwsType, body,
@@ -506,7 +517,7 @@ public class Parser(List<Token> tokens) {
 		};
 	}
 
-	private SimpleTypeRef? ParseOptionalReturnType() {
+	private TypeRef? ParseOptionalReturnType() {
 		if (Check(TokenType.Returns)) {
 			Advance();
 			return ParseTypeRef();
@@ -522,16 +533,56 @@ public class Parser(List<Token> tokens) {
 		return null;
 	}
 
-	private SimpleTypeRef ParseTypeRef() {
+	private TypeRef ParseTypeRef() {
 		var startToken = Current();
-		var typeName = ExpectTypeName();
 
 		// Check for function type: (params) returns ReturnType
-		if (typeName == "(" || Check(TokenType.LeftParen)) {
-			// This would be a function type - not implemented for simplicity
+		if (Check(TokenType.LeftParen)) {
+			return ParseFunctionTypeRef(startToken);
+		}
+
+		var typeName = ExpectTypeName();
+
+		// Check for generic type: TypeName with TypeArg or TypeName with TypeArg1, TypeArg2
+		if (Check(TokenType.With)) {
+			Advance();
+			var typeArgs = new List<string>();
+			typeArgs.Add(ExpectTypeName());
+			while (Check(TokenType.Comma)) {
+				Advance();
+				typeArgs.Add(ExpectTypeName());
+			}
+			return new GenericTypeRef(typeName, typeArgs) {
+				Location = new SourceLocation(startToken.Line, startToken.Column)
+			};
 		}
 
 		return new SimpleTypeRef(typeName) {
+			Location = new SourceLocation(startToken.Line, startToken.Column)
+		};
+	}
+
+	private FunctionTypeRef ParseFunctionTypeRef(Token startToken) {
+		// Parse (ParamType1, ParamType2, ...) returns ReturnType
+		Expect(TokenType.LeftParen);
+		var paramTypes = new List<TypeRef>();
+
+		if (!Check(TokenType.RightParen)) {
+			paramTypes.Add(ParseTypeRef());
+			while (Check(TokenType.Comma)) {
+				Advance();
+				paramTypes.Add(ParseTypeRef());
+			}
+		}
+		Expect(TokenType.RightParen);
+
+		TypeRef? returnType = null;
+		if (Check(TokenType.Returns)) {
+			Advance();
+			returnType = ParseTypeRef();
+		}
+
+		return new FunctionTypeRef(paramTypes, returnType) {
 			Location = new SourceLocation(startToken.Line, startToken.Column)
 		};
 	}

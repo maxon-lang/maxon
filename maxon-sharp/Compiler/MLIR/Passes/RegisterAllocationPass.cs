@@ -71,12 +71,9 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			InsertCalleeSavedSaveRestore(func, ctx.UsedNonVolatileGpr, ctx.UsedNonVolatileXmm);
 		}
 
-		// Step 6: Update prologue stack size to include spill area if needed
-		if (ctx.TotalSpillSize > 0) {
-			UpdatePrologueStackSize(func, ctx.TotalSpillSize);
-			func.SetMetadata("spill_size", ctx.TotalSpillSize);
-			Logger.Debug(LogCategory.RegAlloc, $"  {func.Name}: spill size = {ctx.TotalSpillSize} bytes");
-		}
+		// Step 6: Update prologue stack size to include spill area and alignment padding
+		// This must be done AFTER callee-saved insertion so we know the GPR push count
+		UpdateFinalPrologueStackSize(func, ctx.TotalSpillSize, ctx.UsedNonVolatileGpr.Count);
 
 		if (allocation.Count > 0) {
 			Logger.Debug(LogCategory.RegAlloc, $"  {func.Name}: allocated {allocation.Count} virtual registers ({ctx.UsedNonVolatileGpr.Count} callee-saved GPRs, {ctx.UsedNonVolatileXmm.Count} callee-saved XMMs)");
@@ -85,19 +82,42 @@ public sealed class RegisterAllocationPass : FunctionPass {
 	}
 
 	/// <summary>
-	/// Updates the PrologueOp stack size to include the spill area.
+	/// Updates the PrologueOp stack size to include spill area and alignment padding.
+	///
+	/// Stack layout after prologue (pushes happen BEFORE sub rsp):
+	/// 1. call pushes return address: RSP - 8
+	/// 2. push rbp: RSP - 16 (aligned)
+	/// 3. push callee-saved GPRs: RSP - 16 - N*8 (where N = gprPushCount)
+	/// 4. sub rsp, stackSize
+	///
+	/// For 16-byte alignment at call sites:
+	/// - Even GPR pushes: stackSize must be multiple of 16
+	/// - Odd GPR pushes: stackSize must be 8 mod 16 (to compensate for 8-byte misalignment)
 	/// </summary>
-	private static void UpdatePrologueStackSize(MlirFunction func, int spillSize) {
-		// Find the PrologueOp in the entry block
+	private static void UpdateFinalPrologueStackSize(MlirFunction func, int spillSize, int gprPushCount) {
 		var entryBlock = func.Body.Blocks.FirstOrDefault();
 		if (entryBlock is null) return;
 
 		for (int i = 0; i < entryBlock.Operations.Count; i++) {
 			if (entryBlock.Operations[i] is PrologueOp prologue) {
-				// Create new prologue with updated stack size (aligned to 16)
-				int newStackSize = WindowsX64Abi.AlignTo(prologue.StackSize + spillSize, 16);
-				entryBlock.Operations[i] = new PrologueOp(newStackSize);
-				Logger.Debug(LogCategory.RegAlloc, $"  Updated prologue: {prologue.StackSize} -> {newStackSize} (added {spillSize} for spills)");
+				int baseSize = prologue.StackSize + spillSize;
+
+				// After push rbp + N GPR pushes, the stack is:
+				// - 16-byte aligned if N is even (rbp + even pushes = 16 + even*8 = multiple of 16)
+				// - 8-byte misaligned if N is odd (rbp + odd pushes = 16 + odd*8 = 8 mod 16)
+				//
+				// For sub rsp, stackSize to result in 16-byte alignment:
+				// - Even pushes: stackSize must be 0 mod 16
+				// - Odd pushes: stackSize must be 8 mod 16
+				int targetMod = (gprPushCount % 2 == 0) ? 0 : 8;
+				int currentMod = baseSize % 16;
+				int alignmentPadding = (16 + targetMod - currentMod) % 16;
+				int newStackSize = baseSize + alignmentPadding;
+
+				if (newStackSize != prologue.StackSize || !prologue.CalleeSavedGprs.SequenceEqual(prologue.CalleeSavedGprs)) {
+					entryBlock.Operations[i] = new PrologueOp(newStackSize, prologue.CalleeSavedGprs);
+					Logger.Debug(LogCategory.RegAlloc, $"  Updated prologue: {prologue.StackSize} -> {newStackSize} (spills={spillSize}, gprPushes={gprPushCount}, alignPad={alignmentPadding})");
+				}
 				return;
 			}
 		}
@@ -428,8 +448,9 @@ public sealed class RegisterAllocationPass : FunctionPass {
 	}
 
 	/// <summary>
-	/// Inserts push/pop of callee-saved registers in prologue/epilogue.
-	/// For XMM registers, saves/restores to stack slots using movsd.
+	/// Updates prologue/epilogue with callee-saved registers.
+	/// GPR saves are handled by PrologueOp/EpilogueOp (pushes BEFORE sub rsp).
+	/// XMM saves are handled by movsd to stack slots AFTER the prologue.
 	/// </summary>
 	private static void InsertCalleeSavedSaveRestore(
 		MlirFunction func,
@@ -439,7 +460,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		var gprsToSave = usedNonVolatileGpr.OrderBy(r => r).ToList();
 		var xmmsToSave = usedNonVolatileXmm.OrderBy(r => r).ToList();
 
-		// Find prologue in entry block and insert pushes after it
+		// Find prologue in entry block and update it with callee-saved GPRs
 		var entryBlock = func.Body.Blocks[0];
 		int prologueIdx = -1;
 		PrologueOp? prologue = null;
@@ -452,28 +473,27 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		}
 
 		if (prologueIdx >= 0 && prologue != null) {
-			// Insert pushes after prologue (in order)
-			int insertIdx = prologueIdx + 1;
-			foreach (var reg in gprsToSave) {
-				entryBlock.Operations.Insert(insertIdx++, new PushOp(new RegOperand(reg)));
-			}
+			// Update prologue with callee-saved GPRs (they'll be pushed BEFORE sub rsp)
+			int newStackSize = prologue.StackSize;
 
-			// For XMM registers, save to stack slots after GPR pushes
-			// Each XMM register needs 8 bytes (for movsd)
+			// For XMM registers, add space to stack frame
 			if (xmmsToSave.Count > 0) {
-				// Get the current stack size and add space for XMM saves
 				int xmmSaveAreaOffset = prologue.StackSize;
 				int xmmSaveSize = xmmsToSave.Count * 8;
-				int newStackSize = WindowsX64Abi.AlignTo(prologue.StackSize + xmmSaveSize, 16);
-
-				// Update the prologue with the new stack size
-				entryBlock.Operations[prologueIdx] = new PrologueOp(newStackSize);
+				newStackSize = WindowsX64Abi.AlignTo(prologue.StackSize + xmmSaveSize, 16);
 
 				// Store the XMM save info for use in epilogue
 				func.SetMetadata("xmm_save_offset", xmmSaveAreaOffset);
 				func.SetMetadata("xmm_save_count", xmmsToSave.Count);
+			}
 
-				// Insert movsd instructions to save XMM registers
+			// Replace prologue with one that includes callee-saved GPRs
+			entryBlock.Operations[prologueIdx] = new PrologueOp(newStackSize, gprsToSave);
+
+			// Insert XMM saves AFTER the prologue (they use RBP-relative addressing)
+			if (xmmsToSave.Count > 0) {
+				int xmmSaveAreaOffset = func.GetMetadataValue<int>("xmm_save_offset");
+				int insertIdx = prologueIdx + 1;
 				for (int i = 0; i < xmmsToSave.Count; i++) {
 					var reg = xmmsToSave[i];
 					int offset = -(xmmSaveAreaOffset + (i + 1) * 8);  // Negative offset from RBP
@@ -485,15 +505,15 @@ public sealed class RegisterAllocationPass : FunctionPass {
 					entryBlock.Operations.Insert(insertIdx++, new MovsdOp(memOp, new RegOperand(reg)));
 				}
 
-				Logger.Debug(LogCategory.RegAlloc, $"  Saving XMM registers: {string.Join(", ", xmmsToSave)} at offsets [{xmmSaveAreaOffset}..{xmmSaveAreaOffset + xmmSaveSize})");
+				Logger.Debug(LogCategory.RegAlloc, $"  Saving XMM registers: {string.Join(", ", xmmsToSave)} at offsets [{xmmSaveAreaOffset}..{xmmSaveAreaOffset + xmmsToSave.Count * 8})");
 			}
 		}
 
-		// Find epilogues in all blocks and insert pops/restores before them
+		// Find epilogues in all blocks and update them with callee-saved GPRs
 		foreach (var block in func.Body.Blocks) {
 			for (int i = 0; i < block.Operations.Count; i++) {
 				if (block.Operations[i] is EpilogueOp) {
-					// Restore XMM registers before GPR pops (in reverse order)
+					// Restore XMM registers BEFORE epilogue (they use RBP-relative addressing)
 					if (xmmsToSave.Count > 0) {
 						int xmmSaveAreaOffset = func.GetMetadataValue<int>("xmm_save_offset");
 						for (int j = xmmsToSave.Count - 1; j >= 0; j--) {
@@ -508,10 +528,8 @@ public sealed class RegisterAllocationPass : FunctionPass {
 						}
 					}
 
-					// Insert pops before epilogue (in reverse order)
-					foreach (var reg in gprsToSave.AsEnumerable().Reverse()) {
-						block.Operations.Insert(i++, new PopOp(new RegOperand(reg)));
-					}
+					// Replace epilogue with one that includes callee-saved GPRs
+					block.Operations[i] = new EpilogueOp(gprsToSave);
 					break;
 				}
 			}
@@ -1189,6 +1207,9 @@ public sealed class RegisterAllocationPass : FunctionPass {
 	private static X86Op AllocateOp(X86Op op, AllocationContext ctx) {
 		return op switch {
 			MovOp mov => new MovOp(ctx.Alloc(mov.Dst), ctx.Alloc(mov.Src)),
+			MovzxOp movzx => new MovzxOp(ctx.Alloc(movzx.Dst), ctx.Alloc(movzx.Src), movzx.IsByte),
+			MovsxOp movsx => new MovsxOp(ctx.Alloc(movsx.Dst), ctx.Alloc(movsx.Src), movsx.IsByte),
+			MovsxdOp movsxd => new MovsxdOp(ctx.Alloc(movsxd.Dst), ctx.Alloc(movsxd.Src)),
 			AddOp add => new AddOp(ctx.Alloc(add.Dst), ctx.Alloc(add.Src)),
 			SubOp sub => new SubOp(ctx.Alloc(sub.Dst), ctx.Alloc(sub.Src)),
 			ImulOp imul => imul.Src2 is not null

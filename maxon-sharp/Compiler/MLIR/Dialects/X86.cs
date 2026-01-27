@@ -51,6 +51,72 @@ public sealed class MovOp : X86Op {
 }
 
 /// <summary>
+/// Move with zero-extend: x86.movzx dst, src (byte or word)
+/// </summary>
+public sealed class MovzxOp : X86Op {
+	public override string Mnemonic => "movzx";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
+
+	public X86Operand Dst => X86Operands[0];
+	public X86Operand Src => X86Operands[1];
+	public bool IsByte { get; }
+
+	public MovzxOp(X86Operand dst, X86Operand src, bool isByte = true) {
+		X86Operands.Add(dst);
+		X86Operands.Add(src);
+		IsByte = isByte;
+	}
+
+	public override void Print(MlirPrinter printer) {
+		// Src already includes size prefix if it's a MemOperand
+		printer.PrintLine($"x86.movzx {Dst}, {Src}");
+	}
+}
+
+/// <summary>
+/// Move with sign-extend: x86.movsx dst, src (byte or word)
+/// </summary>
+public sealed class MovsxOp : X86Op {
+	public override string Mnemonic => "movsx";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
+
+	public X86Operand Dst => X86Operands[0];
+	public X86Operand Src => X86Operands[1];
+	public bool IsByte { get; }
+
+	public MovsxOp(X86Operand dst, X86Operand src, bool isByte = true) {
+		X86Operands.Add(dst);
+		X86Operands.Add(src);
+		IsByte = isByte;
+	}
+
+	public override void Print(MlirPrinter printer) {
+		// Src already includes size prefix if it's a MemOperand
+		printer.PrintLine($"x86.movsx {Dst}, {Src}");
+	}
+}
+
+/// <summary>
+/// Move with sign-extend dword to qword: x86.movsxd dst, src
+/// </summary>
+public sealed class MovsxdOp : X86Op {
+	public override string Mnemonic => "movsxd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
+
+	public X86Operand Dst => X86Operands[0];
+	public X86Operand Src => X86Operands[1];
+
+	public MovsxdOp(X86Operand dst, X86Operand src) {
+		X86Operands.Add(dst);
+		X86Operands.Add(src);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"x86.movsxd {Dst}, {Src}");
+	}
+}
+
+/// <summary>
 /// Load effective address: x86.lea dst, mem
 /// </summary>
 public sealed class LeaOp : X86Op {
@@ -684,7 +750,7 @@ public sealed class JccOp(X86CondCode condition, string trueTarget, string false
 /// <summary>
 /// Call: x86.call target
 /// </summary>
-public sealed class X86CallOp(string target) : X86Op {
+public sealed class X86CallOp(string target, bool isExternal = false, string? dllName = null) : X86Op {
 	public override string Mnemonic => "call";
 
 	// All volatile registers are clobbered by a call (Windows x64 ABI)
@@ -697,8 +763,23 @@ public sealed class X86CallOp(string target) : X86Op {
 
 	public string Target { get; } = target;
 
+	/// <summary>
+	/// True if this is a call to an external (imported) function.
+	/// External calls use indirect addressing through the Import Address Table.
+	/// </summary>
+	public bool IsExternal { get; } = isExternal;
+
+	/// <summary>
+	/// The DLL name from which to import the function (e.g., "msvcrt.dll").
+	/// Only meaningful when IsExternal is true.
+	/// </summary>
+	public string? DllName { get; } = dllName;
+
 	public override void Print(MlirPrinter printer) {
-		printer.PrintLine($"x86.call {Target}");
+		if (IsExternal)
+			printer.PrintLine($"x86.call extern {DllName}::{Target}");
+		else
+			printer.PrintLine($"x86.call {Target}");
 	}
 }
 
@@ -941,33 +1022,99 @@ public sealed class XorpdOp : X86Op {
 }
 
 // ============================================================================
-// Function Prologue/Epilogue
+// String/Memory Operations
 // ============================================================================
 
 /// <summary>
-/// Function prologue: push rbp; mov rbp, rsp; sub rsp, N
+/// Clear direction flag: x86.cld
+/// Required before forward rep movsb. Opcode: FC
 /// </summary>
-public sealed class PrologueOp(int stackSize = 32) : X86Op {
-	public override string Mnemonic => "prologue";
+public sealed class CldOp : X86Op {
+	public override string Mnemonic => "cld";
 	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
-	public int StackSize { get; } = stackSize;
 
 	public override void Print(MlirPrinter printer) {
-		printer.PrintLine($"x86.prologue stack_size={StackSize}");
+		printer.PrintLine("x86.cld");
 	}
 }
 
 /// <summary>
-/// Function epilogue: mov rsp, rbp; pop rbp
+/// Set direction flag: x86.std
+/// Required before backward rep movsb (for memmove with overlap). Opcode: FD
+/// </summary>
+public sealed class StdOp : X86Op {
+	public override string Mnemonic => "std";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine("x86.std");
+	}
+}
+
+/// <summary>
+/// Rep movsb: x86.rep_movsb
+/// Copies RCX bytes from [RSI] to [RDI].
+/// Direction determined by direction flag (CLD=forward, STD=backward).
+/// Opcode: F3 A4
+/// </summary>
+public sealed class RepMovsbOp : X86Op {
+	public override string Mnemonic => "rep_movsb";
+	public override IReadOnlyList<X86Register> ClobberedRegisters =>
+		[X86Register.RCX, X86Register.RSI, X86Register.RDI];
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine("x86.rep_movsb");
+	}
+}
+
+// ============================================================================
+// Function Prologue/Epilogue
+// ============================================================================
+
+/// <summary>
+/// Function prologue: push rbp; mov rbp, rsp; [push callee-saved regs]; sub rsp, N
+/// The callee-saved register pushes happen BEFORE sub rsp to ensure shadow space
+/// doesn't overlap with saved registers.
+/// </summary>
+public sealed class PrologueOp : X86Op {
+	public override string Mnemonic => "prologue";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
+	public int StackSize { get; }
+	public IReadOnlyList<X86Register> CalleeSavedGprs { get; }
+
+	public PrologueOp(int stackSize = 32, IReadOnlyList<X86Register>? calleeSavedGprs = null) {
+		StackSize = stackSize;
+		CalleeSavedGprs = calleeSavedGprs ?? [];
+	}
+
+	public override void Print(MlirPrinter printer) {
+		if (CalleeSavedGprs.Count > 0) {
+			printer.PrintLine($"x86.prologue stack_size={StackSize} saved_gprs=[{string.Join(",", CalleeSavedGprs)}]");
+		} else {
+			printer.PrintLine($"x86.prologue stack_size={StackSize}");
+		}
+	}
+}
+
+/// <summary>
+/// Function epilogue: [pop callee-saved regs in reverse]; mov rsp, rbp; pop rbp
+/// The callee-saved register pops happen BEFORE mov rsp, rbp to match prologue order.
 /// </summary>
 public sealed class EpilogueOp : X86Op {
 	public override string Mnemonic => "epilogue";
 	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
+	public IReadOnlyList<X86Register> CalleeSavedGprs { get; }
 
-	public EpilogueOp() { }
+	public EpilogueOp(IReadOnlyList<X86Register>? calleeSavedGprs = null) {
+		CalleeSavedGprs = calleeSavedGprs ?? [];
+	}
 
 	public override void Print(MlirPrinter printer) {
-		printer.PrintLine("x86.epilogue");
+		if (CalleeSavedGprs.Count > 0) {
+			printer.PrintLine($"x86.epilogue saved_gprs=[{string.Join(",", CalleeSavedGprs)}]");
+		} else {
+			printer.PrintLine("x86.epilogue");
+		}
 	}
 }
 

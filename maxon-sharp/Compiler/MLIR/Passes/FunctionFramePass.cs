@@ -40,22 +40,76 @@ public sealed class FunctionFramePass : FunctionPass {
 
 		// Copy parameters from ABI registers to their virtual registers
 		// First 4 parameters come from registers (RCX, RDX, R8, R9 for int; XMM0-XMM3 for float)
+		// IMPORTANT: We must use a parallel copy approach to avoid clobbering unread sources.
+		// We first copy all sources to scratch registers (R10, R11), then copy to destinations.
+		// This handles the case where v_param1 is allocated to R8, which would clobber the
+		// source for v_param2 if we copied directly.
 		var args = entryBlock.Arguments;
+		var scratchRegs = new[] { X86Register.R10, X86Register.R11 };
+
+		// For more than 2 register params, we need to be careful about the order
+		// Strategy: copy all int params from ABI regs to scratch, then from scratch to vregs
+		// For functions with <= 2 params, no clobbering is possible, so direct copy is fine
+		var intParams = new List<(int index, MlirBlockArgument arg)>();
+		var floatParams = new List<(int index, MlirBlockArgument arg)>();
+
 		for (int i = 0; i < args.Count && i < WindowsX64Abi.IntArgRegs.Length; i++) {
 			var arg = args[i];
 			bool isFloat = arg.Value.Type is FloatType;
-			var paramVreg = new VRegOperand(arg.Value.Id, IsFloat: isFloat);
-
 			if (isFloat) {
-				// Float: copy from XMMn using movsd
-				var abiReg = new RegOperand(WindowsX64Abi.FloatArgRegs[i]);
-				insertOps.Add(new MovsdOp(paramVreg, abiReg));
-				Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} float param {i} from {WindowsX64Abi.FloatArgRegs[i]} to v{arg.Value.Id}");
+				floatParams.Add((i, arg));
 			} else {
-				// Integer: copy from GPR
+				intParams.Add((i, arg));
+			}
+		}
+
+		// Float params: XMM registers don't conflict with GPR params, so direct copy is fine
+		foreach (var (i, arg) in floatParams) {
+			var paramVreg = new VRegOperand(arg.Value.Id, IsFloat: true);
+			var abiReg = new RegOperand(WindowsX64Abi.FloatArgRegs[i]);
+			insertOps.Add(new MovsdOp(paramVreg, abiReg));
+			Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} float param {i} from {WindowsX64Abi.FloatArgRegs[i]} to v{arg.Value.Id}");
+		}
+
+		// Int params: potential for clobbering if reg allocator assigns vreg to another ABI reg
+		if (intParams.Count <= 2) {
+			// Safe: no more than 2 params means we can't have param vreg allocated to another ABI reg
+			// (at most RCX and RDX as sources, so R8/R9 are free for destinations)
+			foreach (var (i, arg) in intParams) {
+				var paramVreg = new VRegOperand(arg.Value.Id, IsFloat: false);
 				var abiReg = new RegOperand(WindowsX64Abi.IntArgRegs[i]);
 				insertOps.Add(new MovOp(paramVreg, abiReg));
 				Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} int param {i} from {WindowsX64Abi.IntArgRegs[i]} to v{arg.Value.Id}");
+			}
+		} else {
+			// 3+ int params: use scratch registers to avoid clobbering
+			// First, copy all ABI regs to scratch/stack
+			var tempDest = new List<(int index, X86Operand temp, MlirBlockArgument arg)>();
+
+			for (int j = 0; j < intParams.Count; j++) {
+				var (i, arg) = intParams[j];
+				var abiReg = new RegOperand(WindowsX64Abi.IntArgRegs[i]);
+
+				if (j < scratchRegs.Length) {
+					// Use scratch register
+					var scratch = new RegOperand(scratchRegs[j]);
+					insertOps.Add(new MovOp(scratch, abiReg));
+					tempDest.Add((i, scratch, arg));
+					Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} int param {i} from {WindowsX64Abi.IntArgRegs[i]} to {scratchRegs[j]} (temp)");
+				} else {
+					// More than 2 params and we're out of scratch regs
+					// For param 2 (R8) and param 3 (R9), copy directly to vreg since params 0&1 are in scratch
+					var paramVreg = new VRegOperand(arg.Value.Id, IsFloat: false);
+					insertOps.Add(new MovOp(paramVreg, abiReg));
+					Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} int param {i} from {WindowsX64Abi.IntArgRegs[i]} to v{arg.Value.Id} (direct)");
+				}
+			}
+
+			// Now copy from scratch to vregs (RCX and RDX are now free)
+			foreach (var (i, temp, arg) in tempDest) {
+				var paramVreg = new VRegOperand(arg.Value.Id, IsFloat: false);
+				insertOps.Add(new MovOp(paramVreg, temp));
+				Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} int param {i} from {temp} to v{arg.Value.Id}");
 			}
 		}
 

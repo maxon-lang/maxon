@@ -161,13 +161,37 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 
 	/// <summary>
 	/// Removes mov instructions where source and destination are the same register.
+	/// IMPORTANT: Does NOT remove self-moves that set up function call arguments,
+	/// since the register value may have changed since its original assignment.
 	/// </summary>
 	private static (bool changed, int count) RemoveSelfMoves(MlirBlock block) {
 		var toRemove = new List<MlirOperation>();
+		var ops = block.Operations.ToList();
 
-		foreach (var op in block.Operations) {
+		for (int i = 0; i < ops.Count; i++) {
+			var op = ops[i];
 			if (op is MovOp mov && IsSameRegister(mov.Dst, mov.Src)) {
-				toRemove.Add(op);
+				// Check if this self-move is setting up a call argument
+				// by looking if a call instruction follows within the next few ops
+				bool isCallArgSetup = false;
+				for (int j = i + 1; j < ops.Count && j < i + 10; j++) {
+					var nextOp = ops[j];
+					if (nextOp is X86CallOp) {
+						// This self-move is near a call - it's likely setting up an argument
+						// Don't remove it because the register may have been clobbered
+						isCallArgSetup = true;
+						break;
+					}
+					// If we hit another instruction that writes to this register, stop
+					if (nextOp is MovOp nextMov && nextMov.Dst is RegOperand dstReg &&
+						mov.Dst is RegOperand selfDstReg && dstReg.Register == selfDstReg.Register) {
+						break;
+					}
+				}
+
+				if (!isCallArgSetup) {
+					toRemove.Add(op);
+				}
 			}
 		}
 
@@ -457,6 +481,11 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 			if (OperandReadsRegister(idiv.Divisor, reg)) {
 				return true;
 			}
+		}
+
+		// rep movsb implicitly reads RCX (count), RSI (source), RDI (destination)
+		if (op is RepMovsbOp && (reg == X86Register.RCX || reg == X86Register.RSI || reg == X86Register.RDI)) {
+			return true;
 		}
 
 		// For mov, only the source is read (index 1)

@@ -48,7 +48,7 @@ public sealed class DeadStoreEliminationPass : AbstractPassBase {
 			}
 		}
 
-		// Also track allocas passed to function calls (address escapes to callee)
+		// Also track allocas passed to function calls or used by pointer operations (address escapes)
 		foreach (var func in module.Functions) {
 			foreach (var block in func.Body.Blocks) {
 				foreach (var op in block.Operations) {
@@ -58,6 +58,19 @@ public sealed class DeadStoreEliminationPass : AbstractPassBase {
 								escapedAllocas.Add(arg);
 							}
 						}
+					}
+					// Track allocas used by memcpy/memmove (source/dest addresses escape)
+					if (op is MemCpyOp memcpy) {
+						escapedAllocas.Add(memcpy.Destination);
+						escapedAllocas.Add(memcpy.Source);
+					}
+					if (op is MemMoveOp memmove) {
+						escapedAllocas.Add(memmove.Destination);
+						escapedAllocas.Add(memmove.Source);
+					}
+					// Track allocas used by field_ptr (struct base address escapes)
+					if (op is FieldPtrOp fieldPtr) {
+						escapedAllocas.Add(fieldPtr.Struct);
 					}
 				}
 			}

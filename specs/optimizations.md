@@ -653,8 +653,7 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.push rbx
+    x86.prologue stack_size=56 saved_gprs=[RBX]
     x86.mov rax, 0
     x86.lea rcx, qword ptr [rbp-40]
     x86.mov qword ptr [rcx], rax
@@ -674,8 +673,7 @@ func.func @main() -> i64 {
   ^while.exit:
     x86.mov rdx, qword ptr [rcx]
     x86.mov rax, rdx
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX]
     x86.ret
   ^while.cond_1(%25: i64):
     x86.cmp r11, r9
@@ -828,9 +826,7 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=32
-    x86.push rbx
-    x86.push r12
+    x86.prologue stack_size=32 saved_gprs=[RBX,R12]
     x86.mov r8, 10
     x86.mov r9, 1
     x86.mov r10, 1
@@ -862,15 +858,11 @@ func.func @main() -> i64 {
     x86.jmp while.cond
   ^then_1:
     x86.mov rax, 1
-    x86.pop r12
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX,R12]
     x86.ret
   ^merge_1:
     x86.mov rax, 0
-    x86.pop r12
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX,R12]
     x86.ret
 }
 ```
@@ -1000,8 +992,7 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.push rbx
+    x86.prologue stack_size=56 saved_gprs=[RBX]
     x86.mov rax, 0
     x86.lea rcx, qword ptr [rbp-40]
     x86.mov qword ptr [rcx], rax
@@ -1021,8 +1012,7 @@ func.func @main() -> i64 {
     x86.jmp while.cond_1
   ^while.exit:
     x86.mov rax, qword ptr [rcx]
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX]
     x86.ret
   ^while.cond_1(%23: i64):
     x86.cmp rbx, r10
@@ -1076,9 +1066,7 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.push rbx
-    x86.push r12
+    x86.prologue stack_size=48 saved_gprs=[RBX,R12]
     x86.mov rax, 0
     x86.lea rcx, qword ptr [rbp-40]
     x86.mov qword ptr [rcx], rax
@@ -1097,9 +1085,7 @@ func.func @main() -> i64 {
     x86.jmp while.cond_1
   ^while.exit:
     x86.mov rax, qword ptr [rcx]
-    x86.pop r12
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX,R12]
     x86.ret
   ^while.cond_1(%31: i64):
     x86.cmp r11, r8
@@ -1239,8 +1225,7 @@ func.func @test(%x: i64) -> i64 {
 
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=32
-    x86.push rbx
+    x86.prologue stack_size=40 saved_gprs=[RBX]
     x86.mov rax, 5
     x86.mov rcx, rax
     x86.call test
@@ -1251,8 +1236,7 @@ func.func @main() -> i64 {
     x86.mov rcx, rbx
     x86.add rcx, rax
     x86.mov rax, rcx
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX]
     x86.ret
 }
 ```
@@ -1542,9 +1526,7 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=48
-    x86.push rbx
-    x86.push r12
+    x86.prologue stack_size=48 saved_gprs=[RBX,R12]
     x86.mov rax, 0
     x86.lea rcx, qword ptr [rbp-40]
     x86.mov qword ptr [rcx], rax
@@ -1563,9 +1545,7 @@ func.func @main() -> i64 {
     x86.jmp while.cond_1
   ^while.exit:
     x86.mov rax, qword ptr [rcx]
-    x86.pop r12
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX,R12]
     x86.ret
   ^while.cond_1(%27: i64):
     x86.cmp r11, r8
@@ -1617,10 +1597,7 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=32
-    x86.push rbx
-    x86.push r12
-    x86.push r13
+    x86.prologue stack_size=40 saved_gprs=[RBX,R12,R13]
     x86.mov rcx, 1
     x86.mov r8, 10
     x86.mov r9, 2
@@ -1655,10 +1632,7 @@ func.func @main() -> i64 {
     x86.jmp while.cond
   ^while.exit:
     x86.mov rax, r11
-    x86.pop r13
-    x86.pop r12
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX,R12,R13]
     x86.ret
 }
 ```

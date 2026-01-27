@@ -93,4 +93,4 @@ Use `--log=LEVEL` or `--log=CATEGORY:LEVEL` for debugging:
 
 ## Debugging
 When debugging an issue prefer adding more debug printing so you can see what is happening instead of trying to think through it.
-llvm-objdump is available in /llvm-project/bin
+llvm-objdump is available in llvm-project/bin

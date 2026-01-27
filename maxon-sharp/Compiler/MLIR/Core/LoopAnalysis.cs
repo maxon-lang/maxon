@@ -81,9 +81,10 @@ public static class LoopAnalysis {
 		var backEdgesByHeader = FindBackEdges(func, blockIndices);
 
 		foreach (var (header, latches) in backEdgesByHeader) {
-			// Skip exit blocks masquerading as loop headers
-			if (header.Name.Contains("exit")) {
-				Logger.Trace(LogCategory.Optimizer, $"    loop-analysis: skipping spurious loop with exit block as header: ^{header.Name}");
+			// Skip exit and merge blocks masquerading as loop headers
+			// These can appear as loop headers when block ordering puts them before their predecessors
+			if (header.Name.Contains("exit") || header.Name.StartsWith("merge")) {
+				Logger.Trace(LogCategory.Optimizer, $"    loop-analysis: skipping spurious loop with exit/merge block as header: ^{header.Name}");
 				continue;
 			}
 

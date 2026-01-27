@@ -9,7 +9,8 @@ namespace MaxonSharp.Compiler;
 /// </summary>
 public record CodeEmitResult(
 	byte[] Code,
-	byte[] Data
+	byte[] Data,
+	IReadOnlyList<ImportEntry> Imports
 );
 
 /// <summary>
@@ -36,31 +37,53 @@ public class CodeEmitter {
 			emitter.DefineGlobal(global.Name, size, initValue);
 		}
 
-		// Emit main first (entry point must be at start of code section)
-		var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main") ?? throw new CompileError(ErrorCode.CodeEmitterNoMain, "No 'main' function found");
-		EmitFunction(emitter, mainFunc);
+		// Emit _start wrapper first (entry point at offset 0)
+		// _start calls main and then ExitProcess
+		emitter.EmitStartWrapper();
 
-		// Emit other functions
+		// Verify main exists
+		var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main") ?? throw new CompileError(ErrorCode.CodeEmitterNoMain, "No 'main' function found");
+
+		// Emit all functions (main and others)
+		EmitFunction(emitter, mainFunc);
 		foreach (var func in module.Functions.Where(f => f.Name != "main")) {
 			EmitFunction(emitter, func);
 		}
 
+		// Emit __chkstk runtime function (for large stack allocations)
+		emitter.EmitChkstk();
+
+		// Patch all __chkstk call sites
+		emitter.PatchChkstkCalls();
+
 		emitter.ResolveLabels();
+
+		var codeSize = (uint)emitter.GetCode().Length;
+		var codeSizeVirtual = AlignUp(codeSize, 0x1000);
 
 		// Resolve global references
 		if (emitter.HasGlobals) {
-			var codeSize = (uint)emitter.GetCode().Length;
-			var codeSizeVirtual = AlignUp(codeSize, 0x1000);
 			var dataRvaOffset = (int)(codeSizeVirtual - codeSize);
 			emitter.ResolveGlobals(dataRvaOffset);
 		}
 
+		// Resolve import references
+		// IAT comes after data section (if present) or directly after code section
+		if (emitter.HasImports) {
+			var dataSize = (uint)emitter.GetData().Length;
+			var dataSizeVirtual = emitter.HasGlobals ? AlignUp(dataSize, 0x1000) : 0;
+			// IAT is at the start of the .idata section, which follows .data
+			var iatRvaOffset = (int)(codeSizeVirtual - codeSize + dataSizeVirtual);
+			emitter.ResolveImports(iatRvaOffset);
+		}
+
 		var code = emitter.GetCode();
 		var data = emitter.GetData();
+		var imports = emitter.Imports;
 
-		Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {data.Length} bytes data");
+		Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {data.Length} bytes data, {imports.Count} imports");
 
-		return new CodeEmitResult(code, data);
+		return new CodeEmitResult(code, data, imports);
 	}
 
 	/// <summary>

@@ -534,3 +534,393 @@ public sealed record BorrowedType(MlirType Inner, bool IsMutable = false) : Mlir
 
 	public override string ToString() => IsMutable ? $"!maxon.borrowed_mut<{Inner}>" : $"!maxon.borrowed<{Inner}>";
 }
+
+// ============================================================================
+// Error Union Type
+// ============================================================================
+
+/// <summary>
+/// Error union type for functions that can throw.
+/// Layout: { tag: i8 (0=success, 1+=error), padding: [7]i8, value: T | ErrorType }
+/// </summary>
+public sealed record MaxonErrorUnionType(MlirType SuccessType, MaxonEnumType ErrorType) : MlirType, IFunctionResultType {
+	public override string? Dialect => "maxon";
+	public override string Mnemonic => $"error_union<{SuccessType}, {ErrorType.Name}>";
+	// Size = 8 (tag + padding) + max(success size, error size)
+	public override int SizeInBytes => 8 + Math.Max(SuccessType.SizeInBytes, ErrorType.SizeInBytes);
+
+	public override string ToString() => $"!maxon.error_union<{SuccessType}, {ErrorType.Name}>";
+}
+
+// ============================================================================
+// Error Union Operations
+// ============================================================================
+
+/// <summary>
+/// Create a success error union: %result = maxon.error_union_success %value : error_union_type
+/// </summary>
+public sealed class ErrorUnionSuccessOp : MaxonOp {
+	public override string Mnemonic => "error_union_success";
+	public override bool HasSideEffects => false;
+
+	public MlirValue Value => Operands[0];
+	public MlirValue Result => Results[0];
+
+	public ErrorUnionSuccessOp(MlirValue value, MaxonErrorUnionType errorUnionType) {
+		Operands.Add(value);
+		CreateResult(errorUnionType);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.error_union_success {Value} : {Result.Type}");
+	}
+}
+
+/// <summary>
+/// Create an error error union: %result = maxon.error_union_error %error : error_union_type
+/// </summary>
+public sealed class ErrorUnionErrorOp : MaxonOp {
+	public override string Mnemonic => "error_union_error";
+	public override bool HasSideEffects => false;
+
+	public MlirValue Error => Operands[0];
+	public MlirValue Result => Results[0];
+
+	public ErrorUnionErrorOp(MlirValue error, MaxonErrorUnionType errorUnionType) {
+		Operands.Add(error);
+		CreateResult(errorUnionType);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.error_union_error {Error} : {Result.Type}");
+	}
+}
+
+/// <summary>
+/// Check if error union holds an error: %result = maxon.error_union_is_error %union : i1
+/// </summary>
+public sealed class ErrorUnionIsErrorOp : MaxonOp {
+	public override string Mnemonic => "error_union_is_error";
+	public override bool HasSideEffects => false;
+
+	public MlirValue Union => Operands[0];
+	public MlirValue Result => Results[0];
+
+	public ErrorUnionIsErrorOp(MlirValue union) {
+		Operands.Add(union);
+		CreateResult(IntegerType.I1);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.error_union_is_error {Union} : i1");
+	}
+}
+
+/// <summary>
+/// Extract success value from error union: %result = maxon.error_union_get_value %union : success_type
+/// </summary>
+public sealed class ErrorUnionGetValueOp : MaxonOp {
+	public override string Mnemonic => "error_union_get_value";
+	public override bool HasSideEffects => false;
+
+	public MlirValue Union => Operands[0];
+	public MlirValue Result => Results[0];
+
+	public ErrorUnionGetValueOp(MlirValue union, MlirType successType) {
+		Operands.Add(union);
+		CreateResult(successType);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.error_union_get_value {Union} : {Result.Type}");
+	}
+}
+
+/// <summary>
+/// Extract error value from error union: %result = maxon.error_union_get_error %union : error_type
+/// </summary>
+public sealed class ErrorUnionGetErrorOp : MaxonOp {
+	public override string Mnemonic => "error_union_get_error";
+	public override bool HasSideEffects => false;
+
+	public MlirValue Union => Operands[0];
+	public MlirValue Result => Results[0];
+
+	public ErrorUnionGetErrorOp(MlirValue union, MlirType errorType) {
+		Operands.Add(union);
+		CreateResult(errorType);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.error_union_get_error {Union} : {Result.Type}");
+	}
+}
+
+// ============================================================================
+// Managed Memory Operations (for Array implementation)
+// ============================================================================
+
+/// <summary>
+/// Create managed memory: %result = maxon.managed_memory_create %count, %elemSize : !maxon.managed_memory
+/// Allocates memory for count elements of elemSize bytes each.
+/// </summary>
+public sealed class ManagedMemoryCreateOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_create";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Count => Operands[0];
+	public MlirValue ElemSize => Operands[1];
+	public MlirValue Result => Results[0];
+	public MaxonStructType ManagedMemoryType { get; }
+
+	public ManagedMemoryCreateOp(MlirValue count, MlirValue elemSize, MaxonStructType managedMemoryType) {
+		Operands.Add(count);
+		Operands.Add(elemSize);
+		ManagedMemoryType = managedMemoryType;
+		CreateResult(managedMemoryType);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.managed_memory_create {Count}, {ElemSize}");
+	}
+}
+
+/// <summary>
+/// Get managed memory length: %result = maxon.managed_memory_len %mem : i64
+/// </summary>
+public sealed class ManagedMemoryLenOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_len";
+	public override bool HasSideEffects => false;
+
+	public MlirValue Memory => Operands[0];
+	public MlirValue Result => Results[0];
+
+	public ManagedMemoryLenOp(MlirValue memory) {
+		Operands.Add(memory);
+		CreateResult(IntegerType.I64);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.managed_memory_len {Memory}");
+	}
+}
+
+/// <summary>
+/// Get managed memory capacity: %result = maxon.managed_memory_capacity %mem : i64
+/// </summary>
+public sealed class ManagedMemoryCapacityOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_capacity";
+	public override bool HasSideEffects => false;
+
+	public MlirValue Memory => Operands[0];
+	public MlirValue Result => Results[0];
+
+	public ManagedMemoryCapacityOp(MlirValue memory) {
+		Operands.Add(memory);
+		CreateResult(IntegerType.I64);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.managed_memory_capacity {Memory}");
+	}
+}
+
+/// <summary>
+/// Get element from managed memory (unchecked): %result = maxon.managed_memory_get_unchecked %mem, %index : element_type
+/// </summary>
+public sealed class ManagedMemoryGetUncheckedOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_get_unchecked";
+	public override bool HasSideEffects => false;
+
+	public MlirValue Memory => Operands[0];
+	public MlirValue Index => Operands[1];
+	public MlirType ElementType { get; }
+	public MlirValue Result => Results[0];
+
+	public ManagedMemoryGetUncheckedOp(MlirValue memory, MlirValue index, MlirType elementType) {
+		Operands.Add(memory);
+		Operands.Add(index);
+		ElementType = elementType;
+		CreateResult(elementType);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.managed_memory_get_unchecked {Memory}, {Index} : {ElementType}");
+	}
+}
+
+/// <summary>
+/// Set element in managed memory: maxon.managed_memory_set_at %mem, %index, %value
+/// </summary>
+public sealed class ManagedMemorySetAtOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_set_at";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Memory => Operands[0];
+	public MlirValue Index => Operands[1];
+	public MlirValue Value => Operands[2];
+
+	public ManagedMemorySetAtOp(MlirValue memory, MlirValue index, MlirValue value) {
+		Operands.Add(memory);
+		Operands.Add(index);
+		Operands.Add(value);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"maxon.managed_memory_set_at {Memory}, {Index}, {Value}");
+	}
+}
+
+/// <summary>
+/// Grow managed memory capacity: maxon.managed_memory_grow %mem, %newCapacity
+/// </summary>
+public sealed class ManagedMemoryGrowOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_grow";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Memory => Operands[0];
+	public MlirValue NewCapacity => Operands[1];
+	public MlirType ElementType { get; }
+
+	public ManagedMemoryGrowOp(MlirValue memory, MlirValue newCapacity, MlirType elementType) {
+		Operands.Add(memory);
+		Operands.Add(newCapacity);
+		ElementType = elementType;
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"maxon.managed_memory_grow {Memory}, {NewCapacity}");
+	}
+}
+
+/// <summary>
+/// Set managed memory length: maxon.managed_memory_set_length %mem, %newLen
+/// </summary>
+public sealed class ManagedMemorySetLengthOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_set_length";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Memory => Operands[0];
+	public MlirValue NewLength => Operands[1];
+
+	public ManagedMemorySetLengthOp(MlirValue memory, MlirValue newLength) {
+		Operands.Add(memory);
+		Operands.Add(newLength);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"maxon.managed_memory_set_length {Memory}, {NewLength}");
+	}
+}
+
+/// <summary>
+/// Grow managed memory (ByRef version - takes a pointer): maxon.managed_memory_grow_byref %memPtr, %newCap
+/// The pointer allows modifications to persist to the original struct.
+/// </summary>
+public sealed class ManagedMemoryGrowByRefOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_grow_byref";
+	public override bool HasSideEffects => true;
+
+	public MlirValue MemoryPtr => Operands[0];  // Pointer to __ManagedMemory
+	public MlirValue NewCapacity => Operands[1];
+	public MlirType ElementType { get; }
+
+	public ManagedMemoryGrowByRefOp(MlirValue memoryPtr, MlirValue newCapacity, MlirType elementType) {
+		Operands.Add(memoryPtr);
+		Operands.Add(newCapacity);
+		ElementType = elementType;
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"maxon.managed_memory_grow_byref {MemoryPtr}, {NewCapacity}");
+	}
+}
+
+/// <summary>
+/// Set managed memory length (ByRef version - takes a pointer): maxon.managed_memory_set_length_byref %memPtr, %newLen
+/// </summary>
+public sealed class ManagedMemorySetLengthByRefOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_set_length_byref";
+	public override bool HasSideEffects => true;
+
+	public MlirValue MemoryPtr => Operands[0];  // Pointer to __ManagedMemory
+	public MlirValue NewLength => Operands[1];
+
+	public ManagedMemorySetLengthByRefOp(MlirValue memoryPtr, MlirValue newLength) {
+		Operands.Add(memoryPtr);
+		Operands.Add(newLength);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"maxon.managed_memory_set_length_byref {MemoryPtr}, {NewLength}");
+	}
+}
+
+/// <summary>
+/// Shift elements right: maxon.managed_memory_shift_right %mem, %startIndex, %count
+/// </summary>
+public sealed class ManagedMemoryShiftRightOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_shift_right";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Memory => Operands[0];
+	public MlirValue StartIndex => Operands[1];
+	public MlirValue Count => Operands[2];
+	public MlirType ElementType { get; }
+
+	public ManagedMemoryShiftRightOp(MlirValue memory, MlirValue startIndex, MlirValue count, MlirType elementType) {
+		Operands.Add(memory);
+		Operands.Add(startIndex);
+		Operands.Add(count);
+		ElementType = elementType;
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"maxon.managed_memory_shift_right {Memory}, {StartIndex}, {Count}");
+	}
+}
+
+/// <summary>
+/// Shift elements left: maxon.managed_memory_shift_left %mem, %startIndex, %count
+/// </summary>
+public sealed class ManagedMemoryShiftLeftOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_shift_left";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Memory => Operands[0];
+	public MlirValue StartIndex => Operands[1];
+	public MlirValue Count => Operands[2];
+	public MlirType ElementType { get; }
+
+	public ManagedMemoryShiftLeftOp(MlirValue memory, MlirValue startIndex, MlirValue count, MlirType elementType) {
+		Operands.Add(memory);
+		Operands.Add(startIndex);
+		Operands.Add(count);
+		ElementType = elementType;
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"maxon.managed_memory_shift_left {Memory}, {StartIndex}, {Count}");
+	}
+}
+
+/// <summary>
+/// Get element size for a type: %result = maxon.element_size : i64
+/// Returns the size in bytes of the element type.
+/// </summary>
+public sealed class ElementSizeOp : MaxonOp {
+	public override string Mnemonic => "element_size";
+	public override bool HasSideEffects => false;
+
+	public MlirType ElementType { get; }
+	public MlirValue Result => Results[0];
+
+	public ElementSizeOp(MlirType elementType) {
+		ElementType = elementType;
+		CreateResult(IntegerType.I64);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.element_size<{ElementType}>");
+	}
+}

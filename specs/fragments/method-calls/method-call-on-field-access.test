@@ -27,19 +27,27 @@ func.func @main() -> i64 {
     x86.prologue stack_size=64
     x86.mov rax, 42
     x86.lea rcx, qword ptr [rbp-40]
-    x86.mov rdx, 0
-    x86.lea r8, qword ptr [rcx+rdx]
-    x86.mov qword ptr [r8], rax
-    x86.lea r8, qword ptr [rbp-48]
-    x86.lea rax, qword ptr [r8+rdx]
-    x86.mov qword ptr [rax], rcx
-    x86.lea rcx, qword ptr [rbp-56]
-    x86.mov qword ptr [rcx], r8
-    x86.mov r8, qword ptr [rcx]
+    x86.lea rdx, qword ptr [rcx]
+    x86.mov qword ptr [rdx], rax
+    x86.lea rdx, qword ptr [rbp-48]
+    x86.lea rax, qword ptr [rdx]
+    x86.mov r8, 8
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rax
+    x86.mov rsi, rcx
     x86.mov rcx, r8
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.lea r8, qword ptr [rbp-56]
+    x86.mov qword ptr [r8], rdx
+    x86.mov rdx, qword ptr [r8]
+    x86.mov rcx, rdx
     x86.call Outer.getInnerValue
-    x86.mov r8, rax
-    x86.mov rax, r8
+    x86.mov rdx, rax
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
 }
@@ -59,9 +67,10 @@ func.func @Outer.getInnerValue(%self: !maxon.struct<Outer>) -> i64 {
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]
-    x86.mov rax, qword ptr [rcx]
-    x86.mov rcx, rax
+    x86.mov rcx, rcx
     x86.call Inner.get
+    x86.mov rcx, rax
+    x86.mov rax, rcx
     x86.epilogue
     x86.ret
 }

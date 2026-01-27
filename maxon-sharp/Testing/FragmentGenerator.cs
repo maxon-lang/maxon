@@ -125,9 +125,11 @@ public static class FragmentGenerator {
 					continue;
 				}
 
-				var (content, error) = GenerateFragmentContent(test, exePath);
+				// Pass absolute path - CompileError.Format() will make it relative to ProjectRoot
+				var absolutePath = Path.GetFullPath(fragmentPath);
+				var (content, error) = GenerateFragmentContent(test, exePath, absolutePath);
 				if (error != null) {
-					errors.Add($"{test.Name}: {error}");
+					errors.Add(error);
 				}
 				File.WriteAllText(fragmentPath, content);
 				Interlocked.Increment(ref generated);
@@ -136,7 +138,7 @@ public static class FragmentGenerator {
 
 		// Report any compilation errors encountered during fragment generation
 		foreach (var error in errors) {
-			Logger.Error(LogCategory.Testing, $"Fragment generation error: {error}");
+			Logger.Error(LogCategory.Testing, error);
 		}
 
 		// Update or delete the flag file based on success/failure
@@ -149,7 +151,7 @@ public static class FragmentGenerator {
 		return new FragmentGenerationResult(generated, errors.Count);
 	}
 
-	private static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath) {
+	private static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath) {
 		var sb = new StringBuilder();
 		string? error = null;
 
@@ -183,7 +185,7 @@ public static class FragmentGenerator {
 
 		// Compile to executable and capture IR (for success expectations only)
 		if (test.Expectation is SuccessExpectation) {
-			var sources = new[] { new Compiler.SourceFile("test.mx", test.Source) };
+			var sources = new[] { new Compiler.SourceFile(fragmentPath, test.Source) };
 			var result = Compiler.Compiler.Compile(sources, exePath, returnIr: true);
 			if (result.Success) {
 				sb.Append(result.X86Ir?.TrimEnd());

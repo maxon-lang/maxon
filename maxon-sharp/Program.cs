@@ -18,7 +18,7 @@ class Program {
 			"build" => RunBuild(args[1..]),
 			"run" => RunRun(args[1..]),
 			"spec-test" => RunSpecTests(args[1..]),
-			_ => HandleUnknownCommand(command)
+			_ => Fail()
 		};
 	}
 
@@ -50,25 +50,32 @@ class Program {
 		Console.WriteLine("  debug  - Also show each passing test");
 	}
 
-	static int HandleUnknownCommand(string command) {
-		Console.WriteLine($"Unknown command: {command}");
-		Console.WriteLine();
+	static int Fail() {
 		PrintUsage();
 		return 1;
 	}
 
-	static (bool emitIr, bool valid) ParseCommonOptions(string[] args) {
+	static (bool emitIr, bool valid) ParseOptions(string[] args, HashSet<string>? additionalOptions = null) {
 		var emitIr = false;
 
 		foreach (var arg in args) {
 			if (arg == "--emit-ir") {
 				emitIr = true;
 			} else if (arg.StartsWith("--log=")) {
-				var logValue = arg["--log=".Length..];
-				if (!Logger.ParseOption(logValue)) {
-					Console.WriteLine($"Invalid log option: {logValue}");
-					Console.WriteLine("  Valid levels: none, error, info, debug, trace");
-					Console.WriteLine("  Valid categories: compiler, lexer, parser, semantic, hir, lir, codegen, pe");
+				if (!Logger.ParseOption(arg["--log=".Length..])) {
+					return (false, false);
+				}
+			} else if (arg.StartsWith('-')) {
+				var recognized = false;
+				if (additionalOptions != null) {
+					foreach (var opt in additionalOptions) {
+						if (opt.EndsWith('=') ? arg.StartsWith(opt) : arg == opt) {
+							recognized = true;
+							break;
+						}
+					}
+				}
+				if (!recognized) {
 					return (false, false);
 				}
 			}
@@ -78,8 +85,8 @@ class Program {
 	}
 
 	static int RunCompile(string[] args) {
-		var (emitIr, valid) = ParseCommonOptions(args);
-		if (!valid) return 1;
+		var (emitIr, valid) = ParseOptions(args);
+		if (!valid) return Fail();
 
 		string? sourceFile = null;
 		foreach (var arg in args) {
@@ -90,10 +97,7 @@ class Program {
 		}
 
 		if (sourceFile == null) {
-			Console.WriteLine("Usage: maxonsharp compile [options] <file>");
-			Console.WriteLine();
-			Console.WriteLine("Compile a single .maxon file to an executable.");
-			return 1;
+			return Fail();
 		}
 
 		if (!File.Exists(sourceFile)) {
@@ -118,8 +122,8 @@ class Program {
 	}
 
 	static int RunBuild(string[] args) {
-		var (emitIr, valid) = ParseCommonOptions(args);
-		if (!valid) return 1;
+		var (emitIr, valid) = ParseOptions(args);
+		if (!valid) return Fail();
 
 		string? directory = null;
 		foreach (var arg in args) {
@@ -159,8 +163,8 @@ class Program {
 	}
 
 	static int RunRun(string[] args) {
-		var (emitIr, valid) = ParseCommonOptions(args);
-		if (!valid) return 1;
+		var (emitIr, valid) = ParseOptions(args);
+		if (!valid) return Fail();
 
 		string? path = null;
 		foreach (var arg in args) {
@@ -171,10 +175,7 @@ class Program {
 		}
 
 		if (path == null) {
-			Console.WriteLine("Usage: maxonsharp run [options] <file|directory>");
-			Console.WriteLine();
-			Console.WriteLine("Compile and run a .maxon file or project.");
-			return 1;
+			return Fail();
 		}
 
 		SourceFile[] sourceFiles;
@@ -287,8 +288,9 @@ class Program {
 		Logger.SetLevel(LogCategory.Compiler, LogLevel.Error);
 
 		// Parse common options (logging) - allows user overrides
-		var (_, valid) = ParseCommonOptions(args);
-		if (!valid) return 1;
+		var specTestOptions = new HashSet<string> { "--filter=", "--workers=" };
+		var (_, valid) = ParseOptions(args, specTestOptions);
+		if (!valid) return Fail();
 
 		string? filter = null;
 		int? workers = null;
@@ -299,6 +301,8 @@ class Program {
 			} else if (arg.StartsWith("--workers=")) {
 				if (int.TryParse(arg["--workers=".Length..], out var w)) {
 					workers = w;
+				} else {
+					return Fail();
 				}
 			}
 		}

@@ -18,21 +18,22 @@ ExitCode: 12
 func.func @makePair(%__sret: ptr<!maxon.struct<Pair>>, %a: i64, %b: i64) {
   ^entry(%__sret: ptr<!maxon.struct<Pair>>, %a: i64, %b: i64):
     x86.prologue stack_size=32
-    x86.mov rax, rcx
-    x86.mov rcx, rdx
-    x86.mov rdx, r8
-    x86.lea r8, qword ptr [rax]
-    x86.mov qword ptr [r8], rcx
-    x86.lea r8, qword ptr [rax+8]
+    x86.mov r10, rcx
+    x86.mov r11, rdx
+    x86.mov rax, r8
+    x86.mov rcx, r10
+    x86.mov rdx, r11
+    x86.lea r8, qword ptr [rcx]
     x86.mov qword ptr [r8], rdx
+    x86.lea r8, qword ptr [rcx+8]
+    x86.mov qword ptr [r8], rax
     x86.epilogue
     x86.ret
 }
 
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=64
-    x86.push rbx
+    x86.prologue stack_size=72 saved_gprs=[RBX]
     x86.mov rax, 5
     x86.mov rcx, 7
     x86.lea rbx, qword ptr [rbp-48]
@@ -54,8 +55,7 @@ func.func @main() -> i64 {
     x86.mov rcx, rax
     x86.add rcx, rdx
     x86.mov rax, rcx
-    x86.pop rbx
-    x86.epilogue
+    x86.epilogue saved_gprs=[RBX]
     x86.ret
 }
 ---

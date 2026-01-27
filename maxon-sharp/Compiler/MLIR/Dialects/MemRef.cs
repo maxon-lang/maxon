@@ -278,3 +278,139 @@ public sealed class GlobalOp : MemRefOp {
 		printer.PrintLine($"memref.global {constStr}@{Name} : {Type}{initStr}");
 	}
 }
+
+// ============================================================================
+// Heap Operations (for managed memory)
+// ============================================================================
+
+/// <summary>
+/// Heap allocation: %result = memref.heap_alloc %size : !ptr<i8>
+/// Allocates size bytes on the heap.
+/// </summary>
+public sealed class HeapAllocOp : MemRefOp {
+	public override string Mnemonic => "heap_alloc";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Size => Operands[0];
+	public MlirValue Result => Results[0];
+
+	public HeapAllocOp(MlirValue size) {
+		Operands.Add(size);
+		CreateResult(new PtrType(IntegerType.I8));
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = memref.heap_alloc {Size} : !ptr<i8>");
+	}
+}
+
+/// <summary>
+/// Heap reallocation: %result = memref.heap_realloc %ptr, %newSize : !ptr<i8>
+/// Reallocates the buffer to a new size.
+/// </summary>
+public sealed class HeapReallocOp : MemRefOp {
+	public override string Mnemonic => "heap_realloc";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Ptr => Operands[0];
+	public MlirValue NewSize => Operands[1];
+	public MlirValue Result => Results[0];
+
+	public HeapReallocOp(MlirValue ptr, MlirValue newSize) {
+		Operands.Add(ptr);
+		Operands.Add(newSize);
+		CreateResult(new PtrType(IntegerType.I8));
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = memref.heap_realloc {Ptr}, {NewSize} : !ptr<i8>");
+	}
+}
+
+/// <summary>
+/// Heap free: memref.heap_free %ptr
+/// Frees memory allocated on the heap.
+/// </summary>
+public sealed class HeapFreeOp : MemRefOp {
+	public override string Mnemonic => "heap_free";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Ptr => Operands[0];
+
+	public HeapFreeOp(MlirValue ptr) {
+		Operands.Add(ptr);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"memref.heap_free {Ptr}");
+	}
+}
+
+/// <summary>
+/// Pointer add: %result = memref.ptr_add %ptr, %offset : !ptr<T>
+/// Adds offset bytes to a pointer.
+/// </summary>
+public sealed class PtrAddOp : MemRefOp {
+	public override string Mnemonic => "ptr_add";
+	public override bool HasSideEffects => false;
+
+	public MlirValue Ptr => Operands[0];
+	public MlirValue Offset => Operands[1];
+	public MlirValue Result => Results[0];
+	public PtrType ResultPtrType { get; }
+
+	public PtrAddOp(MlirValue ptr, MlirValue offset, PtrType resultType) {
+		Operands.Add(ptr);
+		Operands.Add(offset);
+		ResultPtrType = resultType;
+		CreateResult(resultType);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = memref.ptr_add {Ptr}, {Offset} : {ResultPtrType}");
+	}
+}
+
+/// <summary>
+/// Memory move (handles overlapping regions): memref.memmove %dst, %src, %len
+/// </summary>
+public sealed class MemMoveOp : MemRefOp {
+	public override string Mnemonic => "memmove";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Destination => Operands[0];
+	public MlirValue Source => Operands[1];
+	public MlirValue Length => Operands[2];
+
+	public MemMoveOp(MlirValue dst, MlirValue src, MlirValue length) {
+		Operands.Add(dst);
+		Operands.Add(src);
+		Operands.Add(length);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"memref.memmove {Destination}, {Source}, {Length}");
+	}
+}
+
+/// <summary>
+/// Memory copy (non-overlapping): memref.memcpy %dst, %src, %len
+/// </summary>
+public sealed class MemCpyOp : MemRefOp {
+	public override string Mnemonic => "memcpy";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Destination => Operands[0];
+	public MlirValue Source => Operands[1];
+	public MlirValue Length => Operands[2];
+
+	public MemCpyOp(MlirValue dst, MlirValue src, MlirValue length) {
+		Operands.Add(dst);
+		Operands.Add(src);
+		Operands.Add(length);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"memref.memcpy {Destination}, {Source}, {Length}");
+	}
+}

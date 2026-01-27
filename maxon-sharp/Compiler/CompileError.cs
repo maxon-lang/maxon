@@ -21,12 +21,10 @@ public class CompileError(ErrorCode code, string message, int? line = null, int?
 	/// </summary>
 	public string Format() {
 		if (FilePath != null && Line.HasValue) {
-			// Use forward slashes and make path relative to project root
-			var displayPath = FilePath.Replace('\\', '/');
-			var root = (ProjectRoot ?? Environment.CurrentDirectory).Replace('\\', '/');
-			if (displayPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)) {
-				displayPath = displayPath[(root.Length + 1)..];
-			}
+			// Normalize the path relative to project root
+			var root = ProjectRoot ?? Environment.CurrentDirectory;
+			var fullPath = Path.IsPathRooted(FilePath) ? FilePath : Path.GetFullPath(Path.Combine(root, FilePath));
+			var displayPath = Path.GetRelativePath(root, fullPath).Replace('\\', '/');
 			return $"error {Code.Format()}: {displayPath}:{Line}:{Column ?? 1}: {Message}";
 		}
 		return $"error {Code.Format()}: {Message}";

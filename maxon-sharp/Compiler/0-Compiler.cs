@@ -80,8 +80,8 @@ public class Compiler {
 			var codeResult = CodeEmitter.Emit(mlirResult.Module);
 
 			// Write PE executable
-			PeWriter.Write(outputPath, codeResult.Code, codeResult.Data);
-			Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Data.Length} bytes data to {outputPath}");
+			PeWriter.Write(outputPath, codeResult.Code, codeResult.Data, codeResult.Imports);
+			Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Data.Length} bytes data, {codeResult.Imports.Count} imports to {outputPath}");
 
 			return new CompileResult(true, null, mlirResult.X86Ir);
 		} catch (CompileError ex) {
@@ -97,7 +97,7 @@ public class Compiler {
 }
 
 public static class StdlibLoader {
-	private static readonly string[] WhitelistedModules = ["Math.maxon", "Pair.maxon"];
+	private static readonly string[] WhitelistedModules = ["Math.maxon", "Pair.maxon", "Interfaces.maxon", "Array.maxon"];
 
 	public static string? FindStdlibPath() {
 		// Search exe_dir/stdlib, exe_dir/../stdlib, exe_dir/../../stdlib, etc.

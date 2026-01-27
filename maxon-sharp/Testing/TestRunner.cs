@@ -28,7 +28,6 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 		// Abort if fragment generation had errors
 		if (genResult.Errors > 0) {
-			Logger.Error(LogCategory.Testing, $"Fragment generation failed with {genResult.Errors} error(s). Fix spec files before running tests.");
 			// Clean up any executables that were generated before the error
 			CleanupExecutables(_fragmentDir);
 			return new TestSummary {

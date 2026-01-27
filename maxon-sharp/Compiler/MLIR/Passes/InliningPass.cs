@@ -171,9 +171,16 @@ public sealed class InliningPass : AbstractPassBase {
 			return false;
 		}
 
-		// Don't inline functions with sret parameter (hidden first parameter that is ptr to struct)
-		// These use the sret calling convention where caller provides storage for struct return
-		if (func.ParamTypes.Count > 0 && func.ParamTypes[0] is PtrType ptrType && ptrType.ElementType is MaxonStructType) {
+		// Don't inline functions that return error unions (they use sret calling convention)
+		if (func.ResultTypes.Count > 0 && func.ResultTypes[0] is MaxonErrorUnionType) {
+			reason = "returns error union (sret)";
+			return false;
+		}
+
+		// Don't inline functions with sret parameter (hidden first parameter that is ptr to struct/error union)
+		// These use the sret calling convention where caller provides storage for return value
+		if (func.ParamTypes.Count > 0 && func.ParamTypes[0] is PtrType ptrType &&
+			(ptrType.ElementType is MaxonStructType or MaxonErrorUnionType)) {
 			reason = "has sret parameter";
 			return false;
 		}

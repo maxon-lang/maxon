@@ -22,6 +22,27 @@ public static class MaxonToStandardPatterns {
 		patterns.Add<LowerArraySetOp>();
 		patterns.Add<LowerArrayLenOp>();
 		patterns.Add<LowerMaxonCallOp>();
+		// Enum patterns
+		patterns.Add<LowerEnumInitOp>();
+		// Error union patterns
+		patterns.Add<LowerErrorUnionSuccessOp>();
+		patterns.Add<LowerErrorUnionErrorOp>();
+		patterns.Add<LowerErrorUnionIsErrorOp>();
+		patterns.Add<LowerErrorUnionGetValueOp>();
+		patterns.Add<LowerErrorUnionGetErrorOp>();
+		// Managed memory patterns (for Array implementation)
+		patterns.Add<LowerManagedMemoryCreateOp>();
+		patterns.Add<LowerManagedMemoryLenOp>();
+		patterns.Add<LowerManagedMemoryCapacityOp>();
+		patterns.Add<LowerManagedMemoryGetUncheckedOp>();
+		patterns.Add<LowerManagedMemorySetAtOp>();
+		patterns.Add<LowerManagedMemoryGrowOp>();
+		patterns.Add<LowerManagedMemorySetLengthOp>();
+		patterns.Add<LowerManagedMemoryShiftRightOp>();
+		patterns.Add<LowerManagedMemoryShiftLeftOp>();
+		patterns.Add<LowerManagedMemoryGrowByRefOp>();
+		patterns.Add<LowerManagedMemorySetLengthByRefOp>();
+		patterns.Add<LowerElementSizeOp>();
 		// Note: FieldPtrOp is lowered by StandardToX86Patterns, not here
 	}
 }
@@ -86,13 +107,22 @@ public sealed class LowerStructInitOp : ConversionPattern<StructInitOp> {
 		int offset = 0;
 		foreach (var field in op.StructType.Fields) {
 			if (op.FieldValues.TryGetValue(field.Name, out var value)) {
-				// Create index for the offset
-				var offsetConst = ConstantOp.Index(offset);
-				rewriter.Insert(offsetConst);
+				// Calculate destination address for this field
+				var fieldPtr = new FieldPtrOp(alloca.Result, field.Name, offset, field.Type);
+				rewriter.Insert(fieldPtr);
 
-				// Store the value
-				var store = new StoreOp(value, alloca.Result, offsetConst.Result);
-				rewriter.Insert(store);
+				// If the value is a struct (value.Type is a pointer to struct), copy it with memcpy
+				if (field.Type is MaxonStructType structType) {
+					// value is a pointer to the source struct, copy its contents
+					var sizeConst = ConstantOp.Int(structType.SizeInBytes, IntegerType.I64);
+					rewriter.Insert(sizeConst);
+					var memcpy = new MemCpyOp(fieldPtr.Result, value, sizeConst.Result);
+					rewriter.Insert(memcpy);
+				} else {
+					// Simple value, just store it
+					var store = new StoreOp(value, fieldPtr.Result);
+					rewriter.Insert(store);
+				}
 			}
 			offset += field.Type.SizeInBytes;
 		}
@@ -104,10 +134,18 @@ public sealed class LowerStructInitOp : ConversionPattern<StructInitOp> {
 
 /// <summary>
 /// Lowers maxon.field_get to field_ptr + load.
+/// For struct-typed fields, returns the field pointer directly (no load).
 /// </summary>
 public sealed class LowerFieldGetOp : ConversionPattern<FieldGetOp> {
 	protected override bool MatchAndRewrite(FieldGetOp op, ConversionPatternRewriter rewriter) {
 		var fieldPtr = EmitFieldPtr(op.Struct, op.FieldName, rewriter);
+
+		// For struct-typed fields, return the pointer (structs are passed by reference)
+		// For primitive types, load the value
+		if (op.Result.Type is MaxonStructType) {
+			rewriter.ReplaceOpWithValue(op, fieldPtr.Result);
+			return true;
+		}
 
 		var load = new LoadOp(fieldPtr.Result);
 		rewriter.Insert(load);
@@ -225,12 +263,589 @@ public sealed class LowerMaxonCallOp : ConversionPattern<MaxonCallOp> {
 			return true;
 		}
 
+		// Check if return type is an error union (also needs caller-allocated return space)
+		if (op.Result?.Type is MaxonErrorUnionType errorUnionType) {
+			// Allocate space for the error union on caller's stack
+			var memRefType = new MemRefType(IntegerType.I8, [errorUnionType.SizeInBytes]);
+			var alloca = new AllocaOp(memRefType);
+			rewriter.Insert(alloca);
+
+			// Pass the return pointer as a hidden first argument
+			var args = new List<MlirValue> { alloca.Result };
+			args.AddRange(op.Operands);
+
+			// Call with void return (error union is written to the pointer)
+			var call = new FuncCallOp(op.Callee, args, null);
+			rewriter.Insert(call);
+
+			// Result is the alloca pointer (now points to the filled error union)
+			rewriter.ReplaceOpWithValue(op, alloca.Result);
+			return true;
+		}
+
 		// Non-struct return: standard call
 		var standardCall = new FuncCallOp(op.Callee, op.Operands, op.Result?.Type);
 		rewriter.Insert(standardCall);
 		if (op.Result is not null && standardCall.Result is not null) {
 			rewriter.ReplaceOpWithValue(op, standardCall.Result);
 		}
+		return true;
+	}
+}
+
+// ============================================================================
+// Error Union Lowering Patterns
+// ============================================================================
+
+/// <summary>
+/// Lowers maxon.error_union_success to alloca + stores (tag=0, value).
+/// </summary>
+public sealed class LowerErrorUnionSuccessOp : ConversionPattern<ErrorUnionSuccessOp> {
+	protected override bool MatchAndRewrite(ErrorUnionSuccessOp op, ConversionPatternRewriter rewriter) {
+		var errorUnionType = (MaxonErrorUnionType)op.Result.Type;
+
+		// Allocate space for the error union
+		var memRefType = new MemRefType(IntegerType.I8, [errorUnionType.SizeInBytes]);
+		var alloca = new AllocaOp(memRefType);
+		rewriter.Insert(alloca);
+
+		// Store tag = 0 (success) at offset 0
+		var tagConst = ConstantOp.Int(0, IntegerType.I8);
+		rewriter.Insert(tagConst);
+		var tagStore = new StoreOp(tagConst.Result, alloca.Result);
+		rewriter.Insert(tagStore);
+
+		// Store value at offset 8 (after tag + padding)
+		var valueOffsetConst = ConstantOp.Index(8);
+		rewriter.Insert(valueOffsetConst);
+		var valueStore = new StoreOp(op.Value, alloca.Result, valueOffsetConst.Result);
+		rewriter.Insert(valueStore);
+
+		rewriter.ReplaceOpWithValue(op, alloca.Result);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.error_union_error to alloca + stores (tag=1, error value).
+/// </summary>
+public sealed class LowerErrorUnionErrorOp : ConversionPattern<ErrorUnionErrorOp> {
+	protected override bool MatchAndRewrite(ErrorUnionErrorOp op, ConversionPatternRewriter rewriter) {
+		var errorUnionType = (MaxonErrorUnionType)op.Result.Type;
+
+		// Allocate space for the error union
+		var memRefType = new MemRefType(IntegerType.I8, [errorUnionType.SizeInBytes]);
+		var alloca = new AllocaOp(memRefType);
+		rewriter.Insert(alloca);
+
+		// Store tag = 1 (error) at offset 0
+		var tagConst = ConstantOp.Int(1, IntegerType.I8);
+		rewriter.Insert(tagConst);
+		var tagStore = new StoreOp(tagConst.Result, alloca.Result);
+		rewriter.Insert(tagStore);
+
+		// Store error value at offset 8 (after tag + padding)
+		var errorOffsetConst = ConstantOp.Index(8);
+		rewriter.Insert(errorOffsetConst);
+		var errorStore = new StoreOp(op.Error, alloca.Result, errorOffsetConst.Result);
+		rewriter.Insert(errorStore);
+
+		rewriter.ReplaceOpWithValue(op, alloca.Result);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.error_union_is_error to load tag and compare != 0.
+/// </summary>
+public sealed class LowerErrorUnionIsErrorOp : ConversionPattern<ErrorUnionIsErrorOp> {
+	protected override bool MatchAndRewrite(ErrorUnionIsErrorOp op, ConversionPatternRewriter rewriter) {
+		// The union is a pointer (MemRefType or PtrType) to the error union data
+		// After LowerMaxonCallOp runs, it will be a MemRefType<i8 x size>
+		// The tag is at offset 0 (first byte)
+
+		// Get the remapped value (in case it was replaced by LowerMaxonCallOp)
+		var unionPtr = rewriter.GetRemapped(op.Union);
+
+		// Create a ptr to load the tag byte
+		var tagPtr = new FieldPtrOp(unionPtr, "_tag", 0, IntegerType.I8);
+		rewriter.Insert(tagPtr);
+
+		var load = new LoadOp(tagPtr.Result);
+		rewriter.Insert(load);
+
+		// Extend to i64 for comparison
+		var extended = new ExtUIOp(load.Result, IntegerType.I64);
+		rewriter.Insert(extended);
+
+		// Compare tag != 0 (non-zero means error)
+		var zeroConst = ConstantOp.Int(0, IntegerType.I64);
+		rewriter.Insert(zeroConst);
+		var cmp = new CmpIOp(CmpIPredicate.Ne, extended.Result, zeroConst.Result);
+		rewriter.Insert(cmp);
+
+		rewriter.ReplaceOpWithValue(op, cmp.Result);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.error_union_get_value to load from offset 8.
+/// </summary>
+public sealed class LowerErrorUnionGetValueOp : ConversionPattern<ErrorUnionGetValueOp> {
+	protected override bool MatchAndRewrite(ErrorUnionGetValueOp op, ConversionPatternRewriter rewriter) {
+		// Get the remapped value (in case it was replaced by LowerMaxonCallOp)
+		var unionPtr = rewriter.GetRemapped(op.Union);
+
+		// Load value from the error union at offset 8
+		// We use a FieldPtrOp to compute the address at offset 8
+		var valueOffset = 8;
+		var fieldPtr = new FieldPtrOp(unionPtr, "_value", valueOffset, op.Result.Type);
+		rewriter.Insert(fieldPtr);
+
+		var load = new LoadOp(fieldPtr.Result);
+		rewriter.Insert(load);
+
+		rewriter.ReplaceOpWithValue(op, load.Result);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.error_union_get_error to load from offset 8.
+/// </summary>
+public sealed class LowerErrorUnionGetErrorOp : ConversionPattern<ErrorUnionGetErrorOp> {
+	protected override bool MatchAndRewrite(ErrorUnionGetErrorOp op, ConversionPatternRewriter rewriter) {
+		// Get the remapped value (in case it was replaced by LowerMaxonCallOp)
+		var unionPtr = rewriter.GetRemapped(op.Union);
+
+		// Load error from the error union at offset 8 (same offset as value)
+		var errorOffset = 8;
+		var fieldPtr = new FieldPtrOp(unionPtr, "_error", errorOffset, op.Result.Type);
+		rewriter.Insert(fieldPtr);
+
+		var load = new LoadOp(fieldPtr.Result);
+		rewriter.Insert(load);
+
+		rewriter.ReplaceOpWithValue(op, load.Result);
+		return true;
+	}
+}
+
+// ============================================================================
+// Enum Lowering Patterns
+// ============================================================================
+
+/// <summary>
+/// Lowers maxon.enum_init to a constant integer (the tag value).
+/// For enums without payload, the enum value is just the discriminant.
+/// For enums with payload, would need to allocate space for tag + payload.
+/// </summary>
+public sealed class LowerEnumInitOp : ConversionPattern<EnumInitOp> {
+	protected override bool MatchAndRewrite(EnumInitOp op, ConversionPatternRewriter rewriter) {
+		var variant = op.EnumType.GetVariant(op.VariantName);
+		if (variant is null) {
+			throw new InvalidOperationException($"Unknown enum variant: {op.EnumType.Name}::{op.VariantName}");
+		}
+
+		// For simple enums without payload, the value is just the tag
+		if (variant.PayloadFields.Count == 0) {
+			var tagConst = ConstantOp.Int(variant.Tag, IntegerType.I8);
+			rewriter.Insert(tagConst);
+			rewriter.ReplaceOpWithValue(op, tagConst.Result);
+			return true;
+		}
+
+		// TODO: For enums with payload, allocate space for tag + payload
+		throw new NotImplementedException($"Enum variants with payload not yet supported: {op.EnumType.Name}::{op.VariantName}");
+	}
+}
+
+// ============================================================================
+// Managed Memory Lowering Patterns (for Array implementation)
+// ============================================================================
+
+/// <summary>
+/// Lowers maxon.managed_memory_create to heap allocation.
+/// Creates the __ManagedMemory struct with allocated buffer.
+/// </summary>
+public sealed class LowerManagedMemoryCreateOp : ConversionPattern<ManagedMemoryCreateOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryCreateOp op, ConversionPatternRewriter rewriter) {
+		// __ManagedMemory layout:
+		//   _buffer: ptr (offset 0, 8 bytes)
+		//   _len: i64 (offset 8, 8 bytes)
+		//   _capacity: i64 (offset 16, 8 bytes)
+		//   _flags: i32 (offset 24, 4 bytes)
+		//   _parent_off: i32 (offset 28, 4 bytes)
+
+		// Calculate total bytes needed: count * elemSize
+		var totalBytes = new MulIOp(op.Count, op.ElemSize);
+		rewriter.Insert(totalBytes);
+
+		// Allocate buffer on heap (will be lowered to malloc call later)
+		var heapAlloc = new HeapAllocOp(totalBytes.Result);
+		rewriter.Insert(heapAlloc);
+
+		// Allocate space for the struct (32 bytes)
+		var structSize = ConstantOp.Int(32, IntegerType.I64);
+		rewriter.Insert(structSize);
+		var memRefType = new MemRefType(IntegerType.I8, [32]);
+		var structAlloca = new AllocaOp(memRefType);
+		rewriter.Insert(structAlloca);
+
+		// Store _buffer at offset 0
+		var offset0 = ConstantOp.Index(0);
+		rewriter.Insert(offset0);
+		var bufferPtr = new FieldPtrOp(structAlloca.Result, "_buffer", 0, new PtrType(IntegerType.I8));
+		rewriter.Insert(bufferPtr);
+		var storeBuffer = new StoreOp(heapAlloc.Result, bufferPtr.Result);
+		rewriter.Insert(storeBuffer);
+
+		// Store _len at offset 8 (initially 0)
+		var zero = ConstantOp.Int(0, IntegerType.I64);
+		rewriter.Insert(zero);
+		var lenPtr = new FieldPtrOp(structAlloca.Result, "_len", 8, IntegerType.I64);
+		rewriter.Insert(lenPtr);
+		var storeLen = new StoreOp(zero.Result, lenPtr.Result);
+		rewriter.Insert(storeLen);
+
+		// Store _capacity at offset 16
+		var capPtr = new FieldPtrOp(structAlloca.Result, "_capacity", 16, IntegerType.I64);
+		rewriter.Insert(capPtr);
+		var storeCap = new StoreOp(op.Count, capPtr.Result);
+		rewriter.Insert(storeCap);
+
+		// Store _flags at offset 24 (initially 0)
+		var zeroFlags = ConstantOp.Int(0, IntegerType.I32);
+		rewriter.Insert(zeroFlags);
+		var flagsPtr = new FieldPtrOp(structAlloca.Result, "_flags", 24, IntegerType.I32);
+		rewriter.Insert(flagsPtr);
+		var storeFlags = new StoreOp(zeroFlags.Result, flagsPtr.Result);
+		rewriter.Insert(storeFlags);
+
+		// Store _parent_off at offset 28 (initially 0)
+		var zeroParent = ConstantOp.Int(0, IntegerType.I32);
+		rewriter.Insert(zeroParent);
+		var parentOffPtr = new FieldPtrOp(structAlloca.Result, "_parent_off", 28, IntegerType.I32);
+		rewriter.Insert(parentOffPtr);
+		var storeParent = new StoreOp(zeroParent.Result, parentOffPtr.Result);
+		rewriter.Insert(storeParent);
+
+		rewriter.ReplaceOpWithValue(op, structAlloca.Result);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_len to field load from offset 8.
+/// </summary>
+public sealed class LowerManagedMemoryLenOp : ConversionPattern<ManagedMemoryLenOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryLenOp op, ConversionPatternRewriter rewriter) {
+		var lenPtr = new FieldPtrOp(op.Memory, "_len", 8, IntegerType.I64);
+		rewriter.Insert(lenPtr);
+		var load = new LoadOp(lenPtr.Result);
+		rewriter.Insert(load);
+		rewriter.ReplaceOpWithValue(op, load.Result);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_capacity to field load from offset 16.
+/// </summary>
+public sealed class LowerManagedMemoryCapacityOp : ConversionPattern<ManagedMemoryCapacityOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryCapacityOp op, ConversionPatternRewriter rewriter) {
+		var capPtr = new FieldPtrOp(op.Memory, "_capacity", 16, IntegerType.I64);
+		rewriter.Insert(capPtr);
+		var load = new LoadOp(capPtr.Result);
+		rewriter.Insert(load);
+		rewriter.ReplaceOpWithValue(op, load.Result);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_get_unchecked to buffer[index * elemSize] load.
+/// </summary>
+public sealed class LowerManagedMemoryGetUncheckedOp : ConversionPattern<ManagedMemoryGetUncheckedOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryGetUncheckedOp op, ConversionPatternRewriter rewriter) {
+		// Load buffer pointer
+		var bufferPtr = new FieldPtrOp(op.Memory, "_buffer", 0, new PtrType(IntegerType.I8));
+		rewriter.Insert(bufferPtr);
+		var bufferLoad = new LoadOp(bufferPtr.Result);
+		rewriter.Insert(bufferLoad);
+
+		// Calculate offset: index * elementSize
+		var elemSize = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSize);
+		var offset = new MulIOp(op.Index, elemSize.Result);
+		rewriter.Insert(offset);
+
+		// Get element pointer: buffer + offset
+		var elemPtr = new PtrAddOp(bufferLoad.Result, offset.Result, new PtrType(op.ElementType));
+		rewriter.Insert(elemPtr);
+
+		// Load element
+		var load = new LoadOp(elemPtr.Result);
+		rewriter.Insert(load);
+		rewriter.ReplaceOpWithValue(op, load.Result);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_set_at to buffer[index * elemSize] store.
+/// </summary>
+public sealed class LowerManagedMemorySetAtOp : ConversionPattern<ManagedMemorySetAtOp> {
+	protected override bool MatchAndRewrite(ManagedMemorySetAtOp op, ConversionPatternRewriter rewriter) {
+		// Load buffer pointer
+		var bufferPtr = new FieldPtrOp(op.Memory, "_buffer", 0, new PtrType(IntegerType.I8));
+		rewriter.Insert(bufferPtr);
+		var bufferLoad = new LoadOp(bufferPtr.Result);
+		rewriter.Insert(bufferLoad);
+
+		// Calculate offset: index * elementSize
+		var elemSize = ConstantOp.Int(op.Value.Type.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSize);
+		var offset = new MulIOp(op.Index, elemSize.Result);
+		rewriter.Insert(offset);
+
+		// Get element pointer: buffer + offset
+		var elemPtr = new PtrAddOp(bufferLoad.Result, offset.Result, new PtrType(op.Value.Type));
+		rewriter.Insert(elemPtr);
+
+		// Store element
+		var store = new StoreOp(op.Value, elemPtr.Result);
+		rewriter.Insert(store);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_grow to heap realloc.
+/// </summary>
+public sealed class LowerManagedMemoryGrowOp : ConversionPattern<ManagedMemoryGrowOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryGrowOp op, ConversionPatternRewriter rewriter) {
+		// Load current buffer and capacity
+		var bufferPtr = new FieldPtrOp(op.Memory, "_buffer", 0, new PtrType(IntegerType.I8));
+		rewriter.Insert(bufferPtr);
+		var bufferLoad = new LoadOp(bufferPtr.Result);
+		rewriter.Insert(bufferLoad);
+
+		var capPtr = new FieldPtrOp(op.Memory, "_capacity", 16, IntegerType.I64);
+		rewriter.Insert(capPtr);
+		var capLoad = new LoadOp(capPtr.Result);
+		rewriter.Insert(capLoad);
+
+		// Calculate new size: newCapacity * elementSize
+		var elemSize = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSize);
+		var newSize = new MulIOp(op.NewCapacity, elemSize.Result);
+		rewriter.Insert(newSize);
+
+		// Calculate old size: capacity * elementSize (for memcpy)
+		var oldSize = new MulIOp(capLoad.Result, elemSize.Result);
+		rewriter.Insert(oldSize);
+
+		// Reallocate (will be lowered to realloc call)
+		var realloc = new HeapReallocOp(bufferLoad.Result, newSize.Result);
+		rewriter.Insert(realloc);
+
+		// Store new buffer pointer
+		var storeBuffer = new StoreOp(realloc.Result, bufferPtr.Result);
+		rewriter.Insert(storeBuffer);
+
+		// Update capacity
+		var storeCap = new StoreOp(op.NewCapacity, capPtr.Result);
+		rewriter.Insert(storeCap);
+
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_set_length to field store at offset 8.
+/// </summary>
+public sealed class LowerManagedMemorySetLengthOp : ConversionPattern<ManagedMemorySetLengthOp> {
+	protected override bool MatchAndRewrite(ManagedMemorySetLengthOp op, ConversionPatternRewriter rewriter) {
+		var lenPtr = new FieldPtrOp(op.Memory, "_len", 8, IntegerType.I64);
+		rewriter.Insert(lenPtr);
+		var store = new StoreOp(op.NewLength, lenPtr.Result);
+		rewriter.Insert(store);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_grow_byref - takes a pointer to __ManagedMemory.
+/// This version allows modifications to persist to the original struct.
+/// </summary>
+public sealed class LowerManagedMemoryGrowByRefOp : ConversionPattern<ManagedMemoryGrowByRefOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryGrowByRefOp op, ConversionPatternRewriter rewriter) {
+		// MemoryPtr is a pointer to the __ManagedMemory struct
+		// Calculate field addresses from the pointer base
+
+		// Buffer pointer is at offset 0 from the struct (it's a ptr to a ptr)
+		var bufferOffset = ConstantOp.Int(0, IntegerType.I64);
+		rewriter.Insert(bufferOffset);
+		var bufferPtrType = new PtrType(new PtrType(IntegerType.I8));
+		var bufferFieldPtr = new PtrAddOp(op.MemoryPtr, bufferOffset.Result, bufferPtrType);
+		rewriter.Insert(bufferFieldPtr);
+		var bufferPtrPtr = bufferFieldPtr.Result;
+
+		// Load current buffer pointer
+		var bufferLoad = new LoadOp(bufferPtrPtr);
+		rewriter.Insert(bufferLoad);
+
+		// Capacity is at offset 16
+		var capOffset = ConstantOp.Int(16, IntegerType.I64);
+		rewriter.Insert(capOffset);
+		var capPtrType = new PtrType(IntegerType.I64);
+		var capFieldPtr = new PtrAddOp(op.MemoryPtr, capOffset.Result, capPtrType);
+		rewriter.Insert(capFieldPtr);
+
+		// Calculate new size: newCapacity * elementSize
+		var elemSize = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSize);
+		var newSize = new MulIOp(op.NewCapacity, elemSize.Result);
+		rewriter.Insert(newSize);
+
+		// Reallocate
+		var realloc = new HeapReallocOp(bufferLoad.Result, newSize.Result);
+		rewriter.Insert(realloc);
+
+		// Store new buffer pointer back
+		var storeBuffer = new StoreOp(realloc.Result, bufferPtrPtr);
+		rewriter.Insert(storeBuffer);
+
+		// Update capacity
+		var storeCap = new StoreOp(op.NewCapacity, capFieldPtr.Result);
+		rewriter.Insert(storeCap);
+
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_set_length_byref - takes a pointer to __ManagedMemory.
+/// </summary>
+public sealed class LowerManagedMemorySetLengthByRefOp : ConversionPattern<ManagedMemorySetLengthByRefOp> {
+	protected override bool MatchAndRewrite(ManagedMemorySetLengthByRefOp op, ConversionPatternRewriter rewriter) {
+		// Length is at offset 8 from the struct pointer
+		var lenOffset = ConstantOp.Int(8, IntegerType.I64);
+		rewriter.Insert(lenOffset);
+		var lenPtrType = new PtrType(IntegerType.I64);
+		var lenFieldPtr = new PtrAddOp(op.MemoryPtr, lenOffset.Result, lenPtrType);
+		rewriter.Insert(lenFieldPtr);
+
+		var store = new StoreOp(op.NewLength, lenFieldPtr.Result);
+		rewriter.Insert(store);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_shift_right to memmove.
+/// </summary>
+public sealed class LowerManagedMemoryShiftRightOp : ConversionPattern<ManagedMemoryShiftRightOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryShiftRightOp op, ConversionPatternRewriter rewriter) {
+		// Load buffer pointer
+		var bufferPtr = new FieldPtrOp(op.Memory, "_buffer", 0, new PtrType(IntegerType.I8));
+		rewriter.Insert(bufferPtr);
+		var bufferLoad = new LoadOp(bufferPtr.Result);
+		rewriter.Insert(bufferLoad);
+
+		var elemSize = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSize);
+
+		// Source: buffer + startIndex * elemSize
+		var srcOffset = new MulIOp(op.StartIndex, elemSize.Result);
+		rewriter.Insert(srcOffset);
+		var srcPtr = new PtrAddOp(bufferLoad.Result, srcOffset.Result, new PtrType(IntegerType.I8));
+		rewriter.Insert(srcPtr);
+
+		// Destination: buffer + (startIndex + count) * elemSize
+		var destIndex = new AddIOp(op.StartIndex, op.Count);
+		rewriter.Insert(destIndex);
+		var destOffset = new MulIOp(destIndex.Result, elemSize.Result);
+		rewriter.Insert(destOffset);
+		var destPtr = new PtrAddOp(bufferLoad.Result, destOffset.Result, new PtrType(IntegerType.I8));
+		rewriter.Insert(destPtr);
+
+		// Length to move: (len - startIndex) * elemSize
+		var lenPtr = new FieldPtrOp(op.Memory, "_len", 8, IntegerType.I64);
+		rewriter.Insert(lenPtr);
+		var lenLoad = new LoadOp(lenPtr.Result);
+		rewriter.Insert(lenLoad);
+		var moveCount = new SubIOp(lenLoad.Result, op.StartIndex);
+		rewriter.Insert(moveCount);
+		var moveBytes = new MulIOp(moveCount.Result, elemSize.Result);
+		rewriter.Insert(moveBytes);
+
+		// Memmove (handles overlapping regions)
+		var memmove = new MemMoveOp(destPtr.Result, srcPtr.Result, moveBytes.Result);
+		rewriter.Insert(memmove);
+
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_shift_left to memmove.
+/// </summary>
+public sealed class LowerManagedMemoryShiftLeftOp : ConversionPattern<ManagedMemoryShiftLeftOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryShiftLeftOp op, ConversionPatternRewriter rewriter) {
+		// Load buffer pointer
+		var bufferPtr = new FieldPtrOp(op.Memory, "_buffer", 0, new PtrType(IntegerType.I8));
+		rewriter.Insert(bufferPtr);
+		var bufferLoad = new LoadOp(bufferPtr.Result);
+		rewriter.Insert(bufferLoad);
+
+		var elemSize = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSize);
+
+		// Source: buffer + (startIndex + count) * elemSize
+		var srcIndex = new AddIOp(op.StartIndex, op.Count);
+		rewriter.Insert(srcIndex);
+		var srcOffset = new MulIOp(srcIndex.Result, elemSize.Result);
+		rewriter.Insert(srcOffset);
+		var srcPtr = new PtrAddOp(bufferLoad.Result, srcOffset.Result, new PtrType(IntegerType.I8));
+		rewriter.Insert(srcPtr);
+
+		// Destination: buffer + startIndex * elemSize
+		var destOffset = new MulIOp(op.StartIndex, elemSize.Result);
+		rewriter.Insert(destOffset);
+		var destPtr = new PtrAddOp(bufferLoad.Result, destOffset.Result, new PtrType(IntegerType.I8));
+		rewriter.Insert(destPtr);
+
+		// Length to move: (len - startIndex - count) * elemSize
+		var lenPtr = new FieldPtrOp(op.Memory, "_len", 8, IntegerType.I64);
+		rewriter.Insert(lenPtr);
+		var lenLoad = new LoadOp(lenPtr.Result);
+		rewriter.Insert(lenLoad);
+		var temp = new SubIOp(lenLoad.Result, op.StartIndex);
+		rewriter.Insert(temp);
+		var moveCount = new SubIOp(temp.Result, op.Count);
+		rewriter.Insert(moveCount);
+		var moveBytes = new MulIOp(moveCount.Result, elemSize.Result);
+		rewriter.Insert(moveBytes);
+
+		// Memmove (handles overlapping regions)
+		var memmove = new MemMoveOp(destPtr.Result, srcPtr.Result, moveBytes.Result);
+		rewriter.Insert(memmove);
+
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.element_size to a constant integer.
+/// </summary>
+public sealed class LowerElementSizeOp : ConversionPattern<ElementSizeOp> {
+	protected override bool MatchAndRewrite(ElementSizeOp op, ConversionPatternRewriter rewriter) {
+		var sizeConst = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(sizeConst);
+		rewriter.ReplaceOpWithValue(op, sizeConst.Result);
 		return true;
 	}
 }
