@@ -151,7 +151,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E2004: specs/fragments/function-declaration/missing-returns-keyword-error.test:1:16: Expected expression, got Int
+error E2004: specs/fragments/function-declaration/missing-returns-keyword-error.test:2:16: Expected expression, got Int
 ```
 
 

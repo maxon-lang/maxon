@@ -338,7 +338,8 @@ public sealed class Mem2RegPass : FunctionPass {
 
 	private static bool VerifyLoopExitValues(AllocaOp alloca, LoopInfo loop, MlirType elementType, MlirFunction func) {
 		var tempBlockArgs = new Dictionary<MlirBlock, MlirValue>();
-		var placeholderArg = new MlirValue(elementType);
+		// Use explicit negative ID to avoid consuming from the global SSA counter
+		var placeholderArg = new MlirValue(-1, elementType);
 		tempBlockArgs[loop.Header] = placeholderArg;
 
 		foreach (var block in func.Body.Blocks) {

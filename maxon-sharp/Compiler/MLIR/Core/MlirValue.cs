@@ -11,7 +11,7 @@ public sealed class MlirValue {
 	/// <summary>
 	/// Unique identifier for this value within the function.
 	/// </summary>
-	public int Id { get; }
+	public int Id { get; private set; }
 
 	/// <summary>
 	/// The type of this value.
@@ -47,6 +47,11 @@ public sealed class MlirValue {
 	/// Resets the global ID counter. Used for testing.
 	/// </summary>
 	public static void ResetIdCounter() => _nextId = 0;
+
+	/// <summary>
+	/// Assigns a new ID from the global counter. Used by RenumberValues to reassign sequential IDs.
+	/// </summary>
+	public void RenumberId() => Id = _nextId++;
 
 	public override string ToString() => Name is not null ? $"%{Name}" : $"%{Id}";
 

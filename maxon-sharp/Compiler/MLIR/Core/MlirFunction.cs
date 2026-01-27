@@ -69,6 +69,13 @@ public sealed class MlirFunction(string name) {
 	}
 
 	/// <summary>
+	/// Gets metadata from this function (value type version).
+	/// </summary>
+	public T GetMetadataValue<T>(string key) where T : struct {
+		return Metadata.TryGetValue(key, out var value) && value is T typedValue ? typedValue : default;
+	}
+
+	/// <summary>
 	/// Adds a parameter and returns its type.
 	/// </summary>
 	public void AddParam(string name, MlirType type) {
@@ -107,6 +114,26 @@ public sealed class MlirFunction(string name) {
 	/// Gets the function parameters as MlirValues (from entry block arguments).
 	/// </summary>
 	public IReadOnlyList<MlirValue> Parameters => GetParamValues();
+
+	/// <summary>
+	/// Renumbers all SSA values in this function to be sequential.
+	/// Values are assigned IDs in the order they appear: block arguments first, then operation results.
+	/// </summary>
+	public void RenumberValues() {
+		foreach (var block in Body.Blocks) {
+			// Renumber block arguments
+			foreach (var arg in block.Arguments) {
+				arg.Value.RenumberId();
+			}
+
+			// Renumber operation results
+			foreach (var op in block.Operations) {
+				foreach (var result in op.Results) {
+					result.RenumberId();
+				}
+			}
+		}
+	}
 
 	/// <summary>
 	/// Verify this function is well-formed.

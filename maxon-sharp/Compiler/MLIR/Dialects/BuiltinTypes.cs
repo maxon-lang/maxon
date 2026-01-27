@@ -13,6 +13,7 @@ public sealed record IntegerType(int BitWidth, bool IsSigned = true) : MlirType,
 	public override string? Dialect => null;
 	public override string Mnemonic => IsSigned ? $"i{BitWidth}" : $"ui{BitWidth}";
 	public override int SizeInBytes => (BitWidth + 7) / 8;
+	public override bool IsCopyType => true;
 
 	public override string ToString() => Mnemonic;
 
@@ -39,6 +40,7 @@ public sealed record FloatType(int BitWidth) : MlirType, IFunctionResultType, IM
 	public override string? Dialect => null;
 	public override string Mnemonic => $"f{BitWidth}";
 	public override int SizeInBytes => BitWidth / 8;
+	public override bool IsCopyType => true;
 
 	public override string ToString() => Mnemonic;
 
@@ -59,6 +61,7 @@ public sealed record IndexType : MlirType, IFunctionResultType {
 	public override string? Dialect => null;
 	public override string Mnemonic => "index";
 	public override int SizeInBytes => 8; // Assume 64-bit target
+	public override bool IsCopyType => true;
 
 	public static readonly IndexType Instance = new();
 	private IndexType() { }

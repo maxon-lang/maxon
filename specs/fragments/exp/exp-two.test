@@ -1,0 +1,209 @@
+// Test: exp-two
+function main() returns int
+    var result = Math.exp(2.0)  // e^2 ≈ 7.389
+    return trunc(result)
+end 'main'
+---
+ExitCode: 7
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 4611686018427387904
+    x86.movq xmm0, rax
+    x86.movsd xmm0, xmm0
+    x86.call Math.exp
+    x86.movsd xmm0, xmm0
+    x86.cvttsd2si rax, xmm0
+    x86.epilogue
+    x86.ret
+}
+
+func.func @Math.exp(%x: f64) -> f64 {
+  ^entry(%x: f64):
+    x86.prologue stack_size=160
+    x86.push rbx
+    x86.push r12
+    x86.push r13
+    x86.movsd xmm0, xmm0
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.movsd qword ptr [rcx], xmm0
+    x86.movsd xmm0, qword ptr [rcx]
+    x86.mov rax, 0
+    x86.movq xmm1, rax
+    x86.comisd xmm0, xmm1
+    x86.sete rax
+    x86.test rax, rax
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, 4607182418800017408
+    x86.movq xmm1, rax
+    x86.movsd xmm0, xmm1
+    x86.pop r13
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+  ^merge:
+    x86.movsd xmm1, qword ptr [rcx]
+    x86.mov rax, 0
+    x86.movq xmm0, rax
+    x86.comisd xmm1, xmm0
+    x86.setb rax
+    x86.lea rdx, qword ptr [rbp-48]
+    x86.mov byte ptr [rdx], rax
+    x86.mov rax, byte ptr [rdx]
+    x86.test rax, rax
+    x86.jne then_1
+    x86.jmp merge_1
+  ^then_1:
+    x86.movsd xmm0, qword ptr [rcx]
+    x86.mov rax, -9223372036854775808
+    x86.movq xmm1, rax
+    x86.movsd xmm2, xmm0
+    x86.xorpd xmm2, xmm1
+    x86.movsd qword ptr [rcx], xmm2
+    x86.jmp merge_1
+  ^merge_1:
+    x86.mov rax, 0
+    x86.lea r8, qword ptr [rbp-56]
+    x86.mov qword ptr [r8], rax
+    x86.mov rax, 4607182418800017408
+    x86.movq xmm2, rax
+    x86.mov rax, 4611686018427387904
+    x86.movq xmm1, rax
+    x86.jmp while.cond
+  ^while.cond:
+    x86.movsd xmm0, qword ptr [rcx]
+    x86.comisd xmm0, xmm2
+    x86.seta rax
+    x86.test rax, rax
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.movsd xmm0, qword ptr [rcx]
+    x86.movsd xmm3, xmm0
+    x86.divsd xmm3, xmm1
+    x86.movsd qword ptr [rcx], xmm3
+    x86.mov rax, qword ptr [r8]
+    x86.mov r9, 1
+    x86.mov r10, rax
+    x86.add r10, r9
+    x86.mov qword ptr [r8], r10
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov r10, 4607182418800017408
+    x86.movq xmm3, r10
+    x86.mov r10, 4607182418800017408
+    x86.movq xmm0, r10
+    x86.mov r10, 4607182418800017408
+    x86.movq xmm4, r10
+    x86.lea r10, qword ptr [rbp-64]
+    x86.movsd qword ptr [r10], xmm4
+    x86.mov r9, 4626322717216342016
+    x86.movq xmm4, r9
+    x86.movsd xmm5, qword ptr [rcx]
+    x86.movsd qword ptr [rbp-88], xmm5
+    x86.movsd xmm5, xmm3
+    x86.movsd xmm3, xmm0
+    x86.jmp while.cond_1
+  ^while.cond_1(%72: f64, %73: f64):
+    x86.movsd xmm0, qword ptr [r10]
+    x86.comisd xmm0, xmm4
+    x86.setb r9
+    x86.test r9, r9
+    x86.jne while.body_1
+    x86.jmp while.exit_1
+  ^while.body_1:
+    x86.movsd xmm0, xmm5
+    x86.movsd qword ptr [rbp-96], xmm5
+    x86.movsd xmm5, qword ptr [rbp-88]
+    x86.mulsd xmm0, xmm5
+    x86.movsd qword ptr [rbp-104], xmm3
+    x86.movsd xmm3, qword ptr [r10]
+    x86.movsd qword ptr [rbp-112], xmm3
+    x86.movsd xmm3, xmm0
+    x86.movsd xmm0, qword ptr [rbp-112]
+    x86.divsd xmm3, xmm0
+    x86.movsd qword ptr [rbp-120], xmm3
+    x86.movsd xmm3, qword ptr [rbp-104]
+    x86.movsd xmm0, xmm3
+    x86.movsd qword ptr [rbp-104], xmm3
+    x86.movsd xmm3, qword ptr [rbp-120]
+    x86.addsd xmm0, xmm3
+    x86.movsd qword ptr [rbp-128], xmm0
+    x86.movsd xmm0, qword ptr [r10]
+    x86.mov r9, 1
+    x86.movsd qword ptr [rbp-120], xmm3
+    x86.cvtsi2sd xmm3, r9
+    x86.movsd qword ptr [rbp-136], xmm3
+    x86.movsd xmm3, xmm0
+    x86.movsd xmm0, qword ptr [rbp-136]
+    x86.addsd xmm3, xmm0
+    x86.movsd qword ptr [r10], xmm3
+    x86.movsd qword ptr [rbp-88], xmm5
+    x86.movsd xmm5, qword ptr [rbp-96]
+    x86.movsd xmm3, qword ptr [rbp-120]
+    x86.movsd xmm5, xmm3
+    x86.movsd xmm3, qword ptr [rbp-104]
+    x86.movsd xmm0, qword ptr [rbp-128]
+    x86.movsd xmm3, xmm0
+    x86.jmp while.cond_1
+  ^while.exit_1:
+    x86.lea r9, qword ptr [rbp-72]
+    x86.movsd qword ptr [r9], xmm3
+    x86.mov rax, 0
+    x86.lea r11, qword ptr [rbp-80]
+    x86.mov qword ptr [r11], rax
+    x86.mov rbx, qword ptr [r8]
+    x86.jmp while.cond_2
+  ^while.cond_2:
+    x86.mov rax, qword ptr [r11]
+    x86.cmp rax, rbx
+    x86.setl rax
+    x86.test rax, rax
+    x86.jne while.body_2
+    x86.jmp while.exit_2
+  ^while.body_2:
+    x86.movsd xmm0, qword ptr [r9]
+    x86.movsd qword ptr [rbp-144], xmm0
+    x86.movsd xmm0, qword ptr [r9]
+    x86.movsd qword ptr [rbp-152], xmm0
+    x86.movsd qword ptr [rbp-104], xmm3
+    x86.movsd xmm3, qword ptr [rbp-144]
+    x86.movsd xmm0, xmm3
+    x86.movsd xmm3, qword ptr [rbp-152]
+    x86.mulsd xmm0, xmm3
+    x86.movsd qword ptr [r9], xmm0
+    x86.mov rax, qword ptr [r11]
+    x86.mov r12, 1
+    x86.mov r13, rax
+    x86.add r13, r12
+    x86.mov qword ptr [r11], r13
+    x86.jmp while.cond_2
+  ^while.exit_2:
+    x86.mov rax, byte ptr [rdx]
+    x86.test rax, rax
+    x86.jne then_2
+    x86.jmp merge_2
+  ^then_2:
+    x86.mov rax, 4607182418800017408
+    x86.movq xmm0, rax
+    x86.movsd xmm3, qword ptr [r9]
+    x86.movsd qword ptr [rbp-160], xmm3
+    x86.movsd xmm3, xmm0
+    x86.movsd xmm0, qword ptr [rbp-160]
+    x86.divsd xmm3, xmm0
+    x86.movsd qword ptr [r9], xmm3
+    x86.jmp merge_2
+  ^merge_2:
+    x86.movsd xmm3, qword ptr [r9]
+    x86.movsd xmm0, xmm3
+    x86.pop r13
+    x86.pop r12
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+---

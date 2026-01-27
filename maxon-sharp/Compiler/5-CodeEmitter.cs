@@ -68,10 +68,11 @@ public class CodeEmitter {
 	/// </summary>
 	private static void EmitFunction(X86CodeEmitter emitter, MlirFunction func) {
 		emitter.DefineLabel(func.Name);
+		emitter.SetCurrentFunction(func.Name);
 
 		foreach (var block in func.Body.Blocks) {
 			if (block.Name != "entry") {
-				emitter.DefineLabel(block.Name);
+				emitter.DefineLabel(emitter.ScopedLabel(block.Name));
 			}
 
 			foreach (var op in block.Operations) {

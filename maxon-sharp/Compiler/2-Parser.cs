@@ -1199,7 +1199,8 @@ public class Parser(List<Token> tokens) {
 			// so we create StaticCallExpr and resolve it in MLIR lowering
 			if (Check(TokenType.Dot)) {
 				Advance();
-				var memberName = Expect(TokenType.Identifier).Value;
+				var memberToken = Expect(TokenType.Identifier);
+				var memberName = memberToken.Value;
 
 				// Check for call with args: name.member(args)
 				if (Check(TokenType.LeftParen)) {
@@ -1208,7 +1209,8 @@ public class Parser(List<Token> tokens) {
 					var namedArgs = new List<NamedArg>();
 					ParseCallArgs(args, namedArgs);
 					// Could be static method, enum case, or instance method - resolved in MLIR lowering
-					return new StaticCallExpr(name, memberName, args, namedArgs) { Location = new SourceLocation(token.Line, token.Column) };
+					// Use memberToken location so errors point to the method name, not the type name
+					return new StaticCallExpr(name, memberName, args, namedArgs) { Location = new SourceLocation(memberToken.Line, memberToken.Column) };
 				}
 
 				// Field access continues in parsePostfix

@@ -222,8 +222,9 @@ public static class FragmentGenerator {
 			return null;
 		}
 
-		// Extract source code (between first line and first ---)
-		var sourceLines = lines[1..separatorIndex];
+		// Extract source code (from start to first ---), including the comment line
+		// so that line numbers in error messages match the actual file
+		var sourceLines = lines[0..separatorIndex];
 		var source = string.Join("\n", sourceLines).Trim();
 
 		// Parse expectations (between first --- and second ---)

@@ -75,6 +75,19 @@ public sealed class MlirModule {
 	}
 
 	/// <summary>
+	/// Renumbers all SSA values in the module to be sequential starting from 0.
+	/// Call this after dead function elimination to get clean IDs.
+	/// </summary>
+	public void RenumberValues() {
+		MlirValue.ResetIdCounter();
+		MlirBlock.ResetIdCounter();
+
+		foreach (var func in Functions) {
+			func.RenumberValues();
+		}
+	}
+
+	/// <summary>
 	/// Verify this module is well-formed.
 	/// </summary>
 	public string? Verify() {

@@ -454,7 +454,7 @@ func.func @main() -> i64 {
     x86.mov r9, 0
     x86.mov r10, rcx
     x86.jmp while.cond
-  ^while.cond(%15: i64, %18: i64):
+  ^while.cond(%14: i64, %16: i64):
     x86.cmp r10, r8
     x86.setle rdx
     x86.test rdx, rdx
@@ -513,7 +513,7 @@ func.func @test(%cond: i64) -> i64 {
   ^else:
     x86.mov rax, 20
     x86.jmp merge
-  ^merge(%11: i64):
+  ^merge(%13: i64):
     x86.epilogue
     x86.ret
 }
@@ -564,7 +564,7 @@ func.func @test(%cond: i64) -> i64 {
   ^else:
     x86.mov rax, 20
     x86.jmp merge
-  ^merge(%11: i64):
+  ^merge(%13: i64):
     x86.epilogue
     x86.ret
 }
@@ -614,7 +614,7 @@ func.func @test(%cond: i64) -> i64 {
   ^then:
     x86.mov rax, 42
     x86.jmp merge
-  ^merge(%10: i64):
+  ^merge(%12: i64):
     x86.epilogue
     x86.ret
 }
@@ -662,7 +662,7 @@ func.func @main() -> i64 {
     x86.mov r9, 3
     x86.mov r10, r8
     x86.jmp while.cond
-  ^while.cond(%25: i64):
+  ^while.cond(%24: i64):
     x86.cmp r10, r9
     x86.setle rax
     x86.test rax, rax
@@ -677,7 +677,7 @@ func.func @main() -> i64 {
     x86.pop rbx
     x86.epilogue
     x86.ret
-  ^while.cond_1(%27: i64):
+  ^while.cond_1(%25: i64):
     x86.cmp r11, r9
     x86.setle rdx
     x86.test rdx, rdx
@@ -838,7 +838,7 @@ func.func @main() -> i64 {
     x86.mov rbx, 0
     x86.mov r12, 0
     x86.jmp while.cond
-  ^while.cond(%18: i64, %20: i1):
+  ^while.cond(%17: i64, %18: i1):
     x86.cmp rbx, r8
     x86.setl rdx
     x86.test rdx, rdx
@@ -907,7 +907,7 @@ func.func @main() -> i64 {
     x86.mov r10, rax
     x86.mov r11, rax
     x86.jmp while.cond
-  ^while.cond(%15: i64, %18: i64):
+  ^while.cond(%14: i64, %16: i64):
     x86.cmp r11, rcx
     x86.setl rdx
     x86.test rdx, rdx
@@ -955,7 +955,7 @@ func.func @main() -> i64 {
     x86.mov r9, rax
     x86.mov r10, rax
     x86.jmp while.cond
-  ^while.cond(%15: i64, %18: i64):
+  ^while.cond(%14: i64, %16: i64):
     x86.cmp r10, rcx
     x86.setl rdx
     x86.test rdx, rdx
@@ -1010,7 +1010,7 @@ func.func @main() -> i64 {
     x86.mov r10, 2
     x86.mov r11, r8
     x86.jmp while.cond
-  ^while.cond(%23: i64):
+  ^while.cond(%22: i64):
     x86.cmp r11, r9
     x86.setle rax
     x86.test rax, rax
@@ -1024,7 +1024,7 @@ func.func @main() -> i64 {
     x86.pop rbx
     x86.epilogue
     x86.ret
-  ^while.cond_1(%25: i64):
+  ^while.cond_1(%23: i64):
     x86.cmp rbx, r10
     x86.setle rax
     x86.test rax, rax
@@ -1086,7 +1086,7 @@ func.func @main() -> i64 {
     x86.mov r9, 1
     x86.mov r10, rax
     x86.jmp while.cond
-  ^while.cond(%31: i64):
+  ^while.cond(%30: i64):
     x86.cmp r10, r8
     x86.setl rdx
     x86.test rdx, rdx
@@ -1101,7 +1101,7 @@ func.func @main() -> i64 {
     x86.pop rbx
     x86.epilogue
     x86.ret
-  ^while.cond_1(%33: i64):
+  ^while.cond_1(%31: i64):
     x86.cmp r11, r8
     x86.setl rax
     x86.test rax, rax
@@ -1178,7 +1178,7 @@ func.func @main() -> i64 {
     x86.mov r9, rax
     x86.mov r10, rax
     x86.jmp while.cond
-  ^while.cond(%15: i64, %18: i64):
+  ^while.cond(%14: i64, %16: i64):
     x86.cmp r10, rcx
     x86.setl rdx
     x86.test rdx, rdx
@@ -1552,7 +1552,7 @@ func.func @main() -> i64 {
     x86.mov r9, 1
     x86.mov r10, rax
     x86.jmp while.cond
-  ^while.cond(%27: i64):
+  ^while.cond(%26: i64):
     x86.cmp r10, r8
     x86.setl rdx
     x86.test rdx, rdx
@@ -1567,7 +1567,7 @@ func.func @main() -> i64 {
     x86.pop rbx
     x86.epilogue
     x86.ret
-  ^while.cond_1(%29: i64):
+  ^while.cond_1(%27: i64):
     x86.cmp r11, r8
     x86.setl rax
     x86.test rax, rax
@@ -1628,7 +1628,7 @@ func.func @main() -> i64 {
     x86.mov r11, 0
     x86.mov rbx, rcx
     x86.jmp while.cond
-  ^while.cond(%21: i64, %24: i64):
+  ^while.cond(%20: i64, %22: i64):
     x86.cmp rbx, r8
     x86.setle rdx
     x86.test rdx, rdx

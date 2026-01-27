@@ -9,6 +9,7 @@ public sealed class X86CodeEmitter {
 	private readonly List<byte> _code = [];
 	private readonly Dictionary<string, int> _labelOffsets = [];
 	private readonly List<(int offset, string label, int instrSize)> _labelFixups = [];
+	private string _currentFunction = "";
 
 	// Global data support
 	private readonly List<byte> _data = [];
@@ -90,7 +91,7 @@ public sealed class X86CodeEmitter {
 				EmitRet();
 				break;
 			case LabelOp label:
-				DefineLabel(label.Name);
+				DefineLabel(ScopedLabel(label.Name));
 				break;
 			case PushOp push:
 				EmitPush(push);
@@ -206,9 +207,17 @@ public sealed class X86CodeEmitter {
 		// sub rsp, N
 		if (op.StackSize > 0) {
 			EmitRexW(rm: X86Register.RSP);
-			EmitByte(0x83);
-			EmitByte(ModRM(0b11, 5, GetRegCode(X86Register.RSP)));
-			EmitByte((byte)op.StackSize);
+			if (op.StackSize <= 127) {
+				// sub rsp, imm8 (0x83 /5)
+				EmitByte(0x83);
+				EmitByte(ModRM(0b11, 5, GetRegCode(X86Register.RSP)));
+				EmitByte((byte)op.StackSize);
+			} else {
+				// sub rsp, imm32 (0x81 /5)
+				EmitByte(0x81);
+				EmitByte(ModRM(0b11, 5, GetRegCode(X86Register.RSP)));
+				EmitImm32(op.StackSize);
+			}
 		}
 	}
 
@@ -292,6 +301,20 @@ public sealed class X86CodeEmitter {
 	public void DefineLabel(string name) {
 		_labelOffsets[name] = CurrentOffset;
 		Logger.Trace(LogCategory.Codegen, $"Label: {name} at offset 0x{CurrentOffset:X}");
+	}
+
+	/// <summary>
+	/// Sets the current function name for scoping block labels.
+	/// </summary>
+	public void SetCurrentFunction(string name) {
+		_currentFunction = name;
+	}
+
+	/// <summary>
+	/// Returns a function-scoped label name.
+	/// </summary>
+	public string ScopedLabel(string blockName) {
+		return $"{_currentFunction}.{blockName}";
 	}
 
 	// ========================================================================
@@ -559,18 +582,18 @@ public sealed class X86CodeEmitter {
 
 	private void EmitJmp(JmpOp op) {
 		EmitByte(0xE9);
-		_labelFixups.Add((CurrentOffset, op.Target, 4));
+		_labelFixups.Add((CurrentOffset, ScopedLabel(op.Target), 4));
 		EmitImm32(0); // Placeholder
 	}
 
 	private void EmitJcc(JccOp op) {
 		EmitBytes(0x0F, GetJccOpcode(op.Condition));
-		_labelFixups.Add((CurrentOffset, op.TrueTarget, 4));
+		_labelFixups.Add((CurrentOffset, ScopedLabel(op.TrueTarget), 4));
 		EmitImm32(0);
 
 		// Emit fall-through jump
 		EmitByte(0xE9);
-		_labelFixups.Add((CurrentOffset, op.FalseTarget, 4));
+		_labelFixups.Add((CurrentOffset, ScopedLabel(op.FalseTarget), 4));
 		EmitImm32(0);
 	}
 
@@ -734,22 +757,47 @@ public sealed class X86CodeEmitter {
 
 	// SSE floating point
 	private void EmitMovsd(MovsdOp op) {
-		// F2 0F 10 /r - MOVSD xmm1, xmm2/m64 (load)
-		// F2 0F 11 /r - MOVSD xmm1/m64, xmm2 (store)
+		// F2 [REX] 0F 10 /r - MOVSD xmm1, xmm2/m64 (load)
+		// F2 [REX] 0F 11 /r - MOVSD xmm1/m64, xmm2 (store)
+		// REX.R extends the reg field (XMM8-XMM15)
+		// REX.B extends the r/m field (base register R8-R15 or XMM8-XMM15)
 		if (op.Dst is RegOperand dst && op.Src is RegOperand src) {
 			// XMM to XMM move
-			EmitBytes(0xF2, 0x0F, 0x10);
+			EmitByte(0xF2);
+			EmitRexIfNeeded(dst.Register, src.Register);
+			EmitBytes(0x0F, 0x10);
 			EmitByte(ModRM(0b11, GetRegCode(dst.Register), GetRegCode(src.Register)));
 		} else if (op.Dst is RegOperand dstReg && op.Src is MemOperand srcMem) {
 			// Memory to XMM (load)
-			EmitBytes(0xF2, 0x0F, 0x10);
+			var baseReg = (srcMem.Base as RegOperand)?.Register;
+			EmitByte(0xF2);
+			EmitRexIfNeeded(dstReg.Register, baseReg);
+			EmitBytes(0x0F, 0x10);
 			EmitMemOperand(dstReg.Register, srcMem);
 		} else if (op.Dst is MemOperand dstMem && op.Src is RegOperand srcReg) {
 			// XMM to memory (store)
-			EmitBytes(0xF2, 0x0F, 0x11);
+			var baseReg = (dstMem.Base as RegOperand)?.Register;
+			EmitByte(0xF2);
+			EmitRexIfNeeded(srcReg.Register, baseReg);
+			EmitBytes(0x0F, 0x11);
 			EmitMemOperand(srcReg.Register, dstMem);
 		} else {
 			throw new NotSupportedException($"Unsupported MOVSD operand combination");
+		}
+	}
+
+	/// <summary>
+	/// Emit REX prefix only if needed (when using extended registers).
+	/// For SSE instructions, REX.R extends the reg field and REX.B extends the r/m field.
+	/// </summary>
+	private void EmitRexIfNeeded(X86Register? reg = null, X86Register? rm = null) {
+		bool needsRex = (reg.HasValue && NeedsRex(reg.Value)) ||
+						(rm.HasValue && NeedsRex(rm.Value));
+		if (needsRex) {
+			byte rex = 0x40;
+			if (reg.HasValue && NeedsRex(reg.Value)) rex |= 0x04; // REX.R
+			if (rm.HasValue && NeedsRex(rm.Value)) rex |= 0x01; // REX.B
+			EmitByte(rex);
 		}
 	}
 
@@ -805,13 +853,18 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitComisd(ComiOp op) {
-		// 66 0F 2F /r - COMISD xmm1, xmm2/m64
+		// 66 [REX] 0F 2F /r - COMISD xmm1, xmm2/m64
 		// Compares two doubles and sets EFLAGS (ZF, PF, CF)
 		if (op.Left is RegOperand left && op.Right is RegOperand right) {
-			EmitBytes(0x66, 0x0F, 0x2F);
+			EmitByte(0x66);
+			EmitRexIfNeeded(left.Register, right.Register);
+			EmitBytes(0x0F, 0x2F);
 			EmitByte(ModRM(0b11, GetRegCode(left.Register), GetRegCode(right.Register)));
 		} else if (op.Left is RegOperand leftReg && op.Right is MemOperand rightMem) {
-			EmitBytes(0x66, 0x0F, 0x2F);
+			var baseReg = (rightMem.Base as RegOperand)?.Register;
+			EmitByte(0x66);
+			EmitRexIfNeeded(leftReg.Register, baseReg);
+			EmitBytes(0x0F, 0x2F);
 			EmitMemOperand(leftReg.Register, rightMem);
 		} else {
 			throw new NotSupportedException($"Unsupported COMISD operand combination: {op.Left}, {op.Right}");
@@ -824,14 +877,19 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitRoundsd(RoundsdOp op) {
-		// 66 0F 3A 0B /r imm8 - ROUNDSD xmm1, xmm2/m64, imm8
+		// 66 [REX] 0F 3A 0B /r imm8 - ROUNDSD xmm1, xmm2/m64, imm8
 		// imm8: 0x08 = nearest, 0x09 = floor, 0x0A = ceil, 0x0B = truncate
 		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
-			EmitBytes(0x66, 0x0F, 0x3A, 0x0B);
+			EmitByte(0x66);
+			EmitRexIfNeeded(dstReg.Register, srcReg.Register);
+			EmitBytes(0x0F, 0x3A, 0x0B);
 			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
 			EmitByte((byte)op.Mode);
 		} else if (op.Dst is RegOperand dstRegOp && op.Src is MemOperand srcMem) {
-			EmitBytes(0x66, 0x0F, 0x3A, 0x0B);
+			var baseReg = (srcMem.Base as RegOperand)?.Register;
+			EmitByte(0x66);
+			EmitRexIfNeeded(dstRegOp.Register, baseReg);
+			EmitBytes(0x0F, 0x3A, 0x0B);
 			EmitMemOperand(dstRegOp.Register, srcMem);
 			EmitByte((byte)op.Mode);
 		} else {
@@ -850,13 +908,18 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitAndpd(AndpdOp op) {
-		// 66 0F 54 /r - ANDPD xmm1, xmm2/m128
+		// 66 [REX] 0F 54 /r - ANDPD xmm1, xmm2/m128
 		// Bitwise AND of packed doubles
 		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
-			EmitBytes(0x66, 0x0F, 0x54);
+			EmitByte(0x66);
+			EmitRexIfNeeded(dstReg.Register, srcReg.Register);
+			EmitBytes(0x0F, 0x54);
 			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
 		} else if (op.Dst is RegOperand dstRegOp && op.Src is MemOperand srcMem) {
-			EmitBytes(0x66, 0x0F, 0x54);
+			var baseReg = (srcMem.Base as RegOperand)?.Register;
+			EmitByte(0x66);
+			EmitRexIfNeeded(dstRegOp.Register, baseReg);
+			EmitBytes(0x0F, 0x54);
 			EmitMemOperand(dstRegOp.Register, srcMem);
 		} else {
 			throw new NotSupportedException($"Unsupported ANDPD operand combination");
@@ -864,13 +927,18 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitXorpd(XorpdOp op) {
-		// 66 0F 57 /r - XORPD xmm1, xmm2/m128
+		// 66 [REX] 0F 57 /r - XORPD xmm1, xmm2/m128
 		// Bitwise XOR of packed doubles
 		if (op.Dst is RegOperand dstReg && op.Src is RegOperand srcReg) {
-			EmitBytes(0x66, 0x0F, 0x57);
+			EmitByte(0x66);
+			EmitRexIfNeeded(dstReg.Register, srcReg.Register);
+			EmitBytes(0x0F, 0x57);
 			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
 		} else if (op.Dst is RegOperand dstRegOp && op.Src is MemOperand srcMem) {
-			EmitBytes(0x66, 0x0F, 0x57);
+			var baseReg = (srcMem.Base as RegOperand)?.Register;
+			EmitByte(0x66);
+			EmitRexIfNeeded(dstRegOp.Register, baseReg);
+			EmitBytes(0x0F, 0x57);
 			EmitMemOperand(dstRegOp.Register, srcMem);
 		} else {
 			throw new NotSupportedException($"Unsupported XORPD operand combination");
@@ -878,10 +946,17 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitSseArith(byte opcode, X86Operand dst, X86Operand src) {
-		EmitBytes(0xF2, 0x0F, opcode);
+		// F2 [REX] 0F opcode /r
 		if (dst is RegOperand dstReg && src is RegOperand srcReg) {
+			EmitByte(0xF2);
+			EmitRexIfNeeded(dstReg.Register, srcReg.Register);
+			EmitBytes(0x0F, opcode);
 			EmitByte(ModRM(0b11, GetRegCode(dstReg.Register), GetRegCode(srcReg.Register)));
 		} else if (dst is RegOperand dstRegOp && src is MemOperand srcMem) {
+			var baseReg = (srcMem.Base as RegOperand)?.Register;
+			EmitByte(0xF2);
+			EmitRexIfNeeded(dstRegOp.Register, baseReg);
+			EmitBytes(0x0F, opcode);
 			EmitMemOperand(dstRegOp.Register, srcMem);
 		} else {
 			throw new NotSupportedException($"Unsupported SSE operand combination");

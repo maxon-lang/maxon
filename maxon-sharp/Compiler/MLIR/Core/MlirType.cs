@@ -30,6 +30,12 @@ public abstract record MlirType {
 	public bool IsSized => SizeInBytes >= 0;
 
 	/// <summary>
+	/// Returns true if this type has Copy semantics (passing doesn't move ownership).
+	/// Primitive types (integers, floats, bools) are Copy types.
+	/// </summary>
+	public virtual bool IsCopyType => false;
+
+	/// <summary>
 	/// MLIR-style textual representation.
 	/// </summary>
 	public override string ToString() => Dialect is null ? Mnemonic : $"!{Dialect}.{Mnemonic}";

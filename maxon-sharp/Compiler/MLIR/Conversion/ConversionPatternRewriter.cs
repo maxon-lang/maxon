@@ -60,14 +60,10 @@ public sealed class ConversionPatternRewriter(MlirBlock block, int insertPoint, 
 	public static MlirValue CreateValue(MlirType type) => new(type);
 
 	/// <summary>
-	/// Creates a fresh virtual register operand with a unique ID.
+	/// Creates a fresh temporary virtual register operand with a unique negative ID.
 	/// Used for temporaries that need register allocation.
 	/// </summary>
-	public static VRegOperand CreateVReg(bool isFloat = false) {
-		// Create a new MlirValue to get a unique ID from the global counter
-		var value = new MlirValue(IntegerType.I64);
-		return new VRegOperand(value.Id, Size: 8, IsFloat: isFloat);
-	}
+	public static VRegOperand CreateVReg(bool isFloat = false) => VRegOperand.CreateTemp(isFloat);
 
 	/// <summary>
 	/// The current insertion block.

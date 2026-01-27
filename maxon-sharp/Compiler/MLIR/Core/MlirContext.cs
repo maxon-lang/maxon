@@ -1,3 +1,5 @@
+using MaxonSharp.Compiler.Mlir.Dialects;
+
 namespace MaxonSharp.Compiler.Mlir.Core;
 
 /// <summary>
@@ -29,5 +31,6 @@ public sealed class MlirContext {
 		_typeCache.Clear();
 		MlirValue.ResetIdCounter();
 		MlirBlock.ResetIdCounter();
+		VRegOperand.ResetTempIdCounter();
 	}
 }

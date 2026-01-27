@@ -485,7 +485,7 @@ internal static class MemOperandHelper {
 
 		if (indices.Count == 1) {
 			var idx = new VRegOperand(indices[0].Id);
-			var tmp = new VRegOperand(new MlirValue(IntegerType.I64).Id);
+			var tmp = VRegOperand.CreateTemp();
 			rewriter.Insert(new LeaOp(tmp, new MemOperand(Base: ptr, Index: idx, Size: 8)));
 			return new MemOperand(Base: tmp, Size: size);
 		}

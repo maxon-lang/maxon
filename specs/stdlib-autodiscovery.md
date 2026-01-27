@@ -26,7 +26,7 @@ No imports or includes needed!
 ```maxon
 function main() returns int
     // pow() is automatically found in stdlib/math/
-    var result = Math.pow(2.0, 3.0)
+    var result = Math.pow(2.0, exponent: 3.0)
     return trunc(result)
 end 'main'
 ```
@@ -56,7 +56,7 @@ end 'main'
 ```maxon
 // pow -> log, exp
 function main() returns int
-    var result = Math.pow(2.0, 3.0)
+    var result = Math.pow(2.0, exponent: 3.0)
     if result > 7.5 'check'
         return 8
     end 'check'
@@ -83,7 +83,7 @@ end 'main'
 <!-- test: qualified-call -->
 ```maxon
 function main() returns int
-    return trunc(Math.pow(2.0, 4.0))
+    return trunc(Math.pow(2.0, exponent: 4.0))
 end 'main'
 ```
 ```exitcode
@@ -98,6 +98,6 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E011: specs/fragments/stdlib-autodiscovery.wrong-arg-count.1.test:3:23: Wrong number of arguments: expected 2, got 1
+error E3005: specs/fragments/stdlib-autodiscovery/wrong-arg-count.test:3:23: missing argument for parameter 'exponent'
 ```
 

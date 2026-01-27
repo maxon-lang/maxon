@@ -11,10 +11,44 @@ end 'main'
 ---
 ExitCode: 10
 ---
+func.func @multiDiv(%a: i64, %b: i64, %c: i64, %d: i64) -> i64 {
+  ^entry(%a: i64, %b: i64, %c: i64, %d: i64):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.mov rcx, rdx
+    x86.mov r10, rcx
+    x86.cdq
+    x86.idiv r10
+    x86.mov r10, rax
+    x86.mov rcx, r9
+    x86.mov rax, r8
+    x86.cdq
+    x86.idiv rcx
+    x86.mov rcx, rax
+    x86.mov rdx, r10
+    x86.add rdx, rcx
+    x86.mov rax, rdx
+    x86.epilogue
+    x86.ret
+}
+
 func.func @main() -> i64 {
   ^entry:
     x86.prologue stack_size=32
     x86.mov rax, 10
+    x86.mov rdx, 20
+    x86.mov r8, 4
+    x86.mov r10, rax
+    x86.mov r11, 2
+    x86.push rdx
+    x86.push r8
+    x86.pop r9
+    x86.pop r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call multiDiv
+    x86.mov r8, rax
+    x86.mov rax, r8
     x86.epilogue
     x86.ret
 }

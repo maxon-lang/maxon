@@ -429,6 +429,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 
 	/// <summary>
 	/// Inserts push/pop of callee-saved registers in prologue/epilogue.
+	/// For XMM registers, saves/restores to stack slots using movsd.
 	/// </summary>
 	private static void InsertCalleeSavedSaveRestore(
 		MlirFunction func,
@@ -441,31 +442,72 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		// Find prologue in entry block and insert pushes after it
 		var entryBlock = func.Body.Blocks[0];
 		int prologueIdx = -1;
+		PrologueOp? prologue = null;
 		for (int i = 0; i < entryBlock.Operations.Count; i++) {
-			if (entryBlock.Operations[i] is PrologueOp) {
+			if (entryBlock.Operations[i] is PrologueOp p) {
 				prologueIdx = i;
+				prologue = p;
 				break;
 			}
 		}
 
-		if (prologueIdx >= 0) {
+		if (prologueIdx >= 0 && prologue != null) {
 			// Insert pushes after prologue (in order)
 			int insertIdx = prologueIdx + 1;
 			foreach (var reg in gprsToSave) {
 				entryBlock.Operations.Insert(insertIdx++, new PushOp(new RegOperand(reg)));
 			}
 
-			// For XMM registers, we would need to save to stack with movaps/movups
-			// For now, just log that they're used (full implementation would require stack space)
+			// For XMM registers, save to stack slots after GPR pushes
+			// Each XMM register needs 8 bytes (for movsd)
 			if (xmmsToSave.Count > 0) {
-				Logger.Trace(LogCategory.RegAlloc, $"  XMM save/restore not yet implemented for: {string.Join(", ", xmmsToSave)}");
+				// Get the current stack size and add space for XMM saves
+				int xmmSaveAreaOffset = prologue.StackSize;
+				int xmmSaveSize = xmmsToSave.Count * 8;
+				int newStackSize = WindowsX64Abi.AlignTo(prologue.StackSize + xmmSaveSize, 16);
+
+				// Update the prologue with the new stack size
+				entryBlock.Operations[prologueIdx] = new PrologueOp(newStackSize);
+
+				// Store the XMM save info for use in epilogue
+				func.SetMetadata("xmm_save_offset", xmmSaveAreaOffset);
+				func.SetMetadata("xmm_save_count", xmmsToSave.Count);
+
+				// Insert movsd instructions to save XMM registers
+				for (int i = 0; i < xmmsToSave.Count; i++) {
+					var reg = xmmsToSave[i];
+					int offset = -(xmmSaveAreaOffset + (i + 1) * 8);  // Negative offset from RBP
+					var memOp = new MemOperand(
+						Base: new RegOperand(X86Register.RBP),
+						Displacement: offset,
+						Size: 8
+					);
+					entryBlock.Operations.Insert(insertIdx++, new MovsdOp(memOp, new RegOperand(reg)));
+				}
+
+				Logger.Debug(LogCategory.RegAlloc, $"  Saving XMM registers: {string.Join(", ", xmmsToSave)} at offsets [{xmmSaveAreaOffset}..{xmmSaveAreaOffset + xmmSaveSize})");
 			}
 		}
 
-		// Find epilogues in all blocks and insert pops before them
+		// Find epilogues in all blocks and insert pops/restores before them
 		foreach (var block in func.Body.Blocks) {
 			for (int i = 0; i < block.Operations.Count; i++) {
 				if (block.Operations[i] is EpilogueOp) {
+					// Restore XMM registers before GPR pops (in reverse order)
+					if (xmmsToSave.Count > 0) {
+						int xmmSaveAreaOffset = func.GetMetadataValue<int>("xmm_save_offset");
+						for (int j = xmmsToSave.Count - 1; j >= 0; j--) {
+							var reg = xmmsToSave[j];
+							int offset = -(xmmSaveAreaOffset + (j + 1) * 8);
+							var memOp = new MemOperand(
+								Base: new RegOperand(X86Register.RBP),
+								Displacement: offset,
+								Size: 8
+							);
+							block.Operations.Insert(i++, new MovsdOp(new RegOperand(reg), memOp));
+						}
+					}
+
 					// Insert pops before epilogue (in reverse order)
 					foreach (var reg in gprsToSave.AsEnumerable().Reverse()) {
 						block.Operations.Insert(i++, new PopOp(new RegOperand(reg)));
@@ -520,13 +562,37 @@ public sealed class RegisterAllocationPass : FunctionPass {
 
 				var allocated = AllocateOp(x86Op, ctx);
 
-				// Insert pending pre-operations (reloads) before the main op
-				foreach (var preOp in ctx.PendingPreOps) {
-					newOps.Add(preOp);
+				// Insert pending spills FIRST (to save register values before they're overwritten)
+				if (ctx.PendingSpills.Count > 0) {
+					var spillDescs = ctx.PendingSpills.Select(p => {
+						if (p is MovsdOp movsd) return $"movsd {movsd.Dst} <- {movsd.Src}";
+						if (p is MovOp mov) return $"mov {mov.Dst} <- {mov.Src}";
+						return ((X86Op)p).Mnemonic;
+					});
+					Logger.Trace(LogCategory.RegAlloc, $"  Spills for {x86Op.Mnemonic}: {string.Join("; ", spillDescs)}");
+				}
+				foreach (var spillOp in ctx.PendingSpills) {
+					newOps.Add(spillOp);
+				}
+
+				// Insert pending reloads AFTER spills (to load values after registers are freed)
+				if (ctx.PendingReloads.Count > 0) {
+					var reloadDescs = ctx.PendingReloads.Select(p => {
+						if (p is MovsdOp movsd) return $"movsd {movsd.Dst} <- {movsd.Src}";
+						if (p is MovOp mov) return $"mov {mov.Dst} <- {mov.Src}";
+						return ((X86Op)p).Mnemonic;
+					});
+					Logger.Trace(LogCategory.RegAlloc, $"  Reloads for {x86Op.Mnemonic}: {string.Join("; ", reloadDescs)}");
+				}
+				foreach (var reloadOp in ctx.PendingReloads) {
+					newOps.Add(reloadOp);
 				}
 
 				newOps.Add(allocated);
 				changed = true;
+
+				// After the instruction, all active vregs have values and are spill-safe
+				ctx.MarkAllActiveSpillSafe();
 
 				// Insert pending post-operations (stores) after the main op
 				foreach (var postOp in ctx.PendingPostOps) {
@@ -579,9 +645,17 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		private readonly Dictionary<int, bool> _vregIsFloat = [];
 		private readonly Dictionary<int, bool> _vregIsNonVolatile = [];
 
+		// Track which vregs have received a value and are safe to spill.
+		// A vreg becomes spill-safe after it's defined (instruction completes) or reloaded.
+		private readonly HashSet<int> _spillSafeVregs = [];
+
 		// Spill slot tracking - maps vregId to frame offset (negative relative to RBP)
 		private readonly Dictionary<int, int> _spillOffsets = [];
 		private int _nextSpillOffset = 0;  // starts at 0, grows downward (more negative)
+
+		// For loop-live vregs, track the original "home" register they were allocated to.
+		// When spilled and reloaded, they must return to this register for loop correctness.
+		private readonly Dictionary<int, X86Register> _loopLiveHomeRegs = [];
 
 		// Total number of blocks in this function
 		private readonly int _totalBlocks = totalBlocks;
@@ -627,36 +701,48 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		/// </summary>
 		public int FindSpillCandidate(bool isFloat) {
 			int bestVreg = -1;
-			int bestDistance = -1;
+			int bestDistance = int.MinValue;  // Use MinValue to allow negative distances
 
+			Logger.Trace(LogCategory.RegAlloc, $"  FindSpillCandidate(isFloat={isFloat}) at block {CurrentBlockIdx} op {CurrentOpIdx}: {_activeVregs.Count} active vregs");
 			foreach (var (vregId, physReg) in _activeVregs) {
 				// Skip if wrong register type
 				bool vregIsFloat = _vregIsFloat.GetValueOrDefault(vregId);
-				if (vregIsFloat != isFloat) continue;
+				if (vregIsFloat != isFloat) {
+					Logger.Trace(LogCategory.RegAlloc, $"    v{vregId} in {physReg}: skip (isFloat={vregIsFloat}, wanted={isFloat})");
+					continue;
+				}
 
-				// Skip if already spilled (shouldn't happen but be safe)
-				if (IsSpilled(vregId)) continue;
+				// Skip vregs that haven't received a value yet (being defined by current instruction)
+				if (!_spillSafeVregs.Contains(vregId)) {
+					Logger.Trace(LogCategory.RegAlloc, $"    v{vregId} in {physReg}: skip (not spill-safe, no value yet)");
+					continue;
+				}
 
-				// Calculate distance to next use
+				// Calculate distance to next use (or use a fallback if no liveness info)
+				int distance;
 				if (livenessInfo.LastUse.TryGetValue(vregId, out var lastUse)) {
 					// Distance = blocks away * 1000 + operations away
-					int distance = (lastUse.blockIdx - CurrentBlockIdx) * 1000 + (lastUse.opIdx - CurrentOpIdx);
-					if (distance > bestDistance) {
-						bestDistance = distance;
-						bestVreg = vregId;
-					}
+					distance = (lastUse.blockIdx - CurrentBlockIdx) * 1000 + (lastUse.opIdx - CurrentOpIdx);
+				} else {
+					// No liveness info - assume it's used soon (distance 0)
+					distance = 0;
+				}
+				Logger.Trace(LogCategory.RegAlloc, $"    v{vregId} in {physReg}: distance={distance}");
+				if (distance > bestDistance) {
+					bestDistance = distance;
+					bestVreg = vregId;
 				}
 			}
 
 			if (bestVreg == -1) {
-				throw new InvalidOperationException("No vreg available to spill - all active vregs are already spilled or of wrong type");
+				throw new InvalidOperationException($"No vreg available to spill - all active vregs are of wrong type or not spill-safe. Looking for isFloat={isFloat}. Active: {string.Join(", ", _activeVregs.Select(kv => $"v{kv.Key}({kv.Value}, float={_vregIsFloat.GetValueOrDefault(kv.Key)}, safe={_spillSafeVregs.Contains(kv.Key)})"))}");
 			}
 
 			return bestVreg;
 		}
 
 		/// <summary>
-		/// Spills a vreg: allocates a spill slot, generates store instruction, and frees its register.
+		/// Spills a vreg: allocates a spill slot (or reuses existing), generates store instruction, and frees its register.
 		/// Returns the physical register that was freed.
 		/// </summary>
 		public X86Register SpillVreg(int vregId) {
@@ -667,20 +753,26 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			var isFloat = _vregIsFloat.GetValueOrDefault(vregId);
 			var isNonVolatile = _vregIsNonVolatile.GetValueOrDefault(vregId);
 
-			// Allocate spill slot
-			var spillOffset = AllocateSpillSlot(vregId);
+			// Allocate spill slot (or reuse existing if this vreg was previously spilled and reloaded)
+			if (_spillOffsets.TryGetValue(vregId, out int spillOffset)) {
+				Logger.Trace(LogCategory.RegAlloc, $"  Re-spilling v{vregId} to existing slot at offset {spillOffset}");
+			} else {
+				spillOffset = AllocateSpillSlot(vregId);
+			}
 
 			// Generate store instruction to save current value to spill slot
+			// IMPORTANT: Spills go to PendingSpills (not PendingReloads) to ensure they
+			// execute BEFORE any reloads that might overwrite the register.
 			var memOp = new MemOperand(
-				Base: new RegOperand(X86Register.RBP),
-				Displacement: SpillAreaBaseOffset + spillOffset,
-				Size: 8
-			);
+					Base: new RegOperand(X86Register.RBP),
+					Displacement: SpillAreaBaseOffset + spillOffset,
+					Size: 8
+				);
 
 			if (isFloat) {
-				PendingPreOps.Add(new MovsdOp(memOp, new RegOperand(physReg)));
+				PendingSpills.Add(new MovsdOp(memOp, new RegOperand(physReg)));
 			} else {
-				PendingPreOps.Add(new MovOp(memOp, new RegOperand(physReg)));
+				PendingSpills.Add(new MovOp(memOp, new RegOperand(physReg)));
 			}
 
 			// Remove from active set and free the register
@@ -699,19 +791,16 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		}
 
 		/// <summary>
-		/// Marks a vreg as reloaded into a new register (after being spilled).
+		/// Spill stores to insert before the current operation.
+		/// These must be emitted FIRST to save register values before they're overwritten.
 		/// </summary>
-		public void MarkReloaded(int vregId, X86Register newReg, bool isFloat) {
-			allocation[vregId] = newReg;
-			_activeVregs[vregId] = newReg;
-			// Keep the spill slot - vreg might be spilled again
-			Logger.Trace(LogCategory.RegAlloc, $"  Reloaded v{vregId} into {newReg}");
-		}
+		public List<X86Op> PendingSpills { get; } = [];
 
 		/// <summary>
-		/// Operations to insert before the current operation (e.g., reloads).
+		/// Reload operations to insert before the current operation.
+		/// These are emitted AFTER spills to load values into registers.
 		/// </summary>
-		public List<X86Op> PendingPreOps { get; } = [];
+		public List<X86Op> PendingReloads { get; } = [];
 
 		/// <summary>
 		/// Operations to insert after the current operation (e.g., stores for definitions).
@@ -722,8 +811,18 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		/// Clears pending operations after they have been inserted.
 		/// </summary>
 		public void ClearPendingOps() {
-			PendingPreOps.Clear();
+			PendingSpills.Clear();
+			PendingReloads.Clear();
 			PendingPostOps.Clear();
+		}
+
+		/// <summary>
+		/// Marks all active vregs as spill-safe (called after an instruction completes).
+		/// </summary>
+		public void MarkAllActiveSpillSafe() {
+			foreach (var vregId in _activeVregs.Keys) {
+				_spillSafeVregs.Add(vregId);
+			}
 		}
 
 		/// <summary>
@@ -816,12 +915,21 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			if (operand is VRegOperand vreg) {
 				// Check if this vreg is currently spilled and needs to be reloaded
 				if (IsSpilled(vreg.Id) && !_activeVregs.ContainsKey(vreg.Id)) {
-					// Allocate a new register for the reloaded value
-					var newReg = vreg.IsFloat
-						? AllocXmm(vreg.Id)
-						: AllocGpr(vreg.Id);
+					X86Register newReg;
+
+					// For loop-live vregs, we must reload into the home register
+					// to maintain correct values at the loop header
+					if (_loopLiveHomeRegs.TryGetValue(vreg.Id, out var homeReg)) {
+						newReg = EnsureRegisterFree(homeReg, vreg.IsFloat);
+					} else {
+						// Allocate a new register for the reloaded value
+						newReg = vreg.IsFloat
+							? AllocXmm(vreg.Id)
+							: AllocGpr(vreg.Id);
+					}
 
 					// Generate reload instruction from spill slot
+					// Reloads go to PendingReloads (after spills) to ensure register is freed first
 					var spillOffset = GetSpillOffset(vreg.Id);
 					var memOp = new MemOperand(
 						Base: new RegOperand(X86Register.RBP),
@@ -830,14 +938,15 @@ public sealed class RegisterAllocationPass : FunctionPass {
 					);
 
 					if (vreg.IsFloat) {
-						PendingPreOps.Add(new MovsdOp(new RegOperand(newReg), memOp));
+						PendingReloads.Add(new MovsdOp(new RegOperand(newReg), memOp));
 					} else {
-						PendingPreOps.Add(new MovOp(new RegOperand(newReg), memOp));
+						PendingReloads.Add(new MovOp(new RegOperand(newReg), memOp));
 					}
 
-					// Update tracking
+					// Update tracking - reloaded vregs are immediately spill-safe
 					allocation[vreg.Id] = newReg;
 					_activeVregs[vreg.Id] = newReg;
+					_spillSafeVregs.Add(vreg.Id);
 					Logger.Debug(LogCategory.RegAlloc, $"  Reload v{vreg.Id} from [rbp{SpillAreaBaseOffset + spillOffset}] to {newReg}");
 
 					return new RegOperand(newReg);
@@ -850,6 +959,12 @@ public sealed class RegisterAllocationPass : FunctionPass {
 					allocation[vreg.Id] = physReg;
 					_activeVregs[vreg.Id] = physReg;
 					_vregIsFloat[vreg.Id] = vreg.IsFloat;
+
+					// Record home register for loop-live vregs
+					if (livenessInfo.LiveThroughLoop.Contains(vreg.Id)) {
+						_loopLiveHomeRegs[vreg.Id] = physReg;
+						Logger.Trace(LogCategory.RegAlloc, $"  Recorded home register for loop-live v{vreg.Id}: {physReg}");
+					}
 				}
 				return new RegOperand(physReg);
 			}
@@ -887,15 +1002,13 @@ public sealed class RegisterAllocationPass : FunctionPass {
 						_freeNonVolatileGprs,
 						available,
 						usedNonVolatileGpr,
-						isFloat: false,
-						$"callee-saved GPRs for v{vregId}");
+						isFloat: false);
 				}
 				// Fall back to any available non-volatile with spilling
 				return AllocFromFreeSetWithSpilling(
 					_freeNonVolatileGprs,
 					usedNonVolatileGpr,
-					isFloat: false,
-					$"callee-saved GPRs for v{vregId}");
+					isFloat: false);
 			}
 
 			// For loop-live vregs, avoid RAX/RDX which are clobbered by idiv
@@ -919,14 +1032,13 @@ public sealed class RegisterAllocationPass : FunctionPass {
 						_freeNonVolatileGprs,
 						availableNonVol,
 						usedNonVolatileGpr,
-						isFloat: false,
-						$"GPRs for loop-live v{vregId} (avoiding RAX/RDX)");
+						isFloat: false
+						);
 				}
 				return AllocFromFreeSetWithSpilling(
 					_freeNonVolatileGprs,
 					usedNonVolatileGpr,
-					isFloat: false,
-					$"GPRs for loop-live v{vregId} (avoiding RAX/RDX)");
+					isFloat: false);
 			}
 
 			// Check if this vreg is constrained from any registers
@@ -954,7 +1066,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 
 			// Try volatile first, then fall back to non-volatile
 			if (_freeVolatileGprs.Count > 0) {
-				return AllocFromFreeSetWithSpilling(_freeVolatileGprs, null, isFloat: false, $"volatile GPRs for v{vregId}");
+				return AllocFromFreeSetWithSpilling(_freeVolatileGprs, null, isFloat: false);
 			}
 
 			// Fall back to callee-saved registers (will be saved/restored in prologue/epilogue)
@@ -962,8 +1074,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			return AllocFromFreeSetWithSpilling(
 				_freeNonVolatileGprs,
 				usedNonVolatileGpr,
-				isFloat: false,
-				$"GPRs for v{vregId} (using callee-saved)");
+				isFloat: false);
 		}
 
 		/// <summary>
@@ -973,8 +1084,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			HashSet<X86Register> freeSet,
 			HashSet<X86Register> available,
 			HashSet<X86Register>? usedSet,
-			bool isFloat,
-			string description) {
+			bool isFloat) {
 			if (available.Count == 0) {
 				// Need to spill - find the best candidate and spill it
 				var victimVreg = FindSpillCandidate(isFloat);
@@ -1001,14 +1111,12 @@ public sealed class RegisterAllocationPass : FunctionPass {
 				return AllocFromFreeSetWithSpilling(
 					_freeNonVolatileXmms,
 					usedNonVolatileXmm,
-					isFloat: true,
-					$"callee-saved XMM registers for vf{vregId}");
+					isFloat: true);
 			}
 			return AllocFromFreeSetWithSpilling(
 				_freeVolatileXmms,
 				null,
-				isFloat: true,
-				$"volatile XMM registers for vf{vregId}");
+				isFloat: true);
 		}
 
 		/// <summary>
@@ -1018,11 +1126,11 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			HashSet<X86Register> freeSet,
 			HashSet<X86Register>? usedSet,
 			bool isFloat,
-			string description) {
+			string? description = null) {
 			if (freeSet.Count == 0) {
 				// Need to spill - find the best candidate and spill it
 				var victimVreg = FindSpillCandidate(isFloat);
-				var freedReg = SpillVreg(victimVreg);
+				_ = SpillVreg(victimVreg);
 				// The freed register is now in freeSet, so fall through to allocate it
 			}
 
@@ -1030,6 +1138,38 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			freeSet.Remove(reg);
 			usedSet?.Add(reg);
 			return reg;
+		}
+
+		/// <summary>
+		/// Ensures a specific register is free by spilling any vreg currently using it.
+		/// Returns the register after ensuring it's free.
+		/// </summary>
+		private X86Register EnsureRegisterFree(X86Register targetReg, bool isFloat) {
+			// Check if any vreg is currently using this register
+			int? vregInTarget = null;
+			foreach (var (vregId, physReg) in _activeVregs) {
+				if (physReg == targetReg) {
+					vregInTarget = vregId;
+					break;
+				}
+			}
+
+			if (vregInTarget.HasValue) {
+				// Spill the vreg currently in the target register
+				Logger.Trace(LogCategory.RegAlloc, $"  EnsureRegisterFree: spilling v{vregInTarget.Value} from {targetReg}");
+				SpillVreg(vregInTarget.Value);
+			}
+
+			// Remove from free sets (it may already not be there if it was active)
+			if (isFloat) {
+				_freeVolatileXmms.Remove(targetReg);
+				_freeNonVolatileXmms.Remove(targetReg);
+			} else {
+				_freeVolatileGprs.Remove(targetReg);
+				_freeNonVolatileGprs.Remove(targetReg);
+			}
+
+			return targetReg;
 		}
 
 		private static X86Register AllocFromFreeSet(

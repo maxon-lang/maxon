@@ -43,6 +43,9 @@ public class MlirPipeline {
 		passManager.AddPass(new DeadFunctionEliminationPass());
 		passManager.Run(module);
 
+		// Renumber all SSA values after dead function elimination to get clean sequential IDs
+		module.RenumberValues();
+
 		// Lower Maxon → Standard dialects
 		Logger.Debug(LogCategory.Compiler, "Lowering Maxon to Standard dialects");
 

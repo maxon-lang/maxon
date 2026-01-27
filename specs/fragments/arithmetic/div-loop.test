@@ -17,22 +17,27 @@ ExitCode: 228
 ---
 func.func @divLoop(%n: i64) -> i64 {
   ^entry(%n: i64):
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.push rbx
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rbp-40]
+    x86.mov qword ptr [rcx], rax
+    x86.mov rax, 0
     x86.mov r8, 1
-    x86.mov r9, 100
-    x86.mov r10, 0
+    x86.mov r9, qword ptr [rcx]
+    x86.mov rcx, 100
+    x86.mov r10, rax
     x86.mov r11, r8
     x86.jmp while.cond
-  ^while.cond(%20: i64, %23: i64):
-    x86.cmp r11, rcx
+  ^while.cond(%21: i64, %23: i64):
+    x86.cmp r11, r9
     x86.setle rdx
     x86.test rdx, rdx
     x86.jne while.body
     x86.jmp while.exit
   ^while.body:
     x86.mov rbx, r11
-    x86.mov rax, r9
+    x86.mov rax, rcx
     x86.cdq
     x86.idiv rbx
     x86.mov rdx, rax

@@ -530,9 +530,48 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			StaticCallExpr staticCall => LowerStaticCallExpr(staticCall),
 			StructInitExpr structInit => LowerStructInitExpr(structInit, expectedType),
 			FieldAccessExpr fieldAccess => LowerFieldAccessExpr(fieldAccess),
+			CastExpr cast => LowerCastExpr(cast),
 			_ => throw new NotSupportedException($"Unsupported expression: {expr.GetType().Name}")
 		};
+
+		// Apply implicit type coercion if needed (e.g., int to float)
+		if (expectedType != null && result != null && result.Type != expectedType) {
+			result = EmitTypeCoercion(result, expectedType);
+		}
+
 		return result!;
+	}
+
+	/// <summary>
+	/// Emits type coercion operations for implicit conversions.
+	/// </summary>
+	private MlirValue EmitTypeCoercion(MlirValue value, MlirType targetType) {
+		// Int to float conversion
+		if (value.Type is IntegerType && targetType is FloatType floatType) {
+			var op = new SIToFPOp(value, floatType);
+			InsertOp(op);
+			return op.Result;
+		}
+
+		// Integer width extension/truncation
+		if (value.Type is IntegerType srcIntType && targetType is IntegerType dstIntType) {
+			if (srcIntType.BitWidth < dstIntType.BitWidth) {
+				// Extension
+				var op = srcIntType.IsSigned
+					? (MlirOperation)new ExtSIOp(value, dstIntType)
+					: new ExtUIOp(value, dstIntType);
+				InsertOp(op);
+				return ((dynamic)op).Result;
+			} else if (srcIntType.BitWidth > dstIntType.BitWidth) {
+				// Truncation
+				var op = new TruncIOp(value, dstIntType);
+				InsertOp(op);
+				return op.Result;
+			}
+		}
+
+		// No coercion needed or not supported - return as-is
+		return value;
 	}
 
 	private MlirValue LowerBinaryExpr(BinaryExpr binary) {
@@ -661,6 +700,20 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		};
 	}
 
+	private MlirValue LowerCastExpr(CastExpr cast) {
+		var operand = LowerExpression(cast.Expression);
+		var targetType = ConvertType(cast.TargetType);
+
+		if (operand.Type == targetType) {
+			throw new CompileError(ErrorCode.SemanticTypeMismatch,
+				$"redundant cast: expression is already of type '{cast.TargetType}'",
+				cast.Expression.Location?.Line, cast.Expression.Location?.Column);
+		}
+
+		// Use existing coercion logic which handles int->float, int width changes, etc.
+		return EmitTypeCoercion(operand, targetType);
+	}
+
 	private MlirValue? LowerCallExpr(CallExpr call) {
 		// Handle builtin functions first
 		var builtinResult = TryLowerBuiltinCall(call);
@@ -697,10 +750,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 						}
 					}
 
-					methodArgs.Add(LowerExpression(arg, expectedType));
+					var loweredArg = LowerExpression(arg, expectedType);
+					methodArgs.Add(loweredArg);
 
-					// Determine ownership based on mutation analysis (offset by 1 for 'self')
-					if (_mutationAnalyzer.IsMutated(siblingMethodName, i + 1)) {
+					// Determine ownership based on type and mutation analysis (offset by 1 for 'self').
+					// Copy types (primitives) are always passed by copy.
+					if (loweredArg.Type.IsCopyType) {
+						methodOwnership.Add(ArgumentOwnership.Copy);
+					} else if (_mutationAnalyzer.IsMutated(siblingMethodName, i + 1)) {
 						methodOwnership.Add(ArgumentOwnership.Move);
 					} else {
 						methodOwnership.Add(ArgumentOwnership.Borrow);
@@ -737,10 +794,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				}
 			}
 
-			args.Add(LowerExpression(arg, expectedType));
+			var loweredArg = LowerExpression(arg, expectedType);
+			args.Add(loweredArg);
 
-			// Determine ownership based on mutation analysis
-			if (_mutationAnalyzer.IsMutated(call.FuncName, i)) {
+			// Determine ownership based on type and mutation analysis.
+			// Copy types (primitives) are always passed by copy.
+			if (loweredArg.Type.IsCopyType) {
+				ownership.Add(ArgumentOwnership.Copy);
+			} else if (_mutationAnalyzer.IsMutated(call.FuncName, i)) {
 				ownership.Add(ArgumentOwnership.Move);
 			} else {
 				ownership.Add(ArgumentOwnership.Borrow);
@@ -796,10 +857,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				}
 			}
 
-			args.Add(LowerExpression(arg, expectedType));
+			var loweredArg = LowerExpression(arg, expectedType);
+			args.Add(loweredArg);
 
-			// Determine ownership based on mutation analysis (offset by 1 for 'self')
-			if (_mutationAnalyzer.IsMutated(methodName, i + 1)) {
+			// Determine ownership based on type and mutation analysis (offset by 1 for 'self').
+			// Copy types (primitives) are always passed by copy.
+			if (loweredArg.Type.IsCopyType) {
+				ownership.Add(ArgumentOwnership.Copy);
+			} else if (_mutationAnalyzer.IsMutated(methodName, i + 1)) {
 				ownership.Add(ArgumentOwnership.Move);
 			} else {
 				ownership.Add(ArgumentOwnership.Borrow);
@@ -870,10 +935,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 					}
 				}
 
-				args.Add(LowerExpression(arg, expectedType));
+				var loweredArg = LowerExpression(arg, expectedType);
+				args.Add(loweredArg);
 
-				// Determine ownership based on mutation analysis (offset by 1 for 'self')
-				if (_mutationAnalyzer.IsMutated(methodName, i + 1)) {
+				// Determine ownership based on type and mutation analysis (offset by 1 for 'self').
+				// Copy types (primitives) are always passed by copy.
+				if (loweredArg.Type.IsCopyType) {
+					ownership.Add(ArgumentOwnership.Copy);
+				} else if (_mutationAnalyzer.IsMutated(methodName, i + 1)) {
 					ownership.Add(ArgumentOwnership.Move);
 				} else {
 					ownership.Add(ArgumentOwnership.Borrow);
@@ -913,10 +982,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				}
 			}
 
-			staticArgs.Add(LowerExpression(arg, expectedType));
+			var loweredArg = LowerExpression(arg, expectedType);
+			staticArgs.Add(loweredArg);
 
-			// Determine ownership based on mutation analysis
-			if (_mutationAnalyzer.IsMutated(staticMethodName, i)) {
+			// Determine ownership based on type and mutation analysis.
+			// Copy types (primitives) are always passed by copy.
+			if (loweredArg.Type.IsCopyType) {
+				staticOwnership.Add(ArgumentOwnership.Copy);
+			} else if (_mutationAnalyzer.IsMutated(staticMethodName, i)) {
 				staticOwnership.Add(ArgumentOwnership.Move);
 			} else {
 				staticOwnership.Add(ArgumentOwnership.Borrow);
@@ -1289,8 +1362,30 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			_structReturnPtr = null;
 		}
 
+		// Create allocas for scalar parameters to enable proper SSA promotion via mem2reg.
+		// This is necessary because parameters may be reassigned inside the function body,
+		// and without allocas, those reassignments can't be tracked through loops.
+		// Struct parameters (like 'self') are already passed by reference, so they don't need allocas.
 		for (int i = 0; i < parameters.Count; i++) {
-			_namedValues[parameters[i].name] = paramValues[paramIndex++];
+			var paramValue = paramValues[paramIndex++];
+			var paramType = paramValue.Type;
+			var paramName = parameters[i].name;
+
+			// Struct parameters are passed by reference - use them directly without allocas.
+			// Creating an alloca for a struct param would create a pointer-to-pointer situation.
+			if (paramType is MaxonStructType) {
+				_namedValues[paramName] = paramValue;
+				continue;
+			}
+
+			// For scalar types (primitives), create an alloca to enable SSA promotion.
+			var alloca = EmitAlloca(paramType, paramName);
+
+			// Store the incoming parameter value into the alloca
+			EmitStore(paramValue, alloca);
+
+			// Map the parameter name to the alloca (not the raw parameter value)
+			_namedValues[paramName] = alloca;
 		}
 
 		_module.Functions.Add(func);
