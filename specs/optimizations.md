@@ -1662,3 +1662,322 @@ func.func @main() -> i64 {
     x86.ret
 }
 ```
+
+### Identity and Absorbing Folding
+
+The following tests verify identity folding patterns (e.g., `x + 0 = x`) and absorbing element patterns (e.g., `x * 0 = 0`).
+
+<!-- test: identity-add-zero-lhs -->
+`0 + x = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return 0 + x
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-add-zero-rhs -->
+`x + 0 = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return x + 0
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-sub-zero -->
+`x - 0 = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return x - 0
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-mul-one-lhs -->
+`1 * x = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return 1 * x
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-mul-one-rhs -->
+`x * 1 = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return x * 1
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-div-one -->
+`x / 1 = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return x / 1
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: absorbing-zero-div-lhs -->
+`0 / x = 0` absorbing element.
+```maxon
+function main() returns int
+    var x = 42
+    return 0 / x
+end 'main'
+```
+```exitcode
+0
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-or-zero -->
+`x | 0 = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return x | 0
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-xor-zero -->
+`x ^ 0 = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return x ^ 0
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-shift-left-zero -->
+`x << 0 = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return x << 0
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-shift-right-zero -->
+`x >> 0 = x` identity folding.
+```maxon
+function main() returns int
+    var x = 42
+    return x >> 0
+end 'main'
+```
+```exitcode
+42
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 42
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: absorbing-and-zero -->
+`x & 0 = 0` absorbing element.
+```maxon
+function main() returns int
+    var x = 42
+    return x & 0
+end 'main'
+```
+```exitcode
+0
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: absorbing-shift-left-zero-lhs -->
+`0 << n = 0` absorbing element.
+```maxon
+function main() returns int
+    var n = 5
+    return 0 << n
+end 'main'
+```
+```exitcode
+0
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-float-mul-one -->
+`x * 1.0 = x` identity folding for floats.
+```maxon
+function main() returns int
+    var x = 5.0
+    return trunc(x * 1.0)
+end 'main'
+```
+```exitcode
+5
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 5
+    x86.epilogue
+    x86.ret
+}
+```
+
+<!-- test: identity-float-div-one -->
+`x / 1.0 = x` identity folding for floats.
+```maxon
+function main() returns int
+    var x = 5.0
+    return trunc(x / 1.0)
+end 'main'
+```
+```exitcode
+5
+```
+```requiredmlir
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 5
+    x86.epilogue
+    x86.ret
+}
+```

@@ -1,4 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
+using MaxonSharp.Compiler.Mlir.Passes;
 
 namespace MaxonSharp.Compiler.Mlir.Dialects;
 
@@ -14,7 +15,7 @@ public abstract class MathOp : MlirOperation {
 	public override bool HasSideEffects => false;
 
 	public abstract MlirOperation Clone(Func<MlirValue, MlirValue> remapValue);
-	public abstract MlirOperation? TryFold();
+	public abstract FoldResult TryFold(FoldingContext context);
 }
 
 /// <summary>
@@ -39,18 +40,6 @@ public abstract class FloatUnaryOp : MathOp {
 
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"{Result} = {FullName} {Operand} : {Operand.Type}");
-	}
-
-	protected static double? GetConstantDoubleValue(MlirValue value) {
-		if (value.DefiningOp is ConstantOp constOp && constOp.Value is FloatAttr floatAttr)
-			return floatAttr.Value;
-		return null;
-	}
-
-	protected ConstantOp CreateConstantReplacement(FloatAttr value) {
-		var constOp = new ConstantOp(value, Result.Type) { Results = { [0] = Result } };
-		Result.DefiningOp = constOp;
-		return constOp;
 	}
 }
 
@@ -81,18 +70,6 @@ public abstract class FloatBinaryMathOp : MathOp {
 	public override void Print(MlirPrinter printer) {
 		printer.PrintLine($"{Result} = {FullName} {Lhs}, {Rhs} : {Lhs.Type}");
 	}
-
-	protected static double? GetConstantDoubleValue(MlirValue value) {
-		if (value.DefiningOp is ConstantOp constOp && constOp.Value is FloatAttr floatAttr)
-			return floatAttr.Value;
-		return null;
-	}
-
-	protected ConstantOp CreateConstantReplacement(FloatAttr value) {
-		var constOp = new ConstantOp(value, Result.Type) { Results = { [0] = Result } };
-		Result.DefiningOp = constOp;
-		return constOp;
-	}
 }
 
 // ============================================================================
@@ -108,10 +85,11 @@ public sealed class SqrtOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
 		=> new SqrtOp(remapValue(Operand));
 
-	public override MlirOperation? TryFold() {
-		if (GetConstantDoubleValue(Operand) is double v && v >= 0)
-			return CreateConstantReplacement(new FloatAttr(Math.Sqrt(v)));
-		return null;
+	public override FoldResult TryFold(FoldingContext context) {
+		var constVal = FoldingContext.GetConstantDoubleValue(Operand);
+		if (constVal is double v && v >= 0)
+			return FoldResult.WithOperation(FoldingContext.CreateConstantReplacement(new FloatAttr(Math.Sqrt(v)), Result));
+		return FoldResult.None;
 	}
 }
 
@@ -125,10 +103,11 @@ public sealed class FloorOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
 		=> new FloorOp(remapValue(Operand));
 
-	public override MlirOperation? TryFold() {
-		if (GetConstantDoubleValue(Operand) is double v)
-			return CreateConstantReplacement(new FloatAttr(Math.Floor(v)));
-		return null;
+	public override FoldResult TryFold(FoldingContext context) {
+		var constVal = FoldingContext.GetConstantDoubleValue(Operand);
+		if (constVal is double v)
+			return FoldResult.WithOperation(FoldingContext.CreateConstantReplacement(new FloatAttr(Math.Floor(v)), Result));
+		return FoldResult.None;
 	}
 }
 
@@ -142,10 +121,11 @@ public sealed class CeilOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
 		=> new CeilOp(remapValue(Operand));
 
-	public override MlirOperation? TryFold() {
-		if (GetConstantDoubleValue(Operand) is double v)
-			return CreateConstantReplacement(new FloatAttr(Math.Ceiling(v)));
-		return null;
+	public override FoldResult TryFold(FoldingContext context) {
+		var constVal = FoldingContext.GetConstantDoubleValue(Operand);
+		if (constVal is double v)
+			return FoldResult.WithOperation(FoldingContext.CreateConstantReplacement(new FloatAttr(Math.Ceiling(v)), Result));
+		return FoldResult.None;
 	}
 }
 
@@ -159,10 +139,11 @@ public sealed class RoundOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
 		=> new RoundOp(remapValue(Operand));
 
-	public override MlirOperation? TryFold() {
-		if (GetConstantDoubleValue(Operand) is double v)
-			return CreateConstantReplacement(new FloatAttr(Math.Round(v, MidpointRounding.ToEven)));
-		return null;
+	public override FoldResult TryFold(FoldingContext context) {
+		var constVal = FoldingContext.GetConstantDoubleValue(Operand);
+		if (constVal is double v)
+			return FoldResult.WithOperation(FoldingContext.CreateConstantReplacement(new FloatAttr(Math.Round(v, MidpointRounding.ToEven)), Result));
+		return FoldResult.None;
 	}
 }
 
@@ -175,10 +156,11 @@ public sealed class AbsFOp(MlirValue operand) : FloatUnaryOp(operand) {
 	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
 		=> new AbsFOp(remapValue(Operand));
 
-	public override MlirOperation? TryFold() {
-		if (GetConstantDoubleValue(Operand) is double v)
-			return CreateConstantReplacement(new FloatAttr(Math.Abs(v)));
-		return null;
+	public override FoldResult TryFold(FoldingContext context) {
+		var constVal = FoldingContext.GetConstantDoubleValue(Operand);
+		if (constVal is double v)
+			return FoldResult.WithOperation(FoldingContext.CreateConstantReplacement(new FloatAttr(Math.Abs(v)), Result));
+		return FoldResult.None;
 	}
 }
 
@@ -196,10 +178,12 @@ public sealed class MinFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryMathOp(lhs
 	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
 		=> new MinFOp(remapValue(Lhs), remapValue(Rhs));
 
-	public override MlirOperation? TryFold() {
-		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r)
-			return CreateConstantReplacement(new FloatAttr(Math.Min(l, r)));
-		return null;
+	public override FoldResult TryFold(FoldingContext context) {
+		var lConst = FoldingContext.GetConstantDoubleValue(Lhs);
+		var rConst = FoldingContext.GetConstantDoubleValue(Rhs);
+		if (lConst is double l && rConst is double r)
+			return FoldResult.WithOperation(FoldingContext.CreateConstantReplacement(new FloatAttr(Math.Min(l, r)), Result));
+		return FoldResult.None;
 	}
 }
 
@@ -213,10 +197,12 @@ public sealed class MaxFOp(MlirValue lhs, MlirValue rhs) : FloatBinaryMathOp(lhs
 	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
 		=> new MaxFOp(remapValue(Lhs), remapValue(Rhs));
 
-	public override MlirOperation? TryFold() {
-		if (GetConstantDoubleValue(Lhs) is double l && GetConstantDoubleValue(Rhs) is double r)
-			return CreateConstantReplacement(new FloatAttr(Math.Max(l, r)));
-		return null;
+	public override FoldResult TryFold(FoldingContext context) {
+		var lConst = FoldingContext.GetConstantDoubleValue(Lhs);
+		var rConst = FoldingContext.GetConstantDoubleValue(Rhs);
+		if (lConst is double l && rConst is double r)
+			return FoldResult.WithOperation(FoldingContext.CreateConstantReplacement(new FloatAttr(Math.Max(l, r)), Result));
+		return FoldResult.None;
 	}
 }
 
@@ -256,14 +242,10 @@ public sealed class TruncOp : MathOp {
 	public override MlirOperation Clone(Func<MlirValue, MlirValue> remapValue)
 		=> new TruncOp(remapValue(Operand), (IntegerType)Result.Type);
 
-	public override MlirOperation? TryFold() {
-		if (Operand.DefiningOp is ConstantOp constOp && constOp.Value is FloatAttr floatAttr) {
-			var constResult = new ConstantOp(new IntegerAttr((long)floatAttr.Value), Result.Type) {
-				Results = { [0] = Result }
-			};
-			Result.DefiningOp = constResult;
-			return constResult;
-		}
-		return null;
+	public override FoldResult TryFold(FoldingContext context) {
+		var constVal = FoldingContext.GetConstantDoubleValue(Operand);
+		if (constVal is double v)
+			return FoldResult.WithOperation(FoldingContext.CreateConstantReplacement(new IntegerAttr((long)v), Result));
+		return FoldResult.None;
 	}
 }
