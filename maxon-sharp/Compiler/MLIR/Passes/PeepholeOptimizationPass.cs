@@ -291,14 +291,14 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 				for (int i = 1; i < x86Op.X86Operands.Count; i++) {
 					CollectUsedRegistersInto(x86Op.X86Operands[i], usesBeforeDefs, defsInBlock);
 				}
-				// For cmp/test, first operand is also a source
-				if (op is CmpOp or TestOp && x86Op.X86Operands.Count > 0) {
+				// For cmp/test/push, first operand is also a source
+				if (op is CmpOp or TestOp or PushOp && x86Op.X86Operands.Count > 0) {
 					CollectUsedRegistersInto(x86Op.X86Operands[0], usesBeforeDefs, defsInBlock);
 				}
 
 				// Collect defs (destinations) - track after uses so we know what's used before def
 				if (x86Op.X86Operands.Count > 0 && x86Op.X86Operands[0] is RegOperand dstReg) {
-					if (op is not CmpOp and not TestOp) {
+					if (op is not CmpOp and not TestOp and not PushOp) {
 						defsInBlock.Add(dstReg.Register);
 					}
 				}
@@ -369,8 +369,8 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 					CountOperandUses(x86Op.X86Operands[i], counts);
 				}
 
-				// For some ops like cmp, test, both operands are sources
-				if (op is CmpOp or TestOp && x86Op.X86Operands.Count > 0) {
+				// For some ops like cmp, test, push - the first operand is also a source
+				if (op is CmpOp or TestOp or PushOp && x86Op.X86Operands.Count > 0) {
 					CountOperandUses(x86Op.X86Operands[0], counts);
 				}
 			}

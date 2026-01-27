@@ -77,3 +77,117 @@ end 'main'
 ```exitcode
 20
 ```
+
+<!-- test: div-live-values -->
+```maxon
+function divLive(a int, b int, x int) returns int
+    var preserved = x + 1
+    var result = a / b
+    return result + preserved
+end 'divLive'
+
+function main() returns int
+    return divLive(10, b: 2, x: 5)
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: mod-live-values -->
+```maxon
+function modLive(a int, b int, x int) returns int
+    var preserved = x + 1
+    var result = a mod b
+    return result + preserved
+end 'modLive'
+
+function main() returns int
+    return modLive(10, b: 3, x: 5)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: div-loop -->
+```maxon
+function divLoop(n int) returns int
+    var sum = 0
+    var i = 1
+    while i <= n 'loop'
+        sum = sum + (100 / i)
+        i = i + 1
+    end 'loop'
+    return sum
+end 'divLoop'
+
+function main() returns int
+    return divLoop(5)
+end 'main'
+```
+```exitcode
+228
+```
+
+<!-- test: div-with-call -->
+```maxon
+function helper(x int) returns int
+    return x * 2
+end 'helper'
+
+function divCall(a int, b int) returns int
+    var temp = a / b
+    var result = helper(temp)
+    return result + temp
+end 'divCall'
+
+function main() returns int
+    return divCall(10, b: 2)
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: multi-div -->
+```maxon
+function multiDiv(a int, b int, c int, d int) returns int
+    var r1 = a / b
+    var r2 = c / d
+    return r1 + r2
+end 'multiDiv'
+
+function main() returns int
+    return multiDiv(10, b: 2, c: 20, d: 4)
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: register-pressure -->
+```maxon
+function manyVars(a int, b int, c int, d int, e int, f int) returns int
+    var v1 = a + 1
+    var v2 = b + 2
+    var v3 = c + 3
+    var v4 = d + 4
+    var v5 = e + 5
+    var v6 = f + 6
+    var v7 = v1 + v2
+    var v8 = v3 + v4
+    var v9 = v5 + v6
+    var v10 = v7 + v8
+    var v11 = v9 + v10
+    var v12 = v11 + v1 + v2 + v3 + v4 + v5 + v6
+    return v12
+end 'manyVars'
+
+function main() returns int
+    return manyVars(1, b: 2, c: 3, d: 4, e: 5, f: 6)
+end 'main'
+```
+```exitcode
+84
+```

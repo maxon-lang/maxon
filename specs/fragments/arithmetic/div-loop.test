@@ -1,0 +1,61 @@
+// Test: div-loop
+function divLoop(n int) returns int
+    var sum = 0
+    var i = 1
+    while i <= n 'loop'
+        sum = sum + (100 / i)
+        i = i + 1
+    end 'loop'
+    return sum
+end 'divLoop'
+
+function main() returns int
+    return divLoop(5)
+end 'main'
+---
+ExitCode: 228
+---
+func.func @divLoop(%n: i64) -> i64 {
+  ^entry(%n: i64):
+    x86.prologue stack_size=32
+    x86.push rbx
+    x86.mov r8, 1
+    x86.mov r9, 100
+    x86.mov r10, 0
+    x86.mov r11, r8
+    x86.jmp while.cond
+  ^while.cond(%20: i64, %23: i64):
+    x86.cmp r11, rcx
+    x86.setle rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rbx, r11
+    x86.mov rax, r9
+    x86.cdq
+    x86.idiv rbx
+    x86.mov rdx, rax
+    x86.mov rax, r10
+    x86.add rax, rdx
+    x86.mov rdx, r11
+    x86.add rdx, r8
+    x86.mov r10, rax
+    x86.mov r11, rdx
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, r10
+    x86.pop rbx
+    x86.epilogue
+    x86.ret
+}
+
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 5
+    x86.call divLoop
+    x86.epilogue
+    x86.ret
+}
+---

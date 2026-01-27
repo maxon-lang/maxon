@@ -310,10 +310,21 @@ public sealed class LowerFuncCallOp : ConversionPattern<FuncCallOp> {
 	private static readonly X86Register[] ScratchRegs = [X86Register.R10, X86Register.R11];
 
 	protected override bool MatchAndRewrite(FuncCallOp op, ConversionPatternRewriter rewriter) {
+		// Handle stack arguments FIRST (5th parameter onward)
+		// This must happen before we set up register arguments, because the register
+		// setup may clobber vregs that hold stack argument values (e.g., when we pop
+		// arg3/arg4 into R8/R9, we might clobber a vreg that holds arg5/arg6)
+		int stackArgsCount = Math.Max(0, op.Operands.Count - WindowsX64Abi.IntArgRegs.Length);
+		// Push in reverse order so they appear in memory in parameter order
+		for (int i = op.Operands.Count - 1; i >= WindowsX64Abi.IntArgRegs.Length; i--) {
+			var operand = op.Operands[i];
+			rewriter.Insert(new PushOp(new VRegOperand(operand.Id, IsFloat: operand.Type is FloatType)));
+		}
+
 		var intArgs = new List<(int index, VRegOperand arg)>();
 		var floatArgs = new List<(int index, VRegOperand arg)>();
 
-		// Categorize arguments
+		// Categorize arguments (only first 4)
 		for (int i = 0; i < op.Operands.Count && i < WindowsX64Abi.IntArgRegs.Length; i++) {
 			var operand = op.Operands[i];
 			bool isFloat = operand.Type is FloatType;
@@ -355,13 +366,15 @@ public sealed class LowerFuncCallOp : ConversionPattern<FuncCallOp> {
 			rewriter.Insert(new MovsdOp(new RegOperand(WindowsX64Abi.FloatArgRegs[i]), arg));
 		}
 
-		// Handle stack arguments
-		for (int i = WindowsX64Abi.IntArgRegs.Length; i < op.Operands.Count; i++) {
-			var operand = op.Operands[i];
-			rewriter.Insert(new PushOp(new VRegOperand(operand.Id, IsFloat: operand.Type is FloatType)));
-		}
-
 		rewriter.Insert(new X86CallOp(op.Callee));
+
+		// Clean up stack arguments after call (caller cleanup in x64)
+		if (stackArgsCount > 0) {
+			int cleanupBytes = stackArgsCount * 8;
+			rewriter.Insert(new AddOp(
+				new RegOperand(X86Register.RSP),
+				new ImmOperand(cleanupBytes)));
+		}
 
 		// Handle result
 		if (op.Result is not null) {

@@ -39,6 +39,7 @@ public sealed class FunctionFramePass : FunctionPass {
 		};
 
 		// Copy parameters from ABI registers to their virtual registers
+		// First 4 parameters come from registers (RCX, RDX, R8, R9 for int; XMM0-XMM3 for float)
 		var args = entryBlock.Arguments;
 		for (int i = 0; i < args.Count && i < WindowsX64Abi.IntArgRegs.Length; i++) {
 			var arg = args[i];
@@ -55,6 +56,35 @@ public sealed class FunctionFramePass : FunctionPass {
 				var abiReg = new RegOperand(WindowsX64Abi.IntArgRegs[i]);
 				insertOps.Add(new MovOp(paramVreg, abiReg));
 				Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} int param {i} from {WindowsX64Abi.IntArgRegs[i]} to v{arg.Value.Id}");
+			}
+		}
+
+		// Parameters 5+ come from the stack (Windows x64 calling convention)
+		// Stack layout after prologue (push rbp; mov rbp, rsp):
+		//   [RBP]     = saved RBP
+		//   [RBP+8]   = return address
+		//   [RBP+16]  = 5th argument
+		//   [RBP+24]  = 6th argument
+		//   etc.
+		for (int i = WindowsX64Abi.IntArgRegs.Length; i < args.Count; i++) {
+			var arg = args[i];
+			bool isFloat = arg.Value.Type is FloatType;
+			var paramVreg = new VRegOperand(arg.Value.Id, IsFloat: isFloat);
+
+			// Stack offset: +16 for saved RBP and return address, then +8 per argument
+			int stackOffset = 16 + (i - WindowsX64Abi.IntArgRegs.Length) * 8;
+			var stackMem = new MemOperand(
+				Base: new RegOperand(X86Register.RBP),
+				Displacement: stackOffset,
+				Size: 8
+			);
+
+			if (isFloat) {
+				insertOps.Add(new MovsdOp(paramVreg, stackMem));
+				Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} float param {i} from [RBP+{stackOffset}] to v{arg.Value.Id}");
+			} else {
+				insertOps.Add(new MovOp(paramVreg, stackMem));
+				Logger.Trace(LogCategory.Codegen, $"function-frame: {func.Name} int param {i} from [RBP+{stackOffset}] to v{arg.Value.Id}");
 			}
 		}
 

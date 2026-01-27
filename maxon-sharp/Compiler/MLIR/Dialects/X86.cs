@@ -21,8 +21,9 @@ public abstract class X86Op : MlirOperation {
 	/// <summary>
 	/// Returns registers that are clobbered (destroyed) by this operation.
 	/// Used by register allocation to save/restore live values.
+	/// Every X86 operation must explicitly declare this, even if empty.
 	/// </summary>
-	public virtual IReadOnlyList<X86Register> ClobberedRegisters => [];
+	public abstract IReadOnlyList<X86Register> ClobberedRegisters { get; }
 }
 
 // ============================================================================
@@ -34,6 +35,7 @@ public abstract class X86Op : MlirOperation {
 /// </summary>
 public sealed class MovOp : X86Op {
 	public override string Mnemonic => "mov";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -53,6 +55,7 @@ public sealed class MovOp : X86Op {
 /// </summary>
 public sealed class LeaOp : X86Op {
 	public override string Mnemonic => "lea";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -73,6 +76,7 @@ public sealed class LeaOp : X86Op {
 /// </summary>
 public sealed class LeaGlobalOp : X86Op {
 	public override string Mnemonic => "lea_global";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public string GlobalName { get; }
@@ -92,6 +96,7 @@ public sealed class LeaGlobalOp : X86Op {
 /// </summary>
 public sealed class PushOp : X86Op {
 	public override string Mnemonic => "push";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Src => X86Operands[0];
 
@@ -109,6 +114,7 @@ public sealed class PushOp : X86Op {
 /// </summary>
 public sealed class PopOp : X86Op {
 	public override string Mnemonic => "pop";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 
@@ -130,6 +136,7 @@ public sealed class PopOp : X86Op {
 /// </summary>
 public sealed class AddOp : X86Op {
 	public override string Mnemonic => "add";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -149,6 +156,7 @@ public sealed class AddOp : X86Op {
 /// </summary>
 public sealed class SubOp : X86Op {
 	public override string Mnemonic => "sub";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -168,6 +176,10 @@ public sealed class SubOp : X86Op {
 /// </summary>
 public sealed class ImulOp : X86Op {
 	public override string Mnemonic => "imul";
+
+	// 2-operand imul clobbers RDX (high bits), 3-operand form does not
+	public override IReadOnlyList<X86Register> ClobberedRegisters =>
+		Src2 is null ? [X86Register.RDX] : [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src1 => X86Operands[1];
@@ -201,6 +213,10 @@ public sealed class ImulOp : X86Op {
 public sealed class IdivOp : X86Op {
 	public override string Mnemonic => "idiv";
 
+	// idiv uses RAX/RDX but constraint analysis handles this - we can't push/pop
+	// because idiv needs those values set up by the preceding cdq instruction
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
+
 	public X86Operand Divisor => X86Operands[0];
 
 	public IdivOp(X86Operand divisor) {
@@ -217,6 +233,7 @@ public sealed class IdivOp : X86Op {
 /// </summary>
 public sealed class NegOp : X86Op {
 	public override string Mnemonic => "neg";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 
@@ -234,6 +251,7 @@ public sealed class NegOp : X86Op {
 /// </summary>
 public sealed class IncOp : X86Op {
 	public override string Mnemonic => "inc";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 
@@ -251,6 +269,7 @@ public sealed class IncOp : X86Op {
 /// </summary>
 public sealed class DecOp : X86Op {
 	public override string Mnemonic => "dec";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 
@@ -272,6 +291,7 @@ public sealed class DecOp : X86Op {
 /// </summary>
 public sealed class AndOp : X86Op {
 	public override string Mnemonic => "and";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -291,6 +311,7 @@ public sealed class AndOp : X86Op {
 /// </summary>
 public sealed class OrOp : X86Op {
 	public override string Mnemonic => "or";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -310,6 +331,7 @@ public sealed class OrOp : X86Op {
 /// </summary>
 public sealed class XorOp : X86Op {
 	public override string Mnemonic => "xor";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -329,6 +351,7 @@ public sealed class XorOp : X86Op {
 /// </summary>
 public sealed class NotOp : X86Op {
 	public override string Mnemonic => "not";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 
@@ -419,6 +442,7 @@ public sealed class SarOp : X86Op {
 /// </summary>
 public sealed class MovsdOp : X86Op {
 	public override string Mnemonic => "movsd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -441,6 +465,7 @@ public sealed class MovsdOp : X86Op {
 /// </summary>
 public sealed class MovqOp : X86Op {
 	public override string Mnemonic => "movq";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -460,6 +485,7 @@ public sealed class MovqOp : X86Op {
 /// </summary>
 public sealed class AddsdOp : X86Op {
 	public override string Mnemonic => "addsd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -479,6 +505,7 @@ public sealed class AddsdOp : X86Op {
 /// </summary>
 public sealed class SubsdOp : X86Op {
 	public override string Mnemonic => "subsd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -498,6 +525,7 @@ public sealed class SubsdOp : X86Op {
 /// </summary>
 public sealed class MulsdOp : X86Op {
 	public override string Mnemonic => "mulsd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -517,6 +545,7 @@ public sealed class MulsdOp : X86Op {
 /// </summary>
 public sealed class DivsdOp : X86Op {
 	public override string Mnemonic => "divsd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -540,6 +569,7 @@ public sealed class DivsdOp : X86Op {
 /// </summary>
 public sealed class CmpOp : X86Op {
 	public override string Mnemonic => "cmp";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Left => X86Operands[0];
 	public X86Operand Right => X86Operands[1];
@@ -559,6 +589,7 @@ public sealed class CmpOp : X86Op {
 /// </summary>
 public sealed class TestOp : X86Op {
 	public override string Mnemonic => "test";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Left => X86Operands[0];
 	public X86Operand Right => X86Operands[1];
@@ -578,6 +609,7 @@ public sealed class TestOp : X86Op {
 /// </summary>
 public sealed class SetccOp : X86Op {
 	public override string Mnemonic => $"set{Condition.ToString().ToLowerInvariant()}";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86CondCode Condition { get; }
 	public X86Operand Dst => X86Operands[0];
@@ -597,6 +629,7 @@ public sealed class SetccOp : X86Op {
 /// </summary>
 public sealed class ComiOp : X86Op {
 	public override string Mnemonic => "comisd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Left => X86Operands[0];
 	public X86Operand Right => X86Operands[1];
@@ -621,6 +654,7 @@ public sealed class ComiOp : X86Op {
 public sealed class JmpOp(string target) : X86Op {
 	public override string Mnemonic => "jmp";
 	public override bool IsTerminator => true;
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public string Target { get; } = target;
 
@@ -635,6 +669,7 @@ public sealed class JmpOp(string target) : X86Op {
 public sealed class JccOp(X86CondCode condition, string trueTarget, string falseTarget) : X86Op {
 	public override string Mnemonic => $"j{Condition.ToString().ToLowerInvariant()}";
 	public override bool IsTerminator => true;
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86CondCode Condition { get; } = condition;
 	public string TrueTarget { get; } = trueTarget;
@@ -652,6 +687,14 @@ public sealed class JccOp(X86CondCode condition, string trueTarget, string false
 public sealed class X86CallOp(string target) : X86Op {
 	public override string Mnemonic => "call";
 
+	// All volatile registers are clobbered by a call (Windows x64 ABI)
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [
+		X86Register.RAX, X86Register.RCX, X86Register.RDX,
+		X86Register.R8, X86Register.R9, X86Register.R10, X86Register.R11,
+		X86Register.XMM0, X86Register.XMM1, X86Register.XMM2, X86Register.XMM3,
+		X86Register.XMM4, X86Register.XMM5
+	];
+
 	public string Target { get; } = target;
 
 	public override void Print(MlirPrinter printer) {
@@ -665,6 +708,7 @@ public sealed class X86CallOp(string target) : X86Op {
 public sealed class RetOp : X86Op {
 	public override string Mnemonic => "ret";
 	public override bool IsTerminator => true;
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public RetOp() { }
 
@@ -679,6 +723,7 @@ public sealed class RetOp : X86Op {
 public sealed class LabelOp(string name) : X86Op {
 	public override string Mnemonic => "label";
 	public override bool HasSideEffects => false;
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public string Name { get; } = name;
 
@@ -696,6 +741,7 @@ public sealed class LabelOp(string name) : X86Op {
 /// </summary>
 public sealed class CvtsiOp : X86Op {
 	public override string Mnemonic => "cvtsi2sd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -715,6 +761,7 @@ public sealed class CvtsiOp : X86Op {
 /// </summary>
 public sealed class CvttsdOp : X86Op {
 	public override string Mnemonic => "cvttsd2si";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -731,11 +778,12 @@ public sealed class CvttsdOp : X86Op {
 
 /// <summary>
 /// Sign extend EAX to EDX:EAX: x86.cdq
-/// Note: cdq clobbers RDX but we don't mark it here because cdq is always
-/// immediately followed by idiv which handles the save/restore of RDX.
+/// Note: cdq clobbers RDX but we return [] because cdq is always
+/// immediately followed by idiv which needs RDX. Constraint analysis handles this.
 /// </summary>
 public sealed class CdqOp : X86Op {
 	public override string Mnemonic => "cdq";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public CdqOp() { }
 
@@ -754,6 +802,7 @@ public sealed class CdqOp : X86Op {
 /// </summary>
 public sealed class SqrtsdOp : X86Op {
 	public override string Mnemonic => "sqrtsd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -788,6 +837,7 @@ public enum RoundingMode : byte {
 /// </summary>
 public sealed class RoundsdOp : X86Op {
 	public override string Mnemonic => "roundsd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -810,6 +860,7 @@ public sealed class RoundsdOp : X86Op {
 /// </summary>
 public sealed class MinsdOp : X86Op {
 	public override string Mnemonic => "minsd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -830,6 +881,7 @@ public sealed class MinsdOp : X86Op {
 /// </summary>
 public sealed class MaxsdOp : X86Op {
 	public override string Mnemonic => "maxsd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -851,6 +903,7 @@ public sealed class MaxsdOp : X86Op {
 /// </summary>
 public sealed class AndpdOp : X86Op {
 	public override string Mnemonic => "andpd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -872,6 +925,7 @@ public sealed class AndpdOp : X86Op {
 /// </summary>
 public sealed class XorpdOp : X86Op {
 	public override string Mnemonic => "xorpd";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public X86Operand Dst => X86Operands[0];
 	public X86Operand Src => X86Operands[1];
@@ -895,6 +949,7 @@ public sealed class XorpdOp : X86Op {
 /// </summary>
 public sealed class PrologueOp(int stackSize = 32) : X86Op {
 	public override string Mnemonic => "prologue";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 	public int StackSize { get; } = stackSize;
 
 	public override void Print(MlirPrinter printer) {
@@ -907,6 +962,7 @@ public sealed class PrologueOp(int stackSize = 32) : X86Op {
 /// </summary>
 public sealed class EpilogueOp : X86Op {
 	public override string Mnemonic => "epilogue";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
 
 	public EpilogueOp() { }
 
