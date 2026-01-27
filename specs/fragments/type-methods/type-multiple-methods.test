@@ -37,27 +37,32 @@ func.func @main() -> i64 {
     x86.lea rdx, qword ptr [rcx]
     x86.mov qword ptr [rdx], rax
     x86.lea rbx, qword ptr [rbp-48]
-    x86.mov qword ptr [rbx], rcx
-    x86.mov rcx, qword ptr [rbx]
-    x86.mov rcx, rcx
+    x86.mov rdx, 8
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rbx
+    x86.mov rsi, rcx
+    x86.mov rcx, rdx
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.mov rcx, rbx
     x86.call Counter.increment
-    x86.mov rcx, qword ptr [rbx]
-    x86.mov rcx, rcx
+    x86.mov rcx, rbx
     x86.call Counter.increment
-    x86.mov rcx, qword ptr [rbx]
-    x86.mov rcx, rcx
+    x86.mov rcx, rbx
     x86.call Counter.decrement
-    x86.mov rcx, qword ptr [rbx]
-    x86.mov rcx, rcx
+    x86.mov rcx, rbx
     x86.call Counter.get
-    x86.mov rcx, rax
-    x86.mov rax, rcx
+    x86.mov rdx, rax
+    x86.mov rax, rdx
     x86.epilogue saved_gprs=[RBX]
     x86.ret
 }
 
-func.func @Counter.increment(%self: !maxon.struct<Counter>) {
-  ^entry(%self: !maxon.struct<Counter>):
+func.func @Counter.increment(%self: memref<!maxon.struct<Counter>>) {
+  ^entry(%self: memref<!maxon.struct<Counter>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]
@@ -70,8 +75,8 @@ func.func @Counter.increment(%self: !maxon.struct<Counter>) {
     x86.ret
 }
 
-func.func @Counter.decrement(%self: !maxon.struct<Counter>) {
-  ^entry(%self: !maxon.struct<Counter>):
+func.func @Counter.decrement(%self: memref<!maxon.struct<Counter>>) {
+  ^entry(%self: memref<!maxon.struct<Counter>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]
@@ -84,8 +89,8 @@ func.func @Counter.decrement(%self: !maxon.struct<Counter>) {
     x86.ret
 }
 
-func.func @Counter.get(%self: !maxon.struct<Counter>) -> i64 {
-  ^entry(%self: !maxon.struct<Counter>):
+func.func @Counter.get(%self: memref<!maxon.struct<Counter>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Counter>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]

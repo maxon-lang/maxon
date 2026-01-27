@@ -547,8 +547,11 @@ public sealed class X86CodeEmitter {
 		// sub r10, 0x1000
 		EmitBytes(0x49, 0x81, 0xEA, 0x00, 0x10, 0x00, 0x00);
 
-		// test [r10], r10d (just touch the memory, using 32-bit for efficiency)
-		EmitBytes(0x45, 0x85, 0x12);
+		// Touch the page to trigger guard page exception if needed
+		// mov dword ptr [r10], 0  (actually read is sufficient: mov eax, [r10])
+		// Using: or dword ptr [r10], 0 - reads and writes the memory location
+		// 41 83 0A 00 = or dword ptr [r10], 0
+		EmitBytes(0x41, 0x83, 0x0A, 0x00);
 
 		// sub rcx, 0x1000
 		EmitBytes(0x48, 0x81, 0xE9, 0x00, 0x10, 0x00, 0x00);
@@ -818,37 +821,63 @@ public sealed class X86CodeEmitter {
 	private void EmitMovMemReg(MemOperand dst, X86Register src) {
 		// Determine opcode based on operand size
 		// For byte stores: 0x88 (MOV r/m8, r8)
-		// For word/dword/qword stores: 0x89 (MOV r/m16/32/64, r16/32/64) with REX.W for 64-bit
+		// For word/dword/qword stores: 0x89 (MOV r/m16/32/64, r16/32/64)
+		// REX.W only for 64-bit, 0x66 prefix for 16-bit
 		byte opcode = dst.Size == 1 ? (byte)0x88 : (byte)0x89;
 
 		if (dst.Base is RegOperand baseReg && dst.Index is RegOperand indexReg) {
 			// [base + index*scale + disp] - requires SIB byte
-			if (dst.Size == 1) {
-				// Byte store doesn't need REX.W, but may need REX for r8-r15
-				if (NeedsRex(src) || NeedsRex(baseReg.Register) || NeedsRex(indexReg.Register)) {
-					EmitByte(Rex(false, src, baseReg.Register, indexReg.Register));
-				}
-			} else {
-				EmitRexW(src, baseReg.Register, indexReg.Register);
-			}
+			EmitMovMemRegPrefix(dst.Size, src, baseReg.Register, indexReg.Register);
 			EmitByte(opcode);
 			EmitByte(ModRM(0b10, GetRegCode(src), 0b100)); // rm=4 means SIB follows
 			EmitByte(SIB(dst.Scale, GetRegCode(indexReg.Register), GetRegCode(baseReg.Register)));
 			EmitImm32(dst.Displacement);
 		} else if (dst.Base is RegOperand baseOnly) {
 			// [base + disp32]
-			if (dst.Size == 1) {
-				// Byte store doesn't need REX.W, but may need REX for r8-r15
-				if (NeedsRex(src) || NeedsRex(baseOnly.Register)) {
-					EmitByte(Rex(false, src, baseOnly.Register));
-				}
-			} else {
-				EmitRexW(src, baseOnly.Register);
-			}
+			EmitMovMemRegPrefix(dst.Size, src, baseOnly.Register, null);
 			EmitByte(opcode);
 			EmitByte(ModRM(0b10, GetRegCode(src), GetRegCode(baseOnly.Register)));
 			if (GetRegCode(baseOnly.Register) == 4) EmitByte(0x24);
 			EmitImm32(dst.Displacement);
+		}
+	}
+
+	private void EmitMovMemRegPrefix(int size, X86Register src, X86Register baseReg, X86Register? indexReg) {
+		// Emit appropriate prefixes based on operand size:
+		// - Size 8 (qword): REX.W prefix
+		// - Size 4 (dword): REX prefix only if extended registers used (no W bit)
+		// - Size 2 (word): 0x66 prefix + REX if extended registers
+		// - Size 1 (byte): REX prefix only if extended registers used (no W bit)
+		switch (size) {
+			case 8:
+				// 64-bit: always emit REX.W
+				if (indexReg != null) {
+					EmitRexW(src, baseReg, indexReg.Value);
+				} else {
+					EmitRexW(src, baseReg);
+				}
+				break;
+			case 4:
+				// 32-bit: only emit REX if extended registers are used (no W bit)
+				if (NeedsRex(src) || NeedsRex(baseReg) || (indexReg != null && NeedsRex(indexReg.Value))) {
+					EmitByte(Rex(false, src, baseReg, indexReg));
+				}
+				break;
+			case 2:
+				// 16-bit: 0x66 operand size prefix + REX if extended registers
+				EmitByte(0x66);
+				if (NeedsRex(src) || NeedsRex(baseReg) || (indexReg != null && NeedsRex(indexReg.Value))) {
+					EmitByte(Rex(false, src, baseReg, indexReg));
+				}
+				break;
+			case 1:
+				// 8-bit: only emit REX if extended registers are used (no W bit)
+				if (NeedsRex(src) || NeedsRex(baseReg) || (indexReg != null && NeedsRex(indexReg.Value))) {
+					EmitByte(Rex(false, src, baseReg, indexReg));
+				}
+				break;
+			default:
+				throw new NotSupportedException($"Unsupported operand size: {size}");
 		}
 	}
 

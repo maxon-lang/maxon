@@ -219,3 +219,66 @@ public static class StoreSemantics
 		}
 	}
 }
+
+// ============================================================================
+// FunctionParameter - How a parameter is passed to a function
+// ============================================================================
+
+/// <summary>
+/// How a parameter is passed to a function. Forces correct caller/callee semantics.
+/// This discriminated union ensures type-safe parameter passing and prevents
+/// mismatches between caller (passing pointer) and callee (expecting value).
+/// </summary>
+public abstract record FunctionParameter
+{
+	/// <summary>Name of the parameter.</summary>
+	public abstract string Name { get; }
+
+	/// <summary>The MLIR type of the parameter as it appears in the function signature.</summary>
+	public abstract MlirType Type { get; }
+
+	/// <summary>
+	/// Scalar parameter - passed by value, needs alloca for SSA promotion.
+	/// Used for primitives (int, float, bool).
+	/// </summary>
+	public sealed record Scalar(string ParamName, MlirType ParamType) : FunctionParameter
+	{
+		public override string Name => ParamName;
+		public override MlirType Type => ParamType;
+	}
+
+	/// <summary>
+	/// Struct self receiver - passed by reference (pointer), used directly.
+	/// The caller passes the address; callee uses it as a pointer to mutate.
+	/// </summary>
+	public sealed record SelfRef(string ParamName, MaxonStructType StructType) : FunctionParameter
+	{
+		public override string Name => ParamName;
+		public override MlirType Type => new MemRefType(StructType);
+	}
+
+	/// <summary>
+	/// Struct parameter (not self) - passed by reference, used directly.
+	/// For struct parameters other than self.
+	/// </summary>
+	public sealed record StructRef(string ParamName, MaxonStructType StructType) : FunctionParameter
+	{
+		public override string Name => ParamName;
+		public override MlirType Type => new MemRefType(StructType);
+	}
+
+	/// <summary>
+	/// Returns true if this parameter needs an alloca for SSA promotion.
+	/// </summary>
+	public bool NeedsAlloca => this is Scalar;
+
+	/// <summary>
+	/// Returns the underlying struct type for self/struct ref parameters.
+	/// </summary>
+	public MaxonStructType? GetStructType() => this switch
+	{
+		SelfRef s => s.StructType,
+		StructRef s => s.StructType,
+		_ => null
+	};
+}

@@ -19,7 +19,7 @@ ExitCode: 32
 ---
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=64 saved_gprs=[RBX,R12]
+    x86.prologue stack_size=72 saved_gprs=[RBX,R12,R13]
     x86.mov rax, 10
     x86.lea rbx, qword ptr [rbp-40]
     x86.mov r10, rbx
@@ -28,7 +28,16 @@ func.func @main() -> i64 {
     x86.mov rcx, r10
     x86.call Thing.make
     x86.lea r12, qword ptr [rbp-48]
-    x86.mov qword ptr [r12], rbx
+    x86.mov r13, 8
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, r12
+    x86.mov rsi, rbx
+    x86.mov rcx, r13
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
     x86.mov rax, 20
     x86.lea rbx, qword ptr [rbp-56]
     x86.mov r10, rbx
@@ -37,7 +46,15 @@ func.func @main() -> i64 {
     x86.mov rcx, r10
     x86.call Thing.make
     x86.lea rax, qword ptr [rbp-64]
-    x86.mov qword ptr [rax], rbx
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rax
+    x86.mov rsi, rbx
+    x86.mov rcx, r13
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
     x86.lea_global rcx, @global.Thing.created
     x86.mov rdx, qword ptr [rcx]
     x86.mov rcx, qword ptr [r12]
@@ -50,7 +67,7 @@ func.func @main() -> i64 {
     x86.mov rcx, qword ptr [rax]
     x86.mov rax, r8
     x86.add rax, rcx
-    x86.epilogue saved_gprs=[RBX,R12]
+    x86.epilogue saved_gprs=[RBX,R12,R13]
     x86.ret
 }
 

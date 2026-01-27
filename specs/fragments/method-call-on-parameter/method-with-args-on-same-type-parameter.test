@@ -27,31 +27,47 @@ func.func @main() -> i64 {
     x86.lea rdx, qword ptr [rcx]
     x86.mov qword ptr [rdx], rax
     x86.lea rdx, qword ptr [rbp-48]
-    x86.mov qword ptr [rdx], rcx
+    x86.mov rax, 8
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rdx
+    x86.mov rsi, rcx
+    x86.mov rcx, rax
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
     x86.mov rcx, 50
-    x86.lea rax, qword ptr [rbp-56]
-    x86.lea r8, qword ptr [rax]
-    x86.mov qword ptr [r8], rcx
-    x86.lea r8, qword ptr [rbp-64]
-    x86.mov qword ptr [r8], rax
-    x86.mov rax, qword ptr [rdx]
-    x86.mov rdx, qword ptr [r8]
-    x86.mov r8, 7
-    x86.mov r10, rax
-    x86.mov r11, rdx
-    x86.push r8
+    x86.lea r8, qword ptr [rbp-56]
+    x86.lea r9, qword ptr [r8]
+    x86.mov qword ptr [r9], rcx
+    x86.lea r9, qword ptr [rbp-64]
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, r9
+    x86.mov rsi, r8
+    x86.mov rcx, rax
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.mov rax, qword ptr [r9]
+    x86.mov r9, 7
+    x86.mov r10, rdx
+    x86.mov r11, rax
+    x86.push r9
     x86.pop r8
     x86.mov rdx, r11
     x86.mov rcx, r10
     x86.call Adder.delegateAdd
-    x86.mov r8, rax
-    x86.mov rax, r8
+    x86.mov r9, rax
+    x86.mov rax, r9
     x86.epilogue
     x86.ret
 }
 
-func.func @Adder.addTo(%self: !maxon.struct<Adder>, %n: i64) -> i64 {
-  ^entry(%self: !maxon.struct<Adder>, %n: i64):
+func.func @Adder.addTo(%self: memref<!maxon.struct<Adder>>, %n: i64) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Adder>>, %n: i64):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.mov rcx, rdx
@@ -64,8 +80,8 @@ func.func @Adder.addTo(%self: !maxon.struct<Adder>, %n: i64) -> i64 {
     x86.ret
 }
 
-func.func @Adder.delegateAdd(%self: !maxon.struct<Adder>, %other: !maxon.struct<Adder>, %n: i64) -> i64 {
-  ^entry(%self: !maxon.struct<Adder>, %other: !maxon.struct<Adder>, %n: i64):
+func.func @Adder.delegateAdd(%self: memref<!maxon.struct<Adder>>, %other: memref<!maxon.struct<Adder>>, %n: i64) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Adder>>, %other: memref<!maxon.struct<Adder>>, %n: i64):
     x86.prologue stack_size=32
     x86.mov r10, rcx
     x86.mov r11, rdx

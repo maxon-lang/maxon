@@ -41,19 +41,24 @@ func.func @main() -> i64 {
     x86.rep_movsb
     x86.pop rdi
     x86.pop rsi
-    x86.lea r8, qword ptr [rbp-56]
-    x86.mov qword ptr [r8], rdx
-    x86.mov rdx, qword ptr [r8]
-    x86.mov rcx, rdx
+    x86.lea rax, qword ptr [rbp-56]
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rax
+    x86.mov rsi, rdx
+    x86.mov rcx, r8
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.mov rcx, rax
     x86.call Outer.getInnerValue
-    x86.mov rdx, rax
-    x86.mov rax, rdx
     x86.epilogue
     x86.ret
 }
 
-func.func @Inner.get(%self: !maxon.struct<Inner>) -> i64 {
-  ^entry(%self: !maxon.struct<Inner>):
+func.func @Inner.get(%self: memref<!maxon.struct<Inner>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Inner>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]
@@ -62,8 +67,8 @@ func.func @Inner.get(%self: !maxon.struct<Inner>) -> i64 {
     x86.ret
 }
 
-func.func @Outer.getInnerValue(%self: !maxon.struct<Outer>) -> i64 {
-  ^entry(%self: !maxon.struct<Outer>):
+func.func @Outer.getInnerValue(%self: memref<!maxon.struct<Outer>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Outer>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]

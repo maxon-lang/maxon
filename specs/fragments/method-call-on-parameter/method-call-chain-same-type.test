@@ -35,44 +35,67 @@ func.func @main() -> i64 {
     x86.lea rdx, qword ptr [rcx]
     x86.mov qword ptr [rdx], rax
     x86.lea rbx, qword ptr [rbp-48]
-    x86.mov qword ptr [rbx], rcx
+    x86.mov rdx, 8
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rbx
+    x86.mov rsi, rcx
+    x86.mov rcx, rdx
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
     x86.mov rcx, 3
-    x86.lea rdx, qword ptr [rbp-56]
-    x86.lea rax, qword ptr [rdx]
-    x86.mov qword ptr [rax], rcx
-    x86.lea rax, qword ptr [rbp-64]
-    x86.mov qword ptr [rax], rdx
-    x86.mov rdx, 2
+    x86.lea rax, qword ptr [rbp-56]
+    x86.lea r8, qword ptr [rax]
+    x86.mov qword ptr [r8], rcx
+    x86.lea r8, qword ptr [rbp-64]
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, r8
+    x86.mov rsi, rax
+    x86.mov rcx, rdx
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.mov rax, 2
     x86.lea rcx, qword ptr [rbp-72]
-    x86.lea r8, qword ptr [rcx]
-    x86.mov qword ptr [r8], rdx
+    x86.lea r9, qword ptr [rcx]
+    x86.mov qword ptr [r9], rax
     x86.lea r12, qword ptr [rbp-80]
-    x86.mov qword ptr [r12], rcx
-    x86.mov rcx, qword ptr [rbx]
-    x86.mov r8, qword ptr [rax]
-    x86.mov r10, rcx
-    x86.mov r11, r8
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, r12
+    x86.mov rsi, rcx
+    x86.mov rcx, rdx
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.mov rdx, qword ptr [r8]
+    x86.mov r10, rbx
+    x86.mov r11, rdx
     x86.mov rdx, r11
     x86.mov rcx, r10
     x86.call Value.add
     x86.mov r13, rax
-    x86.mov r8, qword ptr [rbx]
-    x86.mov rcx, qword ptr [r12]
-    x86.mov r10, r8
-    x86.mov r11, rcx
+    x86.mov rdx, qword ptr [r12]
+    x86.mov r10, rbx
+    x86.mov r11, rdx
     x86.mov rdx, r11
     x86.mov rcx, r10
     x86.call Value.multiply
-    x86.mov rcx, rax
+    x86.mov rdx, rax
     x86.mov r8, r13
-    x86.add r8, rcx
+    x86.add r8, rdx
     x86.mov rax, r8
     x86.epilogue saved_gprs=[RBX,R12,R13]
     x86.ret
 }
 
-func.func @Value.get(%self: !maxon.struct<Value>) -> i64 {
-  ^entry(%self: !maxon.struct<Value>):
+func.func @Value.get(%self: memref<!maxon.struct<Value>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Value>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]
@@ -81,8 +104,8 @@ func.func @Value.get(%self: !maxon.struct<Value>) -> i64 {
     x86.ret
 }
 
-func.func @Value.add(%self: !maxon.struct<Value>, %other: !maxon.struct<Value>) -> i64 {
-  ^entry(%self: !maxon.struct<Value>, %other: !maxon.struct<Value>):
+func.func @Value.add(%self: memref<!maxon.struct<Value>>, %other: memref<!maxon.struct<Value>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Value>>, %other: memref<!maxon.struct<Value>>):
     x86.prologue stack_size=40 saved_gprs=[RBX]
     x86.mov rax, rcx
     x86.mov rcx, rdx
@@ -98,8 +121,8 @@ func.func @Value.add(%self: !maxon.struct<Value>, %other: !maxon.struct<Value>) 
     x86.ret
 }
 
-func.func @Value.multiply(%self: !maxon.struct<Value>, %other: !maxon.struct<Value>) -> i64 {
-  ^entry(%self: !maxon.struct<Value>, %other: !maxon.struct<Value>):
+func.func @Value.multiply(%self: memref<!maxon.struct<Value>>, %other: memref<!maxon.struct<Value>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Value>>, %other: memref<!maxon.struct<Value>>):
     x86.prologue stack_size=40 saved_gprs=[RBX]
     x86.mov rax, rcx
     x86.mov rcx, rdx

@@ -186,8 +186,11 @@ public sealed class InliningPass : AbstractPassBase {
 		}
 
 		// Don't inline functions with struct parameters (complex ownership semantics)
+		// Methods receive self as MemRefType<MaxonStructType> (pointer to struct)
 		foreach (var paramType in func.ParamTypes) {
-			if (paramType is MaxonStructType or OwnedType { Inner: MaxonStructType }) {
+			if (paramType is MaxonStructType
+				or OwnedType { Inner: MaxonStructType }
+				or MemRefType { ElementType: MaxonStructType }) {
 				reason = "has struct parameter";
 				return false;
 			}
@@ -398,6 +401,19 @@ public sealed class InliningPass : AbstractPassBase {
 			GetTagOp getTag => CloneGetTagOp(getTag, valueMap),
 			GetPayloadOp getPayload => CloneGetPayloadOp(getPayload, valueMap),
 
+			// Managed memory operations
+			ManagedMemoryCreateOp memCreate => CloneManagedMemoryCreateOp(memCreate, valueMap),
+			ManagedMemoryLenOp memLen => CloneManagedMemoryLenOp(memLen, valueMap),
+			ManagedMemoryCapacityOp memCap => CloneManagedMemoryCapacityOp(memCap, valueMap),
+			ManagedMemoryGetUncheckedOp memGet => CloneManagedMemoryGetUncheckedOp(memGet, valueMap),
+			ManagedMemorySetAtOp memSet => CloneManagedMemorySetAtOp(memSet, valueMap),
+			ManagedMemoryGrowOp memGrow => CloneManagedMemoryGrowOp(memGrow, valueMap),
+			ManagedMemorySetLengthOp memSetLen => CloneManagedMemorySetLengthOp(memSetLen, valueMap),
+			ManagedMemoryGrowByRefOp memGrowRef => CloneManagedMemoryGrowByRefOp(memGrowRef, valueMap),
+			ManagedMemorySetLengthByRefOp memSetLenRef => CloneManagedMemorySetLengthByRefOp(memSetLenRef, valueMap),
+			ManagedMemoryShiftRightOp memShiftR => CloneManagedMemoryShiftRightOp(memShiftR, valueMap),
+			ManagedMemoryShiftLeftOp memShiftL => CloneManagedMemoryShiftLeftOp(memShiftL, valueMap),
+
 			// Call operations (nested calls)
 			FuncCallOp funcCall => CloneFuncCallOp(funcCall, valueMap),
 			MaxonCallOp maxonCall => CloneMaxonCallOp(maxonCall, valueMap),
@@ -569,6 +585,77 @@ public sealed class InliningPass : AbstractPassBase {
 	private static MaxonCallOp CloneMaxonCallOp(MaxonCallOp original, Dictionary<MlirValue, MlirValue> valueMap) {
 		var args = original.Operands.Select(v => RemapValue(v, valueMap)).ToList();
 		return new MaxonCallOp(original.Callee, args, [.. original.ArgOwnership], original.Result?.Type);
+	}
+
+	// ============================================================================
+	// Managed memory operation cloning
+	// ============================================================================
+
+	private static ManagedMemoryCreateOp CloneManagedMemoryCreateOp(ManagedMemoryCreateOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var count = RemapValue(original.Count, valueMap);
+		var elemSize = RemapValue(original.ElemSize, valueMap);
+		return new ManagedMemoryCreateOp(count, elemSize, original.ManagedMemoryType);
+	}
+
+	private static ManagedMemoryLenOp CloneManagedMemoryLenOp(ManagedMemoryLenOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memory = RemapValue(original.Memory, valueMap);
+		return new ManagedMemoryLenOp(memory);
+	}
+
+	private static ManagedMemoryCapacityOp CloneManagedMemoryCapacityOp(ManagedMemoryCapacityOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memory = RemapValue(original.Memory, valueMap);
+		return new ManagedMemoryCapacityOp(memory);
+	}
+
+	private static ManagedMemoryGetUncheckedOp CloneManagedMemoryGetUncheckedOp(ManagedMemoryGetUncheckedOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memory = RemapValue(original.Memory, valueMap);
+		var index = RemapValue(original.Index, valueMap);
+		return new ManagedMemoryGetUncheckedOp(memory, index, original.ElementType);
+	}
+
+	private static ManagedMemorySetAtOp CloneManagedMemorySetAtOp(ManagedMemorySetAtOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memory = RemapValue(original.Memory, valueMap);
+		var index = RemapValue(original.Index, valueMap);
+		var value = RemapValue(original.Value, valueMap);
+		return new ManagedMemorySetAtOp(memory, index, value);
+	}
+
+	private static ManagedMemoryGrowOp CloneManagedMemoryGrowOp(ManagedMemoryGrowOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memory = RemapValue(original.Memory, valueMap);
+		var newCapacity = RemapValue(original.NewCapacity, valueMap);
+		return new ManagedMemoryGrowOp(memory, newCapacity, original.ElementType);
+	}
+
+	private static ManagedMemorySetLengthOp CloneManagedMemorySetLengthOp(ManagedMemorySetLengthOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memory = RemapValue(original.Memory, valueMap);
+		var newLength = RemapValue(original.NewLength, valueMap);
+		return new ManagedMemorySetLengthOp(memory, newLength);
+	}
+
+	private static ManagedMemoryGrowByRefOp CloneManagedMemoryGrowByRefOp(ManagedMemoryGrowByRefOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memoryPtr = RemapValue(original.MemoryPtr, valueMap);
+		var newCapacity = RemapValue(original.NewCapacity, valueMap);
+		return new ManagedMemoryGrowByRefOp(memoryPtr, newCapacity, original.ElementType);
+	}
+
+	private static ManagedMemorySetLengthByRefOp CloneManagedMemorySetLengthByRefOp(ManagedMemorySetLengthByRefOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memoryPtr = RemapValue(original.MemoryPtr, valueMap);
+		var newLength = RemapValue(original.NewLength, valueMap);
+		return new ManagedMemorySetLengthByRefOp(memoryPtr, newLength);
+	}
+
+	private static ManagedMemoryShiftRightOp CloneManagedMemoryShiftRightOp(ManagedMemoryShiftRightOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memory = RemapValue(original.Memory, valueMap);
+		var startIndex = RemapValue(original.StartIndex, valueMap);
+		var count = RemapValue(original.Count, valueMap);
+		return new ManagedMemoryShiftRightOp(memory, startIndex, count, original.ElementType);
+	}
+
+	private static ManagedMemoryShiftLeftOp CloneManagedMemoryShiftLeftOp(ManagedMemoryShiftLeftOp original, Dictionary<MlirValue, MlirValue> valueMap) {
+		var memory = RemapValue(original.Memory, valueMap);
+		var startIndex = RemapValue(original.StartIndex, valueMap);
+		var count = RemapValue(original.Count, valueMap);
+		return new ManagedMemoryShiftLeftOp(memory, startIndex, count, original.ElementType);
 	}
 
 	/// <summary>

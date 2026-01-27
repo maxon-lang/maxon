@@ -58,40 +58,57 @@ func.func @main() -> i64 {
     x86.rep_movsb
     x86.pop rdi
     x86.pop rsi
-    x86.lea rcx, qword ptr [rbp-144]
-    x86.mov qword ptr [rcx], rax
-    x86.mov rax, [rcx]
-    x86.lea r12, qword ptr [rbp-160]
-    x86.mov r10, r12
-    x86.mov r11, rax
+    x86.lea r12, qword ptr [rbp-144]
+    x86.mov rcx, 40
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, r12
+    x86.mov rsi, rax
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.lea r13, qword ptr [rbp-160]
+    x86.mov r10, r13
+    x86.mov r11, r12
     x86.push r14
     x86.pop r8
     x86.mov rdx, r11
     x86.mov rcx, r10
     x86.call Array$int.get
-    x86.lea rax, qword ptr [r12]
-    x86.movzx rcx, byte ptr [rax]
-    x86.mov rax, rcx
-    x86.cmp rax, r14
-    x86.setne rax
-    x86.test rax, rax
+    x86.lea rcx, qword ptr [r13]
+    x86.movzx rax, byte ptr [rcx]
+    x86.mov rcx, rax
+    x86.cmp rcx, r14
+    x86.setne rcx
+    x86.test rcx, rcx
     x86.jne try.error
     x86.jmp try.success
   ^try.success:
-    x86.lea rax, qword ptr [r12+8]
-    x86.mov rcx, qword ptr [rax]
-    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [r13+8]
+    x86.mov rax, qword ptr [rcx]
+    x86.mov r13, rax
     x86.jmp try.merge
   ^try.error:
-    x86.mov rax, 0
+    x86.mov r13, 0
     x86.jmp try.merge
-  ^try.merge(%95: i64):
+  ^try.merge(%98: i64):
+    x86.lea rax, qword ptr [r12+8]
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.mov r11, rax
+    x86.call extern kernel32.dll::GetProcessHeap
+    x86.mov rcx, rax
+    x86.mov rdx, 0
+    x86.mov r8, r11
+    x86.call extern kernel32.dll::HeapFree
+    x86.mov rax, r13
     x86.epilogue saved_gprs=[RBX,R12,R13,R14]
     x86.ret
 }
 
-func.func @Array$int.get(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayError>>, %self: !maxon.struct<Array$int>, %index: i64) {
-  ^entry(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayError>>, %self: !maxon.struct<Array$int>, %index: i64):
+func.func @Array$int.get(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayError>>, %self: memref<!maxon.struct<Array$int>>, %index: i64) {
+  ^entry(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayError>>, %self: memref<!maxon.struct<Array$int>>, %index: i64):
     x86.prologue stack_size=32
     x86.mov r10, rcx
     x86.mov r11, rdx

@@ -115,19 +115,18 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 	end 'ensureCapacity'
 
 	/// Append element to end
-	export function push(value Element) returns Self
+	export function push(value Element)
 		var len = __managed_memory_len(managed)
 		ensureCapacity(len + 1)
 		__managed_memory_set_at(managed, len, value)
 		__managed_memory_set_length(managed, len + 1)
-		return self
 	end 'push'
 
 	/// Append all elements from another array
-	export function append(other Self) returns Self
+	export function append(other Self)
 		var otherLen = other.count()
 		if otherLen == 0 'empty'
-			return self
+			return
 		end 'empty'
 		var len = __managed_memory_len(managed)
 		ensureCapacity(len + otherLen)
@@ -136,7 +135,6 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 			len = len + 1
 		end 'copy'
 		__managed_memory_set_length(managed, len)
-		return self
 	end 'append'
 
 	/// Remove and return last element, throws if empty
@@ -152,7 +150,7 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 	end 'pop'
 
 	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
-	export function insert(at int, value Element) returns Self
+	export function insert(at int, value Element)
 		var len = __managed_memory_len(managed)
 		var index = at
 
@@ -175,7 +173,6 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 		// Insert element and update length
 		__managed_memory_set_at(managed, index, value)
 		__managed_memory_set_length(managed, len + 1)
-		return self
 	end 'insert'
 
 	/// Remove and return element at index, shifting elements to the left (throws if out of bounds)
@@ -203,9 +200,8 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 	end 'remove'
 
 	/// Remove all elements from the array (keeps capacity)
-	export function clear() returns Self
+	export function clear()
 		__managed_memory_set_length(managed, 0)
-		return self
 	end 'clear'
 
 	// =========================================================================
@@ -213,20 +209,18 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 	// =========================================================================
 
 	/// Reserve space by ensuring array has at least minCapacity slots
-	export function reserve(minCapacity int) returns Self
+	export function reserve(minCapacity int)
 		var cap = __managed_memory_capacity(managed)
 		if minCapacity > cap 'grow'
 			__managed_memory_grow(managed, minCapacity)
 		end 'grow'
-		return self
 	end 'reserve'
 
 	/// Resize array to newLength elements, allocating if needed
 	/// New elements are zero-initialized
-	export function resize(newLength int) returns Self
+	export function resize(newLength int)
 		reserve(newLength)
 		__managed_memory_set_length(managed, newLength)
-		return self
 	end 'resize'
 
 	// =========================================================================

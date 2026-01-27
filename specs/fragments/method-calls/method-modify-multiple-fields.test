@@ -31,18 +31,25 @@ func.func @main() -> i64 {
     x86.lea rdx, qword ptr [rcx+8]
     x86.mov qword ptr [rdx], rax
     x86.lea rbx, qword ptr [rbp-64]
-    x86.mov qword ptr [rbx], rcx
-    x86.mov rcx, [rbx]
+    x86.mov rdx, 16
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rbx
+    x86.mov rsi, rcx
+    x86.mov rcx, rdx
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
     x86.mov rdx, 12
-    x86.mov r10, rcx
+    x86.mov r10, rbx
     x86.mov r11, rax
     x86.push rdx
     x86.pop r8
     x86.mov rdx, r11
     x86.mov rcx, r10
     x86.call Point.moveBy
-    x86.mov rdx, [rbx]
-    x86.mov rcx, rdx
+    x86.mov rcx, rbx
     x86.call Point.sum
     x86.mov rdx, rax
     x86.mov rax, rdx
@@ -50,8 +57,8 @@ func.func @main() -> i64 {
     x86.ret
 }
 
-func.func @Point.moveBy(%self: !maxon.struct<Point>, %dx: i64, %dy: i64) {
-  ^entry(%self: !maxon.struct<Point>, %dx: i64, %dy: i64):
+func.func @Point.moveBy(%self: memref<!maxon.struct<Point>>, %dx: i64, %dy: i64) {
+  ^entry(%self: memref<!maxon.struct<Point>>, %dx: i64, %dy: i64):
     x86.prologue stack_size=32
     x86.mov r10, rcx
     x86.mov r11, rdx
@@ -72,8 +79,8 @@ func.func @Point.moveBy(%self: !maxon.struct<Point>, %dx: i64, %dy: i64) {
     x86.ret
 }
 
-func.func @Point.sum(%self: !maxon.struct<Point>) -> i64 {
-  ^entry(%self: !maxon.struct<Point>):
+func.func @Point.sum(%self: memref<!maxon.struct<Point>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Point>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]

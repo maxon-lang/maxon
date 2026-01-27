@@ -488,9 +488,19 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 			return true;
 		}
 
-		// For mov, only the source is read (index 1)
+		// For mov, the source is always read. Additionally, if the destination is
+		// a MemOperand, its base and index registers are also read to compute the address.
 		if (op is MovOp mov) {
-			return OperandReadsRegister(mov.Src, reg);
+			if (OperandReadsRegister(mov.Src, reg))
+				return true;
+			// Check if destination MemOperand reads the register for address calculation
+			if (mov.Dst is MemOperand memDst) {
+				if (memDst.Base is RegOperand baseReg && baseReg.Register == reg)
+					return true;
+				if (memDst.Index is RegOperand indexReg && indexReg.Register == reg)
+					return true;
+			}
+			return false;
 		}
 
 		// Push reads its source operand (index 0)

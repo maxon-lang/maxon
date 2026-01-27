@@ -16,8 +16,8 @@ end 'main'
 ---
 ExitCode: 10
 ---
-func.func @dot(%a: !maxon.struct<Vec2>, %b: !maxon.struct<Vec2>) -> i64 {
-  ^entry(%a: !maxon.struct<Vec2>, %b: !maxon.struct<Vec2>):
+func.func @dot(%a: memref<!maxon.struct<Vec2>>, %b: memref<!maxon.struct<Vec2>>) -> i64 {
+  ^entry(%a: memref<!maxon.struct<Vec2>>, %b: memref<!maxon.struct<Vec2>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.mov rcx, rdx
@@ -49,18 +49,35 @@ func.func @main() -> i64 {
     x86.lea r8, qword ptr [rdx+8]
     x86.mov qword ptr [r8], rcx
     x86.lea r8, qword ptr [rbp-64]
-    x86.mov qword ptr [r8], rdx
-    x86.mov rdx, 2
-    x86.mov rcx, 1
-    x86.lea rax, qword ptr [rbp-80]
-    x86.lea r9, qword ptr [rax]
-    x86.mov qword ptr [r9], rdx
-    x86.lea r9, qword ptr [rax+8]
-    x86.mov qword ptr [r9], rcx
-    x86.lea r9, qword ptr [rbp-96]
-    x86.mov qword ptr [r9], rax
+    x86.mov rax, 16
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, r8
+    x86.mov rsi, rdx
+    x86.mov rcx, rax
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.mov rcx, 2
+    x86.mov rdx, 1
+    x86.lea r9, qword ptr [rbp-80]
+    x86.lea r10, qword ptr [r9]
+    x86.mov qword ptr [r10], rcx
+    x86.lea r10, qword ptr [r9+8]
+    x86.mov qword ptr [r10], rdx
+    x86.lea r10, qword ptr [rbp-96]
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, r10
+    x86.mov rsi, r9
+    x86.mov rcx, rax
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
     x86.mov rax, [r8]
-    x86.mov r8, [r9]
+    x86.mov r8, [r10]
     x86.mov r10, rax
     x86.mov r11, r8
     x86.mov rdx, r11

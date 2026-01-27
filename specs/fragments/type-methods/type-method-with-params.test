@@ -28,32 +28,38 @@ func.func @main() -> i64 {
     x86.lea rdx, qword ptr [rcx]
     x86.mov qword ptr [rdx], rax
     x86.lea rbx, qword ptr [rbp-48]
-    x86.mov qword ptr [rbx], rcx
-    x86.mov rcx, qword ptr [rbx]
+    x86.mov rdx, 8
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rbx
+    x86.mov rsi, rcx
+    x86.mov rcx, rdx
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
     x86.mov rdx, 10
-    x86.mov r10, rcx
+    x86.mov r10, rbx
     x86.mov r11, rdx
     x86.mov rdx, r11
     x86.mov rcx, r10
     x86.call Adder.add
-    x86.mov rdx, qword ptr [rbx]
-    x86.mov rcx, 32
-    x86.mov r10, rdx
-    x86.mov r11, rcx
+    x86.mov rdx, 32
+    x86.mov r10, rbx
+    x86.mov r11, rdx
     x86.mov rdx, r11
     x86.mov rcx, r10
     x86.call Adder.add
-    x86.mov rcx, qword ptr [rbx]
-    x86.mov rcx, rcx
+    x86.mov rcx, rbx
     x86.call Adder.getTotal
-    x86.mov rcx, rax
-    x86.mov rax, rcx
+    x86.mov rdx, rax
+    x86.mov rax, rdx
     x86.epilogue saved_gprs=[RBX]
     x86.ret
 }
 
-func.func @Adder.add(%self: !maxon.struct<Adder>, %value: i64) {
-  ^entry(%self: !maxon.struct<Adder>, %value: i64):
+func.func @Adder.add(%self: memref<!maxon.struct<Adder>>, %value: i64) {
+  ^entry(%self: memref<!maxon.struct<Adder>>, %value: i64):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.mov rcx, rdx
@@ -66,8 +72,8 @@ func.func @Adder.add(%self: !maxon.struct<Adder>, %value: i64) {
     x86.ret
 }
 
-func.func @Adder.getTotal(%self: !maxon.struct<Adder>) -> i64 {
-  ^entry(%self: !maxon.struct<Adder>):
+func.func @Adder.getTotal(%self: memref<!maxon.struct<Adder>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Adder>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]

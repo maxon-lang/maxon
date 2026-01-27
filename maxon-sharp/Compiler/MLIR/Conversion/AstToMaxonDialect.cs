@@ -24,6 +24,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private readonly Dictionary<string, MlirType> _functionReturnTypes = [];
 	private readonly Dictionary<string, List<ParamDecl>> _functionParams = [];
 	private readonly Stack<(MlirBlock continueBlock, MlirBlock exitBlock, string? label)> _loopContextStack = new();
+	private readonly Stack<List<(string name, MlirValue address, MlirType type)>> _cleanupScopeStack = new(); // Variables needing cleanup per scope
 	private MlirValue? _structReturnPtr; // Hidden sret parameter for struct returns
 	private MaxonStructType? _currentMethodStructType; // The struct type when inside a method body
 	private MaxonErrorUnionType? _currentFunctionErrorUnionType; // Error union type if current function throws
@@ -253,20 +254,37 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	private void LowerFunction(FunctionDecl func) {
-		var parameters = func.Params.Select(p => (p.Name, GetTypeString(p.Type))).ToList();
+		var parameters = new List<FunctionParameter>();
+		foreach (var p in func.Params) {
+			var mlirType = ConvertTypeRef(p.Type);
+			if (mlirType is MaxonStructType pst) {
+				parameters.Add(new FunctionParameter.StructRef(p.Name, pst));
+			} else {
+				parameters.Add(new FunctionParameter.Scalar(p.Name, mlirType));
+			}
+		}
 		LowerFunctionBody(func.Name, parameters, func.ReturnType, func.ThrowsType, func.Body);
 	}
 
 	private void LowerMethod(string typeName, MethodDecl method) {
-		var parameters = new List<(string name, string type)>();
+		var parameters = new List<FunctionParameter>();
 		if (!method.IsStatic) {
-			parameters.Add(("self", typeName));
-			// Set the current method struct type for field resolution
+			// Get the struct type for self - this is type-safe now
 			if (_structTypes.TryGetValue(typeName, out var structType) && structType is MaxonStructType mst) {
+				parameters.Add(new FunctionParameter.SelfRef("self", mst));
 				_currentMethodStructType = mst;
+			} else {
+				throw new CompileError(ErrorCode.MlirUndefinedType, $"Unknown struct type for method receiver: {typeName}");
 			}
 		}
-		parameters.AddRange(method.Params.Select(p => (p.Name, GetTypeString(p.Type))));
+		foreach (var p in method.Params) {
+			var mlirType = ConvertTypeRef(p.Type);
+			if (mlirType is MaxonStructType pst) {
+				parameters.Add(new FunctionParameter.StructRef(p.Name, pst));
+			} else {
+				parameters.Add(new FunctionParameter.Scalar(p.Name, mlirType));
+			}
+		}
 
 		try {
 			LowerFunctionBody($"{typeName}.{method.Name}", parameters, method.ReturnType, method.ThrowsType, method.Body);
@@ -275,9 +293,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 	}
 
-	private void LowerFunctionBody(string name, List<(string name, string type)> parameters, TypeRef? returnType, string? throwsType, List<Stmt> body) {
-		var returnTypeStr = GetTypeString(returnType);
-
+	private void LowerFunctionBody(string name, List<FunctionParameter> parameters, TypeRef? returnType, string? throwsType, List<Stmt> body) {
 		// Check if return type is a struct (needs sret parameter)
 		MlirType? returnMlirType = null;
 		if (returnType != null) {
@@ -306,17 +322,16 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 			// The actual return type of the function is now the error union
 			returnMlirType = _currentFunctionErrorUnionType;
-			returnTypeStr = "error_union"; // Signal that we're returning an error union
 		}
 
 		// For struct returns, use sret calling convention (hidden pointer parameter)
 		if (returnMlirType is MaxonStructType structType) {
-			BeginFunction(name, parameters, "void", sretType: structType);
+			BeginFunction(name, parameters, null, sretType: structType);
 		} else if (_currentFunctionErrorUnionType != null) {
 			// Error union returns are handled via sret since they can be large
-			BeginFunction(name, parameters, "void", sretType: null, errorUnionType: _currentFunctionErrorUnionType);
+			BeginFunction(name, parameters, null, sretType: null, errorUnionType: _currentFunctionErrorUnionType);
 		} else {
-			BeginFunction(name, parameters, returnTypeStr);
+			BeginFunction(name, parameters, returnMlirType);
 		}
 
 		foreach (var stmt in body) {
@@ -324,8 +339,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 
 		// For void functions (or struct returns using sret), add implicit return if needed
-		bool isEffectivelyVoid = returnTypeStr == "void" || returnMlirType is MaxonStructType;
+		bool isEffectivelyVoid = returnMlirType == null || returnMlirType is MaxonStructType;
 		if (_currentBlock is not null && !_currentBlock.IsTerminated && isEffectivelyVoid) {
+			EmitCleanupForAllScopes();
 			EmitReturn();
 		}
 
@@ -381,6 +397,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 							InsertOp(valueStore);
 						}
 					}
+					EmitCleanupForAllScopes();
 					EmitReturn();
 					break;
 				}
@@ -410,17 +427,21 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 							var storeOp = new StoreOp(fieldValue, fieldPtr.Result);
 							InsertOp(storeOp);
 						}
+						EmitCleanupForAllScopes();
 						EmitReturn();
 					} else if (_structReturnPtr != null) {
 						// sret return with existing struct variable - copy it
 						var value = LowerExpression(ret.Value, expectedType);
 						EmitStructCopy(_structReturnPtr, value);
+						EmitCleanupForAllScopes();
 						EmitReturn();
 					} else {
 						var value = LowerExpression(ret.Value, expectedType);
+						EmitCleanupForAllScopes();
 						EmitReturn(value);
 					}
 				} else {
+					EmitCleanupForAllScopes();
 					EmitReturn();
 				}
 				break;
@@ -511,8 +532,20 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 	private void LowerVariableDecl(string name, Expr value, bool isImmutable) {
 		var mlirValue = LowerExpression(value);
+		Logger.Debug(LogCategory.Mlir, $"LowerVariableDecl: {name} = {value.GetType().Name}, mlirValue.Type = {mlirValue.Type}");
 		var slot = DeclareVariable(name, mlirValue.Type);
-		EmitStore(mlirValue, slot);
+
+		// For structs, the expression returns a pointer to a temporary.
+		// We need to copy the struct contents, not store the pointer.
+		if (mlirValue.Type is MaxonStructType structType) {
+			var sizeOp = ConstantOp.Int(structType.SizeInBytes, IntegerType.I64);
+			InsertOp(sizeOp);
+			var memcpy = new MemCpyOp(slot, mlirValue, sizeOp.Result);
+			InsertOp(memcpy);
+		} else {
+			EmitStore(mlirValue, slot);
+		}
+
 		if (isImmutable) {
 			_immutableVariables.Add(name);
 		}
@@ -1100,15 +1133,17 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// <summary>
 	/// Lowers a method call expression (e.g., obj.method(args)).
 	/// The base expression is evaluated and passed as the first argument (self).
+	/// For struct types, we pass a pointer to enable mutation of the receiver.
 	/// </summary>
 	private MlirValue? LowerMethodCallExpr(MethodCallExpr methodCall) {
-		// Evaluate the base expression to get the receiver
-		var baseValue = LowerExpression(methodCall.Base);
+		// For struct types, we need to pass a pointer so mutations to self persist.
+		// Get the address of the base expression if it's a variable.
+		var (baseValue, structType) = GetMethodReceiverAsPointer(methodCall.Base);
 
 		Logger.Trace(LogCategory.Mlir, $"LowerMethodCallExpr: base type = {baseValue.Type}, methodName = {methodCall.MethodName}");
 
 		// Get the struct type from the base value to determine the method name
-		if (baseValue.Type is not MaxonStructType structType) {
+		if (structType == null) {
 			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
 				$"Cannot call method '{methodCall.MethodName}' on non-struct type: {baseValue.Type}",
 				methodCall.Location?.Line, methodCall.Location?.Column);
@@ -1165,29 +1200,32 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// </summary>
 	private MlirValue? LowerStaticCallExpr(StaticCallExpr staticCall) {
 		// Check if TypeName is actually a variable (instance method call)
-		// If so, treat it as a method call on that variable
+		// If so, treat it as a method call on that variable, passing pointer to enable mutation
 		MlirValue? baseValue = null;
 		MaxonStructType? structType = null;
 		if (_namedValues.ContainsKey(staticCall.TypeName)) {
 			// This is actually an instance method call: variable.method(args)
-			baseValue = GetVariable(staticCall.TypeName);
-			if (baseValue.Type is MaxonStructType st) {
-				structType = st;
-			}
+			// Use GetMethodReceiverAsPointer to get address for struct types
+			var identExpr = new IdentifierExpr(staticCall.TypeName);
+			(baseValue, structType) = GetMethodReceiverAsPointer(identExpr);
 		} else if (_currentMethodStructType != null) {
 			// Check if TypeName is a field of the current method's struct (e.g., inner.get() inside a method)
 			var fieldInfo = _currentMethodStructType.GetField(staticCall.TypeName);
 			if (fieldInfo != null && _namedValues.TryGetValue("self", out var selfBinding)) {
-				// Get self value from binding
+				// Get self value from binding (self is already a pointer)
 				var selfValue = selfBinding switch {
 					VariableBinding.Direct d => d.Value,
 					VariableBinding.StackSlot s => s.Address,
 					_ => throw new InvalidOperationException("Unknown VariableBinding variant for self")
 				};
-				// Access the field from self
-				baseValue = EmitGetField(selfValue, staticCall.TypeName, fieldInfo.Type);
-				if (baseValue.Type is MaxonStructType st) {
-					structType = st;
+				// Get pointer to the field for struct fields
+				if (fieldInfo.Type is MaxonStructType fieldStructType) {
+					baseValue = EmitFieldPtr(selfValue, staticCall.TypeName, fieldInfo.Offset, fieldInfo.Type);
+					structType = fieldStructType;
+				} else {
+					// For non-struct fields, load the value
+					baseValue = EmitGetField(selfValue, staticCall.TypeName, fieldInfo.Type);
+					structType = baseValue.Type as MaxonStructType;
 				}
 				Logger.Trace(LogCategory.Mlir, $"LowerStaticCallExpr: resolved field '{staticCall.TypeName}' of self to instance method call");
 			}
@@ -1529,6 +1567,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			return LowerExpression(arg);
 		}
 
+		Logger.Debug(LogCategory.Mlir, $"TryLowerManagedMemoryIntrinsic: checking '{call.FuncName}'");
+
 		return call.FuncName switch {
 			"__managed_memory_create" => LowerManagedMemoryCreate(call, managedMemoryType),
 			// All managed memory operations use ByRef pattern - the struct is too large to pass by value
@@ -1686,11 +1726,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		if (call.Args.Count != 3)
 			throw new ArgumentException("__managed_memory_set_at requires 3 arguments (managed, index, value)");
 		var memPtr = getManagedPointer(call.Args[0]);
+		Logger.Debug(LogCategory.Mlir, $"LowerManagedMemorySetAtByRef: memPtr type={memPtr.Type}, func={_currentFunction?.Name}");
 		var index = LowerExpression(call.Args[1]);
 		var value = LowerExpression(call.Args[2]);
 		// Pass pointer directly - lowering pattern uses FieldPtrOp which expects a pointer
 		var op = new ManagedMemorySetAtOp(memPtr, index, value);
 		InsertOp(op);
+		Logger.Debug(LogCategory.Mlir, $"LowerManagedMemorySetAtByRef: inserted op in block {_currentBlock?.Name}");
 		return VoidIntrinsicHandled;
 	}
 
@@ -1717,15 +1759,18 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		if (call.Args.Count != 2)
 			throw new ArgumentException("__managed_memory_set_length requires 2 arguments (managed, newLen)");
 		var memPtr = getManagedPointer(call.Args[0]);
+		Logger.Debug(LogCategory.Mlir, $"LowerManagedMemorySetLengthByRef: memPtr type={memPtr.Type}, func={_currentFunction?.Name}");
 		var newLength = LowerExpression(call.Args[1]);
 
 		// For set_length, we need to modify the actual struct
 		if (memPtr.Type is PtrType) {
 			var op = new ManagedMemorySetLengthByRefOp(memPtr, newLength);
 			InsertOp(op);
+			Logger.Debug(LogCategory.Mlir, $"LowerManagedMemorySetLengthByRef: inserted ByRef op in block {_currentBlock?.Name}");
 		} else {
 			var op = new ManagedMemorySetLengthOp(memPtr, newLength);
 			InsertOp(op);
+			Logger.Debug(LogCategory.Mlir, $"LowerManagedMemorySetLengthByRef: inserted non-ByRef op in block {_currentBlock?.Name}");
 		}
 		return VoidIntrinsicHandled;
 	}
@@ -1813,6 +1858,30 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			}
 		}
 
+		// Special handling for types with __ManagedMemory field (like Array)
+		// If no explicit field values were provided (empty init like IntArray{}),
+		// we need to create an empty managed memory and initialize all fields.
+		if (structInit.Fields.Count == 0) {
+			var managedField = structType.GetField("managed");
+			if (managedField != null && managedField.Type is MaxonStructType managedType
+				&& managedType.Name == "__ManagedMemory") {
+				// Get the element type from the monomorphized type name (e.g., Array$int -> int)
+				var elemType = GetElementTypeFromArrayType(structType);
+				var elemSize = elemType?.SizeInBytes ?? 8;
+
+				// Create empty managed memory (capacity = 0, length = 0)
+				var zeroConst = EmitConstantInt(0);
+				var elemSizeConst = EmitConstantInt(elemSize);
+				var createOp = new ManagedMemoryCreateOp(zeroConst, elemSizeConst, managedType);
+				InsertOp(createOp);
+
+				fieldValues["managed"] = createOp.Result;
+				fieldValues["iterIndex"] = zeroConst;
+
+				Logger.Debug(LogCategory.Mlir, $"Empty array init: created managed memory for {structType.Name}, elemSize={elemSize}");
+			}
+		}
+
 		return EmitStructInit(structType, fieldValues);
 	}
 
@@ -1881,6 +1950,26 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Infers type arguments for a generic type from field initializer expressions
 	/// and creates the monomorphized type.
 	/// </summary>
+	/// <summary>
+	/// Gets the element type from a monomorphized Array type (e.g., Array$int -> IntegerType.I64).
+	/// </summary>
+	private MlirType? GetElementTypeFromArrayType(MaxonStructType structType) {
+		// Check if this is an Array type by name pattern: Array$ElementType
+		if (!structType.Name.StartsWith("Array$")) {
+			return null;
+		}
+
+		var elemTypeName = structType.Name.Substring("Array$".Length);
+		return elemTypeName switch {
+			"int" => IntegerType.I64,
+			"int32" => IntegerType.I32,
+			"bool" => IntegerType.I1,
+			"float" => FloatType.F64,
+			"float32" => FloatType.F32,
+			_ => _structTypes.TryGetValue(elemTypeName, out var st) ? st : null
+		};
+	}
+
 	private MaxonStructType InferAndCreateMonomorphizedType(TypeDecl genericType, StructInitExpr structInit) {
 		// Build a map from field name to its type parameter (if it uses one)
 		var fieldToParam = new Dictionary<string, string>();
@@ -1951,7 +2040,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 		var baseValue = LowerExpression(baseExpr);
 
-		if (baseValue.Type is not MaxonStructType structType) {
+		// Handle both direct struct types and MemRefType<struct> (for struct parameters passed by ref)
+		MaxonStructType? structType = baseValue.Type switch {
+			MaxonStructType st => st,
+			MemRefType mrt when mrt.ElementType is MaxonStructType st => st,
+			_ => null
+		};
+
+		if (structType == null) {
 			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
 				$"Cannot access field '{fieldName}' on non-struct type: {baseValue.Type}",
 				line, column);
@@ -2114,8 +2210,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 	/// <summary>
 	/// Starts conversion of a function.
+	/// Uses FunctionParameter discriminated union for type-safe parameter handling.
 	/// </summary>
-	public MlirFunction BeginFunction(string name, List<(string name, string type)> parameters, string returnType, MlirType? sretType = null, MaxonErrorUnionType? errorUnionType = null) {
+	public MlirFunction BeginFunction(string name, List<FunctionParameter> parameters, MlirType? returnType, MlirType? sretType = null, MaxonErrorUnionType? errorUnionType = null) {
 		var func = new MlirFunction(name);
 
 		// If we have a struct return type, add hidden sret parameter first
@@ -2130,17 +2227,20 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			func.AddParam("__error_union_ret", errorUnionPtrType);
 		}
 
-		foreach (var (pname, ptype) in parameters) {
-			func.AddParam(pname, ConvertType(ptype));
+		// Add parameters with correct types from the discriminated union
+		foreach (var param in parameters) {
+			func.AddParam(param.Name, param.Type);
 		}
 
-		if (returnType != "void" && errorUnionType == null) {
-			func.ResultTypes.Add(ConvertType(returnType));
+		if (returnType != null && errorUnionType == null) {
+			func.ResultTypes.Add(returnType);
 		}
 
 		_currentFunction = func;
 		_namedValues.Clear();
 		_immutableVariables.Clear();
+		_cleanupScopeStack.Clear(); // Clear any leftover scopes
+		PushCleanupScope(); // Push function-level cleanup scope
 
 		// Create entry block with parameters
 		var entry = func.CreateEntryBlock();
@@ -2165,31 +2265,20 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			_errorUnionReturnPtr = null;
 		}
 
-		// Create allocas for scalar parameters to enable proper SSA promotion via mem2reg.
-		// This is necessary because parameters may be reassigned inside the function body,
-		// and without allocas, those reassignments can't be tracked through loops.
-		// Struct parameters (like 'self') are already passed by reference, so they don't need allocas.
-		for (int i = 0; i < parameters.Count; i++) {
+		// Map parameters to bindings based on discriminated union variant.
+		// The FunctionParameter type encodes whether the param needs an alloca or is direct.
+		foreach (var param in parameters) {
 			var paramValue = paramValues[paramIndex++];
-			var paramType = paramValue.Type;
-			var paramName = parameters[i].name;
 
-			// Struct parameters are passed by reference - use them directly without allocas.
-			// Struct parameters are passed by reference - use them directly without allocas.
-			// Creating an alloca for a struct param would create a pointer-to-pointer situation.
-			if (paramType is MaxonStructType) {
-				_namedValues[paramName] = new VariableBinding.Direct(paramValue);
-				continue;
+			if (param.NeedsAlloca) {
+				// Scalar: create alloca for SSA promotion (enables reassignment in loops)
+				var alloca = EmitAlloca(param.Type, param.Name);
+				EmitStore(paramValue, alloca);
+				_namedValues[param.Name] = new VariableBinding.StackSlot(alloca);
+			} else {
+				// SelfRef/StructRef: use directly (the value IS the pointer to the struct)
+				_namedValues[param.Name] = new VariableBinding.Direct(paramValue);
 			}
-
-			// For scalar types (primitives), create an alloca to enable SSA promotion.
-			var alloca = EmitAlloca(paramType, paramName);
-
-			// Store the incoming parameter value into the alloca
-			EmitStore(paramValue, alloca);
-
-			// Map the parameter name to the alloca (not the raw parameter value)
-			_namedValues[paramName] = new VariableBinding.StackSlot(alloca);
 		}
 
 		_module.Functions.Add(func);
@@ -2200,6 +2289,10 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Ends the current function.
 	/// </summary>
 	public void EndFunction() {
+		// Pop any remaining cleanup scopes (should be just the function-level one)
+		while (_cleanupScopeStack.Count > 0) {
+			_cleanupScopeStack.Pop(); // Don't emit cleanup here - it's done at return
+		}
 		_currentFunction = null;
 		_currentBlock = null;
 	}
@@ -2423,6 +2516,120 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	// ========================================================================
+	// Cleanup / Scope Management
+	// ========================================================================
+
+	/// <summary>
+	/// Pushes a new cleanup scope onto the stack.
+	/// </summary>
+	private void PushCleanupScope() {
+		_cleanupScopeStack.Push([]);
+	}
+
+	/// <summary>
+	/// Pops the current cleanup scope and emits cleanup for all tracked variables.
+	/// </summary>
+	private void PopCleanupScope() {
+		if (_cleanupScopeStack.Count == 0) return;
+		var scope = _cleanupScopeStack.Pop();
+		EmitCleanupForVariables(scope);
+	}
+
+	/// <summary>
+	/// Emits cleanup for all variables in all scopes (for returns).
+	/// </summary>
+	private void EmitCleanupForAllScopes() {
+		Logger.Trace(LogCategory.Mlir, $"cleanup: emitting for all scopes ({_cleanupScopeStack.Count} scopes)");
+		// Emit cleanup for all scopes, innermost first
+		foreach (var scope in _cleanupScopeStack) {
+			Logger.Trace(LogCategory.Mlir, $"cleanup: scope has {scope.Count} variables");
+			EmitCleanupForVariables(scope);
+		}
+	}
+
+	/// <summary>
+	/// Emits cleanup for a list of variables.
+	/// </summary>
+	private void EmitCleanupForVariables(List<(string name, MlirValue address, MlirType type)> variables) {
+		// Cleanup in reverse order of declaration
+		for (int i = variables.Count - 1; i >= 0; i--) {
+			var (name, address, type) = variables[i];
+			EmitCleanupForVariable(name, address, type);
+		}
+	}
+
+	/// <summary>
+	/// Emits cleanup code for a single variable based on its type.
+	/// </summary>
+	private void EmitCleanupForVariable(string name, MlirValue address, MlirType type) {
+		Logger.Trace(LogCategory.Mlir, $"cleanup: checking {name} (type={type}, address type={address.Type})");
+
+		// Handle memref wrappers
+		if (type is MemRefType memRef) {
+			Logger.Trace(LogCategory.Mlir, $"cleanup: unwrapping MemRefType element={memRef.ElementType}");
+			type = memRef.ElementType;
+		}
+
+		// Check if the type has a __ManagedMemory field that needs cleanup
+		if (type is MaxonStructType structType) {
+			Logger.Trace(LogCategory.Mlir, $"cleanup: {name} is struct {structType.Name} with {structType.Fields.Count} fields");
+			var managedField = structType.GetField("managed");
+			Logger.Trace(LogCategory.Mlir, $"cleanup: managed field = {(managedField != null ? $"found at offset {managedField.Offset}" : "not found")}");
+			if (managedField != null && managedField.Type is MaxonStructType managedType && managedType.Name == "__ManagedMemory") {
+				// Get the _buffer field from __ManagedMemory and free it
+				Logger.Trace(LogCategory.Mlir, $"cleanup: emitting HeapFree for {name} (managed field at offset {managedField.Offset}), currentBlock={_currentBlock?.Name ?? "null"}, currentFunc={_currentFunction?.Name ?? "null"}");
+
+				// Get address of the 'managed' field
+				var managedFieldPtr = new FieldPtrOp(address, "managed", managedField.Offset, managedField.Type);
+				InsertOp(managedFieldPtr);
+
+				// Get the _buffer field from __ManagedMemory (at offset 0)
+				var ptrField = managedType.GetField("_buffer");
+				if (ptrField != null) {
+					var ptrFieldPtr = new FieldPtrOp(managedFieldPtr.Result, "_buffer", ptrField.Offset, ptrField.Type);
+					InsertOp(ptrFieldPtr);
+
+					// Load the pointer value (use LoadOp directly since it supports PtrType)
+					var loadOp = new LoadOp(ptrFieldPtr.Result);
+					InsertOp(loadOp);
+
+					// Emit HeapFreeOp
+					var freeOp = new HeapFreeOp(loadOp.Result);
+					InsertOp(freeOp);
+				}
+			}
+		}
+	}
+
+	/// <summary>
+	/// Checks if a type needs cleanup (has managed memory).
+	/// </summary>
+	private static bool TypeNeedsCleanup(MlirType type) {
+		// Handle memref wrappers
+		if (type is MemRefType memRef) {
+			type = memRef.ElementType;
+		}
+
+		if (type is MaxonStructType structType) {
+			var managedField = structType.GetField("managed");
+			if (managedField != null && managedField.Type is MaxonStructType managedType && managedType.Name == "__ManagedMemory") {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/// <summary>
+	/// Registers a variable for cleanup if it needs it.
+	/// </summary>
+	private void RegisterForCleanup(string name, MlirValue address, MlirType type) {
+		if (TypeNeedsCleanup(type) && _cleanupScopeStack.Count > 0) {
+			_cleanupScopeStack.Peek().Add((name, address, type));
+			Logger.Trace(LogCategory.Mlir, $"cleanup: registered {name} for cleanup (type: {type})");
+		}
+	}
+
+	// ========================================================================
 	// Struct Operations
 	// ========================================================================
 
@@ -2589,22 +2796,29 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		var savedMethodStructType = _currentMethodStructType;
 		var savedErrorUnionType = _currentFunctionErrorUnionType;
 		var savedSuccessType = _currentFunctionSuccessType;
+		// Save cleanup scope stack
+		var savedCleanupScopes = _cleanupScopeStack.ToList();
 
-		var parameters = new List<(string name, string type)>();
+		var parameters = new List<FunctionParameter>();
 		if (!method.IsStatic) {
-			parameters.Add(("self", monoTypeName));
-			// Set the current method struct type for field resolution
+			// Get the struct type for self - type-safe via discriminated union
 			if (_structTypes.TryGetValue(monoTypeName, out var structType) && structType is MaxonStructType mst) {
+				parameters.Add(new FunctionParameter.SelfRef("self", mst));
 				_currentMethodStructType = mst;
+			} else {
+				throw new CompileError(ErrorCode.MlirUndefinedType, $"Unknown struct type for method receiver: {monoTypeName}");
 			}
 		}
 
 		// Add parameters with type substitution
 		foreach (var param in method.Params) {
-			// Substitute type parameters in the param's type
-			var substType = SubstituteTypeRefInTypeRef(param.Type, paramMap);
-			var typeName = GetTypeString(substType);
-			parameters.Add((param.Name, typeName));
+			// Substitute type parameters in the param's type and convert to MlirType
+			var mlirType = SubstituteTypeRef(param.Type, paramMap);
+			if (mlirType is MaxonStructType pst) {
+				parameters.Add(new FunctionParameter.StructRef(param.Name, pst));
+			} else {
+				parameters.Add(new FunctionParameter.Scalar(param.Name, mlirType));
+			}
 		}
 
 		try {
@@ -2631,6 +2845,11 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			_currentMethodStructType = savedMethodStructType;
 			_currentFunctionErrorUnionType = savedErrorUnionType;
 			_currentFunctionSuccessType = savedSuccessType;
+			// Restore cleanup scope stack
+			_cleanupScopeStack.Clear();
+			foreach (var scope in savedCleanupScopes.AsEnumerable().Reverse()) {
+				_cleanupScopeStack.Push(scope);
+			}
 		}
 	}
 
@@ -2838,6 +3057,10 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	public MlirValue DeclareVariable(string name, MlirType type) {
 		var alloca = EmitAlloca(type, name);
 		_namedValues[name] = new VariableBinding.StackSlot(alloca);
+
+		// Register for cleanup if the type has managed memory
+		RegisterForCleanup(name, alloca, type);
+
 		return alloca;
 	}
 
@@ -2857,6 +3080,65 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Note: This throws here because callers expect an address.
 		// Field access via self is handled separately in GetVariable/SetVariable.
 		throw new InvalidOperationException($"Undefined variable: {name}");
+	}
+
+	/// <summary>
+	/// Gets the receiver for a method call. For struct types, returns a pointer to enable
+	/// mutation of the receiver. For non-structs or complex expressions, returns the value.
+	/// </summary>
+	/// <returns>A tuple of (value/pointer to pass, struct type if struct, null otherwise)</returns>
+	private (MlirValue value, MaxonStructType? structType) GetMethodReceiverAsPointer(Expr baseExpr) {
+		// Case 1: Simple identifier - get its address if it's a struct variable
+		if (baseExpr is IdentifierExpr ident) {
+			if (_namedValues.TryGetValue(ident.Name, out var binding)) {
+				// For stack-allocated structs, return the address (pointer to struct)
+				if (binding is VariableBinding.StackSlot slot
+					&& slot.Address.Type is MemRefType memRef
+					&& memRef.ElementType is MaxonStructType st) {
+					Logger.Debug(LogCategory.Mlir, $"GetMethodReceiverAsPointer: {ident.Name} is StackSlot, returning address v{slot.Address.Id} type={slot.Address.Type}");
+					return (slot.Address, st);
+				}
+				// For Direct bindings where the value IS a pointer (MemRefType<MaxonStructType>)
+				// This happens for 'self' parameters which are now passed as pointers
+				if (binding is VariableBinding.Direct direct
+					&& direct.Value.Type is MemRefType directMemRef
+					&& directMemRef.ElementType is MaxonStructType directSt) {
+					return (direct.Value, directSt);
+				}
+				// For Direct bindings where the value is the struct itself (legacy case)
+				if (binding is VariableBinding.Direct directStruct
+					&& directStruct.Value.Type is MaxonStructType directStructType) {
+					return (directStruct.Value, directStructType);
+				}
+				// For other cases, load the value and check if it's a struct
+				var loadedValue = GetVariable(ident.Name);
+				return (loadedValue, loadedValue.Type as MaxonStructType);
+			}
+			// Check if it's a field of self
+			var selfField = TryGetFieldFromSelf(ident.Name);
+			if (selfField != null) {
+				return (selfField, selfField.Type as MaxonStructType);
+			}
+		}
+
+		// Case 2: Field access (e.g., obj.field.method()) - need to get pointer to the field
+		if (baseExpr is FieldAccessExpr fieldAccess) {
+			// First get the base
+			var (basePtr, baseStructType) = GetMethodReceiverAsPointer(fieldAccess.Base);
+			if (baseStructType != null) {
+				var fieldInfo = baseStructType.GetField(fieldAccess.FieldName);
+				if (fieldInfo != null && fieldInfo.Type is MaxonStructType fieldStructType) {
+					// Get pointer to the field
+					var fieldPtr = EmitFieldPtr(basePtr, fieldAccess.FieldName, fieldInfo.Offset, fieldInfo.Type);
+					return (fieldPtr, fieldStructType);
+				}
+			}
+			// Fall through to loading the value
+		}
+
+		// Default: evaluate the expression and return its value
+		var result = LowerExpression(baseExpr);
+		return (result, result.Type as MaxonStructType);
 	}
 
 	/// <summary>

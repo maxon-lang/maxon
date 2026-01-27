@@ -25,18 +25,26 @@ func.func @main() -> i64 {
     x86.lea rdx, qword ptr [rcx]
     x86.mov qword ptr [rdx], rax
     x86.lea rdx, qword ptr [rbp-48]
-    x86.mov qword ptr [rdx], rcx
-    x86.mov rcx, qword ptr [rdx]
-    x86.mov rcx, rcx
-    x86.call Value.isPositive
+    x86.mov rax, 8
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rdx
+    x86.mov rsi, rcx
     x86.mov rcx, rax
-    x86.mov rax, rcx
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.mov rcx, rdx
+    x86.call Value.isPositive
+    x86.mov rdx, rax
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
 }
 
-func.func @Value.isPositive(%self: !maxon.struct<Value>) -> i64 {
-  ^entry(%self: !maxon.struct<Value>):
+func.func @Value.isPositive(%self: memref<!maxon.struct<Value>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Value>>):
     x86.prologue stack_size=32
     x86.mov rax, rcx
     x86.lea rcx, qword ptr [rax]

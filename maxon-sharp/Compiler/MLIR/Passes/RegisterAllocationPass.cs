@@ -36,7 +36,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		var livenessInfo = ComputeLiveness(func);
 
 		// Step 2: Analyze which vregs are live across function calls
-		var liveAcrossCalls = AnalyzeLiveAcrossCalls(func);
+		var liveAcrossCalls = AnalyzeLiveAcrossCalls(func, livenessInfo);
 
 		// Step 3: Analyze which vregs are live across explicit physical register writes
 		// (e.g., division sequence uses mov rax, X; cdq; idiv which clobbers RAX/RDX)
@@ -263,8 +263,10 @@ public sealed class RegisterAllocationPass : FunctionPass {
 	/// <summary>
 	/// Analyzes which virtual registers are live across function calls.
 	/// A vreg is live across a call if it's defined before the call and used after.
+	/// Loop-live vregs are also considered live across any call within the loop,
+	/// because they are used across loop iterations.
 	/// </summary>
-	private static HashSet<int> AnalyzeLiveAcrossCalls(MlirFunction func) {
+	private static HashSet<int> AnalyzeLiveAcrossCalls(MlirFunction func, LivenessInfo livenessInfo) {
 		var liveAcrossCalls = new HashSet<int>();
 
 		// Collect all vreg definitions and uses per block
@@ -310,6 +312,15 @@ public sealed class RegisterAllocationPass : FunctionPass {
 				if (usedAfter) {
 					liveAcrossCalls.Add(vregId);
 					Logger.Trace(LogCategory.RegAlloc, $"  v{vregId} is live across call at block {callBlockIdx}");
+				}
+			}
+
+			// Loop-live vregs are implicitly live across any call inside the loop.
+			// This is because they're used in the next iteration, which happens after the call.
+			foreach (var loopLiveVreg in livenessInfo.LiveThroughLoop) {
+				if (!liveAcrossCalls.Contains(loopLiveVreg)) {
+					liveAcrossCalls.Add(loopLiveVreg);
+					Logger.Trace(LogCategory.RegAlloc, $"  v{loopLiveVreg} is loop-live, marking as live across call at block {callBlockIdx}");
 				}
 			}
 		}
@@ -961,10 +972,15 @@ public sealed class RegisterAllocationPass : FunctionPass {
 						PendingReloads.Add(new MovOp(new RegOperand(newReg), memOp));
 					}
 
-					// Update tracking - reloaded vregs are immediately spill-safe
+					// Update tracking - reloaded vreg is active but NOT spill-safe yet.
+					// It only becomes spill-safe after the instruction completes via MarkAllActiveSpillSafe().
+					// If we marked it spill-safe now, a later Alloc in the same instruction could spill it
+					// before the reload actually executes, causing register confusion.
 					allocation[vreg.Id] = newReg;
 					_activeVregs[vreg.Id] = newReg;
-					_spillSafeVregs.Add(vreg.Id);
+					// Explicitly remove from spill-safe set - the reload hasn't executed yet
+					// so we can't spill this vreg until after the instruction completes.
+					_spillSafeVregs.Remove(vreg.Id);
 					Logger.Debug(LogCategory.RegAlloc, $"  Reload v{vreg.Id} from [rbp{SpillAreaBaseOffset + spillOffset}] to {newReg}");
 
 					return new RegOperand(newReg);
