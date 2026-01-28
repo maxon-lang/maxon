@@ -271,3 +271,22 @@ end 'main'
 ```exitcode
 99
 ```
+
+<!-- test: array-growth-realloc -->
+Test that arrays grow correctly when pushing many elements (triggers multiple reallocs).
+```maxon
+typealias IntArray is Array with int
+
+function main() returns int
+    var arr = IntArray{}
+    var i = 0
+    while i < 100 'loop'
+        arr.push(i)
+        i = i + 1
+    end 'loop'
+    return try arr.get(99) otherwise -1
+end 'main'
+```
+```exitcode
+99
+```

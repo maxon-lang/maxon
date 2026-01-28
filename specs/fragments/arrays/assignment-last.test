@@ -93,12 +93,8 @@ func.func @main() -> i64 {
     x86.jz free_do_5
     x86.jmp free_done_5
     free_do_5:
-    x86.mov r11, qword ptr [r10]
-    x86.call extern kernel32.dll::GetProcessHeap
-    x86.mov rcx, rax
-    x86.mov rdx, 0
-    x86.mov r8, r11
-    x86.call extern kernel32.dll::HeapFree
+    x86.mov rcx, qword ptr [r10]
+    x86.call maxon_free
     free_done_5:
     x86.mov rax, r14
     x86.epilogue saved_gprs=[RBX,R12,R13,R14]
@@ -146,43 +142,36 @@ func.func @Array$int.set(%self: memref<!maxon.struct<Array$int>>, %index: i64, %
     x86.jz cow_skip_2
     x86.push rsi
     x86.push rdi
-    x86.sub rsp, 80
+    x86.sub rsp, 48
     x86.mov rax, qword ptr [r10+8]
     x86.imul rax, r11
-    x86.mov qword ptr [rsp+32], r10
+    x86.mov qword ptr [rsp], r10
     x86.mov rcx, qword ptr [r10]
-    x86.mov qword ptr [rsp+40], rcx
-    x86.mov qword ptr [rsp+48], rax
-    x86.mov qword ptr [rsp+56], r11
-    x86.mov qword ptr [rbp-56], rbx
-    x86.mov qword ptr [rbp-64], r12
-    x86.mov qword ptr [rbp-72], r13
-    x86.call extern kernel32.dll::GetProcessHeap
-    x86.mov r12, qword ptr [rbp-64]
-    x86.mov r13, qword ptr [rbp-72]
-    x86.mov rbx, qword ptr [rbp-56]
+    x86.mov qword ptr [rsp+8], rcx
+    x86.mov qword ptr [rsp+16], rax
+    x86.mov qword ptr [rsp+24], r11
     x86.mov rcx, rax
-    x86.mov rdx, 0
-    x86.mov r8, qword ptr [rsp+48]
     x86.mov qword ptr [rbp-56], rbx
     x86.mov qword ptr [rbp-64], r12
     x86.mov qword ptr [rbp-72], r13
-    x86.call extern kernel32.dll::HeapAlloc
+    x86.call maxon_alloc
     x86.mov r12, qword ptr [rbp-64]
     x86.mov r13, qword ptr [rbp-72]
     x86.mov rbx, qword ptr [rbp-56]
-    x86.mov r11, qword ptr [rsp+56]
-    x86.mov rsi, qword ptr [rsp+40]
-    x86.mov r10, qword ptr [rsp+32]
+    x86.mov qword ptr [rsp+32], rax
+    x86.mov r11, qword ptr [rsp+24]
+    x86.mov rsi, qword ptr [rsp+8]
+    x86.mov r10, qword ptr [rsp]
     x86.mov rdi, rax
     x86.mov rcx, qword ptr [r10+8]
     x86.imul rcx, r11
     x86.cld
     x86.rep_movsb
+    x86.mov rax, qword ptr [rsp+32]
     x86.mov qword ptr [r10], rax
     x86.xor ecx, ecx
     x86.mov dword ptr [r10+24], ecx
-    x86.add rsp, 80
+    x86.add rsp, 48
     x86.pop rdi
     x86.pop rsi
     x86.jmp cow_done_2

@@ -678,6 +678,213 @@ public sealed class X86CodeEmitter {
 	}
 
 	// ========================================================================
+	// Runtime allocation functions
+	// ========================================================================
+
+	/// <summary>
+	/// Emits the maxon_alloc runtime function.
+	/// Signature: maxon_alloc(size: int) -> ptr
+	/// Calls GetProcessHeap() + HeapAlloc(heap, HEAP_ZERO_MEMORY, size)
+	/// </summary>
+	public void EmitMaxonAlloc() {
+		DefineLabel("maxon_alloc");
+		Logger.Debug(LogCategory.Codegen, $"Emitting maxon_alloc at offset 0x{CurrentOffset:X}");
+
+		// push rbx (save non-volatile register)
+		EmitByte(0x53);
+
+		// sub rsp, 32 (shadow space)
+		EmitBytes(0x48, 0x83, 0xEC, 0x20);
+
+		// mov rbx, rcx (save size argument)
+		EmitBytes(0x48, 0x89, 0xCB);
+
+		// call [GetProcessHeap] (external call via IAT)
+		EmitExternalCall("GetProcessHeap", "kernel32.dll");
+
+		// mov rcx, rax (arg1: heap handle)
+		EmitBytes(0x48, 0x89, 0xC1);
+
+		// mov edx, 8 (arg2: HEAP_ZERO_MEMORY = 0x08)
+		EmitBytes(0xBA, 0x08, 0x00, 0x00, 0x00);
+
+		// mov r8, rbx (arg3: size)
+		EmitBytes(0x49, 0x89, 0xD8);
+
+		// call [HeapAlloc] (external call via IAT)
+		EmitExternalCall("HeapAlloc", "kernel32.dll");
+
+		// add rsp, 32
+		EmitBytes(0x48, 0x83, 0xC4, 0x20);
+
+		// pop rbx
+		EmitByte(0x5B);
+
+		// ret
+		EmitByte(0xC3);
+	}
+
+	/// <summary>
+	/// Emits the maxon_realloc runtime function.
+	/// Signature: maxon_realloc(ptr: int, size: int) -> ptr
+	/// If ptr is NULL, calls maxon_alloc. Otherwise calls HeapReAlloc.
+	/// </summary>
+	public void EmitMaxonRealloc() {
+		DefineLabel("maxon_realloc");
+		Logger.Debug(LogCategory.Codegen, $"Emitting maxon_realloc at offset 0x{CurrentOffset:X}");
+
+		// test rcx, rcx (check if ptr is NULL)
+		EmitBytes(0x48, 0x85, 0xC9);
+
+		// jz .alloc_new (if NULL, just allocate)
+		EmitByte(0x74);
+		var jzPatchOffset = CurrentOffset;
+		EmitByte(0x00);  // placeholder for short jump
+
+		// === Realloc path ===
+		// push rbx
+		EmitByte(0x53);
+
+		// push rsi
+		EmitByte(0x56);
+
+		// sub rsp, 40 (32 shadow space + 8 alignment padding)
+		// Stack: entry(8 mod 16) -> push rbx(0 mod 16) -> push rsi(8 mod 16) -> sub 40(0 mod 16)
+		EmitBytes(0x48, 0x83, 0xEC, 0x28);
+
+		// mov rbx, rcx (save ptr)
+		EmitBytes(0x48, 0x89, 0xCB);
+
+		// mov rsi, rdx (save size)
+		EmitBytes(0x48, 0x89, 0xD6);
+
+		// call [GetProcessHeap]
+		EmitExternalCall("GetProcessHeap", "kernel32.dll");
+
+		// mov rcx, rax (arg1: heap)
+		EmitBytes(0x48, 0x89, 0xC1);
+
+		// xor edx, edx (arg2: flags = 0)
+		EmitBytes(0x31, 0xD2);
+
+		// mov r8, rbx (arg3: ptr)
+		EmitBytes(0x49, 0x89, 0xD8);
+
+		// mov r9, rsi (arg4: size)
+		EmitBytes(0x49, 0x89, 0xF1);
+
+		// call [HeapReAlloc]
+		EmitExternalCall("HeapReAlloc", "kernel32.dll");
+
+		// add rsp, 40
+		EmitBytes(0x48, 0x83, 0xC4, 0x28);
+
+		// pop rsi
+		EmitByte(0x5E);
+
+		// pop rbx
+		EmitByte(0x5B);
+
+		// ret
+		EmitByte(0xC3);
+
+		// .alloc_new:
+		var allocNewOffset = CurrentOffset;
+		_code[jzPatchOffset] = (byte)(allocNewOffset - jzPatchOffset - 1);
+
+		// mov rcx, rdx (size is in rdx, move to rcx for maxon_alloc)
+		EmitBytes(0x48, 0x89, 0xD1);
+
+		// jmp maxon_alloc (tail call)
+		EmitByte(0xE9);
+		_labelFixups.Add((CurrentOffset, "maxon_alloc", 4));
+		EmitImm32(0);
+	}
+
+	/// <summary>
+	/// Emits the maxon_free runtime function.
+	/// Signature: maxon_free(ptr: int) -> void
+	/// If ptr is NULL, returns immediately. Otherwise calls HeapFree.
+	/// </summary>
+	public void EmitMaxonFree() {
+		DefineLabel("maxon_free");
+		Logger.Debug(LogCategory.Codegen, $"Emitting maxon_free at offset 0x{CurrentOffset:X}");
+
+		// test rcx, rcx (check if ptr is NULL)
+		EmitBytes(0x48, 0x85, 0xC9);
+
+		// jz .done (if NULL, return)
+		EmitByte(0x74);
+		var jzPatchOffset = CurrentOffset;
+		EmitByte(0x00);  // placeholder
+
+		// push rbx
+		EmitByte(0x53);
+
+		// sub rsp, 32 (shadow space)
+		EmitBytes(0x48, 0x83, 0xEC, 0x20);
+
+		// mov rbx, rcx (save ptr)
+		EmitBytes(0x48, 0x89, 0xCB);
+
+		// call [GetProcessHeap]
+		EmitExternalCall("GetProcessHeap", "kernel32.dll");
+
+		// mov rcx, rax (arg1: heap)
+		EmitBytes(0x48, 0x89, 0xC1);
+
+		// xor edx, edx (arg2: flags = 0)
+		EmitBytes(0x31, 0xD2);
+
+		// mov r8, rbx (arg3: ptr)
+		EmitBytes(0x49, 0x89, 0xD8);
+
+		// call [HeapFree]
+		EmitExternalCall("HeapFree", "kernel32.dll");
+
+		// add rsp, 32
+		EmitBytes(0x48, 0x83, 0xC4, 0x20);
+
+		// pop rbx
+		EmitByte(0x5B);
+
+		// .done:
+		var doneOffset = CurrentOffset;
+		_code[jzPatchOffset] = (byte)(doneOffset - jzPatchOffset - 1);
+
+		// ret
+		EmitByte(0xC3);
+	}
+
+	/// <summary>
+	/// Emits all runtime allocation functions.
+	/// Should be called after user code but before finalizing.
+	/// </summary>
+	public void EmitRuntimeFunctions() {
+		EmitMaxonAlloc();
+		EmitMaxonRealloc();
+		EmitMaxonFree();
+	}
+
+	/// <summary>
+	/// Helper to emit an external call via IAT.
+	/// </summary>
+	private void EmitExternalCall(string functionName, string dllName) {
+		// CALL [RIP + disp32] = FF 15 disp32
+		EmitByte(0xFF);
+		EmitByte(0x15);
+
+		if (!_importIndices.TryGetValue(functionName, out var importIndex)) {
+			importIndex = _imports.Count;
+			_imports.Add(new ImportEntry(dllName, functionName));
+			_importIndices[functionName] = importIndex;
+		}
+
+		_importFixups.Add((CurrentOffset, importIndex, 4));
+		EmitImm32(0);  // Placeholder
+	}
+
+	// ========================================================================
 	// Encoding helpers
 	// ========================================================================
 
@@ -1157,28 +1364,10 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitCall(X86CallOp op) {
-		if (op.IsExternal) {
-			// External call: use indirect call through IAT
-			// CALL [RIP + disp32] = FF 15 disp32
-			EmitByte(0xFF);
-			EmitByte(0x15);
-
-			// Track this import
-			if (!_importIndices.TryGetValue(op.Target, out var importIndex)) {
-				importIndex = _imports.Count;
-				_imports.Add(new ImportEntry(op.DllName ?? "kernel32.dll", op.Target));
-				_importIndices[op.Target] = importIndex;
-			}
-
-			// Record fixup for the displacement (will be resolved when IAT address is known)
-			_importFixups.Add((CurrentOffset, importIndex, 4));
-			EmitImm32(0);  // Placeholder
-		} else {
-			// Internal call: direct relative call
-			EmitByte(0xE8);
-			_labelFixups.Add((CurrentOffset, op.Target, 4));
-			EmitImm32(0);
-		}
+		// Internal call: direct relative call
+		EmitByte(0xE8);
+		_labelFixups.Add((CurrentOffset, op.Target, 4));
+		EmitImm32(0);
 	}
 
 	private void EmitRet() {

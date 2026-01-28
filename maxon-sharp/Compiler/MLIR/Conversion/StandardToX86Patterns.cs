@@ -616,28 +616,15 @@ public sealed class LowerMaxFOp : FloatBinaryPattern<MaxFOp, MaxsdOp>;
 // ============================================================================
 
 /// <summary>
-/// Lowers heap_alloc to HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size).
+/// Lowers heap_alloc to a call to the maxon_alloc runtime function.
 /// </summary>
 public sealed class LowerHeapAllocOp : ConversionPattern<HeapAllocOp> {
-	private const int HEAP_ZERO_MEMORY = 0x08;
-
 	protected override bool MatchAndRewrite(HeapAllocOp op, ConversionPatternRewriter rewriter) {
-		// Save size in R11 (caller-saved scratch register)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R11), new VRegOperand(op.Size.Id)));
+		// Move size to RCX (first argument)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Size.Id)));
 
-		// Call GetProcessHeap() -> RAX = hHeap
-		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
-
-		// Set up HeapAlloc arguments:
-		// RCX = hHeap (from RAX)
-		// RDX = HEAP_ZERO_MEMORY (0x08)
-		// R8 = dwBytes (size)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(HEAP_ZERO_MEMORY)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8), new RegOperand(X86Register.R11)));
-
-		// Call HeapAlloc
-		rewriter.Insert(new X86CallOp("HeapAlloc", isExternal: true, dllName: "kernel32.dll"));
+		// Call maxon_alloc(size)
+		rewriter.Insert(new X86CallOp("maxon_alloc"));
 
 		// Move result from RAX to destination
 		rewriter.Insert(new MovOp(new VRegOperand(op.Result.Id), new RegOperand(X86Register.RAX)));
@@ -647,29 +634,19 @@ public sealed class LowerHeapAllocOp : ConversionPattern<HeapAllocOp> {
 }
 
 /// <summary>
-/// Lowers heap_realloc to HeapReAlloc(GetProcessHeap(), 0, ptr, newSize).
+/// Lowers heap_realloc to a call to the maxon_realloc runtime function.
+/// Note: This does NOT handle NULL pointers. Use HeapReallocOrAllocOp for that.
 /// </summary>
 public sealed class LowerHeapReallocOp : ConversionPattern<HeapReallocOp> {
 	protected override bool MatchAndRewrite(HeapReallocOp op, ConversionPatternRewriter rewriter) {
-		// Save ptr in R10 and newSize in R11 (caller-saved scratch registers)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R10), new VRegOperand(op.Ptr.Id)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R11), new VRegOperand(op.NewSize.Id)));
+		// Move ptr to RCX (first argument)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Ptr.Id)));
 
-		// Call GetProcessHeap() -> RAX = hHeap
-		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
+		// Move newSize to RDX (second argument)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new VRegOperand(op.NewSize.Id)));
 
-		// Set up HeapReAlloc arguments:
-		// RCX = hHeap (from RAX)
-		// RDX = dwFlags (0)
-		// R8 = lpMem (ptr)
-		// R9 = dwBytes (newSize)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8), new RegOperand(X86Register.R10)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R9), new RegOperand(X86Register.R11)));
-
-		// Call HeapReAlloc
-		rewriter.Insert(new X86CallOp("HeapReAlloc", isExternal: true, dllName: "kernel32.dll"));
+		// Call maxon_realloc(ptr, size)
+		rewriter.Insert(new X86CallOp("maxon_realloc"));
 
 		// Move result from RAX to destination
 		rewriter.Insert(new MovOp(new VRegOperand(op.Result.Id), new RegOperand(X86Register.RAX)));
@@ -679,62 +656,19 @@ public sealed class LowerHeapReallocOp : ConversionPattern<HeapReallocOp> {
 }
 
 /// <summary>
-/// Lowers heap_realloc_or_alloc to conditional HeapAlloc (if NULL) or HeapReAlloc (if non-NULL).
-/// This handles the Windows quirk where HeapReAlloc doesn't work with NULL pointers.
+/// Lowers heap_realloc_or_alloc to a call to the maxon_realloc runtime function.
+/// The runtime handles NULL pointers by allocating new memory.
 /// </summary>
 public sealed class LowerHeapReallocOrAllocOp : ConversionPattern<HeapReallocOrAllocOp> {
-	private static int _labelCounter = 0;
-
 	protected override bool MatchAndRewrite(HeapReallocOrAllocOp op, ConversionPatternRewriter rewriter) {
-		var labelId = _labelCounter++;
-		var allocLabel = $"heap_alloc_{labelId}";
-		var doneLabel = $"heap_done_{labelId}";
+		// Move ptr to RCX (first argument)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Ptr.Id)));
 
-		// Save ptr in R10 and newSize in R11 (caller-saved scratch registers)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R10), new VRegOperand(op.Ptr.Id)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R11), new VRegOperand(op.NewSize.Id)));
+		// Move newSize to RDX (second argument)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new VRegOperand(op.NewSize.Id)));
 
-		// Check if ptr is NULL - if so, use HeapAlloc instead of HeapReAlloc
-		rewriter.Insert(new TestOp(new RegOperand(X86Register.R10), new RegOperand(X86Register.R10)));
-		rewriter.Insert(new JzOp(allocLabel));
-
-		// --- HeapReAlloc path (ptr != NULL) ---
-		// Call GetProcessHeap() -> RAX = hHeap
-		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
-
-		// Set up HeapReAlloc arguments:
-		// RCX = hHeap (from RAX)
-		// RDX = dwFlags (0)
-		// R8 = lpMem (ptr)
-		// R9 = dwBytes (newSize)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8), new RegOperand(X86Register.R10)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R9), new RegOperand(X86Register.R11)));
-
-		// Call HeapReAlloc
-		rewriter.Insert(new X86CallOp("HeapReAlloc", isExternal: true, dllName: "kernel32.dll"));
-		rewriter.Insert(new JmpOp(doneLabel));
-
-		// --- HeapAlloc path (ptr == NULL) ---
-		rewriter.Insert(new LabelOp(allocLabel));
-
-		// Call GetProcessHeap() -> RAX = hHeap
-		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
-
-		// Set up HeapAlloc arguments:
-		// RCX = hHeap (from RAX)
-		// RDX = dwFlags (0)
-		// R8 = dwBytes (newSize)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8), new RegOperand(X86Register.R11)));
-
-		// Call HeapAlloc
-		rewriter.Insert(new X86CallOp("HeapAlloc", isExternal: true, dllName: "kernel32.dll"));
-
-		// --- Done ---
-		rewriter.Insert(new LabelOp(doneLabel));
+		// Call maxon_realloc(ptr, size) - handles NULL ptr internally
+		rewriter.Insert(new X86CallOp("maxon_realloc"));
 
 		// Move result from RAX to destination
 		rewriter.Insert(new MovOp(new VRegOperand(op.Result.Id), new RegOperand(X86Register.RAX)));
@@ -744,26 +678,16 @@ public sealed class LowerHeapReallocOrAllocOp : ConversionPattern<HeapReallocOrA
 }
 
 /// <summary>
-/// Lowers heap_free to HeapFree(GetProcessHeap(), 0, ptr).
+/// Lowers heap_free to a call to the maxon_free runtime function.
+/// The runtime handles NULL pointers safely.
 /// </summary>
 public sealed class LowerHeapFreeOp : ConversionPattern<HeapFreeOp> {
 	protected override bool MatchAndRewrite(HeapFreeOp op, ConversionPatternRewriter rewriter) {
-		// Save ptr in R11 (caller-saved scratch register)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R11), new VRegOperand(op.Ptr.Id)));
+		// Move ptr to RCX (first argument)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Ptr.Id)));
 
-		// Call GetProcessHeap() -> RAX = hHeap
-		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
-
-		// Set up HeapFree arguments:
-		// RCX = hHeap (from RAX)
-		// RDX = dwFlags (0)
-		// R8 = lpMem (ptr)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8), new RegOperand(X86Register.R11)));
-
-		// Call HeapFree
-		rewriter.Insert(new X86CallOp("HeapFree", isExternal: true, dllName: "kernel32.dll"));
+		// Call maxon_free(ptr) - handles NULL ptr internally
+		rewriter.Insert(new X86CallOp("maxon_free"));
 
 		return true;
 	}
@@ -895,79 +819,60 @@ public sealed class LowerManagedMemoryMakeUniqueOp : ConversionPattern<ManagedMe
 		rewriter.Insert(new JzOp(skipCowLabel));
 
 		// === COW path: copy rdata to heap ===
-		// IMPORTANT: We only save/restore RSI and RDI for rep movsb.
-		// We do NOT touch R12, R13 etc because the register allocator may be using them
-		// and will add its own spill/restore around our CALL instructions.
-		//
-		// Windows x64 calling convention REQUIRES 32 bytes of shadow space for callees.
-		// We also need to save our values across calls. We'll allocate a fixed area
-		// on the stack and use RSP-relative addressing.
-		//
-		// Stack layout after allocation (from RSP):
-		// [RSP+0..31]  = 32-byte shadow space for calls
-		// [RSP+32]     = memory_ptr
-		// [RSP+40]     = old_buffer
-		// [RSP+48]     = total_size
-		// [RSP+56]     = elem_size
-		// [RSP+64]     = saved RSI
-		// [RSP+72]     = saved RDI
-		// Total = 80 bytes, but we need 16-byte alignment. Allocate 80.
-
+		// Save RSI and RDI for rep movsb, allocate stack space for saved values
 		rewriter.Insert(new PushOp(new RegOperand(X86Register.RSI)));
 		rewriter.Insert(new PushOp(new RegOperand(X86Register.RDI)));
 
-		// Allocate stack space: 80 bytes for our needs
-		// After 2 pushes (16 bytes), RSP is 16-byte aligned
-		// After sub 80, RSP is still 16-byte aligned
-		rewriter.Insert(new SubOp(new RegOperand(X86Register.RSP), new ImmOperand(80)));
+		// Allocate stack space: 48 bytes for saved values (16-byte aligned after 2 pushes)
+		// [RSP+0]  = memory_ptr
+		// [RSP+8]  = old_buffer
+		// [RSP+16] = total_size
+		// [RSP+24] = elem_size
+		// [RSP+32] = new_buffer (after allocation)
+		rewriter.Insert(new SubOp(new RegOperand(X86Register.RSP), new ImmOperand(48)));
 
 		// Calculate total size = len * elem_size
 		rewriter.Insert(new MovOp(new RegOperand(X86Register.RAX),
 			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 8, Size: 8))); // len
 		rewriter.Insert(new ImulOp(new RegOperand(X86Register.RAX), new RegOperand(X86Register.R11))); // len*elem
 
-		// Save values to our stack area
+		// Save values to stack
 		rewriter.Insert(new MovOp(
-			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 32, Size: 8),
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 0, Size: 8),
 			new RegOperand(X86Register.R10)));  // memory ptr
-		// Load old buffer and save it
 		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX),
 			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 0, Size: 8)));
 		rewriter.Insert(new MovOp(
-			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 40, Size: 8),
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 8, Size: 8),
 			new RegOperand(X86Register.RCX)));  // old buffer
 		rewriter.Insert(new MovOp(
-			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 48, Size: 8),
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 16, Size: 8),
 			new RegOperand(X86Register.RAX)));  // total size
 		rewriter.Insert(new MovOp(
-			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 56, Size: 8),
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 24, Size: 8),
 			new RegOperand(X86Register.R11)));  // elem size
 
-		// GetProcessHeap - shadow space already allocated at RSP+0
-		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
-
-		// Set up HeapAlloc: RCX=heap, RDX=flags, R8=size
+		// Call maxon_alloc(total_size) - RCX = size
 		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8),
-			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 48, Size: 8)));
+		rewriter.Insert(new X86CallOp("maxon_alloc"));
 
-		// HeapAlloc - shadow space already at RSP+0
-		rewriter.Insert(new X86CallOp("HeapAlloc", isExternal: true, dllName: "kernel32.dll"));
+		// Save new buffer address
+		rewriter.Insert(new MovOp(
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 32, Size: 8),
+			new RegOperand(X86Register.RAX)));
 
-		// Restore values from our stack area
+		// Restore values for memcpy
 		rewriter.Insert(new MovOp(new RegOperand(X86Register.R11),
-			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 56, Size: 8)));  // elem size
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 24, Size: 8)));  // elem size
 		rewriter.Insert(new MovOp(new RegOperand(X86Register.RSI),
-			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 40, Size: 8)));  // old buffer
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 8, Size: 8)));  // old buffer (src)
 		rewriter.Insert(new MovOp(new RegOperand(X86Register.R10),
-			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 32, Size: 8)));  // memory ptr
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 0, Size: 8)));  // memory ptr
 
-		// Set up memcpy: RDI=dest (RAX from HeapAlloc), RSI=src (old buffer), RCX=count
+		// Set up memcpy: RDI=dest (new buffer), RSI=src (old buffer), RCX=count
 		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDI), new RegOperand(X86Register.RAX)));
-		// RSI already has old buffer from above
 
-		// Recalculate count = len * elem_size
+		// Calculate count = len * elem_size
 		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX),
 			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 8, Size: 8)));
 		rewriter.Insert(new ImulOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.R11)));
@@ -976,8 +881,11 @@ public sealed class LowerManagedMemoryMakeUniqueOp : ConversionPattern<ManagedMe
 		rewriter.Insert(new CldOp());
 		rewriter.Insert(new RepMovsbOp());
 
+		// Restore new buffer address
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RAX),
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 32, Size: 8)));
+
 		// Update struct: new buffer at offset 0, clear flags at offset 24
-		// RAX still has the new buffer address from HeapAlloc
 		rewriter.Insert(new MovOp(
 			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 0, Size: 8),
 			new RegOperand(X86Register.RAX)));
@@ -986,10 +894,10 @@ public sealed class LowerManagedMemoryMakeUniqueOp : ConversionPattern<ManagedMe
 			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 24, Size: 4),
 			new RegOperand(X86Register.ECX)));
 
-		// Deallocate our stack space (80 bytes)
-		rewriter.Insert(new AddOp(new RegOperand(X86Register.RSP), new ImmOperand(80)));
+		// Deallocate stack space (48 bytes)
+		rewriter.Insert(new AddOp(new RegOperand(X86Register.RSP), new ImmOperand(48)));
 
-		// Restore RSI, RDI from the pushes at the start
+		// Restore RSI, RDI
 		rewriter.Insert(new PopOp(new RegOperand(X86Register.RDI)));
 		rewriter.Insert(new PopOp(new RegOperand(X86Register.RSI)));
 
@@ -1036,24 +944,13 @@ public sealed class LowerManagedMemoryFreeOp : ConversionPattern<ManagedMemoryFr
 		// === Free path (not rdata) ===
 		rewriter.Insert(new LabelOp(doFreeLabel));
 
-		// Load buffer pointer from offset 0
+		// Load buffer pointer from offset 0 into RCX (first argument)
 		rewriter.Insert(new MovOp(
-			new RegOperand(X86Register.R11),
+			new RegOperand(X86Register.RCX),
 			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 0, Size: 8)));
 
-		// Call GetProcessHeap() -> RAX = hHeap
-		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
-
-		// Set up HeapFree arguments:
-		// RCX = hHeap (from RAX)
-		// RDX = dwFlags (0)
-		// R8 = lpMem (buffer ptr)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8), new RegOperand(X86Register.R11)));
-
-		// Call HeapFree
-		rewriter.Insert(new X86CallOp("HeapFree", isExternal: true, dllName: "kernel32.dll"));
+		// Call maxon_free(ptr)
+		rewriter.Insert(new X86CallOp("maxon_free"));
 
 		// === Done label ===
 		rewriter.Insert(new LabelOp(doneLabel));

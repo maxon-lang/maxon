@@ -1,18 +1,21 @@
-// Test: array-with-resize
+// Test: array-growth-realloc
 typealias IntArray is Array with int
 
 function main() returns int
     var arr = IntArray{}
-    arr.resize(5)
-    arr.set(0, value: 99)
-    return try arr.get(0) otherwise 0
+    var i = 0
+    while i < 100 'loop'
+        arr.push(i)
+        i = i + 1
+    end 'loop'
+    return try arr.get(99) otherwise -1
 end 'main'
 ---
 ExitCode: 99
 ---
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=168 saved_gprs=[RBX,R12,R13]
+    x86.prologue stack_size=200 saved_gprs=[RBX,R12,R13,R14,R15]
     x86.mov rbx, 0
     x86.mov rcx, rbx
     x86.call maxon_alloc
@@ -51,78 +54,101 @@ func.func @main() -> i64 {
     x86.rep_movsb
     x86.pop rdi
     x86.pop rsi
-    x86.mov rcx, 5
+    x86.mov r13, 100
+    x86.mov r14, 1
+    x86.mov r15, rbx
+    x86.jmp while.cond
+  ^while.cond(%148: i64):
+    x86.cmp r15, r13
+    x86.setl rcx
+    x86.movzx rcx, rcx
+    x86.test rcx, rcx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
     x86.mov r10, r12
-    x86.mov r11, rcx
+    x86.mov r11, r15
     x86.mov rdx, r11
     x86.mov rcx, r10
-    x86.call Array$int.resize
+    x86.mov qword ptr [rbp-168], r15
+    x86.mov qword ptr [rbp-176], r12
+    x86.mov qword ptr [rbp-184], r13
+    x86.mov qword ptr [rbp-192], r14
+    x86.call Array$int.push
+    x86.mov r15, qword ptr [rbp-168]
+    x86.mov r13, qword ptr [rbp-184]
+    x86.mov r12, qword ptr [rbp-176]
+    x86.mov r14, qword ptr [rbp-192]
+    x86.mov rcx, r15
+    x86.add rcx, r14
+    x86.mov r15, rcx
+    x86.jmp while.cond
+  ^while.exit:
     x86.mov rcx, 99
-    x86.mov r10, r12
-    x86.mov r11, rbx
+    x86.lea rbx, qword ptr [rbp-160]
+    x86.mov r10, rbx
+    x86.mov r11, r12
     x86.push rcx
     x86.pop r8
     x86.mov rdx, r11
     x86.mov rcx, r10
-    x86.call Array$int.set
-    x86.lea r13, qword ptr [rbp-160]
-    x86.mov r10, r13
-    x86.mov r11, r12
-    x86.push rbx
-    x86.pop r8
-    x86.mov rdx, r11
-    x86.mov rcx, r10
     x86.call Array$int.get
-    x86.lea rcx, qword ptr [r13]
+    x86.lea rcx, qword ptr [rbx]
     x86.movzx r8, byte ptr [rcx]
     x86.mov rcx, r8
-    x86.cmp rcx, rbx
-    x86.setne rcx
-    x86.movzx rcx, rcx
-    x86.test rcx, rcx
+    x86.mov r8, 0
+    x86.cmp rcx, r8
+    x86.setne r8
+    x86.movzx r8, r8
+    x86.test r8, r8
     x86.jne try.error
     x86.jmp try.success
   ^try.success:
-    x86.lea rcx, qword ptr [r13+8]
-    x86.mov r8, qword ptr [rcx]
-    x86.mov r13, r8
+    x86.lea r8, qword ptr [rbx+8]
+    x86.mov rcx, qword ptr [r8]
+    x86.mov rbx, rcx
     x86.jmp try.merge
   ^try.error:
-    x86.mov r13, 0
+    x86.mov rbx, -1
     x86.jmp try.merge
-  ^try.merge(%138: i64):
-    x86.lea r8, qword ptr [r12+8]
-    x86.mov r10, r8
+  ^try.merge(%149: i64):
+    x86.lea rcx, qword ptr [r12+8]
+    x86.mov r10, rcx
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz free_do_14
-    x86.jmp free_done_14
-    free_do_14:
+    x86.jz free_do_15
+    x86.jmp free_done_15
+    free_do_15:
     x86.mov rcx, qword ptr [r10]
     x86.call maxon_free
-    free_done_14:
-    x86.mov rax, r13
-    x86.epilogue saved_gprs=[RBX,R12,R13]
+    free_done_15:
+    x86.mov rax, rbx
+    x86.epilogue saved_gprs=[RBX,R12,R13,R14,R15]
     x86.ret
 }
 
-func.func @Array$int.resize(%self: memref<!maxon.struct<Array$int>>, %newLength: i64) {
-  ^entry(%self: memref<!maxon.struct<Array$int>>, %newLength: i64):
-    x86.prologue stack_size=32 saved_gprs=[RBX,R12]
-    x86.mov rbx, rcx
-    x86.mov r12, rdx
-    x86.mov r10, rbx
-    x86.mov r11, r12
+func.func @Array$int.push(%self: memref<!maxon.struct<Array$int>>, %value: i64) {
+  ^entry(%self: memref<!maxon.struct<Array$int>>, %value: i64):
+    x86.prologue stack_size=40 saved_gprs=[RBX,R12,R13,R14,R15]
+    x86.mov rax, rcx
+    x86.mov rbx, rdx
+    x86.lea r12, qword ptr [rax+8]
+    x86.lea rcx, qword ptr [r12+8]
+    x86.mov r13, qword ptr [rcx]
+    x86.mov rcx, 1
+    x86.mov r14, r13
+    x86.add r14, rcx
+    x86.mov r10, rax
+    x86.mov r11, r14
     x86.mov rdx, r11
     x86.mov rcx, r10
-    x86.call Array$int.reserve
-    x86.lea rax, qword ptr [rbx+8]
-    x86.mov rbx, 8
-    x86.mov r10, rax
-    x86.mov r11, rbx
+    x86.call Array$int.ensureCapacity
+    x86.mov r15, 8
+    x86.mov r10, r12
+    x86.mov r11, r15
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz cow_skip_9
+    x86.jz cow_skip_12
     x86.push rsi
     x86.push rdi
     x86.sub rsp, 48
@@ -151,130 +177,122 @@ func.func @Array$int.resize(%self: memref<!maxon.struct<Array$int>>, %newLength:
     x86.add rsp, 48
     x86.pop rdi
     x86.pop rsi
-    x86.jmp cow_done_9
-    cow_skip_9:
-    cow_done_9:
+    x86.jmp cow_done_12
+    cow_skip_12:
+    cow_done_12:
     x86.mov rax, r10
-    x86.lea rcx, qword ptr [rax+rbx]
-    x86.mov qword ptr [rcx], r12
-    x86.epilogue saved_gprs=[RBX,R12]
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rcx, 3
+    x86.mov rdx, r13
+    x86.shl rdx, rcx
+    x86.lea rcx, qword ptr [rax+rdx]
+    x86.mov qword ptr [rcx], rbx
+    x86.mov r10, r12
+    x86.mov r11, r15
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz cow_skip_13
+    x86.push rsi
+    x86.push rdi
+    x86.sub rsp, 48
+    x86.mov rax, qword ptr [r10+8]
+    x86.imul rax, r11
+    x86.mov qword ptr [rsp], r10
+    x86.mov rcx, qword ptr [r10]
+    x86.mov qword ptr [rsp+8], rcx
+    x86.mov qword ptr [rsp+16], rax
+    x86.mov qword ptr [rsp+24], r11
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov qword ptr [rsp+32], rax
+    x86.mov r11, qword ptr [rsp+24]
+    x86.mov rsi, qword ptr [rsp+8]
+    x86.mov r10, qword ptr [rsp]
+    x86.mov rdi, rax
+    x86.mov rcx, qword ptr [r10+8]
+    x86.imul rcx, r11
+    x86.cld
+    x86.rep_movsb
+    x86.mov rax, qword ptr [rsp+32]
+    x86.mov qword ptr [r10], rax
+    x86.xor ecx, ecx
+    x86.mov dword ptr [r10+24], ecx
+    x86.add rsp, 48
+    x86.pop rdi
+    x86.pop rsi
+    x86.jmp cow_done_13
+    cow_skip_13:
+    cow_done_13:
+    x86.mov rcx, r10
+    x86.lea rdx, qword ptr [rcx+r15]
+    x86.mov qword ptr [rdx], r14
+    x86.epilogue saved_gprs=[RBX,R12,R13,R14,R15]
     x86.ret
 }
 
-func.func @Array$int.reserve(%self: memref<!maxon.struct<Array$int>>, %minCapacity: i64) {
-  ^entry(%self: memref<!maxon.struct<Array$int>>, %minCapacity: i64):
-    x86.prologue stack_size=40 saved_gprs=[RBX,R12,R13]
-    x86.mov rax, rcx
-    x86.mov rbx, rdx
-    x86.lea rcx, qword ptr [rax+8]
-    x86.lea rdx, qword ptr [rcx+16]
-    x86.mov rcx, qword ptr [rdx]
-    x86.cmp rbx, rcx
+func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %requiredLen: i64) {
+  ^entry(%self: memref<!maxon.struct<Array$int>>, %requiredLen: i64):
+    x86.prologue stack_size=104 saved_gprs=[RBX,R12,R13,R14,R15]
+    x86.mov rbx, rcx
+    x86.mov rax, rdx
+    x86.lea r12, qword ptr [rbp-40]
+    x86.mov qword ptr [r12], rax
+    x86.lea rax, qword ptr [rbx+8]
+    x86.lea rcx, qword ptr [rax+16]
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rcx, qword ptr [r12]
+    x86.cmp rcx, rax
     x86.setg rcx
     x86.movzx rcx, rcx
     x86.test rcx, rcx
     x86.jne then
     x86.jmp merge
   ^then:
-    x86.lea rcx, qword ptr [rax+8]
+    x86.lea r13, qword ptr [rbp-48]
+    x86.mov qword ptr [r13], rax
+    x86.mov rax, qword ptr [r13]
+    x86.mov rcx, 4
+    x86.cmp rax, rcx
+    x86.setl rcx
+    x86.movzx rcx, rcx
+    x86.test rcx, rcx
+    x86.jne then_1
+    x86.jmp merge_1
+  ^merge:
+    x86.epilogue saved_gprs=[RBX,R12,R13,R14,R15]
+    x86.ret
+  ^then_1:
+    x86.mov rcx, 4
+    x86.mov qword ptr [r13], rcx
+    x86.jmp merge_1
+  ^merge_1:
+    x86.mov r14, qword ptr [r12]
+    x86.jmp while.cond
+  ^while.cond:
+    x86.mov rcx, qword ptr [r13]
+    x86.cmp rcx, r14
+    x86.setl rcx
+    x86.movzx rcx, rcx
+    x86.test rcx, rcx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rcx, qword ptr [r13]
+    x86.mov rax, 1
+    x86.mov rdx, rcx
+    x86.shl rdx, rax
+    x86.mov qword ptr [r13], rdx
+    x86.jmp while.cond
+  ^while.exit:
+    x86.lea rdx, qword ptr [rbx+8]
+    x86.mov r15, qword ptr [r13]
     x86.mov rax, 8
-    x86.mov r10, rcx
+    x86.mov r10, rdx
     x86.mov r11, rax
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz cow_skip_10
-    x86.push rsi
-    x86.push rdi
-    x86.sub rsp, 48
-    x86.mov rax, qword ptr [r10+8]
-    x86.imul rax, r11
-    x86.mov qword ptr [rsp], r10
-    x86.mov rcx, qword ptr [r10]
-    x86.mov qword ptr [rsp+8], rcx
-    x86.mov qword ptr [rsp+16], rax
-    x86.mov qword ptr [rsp+24], r11
-    x86.mov rcx, rax
-    x86.call maxon_alloc
-    x86.mov qword ptr [rsp+32], rax
-    x86.mov r11, qword ptr [rsp+24]
-    x86.mov rsi, qword ptr [rsp+8]
-    x86.mov r10, qword ptr [rsp]
-    x86.mov rdi, rax
-    x86.mov rcx, qword ptr [r10+8]
-    x86.imul rcx, r11
-    x86.cld
-    x86.rep_movsb
-    x86.mov rax, qword ptr [rsp+32]
-    x86.mov qword ptr [r10], rax
-    x86.xor ecx, ecx
-    x86.mov dword ptr [r10+24], ecx
-    x86.add rsp, 48
-    x86.pop rdi
-    x86.pop rsi
-    x86.jmp cow_done_10
-    cow_skip_10:
-    cow_done_10:
-    x86.mov rax, r10
-    x86.mov rcx, 0
-    x86.lea r12, qword ptr [rax+rcx]
-    x86.mov rcx, qword ptr [r12]
-    x86.mov rdx, 16
-    x86.lea r13, qword ptr [rax+rdx]
-    x86.mov rdx, 3
-    x86.mov rax, rbx
-    x86.push rcx
-    x86.shl rax, rdx
-    x86.pop rcx
-    x86.mov rcx, rcx
-    x86.mov rdx, rax
-    x86.call maxon_realloc
-    x86.mov qword ptr [r12], rax
-    x86.mov qword ptr [r13], rbx
-    x86.jmp merge
-  ^merge:
-    x86.epilogue saved_gprs=[RBX,R12,R13]
-    x86.ret
-}
-
-func.func @Array$int.set(%self: memref<!maxon.struct<Array$int>>, %index: i64, %value: i64) {
-  ^entry(%self: memref<!maxon.struct<Array$int>>, %index: i64, %value: i64):
-    x86.prologue stack_size=72 saved_gprs=[RBX,R12,R13]
-    x86.mov r10, rcx
-    x86.mov r11, rdx
-    x86.mov rbx, r8
-    x86.mov r12, r10
-    x86.mov r13, r11
-    x86.lea rax, qword ptr [r12+8]
-    x86.lea rcx, qword ptr [rax+8]
-    x86.mov rax, qword ptr [rcx]
-    x86.lea rcx, qword ptr [rbp-40]
-    x86.mov qword ptr [rcx], rax
-    x86.mov rax, 0
-    x86.cmp r13, rax
-    x86.setge rax
-    x86.movzx rax, rax
-    x86.test rax, rax
-    x86.jne then
-    x86.jmp merge
-  ^then:
-    x86.mov rax, qword ptr [rcx]
-    x86.cmp r13, rax
-    x86.setl rax
-    x86.movzx rax, rax
-    x86.test rax, rax
-    x86.jne then_1
-    x86.jmp merge
-  ^merge:
-    x86.epilogue saved_gprs=[RBX,R12,R13]
-    x86.ret
-  ^then_1:
-    x86.lea rax, qword ptr [r12+8]
-    x86.mov rcx, 8
-    x86.mov r10, rax
-    x86.mov r11, rcx
-    x86.mov eax, dword ptr [r10+24]
-    x86.test eax, 1
-    x86.jz cow_skip_11
+    x86.jz cow_skip_14
     x86.push rsi
     x86.push rdi
     x86.sub rsp, 48
@@ -289,9 +307,11 @@ func.func @Array$int.set(%self: memref<!maxon.struct<Array$int>>, %index: i64, %
     x86.mov qword ptr [rbp-56], rbx
     x86.mov qword ptr [rbp-64], r12
     x86.mov qword ptr [rbp-72], r13
+    x86.mov qword ptr [rbp-80], r14
     x86.call maxon_alloc
-    x86.mov r12, qword ptr [rbp-64]
     x86.mov r13, qword ptr [rbp-72]
+    x86.mov r14, qword ptr [rbp-80]
+    x86.mov r12, qword ptr [rbp-64]
     x86.mov rbx, qword ptr [rbp-56]
     x86.mov qword ptr [rsp+32], rax
     x86.mov r11, qword ptr [rsp+24]
@@ -309,19 +329,40 @@ func.func @Array$int.set(%self: memref<!maxon.struct<Array$int>>, %index: i64, %
     x86.add rsp, 48
     x86.pop rdi
     x86.pop rsi
-    x86.jmp cow_done_11
-    cow_skip_11:
-    cow_done_11:
-    x86.mov rcx, r10
-    x86.lea rax, qword ptr [rcx]
-    x86.mov rcx, qword ptr [rax]
-    x86.mov rax, 3
-    x86.mov rdx, r13
-    x86.push rcx
-    x86.shl rdx, rax
-    x86.pop rcx
-    x86.lea rax, qword ptr [rcx+rdx]
-    x86.mov qword ptr [rax], rbx
+    x86.jmp cow_done_14
+    cow_skip_14:
+    cow_done_14:
+    x86.mov rax, r10
+    x86.mov rdx, 0
+    x86.mov qword ptr [rbp-88], r15
+    x86.lea r15, qword ptr [rax+rdx]
+    x86.mov rdx, qword ptr [r15]
+    x86.mov rcx, 16
+    x86.mov qword ptr [rbp-96], r15
+    x86.lea r15, qword ptr [rax+rcx]
+    x86.mov rcx, 3
+    x86.mov qword ptr [rbp-104], r15
+    x86.mov r15, qword ptr [rbp-88]
+    x86.mov rax, r15
+    x86.shl rax, rcx
+    x86.mov rcx, rdx
+    x86.mov rdx, rax
+    x86.mov qword ptr [rbp-56], rbx
+    x86.mov qword ptr [rbp-64], r12
+    x86.mov qword ptr [rbp-72], r13
+    x86.mov qword ptr [rbp-80], r14
+    x86.call maxon_realloc
+    x86.mov r13, qword ptr [rbp-72]
+    x86.mov r14, qword ptr [rbp-80]
+    x86.mov r12, qword ptr [rbp-64]
+    x86.mov rbx, qword ptr [rbp-56]
+    x86.mov qword ptr [rbp-88], r15
+    x86.mov r15, qword ptr [rbp-96]
+    x86.mov qword ptr [r15], rax
+    x86.mov qword ptr [rbp-72], r13
+    x86.mov r15, qword ptr [rbp-104]
+    x86.mov r13, qword ptr [rbp-88]
+    x86.mov qword ptr [r15], r13
     x86.jmp merge
 }
 

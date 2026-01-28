@@ -786,8 +786,9 @@ public sealed class JccOp(X86CondCode condition, string trueTarget, string false
 
 /// <summary>
 /// Call: x86.call target
+/// Internal function call using relative addressing.
 /// </summary>
-public sealed class X86CallOp(string target, bool isExternal = false, string? dllName = null) : X86Op {
+public sealed class X86CallOp(string target) : X86Op {
 	public override string Mnemonic => "call";
 
 	// All volatile registers are clobbered by a call (Windows x64 ABI)
@@ -800,23 +801,8 @@ public sealed class X86CallOp(string target, bool isExternal = false, string? dl
 
 	public string Target { get; } = target;
 
-	/// <summary>
-	/// True if this is a call to an external (imported) function.
-	/// External calls use indirect addressing through the Import Address Table.
-	/// </summary>
-	public bool IsExternal { get; } = isExternal;
-
-	/// <summary>
-	/// The DLL name from which to import the function (e.g., "msvcrt.dll").
-	/// Only meaningful when IsExternal is true.
-	/// </summary>
-	public string? DllName { get; } = dllName;
-
 	public override void Print(MlirPrinter printer) {
-		if (IsExternal)
-			printer.PrintLine($"x86.call extern {DllName}::{Target}");
-		else
-			printer.PrintLine($"x86.call {Target}");
+		printer.PrintLine($"x86.call {Target}");
 	}
 }
 
