@@ -642,14 +642,14 @@ public sealed class X86CodeEmitter {
 		X86Register.R13 or X86Register.R13D or X86Register.R13W or X86Register.R13B => 5,
 		X86Register.R14 or X86Register.R14D or X86Register.R14W or X86Register.R14B => 6,
 		X86Register.R15 or X86Register.R15D or X86Register.R15W or X86Register.R15B => 7,
-		X86Register.XMM0 => 0,
-		X86Register.XMM1 => 1,
-		X86Register.XMM2 => 2,
-		X86Register.XMM3 => 3,
-		X86Register.XMM4 => 4,
-		X86Register.XMM5 => 5,
-		X86Register.XMM6 => 6,
-		X86Register.XMM7 => 7,
+		X86Register.XMM0 or X86Register.XMM8 => 0,
+		X86Register.XMM1 or X86Register.XMM9 => 1,
+		X86Register.XMM2 or X86Register.XMM10 => 2,
+		X86Register.XMM3 or X86Register.XMM11 => 3,
+		X86Register.XMM4 or X86Register.XMM12 => 4,
+		X86Register.XMM5 or X86Register.XMM13 => 5,
+		X86Register.XMM6 or X86Register.XMM14 => 6,
+		X86Register.XMM7 or X86Register.XMM15 => 7,
 		_ => throw new NotSupportedException($"Unsupported register: {reg}")
 	};
 
@@ -657,7 +657,8 @@ public sealed class X86CodeEmitter {
 		reg is >= X86Register.R8 and <= X86Register.R15 or
 				 >= X86Register.R8D and <= X86Register.R15D or
 				 >= X86Register.R8W and <= X86Register.R15W or
-				 >= X86Register.R8B and <= X86Register.R15B;
+				 >= X86Register.R8B and <= X86Register.R15B or
+				 >= X86Register.XMM8 and <= X86Register.XMM15;
 
 	private void EmitRexW(X86Register? r = null, X86Register? rm = null) {
 		byte rex = 0x48; // REX.W
