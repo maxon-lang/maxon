@@ -86,9 +86,64 @@ public static class StandardToX86Patterns {
 			var src = new VRegOperand(srcValue.Id, IsFloat: isFloat);
 			var dst = new VRegOperand(destArg.Value.Id, IsFloat: isFloat);
 
-			if (isFloat) rewriter.Insert(new MovsdOp(dst, src));
-			else rewriter.Insert(new MovOp(dst, src));
+			EmitMovMaybeFloat(dst, src, isFloat, rewriter);
 		}
+	}
+
+	/// <summary>
+	/// Emits MOV or MOVSD based on float-ness.
+	/// </summary>
+	internal static void EmitMovMaybeFloat(X86Operand dst, X86Operand src, bool isFloat, ConversionPatternRewriter rewriter) {
+		if (isFloat) rewriter.Insert(new MovsdOp(dst, src));
+		else rewriter.Insert(new MovOp(dst, src));
+	}
+
+	/// <summary>
+	/// Emits SETcc + zero-extend for boolean results.
+	/// </summary>
+	internal static void EmitSetccResult(X86CondCode cond, VRegOperand result, ConversionPatternRewriter rewriter) {
+		rewriter.Insert(new SetccOp(cond, result));
+		// Zero-extend setcc result to avoid stale upper bits affecting later tests.
+		rewriter.Insert(new MovzxOp(result, result, isByte: true));
+	}
+
+	/// <summary>
+	/// Emits a runtime call with one argument in RCX and optional RAX result.
+	/// </summary>
+	internal static void EmitRuntimeCall1(string name, X86Operand arg1, VRegOperand? result, ConversionPatternRewriter rewriter) {
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), arg1));
+		rewriter.Insert(new X86CallOp(name));
+		if (result is not null) rewriter.Insert(new MovOp(result, new RegOperand(X86Register.RAX)));
+	}
+
+	/// <summary>
+	/// Emits a runtime call with two arguments in RCX/RDX and optional RAX result.
+	/// </summary>
+	internal static void EmitRuntimeCall2(string name, X86Operand arg1, X86Operand arg2, VRegOperand? result, ConversionPatternRewriter rewriter) {
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), arg1));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), arg2));
+		rewriter.Insert(new X86CallOp(name));
+		if (result is not null) rewriter.Insert(new MovOp(result, new RegOperand(X86Register.RAX)));
+	}
+
+	/// <summary>
+	/// Moves a value into the ABI return register.
+	/// </summary>
+	internal static void EmitMoveToReturnRegister(MlirValue value, ConversionPatternRewriter rewriter) {
+		bool isFloat = value.Type is FloatType;
+		var src = new VRegOperand(value.Id, IsFloat: isFloat);
+		var dst = new RegOperand(isFloat ? X86Register.XMM0 : X86Register.RAX);
+		EmitMovMaybeFloat(dst, src, isFloat, rewriter);
+	}
+
+	/// <summary>
+	/// Moves the ABI return register into a destination value.
+	/// </summary>
+	internal static void EmitMoveFromReturnRegister(MlirValue result, ConversionPatternRewriter rewriter) {
+		bool isFloat = result.Type is FloatType;
+		var dst = new VRegOperand(result.Id, IsFloat: isFloat);
+		var src = new RegOperand(isFloat ? X86Register.XMM0 : X86Register.RAX);
+		EmitMovMaybeFloat(dst, src, isFloat, rewriter);
 	}
 
 	/// <summary>
@@ -280,9 +335,7 @@ public sealed class LowerCmpIOp : ConversionPattern<CmpIOp> {
 	protected override bool MatchAndRewrite(CmpIOp op, ConversionPatternRewriter rewriter) {
 		var result = new VRegOperand(op.Result.Id);
 		rewriter.Insert(new CmpOp(new VRegOperand(op.Lhs.Id), new VRegOperand(op.Rhs.Id)));
-		rewriter.Insert(new SetccOp(MapPredicate(op.Predicate), result));
-		// Zero-extend setcc result to avoid stale upper bits affecting later tests.
-		rewriter.Insert(new MovzxOp(result, result, isByte: true));
+		StandardToX86Patterns.EmitSetccResult(MapPredicate(op.Predicate), result, rewriter);
 		return true;
 	}
 
@@ -312,9 +365,7 @@ public sealed class LowerCmpFOp : ConversionPattern<CmpFOp> {
 		rewriter.Insert(new ComiOp(
 			new VRegOperand(op.Lhs.Id, IsFloat: true),
 			new VRegOperand(op.Rhs.Id, IsFloat: true)));
-		rewriter.Insert(new SetccOp(MapPredicate(op.Predicate), result));
-		// Zero-extend setcc result to avoid stale upper bits affecting later tests.
-		rewriter.Insert(new MovzxOp(result, result, isByte: true));
+		StandardToX86Patterns.EmitSetccResult(MapPredicate(op.Predicate), result, rewriter);
 		return true;
 	}
 
@@ -452,10 +503,7 @@ public sealed class LowerFuncCallOp : ConversionPattern<FuncCallOp> {
 
 		// Handle result
 		if (op.Result is not null) {
-			bool isFloat = op.Result.Type is FloatType;
-			var dst = new VRegOperand(op.Result.Id, IsFloat: isFloat);
-			if (isFloat) rewriter.Insert(new MovsdOp(dst, new RegOperand(X86Register.XMM0)));
-			else rewriter.Insert(new MovOp(dst, new RegOperand(X86Register.RAX)));
+			StandardToX86Patterns.EmitMoveFromReturnRegister(op.Result, rewriter);
 		}
 
 		return true;
@@ -466,11 +514,7 @@ public sealed class LowerReturnOp : ConversionPattern<ReturnOp> {
 	protected override bool MatchAndRewrite(ReturnOp op, ConversionPatternRewriter rewriter) {
 		if (op.ReturnValues.Count > 0) {
 			var retVal = op.ReturnValues[0];
-			bool isFloat = retVal.Type is FloatType;
-			var val = new VRegOperand(retVal.Id, IsFloat: isFloat);
-
-			if (isFloat) rewriter.Insert(new MovsdOp(new RegOperand(X86Register.XMM0), val));
-			else rewriter.Insert(new MovOp(new RegOperand(X86Register.RAX), val));
+			StandardToX86Patterns.EmitMoveToReturnRegister(retVal, rewriter);
 		}
 		rewriter.Insert(new EpilogueOp());
 		rewriter.Insert(new RetOp());
@@ -550,8 +594,7 @@ public sealed class LowerStoreOp : ConversionPattern<StoreOp> {
 		var mem = MemOperandHelper.Build(op.MemRef, op.Indices, op.Value.Type.SizeInBytes, rewriter);
 		var src = new VRegOperand(op.Value.Id, IsFloat: op.Value.Type is FloatType);
 
-		if (op.Value.Type is FloatType) rewriter.Insert(new MovsdOp(mem, src));
-		else rewriter.Insert(new MovOp(mem, src));
+		StandardToX86Patterns.EmitMovMaybeFloat(mem, src, op.Value.Type is FloatType, rewriter);
 		return true;
 	}
 }
@@ -643,14 +686,11 @@ public sealed class LowerMaxFOp : FloatBinaryPattern<MaxFOp, MaxsdOp>;
 /// </summary>
 public sealed class LowerHeapAllocOp : ConversionPattern<HeapAllocOp> {
 	protected override bool MatchAndRewrite(HeapAllocOp op, ConversionPatternRewriter rewriter) {
-		// Move size to RCX (first argument)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Size.Id)));
-
-		// Call maxon_alloc(size)
-		rewriter.Insert(new X86CallOp("maxon_alloc"));
-
-		// Move result from RAX to destination
-		rewriter.Insert(new MovOp(new VRegOperand(op.Result.Id), new RegOperand(X86Register.RAX)));
+		StandardToX86Patterns.EmitRuntimeCall1(
+			"maxon_alloc",
+			new VRegOperand(op.Size.Id),
+			new VRegOperand(op.Result.Id),
+			rewriter);
 
 		return true;
 	}
@@ -662,17 +702,12 @@ public sealed class LowerHeapAllocOp : ConversionPattern<HeapAllocOp> {
 /// </summary>
 public sealed class LowerHeapReallocOp : ConversionPattern<HeapReallocOp> {
 	protected override bool MatchAndRewrite(HeapReallocOp op, ConversionPatternRewriter rewriter) {
-		// Move ptr to RCX (first argument)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Ptr.Id)));
-
-		// Move newSize to RDX (second argument)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new VRegOperand(op.NewSize.Id)));
-
-		// Call maxon_realloc(ptr, size)
-		rewriter.Insert(new X86CallOp("maxon_realloc"));
-
-		// Move result from RAX to destination
-		rewriter.Insert(new MovOp(new VRegOperand(op.Result.Id), new RegOperand(X86Register.RAX)));
+		StandardToX86Patterns.EmitRuntimeCall2(
+			"maxon_realloc",
+			new VRegOperand(op.Ptr.Id),
+			new VRegOperand(op.NewSize.Id),
+			new VRegOperand(op.Result.Id),
+			rewriter);
 
 		return true;
 	}
@@ -684,17 +719,12 @@ public sealed class LowerHeapReallocOp : ConversionPattern<HeapReallocOp> {
 /// </summary>
 public sealed class LowerHeapReallocOrAllocOp : ConversionPattern<HeapReallocOrAllocOp> {
 	protected override bool MatchAndRewrite(HeapReallocOrAllocOp op, ConversionPatternRewriter rewriter) {
-		// Move ptr to RCX (first argument)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Ptr.Id)));
-
-		// Move newSize to RDX (second argument)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new VRegOperand(op.NewSize.Id)));
-
-		// Call maxon_realloc(ptr, size) - handles NULL ptr internally
-		rewriter.Insert(new X86CallOp("maxon_realloc"));
-
-		// Move result from RAX to destination
-		rewriter.Insert(new MovOp(new VRegOperand(op.Result.Id), new RegOperand(X86Register.RAX)));
+		StandardToX86Patterns.EmitRuntimeCall2(
+			"maxon_realloc",
+			new VRegOperand(op.Ptr.Id),
+			new VRegOperand(op.NewSize.Id),
+			new VRegOperand(op.Result.Id),
+			rewriter);
 
 		return true;
 	}
@@ -706,11 +736,11 @@ public sealed class LowerHeapReallocOrAllocOp : ConversionPattern<HeapReallocOrA
 /// </summary>
 public sealed class LowerHeapFreeOp : ConversionPattern<HeapFreeOp> {
 	protected override bool MatchAndRewrite(HeapFreeOp op, ConversionPatternRewriter rewriter) {
-		// Move ptr to RCX (first argument)
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Ptr.Id)));
-
-		// Call maxon_free(ptr) - handles NULL ptr internally
-		rewriter.Insert(new X86CallOp("maxon_free"));
+		StandardToX86Patterns.EmitRuntimeCall1(
+			"maxon_free",
+			new VRegOperand(op.Ptr.Id),
+			null,
+			rewriter);
 
 		return true;
 	}
@@ -838,8 +868,11 @@ public sealed class LowerManagedMemoryMakeUniqueOp : ConversionPattern<ManagedMe
 		rewriter.Insert(new ImulOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.R11)));
 
 		// Copy (RSI=src, RDI=dest, RCX=count)
-		rewriter.Insert(new CldOp());
-		rewriter.Insert(new RepMovsbOp());
+		StandardToX86Patterns.EmitRepMovsbCore(
+			new RegOperand(X86Register.RDI),
+			new RegOperand(X86Register.RSI),
+			new RegOperand(X86Register.RCX),
+			rewriter);
 
 		// Restore new buffer address
 		rewriter.Insert(new MovOp(new RegOperand(X86Register.RAX),
