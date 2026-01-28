@@ -29,7 +29,17 @@ public class MlirPipeline {
 	/// <param name="program">The program AST to compile</param>
 	/// <param name="mutationAnalyzer">Mutation analysis results for ownership tracking</param>
 	/// <param name="returnIr">If true, include X86 IR in the result</param>
-	public MlirPipelineResult Run(ProgramAst program, MutationAnalyzer mutationAnalyzer, bool returnIr = false) {
+	/// <param name="dumpStagesBasePath">If set, write IR at each pipeline stage</param>
+	public MlirPipelineResult Run(ProgramAst program, MutationAnalyzer mutationAnalyzer, bool returnIr = false, string? dumpStagesBasePath = null) {
+		// Helper to dump stage if requested
+		void DumpStage(MlirModule mod, string stageName) {
+			if (dumpStagesBasePath != null) {
+				var path = $"{dumpStagesBasePath}.{stageName}.mlir";
+				WriteMlirOutput(mod, path);
+				Logger.Info(LogCategory.Compiler, $"Wrote {path}");
+			}
+		}
+
 		// AST → Maxon Dialect
 		Logger.Debug(LogCategory.Compiler, "Converting AST to Maxon dialect");
 		var converter = new AstToMaxonConverter(mutationAnalyzer);
@@ -45,6 +55,8 @@ public class MlirPipeline {
 
 		// Renumber all SSA values after dead function elimination to get clean sequential IDs
 		module.RenumberValues();
+
+		DumpStage(module, "1-maxon");
 
 		// Lower Maxon → Standard dialects
 		Logger.Debug(LogCategory.Compiler, "Lowering Maxon to Standard dialects");
@@ -65,6 +77,8 @@ public class MlirPipeline {
 		maxonToStandard.AddLegalDialect("cf");
 		maxonToStandard.Run(module);
 
+		DumpStage(module, "2-standard");
+
 		// Debug: print IR after Maxon->Standard lowering
 		if (Logger.GetLevel(LogCategory.Compiler) <= LogLevel.Trace) {
 			var postMaxonPrinter = new MlirPrinter();
@@ -76,6 +90,11 @@ public class MlirPipeline {
 		Logger.Debug(LogCategory.Compiler, "Running Standard dialect passes");
 		var standardPasses = new PassManager(_context);
 		standardPasses.AddPass(new Mem2RegPass());
+		standardPasses.Run(module);
+
+		DumpStage(module, "3-mem2reg");
+
+		standardPasses = new PassManager(_context);
 		standardPasses.AddPass(new LICMPass());
 		standardPasses.AddPass(new ConstantFoldingPass());
 		standardPasses.AddPass(new JumpThreadingPass()); // Re-enabled for testing
@@ -99,6 +118,8 @@ public class MlirPipeline {
 		var frameLayoutPass = new FrameLayoutAnalysisPass();
 		frameLayoutPass.Run(module);
 
+		DumpStage(module, "4-optimized");
+
 		// Lower Standard → X86 dialect
 		Logger.Debug(LogCategory.Compiler, "Lowering Standard to X86 dialect");
 
@@ -115,6 +136,8 @@ public class MlirPipeline {
 		standardToX86.AddLegalDialect("x86");
 		standardToX86.Run(module);
 
+		DumpStage(module, "5-x86");
+
 		// Debug: print IR after lowering, before frame insertion
 		if (Logger.GetLevel(LogCategory.Compiler) <= LogLevel.Trace) {
 			var postPrinter = new MlirPrinter();
@@ -127,10 +150,14 @@ public class MlirPipeline {
 		var framePass = new FunctionFramePass();
 		framePass.Run(module);
 
+		DumpStage(module, "6-frame");
+
 		// Register allocation
 		Logger.Debug(LogCategory.Compiler, "Allocating registers");
 		var regAllocPass = new RegisterAllocationPass();
 		regAllocPass.Run(module);
+
+		DumpStage(module, "7-regalloc");
 
 		// Debug: print IR after register allocation
 		if (Logger.GetLevel(LogCategory.Compiler) <= LogLevel.Trace) {
@@ -143,6 +170,8 @@ public class MlirPipeline {
 		Logger.Debug(LogCategory.Compiler, "Running peephole optimization");
 		var peepholePass = new PeepholeOptimizationPass();
 		peepholePass.Run(module);
+
+		DumpStage(module, "8-final");
 
 		// Capture X86 IR if requested
 		string? x86Ir = null;

@@ -252,8 +252,11 @@ public sealed class LowerRemSIOp() : DivisionPattern<RemSIOp>(X86Register.RDX);
 
 public sealed class LowerCmpIOp : ConversionPattern<CmpIOp> {
 	protected override bool MatchAndRewrite(CmpIOp op, ConversionPatternRewriter rewriter) {
+		var result = new VRegOperand(op.Result.Id);
 		rewriter.Insert(new CmpOp(new VRegOperand(op.Lhs.Id), new VRegOperand(op.Rhs.Id)));
-		rewriter.Insert(new SetccOp(MapPredicate(op.Predicate), new VRegOperand(op.Result.Id)));
+		rewriter.Insert(new SetccOp(MapPredicate(op.Predicate), result));
+		// Zero-extend setcc result to avoid stale upper bits affecting later tests.
+		rewriter.Insert(new MovzxOp(result, result, isByte: true));
 		return true;
 	}
 
@@ -279,10 +282,13 @@ public sealed class LowerDivFOp : FloatBinaryPattern<DivFOp, DivsdOp>;
 
 public sealed class LowerCmpFOp : ConversionPattern<CmpFOp> {
 	protected override bool MatchAndRewrite(CmpFOp op, ConversionPatternRewriter rewriter) {
+		var result = new VRegOperand(op.Result.Id);
 		rewriter.Insert(new ComiOp(
 			new VRegOperand(op.Lhs.Id, IsFloat: true),
 			new VRegOperand(op.Rhs.Id, IsFloat: true)));
-		rewriter.Insert(new SetccOp(MapPredicate(op.Predicate), new VRegOperand(op.Result.Id)));
+		rewriter.Insert(new SetccOp(MapPredicate(op.Predicate), result));
+		// Zero-extend setcc result to avoid stale upper bits affecting later tests.
+		rewriter.Insert(new MovzxOp(result, result, isByte: true));
 		return true;
 	}
 

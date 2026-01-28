@@ -2104,7 +2104,16 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 						$"cannot assign to static field '{staticFieldName}' because it is immutable (declare with 'var' to make it mutable)",
 						fieldAssign.Location?.Line, fieldAssign.Location?.Column);
 				}
-				EmitStore(LowerExpression(fieldAssign.Value), EmitGetGlobal(global));
+				var value = LowerExpression(fieldAssign.Value);
+				var addr = EmitGetGlobal(global);
+				if (ShouldReturnAddress(addr)) {
+					var size = global.Type.SizeInBytes;
+					var sizeOp = ConstantOp.Int(size, IntegerType.I64);
+					InsertOp(sizeOp);
+					InsertOp(new MemCpyOp(addr, value, sizeOp.Result));
+				} else {
+					EmitStore(value, addr);
+				}
 				return;
 			}
 			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
@@ -3184,7 +3193,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Use the VariableBinding union to determine if we need to load
 		if (_namedValues.TryGetValue(name, out var binding)) {
 			return binding switch {
-				VariableBinding.StackSlot slot => EmitLoad(slot.Address),
+				VariableBinding.StackSlot slot => ShouldReturnAddress(slot.Address)
+					? slot.Address
+					: EmitLoad(slot.Address),
 				VariableBinding.Direct direct => direct.Value,
 				_ => throw new InvalidOperationException($"Unknown VariableBinding variant for {name}")
 			};
@@ -3208,8 +3219,21 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 
 		var addr = GetVariableAddress(name);
+		if (addr.Type is MemRefType memref && ShouldCopyAggregate(memref.ElementType)) {
+			var size = memref.ElementType.SizeInBytes;
+			var sizeOp = ConstantOp.Int(size, IntegerType.I64);
+			InsertOp(sizeOp);
+			InsertOp(new MemCpyOp(addr, value, sizeOp.Result));
+			return;
+		}
 		EmitStore(value, addr);
 	}
+
+	private static bool ShouldReturnAddress(MlirValue address) =>
+		address.Type is MemRefType memref && ShouldCopyAggregate(memref.ElementType);
+
+	private static bool ShouldCopyAggregate(MlirType type) =>
+		type is MaxonStructType or MaxonErrorUnionType;
 
 	/// <summary>
 	/// Tries to set a field on self when inside a method.

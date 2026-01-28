@@ -80,6 +80,7 @@ func.func @main() -> i64 {
     x86.mov rcx, r8
     x86.cmp rcx, rbx
     x86.setne rcx
+    x86.movzx rcx, rcx
     x86.test rcx, rcx
     x86.jne try.error
     x86.jmp try.success
@@ -116,6 +117,7 @@ func.func @Array$int.reserve(%self: memref<!maxon.struct<Array$int>>, %minCapaci
     x86.mov rcx, qword ptr [rdx]
     x86.cmp rbx, rcx
     x86.setg rcx
+    x86.movzx rcx, rcx
     x86.test rcx, rcx
     x86.jne then
     x86.jmp merge
@@ -192,7 +194,7 @@ func.func @Array$int.push(%self: memref<!maxon.struct<Array$int>>, %value: i64) 
 
 func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %requiredLen: i64) {
   ^entry(%self: memref<!maxon.struct<Array$int>>, %requiredLen: i64):
-    x86.prologue stack_size=88 saved_gprs=[RBX,R12,R13,R14,R15]
+    x86.prologue stack_size=104 saved_gprs=[RBX,R12,R13,R14,R15]
     x86.mov rbx, rcx
     x86.mov rax, rdx
     x86.lea r12, qword ptr [rbp-40]
@@ -203,6 +205,7 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
     x86.mov rcx, qword ptr [r12]
     x86.cmp rcx, rax
     x86.setg rcx
+    x86.movzx rcx, rcx
     x86.test rcx, rcx
     x86.jne then
     x86.jmp merge
@@ -213,6 +216,7 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
     x86.mov rcx, 4
     x86.cmp rax, rcx
     x86.setl rcx
+    x86.movzx rcx, rcx
     x86.test rcx, rcx
     x86.jne then_1
     x86.jmp merge_1
@@ -230,6 +234,7 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
     x86.mov rcx, qword ptr [r13]
     x86.cmp rcx, r14
     x86.setl rcx
+    x86.movzx rcx, rcx
     x86.test rcx, rcx
     x86.jne while.body
     x86.jmp while.exit
@@ -259,25 +264,57 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
     x86.mov r11, rdx
     x86.test r10, r10
     x86.jz heap_alloc_1
+    x86.mov qword ptr [rbp-80], rbx
+    x86.mov qword ptr [rbp-88], r12
+    x86.mov qword ptr [rbp-96], r13
+    x86.mov qword ptr [rbp-104], r14
     x86.call extern kernel32.dll::GetProcessHeap
+    x86.mov r13, qword ptr [rbp-96]
+    x86.mov r14, qword ptr [rbp-104]
+    x86.mov r12, qword ptr [rbp-88]
+    x86.mov rbx, qword ptr [rbp-80]
     x86.mov rcx, rax
     x86.mov rdx, 0
     x86.mov r8, r10
     x86.mov r9, r11
+    x86.mov qword ptr [rbp-80], rbx
+    x86.mov qword ptr [rbp-88], r12
+    x86.mov qword ptr [rbp-96], r13
+    x86.mov qword ptr [rbp-104], r14
     x86.call extern kernel32.dll::HeapReAlloc
+    x86.mov r13, qword ptr [rbp-96]
+    x86.mov r14, qword ptr [rbp-104]
+    x86.mov r12, qword ptr [rbp-88]
+    x86.mov rbx, qword ptr [rbp-80]
     x86.jmp heap_done_1
     heap_alloc_1:
+    x86.mov qword ptr [rbp-80], rbx
+    x86.mov qword ptr [rbp-88], r12
+    x86.mov qword ptr [rbp-96], r13
+    x86.mov qword ptr [rbp-104], r14
     x86.call extern kernel32.dll::GetProcessHeap
+    x86.mov r13, qword ptr [rbp-96]
+    x86.mov r14, qword ptr [rbp-104]
+    x86.mov r12, qword ptr [rbp-88]
+    x86.mov rbx, qword ptr [rbp-80]
     x86.mov rcx, rax
     x86.mov rdx, 0
     x86.mov r8, r11
+    x86.mov qword ptr [rbp-80], rbx
+    x86.mov qword ptr [rbp-88], r12
+    x86.mov qword ptr [rbp-96], r13
+    x86.mov qword ptr [rbp-104], r14
     x86.call extern kernel32.dll::HeapAlloc
+    x86.mov r13, qword ptr [rbp-96]
+    x86.mov r14, qword ptr [rbp-104]
+    x86.mov r12, qword ptr [rbp-88]
+    x86.mov rbx, qword ptr [rbp-80]
     heap_done_1:
     x86.mov rdx, rax
     x86.mov qword ptr [rbp-56], r15
     x86.mov r15, qword ptr [rbp-64]
     x86.mov qword ptr [r15], rdx
-    x86.mov qword ptr [rbp-80], r13
+    x86.mov qword ptr [rbp-96], r13
     x86.mov r15, qword ptr [rbp-72]
     x86.mov r13, qword ptr [rbp-56]
     x86.mov qword ptr [r15], r13
@@ -298,6 +335,7 @@ func.func @Array$int.get(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayEr
     x86.mov r9, 0
     x86.cmp rax, r9
     x86.setl r9
+    x86.movzx r9, r9
     x86.test r9, r9
     x86.jne then
     x86.jmp merge
@@ -313,6 +351,7 @@ func.func @Array$int.get(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayEr
   ^merge:
     x86.cmp rax, r8
     x86.setge r8
+    x86.movzx r8, r8
     x86.test r8, r8
     x86.jne then_1
     x86.jmp merge_1

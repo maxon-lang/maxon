@@ -20,7 +20,8 @@ public class Compiler {
 	/// <param name="outputPath">Path for the output executable</param>
 	/// <param name="mlirOutputPath">Optional path to write MLIR output</param>
 	/// <param name="returnIr">If true, include X86 IR in the result</param>
-	public static CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false) {
+	/// <param name="dumpStagesBasePath">If set, write IR at each pipeline stage (e.g., "foo" -> "foo.1-maxon.mlir")</param>
+	public static CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
 		// Track the original user source file for error reporting (before prepending stdlib)
 		var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
@@ -69,7 +70,7 @@ public class Compiler {
 
 			// MLIR pipeline (AST → Maxon → Standard → X86 dialect)
 			var pipeline = new MlirPipeline();
-			var mlirResult = pipeline.Run(program, semanticAnalyzer.MutationAnalyzer!, returnIr);
+			var mlirResult = pipeline.Run(program, semanticAnalyzer.MutationAnalyzer!, returnIr, dumpStagesBasePath);
 
 			// Write MLIR if requested
 			if (mlirOutputPath != null) {

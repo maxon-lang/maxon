@@ -162,10 +162,11 @@ public sealed class LowerFieldGetOp : ConversionPattern<FieldGetOp> {
 public sealed class LowerFieldSetOp : ConversionPattern<FieldSetOp> {
 	protected override bool MatchAndRewrite(FieldSetOp op, ConversionPatternRewriter rewriter) {
 		var fieldPtr = LowerFieldGetOp.EmitFieldPtr(op.Struct, op.FieldName, rewriter);
-
-		var store = new StoreOp(op.Value, fieldPtr.Result);
-		rewriter.Insert(store);
-
+		if (fieldPtr.Result.Type is not PtrType ptrType || ptrType.ElementType is null) {
+			throw new InvalidOperationException("Field pointer must have an element type");
+		}
+		var storeAction = StoreSemantics.DetermineStoreAction(op.Value, ptrType.ElementType);
+		StoreSemantics.EmitStore(storeAction, fieldPtr.Result, rewriter);
 		return true;
 	}
 }

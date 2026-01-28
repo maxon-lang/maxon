@@ -35,6 +35,7 @@ class Program {
 		Console.WriteLine();
 		Console.WriteLine("Build options (compile, build, run):");
 		Console.WriteLine("  --emit-ir                Write .mlir file");
+		Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.mlir, etc.)");
 		Console.WriteLine();
 		Console.WriteLine("Spec/unit test options:");
 		Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
@@ -56,15 +57,18 @@ class Program {
 		return 1;
 	}
 
-	static (bool emitIr, bool valid) ParseOptions(string[] args, HashSet<string>? additionalOptions = null) {
+	static (bool emitIr, bool dumpStages, bool valid) ParseOptions(string[] args, HashSet<string>? additionalOptions = null) {
 		var emitIr = false;
+		var dumpStages = false;
 
 		foreach (var arg in args) {
 			if (arg == "--emit-ir") {
 				emitIr = true;
+			} else if (arg == "--dump-stages") {
+				dumpStages = true;
 			} else if (arg.StartsWith("--log=")) {
 				if (!Logger.ParseOption(arg["--log=".Length..])) {
-					return (false, false);
+					return (false, false, false);
 				}
 			} else if (arg.StartsWith('-')) {
 				var recognized = false;
@@ -77,16 +81,16 @@ class Program {
 					}
 				}
 				if (!recognized) {
-					return (false, false);
+					return (false, false, false);
 				}
 			}
 		}
 
-		return (emitIr, true);
+		return (emitIr, dumpStages, true);
 	}
 
 	static int RunCompile(string[] args) {
-		var (emitIr, valid) = ParseOptions(args);
+		var (emitIr, dumpStages, valid) = ParseOptions(args);
 		if (!valid) return Fail();
 
 		string? sourceFile = null;
@@ -115,7 +119,12 @@ class Program {
 			mlirOutputPath = Path.ChangeExtension(sourceFile, ".mlir");
 		}
 
-		var result = Compiler.Compiler.Compile(sources, outputPath, mlirOutputPath);
+		string? dumpStagesBasePath = null;
+		if (dumpStages) {
+			dumpStagesBasePath = Path.ChangeExtension(sourceFile, null);
+		}
+
+		var result = Compiler.Compiler.Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
 		if (!result.Success && result.Error != null) {
 			Logger.Error(LogCategory.Compiler, result.Error);
 		}
@@ -123,7 +132,7 @@ class Program {
 	}
 
 	static int RunBuild(string[] args) {
-		var (emitIr, valid) = ParseOptions(args);
+		var (emitIr, dumpStages, valid) = ParseOptions(args);
 		if (!valid) return Fail();
 
 		string? directory = null;
@@ -156,7 +165,12 @@ class Program {
 			mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
 		}
 
-		var result = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath);
+		string? dumpStagesBasePath = null;
+		if (dumpStages) {
+			dumpStagesBasePath = Path.ChangeExtension(mainFile, null);
+		}
+
+		var result = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
 		if (!result.Success && result.Error != null) {
 			Logger.Error(LogCategory.Compiler, result.Error);
 		}
@@ -164,7 +178,7 @@ class Program {
 	}
 
 	static int RunRun(string[] args) {
-		var (emitIr, valid) = ParseOptions(args);
+		var (emitIr, dumpStages, valid) = ParseOptions(args);
 		if (!valid) return Fail();
 
 		string? path = null;
@@ -205,7 +219,12 @@ class Program {
 			mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
 		}
 
-		var result = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath);
+		string? dumpStagesBasePath = null;
+		if (dumpStages) {
+			dumpStagesBasePath = Path.ChangeExtension(mainFile, null);
+		}
+
+		var result = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
 		if (!result.Success) {
 			if (result.Error != null) {
 				Logger.Error(LogCategory.Compiler, result.Error);
@@ -290,7 +309,7 @@ class Program {
 
 		// Parse common options (logging) - allows user overrides
 		var specTestOptions = new HashSet<string> { "--filter=", "--workers=" };
-		var (_, valid) = ParseOptions(args, specTestOptions);
+		var (_, _, valid) = ParseOptions(args, specTestOptions);
 		if (!valid) return Fail();
 
 		string? filter = null;
@@ -358,7 +377,7 @@ class Program {
 
 		// Parse common options (logging) - allows user overrides
 		var unitTestOptions = new HashSet<string> { "--filter=" };
-		var (_, valid) = ParseOptions(args, unitTestOptions);
+		var (_, _, valid) = ParseOptions(args, unitTestOptions);
 		if (!valid) return Fail();
 
 		string? filter = null;
