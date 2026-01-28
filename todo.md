@@ -2,8 +2,7 @@
 You *Are* Going To Read It
 
 ## Priorities
-- implement stdlib
-- implement command line params
+- implement command line params then do "fix for later" below
 - add new tests that actually test builtins at runtime (abs, trunc, etc) because the
   current tests get optimized to nothing
 - range()
@@ -208,3 +207,48 @@ Value: Vectors straight-line code. If you manually write x1 = a[0] + b[0]; x2 = 
 Phase 7: Interface conformance checking (verify types implement required methods)
 Phase 9: Export keyword enforcement (visibility rules)
 Phase 11: Interface declarations (parsing interface definitions)
+
+
+## fix for later 
+Fix for ClobberedRegisters in Peephole Optimizer
+The Problem
+The peephole optimizer's constant propagation pass tracks mov reg, imm instructions and later replaces mov destReg, srcReg with mov destReg, imm when beneficial. However, it only invalidated the constant mapping when an instruction explicitly wrote to a register as its first operand.
+
+This missed cases where instructions implicitly clobber registers without writing to them as an explicit operand. For example:
+
+call foo clobbers RAX, RCX, RDX, R8, R9, R10, R11 per Windows x64 ABI
+rep movsb clobbers RCX, RSI, RDI
+imul dst, src (2-operand form) clobbers RDX
+shl dst, count with variable count clobbers RCX
+The Fix
+Added code to invalidate constant mappings for all registers in ClobberedRegisters:
+
+
+// Invalidate for clobbered registers (e.g., calls clobber RAX, RCX, RDX, etc.)
+foreach (var clobbered in x86Op.ClobberedRegisters) {
+    regToImm.Remove(clobbered);
+}
+Test Case
+A test that would fail without this fix:
+
+
+// Test: peephole-clobber-invalidation
+// Verifies that constant propagation doesn't propagate across calls
+
+function identity(x int) returns int
+    return x
+end 'identity'
+
+function main() returns int
+    var a = 42
+    var b = identity(a)  // Call clobbers registers
+    // If peephole incorrectly propagates, it might use stale constant
+    return a + b
+end 'main'
+
+84
+However, this specific test would likely be optimized away by inlining. A more robust test would need to:
+
+Prevent inlining (e.g., recursive function or export to force preservation)
+Have a pattern where mov rcx, imm happens, then a call, then mov r9, rcx
+The fix is defensive - it ensures correctness if such patterns emerge from future code generation changes. The existing tests pass with it, and it adds no measurable overhead since ClobberedRegisters is typically empty or small.

@@ -228,7 +228,27 @@ public sealed class PeepholeOptimizationPass : FunctionPass {
 		var toRemove = new HashSet<int>();
 
 		for (int i = 0; i < ops.Count; i++) {
-			if (ops[i] is MovOp mov) {
+			var op = ops[i];
+
+			// Track any instruction that defines a register (not just mov reg, imm)
+			// This invalidates any previous constant mapping for that register
+			if (op is X86Op x86Op) {
+				// Invalidate for explicit destination register
+				if (x86Op.X86Operands.Count > 0 && x86Op.X86Operands[0] is RegOperand defReg) {
+					// Most instructions with a register as first operand write to it
+					// Exceptions: cmp, test, push don't write their first operand
+					if (op is not CmpOp and not TestOp and not PushOp) {
+						regToImm.Remove(defReg.Register);
+					}
+				}
+
+				// Invalidate for clobbered registers (e.g., calls clobber RAX, RCX, RDX, etc.)
+				foreach (var clobbered in x86Op.ClobberedRegisters) {
+					regToImm.Remove(clobbered);
+				}
+			}
+
+			if (op is MovOp mov) {
 				// Check if this is a mov reg, imm
 				if (mov.Dst is RegOperand dstReg && mov.Src is ImmOperand imm) {
 					regToImm[dstReg.Register] = (imm.Value, i);

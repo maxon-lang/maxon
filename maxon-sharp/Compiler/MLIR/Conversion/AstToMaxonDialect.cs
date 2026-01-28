@@ -2133,7 +2133,11 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			fieldAssign.Location?.Line, fieldAssign.Location?.Column);
 
 		if (!fieldInfo.IsMutable) {
-			var structType = (MaxonStructType)baseValue.Type;
+			var structType = baseValue.Type switch {
+				MaxonStructType st => st,
+				MemRefType mrt when mrt.ElementType is MaxonStructType st => st,
+				_ => throw new InvalidOperationException($"Unexpected type: {baseValue.Type}")
+			};
 			throw new CompileError(ErrorCode.ImmutableVariable,
 				$"cannot assign to field '{structType.Name}.{fieldAssign.FieldName}' because it is immutable (declare with 'var' to make it mutable)",
 				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
