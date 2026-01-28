@@ -59,14 +59,10 @@ public sealed class DeadStoreEliminationPass : AbstractPassBase {
 							}
 						}
 					}
-					// Track allocas used by memcpy/memmove (source/dest addresses escape)
+					// Track allocas used by memcpy (source/dest addresses escape)
 					if (op is MemCpyOp memcpy) {
 						escapedAllocas.Add(memcpy.Destination);
 						escapedAllocas.Add(memcpy.Source);
-					}
-					if (op is MemMoveOp memmove) {
-						escapedAllocas.Add(memmove.Destination);
-						escapedAllocas.Add(memmove.Source);
 					}
 					// Track allocas used by field_ptr (struct base address escapes)
 					if (op is FieldPtrOp fieldPtr) {

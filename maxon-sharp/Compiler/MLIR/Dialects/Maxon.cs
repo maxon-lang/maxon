@@ -972,30 +972,6 @@ public sealed class ManagedMemorySetLengthByRefOp : MaxonOp {
 }
 
 /// <summary>
-/// Shift elements right: maxon.managed_memory_shift_right %mem, %startIndex, %count
-/// </summary>
-public sealed class ManagedMemoryShiftRightOp : MaxonOp {
-	public override string Mnemonic => "managed_memory_shift_right";
-	public override bool HasSideEffects => true;
-
-	public MlirValue Memory => Operands[0];
-	public MlirValue StartIndex => Operands[1];
-	public MlirValue Count => Operands[2];
-	public MlirType ElementType { get; }
-
-	public ManagedMemoryShiftRightOp(MlirValue memory, MlirValue startIndex, MlirValue count, MlirType elementType) {
-		Operands.Add(memory);
-		Operands.Add(startIndex);
-		Operands.Add(count);
-		ElementType = elementType;
-	}
-
-	public override void Print(MlirPrinter printer) {
-		printer.PrintLine($"maxon.managed_memory_shift_right {Memory}, {StartIndex}, {Count}");
-	}
-}
-
-/// <summary>
 /// Shift elements left: maxon.managed_memory_shift_left %mem, %startIndex, %count
 /// </summary>
 public sealed class ManagedMemoryShiftLeftOp : MaxonOp {

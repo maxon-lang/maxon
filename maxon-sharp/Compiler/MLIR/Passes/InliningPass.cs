@@ -411,7 +411,6 @@ public sealed class InliningPass : AbstractPassBase {
 			ManagedMemorySetLengthOp memSetLen => CloneManagedMemorySetLengthOp(memSetLen, valueMap),
 			ManagedMemoryGrowByRefOp memGrowRef => CloneManagedMemoryGrowByRefOp(memGrowRef, valueMap),
 			ManagedMemorySetLengthByRefOp memSetLenRef => CloneManagedMemorySetLengthByRefOp(memSetLenRef, valueMap),
-			ManagedMemoryShiftRightOp memShiftR => CloneManagedMemoryShiftRightOp(memShiftR, valueMap),
 			ManagedMemoryShiftLeftOp memShiftL => CloneManagedMemoryShiftLeftOp(memShiftL, valueMap),
 
 			// Call operations (nested calls)
@@ -642,13 +641,6 @@ public sealed class InliningPass : AbstractPassBase {
 		var memoryPtr = RemapValue(original.MemoryPtr, valueMap);
 		var newLength = RemapValue(original.NewLength, valueMap);
 		return new ManagedMemorySetLengthByRefOp(memoryPtr, newLength);
-	}
-
-	private static ManagedMemoryShiftRightOp CloneManagedMemoryShiftRightOp(ManagedMemoryShiftRightOp original, Dictionary<MlirValue, MlirValue> valueMap) {
-		var memory = RemapValue(original.Memory, valueMap);
-		var startIndex = RemapValue(original.StartIndex, valueMap);
-		var count = RemapValue(original.Count, valueMap);
-		return new ManagedMemoryShiftRightOp(memory, startIndex, count, original.ElementType);
 	}
 
 	private static ManagedMemoryShiftLeftOp CloneManagedMemoryShiftLeftOp(ManagedMemoryShiftLeftOp original, Dictionary<MlirValue, MlirValue> valueMap) {

@@ -15,10 +15,12 @@ public static class UnitTests {
 	private const int TestTimeoutMs = 5000;
 
 	// IR patterns in final X86 IR (after lowering)
-	// memref.heap_free -> HeapFree call
-	// memref.heap_realloc -> HeapReAlloc call
-	private const string IrHeapFree = "HeapFree";
-	private const string IrHeapRealloc = "HeapReAlloc";
+	// memref.heap_free -> maxon_free call
+	// memref.heap_realloc -> maxon_realloc call
+	// memref.heap_alloc -> maxon_alloc call
+	private const string IrHeapFree = "maxon_free";
+	private const string IrHeapRealloc = "maxon_realloc";
+	private const string IrHeapAlloc = "maxon_alloc";
 
 	/// <summary>
 	/// Run all unit tests and return summary.
@@ -499,7 +501,7 @@ end 'main'
 			if (!success) return Fail(name, $"Compilation failed: {error}");
 			if (ir == null) return Fail(name, "No IR generated");
 			if (!ir.Contains("lea_rdata")) return Fail(name, "IR missing lea_rdata - array should start in rdata");
-			if (!ir.Contains("HeapAlloc")) return Fail(name, "IR missing HeapAlloc - COW should allocate heap");
+			if (!ir.Contains(IrHeapAlloc)) return Fail(name, $"IR missing {IrHeapAlloc} - COW should allocate heap");
 
 			var (found, rdataError) = VerifyRdataContains(tempExe, Int64ArrayToBytes(42));
 			if (rdataError != null) return Fail(name, rdataError);
@@ -541,8 +543,8 @@ end 'main'
 			if (rdataError != null) return Fail(name, rdataError);
 			if (!found) return Fail(name, ".rdata missing original data [1, 2, 3]");
 
-			int heapAllocCount = CountOccurrences(ir, "HeapAlloc");
-			if (heapAllocCount != 1) return Fail(name, $"Expected 1 HeapAlloc for COW, found {heapAllocCount}");
+			int heapAllocCount = CountOccurrences(ir, IrHeapAlloc);
+			if (heapAllocCount != 1) return Fail(name, $"Expected 1 {IrHeapAlloc} for COW, found {heapAllocCount}");
 
 			return Pass(name);
 		} finally {
@@ -570,7 +572,7 @@ end 'main'
 			if (!success) return Fail(name, $"Compilation failed: {error}");
 			if (ir == null) return Fail(name, "No IR generated");
 			if (ir.Contains("lea_rdata")) return Fail(name, "IR has lea_rdata - non-constant array shouldn't use rdata");
-			if (!ir.Contains("HeapAlloc")) return Fail(name, "IR missing HeapAlloc - non-constant array should use heap");
+			if (!ir.Contains(IrHeapAlloc)) return Fail(name, $"IR missing {IrHeapAlloc} - non-constant array should use heap");
 
 			return Pass(name);
 		} finally {

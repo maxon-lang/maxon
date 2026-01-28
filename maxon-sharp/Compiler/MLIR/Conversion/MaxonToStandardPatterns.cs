@@ -42,7 +42,6 @@ public static class MaxonToStandardPatterns {
 		patterns.Add<LowerManagedMemorySetAtOp>();
 		patterns.Add<LowerManagedMemoryGrowOp>();
 		patterns.Add<LowerManagedMemorySetLengthOp>();
-		patterns.Add<LowerManagedMemoryShiftRightOp>();
 		patterns.Add<LowerManagedMemoryShiftLeftOp>();
 		patterns.Add<LowerManagedMemoryGrowByRefOp>();
 		patterns.Add<LowerManagedMemorySetLengthByRefOp>();
@@ -867,61 +866,8 @@ public sealed class LowerManagedMemorySetLengthByRefOp : ConversionPattern<Manag
 }
 
 /// <summary>
-/// Lowers maxon.managed_memory_shift_right to memmove.
-/// First ensures COW by inserting make_unique.
-/// </summary>
-public sealed class LowerManagedMemoryShiftRightOp : ConversionPattern<ManagedMemoryShiftRightOp> {
-	protected override bool MatchAndRewrite(ManagedMemoryShiftRightOp op, ConversionPatternRewriter rewriter) {
-		// First, ensure the memory is unique (COW check)
-		var elemSizeForCow = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
-		rewriter.Insert(elemSizeForCow);
-		var makeUnique = new ManagedMemoryMakeUniqueOp(op.Memory, elemSizeForCow.Result);
-		rewriter.Insert(makeUnique);
-		var memory = makeUnique.Result;
-
-		// Load buffer pointer
-		var bufferPtr = new FieldPtrOp(memory, "_buffer", 0, new PtrType(IntegerType.I8));
-		rewriter.Insert(bufferPtr);
-		var bufferLoad = new LoadOp(bufferPtr.Result);
-		rewriter.Insert(bufferLoad);
-
-		var elemSize = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
-		rewriter.Insert(elemSize);
-
-		// Source: buffer + startIndex * elemSize
-		var srcOffset = new MulIOp(op.StartIndex, elemSize.Result);
-		rewriter.Insert(srcOffset);
-		var srcPtr = new PtrAddOp(bufferLoad.Result, srcOffset.Result, new PtrType(IntegerType.I8));
-		rewriter.Insert(srcPtr);
-
-		// Destination: buffer + (startIndex + count) * elemSize
-		var destIndex = new AddIOp(op.StartIndex, op.Count);
-		rewriter.Insert(destIndex);
-		var destOffset = new MulIOp(destIndex.Result, elemSize.Result);
-		rewriter.Insert(destOffset);
-		var destPtr = new PtrAddOp(bufferLoad.Result, destOffset.Result, new PtrType(IntegerType.I8));
-		rewriter.Insert(destPtr);
-
-		// Length to move: (len - startIndex) * elemSize
-		var lenPtr = new FieldPtrOp(memory, "_len", 8, IntegerType.I64);
-		rewriter.Insert(lenPtr);
-		var lenLoad = new LoadOp(lenPtr.Result);
-		rewriter.Insert(lenLoad);
-		var moveCount = new SubIOp(lenLoad.Result, op.StartIndex);
-		rewriter.Insert(moveCount);
-		var moveBytes = new MulIOp(moveCount.Result, elemSize.Result);
-		rewriter.Insert(moveBytes);
-
-		// Memmove (handles overlapping regions)
-		var memmove = new MemMoveOp(destPtr.Result, srcPtr.Result, moveBytes.Result);
-		rewriter.Insert(memmove);
-
-		return true;
-	}
-}
-
-/// <summary>
-/// Lowers maxon.managed_memory_shift_left to memmove.
+/// Lowers maxon.managed_memory_shift_left to memcpy.
+/// Shifts elements left (to lower addresses), which is safe for forward copy.
 /// First ensures COW by inserting make_unique.
 /// </summary>
 public sealed class LowerManagedMemoryShiftLeftOp : ConversionPattern<ManagedMemoryShiftLeftOp> {
@@ -956,21 +902,20 @@ public sealed class LowerManagedMemoryShiftLeftOp : ConversionPattern<ManagedMem
 		var destPtr = new PtrAddOp(bufferLoad.Result, destOffset.Result, new PtrType(IntegerType.I8));
 		rewriter.Insert(destPtr);
 
-		// Length to move: (len - startIndex - count) * elemSize
+		// Length to copy: (len - startIndex - count) * elemSize
 		var lenPtr = new FieldPtrOp(memory, "_len", 8, IntegerType.I64);
 		rewriter.Insert(lenPtr);
 		var lenLoad = new LoadOp(lenPtr.Result);
 		rewriter.Insert(lenLoad);
 		var temp = new SubIOp(lenLoad.Result, op.StartIndex);
 		rewriter.Insert(temp);
-		var moveCount = new SubIOp(temp.Result, op.Count);
-		rewriter.Insert(moveCount);
-		var moveBytes = new MulIOp(moveCount.Result, elemSize.Result);
-		rewriter.Insert(moveBytes);
+		var copyCount = new SubIOp(temp.Result, op.Count);
+		rewriter.Insert(copyCount);
+		var copyBytes = new MulIOp(copyCount.Result, elemSize.Result);
+		rewriter.Insert(copyBytes);
 
-		// Memmove (handles overlapping regions)
-		var memmove = new MemMoveOp(destPtr.Result, srcPtr.Result, moveBytes.Result);
-		rewriter.Insert(memmove);
+		var memcpy = new MemCpyOp(destPtr.Result, srcPtr.Result, copyBytes.Result);
+		rewriter.Insert(memcpy);
 
 		return true;
 	}

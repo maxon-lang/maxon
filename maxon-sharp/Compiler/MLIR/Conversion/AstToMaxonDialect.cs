@@ -1578,7 +1578,6 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			"__managed_memory_set_at" => LowerManagedMemorySetAtByRef(call, GetManagedMemoryPointer),
 			"__managed_memory_grow" => LowerManagedMemoryGrowByRef(call, GetElementType(), GetManagedMemoryPointer),
 			"__managed_memory_set_length" => LowerManagedMemorySetLengthByRef(call, GetManagedMemoryPointer),
-			"__managed_memory_shift_right" => LowerManagedMemoryShiftRightByRef(call, GetElementType(), GetManagedMemoryPointer),
 			"__managed_memory_shift_left" => LowerManagedMemoryShiftLeftByRef(call, GetElementType(), GetManagedMemoryPointer),
 			"__element_size" => LowerElementSize(GetElementType()),
 			_ => null
@@ -1659,17 +1658,6 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		var mem = LowerExpression(call.Args[0]);
 		var newLength = LowerExpression(call.Args[1]);
 		var op = new ManagedMemorySetLengthOp(mem, newLength);
-		InsertOp(op);
-		return VoidIntrinsicHandled;
-	}
-
-	private MlirValue LowerManagedMemoryShiftRight(CallExpr call, MlirType elementType) {
-		if (call.Args.Count != 3)
-			throw new ArgumentException("__managed_memory_shift_right requires 3 arguments (managed, startIndex, count)");
-		var mem = LowerExpression(call.Args[0]);
-		var startIndex = LowerExpression(call.Args[1]);
-		var count = LowerExpression(call.Args[2]);
-		var op = new ManagedMemoryShiftRightOp(mem, startIndex, count, elementType);
 		InsertOp(op);
 		return VoidIntrinsicHandled;
 	}
@@ -1772,18 +1760,6 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			InsertOp(op);
 			Logger.Debug(LogCategory.Mlir, $"LowerManagedMemorySetLengthByRef: inserted non-ByRef op in block {_currentBlock?.Name}");
 		}
-		return VoidIntrinsicHandled;
-	}
-
-	private MlirValue LowerManagedMemoryShiftRightByRef(CallExpr call, MlirType elementType, Func<Expr, MlirValue> getManagedPointer) {
-		if (call.Args.Count != 3)
-			throw new ArgumentException("__managed_memory_shift_right requires 3 arguments (managed, startIndex, count)");
-		var memPtr = getManagedPointer(call.Args[0]);
-		var startIndex = LowerExpression(call.Args[1]);
-		var count = LowerExpression(call.Args[2]);
-		// Pass pointer directly - lowering pattern uses FieldPtrOp which expects a pointer
-		var op = new ManagedMemoryShiftRightOp(memPtr, startIndex, count, elementType);
-		InsertOp(op);
 		return VoidIntrinsicHandled;
 	}
 

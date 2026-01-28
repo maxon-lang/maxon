@@ -397,28 +397,6 @@ public sealed class PtrAddOp : MemRefOp {
 }
 
 /// <summary>
-/// Memory move (handles overlapping regions): memref.memmove %dst, %src, %len
-/// </summary>
-public sealed class MemMoveOp : MemRefOp {
-	public override string Mnemonic => "memmove";
-	public override bool HasSideEffects => true;
-
-	public MlirValue Destination => Operands[0];
-	public MlirValue Source => Operands[1];
-	public MlirValue Length => Operands[2];
-
-	public MemMoveOp(MlirValue dst, MlirValue src, MlirValue length) {
-		Operands.Add(dst);
-		Operands.Add(src);
-		Operands.Add(length);
-	}
-
-	public override void Print(MlirPrinter printer) {
-		printer.PrintLine($"memref.memmove {Destination}, {Source}, {Length}");
-	}
-}
-
-/// <summary>
 /// Memory copy (non-overlapping): memref.memcpy %dst, %src, %len
 /// </summary>
 public sealed class MemCpyOp : MemRefOp {

@@ -65,7 +65,6 @@ public static class StandardToX86Patterns {
 		patterns.Add<LowerHeapReallocOrAllocOp>();
 		patterns.Add<LowerHeapFreeOp>();
 		patterns.Add<LowerPtrAddOp>();
-		patterns.Add<LowerMemMoveOp>();
 		patterns.Add<LowerMemCpyOp>();
 
 		// Maxon patterns that pass through to x86
@@ -90,6 +89,30 @@ public static class StandardToX86Patterns {
 			if (isFloat) rewriter.Insert(new MovsdOp(dst, src));
 			else rewriter.Insert(new MovOp(dst, src));
 		}
+	}
+
+	/// <summary>
+	/// Emits rep movsb sequence with RSI/RDI save/restore.
+	/// Copies RCX bytes from RSI to RDI.
+	/// </summary>
+	internal static void EmitRepMovsb(X86Operand dest, X86Operand src, X86Operand length, ConversionPatternRewriter rewriter) {
+		rewriter.Insert(new PushOp(new RegOperand(X86Register.RSI)));
+		rewriter.Insert(new PushOp(new RegOperand(X86Register.RDI)));
+		EmitRepMovsbCore(dest, src, length, rewriter);
+		rewriter.Insert(new PopOp(new RegOperand(X86Register.RDI)));
+		rewriter.Insert(new PopOp(new RegOperand(X86Register.RSI)));
+	}
+
+	/// <summary>
+	/// Emits rep movsb core sequence without RSI/RDI save/restore.
+	/// Caller must ensure RSI/RDI are saved if needed.
+	/// </summary>
+	internal static void EmitRepMovsbCore(X86Operand dest, X86Operand src, X86Operand length, ConversionPatternRewriter rewriter) {
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDI), dest));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RSI), src));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), length));
+		rewriter.Insert(new CldOp());
+		rewriter.Insert(new RepMovsbOp());
 	}
 }
 
@@ -711,78 +734,15 @@ public sealed class LowerPtrAddOp : ConversionPattern<PtrAddOp> {
 }
 
 /// <summary>
-/// Lowers memmove to inline rep movsb instruction.
-/// Note: This uses forward copy only. Overlapping regions where dest > src
-/// are not handled correctly. The compiler should ensure non-overlapping copies.
-/// Uses: RDI=dest, RSI=src, RCX=count, direction flag must be clear.
-/// </summary>
-public sealed class LowerMemMoveOp : ConversionPattern<MemMoveOp> {
-	protected override bool MatchAndRewrite(MemMoveOp op, ConversionPatternRewriter rewriter) {
-		// Save RSI and RDI (callee-saved on Windows x64)
-		rewriter.Insert(new PushOp(new RegOperand(X86Register.RSI)));
-		rewriter.Insert(new PushOp(new RegOperand(X86Register.RDI)));
-
-		// Load destination to RDI
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDI), new VRegOperand(op.Destination.Id)));
-
-		// Load source to RSI
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RSI), new VRegOperand(op.Source.Id)));
-
-		// Load length to RCX
-		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Length.Id)));
-
-		// Clear direction flag (forward copy)
-		rewriter.Insert(new CldOp());
-
-		// rep movsb - copy RCX bytes from [RSI] to [RDI]
-		rewriter.Insert(new RepMovsbOp());
-
-		// Restore RDI and RSI (reverse order)
-		rewriter.Insert(new PopOp(new RegOperand(X86Register.RDI)));
-		rewriter.Insert(new PopOp(new RegOperand(X86Register.RSI)));
-
-		return true;
-	}
-}
-
-/// <summary>
 /// Lowers memcpy to inline rep movsb instruction.
-/// Uses: RDI=dest, RSI=src, RCX=count, direction flag must be clear.
 /// </summary>
 public sealed class LowerMemCpyOp : ConversionPattern<MemCpyOp> {
 	protected override bool MatchAndRewrite(MemCpyOp op, ConversionPatternRewriter rewriter) {
-		Logger.Debug(LogCategory.Mlir, $"LowerMemCpyOp: dest=v{op.Destination.Id}, src=v{op.Source.Id}, len=v{op.Length.Id}");
-
-		// Save RSI and RDI (callee-saved on Windows x64)
-		var push1 = rewriter.Insert(new PushOp(new RegOperand(X86Register.RSI)));
-		Logger.Trace(LogCategory.Mlir, $"  Inserted: {push1.GetType().Name}");
-		var push2 = rewriter.Insert(new PushOp(new RegOperand(X86Register.RDI)));
-		Logger.Trace(LogCategory.Mlir, $"  Inserted: {push2.GetType().Name}");
-
-		// Load destination to RDI
-		_ = rewriter.Insert(new MovOp(new RegOperand(X86Register.RDI), new VRegOperand(op.Destination.Id)));
-		Logger.Trace(LogCategory.Mlir, $"  Inserted: mov rdi, v{op.Destination.Id}");
-
-		// Load source to RSI
-		_ = rewriter.Insert(new MovOp(new RegOperand(X86Register.RSI), new VRegOperand(op.Source.Id)));
-		Logger.Trace(LogCategory.Mlir, $"  Inserted: mov rsi, v{op.Source.Id}");
-
-		// Load length to RCX
-		var lenMov = rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new VRegOperand(op.Length.Id)));
-		Logger.Trace(LogCategory.Mlir, $"  Inserted: mov rcx, v{op.Length.Id} - op={lenMov.GetType().Name}, src={((MovOp)lenMov).Src}");
-
-		// Clear direction flag (forward copy)
-		var cld = rewriter.Insert(new CldOp());
-		Logger.Trace(LogCategory.Mlir, $"  Inserted: {cld.GetType().Name}");
-
-		// rep movsb - copy RCX bytes from [RSI] to [RDI]
-		var rep = rewriter.Insert(new RepMovsbOp());
-		Logger.Trace(LogCategory.Mlir, $"  Inserted: {rep.GetType().Name}");
-
-		// Restore RDI and RSI (reverse order)
-		rewriter.Insert(new PopOp(new RegOperand(X86Register.RDI)));
-		rewriter.Insert(new PopOp(new RegOperand(X86Register.RSI)));
-
+		StandardToX86Patterns.EmitRepMovsb(
+			new VRegOperand(op.Destination.Id),
+			new VRegOperand(op.Source.Id),
+			new VRegOperand(op.Length.Id),
+			rewriter);
 		return true;
 	}
 }
