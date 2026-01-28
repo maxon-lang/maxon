@@ -1887,6 +1887,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 	/// <summary>
 	/// Lowers an array literal like [1, 2, 3] to managed memory allocation and Array creation.
+	/// If all elements are compile-time constants, stores data in rdata section.
 	/// </summary>
 	private MlirValue LowerArrayLiteralExpr(ArrayLiteralExpr arrayLit) {
 		if (arrayLit.Elements.Count == 0) {
@@ -1901,26 +1902,44 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			throw new InvalidOperationException("__ManagedMemory type not registered");
 		}
 
-		// Infer element type from the first element
-		var firstElem = LowerExpression(arrayLit.Elements[0]);
-		var elementType = firstElem.Type;
-		var elemTypeName = elementType switch {
-			IntegerType { BitWidth: 64, IsSigned: true } => "int",
-			IntegerType { BitWidth: 32, IsSigned: true } => "int32",
-			IntegerType { BitWidth: 1 } => "bool",
-			FloatType { BitWidth: 64 } => "float",
-			FloatType { BitWidth: 32 } => "float32",
-			MaxonStructType st => st.Name,
-			_ => throw new NotSupportedException($"Cannot infer array element type from: {elementType}")
-		};
+		// Try to determine element type and check if all constant without lowering
+		var (elementType, elemTypeName) = InferArrayElementType(arrayLit.Elements[0]);
 
 		// Get or create the monomorphized Array type for this element type
 		var arrayType = GetOrCreateMonomorphizedType("Array", [elemTypeName]);
 
+		// Check if all elements are compile-time constants
+		// Store constant array literals in rdata section with COW (copy-on-write) for mutations
+		if (TrySerializeConstantArray(arrayLit.Elements, elementType, out var serializedData)) {
+			// Use rdata: store constant data in read-only section
+			var label = $"__arr_{ComputeDataHash(serializedData):X16}";
+			var constDataOp = new ConstDataOp(serializedData, label);
+			InsertOp(constDataOp);
+
+			// Create __ManagedMemory pointing to rdata
+			var countConst = EmitConstantInt(arrayLit.Elements.Count);
+			var elemSizeConst = EmitConstantInt(elementType.SizeInBytes);
+			var createFromRdataOp = new ManagedMemoryCreateFromRdataOp(
+				constDataOp.Result, countConst, elemSizeConst, managedMemoryType);
+			InsertOp(createFromRdataOp);
+
+			// Create the Array struct
+			var zeroConst = EmitConstantInt(0);
+			var fieldValues = new Dictionary<string, MlirValue> {
+				["iterIndex"] = zeroConst,
+				["managed"] = createFromRdataOp.Result
+			};
+
+			return EmitStructInit(arrayType, fieldValues);
+		}
+
+		// Fallback: heap allocation for non-constant arrays
+		var firstElem = LowerExpression(arrayLit.Elements[0]);
+
 		// Create managed memory for count elements
-		var countConst = EmitConstantInt(arrayLit.Elements.Count);
-		var elemSizeConst = EmitConstantInt(elementType.SizeInBytes);
-		var createOp = new ManagedMemoryCreateOp(countConst, elemSizeConst, managedMemoryType);
+		var countConstHeap = EmitConstantInt(arrayLit.Elements.Count);
+		var elemSizeConstHeap = EmitConstantInt(elementType.SizeInBytes);
+		var createOp = new ManagedMemoryCreateOp(countConstHeap, elemSizeConstHeap, managedMemoryType);
 		InsertOp(createOp);
 		var managedMem = createOp.Result;
 
@@ -1933,17 +1952,115 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 
 		// Set the length
-		var lenOp = new ManagedMemorySetLengthOp(managedMem, countConst);
+		var lenOp = new ManagedMemorySetLengthOp(managedMem, countConstHeap);
 		InsertOp(lenOp);
 
 		// Create the Array struct with the managed memory and iterIndex = 0
-		var zeroConst = EmitConstantInt(0);
-		var fieldValues = new Dictionary<string, MlirValue> {
-			["iterIndex"] = zeroConst,
+		var zeroConstHeap = EmitConstantInt(0);
+		var fieldValuesHeap = new Dictionary<string, MlirValue> {
+			["iterIndex"] = zeroConstHeap,
 			["managed"] = managedMem
 		};
 
-		return EmitStructInit(arrayType, fieldValues);
+		return EmitStructInit(arrayType, fieldValuesHeap);
+	}
+
+	/// <summary>
+	/// Infers the element type from an expression without lowering it.
+	/// </summary>
+	private (MlirType type, string name) InferArrayElementType(Expr element) {
+		return element switch {
+			IntLiteralExpr => (IntegerType.I64, "int"),
+			FloatLiteralExpr => (FloatType.F64, "float"),
+			BoolLiteralExpr => (IntegerType.I1, "bool"),
+			_ => InferTypeFromLoweredExpression(element)
+		};
+	}
+
+	private (MlirType type, string name) InferTypeFromLoweredExpression(Expr element) {
+		// For non-literal expressions, we need to lower to determine type
+		var lowered = LowerExpression(element);
+		var typeName = lowered.Type switch {
+			IntegerType { BitWidth: 64, IsSigned: true } => "int",
+			IntegerType { BitWidth: 32, IsSigned: true } => "int32",
+			IntegerType { BitWidth: 1 } => "bool",
+			FloatType { BitWidth: 64 } => "float",
+			FloatType { BitWidth: 32 } => "float32",
+			MaxonStructType st => st.Name,
+			_ => throw new NotSupportedException($"Cannot infer array element type from: {lowered.Type}")
+		};
+		return (lowered.Type, typeName);
+	}
+
+	/// <summary>
+	/// Tries to serialize all array elements to bytes if they are compile-time constants.
+	/// </summary>
+	private bool TrySerializeConstantArray(List<Expr> elements, MlirType elementType, out byte[] data) {
+		var sizePerElement = elementType.SizeInBytes;
+		var bytes = new List<byte>();
+
+		foreach (var element in elements) {
+			if (!TrySerializeConstantValue(element, elementType, bytes)) {
+				data = [];
+				return false;
+			}
+		}
+
+		data = [.. bytes];
+		return true;
+	}
+
+	/// <summary>
+	/// Tries to serialize a single constant expression to bytes.
+	/// </summary>
+	private bool TrySerializeConstantValue(Expr expr, MlirType type, List<byte> bytes) {
+		switch (expr) {
+			case IntLiteralExpr intLit:
+				// Serialize as little-endian based on type size
+				var intValue = intLit.Value;
+				var intSize = type.SizeInBytes;
+				for (int i = 0; i < intSize; i++) {
+					bytes.Add((byte)(intValue >> (i * 8)));
+				}
+				return true;
+
+			case FloatLiteralExpr floatLit:
+				var floatValue = floatLit.Value;
+				if (type.SizeInBytes == 8) {
+					var floatBytes = BitConverter.GetBytes(floatValue);
+					bytes.AddRange(floatBytes);
+				} else if (type.SizeInBytes == 4) {
+					var floatBytes = BitConverter.GetBytes((float)floatValue);
+					bytes.AddRange(floatBytes);
+				}
+				return true;
+
+			case BoolLiteralExpr boolLit:
+				// Bool is stored as 1 byte (or 8 bytes for i64 representation)
+				var boolValue = boolLit.Value ? 1L : 0L;
+				var boolSize = type.SizeInBytes;
+				for (int i = 0; i < boolSize; i++) {
+					bytes.Add((byte)(boolValue >> (i * 8)));
+				}
+				return true;
+
+			default:
+				// Non-constant expression
+				return false;
+		}
+	}
+
+	/// <summary>
+	/// Computes a hash of the data for deduplication.
+	/// </summary>
+	private static ulong ComputeDataHash(byte[] data) {
+		// Simple FNV-1a hash
+		ulong hash = 14695981039346656037UL;
+		foreach (var b in data) {
+			hash ^= b;
+			hash *= 1099511628211UL;
+		}
+		return hash;
 	}
 
 	/// <summary>
@@ -2599,15 +2716,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				// Get the _buffer field from __ManagedMemory (at offset 0)
 				var ptrField = managedType.GetField("_buffer");
 				if (ptrField != null) {
-					var ptrFieldPtr = new FieldPtrOp(managedFieldPtr.Result, "_buffer", ptrField.Offset, ptrField.Type);
-					InsertOp(ptrFieldPtr);
-
-					// Load the pointer value (use LoadOp directly since it supports PtrType)
-					var loadOp = new LoadOp(ptrFieldPtr.Result);
-					InsertOp(loadOp);
-
-					// Emit HeapFreeOp
-					var freeOp = new HeapFreeOp(loadOp.Result);
+					// Use ManagedMemoryFreeOp which handles checking the RDATA flag
+					var freeOp = new ManagedMemoryFreeOp(managedFieldPtr.Result);
 					InsertOp(freeOp);
 				}
 			}

@@ -70,6 +70,9 @@ public static class StandardToX86Patterns {
 
 		// Maxon patterns that pass through to x86
 		patterns.Add<LowerFieldPtrOp>();
+		patterns.Add<LowerConstDataOp>();
+		patterns.Add<LowerManagedMemoryMakeUniqueOp>();
+		patterns.Add<LowerManagedMemoryFreeOp>();
 	}
 
 	/// <summary>
@@ -506,8 +509,8 @@ public sealed class LowerLoadOp : ConversionPattern<LoadOp> {
 
 		if (op.Result.Type is FloatType) {
 			rewriter.Insert(new MovsdOp(dst, mem));
-		} else if (op.Result.Type is IntegerType it && it.BitWidth == 8) {
-			// For byte loads, use movzx to zero-extend into 64-bit register
+		} else if (op.Result.Type is IntegerType it && (it.BitWidth == 8 || it.BitWidth == 1)) {
+			// For byte/bool loads, use movzx to zero-extend into 64-bit register
 			rewriter.Insert(new MovzxOp(dst, mem, isByte: true));
 		} else if (op.Result.Type is IntegerType it16 && it16.BitWidth == 16) {
 			// For word loads, use movzx to zero-extend into 64-bit register
@@ -574,6 +577,21 @@ public sealed class LowerFieldPtrOp : ConversionPattern<FieldPtrOp> {
 		rewriter.Insert(new LeaOp(
 			new VRegOperand(op.Result.Id),
 			new MemOperand(Base: new VRegOperand(op.Struct.Id), Displacement: op.Offset)));
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.const_data to x86.lea_rdata.
+/// The data bytes are stored in MlirModule.RdataEntries for the code emitter.
+/// </summary>
+public sealed class LowerConstDataOp : ConversionPattern<ConstDataOp> {
+	protected override bool MatchAndRewrite(ConstDataOp op, ConversionPatternRewriter rewriter) {
+		// Store rdata entry for the code emitter
+		rewriter.Module?.AddRdataEntry(op.Label, op.Data);
+
+		// Emit LEA to load the rdata address
+		rewriter.Insert(new LeaRdataOp(new VRegOperand(op.Result.Id), op.Label));
 		return true;
 	}
 }
@@ -840,6 +858,205 @@ public sealed class LowerMemCpyOp : ConversionPattern<MemCpyOp> {
 		// Restore RDI and RSI (reverse order)
 		rewriter.Insert(new PopOp(new RegOperand(X86Register.RDI)));
 		rewriter.Insert(new PopOp(new RegOperand(X86Register.RSI)));
+
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers ManagedMemoryMakeUniqueOp to inline COW check.
+/// If the memory is rdata-backed (flags & 1), copies to heap and clears flag.
+/// This enables mutation of arrays that were initialized from rdata.
+/// </summary>
+public sealed class LowerManagedMemoryMakeUniqueOp : ConversionPattern<ManagedMemoryMakeUniqueOp> {
+	private static int _labelCounter = 0;
+
+	protected override bool MatchAndRewrite(ManagedMemoryMakeUniqueOp op, ConversionPatternRewriter rewriter) {
+		var labelId = _labelCounter++;
+		var skipCowLabel = $"cow_skip_{labelId}";
+		var doneLabel = $"cow_done_{labelId}";
+
+		// Memory pointer is in the op.Memory value
+		// Save it to R10 (volatile/scratch register)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R10), new VRegOperand(op.Memory.Id)));
+
+		// Save element size to R11 (volatile)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R11), new VRegOperand(op.ElemSize.Id)));
+
+		// Load flags from offset 24 (dword)
+		rewriter.Insert(new MovOp(
+			new RegOperand(X86Register.EAX),
+			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 24, Size: 4)));
+
+		// Test if RDATA flag (bit 0) is set
+		rewriter.Insert(new TestOp(new RegOperand(X86Register.EAX), new ImmOperand(ManagedMemoryFlags.RDATA)));
+
+		// If zero (not rdata), skip the copy
+		rewriter.Insert(new JzOp(skipCowLabel));
+
+		// === COW path: copy rdata to heap ===
+		// IMPORTANT: We only save/restore RSI and RDI for rep movsb.
+		// We do NOT touch R12, R13 etc because the register allocator may be using them
+		// and will add its own spill/restore around our CALL instructions.
+		//
+		// Windows x64 calling convention REQUIRES 32 bytes of shadow space for callees.
+		// We also need to save our values across calls. We'll allocate a fixed area
+		// on the stack and use RSP-relative addressing.
+		//
+		// Stack layout after allocation (from RSP):
+		// [RSP+0..31]  = 32-byte shadow space for calls
+		// [RSP+32]     = memory_ptr
+		// [RSP+40]     = old_buffer
+		// [RSP+48]     = total_size
+		// [RSP+56]     = elem_size
+		// [RSP+64]     = saved RSI
+		// [RSP+72]     = saved RDI
+		// Total = 80 bytes, but we need 16-byte alignment. Allocate 80.
+
+		rewriter.Insert(new PushOp(new RegOperand(X86Register.RSI)));
+		rewriter.Insert(new PushOp(new RegOperand(X86Register.RDI)));
+
+		// Allocate stack space: 80 bytes for our needs
+		// After 2 pushes (16 bytes), RSP is 16-byte aligned
+		// After sub 80, RSP is still 16-byte aligned
+		rewriter.Insert(new SubOp(new RegOperand(X86Register.RSP), new ImmOperand(80)));
+
+		// Calculate total size = len * elem_size
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RAX),
+			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 8, Size: 8))); // len
+		rewriter.Insert(new ImulOp(new RegOperand(X86Register.RAX), new RegOperand(X86Register.R11))); // len*elem
+
+		// Save values to our stack area
+		rewriter.Insert(new MovOp(
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 32, Size: 8),
+			new RegOperand(X86Register.R10)));  // memory ptr
+		// Load old buffer and save it
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX),
+			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 0, Size: 8)));
+		rewriter.Insert(new MovOp(
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 40, Size: 8),
+			new RegOperand(X86Register.RCX)));  // old buffer
+		rewriter.Insert(new MovOp(
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 48, Size: 8),
+			new RegOperand(X86Register.RAX)));  // total size
+		rewriter.Insert(new MovOp(
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 56, Size: 8),
+			new RegOperand(X86Register.R11)));  // elem size
+
+		// GetProcessHeap - shadow space already allocated at RSP+0
+		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
+
+		// Set up HeapAlloc: RCX=heap, RDX=flags, R8=size
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8),
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 48, Size: 8)));
+
+		// HeapAlloc - shadow space already at RSP+0
+		rewriter.Insert(new X86CallOp("HeapAlloc", isExternal: true, dllName: "kernel32.dll"));
+
+		// Restore values from our stack area
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R11),
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 56, Size: 8)));  // elem size
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RSI),
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 40, Size: 8)));  // old buffer
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R10),
+			new MemOperand(Base: new RegOperand(X86Register.RSP), Displacement: 32, Size: 8)));  // memory ptr
+
+		// Set up memcpy: RDI=dest (RAX from HeapAlloc), RSI=src (old buffer), RCX=count
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDI), new RegOperand(X86Register.RAX)));
+		// RSI already has old buffer from above
+
+		// Recalculate count = len * elem_size
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX),
+			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 8, Size: 8)));
+		rewriter.Insert(new ImulOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.R11)));
+
+		// Copy (RSI=src, RDI=dest, RCX=count)
+		rewriter.Insert(new CldOp());
+		rewriter.Insert(new RepMovsbOp());
+
+		// Update struct: new buffer at offset 0, clear flags at offset 24
+		// RAX still has the new buffer address from HeapAlloc
+		rewriter.Insert(new MovOp(
+			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 0, Size: 8),
+			new RegOperand(X86Register.RAX)));
+		rewriter.Insert(new XorOp(new RegOperand(X86Register.ECX), new RegOperand(X86Register.ECX)));
+		rewriter.Insert(new MovOp(
+			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 24, Size: 4),
+			new RegOperand(X86Register.ECX)));
+
+		// Deallocate our stack space (80 bytes)
+		rewriter.Insert(new AddOp(new RegOperand(X86Register.RSP), new ImmOperand(80)));
+
+		// Restore RSI, RDI from the pushes at the start
+		rewriter.Insert(new PopOp(new RegOperand(X86Register.RDI)));
+		rewriter.Insert(new PopOp(new RegOperand(X86Register.RSI)));
+
+		rewriter.Insert(new JmpOp(doneLabel));
+
+		rewriter.Insert(new LabelOp(skipCowLabel));
+		rewriter.Insert(new LabelOp(doneLabel));
+
+		// Result is the memory pointer
+		rewriter.Insert(new MovOp(new VRegOperand(op.Result.Id), new RegOperand(X86Register.R10)));
+
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers ManagedMemoryFreeOp to conditional HeapFree.
+/// Checks the RDATA flag (offset 24) first - if set, skips the free.
+/// </summary>
+public sealed class LowerManagedMemoryFreeOp : ConversionPattern<ManagedMemoryFreeOp> {
+	private static int _labelCounter = 0;
+
+	protected override bool MatchAndRewrite(ManagedMemoryFreeOp op, ConversionPatternRewriter rewriter) {
+		var labelId = _labelCounter++;
+		var doFreeLabel = $"free_do_{labelId}";
+		var doneLabel = $"free_done_{labelId}";
+
+		// Memory pointer (ptr to __ManagedMemory struct)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R10), new VRegOperand(op.Memory.Id)));
+
+		// Load flags from offset 24 (dword)
+		rewriter.Insert(new MovOp(
+			new RegOperand(X86Register.EAX),
+			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 24, Size: 4)));
+
+		// Test if RDATA flag (bit 0) is set
+		rewriter.Insert(new TestOp(new RegOperand(X86Register.EAX), new ImmOperand(ManagedMemoryFlags.RDATA)));
+
+		// If RDATA is set (test result non-zero), skip the free
+		// JZ = jump if zero = RDATA flag NOT set = do the free
+		rewriter.Insert(new JzOp(doFreeLabel));
+		rewriter.Insert(new JmpOp(doneLabel));  // RDATA is set, skip to done
+
+		// === Free path (not rdata) ===
+		rewriter.Insert(new LabelOp(doFreeLabel));
+
+		// Load buffer pointer from offset 0
+		rewriter.Insert(new MovOp(
+			new RegOperand(X86Register.R11),
+			new MemOperand(Base: new RegOperand(X86Register.R10), Displacement: 0, Size: 8)));
+
+		// Call GetProcessHeap() -> RAX = hHeap
+		rewriter.Insert(new X86CallOp("GetProcessHeap", isExternal: true, dllName: "kernel32.dll"));
+
+		// Set up HeapFree arguments:
+		// RCX = hHeap (from RAX)
+		// RDX = dwFlags (0)
+		// R8 = lpMem (buffer ptr)
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RCX), new RegOperand(X86Register.RAX)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.RDX), new ImmOperand(0)));
+		rewriter.Insert(new MovOp(new RegOperand(X86Register.R8), new RegOperand(X86Register.R11)));
+
+		// Call HeapFree
+		rewriter.Insert(new X86CallOp("HeapFree", isExternal: true, dllName: "kernel32.dll"));
+
+		// === Done label ===
+		rewriter.Insert(new LabelOp(doneLabel));
 
 		return true;
 	}

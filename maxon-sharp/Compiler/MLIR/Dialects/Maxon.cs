@@ -686,6 +686,121 @@ public sealed class ManagedMemoryCreateOp : MaxonOp {
 }
 
 /// <summary>
+/// Constants for managed memory flags.
+/// </summary>
+public static class ManagedMemoryFlags {
+	/// <summary>
+	/// Flag indicating managed memory buffer points to read-only data (rdata section).
+	/// When this flag is set, mutations must first copy the data to the heap.
+	/// </summary>
+	public const int RDATA = 1;
+}
+
+/// <summary>
+/// Store constant data in rdata section: %ptr = maxon.const_data @label, data
+/// Returns a pointer to the constant data in the read-only section.
+/// </summary>
+public sealed class ConstDataOp : MaxonOp {
+	public override string Mnemonic => "const_data";
+	public override bool HasSideEffects => false;
+
+	public byte[] Data { get; }
+	public string Label { get; }
+	public MlirValue Result => Results[0];
+
+	public ConstDataOp(byte[] data, string label) {
+		Data = data;
+		Label = label;
+		CreateResult(new PtrType(IntegerType.I8));
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.const_data @{Label}, [{Data.Length} bytes]");
+	}
+}
+
+/// <summary>
+/// Create managed memory pointing to rdata: %result = maxon.managed_memory_create_from_rdata %ptr, %count, %elemSize
+/// Creates a __ManagedMemory struct with _buffer pointing to rdata and _flags = RDATA.
+/// </summary>
+public sealed class ManagedMemoryCreateFromRdataOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_create_from_rdata";
+	public override bool HasSideEffects => true;
+
+	public MlirValue RdataPtr => Operands[0];
+	public MlirValue Count => Operands[1];
+	public MlirValue ElemSize => Operands[2];
+	public MlirValue Result => Results[0];
+	public MaxonStructType ManagedMemoryType { get; }
+
+	public ManagedMemoryCreateFromRdataOp(MlirValue rdataPtr, MlirValue count, MlirValue elemSize, MaxonStructType managedMemoryType) {
+		Operands.Add(rdataPtr);
+		Operands.Add(count);
+		Operands.Add(elemSize);
+		ManagedMemoryType = managedMemoryType;
+		CreateResult(managedMemoryType);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.managed_memory_create_from_rdata {RdataPtr}, {Count}, {ElemSize}");
+	}
+}
+
+/// <summary>
+/// Copy-on-write: %result = maxon.managed_memory_make_unique %mem, %elemSize
+/// If the memory has the RDATA flag set, copies data to heap and clears the flag.
+/// Otherwise returns the same memory unchanged.
+/// </summary>
+public sealed class ManagedMemoryMakeUniqueOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_make_unique";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Memory => Operands[0];
+	public MlirValue ElemSize => Operands[1];
+	public MlirValue Result => Results[0];
+
+	public ManagedMemoryMakeUniqueOp(MlirValue memory, MlirValue elemSize, MaxonStructType managedMemoryType) {
+		Operands.Add(memory);
+		Operands.Add(elemSize);
+		CreateResult(managedMemoryType);
+	}
+
+	/// <summary>
+	/// Constructor that derives the result type from the memory operand.
+	/// Used when inserting COW checks in lowering patterns.
+	/// </summary>
+	public ManagedMemoryMakeUniqueOp(MlirValue memory, MlirValue elemSize) {
+		Operands.Add(memory);
+		Operands.Add(elemSize);
+		// The result type matches the memory operand type (pointer to struct)
+		CreateResult(memory.Type);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"{Result} = maxon.managed_memory_make_unique {Memory}, {ElemSize}");
+	}
+}
+
+/// <summary>
+/// Free managed memory: maxon.managed_memory_free %mem
+/// Checks the RDATA flag before freeing. If RDATA is set, skips the HeapFree.
+/// </summary>
+public sealed class ManagedMemoryFreeOp : MaxonOp {
+	public override string Mnemonic => "managed_memory_free";
+	public override bool HasSideEffects => true;
+
+	public MlirValue Memory => Operands[0];
+
+	public ManagedMemoryFreeOp(MlirValue memory) {
+		Operands.Add(memory);
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"maxon.managed_memory_free {Memory}");
+	}
+}
+
+/// <summary>
 /// Get managed memory length: %result = maxon.managed_memory_len %mem : i64
 /// </summary>
 public sealed class ManagedMemoryLenOp : MaxonOp {

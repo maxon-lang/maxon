@@ -9,14 +9,16 @@ public class PeWriter {
 	private const uint SectionAlignment = 0x1000;  // 4096 bytes
 	private const ulong ImageBase = 0x140000000;   // Default for 64-bit
 
-	public static void Write(string path, byte[] code, byte[]? data = null, IReadOnlyList<ImportEntry>? imports = null) {
+	public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null, IReadOnlyList<ImportEntry>? imports = null) {
 		Logger.Debug(LogCategory.Pe, $"Writing PE file: {path}");
 		using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
 		using var writer = new BinaryWriter(fs);
 
+		rdata ??= [];
 		data ??= [];
 		imports ??= [];
 
+		var hasRdata = rdata.Length > 0;
 		var hasData = data.Length > 0;
 		var hasImports = imports.Count > 0;
 
@@ -37,6 +39,7 @@ public class PeWriter {
 		var optionalHeaderSize = 240u;  // PE32+ optional header
 		var sectionHeaderSize = 40u;
 		var numSections = 1u;
+		if (hasRdata) numSections++;
 		if (hasData) numSections++;
 		if (hasImports) numSections++;
 
@@ -47,6 +50,10 @@ public class PeWriter {
 		var codeSizeAligned = AlignUp(codeSize, FileAlignment);
 		var codeSizeVirtual = AlignUp(codeSize, SectionAlignment);
 
+		var rdataSize = (uint)rdata.Length;
+		var rdataSizeAligned = hasRdata ? AlignUp(rdataSize, FileAlignment) : 0;
+		var rdataSizeVirtual = hasRdata ? AlignUp(rdataSize, SectionAlignment) : 0;
+
 		var dataSize = (uint)data.Length;
 		var dataSizeAligned = hasData ? AlignUp(dataSize, FileAlignment) : 0;
 		var dataSizeVirtual = hasData ? AlignUp(dataSize, SectionAlignment) : 0;
@@ -55,8 +62,10 @@ public class PeWriter {
 		var idataSizeAligned = hasImports ? AlignUp(idataSize, FileAlignment) : 0;
 		var idataSizeVirtual = hasImports ? AlignUp(idataSize, SectionAlignment) : 0;
 
+		// Section RVAs: .text -> .rdata -> .data -> .idata
 		var textRva = SectionAlignment;  // .text section starts at section alignment
-		var dataRva = textRva + codeSizeVirtual;  // .data section follows .text
+		var rdataRva = textRva + codeSizeVirtual;  // .rdata section follows .text
+		var dataRva = rdataRva + rdataSizeVirtual;  // .data section follows .rdata
 		var idataRva = dataRva + dataSizeVirtual;  // .idata section follows .data
 
 		// Adjust RVAs in import section data for actual position
@@ -66,11 +75,14 @@ public class PeWriter {
 			FixupImportSection(ref idataSection, idataRva);
 		}
 
+		// Calculate image size (last section RVA + its virtual size)
 		var imageSize = idataRva + idataSizeVirtual;
 		if (!hasImports) imageSize = dataRva + dataSizeVirtual;
-		if (!hasData && !hasImports) imageSize = textRva + codeSizeVirtual;
+		if (!hasData && !hasImports) imageSize = rdataRva + rdataSizeVirtual;
+		if (!hasRdata && !hasData && !hasImports) imageSize = textRva + codeSizeVirtual;
 
 		Logger.Debug(LogCategory.Pe, $"Code section: {codeSize} bytes at RVA 0x{textRva:X}");
+		if (hasRdata) Logger.Debug(LogCategory.Pe, $"Rdata section: {rdataSize} bytes at RVA 0x{rdataRva:X}");
 		if (hasData) Logger.Debug(LogCategory.Pe, $"Data section: {dataSize} bytes at RVA 0x{dataRva:X}");
 		if (hasImports) Logger.Debug(LogCategory.Pe, $"Import section: {idataSize} bytes at RVA 0x{idataRva:X}");
 
@@ -145,8 +157,15 @@ public class PeWriter {
 		// Section Header: .text
 		WriteSectionHeader(writer, ".text", codeSize, textRva, codeSizeAligned, headersAligned, 0x60000020);
 
-		// Section Header: .data (if present)
+		// Section Header: .rdata (if present) - READ-ONLY data
 		uint currentRawDataPos = headersAligned + codeSizeAligned;
+		if (hasRdata) {
+			// 0x40000040 = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ
+			WriteSectionHeader(writer, ".rdata", rdataSize, rdataRva, rdataSizeAligned, currentRawDataPos, 0x40000040);
+			currentRawDataPos += rdataSizeAligned;
+		}
+
+		// Section Header: .data (if present)
 		if (hasData) {
 			WriteSectionHeader(writer, ".data", dataSize, dataRva, dataSizeAligned, currentRawDataPos, 0xC0000040);
 			currentRawDataPos += dataSizeAligned;
@@ -169,6 +188,15 @@ public class PeWriter {
 		var codePadding = codeSizeAligned - codeSize;
 		if (codePadding > 0) {
 			writer.Write(new byte[codePadding]);
+		}
+
+		// .rdata section (read-only constants)
+		if (hasRdata) {
+			writer.Write(rdata);
+			var rdataPadding = rdataSizeAligned - rdataSize;
+			if (rdataPadding > 0) {
+				writer.Write(new byte[rdataPadding]);
+			}
 		}
 
 		// .data section (globals)

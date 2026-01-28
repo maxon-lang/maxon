@@ -26,6 +26,11 @@ public sealed class X86CodeEmitter {
 	private readonly Dictionary<string, int> _importIndices = [];  // function name -> index in _imports
 	private readonly List<(int codeOffset, int importIndex, int instrSize)> _importFixups = [];
 
+	// Rdata section (read-only constants like array literals)
+	private readonly List<byte> _rdata = [];
+	private readonly Dictionary<string, int> _rdataLabels = [];  // label -> offset
+	private readonly List<(int codeOffset, string label, int instrSize)> _rdataFixups = [];
+
 	/// <summary>
 	/// Gets the emitted machine code.
 	/// </summary>
@@ -35,6 +40,11 @@ public sealed class X86CodeEmitter {
 	/// Gets the emitted global data.
 	/// </summary>
 	public byte[] GetData() => [.. _data];
+
+	/// <summary>
+	/// Gets the emitted read-only data (rdata) section.
+	/// </summary>
+	public byte[] GetRdata() => [.. _rdata];
 
 	/// <summary>
 	/// Gets the current code offset.
@@ -54,6 +64,28 @@ public sealed class X86CodeEmitter {
 		for (int i = 0; i < size; i++) {
 			_data.Add((byte)(initialValue >> (i * 8)));
 		}
+
+		return offset;
+	}
+
+	/// <summary>
+	/// Defines constant data in the read-only data (rdata) section.
+	/// Returns the offset, deduplicating identical data by label.
+	/// </summary>
+	public int DefineRdata(string label, byte[] data) {
+		// Deduplication: if we already have this label, return existing offset
+		if (_rdataLabels.TryGetValue(label, out var existing))
+			return existing;
+
+		var offset = _rdata.Count;
+		_rdataLabels[label] = offset;
+		_rdata.AddRange(data);
+
+		// Align to 8 bytes for optimal access
+		while (_rdata.Count % 8 != 0)
+			_rdata.Add(0);
+
+		Logger.Trace(LogCategory.Codegen, $"DefineRdata: {label} at offset {offset}, size {data.Length}");
 
 		return offset;
 	}
@@ -120,6 +152,9 @@ public sealed class X86CodeEmitter {
 				break;
 			case LeaGlobalOp leaGlobal:
 				EmitLeaGlobal(leaGlobal);
+				break;
+			case LeaRdataOp leaRdata:
+				EmitLeaRdata(leaRdata);
 				break;
 			case ShlOp shl:
 				EmitShl(shl);
@@ -370,6 +405,38 @@ public sealed class X86CodeEmitter {
 	}
 
 	/// <summary>
+	/// Resolves all rdata references.
+	/// Must be called after code emission is complete but before writing to PE.
+	/// </summary>
+	/// <param name="rdataRvaOffset">The RVA offset of the rdata section relative to code section end</param>
+	public void ResolveRdata(int rdataRvaOffset) {
+		Logger.Debug(LogCategory.Codegen, $"Resolving {_rdataFixups.Count} rdata references");
+
+		foreach (var (codeOffset, label, instrSize) in _rdataFixups) {
+			if (!_rdataLabels.TryGetValue(label, out var rdataOffset)) {
+				throw new InvalidOperationException($"Undefined rdata label: {label}");
+			}
+
+			// RIP-relative addressing: displacement is from end of instruction to target
+			// Target = code_end + rdataRvaOffset + rdataOffset
+			// RIP at instruction end = codeOffset + instrSize
+			// So displacement = code_end + rdataRvaOffset + rdataOffset - (codeOffset + instrSize)
+			var codeEnd = _code.Count;
+			var targetAddr = codeEnd + rdataRvaOffset + rdataOffset;
+			var ripAtEnd = codeOffset + instrSize;
+			var relOffset = targetAddr - ripAtEnd;
+
+			Logger.Trace(LogCategory.Codegen, $"  {label}: code offset 0x{codeOffset:X} -> rdata offset 0x{rdataOffset:X}");
+
+			// Patch the displacement
+			_code[codeOffset] = (byte)relOffset;
+			_code[codeOffset + 1] = (byte)(relOffset >> 8);
+			_code[codeOffset + 2] = (byte)(relOffset >> 16);
+			_code[codeOffset + 3] = (byte)(relOffset >> 24);
+		}
+	}
+
+	/// <summary>
 	/// Resolves all import fixups.
 	/// Must be called after code emission is complete and import table addresses are known.
 	/// </summary>
@@ -403,6 +470,11 @@ public sealed class X86CodeEmitter {
 	/// Gets whether there are any globals defined.
 	/// </summary>
 	public bool HasGlobals => _data.Count > 0;
+
+	/// <summary>
+	/// Gets whether there is any rdata defined.
+	/// </summary>
+	public bool HasRdata => _rdata.Count > 0;
 
 	/// <summary>
 	/// Gets whether there are any imports.
@@ -802,20 +874,65 @@ public sealed class X86CodeEmitter {
 	}
 
 	private void EmitMovRegMem(X86Register dst, MemOperand src) {
+		// Determine opcode based on operand size
+		// For byte loads: 0x8A (MOV r8, r/m8)
+		// For word/dword/qword loads: 0x8B (MOV r16/32/64, r/m16/32/64)
+		// REX.W only for 64-bit, 0x66 prefix for 16-bit
+		byte opcode = src.Size == 1 ? (byte)0x8A : (byte)0x8B;
+
 		if (src.Base is RegOperand baseReg && src.Index is RegOperand indexReg) {
 			// [base + index*scale + disp] - requires SIB byte
-			EmitRexW(dst, baseReg.Register, indexReg.Register);
-			EmitByte(0x8B);
+			EmitMovRegMemPrefix(src.Size, dst, baseReg.Register, indexReg.Register);
+			EmitByte(opcode);
 			EmitByte(ModRM(0b10, GetRegCode(dst), 0b100)); // rm=4 means SIB follows
 			EmitByte(SIB(src.Scale, GetRegCode(indexReg.Register), GetRegCode(baseReg.Register)));
 			EmitImm32(src.Displacement);
 		} else if (src.Base is RegOperand baseOnly) {
 			// [base + disp32]
-			EmitRexW(dst, baseOnly.Register);
-			EmitByte(0x8B);
+			EmitMovRegMemPrefix(src.Size, dst, baseOnly.Register, null);
+			EmitByte(opcode);
 			EmitByte(ModRM(0b10, GetRegCode(dst), GetRegCode(baseOnly.Register)));
 			if (GetRegCode(baseOnly.Register) == 4) EmitByte(0x24); // SIB for RSP
 			EmitImm32(src.Displacement);
+		}
+	}
+
+	private void EmitMovRegMemPrefix(int size, X86Register dst, X86Register baseReg, X86Register? indexReg) {
+		// Emit appropriate prefixes based on operand size:
+		// - Size 8 (qword): REX.W prefix
+		// - Size 4 (dword): REX prefix only if extended registers used (no W bit)
+		// - Size 2 (word): 0x66 prefix + REX if extended registers
+		// - Size 1 (byte): REX prefix only if extended registers used (no W bit)
+		switch (size) {
+			case 8:
+				// 64-bit: always emit REX.W
+				if (indexReg != null) {
+					EmitRexW(dst, baseReg, indexReg.Value);
+				} else {
+					EmitRexW(dst, baseReg);
+				}
+				break;
+			case 4:
+				// 32-bit: only emit REX if extended registers are used (no W bit)
+				if (NeedsRex(dst) || NeedsRex(baseReg) || (indexReg != null && NeedsRex(indexReg.Value))) {
+					EmitByte(Rex(false, dst, baseReg, indexReg));
+				}
+				break;
+			case 2:
+				// 16-bit: 0x66 operand size prefix + REX if extended registers
+				EmitByte(0x66);
+				if (NeedsRex(dst) || NeedsRex(baseReg) || (indexReg != null && NeedsRex(indexReg.Value))) {
+					EmitByte(Rex(false, dst, baseReg, indexReg));
+				}
+				break;
+			case 1:
+				// 8-bit: only emit REX if extended registers are used (no W bit)
+				if (NeedsRex(dst) || NeedsRex(baseReg) || (indexReg != null && NeedsRex(indexReg.Value))) {
+					EmitByte(Rex(false, dst, baseReg, indexReg));
+				}
+				break;
+			default:
+				throw new NotSupportedException($"Unsupported operand size: {size}");
 		}
 	}
 
@@ -961,7 +1078,39 @@ public sealed class X86CodeEmitter {
 
 	private void EmitCmp(CmpOp op) => EmitRegRegOp(op.Left, op.Right, 0x39);
 
-	private void EmitTest(TestOp op) => EmitRegRegOp(op.Left, op.Right, 0x85);
+	private void EmitTest(TestOp op) {
+		if (op.Left is RegOperand leftReg && op.Right is RegOperand rightReg) {
+			// TEST reg, reg: opcode 85
+			EmitRexW(rightReg.Register, leftReg.Register);
+			EmitByte(0x85);
+			EmitByte(ModRM(0b11, GetRegCode(rightReg.Register), GetRegCode(leftReg.Register)));
+		} else if (op.Left is RegOperand reg && op.Right is ImmOperand imm) {
+			// TEST reg, imm32
+			// For EAX/RAX, use short form: A9 id (TEST EAX, imm32) or REX.W A9 id (TEST RAX, imm32)
+			// For other regs: F7 /0 (TEST r/m32, imm32) or REX.W F7 /0 (TEST r/m64, imm64)
+			bool is32Bit = reg.Register == X86Register.EAX;
+			bool is64Bit = reg.Register >= X86Register.RAX && reg.Register <= X86Register.R15;
+
+			if (is32Bit) {
+				// TEST EAX, imm32: A9 id
+				EmitByte(0xA9);
+				EmitImm32((int)imm.Value);
+			} else if (is64Bit && (reg.Register == X86Register.RAX)) {
+				// TEST RAX, imm32 (sign-extended): REX.W A9 id
+				EmitByte(0x48); // REX.W
+				EmitByte(0xA9);
+				EmitImm32((int)imm.Value);
+			} else {
+				// TEST r/m, imm32: F7 /0
+				if (NeedsRex(reg.Register)) {
+					EmitByte((byte)(0x40 | (NeedsRex(reg.Register) ? 0x01 : 0)));
+				}
+				EmitByte(0xF7);
+				EmitByte(ModRM(0b11, 0, GetRegCode(reg.Register)));
+				EmitImm32((int)imm.Value);
+			}
+		}
+	}
 
 	private void EmitRegRegOp(X86Operand left, X86Operand right, byte opcode) {
 		if (left is RegOperand leftReg && right is RegOperand rightReg) {
@@ -1108,6 +1257,20 @@ public sealed class X86CodeEmitter {
 
 			// Record fixup for the displacement (will be resolved when we know data section offset)
 			_globalFixups.Add((CurrentOffset, op.GlobalName, 4)); // 4 bytes for disp32
+			EmitImm32(0); // Placeholder, will be fixed up later
+		}
+	}
+
+	private void EmitLeaRdata(LeaRdataOp op) {
+		if (op.Dst is RegOperand dst) {
+			// LEA with RIP-relative addressing: LEA reg, [RIP + disp32]
+			// REX.W + 8D /r with ModR/M byte indicating RIP-relative (mod=00, rm=101)
+			EmitRexW(dst.Register);
+			EmitByte(0x8D);
+			EmitByte(ModRM(0b00, GetRegCode(dst.Register), 0b101)); // RIP-relative
+
+			// Record fixup for the displacement (will be resolved when we know rdata section offset)
+			_rdataFixups.Add((CurrentOffset, op.Label, 4)); // 4 bytes for disp32
 			EmitImm32(0); // Placeholder, will be fixed up later
 		}
 	}

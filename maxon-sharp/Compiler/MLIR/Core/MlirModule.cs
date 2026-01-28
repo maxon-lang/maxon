@@ -35,6 +35,19 @@ public sealed class MlirModule {
 	public List<MlirStringData> Strings { get; } = [];
 
 	/// <summary>
+	/// Read-only data entries (for rdata section).
+	/// Populated during StandardToX86 lowering when ConstDataOp is converted.
+	/// </summary>
+	public Dictionary<string, byte[]> RdataEntries { get; } = [];
+
+	/// <summary>
+	/// Adds a read-only data entry.
+	/// </summary>
+	public void AddRdataEntry(string label, byte[] data) {
+		RdataEntries.TryAdd(label, data);
+	}
+
+	/// <summary>
 	/// Module-level attributes.
 	/// </summary>
 	public Dictionary<string, MlirAttribute> Attributes { get; } = [];

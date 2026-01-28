@@ -6,7 +6,7 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 /// <summary>
 /// Provides utilities for rewriting operations during dialect conversion.
 /// </summary>
-public sealed class ConversionPatternRewriter(MlirBlock block, int insertPoint, MlirFunction? currentFunction = null) {
+public sealed class ConversionPatternRewriter(MlirBlock block, int insertPoint, MlirFunction? currentFunction = null, MlirModule? module = null) {
 	private readonly MlirBlock _block = block;
 	private int _insertPoint = insertPoint;
 	private readonly Dictionary<MlirValue, MlirValue> _valueMap = [];
@@ -15,6 +15,11 @@ public sealed class ConversionPatternRewriter(MlirBlock block, int insertPoint, 
 	/// The function being converted (for accessing metadata).
 	/// </summary>
 	public MlirFunction? CurrentFunction { get; } = currentFunction;
+
+	/// <summary>
+	/// The module being converted (for accessing module-level data like rdata entries).
+	/// </summary>
+	public MlirModule? Module { get; } = module;
 
 	/// <summary>
 	/// Gets or sets the mapped value for an original value.

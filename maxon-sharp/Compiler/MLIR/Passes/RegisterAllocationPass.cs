@@ -1609,6 +1609,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			PopOp pop => new PopOp(ctx.Alloc(pop.Dst)),
 			LeaOp lea => new LeaOp(ctx.Alloc(lea.Dst), ctx.Alloc(lea.Src)),
 			LeaGlobalOp leaGlobal => new LeaGlobalOp(ctx.Alloc(leaGlobal.Dst), leaGlobal.GlobalName),
+			LeaRdataOp leaRdata => new LeaRdataOp(ctx.Alloc(leaRdata.Dst), leaRdata.Label),
 			// Shift ops
 			ShlOp shl => new ShlOp(ctx.Alloc(shl.Dst), ctx.Alloc(shl.Count)),
 			ShrOp shr => new ShrOp(ctx.Alloc(shr.Dst), ctx.Alloc(shr.Count)),

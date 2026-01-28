@@ -158,6 +158,27 @@ public sealed class LeaGlobalOp : X86Op {
 }
 
 /// <summary>
+/// Load effective address of rdata constant: x86.lea_rdata dst, @label
+/// Uses RIP-relative addressing to load the address of read-only data.
+/// </summary>
+public sealed class LeaRdataOp : X86Op {
+	public override string Mnemonic => "lea_rdata";
+	public override IReadOnlyList<X86Register> ClobberedRegisters => [];
+
+	public X86Operand Dst => X86Operands[0];
+	public string Label { get; }
+
+	public LeaRdataOp(X86Operand dst, string label) {
+		X86Operands.Add(dst);
+		Label = label;
+	}
+
+	public override void Print(MlirPrinter printer) {
+		printer.PrintLine($"x86.lea_rdata {Dst}, @{Label}");
+	}
+}
+
+/// <summary>
 /// Push onto stack: x86.push src
 /// </summary>
 public sealed class PushOp : X86Op {

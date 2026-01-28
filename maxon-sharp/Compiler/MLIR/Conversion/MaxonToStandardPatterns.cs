@@ -32,6 +32,10 @@ public static class MaxonToStandardPatterns {
 		patterns.Add<LowerErrorUnionGetErrorOp>();
 		// Managed memory patterns (for Array implementation)
 		patterns.Add<LowerManagedMemoryCreateOp>();
+		patterns.Add<PassThroughConstDataOp>();
+		patterns.Add<LowerManagedMemoryCreateFromRdataOp>();
+		patterns.Add<PassThroughManagedMemoryMakeUniqueOp>();
+		patterns.Add<PassThroughManagedMemoryFreeOp>();
 		patterns.Add<LowerManagedMemoryLenOp>();
 		patterns.Add<LowerManagedMemoryCapacityOp>();
 		patterns.Add<LowerManagedMemoryGetUncheckedOp>();
@@ -521,6 +525,97 @@ public sealed class LowerManagedMemoryCreateOp : ConversionPattern<ManagedMemory
 }
 
 /// <summary>
+/// Passes maxon.const_data through to X86 lowering (handled by StandardToX86).
+/// Returns false to indicate no transformation at this stage.
+/// </summary>
+public sealed class PassThroughConstDataOp : ConversionPattern<ConstDataOp> {
+	protected override bool MatchAndRewrite(ConstDataOp op, ConversionPatternRewriter rewriter) {
+		// This operation passes through to StandardToX86 where it becomes LeaRdataOp
+		// We don't transform it here, just keep it as-is
+		return false;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_create_from_rdata to create __ManagedMemory pointing to rdata.
+/// Sets _flags = ManagedMemoryFlags.RDATA to indicate copy-on-write needed for mutation.
+/// </summary>
+public sealed class LowerManagedMemoryCreateFromRdataOp : ConversionPattern<ManagedMemoryCreateFromRdataOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryCreateFromRdataOp op, ConversionPatternRewriter rewriter) {
+		// __ManagedMemory layout:
+		//   _buffer: ptr (offset 0, 8 bytes)
+		//   _len: i64 (offset 8, 8 bytes)
+		//   _capacity: i64 (offset 16, 8 bytes)
+		//   _flags: i32 (offset 24, 4 bytes)
+		//   _parent_off: i32 (offset 28, 4 bytes)
+
+		// Allocate space for the struct (32 bytes)
+		var memRefType = new MemRefType(IntegerType.I8, [32]);
+		var structAlloca = new AllocaOp(memRefType);
+		rewriter.Insert(structAlloca);
+
+		// Store _buffer at offset 0 (points to rdata)
+		var bufferPtr = new FieldPtrOp(structAlloca.Result, "_buffer", 0, new PtrType(IntegerType.I8));
+		rewriter.Insert(bufferPtr);
+		var storeBuffer = new StoreOp(op.RdataPtr, bufferPtr.Result);
+		rewriter.Insert(storeBuffer);
+
+		// Store _len at offset 8
+		var lenPtr = new FieldPtrOp(structAlloca.Result, "_len", 8, IntegerType.I64);
+		rewriter.Insert(lenPtr);
+		var storeLen = new StoreOp(op.Count, lenPtr.Result);
+		rewriter.Insert(storeLen);
+
+		// Store _capacity at offset 16 (same as count for rdata)
+		var capPtr = new FieldPtrOp(structAlloca.Result, "_capacity", 16, IntegerType.I64);
+		rewriter.Insert(capPtr);
+		var storeCap = new StoreOp(op.Count, capPtr.Result);
+		rewriter.Insert(storeCap);
+
+		// Store _flags at offset 24 (set RDATA flag)
+		var rdataFlag = ConstantOp.Int(ManagedMemoryFlags.RDATA, IntegerType.I32);
+		rewriter.Insert(rdataFlag);
+		var flagsPtr = new FieldPtrOp(structAlloca.Result, "_flags", 24, IntegerType.I32);
+		rewriter.Insert(flagsPtr);
+		var storeFlags = new StoreOp(rdataFlag.Result, flagsPtr.Result);
+		rewriter.Insert(storeFlags);
+
+		// Store _parent_off at offset 28 (initially 0)
+		var zeroParent = ConstantOp.Int(0, IntegerType.I32);
+		rewriter.Insert(zeroParent);
+		var parentOffPtr = new FieldPtrOp(structAlloca.Result, "_parent_off", 28, IntegerType.I32);
+		rewriter.Insert(parentOffPtr);
+		var storeParent = new StoreOp(zeroParent.Result, parentOffPtr.Result);
+		rewriter.Insert(storeParent);
+
+		rewriter.ReplaceOpWithValue(op, structAlloca.Result);
+		return true;
+	}
+}
+
+/// <summary>
+/// Lowers maxon.managed_memory_make_unique to a no-op (pass-through).
+/// The actual COW logic is implemented in StandardToX86Patterns with inline jumps.
+/// </summary>
+public sealed class PassThroughManagedMemoryMakeUniqueOp : ConversionPattern<ManagedMemoryMakeUniqueOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryMakeUniqueOp op, ConversionPatternRewriter rewriter) {
+		// This operation passes through to StandardToX86 where COW is implemented
+		return false;
+	}
+}
+
+/// <summary>
+/// Passes through ManagedMemoryFreeOp to StandardToX86Patterns.
+/// The actual rdata check is implemented there with inline jumps.
+/// </summary>
+public sealed class PassThroughManagedMemoryFreeOp : ConversionPattern<ManagedMemoryFreeOp> {
+	protected override bool MatchAndRewrite(ManagedMemoryFreeOp op, ConversionPatternRewriter rewriter) {
+		// This operation passes through to StandardToX86 where rdata check is implemented
+		return false;
+	}
+}
+
+/// <summary>
 /// Lowers maxon.managed_memory_len to field load from offset 8.
 /// </summary>
 public sealed class LowerManagedMemoryLenOp : ConversionPattern<ManagedMemoryLenOp> {
@@ -579,11 +674,19 @@ public sealed class LowerManagedMemoryGetUncheckedOp : ConversionPattern<Managed
 
 /// <summary>
 /// Lowers maxon.managed_memory_set_at to buffer[index * elemSize] store.
+/// First ensures COW by inserting make_unique.
 /// </summary>
 public sealed class LowerManagedMemorySetAtOp : ConversionPattern<ManagedMemorySetAtOp> {
 	protected override bool MatchAndRewrite(ManagedMemorySetAtOp op, ConversionPatternRewriter rewriter) {
+		// First, ensure the memory is unique (COW check)
+		var elemSizeForCow = ConstantOp.Int(op.Value.Type.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSizeForCow);
+		var makeUnique = new ManagedMemoryMakeUniqueOp(op.Memory, elemSizeForCow.Result);
+		rewriter.Insert(makeUnique);
+		var memory = makeUnique.Result;
+
 		// Load buffer pointer
-		var bufferPtr = new FieldPtrOp(op.Memory, "_buffer", 0, new PtrType(IntegerType.I8));
+		var bufferPtr = new FieldPtrOp(memory, "_buffer", 0, new PtrType(IntegerType.I8));
 		rewriter.Insert(bufferPtr);
 		var bufferLoad = new LoadOp(bufferPtr.Result);
 		rewriter.Insert(bufferLoad);
@@ -607,16 +710,24 @@ public sealed class LowerManagedMemorySetAtOp : ConversionPattern<ManagedMemoryS
 
 /// <summary>
 /// Lowers maxon.managed_memory_grow to heap realloc.
+/// First ensures COW by inserting make_unique.
 /// </summary>
 public sealed class LowerManagedMemoryGrowOp : ConversionPattern<ManagedMemoryGrowOp> {
 	protected override bool MatchAndRewrite(ManagedMemoryGrowOp op, ConversionPatternRewriter rewriter) {
+		// First, ensure the memory is unique (COW check)
+		var elemSizeForCow = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSizeForCow);
+		var makeUnique = new ManagedMemoryMakeUniqueOp(op.Memory, elemSizeForCow.Result);
+		rewriter.Insert(makeUnique);
+		var memory = makeUnique.Result;
+
 		// Load current buffer and capacity
-		var bufferPtr = new FieldPtrOp(op.Memory, "_buffer", 0, new PtrType(IntegerType.I8));
+		var bufferPtr = new FieldPtrOp(memory, "_buffer", 0, new PtrType(IntegerType.I8));
 		rewriter.Insert(bufferPtr);
 		var bufferLoad = new LoadOp(bufferPtr.Result);
 		rewriter.Insert(bufferLoad);
 
-		var capPtr = new FieldPtrOp(op.Memory, "_capacity", 16, IntegerType.I64);
+		var capPtr = new FieldPtrOp(memory, "_capacity", 16, IntegerType.I64);
 		rewriter.Insert(capPtr);
 		var capLoad = new LoadOp(capPtr.Result);
 		rewriter.Insert(capLoad);
@@ -649,10 +760,20 @@ public sealed class LowerManagedMemoryGrowOp : ConversionPattern<ManagedMemoryGr
 
 /// <summary>
 /// Lowers maxon.managed_memory_set_length to field store at offset 8.
+/// First ensures COW by inserting make_unique.
 /// </summary>
 public sealed class LowerManagedMemorySetLengthOp : ConversionPattern<ManagedMemorySetLengthOp> {
 	protected override bool MatchAndRewrite(ManagedMemorySetLengthOp op, ConversionPatternRewriter rewriter) {
-		var lenPtr = new FieldPtrOp(op.Memory, "_len", 8, IntegerType.I64);
+		// First, ensure the memory is unique (COW check)
+		// Use 8 as a default element size (for length operations the actual size doesn't matter
+		// since we're not copying data, just potentially changing the buffer)
+		var elemSizeForCow = ConstantOp.Int(8, IntegerType.I64);
+		rewriter.Insert(elemSizeForCow);
+		var makeUnique = new ManagedMemoryMakeUniqueOp(op.Memory, elemSizeForCow.Result);
+		rewriter.Insert(makeUnique);
+		var memory = makeUnique.Result;
+
+		var lenPtr = new FieldPtrOp(memory, "_len", 8, IntegerType.I64);
 		rewriter.Insert(lenPtr);
 		var store = new StoreOp(op.NewLength, lenPtr.Result);
 		rewriter.Insert(store);
@@ -663,9 +784,17 @@ public sealed class LowerManagedMemorySetLengthOp : ConversionPattern<ManagedMem
 /// <summary>
 /// Lowers maxon.managed_memory_grow_byref - takes a pointer to __ManagedMemory.
 /// This version allows modifications to persist to the original struct.
+/// First ensures COW by inserting make_unique.
 /// </summary>
 public sealed class LowerManagedMemoryGrowByRefOp : ConversionPattern<ManagedMemoryGrowByRefOp> {
 	protected override bool MatchAndRewrite(ManagedMemoryGrowByRefOp op, ConversionPatternRewriter rewriter) {
+		// First, ensure the memory is unique (COW check)
+		var elemSizeForCow = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSizeForCow);
+		var makeUnique = new ManagedMemoryMakeUniqueOp(op.MemoryPtr, elemSizeForCow.Result);
+		rewriter.Insert(makeUnique);
+		var memoryPtr = makeUnique.Result;
+
 		// MemoryPtr is a pointer to the __ManagedMemory struct
 		// Calculate field addresses from the pointer base
 
@@ -673,7 +802,7 @@ public sealed class LowerManagedMemoryGrowByRefOp : ConversionPattern<ManagedMem
 		var bufferOffset = ConstantOp.Int(0, IntegerType.I64);
 		rewriter.Insert(bufferOffset);
 		var bufferPtrType = new PtrType(new PtrType(IntegerType.I8));
-		var bufferFieldPtr = new PtrAddOp(op.MemoryPtr, bufferOffset.Result, bufferPtrType);
+		var bufferFieldPtr = new PtrAddOp(memoryPtr, bufferOffset.Result, bufferPtrType);
 		rewriter.Insert(bufferFieldPtr);
 		var bufferPtrPtr = bufferFieldPtr.Result;
 
@@ -685,7 +814,7 @@ public sealed class LowerManagedMemoryGrowByRefOp : ConversionPattern<ManagedMem
 		var capOffset = ConstantOp.Int(16, IntegerType.I64);
 		rewriter.Insert(capOffset);
 		var capPtrType = new PtrType(IntegerType.I64);
-		var capFieldPtr = new PtrAddOp(op.MemoryPtr, capOffset.Result, capPtrType);
+		var capFieldPtr = new PtrAddOp(memoryPtr, capOffset.Result, capPtrType);
 		rewriter.Insert(capFieldPtr);
 
 		// Calculate new size: newCapacity * elementSize
@@ -712,14 +841,23 @@ public sealed class LowerManagedMemoryGrowByRefOp : ConversionPattern<ManagedMem
 
 /// <summary>
 /// Lowers maxon.managed_memory_set_length_byref - takes a pointer to __ManagedMemory.
+/// First ensures COW by inserting make_unique.
 /// </summary>
 public sealed class LowerManagedMemorySetLengthByRefOp : ConversionPattern<ManagedMemorySetLengthByRefOp> {
 	protected override bool MatchAndRewrite(ManagedMemorySetLengthByRefOp op, ConversionPatternRewriter rewriter) {
+		// First, ensure the memory is unique (COW check)
+		// Use 8 as default element size (for length ops the actual size doesn't matter)
+		var elemSizeForCow = ConstantOp.Int(8, IntegerType.I64);
+		rewriter.Insert(elemSizeForCow);
+		var makeUnique = new ManagedMemoryMakeUniqueOp(op.MemoryPtr, elemSizeForCow.Result);
+		rewriter.Insert(makeUnique);
+		var memoryPtr = makeUnique.Result;
+
 		// Length is at offset 8 from the struct pointer
 		var lenOffset = ConstantOp.Int(8, IntegerType.I64);
 		rewriter.Insert(lenOffset);
 		var lenPtrType = new PtrType(IntegerType.I64);
-		var lenFieldPtr = new PtrAddOp(op.MemoryPtr, lenOffset.Result, lenPtrType);
+		var lenFieldPtr = new PtrAddOp(memoryPtr, lenOffset.Result, lenPtrType);
 		rewriter.Insert(lenFieldPtr);
 
 		var store = new StoreOp(op.NewLength, lenFieldPtr.Result);
@@ -730,11 +868,19 @@ public sealed class LowerManagedMemorySetLengthByRefOp : ConversionPattern<Manag
 
 /// <summary>
 /// Lowers maxon.managed_memory_shift_right to memmove.
+/// First ensures COW by inserting make_unique.
 /// </summary>
 public sealed class LowerManagedMemoryShiftRightOp : ConversionPattern<ManagedMemoryShiftRightOp> {
 	protected override bool MatchAndRewrite(ManagedMemoryShiftRightOp op, ConversionPatternRewriter rewriter) {
+		// First, ensure the memory is unique (COW check)
+		var elemSizeForCow = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSizeForCow);
+		var makeUnique = new ManagedMemoryMakeUniqueOp(op.Memory, elemSizeForCow.Result);
+		rewriter.Insert(makeUnique);
+		var memory = makeUnique.Result;
+
 		// Load buffer pointer
-		var bufferPtr = new FieldPtrOp(op.Memory, "_buffer", 0, new PtrType(IntegerType.I8));
+		var bufferPtr = new FieldPtrOp(memory, "_buffer", 0, new PtrType(IntegerType.I8));
 		rewriter.Insert(bufferPtr);
 		var bufferLoad = new LoadOp(bufferPtr.Result);
 		rewriter.Insert(bufferLoad);
@@ -757,7 +903,7 @@ public sealed class LowerManagedMemoryShiftRightOp : ConversionPattern<ManagedMe
 		rewriter.Insert(destPtr);
 
 		// Length to move: (len - startIndex) * elemSize
-		var lenPtr = new FieldPtrOp(op.Memory, "_len", 8, IntegerType.I64);
+		var lenPtr = new FieldPtrOp(memory, "_len", 8, IntegerType.I64);
 		rewriter.Insert(lenPtr);
 		var lenLoad = new LoadOp(lenPtr.Result);
 		rewriter.Insert(lenLoad);
@@ -776,11 +922,19 @@ public sealed class LowerManagedMemoryShiftRightOp : ConversionPattern<ManagedMe
 
 /// <summary>
 /// Lowers maxon.managed_memory_shift_left to memmove.
+/// First ensures COW by inserting make_unique.
 /// </summary>
 public sealed class LowerManagedMemoryShiftLeftOp : ConversionPattern<ManagedMemoryShiftLeftOp> {
 	protected override bool MatchAndRewrite(ManagedMemoryShiftLeftOp op, ConversionPatternRewriter rewriter) {
+		// First, ensure the memory is unique (COW check)
+		var elemSizeForCow = ConstantOp.Int(op.ElementType.SizeInBytes, IntegerType.I64);
+		rewriter.Insert(elemSizeForCow);
+		var makeUnique = new ManagedMemoryMakeUniqueOp(op.Memory, elemSizeForCow.Result);
+		rewriter.Insert(makeUnique);
+		var memory = makeUnique.Result;
+
 		// Load buffer pointer
-		var bufferPtr = new FieldPtrOp(op.Memory, "_buffer", 0, new PtrType(IntegerType.I8));
+		var bufferPtr = new FieldPtrOp(memory, "_buffer", 0, new PtrType(IntegerType.I8));
 		rewriter.Insert(bufferPtr);
 		var bufferLoad = new LoadOp(bufferPtr.Result);
 		rewriter.Insert(bufferLoad);
@@ -803,7 +957,7 @@ public sealed class LowerManagedMemoryShiftLeftOp : ConversionPattern<ManagedMem
 		rewriter.Insert(destPtr);
 
 		// Length to move: (len - startIndex - count) * elemSize
-		var lenPtr = new FieldPtrOp(op.Memory, "_len", 8, IntegerType.I64);
+		var lenPtr = new FieldPtrOp(memory, "_len", 8, IntegerType.I64);
 		rewriter.Insert(lenPtr);
 		var lenLoad = new LoadOp(lenPtr.Result);
 		rewriter.Insert(lenLoad);

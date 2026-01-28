@@ -42,7 +42,7 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 		Logger.Trace(LogCategory.Mlir, $"Legal dialects: {string.Join(", ", _legalDialects)}");
 
 		foreach (var func in module.Functions) {
-			var result = ConvertFunction(func);
+			var result = ConvertFunction(func, module);
 			if (result == ConversionResult.Failure) {
 				Logger.Error(LogCategory.Mlir, $"Conversion failed for function: {func.Name}");
 				return result;
@@ -56,13 +56,13 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 	/// <summary>
 	/// Runs the conversion on a function.
 	/// </summary>
-	public ConversionResult ConvertFunction(MlirFunction func) {
+	public ConversionResult ConvertFunction(MlirFunction func, MlirModule? module = null) {
 		Logger.Trace(LogCategory.Mlir, $"Converting function: {func.Name} ({func.Body.Blocks.Count} blocks)");
 		int convertedCount = 0;
 		var valueMappings = new Dictionary<MlirValue, MlirValue>();
 
 		foreach (var block in func.Body.Blocks) {
-			var (result, count) = ConvertBlock(block, valueMappings, func);
+			var (result, count) = ConvertBlock(block, valueMappings, func, module);
 			if (result == ConversionResult.Failure)
 				return result;
 			convertedCount += count;
@@ -78,7 +78,7 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 		return ConversionResult.Success;
 	}
 
-	private (ConversionResult result, int convertedCount) ConvertBlock(MlirBlock block, Dictionary<MlirValue, MlirValue> globalMappings, MlirFunction? func = null) {
+	private (ConversionResult result, int convertedCount) ConvertBlock(MlirBlock block, Dictionary<MlirValue, MlirValue> globalMappings, MlirFunction? func = null, MlirModule? module = null) {
 		// Process operations in order, keeping track of which ones to remove
 		var toRemove = new List<MlirOperation>();
 
@@ -93,7 +93,7 @@ public sealed class DialectConversionPass(ConversionPatternSet patterns) {
 			bool converted = false;
 
 			foreach (var pattern in patterns) {
-				var rewriter = new ConversionPatternRewriter(block, i + 1, func);
+				var rewriter = new ConversionPatternRewriter(block, i + 1, func, module);
 				if (pattern.MatchAndRewrite(op, rewriter)) {
 					Logger.Trace(LogCategory.Mlir, $"    {op.Mnemonic} -> {pattern.GetType().Name}");
 

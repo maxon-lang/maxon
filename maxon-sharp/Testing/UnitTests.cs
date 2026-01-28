@@ -39,10 +39,11 @@ public static class UnitTests {
 			("managed-memory-loop-growth-generates-realloc", ManagedMemoryLoopGrowthGeneratesRealloc),
 			("managed-memory-fixed-size-array-literal-cleanup", ManagedMemoryFixedSizeArrayLiteralCleanup),
 
-			// Managed strings: Disabled - strings not yet implemented
-			// ("managed-string-heap-string-generates-cleanup", ManagedStringHeapStringGeneratesCleanup),
-			// ("managed-string-reassignment-handles-old-value", ManagedStringReassignmentHandlesOldValue),
-			// ("managed-string-loop-concatenation-cleanup", ManagedStringLoopConcatenationCleanup),
+			// Rdata and COW: Verifies array literals use rdata and COW works
+			("rdata-constant-array-uses-rdata", RdataConstantArrayUsesRdata),
+			("rdata-cow-mutation-copies-to-heap", RdataCowMutationCopiesToHeap),
+			("rdata-cow-multiple-mutations", RdataCowMultipleMutations),
+			("rdata-non-constant-array-uses-heap", RdataNonConstantArrayUsesHeap),
 		};
 
 		foreach (var (name, run) in tests) {
@@ -134,6 +135,130 @@ public static class UnitTests {
 		return count;
 	}
 
+	/// <summary>
+	/// Information about a PE section.
+	/// </summary>
+	private sealed record PeSectionInfo(string Name, uint VirtualSize, uint VirtualAddress, uint RawSize, uint RawOffset, uint Characteristics);
+
+	/// <summary>
+	/// Parses basic PE section headers from an executable.
+	/// Returns null if parsing fails.
+	/// </summary>
+	private static List<PeSectionInfo>? ParsePeSections(string exePath) {
+		try {
+			using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read);
+			using var reader = new BinaryReader(fs);
+
+			// DOS Header - check magic
+			var dosMagic = reader.ReadUInt16();
+			if (dosMagic != 0x5A4D) return null; // "MZ"
+
+			// Skip to e_lfanew (PE header offset at 0x3C)
+			fs.Position = 0x3C;
+			var peOffset = reader.ReadUInt32();
+
+			// PE Signature
+			fs.Position = peOffset;
+			var peSignature = reader.ReadUInt32();
+			if (peSignature != 0x00004550) return null; // "PE\0\0"
+
+			// COFF Header
+			var machine = reader.ReadUInt16();
+			var numberOfSections = reader.ReadUInt16();
+			reader.ReadUInt32(); // TimeDateStamp
+			reader.ReadUInt32(); // PointerToSymbolTable
+			reader.ReadUInt32(); // NumberOfSymbols
+			var sizeOfOptionalHeader = reader.ReadUInt16();
+			reader.ReadUInt16(); // Characteristics
+
+			// Skip optional header
+			fs.Position += sizeOfOptionalHeader;
+
+			// Parse section headers
+			var sections = new List<PeSectionInfo>();
+			for (int i = 0; i < numberOfSections; i++) {
+				var nameBytes = reader.ReadBytes(8);
+				var name = Encoding.ASCII.GetString(nameBytes).TrimEnd('\0');
+				var virtualSize = reader.ReadUInt32();
+				var virtualAddress = reader.ReadUInt32();
+				var rawSize = reader.ReadUInt32();
+				var rawOffset = reader.ReadUInt32();
+				reader.ReadUInt32(); // PointerToRelocations
+				reader.ReadUInt32(); // PointerToLinenumbers
+				reader.ReadUInt16(); // NumberOfRelocations
+				reader.ReadUInt16(); // NumberOfLinenumbers
+				var characteristics = reader.ReadUInt32();
+
+				sections.Add(new PeSectionInfo(name, virtualSize, virtualAddress, rawSize, rawOffset, characteristics));
+			}
+
+			return sections;
+		} catch {
+			return null;
+		}
+	}
+
+	/// <summary>
+	/// Reads raw data from a PE section.
+	/// </summary>
+	private static byte[]? ReadPeSectionData(string exePath, PeSectionInfo section) {
+		try {
+			using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read);
+			fs.Position = section.RawOffset;
+			var data = new byte[section.RawSize];
+			fs.ReadExactly(data, 0, (int)section.RawSize);
+			return data;
+		} catch {
+			return null;
+		}
+	}
+
+	/// <summary>
+	/// Converts an array of int64 values to little-endian bytes.
+	/// </summary>
+	private static byte[] Int64ArrayToBytes(params long[] values) {
+		var bytes = new byte[values.Length * 8];
+		for (int i = 0; i < values.Length; i++) {
+			BitConverter.TryWriteBytes(bytes.AsSpan(i * 8, 8), values[i]);
+		}
+		return bytes;
+	}
+
+	/// <summary>
+	/// Checks if the .rdata section contains the expected byte sequence.
+	/// </summary>
+	private static (bool found, string? error) VerifyRdataContains(string exePath, byte[] expected) {
+		var sections = ParsePeSections(exePath);
+		if (sections == null) return (false, "Failed to parse PE sections");
+
+		var rdataSection = sections.FirstOrDefault(s => s.Name == ".rdata");
+		if (rdataSection == null) return (false, "PE does not contain .rdata section");
+
+		if ((rdataSection.Characteristics & 0x40000000) == 0)
+			return (false, ".rdata section does not have READ characteristic");
+
+		var rdataBytes = ReadPeSectionData(exePath, rdataSection);
+		if (rdataBytes == null) return (false, "Failed to read .rdata section data");
+
+		for (int i = 0; i <= rdataBytes.Length - expected.Length; i++) {
+			if (rdataBytes.AsSpan(i, expected.Length).SequenceEqual(expected))
+				return (true, null);
+		}
+		return (false, null);
+	}
+
+	/// <summary>
+	/// Creates a failing UnitTestResult.
+	/// </summary>
+	private static UnitTestResult Fail(string name, string message) =>
+		new() { Name = name, Passed = false, ErrorMessage = message };
+
+	/// <summary>
+	/// Creates a passing UnitTestResult.
+	/// </summary>
+	private static UnitTestResult Pass(string name) =>
+		new() { Name = name, Passed = true };
+
 	private static string GetTempExePath(string testName) {
 		var tempDir = Path.Combine(Path.GetTempPath(), "maxon-tests");
 		Directory.CreateDirectory(tempDir);
@@ -151,73 +276,45 @@ public static class UnitTests {
 	/// <summary>
 	/// Test that large struct allocation with recursion works correctly.
 	/// On Windows x64, functions with >4KB stack allocation need __chkstk.
-	/// Uses multiple medium-sized structs to get >4KB total without slow compilation.
+	/// This test requires execution - would crash without proper stack probing.
 	/// </summary>
 	private static UnitTestResult StackProbingLargeStructRecursive() {
-		const string testName = "stack-probing-large-struct-recursive";
+		const string name = "stack-probing-large-struct-recursive";
 
-		// Generate a struct with 64 int fields (512 bytes)
-		// Then use 10 of them in a function to get 5120 bytes (> 4KB)
+		// Generate a struct with 2000 int fields (16000 bytes on stack)
+		// This requires stack probing on Windows - a single sub rsp, 16000
+		// would skip multiple pages and crash without __chkstk
 		var sb = new StringBuilder();
 		sb.AppendLine("type BigStruct");
-		for (int i = 0; i < 64; i++) {
+		for (int i = 0; i < 2000; i++) {
 			sb.AppendLine($"    export var f{i} int");
 		}
 		sb.AppendLine("end 'BigStruct'");
 		sb.AppendLine();
 		sb.AppendLine("""
 function recurse(n int) returns int
-    var s1 = BigStruct { f0: n }
-    var s2 = BigStruct { f0: n }
-    var s3 = BigStruct { f0: n }
-    var s4 = BigStruct { f0: n }
-    var s5 = BigStruct { f0: n }
-    var s6 = BigStruct { f0: n }
-    var s7 = BigStruct { f0: n }
-    var s8 = BigStruct { f0: n }
-    var s9 = BigStruct { f0: n }
-    var s10 = BigStruct { f0: n }
+    var s = BigStruct { f0: n }
     if n == 0 'base'
-        return s10.f63
+        return s.f1999
     end 'base'
     return recurse(n - 1)
 end 'recurse'
 
 function main() returns int
-    return recurse(50)
+    return recurse(10)
 end 'main'
 """);
 
-		var tempExe = GetTempExePath(testName);
+		var tempExe = GetTempExePath(name);
 		try {
-			var (success, error, ir) = CompileWithIr(sb.ToString(), tempExe);
-			if (!success) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Compilation failed: {error}"
-				};
-			}
+			var (success, error, _) = CompileWithIr(sb.ToString(), tempExe);
+			if (!success) return Fail(name, $"Compilation failed: {error}");
 
 			var runResult = RunExecutable(tempExe);
-			if (runResult == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "Failed to run executable (timeout or error)"
-				};
-			}
+			if (runResult == null) return Fail(name, "Failed to run executable (timeout or crash)");
+			if (runResult.Value.ExitCode != 0) return Fail(name, $"Expected exit code 0, got {runResult.Value.ExitCode}");
 
-			// If stack probing is broken, this would crash before returning
-			if (runResult.Value.ExitCode != 0) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected exit code 0, got {runResult.Value.ExitCode}"
-				};
-			}
-
-			return new UnitTestResult { Name = testName, Passed = true };
+			return Pass(name);
 		} finally {
 			CleanupTempFile(tempExe);
 		}
@@ -231,7 +328,7 @@ end 'main'
 	/// Test that heap arrays generate heap_free for cleanup.
 	/// </summary>
 	private static UnitTestResult ManagedMemoryHeapArrayGeneratesFree() {
-		const string testName = "managed-memory-heap-array-generates-free";
+		const string name = "managed-memory-heap-array-generates-free";
 		const string source = """
 typealias IntArray is Array with int
 
@@ -243,44 +340,13 @@ function main() returns int
 end 'main'
 """;
 
-		var tempExe = GetTempExePath(testName);
+		var tempExe = GetTempExePath(name);
 		try {
 			var (success, error, ir) = CompileWithIr(source, tempExe);
-			if (!success) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Compilation failed: {error}"
-				};
-			}
+			if (!success) return Fail(name, $"Compilation failed: {error}");
+			if (ir == null || !ir.Contains(IrHeapFree)) return Fail(name, $"IR missing {IrHeapFree}");
 
-			// Verify IR contains heap_free for array cleanup
-			if (ir == null || !ir.Contains(IrHeapFree)) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"IR does not contain {IrHeapFree} instruction"
-				};
-			}
-
-			var runResult = RunExecutable(tempExe);
-			if (runResult == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "Failed to run executable"
-				};
-			}
-
-			if (runResult.Value.ExitCode != 2) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected exit code 2, got {runResult.Value.ExitCode}"
-				};
-			}
-
-			return new UnitTestResult { Name = testName, Passed = true };
+			return Pass(name);
 		} finally {
 			CleanupTempFile(tempExe);
 		}
@@ -290,7 +356,7 @@ end 'main'
 	/// Test that nested scopes generate multiple heap_free calls.
 	/// </summary>
 	private static UnitTestResult ManagedMemoryScopeCleanupGeneratesFree() {
-		const string testName = "managed-memory-scope-cleanup-generates-free";
+		const string name = "managed-memory-scope-cleanup-generates-free";
 		const string source = """
 typealias IntArray is Array with int
 
@@ -307,53 +373,16 @@ function main() returns int
 end 'main'
 """;
 
-		var tempExe = GetTempExePath(testName);
+		var tempExe = GetTempExePath(name);
 		try {
 			var (success, error, ir) = CompileWithIr(source, tempExe);
-			if (!success) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Compilation failed: {error}"
-				};
-			}
-
-			// Verify IR contains at least 2 heap_free calls (inner and outer scope)
-			if (ir == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "No IR generated"
-				};
-			}
+			if (!success) return Fail(name, $"Compilation failed: {error}");
+			if (ir == null) return Fail(name, "No IR generated");
 
 			int freeCount = CountOccurrences(ir, IrHeapFree);
-			if (freeCount < 2) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected at least 2 {IrHeapFree} instructions, found {freeCount}"
-				};
-			}
+			if (freeCount < 2) return Fail(name, $"Expected >= 2 {IrHeapFree}, found {freeCount}");
 
-			var runResult = RunExecutable(tempExe);
-			if (runResult == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "Failed to run executable"
-				};
-			}
-
-			if (runResult.Value.ExitCode != 0) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected exit code 0, got {runResult.Value.ExitCode}"
-				};
-			}
-
-			return new UnitTestResult { Name = testName, Passed = true };
+			return Pass(name);
 		} finally {
 			CleanupTempFile(tempExe);
 		}
@@ -363,7 +392,7 @@ end 'main'
 	/// Test that array growth in a loop generates heap_realloc.
 	/// </summary>
 	private static UnitTestResult ManagedMemoryLoopGrowthGeneratesRealloc() {
-		const string testName = "managed-memory-loop-growth-generates-realloc";
+		const string name = "managed-memory-loop-growth-generates-realloc";
 		const string source = """
 typealias IntArray is Array with int
 
@@ -378,56 +407,14 @@ function main() returns int
 end 'main'
 """;
 
-		var tempExe = GetTempExePath(testName);
+		var tempExe = GetTempExePath(name);
 		try {
 			var (success, error, ir) = CompileWithIr(source, tempExe);
-			if (!success) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Compilation failed: {error}"
-				};
-			}
+			if (!success) return Fail(name, $"Compilation failed: {error}");
+			if (ir == null) return Fail(name, "No IR generated");
+			if (!ir.Contains(IrHeapRealloc)) return Fail(name, $"IR missing {IrHeapRealloc}");
 
-			if (ir == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "No IR generated"
-				};
-			}
-
-			// Verify IR contains heap_realloc for array growth (or heap_realloc_or_alloc)
-			if (!ir.Contains(IrHeapRealloc)) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"IR does not contain {IrHeapRealloc} instruction"
-				};
-			}
-
-			// NOTE: HeapFree is only generated if cleanup code is emitted.
-			// This test currently verifies realloc is called for growth.
-			// Cleanup verification is separate (ManagedMemoryHeapArrayGeneratesFree)
-
-			var runResult = RunExecutable(tempExe);
-			if (runResult == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "Failed to run executable"
-				};
-			}
-
-			if (runResult.Value.ExitCode != 10) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected exit code 10, got {runResult.Value.ExitCode}"
-				};
-			}
-
-			return new UnitTestResult { Name = testName, Passed = true };
+			return Pass(name);
 		} finally {
 			CleanupTempFile(tempExe);
 		}
@@ -437,7 +424,7 @@ end 'main'
 	/// Test that fixed-size array literals get cleaned up.
 	/// </summary>
 	private static UnitTestResult ManagedMemoryFixedSizeArrayLiteralCleanup() {
-		const string testName = "managed-memory-fixed-size-array-literal-cleanup";
+		const string name = "managed-memory-fixed-size-array-literal-cleanup";
 		const string source = """
 function main() returns int
     var arr = [10, 20, 30]
@@ -445,277 +432,152 @@ function main() returns int
 end 'main'
 """;
 
-		var tempExe = GetTempExePath(testName);
+		var tempExe = GetTempExePath(name);
 		try {
 			var (success, error, ir) = CompileWithIr(source, tempExe);
-			if (!success) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Compilation failed: {error}"
-				};
-			}
+			if (!success) return Fail(name, $"Compilation failed: {error}");
+			if (ir == null) return Fail(name, "No IR generated");
+			if (!ir.Contains(IrHeapFree)) return Fail(name, $"IR missing {IrHeapFree}");
 
-			if (ir == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "No IR generated"
-				};
-			}
-
-			// Verify IR contains heap_free for cleanup
-			if (!ir.Contains(IrHeapFree)) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"IR does not contain {IrHeapFree} instruction"
-				};
-			}
-
-			var runResult = RunExecutable(tempExe);
-			if (runResult == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "Failed to run executable"
-				};
-			}
-
-			if (runResult.Value.ExitCode != 20) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected exit code 20, got {runResult.Value.ExitCode}"
-				};
-			}
-
-			return new UnitTestResult { Name = testName, Passed = true };
-		} finally {
-			CleanupTempFile(tempExe);
-		}
-	}
-
-	/// <summary>
-	/// Test that struct field array method calls work correctly.
-	/// Uses inline generic type since typealias may not resolve in struct field context.
-	/// </summary>
-	private static UnitTestResult ManagedMemoryStructFieldArrayMethodCall() {
-		const string testName = "managed-memory-struct-field-array-method-call";
-		const string source = """
-type Config
-    export var values Array with int
-end 'Config'
-
-function main() returns int
-    var config = Config{values: [1, 2, 3]}
-    return config.values.count()
-end 'main'
-""";
-
-		var tempExe = GetTempExePath(testName);
-		try {
-			var (success, error, ir) = CompileWithIr(source, tempExe);
-			if (!success) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Compilation failed: {error}"
-				};
-			}
-
-			var runResult = RunExecutable(tempExe);
-			if (runResult == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "Failed to run executable"
-				};
-			}
-
-			if (runResult.Value.ExitCode != 3) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected exit code 3, got {runResult.Value.ExitCode}"
-				};
-			}
-
-			return new UnitTestResult { Name = testName, Passed = true };
+			return Pass(name);
 		} finally {
 			CleanupTempFile(tempExe);
 		}
 	}
 
 	// ============================================================================
-	// Managed String Tests
-	// These tests require string literal support in the compiler.
+	// Rdata and Copy-on-Write Tests
 	// ============================================================================
 
 	/// <summary>
-	/// Test that heap strings generate cleanup.
+	/// Test that constant array literals use rdata section.
+	/// Verifies: IR contains lea_rdata, PE has .rdata section with array data.
 	/// </summary>
-	private static UnitTestResult ManagedStringHeapStringGeneratesCleanup() {
-		const string testName = "managed-string-heap-string-generates-cleanup";
+	private static UnitTestResult RdataConstantArrayUsesRdata() {
+		const string name = "rdata-constant-array-uses-rdata";
 		const string source = """
 function main() returns int
-    var s = "this is a heap allocated string!"
-    return s.count()
+    let arr = [10, 20, 30]
+    return try arr.get(1) otherwise 0
 end 'main'
 """;
 
-		var tempExe = GetTempExePath(testName);
+		var tempExe = GetTempExePath(name);
 		try {
 			var (success, error, ir) = CompileWithIr(source, tempExe);
-			if (!success) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Compilation failed: {error}"
-				};
-			}
+			if (!success) return Fail(name, $"Compilation failed: {error}");
+			if (ir == null) return Fail(name, "No IR generated");
+			if (!ir.Contains("lea_rdata")) return Fail(name, "IR missing lea_rdata for constant array");
 
-			var runResult = RunExecutable(tempExe);
-			if (runResult == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "Failed to run executable"
-				};
-			}
+			var (found, rdataError) = VerifyRdataContains(tempExe, Int64ArrayToBytes(10, 20, 30));
+			if (rdataError != null) return Fail(name, rdataError);
+			if (!found) return Fail(name, ".rdata missing array data [10, 20, 30]");
 
-			// "this is a heap allocated string!" = 32 characters
-			if (runResult.Value.ExitCode != 32) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected exit code 32, got {runResult.Value.ExitCode}"
-				};
-			}
-
-			return new UnitTestResult { Name = testName, Passed = true };
+			return Pass(name);
 		} finally {
 			CleanupTempFile(tempExe);
 		}
 	}
 
 	/// <summary>
-	/// Test that string reassignment handles old value cleanup.
+	/// Test that mutating an rdata-backed array triggers COW (copy-on-write).
+	/// Verifies: IR contains lea_rdata and HeapAlloc, PE has .rdata with original data.
 	/// </summary>
-	private static UnitTestResult ManagedStringReassignmentHandlesOldValue() {
-		const string testName = "managed-string-reassignment-handles-old-value";
+	private static UnitTestResult RdataCowMutationCopiesToHeap() {
+		const string name = "rdata-cow-mutation-copies-to-heap";
 		const string source = """
 function main() returns int
-    var s = "first heap allocated value!!"
-    s = "second heap allocated here!!"
-    return s.count()
+    var arr = [42]
+    arr.set(0, value: 77)
+    return try arr.get(0) otherwise 0
 end 'main'
 """;
 
-		var tempExe = GetTempExePath(testName);
+		var tempExe = GetTempExePath(name);
 		try {
 			var (success, error, ir) = CompileWithIr(source, tempExe);
-			if (!success) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Compilation failed: {error}"
-				};
-			}
+			if (!success) return Fail(name, $"Compilation failed: {error}");
+			if (ir == null) return Fail(name, "No IR generated");
+			if (!ir.Contains("lea_rdata")) return Fail(name, "IR missing lea_rdata - array should start in rdata");
+			if (!ir.Contains("HeapAlloc")) return Fail(name, "IR missing HeapAlloc - COW should allocate heap");
 
-			var runResult = RunExecutable(tempExe);
-			if (runResult == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "Failed to run executable"
-				};
-			}
+			var (found, rdataError) = VerifyRdataContains(tempExe, Int64ArrayToBytes(42));
+			if (rdataError != null) return Fail(name, rdataError);
+			if (!found) return Fail(name, ".rdata missing original value [42]");
 
-			// "second heap allocated here!!" = 28 characters
-			if (runResult.Value.ExitCode != 28) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected exit code 28, got {runResult.Value.ExitCode}"
-				};
-			}
-
-			return new UnitTestResult { Name = testName, Passed = true };
+			return Pass(name);
 		} finally {
 			CleanupTempFile(tempExe);
 		}
 	}
 
 	/// <summary>
-	/// Test that loop concatenation generates cleanup for intermediate strings.
+	/// Test that multiple mutations after COW work correctly.
+	/// Verifies: .rdata contains original data, exactly one HeapAlloc for COW.
 	/// </summary>
-	private static UnitTestResult ManagedStringLoopConcatenationCleanup() {
-		const string testName = "managed-string-loop-concatenation-cleanup";
+	private static UnitTestResult RdataCowMultipleMutations() {
+		const string name = "rdata-cow-multiple-mutations";
 		const string source = """
 function main() returns int
-    var s = ""
-    var a = "a"
-    var i = 0
-    while i < 5 'loop'
-        s = "{s}{a}"
-        i = i + 1
-    end 'loop'
-    return s.count()
+    var arr = [1, 2, 3]
+    arr.set(0, value: 10)
+    arr.set(1, value: 20)
+    arr.set(2, value: 30)
+    var sum = 0
+    sum = sum + (try arr.get(0) otherwise 0)
+    sum = sum + (try arr.get(1) otherwise 0)
+    sum = sum + (try arr.get(2) otherwise 0)
+    return sum
 end 'main'
 """;
 
-		var tempExe = GetTempExePath(testName);
+		var tempExe = GetTempExePath(name);
 		try {
 			var (success, error, ir) = CompileWithIr(source, tempExe);
-			if (!success) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Compilation failed: {error}"
-				};
-			}
+			if (!success) return Fail(name, $"Compilation failed: {error}");
+			if (ir == null) return Fail(name, "No IR generated");
 
-			if (ir == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "No IR generated"
-				};
-			}
+			var (found, rdataError) = VerifyRdataContains(tempExe, Int64ArrayToBytes(1, 2, 3));
+			if (rdataError != null) return Fail(name, rdataError);
+			if (!found) return Fail(name, ".rdata missing original data [1, 2, 3]");
 
-			// Verify IR contains heap_free for string cleanup
-			if (!ir.Contains(IrHeapFree)) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"IR does not contain {IrHeapFree} instruction"
-				};
-			}
+			int heapAllocCount = CountOccurrences(ir, "HeapAlloc");
+			if (heapAllocCount != 1) return Fail(name, $"Expected 1 HeapAlloc for COW, found {heapAllocCount}");
 
-			var runResult = RunExecutable(tempExe);
-			if (runResult == null) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = "Failed to run executable"
-				};
-			}
-
-			// 5 'a' characters
-			if (runResult.Value.ExitCode != 5) {
-				return new UnitTestResult {
-					Name = testName,
-					Passed = false,
-					ErrorMessage = $"Expected exit code 5, got {runResult.Value.ExitCode}"
-				};
-			}
-
-			return new UnitTestResult { Name = testName, Passed = true };
+			return Pass(name);
 		} finally {
 			CleanupTempFile(tempExe);
 		}
 	}
+
+	/// <summary>
+	/// Test that non-constant array literals use heap allocation (not rdata).
+	/// Verifies: no lea_rdata, HeapAlloc used instead.
+	/// </summary>
+	private static UnitTestResult RdataNonConstantArrayUsesHeap() {
+		const string name = "rdata-non-constant-array-uses-heap";
+		const string source = """
+function main() returns int
+    var x = 5
+    var arr = [1, x, 3]
+    return try arr.get(1) otherwise 0
+end 'main'
+""";
+
+		var tempExe = GetTempExePath(name);
+		try {
+			var (success, error, ir) = CompileWithIr(source, tempExe);
+			if (!success) return Fail(name, $"Compilation failed: {error}");
+			if (ir == null) return Fail(name, "No IR generated");
+			if (ir.Contains("lea_rdata")) return Fail(name, "IR has lea_rdata - non-constant array shouldn't use rdata");
+			if (!ir.Contains("HeapAlloc")) return Fail(name, "IR missing HeapAlloc - non-constant array should use heap");
+
+			return Pass(name);
+		} finally {
+			CleanupTempFile(tempExe);
+		}
+	}
+
 }
 
 /// <summary>

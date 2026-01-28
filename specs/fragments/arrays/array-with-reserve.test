@@ -92,16 +92,21 @@ func.func @main() -> i64 {
   ^try.error:
     x86.mov r13, 0
     x86.jmp try.merge
-  ^try.merge(%159: i64):
+  ^try.merge(%165: i64):
     x86.lea r8, qword ptr [r12+8]
-    x86.lea rcx, qword ptr [r8]
-    x86.mov r8, qword ptr [rcx]
-    x86.mov r11, r8
+    x86.mov r10, r8
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz free_do_13
+    x86.jmp free_done_13
+    free_do_13:
+    x86.mov r11, qword ptr [r10]
     x86.call extern kernel32.dll::GetProcessHeap
     x86.mov rcx, rax
     x86.mov rdx, 0
     x86.mov r8, r11
     x86.call extern kernel32.dll::HeapFree
+    free_done_13:
     x86.mov rax, r13
     x86.epilogue saved_gprs=[RBX,R12,R13]
     x86.ret
@@ -123,18 +128,57 @@ func.func @Array$int.reserve(%self: memref<!maxon.struct<Array$int>>, %minCapaci
     x86.jmp merge
   ^then:
     x86.lea rcx, qword ptr [rax+8]
-    x86.mov rax, 0
-    x86.lea r12, qword ptr [rcx+rax]
-    x86.mov rax, qword ptr [r12]
+    x86.mov rax, 8
+    x86.mov r10, rcx
+    x86.mov r11, rax
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz cow_skip_5
+    x86.push rsi
+    x86.push rdi
+    x86.sub rsp, 80
+    x86.mov rax, qword ptr [r10+8]
+    x86.imul rax, r11
+    x86.mov qword ptr [rsp+32], r10
+    x86.mov rcx, qword ptr [r10]
+    x86.mov qword ptr [rsp+40], rcx
+    x86.mov qword ptr [rsp+48], rax
+    x86.mov qword ptr [rsp+56], r11
+    x86.call extern kernel32.dll::GetProcessHeap
+    x86.mov rcx, rax
+    x86.mov rdx, 0
+    x86.mov r8, qword ptr [rsp+48]
+    x86.call extern kernel32.dll::HeapAlloc
+    x86.mov r11, qword ptr [rsp+56]
+    x86.mov rsi, qword ptr [rsp+40]
+    x86.mov r10, qword ptr [rsp+32]
+    x86.mov rdi, rax
+    x86.mov rcx, qword ptr [r10+8]
+    x86.imul rcx, r11
+    x86.cld
+    x86.rep_movsb
+    x86.mov qword ptr [r10], rax
+    x86.xor ecx, ecx
+    x86.mov dword ptr [r10+24], ecx
+    x86.add rsp, 80
+    x86.pop rdi
+    x86.pop rsi
+    x86.jmp cow_done_5
+    cow_skip_5:
+    cow_done_5:
+    x86.mov rax, r10
+    x86.mov rcx, 0
+    x86.lea r12, qword ptr [rax+rcx]
+    x86.mov rcx, qword ptr [r12]
     x86.mov rdx, 16
-    x86.lea r13, qword ptr [rcx+rdx]
+    x86.lea r13, qword ptr [rax+rdx]
     x86.mov rdx, 3
-    x86.mov rcx, rbx
+    x86.mov rax, rbx
     x86.push rcx
-    x86.shl rcx, rdx
+    x86.shl rax, rdx
     x86.pop rcx
-    x86.mov r10, rax
-    x86.mov r11, rcx
+    x86.mov r10, rcx
+    x86.mov r11, rax
     x86.test r10, r10
     x86.jz heap_alloc_0
     x86.call extern kernel32.dll::GetProcessHeap
@@ -151,8 +195,7 @@ func.func @Array$int.reserve(%self: memref<!maxon.struct<Array$int>>, %minCapaci
     x86.mov r8, r11
     x86.call extern kernel32.dll::HeapAlloc
     heap_done_0:
-    x86.mov rcx, rax
-    x86.mov qword ptr [r12], rcx
+    x86.mov qword ptr [r12], rax
     x86.mov qword ptr [r13], rbx
     x86.jmp merge
   ^merge:
@@ -162,7 +205,7 @@ func.func @Array$int.reserve(%self: memref<!maxon.struct<Array$int>>, %minCapaci
 
 func.func @Array$int.push(%self: memref<!maxon.struct<Array$int>>, %value: i64) {
   ^entry(%self: memref<!maxon.struct<Array$int>>, %value: i64):
-    x86.prologue stack_size=32 saved_gprs=[RBX,R12,R13,R14]
+    x86.prologue stack_size=40 saved_gprs=[RBX,R12,R13,R14,R15]
     x86.mov rax, rcx
     x86.mov rbx, rdx
     x86.lea r12, qword ptr [rax+8]
@@ -176,19 +219,93 @@ func.func @Array$int.push(%self: memref<!maxon.struct<Array$int>>, %value: i64) 
     x86.mov rdx, r11
     x86.mov rcx, r10
     x86.call Array$int.ensureCapacity
-    x86.lea rax, qword ptr [r12]
-    x86.mov rcx, qword ptr [rax]
-    x86.mov rax, 8
-    x86.mov rdx, 3
-    x86.mov r8, r13
-    x86.push rcx
-    x86.shl r8, rdx
-    x86.pop rcx
-    x86.lea rdx, qword ptr [rcx+r8]
-    x86.mov qword ptr [rdx], rbx
-    x86.lea rdx, qword ptr [r12+rax]
+    x86.mov r15, 8
+    x86.mov r10, r12
+    x86.mov r11, r15
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz cow_skip_6
+    x86.push rsi
+    x86.push rdi
+    x86.sub rsp, 80
+    x86.mov rax, qword ptr [r10+8]
+    x86.imul rax, r11
+    x86.mov qword ptr [rsp+32], r10
+    x86.mov rcx, qword ptr [r10]
+    x86.mov qword ptr [rsp+40], rcx
+    x86.mov qword ptr [rsp+48], rax
+    x86.mov qword ptr [rsp+56], r11
+    x86.call extern kernel32.dll::GetProcessHeap
+    x86.mov rcx, rax
+    x86.mov rdx, 0
+    x86.mov r8, qword ptr [rsp+48]
+    x86.call extern kernel32.dll::HeapAlloc
+    x86.mov r11, qword ptr [rsp+56]
+    x86.mov rsi, qword ptr [rsp+40]
+    x86.mov r10, qword ptr [rsp+32]
+    x86.mov rdi, rax
+    x86.mov rcx, qword ptr [r10+8]
+    x86.imul rcx, r11
+    x86.cld
+    x86.rep_movsb
+    x86.mov qword ptr [r10], rax
+    x86.xor ecx, ecx
+    x86.mov dword ptr [r10+24], ecx
+    x86.add rsp, 80
+    x86.pop rdi
+    x86.pop rsi
+    x86.jmp cow_done_6
+    cow_skip_6:
+    cow_done_6:
+    x86.mov rax, r10
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.mov rcx, 3
+    x86.mov rdx, r13
+    x86.shl rdx, rcx
+    x86.lea rcx, qword ptr [rax+rdx]
+    x86.mov qword ptr [rcx], rbx
+    x86.mov r10, r12
+    x86.mov r11, r15
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz cow_skip_7
+    x86.push rsi
+    x86.push rdi
+    x86.sub rsp, 80
+    x86.mov rax, qword ptr [r10+8]
+    x86.imul rax, r11
+    x86.mov qword ptr [rsp+32], r10
+    x86.mov rcx, qword ptr [r10]
+    x86.mov qword ptr [rsp+40], rcx
+    x86.mov qword ptr [rsp+48], rax
+    x86.mov qword ptr [rsp+56], r11
+    x86.call extern kernel32.dll::GetProcessHeap
+    x86.mov rcx, rax
+    x86.mov rdx, 0
+    x86.mov r8, qword ptr [rsp+48]
+    x86.call extern kernel32.dll::HeapAlloc
+    x86.mov r11, qword ptr [rsp+56]
+    x86.mov rsi, qword ptr [rsp+40]
+    x86.mov r10, qword ptr [rsp+32]
+    x86.mov rdi, rax
+    x86.mov rcx, qword ptr [r10+8]
+    x86.imul rcx, r11
+    x86.cld
+    x86.rep_movsb
+    x86.mov qword ptr [r10], rax
+    x86.xor ecx, ecx
+    x86.mov dword ptr [r10+24], ecx
+    x86.add rsp, 80
+    x86.pop rdi
+    x86.pop rsi
+    x86.jmp cow_done_7
+    cow_skip_7:
+    cow_done_7:
+    x86.mov rcx, r10
+    x86.lea rdx, qword ptr [rcx+r15]
     x86.mov qword ptr [rdx], r14
-    x86.epilogue saved_gprs=[RBX,R12,R13,R14]
+    x86.epilogue saved_gprs=[RBX,R12,R13,R14,R15]
     x86.ret
 }
 
@@ -248,75 +365,129 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
   ^while.exit:
     x86.lea rdx, qword ptr [rbx+8]
     x86.mov r15, qword ptr [r13]
-    x86.mov rax, 0
-    x86.mov qword ptr [rbp-56], r15
-    x86.lea r15, qword ptr [rdx+rax]
-    x86.mov rax, qword ptr [r15]
+    x86.mov rax, 8
+    x86.mov r10, rdx
+    x86.mov r11, rax
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz cow_skip_8
+    x86.push rsi
+    x86.push rdi
+    x86.sub rsp, 80
+    x86.mov rax, qword ptr [r10+8]
+    x86.imul rax, r11
+    x86.mov qword ptr [rsp+32], r10
+    x86.mov rcx, qword ptr [r10]
+    x86.mov qword ptr [rsp+40], rcx
+    x86.mov qword ptr [rsp+48], rax
+    x86.mov qword ptr [rsp+56], r11
+    x86.mov qword ptr [rbp-56], rbx
+    x86.mov qword ptr [rbp-64], r12
+    x86.mov qword ptr [rbp-72], r13
+    x86.mov qword ptr [rbp-80], r14
+    x86.call extern kernel32.dll::GetProcessHeap
+    x86.mov r13, qword ptr [rbp-72]
+    x86.mov r14, qword ptr [rbp-80]
+    x86.mov r12, qword ptr [rbp-64]
+    x86.mov rbx, qword ptr [rbp-56]
+    x86.mov rcx, rax
+    x86.mov rdx, 0
+    x86.mov r8, qword ptr [rsp+48]
+    x86.mov qword ptr [rbp-56], rbx
+    x86.mov qword ptr [rbp-64], r12
+    x86.mov qword ptr [rbp-72], r13
+    x86.mov qword ptr [rbp-80], r14
+    x86.call extern kernel32.dll::HeapAlloc
+    x86.mov r13, qword ptr [rbp-72]
+    x86.mov r14, qword ptr [rbp-80]
+    x86.mov r12, qword ptr [rbp-64]
+    x86.mov rbx, qword ptr [rbp-56]
+    x86.mov r11, qword ptr [rsp+56]
+    x86.mov rsi, qword ptr [rsp+40]
+    x86.mov r10, qword ptr [rsp+32]
+    x86.mov rdi, rax
+    x86.mov rcx, qword ptr [r10+8]
+    x86.imul rcx, r11
+    x86.cld
+    x86.rep_movsb
+    x86.mov qword ptr [r10], rax
+    x86.xor ecx, ecx
+    x86.mov dword ptr [r10+24], ecx
+    x86.add rsp, 80
+    x86.pop rdi
+    x86.pop rsi
+    x86.jmp cow_done_8
+    cow_skip_8:
+    cow_done_8:
+    x86.mov rax, r10
+    x86.mov rdx, 0
+    x86.mov qword ptr [rbp-88], r15
+    x86.lea r15, qword ptr [rax+rdx]
+    x86.mov rdx, qword ptr [r15]
     x86.mov rcx, 16
-    x86.mov qword ptr [rbp-64], r15
-    x86.lea r15, qword ptr [rdx+rcx]
+    x86.mov qword ptr [rbp-96], r15
+    x86.lea r15, qword ptr [rax+rcx]
     x86.mov rcx, 3
-    x86.mov qword ptr [rbp-72], r15
-    x86.mov r15, qword ptr [rbp-56]
-    x86.mov rdx, r15
-    x86.shl rdx, rcx
-    x86.mov r10, rax
-    x86.mov r11, rdx
+    x86.mov qword ptr [rbp-104], r15
+    x86.mov r15, qword ptr [rbp-88]
+    x86.mov rax, r15
+    x86.shl rax, rcx
+    x86.mov r10, rdx
+    x86.mov r11, rax
     x86.test r10, r10
     x86.jz heap_alloc_1
-    x86.mov qword ptr [rbp-80], rbx
-    x86.mov qword ptr [rbp-88], r12
-    x86.mov qword ptr [rbp-96], r13
-    x86.mov qword ptr [rbp-104], r14
+    x86.mov qword ptr [rbp-56], rbx
+    x86.mov qword ptr [rbp-64], r12
+    x86.mov qword ptr [rbp-72], r13
+    x86.mov qword ptr [rbp-80], r14
     x86.call extern kernel32.dll::GetProcessHeap
-    x86.mov r13, qword ptr [rbp-96]
-    x86.mov r14, qword ptr [rbp-104]
-    x86.mov r12, qword ptr [rbp-88]
-    x86.mov rbx, qword ptr [rbp-80]
+    x86.mov r13, qword ptr [rbp-72]
+    x86.mov r14, qword ptr [rbp-80]
+    x86.mov r12, qword ptr [rbp-64]
+    x86.mov rbx, qword ptr [rbp-56]
     x86.mov rcx, rax
     x86.mov rdx, 0
     x86.mov r8, r10
     x86.mov r9, r11
-    x86.mov qword ptr [rbp-80], rbx
-    x86.mov qword ptr [rbp-88], r12
-    x86.mov qword ptr [rbp-96], r13
-    x86.mov qword ptr [rbp-104], r14
+    x86.mov qword ptr [rbp-56], rbx
+    x86.mov qword ptr [rbp-64], r12
+    x86.mov qword ptr [rbp-72], r13
+    x86.mov qword ptr [rbp-80], r14
     x86.call extern kernel32.dll::HeapReAlloc
-    x86.mov r13, qword ptr [rbp-96]
-    x86.mov r14, qword ptr [rbp-104]
-    x86.mov r12, qword ptr [rbp-88]
-    x86.mov rbx, qword ptr [rbp-80]
+    x86.mov r13, qword ptr [rbp-72]
+    x86.mov r14, qword ptr [rbp-80]
+    x86.mov r12, qword ptr [rbp-64]
+    x86.mov rbx, qword ptr [rbp-56]
     x86.jmp heap_done_1
     heap_alloc_1:
-    x86.mov qword ptr [rbp-80], rbx
-    x86.mov qword ptr [rbp-88], r12
-    x86.mov qword ptr [rbp-96], r13
-    x86.mov qword ptr [rbp-104], r14
+    x86.mov qword ptr [rbp-56], rbx
+    x86.mov qword ptr [rbp-64], r12
+    x86.mov qword ptr [rbp-72], r13
+    x86.mov qword ptr [rbp-80], r14
     x86.call extern kernel32.dll::GetProcessHeap
-    x86.mov r13, qword ptr [rbp-96]
-    x86.mov r14, qword ptr [rbp-104]
-    x86.mov r12, qword ptr [rbp-88]
-    x86.mov rbx, qword ptr [rbp-80]
+    x86.mov r13, qword ptr [rbp-72]
+    x86.mov r14, qword ptr [rbp-80]
+    x86.mov r12, qword ptr [rbp-64]
+    x86.mov rbx, qword ptr [rbp-56]
     x86.mov rcx, rax
     x86.mov rdx, 0
     x86.mov r8, r11
-    x86.mov qword ptr [rbp-80], rbx
-    x86.mov qword ptr [rbp-88], r12
-    x86.mov qword ptr [rbp-96], r13
-    x86.mov qword ptr [rbp-104], r14
+    x86.mov qword ptr [rbp-56], rbx
+    x86.mov qword ptr [rbp-64], r12
+    x86.mov qword ptr [rbp-72], r13
+    x86.mov qword ptr [rbp-80], r14
     x86.call extern kernel32.dll::HeapAlloc
-    x86.mov r13, qword ptr [rbp-96]
-    x86.mov r14, qword ptr [rbp-104]
-    x86.mov r12, qword ptr [rbp-88]
-    x86.mov rbx, qword ptr [rbp-80]
+    x86.mov r13, qword ptr [rbp-72]
+    x86.mov r14, qword ptr [rbp-80]
+    x86.mov r12, qword ptr [rbp-64]
+    x86.mov rbx, qword ptr [rbp-56]
     heap_done_1:
-    x86.mov rdx, rax
-    x86.mov qword ptr [rbp-56], r15
-    x86.mov r15, qword ptr [rbp-64]
-    x86.mov qword ptr [r15], rdx
-    x86.mov qword ptr [rbp-96], r13
-    x86.mov r15, qword ptr [rbp-72]
-    x86.mov r13, qword ptr [rbp-56]
+    x86.mov qword ptr [rbp-88], r15
+    x86.mov r15, qword ptr [rbp-96]
+    x86.mov qword ptr [r15], rax
+    x86.mov qword ptr [rbp-72], r13
+    x86.mov r15, qword ptr [rbp-104]
+    x86.mov r13, qword ptr [rbp-88]
     x86.mov qword ptr [r15], r13
     x86.jmp merge
 }

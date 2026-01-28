@@ -81,8 +81,8 @@ public class Compiler {
 			var codeResult = CodeEmitter.Emit(mlirResult.Module);
 
 			// Write PE executable
-			PeWriter.Write(outputPath, codeResult.Code, codeResult.Data, codeResult.Imports);
-			Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Data.Length} bytes data, {codeResult.Imports.Count} imports to {outputPath}");
+			PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Imports);
+			Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Imports.Count} imports to {outputPath}");
 
 			return new CompileResult(true, null, mlirResult.X86Ir);
 		} catch (CompileError ex) {

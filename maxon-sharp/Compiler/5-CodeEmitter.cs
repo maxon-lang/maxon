@@ -9,6 +9,7 @@ namespace MaxonSharp.Compiler;
 /// </summary>
 public record CodeEmitResult(
 	byte[] Code,
+	byte[] Rdata,
 	byte[] Data,
 	IReadOnlyList<ImportEntry> Imports
 );
@@ -26,6 +27,11 @@ public class CodeEmitter {
 		Logger.Debug(LogCategory.Codegen, "Emitting machine code");
 
 		var emitter = new X86CodeEmitter();
+
+		// Define rdata constants from module's RdataEntries (populated during StandardToX86 conversion)
+		foreach (var (label, rdataBytes) in module.RdataEntries) {
+			emitter.DefineRdata(label, rdataBytes);
+		}
 
 		// Emit globals (define them in the data section)
 		foreach (var global in module.Globals) {
@@ -61,29 +67,41 @@ public class CodeEmitter {
 		var codeSize = (uint)emitter.GetCode().Length;
 		var codeSizeVirtual = AlignUp(codeSize, 0x1000);
 
-		// Resolve global references
+		// Section order: .text -> .rdata -> .data -> .idata
+		// Calculate virtual section sizes for RVA calculations
+		var rdataSize = (uint)emitter.GetRdata().Length;
+		var rdataSizeVirtual = emitter.HasRdata ? AlignUp(rdataSize, 0x1000) : 0;
+
+		// Resolve rdata references (rdata comes directly after code)
+		if (emitter.HasRdata) {
+			var rdataRvaOffset = (int)(codeSizeVirtual - codeSize);
+			emitter.ResolveRdata(rdataRvaOffset);
+		}
+
+		// Resolve global references (data section comes after rdata)
 		if (emitter.HasGlobals) {
-			var dataRvaOffset = (int)(codeSizeVirtual - codeSize);
+			var dataRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual);
 			emitter.ResolveGlobals(dataRvaOffset);
 		}
 
 		// Resolve import references
-		// IAT comes after data section (if present) or directly after code section
+		// IAT comes after data section (if present) or directly after rdata/code
 		if (emitter.HasImports) {
 			var dataSize = (uint)emitter.GetData().Length;
 			var dataSizeVirtual = emitter.HasGlobals ? AlignUp(dataSize, 0x1000) : 0;
 			// IAT is at the start of the .idata section, which follows .data
-			var iatRvaOffset = (int)(codeSizeVirtual - codeSize + dataSizeVirtual);
+			var iatRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual + dataSizeVirtual);
 			emitter.ResolveImports(iatRvaOffset);
 		}
 
 		var code = emitter.GetCode();
+		var rdata = emitter.GetRdata();
 		var data = emitter.GetData();
 		var imports = emitter.Imports;
 
-		Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {data.Length} bytes data, {imports.Count} imports");
+		Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {imports.Count} imports");
 
-		return new CodeEmitResult(code, data, imports);
+		return new CodeEmitResult(code, rdata, data, imports);
 	}
 
 	/// <summary>
