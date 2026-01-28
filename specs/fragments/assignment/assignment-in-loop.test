@@ -1,0 +1,42 @@
+// Test: assignment-in-loop
+function main() returns int
+    var sum = 0
+    var i = 1
+    while i <= 5 'loop'
+        sum = sum + i
+        i = i + 1
+    end 'loop'
+    return sum
+end 'main'
+---
+ExitCode: 15
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 1
+    x86.mov r8, 5
+    x86.mov r9, 0
+    x86.mov r10, rcx
+    x86.jmp while.cond
+  ^while.cond(%14: i64, %16: i64):
+    x86.cmp r10, r8
+    x86.setle rdx
+    x86.movzx rdx, rdx
+    x86.test rdx, rdx
+    x86.jne while.body
+    x86.jmp while.exit
+  ^while.body:
+    x86.mov rdx, r9
+    x86.add rdx, r10
+    x86.mov rax, r10
+    x86.add rax, rcx
+    x86.mov r9, rdx
+    x86.mov r10, rax
+    x86.jmp while.cond
+  ^while.exit:
+    x86.mov rax, r9
+    x86.epilogue
+    x86.ret
+}
+---

@@ -273,7 +273,7 @@ public sealed class RegisterAllocationPass : FunctionPass {
 		return successorNames;
 	}
 
-	private static IEnumerable<int> GetVregIds(X86Op op) {
+	private static HashSet<int> GetVregIds(X86Op op) {
 		var vregs = new HashSet<int>();
 		foreach (var operand in op.X86Operands) {
 			CollectVregs(operand, vregs);
@@ -389,10 +389,8 @@ public sealed class RegisterAllocationPass : FunctionPass {
 			// Loop-live vregs are implicitly live across any call inside the loop.
 			// This is because they're used in the next iteration, which happens after the call.
 			foreach (var loopLiveVreg in livenessInfo.LiveThroughLoop) {
-				if (!liveAcrossCalls.Contains(loopLiveVreg)) {
-					liveAcrossCalls.Add(loopLiveVreg);
-					Logger.Trace(LogCategory.RegAlloc, $"  v{loopLiveVreg} is loop-live, marking as live across call at block {callBlockIdx}");
-				}
+				liveAcrossCalls.Add(loopLiveVreg);
+				Logger.Trace(LogCategory.RegAlloc, $"  v{loopLiveVreg} is loop-live, marking as live across call at block {callBlockIdx}");
 			}
 		}
 

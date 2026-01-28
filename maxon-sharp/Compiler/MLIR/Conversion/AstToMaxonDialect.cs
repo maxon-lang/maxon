@@ -1,3 +1,4 @@
+using System.Text;
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
 
@@ -23,6 +24,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private readonly Dictionary<string, MlirGlobal> _globals = [];
 	private readonly Dictionary<string, MlirType> _functionReturnTypes = [];
 	private readonly Dictionary<string, List<ParamDecl>> _functionParams = [];
+	private readonly Dictionary<string, string> _builtinLiteralTypes = [];
 	private readonly Stack<(MlirBlock continueBlock, MlirBlock exitBlock, string? label)> _loopContextStack = new();
 	private readonly Stack<List<(string name, MlirValue address, MlirType type)>> _cleanupScopeStack = new(); // Variables needing cleanup per scope
 	private MlirValue? _structReturnPtr; // Hidden sret parameter for struct returns
@@ -43,6 +45,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 		// Register built-in internal types before processing user types
 		RegisterBuiltinTypes();
+
+		// Discover builtin literal types (e.g., BuiltinStringLiteral)
+		RegisterBuiltinLiteralTypes(program);
 
 		// First pass: collect struct and enum definitions
 		foreach (var type in program.Types) {
@@ -133,6 +138,41 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private void LowerGlobalConstant(GlobalConstant globalConst) =>
 		LowerGlobal(globalConst.Name, globalConst.Value, isConstant: true);
 
+	// ========================================================================
+	// Builtin Literal Types
+	// ========================================================================
+
+	private void RegisterBuiltinLiteralTypes(ProgramAst program) {
+		foreach (var type in program.Types) {
+			foreach (var conformance in type.Conformances) {
+				if (conformance.InterfaceName is "BuiltinStringLiteral" or "BuiltinCharLiteral" or "BuiltinArrayLiteral" or "BuiltinDictionaryLiteral") {
+					if (_builtinLiteralTypes.TryGetValue(conformance.InterfaceName, out string? value)) {
+						Logger.Info(LogCategory.Mlir, $"Multiple types implement {conformance.InterfaceName}; using '{value}' and ignoring '{type.Name}'");
+						continue;
+					}
+					_builtinLiteralTypes[conformance.InterfaceName] = type.Name;
+					Logger.Debug(LogCategory.Mlir, $"Builtin literal type for {conformance.InterfaceName} = {type.Name}");
+				}
+			}
+		}
+	}
+
+	private string GetBuiltinLiteralTypeName(string interfaceName, SourceLocation? location) {
+		if (_builtinLiteralTypes.TryGetValue(interfaceName, out var typeName)) {
+			return typeName;
+		}
+
+		if (interfaceName == "BuiltinStringLiteral" && _structTypes.ContainsKey("String")) {
+			return "String";
+		}
+
+		throw new CompileError(
+			ErrorCode.MlirUndefinedType,
+			$"No type implements {interfaceName}. Ensure stdlib is loaded and a type conforms to this interface.",
+			location?.Line ?? 0,
+			location?.Column ?? 0);
+	}
+
 	private void LowerGlobal(string name, Expr value, bool isConstant) {
 		var (type, attr) = EvaluateConstantExpr(value);
 		var global = new MlirGlobal($"global.{name}", type) {
@@ -156,11 +196,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Infers the MLIR type from an expression AST node.
 	/// Used for type inference when no explicit type annotation is provided.
 	/// </summary>
-	private static MlirType InferTypeFromExpr(Expr expr) {
+	private MlirType InferTypeFromExpr(Expr expr) {
 		return expr switch {
 			IntLiteralExpr => IntegerType.I64,
 			FloatLiteralExpr => FloatType.F64,
 			BoolLiteralExpr => IntegerType.I1,
+			StringLiteralExpr => ConvertType(GetBuiltinLiteralTypeName("BuiltinStringLiteral", expr.Location)),
+			InterpolatedStringExpr => ConvertType(GetBuiltinLiteralTypeName("BuiltinStringLiteral", expr.Location)),
 			_ => throw new NotSupportedException($"Cannot infer type from expression: {expr.GetType().Name}. Please provide an explicit type annotation.")
 		};
 	}
@@ -677,6 +719,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			IntLiteralExpr intLit => EmitConstantInt(intLit.Value),
 			FloatLiteralExpr floatLit => EmitConstantFloat(floatLit.Value),
 			BoolLiteralExpr boolLit => EmitConstantBool(boolLit.Value),
+			StringLiteralExpr stringLit => LowerStringLiteralExpr(stringLit),
+			InterpolatedStringExpr interpolated => LowerInterpolatedStringExpr(interpolated),
 			IdentifierExpr ident => GetVariable(ident.Name),
 			SelfExpr => GetVariable("self"),
 			BinaryExpr binary => LowerBinaryExpr(binary),
@@ -1862,6 +1906,115 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	/// <summary>
+	/// Lowers a string literal to a String value backed by rdata managed memory.
+	/// </summary>
+	private MlirValue LowerStringLiteralExpr(StringLiteralExpr stringLit) {
+		var unescaped = DecodeStringLiteral(stringLit.Value, stringLit.Location);
+		var utf8Bytes = Encoding.UTF8.GetBytes(unescaped);
+		var data = new byte[utf8Bytes.Length + 1];
+		utf8Bytes.CopyTo(data, 0);
+		data[^1] = 0; // null terminator for interop
+		return BuildStringFromRdata(data, utf8Bytes.Length, stringLit.Location);
+	}
+
+	private static MlirValue LowerInterpolatedStringExpr(InterpolatedStringExpr interpolated) {
+		throw new CompileError(
+			ErrorCode.MlirUnsupportedExpression,
+			"Interpolated strings are not supported yet",
+			interpolated.Location?.Line ?? 0,
+			interpolated.Location?.Column ?? 0);
+	}
+
+	private MlirValue BuildStringFromRdata(byte[] data, int length, SourceLocation? location) {
+		// Get the __ManagedMemory type
+		if (!_structTypes.TryGetValue("__ManagedMemory", out var managedMemType) ||
+			managedMemType is not MaxonStructType managedMemoryType) {
+			throw new InvalidOperationException("__ManagedMemory type not registered");
+		}
+
+		var label = $"__str_{ComputeDataHash(data):X16}";
+		var constDataOp = new ConstDataOp(data, label);
+		InsertOp(constDataOp);
+
+		var countConst = EmitConstantInt(length);
+		var elemSizeConst = EmitConstantInt(1);
+		var createFromRdataOp = new ManagedMemoryCreateFromRdataOp(
+			constDataOp.Result, countConst, elemSizeConst, managedMemoryType);
+		InsertOp(createFromRdataOp);
+
+		var stringTypeName = GetBuiltinLiteralTypeName("BuiltinStringLiteral", location);
+		var initMethodName = $"{stringTypeName}.BuiltinStringLiteral.init";
+		if (!_functionReturnTypes.TryGetValue(initMethodName, out var returnType)) {
+			throw new CompileError(
+				ErrorCode.MlirUndefinedFunction,
+				$"Missing builtin string literal initializer: {initMethodName}",
+				location?.Line ?? 0,
+				location?.Column ?? 0);
+		}
+
+		// Pass __ManagedMemory by reference (struct params are by-ref)
+		var managedMemSlot = EmitAlloca(managedMemoryType);
+		var storeManaged = new StoreOp(createFromRdataOp.Result, managedMemSlot);
+		InsertOp(storeManaged);
+
+		var args = new List<MlirValue> { managedMemSlot };
+		var ownership = new List<ArgumentOwnership> { ArgumentOwnership.Borrow };
+		return EmitMaxonCall(initMethodName, args, ownership, returnType)
+			?? throw new InvalidOperationException("String literal init did not produce a value");
+	}
+
+	private static string DecodeStringLiteral(string raw, SourceLocation? location) {
+		var builder = new StringBuilder(raw.Length);
+		for (int i = 0; i < raw.Length; i++) {
+			var c = raw[i];
+			if (c != '\\') {
+				builder.Append(c);
+				continue;
+			}
+
+			if (i + 1 >= raw.Length) {
+				throw new CompileError(
+					ErrorCode.LexerInvalidEscape,
+					"Invalid escape sequence at end of string literal",
+					location?.Line ?? 0,
+					location?.Column ?? 0);
+			}
+
+			i++;
+			switch (raw[i]) {
+				case 'n':
+					builder.Append('\n');
+					break;
+				case 't':
+					builder.Append('\t');
+					break;
+				case 'r':
+					builder.Append('\r');
+					break;
+				case '\\':
+					builder.Append('\\');
+					break;
+				case '"':
+					builder.Append('"');
+					break;
+				case '{':
+					builder.Append('{');
+					break;
+				case '}':
+					builder.Append('}');
+					break;
+				default:
+					throw new CompileError(
+						ErrorCode.LexerInvalidEscape,
+						$"Invalid escape sequence: \\{raw[i]}",
+						location?.Line ?? 0,
+						location?.Column ?? 0);
+			}
+		}
+		return builder.ToString();
+	}
+
+	/// <summary>
 	/// Lowers an array literal like [1, 2, 3] to managed memory allocation and Array creation.
 	/// If all elements are compile-time constants, stores data in rdata section.
 	/// </summary>
@@ -1945,6 +2098,11 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Infers the element type from an expression without lowering it.
 	/// </summary>
 	private (MlirType type, string name) InferArrayElementType(Expr element) {
+		if (element is StringLiteralExpr or InterpolatedStringExpr) {
+			var stringTypeName = GetBuiltinLiteralTypeName("BuiltinStringLiteral", element.Location);
+			return (ConvertType(stringTypeName), stringTypeName);
+		}
+
 		return element switch {
 			IntLiteralExpr => (IntegerType.I64, "int"),
 			FloatLiteralExpr => (FloatType.F64, "float"),
@@ -1971,8 +2129,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// <summary>
 	/// Tries to serialize all array elements to bytes if they are compile-time constants.
 	/// </summary>
-	private bool TrySerializeConstantArray(List<Expr> elements, MlirType elementType, out byte[] data) {
-		var sizePerElement = elementType.SizeInBytes;
+	private static bool TrySerializeConstantArray(List<Expr> elements, MlirType elementType, out byte[] data) {
+		_ = elementType.SizeInBytes;
 		var bytes = new List<byte>();
 
 		foreach (var element in elements) {
@@ -1989,7 +2147,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// <summary>
 	/// Tries to serialize a single constant expression to bytes.
 	/// </summary>
-	private bool TrySerializeConstantValue(Expr expr, MlirType type, List<byte> bytes) {
+	private static bool TrySerializeConstantValue(Expr expr, MlirType type, List<byte> bytes) {
 		switch (expr) {
 			case IntLiteralExpr intLit:
 				// Serialize as little-endian based on type size
@@ -2052,8 +2210,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			return null;
 		}
 
-		var elemTypeName = structType.Name.Substring("Array$".Length);
+		var elemTypeName = structType.Name["Array$".Length..];
 		return elemTypeName switch {
+			"byte" => IntegerType.UI8,
 			"int" => IntegerType.I64,
 			"int32" => IntegerType.I32,
 			"bool" => IntegerType.I1,
@@ -2102,6 +2261,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// </summary>
 	private static string MlirTypeToTypeName(MlirType type) {
 		return type switch {
+			IntegerType it when it == IntegerType.UI8 => "byte",
 			IntegerType it when it == IntegerType.I64 => "int",
 			IntegerType it when it == IntegerType.I32 => "int32",
 			IntegerType it when it == IntegerType.I1 => "bool",
@@ -2138,18 +2298,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			MaxonStructType st => st,
 			MemRefType mrt when mrt.ElementType is MaxonStructType st => st,
 			_ => null
-		};
-
-		if (structType == null) {
-			throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+		} ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
 				$"Cannot access field '{fieldName}' on non-struct type: {baseValue.Type}",
 				line, column);
-		}
-
 		var fieldInfo = structType.GetField(fieldName)
-			?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
-				$"Struct '{structType.Name}' does not have a field '{fieldName}'",
-				line, column);
+				?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+					$"Struct '{structType.Name}' does not have a field '{fieldName}'",
+					line, column);
 
 		return (baseValue, fieldInfo);
 	}
@@ -2261,6 +2416,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 
 		return typeName switch {
+			"byte" or "Byte" => IntegerType.UI8,
 			"int" or "Int" or "i64" => IntegerType.I64,
 			"int32" or "Int32" or "i32" => IntegerType.I32,
 			"int16" or "Int16" or "i16" => IntegerType.I16,

@@ -34,6 +34,7 @@ public static class StandardToX86Patterns {
 		// Integer extension patterns
 		patterns.Add<LowerExtUIOp>();
 		patterns.Add<LowerExtSIOp>();
+		patterns.Add<LowerTruncIOp>();
 
 		// Math patterns
 		patterns.Add<LowerTruncOp>();
@@ -423,6 +424,24 @@ public sealed class LowerExtSIOp : ConversionPattern<ExtSIOp> {
 		// For now, just copy (assumes source already contains the correct value).
 		// TODO: Handle actual sign extension if LoadOp doesn't use movsx
 		rewriter.Insert(new MovOp(dst, src));
+		return true;
+	}
+}
+
+public sealed class LowerTruncIOp : ConversionPattern<TruncIOp> {
+	protected override bool MatchAndRewrite(TruncIOp op, ConversionPatternRewriter rewriter) {
+		var dst = new VRegOperand(op.Result.Id, IsFloat: false);
+		var src = new VRegOperand(op.Operand.Id, IsFloat: false);
+
+		rewriter.Insert(new MovOp(dst, src));
+
+		if (op.Result.Type is IntegerType intType && intType.BitWidth is > 0 and < 64) {
+			long mask = intType.BitWidth == 63
+				? long.MaxValue
+				: (1L << intType.BitWidth) - 1;
+			rewriter.Insert(new AndOp(dst, new ImmOperand(mask)));
+		}
+
 		return true;
 	}
 }

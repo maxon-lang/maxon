@@ -1,21 +1,34 @@
-// Test: array-growth-realloc
-typealias IntArray is Array with int
+// Test: byte-array-max-values
+typealias ByteArray is Array with byte
 
 function main() returns int
-    var arr = IntArray{}
-    var i = 0
-    while i < 100 'loop'
-        arr.push(i)
-        i = i + 1
-    end 'loop'
-    return try arr.get(99) otherwise -1
+    var arr = ByteArray{}
+    arr.push(255 as byte)
+    arr.push(0 as byte)
+    arr.push(128 as byte)
+
+    var v0 = try arr.get(0) otherwise 0 as byte
+    var v1 = try arr.get(1) otherwise 99 as byte
+    var v2 = try arr.get(2) otherwise 0 as byte
+
+    if (v0 as int) != 255 'c0'
+        return 1
+    end 'c0'
+    if (v1 as int) != 0 'c1'
+        return 2
+    end 'c1'
+    if (v2 as int) != 128 'c2'
+        return 3
+    end 'c2'
+
+    return 0
 end 'main'
 ---
-ExitCode: 99
+ExitCode: 0
 ---
 func.func @main() -> i64 {
   ^entry:
-    x86.prologue stack_size=200 saved_gprs=[RBX,R12,R13,R14,R15]
+    x86.prologue stack_size=224 saved_gprs=[RBX,R12,R13,R14]
     x86.mov rbx, 0
     x86.mov rcx, rbx
     x86.call maxon_alloc
@@ -54,45 +67,66 @@ func.func @main() -> i64 {
     x86.rep_movsb
     x86.pop rdi
     x86.pop rsi
-    x86.mov r13, 100
-    x86.mov r14, 1
-    x86.mov r15, rbx
-    x86.jmp while.cond
-  ^while.cond(%148: i64):
-    x86.cmp r15, r13
-    x86.setl rcx
-    x86.movzx rcx, rcx
-    x86.test rcx, rcx
-    x86.jne while.body
-    x86.jmp while.exit
-  ^while.body:
+    x86.mov rcx, 255
+    x86.mov r8, rcx
+    x86.and r8, 255
     x86.mov r10, r12
-    x86.mov r11, r15
+    x86.mov r11, r8
     x86.mov rdx, r11
     x86.mov rcx, r10
-    x86.mov qword ptr [rbp-168], r15
-    x86.mov qword ptr [rbp-176], r12
-    x86.mov qword ptr [rbp-184], r13
-    x86.mov qword ptr [rbp-192], r14
-    x86.call Array$int.push
-    x86.mov r15, qword ptr [rbp-168]
-    x86.mov r13, qword ptr [rbp-184]
-    x86.mov r12, qword ptr [rbp-176]
-    x86.mov r14, qword ptr [rbp-192]
-    x86.mov rcx, r15
-    x86.add rcx, r14
-    x86.mov r15, rcx
-    x86.jmp while.cond
-  ^while.exit:
-    x86.mov rcx, 99
-    x86.lea rbx, qword ptr [rbp-160]
+    x86.call Array$byte.push
+    x86.mov r8, rbx
+    x86.and r8, 255
+    x86.mov r10, r12
+    x86.mov r11, r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Array$byte.push
+    x86.mov r8, 128
+    x86.mov rcx, r8
+    x86.and rcx, 255
+    x86.mov r10, r12
+    x86.mov r11, rcx
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Array$byte.push
+    x86.lea r13, qword ptr [rbp-160]
+    x86.mov r10, r13
+    x86.mov r11, r12
+    x86.push rbx
+    x86.pop r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Array$byte.get
+    x86.lea rcx, qword ptr [r13]
+    x86.movzx r8, byte ptr [rcx]
+    x86.mov rcx, r8
+    x86.cmp rcx, rbx
+    x86.setne rcx
+    x86.movzx rcx, rcx
+    x86.test rcx, rcx
+    x86.jne try.error
+    x86.jmp try.success
+  ^try.success:
+    x86.lea rcx, qword ptr [r13+8]
+    x86.movzx r8, byte ptr [rcx]
+    x86.mov r13, r8
+    x86.jmp try.merge
+  ^try.error:
+    x86.mov rcx, 0
+    x86.and rcx, 255
+    x86.mov r13, rcx
+    x86.jmp try.merge
+  ^try.merge(%202: ui8, %203: ui8):
+    x86.mov rcx, 1
+    x86.lea rbx, qword ptr [rbp-176]
     x86.mov r10, rbx
     x86.mov r11, r12
     x86.push rcx
     x86.pop r8
     x86.mov rdx, r11
     x86.mov rcx, r10
-    x86.call Array$int.get
+    x86.call Array$byte.get
     x86.lea rcx, qword ptr [rbx]
     x86.movzx r8, byte ptr [rcx]
     x86.mov rcx, r8
@@ -100,55 +134,170 @@ func.func @main() -> i64 {
     x86.cmp rcx, r8
     x86.setne r8
     x86.movzx r8, r8
+    x86.lea rcx, qword ptr [rbp-184]
     x86.test r8, r8
-    x86.jne try.error
-    x86.jmp try.success
-  ^try.success:
+    x86.jne try.error_1
+    x86.jmp try.success_1
+  ^try.success_1:
     x86.lea r8, qword ptr [rbx+8]
-    x86.mov rcx, qword ptr [r8]
-    x86.mov rbx, rcx
-    x86.jmp try.merge
-  ^try.error:
-    x86.mov rbx, -1
-    x86.jmp try.merge
-  ^try.merge(%149: i64):
-    x86.lea rcx, qword ptr [r12+8]
-    x86.mov r10, rcx
+    x86.movzx rdx, byte ptr [r8]
+    x86.mov byte ptr [rcx], rdx
+    x86.mov rbx, r13
+    x86.jmp try.merge_1
+  ^try.error_1:
+    x86.mov rdx, 99
+    x86.mov r8, rdx
+    x86.and r8, 255
+    x86.mov byte ptr [rcx], r8
+    x86.mov rbx, r13
+    x86.jmp try.merge_1
+  ^try.merge_1(%204: ui8):
+    x86.movzx r8, byte ptr [rcx]
+    x86.lea r13, qword ptr [rbp-192]
+    x86.mov byte ptr [r13], r8
+    x86.mov r8, 2
+    x86.lea r14, qword ptr [rbp-208]
+    x86.mov r10, r14
+    x86.mov r11, r12
+    x86.push r8
+    x86.pop r8
+    x86.mov rdx, r11
+    x86.mov rcx, r10
+    x86.call Array$byte.get
+    x86.lea r8, qword ptr [r14]
+    x86.movzx rcx, byte ptr [r8]
+    x86.mov r8, rcx
+    x86.mov rcx, 0
+    x86.cmp r8, rcx
+    x86.setne r8
+    x86.movzx r8, r8
+    x86.lea rcx, qword ptr [rbp-216]
+    x86.test r8, r8
+    x86.jne try.error_2
+    x86.jmp try.success_2
+  ^try.success_2:
+    x86.lea r8, qword ptr [r14+8]
+    x86.movzx rdx, byte ptr [r8]
+    x86.mov byte ptr [rcx], rdx
+    x86.mov rdx, rbx
+    x86.jmp try.merge_2
+  ^try.error_2:
+    x86.mov rax, 0
+    x86.and rax, 255
+    x86.mov byte ptr [rcx], rax
+    x86.mov rdx, rbx
+    x86.jmp try.merge_2
+  ^try.merge_2(%205: ui8):
+    x86.movzx rax, byte ptr [rcx]
+    x86.lea rbx, qword ptr [rbp-224]
+    x86.mov byte ptr [rbx], rax
+    x86.mov rax, rdx
+    x86.mov rdx, 255
+    x86.cmp rax, rdx
+    x86.setne rdx
+    x86.movzx rdx, rdx
+    x86.test rdx, rdx
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.lea rdx, qword ptr [r12+8]
+    x86.mov r10, rdx
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz free_do_18
-    x86.jmp free_done_18
-    free_do_18:
+    x86.jz free_do_19
+    x86.jmp free_done_19
+    free_do_19:
     x86.mov rcx, qword ptr [r10]
     x86.call maxon_free
-    free_done_18:
-    x86.mov rax, rbx
-    x86.epilogue saved_gprs=[RBX,R12,R13,R14,R15]
+    free_done_19:
+    x86.mov rax, 1
+    x86.epilogue saved_gprs=[RBX,R12,R13,R14]
+    x86.ret
+  ^merge:
+    x86.movzx rdx, byte ptr [r13]
+    x86.mov rax, rdx
+    x86.mov rdx, 0
+    x86.cmp rax, rdx
+    x86.setne rdx
+    x86.movzx rdx, rdx
+    x86.test rdx, rdx
+    x86.jne then_1
+    x86.jmp merge_1
+  ^then_1:
+    x86.lea rdx, qword ptr [r12+8]
+    x86.mov r10, rdx
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz free_do_20
+    x86.jmp free_done_20
+    free_do_20:
+    x86.mov rcx, qword ptr [r10]
+    x86.call maxon_free
+    free_done_20:
+    x86.mov rax, 2
+    x86.epilogue saved_gprs=[RBX,R12,R13,R14]
+    x86.ret
+  ^merge_1:
+    x86.movzx rdx, byte ptr [rbx]
+    x86.mov rax, rdx
+    x86.mov rdx, 128
+    x86.cmp rax, rdx
+    x86.setne rdx
+    x86.movzx rdx, rdx
+    x86.test rdx, rdx
+    x86.jne then_2
+    x86.jmp merge_2
+  ^then_2:
+    x86.lea rdx, qword ptr [r12+8]
+    x86.mov r10, rdx
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz free_do_21
+    x86.jmp free_done_21
+    free_do_21:
+    x86.mov rcx, qword ptr [r10]
+    x86.call maxon_free
+    free_done_21:
+    x86.mov rax, 3
+    x86.epilogue saved_gprs=[RBX,R12,R13,R14]
+    x86.ret
+  ^merge_2:
+    x86.lea rdx, qword ptr [r12+8]
+    x86.mov r10, rdx
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz free_do_22
+    x86.jmp free_done_22
+    free_do_22:
+    x86.mov rcx, qword ptr [r10]
+    x86.call maxon_free
+    free_done_22:
+    x86.mov rax, 0
+    x86.epilogue saved_gprs=[RBX,R12,R13,R14]
     x86.ret
 }
 
-func.func @Array$int.push(%self: memref<!maxon.struct<Array$int>>, %value: i64) {
-  ^entry(%self: memref<!maxon.struct<Array$int>>, %value: i64):
+func.func @Array$byte.push(%self: memref<!maxon.struct<Array$byte>>, %value: ui8) {
+  ^entry(%self: memref<!maxon.struct<Array$byte>>, %value: ui8):
     x86.prologue stack_size=40 saved_gprs=[RBX,R12,R13,R14,R15]
     x86.mov rax, rcx
     x86.mov rbx, rdx
     x86.lea r12, qword ptr [rax+8]
     x86.lea rcx, qword ptr [r12+8]
     x86.mov r13, qword ptr [rcx]
-    x86.mov rcx, 1
-    x86.mov r14, r13
-    x86.add r14, rcx
+    x86.mov r14, 1
+    x86.mov r15, r13
+    x86.add r15, r14
     x86.mov r10, rax
-    x86.mov r11, r14
+    x86.mov r11, r15
     x86.mov rdx, r11
     x86.mov rcx, r10
-    x86.call Array$int.ensureCapacity
-    x86.mov r15, 8
+    x86.call Array$byte.ensureCapacity
     x86.mov r10, r12
-    x86.mov r11, r15
+    x86.mov r11, r14
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz cow_skip_22
+    x86.jz cow_skip_25
     x86.push rsi
     x86.push rdi
     x86.sub rsp, 48
@@ -177,22 +326,20 @@ func.func @Array$int.push(%self: memref<!maxon.struct<Array$int>>, %value: i64) 
     x86.add rsp, 48
     x86.pop rdi
     x86.pop rsi
-    x86.jmp cow_done_22
-    cow_skip_22:
-    cow_done_22:
+    x86.jmp cow_done_25
+    cow_skip_25:
+    cow_done_25:
     x86.mov rax, r10
     x86.lea rcx, qword ptr [rax]
     x86.mov rax, qword ptr [rcx]
-    x86.mov rcx, 3
-    x86.mov rdx, r13
-    x86.shl rdx, rcx
-    x86.lea rcx, qword ptr [rax+rdx]
-    x86.mov qword ptr [rcx], rbx
+    x86.lea rcx, qword ptr [rax+r13]
+    x86.mov byte ptr [rcx], rbx
+    x86.mov rbx, 8
     x86.mov r10, r12
-    x86.mov r11, r15
+    x86.mov r11, rbx
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz cow_skip_23
+    x86.jz cow_skip_26
     x86.push rsi
     x86.push rdi
     x86.sub rsp, 48
@@ -221,18 +368,18 @@ func.func @Array$int.push(%self: memref<!maxon.struct<Array$int>>, %value: i64) 
     x86.add rsp, 48
     x86.pop rdi
     x86.pop rsi
-    x86.jmp cow_done_23
-    cow_skip_23:
-    cow_done_23:
+    x86.jmp cow_done_26
+    cow_skip_26:
+    cow_done_26:
     x86.mov rcx, r10
-    x86.lea rdx, qword ptr [rcx+r15]
-    x86.mov qword ptr [rdx], r14
+    x86.lea rax, qword ptr [rcx+rbx]
+    x86.mov qword ptr [rax], r15
     x86.epilogue saved_gprs=[RBX,R12,R13,R14,R15]
     x86.ret
 }
 
-func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %requiredLen: i64) {
-  ^entry(%self: memref<!maxon.struct<Array$int>>, %requiredLen: i64):
+func.func @Array$byte.ensureCapacity(%self: memref<!maxon.struct<Array$byte>>, %requiredLen: i64) {
+  ^entry(%self: memref<!maxon.struct<Array$byte>>, %requiredLen: i64):
     x86.prologue stack_size=104 saved_gprs=[RBX,R12,R13,R14,R15]
     x86.mov rbx, rcx
     x86.mov rax, rdx
@@ -287,12 +434,12 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
   ^while.exit:
     x86.lea rdx, qword ptr [rbx+8]
     x86.mov r15, qword ptr [r13]
-    x86.mov rax, 8
+    x86.mov rax, 1
     x86.mov r10, rdx
     x86.mov r11, rax
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz cow_skip_24
+    x86.jz cow_skip_27
     x86.push rsi
     x86.push rdi
     x86.sub rsp, 48
@@ -329,9 +476,9 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
     x86.add rsp, 48
     x86.pop rdi
     x86.pop rsi
-    x86.jmp cow_done_24
-    cow_skip_24:
-    cow_done_24:
+    x86.jmp cow_done_27
+    cow_skip_27:
+    cow_done_27:
     x86.mov rax, r10
     x86.mov rdx, 0
     x86.mov qword ptr [rbp-88], r15
@@ -340,13 +487,10 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
     x86.mov rcx, 16
     x86.mov qword ptr [rbp-96], r15
     x86.lea r15, qword ptr [rax+rcx]
-    x86.mov rcx, 3
+    x86.mov rcx, rdx
     x86.mov qword ptr [rbp-104], r15
     x86.mov r15, qword ptr [rbp-88]
-    x86.mov rax, r15
-    x86.shl rax, rcx
-    x86.mov rcx, rdx
-    x86.mov rdx, rax
+    x86.mov rdx, r15
     x86.mov qword ptr [rbp-56], rbx
     x86.mov qword ptr [rbp-64], r12
     x86.mov qword ptr [rbp-72], r13
@@ -356,9 +500,10 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
     x86.mov r14, qword ptr [rbp-80]
     x86.mov r12, qword ptr [rbp-64]
     x86.mov rbx, qword ptr [rbp-56]
+    x86.mov rdx, rax
     x86.mov qword ptr [rbp-88], r15
     x86.mov r15, qword ptr [rbp-96]
-    x86.mov qword ptr [r15], rax
+    x86.mov qword ptr [r15], rdx
     x86.mov qword ptr [rbp-72], r13
     x86.mov r15, qword ptr [rbp-104]
     x86.mov r13, qword ptr [rbp-88]
@@ -366,8 +511,8 @@ func.func @Array$int.ensureCapacity(%self: memref<!maxon.struct<Array$int>>, %re
     x86.jmp merge
 }
 
-func.func @Array$int.get(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayError>>, %self: memref<!maxon.struct<Array$int>>, %index: i64) {
-  ^entry(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayError>>, %self: memref<!maxon.struct<Array$int>>, %index: i64):
+func.func @Array$byte.get(%__error_union_ret: ptr<!maxon.error_union<ui8, ArrayError>>, %self: memref<!maxon.struct<Array$byte>>, %index: i64) {
+  ^entry(%__error_union_ret: ptr<!maxon.error_union<ui8, ArrayError>>, %self: memref<!maxon.struct<Array$byte>>, %index: i64):
     x86.prologue stack_size=32
     x86.mov r10, rcx
     x86.mov r11, rdx
@@ -415,16 +560,11 @@ func.func @Array$int.get(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayEr
     x86.lea r9, qword ptr [rdx+8]
     x86.lea rdx, qword ptr [r9]
     x86.mov r9, qword ptr [rdx]
-    x86.mov rdx, 3
-    x86.mov r8, rax
-    x86.push rcx
-    x86.shl r8, rdx
-    x86.pop rcx
-    x86.lea rdx, qword ptr [r9+r8]
-    x86.mov r9, qword ptr [rdx]
+    x86.lea rdx, qword ptr [r9+rax]
+    x86.movzx r9, byte ptr [rdx]
     x86.mov rdx, 8
-    x86.lea r8, qword ptr [rcx+rdx]
-    x86.mov qword ptr [r8], r9
+    x86.lea rax, qword ptr [rcx+rdx]
+    x86.mov byte ptr [rax], r9
     x86.epilogue
     x86.ret
 }
