@@ -1,0 +1,82 @@
+// Test: array-from-literal
+function main() returns int
+    var arr = [10, 20, 30]
+    return arr.count()
+end 'main'
+---
+ExitCode: 3
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=144 saved_gprs=[RBX,R12]
+    x86.lea_rdata rax, @__arr_0EBAC6C65ACC0F05
+    x86.mov rcx, 3
+    x86.lea rdx, qword ptr [rbp-64]
+    x86.lea r8, qword ptr [rdx]
+    x86.mov qword ptr [r8], rax
+    x86.lea r8, qword ptr [rdx+8]
+    x86.mov qword ptr [r8], rcx
+    x86.lea r8, qword ptr [rdx+16]
+    x86.mov qword ptr [r8], rcx
+    x86.mov r8, 1
+    x86.lea rcx, qword ptr [rdx+24]
+    x86.mov dword ptr [rcx], r8
+    x86.mov r8, 0
+    x86.lea rcx, qword ptr [rdx+28]
+    x86.mov dword ptr [rcx], r8
+    x86.mov r8, 0
+    x86.lea rax, qword ptr [rbp-104]
+    x86.lea rcx, qword ptr [rax]
+    x86.mov qword ptr [rcx], r8
+    x86.lea rcx, qword ptr [rax+8]
+    x86.mov r8, 32
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rcx
+    x86.mov rsi, rdx
+    x86.mov rcx, r8
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.lea rbx, qword ptr [rbp-144]
+    x86.mov r8, 40
+    x86.push rsi
+    x86.push rdi
+    x86.mov rdi, rbx
+    x86.mov rsi, rax
+    x86.mov rcx, r8
+    x86.cld
+    x86.rep_movsb
+    x86.pop rdi
+    x86.pop rsi
+    x86.mov rcx, rbx
+    x86.call Array$int.count
+    x86.mov r12, rax
+    x86.lea r8, qword ptr [rbx+8]
+    x86.mov r10, r8
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz free_do_0
+    x86.jmp free_done_0
+    free_do_0:
+    x86.mov rcx, qword ptr [r10]
+    x86.call maxon_free
+    free_done_0:
+    x86.mov rax, r12
+    x86.epilogue saved_gprs=[RBX,R12]
+    x86.ret
+}
+
+func.func @Array$int.count(%self: memref<!maxon.struct<Array$int>>) -> i64 {
+  ^entry(%self: memref<!maxon.struct<Array$int>>):
+    x86.prologue stack_size=32
+    x86.mov rax, rcx
+    x86.lea rcx, qword ptr [rax+8]
+    x86.lea rax, qword ptr [rcx+8]
+    x86.mov rcx, qword ptr [rax]
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+}
+---

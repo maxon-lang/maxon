@@ -1,11 +1,11 @@
-// Test: index-assignment
+// Test: array-from-literal-access
 function main() returns int
     var arr = [10, 20, 30]
-    arr.set(0, value: 100)
-    return try arr.get(0) otherwise 0
+    var val = try arr.get(1) otherwise 0
+    return val
 end 'main'
 ---
-ExitCode: 100
+ExitCode: 20
 ---
 func.func @main() -> i64 {
   ^entry:
@@ -51,18 +51,11 @@ func.func @main() -> i64 {
     x86.rep_movsb
     x86.pop rdi
     x86.pop rsi
-    x86.mov rax, 100
-    x86.mov r10, r12
-    x86.mov r11, rbx
-    x86.push rax
-    x86.pop r8
-    x86.mov rdx, r11
-    x86.mov rcx, r10
-    x86.call Array$int.set
+    x86.mov rax, 1
     x86.lea r13, qword ptr [rbp-160]
     x86.mov r10, r13
     x86.mov r11, r12
-    x86.push rbx
+    x86.push rax
     x86.pop r8
     x86.mov rdx, r11
     x86.mov rcx, r10
@@ -84,109 +77,20 @@ func.func @main() -> i64 {
   ^try.error:
     x86.mov r13, 0
     x86.jmp try.merge
-  ^try.merge(%99: i64):
+  ^try.merge(%72: i64):
     x86.lea r8, qword ptr [r12+8]
     x86.mov r10, r8
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz free_do_7
-    x86.jmp free_done_7
-    free_do_7:
+    x86.jz free_do_1
+    x86.jmp free_done_1
+    free_do_1:
     x86.mov rcx, qword ptr [r10]
     x86.call maxon_free
-    free_done_7:
+    free_done_1:
     x86.mov rax, r13
     x86.epilogue saved_gprs=[RBX,R12,R13]
     x86.ret
-}
-
-func.func @Array$int.set(%self: memref<!maxon.struct<Array$int>>, %index: i64, %value: i64) {
-  ^entry(%self: memref<!maxon.struct<Array$int>>, %index: i64, %value: i64):
-    x86.prologue stack_size=72 saved_gprs=[RBX,R12,R13]
-    x86.mov r10, rcx
-    x86.mov r11, rdx
-    x86.mov rbx, r8
-    x86.mov r12, r10
-    x86.mov r13, r11
-    x86.lea rax, qword ptr [r12+8]
-    x86.lea rcx, qword ptr [rax+8]
-    x86.mov rax, qword ptr [rcx]
-    x86.lea rcx, qword ptr [rbp-40]
-    x86.mov qword ptr [rcx], rax
-    x86.mov rax, 0
-    x86.cmp r13, rax
-    x86.setge rax
-    x86.movzx rax, rax
-    x86.test rax, rax
-    x86.jne then
-    x86.jmp merge
-  ^then:
-    x86.mov rax, qword ptr [rcx]
-    x86.cmp r13, rax
-    x86.setl rax
-    x86.movzx rax, rax
-    x86.test rax, rax
-    x86.jne then_1
-    x86.jmp merge
-  ^merge:
-    x86.epilogue saved_gprs=[RBX,R12,R13]
-    x86.ret
-  ^then_1:
-    x86.lea rax, qword ptr [r12+8]
-    x86.mov rcx, 8
-    x86.mov r10, rax
-    x86.mov r11, rcx
-    x86.mov eax, dword ptr [r10+24]
-    x86.test eax, 1
-    x86.jz cow_skip_0
-    x86.push rsi
-    x86.push rdi
-    x86.sub rsp, 48
-    x86.mov rax, qword ptr [r10+8]
-    x86.imul rax, r11
-    x86.mov qword ptr [rsp], r10
-    x86.mov rcx, qword ptr [r10]
-    x86.mov qword ptr [rsp+8], rcx
-    x86.mov qword ptr [rsp+16], rax
-    x86.mov qword ptr [rsp+24], r11
-    x86.mov rcx, rax
-    x86.mov qword ptr [rbp-56], rbx
-    x86.mov qword ptr [rbp-64], r12
-    x86.mov qword ptr [rbp-72], r13
-    x86.call maxon_alloc
-    x86.mov r12, qword ptr [rbp-64]
-    x86.mov r13, qword ptr [rbp-72]
-    x86.mov rbx, qword ptr [rbp-56]
-    x86.mov qword ptr [rsp+32], rax
-    x86.mov r11, qword ptr [rsp+24]
-    x86.mov rsi, qword ptr [rsp+8]
-    x86.mov r10, qword ptr [rsp]
-    x86.mov rdi, rax
-    x86.mov rcx, qword ptr [r10+8]
-    x86.imul rcx, r11
-    x86.cld
-    x86.rep_movsb
-    x86.mov rax, qword ptr [rsp+32]
-    x86.mov qword ptr [r10], rax
-    x86.xor ecx, ecx
-    x86.mov dword ptr [r10+24], ecx
-    x86.add rsp, 48
-    x86.pop rdi
-    x86.pop rsi
-    x86.jmp cow_done_0
-    cow_skip_0:
-    cow_done_0:
-    x86.mov rcx, r10
-    x86.lea rax, qword ptr [rcx]
-    x86.mov rcx, qword ptr [rax]
-    x86.mov rax, 3
-    x86.mov rdx, r13
-    x86.push rcx
-    x86.shl rdx, rax
-    x86.pop rcx
-    x86.lea rax, qword ptr [rcx+rdx]
-    x86.mov qword ptr [rax], rbx
-    x86.jmp merge
 }
 
 func.func @Array$int.get(%__error_union_ret: ptr<!maxon.error_union<i64, ArrayError>>, %self: memref<!maxon.struct<Array$int>>, %index: i64) {
