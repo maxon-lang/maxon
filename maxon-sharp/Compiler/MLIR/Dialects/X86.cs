@@ -1242,19 +1242,12 @@ public sealed record RegOperand(X86Register Register) : X86Operand {
 /// <param name="Size">Size in bytes (default 8).</param>
 /// <param name="IsFloat">True if this vreg holds a floating-point value (uses XMM register).</param>
 public sealed record VRegOperand(int Id, int Size = 8, bool IsFloat = false) : X86Operand {
-	[ThreadStatic]
-	private static int _nextTempId;
-
 	/// <summary>
 	/// Creates a fresh temporary virtual register with a unique negative ID.
 	/// Negative IDs avoid conflicts with VRegs derived from MlirValue.Id.
 	/// </summary>
-	public static VRegOperand CreateTemp(bool isFloat = false) => new(--_nextTempId, Size: 8, IsFloat: isFloat);
-
-	/// <summary>
-	/// Resets the temporary VReg ID counter. Called at the start of each compilation.
-	/// </summary>
-	public static void ResetTempIdCounter() => _nextTempId = 0;
+	public static VRegOperand CreateTemp(bool isFloat = false) =>
+		new(MlirContext.Current.NextVRegId(), Size: 8, IsFloat: isFloat);
 
 	public override string ToString() => IsFloat ? $"vf{Id}" : $"v{Id}";
 }

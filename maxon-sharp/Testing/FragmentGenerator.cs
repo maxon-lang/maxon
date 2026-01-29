@@ -131,7 +131,7 @@ public static class FragmentGenerator {
 				if (error != null) {
 					errors.Add(error);
 				}
-				File.WriteAllText(fragmentPath, content);
+				File.WriteAllText(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
 				Interlocked.Increment(ref generated);
 			}
 		});

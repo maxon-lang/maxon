@@ -5,9 +5,6 @@ namespace MaxonSharp.Compiler.Mlir.Core;
 /// Values are produced by operations or block arguments.
 /// </summary>
 public sealed class MlirValue {
-	[ThreadStatic]
-	private static int _nextId;
-
 	/// <summary>
 	/// Unique identifier for this value within the function.
 	/// </summary>
@@ -34,7 +31,7 @@ public sealed class MlirValue {
 	public string? Name { get; set; }
 
 	public MlirValue(MlirType type) {
-		Id = _nextId++;
+		Id = MlirContext.Current.NextValueId();
 		Type = type;
 	}
 
@@ -44,14 +41,9 @@ public sealed class MlirValue {
 	}
 
 	/// <summary>
-	/// Resets the global ID counter. Used for testing.
+	/// Assigns a new ID from the context. Used by RenumberValues to reassign sequential IDs.
 	/// </summary>
-	public static void ResetIdCounter() => _nextId = 0;
-
-	/// <summary>
-	/// Assigns a new ID from the global counter. Used by RenumberValues to reassign sequential IDs.
-	/// </summary>
-	public void RenumberId() => Id = _nextId++;
+	public void RenumberId() => Id = MlirContext.Current.NextValueId();
 
 	public override string ToString() => Name is not null ? $"%{Name}" : $"%{Id}";
 

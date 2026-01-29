@@ -92,8 +92,7 @@ public sealed class MlirModule {
 	/// Call this after dead function elimination to get clean IDs.
 	/// </summary>
 	public void RenumberValues() {
-		MlirValue.ResetIdCounter();
-		MlirBlock.ResetIdCounter();
+		MlirContext.Current.ResetIdCounters();
 
 		foreach (var func in Functions) {
 			func.RenumberValues();

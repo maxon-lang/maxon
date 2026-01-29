@@ -1,5 +1,4 @@
 using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
@@ -25,12 +24,11 @@ public class Compiler {
 		// Track the original user source file for error reporting (before prepending stdlib)
 		var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
-		try {
-			// Reset global ID counters for each compilation (important for parallel test runs)
-			MlirValue.ResetIdCounter();
-			MlirBlock.ResetIdCounter();
-			VRegOperand.ResetTempIdCounter();
+		// Create a fresh context for this compilation
+		var context = new MlirContext();
+		using var _ = context.PushScope();
 
+		try {
 			Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
 
 			// Load stdlib and prepend to sources
@@ -39,7 +37,6 @@ public class Compiler {
 
 			// Stage 1: Parse all source files
 			var asts = new List<ProgramAst>();
-			int mainFileIndex = -1;
 
 			for (int i = 0; i < sources.Length; i++) {
 				var source = sources[i];
@@ -48,19 +45,10 @@ public class Compiler {
 				var parser = new Parser(tokens, i);
 				var ast = parser.Parse();
 				asts.Add(ast);
-
-				if (ast.Functions.Any(f => f.Name == "main")) {
-					mainFileIndex = i;
-				}
-			}
-
-			if (mainFileIndex < 0) {
-				Logger.Error(LogCategory.Compiler, "No 'main' function found");
-				return new CompileResult(false, "No 'main' function found");
 			}
 
 			// Stage 2: Merge ASTs
-			var program = ProgramAst.Merge(asts, mainFileIndex);
+			var program = ProgramAst.Merge(asts);
 
 			// Stage 3: Semantic analysis
 			var semanticAnalyzer = new SemanticAnalyzer();

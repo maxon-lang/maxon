@@ -4,14 +4,11 @@ namespace MaxonSharp.Compiler.Mlir.Core;
 /// A basic block in MLIR. Contains a linear sequence of operations ending with a terminator.
 /// Blocks can have arguments (replacing PHI nodes from traditional SSA).
 /// </summary>
-public sealed class MlirBlock(string? name = null) {
-	[ThreadStatic]
-	private static int _nextId;
-
+public sealed class MlirBlock {
 	/// <summary>
 	/// Unique name for this block (e.g., "entry", "bb0", "then").
 	/// </summary>
-	public string Name { get; set; } = name ?? $"bb{_nextId++}";
+	public string Name { get; set; }
 
 	/// <summary>
 	/// Block arguments - values passed from predecessor blocks.
@@ -28,10 +25,9 @@ public sealed class MlirBlock(string? name = null) {
 	/// </summary>
 	public MlirRegion? ParentRegion { get; internal set; }
 
-	/// <summary>
-	/// Resets the global ID counter. Used for testing.
-	/// </summary>
-	public static void ResetIdCounter() => _nextId = 0;
+	public MlirBlock(string? name = null) {
+		Name = name ?? $"bb{MlirContext.Current.NextBlockId()}";
+	}
 
 	/// <summary>
 	/// Adds a block argument and returns its value.

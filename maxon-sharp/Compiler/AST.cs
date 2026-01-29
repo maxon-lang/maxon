@@ -273,7 +273,7 @@ public record ProgramAst(
 	/// </summary>
 	/// <param name="programs">List of parsed programs to merge</param>
 	/// <param name="mainFileIndex">Index of the main file (reserved for future use)</param>
-	public static ProgramAst Merge(List<ProgramAst> programs, int mainFileIndex) {
+	public static ProgramAst Merge(List<ProgramAst> programs) {
 		var types = new List<TypeDecl>();
 		var enums = new List<EnumDecl>();
 		var interfaces = new List<InterfaceDecl>();

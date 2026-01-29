@@ -93,58 +93,28 @@ class Program {
 		var (emitIr, dumpStages, valid) = ParseOptions(args);
 		if (!valid) return Fail();
 
-		string? sourceFile = null;
-		foreach (var arg in args) {
-			if (!arg.StartsWith('-')) {
-				sourceFile = arg;
-				break;
-			}
-		}
-
-		if (sourceFile == null) {
-			return Fail();
-		}
+		var sourceFile = GetNonOptionArg(args);
+		if (sourceFile == null) return Fail();
 
 		if (!File.Exists(sourceFile)) {
 			Console.WriteLine($"File not found: {sourceFile}");
 			return 1;
 		}
 
-		var content = File.ReadAllText(sourceFile);
+		var content = ReadFileContentUntilSeparator(sourceFile);
 		var sources = new SourceFile[] { new(sourceFile, content) };
 		var outputPath = Path.ChangeExtension(sourceFile, ".exe");
 
-		string? mlirOutputPath = null;
-		if (emitIr) {
-			mlirOutputPath = Path.ChangeExtension(sourceFile, ".mlir");
-		}
+		var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(sourceFile, emitIr, dumpStages);
 
-		string? dumpStagesBasePath = null;
-		if (dumpStages) {
-			dumpStagesBasePath = Path.ChangeExtension(sourceFile, null);
-		}
-
-		var result = Compiler.Compiler.Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
-		if (!result.Success && result.Error != null) {
-			Logger.Error(LogCategory.Compiler, result.Error);
-		}
-		return result.Success ? 0 : 1;
+		return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath);
 	}
 
 	static int RunBuild(string[] args) {
 		var (emitIr, dumpStages, valid) = ParseOptions(args);
 		if (!valid) return Fail();
 
-		string? directory = null;
-		foreach (var arg in args) {
-			if (!arg.StartsWith('-')) {
-				directory = arg;
-				break;
-			}
-		}
-
-		// Default to current directory if not specified
-		directory ??= Directory.GetCurrentDirectory();
+		var directory = GetNonOptionArg(args) ?? Directory.GetCurrentDirectory();
 
 		if (!Directory.Exists(directory)) {
 			Console.WriteLine($"Directory not found: {directory}");
@@ -160,105 +130,44 @@ class Program {
 		var mainFile = FindMainFile(sourceFiles, directory);
 		var outputPath = Path.ChangeExtension(mainFile, ".exe");
 
-		string? mlirOutputPath = null;
-		if (emitIr) {
-			mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
-		}
+		var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
 
-		string? dumpStagesBasePath = null;
-		if (dumpStages) {
-			dumpStagesBasePath = Path.ChangeExtension(mainFile, null);
-		}
-
-		var result = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
-		if (!result.Success && result.Error != null) {
-			Logger.Error(LogCategory.Compiler, result.Error);
-		}
-		return result.Success ? 0 : 1;
+		return CompileAndReportResult(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath);
 	}
 
 	static int RunRun(string[] args) {
 		var (emitIr, dumpStages, valid) = ParseOptions(args);
 		if (!valid) return Fail();
 
-		string? path = null;
-		foreach (var arg in args) {
-			if (!arg.StartsWith('-')) {
-				path = arg;
-				break;
-			}
-		}
+		var path = GetNonOptionArg(args);
+		if (path == null) return Fail();
 
-		if (path == null) {
-			return Fail();
-		}
-
-		SourceFile[] sourceFiles;
-		string mainFile;
-
-		if (Directory.Exists(path)) {
-			sourceFiles = CollectFilesFromDirectory(path);
-			if (sourceFiles.Length == 0) {
-				Console.WriteLine($"No .maxon files found in: {path}");
-				return 1;
-			}
-			mainFile = FindMainFile(sourceFiles, path);
-		} else if (File.Exists(path)) {
-			var content = File.ReadAllText(path);
-			sourceFiles = [new SourceFile(path, content)];
-			mainFile = path;
-		} else {
-			Console.WriteLine($"File or directory not found: {path}");
-			return 1;
-		}
+		var (sourceFiles, mainFile) = ResolveSourceFilesAndMain(path);
+		if (sourceFiles == null || mainFile == null) return 1;
 
 		var outputPath = Path.ChangeExtension(mainFile, ".exe");
+		var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
 
-		string? mlirOutputPath = null;
-		if (emitIr) {
-			mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
-		}
+		var compileResult = CompileAndReportResult(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath);
+		if (compileResult != 0) return compileResult;
 
-		string? dumpStagesBasePath = null;
-		if (dumpStages) {
-			dumpStagesBasePath = Path.ChangeExtension(mainFile, null);
-		}
+		return RunExecutable(outputPath);
+	}
 
-		var result = Compiler.Compiler.Compile(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
-		if (!result.Success) {
-			if (result.Error != null) {
-				Logger.Error(LogCategory.Compiler, result.Error);
+	/// <summary>
+	/// Reads file content up to the first "---" separator line.
+	/// </summary>
+	static string ReadFileContentUntilSeparator(string filePath) {
+		var content = File.ReadAllText(filePath);
+		var lines = content.Split('\n');
+		var sourceLines = new List<string>();
+		foreach (var line in lines) {
+			if (line.Trim() == "---") {
+				break;
 			}
-			return 1;
+			sourceLines.Add(line);
 		}
-
-		// Run the compiled executable
-		var process = new Process {
-			StartInfo = new ProcessStartInfo {
-				FileName = outputPath,
-				UseShellExecute = false,
-				RedirectStandardOutput = true,
-				RedirectStandardError = true,
-				CreateNoWindow = true
-			}
-		};
-
-		process.Start();
-
-		// Read output streams
-		var stdout = process.StandardOutput.ReadToEnd();
-		var stderr = process.StandardError.ReadToEnd();
-
-		process.WaitForExit();
-
-		if (!string.IsNullOrEmpty(stdout)) {
-			Console.Write(stdout);
-		}
-		if (!string.IsNullOrEmpty(stderr)) {
-			Console.Error.Write(stderr);
-		}
-
-		return process.ExitCode;
+		return string.Join('\n', sourceLines);
 	}
 
 	/// <summary>
@@ -268,7 +177,7 @@ class Program {
 		var files = new List<SourceFile>();
 
 		foreach (var file in Directory.GetFiles(directory, "*.maxon", SearchOption.AllDirectories)) {
-			var content = File.ReadAllText(file);
+			var content = ReadFileContentUntilSeparator(file);
 			files.Add(new SourceFile(file, content));
 		}
 
@@ -302,12 +211,102 @@ class Program {
 		return files.Length > 0 ? files[0].Path : originalPath;
 	}
 
-	static int RunSpecTests(string[] args) {
-		// For spec-test, suppress compiler Info messages (e.g., "Successfully compiled to...")
-		// Errors are still shown. User can override with --log=compiler:info
-		Logger.SetLevel(LogCategory.Compiler, LogLevel.Error);
+	/// <summary>
+	/// Gets the first non-option argument from the args array.
+	/// </summary>
+	static string? GetNonOptionArg(string[] args) {
+		foreach (var arg in args) {
+			if (!arg.StartsWith('-')) {
+				return arg;
+			}
+		}
+		return null;
+	}
 
-		// Parse common options (logging) - allows user overrides
+	/// <summary>
+	/// Gets output paths for MLIR and dump stages based on flags.
+	/// </summary>
+	static (string? mlirOutputPath, string? dumpStagesBasePath) GetOutputPaths(string mainFile, bool emitIr, bool dumpStages) {
+		string? mlirOutputPath = null;
+		if (emitIr) {
+			mlirOutputPath = Path.ChangeExtension(mainFile, ".mlir");
+		}
+
+		string? dumpStagesBasePath = null;
+		if (dumpStages) {
+			dumpStagesBasePath = Path.ChangeExtension(mainFile, null);
+		}
+
+		return (mlirOutputPath, dumpStagesBasePath);
+	}
+
+	/// <summary>
+	/// Compiles source files and reports the result.
+	/// </summary>
+	static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath) {
+		var result = Compiler.Compiler.Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
+		if (!result.Success && result.Error != null) {
+			Logger.Error(LogCategory.Compiler, result.Error);
+		}
+		return result.Success ? 0 : 1;
+	}
+
+	/// <summary>
+	/// Resolves source files and main file from either a file or directory path.
+	/// </summary>
+	static (SourceFile[]? sourceFiles, string? mainFile) ResolveSourceFilesAndMain(string path) {
+		if (Directory.Exists(path)) {
+			var sourceFiles = CollectFilesFromDirectory(path);
+			if (sourceFiles.Length == 0) {
+				Console.WriteLine($"No .maxon files found in: {path}");
+				return (null, null);
+			}
+			var mainFile = FindMainFile(sourceFiles, path);
+			return (sourceFiles, mainFile);
+		} else if (File.Exists(path)) {
+			var content = ReadFileContentUntilSeparator(path);
+			var sourceFiles = new SourceFile[] { new(path, content) };
+			return (sourceFiles, path);
+		} else {
+			Console.WriteLine($"File or directory not found: {path}");
+			return (null, null);
+		}
+	}
+
+	/// <summary>
+	/// Runs a compiled executable and returns its exit code.
+	/// </summary>
+	static int RunExecutable(string executablePath) {
+		var process = new Process {
+			StartInfo = new ProcessStartInfo {
+				FileName = executablePath,
+				UseShellExecute = false,
+				RedirectStandardOutput = true,
+				RedirectStandardError = true,
+				CreateNoWindow = true
+			}
+		};
+
+		process.Start();
+
+		var stdout = process.StandardOutput.ReadToEnd();
+		var stderr = process.StandardError.ReadToEnd();
+
+		process.WaitForExit();
+
+		if (!string.IsNullOrEmpty(stdout)) {
+			Console.Write(stdout);
+		}
+		if (!string.IsNullOrEmpty(stderr)) {
+			Console.Error.Write(stderr);
+		}
+
+		return process.ExitCode;
+	}
+
+	static int RunSpecTests(string[] args) {
+		SetupTestLogging();
+
 		var specTestOptions = new HashSet<string> { "--filter=", "--workers=" };
 		var (_, _, valid) = ParseOptions(args, specTestOptions);
 		if (!valid) return Fail();
@@ -327,7 +326,6 @@ class Program {
 			}
 		}
 
-		// Determine paths relative to the project
 		var projectDir = FindProjectRoot();
 		if (projectDir == null) {
 			Console.WriteLine("Could not find project root (looking for specs/ directory)");
@@ -338,7 +336,6 @@ class Program {
 		var fragmentDir = Path.Combine(specDir, "fragments");
 		var tempDir = Path.Combine(projectDir, "temp");
 
-		// Set project root for error formatting
 		Compiler.CompileError.ProjectRoot = projectDir;
 
 		Logger.Info(LogCategory.Testing, "Running maxon-sharp spec tests...");
@@ -350,13 +347,9 @@ class Program {
 		if (summary.FragmentGenerationErrors > 0) {
 			Logger.Error(LogCategory.Testing, $"Fragment generation failed: {summary.FragmentGenerationErrors} error(s) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
 			return 1;
-		} else if (summary.Failed == 0) {
-			Logger.Info(LogCategory.Testing, $"Tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
-			return 0;
-		} else {
-			Logger.Error(LogCategory.Testing, $"Tests: {summary.Passed} passed, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
-			return 1;
 		}
+
+		return ReportTestResults(summary);
 	}
 
 	static string? FindProjectRoot() {
@@ -372,27 +365,58 @@ class Program {
 	}
 
 	static int RunUnitTests(string[] args) {
-		// For unit-test, suppress compiler Info messages
-		Logger.SetLevel(LogCategory.Compiler, LogLevel.Error);
+		SetupTestLogging();
 
-		// Parse common options (logging) - allows user overrides
 		var unitTestOptions = new HashSet<string> { "--filter=" };
 		var (_, _, valid) = ParseOptions(args, unitTestOptions);
 		if (!valid) return Fail();
 
-		string? filter = null;
-
-		foreach (var arg in args) {
-			if (arg.StartsWith("--filter=")) {
-				filter = arg["--filter=".Length..];
-			}
-		}
+		var filter = GetFilterArg(args);
 
 		Logger.Info(LogCategory.Testing, "Running maxon-sharp unit tests...");
 
 		var summary = UnitTests.RunAll(filter);
 
 		Logger.Info(LogCategory.Testing, "");
+		return ReportTestResults(summary);
+	}
+
+	/// <summary>
+	/// Sets up logging for test commands (suppresses compiler Info messages).
+	/// </summary>
+	static void SetupTestLogging() {
+		Logger.SetLevel(LogCategory.Compiler, LogLevel.Error);
+	}
+
+	/// <summary>
+	/// Extracts the --filter argument value.
+	/// </summary>
+	static string? GetFilterArg(string[] args) {
+		foreach (var arg in args) {
+			if (arg.StartsWith("--filter=")) {
+				return arg["--filter=".Length..];
+			}
+		}
+		return null;
+	}
+
+	/// <summary>
+	/// Reports test results in a consistent format.
+	/// </summary>
+	static int ReportTestResults(TestSummary summary) {
+		if (summary.Failed == 0) {
+			Logger.Info(LogCategory.Testing, $"Tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
+			return 0;
+		} else {
+			Logger.Error(LogCategory.Testing, $"Tests: {summary.Passed} passed, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
+			return 1;
+		}
+	}
+
+	/// <summary>
+	/// Reports unit test results in a consistent format.
+	/// </summary>
+	static int ReportTestResults(UnitTestSummary summary) {
 		if (summary.Failed == 0) {
 			Logger.Info(LogCategory.Testing, $"Unit tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
 			return 0;
