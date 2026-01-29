@@ -304,7 +304,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 	private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath) {
 		try {
-			var result = Compiler.Compiler.Compile(
+			var result = new Compiler.Compiler().Compile(
 				[new Compiler.SourceFile(fragment.FilePath, fragment.Source)],
 				outputPath);
 			return (result.Success, result.Error);

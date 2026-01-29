@@ -11,7 +11,12 @@ public record CompileResult(
 	string? X86Ir = null
 );
 
+/// <summary>
+/// Maxon compiler instance. Create one per compilation.
+/// </summary>
 public class Compiler {
+	private readonly MlirContext _context = new();
+
 	/// <summary>
 	/// Compile source files using the MLIR-based pipeline.
 	/// </summary>
@@ -20,13 +25,12 @@ public class Compiler {
 	/// <param name="mlirOutputPath">Optional path to write MLIR output</param>
 	/// <param name="returnIr">If true, include X86 IR in the result</param>
 	/// <param name="dumpStagesBasePath">If set, write IR at each pipeline stage (e.g., "foo" -> "foo.1-maxon.mlir")</param>
-	public static CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
+	public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
 		// Track the original user source file for error reporting (before prepending stdlib)
 		var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
-		// Create a fresh context for this compilation
-		var context = new MlirContext();
-		using var _ = context.PushScope();
+		// Push our context as the ambient context for this compilation
+		using var _ = _context.PushScope();
 
 		try {
 			Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");

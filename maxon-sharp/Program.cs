@@ -244,7 +244,7 @@ class Program {
 	/// Compiles source files and reports the result.
 	/// </summary>
 	static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath) {
-		var result = Compiler.Compiler.Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
+		var result = new Compiler.Compiler().Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
 		if (!result.Success && result.Error != null) {
 			Logger.Error(LogCategory.Compiler, result.Error);
 		}

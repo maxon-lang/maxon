@@ -102,7 +102,7 @@ public static class UnitTests {
 
 	private static (bool Success, string? Error, string? Ir) CompileWithIr(string source, string tempExePath) {
 		var sources = new SourceFile[] { new("test.maxon", source) };
-		var result = Compiler.Compiler.Compile(sources, tempExePath, returnIr: true);
+		var result = new Compiler.Compiler().Compile(sources, tempExePath, returnIr: true);
 		return (result.Success, result.Error, result.X86Ir);
 	}
 

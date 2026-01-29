@@ -186,7 +186,7 @@ public static class FragmentGenerator {
 		// Compile to executable and capture IR (for success expectations only)
 		if (test.Expectation is SuccessExpectation) {
 			var sources = new[] { new Compiler.SourceFile(fragmentPath, test.Source) };
-			var result = Compiler.Compiler.Compile(sources, exePath, returnIr: true);
+			var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
 			if (result.Success) {
 				sb.Append(result.X86Ir?.TrimEnd());
 				sb.AppendLine();
