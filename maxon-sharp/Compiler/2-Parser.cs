@@ -93,7 +93,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		return new FunctionDecl(
 			name, isExport, parameters, returnType, throwsType, body,
-			SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
+			SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
 		);
 	}
 
@@ -149,9 +149,9 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		return new TypeDecl(
 			name, isExport, genericParams, conformances, associatedTypes, fields, methods,
-			SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
+			SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
 		) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -194,7 +194,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		return new EnumDecl(
 			name, isExport, conformances, members, methods,
-			SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
+			SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
 		);
 	}
 
@@ -219,7 +219,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 
 		return new EnumMember(nameToken.Value, value, associatedValues) {
-			Location = SourceSpan.Point(_sourceFileIndex, nameToken.Line, nameToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, nameToken.Line, nameToken.Column)
 		};
 	}
 
@@ -271,7 +271,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		return new InterfaceDecl(
 			name, isExport, genericParams, extends, associatedTypes, methods,
-			SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
+			SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
 		);
 	}
 
@@ -320,7 +320,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		return new ExtensionDecl(
 			interfaceName, isExport, associatedTypes, methods,
-			SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, interfaceName)
+			SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, interfaceName)
 		);
 	}
 
@@ -337,7 +337,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		return new ExtensionMethod(
 			name, parameters, returnType, throwsType, body,
-			SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
+			SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
 		);
 	}
 
@@ -364,7 +364,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 
 		return new TypeAliasDecl(name, baseType, typeArgs, isExport) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -375,7 +375,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		var value = ParseExpression();
 
 		return new GlobalConstant(name, isExport, value) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -386,7 +386,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		var value = ParseExpression();
 
 		return new GlobalVariable(name, isExport, value) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -428,7 +428,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 
 		return new FieldDecl(name, type, isMutable, isExport, isStatic, defaultValue) {
-			Location = SourceSpan.Point(_sourceFileIndex, nameToken.Line, nameToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, nameToken.Line, nameToken.Column)
 		};
 	}
 
@@ -468,7 +468,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		return new MethodDecl(
 			name, isStatic, isExport, parameters, returnType, throwsType, body,
-			SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
+			SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, name)
 		);
 	}
 
@@ -524,7 +524,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 
 		return new ParamDecl(nameToken.Value, type, defaultValue) {
-			Location = SourceSpan.Point(_sourceFileIndex, nameToken.Line, nameToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, nameToken.Line, nameToken.Column)
 		};
 	}
 
@@ -565,12 +565,12 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 				typeArgs.Add(ExpectTypeName());
 			}
 			return new GenericTypeRef(typeName, typeArgs) {
-				Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+				Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 			};
 		}
 
 		return new SimpleTypeRef(typeName) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -595,7 +595,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 
 		return new FunctionTypeRef(paramTypes, returnType) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -636,7 +636,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
 				value = ParseExpression();
 			}
-			return new ReturnStmt(value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new ReturnStmt(value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		if (Check(TokenType.Let)) {
@@ -648,7 +648,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			}
 			Expect(TokenType.Equals);
 			var value = ParseExpression();
-			return new LetDeclStmt(name, typeAnnotation, value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new LetDeclStmt(name, typeAnnotation, value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		if (Check(TokenType.Var)) {
@@ -660,7 +660,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			}
 			Expect(TokenType.Equals);
 			var value = ParseExpression();
-			return new VarDeclStmt(name, typeAnnotation, value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new VarDeclStmt(name, typeAnnotation, value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		if (Check(TokenType.If)) {
@@ -685,7 +685,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			if (Check(TokenType.CharacterLiteral)) {
 				label = Advance().Value;
 			}
-			return new BreakStmt(label) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new BreakStmt(label) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		if (Check(TokenType.Continue)) {
@@ -694,13 +694,13 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			if (Check(TokenType.CharacterLiteral)) {
 				label = Advance().Value;
 			}
-			return new ContinueStmt(label) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new ContinueStmt(label) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		if (Check(TokenType.Throw)) {
 			Advance();
 			var errorExpr = ParseExpression();
-			return new ThrowStmt(errorExpr) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new ThrowStmt(errorExpr) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		// Assignment or expression statement
@@ -712,19 +712,19 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			var value = ParseExpression();
 
 			if (expr is IdentifierExpr idExpr) {
-				return new AssignStmt(idExpr.Name, value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+				return new AssignStmt(idExpr.Name, value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 			}
 			if (expr is FieldAccessExpr fieldExpr) {
-				return new FieldAssignStmt(fieldExpr.Base, fieldExpr.FieldName, value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+				return new FieldAssignStmt(fieldExpr.Base, fieldExpr.FieldName, value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 			}
 			if (expr is IndexExpr indexExpr) {
-				return new IndexAssignStmt(indexExpr.Base, indexExpr.Index, value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+				return new IndexAssignStmt(indexExpr.Base, indexExpr.Index, value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 			}
 
 			throw new CompileError(ErrorCode.ParserInvalidAssignment, "Invalid assignment target", startToken.Line, startToken.Column);
 		}
 
-		return new ExprStmt(expr) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+		return new ExprStmt(expr) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 	}
 
 	private IfStmt ParseIfStatement() {
@@ -742,10 +742,10 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 
 		var thenEndLine = ExpectEndLabel(label);
-		var thenBlock = SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, thenEndLine, label);
+		var thenBlock = SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, thenEndLine, label);
 
 		List<Stmt>? elseBody = null;
-		SourceSpan? elseBlock = null;
+		SourceLocation? elseBlock = null;
 
 		if (Check(TokenType.Else)) {
 			var elseStartToken = Advance();
@@ -757,7 +757,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 				elseBody = [nestedIf];
 				// Use the nested if's end line for the else block info
 				var endLine = nestedIf.ElseBlock?.EndLine ?? nestedIf.ThenBlock.EndLine;
-				elseBlock = SourceSpan.Block(_sourceFileIndex, elseStartToken.Line, elseStartToken.Column, endLine, null);
+				elseBlock = SourceLocation.Block(_sourceFileIndex, elseStartToken.Line, elseStartToken.Column, endLine, null);
 			} else {
 				var elseLabel = ExpectBlockLabel();
 				SkipNewlines();
@@ -771,12 +771,12 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 				}
 
 				var elseEndLine = ExpectEndLabel(elseLabel);
-				elseBlock = SourceSpan.Block(_sourceFileIndex, elseStartToken.Line, elseStartToken.Column, elseEndLine, elseLabel);
+				elseBlock = SourceLocation.Block(_sourceFileIndex, elseStartToken.Line, elseStartToken.Column, elseEndLine, elseLabel);
 			}
 		}
 
 		return new IfStmt(condition, thenBody, thenBlock, elseBody, elseBlock) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -796,8 +796,8 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		var endLine = ExpectEndLabel(label);
 
-		return new WhileStmt(condition, body, SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, label)) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+		return new WhileStmt(condition, body, SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, label)) {
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -819,8 +819,8 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		var endLine = ExpectEndLabel(label);
 
-		return new ForStmt(varName, iterable, body, SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, label)) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+		return new ForStmt(varName, iterable, body, SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, label)) {
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -849,8 +849,8 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		var endLine = ExpectEndLabel(label);
 
-		return new MatchStmt(scrutinee, cases, defaultBody, SourceSpan.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, label)) {
-			Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column)
+		return new MatchStmt(scrutinee, cases, defaultBody, SourceLocation.Block(_sourceFileIndex, startToken.Line, startToken.Column, endLine, label)) {
+			Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column)
 		};
 	}
 
@@ -903,13 +903,13 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 				Expect(TokenType.RightParen);
 
 				return (
-					new IdentifierExpr(caseName) { Location = SourceSpan.Point(_sourceFileIndex, nameToken.Line, nameToken.Column) },
+					new IdentifierExpr(caseName) { Location = SourceLocation.Point(_sourceFileIndex, nameToken.Line, nameToken.Column) },
 					new PatternBinding(caseName, bindings)
 				);
 			}
 
 			return (
-				new IdentifierExpr(caseName) { Location = SourceSpan.Point(_sourceFileIndex, nameToken.Line, nameToken.Column) },
+				new IdentifierExpr(caseName) { Location = SourceLocation.Point(_sourceFileIndex, nameToken.Line, nameToken.Column) },
 				null
 			);
 		}
@@ -930,9 +930,10 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		var left = ParseLogicalAnd();
 
 		while (Check(TokenType.Or)) {
+			var opToken = Current();
 			Advance();
 			var right = ParseLogicalAnd();
-			left = new LogicalExpr(left, LogicalOp.Or, right);
+			left = new LogicalExpr(left, LogicalOp.Or, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 		}
 
 		return left;
@@ -945,9 +946,10 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			// Check if 'and' is followed by 'fallthrough' - if so, stop parsing
 			if (Peek(1)?.Type == TokenType.Fallthrough) break;
 
+			var opToken = Current();
 			Advance();
 			var right = ParseBitwiseOr();
-			left = new LogicalExpr(left, LogicalOp.And, right);
+			left = new LogicalExpr(left, LogicalOp.And, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 		}
 
 		return left;
@@ -958,19 +960,22 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		// Check for range operators: .., ..=, ..<
 		if (Check(TokenType.DotDot)) {
+			var opToken = Current();
 			Advance();
 			var right = ParseBitwiseOr();
-			return new RangeExpr(left, right, false); // exclusive by default (..)
+			return new RangeExpr(left, right, false) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) }; // exclusive by default (..)
 		}
 		if (Check(TokenType.DotDotEquals)) {
+			var opToken = Current();
 			Advance();
 			var right = ParseBitwiseOr();
-			return new RangeExpr(left, right, true); // inclusive (..=)
+			return new RangeExpr(left, right, true) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) }; // inclusive (..=)
 		}
 		if (Check(TokenType.DotDotLess)) {
+			var opToken = Current();
 			Advance();
 			var right = ParseBitwiseOr();
-			return new RangeExpr(left, right, false); // exclusive (..<)
+			return new RangeExpr(left, right, false) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) }; // exclusive (..<)
 		}
 
 		return left;
@@ -980,9 +985,10 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		var left = ParseBitwiseXor();
 
 		while (Check(TokenType.Pipe)) {
+			var opToken = Current();
 			Advance();
 			var right = ParseBitwiseXor();
-			left = new BinaryExpr(left, BinaryOp.Bor, right);
+			left = new BinaryExpr(left, BinaryOp.Bor, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 		}
 
 		return left;
@@ -992,9 +998,10 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		var left = ParseBitwiseAnd();
 
 		while (Check(TokenType.Caret)) {
+			var opToken = Current();
 			Advance();
 			var right = ParseBitwiseAnd();
-			left = new BinaryExpr(left, BinaryOp.Bxor, right);
+			left = new BinaryExpr(left, BinaryOp.Bxor, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 		}
 
 		return left;
@@ -1004,9 +1011,10 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		var left = ParseComparison();
 
 		while (Check(TokenType.Ampersand)) {
+			var opToken = Current();
 			Advance();
 			var right = ParseComparison();
-			left = new BinaryExpr(left, BinaryOp.Band, right);
+			left = new BinaryExpr(left, BinaryOp.Band, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 		}
 
 		return left;
@@ -1016,9 +1024,10 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		var left = ParseShift();
 
 		if (MatchComparison() is CompareOp op) {
+			var opToken = Current();
 			Advance();
 			var right = ParseShift();
-			left = new CompareExpr(left, op, right);
+			left = new CompareExpr(left, op, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 		}
 
 		return left;
@@ -1039,13 +1048,15 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		while (true) {
 			if (Check(TokenType.LeftShift)) {
+				var opToken = Current();
 				Advance();
 				var right = ParseAdditive();
-				left = new BinaryExpr(left, BinaryOp.Shl, right);
+				left = new BinaryExpr(left, BinaryOp.Shl, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 			} else if (Check(TokenType.RightShift)) {
+				var opToken = Current();
 				Advance();
 				var right = ParseAdditive();
-				left = new BinaryExpr(left, BinaryOp.Shr, right);
+				left = new BinaryExpr(left, BinaryOp.Shr, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 			} else {
 				break;
 			}
@@ -1059,13 +1070,15 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		while (true) {
 			if (Check(TokenType.Plus)) {
+				var opToken = Current();
 				Advance();
 				var right = ParseMultiplicative();
-				left = new BinaryExpr(left, BinaryOp.Add, right);
+				left = new BinaryExpr(left, BinaryOp.Add, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 			} else if (Check(TokenType.Minus)) {
+				var opToken = Current();
 				Advance();
 				var right = ParseMultiplicative();
-				left = new BinaryExpr(left, BinaryOp.Sub, right);
+				left = new BinaryExpr(left, BinaryOp.Sub, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 			} else {
 				break;
 			}
@@ -1079,17 +1092,20 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		while (true) {
 			if (Check(TokenType.Star)) {
+				var opToken = Current();
 				Advance();
 				var right = ParseUnary();
-				left = new BinaryExpr(left, BinaryOp.Mul, right);
+				left = new BinaryExpr(left, BinaryOp.Mul, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 			} else if (Check(TokenType.Slash)) {
+				var opToken = Current();
 				Advance();
 				var right = ParseUnary();
-				left = new BinaryExpr(left, BinaryOp.Div, right);
+				left = new BinaryExpr(left, BinaryOp.Div, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 			} else if (Check(TokenType.Mod)) {
+				var opToken = Current();
 				Advance();
 				var right = ParseUnary();
-				left = new BinaryExpr(left, BinaryOp.Mod, right);
+				left = new BinaryExpr(left, BinaryOp.Mod, right) { Location = SourceLocation.Point(_sourceFileIndex, opToken.Line, opToken.Column) };
 			} else {
 				break;
 			}
@@ -1105,21 +1121,21 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			// Fold negative numeric literals directly
 			if (Check(TokenType.IntegerLiteral)) {
 				var value = ParseIntegerLiteral(Advance().Value);
-				return new IntLiteralExpr(-value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+				return new IntLiteralExpr(-value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 			}
 			if (Check(TokenType.FloatLiteral)) {
 				var value = double.Parse(Advance().Value.Replace("_", ""));
-				return new FloatLiteralExpr(-value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+				return new FloatLiteralExpr(-value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 			}
 
 			var operand = ParseUnary();
-			return new UnaryExpr(UnaryOp.Negate, operand) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new UnaryExpr(UnaryOp.Negate, operand) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		if (Check(TokenType.Not)) {
 			var startToken = Advance();
 			var operand = ParseUnary();
-			return new UnaryExpr(UnaryOp.Not, operand) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new UnaryExpr(UnaryOp.Not, operand) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		if (Check(TokenType.Try)) {
@@ -1164,7 +1180,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			}
 		}
 
-		return new TryExpr(operand, otherwise) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+		return new TryExpr(operand, otherwise) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 	}
 
 	private Expr ParsePrimary() {
@@ -1178,29 +1194,29 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		// Integer literal
 		if (Check(TokenType.IntegerLiteral)) {
 			var value = ParseIntegerLiteral(Advance().Value);
-			return new IntLiteralExpr(value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new IntLiteralExpr(value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		// Float literal
 		if (Check(TokenType.FloatLiteral)) {
 			var value = double.Parse(Advance().Value.Replace("_", ""));
-			return new FloatLiteralExpr(value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new FloatLiteralExpr(value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		// Boolean literals
 		if (Check(TokenType.True)) {
 			Advance();
-			return new BoolLiteralExpr(true) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new BoolLiteralExpr(true) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 		if (Check(TokenType.False)) {
 			Advance();
-			return new BoolLiteralExpr(false) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new BoolLiteralExpr(false) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		// String literal
 		if (Check(TokenType.StringLiteral)) {
 			var value = Advance().Value;
-			return new StringLiteralExpr(value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new StringLiteralExpr(value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		// Interpolated string
@@ -1211,13 +1227,13 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		// Character literal
 		if (Check(TokenType.CharacterLiteral)) {
 			var value = Advance().Value;
-			return new CharLiteralExpr(value) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new CharLiteralExpr(value) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		// Self
 		if (Check(TokenType.Self)) {
 			Advance();
-			return new SelfExpr() { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+			return new SelfExpr() { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 		}
 
 		// Array literal
@@ -1244,7 +1260,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			if (Check(TokenType.LeftBrace)) {
 				return ParseStructInit(token.Value);
 			}
-			return new IdentifierExpr(token.Value) { Location = SourceSpan.Point(_sourceFileIndex, token.Line, token.Column) };
+			return new IdentifierExpr(token.Value) { Location = SourceLocation.Point(_sourceFileIndex, token.Line, token.Column) };
 		}
 
 		// Identifier, function call, or type init
@@ -1273,14 +1289,14 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 					ParseCallArgs(args, namedArgs);
 					// Could be static method, enum case, or instance method - resolved in MLIR lowering
 					// Use memberToken location so errors point to the method name, not the type name
-					return new StaticCallExpr(name, memberName, args, namedArgs) { Location = SourceSpan.Point(_sourceFileIndex, memberToken.Line, memberToken.Column) };
+					return new StaticCallExpr(name, memberName, args, namedArgs) { Location = SourceLocation.Point(_sourceFileIndex, memberToken.Line, memberToken.Column) };
 				}
 
 				// Field access continues in parsePostfix
 				return ParsePostfix(new FieldAccessExpr(
-					new IdentifierExpr(name) { Location = SourceSpan.Point(_sourceFileIndex, token.Line, token.Column) },
+					new IdentifierExpr(name) { Location = SourceLocation.Point(_sourceFileIndex, token.Line, token.Column) },
 					memberName
-				) { Location = SourceSpan.Point(_sourceFileIndex, token.Line, token.Column) });
+				) { Location = SourceLocation.Point(_sourceFileIndex, token.Line, token.Column) });
 			}
 
 			// Check for function call: name(...)
@@ -1290,10 +1306,10 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 				var namedArgs = new List<NamedArg>();
 				ParseCallArgs(args, namedArgs);
 				var builtin = BuiltinFunctions.GetValueOrDefault(name, BuiltinOp.None);
-				return new CallExpr(name, args, namedArgs, builtin) { Location = SourceSpan.Point(_sourceFileIndex, token.Line, token.Column) };
+				return new CallExpr(name, args, namedArgs, builtin) { Location = SourceLocation.Point(_sourceFileIndex, token.Line, token.Column) };
 			}
 
-			return new IdentifierExpr(name) { Location = SourceSpan.Point(_sourceFileIndex, token.Line, token.Column) };
+			return new IdentifierExpr(name) { Location = SourceLocation.Point(_sourceFileIndex, token.Line, token.Column) };
 		}
 
 		throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got {startToken.Type}", startToken.Line, startToken.Column);
@@ -1302,6 +1318,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 	private Expr ParsePostfix(Expr expr) {
 		while (true) {
 			if (Check(TokenType.Dot)) {
+				var dotToken = Current();
 				Advance();
 				var memberName = Expect(TokenType.Identifier).Value;
 
@@ -1311,19 +1328,21 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 					var args = new List<Expr>();
 					var namedArgs = new List<NamedArg>();
 					ParseCallArgs(args, namedArgs);
-					expr = new MethodCallExpr(expr, memberName, args, namedArgs);
+					expr = new MethodCallExpr(expr, memberName, args, namedArgs) { Location = SourceLocation.Point(_sourceFileIndex, dotToken.Line, dotToken.Column) };
 				} else {
-					expr = new FieldAccessExpr(expr, memberName);
+					expr = new FieldAccessExpr(expr, memberName) { Location = SourceLocation.Point(_sourceFileIndex, dotToken.Line, dotToken.Column) };
 				}
 			} else if (Check(TokenType.LeftBracket)) {
+				var bracketToken = Current();
 				Advance();
 				var index = ParseExpression();
 				Expect(TokenType.RightBracket);
-				expr = new IndexExpr(expr, index);
+				expr = new IndexExpr(expr, index) { Location = SourceLocation.Point(_sourceFileIndex, bracketToken.Line, bracketToken.Column) };
 			} else if (Check(TokenType.As)) {
+				var asToken = Current();
 				Advance();
 				var targetType = ExpectTypeName();
-				expr = new CastExpr(expr, targetType);
+				expr = new CastExpr(expr, targetType) { Location = SourceLocation.Point(_sourceFileIndex, asToken.Line, asToken.Column) };
 			} else {
 				break;
 			}
@@ -1372,7 +1391,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 		Expect(TokenType.RightBracket);
 
-		return new ArrayLiteralExpr(elements) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+		return new ArrayLiteralExpr(elements) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 	}
 
 	private StructInitExpr ParseStructInit(string typeName) {
@@ -1389,7 +1408,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 		Expect(TokenType.RightBrace);
 
-		return new StructInitExpr(typeName, [], fields) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+		return new StructInitExpr(typeName, [], fields) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 	}
 
 	private StructInitExpr ParseAnonymousStructInit() {
@@ -1406,7 +1425,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 		Expect(TokenType.RightBrace);
 
-		return new StructInitExpr(null, [], fields) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+		return new StructInitExpr(null, [], fields) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 	}
 
 	private FieldInit ParseFieldInit() {
@@ -1441,7 +1460,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 		ExpectEndLabel(label);
 
-		return new MatchExpr(scrutinee, cases, defaultExpr, label) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+		return new MatchExpr(scrutinee, cases, defaultExpr, label) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 	}
 
 	private MatchExprCase ParseMatchExprCase() {
@@ -1516,7 +1535,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 			}
 		}
 
-		return new InterpolatedStringExpr(parts) { Location = SourceSpan.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
+		return new InterpolatedStringExpr(parts) { Location = SourceLocation.Point(_sourceFileIndex, startToken.Line, startToken.Column) };
 	}
 
 	// ============================================================================

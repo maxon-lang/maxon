@@ -238,7 +238,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 	}
 
-	private string GetBuiltinLiteralTypeName(string interfaceName, SourceSpan? location) {
+	private string GetBuiltinLiteralTypeName(string interfaceName, SourceLocation location) {
 		if (_builtinLiteralTypes.TryGetValue(interfaceName, out var typeName)) {
 			return typeName;
 		}
@@ -528,7 +528,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// Checks if a symbol can be accessed from the current file context.
 	/// Throws CompileError if the symbol is not exported and not from the same file.
 	/// </summary>
-	private void CheckSymbolVisibility(string symbolName, SourceSpan? location) {
+	private void CheckSymbolVisibility(string symbolName, SourceLocation? location) {
 		var accessFileIndex = location?.FileIndex ?? _currentFileIndex;
 
 		if (!_symbolTable.CanAccess(symbolName, accessFileIndex)) {
@@ -930,7 +930,61 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	private MlirValue LowerCompareExpr(CompareExpr compare) {
-		var (left, right, isFloat) = LowerBinaryOperands(compare.Left, compare.Right);
+		var left = LowerExpression(compare.Left);
+		var right = LowerExpression(compare.Right);
+
+		// Check for type mismatches - no implicit conversion between int and float in comparisons
+		var leftIsFloat = left.Type is FloatType;
+		var rightIsFloat = right.Type is FloatType;
+		var leftIsInt = left.Type is IntegerType { BitWidth: > 1 }; // Not bool
+		var rightIsInt = right.Type is IntegerType { BitWidth: > 1 };
+
+		// Reject int/float mixing (with both variables and literals)
+		if ((leftIsInt && rightIsFloat) || (leftIsFloat && rightIsInt)) {
+			var leftTypeName = leftIsFloat ? "float" : "int";
+			var rightTypeName = rightIsFloat ? "float" : "int";
+			throw new CompileError(
+				ErrorCode.SemanticTypeMismatch,
+				$"type mismatch: 'cannot compare {leftTypeName} with {rightTypeName}'",
+				compare.Location?.Line ?? 0,
+				compare.Location?.Column ?? 0);
+		}
+
+		// Special handling for byte vs int literal comparisons
+		var leftIsByte = left.Type is IntegerType { BitWidth: 8, IsSigned: false };
+		var rightIsByte = right.Type is IntegerType { BitWidth: 8, IsSigned: false };
+
+		// Allow byte to be compared with int literals in range 0-255
+		// This is handled by checking if right is a constant int literal
+		if (leftIsByte && rightIsInt) {
+			// Check if right is a literal that can fit in a byte (0-255)
+			if (compare.Right is IntLiteralExpr intLit) {
+				if (intLit.Value < 0 || intLit.Value > 255) {
+					throw new CompileError(
+						ErrorCode.SemanticTypeMismatch,
+						"type mismatch: 'cannot compare byte with int'",
+						compare.Location?.Line ?? 0,
+						compare.Location?.Column ?? 0);
+				}
+				// Convert int literal to byte for comparison
+				right = EmitConstantInt((byte)intLit.Value, IntegerType.UI8);
+			}
+		} else if (rightIsByte && leftIsInt) {
+			// Check if left is a literal that can fit in a byte (0-255)
+			if (compare.Left is IntLiteralExpr intLit) {
+				if (intLit.Value < 0 || intLit.Value > 255) {
+					throw new CompileError(
+						ErrorCode.SemanticTypeMismatch,
+						"type mismatch: 'cannot compare byte with int'",
+						compare.Location?.Line ?? 0,
+						compare.Location?.Column ?? 0);
+				}
+				// Convert int literal to byte for comparison
+				left = EmitConstantInt((byte)intLit.Value, IntegerType.UI8);
+			}
+		}
+
+		var isFloat = left.Type is FloatType;
 
 		if (isFloat) {
 			var floatPredicate = compare.Op switch {
@@ -1378,7 +1432,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		if (_namedValues.ContainsKey(staticCall.TypeName)) {
 			// This is actually an instance method call: variable.method(args)
 			// Use GetMethodReceiverAsPointer to get address for struct types
-			var identExpr = new IdentifierExpr(staticCall.TypeName);
+			var identExpr = new IdentifierExpr(staticCall.TypeName) { Location = staticCall.Location };
 			(baseValue, structType) = GetMethodReceiverAsPointer(identExpr);
 		} else if (_currentMethodStructType != null) {
 			// Check if TypeName is a field of the current method's struct (e.g., inner.get() inside a method)
@@ -1634,6 +1688,12 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		if (call.Args.Count != 1)
 			throw new ArgumentException($"{call.FuncName}() requires exactly 1 argument");
 		var arg = LowerExpression(call.Args[0]);
+
+		// Math intrinsics accept both int and float - promote int to float
+		if (arg.Type is IntegerType { BitWidth: > 1 }) {
+			arg = Emit<SIToFPOp>(arg, FloatType.F64);
+		}
+
 		return EmitUnary<T>(arg);
 	}
 
@@ -2221,7 +2281,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			interpolated.Location?.Column ?? 0);
 	}
 
-	private MlirValue BuildStringFromRdata(byte[] data, int length, SourceSpan? location) {
+	private MlirValue BuildStringFromRdata(byte[] data, int length, SourceLocation location) {
 		// Get the __ManagedMemory type
 		if (!_structTypes.TryGetValue("__ManagedMemory", out var managedMemType) ||
 			managedMemType is not MaxonStructType managedMemoryType) {
@@ -2260,7 +2320,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			?? throw new InvalidOperationException("String literal init did not produce a value");
 	}
 
-	private static string DecodeStringLiteral(string raw, SourceSpan? location) {
+	private static string DecodeStringLiteral(string raw, SourceLocation? location) {
 		var builder = new StringBuilder(raw.Length);
 		for (int i = 0; i < raw.Length; i++) {
 			var c = raw[i];
@@ -2716,7 +2776,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// <summary>
 	/// Converts an AST type to an MLIR type.
 	/// </summary>
-	public MlirType ConvertType(string typeName, SourceSpan? location = null) {
+	public MlirType ConvertType(string typeName, SourceLocation? location = null) {
 		// Check for type alias first (e.g., typealias IntArray is Array with int)
 		if (_typeAliases.TryGetValue(typeName, out var alias)) {
 			if (alias.typeArgs.Count > 0) {

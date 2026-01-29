@@ -1,0 +1,20 @@
+// Test: math-intrinsic-with-int
+function main() returns int
+    var x = 16
+    var result = sqrt(x)
+    return trunc(result)
+end 'main'
+---
+ExitCode: 4
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 16
+    x86.cvtsi2sd xmm0, rax
+    x86.sqrtsd xmm1, xmm0
+    x86.cvttsd2si rax, xmm1
+    x86.epilogue
+    x86.ret
+}
+---

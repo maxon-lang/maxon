@@ -4,13 +4,13 @@ namespace MaxonSharp.Compiler;
 // Source Span
 // ============================================================================
 
-public record SourceSpan(int FileIndex, int StartLine, int StartColumn, int EndLine, int EndColumn, string? Identifier = null) {
+public record SourceLocation(int FileIndex, int StartLine, int StartColumn, int EndLine, int EndColumn, string? Identifier = null) {
 	public int Line => StartLine;
 	public int Column => StartColumn;
-	public static SourceSpan Point(int fileIndex, int line, int column) =>
+	public static SourceLocation Point(int fileIndex, int line, int column) =>
 		new(fileIndex, line, column, line, column, null);
 
-	public static SourceSpan Block(int fileIndex, int startLine, int startColumn, int endLine, string? identifier) =>
+	public static SourceLocation Block(int fileIndex, int startLine, int startColumn, int endLine, string? identifier) =>
 		new(fileIndex, startLine, startColumn, endLine, 0, identifier);
 }
 
@@ -19,7 +19,7 @@ public record SourceSpan(int FileIndex, int StartLine, int StartColumn, int EndL
 // ============================================================================
 
 public abstract record TypeRef {
-	public SourceSpan? Location { get; init; }
+	public SourceLocation? Location { get; init; }
 }
 
 public record SimpleTypeRef(string Name) : TypeRef;
@@ -32,7 +32,7 @@ public record ErrorUnionTypeRef(TypeRef SuccessType, string ErrorType) : TypeRef
 // ============================================================================
 
 public abstract record Expr {
-	public SourceSpan? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 // Literals
@@ -125,7 +125,7 @@ public record InitFromArrayExpr(string TypeName, List<string> TypeArgs, Expr Ele
 // ============================================================================
 
 public abstract record Stmt {
-	public SourceSpan? Location { get; init; }
+	public SourceLocation? Location { get; init; }
 }
 
 public record ReturnStmt(Expr? Value) : Stmt;
@@ -141,24 +141,24 @@ public record ContinueStmt(string? Label) : Stmt;
 
 // Control flow with child blocks
 
-public record IfStmt(Expr Condition, List<Stmt> ThenBody, SourceSpan ThenBlock, List<Stmt>? ElseBody, SourceSpan? ElseBlock) : Stmt;
-public record WhileStmt(Expr Condition, List<Stmt> Body, SourceSpan Block) : Stmt;
-public record ForStmt(string VarName, Expr Iterable, List<Stmt> Body, SourceSpan Block) : Stmt;
+public record IfStmt(Expr Condition, List<Stmt> ThenBody, SourceLocation ThenBlock, List<Stmt>? ElseBody, SourceLocation? ElseBlock) : Stmt;
+public record WhileStmt(Expr Condition, List<Stmt> Body, SourceLocation Block) : Stmt;
+public record ForStmt(string VarName, Expr Iterable, List<Stmt> Body, SourceLocation Block) : Stmt;
 
 // Match statement
 public record MatchCase(List<Expr> Patterns, List<PatternBinding?> PatternBindings, List<Stmt> Body, bool HasFallthrough);
-public record MatchStmt(Expr Scrutinee, List<MatchCase> Cases, List<Stmt>? DefaultBody, SourceSpan Block) : Stmt;
+public record MatchStmt(Expr Scrutinee, List<MatchCase> Cases, List<Stmt>? DefaultBody, SourceLocation Block) : Stmt;
 
 // ============================================================================
 // Declarations
 // ============================================================================
 
 public record ParamDecl(string Name, TypeRef Type, Expr? DefaultValue = null) {
-	public SourceSpan? Location { get; init; }
+	public SourceLocation? Location { get; init; }
 }
 
 public record FieldDecl(string Name, TypeRef? Type, bool IsMutable, bool IsExport = false, bool IsStatic = false, Expr? DefaultValue = null) {
-	public SourceSpan? Location { get; init; }
+	public SourceLocation? Location { get; init; }
 }
 
 public record MethodDecl(
@@ -169,7 +169,7 @@ public record MethodDecl(
 	TypeRef? ReturnType,
 	string? ThrowsType,
 	List<Stmt> Body,
-	SourceSpan Block,
+	SourceLocation Block,
 	string? DocComment = null
 );
 
@@ -180,7 +180,7 @@ public record FunctionDecl(
 	TypeRef? ReturnType,
 	string? ThrowsType,
 	List<Stmt> Body,
-	SourceSpan Block,
+	SourceLocation Block,
 	string? DocComment = null
 );
 
@@ -192,13 +192,13 @@ public record TypeDecl(
 	List<TypeAliasDecl> AssociatedTypes,
 	List<FieldDecl> Fields,
 	List<MethodDecl> Methods,
-	SourceSpan Block
+	SourceLocation Block
 ) {
-	public SourceSpan? Location { get; init; }
+	public SourceLocation? Location { get; init; }
 }
 
 public record EnumMember(string Name, Expr? Value, List<ParamDecl> AssociatedValues) {
-	public SourceSpan? Location { get; init; }
+	public SourceLocation? Location { get; init; }
 }
 
 public record EnumDecl(
@@ -207,7 +207,7 @@ public record EnumDecl(
 	List<InterfaceConformance> Conformances,
 	List<EnumMember> Members,
 	List<MethodDecl> Methods,
-	SourceSpan Block
+	SourceLocation Block
 );
 
 public record InterfaceConformance(string InterfaceName, List<string> TypeArgs);
@@ -221,7 +221,7 @@ public record InterfaceDecl(
 	List<string> Extends,
 	List<TypeAliasDecl> AssociatedTypes,
 	List<InterfaceMethod> Methods,
-	SourceSpan Block
+	SourceLocation Block
 );
 
 public record ExtensionMethod(
@@ -230,7 +230,7 @@ public record ExtensionMethod(
 	TypeRef? ReturnType,
 	string? ThrowsType,
 	List<Stmt> Body,
-	SourceSpan Block
+	SourceLocation Block
 );
 
 public record ExtensionDecl(
@@ -238,19 +238,19 @@ public record ExtensionDecl(
 	bool IsExport,
 	List<TypeAliasDecl> AssociatedTypes,
 	List<ExtensionMethod> Methods,
-	SourceSpan Block
+	SourceLocation Block
 );
 
 public record TypeAliasDecl(string Name, string BaseType, List<string> TypeArgs, bool IsExport = false) {
-	public SourceSpan? Location { get; init; }
+	public SourceLocation? Location { get; init; }
 }
 
 public record GlobalConstant(string Name, bool IsExport, Expr Value) {
-	public SourceSpan? Location { get; init; }
+	public SourceLocation? Location { get; init; }
 }
 
 public record GlobalVariable(string Name, bool IsExport, Expr Value) {
-	public SourceSpan? Location { get; init; }
+	public SourceLocation? Location { get; init; }
 }
 
 // ============================================================================

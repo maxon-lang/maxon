@@ -1,0 +1,35 @@
+// Test: docs-example-1
+function main() returns int
+    var b = 100 as byte
+    if b == 50 'check'
+        return 1
+    end 'check'
+    return 0
+end 'main'
+
+---
+ExitCode: 0
+---
+func.func @main() -> i64 {
+  ^entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 100
+    x86.mov rcx, rax
+    x86.and rcx, 255
+    x86.mov rax, 50
+    x86.cmp rcx, rax
+    x86.sete rcx
+    x86.movzx rcx, rcx
+    x86.test rcx, rcx
+    x86.jne then
+    x86.jmp merge
+  ^then:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  ^merge:
+    x86.mov rax, 0
+    x86.epilogue
+    x86.ret
+}
+---
