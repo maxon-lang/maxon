@@ -181,7 +181,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				// For methods, add 'self' as first parameter (unless static)
 				var methodParams = new List<ParamDecl>();
 				if (!method.IsStatic) {
-					methodParams.Add(new ParamDecl("self", new SimpleTypeRef(type.Name)));
+					methodParams.Add(new ParamDecl("self", new SimpleTypeRef(type.Name) { Location = type.Block }) { Location = type.Block });
 				}
 				methodParams.AddRange(method.Params);
 				_functionParams[methodName] = methodParams;
@@ -283,8 +283,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			IntLiteralExpr => IntegerType.I64,
 			FloatLiteralExpr => FloatType.F64,
 			BoolLiteralExpr => IntegerType.I1,
-			StringLiteralExpr => ConvertType(GetBuiltinLiteralTypeName("BuiltinStringLiteral", expr.Location)),
-			InterpolatedStringExpr => ConvertType(GetBuiltinLiteralTypeName("BuiltinStringLiteral", expr.Location)),
+			StringLiteralExpr => ConvertType(GetBuiltinLiteralTypeName("BuiltinStringLiteral", expr.Location), expr.Location),
+			InterpolatedStringExpr => ConvertType(GetBuiltinLiteralTypeName("BuiltinStringLiteral", expr.Location), expr.Location),
 			_ => throw new NotSupportedException($"Cannot infer type from expression: {expr.GetType().Name}. Please provide an explicit type annotation.")
 		};
 	}
@@ -1083,7 +1083,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 	private MlirValue LowerCastExpr(CastExpr cast) {
 		var operand = LowerExpression(cast.Expression);
-		var targetType = ConvertType(cast.TargetType);
+		var targetType = ConvertType(cast.TargetType, cast.Location);
 
 		if (operand.Type == targetType) {
 			throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -1725,7 +1725,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			// For Array$int, extract "int" from the name
 			if (_currentMethodStructType != null && _currentMethodStructType.Name.StartsWith("Array$")) {
 				var elemTypeName = _currentMethodStructType.Name["Array$".Length..];
-				return ConvertType(elemTypeName);
+				// Use a synthetic location for derived type names
+				var loc = SourceLocation.Point(_currentFileIndex, 0, 0);
+				return ConvertType(elemTypeName, loc);
 			}
 			// Default to i64 if we can't determine the type
 			return IntegerType.I64;
@@ -2457,7 +2459,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private (MlirType type, string name) InferArrayElementType(Expr element) {
 		if (element is StringLiteralExpr or InterpolatedStringExpr) {
 			var stringTypeName = GetBuiltinLiteralTypeName("BuiltinStringLiteral", element.Location);
-			return (ConvertType(stringTypeName), stringTypeName);
+			return (ConvertType(stringTypeName, element.Location), stringTypeName);
 		}
 
 		return element switch {
@@ -2776,7 +2778,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	/// <summary>
 	/// Converts an AST type to an MLIR type.
 	/// </summary>
-	public MlirType ConvertType(string typeName, SourceLocation? location = null) {
+	public MlirType ConvertType(string typeName, SourceLocation location) {
 		// Check for type alias first (e.g., typealias IntArray is Array with int)
 		if (_typeAliases.TryGetValue(typeName, out var alias)) {
 			if (alias.typeArgs.Count > 0) {
@@ -2787,7 +2789,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 		// Handle function pointer type strings: fn(params)->returnType
 		if (typeName.StartsWith("fn(")) {
-			return ParseFunctionPtrTypeString(typeName);
+			return ParseFunctionPtrTypeString(typeName, location);
 		}
 
 		// Check visibility for user-defined types (structs and enums)
@@ -2812,14 +2814,18 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			"void" or "Void" => NoneType.Instance,
 			_ when _structTypes.TryGetValue(typeName, out var st) => st,
 			_ when _enumTypes.TryGetValue(typeName, out var et) => et,
-			_ => throw new NotSupportedException($"Unknown type: {typeName}")
+			_ => throw new CompileError(
+				ErrorCode.MlirUndefinedType,
+				$"Unknown type: {typeName}",
+				location.StartLine,
+				location.StartColumn)
 		};
 	}
 
 	/// <summary>
 	/// Parses a function pointer type string like "fn(int,int)->int" into a FunctionPtrType.
 	/// </summary>
-	private FunctionPtrType ParseFunctionPtrTypeString(string typeStr) {
+	private FunctionPtrType ParseFunctionPtrTypeString(string typeStr, SourceLocation location) {
 		// Format: fn(param1,param2,...)->returnType
 		var arrowIndex = typeStr.IndexOf("->");
 		if (arrowIndex == -1) {
@@ -2834,13 +2840,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		var paramTypes = new List<MlirType>();
 		if (!string.IsNullOrEmpty(paramsStr)) {
 			foreach (var paramType in paramsStr.Split(',')) {
-				paramTypes.Add(ConvertType(paramType.Trim()));
+				paramTypes.Add(ConvertType(paramType.Trim(), location));
 			}
 		}
 
 		// Extract return type
 		var returnTypeStr = typeStr[(arrowIndex + 2)..];
-		var returnType = ConvertType(returnTypeStr);
+		var returnType = ConvertType(returnTypeStr, location);
 
 		return new FunctionPtrType(paramTypes, returnType);
 	}
@@ -3337,7 +3343,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				// Substitute type parameters
 				var typeName = GetTypeString(field.Type);
 				if (paramMap.TryGetValue(typeName, out var substituted)) {
-					fieldType = ConvertType(substituted);
+					// Use the field's type location for substituted types
+					fieldType = ConvertType(substituted, field.Type.Location);
 				} else {
 					fieldType = ConvertTypeRef(field.Type);
 				}
@@ -3394,12 +3401,12 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			var methodParams = new List<ParamDecl>();
 			if (!method.IsStatic) {
 				// 'self' parameter uses the monomorphized type name
-				methodParams.Add(new ParamDecl("self", new SimpleTypeRef(monoName)));
+				methodParams.Add(new ParamDecl("self", new SimpleTypeRef(monoName) { Location = method.Block }) { Location = method.Block });
 			}
 			foreach (var param in method.Params) {
 				// Create a new param with substituted type
 				var substType = SubstituteTypeRefInTypeRef(param.Type, fullParamMap);
-				methodParams.Add(new ParamDecl(param.Name, substType));
+				methodParams.Add(new ParamDecl(param.Name, substType) { Location = method.Block });
 			}
 			_functionParams[methodName] = methodParams;
 
@@ -3532,7 +3539,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private MlirType SubstituteTypeRef(TypeRef typeRef, Dictionary<string, string> paramMap) {
 		var typeName = GetTypeString(typeRef);
 		if (paramMap.TryGetValue(typeName, out var substituted)) {
-			return ConvertType(substituted);
+			return ConvertType(substituted, typeRef.Location);
 		}
 		return ConvertTypeRef(typeRef);
 	}
@@ -3543,16 +3550,16 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private static TypeRef SubstituteTypeRefInTypeRef(TypeRef typeRef, Dictionary<string, string> paramMap) {
 		return typeRef switch {
 			SimpleTypeRef simple when paramMap.TryGetValue(simple.Name, out var substituted)
-				=> new SimpleTypeRef(substituted),
+				=> new SimpleTypeRef(substituted) { Location = simple.Location },
 			SimpleTypeRef simple => simple,
 			GenericTypeRef generic => new GenericTypeRef(
 				generic.BaseName,
 				[.. generic.TypeArgs.Select(arg => paramMap.TryGetValue(arg, out var sub) ? sub : arg)]
-			),
+			) { Location = generic.Location },
 			FunctionTypeRef func => new FunctionTypeRef(
 				[.. func.ParamTypes.Select(p => SubstituteTypeRefInTypeRef(p, paramMap))],
 				func.ReturnType != null ? SubstituteTypeRefInTypeRef(func.ReturnType, paramMap) : null
-			),
+			) { Location = func.Location },
 			_ => typeRef
 		};
 	}

@@ -19,7 +19,7 @@ public record SourceLocation(int FileIndex, int StartLine, int StartColumn, int 
 // ============================================================================
 
 public abstract record TypeRef {
-	public SourceLocation? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 public record SimpleTypeRef(string Name) : TypeRef;
@@ -125,7 +125,7 @@ public record InitFromArrayExpr(string TypeName, List<string> TypeArgs, Expr Ele
 // ============================================================================
 
 public abstract record Stmt {
-	public SourceLocation? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 public record ReturnStmt(Expr? Value) : Stmt;
@@ -154,11 +154,11 @@ public record MatchStmt(Expr Scrutinee, List<MatchCase> Cases, List<Stmt>? Defau
 // ============================================================================
 
 public record ParamDecl(string Name, TypeRef Type, Expr? DefaultValue = null) {
-	public SourceLocation? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 public record FieldDecl(string Name, TypeRef? Type, bool IsMutable, bool IsExport = false, bool IsStatic = false, Expr? DefaultValue = null) {
-	public SourceLocation? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 public record MethodDecl(
@@ -194,11 +194,11 @@ public record TypeDecl(
 	List<MethodDecl> Methods,
 	SourceLocation Block
 ) {
-	public SourceLocation? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 public record EnumMember(string Name, Expr? Value, List<ParamDecl> AssociatedValues) {
-	public SourceLocation? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 public record EnumDecl(
@@ -242,15 +242,15 @@ public record ExtensionDecl(
 );
 
 public record TypeAliasDecl(string Name, string BaseType, List<string> TypeArgs, bool IsExport = false) {
-	public SourceLocation? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 public record GlobalConstant(string Name, bool IsExport, Expr Value) {
-	public SourceLocation? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 public record GlobalVariable(string Name, bool IsExport, Expr Value) {
-	public SourceLocation? Location { get; init; }
+	public required SourceLocation Location { get; init; }
 }
 
 // ============================================================================

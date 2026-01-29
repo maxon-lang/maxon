@@ -204,12 +204,12 @@ func.func @main() -> i64 {
     x86.mov r10, rdx
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz free_do_15
-    x86.jmp free_done_15
-    free_do_15:
+    x86.jz free_do_14
+    x86.jmp free_done_14
+    free_do_14:
     x86.mov rcx, qword ptr [r10]
     x86.call maxon_free
-    free_done_15:
+    free_done_14:
     x86.mov rax, 1
     x86.epilogue saved_gprs=[RBX,R12,R13,R14]
     x86.ret
@@ -228,12 +228,12 @@ func.func @main() -> i64 {
     x86.mov r10, rdx
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz free_do_16
-    x86.jmp free_done_16
-    free_do_16:
+    x86.jz free_do_15
+    x86.jmp free_done_15
+    free_do_15:
     x86.mov rcx, qword ptr [r10]
     x86.call maxon_free
-    free_done_16:
+    free_done_15:
     x86.mov rax, 2
     x86.epilogue saved_gprs=[RBX,R12,R13,R14]
     x86.ret
@@ -252,12 +252,12 @@ func.func @main() -> i64 {
     x86.mov r10, rdx
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz free_do_17
-    x86.jmp free_done_17
-    free_do_17:
+    x86.jz free_do_16
+    x86.jmp free_done_16
+    free_do_16:
     x86.mov rcx, qword ptr [r10]
     x86.call maxon_free
-    free_done_17:
+    free_done_16:
     x86.mov rax, 3
     x86.epilogue saved_gprs=[RBX,R12,R13,R14]
     x86.ret
@@ -266,12 +266,12 @@ func.func @main() -> i64 {
     x86.mov r10, rdx
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz free_do_18
-    x86.jmp free_done_18
-    free_do_18:
+    x86.jz free_do_17
+    x86.jmp free_done_17
+    free_do_17:
     x86.mov rcx, qword ptr [r10]
     x86.call maxon_free
-    free_done_18:
+    free_done_17:
     x86.mov rax, 0
     x86.epilogue saved_gprs=[RBX,R12,R13,R14]
     x86.ret
@@ -295,6 +295,48 @@ func.func @Array$byte.push(%self: memref<!maxon.struct<Array$byte>>, %value: ui8
     x86.call Array$byte.ensureCapacity
     x86.mov r10, r12
     x86.mov r11, r14
+    x86.mov eax, dword ptr [r10+24]
+    x86.test eax, 1
+    x86.jz cow_skip_13
+    x86.push rsi
+    x86.push rdi
+    x86.sub rsp, 48
+    x86.mov rax, qword ptr [r10+8]
+    x86.imul rax, r11
+    x86.mov qword ptr [rsp], r10
+    x86.mov rcx, qword ptr [r10]
+    x86.mov qword ptr [rsp+8], rcx
+    x86.mov qword ptr [rsp+16], rax
+    x86.mov qword ptr [rsp+24], r11
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov qword ptr [rsp+32], rax
+    x86.mov r11, qword ptr [rsp+24]
+    x86.mov rsi, qword ptr [rsp+8]
+    x86.mov r10, qword ptr [rsp]
+    x86.mov rdi, rax
+    x86.mov rcx, qword ptr [r10+8]
+    x86.imul rcx, r11
+    x86.cld
+    x86.rep_movsb
+    x86.mov rax, qword ptr [rsp+32]
+    x86.mov qword ptr [r10], rax
+    x86.xor ecx, ecx
+    x86.mov dword ptr [r10+24], ecx
+    x86.add rsp, 48
+    x86.pop rdi
+    x86.pop rsi
+    x86.jmp cow_done_13
+    cow_skip_13:
+    cow_done_13:
+    x86.mov rax, r10
+    x86.lea rcx, qword ptr [rax]
+    x86.mov rax, qword ptr [rcx]
+    x86.lea rcx, qword ptr [rax+r13]
+    x86.mov byte ptr [rcx], rbx
+    x86.mov rbx, 8
+    x86.mov r10, r12
+    x86.mov r11, rbx
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
     x86.jz cow_skip_14
@@ -329,48 +371,6 @@ func.func @Array$byte.push(%self: memref<!maxon.struct<Array$byte>>, %value: ui8
     x86.jmp cow_done_14
     cow_skip_14:
     cow_done_14:
-    x86.mov rax, r10
-    x86.lea rcx, qword ptr [rax]
-    x86.mov rax, qword ptr [rcx]
-    x86.lea rcx, qword ptr [rax+r13]
-    x86.mov byte ptr [rcx], rbx
-    x86.mov rbx, 8
-    x86.mov r10, r12
-    x86.mov r11, rbx
-    x86.mov eax, dword ptr [r10+24]
-    x86.test eax, 1
-    x86.jz cow_skip_15
-    x86.push rsi
-    x86.push rdi
-    x86.sub rsp, 48
-    x86.mov rax, qword ptr [r10+8]
-    x86.imul rax, r11
-    x86.mov qword ptr [rsp], r10
-    x86.mov rcx, qword ptr [r10]
-    x86.mov qword ptr [rsp+8], rcx
-    x86.mov qword ptr [rsp+16], rax
-    x86.mov qword ptr [rsp+24], r11
-    x86.mov rcx, rax
-    x86.call maxon_alloc
-    x86.mov qword ptr [rsp+32], rax
-    x86.mov r11, qword ptr [rsp+24]
-    x86.mov rsi, qword ptr [rsp+8]
-    x86.mov r10, qword ptr [rsp]
-    x86.mov rdi, rax
-    x86.mov rcx, qword ptr [r10+8]
-    x86.imul rcx, r11
-    x86.cld
-    x86.rep_movsb
-    x86.mov rax, qword ptr [rsp+32]
-    x86.mov qword ptr [r10], rax
-    x86.xor ecx, ecx
-    x86.mov dword ptr [r10+24], ecx
-    x86.add rsp, 48
-    x86.pop rdi
-    x86.pop rsi
-    x86.jmp cow_done_15
-    cow_skip_15:
-    cow_done_15:
     x86.mov rcx, r10
     x86.lea rax, qword ptr [rcx+rbx]
     x86.mov qword ptr [rax], r15
@@ -439,7 +439,7 @@ func.func @Array$byte.ensureCapacity(%self: memref<!maxon.struct<Array$byte>>, %
     x86.mov r11, rax
     x86.mov eax, dword ptr [r10+24]
     x86.test eax, 1
-    x86.jz cow_skip_16
+    x86.jz cow_skip_15
     x86.push rsi
     x86.push rdi
     x86.sub rsp, 48
@@ -476,9 +476,9 @@ func.func @Array$byte.ensureCapacity(%self: memref<!maxon.struct<Array$byte>>, %
     x86.add rsp, 48
     x86.pop rdi
     x86.pop rsi
-    x86.jmp cow_done_16
-    cow_skip_16:
-    cow_done_16:
+    x86.jmp cow_done_15
+    cow_skip_15:
+    cow_done_15:
     x86.mov rax, r10
     x86.mov rdx, 0
     x86.mov qword ptr [rbp-88], r15
