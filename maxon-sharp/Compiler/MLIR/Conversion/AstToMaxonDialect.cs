@@ -5,14 +5,91 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
 /// <summary>
+/// Tracks symbol visibility information for enforcing export/file-local scoping.
+/// </summary>
+internal sealed class SymbolTable {
+	private enum SymbolKind { Function, Type, Enum, Global, StaticMethod, StaticField, Field }
+
+	private sealed record SymbolInfo(SymbolKind Kind, int FileIndex, bool IsExport, string? OwningTypeName = null);
+
+	private readonly Dictionary<string, SymbolInfo> _symbols = [];
+
+	public void RegisterFunction(string name, int fileIndex, bool isExport) {
+		_symbols[name] = new SymbolInfo(SymbolKind.Function, fileIndex, isExport);
+	}
+
+	public void RegisterType(string name, int fileIndex, bool isExport) {
+		_symbols[name] = new SymbolInfo(SymbolKind.Type, fileIndex, isExport);
+	}
+
+	public void RegisterEnum(string name, int fileIndex, bool isExport) {
+		_symbols[name] = new SymbolInfo(SymbolKind.Enum, fileIndex, isExport);
+	}
+
+	public void RegisterGlobal(string name, int fileIndex, bool isExport) {
+		_symbols[name] = new SymbolInfo(SymbolKind.Global, fileIndex, isExport);
+	}
+
+	public void RegisterMethod(string fullMethodName, int fileIndex, bool isExport, string owningTypeName) {
+		_symbols[fullMethodName] = new SymbolInfo(SymbolKind.StaticMethod, fileIndex, isExport, owningTypeName);
+	}
+
+	public void RegisterStaticField(string fullFieldName, int fileIndex, bool isExport, string owningTypeName) {
+		_symbols[fullFieldName] = new SymbolInfo(SymbolKind.StaticField, fileIndex, isExport, owningTypeName);
+	}
+
+	public void RegisterField(string typeName, string fieldName, int fileIndex, bool isExport) {
+		var fullFieldName = $"{typeName}.{fieldName}";
+		_symbols[fullFieldName] = new SymbolInfo(SymbolKind.Field, fileIndex, isExport, typeName);
+	}
+
+	/// <summary>
+	/// Checks if a symbol can be accessed from the given file index.
+	/// Returns true if: symbol is exported OR accessing from same file.
+	/// </summary>
+	public bool CanAccess(string symbolName, int accessFileIndex) {
+		if (!_symbols.TryGetValue(symbolName, out var info)) {
+			return true; // Unknown symbol - let other error handling deal with it
+		}
+
+		return info.IsExport || info.FileIndex == accessFileIndex;
+	}
+
+	/// <summary>
+	/// Gets diagnostic info for error messages.
+	/// </summary>
+	public string GetSymbolDiagnosticInfo(string symbolName) {
+		if (!_symbols.TryGetValue(symbolName, out var info)) {
+			return "unknown symbol";
+		}
+
+		var kindStr = info.Kind switch {
+			SymbolKind.Function => "function",
+			SymbolKind.Type => "type",
+			SymbolKind.Enum => "enum",
+			SymbolKind.Global => "global",
+			SymbolKind.StaticMethod => "static method",
+			SymbolKind.StaticField => "static field",
+			SymbolKind.Field => "field",
+			_ => "symbol"
+		};
+
+		var exportStr = info.IsExport ? "exported" : "not exported";
+		return $"{kindStr} (defined in file {info.FileIndex}, {exportStr})";
+	}
+}
+
+/// <summary>
 /// Converts AST nodes to Maxon dialect operations.
 /// This is the entry point for the new IR pipeline.
 /// </summary>
 public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	private readonly MlirModule _module = new();
 	private readonly MutationAnalyzer _mutationAnalyzer = mutationAnalyzer;
+	private readonly SymbolTable _symbolTable = new();
 	private MlirBlock? _currentBlock;
 	private MlirFunction? _currentFunction;
+	private int _currentFileIndex; // Track the current file being processed for visibility checks
 	private readonly Dictionary<string, VariableBinding> _namedValues = [];
 	private readonly HashSet<string> _immutableVariables = [];
 	private readonly Dictionary<string, MlirType> _structTypes = [];
@@ -132,11 +209,15 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		return _module;
 	}
 
-	private void LowerGlobalVariable(GlobalVariable globalVar) =>
-		LowerGlobal(globalVar.Name, globalVar.Value, isConstant: false);
+	private void LowerGlobalVariable(GlobalVariable globalVar) {
+		var fileIndex = globalVar.Location?.FileIndex ?? 0;
+		LowerGlobal(globalVar.Name, globalVar.Value, isConstant: false, fileIndex, globalVar.IsExport);
+	}
 
-	private void LowerGlobalConstant(GlobalConstant globalConst) =>
-		LowerGlobal(globalConst.Name, globalConst.Value, isConstant: true);
+	private void LowerGlobalConstant(GlobalConstant globalConst) {
+		var fileIndex = globalConst.Location?.FileIndex ?? 0;
+		LowerGlobal(globalConst.Name, globalConst.Value, isConstant: true, fileIndex, globalConst.IsExport);
+	}
 
 	// ========================================================================
 	// Builtin Literal Types
@@ -157,7 +238,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 	}
 
-	private string GetBuiltinLiteralTypeName(string interfaceName, SourceLocation? location) {
+	private string GetBuiltinLiteralTypeName(string interfaceName, SourceSpan? location) {
 		if (_builtinLiteralTypes.TryGetValue(interfaceName, out var typeName)) {
 			return typeName;
 		}
@@ -169,11 +250,12 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		throw new CompileError(
 			ErrorCode.MlirUndefinedType,
 			$"No type implements {interfaceName}. Ensure stdlib is loaded and a type conforms to this interface.",
-			location?.Line ?? 0,
-			location?.Column ?? 0);
+			location?.StartLine ?? 0,
+			location?.StartColumn ?? 0);
 	}
 
-	private void LowerGlobal(string name, Expr value, bool isConstant) {
+	private void LowerGlobal(string name, Expr value, bool isConstant, int fileIndex, bool isExport) {
+		_symbolTable.RegisterGlobal(name, fileIndex, isExport);
 		var (type, attr) = EvaluateConstantExpr(value);
 		var global = new MlirGlobal($"global.{name}", type) {
 			IsConstant = isConstant,
@@ -208,6 +290,10 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	private void LowerTypeDecl(TypeDecl type) {
+		// Register type in symbol table for visibility tracking
+		var fileIndex = type.Location?.FileIndex ?? type.Block.FileIndex;
+		_symbolTable.RegisterType(type.Name, fileIndex, type.IsExport);
+
 		// If this is a generic type (has type parameters), store it for later monomorphization
 		if (type.GenericParams.Count > 0) {
 			Logger.Debug(LogCategory.Mlir, $"  Storing generic type: {type.Name} with params: {string.Join(", ", type.GenericParams)}");
@@ -229,8 +315,13 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 			if (field.IsStatic) {
 				// Static fields are registered as globals with name "TypeName.fieldName"
+				var fieldFileIndex = field.Location?.FileIndex ?? type.Location?.FileIndex ?? type.Block.FileIndex;
+				_symbolTable.RegisterStaticField($"{type.Name}.{field.Name}", fieldFileIndex, field.IsExport, type.Name);
 				LowerStaticField(type.Name, field.Name, fieldType, field.DefaultValue, isConstant: !field.IsMutable);
 			} else {
+				// Register instance field for visibility tracking
+				var fieldFileIndex = field.Location?.FileIndex ?? type.Location?.FileIndex ?? type.Block.FileIndex;
+				_symbolTable.RegisterField(type.Name, field.Name, fieldFileIndex, field.IsExport);
 				instanceFields.Add((field.Name, fieldType, field.IsMutable, field.DefaultValue));
 			}
 		}
@@ -263,6 +354,10 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	private void LowerEnumDecl(EnumDecl enumDecl) {
+		// Register enum in symbol table for visibility tracking
+		var fileIndex = enumDecl.Block.FileIndex;
+		_symbolTable.RegisterEnum(enumDecl.Name, fileIndex, enumDecl.IsExport);
+
 		var variants = new List<MaxonVariantInfo>();
 		var tag = 0;
 
@@ -296,6 +391,11 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	private void LowerFunction(FunctionDecl func) {
+		// Register function in symbol table for visibility tracking
+		var fileIndex = func.Block.FileIndex;
+		_symbolTable.RegisterFunction(func.Name, fileIndex, func.IsExport);
+		_currentFileIndex = fileIndex; // Track for visibility checks in function body
+
 		var parameters = new List<FunctionParameter>();
 		foreach (var p in func.Params) {
 			var mlirType = ConvertTypeRef(p.Type);
@@ -309,6 +409,11 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 	}
 
 	private void LowerMethod(string typeName, MethodDecl method) {
+		// Register method in symbol table for visibility tracking
+		var fileIndex = method.Block.FileIndex;
+		_symbolTable.RegisterMethod($"{typeName}.{method.Name}", fileIndex, method.IsExport, typeName);
+		_currentFileIndex = fileIndex; // Track for visibility checks in method body
+
 		var parameters = new List<FunctionParameter>();
 		if (!method.IsStatic) {
 			// Get the struct type for self - this is type-safe now
@@ -406,7 +511,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 	private MlirType ConvertTypeRef(TypeRef typeRef) {
 		return typeRef switch {
-			SimpleTypeRef simple => ConvertType(simple.Name),
+			SimpleTypeRef simple => ConvertType(simple.Name, simple.Location),
 			GenericTypeRef generic => GetOrCreateMonomorphizedType(generic.BaseName, generic.TypeArgs),
 			FunctionTypeRef func => ConvertFunctionTypeRef(func),
 			_ => throw new NotSupportedException($"Unsupported type ref: {typeRef}")
@@ -417,6 +522,23 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		var paramTypes = funcType.ParamTypes.Select(ConvertTypeRef).ToList();
 		var returnType = funcType.ReturnType != null ? ConvertTypeRef(funcType.ReturnType) : NoneType.Instance;
 		return new FunctionPtrType(paramTypes, returnType);
+	}
+
+	/// <summary>
+	/// Checks if a symbol can be accessed from the current file context.
+	/// Throws CompileError if the symbol is not exported and not from the same file.
+	/// </summary>
+	private void CheckSymbolVisibility(string symbolName, SourceSpan? location) {
+		var accessFileIndex = location?.FileIndex ?? _currentFileIndex;
+
+		if (!_symbolTable.CanAccess(symbolName, accessFileIndex)) {
+			var diagnosticInfo = _symbolTable.GetSymbolDiagnosticInfo(symbolName);
+			throw new CompileError(
+				ErrorCode.SemanticSymbolNotExported,
+				$"Cannot access unexported symbol '{symbolName}' from another file ({diagnosticInfo})",
+				location?.StartLine ?? 0,
+				location?.StartColumn ?? 0);
+		}
 	}
 
 	private void LowerStatement(Stmt stmt) {
@@ -1138,6 +1260,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		}
 
 		// Regular function call
+		// Check visibility before resolving the call
+		CheckSymbolVisibility(call.FuncName, call.Location);
+
 		// Resolve arguments: combine positional args with named args in the correct order
 		var resolvedArgs = ResolveCallArguments(call);
 
@@ -1196,6 +1321,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Build the fully qualified method name
 		var methodName = $"{structType.Name}.{methodCall.MethodName}";
 		Logger.Trace(LogCategory.Mlir, $"LowerMethodCallExpr: qualified method name = {methodName}");
+
+		// Check method visibility
+		CheckSymbolVisibility(methodName, methodCall.Location);
 
 		// Get parameter info for this method
 		_functionParams.TryGetValue(methodName, out List<ParamDecl>? paramDecls);
@@ -1580,11 +1708,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 								Logger.Debug(LogCategory.Mlir, $"  Field {fieldAccess.FieldName}: {fieldInfo?.Type}");
 								if (fieldInfo != null && fieldInfo.Type is MaxonStructType fieldStructType
 									&& fieldStructType.Name == "__ManagedMemory") {
-									Logger.Debug(LogCategory.Mlir, $"  SUCCESS - loading struct and emitting FieldPtr at offset {fieldInfo.Offset}");
-									// Load the struct value (pointer to struct) from the variable
-									var structValue = EmitLoad(baseAddr);
-									// Emit field_ptr to get the address of the managed memory field
-									return EmitFieldPtr(structValue, fieldAccess.FieldName, fieldInfo.Offset, fieldInfo.Type);
+									Logger.Debug(LogCategory.Mlir, $"  SUCCESS - emitting FieldPtr at offset {fieldInfo.Offset}");
+									// Use the struct's address directly to avoid loading large structs
+									return EmitFieldPtr(baseAddr, fieldAccess.FieldName, fieldInfo.Offset, fieldInfo.Type);
 								}
 							}
 						}
@@ -1599,9 +1725,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 				if (_namedValues.TryGetValue(standaloneIdent.Name, out var standaloneBinding) && standaloneBinding is VariableBinding.StackSlot standaloneSlot && standaloneSlot.Address.Type is MemRefType memRef) {
 					if (memRef.ElementType is MaxonStructType structType && structType.Name == "__ManagedMemory") {
 						Logger.Debug(LogCategory.Mlir, $"GetManagedMemoryPointer: Case 3 - loading standalone {standaloneIdent.Name}");
-						// Load the pointer to ManagedMemory from the variable
-						// The variable stores a pointer to the ManagedMemory struct (from __managed_memory_create)
-						return EmitLoad(standaloneSlot.Address);
+						// Use the stack slot address directly for by-ref managed memory operations
+						return standaloneSlot.Address;
 					}
 				}
 			}
@@ -1619,10 +1744,16 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			"__managed_memory_len" => LowerManagedMemoryLenByRef(call, GetManagedMemoryPointer),
 			"__managed_memory_capacity" => LowerManagedMemoryCapacityByRef(call, GetManagedMemoryPointer),
 			"__managed_memory_get_unchecked" => LowerManagedMemoryGetUncheckedByRef(call, GetElementType(), GetManagedMemoryPointer),
+			"__managed_memory_byte_at" => LowerManagedMemoryByteAtByRef(call, GetManagedMemoryPointer),
 			"__managed_memory_set_at" => LowerManagedMemorySetAtByRef(call, GetManagedMemoryPointer),
 			"__managed_memory_grow" => LowerManagedMemoryGrowByRef(call, GetElementType(), GetManagedMemoryPointer),
 			"__managed_memory_set_length" => LowerManagedMemorySetLengthByRef(call, GetManagedMemoryPointer),
 			"__managed_memory_shift_left" => LowerManagedMemoryShiftLeftByRef(call, GetElementType(), GetManagedMemoryPointer),
+			"__managed_memory_concat" => LowerManagedMemoryConcatByRef(call, managedMemoryType, GetManagedMemoryPointer),
+			"__managed_memory_slice" => LowerManagedMemorySliceByRef(call, managedMemoryType, GetManagedMemoryPointer),
+			"__managed_memory_to_cstring" => LowerManagedMemoryToCStringByRef(call, GetManagedMemoryPointer),
+			"__make_char_from_bytes" => LowerMakeCharFromBytesByRef(call, managedMemoryType, GetManagedMemoryPointer),
+			"__cstring_to_managed" => LowerCStringToManaged(call, managedMemoryType),
 			"__element_size" => LowerElementSize(GetElementType()),
 			_ => null
 		};
@@ -1819,6 +1950,171 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		return VoidIntrinsicHandled;
 	}
 
+	private MlirValue LowerManagedMemoryByteAtByRef(CallExpr call, Func<Expr, MlirValue> getManagedPointer) {
+		if (call.Args.Count != 2)
+			throw new ArgumentException("__managed_memory_byte_at requires 2 arguments (managed, index)");
+		var memPtr = getManagedPointer(call.Args[0]);
+		var index = LowerExpression(call.Args[1]);
+		var op = new ManagedMemoryGetUncheckedOp(memPtr, index, IntegerType.I8);
+		InsertOp(op);
+		var zext = new ExtUIOp(op.Result, IntegerType.I64);
+		InsertOp(zext);
+		return zext.Result;
+	}
+
+	private MlirValue LowerManagedMemoryConcatByRef(CallExpr call, MaxonStructType managedMemoryType, Func<Expr, MlirValue> getManagedPointer) {
+		if (call.Args.Count != 2)
+			throw new ArgumentException("__managed_memory_concat requires 2 arguments (left, right)");
+		var leftPtr = getManagedPointer(call.Args[0]);
+		var rightPtr = getManagedPointer(call.Args[1]);
+
+		var leftLenOp = new ManagedMemoryLenOp(leftPtr);
+		InsertOp(leftLenOp);
+		var rightLenOp = new ManagedMemoryLenOp(rightPtr);
+		InsertOp(rightLenOp);
+
+		var totalLen = new AddIOp(leftLenOp.Result, rightLenOp.Result);
+		InsertOp(totalLen);
+
+		var elemSizeConst = EmitConstantInt(1);
+		var createOp = new ManagedMemoryCreateOp(totalLen.Result, elemSizeConst, managedMemoryType);
+		InsertOp(createOp);
+
+		var managedSlot = EmitAlloca(managedMemoryType);
+		StoreManagedMemoryValue(createOp.Result, managedSlot, managedMemoryType);
+
+		var destBuffer = LoadManagedBufferPointer(managedSlot);
+		var leftBuffer = LoadManagedBufferPointer(leftPtr);
+		var rightBuffer = LoadManagedBufferPointer(rightPtr);
+
+		var copyLeft = new MemCpyOp(destBuffer, leftBuffer, leftLenOp.Result);
+		InsertOp(copyLeft);
+
+		var destOffset = new PtrAddOp(destBuffer, leftLenOp.Result, new PtrType(IntegerType.I8));
+		InsertOp(destOffset);
+		var copyRight = new MemCpyOp(destOffset.Result, rightBuffer, rightLenOp.Result);
+		InsertOp(copyRight);
+
+		var setLen = new ManagedMemorySetLengthByRefOp(managedSlot, totalLen.Result);
+		InsertOp(setLen);
+
+		return createOp.Result;
+	}
+
+	private MlirValue LowerManagedMemorySliceByRef(CallExpr call, MaxonStructType managedMemoryType, Func<Expr, MlirValue> getManagedPointer) {
+		if (call.Args.Count != 3)
+			throw new ArgumentException("__managed_memory_slice requires 3 arguments (managed, start, end)");
+		var memPtr = getManagedPointer(call.Args[0]);
+		var start = LowerExpression(call.Args[1]);
+		var end = LowerExpression(call.Args[2]);
+
+		var length = new SubIOp(end, start);
+		InsertOp(length);
+
+		var elemSizeConst = EmitConstantInt(1);
+		var createOp = new ManagedMemoryCreateOp(length.Result, elemSizeConst, managedMemoryType);
+		InsertOp(createOp);
+
+		var managedSlot = EmitAlloca(managedMemoryType);
+		StoreManagedMemoryValue(createOp.Result, managedSlot, managedMemoryType);
+
+		var destBuffer = LoadManagedBufferPointer(managedSlot);
+		var srcBuffer = LoadManagedBufferPointer(memPtr);
+		var srcOffset = new PtrAddOp(srcBuffer, start, new PtrType(IntegerType.I8));
+		InsertOp(srcOffset);
+		var copy = new MemCpyOp(destBuffer, srcOffset.Result, length.Result);
+		InsertOp(copy);
+
+		var setLen = new ManagedMemorySetLengthByRefOp(managedSlot, length.Result);
+		InsertOp(setLen);
+
+		return createOp.Result;
+	}
+
+	private MlirValue LowerManagedMemoryToCStringByRef(CallExpr call, Func<Expr, MlirValue> getManagedPointer) {
+		if (call.Args.Count != 1)
+			throw new ArgumentException("__managed_memory_to_cstring requires 1 argument (managed)");
+		var memPtr = getManagedPointer(call.Args[0]);
+		return LoadManagedBufferPointer(memPtr);
+	}
+
+	private MlirValue LowerMakeCharFromBytesByRef(CallExpr call, MaxonStructType managedMemoryType, Func<Expr, MlirValue> getManagedPointer) {
+		if (call.Args.Count != 3)
+			throw new ArgumentException("__make_char_from_bytes requires 3 arguments (managed, pos, len)");
+		var memPtr = getManagedPointer(call.Args[0]);
+		var pos = LowerExpression(call.Args[1]);
+		var len = LowerExpression(call.Args[2]);
+		var end = new AddIOp(pos, len);
+		InsertOp(end);
+
+		var sliceManaged = LowerManagedMemorySliceFromPtr(memPtr, pos, end.Result, managedMemoryType);
+		var charTypeName = GetBuiltinLiteralTypeName("BuiltinCharLiteral", call.Location);
+		var initMethodName = $"{charTypeName}.BuiltinCharLiteral.init";
+		if (!_functionReturnTypes.TryGetValue(initMethodName, out var returnType)) {
+			throw new CompileError(
+				ErrorCode.MlirUndefinedFunction,
+				$"Missing builtin char literal initializer: {initMethodName}",
+				call.Location?.Line ?? 0,
+				call.Location?.Column ?? 0);
+		}
+
+		var managedSlot = EmitAlloca(managedMemoryType);
+		StoreManagedMemoryValue(sliceManaged, managedSlot, managedMemoryType);
+
+		var args = new List<MlirValue> { managedSlot };
+		var ownership = new List<ArgumentOwnership> { ArgumentOwnership.Borrow };
+		return EmitMaxonCall(initMethodName, args, ownership, returnType)
+			?? throw new InvalidOperationException("Char init did not produce a value");
+	}
+
+	private MlirValue LowerCStringToManaged(CallExpr call, MaxonStructType managedMemoryType) {
+		if (call.Args.Count != 1)
+			throw new ArgumentException("__cstring_to_managed requires 1 argument (cstring)");
+		var zero = EmitConstantInt(0);
+		var elemSizeConst = EmitConstantInt(1);
+		var createOp = new ManagedMemoryCreateOp(zero, elemSizeConst, managedMemoryType);
+		InsertOp(createOp);
+		return createOp.Result;
+	}
+
+	private MlirValue LoadManagedBufferPointer(MlirValue managedPtr) {
+		var bufferPtr = new FieldPtrOp(managedPtr, "_buffer", 0, new PtrType(IntegerType.I8));
+		InsertOp(bufferPtr);
+		var load = new LoadOp(bufferPtr.Result);
+		InsertOp(load);
+		return load.Result;
+	}
+
+	private void StoreManagedMemoryValue(MlirValue source, MlirValue destinationPtr, MaxonStructType managedMemoryType) {
+		var sizeConst = EmitConstantInt(managedMemoryType.SizeInBytes);
+		var memcpy = new MemCpyOp(destinationPtr, source, sizeConst);
+		InsertOp(memcpy);
+	}
+
+	private MlirValue LowerManagedMemorySliceFromPtr(MlirValue memPtr, MlirValue start, MlirValue end, MaxonStructType managedMemoryType) {
+		var length = new SubIOp(end, start);
+		InsertOp(length);
+
+		var elemSizeConst = EmitConstantInt(1);
+		var createOp = new ManagedMemoryCreateOp(length.Result, elemSizeConst, managedMemoryType);
+		InsertOp(createOp);
+
+		var managedSlot = EmitAlloca(managedMemoryType);
+		StoreManagedMemoryValue(createOp.Result, managedSlot, managedMemoryType);
+
+		var destBuffer = LoadManagedBufferPointer(managedSlot);
+		var srcBuffer = LoadManagedBufferPointer(memPtr);
+		var srcOffset = new PtrAddOp(srcBuffer, start, new PtrType(IntegerType.I8));
+		InsertOp(srcOffset);
+		var copy = new MemCpyOp(destBuffer, srcOffset.Result, length.Result);
+		InsertOp(copy);
+
+		var setLen = new ManagedMemorySetLengthByRefOp(managedSlot, length.Result);
+		InsertOp(setLen);
+
+		return createOp.Result;
+	}
+
 	/// <summary>
 	/// Emits a unary operation of type T. The operation must have a constructor (MlirValue).
 	/// </summary>
@@ -1925,7 +2221,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			interpolated.Location?.Column ?? 0);
 	}
 
-	private MlirValue BuildStringFromRdata(byte[] data, int length, SourceLocation? location) {
+	private MlirValue BuildStringFromRdata(byte[] data, int length, SourceSpan? location) {
 		// Get the __ManagedMemory type
 		if (!_structTypes.TryGetValue("__ManagedMemory", out var managedMemType) ||
 			managedMemType is not MaxonStructType managedMemoryType) {
@@ -1954,8 +2250,9 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 
 		// Pass __ManagedMemory by reference (struct params are by-ref)
 		var managedMemSlot = EmitAlloca(managedMemoryType);
-		var storeManaged = new StoreOp(createFromRdataOp.Result, managedMemSlot);
-		InsertOp(storeManaged);
+		StoreManagedMemoryValue(createFromRdataOp.Result, managedMemSlot, managedMemoryType);
+		var setLen = new ManagedMemorySetLengthByRefOp(managedMemSlot, countConst);
+		InsertOp(setLen);
 
 		var args = new List<MlirValue> { managedMemSlot };
 		var ownership = new List<ArgumentOwnership> { ArgumentOwnership.Borrow };
@@ -1963,7 +2260,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			?? throw new InvalidOperationException("String literal init did not produce a value");
 	}
 
-	private static string DecodeStringLiteral(string raw, SourceLocation? location) {
+	private static string DecodeStringLiteral(string raw, SourceSpan? location) {
 		var builder = new StringBuilder(raw.Length);
 		for (int i = 0; i < raw.Length; i++) {
 			var c = raw[i];
@@ -2327,6 +2624,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		var typeName = TryGetStaticFieldTypeName(fieldAccess.Base);
 		if (typeName != null) {
 			var staticFieldName = $"{typeName}.{fieldAccess.FieldName}";
+			// Check visibility for static field access
+			CheckSymbolVisibility(staticFieldName, fieldAccess.Location);
 			if (_globals.TryGetValue(staticFieldName, out var global)) {
 				return EmitLoad(EmitGetGlobal(global));
 			}
@@ -2339,6 +2638,14 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			fieldAccess.Base, fieldAccess.FieldName,
 			fieldAccess.Location?.Line, fieldAccess.Location?.Column);
 
+		// Check visibility for instance field access
+		// Get the struct type name from the base value
+		if (baseValue.Type is PtrType ptr && ptr.ElementType is MaxonStructType structType) {
+			CheckSymbolVisibility($"{structType.Name}.{fieldAccess.FieldName}", fieldAccess.Location);
+		} else if (baseValue.Type is MaxonStructType directStructType) {
+			CheckSymbolVisibility($"{directStructType.Name}.{fieldAccess.FieldName}", fieldAccess.Location);
+		}
+
 		return EmitGetField(baseValue, fieldAccess.FieldName, fieldInfo.Type);
 	}
 
@@ -2346,6 +2653,8 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		var typeName = TryGetStaticFieldTypeName(fieldAssign.Base);
 		if (typeName != null) {
 			var staticFieldName = $"{typeName}.{fieldAssign.FieldName}";
+			// Check visibility for static field assignment
+			CheckSymbolVisibility(staticFieldName, fieldAssign.Location);
 			if (_globals.TryGetValue(staticFieldName, out var global)) {
 				if (global.IsConstant) {
 					throw new CompileError(ErrorCode.ImmutableVariable,
@@ -2380,28 +2689,34 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			fieldAssign.Base, fieldAssign.FieldName,
 			fieldAssign.Location?.Line, fieldAssign.Location?.Column);
 
+		// Check visibility for instance field assignment
+		// Get the struct type name from the base value
+		if (baseValue.Type is PtrType ptr && ptr.ElementType is MaxonStructType structType) {
+			CheckSymbolVisibility($"{structType.Name}.{fieldAssign.FieldName}", fieldAssign.Location);
+		} else if (baseValue.Type is MaxonStructType directStructType) {
+			CheckSymbolVisibility($"{directStructType.Name}.{fieldAssign.FieldName}", fieldAssign.Location);
+		}
+
+		// Check if the field is mutable
 		if (!fieldInfo.IsMutable) {
-			var structType = baseValue.Type switch {
+			var structType2 = baseValue.Type switch {
+				PtrType ptrType when ptrType.ElementType is MaxonStructType st => st,
 				MaxonStructType st => st,
 				MemRefType mrt when mrt.ElementType is MaxonStructType st => st,
 				_ => throw new InvalidOperationException($"Unexpected type: {baseValue.Type}")
 			};
 			throw new CompileError(ErrorCode.ImmutableVariable,
-				$"cannot assign to field '{structType.Name}.{fieldAssign.FieldName}' because it is immutable (declare with 'var' to make it mutable)",
+				$"cannot assign to field '{structType2.Name}.{fieldAssign.FieldName}' because it is immutable (declare with 'var' to make it mutable)",
 				fieldAssign.Location?.Line, fieldAssign.Location?.Column);
 		}
 
 		EmitSetField(baseValue, fieldAssign.FieldName, LowerExpression(fieldAssign.Value));
 	}
 
-	// ========================================================================
-	// Type Conversion
-	// ========================================================================
-
 	/// <summary>
 	/// Converts an AST type to an MLIR type.
 	/// </summary>
-	public MlirType ConvertType(string typeName) {
+	public MlirType ConvertType(string typeName, SourceSpan? location = null) {
 		// Check for type alias first (e.g., typealias IntArray is Array with int)
 		if (_typeAliases.TryGetValue(typeName, out var alias)) {
 			if (alias.typeArgs.Count > 0) {
@@ -2413,6 +2728,11 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 		// Handle function pointer type strings: fn(params)->returnType
 		if (typeName.StartsWith("fn(")) {
 			return ParseFunctionPtrTypeString(typeName);
+		}
+
+		// Check visibility for user-defined types (structs and enums)
+		if (_structTypes.ContainsKey(typeName) || _enumTypes.ContainsKey(typeName)) {
+			CheckSymbolVisibility(typeName, location);
 		}
 
 		return typeName switch {
@@ -2428,6 +2748,7 @@ public sealed class AstToMaxonConverter(MutationAnalyzer mutationAnalyzer) {
 			"bool" or "Bool" => IntegerType.I1,
 			"float" or "Float" or "f64" => FloatType.F64,
 			"float32" or "Float32" or "f32" => FloatType.F32,
+			"cstring" => new PtrType(IntegerType.I8),
 			"void" or "Void" => NoneType.Instance,
 			_ when _structTypes.TryGetValue(typeName, out var st) => st,
 			_ when _enumTypes.TryGetValue(typeName, out var et) => et,

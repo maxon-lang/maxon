@@ -1,17 +1,25 @@
 namespace MaxonSharp.Compiler;
 
 // ============================================================================
-// Source Location
+// Source Span
 // ============================================================================
 
-public record SourceLocation(int Line, int Column);
+public record SourceSpan(int FileIndex, int StartLine, int StartColumn, int EndLine, int EndColumn, string? Identifier = null) {
+	public int Line => StartLine;
+	public int Column => StartColumn;
+	public static SourceSpan Point(int fileIndex, int line, int column) =>
+		new(fileIndex, line, column, line, column, null);
+
+	public static SourceSpan Block(int fileIndex, int startLine, int startColumn, int endLine, string? identifier) =>
+		new(fileIndex, startLine, startColumn, endLine, 0, identifier);
+}
 
 // ============================================================================
 // Type References
 // ============================================================================
 
 public abstract record TypeRef {
-	public SourceLocation? Location { get; init; }
+	public SourceSpan? Location { get; init; }
 }
 
 public record SimpleTypeRef(string Name) : TypeRef;
@@ -24,7 +32,7 @@ public record ErrorUnionTypeRef(TypeRef SuccessType, string ErrorType) : TypeRef
 // ============================================================================
 
 public abstract record Expr {
-	public SourceLocation? Location { get; init; }
+	public SourceSpan? Location { get; init; }
 }
 
 // Literals
@@ -117,7 +125,7 @@ public record InitFromArrayExpr(string TypeName, List<string> TypeArgs, Expr Ele
 // ============================================================================
 
 public abstract record Stmt {
-	public SourceLocation? Location { get; init; }
+	public SourceSpan? Location { get; init; }
 }
 
 public record ReturnStmt(Expr? Value) : Stmt;
@@ -132,25 +140,26 @@ public record BreakStmt(string? Label) : Stmt;
 public record ContinueStmt(string? Label) : Stmt;
 
 // Control flow with child blocks
-public record BlockInfo(int StartLine, int StartColumn, int EndLine, string? Identifier);
 
-public record IfStmt(Expr Condition, List<Stmt> ThenBody, BlockInfo ThenBlock, List<Stmt>? ElseBody, BlockInfo? ElseBlock) : Stmt;
-public record WhileStmt(Expr Condition, List<Stmt> Body, BlockInfo Block) : Stmt;
-public record ForStmt(string VarName, Expr Iterable, List<Stmt> Body, BlockInfo Block) : Stmt;
+public record IfStmt(Expr Condition, List<Stmt> ThenBody, SourceSpan ThenBlock, List<Stmt>? ElseBody, SourceSpan? ElseBlock) : Stmt;
+public record WhileStmt(Expr Condition, List<Stmt> Body, SourceSpan Block) : Stmt;
+public record ForStmt(string VarName, Expr Iterable, List<Stmt> Body, SourceSpan Block) : Stmt;
 
 // Match statement
 public record MatchCase(List<Expr> Patterns, List<PatternBinding?> PatternBindings, List<Stmt> Body, bool HasFallthrough);
-public record MatchStmt(Expr Scrutinee, List<MatchCase> Cases, List<Stmt>? DefaultBody, BlockInfo Block) : Stmt;
+public record MatchStmt(Expr Scrutinee, List<MatchCase> Cases, List<Stmt>? DefaultBody, SourceSpan Block) : Stmt;
 
 // ============================================================================
 // Declarations
 // ============================================================================
 
 public record ParamDecl(string Name, TypeRef Type, Expr? DefaultValue = null) {
-	public SourceLocation? Location { get; init; }
+	public SourceSpan? Location { get; init; }
 }
 
-public record FieldDecl(string Name, TypeRef? Type, bool IsMutable, bool IsExport = false, bool IsStatic = false, Expr? DefaultValue = null);
+public record FieldDecl(string Name, TypeRef? Type, bool IsMutable, bool IsExport = false, bool IsStatic = false, Expr? DefaultValue = null) {
+	public SourceSpan? Location { get; init; }
+}
 
 public record MethodDecl(
 	string Name,
@@ -160,7 +169,7 @@ public record MethodDecl(
 	TypeRef? ReturnType,
 	string? ThrowsType,
 	List<Stmt> Body,
-	BlockInfo Block,
+	SourceSpan Block,
 	string? DocComment = null
 );
 
@@ -171,7 +180,7 @@ public record FunctionDecl(
 	TypeRef? ReturnType,
 	string? ThrowsType,
 	List<Stmt> Body,
-	BlockInfo Block,
+	SourceSpan Block,
 	string? DocComment = null
 );
 
@@ -183,11 +192,13 @@ public record TypeDecl(
 	List<TypeAliasDecl> AssociatedTypes,
 	List<FieldDecl> Fields,
 	List<MethodDecl> Methods,
-	BlockInfo Block
-);
+	SourceSpan Block
+) {
+	public SourceSpan? Location { get; init; }
+}
 
 public record EnumMember(string Name, Expr? Value, List<ParamDecl> AssociatedValues) {
-	public SourceLocation? Location { get; init; }
+	public SourceSpan? Location { get; init; }
 }
 
 public record EnumDecl(
@@ -196,7 +207,7 @@ public record EnumDecl(
 	List<InterfaceConformance> Conformances,
 	List<EnumMember> Members,
 	List<MethodDecl> Methods,
-	BlockInfo Block
+	SourceSpan Block
 );
 
 public record InterfaceConformance(string InterfaceName, List<string> TypeArgs);
@@ -210,7 +221,7 @@ public record InterfaceDecl(
 	List<string> Extends,
 	List<TypeAliasDecl> AssociatedTypes,
 	List<InterfaceMethod> Methods,
-	BlockInfo Block
+	SourceSpan Block
 );
 
 public record ExtensionMethod(
@@ -219,7 +230,7 @@ public record ExtensionMethod(
 	TypeRef? ReturnType,
 	string? ThrowsType,
 	List<Stmt> Body,
-	BlockInfo Block
+	SourceSpan Block
 );
 
 public record ExtensionDecl(
@@ -227,19 +238,19 @@ public record ExtensionDecl(
 	bool IsExport,
 	List<TypeAliasDecl> AssociatedTypes,
 	List<ExtensionMethod> Methods,
-	BlockInfo Block
+	SourceSpan Block
 );
 
 public record TypeAliasDecl(string Name, string BaseType, List<string> TypeArgs, bool IsExport = false) {
-	public SourceLocation? Location { get; init; }
+	public SourceSpan? Location { get; init; }
 }
 
 public record GlobalConstant(string Name, bool IsExport, Expr Value) {
-	public SourceLocation? Location { get; init; }
+	public SourceSpan? Location { get; init; }
 }
 
 public record GlobalVariable(string Name, bool IsExport, Expr Value) {
-	public SourceLocation? Location { get; init; }
+	public SourceSpan? Location { get; init; }
 }
 
 // ============================================================================
@@ -258,10 +269,10 @@ public record ProgramAst(
 ) {
 	/// <summary>
 	/// Merges multiple ProgramAst objects into a single unified program.
-	/// Non-exported symbols from non-main files are filtered out (file-private).
+	/// File scoping is enforced during semantic analysis.
 	/// </summary>
 	/// <param name="programs">List of parsed programs to merge</param>
-	/// <param name="mainFileIndex">Index of the main file (all its symbols are kept)</param>
+	/// <param name="mainFileIndex">Index of the main file (reserved for future use)</param>
 	public static ProgramAst Merge(List<ProgramAst> programs, int mainFileIndex) {
 		var types = new List<TypeDecl>();
 		var enums = new List<EnumDecl>();
@@ -272,19 +283,15 @@ public record ProgramAst(
 		var globalVariables = new List<GlobalVariable>();
 		var typeAliases = new List<TypeAliasDecl>();
 
-		for (int i = 0; i < programs.Count; i++) {
-			var p = programs[i];
-			var isMainFile = (i == mainFileIndex);
-
-			// Include all symbols from main file, only exported from others
-			types.AddRange(isMainFile ? p.Types : p.Types.Where(t => t.IsExport));
-			enums.AddRange(isMainFile ? p.Enums : p.Enums.Where(e => e.IsExport));
-			interfaces.AddRange(isMainFile ? p.Interfaces : p.Interfaces.Where(iface => iface.IsExport));
-			extensions.AddRange(isMainFile ? p.Extensions : p.Extensions.Where(e => e.IsExport));
-			functions.AddRange(isMainFile ? p.Functions : p.Functions.Where(f => f.IsExport));
-			globalConstants.AddRange(isMainFile ? p.GlobalConstants : p.GlobalConstants.Where(c => c.IsExport));
-			globalVariables.AddRange(isMainFile ? p.GlobalVariables : p.GlobalVariables.Where(v => v.IsExport));
-			typeAliases.AddRange(isMainFile ? p.TypeAliases : p.TypeAliases.Where(a => a.IsExport));
+		foreach (var p in programs) {
+			types.AddRange(p.Types);
+			enums.AddRange(p.Enums);
+			interfaces.AddRange(p.Interfaces);
+			extensions.AddRange(p.Extensions);
+			functions.AddRange(p.Functions);
+			globalConstants.AddRange(p.GlobalConstants);
+			globalVariables.AddRange(p.GlobalVariables);
+			typeAliases.AddRange(p.TypeAliases);
 		}
 
 		return new ProgramAst(types, enums, interfaces, extensions, functions, globalConstants, globalVariables, typeAliases);

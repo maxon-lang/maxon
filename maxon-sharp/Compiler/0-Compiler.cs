@@ -45,7 +45,7 @@ public class Compiler {
 				var source = sources[i];
 				var lexer = new Lexer(source.Content);
 				var tokens = lexer.Tokenize();
-				var parser = new Parser(tokens);
+				var parser = new Parser(tokens, i);
 				var ast = parser.Parse();
 				asts.Add(ast);
 
@@ -98,7 +98,20 @@ public class Compiler {
 }
 
 public static class StdlibLoader {
-	private static readonly string[] WhitelistedModules = ["Math.maxon", "Pair.maxon", "Interfaces.maxon", "Array.maxon"];
+	private static readonly string[] WhitelistedModules = [
+		"Math.maxon",
+		"Pair.maxon",
+		"Interfaces.maxon",
+		"Array.maxon",
+		"String.maxon",
+		"Character.maxon",
+		"helpers/string/_grapheme.maxon",
+		"helpers/string/_hash.maxon",
+		"helpers/string/_search.maxon",
+		"helpers/string/_utf16.maxon",
+		"helpers/string/_utf8.maxon",
+		"helpers/string/_views.maxon"
+	];
 
 	public static string? FindStdlibPath() {
 		// Search exe_dir/stdlib, exe_dir/../stdlib, exe_dir/../../stdlib, etc.

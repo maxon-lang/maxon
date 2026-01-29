@@ -40,6 +40,7 @@ public enum ErrorCode {
 	SemanticUndefinedFunction = 3004,
 	SemanticTypeMismatch = 3005,
 	SemanticDuplicateDefinition = 3006,
+	SemanticSymbolNotExported = 3007,
 
 	// MLIR pipeline errors (4xxx) - Stage 4
 	MlirUnsupportedExpression = 4001,
