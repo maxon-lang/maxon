@@ -8,7 +8,18 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 /// Converts Standard dialect operations to X86 dialect.
 /// </summary>
 public static class StandardToX86Patterns {
+	/// <summary>
+	/// Resets all static state (label counters) to ensure deterministic output.
+	/// Called at the start of each compilation.
+	/// </summary>
+	public static void ResetState() {
+		LowerManagedMemoryMakeUniqueOp.ResetLabelCounter();
+		LowerManagedMemoryFreeOp.ResetLabelCounter();
+	}
+
 	public static void PopulatePatterns(ConversionPatternSet patterns) {
+		ResetState();
+
 		// Arith patterns
 		patterns.Add<LowerConstantOp>();
 		patterns.Add<LowerAddIOp>();
@@ -804,6 +815,10 @@ public sealed class LowerMemCpyOp : ConversionPattern<MemCpyOp> {
 public sealed class LowerManagedMemoryMakeUniqueOp : ConversionPattern<ManagedMemoryMakeUniqueOp> {
 	private static int _labelCounter = 0;
 
+	internal static void ResetLabelCounter() {
+		_labelCounter = 0;
+	}
+
 	protected override bool MatchAndRewrite(ManagedMemoryMakeUniqueOp op, ConversionPatternRewriter rewriter) {
 		var labelId = _labelCounter++;
 		var skipCowLabel = $"cow_skip_{labelId}";
@@ -931,6 +946,10 @@ public sealed class LowerManagedMemoryMakeUniqueOp : ConversionPattern<ManagedMe
 /// </summary>
 public sealed class LowerManagedMemoryFreeOp : ConversionPattern<ManagedMemoryFreeOp> {
 	private static int _labelCounter = 0;
+
+	internal static void ResetLabelCounter() {
+		_labelCounter = 0;
+	}
 
 	protected override bool MatchAndRewrite(ManagedMemoryFreeOp op, ConversionPatternRewriter rewriter) {
 		var labelId = _labelCounter++;
