@@ -151,3 +151,5 @@ public static class StdlibLoader {
 		return combined;
 	}
 }
+
+public record SourceFile(string Path, string Content);
