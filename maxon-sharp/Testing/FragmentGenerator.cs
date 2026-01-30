@@ -170,9 +170,9 @@ public static class FragmentGenerator {
 			}
 
 			// Write required MLIR if specified
-			if (success.RequiredMlir != null) {
-				sb.AppendLine("RequiredMlir: ```");
-				sb.AppendLine(success.RequiredMlir);
+			if (success.RequiredMLIR != null) {
+				sb.AppendLine("RequiredMLIR: ```");
+				sb.AppendLine(success.RequiredMLIR);
 				sb.AppendLine("```");
 			}
 		} else if (test.Expectation is CompilerErrorExpectation compilerError) {
@@ -188,7 +188,7 @@ public static class FragmentGenerator {
 			var sources = new[] { new Compiler.SourceFile(fragmentPath, test.Source) };
 			var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
 			if (result.Success) {
-				sb.Append(result.X86Ir?.TrimEnd());
+				sb.Append(result.AllStagesIr?.TrimEnd());
 				sb.AppendLine();
 			} else {
 				sb.AppendLine($"// Compilation failed: {result.Error}");
@@ -238,15 +238,15 @@ public static class FragmentGenerator {
 		var expectationSection = string.Join("\n", lines[(separatorIndex + 1)..secondSeparatorIndex]);
 		var expectation = ParseExpectation(expectationSection);
 
-		// Parse generated IR (between second --- and third ---)
-		string? generatedIr = null;
+		// Parse generated MLIR (between second --- and third ---)
+		string? generatedMLIR = null;
 		if (secondSeparatorIndex < lines.Length) {
 			var thirdSeparatorIndex = Array.FindIndex(lines, secondSeparatorIndex + 1, l => l.Trim() == "---");
 			if (thirdSeparatorIndex < 0) {
 				thirdSeparatorIndex = lines.Length;
 			}
 			var irSection = lines[(secondSeparatorIndex + 1)..thirdSeparatorIndex];
-			generatedIr = ExtractGeneratedIr(irSection);
+			generatedMLIR = ExtractGeneratedIr(irSection);
 		}
 
 		return new Fragment {
@@ -254,7 +254,7 @@ public static class FragmentGenerator {
 			TestName = testName,
 			Source = source,
 			Expectation = expectation,
-			GeneratedIr = generatedIr
+			GeneratedMLIR = generatedMLIR
 		};
 	}
 
@@ -272,8 +272,7 @@ public static class FragmentGenerator {
 		var lines = section.Split('\n');
 		int? exitCode = null;
 		string? stdout = null;
-		string? expectedMlir = null;
-		string? requiredMlir = null;
+		string? requiredMLIR = null;
 		string? expectedError = null;
 
 		var i = 0;
@@ -289,10 +288,8 @@ public static class FragmentGenerator {
 				expectedError = ExtractMultilineValue(lines, ref i);
 			} else if (line.StartsWith("Stdout: ```")) {
 				stdout = ExtractMultilineValue(lines, ref i);
-			} else if (line.StartsWith("ExpectedMlir: ```")) {
-				expectedMlir = ExtractMultilineValue(lines, ref i);
-			} else if (line.StartsWith("RequiredMlir: ```")) {
-				requiredMlir = ExtractMultilineValue(lines, ref i);
+			} else if (line.StartsWith("RequiredMLIR: ```")) {
+				requiredMLIR = ExtractMultilineValue(lines, ref i);
 			}
 
 			i++;
@@ -307,8 +304,7 @@ public static class FragmentGenerator {
 		return new SuccessExpectation {
 			ExitCode = exitCode,
 			Stdout = stdout,
-			ExpectedMlir = expectedMlir,
-			RequiredMlir = requiredMlir
+			RequiredMLIR = requiredMLIR
 		};
 	}
 

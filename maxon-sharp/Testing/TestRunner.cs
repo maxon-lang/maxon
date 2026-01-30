@@ -232,23 +232,23 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 				var successExpectation = (SuccessExpectation)fragment.Expectation;
 
-				// Check Required MLIR using GeneratedIr from fragment
-				if (successExpectation.RequiredMlir != null) {
-					if (fragment.GeneratedIr == null) {
+				// Check Required MLIR using GeneratedMLIR from fragment
+				if (successExpectation.RequiredMLIR != null) {
+					if (fragment.GeneratedMLIR == null) {
 						return new TestResult {
 							TestName = fragment.TestName,
 							Passed = false,
-							ErrorMessage = "RequiredMlir specified but no generated IR found in fragment",
+							ErrorMessage = "RequiredMLIR specified but no generated MLIR found in fragment",
 							Duration = sw.Elapsed
 						};
 					}
 
-					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMlir, fragment.GeneratedIr);
+					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMLIR, fragment.GeneratedMLIR);
 					if (!Passed) {
 						return new TestResult {
 							TestName = fragment.TestName,
 							Passed = false,
-							ErrorMessage = $"Required MLIR not found: {Message}",
+							ErrorMessage = $"Required MLIR mismatch: {Message}",
 							Duration = sw.Elapsed
 						};
 					}

@@ -5,8 +5,27 @@ namespace MaxonSharp.Compiler;
 public record CompileResult(
 	bool Success,
 	string? Error,
-	string? X86Ir = null
-);
+	string? AllStagesIr = null
+) {
+	/// <summary>
+	/// Extracts the x86 stage IR from AllStagesIr for unit test compatibility.
+	/// </summary>
+	public string? X86Ir {
+		get {
+			if (AllStagesIr == null) return null;
+			var marker = $"--- {PipelineStages.X86}";
+			var idx = AllStagesIr.IndexOf(marker);
+			if (idx < 0) return null;
+			var start = idx + marker.Length;
+			// Skip the newline after the marker
+			if (start < AllStagesIr.Length && AllStagesIr[start] == '\n') start++;
+			// Find the next stage marker or end of string
+			var nextMarker = AllStagesIr.IndexOf("\n--- ", start);
+			var end = nextMarker >= 0 ? nextMarker : AllStagesIr.Length;
+			return AllStagesIr[start..end].TrimEnd();
+		}
+	}
+};
 
 public class Compiler {
 	private readonly MlirContext _context = new();
@@ -47,7 +66,7 @@ public class Compiler {
 			PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Imports);
 			Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Imports.Count} imports to {outputPath}");
 
-			return new CompileResult(true, null, mlirResult.X86Ir);
+			return new CompileResult(true, null, mlirResult.AllStagesIr);
 		} catch (CompileError ex) {
 			if (ex.FilePath == null && userSourceFile != null) {
 				ex.FilePath = userSourceFile;

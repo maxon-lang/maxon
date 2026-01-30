@@ -87,9 +87,7 @@ public static partial class SpecParser {
 			var stdout = ExtractCodeBlock(testSection, "stdout");
 			var stderr = ExtractCodeBlock(testSection, "maxoncstderr");
 
-			// MLIR blocks (new format)
-			var expectedMlir = ExtractCodeBlock(testSection, "expectedmlir");
-			var requiredMlir = ExtractCodeBlock(testSection, "requiredmlir");
+			var requiredMLIR = ExtractCodeBlock(testSection, "RequiredMLIR");
 
 			TestExpectation expectation;
 			if (stderr != null) {
@@ -100,8 +98,7 @@ public static partial class SpecParser {
 				expectation = new SuccessExpectation {
 					ExitCode = exitCode != null ? int.Parse(exitCode.Trim()) : null,
 					Stdout = stdout,
-					ExpectedMlir = expectedMlir,
-					RequiredMlir = requiredMlir
+					RequiredMLIR = requiredMLIR
 				};
 			}
 

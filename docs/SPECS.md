@@ -72,36 +72,50 @@ end 'main'
 42
 ```
 
-### IR Verification (Optimization Tests)
+### IR Verification
 
-For tests that verify compiler optimizations (like dead code elimination), you can include an expected IR block. The test will fail if the generated IR doesn't match exactly:
+To verify the compiler's MLIR at all pipeline stages, include a `RequiredMLIR` block. The block contains all stages concatenated, separated by `--- stagename` markers. The test will fail if the generated MLIR doesn't match exactly (after whitespace normalization).
+
+Current pipeline stages: `maxon`, `standard`, `x86`.
 
 ```maxon
-function used() returns int
-    return 42
-end 'used'
-
-function unused() returns int
-    return 999  // This should be eliminated
-end 'unused'
-
 function main() returns int
-    return used()
+    return 42
 end 'main'
 ```
 ```exitcode
 42
 ```
-```ir
-; Function: used
-; ... IR for used function ...
-
-; Function: main
-; ... IR for main function ...
-; (unused function should not appear)
+```RequiredMLIR
+--- maxon
+module {
+  func @main() -> i64 {
+  entry:
+    maxon.return maxon.int_literal 42
+  }
+}
+--- standard
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = arith.constant 42 : i64
+    func.return %0 : i64
+  }
+}
+--- x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.mov eax, 42
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
-The IR block is optional and should only be used when testing optimization behavior.
+The `RequiredMLIR` block is optional. When present, the entire block is compared as one string against the generated MLIR from all pipeline stages.
 
 ### Executable Examples (Compile Errors)
 

@@ -31,10 +31,11 @@ public abstract class TestExpectation { }
 public class SuccessExpectation : TestExpectation {
 	public int? ExitCode { get; init; }
 	public string? Stdout { get; init; }
-	// Reference only (auto-generated for regression review, not checked)
-	public string? ExpectedMlir { get; init; }
-	// Verified during test runs (must match exactly)
-	public string? RequiredMlir { get; init; }
+	/// <summary>
+	/// All pipeline stages concatenated with "--- stagename" markers.
+	/// Verified during test runs (must match exactly).
+	/// </summary>
+	public string? RequiredMLIR { get; init; }
 }
 
 /// <summary>
@@ -53,9 +54,9 @@ public class Fragment {
 	public required string Source { get; init; }
 	public required TestExpectation Expectation { get; init; }
 	/// <summary>
-	/// The generated X86 IR from compilation (parsed from fragment file).
+	/// All pipeline stages IR concatenated with "--- stagename" markers (parsed from fragment file).
 	/// </summary>
-	public string? GeneratedIr { get; init; }
+	public string? GeneratedMLIR { get; init; }
 }
 
 /// <summary>
