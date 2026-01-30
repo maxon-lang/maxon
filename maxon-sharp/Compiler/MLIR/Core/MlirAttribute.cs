@@ -20,3 +20,8 @@ public class TypeAttr(MlirType type) : MlirAttribute {
 	public MlirType Type { get; } = type;
 	public override string ToString() => Type.ToString();
 }
+
+public class StringAttr(string value) : MlirAttribute {
+	public string Value { get; } = value;
+	public override string ToString() => Value;
+}

@@ -18,56 +18,56 @@ public static class MaxonToStandardConversion {
 				var newBlock = newFunc.Body.AddBlock(block.Name);
 				foreach (var op in block.Operations) {
 					switch (op) {
-						case MaxonConstantOp constOp: {
-								switch (constOp.ValueKind) {
+						case MaxonLiteralOp litOp: {
+								switch (litOp.ValueKind) {
 									case MaxonValueKind.Integer: {
-											var newOp = new StdConstI64Op(constOp.IntValue);
+											var newOp = new StdConstI64Op(litOp.IntValue);
 											newBlock.AddOp(newOp);
-											valueMap[constOp.Result] = newOp.Result;
+											valueMap[litOp.Result] = newOp.Result;
 											break;
 										}
 									case MaxonValueKind.Float: {
-											var newOp = new StdConstF64Op(constOp.FloatValue);
+											var newOp = new StdConstF64Op(litOp.FloatValue);
 											newBlock.AddOp(newOp);
-											valueMap[constOp.Result] = newOp.Result;
+											valueMap[litOp.Result] = newOp.Result;
 											break;
 										}
 									default:
-										throw new InvalidOperationException($"Unsupported MaxonConstantOp kind: {constOp.ValueKind}");
+										throw new InvalidOperationException($"Unsupported MaxonLiteralOp kind: {litOp.ValueKind}");
 								}
 								break;
 							}
-						case MaxonVarDeclOp varDecl: {
-								var mappedValue = valueMap[varDecl.InitValue];
+						case MaxonAssignOp assignOp: {
+								var mappedValue = valueMap[assignOp.Value];
 								switch (mappedValue) {
 									case StdI64 i64: {
-											newBlock.AddOp(new StdStoreI64Op(i64, varDecl.VarName));
-											varTypes[varDecl.VarName] = "i64";
+											newBlock.AddOp(new StdStoreI64Op(i64, assignOp.VarName));
+											varTypes[assignOp.VarName] = "i64";
 											break;
 										}
 									case StdF64 f64: {
-											newBlock.AddOp(new StdStoreF64Op(f64, varDecl.VarName));
-											varTypes[varDecl.VarName] = "f64";
+											newBlock.AddOp(new StdStoreF64Op(f64, assignOp.VarName));
+											varTypes[assignOp.VarName] = "f64";
 											break;
 										}
 									default:
-										throw new InvalidOperationException($"Unsupported value type for var decl: {mappedValue.GetType().Name}");
+										throw new InvalidOperationException($"Unsupported value type for assign: {mappedValue.GetType().Name}");
 								}
 								break;
 							}
-						case MaxonVarLoadOp varLoad: {
-								var varTypeName = varTypes[varLoad.VarName];
+						case MaxonVarRefOp varRef: {
+								var varTypeName = varTypes[varRef.VarName];
 								switch (varTypeName) {
 									case "i64": {
-											var loadOp = new StdLoadI64Op(varLoad.VarName);
+											var loadOp = new StdLoadI64Op(varRef.VarName);
 											newBlock.AddOp(loadOp);
-											valueMap[varLoad.Result] = loadOp.Result;
+											valueMap[varRef.Result] = loadOp.Result;
 											break;
 										}
 									case "f64": {
-											var loadOp = new StdLoadF64Op(varLoad.VarName);
+											var loadOp = new StdLoadF64Op(varRef.VarName);
 											newBlock.AddOp(loadOp);
-											valueMap[varLoad.Result] = loadOp.Result;
+											valueMap[varRef.Result] = loadOp.Result;
 											break;
 										}
 									default:
@@ -75,49 +75,8 @@ public static class MaxonToStandardConversion {
 								}
 								break;
 							}
-						case MaxonAddOp addOp: {
-								switch (addOp.ValueKind) {
-									case MaxonValueKind.Integer: {
-											var lhs = (StdI64)valueMap[addOp.Lhs];
-											var rhs = (StdI64)valueMap[addOp.Rhs];
-											var newAdd = new StdAddI64Op(lhs, rhs);
-											newBlock.AddOp(newAdd);
-											valueMap[addOp.Result] = newAdd.Result;
-											break;
-										}
-									default:
-										throw new InvalidOperationException($"Unsupported MaxonAddOp kind: {addOp.ValueKind}");
-								}
-								break;
-							}
-						case MaxonSubOp subOp: {
-								switch (subOp.ValueKind) {
-									case MaxonValueKind.Integer: {
-											var lhs = (StdI64)valueMap[subOp.Lhs];
-											var rhs = (StdI64)valueMap[subOp.Rhs];
-											var newSub = new StdSubI64Op(lhs, rhs);
-											newBlock.AddOp(newSub);
-											valueMap[subOp.Result] = newSub.Result;
-											break;
-										}
-									default:
-										throw new InvalidOperationException($"Unsupported MaxonSubOp kind: {subOp.ValueKind}");
-								}
-								break;
-							}
-						case MaxonCmpOp cmpOp: {
-								switch (cmpOp.ValueKind) {
-									case MaxonValueKind.Float: {
-											var lhs = (StdF64)valueMap[cmpOp.Lhs];
-											var rhs = (StdF64)valueMap[cmpOp.Rhs];
-											var newCmp = new StdCmpF64Op(cmpOp.Predicate, lhs, rhs);
-											newBlock.AddOp(newCmp);
-											valueMap[cmpOp.Result] = newCmp.Result;
-											break;
-										}
-									default:
-										throw new InvalidOperationException($"Unsupported MaxonCmpOp kind: {cmpOp.ValueKind}");
-								}
+						case MaxonBinOp binOp: {
+								ConvertBinOp(binOp, newBlock, valueMap);
 								break;
 							}
 						case MaxonCondBrOp condBr: {
@@ -125,35 +84,29 @@ public static class MaxonToStandardConversion {
 								newBlock.AddOp(new StdCondBrOp(cond, condBr.ThenBlock, condBr.ElseBlock));
 								break;
 							}
-						case MaxonReturnOp retOp: {
-								StdValue? newRetVal = null;
-								switch (retOp.ReturnExpr) {
-									case MaxonExpr.Value v:
-										newRetVal = valueMap[v.MaxonValue];
-										break;
-									case MaxonExpr.VarLoad vl:
-										newRetVal = valueMap[vl.LoadOp.Result];
-										break;
-									case MaxonExpr.Call c: {
-											var newArgs = c.CallOp.Args.Select(a => valueMap[a]).ToList();
-											var callee = module.Functions.FirstOrDefault(f => f.Name == c.CallOp.Callee);
-											StdValue? callResult = null;
-											if (callee?.ReturnType != null && callee.ReturnType != MlirType.Void) {
-												callResult = callee.ReturnType == MlirType.F64
-													? new StdF64(MlirContext.Current.NextId())
-													: new StdI64(MlirContext.Current.NextId());
-											}
-											var funcCall = new StdCallOp(c.CallOp.Callee, newArgs, callResult);
-											newBlock.AddOp(funcCall);
-											newRetVal = funcCall.Result;
-											break;
-										}
+						case MaxonCallOp callOp: {
+								var newArgs = callOp.Args.Select(a => valueMap[a]).ToList();
+								StdValue? callResult = null;
+								if (callOp.ResultKind != null) {
+									callResult = callOp.ResultKind switch {
+										MaxonValueKind.Float => new StdF64(MlirContext.Current.NextId()),
+										MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),
+										MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
+										_ => throw new InvalidOperationException($"Unsupported call result kind: {callOp.ResultKind}")
+									};
 								}
+								var funcCall = new StdCallOp(callOp.Callee, newArgs, callResult);
+								newBlock.AddOp(funcCall);
+								if (callOp.Result != null && funcCall.Result != null) {
+									valueMap[callOp.Result] = funcCall.Result;
+								}
+								break;
+							}
+						case MaxonReturnOp retOp: {
+								StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;
 								newBlock.AddOp(new StdReturnOp(newRetVal));
 								break;
 							}
-						case MaxonCallOp:
-							break;
 						default:
 							throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
 					}
@@ -162,5 +115,57 @@ public static class MaxonToStandardConversion {
 			result.AddFunction(newFunc);
 		}
 		return result;
+	}
+
+	private static void ConvertBinOp(MaxonBinOp binOp, MlirBlock<StandardOp> block, Dictionary<MaxonValue, StdValue> valueMap) {
+		switch (binOp.Operator) {
+			case MaxonBinOperator.Add: {
+					switch (binOp.OperandKind) {
+						case MaxonValueKind.Integer: {
+								var lhs = (StdI64)valueMap[binOp.Lhs];
+								var rhs = (StdI64)valueMap[binOp.Rhs];
+								var newAdd = new StdAddI64Op(lhs, rhs);
+								block.AddOp(newAdd);
+								valueMap[binOp.Result] = newAdd.Result;
+								break;
+							}
+						default:
+							throw new InvalidOperationException($"Unsupported binop add kind: {binOp.OperandKind}");
+					}
+					break;
+				}
+			case MaxonBinOperator.Sub: {
+					switch (binOp.OperandKind) {
+						case MaxonValueKind.Integer: {
+								var lhs = (StdI64)valueMap[binOp.Lhs];
+								var rhs = (StdI64)valueMap[binOp.Rhs];
+								var newSub = new StdSubI64Op(lhs, rhs);
+								block.AddOp(newSub);
+								valueMap[binOp.Result] = newSub.Result;
+								break;
+							}
+						default:
+							throw new InvalidOperationException($"Unsupported binop sub kind: {binOp.OperandKind}");
+					}
+					break;
+				}
+			case MaxonBinOperator.Eq: {
+					switch (binOp.OperandKind) {
+						case MaxonValueKind.Float: {
+								var lhs = (StdF64)valueMap[binOp.Lhs];
+								var rhs = (StdF64)valueMap[binOp.Rhs];
+								var newCmp = new StdCmpF64Op("eq", lhs, rhs);
+								block.AddOp(newCmp);
+								valueMap[binOp.Result] = newCmp.Result;
+								break;
+							}
+						default:
+							throw new InvalidOperationException($"Unsupported binop eq kind: {binOp.OperandKind}");
+					}
+					break;
+				}
+			default:
+				throw new InvalidOperationException($"Unsupported binop operator: {binOp.Operator}");
+		}
 	}
 }

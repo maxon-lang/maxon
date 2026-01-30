@@ -10,20 +10,18 @@ RequiredMLIR: ```
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.constant {value = 99 : i64}
-    maxon.var_decl x %0
-    %1 = maxon.var_load x {type = i64}
-    maxon.return %1
+    %0 = maxon.literal {value = 99 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.return %0
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-    %2 = arith.constant {value = 99 : i64}
-    memref.store %2, x
-    %3 = memref.load x : i64
-    func.return %3
+    %1 = arith.constant {value = 99 : i64}
+    memref.store %1, x
+    func.return %1
   }
 }
 === x86
@@ -35,8 +33,6 @@ module {
     x86.sub rsp, 16
     x86.mov eax, 99
     x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-8]
-    x86.mov eax, ecx
     x86.add rsp, 16
     x86.pop rbp
     x86.ret
@@ -52,8 +48,6 @@ module {
     x86.sub rsp, 16
     x86.mov eax, 99
     x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-8]
-    x86.mov eax, ecx
     x86.add rsp, 16
     x86.pop rbp
     x86.ret

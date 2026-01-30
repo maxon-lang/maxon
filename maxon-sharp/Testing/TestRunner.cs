@@ -9,12 +9,13 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Executes tests from fragment files.
 /// </summary>
-public class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null) {
+public class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequiredMLIR = false) {
 	private readonly string _specDir = specDir;
 	private readonly string _fragmentDir = fragmentDir;
 	private readonly string _tempDir = tempDir;
 	private readonly string? _filter = filter;
 	private readonly int _workerCount = workers ?? Math.Max(1, Environment.ProcessorCount / 2);
+	private readonly bool _updateRequiredMLIR = updateRequiredMLIR;
 
 	/// <summary>
 	/// Run all tests and return summary.
@@ -22,8 +23,13 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 	public TestSummary RunAllSpecTests() {
 		var sw = Stopwatch.StartNew();
 
+		// Update RequiredMLIR in spec files if requested
+		if (_updateRequiredMLIR) {
+			UpdateRequiredMLIRInSpecFiles();
+		}
+
 		// Regenerate fragments if specs changed
-		var genResult = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir);
+		var genResult = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir, _updateRequiredMLIR);
 		if (genResult.Generated > 0) {
 			Logger.Info(LogCategory.Testing, $"Generated {genResult.Generated} fragment(s)");
 		}
@@ -470,29 +476,29 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 			switch (type) {
 				case "f64": {
-					if (!double.TryParse(value, CultureInfo.InvariantCulture, out var d)) return null;
-					result.AddRange(BitConverter.GetBytes(d));
-					break;
-				}
-				case "i64": {
-					if (!long.TryParse(value, out var l)) return null;
-					result.AddRange(BitConverter.GetBytes(l));
-					break;
-				}
-				case "i64[]": {
-					var parts = value.Split(',');
-					foreach (var part in parts) {
-						if (!long.TryParse(part.Trim(), out var l)) return null;
-						result.AddRange(BitConverter.GetBytes(l));
+						if (!double.TryParse(value, CultureInfo.InvariantCulture, out var d)) return null;
+						result.AddRange(BitConverter.GetBytes(d));
+						break;
 					}
-					break;
-				}
+				case "i64": {
+						if (!long.TryParse(value, out var l)) return null;
+						result.AddRange(BitConverter.GetBytes(l));
+						break;
+					}
+				case "i64[]": {
+						var parts = value.Split(',');
+						foreach (var part in parts) {
+							if (!long.TryParse(part.Trim(), out var l)) return null;
+							result.AddRange(BitConverter.GetBytes(l));
+						}
+						break;
+					}
 				case "utf8": {
-					if (value.Length < 2 || value[0] != '"' || value[^1] != '"') return null;
-					var str = ProcessEscapes(value[1..^1]);
-					result.AddRange(Encoding.UTF8.GetBytes(str));
-					break;
-				}
+						if (value.Length < 2 || value[0] != '"' || value[^1] != '"') return null;
+						var str = ProcessEscapes(value[1..^1]);
+						result.AddRange(Encoding.UTF8.GetBytes(str));
+						break;
+					}
 				default:
 					return null;
 			}
@@ -582,6 +588,50 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 			return data;
 		} catch {
 			return null;
+		}
+	}
+
+	/// <summary>
+	/// Update RequiredMLIR sections in spec files with newly generated MLIR from fragments.
+	/// </summary>
+	private void UpdateRequiredMLIRInSpecFiles() {
+		var specs = SpecParser.ParseDirectory(_specDir);
+		var updatedSpecs = 0;
+
+		foreach (var spec in specs) {
+			var specContent = File.ReadAllText(spec.FilePath);
+			var updated = false;
+
+			foreach (var test in spec.Tests) {
+				if (test.Expectation is SuccessExpectation success && success.RequiredMLIR != null) {
+					// Compile the test to get the current IR
+					var sources = new[] { new Compiler.SourceFile(spec.FilePath, test.Source) };
+					var exePath = Path.Combine(_tempDir, $"{Path.GetFileNameWithoutExtension(spec.FilePath)}_{test.Name}_temp.exe");
+					var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
+
+					if (irResult.Success && irResult.AllStagesIr != null) {
+						// Replace the RequiredMLIR block in the spec content
+						var newRequiredMLIR = irResult.AllStagesIr.Trim();
+						var oldPattern = $@"```RequiredMLIR\s*{Regex.Escape(success.RequiredMLIR.Trim())}\s*```";
+						var newPattern = $"```RequiredMLIR\n{newRequiredMLIR}\n```";
+
+						if (Regex.IsMatch(specContent, oldPattern, RegexOptions.Singleline)) {
+							specContent = Regex.Replace(specContent, oldPattern, newPattern, RegexOptions.Singleline);
+							updated = true;
+							Logger.Debug(LogCategory.Testing, $"Updated RequiredMLIR for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+						}
+					}
+				}
+			}
+
+			if (updated) {
+				File.WriteAllText(spec.FilePath, specContent);
+				updatedSpecs++;
+			}
+		}
+
+		if (updatedSpecs > 0) {
+			Logger.Info(LogCategory.Testing, $"Updated RequiredMLIR in {updatedSpecs} spec file(s)");
 		}
 	}
 }

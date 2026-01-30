@@ -37,6 +37,7 @@ class Program {
 		Console.WriteLine();
 		Console.WriteLine("Spec test options:");
 		Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
+		Console.WriteLine("  --update-requiredmlir    Force regeneration of test fragments and update RequiredMLIR");
 		Console.WriteLine();
 		Console.WriteLine("Logging (all commands):");
 		Console.WriteLine("  --log=LEVEL              Set all log categories to LEVEL");
@@ -305,12 +306,13 @@ class Program {
 	static int RunSpecTests(string[] args) {
 		SetupTestLogging();
 
-		var specTestOptions = new HashSet<string> { "--filter=", "--workers=" };
+		var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-requiredmlir" };
 		var (_, _, valid) = ParseOptions(args, specTestOptions);
 		if (!valid) return Fail();
 
 		string? filter = null;
 		int? workers = null;
+		bool updateRequiredMLIR = false;
 
 		foreach (var arg in args) {
 			if (arg.StartsWith("--filter=")) {
@@ -321,6 +323,8 @@ class Program {
 				} else {
 					return Fail();
 				}
+			} else if (arg == "--update-requiredmlir") {
+				updateRequiredMLIR = true;
 			}
 		}
 
@@ -338,7 +342,7 @@ class Program {
 
 		Logger.Info(LogCategory.Testing, "Running maxon-sharp spec tests...");
 
-		var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers);
+		var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers, updateRequiredMLIR);
 		var summary = runner.RunAllSpecTests();
 
 		Logger.Info(LogCategory.Testing, "");

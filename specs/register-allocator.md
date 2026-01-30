@@ -34,7 +34,7 @@ end 'main'
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.constant {value = 42 : i64}
+    %0 = maxon.literal {value = 42 : i64}
     maxon.return %0
   }
 }
@@ -74,20 +74,18 @@ end 'main'
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.constant {value = 99 : i64}
-    maxon.var_decl x %0
-    %1 = maxon.var_load x {type = i64}
-    maxon.return %1
+    %0 = maxon.literal {value = 99 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.return %0
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-    %2 = arith.constant {value = 99 : i64}
-    memref.store %2, x
-    %3 = memref.load x : i64
-    func.return %3
+    %1 = arith.constant {value = 99 : i64}
+    memref.store %1, x
+    func.return %1
   }
 }
 === x86
@@ -99,8 +97,6 @@ module {
     x86.sub rsp, 16
     x86.mov eax, 99
     x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-8]
-    x86.mov eax, ecx
     x86.add rsp, 16
     x86.pop rbp
     x86.ret
@@ -122,9 +118,9 @@ end 'main'
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.constant {value = 30 : i64}
-    %1 = maxon.constant {value = 12 : i64}
-    %2 = maxon.add %0, %1 {type = i64}
+    %0 = maxon.literal {value = 30 : i64}
+    %1 = maxon.literal {value = 12 : i64}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
     maxon.return %2
   }
 }
@@ -167,9 +163,9 @@ end 'main'
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.constant {value = 100 : i64}
-    %1 = maxon.constant {value = 58 : i64}
-    %2 = maxon.sub %0, %1 {type = i64}
+    %0 = maxon.literal {value = 100 : i64}
+    %1 = maxon.literal {value = 58 : i64}
+    %2 = maxon.binop %0, %1 {op = sub} {kind = i64}
     maxon.return %2
   }
 }
@@ -216,28 +212,24 @@ end 'main'
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.constant {value = 30 : i64}
-    maxon.var_decl a %0
-    %1 = maxon.constant {value = 12 : i64}
-    maxon.var_decl b %1
-    %2 = maxon.var_load a {type = i64}
-    %3 = maxon.var_load b {type = i64}
-    %4 = maxon.add %2, %3 {type = i64}
-    maxon.return %4
+    %0 = maxon.literal {value = 30 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 12 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    maxon.return %2
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-    %5 = arith.constant {value = 30 : i64}
-    memref.store %5, a
-    %6 = arith.constant {value = 12 : i64}
-    memref.store %6, b
-    %7 = memref.load a : i64
-    %8 = memref.load b : i64
-    %9 = arith.addi %7, %8
-    func.return %9
+    %3 = arith.constant {value = 30 : i64}
+    memref.store %3, a
+    %4 = arith.constant {value = 12 : i64}
+    memref.store %4, b
+    %5 = arith.addi %3, %4
+    func.return %5
   }
 }
 === x86
@@ -251,10 +243,7 @@ module {
     x86.mov [rbp-8], eax
     x86.mov ecx, 12
     x86.mov [rbp-16], ecx
-    x86.mov edx, [rbp-8]
-    x86.mov ebx, [rbp-16]
-    x86.add edx, ebx
-    x86.mov eax, edx
+    x86.add eax, ecx
     x86.add rsp, 16
     x86.pop rbp
     x86.ret

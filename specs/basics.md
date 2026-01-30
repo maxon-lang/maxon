@@ -75,26 +75,26 @@ end 'main'
 module {
   func @getValue() -> i64 {
   entry:
-    %0 = maxon.constant {value = 42 : i64}
+    %0 = maxon.literal {value = 42 : i64}
     maxon.return %0
   }
   func @main() -> i64 {
   entry:
-    maxon.call @getValue
-    maxon.return
+    %1 = maxon.call @getValue
+    maxon.return %1
   }
 }
 === standard
 module {
   func @getValue() -> i64 {
   entry:
-    %1 = arith.constant {value = 42 : i64}
-    func.return %1
+    %2 = arith.constant {value = 42 : i64}
+    func.return %2
   }
   func @main() -> i64 {
   entry:
-    %2 = func.call @getValue
-    func.return %2
+    %3 = func.call @getValue
+    func.return %3
   }
 }
 === x86
@@ -140,36 +140,34 @@ f64 3.14
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.constant {value = 3.14 : f64}
-    maxon.var_decl x %0
-    %1 = maxon.var_load x {type = f64}
-    %2 = maxon.constant {value = 3.14 : f64}
-    %3 = maxon.cmp eq %1, %2 {type = f64}
-    maxon.cond_br %3 [then: check, else: other]
+    %0 = maxon.literal {value = 3.14 : f64}
+    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3.14 : f64}
+    %2 = maxon.binop %0, %1 {op = eq} {kind = f64}
+    maxon.cond_br %2 [then: check, else: other]
   check:
-    %4 = maxon.constant {value = 1 : i64}
-    maxon.return %4
+    %3 = maxon.literal {value = 1 : i64}
+    maxon.return %3
   other:
-    %5 = maxon.constant {value = 0 : i64}
-    maxon.return %5
+    %4 = maxon.literal {value = 0 : i64}
+    maxon.return %4
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
+    %5 = arith.float_constant {value = 3.14 : f64}
+    memref.store %5, x
     %6 = arith.float_constant {value = 3.14 : f64}
-    memref.store %6, x
-    %7 = memref.load x : f64
-    %8 = arith.float_constant {value = 3.14 : f64}
-    %9 = arith.cmpf eq %7, %8
-    cf.cond_br %9 [then: check, else: other]
+    %7 = arith.cmpf eq %5, %6
+    cf.cond_br %7 [then: check, else: other]
   check:
-    %10 = arith.constant {value = 1 : i64}
-    func.return %10
+    %8 = arith.constant {value = 1 : i64}
+    func.return %8
   other:
-    %11 = arith.constant {value = 0 : i64}
-    func.return %11
+    %9 = arith.constant {value = 0 : i64}
+    func.return %9
   }
 }
 === x86
@@ -181,7 +179,6 @@ module {
     x86.sub rsp, 16
     x86.movsd xmm0, [rip+__float_3.14]
     x86.movsd [rbp-8], xmm0
-    x86.movsd xmm0, [rbp-8]
     x86.movsd xmm1, [rip+__float_3.14]
     x86.ucomisd xmm0, xmm1
     x86.jne main.other

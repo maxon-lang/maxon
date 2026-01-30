@@ -11,28 +11,24 @@ RequiredMLIR: ```
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.constant {value = 30 : i64}
-    maxon.var_decl a %0
-    %1 = maxon.constant {value = 12 : i64}
-    maxon.var_decl b %1
-    %2 = maxon.var_load a {type = i64}
-    %3 = maxon.var_load b {type = i64}
-    %4 = maxon.add %2, %3 {type = i64}
-    maxon.return %4
+    %0 = maxon.literal {value = 30 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 12 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    maxon.return %2
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-    %5 = arith.constant {value = 30 : i64}
-    memref.store %5, a
-    %6 = arith.constant {value = 12 : i64}
-    memref.store %6, b
-    %7 = memref.load a : i64
-    %8 = memref.load b : i64
-    %9 = arith.addi %7, %8
-    func.return %9
+    %3 = arith.constant {value = 30 : i64}
+    memref.store %3, a
+    %4 = arith.constant {value = 12 : i64}
+    memref.store %4, b
+    %5 = arith.addi %3, %4
+    func.return %5
   }
 }
 === x86
@@ -46,10 +42,7 @@ module {
     x86.mov [rbp-8], eax
     x86.mov ecx, 12
     x86.mov [rbp-16], ecx
-    x86.mov edx, [rbp-8]
-    x86.mov ebx, [rbp-16]
-    x86.add edx, ebx
-    x86.mov eax, edx
+    x86.add eax, ecx
     x86.add rsp, 16
     x86.pop rbp
     x86.ret
@@ -67,10 +60,7 @@ module {
     x86.mov [rbp-8], eax
     x86.mov ecx, 12
     x86.mov [rbp-16], ecx
-    x86.mov edx, [rbp-8]
-    x86.mov ebx, [rbp-16]
-    x86.add edx, ebx
-    x86.mov eax, edx
+    x86.add eax, ecx
     x86.add rsp, 16
     x86.pop rbp
     x86.ret

@@ -114,8 +114,8 @@ public static class StandardToX86Conversion {
 
 					case StdStoreF64Op storeOp: {
 							var offset = varOffsets[storeOp.VarName];
-							x86Block.AddOp(new X86MovSdMemXmmOp(offset, X86XmmRegister.Xmm0));
-							nextXmm = 0;
+							var srcXmm = valueToXmm[storeOp.Value];
+							x86Block.AddOp(new X86MovSdMemXmmOp(offset, srcXmm));
 							break;
 						}
 
@@ -130,9 +130,10 @@ public static class StandardToX86Conversion {
 
 					case StdLoadF64Op loadOp: {
 							var offset = varOffsets[loadOp.VarName];
-							x86Block.AddOp(new X86MovSdXmmMemOp(X86XmmRegister.Xmm0, offset));
-							valueToXmm[loadOp.Result] = X86XmmRegister.Xmm0;
-							nextXmm = 1;
+							var xmmReg = (X86XmmRegister)nextXmm;
+							x86Block.AddOp(new X86MovSdXmmMemOp(xmmReg, offset));
+							valueToXmm[loadOp.Result] = xmmReg;
+							nextXmm++;
 							break;
 						}
 
