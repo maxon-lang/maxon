@@ -153,11 +153,17 @@ public static class StandardToX86Conversion {
 									x86Block.AddOp(new X86JccOp("ne", scopedElse));
 									x86Block.AddOp(new X86JccOp("p", scopedElse));
 									break;
+								default:
+									throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {cmpKind}");
 							}
 							lastCmpKind = null;
 							lastCmpPredicate = null;
 							break;
 						}
+
+					case StdBrOp br:
+						x86Block.AddOp(new X86JmpOp($"{func.Name}.{br.Target}"));
+						break;
 
 					case StdCallOp callOp:
 						regManager.EmitCall(callOp.Callee, callOp.Args, callOp.Result, x86Block);

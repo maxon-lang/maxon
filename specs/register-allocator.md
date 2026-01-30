@@ -1928,7 +1928,7 @@ module {
 }
 ```
 
-<!-- disabled-test: int-if-else-value-survives-branch -->
+<!-- test: int-if-else-value-survives-branch -->
 ```maxon
 function main() returns int
     var base = 40
@@ -1946,7 +1946,95 @@ end 'main'
 42
 ```
 ```RequiredMLIR
-FILL ME IN
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 40 : i64}
+    maxon.assign %0 {var = base} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 1 : i64}
+    maxon.assign %1 {var = cond} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 0 : i64}
+    maxon.assign %2 {var = extra} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %1, %3 {op = eq} {kind = i64}
+    maxon.cond_br %4 [then: check, else: other]
+  check:
+    %5 = maxon.literal {value = 2 : i64}
+    maxon.assign %5 {var = extra} {kind = i64} {mut = 1 : i1}
+    maxon.br check.merge
+  other:
+    %6 = maxon.literal {value = 100 : i64}
+    maxon.assign %6 {var = extra} {kind = i64} {mut = 1 : i1}
+    maxon.br check.merge
+  check.merge:
+    %7 = maxon.var_ref {var = base} {type = i64}
+    %8 = maxon.var_ref {var = extra} {type = i64}
+    %9 = maxon.binop %7, %8 {op = add} {kind = i64}
+    maxon.return %9
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %10 = arith.constant {value = 40 : i64}
+    memref.store %10, base
+    %11 = arith.constant {value = 1 : i64}
+    memref.store %11, cond
+    %12 = arith.constant {value = 0 : i64}
+    memref.store %12, extra
+    %13 = arith.constant {value = 1 : i64}
+    %14 = arith.cmpi eq %11, %13
+    cf.cond_br %14 [then: check, else: other]
+  check:
+    %15 = arith.constant {value = 2 : i64}
+    memref.store %15, extra
+    cf.br check.merge
+  other:
+    %16 = arith.constant {value = 100 : i64}
+    memref.store %16, extra
+    cf.br check.merge
+  check.merge:
+    %17 = memref.load base : i64
+    %18 = memref.load extra : i64
+    %19 = arith.addi %17, %18
+    func.return %19
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 40
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 0
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 1
+    x86.cmp ecx, ebx
+    x86.jne main.other
+  check:
+    x86.mov eax, 2
+    x86.mov [rbp-24], eax
+    x86.jmp main.check.merge
+  other:
+    x86.mov eax, 100
+    x86.mov [rbp-24], eax
+    x86.jmp main.check.merge
+  check.merge:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.add eax, ecx
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
 <!-- disabled-test: int-while-loop-counter -->

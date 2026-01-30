@@ -99,6 +99,10 @@ public static class MaxonToStandardConversion {
 								newBlock.AddOp(new StdCondBrOp(cond, condBr.ThenBlock, condBr.ElseBlock));
 								break;
 							}
+						case MaxonBrOp br: {
+								newBlock.AddOp(new StdBrOp(br.Target));
+								break;
+							}
 						case MaxonCallOp callOp: {
 								var newArgs = callOp.Args.Select(a => valueMap[a]).ToList();
 								var callResult = callOp.ResultKind?.CreateStdValue();

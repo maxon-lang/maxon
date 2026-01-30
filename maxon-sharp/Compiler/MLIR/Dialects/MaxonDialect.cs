@@ -170,6 +170,11 @@ public class MaxonCondBrOp(MaxonValue condition, string thenBlock, string elseBl
 	public string ElseBlock { get; } = elseBlock;
 }
 
+public class MaxonBrOp(string target) : MaxonOp {
+	public override string Mnemonic => $"maxon.br {Target}";
+	public string Target { get; } = target;
+}
+
 public class MaxonReturnOp(MaxonValue? value = null) : MaxonOp {
 	public override string Mnemonic => "maxon.return";
 	public MaxonValue? Value { get; } = value;

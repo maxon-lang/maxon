@@ -227,22 +227,17 @@ public class Parser(List<Token> tokens) {
 		ParseBodyUntilEnd();
 
 		// Parse: end 'thenLabel'
-		var endToken = Expect(TokenType.End);
-		if (Check(TokenType.CharacterLiteral)) {
-			var label = Advance().Value;
-			if (label != thenLabel) {
-				throw new CompileError(ErrorCode.ParserMismatchedEndLabel, $"Mismatched end label: expected '{thenLabel}', got '{label}'", endToken.Line, endToken.Column);
-			}
-		}
+		ExpectEndLabel(thenLabel);
 
 		// Check for else
+		MlirBlock<MaxonOp>? elseBlock = null;
 		string? elseLabel = null;
 		if (Check(TokenType.Else)) {
 			Advance(); // consume 'else'
 			elseLabel = Expect(TokenType.CharacterLiteral).Value;
 			SkipNewlines();
 
-			var elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
+			elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
 			_currentBlock = elseBlock;
 			ParseBodyUntilEnd();
 			ExpectEndLabel(elseLabel);
@@ -253,7 +248,29 @@ public class Parser(List<Token> tokens) {
 			entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel));
 		}
 
-		_currentBlock = entryBlock;
+		// If either branch doesn't end with a return, create a merge block
+		bool thenNeedsMerge = !BlockEndsWithTerminator(thenBlock);
+		bool elseNeedsMerge = elseBlock != null && !BlockEndsWithTerminator(elseBlock);
+
+		if (thenNeedsMerge || elseNeedsMerge) {
+			var mergeLabel = $"{thenLabel}.merge";
+			var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
+
+			if (thenNeedsMerge)
+				thenBlock.AddOp(new MaxonBrOp(mergeLabel));
+			if (elseNeedsMerge)
+				elseBlock!.AddOp(new MaxonBrOp(mergeLabel));
+
+			_currentBlock = mergeBlock;
+		} else {
+			_currentBlock = entryBlock;
+		}
+	}
+
+	private static bool BlockEndsWithTerminator(MlirBlock<MaxonOp> block) {
+		if (block.Operations.Count == 0) return false;
+		var lastOp = block.Operations[^1];
+		return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp;
 	}
 
 	// ============================================================================
