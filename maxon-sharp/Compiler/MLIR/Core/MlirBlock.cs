@@ -1,10 +1,10 @@
 namespace MaxonSharp.Compiler.Mlir.Core;
 
-public class MlirBlock(string name) {
+public class MlirBlock<TOp>(string name) where TOp : IMlirOp {
 	public string Name { get; } = name;
-	public List<MlirOperation> Operations { get; } = [];
+	public List<TOp> Operations { get; } = [];
 
-	public void AddOp(MlirOperation op) {
+	public void AddOp(TOp op) {
 		Operations.Add(op);
 	}
 }

@@ -1,6 +1,6 @@
+using MaxonSharp.Compiler.Mlir;
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
-using MaxonSharp.Compiler.Mlir.Emit;
 
 namespace MaxonSharp.Compiler;
 
@@ -23,7 +23,7 @@ public class CodeEmitter {
 	/// Emits machine code from an MLIR module containing X86 dialect operations.
 	/// </summary>
 	/// <param name="module">The MLIR module with X86 operations</param>
-	public static CodeEmitResult Emit(MlirModule module) {
+	public static CodeEmitResult Emit(MlirModule<X86Op> module) {
 		Logger.Debug(LogCategory.Codegen, "Emitting machine code");
 
 		var emitter = new X86CodeEmitter();
@@ -110,7 +110,7 @@ public class CodeEmitter {
 	/// <summary>
 	/// Emits machine code for a single function.
 	/// </summary>
-	private static void EmitFunction(X86CodeEmitter emitter, MlirFunction func) {
+	private static void EmitFunction(X86CodeEmitter emitter, MlirFunction<X86Op> func) {
 		emitter.DefineLabel(func.Name);
 		emitter.SetCurrentFunction(func.Name);
 
@@ -120,9 +120,7 @@ public class CodeEmitter {
 			}
 
 			foreach (var op in block.Operations) {
-				if (op is X86Op x86Op) {
-					emitter.Emit(x86Op);
-				}
+				emitter.Emit(op);
 			}
 		}
 	}

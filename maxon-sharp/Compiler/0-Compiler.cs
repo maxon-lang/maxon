@@ -1,4 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
@@ -39,7 +40,7 @@ public class Compiler {
 			Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
 
 			// Stage 1-2: Lex and parse all source files into MLIR modules
-			var module = new MlirModule();
+			var module = new MlirModule<MaxonOp>();
 
 			for (int i = 0; i < sources.Length; i++) {
 				var source = sources[i];

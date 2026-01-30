@@ -3,7 +3,7 @@ using System.Text;
 namespace MaxonSharp.Compiler.Mlir.Core;
 
 public static class MlirPrinter {
-	public static string Print(MlirModule module) {
+	public static string Print<TOp>(MlirModule<TOp> module) where TOp : IMlirOp {
 		var sb = new StringBuilder();
 		sb.AppendLine("module {");
 		foreach (var func in module.Functions) {
@@ -13,7 +13,7 @@ public static class MlirPrinter {
 		return sb.ToString();
 	}
 
-	private static void PrintFunction(StringBuilder sb, MlirFunction func, string indent) {
+	private static void PrintFunction<TOp>(StringBuilder sb, MlirFunction<TOp> func, string indent) where TOp : IMlirOp {
 		sb.Append($"{indent}func @{func.Name}(");
 		for (int i = 0; i < func.ParamTypes.Count; i++) {
 			if (i > 0) sb.Append(", ");
@@ -37,7 +37,7 @@ public static class MlirPrinter {
 		sb.AppendLine($"{indent}}}");
 	}
 
-	private static void PrintOp(StringBuilder sb, MlirOperation op) {
+	private static void PrintOp(StringBuilder sb, IMlirOp op) {
 		if (op.Results.Count > 0) {
 			sb.Append(string.Join(", ", op.Results));
 			sb.Append(" = ");

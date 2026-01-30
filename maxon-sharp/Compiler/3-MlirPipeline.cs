@@ -1,14 +1,15 @@
 using System.Text;
 using MaxonSharp.Compiler.Mlir.Conversion;
 using MaxonSharp.Compiler.Mlir.Core;
+using MaxonSharp.Compiler.Mlir.Dialects;
 using MaxonSharp.Compiler.Mlir.Passes;
 
 namespace MaxonSharp.Compiler;
 
-public record MlirPipelineResult(MlirModule Module, string? AllStagesIr);
+public record MlirPipelineResult(MlirModule<X86Op> Module, string? AllStagesIr);
 
 public class MlirPipeline {
-	public static MlirPipelineResult Run(MlirModule module, bool returnIr = false, string? dumpStagesBasePath = null) {
+	public static MlirPipelineResult Run(MlirModule<MaxonOp> module, bool returnIr = false, string? dumpStagesBasePath = null) {
 		Logger.Debug(LogCategory.Mlir, "Starting MLIR pipeline");
 
 		StringBuilder? irBuilder = returnIr ? new() : null;
@@ -30,12 +31,12 @@ public class MlirPipeline {
 		}
 
 		// Maxon dialect -> Standard dialects
-		MaxonToStandardConversion.Run(module);
+		var stdModule = MaxonToStandardConversion.Run(module);
 		Logger.Debug(LogCategory.Mlir, "Lowered Maxon to Standard");
 
 		// Capture standard stage
 		if (returnIr || dumpStagesBasePath != null) {
-			var standardIr = MlirPrinter.Print(module);
+			var standardIr = MlirPrinter.Print(stdModule);
 			if (returnIr) {
 				irBuilder!.AppendLine($"=== {PipelineStages.Standard}");
 				irBuilder.Append(standardIr.TrimEnd());
@@ -47,12 +48,12 @@ public class MlirPipeline {
 		}
 
 		// Standard dialects -> X86 dialect
-		StandardToX86Conversion.Run(module);
+		var x86Module = StandardToX86Conversion.Run(stdModule);
 		Logger.Debug(LogCategory.Mlir, "Lowered Standard to X86");
 
 		// Capture x86 stage
 		if (returnIr || dumpStagesBasePath != null) {
-			var x86Ir = MlirPrinter.Print(module);
+			var x86Ir = MlirPrinter.Print(x86Module);
 			if (returnIr) {
 				irBuilder!.AppendLine($"=== {PipelineStages.X86}");
 				irBuilder.Append(x86Ir.TrimEnd());
@@ -63,10 +64,10 @@ public class MlirPipeline {
 			}
 		}
 
-		return new MlirPipelineResult(module, irBuilder?.ToString().TrimEnd());
+		return new MlirPipelineResult(x86Module, irBuilder?.ToString().TrimEnd());
 	}
 
-	public static void WriteMlirOutput(MlirModule module, string path) {
+	public static void WriteMlirOutput<TOp>(MlirModule<TOp> module, string path) where TOp : IMlirOp {
 		File.WriteAllText(path, MlirPrinter.Print(module));
 	}
 }

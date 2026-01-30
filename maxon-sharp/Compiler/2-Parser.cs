@@ -8,13 +8,13 @@ public class Parser(List<Token> tokens) {
 	private readonly List<Token> _tokens = tokens;
 	private int _pos;
 
-	private MlirFunction? _currentFunction;
-	private MlirBlock? _currentBlock;
+	private MlirFunction<MaxonOp>? _currentFunction;
+	private MlirBlock<MaxonOp>? _currentBlock;
 	private readonly Dictionary<string, (MlirType type, bool mutable)> _variables = [];
 
-	public MlirModule Parse() {
+	public MlirModule<MaxonOp> Parse() {
 		Logger.Debug(LogCategory.Parser, "Starting parser");
-		var module = new MlirModule();
+		var module = new MlirModule<MaxonOp>();
 
 		SkipNewlines();
 		while (!IsAtEnd() && Current().Type != TokenType.Eof) {
@@ -30,7 +30,7 @@ public class Parser(List<Token> tokens) {
 	// Top-level parsing
 	// ============================================================================
 
-	private void ParseTopLevel(MlirModule module) {
+	private void ParseTopLevel(MlirModule<MaxonOp> module) {
 		if (Check(TokenType.Function)) {
 			ParseFunction(module);
 		} else {
@@ -38,7 +38,7 @@ public class Parser(List<Token> tokens) {
 		}
 	}
 
-	private void ParseFunction(MlirModule module) {
+	private void ParseFunction(MlirModule<MaxonOp> module) {
 		Expect(TokenType.Function);
 		var nameToken = Expect(TokenType.Identifier);
 		var name = nameToken.Value;
@@ -55,7 +55,7 @@ public class Parser(List<Token> tokens) {
 
 		SkipNewlines();
 
-		var func = new MlirFunction(name, paramTypes, returnType);
+		var func = new MlirFunction<MaxonOp>(name, paramTypes, returnType);
 		module.AddFunction(func);
 		_currentFunction = func;
 		_currentBlock = func.Body.AddBlock("entry");

@@ -1,9 +1,10 @@
 using MaxonSharp.Compiler.Mlir.Core;
+using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Passes;
 
 public static class SemanticCheckPass {
-	public static void Run(MlirModule module) {
+	public static void Run(MlirModule<MaxonOp> module) {
 		// E3001: main function must exist
 		var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main") ?? throw new CompileError(ErrorCode.SemanticNoMain, "No 'main' function found");
 

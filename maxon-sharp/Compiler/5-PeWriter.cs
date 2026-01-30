@@ -1,5 +1,5 @@
 using System.Text;
-using MaxonSharp.Compiler.Mlir.Emit;
+using MaxonSharp.Compiler.Mlir;
 
 namespace MaxonSharp.Compiler;
 

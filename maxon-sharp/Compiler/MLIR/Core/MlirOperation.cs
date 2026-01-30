@@ -1,8 +1,8 @@
 namespace MaxonSharp.Compiler.Mlir.Core;
 
-public abstract class MlirOperation {
-	public abstract string Mnemonic { get; }
-	public List<MlirValue> Operands { get; } = [];
-	public List<MlirValue> Results { get; } = [];
-	public Dictionary<string, MlirAttribute> Attributes { get; } = [];
+public interface IMlirOp {
+	string Mnemonic { get; }
+	List<MlirValue> Operands { get; }
+	List<MlirValue> Results { get; }
+	Dictionary<string, MlirAttribute> Attributes { get; }
 }

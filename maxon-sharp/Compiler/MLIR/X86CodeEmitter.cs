@@ -1,6 +1,6 @@
 using MaxonSharp.Compiler.Mlir.Dialects;
 
-namespace MaxonSharp.Compiler.Mlir.Emit;
+namespace MaxonSharp.Compiler.Mlir;
 
 public record ImportEntry(string DllName, string FunctionName);
 
@@ -79,54 +79,54 @@ public class X86CodeEmitter {
 
 	public void Emit(X86Op op) {
 		switch (op) {
-			case X86PushReg push:
+			case X86PushRegOp push:
 				EmitPushReg(push.Register);
 				break;
-			case X86PopReg pop:
+			case X86PopRegOp pop:
 				EmitPopReg(pop.Register);
 				break;
-			case X86MovRegReg mov:
+			case X86MovRegRegOp mov:
 				EmitMovRegReg(mov.Dest, mov.Src);
 				break;
-			case X86MovRegImm mov:
+			case X86MovRegImmOp mov:
 				EmitMovRegImm(mov.Dest, mov.Immediate);
 				break;
-			case X86Ret:
+			case X86RetOp:
 				EmitByte(0xC3); // ret
 				break;
-			case X86SubRegImm sub:
+			case X86SubRegImmOp sub:
 				EmitSubRegImm(sub.Dest, sub.Immediate);
 				break;
-			case X86AddRegImm add:
+			case X86AddRegImmOp add:
 				EmitAddRegImm(add.Dest, add.Immediate);
 				break;
-			case X86AddRegReg addReg:
+			case X86AddRegRegOp addReg:
 				EmitAddRegReg(addReg.Dest, addReg.Src);
 				break;
-			case X86SubRegReg subReg:
+			case X86SubRegRegOp subReg:
 				EmitSubRegReg(subReg.Dest, subReg.Src);
 				break;
-			case X86CallDirect call:
+			case X86CallDirectOp call:
 				EmitByte(0xE8); // call rel32
 				_relCallFixups.Add((_code.Count, call.Target));
 				EmitDword(0); // placeholder, patched by ResolveLabels
 				break;
-			case X86MovSdXmmRipRel movsd:
+			case X86MovSdXmmRipRelOp movsd:
 				EmitMovSdXmmRipRel(movsd.Dest, movsd.RdataLabel);
 				break;
-			case X86MovSdMemXmm movsd:
+			case X86MovSdMemXmmOp movsd:
 				EmitMovSdMemXmm(movsd.Displacement, movsd.Src);
 				break;
-			case X86MovSdXmmMem movsd:
+			case X86MovSdXmmMemOp movsd:
 				EmitMovSdXmmMem(movsd.Dest, movsd.Displacement);
 				break;
-			case X86Ucomisd ucomisd:
+			case X86UcomisdOp ucomisd:
 				EmitUcomisd(ucomisd.Src1, ucomisd.Src2);
 				break;
-			case X86Jcc jcc:
+			case X86JccOp jcc:
 				EmitJcc(jcc.Condition, jcc.Target);
 				break;
-			case X86Jmp jmp:
+			case X86JmpOp jmp:
 				EmitJmp(jmp.Target);
 				break;
 			default:

@@ -6,16 +6,16 @@ public class MlirGlobal(string name, MlirType type, MlirAttribute? initValue = n
 	public MlirAttribute? InitValue { get; } = initValue;
 }
 
-public class MlirModule {
-	public List<MlirFunction> Functions { get; } = [];
+public class MlirModule<TOp> where TOp : IMlirOp {
+	public List<MlirFunction<TOp>> Functions { get; } = [];
 	public List<(string label, byte[] bytes)> RdataEntries { get; } = [];
 	public List<MlirGlobal> Globals { get; } = [];
 
-	public void AddFunction(MlirFunction func) {
+	public void AddFunction(MlirFunction<TOp> func) {
 		Functions.Add(func);
 	}
 
-	public void Merge(MlirModule other) {
+	public void Merge(MlirModule<TOp> other) {
 		Functions.AddRange(other.Functions);
 		RdataEntries.AddRange(other.RdataEntries);
 		Globals.AddRange(other.Globals);

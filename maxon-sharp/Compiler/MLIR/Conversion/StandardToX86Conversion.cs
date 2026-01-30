@@ -5,19 +5,27 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
 public static class StandardToX86Conversion {
-	public static void Run(MlirModule module) {
+	public static MlirModule<X86Op> Run(MlirModule<StandardOp> module) {
+		var result = new MlirModule<X86Op>();
+		result.Globals.AddRange(module.Globals);
+
 		foreach (var func in module.Functions) {
-			ConvertFunction(func, module);
+			var newFunc = ConvertFunction(func, result);
+			result.AddFunction(newFunc);
 		}
+
+		return result;
 	}
 
-	private static void ConvertFunction(MlirFunction func, MlirModule module) {
+	private static MlirFunction<X86Op> ConvertFunction(MlirFunction<StandardOp> func, MlirModule<X86Op> outputModule) {
+		var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamTypes, func.ReturnType);
+
 		// Pre-scan: calculate stack frame for local variables
 		var varOffsets = new Dictionary<string, int>();
 		int stackSize = 0;
 		foreach (var block in func.Body.Blocks) {
 			foreach (var op in block.Operations) {
-				if (op is MemRefAllocaOp alloca) {
+				if (op is StandardMemRefAllocaOp alloca) {
 					stackSize += alloca.VarType.SizeInBytes;
 					varOffsets[alloca.VarName] = -stackSize;
 				}
@@ -40,107 +48,105 @@ public static class StandardToX86Conversion {
 		int nextGpr = 0;
 
 		var sourceBlocks = func.Body.Blocks.ToList();
-		var newBlocks = new List<MlirBlock>();
 
 		for (int blockIdx = 0; blockIdx < sourceBlocks.Count; blockIdx++) {
 			var srcBlock = sourceBlocks[blockIdx];
-			var x86Block = new MlirBlock(srcBlock.Name);
-			newBlocks.Add(x86Block);
+			var x86Block = newFunc.Body.AddBlock(srcBlock.Name);
 
 			nextGpr = 0;
 			nextXmm = 0;
 
 			// Prologue only in entry block
 			if (blockIdx == 0) {
-				x86Block.AddOp(new X86PushReg(X86Register.Rbp));
-				x86Block.AddOp(new X86MovRegReg(X86Register.Rbp, X86Register.Rsp));
+				x86Block.AddOp(new X86PushRegOp(X86Register.Rbp));
+				x86Block.AddOp(new X86MovRegRegOp(X86Register.Rbp, X86Register.Rsp));
 				if (stackSize > 0)
-					x86Block.AddOp(new X86SubRegImm(X86Register.Rsp, stackSize));
+					x86Block.AddOp(new X86SubRegImmOp(X86Register.Rsp, stackSize));
 			}
 
 			foreach (var op in srcBlock.Operations) {
 				switch (op) {
-					case ArithConstantOp constOp: {
+					case StandardArithConstantOp constOp: {
 							var gpr = gprPool[nextGpr];
-							x86Block.AddOp(new X86MovRegImm(gpr, (int)constOp.IntValue));
+							x86Block.AddOp(new X86MovRegImmOp(gpr, (int)constOp.IntValue));
 							valueToGpr[constOp.Result] = gpr;
 							nextGpr++;
 							break;
 						}
 
-					case ArithAddIOp addOp: {
+					case StandardArithAddIOp addOp: {
 							var lhsReg = valueToGpr[addOp.Operands[0]];
 							var rhsReg = valueToGpr[addOp.Operands[1]];
-							x86Block.AddOp(new X86AddRegReg(lhsReg, rhsReg));
+							x86Block.AddOp(new X86AddRegRegOp(lhsReg, rhsReg));
 							// Result is in lhsReg
 							valueToGpr[addOp.Result] = lhsReg;
 							break;
 						}
 
-					case ArithSubIOp subOp: {
+					case StandardArithSubIOp subOp: {
 							var lhsReg = valueToGpr[subOp.Operands[0]];
 							var rhsReg = valueToGpr[subOp.Operands[1]];
-							x86Block.AddOp(new X86SubRegReg(lhsReg, rhsReg));
+							x86Block.AddOp(new X86SubRegRegOp(lhsReg, rhsReg));
 							valueToGpr[subOp.Result] = lhsReg;
 							break;
 						}
 
-					case ArithFloatConstantOp floatOp: {
-							var label = GetOrCreateFloatLabel(floatOp.FloatValue, module, floatConstants);
+					case StandardArithFloatConstantOp floatOp: {
+							var label = GetOrCreateFloatLabel(floatOp.FloatValue, outputModule, floatConstants);
 							var xmmReg = (X86XmmRegister)nextXmm;
-							x86Block.AddOp(new X86MovSdXmmRipRel(xmmReg, label));
+							x86Block.AddOp(new X86MovSdXmmRipRelOp(xmmReg, label));
 							valueToXmm[floatOp.Result] = xmmReg;
 							nextXmm++;
 							break;
 						}
 
-					case MemRefAllocaOp:
+					case StandardMemRefAllocaOp:
 						break;
 
-					case MemRefStoreOp storeOp: {
+					case StandardMemRefStoreOp storeOp: {
 							var offset = varOffsets[storeOp.VarName];
-							x86Block.AddOp(new X86MovSdMemXmm(offset, X86XmmRegister.Xmm0));
+							x86Block.AddOp(new X86MovSdMemXmmOp(offset, X86XmmRegister.Xmm0));
 							// After storing, xmm0 is free; reset allocation
 							nextXmm = 0;
 							break;
 						}
 
-					case MemRefLoadOp loadOp: {
+					case StandardMemRefLoadOp loadOp: {
 							var offset = varOffsets[loadOp.VarName];
-							x86Block.AddOp(new X86MovSdXmmMem(X86XmmRegister.Xmm0, offset));
+							x86Block.AddOp(new X86MovSdXmmMemOp(X86XmmRegister.Xmm0, offset));
 							valueToXmm[loadOp.Result] = X86XmmRegister.Xmm0;
 							nextXmm = 1; // xmm0 is now occupied
 							break;
 						}
 
-					case ArithCmpFOp cmpOp: {
+					case StandardArithCmpFOp cmpOp: {
 							var lhsReg = valueToXmm.GetValueOrDefault(cmpOp.Operands[0], X86XmmRegister.Xmm0);
 							var rhsReg = valueToXmm.GetValueOrDefault(cmpOp.Operands[1], X86XmmRegister.Xmm1);
-							x86Block.AddOp(new X86Ucomisd(lhsReg, rhsReg));
+							x86Block.AddOp(new X86UcomisdOp(lhsReg, rhsReg));
 							break;
 						}
 
-					case CfCondBrOp condBr: {
+					case StandardCfCondBrOp condBr: {
 							var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
-							x86Block.AddOp(new X86Jcc("ne", scopedElse));
-							x86Block.AddOp(new X86Jcc("p", scopedElse));
+							x86Block.AddOp(new X86JccOp("ne", scopedElse));
+							x86Block.AddOp(new X86JccOp("p", scopedElse));
 							break;
 						}
 
-					case FuncCallOp callOp:
-						x86Block.AddOp(new X86CallDirect(callOp.Callee));
+					case StandardFuncCallOp callOp:
+						x86Block.AddOp(new X86CallDirectOp(callOp.Callee));
 						break;
 
-					case FuncReturnOp retOp: {
+					case StandardFuncReturnOp retOp: {
 							if (retOp.ReturnValue != null && valueToGpr.TryGetValue(retOp.ReturnValue, out var retReg)) {
 								if (retReg != X86Register.Eax) {
-									x86Block.AddOp(new X86MovRegReg(X86Register.Eax, retReg));
+									x86Block.AddOp(new X86MovRegRegOp(X86Register.Eax, retReg));
 								}
 							}
 							if (stackSize > 0)
-								x86Block.AddOp(new X86AddRegImm(X86Register.Rsp, stackSize));
-							x86Block.AddOp(new X86PopReg(X86Register.Rbp));
-							x86Block.AddOp(new X86Ret());
+								x86Block.AddOp(new X86AddRegImmOp(X86Register.Rsp, stackSize));
+							x86Block.AddOp(new X86PopRegOp(X86Register.Rbp));
+							x86Block.AddOp(new X86RetOp());
 							break;
 						}
 
@@ -150,11 +156,10 @@ public static class StandardToX86Conversion {
 			}
 		}
 
-		func.Body.Blocks.Clear();
-		func.Body.Blocks.AddRange(newBlocks);
+		return newFunc;
 	}
 
-	private static string GetOrCreateFloatLabel(double value, MlirModule module, Dictionary<double, string> floatConstants) {
+	private static string GetOrCreateFloatLabel(double value, MlirModule<X86Op> module, Dictionary<double, string> floatConstants) {
 		if (!floatConstants.TryGetValue(value, out var label)) {
 			label = $"__float_{value.ToString(CultureInfo.InvariantCulture)}";
 			floatConstants[value] = label;

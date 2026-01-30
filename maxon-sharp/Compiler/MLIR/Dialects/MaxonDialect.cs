@@ -2,13 +2,20 @@ using MaxonSharp.Compiler.Mlir.Core;
 
 namespace MaxonSharp.Compiler.Mlir.Dialects;
 
+public abstract class MaxonOp : IMlirOp {
+	public abstract string Mnemonic { get; }
+	public List<MlirValue> Operands { get; } = [];
+	public List<MlirValue> Results { get; } = [];
+	public Dictionary<string, MlirAttribute> Attributes { get; } = [];
+}
+
 public abstract record MaxonExpr {
 	public sealed record Value(MlirValue MlirValue) : MaxonExpr;
 	public sealed record Call(MaxonCallOp CallOp) : MaxonExpr;
 	public sealed record VarLoad(MaxonVarLoadOp LoadOp) : MaxonExpr;
 }
 
-public class MaxonConstantOp : MlirOperation {
+public class MaxonConstantOp : MaxonOp {
 	public override string Mnemonic => "maxon.constant";
 	public long Value { get; }
 	public MlirType ResultType { get; }
@@ -23,7 +30,7 @@ public class MaxonConstantOp : MlirOperation {
 	}
 }
 
-public class MaxonFloatConstantOp : MlirOperation {
+public class MaxonFloatConstantOp : MaxonOp {
 	public override string Mnemonic => "maxon.float_constant";
 	public double Value { get; }
 	public MlirType ResultType { get; }
@@ -38,7 +45,7 @@ public class MaxonFloatConstantOp : MlirOperation {
 	}
 }
 
-public class MaxonVarDeclOp : MlirOperation {
+public class MaxonVarDeclOp : MaxonOp {
 	public override string Mnemonic => $"maxon.var_decl {VarName}";
 	public string VarName { get; }
 	public MlirValue InitValue { get; }
@@ -50,7 +57,7 @@ public class MaxonVarDeclOp : MlirOperation {
 	}
 }
 
-public class MaxonVarLoadOp : MlirOperation {
+public class MaxonVarLoadOp : MaxonOp {
 	public override string Mnemonic => $"maxon.var_load {VarName}";
 	public string VarName { get; }
 	public MlirValue Result { get; }
@@ -63,7 +70,7 @@ public class MaxonVarLoadOp : MlirOperation {
 	}
 }
 
-public class MaxonAddIOp : MlirOperation {
+public class MaxonAddIOp : MaxonOp {
 	public override string Mnemonic => "maxon.addi";
 	public MlirValue Result { get; }
 
@@ -75,7 +82,7 @@ public class MaxonAddIOp : MlirOperation {
 	}
 }
 
-public class MaxonSubIOp : MlirOperation {
+public class MaxonSubIOp : MaxonOp {
 	public override string Mnemonic => "maxon.subi";
 	public MlirValue Result { get; }
 
@@ -87,7 +94,7 @@ public class MaxonSubIOp : MlirOperation {
 	}
 }
 
-public class MaxonCmpFOp : MlirOperation {
+public class MaxonCmpFOp : MaxonOp {
 	public override string Mnemonic => $"maxon.cmpf {Predicate}";
 	public string Predicate { get; }
 	public MlirValue Result { get; }
@@ -101,14 +108,14 @@ public class MaxonCmpFOp : MlirOperation {
 	}
 }
 
-public class MaxonCondBrOp(MlirValue condition, string thenBlock, string elseBlock) : MlirOperation {
+public class MaxonCondBrOp(MlirValue condition, string thenBlock, string elseBlock) : MaxonOp {
 	public override string Mnemonic => $"maxon.cond_br %{Condition.Id} [then: {ThenBlock}, else: {ElseBlock}]";
 	public MlirValue Condition { get; } = condition;
 	public string ThenBlock { get; } = thenBlock;
 	public string ElseBlock { get; } = elseBlock;
 }
 
-public class MaxonCallOp : MlirOperation {
+public class MaxonCallOp : MaxonOp {
 	public override string Mnemonic => $"maxon.call @{Callee}";
 	public string Callee { get; }
 
@@ -118,7 +125,7 @@ public class MaxonCallOp : MlirOperation {
 	}
 }
 
-public class MaxonReturnOp : MlirOperation {
+public class MaxonReturnOp : MaxonOp {
 	public override string Mnemonic => "maxon.return";
 	public MaxonExpr? ReturnExpr { get; }
 
