@@ -74,7 +74,7 @@ public class Compiler {
 			}
 			return new CompileResult(false, ex.Format());
 		} catch (Exception ex) {
-			return new CompileResult(false, ex.Message);
+			return new CompileResult(false, $"{ex.Message}\n{ex.StackTrace}");
 		}
 	}
 }

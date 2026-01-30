@@ -125,14 +125,18 @@ public static class FragmentGenerator {
 					continue;
 				}
 
-				// Pass absolute path - CompileError.Format() will make it relative to ProjectRoot
-				var absolutePath = Path.GetFullPath(fragmentPath);
-				var (content, error) = GenerateFragmentContent(test, exePath, absolutePath);
-				if (error != null) {
-					errors.Add(error);
+				try {
+					// Pass absolute path - CompileError.Format() will make it relative to ProjectRoot
+					var absolutePath = Path.GetFullPath(fragmentPath);
+					var (content, error) = GenerateFragmentContent(test, exePath, absolutePath);
+					if (error != null) {
+						errors.Add(error);
+					}
+					File.WriteAllText(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
+					Interlocked.Increment(ref generated);
+				} catch (Exception ex) {
+					errors.Add($"Exception generating {specName}/{test.Name}: {ex.Message}\n{ex.StackTrace}");
 				}
-				File.WriteAllText(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
-				Interlocked.Increment(ref generated);
 			}
 		});
 

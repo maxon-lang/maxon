@@ -39,7 +39,7 @@ public static partial class SpecParser {
 				}
 				specs.Add(spec);
 			} catch (Exception ex) {
-				Logger.Error(LogCategory.Testing, $"Failed to parse {file}: {ex.Message}");
+				Logger.Error(LogCategory.Testing, $"Failed to parse {file}: {ex.Message}\n{ex.StackTrace}");
 			}
 		}
 

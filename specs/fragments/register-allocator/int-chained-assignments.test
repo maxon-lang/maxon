@@ -1,0 +1,95 @@
+// Test: int-chained-assignments
+function main() returns int
+    var a = 10
+    var b = a + 5
+    var c = b + 7
+    var d = c + 20
+    return d
+end 'main'
+---
+ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 5 : i64}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 7 : i64}
+    %4 = maxon.binop %2, %3 {op = add} {kind = i64}
+    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 20 : i64}
+    %6 = maxon.binop %4, %5 {op = add} {kind = i64}
+    maxon.assign %6 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.return %6
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %7 = arith.constant {value = 10 : i64}
+    memref.store %7, a
+    %8 = arith.constant {value = 5 : i64}
+    %9 = arith.addi %7, %8
+    memref.store %9, b
+    %10 = arith.constant {value = 7 : i64}
+    %11 = arith.addi %9, %10
+    memref.store %11, c
+    %12 = arith.constant {value = 20 : i64}
+    %13 = arith.addi %11, %12
+    memref.store %13, d
+    func.return %13
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 5
+    x86.add eax, ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, 7
+    x86.add eax, edx
+    x86.mov [rbp-24], eax
+    x86.mov ebx, 20
+    x86.add eax, ebx
+    x86.mov [rbp-32], eax
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 5
+    x86.add eax, ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, 7
+    x86.add eax, edx
+    x86.mov [rbp-24], eax
+    x86.mov ebx, 20
+    x86.add eax, ebx
+    x86.mov [rbp-32], eax
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
+---

@@ -121,6 +121,8 @@ public class Parser(List<Token> tokens) {
 			ParseVarDecl();
 		} else if (Check(TokenType.If)) {
 			ParseIf();
+		} else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Equals) {
+			ParseAssignment();
 		} else {
 			throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected statement, got {Current().Type}", Current().Line, Current().Column);
 		}
@@ -176,6 +178,23 @@ public class Parser(List<Token> tokens) {
 		};
 		_currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: true, kind));
 		_variables[name] = new VarInfo(kind, true, initValue, _currentBlock!);
+	}
+
+	private void ParseAssignment() {
+		var nameToken = Advance(); // consume identifier
+		var name = nameToken.Value;
+		Expect(TokenType.Equals);
+
+		if (!_variables.TryGetValue(name, out var varInfo)) {
+			throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
+		}
+		if (!varInfo.Mutable) {
+			throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Variable '{name}' is not mutable", nameToken.Line, nameToken.Column);
+		}
+
+		var newValue = ResolveExprValue(ParseExpression());
+		_currentBlock!.AddOp(new MaxonAssignOp(name, newValue, isDeclaration: false, isMutable: true, varInfo.Kind));
+		_variables[name] = new VarInfo(varInfo.Kind, true, newValue, _currentBlock!);
 	}
 
 	private void ParseIf() {

@@ -149,51 +149,6 @@ module {
 }
 ```
 
-<!-- test: int-subtract-constants -->
-```maxon
-function main() returns int
-    return 100 - 58
-end 'main'
-```
-```exitcode
-42
-```
-```RequiredMLIR
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 100 : i64}
-    %1 = maxon.literal {value = 58 : i64}
-    %2 = maxon.binop %0, %1 {op = sub} {kind = i64}
-    maxon.return %2
-  }
-}
-=== standard
-module {
-  func @main() -> i64 {
-  entry:
-    %3 = arith.constant {value = 100 : i64}
-    %4 = arith.constant {value = 58 : i64}
-    %5 = arith.subi %3, %4
-    func.return %5
-  }
-}
-=== x86
-module {
-  func @main() -> i64 {
-  entry:
-    x86.push rbp
-    x86.mov rbp, rsp
-    x86.mov eax, 100
-    x86.mov ecx, 58
-    x86.sub eax, ecx
-    x86.pop rbp
-    x86.ret
-  }
-}
-```
-
 ### Level 2: Multiple Values and Reuse
 
 <!-- test: int-two-vars-add -->
@@ -251,20 +206,7 @@ module {
 }
 ```
 
-<!-- disabled-test: int-three-vars-arithmetic -->
-```maxon
-function main() returns int
-    var a = 50
-    var b = 20
-    var c = 28
-    return a + b - c
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- disabled-test: int-var-reuse-twice -->
+<!-- test: int-var-reuse-twice -->
 ```maxon
 function main() returns int
     var x = 21
@@ -274,20 +216,45 @@ end 'main'
 ```exitcode
 42
 ```
-
-<!-- disabled-test: int-multiply -->
-```maxon
-function main() returns int
-    var a = 6
-    var b = 7
-    return a * b
-end 'main'
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 21 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.binop %0, %0 {op = add} {kind = i64}
+    maxon.return %1
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %2 = arith.constant {value = 21 : i64}
+    memref.store %2, x
+    %3 = arith.addi %2, %2
+    func.return %3
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 21
+    x86.mov [rbp-8], eax
+    x86.add eax, eax
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
-```exitcode
-42
-```
 
-<!-- disabled-test: int-chained-assignments -->
+<!-- test: int-chained-assignments -->
 ```maxon
 function main() returns int
     var a = 10
@@ -300,8 +267,69 @@ end 'main'
 ```exitcode
 42
 ```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 5 : i64}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 7 : i64}
+    %4 = maxon.binop %2, %3 {op = add} {kind = i64}
+    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 20 : i64}
+    %6 = maxon.binop %4, %5 {op = add} {kind = i64}
+    maxon.assign %6 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.return %6
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %7 = arith.constant {value = 10 : i64}
+    memref.store %7, a
+    %8 = arith.constant {value = 5 : i64}
+    %9 = arith.addi %7, %8
+    memref.store %9, b
+    %10 = arith.constant {value = 7 : i64}
+    %11 = arith.addi %9, %10
+    memref.store %11, c
+    %12 = arith.constant {value = 20 : i64}
+    %13 = arith.addi %11, %12
+    memref.store %13, d
+    func.return %13
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 5
+    x86.add eax, ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, 7
+    x86.add eax, edx
+    x86.mov [rbp-24], eax
+    x86.mov ebx, 20
+    x86.add eax, ebx
+    x86.mov [rbp-32], eax
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
 
-<!-- disabled-test: int-reassignment -->
+<!-- test: int-reassignment -->
 ```maxon
 function main() returns int
     var x = 100
@@ -313,10 +341,63 @@ end 'main'
 ```exitcode
 42
 ```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 100 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 80 : i64}
+    %2 = maxon.binop %0, %1 {op = sub} {kind = i64}
+    maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 22 : i64}
+    maxon.assign %3 {var = x} {kind = i64} {mut = 1 : i1}
+    %4 = maxon.binop %3, %2 {op = add} {kind = i64}
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %5 = arith.constant {value = 100 : i64}
+    memref.store %5, x
+    %6 = arith.constant {value = 80 : i64}
+    %7 = arith.subi %5, %6
+    memref.store %7, y
+    %8 = arith.constant {value = 22 : i64}
+    memref.store %8, x
+    %9 = arith.addi %8, %7
+    func.return %9
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 100
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 80
+    x86.sub eax, ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, 22
+    x86.mov [rbp-8], edx
+    x86.add edx, eax
+    x86.mov eax, edx
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
 
 ### Level 3: Register Pressure and Spilling
 
-<!-- disabled-test: int-six-vars-alive -->
+<!-- test: int-six-vars-alive -->
 ```maxon
 function main() returns int
     var a = 1
@@ -331,8 +412,87 @@ end 'main'
 ```exitcode
 21
 ```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 1 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 2 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 4 : i64}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 5 : i64}
+    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 6 : i64}
+    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %7 = maxon.binop %6, %2 {op = add} {kind = i64}
+    %8 = maxon.binop %7, %3 {op = add} {kind = i64}
+    %9 = maxon.binop %8, %4 {op = add} {kind = i64}
+    %10 = maxon.binop %9, %5 {op = add} {kind = i64}
+    maxon.return %10
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %11 = arith.constant {value = 1 : i64}
+    memref.store %11, a
+    %12 = arith.constant {value = 2 : i64}
+    memref.store %12, b
+    %13 = arith.constant {value = 3 : i64}
+    memref.store %13, c
+    %14 = arith.constant {value = 4 : i64}
+    memref.store %14, d
+    %15 = arith.constant {value = 5 : i64}
+    memref.store %15, e
+    %16 = arith.constant {value = 6 : i64}
+    memref.store %16, f
+    %17 = arith.addi %11, %12
+    %18 = arith.addi %17, %13
+    %19 = arith.addi %18, %14
+    %20 = arith.addi %19, %15
+    %21 = arith.addi %20, %16
+    func.return %21
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 48
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 2
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 3
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 4
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 5
+    x86.mov [rbp-40], esi
+    x86.mov edi, 6
+    x86.mov [rbp-48], edi
+    x86.add eax, ecx
+    x86.add eax, edx
+    x86.add eax, ebx
+    x86.add eax, esi
+    x86.add eax, edi
+    x86.add rsp, 48
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
 
-<!-- disabled-test: int-ten-vars-alive -->
+<!-- test: int-ten-vars-alive -->
 ```maxon
 function main() returns int
     var a = 1
@@ -350,6 +510,9 @@ end 'main'
 ```
 ```exitcode
 55
+```
+```RequiredMLIR
+to be filled in
 ```
 
 <!-- disabled-test: int-sixteen-vars-spill -->
@@ -376,6 +539,9 @@ end 'main'
 ```
 ```exitcode
 136
+```
+```RequiredMLIR
+to be filled in
 ```
 
 <!-- disabled-test: int-twenty-vars-heavy-spill -->
@@ -407,6 +573,9 @@ end 'main'
 ```exitcode
 210
 ```
+```RequiredMLIR
+to be filled in
+```
 
 <!-- disabled-test: int-interleaved-lifetimes -->
 ```maxon
@@ -427,6 +596,67 @@ end 'main'
 ```exitcode
 210
 ```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 5 : i64}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 7 : i64}
+    %4 = maxon.binop %2, %3 {op = add} {kind = i64}
+    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 20 : i64}
+    %6 = maxon.binop %4, %5 {op = add} {kind = i64}
+    maxon.assign %6 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.return %6
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %7 = arith.constant {value = 10 : i64}
+    memref.store %7, a
+    %8 = arith.constant {value = 5 : i64}
+    %9 = arith.addi %7, %8
+    memref.store %9, b
+    %10 = arith.constant {value = 7 : i64}
+    %11 = arith.addi %9, %10
+    memref.store %11, c
+    %12 = arith.constant {value = 20 : i64}
+    %13 = arith.addi %11, %12
+    memref.store %13, d
+    func.return %13
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 5
+    x86.add eax, ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, 7
+    x86.add eax, edx
+    x86.mov [rbp-24], eax
+    x86.mov ebx, 20
+    x86.add eax, ebx
+    x86.mov [rbp-32], eax
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
 
 <!-- disabled-test: int-parallel-accumulation -->
 ```maxon
@@ -446,6 +676,7 @@ end 'main'
 ```exitcode
 90
 ```
+TO BE FILLED IN
 
 ### Level 4: Function Calls and Fixed Register Constraints
 
@@ -464,6 +695,7 @@ end 'main'
 ```exitcode
 42
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-multiple-calls-preserve -->
 ```maxon
@@ -486,6 +718,7 @@ end 'main'
 ```exitcode
 24
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-call-result-used-later -->
 ```maxon
@@ -502,6 +735,7 @@ end 'main'
 ```exitcode
 200
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-division-fixed-regs -->
 ```maxon
@@ -514,6 +748,7 @@ end 'main'
 ```exitcode
 42
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-modulo-fixed-regs -->
 ```maxon
@@ -526,6 +761,7 @@ end 'main'
 ```exitcode
 42
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-division-preserves-other-values -->
 ```maxon
@@ -540,6 +776,7 @@ end 'main'
 ```exitcode
 32
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-function-with-params -->
 ```maxon
@@ -554,6 +791,7 @@ end 'main'
 ```exitcode
 42
 ```
+TO BE FILLED IN
 
 ### Level 5: Control Flow and Loops
 
@@ -571,6 +809,7 @@ end 'main'
 ```exitcode
 42
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-if-else-value-survives-branch -->
 ```maxon
@@ -589,6 +828,7 @@ end 'main'
 ```exitcode
 42
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-while-loop-counter -->
 ```maxon
@@ -603,6 +843,7 @@ end 'main'
 ```exitcode
 42
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-while-loop-accumulator -->
 ```maxon
@@ -619,6 +860,7 @@ end 'main'
 ```exitcode
 45
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-while-loop-multiple-accumulators -->
 ```maxon
@@ -642,6 +884,7 @@ end 'main'
 ```exitcode
 200
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-nested-if-in-loop -->
 ```maxon
@@ -662,6 +905,7 @@ end 'main'
 ```exitcode
 95
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-nested-loops -->
 ```maxon
@@ -682,6 +926,7 @@ end 'main'
 ```exitcode
 20
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-nested-loops-with-outer-var -->
 ```maxon
@@ -702,6 +947,7 @@ end 'main'
 ```exitcode
 15
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-loop-with-function-call -->
 ```maxon
@@ -722,6 +968,7 @@ end 'main'
 ```exitcode
 20
 ```
+TO BE FILLED IN
 
 ### Level 6: Advanced Scenarios
 
@@ -734,6 +981,7 @@ end 'main'
 ```exitcode
 32
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-expression-both-sides-complex -->
 ```maxon
@@ -748,6 +996,7 @@ end 'main'
 ```exitcode
 40
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-many-params-function -->
 ```maxon
@@ -762,6 +1011,7 @@ end 'main'
 ```exitcode
 42
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-recursive-factorial -->
 ```maxon
@@ -779,6 +1029,7 @@ end 'main'
 ```exitcode
 120
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-loop-pressure-with-call -->
 ```maxon
@@ -806,6 +1057,7 @@ end 'main'
 ```exitcode
 55
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: float-and-int-mixed-pressure -->
 ```maxon
@@ -822,6 +1074,7 @@ end 'main'
 ```exitcode
 36
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-value-live-across-nested-control -->
 ```maxon
@@ -845,6 +1098,7 @@ end 'main'
 ```exitcode
 103
 ```
+TO BE FILLED IN
 
 <!-- disabled-test: int-fibonacci -->
 ```maxon
@@ -864,3 +1118,4 @@ end 'main'
 ```exitcode
 233
 ```
+TO BE FILLED IN

@@ -610,16 +610,28 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 					var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
 
 					if (irResult.Success && irResult.AllStagesIr != null) {
-						// Replace the RequiredMLIR block in the spec content
 						var newRequiredMLIR = irResult.AllStagesIr.Trim();
-						var oldPattern = $@"```RequiredMLIR\s*{Regex.Escape(success.RequiredMLIR.Trim())}\s*```";
-						var newPattern = $"```RequiredMLIR\n{newRequiredMLIR}\n```";
+						var oldNorm = NormalizeIr(success.RequiredMLIR);
+						var newNorm = NormalizeIr(newRequiredMLIR);
+						if (oldNorm == newNorm) continue;
 
-						if (Regex.IsMatch(specContent, oldPattern, RegexOptions.Singleline)) {
-							specContent = Regex.Replace(specContent, oldPattern, newPattern, RegexOptions.Singleline);
-							updated = true;
-							Logger.Debug(LogCategory.Testing, $"Updated RequiredMLIR for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
-						}
+						// Find the test section by its marker, then replace the RequiredMLIR block within it
+						var markerPattern = $@"<!--\s*test:\s*{Regex.Escape(test.Name)}\s*-->";
+						var markerMatch = Regex.Match(specContent, markerPattern);
+						if (!markerMatch.Success) continue;
+
+						// Find the first RequiredMLIR block after this test marker
+						var searchStart = markerMatch.Index + markerMatch.Length;
+						var blockPattern = @"```RequiredMLIR\s*\n(.*?)```";
+						var candidate = Regex.Match(specContent[searchStart..], blockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
+						if (!candidate.Success) continue;
+
+						var absoluteStart = searchStart + candidate.Index;
+						var absoluteEnd = absoluteStart + candidate.Length;
+						var replacement = $"```RequiredMLIR\n{newRequiredMLIR}\n```";
+						specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
+						updated = true;
+						Logger.Debug(LogCategory.Testing, $"Updated RequiredMLIR for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
 					}
 				}
 			}
