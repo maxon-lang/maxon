@@ -4,6 +4,36 @@ namespace MaxonSharp.Compiler.Mlir.Dialects;
 
 public enum MaxonValueKind { Integer, Float, Bool }
 
+public static class MaxonValueKindExtensions {
+	public static MlirType ToMlirType(this MaxonValueKind kind) => kind switch {
+		MaxonValueKind.Integer => MlirType.I64,
+		MaxonValueKind.Float => MlirType.F64,
+		MaxonValueKind.Bool => MlirType.I1,
+		_ => throw new ArgumentOutOfRangeException(nameof(kind))
+	};
+
+	public static MaxonValue CreateValue(this MaxonValueKind kind) => kind switch {
+		MaxonValueKind.Integer => new MaxonInteger(MlirContext.Current.NextId()),
+		MaxonValueKind.Float => new MaxonFloat(MlirContext.Current.NextId()),
+		MaxonValueKind.Bool => new MaxonBool(MlirContext.Current.NextId()),
+		_ => throw new ArgumentOutOfRangeException(nameof(kind))
+	};
+
+	public static MaxonValueKind ToValueKind(this MlirType type) {
+		if (type == MlirType.I64) return MaxonValueKind.Integer;
+		if (type == MlirType.F64) return MaxonValueKind.Float;
+		if (type == MlirType.I1) return MaxonValueKind.Bool;
+		throw new ArgumentOutOfRangeException(nameof(type), $"No MaxonValueKind for MlirType: {type}");
+	}
+
+	public static StdValue CreateStdValue(this MaxonValueKind kind) => kind switch {
+		MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),
+		MaxonValueKind.Float => new StdF64(MlirContext.Current.NextId()),
+		MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
+		_ => throw new ArgumentOutOfRangeException(nameof(kind))
+	};
+}
+
 public enum MaxonBinOperator {
 	Add, Sub, Mul, Div, Mod,
 	Eq, Ne, Lt, Gt, Le, Ge,
@@ -27,9 +57,10 @@ public class MaxonLiteralOp : MaxonOp {
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
 		ValueKind switch {
+			MaxonValueKind.Integer => new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(IntValue, MlirType.I64) },
 			MaxonValueKind.Float => new Dictionary<string, MlirAttribute> { ["value"] = new FloatAttr(FloatValue, MlirType.F64) },
 			MaxonValueKind.Bool => new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(BoolValue ? 1 : 0, MlirType.I1) },
-			_ => new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(IntValue, MlirType.I64) }
+			_ => throw new InvalidOperationException($"Unsupported MaxonLiteralOp kind: {ValueKind}")
 		};
 
 	public MaxonLiteralOp(long value) {
@@ -63,45 +94,41 @@ public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration,
 		get {
 			var attrs = new Dictionary<string, MlirAttribute> {
 				["var"] = new StringAttr(VarName),
-				["kind"] = new TypeAttr(KindToMlirType(ValueKind))
+				["kind"] = new TypeAttr(ValueKind.ToMlirType())
 			};
 			if (IsDeclaration) attrs["decl"] = new IntegerAttr(1, MlirType.I1);
 			if (IsMutable) attrs["mut"] = new IntegerAttr(1, MlirType.I1);
 			return attrs;
 		}
 	}
+}
 
-	private static MlirType KindToMlirType(MaxonValueKind kind) => kind switch {
-		MaxonValueKind.Integer => MlirType.I64,
-		MaxonValueKind.Float => MlirType.F64,
-		MaxonValueKind.Bool => MlirType.I1,
-		_ => throw new ArgumentOutOfRangeException(nameof(kind))
-	};
+public class MaxonParamOp(int index, string name, MaxonValueKind kind) : MaxonOp {
+	public override string Mnemonic => "maxon.param";
+	public int Index { get; } = index;
+	public string Name { get; } = name;
+	public MaxonValueKind ValueKind { get; } = kind;
+	public MaxonValue Result { get; } = kind.CreateValue();
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+		new Dictionary<string, MlirAttribute> {
+			["index"] = new IntegerAttr(Index, MlirType.I32),
+			["name"] = new StringAttr(Name),
+			["type"] = new TypeAttr(ValueKind.ToMlirType())
+		};
 }
 
 public class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp {
 	public override string Mnemonic => "maxon.var_ref";
 	public string VarName { get; } = varName;
 	public MaxonValueKind ValueKind { get; } = kind;
-	public MaxonValue Result { get; } = kind switch {
-		MaxonValueKind.Integer => new MaxonInteger(MlirContext.Current.NextId()),
-		MaxonValueKind.Float => new MaxonFloat(MlirContext.Current.NextId()),
-		MaxonValueKind.Bool => new MaxonBool(MlirContext.Current.NextId()),
-		_ => throw new ArgumentOutOfRangeException(nameof(kind))
-	};
+	public MaxonValue Result { get; } = kind.CreateValue();
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
 		new Dictionary<string, MlirAttribute> {
 			["var"] = new StringAttr(VarName),
-			["type"] = new TypeAttr(KindToMlirType(ValueKind))
+			["type"] = new TypeAttr(ValueKind.ToMlirType())
 		};
-
-	private static MlirType KindToMlirType(MaxonValueKind kind) => kind switch {
-		MaxonValueKind.Integer => MlirType.I64,
-		MaxonValueKind.Float => MlirType.F64,
-		MaxonValueKind.Bool => MlirType.I1,
-		_ => throw new ArgumentOutOfRangeException(nameof(kind))
-	};
 }
 
 public class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, MaxonValueKind operandKind) : MaxonOp {
@@ -112,44 +139,25 @@ public class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, Max
 	public MaxonValueKind OperandKind { get; } = operandKind;
 	public MaxonValue Result { get; } = IsComparison(op)
 			? new MaxonBool(MlirContext.Current.NextId())
-			: CreateArithResult(operandKind);
+			: operandKind.CreateValue();
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
 	public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
 		new Dictionary<string, MlirAttribute> {
 			["op"] = new StringAttr(Operator.ToString().ToLowerInvariant()),
-			["kind"] = new TypeAttr(KindToMlirType(OperandKind))
+			["kind"] = new TypeAttr(OperandKind.ToMlirType())
 		};
 
 	private static bool IsComparison(MaxonBinOperator op) =>
 		op is MaxonBinOperator.Eq or MaxonBinOperator.Ne or MaxonBinOperator.Lt
 			or MaxonBinOperator.Gt or MaxonBinOperator.Le or MaxonBinOperator.Ge;
-
-	private static MaxonValue CreateArithResult(MaxonValueKind kind) => kind switch {
-		MaxonValueKind.Integer => new MaxonInteger(MlirContext.Current.NextId()),
-		MaxonValueKind.Float => new MaxonFloat(MlirContext.Current.NextId()),
-		_ => throw new ArgumentOutOfRangeException(nameof(kind))
-	};
-
-	private static MlirType KindToMlirType(MaxonValueKind kind) => kind switch {
-		MaxonValueKind.Integer => MlirType.I64,
-		MaxonValueKind.Float => MlirType.F64,
-		MaxonValueKind.Bool => MlirType.I1,
-		_ => throw new ArgumentOutOfRangeException(nameof(kind))
-	};
 }
 
 public class MaxonCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null) : MaxonOp {
 	public override string Mnemonic => $"maxon.call @{Callee}";
 	public string Callee { get; } = callee;
 	public List<MaxonValue> Args { get; } = args;
-	public MaxonValue? Result { get; } = resultKind switch {
-		MaxonValueKind.Integer => new MaxonInteger(MlirContext.Current.NextId()),
-		MaxonValueKind.Float => new MaxonFloat(MlirContext.Current.NextId()),
-		MaxonValueKind.Bool => new MaxonBool(MlirContext.Current.NextId()),
-		null => null,
-		_ => throw new ArgumentOutOfRangeException(nameof(resultKind))
-	};
+	public MaxonValue? Result { get; } = resultKind?.CreateValue();
 	public MaxonValueKind? ResultKind { get; } = resultKind;
 	public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
 	public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];

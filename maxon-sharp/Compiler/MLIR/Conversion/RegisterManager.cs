@@ -234,20 +234,82 @@ public class RegisterManager {
 		}
 	}
 
+	// Windows x64 integer parameter registers
+	private static readonly X86Register[] CallConvRegs = [X86Register.Ecx, X86Register.Edx];
+
 	/// <summary>
-	/// Emit a function call, invalidate caller-saved registers, and
-	/// record the result (if any) in Eax.
+	/// Emit a function call, placing arguments in calling convention registers,
+	/// invalidating caller-saved registers, and recording the result (if any) in Eax.
 	/// </summary>
-	public void EmitCall(string callee, StdValue? result, MlirBlock<X86Op> block) {
+	public void EmitCall(string callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block) {
+		if (args.Count > CallConvRegs.Length)
+			throw new InvalidOperationException($"Too many arguments ({args.Count}) — only {CallConvRegs.Length} calling convention registers supported");
+
+		// Ensure all arg values are in registers first, before moving to targets.
+		var argRegs = new X86Register[args.Count];
+		for (int i = 0; i < args.Count; i++)
+			argRegs[i] = EnsureInRegister(args[i], block);
+
+		// Move args to their target calling convention registers.
+		// Process args that are already in the right place first, then
+		// handle moves that don't conflict, and use xchg for cycles.
+		var placed = new bool[args.Count];
+		// Pass 1: mark args already in place
+		for (int i = 0; i < args.Count; i++) {
+			if (argRegs[i] == CallConvRegs[i])
+				placed[i] = true;
+		}
+		// Pass 2: repeatedly place args whose target is free
+		bool progress = true;
+		while (progress) {
+			progress = false;
+			for (int i = 0; i < args.Count; i++) {
+				if (placed[i]) continue;
+				bool targetBlocked = false;
+				for (int j = 0; j < args.Count; j++) {
+					if (j != i && !placed[j] && argRegs[j] == CallConvRegs[i]) {
+						targetBlocked = true;
+						break;
+					}
+				}
+				if (!targetBlocked) {
+					block.AddOp(new X86MovRegRegOp(CallConvRegs[i], argRegs[i]));
+					placed[i] = true;
+					progress = true;
+				}
+			}
+		}
+		// Pass 3: resolve remaining conflicts with xchg
+		for (int i = 0; i < args.Count; i++) {
+			if (placed[i]) continue;
+			block.AddOp(new X86XchgRegRegOp(argRegs[i], CallConvRegs[i]));
+			// Update the other arg that was in the target register
+			for (int j = 0; j < args.Count; j++) {
+				if (j != i && argRegs[j] == CallConvRegs[i]) {
+					argRegs[j] = argRegs[i];
+					break;
+				}
+			}
+			placed[i] = true;
+		}
+
 		block.AddOp(new X86CallDirectOp(callee));
 
 		// Caller-saved registers are clobbered by the call.
-		// Remove register mappings but preserve stack homes so values can be reloaded.
 		InvalidateCallerSavedRegisters();
 
 		if (result != null) {
 			Assign(X86Register.Eax, result);
 		}
+	}
+
+	/// <summary>
+	/// Record that a function parameter has arrived in a calling convention register.
+	/// </summary>
+	public void NoteParamInRegister(StdValue paramValue, int paramIndex) {
+		if (paramIndex >= CallConvRegs.Length)
+			throw new InvalidOperationException($"Parameter index {paramIndex} exceeds supported calling convention registers");
+		Assign(CallConvRegs[paramIndex], paramValue);
 	}
 
 	/// <summary>

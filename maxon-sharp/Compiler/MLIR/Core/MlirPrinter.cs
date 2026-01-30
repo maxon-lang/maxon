@@ -17,6 +17,8 @@ public static class MlirPrinter {
 		sb.Append($"{indent}func @{func.Name}(");
 		for (int i = 0; i < func.ParamTypes.Count; i++) {
 			if (i > 0) sb.Append(", ");
+			if (i < func.ParamNames.Count)
+				sb.Append($"{func.ParamNames[i]}: ");
 			sb.Append(func.ParamTypes[i]);
 		}
 		sb.Append(')');

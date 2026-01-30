@@ -36,6 +36,12 @@ public class X86MovRegRegOp(X86Register dest, X86Register src) : X86Op {
 	public override string Mnemonic => $"x86.mov {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
+public class X86XchgRegRegOp(X86Register a, X86Register b) : X86Op {
+	public X86Register A { get; } = a;
+	public X86Register B { get; } = b;
+	public override string Mnemonic => $"x86.xchg {A.ToString().ToLower()}, {B.ToString().ToLower()}";
+}
+
 public class X86MovRegImmOp(X86Register dest, long immediate) : X86Op {
 	public X86Register Dest { get; } = dest;
 	public long Immediate { get; } = immediate;

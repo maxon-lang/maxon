@@ -18,22 +18,17 @@ public static class StandardToX86Conversion {
 	}
 
 	private static MlirFunction<X86Op> ConvertFunction(MlirFunction<StandardOp> func, MlirModule<X86Op> outputModule) {
-		var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamTypes, func.ReturnType);
+		var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType);
 
 		// Pre-scan: calculate stack frame from store ops
 		var varOffsets = new Dictionary<string, int>();
 		int stackSize = 0;
 		foreach (var block in func.Body.Blocks) {
 			foreach (var op in block.Operations) {
-				var varName = op switch {
-					StdStoreI64Op s => s.VarName,
-					StdStoreF64Op s => s.VarName,
-					_ => null
-				};
-				if (varName != null && !varOffsets.ContainsKey(varName)) {
-					int size = op is StdStoreF64Op ? 8 : 8;
-					stackSize += size;
-					varOffsets[varName] = -stackSize;
+				if (op is not IStoreOp store) continue;
+				if (!varOffsets.ContainsKey(store.VarName)) {
+					stackSize += store.StoredType.SizeInBytes;
+					varOffsets[store.VarName] = -stackSize;
 				}
 			}
 		}
@@ -46,7 +41,7 @@ public static class StandardToX86Conversion {
 		int scanIdx = 0;
 		foreach (var block in func.Body.Blocks) {
 			foreach (var op in block.Operations) {
-				foreach (var val in GetReadValues(op)) {
+				foreach (var val in op.ReadValues) {
 					lastUseOfValue[val] = scanIdx;
 				}
 				scanIdx++;
@@ -76,6 +71,10 @@ public static class StandardToX86Conversion {
 
 			foreach (var op in srcBlock.Operations) {
 				switch (op) {
+					case StdParamOp paramOp:
+						regManager.NoteParamInRegister(paramOp.Result, paramOp.Index);
+						break;
+
 					case StdConstI64Op constOp:
 						regManager.EmitLoadImmediate(constOp.Result, (int)constOp.Value, x86Block);
 						break;
@@ -136,7 +135,7 @@ public static class StandardToX86Conversion {
 						}
 
 					case StdCallOp callOp:
-						regManager.EmitCall(callOp.Callee, callOp.Result, x86Block);
+						regManager.EmitCall(callOp.Callee, callOp.Args, callOp.Result, x86Block);
 						break;
 
 					case StdReturnOp retOp: {
@@ -154,7 +153,7 @@ public static class StandardToX86Conversion {
 				}
 
 				// Free registers for values whose last use was this op
-				FreeDeadValues(regManager, lastUseOfValue, currentOpIndex, GetReadValues(op));
+				FreeDeadValues(regManager, lastUseOfValue, currentOpIndex, op.ReadValues);
 				regManager.AdvanceOp();
 				currentOpIndex++;
 			}
@@ -162,22 +161,6 @@ public static class StandardToX86Conversion {
 
 		return newFunc;
 	}
-
-	private static List<StdValue> GetReadValues(StandardOp op) => op switch {
-		StdStoreI64Op s => [s.Value],
-		StdStoreF64Op s => [s.Value],
-		StdAddI64Op a => [a.Lhs, a.Rhs],
-		StdAddI32Op a => [a.Lhs, a.Rhs],
-		StdSubI64Op s => [s.Lhs, s.Rhs],
-		StdSubI32Op s => [s.Lhs, s.Rhs],
-		StdMulI64Op m => [m.Lhs, m.Rhs],
-		StdDivI64Op d => [d.Lhs, d.Rhs],
-		StdRemI64Op r => [r.Lhs, r.Rhs],
-		StdCmpF64Op c => [c.Lhs, c.Rhs],
-		StdReturnOp r when r.ReturnValue != null => [r.ReturnValue],
-		StdCallOp c => c.Args,
-		_ => []
-	};
 
 	private static void FreeDeadValues(
 		RegisterManager regManager,

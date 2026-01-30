@@ -57,7 +57,7 @@ public class Parser(List<Token> tokens) {
 		Logger.Debug(LogCategory.Parser, $"Parsing function: {name}");
 
 		Expect(TokenType.LeftParen);
-		var paramTypes = ParseParamList();
+		var (paramNames, paramTypes) = ParseParamList();
 
 		MlirType? returnType = null;
 		if (Check(TokenType.Returns)) {
@@ -67,11 +67,19 @@ public class Parser(List<Token> tokens) {
 
 		SkipNewlines();
 
-		var func = new MlirFunction<MaxonOp>(name, paramTypes, returnType);
+		var func = new MlirFunction<MaxonOp>(name, paramNames, paramTypes, returnType);
 		module.AddFunction(func);
 		_currentFunction = func;
 		_currentBlock = func.Body.AddBlock("entry");
 		_variables.Clear();
+
+		// Emit param ops and register parameters as variables
+		for (int i = 0; i < paramNames.Count; i++) {
+			var kind = paramTypes[i].ToValueKind();
+			var paramOp = new MaxonParamOp(i, paramNames[i], kind);
+			_currentBlock.AddOp(paramOp);
+			_variables[paramNames[i]] = new VarInfo(kind, false, paramOp.Result, _currentBlock);
+		}
 
 		ParseBodyUntilEnd();
 		ExpectEndLabel(name);
@@ -84,11 +92,19 @@ public class Parser(List<Token> tokens) {
 	// Parameter and type parsing
 	// ============================================================================
 
-	private List<MlirType> ParseParamList() {
-		var paramTypes = new List<MlirType>();
-		// For now, no parameters supported
+	private (List<string> Names, List<MlirType> Types) ParseParamList() {
+		var names = new List<string>();
+		var types = new List<MlirType>();
+		if (!Check(TokenType.RightParen)) {
+			do {
+				var paramName = Expect(TokenType.Identifier).Value;
+				var paramType = ParseTypeRef();
+				names.Add(paramName);
+				types.Add(paramType);
+			} while (Check(TokenType.Comma) && Advance() != null);
+		}
 		Expect(TokenType.RightParen);
-		return paramTypes;
+		return (names, types);
 	}
 
 	private MlirType ParseTypeRef() {
@@ -152,8 +168,8 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftParen) {
 			var token = Advance();
 			Advance(); // consume '('
-			Expect(TokenType.RightParen);
-			var callOp = CreateFunctionCall(token);
+			var args = ParseCallArgs(token);
+			var callOp = CreateFunctionCall(token, args);
 			return callOp.Result!;
 		}
 
@@ -310,8 +326,8 @@ public class Parser(List<Token> tokens) {
 			var token = Advance();
 			if (Check(TokenType.LeftParen)) {
 				Advance(); // consume '('
-				Expect(TokenType.RightParen);
-				var callOp = CreateFunctionCall(token);
+				var args = ParseCallArgs(token);
+				var callOp = CreateFunctionCall(token, args);
 				return new ExprResult.Direct(callOp.Result!);
 			}
 			// Variable reference
@@ -359,9 +375,47 @@ public class Parser(List<Token> tokens) {
 	}
 
 	/// <summary>
+	/// Parses call arguments using first-positional, rest-named rule.
+	/// Resolves named arguments to positional order based on the callee's parameter names.
+	/// </summary>
+	private List<MaxonValue> ParseCallArgs(Token functionNameToken) {
+		if (Check(TokenType.RightParen)) {
+			Advance();
+			return [];
+		}
+
+		var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionNameToken.Value)
+			?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined function '{functionNameToken.Value}'", functionNameToken.Line, functionNameToken.Column);
+
+		var args = new MaxonValue?[callee.ParamTypes.Count];
+
+		// First argument is always positional
+		args[0] = ResolveExprValue(ParseExpression());
+		int nextPositional = 1;
+
+		while (Check(TokenType.Comma) && Advance() != null) {
+			// Check for named argument: identifier followed by ':'
+			if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+				var nameToken = Advance();
+				Advance(); // consume ':'
+				var idx = callee.ParamNames.IndexOf(nameToken.Value);
+				if (idx < 0)
+					throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Unknown parameter '{nameToken.Value}' in call to '{callee.Name}'", nameToken.Line, nameToken.Column);
+				args[idx] = ResolveExprValue(ParseExpression());
+			} else {
+				args[nextPositional] = ResolveExprValue(ParseExpression());
+				nextPositional++;
+			}
+		}
+
+		Expect(TokenType.RightParen);
+		return args.ToList()!;
+	}
+
+	/// <summary>
 	/// Creates a function call operation, validating the function exists and determining the result type.
 	/// </summary>
-	private MaxonCallOp CreateFunctionCall(Token functionNameToken) {
+	private MaxonCallOp CreateFunctionCall(Token functionNameToken, List<MaxonValue> args) {
 		var functionName = functionNameToken.Value;
 
 		var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionName) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined function '{functionName}'", functionNameToken.Line, functionNameToken.Column);
@@ -373,7 +427,7 @@ public class Parser(List<Token> tokens) {
 			_ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unsupported return type '{callee.ReturnType}' for function '{functionName}'", functionNameToken.Line, functionNameToken.Column)
 		};
 
-		var callOp = new MaxonCallOp(functionName, [], resultKind);
+		var callOp = new MaxonCallOp(functionName, args, resultKind);
 		_currentBlock!.AddOp(callOp);
 		return callOp;
 	}
@@ -422,7 +476,7 @@ public class Parser(List<Token> tokens) {
 
 	private Token Expect(TokenType type) {
 		if (!Check(type)) {
-			throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected {type} but got '{Current().Value}'", Current().Line, Current().Column);
+			throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected {Token.DisplayName(type)} but got '{Current().Value}'", Current().Line, Current().Column);
 		}
 		return Advance();
 	}

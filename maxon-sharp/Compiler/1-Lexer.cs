@@ -124,7 +124,35 @@ public enum OperatorCategory {
 public record KeywordInfo(TokenType Type, KeywordCategory Category, string HelpText, bool CanHaveBlockLabel);
 public record OperatorInfo(TokenType Type, OperatorCategory Category, string HelpText);
 
-public record Token(TokenType Type, string Value, int Line, int Column);
+public record Token(TokenType Type, string Value, int Line, int Column) {
+	private static readonly Dictionary<TokenType, string> DisplayNames = BuildDisplayNames();
+
+	private static Dictionary<TokenType, string> BuildDisplayNames() {
+		var names = new Dictionary<TokenType, string>();
+		foreach (var (text, info) in Lexer.KeywordMap)
+			names[info.Type] = $"'{text}'";
+		foreach (var (text, info) in Lexer.OperatorMap)
+			names[info.Type] = $"'{text}'";
+		names[TokenType.LeftParen] = "'('";
+		names[TokenType.RightParen] = "')'";
+		names[TokenType.LeftBrace] = "'{'";
+		names[TokenType.RightBrace] = "'}'";
+		names[TokenType.LeftBracket] = "'['";
+		names[TokenType.RightBracket] = "']'";
+		names[TokenType.Comma] = "','";
+		names[TokenType.Colon] = "':'";
+		names[TokenType.Dot] = "'.'";
+		names[TokenType.DotDot] = "'..'";
+		names[TokenType.DotDotEquals] = "'..='";
+		names[TokenType.DotDotLess] = "'..<'";
+		names[TokenType.Newline] = "newline";
+		names[TokenType.Eof] = "end of file";
+		return names;
+	}
+
+	public static string DisplayName(TokenType type) =>
+		DisplayNames.TryGetValue(type, out var name) ? name : type.ToString().ToLowerInvariant();
+}
 
 public class Lexer(string source) {
 	private readonly string _source = source;

@@ -10,7 +10,7 @@ public static class MaxonToStandardConversion {
 		result.Globals.AddRange(module.Globals);
 
 		foreach (var func in module.Functions) {
-			var newFunc = new MlirFunction<StandardOp>(func.Name, func.ParamTypes, func.ReturnType);
+			var newFunc = new MlirFunction<StandardOp>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType);
 			var valueMap = new Dictionary<MaxonValue, StdValue>();
 			var varTypes = new Dictionary<string, string>();
 
@@ -18,6 +18,12 @@ public static class MaxonToStandardConversion {
 				var newBlock = newFunc.Body.AddBlock(block.Name);
 				foreach (var op in block.Operations) {
 					switch (op) {
+						case MaxonParamOp paramOp: {
+								var stdResult = paramOp.ValueKind.CreateStdValue();
+								newBlock.AddOp(new StdParamOp(paramOp.Index, paramOp.Name, stdResult));
+								valueMap[paramOp.Result] = stdResult;
+								break;
+							}
 						case MaxonLiteralOp litOp: {
 								switch (litOp.ValueKind) {
 									case MaxonValueKind.Integer: {
@@ -95,15 +101,7 @@ public static class MaxonToStandardConversion {
 							}
 						case MaxonCallOp callOp: {
 								var newArgs = callOp.Args.Select(a => valueMap[a]).ToList();
-								StdValue? callResult = null;
-								if (callOp.ResultKind != null) {
-									callResult = callOp.ResultKind switch {
-										MaxonValueKind.Float => new StdF64(MlirContext.Current.NextId()),
-										MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),
-										MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
-										_ => throw new InvalidOperationException($"Unsupported call result kind: {callOp.ResultKind}")
-									};
-								}
+								var callResult = callOp.ResultKind?.CreateStdValue();
 								var funcCall = new StdCallOp(callOp.Callee, newArgs, callResult);
 								newBlock.AddOp(funcCall);
 								if (callOp.Result != null && funcCall.Result != null) {

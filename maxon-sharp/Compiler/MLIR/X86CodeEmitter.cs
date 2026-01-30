@@ -88,6 +88,9 @@ public class X86CodeEmitter {
 			case X86MovRegRegOp mov:
 				EmitMovRegReg(mov.Dest, mov.Src);
 				break;
+			case X86XchgRegRegOp xchg:
+				EmitXchgRegReg(xchg.A, xchg.B);
+				break;
 			case X86MovRegImmOp mov:
 				EmitMovRegImm(mov.Dest, mov.Immediate);
 				break;
@@ -332,6 +335,12 @@ public class X86CodeEmitter {
 			EmitByte(0x41); // REX.B
 		}
 		EmitByte((byte)(0x58 + RegCode(reg)));
+	}
+
+	private void EmitXchgRegReg(X86Register a, X86Register b) {
+		// XCHG r32, r32: 87 /r
+		EmitByte(0x87);
+		EmitByte((byte)(0xC0 | (RegCode(a) << 3) | RegCode(b)));
 	}
 
 	private void EmitMovRegReg(X86Register dest, X86Register src) {
