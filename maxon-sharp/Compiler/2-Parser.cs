@@ -12,6 +12,7 @@ public class Parser(List<Token> tokens) {
 	private MlirFunction<MaxonOp>? _currentFunction;
 	private MlirBlock<MaxonOp>? _currentBlock;
 	private readonly Dictionary<string, VarInfo> _variables = [];
+	private int _blockCounter;
 
 	private static readonly Dictionary<TokenType, MaxonBinOperator> BinaryOperators = new() {
 		{ TokenType.Plus, MaxonBinOperator.Add },
@@ -81,6 +82,7 @@ public class Parser(List<Token> tokens) {
 		_currentFunction = func;
 		_currentBlock = func.Body.AddBlock("entry");
 		_variables.Clear();
+		_blockCounter = 0;
 
 		// Emit param ops and register parameters as variables
 		for (int i = 0; i < paramNames.Count; i++) {
@@ -226,7 +228,8 @@ public class Parser(List<Token> tokens) {
 		var condition = ResolveExprValue(ParseComparisonExpression());
 
 		// Parse then-block label
-		var thenLabel = Expect(TokenType.CharacterLiteral).Value;
+		var thenSourceLabel = Expect(TokenType.CharacterLiteral).Value;
+		var thenLabel = UniqueLabel(thenSourceLabel);
 		SkipNewlines();
 
 		// Save entry block to append cond_br later
@@ -238,20 +241,21 @@ public class Parser(List<Token> tokens) {
 		ParseBodyUntilEnd();
 
 		// Parse: end 'thenLabel'
-		ExpectEndLabel(thenLabel);
+		ExpectEndLabel(thenSourceLabel);
 
 		// Check for else
 		MlirBlock<MaxonOp>? elseBlock = null;
 		string? elseLabel = null;
 		if (Check(TokenType.Else)) {
 			Advance(); // consume 'else'
-			elseLabel = Expect(TokenType.CharacterLiteral).Value;
+			var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
+			elseLabel = UniqueLabel(elseSourceLabel);
 			SkipNewlines();
 
 			elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
 			_currentBlock = elseBlock;
 			ParseBodyUntilEnd();
-			ExpectEndLabel(elseLabel);
+			ExpectEndLabel(elseSourceLabel);
 		}
 
 		// Emit cond_br into the entry block
@@ -292,9 +296,10 @@ public class Parser(List<Token> tokens) {
 		if (!Check(TokenType.CharacterLiteral)) {
 			throw new CompileError(ErrorCode.ParserExpectedToken, "Expected loop label after while condition", Current().Line, Current().Column);
 		}
-		var loopLabel = Advance().Value;
+		var loopSourceLabel = Advance().Value;
 		_pos = savedPos; // rewind to parse condition properly
 
+		var loopLabel = UniqueLabel(loopSourceLabel);
 		var headerLabel = $"{loopLabel}.header";
 		var bodyLabel = loopLabel;
 		var exitLabel = $"{loopLabel}.exit";
@@ -318,7 +323,7 @@ public class Parser(List<Token> tokens) {
 		var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
 		_currentBlock = bodyBlock;
 		ParseBodyUntilEnd();
-		ExpectEndLabel(loopLabel);
+		ExpectEndLabel(loopSourceLabel);
 
 		// At end of body, branch back to header
 		if (!BlockEndsWithTerminator(bodyBlock)) {
@@ -515,6 +520,8 @@ public class Parser(List<Token> tokens) {
 	// ============================================================================
 	// Helpers
 	// ============================================================================
+
+	private string UniqueLabel(string label) => $"{label}_{_blockCounter++}";
 
 	private static long ParseIntegerLiteral(string text) {
 		text = text.Replace("_", "");

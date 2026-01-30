@@ -1876,11 +1876,11 @@ module {
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %1 = maxon.literal {value = 10 : i64}
     %2 = maxon.binop %0, %1 {op = eq} {kind = i64}
-    maxon.cond_br %2 [then: check, else: other]
-  check:
+    maxon.cond_br %2 [then: check_0, else: other_1]
+  check_0:
     %3 = maxon.literal {value = 42 : i64}
     maxon.return %3
-  other:
+  other_1:
     %4 = maxon.literal {value = 0 : i64}
     maxon.return %4
   }
@@ -1893,11 +1893,11 @@ module {
     memref.store %5, x
     %6 = arith.constant {value = 10 : i64}
     %7 = arith.cmpi eq %5, %6
-    cf.cond_br %7 [then: check, else: other]
-  check:
+    cf.cond_br %7 [then: check_0, else: other_1]
+  check_0:
     %8 = arith.constant {value = 42 : i64}
     func.return %8
-  other:
+  other_1:
     %9 = arith.constant {value = 0 : i64}
     func.return %9
   }
@@ -1913,13 +1913,13 @@ module {
     x86.mov [rbp-8], eax
     x86.mov ecx, 10
     x86.cmp eax, ecx
-    x86.jne main.other
-  check:
+    x86.jne main.other_1
+  check_0:
     x86.mov eax, 42
     x86.add rsp, 16
     x86.pop rbp
     x86.ret
-  other:
+  other_1:
     x86.mov eax, 0
     x86.add rsp, 16
     x86.pop rbp
@@ -1958,16 +1958,16 @@ module {
     maxon.assign %2 {var = extra} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 1 : i64}
     %4 = maxon.binop %1, %3 {op = eq} {kind = i64}
-    maxon.cond_br %4 [then: check, else: other]
-  check:
+    maxon.cond_br %4 [then: check_0, else: other_1]
+  check_0:
     %5 = maxon.literal {value = 2 : i64}
     maxon.assign %5 {var = extra} {kind = i64} {mut = 1 : i1}
-    maxon.br check.merge
-  other:
+    maxon.br check_0.merge
+  other_1:
     %6 = maxon.literal {value = 100 : i64}
     maxon.assign %6 {var = extra} {kind = i64} {mut = 1 : i1}
-    maxon.br check.merge
-  check.merge:
+    maxon.br check_0.merge
+  check_0.merge:
     %7 = maxon.var_ref {var = base} {type = i64}
     %8 = maxon.var_ref {var = extra} {type = i64}
     %9 = maxon.binop %7, %8 {op = add} {kind = i64}
@@ -1986,16 +1986,16 @@ module {
     memref.store %12, extra
     %13 = arith.constant {value = 1 : i64}
     %14 = arith.cmpi eq %11, %13
-    cf.cond_br %14 [then: check, else: other]
-  check:
+    cf.cond_br %14 [then: check_0, else: other_1]
+  check_0:
     %15 = arith.constant {value = 2 : i64}
     memref.store %15, extra
-    cf.br check.merge
-  other:
+    cf.br check_0.merge
+  other_1:
     %16 = arith.constant {value = 100 : i64}
     memref.store %16, extra
-    cf.br check.merge
-  check.merge:
+    cf.br check_0.merge
+  check_0.merge:
     %17 = memref.load base : i64
     %18 = memref.load extra : i64
     %19 = arith.addi %17, %18
@@ -2017,16 +2017,16 @@ module {
     x86.mov [rbp-24], edx
     x86.mov ebx, 1
     x86.cmp ecx, ebx
-    x86.jne main.other
-  check:
+    x86.jne main.other_1
+  check_0:
     x86.mov eax, 2
     x86.mov [rbp-24], eax
-    x86.jmp main.check.merge
-  other:
+    x86.jmp main.check_0.merge
+  other_1:
     x86.mov eax, 100
     x86.mov [rbp-24], eax
-    x86.jmp main.check.merge
-  check.merge:
+    x86.jmp main.check_0.merge
+  check_0.merge:
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-24]
     x86.add eax, ecx
@@ -2057,19 +2057,19 @@ module {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.br loop.header
-  loop.header:
+    maxon.br loop_0.header
+  loop_0.header:
     %1 = maxon.literal {value = 42 : i64}
     %2 = maxon.var_ref {var = i} {type = i64}
     %3 = maxon.binop %2, %1 {op = lt} {kind = i64}
-    maxon.cond_br %3 [then: loop, else: loop.exit]
-  loop:
+    maxon.cond_br %3 [then: loop_0, else: loop_0.exit]
+  loop_0:
     %4 = maxon.literal {value = 1 : i64}
     %5 = maxon.var_ref {var = i} {type = i64}
     %6 = maxon.binop %5, %4 {op = add} {kind = i64}
     maxon.assign %6 {var = i} {kind = i64} {mut = 1 : i1}
-    maxon.br loop.header
-  loop.exit:
+    maxon.br loop_0.header
+  loop_0.exit:
     %7 = maxon.var_ref {var = i} {type = i64}
     maxon.return %7
   }
@@ -2080,19 +2080,19 @@ module {
   entry:
     %8 = arith.constant {value = 0 : i64}
     memref.store %8, i
-    cf.br loop.header
-  loop.header:
+    cf.br loop_0.header
+  loop_0.header:
     %9 = arith.constant {value = 42 : i64}
     %10 = memref.load i : i64
     %11 = arith.cmpi lt %10, %9
-    cf.cond_br %11 [then: loop, else: loop.exit]
-  loop:
+    cf.cond_br %11 [then: loop_0, else: loop_0.exit]
+  loop_0:
     %12 = arith.constant {value = 1 : i64}
     %13 = memref.load i : i64
     %14 = arith.addi %13, %12
     memref.store %14, i
-    cf.br loop.header
-  loop.exit:
+    cf.br loop_0.header
+  loop_0.exit:
     %15 = memref.load i : i64
     func.return %15
   }
@@ -2106,19 +2106,19 @@ module {
     x86.sub rsp, 16
     x86.mov eax, 0
     x86.mov [rbp-8], eax
-    x86.jmp main.loop.header
-  loop.header:
+    x86.jmp main.loop_0.header
+  loop_0.header:
     x86.mov eax, 42
     x86.mov ecx, [rbp-8]
     x86.cmp ecx, eax
-    x86.jge main.loop.exit
-  loop:
+    x86.jge main.loop_0.exit
+  loop_0:
     x86.mov eax, 1
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
     x86.mov [rbp-8], ecx
-    x86.jmp main.loop.header
-  loop.exit:
+    x86.jmp main.loop_0.header
+  loop_0.exit:
     x86.mov eax, [rbp-8]
     x86.add rsp, 16
     x86.pop rbp
