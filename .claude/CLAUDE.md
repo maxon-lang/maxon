@@ -74,7 +74,6 @@ If you are implementing a plan then you must finish the plan.
 
 ## Running Tests
 - **Spec tests**: `maxonsharp spec-test` - Extracts and runs tests from spec files
-- **Unit tests**: `maxonsharp unit-test` - Runs built in unit tests
 - **VSCode extension tests**: `cd vscode-extension && npm test` - Runs extension tests
 
 ## Compiler Commands

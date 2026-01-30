@@ -16,6 +16,7 @@ You *Are* Going To Read It
 - multiline string literals using multiple quotes
 
 ## TODO
+- test for __chkstk
 - advent of compiler optimization
 - register allocator
 - add FilePath to stdlib

@@ -1,0 +1,144 @@
+// Test: float-var-if-else
+function main() returns int
+    var x = 3.14
+    if x == 3.14 'check'
+        return 1
+    end 'check' else 'other'
+        return 0
+    end 'other'
+end 'main'
+---
+ExitCode: 1
+RequiredMLIR: ```
+--- maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.float_constant {value = 3.14 : f64}
+    maxon.var_decl x %0
+    %1 = maxon.var_load x {type = f64}
+    %2 = maxon.float_constant {value = 3.14 : f64}
+    %3 = maxon.cmpf eq %1, %2
+    maxon.cond_br %3 [then: check, else: other]
+  check:
+    %4 = maxon.constant {value = 1 : i64}
+    maxon.return %4
+  other:
+    %5 = maxon.constant {value = 0 : i64}
+    maxon.return %5
+  }
+}
+--- standard
+module {
+  func @main() -> i64 {
+  entry:
+    %6 = arith.float_constant {value = 3.14 : f64}
+    memref.alloca x : f64
+    memref.store %6, x
+    %7 = memref.load x : f64
+    %8 = arith.float_constant {value = 3.14 : f64}
+    %9 = arith.cmpf eq %7, %8
+    cf.cond_br %9 [then: check, else: other]
+  check:
+    %10 = arith.constant {value = 1 : i64}
+    func.return %10
+  other:
+    %11 = arith.constant {value = 0 : i64}
+    func.return %11
+  }
+}
+--- x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.movsd xmm0, [rip+__float_3.14]
+    x86.movsd [rbp-8], xmm0
+    x86.movsd xmm0, [rbp-8]
+    x86.movsd xmm1, [rip+__float_3.14]
+    x86.ucomisd xmm0, xmm1
+    x86.jne main.other
+    x86.jp main.other
+  check:
+    x86.mov eax, 1
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  other:
+    x86.mov eax, 0
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
+RequiredRdata: ```
+f64 3.14
+```
+---
+--- maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.float_constant {value = 3.14 : f64}
+    maxon.var_decl x %0
+    %1 = maxon.var_load x {type = f64}
+    %2 = maxon.float_constant {value = 3.14 : f64}
+    %3 = maxon.cmpf eq %1, %2
+    maxon.cond_br %3 [then: check, else: other]
+  check:
+    %4 = maxon.constant {value = 1 : i64}
+    maxon.return %4
+  other:
+    %5 = maxon.constant {value = 0 : i64}
+    maxon.return %5
+  }
+}
+--- standard
+module {
+  func @main() -> i64 {
+  entry:
+    %6 = arith.float_constant {value = 3.14 : f64}
+    memref.alloca x : f64
+    memref.store %6, x
+    %7 = memref.load x : f64
+    %8 = arith.float_constant {value = 3.14 : f64}
+    %9 = arith.cmpf eq %7, %8
+    cf.cond_br %9 [then: check, else: other]
+  check:
+    %10 = arith.constant {value = 1 : i64}
+    func.return %10
+  other:
+    %11 = arith.constant {value = 0 : i64}
+    func.return %11
+  }
+}
+--- x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.movsd xmm0, [rip+__float_3.14]
+    x86.movsd [rbp-8], xmm0
+    x86.movsd xmm0, [rbp-8]
+    x86.movsd xmm1, [rip+__float_3.14]
+    x86.ucomisd xmm0, xmm1
+    x86.jne main.other
+    x86.jp main.other
+  check:
+    x86.mov eax, 1
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  other:
+    x86.mov eax, 0
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
+---

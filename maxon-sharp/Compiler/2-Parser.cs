@@ -1,3 +1,4 @@
+using System.Globalization;
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
 
@@ -10,6 +11,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 
 	private MlirFunction? _currentFunction;
 	private MlirBlock? _currentBlock;
+	private readonly Dictionary<string, (MlirType type, bool mutable)> _variables = [];
 
 	public MlirModule Parse() {
 		Logger.Debug(LogCategory.Parser, "Starting parser");
@@ -58,6 +60,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		module.AddFunction(func);
 		_currentFunction = func;
 		_currentBlock = func.Body.AddBlock("entry");
+		_variables.Clear();
 
 		ParseBodyUntilEnd();
 		ExpectEndLabel(name);
@@ -111,6 +114,10 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 	private void ParseStatement() {
 		if (Check(TokenType.Return)) {
 			ParseReturn();
+		} else if (Check(TokenType.Var)) {
+			ParseVarDecl();
+		} else if (Check(TokenType.If)) {
+			ParseIf();
 		} else {
 			throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected statement, got {Current().Type}", Current().Line, Current().Column);
 		}
@@ -126,15 +133,107 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		}
 	}
 
+	private void ParseVarDecl() {
+		Advance(); // consume 'var'
+		var nameToken = Expect(TokenType.Identifier);
+		var name = nameToken.Value;
+		Expect(TokenType.Equals);
+		var initExpr = ParseExpression();
+
+		MlirValue initValue = ExtractValue(initExpr);
+		var varDecl = new MaxonVarDeclOp(name, initValue);
+		_currentBlock!.AddOp(varDecl);
+		_variables[name] = (initValue.Type, true);
+	}
+
+	private void ParseIf() {
+		Advance(); // consume 'if'
+
+		// Parse the condition (may be a comparison expression)
+		var condition = ParseComparisonExpression();
+		MlirValue condValue = ExtractValue(condition);
+
+		// Parse then-block label
+		var thenLabel = Expect(TokenType.CharacterLiteral).Value;
+		SkipNewlines();
+
+		// Save entry block to append cond_br later
+		var entryBlock = _currentBlock!;
+
+		// Create and parse the then block
+		var thenBlock = _currentFunction!.Body.AddBlock(thenLabel);
+		_currentBlock = thenBlock;
+		ParseBodyUntilEnd();
+
+		// Parse: end 'thenLabel'
+		var endToken = Expect(TokenType.End);
+		if (Check(TokenType.CharacterLiteral)) {
+			var label = Advance().Value;
+			if (label != thenLabel) {
+				throw new CompileError(ErrorCode.ParserMismatchedEndLabel, $"Mismatched end label: expected '{thenLabel}', got '{label}'", endToken.Line, endToken.Column);
+			}
+		}
+
+		// Check for else
+		string? elseLabel = null;
+		if (Check(TokenType.Else)) {
+			Advance(); // consume 'else'
+			elseLabel = Expect(TokenType.CharacterLiteral).Value;
+			SkipNewlines();
+
+			var elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
+			_currentBlock = elseBlock;
+			ParseBodyUntilEnd();
+			ExpectEndLabel(elseLabel);
+		}
+
+		// Emit cond_br into the entry block
+		if (elseLabel != null) {
+			entryBlock.AddOp(new MaxonCondBrOp(condValue, thenLabel, elseLabel));
+		}
+
+		_currentBlock = entryBlock;
+	}
+
 	// ============================================================================
 	// Expression parsing
 	// ============================================================================
+
+	private MaxonExpr ParseComparisonExpression() {
+		var lhs = ParseExpression();
+
+		if (Check(TokenType.EqualsEquals)) {
+			Advance(); // consume '=='
+			var rhs = ParseExpression();
+
+			MlirValue lhsVal = ExtractValue(lhs);
+			MlirValue rhsVal = ExtractValue(rhs);
+
+			if (lhsVal.Type == MlirType.F64 || rhsVal.Type == MlirType.F64) {
+				var cmpOp = new MaxonCmpFOp("eq", lhsVal, rhsVal);
+				_currentBlock!.AddOp(cmpOp);
+				return new MaxonExpr.Value(cmpOp.Result);
+			}
+
+			throw new CompileError(ErrorCode.ParserExpectedExpression, "Unsupported comparison types", Current().Line, Current().Column);
+		}
+
+		return lhs;
+	}
 
 	private MaxonExpr ParseExpression() {
 		if (Check(TokenType.IntegerLiteral)) {
 			var token = Advance();
 			var value = ParseIntegerLiteral(token.Value);
 			var op = new MaxonConstantOp(value, MlirType.I64);
+			_currentBlock!.AddOp(op);
+			return new MaxonExpr.Value(op.Result);
+		}
+
+		if (Check(TokenType.FloatLiteral)) {
+			var token = Advance();
+			var value = double.Parse(token.Value, CultureInfo.InvariantCulture);
+			var op = new MaxonFloatConstantOp(value, MlirType.F64);
 			_currentBlock!.AddOp(op);
 			return new MaxonExpr.Value(op.Result);
 		}
@@ -148,10 +247,24 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 				_currentBlock!.AddOp(callOp);
 				return new MaxonExpr.Call(callOp);
 			}
-			throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unexpected identifier '{token.Value}'", token.Line, token.Column);
+			// Variable reference
+			if (_variables.TryGetValue(token.Value, out var varInfo)) {
+				var loadOp = new MaxonVarLoadOp(token.Value, varInfo.type);
+				_currentBlock!.AddOp(loadOp);
+				return new MaxonExpr.VarLoad(loadOp);
+			}
+			throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{token.Value}'", token.Line, token.Column);
 		}
 
 		throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got {Current().Type}", Current().Line, Current().Column);
+	}
+
+	private static MlirValue ExtractValue(MaxonExpr expr) {
+		return expr switch {
+			MaxonExpr.Value v => v.MlirValue,
+			MaxonExpr.VarLoad vl => vl.LoadOp.Result,
+			_ => throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected value expression")
+		};
 	}
 
 	// ============================================================================

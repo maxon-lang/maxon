@@ -175,6 +175,12 @@ public static class FragmentGenerator {
 				sb.AppendLine(success.RequiredMLIR);
 				sb.AppendLine("```");
 			}
+
+			if (success.RequiredRdata != null) {
+				sb.AppendLine("RequiredRdata: ```");
+				sb.AppendLine(success.RequiredRdata);
+				sb.AppendLine("```");
+			}
 		} else if (test.Expectation is CompilerErrorExpectation compilerError) {
 			sb.AppendLine("MaxoncStderr: ```");
 			sb.AppendLine(compilerError.ExpectedStderr);
@@ -273,6 +279,7 @@ public static class FragmentGenerator {
 		int? exitCode = null;
 		string? stdout = null;
 		string? requiredMLIR = null;
+		string? requiredRdata = null;
 		string? expectedError = null;
 
 		var i = 0;
@@ -290,6 +297,8 @@ public static class FragmentGenerator {
 				stdout = ExtractMultilineValue(lines, ref i);
 			} else if (line.StartsWith("RequiredMLIR: ```")) {
 				requiredMLIR = ExtractMultilineValue(lines, ref i);
+			} else if (line.StartsWith("RequiredRdata: ```")) {
+				requiredRdata = ExtractMultilineValue(lines, ref i);
 			}
 
 			i++;
@@ -304,7 +313,8 @@ public static class FragmentGenerator {
 		return new SuccessExpectation {
 			ExitCode = exitCode,
 			Stdout = stdout,
-			RequiredMLIR = requiredMLIR
+			RequiredMLIR = requiredMLIR,
+			RequiredRdata = requiredRdata
 		};
 	}
 

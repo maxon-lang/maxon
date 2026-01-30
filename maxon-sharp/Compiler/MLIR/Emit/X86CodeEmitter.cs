@@ -16,6 +16,9 @@ public class X86CodeEmitter {
 	// Fixups: code offset -> target label name (for relative call/jmp)
 	private readonly List<(int offset, string target)> _relCallFixups = [];
 
+	// Jump fixups: code offset -> target label name (for Jcc and Jmp)
+	private readonly List<(int offset, string target)> _jumpFixups = [];
+
 	// Import fixups: code offset -> import index (for indirect calls through IAT)
 	private readonly List<(int offset, int importIndex)> _importCallFixups = [];
 
@@ -102,6 +105,24 @@ public class X86CodeEmitter {
 				_relCallFixups.Add((_code.Count, call.Target));
 				EmitDword(0); // placeholder, patched by ResolveLabels
 				break;
+			case X86MovSdXmmRipRel movsd:
+				EmitMovSdXmmRipRel(movsd.Dest, movsd.RdataLabel);
+				break;
+			case X86MovSdMemXmm movsd:
+				EmitMovSdMemXmm(movsd.Displacement, movsd.Src);
+				break;
+			case X86MovSdXmmMem movsd:
+				EmitMovSdXmmMem(movsd.Dest, movsd.Displacement);
+				break;
+			case X86Ucomisd ucomisd:
+				EmitUcomisd(ucomisd.Src1, ucomisd.Src2);
+				break;
+			case X86Jcc jcc:
+				EmitJcc(jcc.Condition, jcc.Target);
+				break;
+			case X86Jmp jmp:
+				EmitJmp(jmp.Target);
+				break;
 			default:
 				throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unsupported X86 operation: {op.GetType().Name}");
 		}
@@ -160,6 +181,13 @@ public class X86CodeEmitter {
 		foreach (var (offset, target) in _relCallFixups) {
 			if (!_labels.TryGetValue(target, out var targetOffset)) {
 				throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unresolved label: {target}");
+			}
+			var rel = targetOffset - (offset + 4);
+			PatchDword(offset, rel);
+		}
+		foreach (var (offset, target) in _jumpFixups) {
+			if (!_labels.TryGetValue(target, out var targetOffset)) {
+				throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unresolved jump target: {target}");
 			}
 			var rel = targetOffset - (offset + 4);
 			PatchDword(offset, rel);
@@ -364,5 +392,101 @@ public class X86CodeEmitter {
 			EmitByte((byte)(0xC0 | RegCode(dest)));
 			EmitDword((int)immediate);
 		}
+	}
+
+	// --- SSE2 encoding helpers ---
+
+	private static int XmmRegCode(X86XmmRegister reg) {
+		return (int)reg;
+	}
+
+	private void EmitMovSdXmmRipRel(X86XmmRegister dest, string rdataLabel) {
+		// MOVSD xmm, [rip+disp32]: F2 0F 10 /r (ModRM: mod=00, r/m=101 for RIP-relative)
+		var reg = XmmRegCode(dest);
+		EmitByte(0xF2);
+		if (reg >= 8) {
+			EmitByte(0x44); // REX.R
+		}
+		EmitBytes(0x0F, 0x10);
+		EmitByte((byte)(0x05 | ((reg & 7) << 3)));
+		_rdataFixups.Add((_code.Count, rdataLabel));
+		EmitDword(0); // placeholder for RIP-relative displacement
+	}
+
+	private void EmitMovSdMemXmm(int displacement, X86XmmRegister src) {
+		// MOVSD [rbp+disp], xmm: F2 0F 11 /r
+		var reg = XmmRegCode(src);
+		EmitByte(0xF2);
+		if (reg >= 8) {
+			EmitByte(0x44); // REX.R
+		}
+		EmitBytes(0x0F, 0x11);
+		if (displacement >= -128 && displacement <= 127) {
+			EmitByte((byte)(0x45 | ((reg & 7) << 3))); // mod=01, r/m=rbp(5)
+			EmitByte((byte)(displacement & 0xFF));
+		} else {
+			EmitByte((byte)(0x85 | ((reg & 7) << 3))); // mod=10, r/m=rbp(5)
+			EmitDword(displacement);
+		}
+	}
+
+	private void EmitMovSdXmmMem(X86XmmRegister dest, int displacement) {
+		// MOVSD xmm, [rbp+disp]: F2 0F 10 /r
+		var reg = XmmRegCode(dest);
+		EmitByte(0xF2);
+		if (reg >= 8) {
+			EmitByte(0x44); // REX.R
+		}
+		EmitBytes(0x0F, 0x10);
+		if (displacement >= -128 && displacement <= 127) {
+			EmitByte((byte)(0x45 | ((reg & 7) << 3)));
+			EmitByte((byte)(displacement & 0xFF));
+		} else {
+			EmitByte((byte)(0x85 | ((reg & 7) << 3)));
+			EmitDword(displacement);
+		}
+	}
+
+	private void EmitUcomisd(X86XmmRegister src1, X86XmmRegister src2) {
+		// UCOMISD xmm, xmm: 66 0F 2E /r
+		var r1 = XmmRegCode(src1);
+		var r2 = XmmRegCode(src2);
+		EmitByte(0x66);
+		if (r1 >= 8 || r2 >= 8) {
+			byte rex = 0x40;
+			if (r1 >= 8) rex |= 0x04; // REX.R
+			if (r2 >= 8) rex |= 0x01; // REX.B
+			EmitByte(rex);
+		}
+		EmitBytes(0x0F, 0x2E);
+		EmitByte((byte)(0xC0 | ((r1 & 7) << 3) | (r2 & 7)));
+	}
+
+	private void EmitJcc(string condition, string target) {
+		// Jcc rel32: 0F 8x rel32
+		byte opcode = condition switch {
+			"e" or "z" => 0x84,
+			"ne" or "nz" => 0x85,
+			"b" or "c" => 0x82,
+			"ae" or "nc" => 0x83,
+			"p" or "pe" => 0x8A,
+			"np" or "po" => 0x8B,
+			"l" => 0x8C,
+			"ge" => 0x8D,
+			"le" => 0x8E,
+			"g" => 0x8F,
+			_ => throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unsupported Jcc condition: {condition}")
+		};
+		EmitByte(0x0F);
+		EmitByte(opcode);
+		_jumpFixups.Add((_code.Count, target));
+		EmitDword(0); // placeholder for rel32
+	}
+
+	private void EmitJmp(string target) {
+		// JMP rel32: E9 rel32
+		EmitByte(0xE9);
+		_jumpFixups.Add((_code.Count, target));
+		EmitDword(0); // placeholder
 	}
 }

@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace MaxonSharp.Testing;
@@ -254,6 +256,19 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 					}
 				}
 
+				// Check Required Rdata
+				if (successExpectation.RequiredRdata != null) {
+					var (rdataPassed, rdataMessage) = CheckRequiredRdata(successExpectation.RequiredRdata, exePath);
+					if (!rdataPassed) {
+						return new TestResult {
+							TestName = fragment.TestName,
+							Passed = false,
+							ErrorMessage = $"Required Rdata mismatch: {rdataMessage}",
+							Duration = sw.Elapsed
+						};
+					}
+				}
+
 				// Run the executable if we have runtime expectations
 				if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null) {
 					var (ExitCode, Stdout, Stderr) = RunExecutable(exePath);
@@ -381,5 +396,189 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 		normalized = normalized.Replace('\\', '/');
 		// Trim whitespace
 		return normalized.Trim();
+	}
+
+	// ============================================================================
+	// RequiredRdata verification
+	// ============================================================================
+
+	private static (bool Passed, string? Message) CheckRequiredRdata(string requiredRdata, string exePath) {
+		var expectedBytes = ParseTypedRdataValues(requiredRdata);
+		if (expectedBytes == null) {
+			return (false, "Failed to parse RequiredRdata typed values");
+		}
+
+		var sections = ParsePeSections(exePath);
+		if (sections == null) {
+			return (false, "Failed to parse PE sections");
+		}
+
+		var rdataSection = sections.FirstOrDefault(s => s.Name == ".rdata");
+		if (rdataSection == null) {
+			return (false, "PE does not contain .rdata section");
+		}
+
+		var actualBytes = ReadPeSectionData(exePath, rdataSection);
+		if (actualBytes == null) {
+			return (false, "Failed to read .rdata section data");
+		}
+
+		// Trim trailing zeros from actual (PE sections are padded to alignment)
+		var actualTrimmed = TrimTrailingZeros(actualBytes);
+
+		if (actualTrimmed.AsSpan().SequenceEqual(expectedBytes)) {
+			return (true, null);
+		}
+
+		return (false, $"Rdata mismatch.\nExpected ({expectedBytes.Length} bytes): {FormatHex(expectedBytes)}\nActual ({actualTrimmed.Length} bytes): {FormatHex(actualTrimmed)}");
+	}
+
+	private static byte[] TrimTrailingZeros(byte[] data) {
+		var end = data.Length;
+		while (end > 0 && data[end - 1] == 0) end--;
+		return data[..end];
+	}
+
+	private static string FormatHex(byte[] data) {
+		var sb = new StringBuilder(data.Length * 3);
+		for (int i = 0; i < data.Length; i++) {
+			if (i > 0) sb.Append(' ');
+			sb.Append(data[i].ToString("x2"));
+		}
+		return sb.ToString();
+	}
+
+	/// <summary>
+	/// Parses typed value lines into a concatenated byte array.
+	/// </summary>
+	private static byte[]? ParseTypedRdataValues(string block) {
+		var result = new List<byte>();
+		var lines = block.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+		foreach (var rawLine in lines) {
+			var line = rawLine.Trim();
+			if (line.Length == 0) continue;
+
+			var spaceIdx = line.IndexOf(' ');
+			if (spaceIdx < 0) return null;
+
+			var type = line[..spaceIdx];
+			var value = line[(spaceIdx + 1)..].Trim();
+
+			switch (type) {
+				case "f64": {
+					if (!double.TryParse(value, CultureInfo.InvariantCulture, out var d)) return null;
+					result.AddRange(BitConverter.GetBytes(d));
+					break;
+				}
+				case "i64": {
+					if (!long.TryParse(value, out var l)) return null;
+					result.AddRange(BitConverter.GetBytes(l));
+					break;
+				}
+				case "i64[]": {
+					var parts = value.Split(',');
+					foreach (var part in parts) {
+						if (!long.TryParse(part.Trim(), out var l)) return null;
+						result.AddRange(BitConverter.GetBytes(l));
+					}
+					break;
+				}
+				case "utf8": {
+					if (value.Length < 2 || value[0] != '"' || value[^1] != '"') return null;
+					var str = ProcessEscapes(value[1..^1]);
+					result.AddRange(Encoding.UTF8.GetBytes(str));
+					break;
+				}
+				default:
+					return null;
+			}
+		}
+
+		return [.. result];
+	}
+
+	private static string ProcessEscapes(string input) {
+		var sb = new StringBuilder(input.Length);
+		for (int i = 0; i < input.Length; i++) {
+			if (input[i] == '\\' && i + 1 < input.Length) {
+				switch (input[i + 1]) {
+					case '0': sb.Append('\0'); i++; break;
+					case 'n': sb.Append('\n'); i++; break;
+					case 't': sb.Append('\t'); i++; break;
+					case '\\': sb.Append('\\'); i++; break;
+					case '"': sb.Append('"'); i++; break;
+					default: sb.Append(input[i]); break;
+				}
+			} else {
+				sb.Append(input[i]);
+			}
+		}
+		return sb.ToString();
+	}
+
+	// ============================================================================
+	// PE parsing helpers
+	// ============================================================================
+
+	private sealed record PeSectionInfo(string Name, uint VirtualSize, uint VirtualAddress, uint RawSize, uint RawOffset, uint Characteristics);
+
+	private static List<PeSectionInfo>? ParsePeSections(string exePath) {
+		try {
+			using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read);
+			using var reader = new BinaryReader(fs);
+
+			var dosMagic = reader.ReadUInt16();
+			if (dosMagic != 0x5A4D) return null;
+
+			fs.Position = 0x3C;
+			var peOffset = reader.ReadUInt32();
+
+			fs.Position = peOffset;
+			var peSignature = reader.ReadUInt32();
+			if (peSignature != 0x00004550) return null;
+
+			reader.ReadUInt16(); // Machine
+			var numberOfSections = reader.ReadUInt16();
+			reader.ReadUInt32(); // TimeDateStamp
+			reader.ReadUInt32(); // PointerToSymbolTable
+			reader.ReadUInt32(); // NumberOfSymbols
+			var sizeOfOptionalHeader = reader.ReadUInt16();
+			reader.ReadUInt16(); // Characteristics
+
+			fs.Position += sizeOfOptionalHeader;
+
+			var sections = new List<PeSectionInfo>();
+			for (int i = 0; i < numberOfSections; i++) {
+				var nameBytes = reader.ReadBytes(8);
+				var name = Encoding.ASCII.GetString(nameBytes).TrimEnd('\0');
+				var virtualSize = reader.ReadUInt32();
+				var virtualAddress = reader.ReadUInt32();
+				var rawSize = reader.ReadUInt32();
+				var rawOffset = reader.ReadUInt32();
+				reader.ReadUInt32(); // PointerToRelocations
+				reader.ReadUInt32(); // PointerToLinenumbers
+				reader.ReadUInt16(); // NumberOfRelocations
+				reader.ReadUInt16(); // NumberOfLinenumbers
+				var characteristics = reader.ReadUInt32();
+				sections.Add(new PeSectionInfo(name, virtualSize, virtualAddress, rawSize, rawOffset, characteristics));
+			}
+
+			return sections;
+		} catch {
+			return null;
+		}
+	}
+
+	private static byte[]? ReadPeSectionData(string exePath, PeSectionInfo section) {
+		try {
+			using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read);
+			fs.Position = section.RawOffset;
+			var data = new byte[section.RawSize];
+			fs.ReadExactly(data, 0, (int)section.RawSize);
+			return data;
+		} catch {
+			return null;
+		}
 	}
 }

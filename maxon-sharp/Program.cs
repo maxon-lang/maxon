@@ -18,7 +18,6 @@ class Program {
 			"build" => RunBuild(args[1..]),
 			"run" => RunRun(args[1..]),
 			"spec-test" => RunSpecTests(args[1..]),
-			"unit-test" => RunUnitTests(args[1..]),
 			_ => Fail()
 		};
 	}
@@ -31,13 +30,12 @@ class Program {
 		Console.WriteLine("  build [<directory>]      Build a project (default: current directory)");
 		Console.WriteLine("  run <file|directory>     Compile and run");
 		Console.WriteLine("  spec-test [options]      Run spec tests");
-		Console.WriteLine("  unit-test [options]      Run unit tests (compiler internals)");
 		Console.WriteLine();
 		Console.WriteLine("Build options (compile, build, run):");
 		Console.WriteLine("  --emit-ir                Write .mlir file");
 		Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.mlir, etc.)");
 		Console.WriteLine();
-		Console.WriteLine("Spec/unit test options:");
+		Console.WriteLine("Spec test options:");
 		Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
 		Console.WriteLine();
 		Console.WriteLine("Logging (all commands):");
@@ -364,40 +362,11 @@ class Program {
 		return null;
 	}
 
-	static int RunUnitTests(string[] args) {
-		SetupTestLogging();
-
-		var unitTestOptions = new HashSet<string> { "--filter=" };
-		var (_, _, valid) = ParseOptions(args, unitTestOptions);
-		if (!valid) return Fail();
-
-		var filter = GetFilterArg(args);
-
-		Logger.Info(LogCategory.Testing, "Running maxon-sharp unit tests...");
-
-		var summary = UnitTests.RunAll(filter);
-
-		Logger.Info(LogCategory.Testing, "");
-		return ReportTestResults(summary);
-	}
-
 	/// <summary>
 	/// Sets up logging for test commands (suppresses compiler Info messages).
 	/// </summary>
 	static void SetupTestLogging() {
 		Logger.SetLevel(LogCategory.Compiler, LogLevel.Error);
-	}
-
-	/// <summary>
-	/// Extracts the --filter argument value.
-	/// </summary>
-	static string? GetFilterArg(string[] args) {
-		foreach (var arg in args) {
-			if (arg.StartsWith("--filter=")) {
-				return arg["--filter=".Length..];
-			}
-		}
-		return null;
 	}
 
 	/// <summary>
@@ -413,16 +382,4 @@ class Program {
 		}
 	}
 
-	/// <summary>
-	/// Reports unit test results in a consistent format.
-	/// </summary>
-	static int ReportTestResults(UnitTestSummary summary) {
-		if (summary.Failed == 0) {
-			Logger.Info(LogCategory.Testing, $"Unit tests: {summary.Passed} passed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
-			return 0;
-		} else {
-			Logger.Error(LogCategory.Testing, $"Unit tests: {summary.Passed} passed, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
-			return 1;
-		}
-	}
 }

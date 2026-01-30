@@ -117,6 +117,38 @@ module {
 
 The `RequiredMLIR` block is optional. When present, the entire block is compared as one string against the generated MLIR from all pipeline stages.
 
+### Rdata Verification
+
+To verify the exact contents of the `.rdata` section in the compiled PE executable, include a `RequiredRdata` block. This performs an exact match — the concatenated bytes from the typed values must equal the full `.rdata` section contents (trailing zero-padding from PE alignment is trimmed before comparison).
+
+Each line is a typed value:
+
+- `f64 3.14` — 8 bytes, IEEE 754 little-endian double
+- `i64 42` — 8 bytes, little-endian int64
+- `i64[] 10, 20, 30` — N×8 bytes, consecutive little-endian int64s
+- `utf8 "hello world\0"` — variable length, UTF-8 encoded (supports `\0`, `\n`, `\t`, `\\`)
+
+Example:
+
+```maxon
+function main() returns int
+    var x = 3.14
+    if x == 3.14 'check'
+        return 1
+    end 'check' else 'other'
+        return 0
+    end 'other'
+end 'main'
+```
+```exitcode
+1
+```
+```RequiredRdata
+f64 3.14
+```
+
+The `RequiredRdata` block is optional. When present, the test compiles the source to an executable, reads the `.rdata` PE section, and compares it byte-for-byte against the expected values.
+
 ### Executable Examples (Compile Errors)
 
 For code that demonstrates compile/parse errors:

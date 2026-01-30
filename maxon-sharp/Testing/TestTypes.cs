@@ -36,6 +36,11 @@ public class SuccessExpectation : TestExpectation {
 	/// Verified during test runs (must match exactly).
 	/// </summary>
 	public string? RequiredMLIR { get; init; }
+	/// <summary>
+	/// Typed value lines describing the exact expected .rdata section contents.
+	/// Each line is a typed value (e.g. "f64 3.14", "i64[] 10, 20, 30", "utf8 \"hello\0\"").
+	/// </summary>
+	public string? RequiredRdata { get; init; }
 }
 
 /// <summary>

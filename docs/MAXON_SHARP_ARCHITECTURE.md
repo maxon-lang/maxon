@@ -35,7 +35,6 @@ Commands:
 - `maxonsharp build [<directory>]` -- build a project directory
 - `maxonsharp run <file|directory>` -- compile and run
 - `maxonsharp spec-test [--filter=PATTERN]` -- run spec tests
-- `maxonsharp unit-test [--filter=PATTERN]` -- run unit tests
 
 
 ## Directory Structure
