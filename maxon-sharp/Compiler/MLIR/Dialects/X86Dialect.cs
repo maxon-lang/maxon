@@ -47,3 +47,8 @@ public class X86AddRegImm(X86Register dest, long immediate) : X86Op {
 	public long Immediate { get; } = immediate;
 	public override string Mnemonic => $"x86.add {Dest.ToString().ToLower()}, {Immediate}";
 }
+
+public class X86CallDirect(string target) : X86Op {
+	public string Target { get; } = target;
+	public override string Mnemonic => $"x86.call {Target}";
+}

@@ -26,7 +26,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 	}
 
 	// ============================================================================
-	// Top-level declarations
+	// Top-level parsing
 	// ============================================================================
 
 	private void ParseTopLevel(MlirModule module) {
@@ -55,13 +55,13 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		SkipNewlines();
 
 		var func = new MlirFunction(name, paramTypes, returnType);
+		module.AddFunction(func);
 		_currentFunction = func;
 		_currentBlock = func.Body.AddBlock("entry");
 
 		ParseBodyUntilEnd();
 		ExpectEndLabel(name);
 
-		module.AddFunction(func);
 		_currentFunction = null;
 		_currentBlock = null;
 	}
@@ -119,29 +119,36 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 	private void ParseReturn() {
 		Advance(); // consume 'return'
 
-		MlirValue? value = null;
 		if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
-			value = ParseExpression();
+			_currentBlock!.AddOp(new MaxonReturnOp(ParseExpression()));
+		} else {
+			_currentBlock!.AddOp(new MaxonReturnOp());
 		}
-
-		_currentBlock!.AddOp(new MaxonReturnOp(value));
 	}
 
 	// ============================================================================
 	// Expression parsing
 	// ============================================================================
 
-	private MlirValue ParseExpression() {
-		return ParsePrimary();
-	}
-
-	private MlirValue ParsePrimary() {
+	private MaxonExpr ParseExpression() {
 		if (Check(TokenType.IntegerLiteral)) {
 			var token = Advance();
 			var value = ParseIntegerLiteral(token.Value);
 			var op = new MaxonConstantOp(value, MlirType.I64);
 			_currentBlock!.AddOp(op);
-			return op.Result;
+			return new MaxonExpr.Value(op.Result);
+		}
+
+		if (Check(TokenType.Identifier)) {
+			var token = Advance();
+			if (Check(TokenType.LeftParen)) {
+				Advance(); // consume '('
+				Expect(TokenType.RightParen);
+				var callOp = new MaxonCallOp(token.Value, []);
+				_currentBlock!.AddOp(callOp);
+				return new MaxonExpr.Call(callOp);
+			}
+			throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unexpected identifier '{token.Value}'", token.Line, token.Column);
 		}
 
 		throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got {Current().Type}", Current().Line, Current().Column);

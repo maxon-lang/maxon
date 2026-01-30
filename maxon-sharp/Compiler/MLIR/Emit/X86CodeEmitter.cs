@@ -97,6 +97,11 @@ public class X86CodeEmitter {
 			case X86AddRegImm add:
 				EmitAddRegImm(add.Dest, add.Immediate);
 				break;
+			case X86CallDirect call:
+				EmitByte(0xE8); // call rel32
+				_relCallFixups.Add((_code.Count, call.Target));
+				EmitDword(0); // placeholder, patched by ResolveLabels
+				break;
 			default:
 				throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unsupported X86 operation: {op.GetType().Name}");
 		}
