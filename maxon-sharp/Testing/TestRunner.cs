@@ -234,18 +234,21 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
 				var successExpectation = (SuccessExpectation)fragment.Expectation;
 
-				// Check Required MLIR using GeneratedMLIR from fragment
+				// Check Required MLIR by compiling fresh with all pipeline stages
 				if (successExpectation.RequiredMLIR != null) {
-					if (fragment.GeneratedMLIR == null) {
+					var irResult = new Compiler.Compiler().Compile(
+						[new Compiler.SourceFile(fragment.FilePath, fragment.Source)],
+						exePath, returnIr: true);
+					if (!irResult.Success || irResult.AllStagesIr == null) {
 						return new TestResult {
 							TestName = fragment.TestName,
 							Passed = false,
-							ErrorMessage = "RequiredMLIR specified but no generated MLIR found in fragment",
+							ErrorMessage = "RequiredMLIR specified but compilation failed or produced no IR",
 							Duration = sw.Elapsed
 						};
 					}
 
-					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMLIR, fragment.GeneratedMLIR);
+					var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMLIR, irResult.AllStagesIr);
 					if (!Passed) {
 						return new TestResult {
 							TestName = fragment.TestName,

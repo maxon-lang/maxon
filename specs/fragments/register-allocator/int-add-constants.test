@@ -1,0 +1,55 @@
+// Test: int-add-constants
+function main() returns int
+    return 30 + 12
+end 'main'
+---
+ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.constant {value = 30 : i64}
+    %1 = maxon.constant {value = 12 : i64}
+    %2 = maxon.addi %0, %1
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %3 = arith.constant {value = 30 : i64}
+    %4 = arith.constant {value = 12 : i64}
+    %5 = arith.addi %3, %4
+    func.return %5
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.mov eax, 30
+    x86.mov ecx, 12
+    x86.add eax, ecx
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.mov eax, 30
+    x86.mov ecx, 12
+    x86.add eax, ecx
+    x86.pop rbp
+    x86.ret
+  }
+}
+---

@@ -194,8 +194,10 @@ public static class FragmentGenerator {
 			var sources = new[] { new Compiler.SourceFile(fragmentPath, test.Source) };
 			var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
 			if (result.Success) {
-				sb.Append(result.AllStagesIr?.TrimEnd());
-				sb.AppendLine();
+				if (result.X86Ir != null) {
+					sb.Append(result.X86Ir.Trim());
+					sb.AppendLine();
+				}
 			} else {
 				sb.AppendLine($"// Compilation failed: {result.Error}");
 				error ??= result.Error;

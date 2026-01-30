@@ -20,7 +20,7 @@ public class MlirPipeline {
 		if (returnIr || dumpStagesBasePath != null) {
 			var maxonIr = MlirPrinter.Print(module);
 			if (returnIr) {
-				irBuilder!.AppendLine($"--- {PipelineStages.Maxon}");
+				irBuilder!.AppendLine($"=== {PipelineStages.Maxon}");
 				irBuilder.Append(maxonIr.TrimEnd());
 				irBuilder.AppendLine();
 			}
@@ -37,7 +37,7 @@ public class MlirPipeline {
 		if (returnIr || dumpStagesBasePath != null) {
 			var standardIr = MlirPrinter.Print(module);
 			if (returnIr) {
-				irBuilder!.AppendLine($"--- {PipelineStages.Standard}");
+				irBuilder!.AppendLine($"=== {PipelineStages.Standard}");
 				irBuilder.Append(standardIr.TrimEnd());
 				irBuilder.AppendLine();
 			}
@@ -54,7 +54,7 @@ public class MlirPipeline {
 		if (returnIr || dumpStagesBasePath != null) {
 			var x86Ir = MlirPrinter.Print(module);
 			if (returnIr) {
-				irBuilder!.AppendLine($"--- {PipelineStages.X86}");
+				irBuilder!.AppendLine($"=== {PipelineStages.X86}");
 				irBuilder.Append(x86Ir.TrimEnd());
 				irBuilder.AppendLine();
 			}

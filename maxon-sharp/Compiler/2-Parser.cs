@@ -222,6 +222,24 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 	}
 
 	private MaxonExpr ParseExpression() {
+		var lhs = ParsePrimary();
+
+		while (Check(TokenType.Plus)) {
+			Advance(); // consume '+'
+			var rhs = ParsePrimary();
+
+			MlirValue lhsVal = ExtractValue(lhs);
+			MlirValue rhsVal = ExtractValue(rhs);
+
+			var addOp = new MaxonAddIOp(lhsVal, rhsVal);
+			_currentBlock!.AddOp(addOp);
+			lhs = new MaxonExpr.Value(addOp.Result);
+		}
+
+		return lhs;
+	}
+
+	private MaxonExpr ParsePrimary() {
 		if (Check(TokenType.IntegerLiteral)) {
 			var token = Advance();
 			var value = ParseIntegerLiteral(token.Value);

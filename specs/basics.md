@@ -71,7 +71,7 @@ end 'main'
 42
 ```
 ```RequiredMLIR
---- maxon
+=== maxon
 module {
   func @getValue() -> i64 {
   entry:
@@ -84,7 +84,7 @@ module {
     maxon.return
   }
 }
---- standard
+=== standard
 module {
   func @getValue() -> i64 {
   entry:
@@ -97,7 +97,7 @@ module {
     func.return %2
   }
 }
---- x86
+=== x86
 module {
   func @getValue() -> i64 {
   entry:
@@ -136,7 +136,7 @@ end 'main'
 f64 3.14
 ```
 ```RequiredMLIR
---- maxon
+=== maxon
 module {
   func @main() -> i64 {
   entry:
@@ -154,7 +154,7 @@ module {
     maxon.return %5
   }
 }
---- standard
+=== standard
 module {
   func @main() -> i64 {
   entry:
@@ -173,7 +173,7 @@ module {
     func.return %11
   }
 }
---- x86
+=== x86
 module {
   func @main() -> i64 {
   entry:

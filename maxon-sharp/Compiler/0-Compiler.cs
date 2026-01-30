@@ -13,14 +13,14 @@ public record CompileResult(
 	public string? X86Ir {
 		get {
 			if (AllStagesIr == null) return null;
-			var marker = $"--- {PipelineStages.X86}";
+			var marker = $"=== {PipelineStages.X86}";
 			var idx = AllStagesIr.IndexOf(marker);
 			if (idx < 0) return null;
 			var start = idx + marker.Length;
 			// Skip the newline after the marker
 			if (start < AllStagesIr.Length && AllStagesIr[start] == '\n') start++;
 			// Find the next stage marker or end of string
-			var nextMarker = AllStagesIr.IndexOf("\n--- ", start);
+			var nextMarker = AllStagesIr.IndexOf("\n=== ", start);
 			var end = nextMarker >= 0 ? nextMarker : AllStagesIr.Length;
 			return AllStagesIr[start..end].TrimEnd();
 		}

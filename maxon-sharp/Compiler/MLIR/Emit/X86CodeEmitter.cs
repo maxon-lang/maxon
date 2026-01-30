@@ -100,6 +100,9 @@ public class X86CodeEmitter {
 			case X86AddRegImm add:
 				EmitAddRegImm(add.Dest, add.Immediate);
 				break;
+			case X86AddRegReg addReg:
+				EmitAddRegReg(addReg.Dest, addReg.Src);
+				break;
 			case X86CallDirect call:
 				EmitByte(0xE8); // call rel32
 				_relCallFixups.Add((_code.Count, call.Target));
@@ -392,6 +395,16 @@ public class X86CodeEmitter {
 			EmitByte((byte)(0xC0 | RegCode(dest)));
 			EmitDword((int)immediate);
 		}
+	}
+
+	private void EmitAddRegReg(X86Register dest, X86Register src) {
+		// ADD r64, r64: REX.W + 01 /r
+		byte rex = 0x48;
+		if (NeedsRex(src)) rex |= 0x04; // REX.R
+		if (NeedsRex(dest)) rex |= 0x01; // REX.B
+		EmitByte(rex);
+		EmitByte(0x01);
+		EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
 	}
 
 	// --- SSE2 encoding helpers ---

@@ -34,6 +34,11 @@ public static class StandardToX86Conversion {
 		var valueToXmm = new Dictionary<MlirValue, X86XmmRegister>();
 		int nextXmm = 0;
 
+		// Track which SSA values map to which GPR
+		var valueToGpr = new Dictionary<MlirValue, X86Register>();
+		var gprPool = new[] { X86Register.Eax, X86Register.Ecx, X86Register.Edx, X86Register.Ebx, X86Register.Esi, X86Register.Edi };
+		int nextGpr = 0;
+
 		var sourceBlocks = func.Body.Blocks.ToList();
 		var newBlocks = new List<MlirBlock>();
 
@@ -41,6 +46,9 @@ public static class StandardToX86Conversion {
 			var srcBlock = sourceBlocks[blockIdx];
 			var x86Block = new MlirBlock(srcBlock.Name);
 			newBlocks.Add(x86Block);
+
+			nextGpr = 0;
+			nextXmm = 0;
 
 			// Prologue only in entry block
 			if (blockIdx == 0) {
@@ -52,9 +60,22 @@ public static class StandardToX86Conversion {
 
 			foreach (var op in srcBlock.Operations) {
 				switch (op) {
-					case ArithConstantOp constOp:
-						x86Block.AddOp(new X86MovRegImm(X86Register.Eax, (int)constOp.IntValue));
+					case ArithConstantOp constOp: {
+						var gpr = gprPool[nextGpr];
+						x86Block.AddOp(new X86MovRegImm(gpr, (int)constOp.IntValue));
+						valueToGpr[constOp.Result] = gpr;
+						nextGpr++;
 						break;
+					}
+
+					case ArithAddIOp addOp: {
+						var lhsReg = valueToGpr[addOp.Operands[0]];
+						var rhsReg = valueToGpr[addOp.Operands[1]];
+						x86Block.AddOp(new X86AddRegReg(lhsReg, rhsReg));
+						// Result is in lhsReg
+						valueToGpr[addOp.Result] = lhsReg;
+						break;
+					}
 
 					case ArithFloatConstantOp floatOp: {
 						var label = GetOrCreateFloatLabel(floatOp.FloatValue, module, floatConstants);
@@ -102,12 +123,18 @@ public static class StandardToX86Conversion {
 						x86Block.AddOp(new X86CallDirect(callOp.Callee));
 						break;
 
-					case FuncReturnOp:
+					case FuncReturnOp retOp: {
+						if (retOp.ReturnValue != null && valueToGpr.TryGetValue(retOp.ReturnValue, out var retReg)) {
+							if (retReg != X86Register.Eax) {
+								x86Block.AddOp(new X86MovRegReg(X86Register.Eax, retReg));
+							}
+						}
 						if (stackSize > 0)
 							x86Block.AddOp(new X86AddRegImm(X86Register.Rsp, stackSize));
 						x86Block.AddOp(new X86PopReg(X86Register.Rbp));
 						x86Block.AddOp(new X86Ret());
 						break;
+					}
 				}
 			}
 		}

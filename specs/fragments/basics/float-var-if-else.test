@@ -10,7 +10,7 @@ end 'main'
 ---
 ExitCode: 1
 RequiredMLIR: ```
---- maxon
+=== maxon
 module {
   func @main() -> i64 {
   entry:
@@ -28,7 +28,7 @@ module {
     maxon.return %5
   }
 }
---- standard
+=== standard
 module {
   func @main() -> i64 {
   entry:
@@ -47,7 +47,7 @@ module {
     func.return %11
   }
 }
---- x86
+=== x86
 module {
   func @main() -> i64 {
   entry:
@@ -78,44 +78,6 @@ RequiredRdata: ```
 f64 3.14
 ```
 ---
---- maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.float_constant {value = 3.14 : f64}
-    maxon.var_decl x %0
-    %1 = maxon.var_load x {type = f64}
-    %2 = maxon.float_constant {value = 3.14 : f64}
-    %3 = maxon.cmpf eq %1, %2
-    maxon.cond_br %3 [then: check, else: other]
-  check:
-    %4 = maxon.constant {value = 1 : i64}
-    maxon.return %4
-  other:
-    %5 = maxon.constant {value = 0 : i64}
-    maxon.return %5
-  }
-}
---- standard
-module {
-  func @main() -> i64 {
-  entry:
-    %6 = arith.float_constant {value = 3.14 : f64}
-    memref.alloca x : f64
-    memref.store %6, x
-    %7 = memref.load x : f64
-    %8 = arith.float_constant {value = 3.14 : f64}
-    %9 = arith.cmpf eq %7, %8
-    cf.cond_br %9 [then: check, else: other]
-  check:
-    %10 = arith.constant {value = 1 : i64}
-    func.return %10
-  other:
-    %11 = arith.constant {value = 0 : i64}
-    func.return %11
-  }
-}
---- x86
 module {
   func @main() -> i64 {
   entry:

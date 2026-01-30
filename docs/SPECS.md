@@ -74,7 +74,7 @@ end 'main'
 
 ### IR Verification
 
-To verify the compiler's MLIR at all pipeline stages, include a `RequiredMLIR` block. The block contains all stages concatenated, separated by `--- stagename` markers. The test will fail if the generated MLIR doesn't match exactly (after whitespace normalization).
+To verify the compiler's MLIR at all pipeline stages, include a `RequiredMLIR` block. The block contains all stages concatenated, separated by `=== stagename` markers. The test will fail if the generated MLIR doesn't match exactly (after whitespace normalization).
 
 Current pipeline stages: `maxon`, `standard`, `x86`.
 
@@ -87,22 +87,23 @@ end 'main'
 42
 ```
 ```RequiredMLIR
---- maxon
+=== maxon
 module {
   func @main() -> i64 {
   entry:
-    maxon.return maxon.int_literal 42
+    %0 = maxon.constant {value = 42 : i64}
+    maxon.return %0
   }
 }
---- standard
+=== standard
 module {
   func @main() -> i64 {
   entry:
-    %0 = arith.constant 42 : i64
-    func.return %0 : i64
+    %1 = arith.constant {value = 42 : i64}
+    func.return %1
   }
 }
---- x86
+=== x86
 module {
   func @main() -> i64 {
   entry:

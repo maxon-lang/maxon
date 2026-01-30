@@ -63,6 +63,18 @@ public class MaxonVarLoadOp : MlirOperation {
 	}
 }
 
+public class MaxonAddIOp : MlirOperation {
+	public override string Mnemonic => "maxon.addi";
+	public MlirValue Result { get; }
+
+	public MaxonAddIOp(MlirValue lhs, MlirValue rhs) {
+		Operands.Add(lhs);
+		Operands.Add(rhs);
+		Result = MlirContext.Current.CreateValue(MlirType.I64, this);
+		Results.Add(Result);
+	}
+}
+
 public class MaxonCmpFOp : MlirOperation {
 	public override string Mnemonic => $"maxon.cmpf {Predicate}";
 	public string Predicate { get; }

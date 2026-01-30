@@ -35,7 +35,15 @@ public static class MaxonToStandardConversion {
 							valueMap[varLoad.Result] = loadOp.Result;
 							break;
 						}
-						case MaxonCmpFOp cmpOp: {
+						case MaxonAddIOp addOp: {
+						var lhs = valueMap.GetValueOrDefault(addOp.Operands[0], addOp.Operands[0]);
+						var rhs = valueMap.GetValueOrDefault(addOp.Operands[1], addOp.Operands[1]);
+						var newAdd = new ArithAddIOp(lhs, rhs);
+						newOps.Add(newAdd);
+						valueMap[addOp.Result] = newAdd.Result;
+						break;
+					}
+					case MaxonCmpFOp cmpOp: {
 							var lhs = valueMap.GetValueOrDefault(cmpOp.Operands[0], cmpOp.Operands[0]);
 							var rhs = valueMap.GetValueOrDefault(cmpOp.Operands[1], cmpOp.Operands[1]);
 							var newCmp = new ArithCmpFOp(cmpOp.Predicate, lhs, rhs);

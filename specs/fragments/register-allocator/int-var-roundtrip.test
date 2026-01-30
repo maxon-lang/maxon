@@ -1,0 +1,61 @@
+// Test: int-var-roundtrip
+function main() returns int
+    var x = 99
+    return x
+end 'main'
+---
+ExitCode: 99
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.constant {value = 99 : i64}
+    maxon.var_decl x %0
+    %1 = maxon.var_load x {type = i64}
+    maxon.return %1
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %2 = arith.constant {value = 99 : i64}
+    memref.alloca x : i64
+    memref.store %2, x
+    %3 = memref.load x : i64
+    func.return %3
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 99
+    x86.movsd [rbp-8], xmm0
+    x86.movsd xmm0, [rbp-8]
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 99
+    x86.movsd [rbp-8], xmm0
+    x86.movsd xmm0, [rbp-8]
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
+---

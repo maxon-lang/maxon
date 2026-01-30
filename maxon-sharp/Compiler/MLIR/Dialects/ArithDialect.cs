@@ -32,6 +32,18 @@ public class ArithFloatConstantOp : MlirOperation {
 	}
 }
 
+public class ArithAddIOp : MlirOperation {
+	public override string Mnemonic => "arith.addi";
+	public MlirValue Result { get; }
+
+	public ArithAddIOp(MlirValue lhs, MlirValue rhs) {
+		Operands.Add(lhs);
+		Operands.Add(rhs);
+		Result = MlirContext.Current.CreateValue(MlirType.I64, this);
+		Results.Add(Result);
+	}
+}
+
 public class ArithCmpFOp : MlirOperation {
 	public override string Mnemonic => $"arith.cmpf {Predicate}";
 	public string Predicate { get; }
