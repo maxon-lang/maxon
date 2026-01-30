@@ -20,14 +20,20 @@ public static class StandardToX86Conversion {
 	private static MlirFunction<X86Op> ConvertFunction(MlirFunction<StandardOp> func, MlirModule<X86Op> outputModule) {
 		var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamTypes, func.ReturnType);
 
-		// Pre-scan: calculate stack frame for local variables
+		// Pre-scan: calculate stack frame from store ops
 		var varOffsets = new Dictionary<string, int>();
 		int stackSize = 0;
 		foreach (var block in func.Body.Blocks) {
 			foreach (var op in block.Operations) {
-				if (op is StandardMemRefAllocaOp alloca) {
-					stackSize += alloca.VarType.SizeInBytes;
-					varOffsets[alloca.VarName] = -stackSize;
+				var varName = op switch {
+					StdStoreI64Op s => s.VarName,
+					StdStoreF64Op s => s.VarName,
+					_ => null
+				};
+				if (varName != null && !varOffsets.ContainsKey(varName)) {
+					int size = op is StdStoreF64Op ? 8 : 8;
+					stackSize += size;
+					varOffsets[varName] = -stackSize;
 				}
 			}
 		}
@@ -38,12 +44,12 @@ public static class StandardToX86Conversion {
 		// Track float constants for rdata deduplication
 		var floatConstants = new Dictionary<double, string>();
 
-		// Track which SSA values map to which XMM register
-		var valueToXmm = new Dictionary<MlirValue, X86XmmRegister>();
+		// Track which StdValue maps to which XMM register
+		var valueToXmm = new Dictionary<StdValue, X86XmmRegister>();
 		int nextXmm = 0;
 
-		// Track which SSA values map to which GPR
-		var valueToGpr = new Dictionary<MlirValue, X86Register>();
+		// Track which StdValue maps to which GPR
+		var valueToGpr = new Dictionary<StdValue, X86Register>();
 		var gprPool = new[] { X86Register.Eax, X86Register.Ecx, X86Register.Edx, X86Register.Ebx, X86Register.Esi, X86Register.Edi };
 		int nextGpr = 0;
 
@@ -66,33 +72,32 @@ public static class StandardToX86Conversion {
 
 			foreach (var op in srcBlock.Operations) {
 				switch (op) {
-					case StandardArithConstantOp constOp: {
+					case StdConstI64Op constOp: {
 							var gpr = gprPool[nextGpr];
-							x86Block.AddOp(new X86MovRegImmOp(gpr, (int)constOp.IntValue));
+							x86Block.AddOp(new X86MovRegImmOp(gpr, (int)constOp.Value));
 							valueToGpr[constOp.Result] = gpr;
 							nextGpr++;
 							break;
 						}
 
-					case StandardArithAddIOp addOp: {
-							var lhsReg = valueToGpr[addOp.Operands[0]];
-							var rhsReg = valueToGpr[addOp.Operands[1]];
+					case StdAddI64Op addOp: {
+							var lhsReg = valueToGpr[addOp.Lhs];
+							var rhsReg = valueToGpr[addOp.Rhs];
 							x86Block.AddOp(new X86AddRegRegOp(lhsReg, rhsReg));
-							// Result is in lhsReg
 							valueToGpr[addOp.Result] = lhsReg;
 							break;
 						}
 
-					case StandardArithSubIOp subOp: {
-							var lhsReg = valueToGpr[subOp.Operands[0]];
-							var rhsReg = valueToGpr[subOp.Operands[1]];
+					case StdSubI64Op subOp: {
+							var lhsReg = valueToGpr[subOp.Lhs];
+							var rhsReg = valueToGpr[subOp.Rhs];
 							x86Block.AddOp(new X86SubRegRegOp(lhsReg, rhsReg));
 							valueToGpr[subOp.Result] = lhsReg;
 							break;
 						}
 
-					case StandardArithFloatConstantOp floatOp: {
-							var label = GetOrCreateFloatLabel(floatOp.FloatValue, outputModule, floatConstants);
+					case StdConstF64Op floatOp: {
+							var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
 							var xmmReg = (X86XmmRegister)nextXmm;
 							x86Block.AddOp(new X86MovSdXmmRipRelOp(xmmReg, label));
 							valueToXmm[floatOp.Result] = xmmReg;
@@ -100,55 +105,56 @@ public static class StandardToX86Conversion {
 							break;
 						}
 
-					case StandardMemRefAllocaOp:
-						break;
-
-					case StandardMemRefStoreOp storeOp: {
+					case StdStoreI64Op storeOp: {
 							var offset = varOffsets[storeOp.VarName];
-							if (storeOp.StoreValue.Type == MlirType.F64) {
-								x86Block.AddOp(new X86MovSdMemXmmOp(offset, X86XmmRegister.Xmm0));
-								nextXmm = 0;
-							} else {
-								var srcReg = valueToGpr[storeOp.StoreValue];
-								x86Block.AddOp(new X86MovMemRegOp(offset, srcReg));
-							}
+							var srcReg = valueToGpr[storeOp.Value];
+							x86Block.AddOp(new X86MovMemRegOp(offset, srcReg));
 							break;
 						}
 
-					case StandardMemRefLoadOp loadOp: {
+					case StdStoreF64Op storeOp: {
+							var offset = varOffsets[storeOp.VarName];
+							x86Block.AddOp(new X86MovSdMemXmmOp(offset, X86XmmRegister.Xmm0));
+							nextXmm = 0;
+							break;
+						}
+
+					case StdLoadI64Op loadOp: {
 							var offset = varOffsets[loadOp.VarName];
-							if (loadOp.VarType == MlirType.F64) {
-								x86Block.AddOp(new X86MovSdXmmMemOp(X86XmmRegister.Xmm0, offset));
-								valueToXmm[loadOp.Result] = X86XmmRegister.Xmm0;
-								nextXmm = 1;
-							} else {
-								var gpr = gprPool[nextGpr];
-								x86Block.AddOp(new X86MovRegMemOp(gpr, offset));
-								valueToGpr[loadOp.Result] = gpr;
-								nextGpr++;
-							}
+							var gpr = gprPool[nextGpr];
+							x86Block.AddOp(new X86MovRegMemOp(gpr, offset));
+							valueToGpr[loadOp.Result] = gpr;
+							nextGpr++;
 							break;
 						}
 
-					case StandardArithCmpFOp cmpOp: {
-							var lhsReg = valueToXmm.GetValueOrDefault(cmpOp.Operands[0], X86XmmRegister.Xmm0);
-							var rhsReg = valueToXmm.GetValueOrDefault(cmpOp.Operands[1], X86XmmRegister.Xmm1);
+					case StdLoadF64Op loadOp: {
+							var offset = varOffsets[loadOp.VarName];
+							x86Block.AddOp(new X86MovSdXmmMemOp(X86XmmRegister.Xmm0, offset));
+							valueToXmm[loadOp.Result] = X86XmmRegister.Xmm0;
+							nextXmm = 1;
+							break;
+						}
+
+					case StdCmpF64Op cmpOp: {
+							var lhsReg = valueToXmm.GetValueOrDefault(cmpOp.Lhs, X86XmmRegister.Xmm0);
+							var rhsReg = valueToXmm.GetValueOrDefault(cmpOp.Rhs, X86XmmRegister.Xmm1);
 							x86Block.AddOp(new X86UcomisdOp(lhsReg, rhsReg));
 							break;
 						}
 
-					case StandardCfCondBrOp condBr: {
+					case StdCondBrOp condBr: {
 							var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
 							x86Block.AddOp(new X86JccOp("ne", scopedElse));
 							x86Block.AddOp(new X86JccOp("p", scopedElse));
 							break;
 						}
 
-					case StandardFuncCallOp callOp:
+					case StdCallOp callOp:
 						x86Block.AddOp(new X86CallDirectOp(callOp.Callee));
 						break;
 
-					case StandardFuncReturnOp retOp: {
+					case StdReturnOp retOp: {
 							if (retOp.ReturnValue != null && valueToGpr.TryGetValue(retOp.ReturnValue, out var retReg)) {
 								if (retReg != X86Register.Eax) {
 									x86Block.AddOp(new X86MovRegRegOp(X86Register.Eax, retReg));

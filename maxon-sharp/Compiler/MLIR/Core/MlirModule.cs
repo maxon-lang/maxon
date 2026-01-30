@@ -6,7 +6,7 @@ public class MlirGlobal(string name, MlirType type, MlirAttribute? initValue = n
 	public MlirAttribute? InitValue { get; } = initValue;
 }
 
-public class MlirModule<TOp> where TOp : IMlirOp {
+public class MlirModule<TOp> where TOp : IPrintableOp {
 	public List<MlirFunction<TOp>> Functions { get; } = [];
 	public List<(string label, byte[] bytes)> RdataEntries { get; } = [];
 	public List<MlirGlobal> Globals { get; } = [];

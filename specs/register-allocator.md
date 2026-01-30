@@ -85,7 +85,6 @@ module {
   func @main() -> i64 {
   entry:
     %2 = arith.constant {value = 99 : i64}
-    memref.alloca x : i64
     memref.store %2, x
     %3 = memref.load x : i64
     func.return %3
@@ -125,7 +124,7 @@ module {
   entry:
     %0 = maxon.constant {value = 30 : i64}
     %1 = maxon.constant {value = 12 : i64}
-    %2 = maxon.addi %0, %1
+    %2 = maxon.add %0, %1 {type = i64}
     maxon.return %2
   }
 }
@@ -170,7 +169,7 @@ module {
   entry:
     %0 = maxon.constant {value = 100 : i64}
     %1 = maxon.constant {value = 58 : i64}
-    %2 = maxon.subi %0, %1
+    %2 = maxon.sub %0, %1 {type = i64}
     maxon.return %2
   }
 }
@@ -223,7 +222,7 @@ module {
     maxon.var_decl b %1
     %2 = maxon.var_load a {type = i64}
     %3 = maxon.var_load b {type = i64}
-    %4 = maxon.addi %2, %3
+    %4 = maxon.add %2, %3 {type = i64}
     maxon.return %4
   }
 }
@@ -232,10 +231,8 @@ module {
   func @main() -> i64 {
   entry:
     %5 = arith.constant {value = 30 : i64}
-    memref.alloca a : i64
     memref.store %5, a
     %6 = arith.constant {value = 12 : i64}
-    memref.alloca b : i64
     memref.store %6, b
     %7 = memref.load a : i64
     %8 = memref.load b : i64

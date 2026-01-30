@@ -10,7 +10,7 @@ public class Parser(List<Token> tokens) {
 
 	private MlirFunction<MaxonOp>? _currentFunction;
 	private MlirBlock<MaxonOp>? _currentBlock;
-	private readonly Dictionary<string, (MlirType type, bool mutable)> _variables = [];
+	private readonly Dictionary<string, (MaxonValueKind kind, bool mutable)> _variables = [];
 
 	public MlirModule<MaxonOp> Parse() {
 		Logger.Debug(LogCategory.Parser, "Starting parser");
@@ -139,10 +139,16 @@ public class Parser(List<Token> tokens) {
 		Expect(TokenType.Equals);
 		var initExpr = ParseExpression();
 
-		MlirValue initValue = ExtractValue(initExpr);
+		MaxonValue initValue = ExtractValue(initExpr);
+		var kind = initValue switch {
+			MaxonInteger => MaxonValueKind.Integer,
+			MaxonFloat => MaxonValueKind.Float,
+			MaxonBool => MaxonValueKind.Bool,
+			_ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Cannot determine type of value: {initValue.GetType().Name}", Current().Line, Current().Column)
+		};
 		var varDecl = new MaxonVarDeclOp(name, initValue);
 		_currentBlock!.AddOp(varDecl);
-		_variables[name] = (initValue.Type, true);
+		_variables[name] = (kind, true);
 	}
 
 	private void ParseIf() {
@@ -150,7 +156,7 @@ public class Parser(List<Token> tokens) {
 
 		// Parse the condition (may be a comparison expression)
 		var condition = ParseComparisonExpression();
-		MlirValue condValue = ExtractValue(condition);
+		MaxonValue condValue = ExtractValue(condition);
 
 		// Parse then-block label
 		var thenLabel = Expect(TokenType.CharacterLiteral).Value;
@@ -188,7 +194,10 @@ public class Parser(List<Token> tokens) {
 
 		// Emit cond_br into the entry block
 		if (elseLabel != null) {
-			entryBlock.AddOp(new MaxonCondBrOp(condValue, thenLabel, elseLabel));
+			if (condValue is not MaxonBool boolCond) {
+				throw new CompileError(ErrorCode.ParserExpectedExpression, "Condition must be a boolean", Current().Line, Current().Column);
+			}
+			entryBlock.AddOp(new MaxonCondBrOp(boolCond, thenLabel, elseLabel));
 		}
 
 		_currentBlock = entryBlock;
@@ -205,16 +214,13 @@ public class Parser(List<Token> tokens) {
 			Advance(); // consume '=='
 			var rhs = ParseExpression();
 
-			MlirValue lhsVal = ExtractValue(lhs);
-			MlirValue rhsVal = ExtractValue(rhs);
+			MaxonValue lhsVal = ExtractValue(lhs);
+			MaxonValue rhsVal = ExtractValue(rhs);
 
-			if (lhsVal.Type == MlirType.F64 || rhsVal.Type == MlirType.F64) {
-				var cmpOp = new MaxonCmpFOp("eq", lhsVal, rhsVal);
-				_currentBlock!.AddOp(cmpOp);
-				return new MaxonExpr.Value(cmpOp.Result);
-			}
-
-			throw new CompileError(ErrorCode.ParserExpectedExpression, "Unsupported comparison types", Current().Line, Current().Column);
+			var kind = DetermineValueKind(lhsVal, rhsVal);
+			var cmpOp = new MaxonCmpOp("eq", lhsVal, rhsVal, kind);
+			_currentBlock!.AddOp(cmpOp);
+			return new MaxonExpr.Value(cmpOp.Result);
 		}
 
 		return lhs;
@@ -228,15 +234,16 @@ public class Parser(List<Token> tokens) {
 			Advance(); // consume '+' or '-'
 			var rhs = ParsePrimary();
 
-			MlirValue lhsVal = ExtractValue(lhs);
-			MlirValue rhsVal = ExtractValue(rhs);
+			MaxonValue lhsVal = ExtractValue(lhs);
+			MaxonValue rhsVal = ExtractValue(rhs);
+			var kind = DetermineValueKind(lhsVal, rhsVal);
 
 			if (opType == TokenType.Plus) {
-				var addOp = new MaxonAddIOp(lhsVal, rhsVal);
+				var addOp = new MaxonAddOp(lhsVal, rhsVal, kind);
 				_currentBlock!.AddOp(addOp);
 				lhs = new MaxonExpr.Value(addOp.Result);
 			} else {
-				var subOp = new MaxonSubIOp(lhsVal, rhsVal);
+				var subOp = new MaxonSubOp(lhsVal, rhsVal, kind);
 				_currentBlock!.AddOp(subOp);
 				lhs = new MaxonExpr.Value(subOp.Result);
 			}
@@ -249,7 +256,7 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.IntegerLiteral)) {
 			var token = Advance();
 			var value = ParseIntegerLiteral(token.Value);
-			var op = new MaxonConstantOp(value, MlirType.I64);
+			var op = new MaxonConstantOp(value);
 			_currentBlock!.AddOp(op);
 			return new MaxonExpr.Value(op.Result);
 		}
@@ -257,7 +264,7 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.FloatLiteral)) {
 			var token = Advance();
 			var value = double.Parse(token.Value, CultureInfo.InvariantCulture);
-			var op = new MaxonFloatConstantOp(value, MlirType.F64);
+			var op = new MaxonConstantOp(value);
 			_currentBlock!.AddOp(op);
 			return new MaxonExpr.Value(op.Result);
 		}
@@ -273,7 +280,7 @@ public class Parser(List<Token> tokens) {
 			}
 			// Variable reference
 			if (_variables.TryGetValue(token.Value, out var varInfo)) {
-				var loadOp = new MaxonVarLoadOp(token.Value, varInfo.type);
+				var loadOp = new MaxonVarLoadOp(token.Value, varInfo.kind);
 				_currentBlock!.AddOp(loadOp);
 				return new MaxonExpr.VarLoad(loadOp);
 			}
@@ -283,9 +290,20 @@ public class Parser(List<Token> tokens) {
 		throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got {Current().Type}", Current().Line, Current().Column);
 	}
 
-	private static MlirValue ExtractValue(MaxonExpr expr) {
+	private MaxonValueKind DetermineValueKind(MaxonValue lhs, MaxonValue rhs) {
+		return (lhs, rhs) switch {
+			(MaxonInteger, MaxonInteger) => MaxonValueKind.Integer,
+			(MaxonFloat, MaxonFloat) => MaxonValueKind.Float,
+			(MaxonBool, MaxonBool) => MaxonValueKind.Bool,
+			_ => throw new CompileError(ErrorCode.ParserExpectedExpression,
+				$"Cannot operate on {lhs.GetType().Name} and {rhs.GetType().Name}",
+				Current().Line, Current().Column)
+		};
+	}
+
+	private static MaxonValue ExtractValue(MaxonExpr expr) {
 		return expr switch {
-			MaxonExpr.Value v => v.MlirValue,
+			MaxonExpr.Value v => v.MaxonValue,
 			MaxonExpr.VarLoad vl => vl.LoadOp.Result,
 			_ => throw new InvalidOperationException($"Cannot extract value from expression type: {expr.GetType().Name}")
 		};

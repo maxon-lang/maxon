@@ -1,6 +1,6 @@
 namespace MaxonSharp.Compiler.Mlir.Core;
 
-public class MlirRegion<TOp> where TOp : IMlirOp {
+public class MlirRegion<TOp> where TOp : IPrintableOp {
 	public List<MlirBlock<TOp>> Blocks { get; } = [];
 
 	public MlirBlock<TOp> EntryBlock => Blocks[0];

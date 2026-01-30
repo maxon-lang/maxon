@@ -13,11 +13,11 @@ public enum X86XmmRegister {
 	Xmm8, Xmm9, Xmm10, Xmm11, Xmm12, Xmm13, Xmm14, Xmm15
 }
 
-public abstract class X86Op : IMlirOp {
+public abstract class X86Op : IPrintableOp {
 	public abstract string Mnemonic { get; }
-	public List<MlirValue> Operands { get; } = [];
-	public List<MlirValue> Results { get; } = [];
-	public Dictionary<string, MlirAttribute> Attributes { get; } = [];
+	public IReadOnlyList<string> PrintableResults => [];
+	public IReadOnlyList<string> PrintableOperands => [];
+	public IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes => new Dictionary<string, MlirAttribute>();
 }
 
 public class X86PushRegOp(X86Register register) : X86Op {

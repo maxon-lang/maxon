@@ -140,11 +140,11 @@ f64 3.14
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.float_constant {value = 3.14 : f64}
+    %0 = maxon.constant {value = 3.14 : f64}
     maxon.var_decl x %0
     %1 = maxon.var_load x {type = f64}
-    %2 = maxon.float_constant {value = 3.14 : f64}
-    %3 = maxon.cmpf eq %1, %2
+    %2 = maxon.constant {value = 3.14 : f64}
+    %3 = maxon.cmp eq %1, %2 {type = f64}
     maxon.cond_br %3 [then: check, else: other]
   check:
     %4 = maxon.constant {value = 1 : i64}
@@ -159,7 +159,6 @@ module {
   func @main() -> i64 {
   entry:
     %6 = arith.float_constant {value = 3.14 : f64}
-    memref.alloca x : f64
     memref.store %6, x
     %7 = memref.load x : f64
     %8 = arith.float_constant {value = 3.14 : f64}

@@ -67,7 +67,7 @@ public class MlirPipeline {
 		return new MlirPipelineResult(x86Module, irBuilder?.ToString().TrimEnd());
 	}
 
-	public static void WriteMlirOutput<TOp>(MlirModule<TOp> module, string path) where TOp : IMlirOp {
+	public static void WriteMlirOutput<TOp>(MlirModule<TOp> module, string path) where TOp : IPrintableOp {
 		File.WriteAllText(path, MlirPrinter.Print(module));
 	}
 }

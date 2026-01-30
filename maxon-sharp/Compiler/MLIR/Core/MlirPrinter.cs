@@ -3,7 +3,7 @@ using System.Text;
 namespace MaxonSharp.Compiler.Mlir.Core;
 
 public static class MlirPrinter {
-	public static string Print<TOp>(MlirModule<TOp> module) where TOp : IMlirOp {
+	public static string Print<TOp>(MlirModule<TOp> module) where TOp : IPrintableOp {
 		var sb = new StringBuilder();
 		sb.AppendLine("module {");
 		foreach (var func in module.Functions) {
@@ -13,7 +13,7 @@ public static class MlirPrinter {
 		return sb.ToString();
 	}
 
-	private static void PrintFunction<TOp>(StringBuilder sb, MlirFunction<TOp> func, string indent) where TOp : IMlirOp {
+	private static void PrintFunction<TOp>(StringBuilder sb, MlirFunction<TOp> func, string indent) where TOp : IPrintableOp {
 		sb.Append($"{indent}func @{func.Name}(");
 		for (int i = 0; i < func.ParamTypes.Count; i++) {
 			if (i > 0) sb.Append(", ");
@@ -37,17 +37,17 @@ public static class MlirPrinter {
 		sb.AppendLine($"{indent}}}");
 	}
 
-	private static void PrintOp(StringBuilder sb, IMlirOp op) {
-		if (op.Results.Count > 0) {
-			sb.Append(string.Join(", ", op.Results));
+	private static void PrintOp(StringBuilder sb, IPrintableOp op) {
+		if (op.PrintableResults.Count > 0) {
+			sb.Append(string.Join(", ", op.PrintableResults));
 			sb.Append(" = ");
 		}
 		sb.Append(op.Mnemonic);
-		if (op.Operands.Count > 0) {
+		if (op.PrintableOperands.Count > 0) {
 			sb.Append(' ');
-			sb.Append(string.Join(", ", op.Operands));
+			sb.Append(string.Join(", ", op.PrintableOperands));
 		}
-		foreach (var (key, attr) in op.Attributes) {
+		foreach (var (key, attr) in op.PrintableAttributes) {
 			sb.Append($" {{{key} = {attr}}}");
 		}
 	}
