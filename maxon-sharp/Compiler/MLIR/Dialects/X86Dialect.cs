@@ -70,6 +70,12 @@ public class X86SubRegRegOp(X86Register dest, X86Register src) : X86Op {
 	public override string Mnemonic => $"x86.sub {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
+public class X86ImulRegRegOp(X86Register dest, X86Register src) : X86Op {
+	public X86Register Dest { get; } = dest;
+	public X86Register Src { get; } = src;
+	public override string Mnemonic => $"x86.imul {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
 public class X86CallDirectOp(string target) : X86Op {
 	public string Target { get; } = target;
 	public override string Mnemonic => $"x86.call {Target}";

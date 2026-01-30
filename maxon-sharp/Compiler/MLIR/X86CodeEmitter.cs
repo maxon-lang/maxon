@@ -106,6 +106,9 @@ public class X86CodeEmitter {
 			case X86SubRegRegOp subReg:
 				EmitSubRegReg(subReg.Dest, subReg.Src);
 				break;
+			case X86ImulRegRegOp imul:
+				EmitImulRegReg(imul.Dest, imul.Src);
+				break;
 			case X86CallDirectOp call:
 				EmitByte(0xE8); // call rel32
 				_relCallFixups.Add((_code.Count, call.Target));
@@ -430,6 +433,17 @@ public class X86CodeEmitter {
 		EmitByte(rex);
 		EmitByte(0x29);
 		EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+	}
+
+	private void EmitImulRegReg(X86Register dest, X86Register src) {
+		// IMUL r64, r64: REX.W + 0F AF /r
+		byte rex = 0x48;
+		if (NeedsRex(dest)) rex |= 0x04; // REX.R
+		if (NeedsRex(src)) rex |= 0x01; // REX.B
+		EmitByte(rex);
+		EmitByte(0x0F);
+		EmitByte(0xAF);
+		EmitByte((byte)(0xC0 | (RegCode(dest) << 3) | RegCode(src)));
 	}
 
 	private void EmitIdivReg(X86Register divisor) {

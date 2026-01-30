@@ -1437,7 +1437,7 @@ module {
 }
 ```
 
-<!-- disabled-test: int-multiple-calls-preserve -->
+<!-- test: int-multiple-calls-preserve -->
 ```maxon
 function getTen() returns int
     return 10
@@ -1459,10 +1459,108 @@ end 'main'
 24
 ```
 ```RequiredMLIR
-TO BE FILLED IN
+=== maxon
+module {
+  func @getTen() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.return %0
+  }
+  func @getTwo() -> i64 {
+  entry:
+    %1 = maxon.literal {value = 2 : i64}
+    maxon.return %1
+  }
+  func @main() -> i64 {
+  entry:
+    %2 = maxon.literal {value = 5 : i64}
+    maxon.assign %2 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.call @getTen
+    maxon.assign %3 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 7 : i64}
+    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.call @getTwo
+    maxon.assign %5 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.binop %2, %3 {op = add} {kind = i64}
+    %7 = maxon.binop %6, %4 {op = add} {kind = i64}
+    %8 = maxon.binop %7, %5 {op = add} {kind = i64}
+    maxon.return %8
+  }
+}
+=== standard
+module {
+  func @getTen() -> i64 {
+  entry:
+    %9 = arith.constant {value = 10 : i64}
+    func.return %9
+  }
+  func @getTwo() -> i64 {
+  entry:
+    %10 = arith.constant {value = 2 : i64}
+    func.return %10
+  }
+  func @main() -> i64 {
+  entry:
+    %11 = arith.constant {value = 5 : i64}
+    memref.store %11, a
+    %12 = func.call @getTen
+    memref.store %12, b
+    %13 = arith.constant {value = 7 : i64}
+    memref.store %13, c
+    %14 = func.call @getTwo
+    memref.store %14, d
+    %15 = arith.addi %11, %12
+    %16 = arith.addi %15, %13
+    %17 = arith.addi %16, %14
+    func.return %17
+  }
+}
+=== x86
+module {
+  func @getTen() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.mov eax, 10
+    x86.pop rbp
+    x86.ret
+  }
+  func @getTwo() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.mov eax, 2
+    x86.pop rbp
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 5
+    x86.mov [rbp-8], eax
+    x86.call getTen
+    x86.mov [rbp-16], eax
+    x86.mov ecx, 7
+    x86.mov [rbp-24], ecx
+    x86.call getTwo
+    x86.mov [rbp-32], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.add edx, ebx
+    x86.mov esi, [rbp-24]
+    x86.add edx, esi
+    x86.add edx, eax
+    x86.mov eax, edx
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
-<!-- disabled-test: int-call-result-used-later -->
+<!-- test: int-call-result-used-later -->
 ```maxon
 function compute() returns int
     return 100
@@ -1478,10 +1576,79 @@ end 'main'
 200
 ```
 ```RequiredMLIR
-FILL ME IN
+=== maxon
+module {
+  func @compute() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 100 : i64}
+    maxon.return %0
+  }
+  func @main() -> i64 {
+  entry:
+    %1 = maxon.call @compute
+    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.call @compute
+    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.binop %1, %2 {op = add} {kind = i64}
+    %4 = maxon.literal {value = 256 : i64}
+    %5 = maxon.binop %3, %4 {op = mod} {kind = i64}
+    maxon.return %5
+  }
+}
+=== standard
+module {
+  func @compute() -> i64 {
+  entry:
+    %6 = arith.constant {value = 100 : i64}
+    func.return %6
+  }
+  func @main() -> i64 {
+  entry:
+    %7 = func.call @compute
+    memref.store %7, a
+    %8 = func.call @compute
+    memref.store %8, b
+    %9 = arith.addi %7, %8
+    %10 = arith.constant {value = 256 : i64}
+    %11 = arith.remsi %9, %10
+    func.return %11
+  }
+}
+=== x86
+module {
+  func @compute() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.mov eax, 100
+    x86.pop rbp
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.call compute
+    x86.mov [rbp-8], eax
+    x86.call compute
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov eax, 256
+    x86.mov ebx, eax
+    x86.mov eax, ecx
+    x86.cqo
+    x86.idiv ebx
+    x86.mov eax, edx
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
-<!-- disabled-test: int-division-fixed-regs -->
+<!-- test: int-division-fixed-regs -->
 ```maxon
 function main() returns int
     var a = 126
@@ -1493,7 +1660,48 @@ end 'main'
 42
 ```
 ```RequiredMLIR
-FILL ME IN
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 126 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = div} {kind = i64}
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %3 = arith.constant {value = 126 : i64}
+    memref.store %3, a
+    %4 = arith.constant {value = 3 : i64}
+    memref.store %4, b
+    %5 = arith.divsi %3, %4
+    func.return %5
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 126
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 3
+    x86.mov [rbp-16], ecx
+    x86.cqo
+    x86.idiv ecx
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
 <!-- disabled-test: int-modulo-fixed-regs -->

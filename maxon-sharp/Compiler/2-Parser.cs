@@ -16,6 +16,8 @@ public class Parser(List<Token> tokens) {
 	private static readonly Dictionary<TokenType, MaxonBinOperator> BinaryOperators = new() {
 		{ TokenType.Plus, MaxonBinOperator.Add },
 		{ TokenType.Minus, MaxonBinOperator.Sub },
+		{ TokenType.Star, MaxonBinOperator.Mul },
+		{ TokenType.Slash, MaxonBinOperator.Div },
 		{ TokenType.Mod, MaxonBinOperator.Mod },
 	};
 

@@ -90,6 +90,14 @@ public static class StandardToX86Conversion {
 							(l, r) => new X86SubRegRegOp(l, r));
 						break;
 
+					case StdMulI64Op mulOp:
+						regManager.EmitMultiply(mulOp.Lhs, mulOp.Rhs, mulOp.Result, x86Block);
+						break;
+
+					case StdDivI64Op divOp:
+						regManager.EmitDivision(divOp.Lhs, divOp.Rhs, divOp.Result, x86Block);
+						break;
+
 					case StdRemI64Op remOp:
 						regManager.EmitRemainder(remOp.Lhs, remOp.Rhs, remOp.Result, x86Block);
 						break;
@@ -162,6 +170,8 @@ public static class StandardToX86Conversion {
 		StdAddI32Op a => [a.Lhs, a.Rhs],
 		StdSubI64Op s => [s.Lhs, s.Rhs],
 		StdSubI32Op s => [s.Lhs, s.Rhs],
+		StdMulI64Op m => [m.Lhs, m.Rhs],
+		StdDivI64Op d => [d.Lhs, d.Rhs],
 		StdRemI64Op r => [r.Lhs, r.Rhs],
 		StdCmpF64Op c => [c.Lhs, c.Rhs],
 		StdReturnOp r when r.ReturnValue != null => [r.ReturnValue],

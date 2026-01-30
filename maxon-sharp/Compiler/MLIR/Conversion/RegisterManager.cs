@@ -116,10 +116,42 @@ public class RegisterManager {
 	}
 
 	/// <summary>
+	/// Emit IMUL (integer multiplication).
+	/// Result = lhs * rhs.
+	/// </summary>
+	public void EmitMultiply(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
+		var lhsReg = EnsureInRegister(lhs, block);
+		var rhsReg = EnsureInRegister(rhs, block);
+
+		// IMUL reg, reg - multiply and store result in first operand
+		var resultReg = AllocateRegister(result, block);
+		if (resultReg != lhsReg) {
+			block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
+		}
+		block.AddOp(new X86ImulRegRegOp(resultReg, rhsReg));
+	}
+
+	/// <summary>
+	/// Emit IDIV and capture the quotient in EAX.
+	/// Handles register constraints: divisor must not be in EAX/EDX.
+	/// </summary>
+	public void EmitDivision(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
+		EmitIdivOperation(lhs, rhs, result, X86Register.Eax, block);
+	}
+
+	/// <summary>
 	/// Emit IDIV and capture the remainder in EDX.
 	/// Handles register constraints: divisor must not be in EAX/EDX.
 	/// </summary>
 	public void EmitRemainder(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
+		EmitIdivOperation(lhs, rhs, result, X86Register.Edx, block);
+	}
+
+	/// <summary>
+	/// Emit IDIV instruction with proper register allocation.
+	/// IDIV clobbers both EAX (quotient) and EDX (remainder), so caller specifies which to capture.
+	/// </summary>
+	private void EmitIdivOperation(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
 		var lhsReg = EnsureInRegister(lhs, block);
 		var rhsReg = EnsureInRegister(rhs, block);
 
@@ -138,7 +170,7 @@ public class RegisterManager {
 		block.AddOp(new X86CqoOp());
 		block.AddOp(new X86IdivRegOp(rhsReg));
 
-		NoteValueInRegister(result, X86Register.Edx);
+		NoteValueInRegister(result, resultRegister);
 	}
 
 	/// <summary>
@@ -294,18 +326,6 @@ public class RegisterManager {
 		}
 
 		throw new InvalidOperationException($"RegisterManager: float value %{value.Id} has no XMM register and no stack home");
-	}
-
-	/// <summary>
-	/// Record that a float value is already in a specific XMM register.
-	/// </summary>
-	private void NoteValueInXmmRegister(StdValue value, X86XmmRegister reg) {
-		if (_xmmContents.TryGetValue(reg, out var existing)) {
-			_valueToXmm.Remove(existing);
-			_xmmContents.Remove(reg);
-			_xmmLastUsed.Remove(reg);
-		}
-		AssignXmm(reg, value);
 	}
 
 	/// <summary>
