@@ -45,7 +45,7 @@ public class Compiler {
 				var source = sources[i];
 				var lexer = new Lexer(source.Content);
 				var tokens = lexer.Tokenize();
-				var parser = new Parser(tokens, i);
+				var parser = new Parser(tokens);
 				var parsed = parser.Parse();
 				module.Merge(parsed);
 			}

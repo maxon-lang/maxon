@@ -153,7 +153,7 @@ module {
 }
 ```
 
-<!-- disabled-test: int-subtract-constants -->
+<!-- test: int-subtract-constants -->
 ```maxon
 function main() returns int
     return 100 - 58

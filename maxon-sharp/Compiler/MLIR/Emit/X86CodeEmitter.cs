@@ -103,6 +103,9 @@ public class X86CodeEmitter {
 			case X86AddRegReg addReg:
 				EmitAddRegReg(addReg.Dest, addReg.Src);
 				break;
+			case X86SubRegReg subReg:
+				EmitSubRegReg(subReg.Dest, subReg.Src);
+				break;
 			case X86CallDirect call:
 				EmitByte(0xE8); // call rel32
 				_relCallFixups.Add((_code.Count, call.Target));
@@ -127,7 +130,7 @@ public class X86CodeEmitter {
 				EmitJmp(jmp.Target);
 				break;
 			default:
-				throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unsupported X86 operation: {op.GetType().Name}");
+				throw new InvalidOperationException($"No X86 emission for: {op.GetType().Name} ({op.Mnemonic})");
 		}
 	}
 
@@ -183,14 +186,14 @@ public class X86CodeEmitter {
 	public void ResolveLabels() {
 		foreach (var (offset, target) in _relCallFixups) {
 			if (!_labels.TryGetValue(target, out var targetOffset)) {
-				throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unresolved label: {target}");
+				throw new InvalidOperationException($"Unresolved label: {target}");
 			}
 			var rel = targetOffset - (offset + 4);
 			PatchDword(offset, rel);
 		}
 		foreach (var (offset, target) in _jumpFixups) {
 			if (!_labels.TryGetValue(target, out var targetOffset)) {
-				throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unresolved jump target: {target}");
+				throw new InvalidOperationException($"Unresolved jump target: {target}");
 			}
 			var rel = targetOffset - (offset + 4);
 			PatchDword(offset, rel);
@@ -204,7 +207,7 @@ public class X86CodeEmitter {
 		var codeSize = _code.Count;
 		foreach (var (offset, label) in _rdataFixups) {
 			if (!_rdataLabels.TryGetValue(label, out var rdataOffset)) {
-				throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unresolved rdata label: {label}");
+				throw new InvalidOperationException($"Unresolved rdata label: {label}");
 			}
 			var target = codeSize + rvaOffset + rdataOffset;
 			var rel = target - (offset + 4);
@@ -216,7 +219,7 @@ public class X86CodeEmitter {
 		var codeSize = _code.Count;
 		foreach (var (offset, name) in _globalFixups) {
 			if (!_globalLabels.TryGetValue(name, out var globalOffset)) {
-				throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unresolved global: {name}");
+				throw new InvalidOperationException($"Unresolved global: {name}");
 			}
 			var target = codeSize + rvaOffset + globalOffset;
 			var rel = target - (offset + 4);
@@ -407,6 +410,16 @@ public class X86CodeEmitter {
 		EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
 	}
 
+	private void EmitSubRegReg(X86Register dest, X86Register src) {
+		// SUB r64, r64: REX.W + 29 /r
+		byte rex = 0x48;
+		if (NeedsRex(src)) rex |= 0x04; // REX.R
+		if (NeedsRex(dest)) rex |= 0x01; // REX.B
+		EmitByte(rex);
+		EmitByte(0x29);
+		EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+	}
+
 	// --- SSE2 encoding helpers ---
 
 	private static int XmmRegCode(X86XmmRegister reg) {
@@ -488,7 +501,7 @@ public class X86CodeEmitter {
 			"ge" => 0x8D,
 			"le" => 0x8E,
 			"g" => 0x8F,
-			_ => throw new CompileError(ErrorCode.CodeEmitterUnsupportedInstruction, $"Unsupported Jcc condition: {condition}")
+			_ => throw new InvalidOperationException($"Unsupported Jcc condition: {condition}")
 		};
 		EmitByte(0x0F);
 		EmitByte(opcode);

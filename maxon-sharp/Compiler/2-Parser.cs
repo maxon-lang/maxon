@@ -4,9 +4,8 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public class Parser(List<Token> tokens, int sourceFileIndex) {
+public class Parser(List<Token> tokens) {
 	private readonly List<Token> _tokens = tokens;
-	private readonly int _sourceFileIndex = sourceFileIndex;
 	private int _pos;
 
 	private MlirFunction? _currentFunction;
@@ -224,16 +223,23 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 	private MaxonExpr ParseExpression() {
 		var lhs = ParsePrimary();
 
-		while (Check(TokenType.Plus)) {
-			Advance(); // consume '+'
+		while (Check(TokenType.Plus) || Check(TokenType.Minus)) {
+			var opType = Current().Type;
+			Advance(); // consume '+' or '-'
 			var rhs = ParsePrimary();
 
 			MlirValue lhsVal = ExtractValue(lhs);
 			MlirValue rhsVal = ExtractValue(rhs);
 
-			var addOp = new MaxonAddIOp(lhsVal, rhsVal);
-			_currentBlock!.AddOp(addOp);
-			lhs = new MaxonExpr.Value(addOp.Result);
+			if (opType == TokenType.Plus) {
+				var addOp = new MaxonAddIOp(lhsVal, rhsVal);
+				_currentBlock!.AddOp(addOp);
+				lhs = new MaxonExpr.Value(addOp.Result);
+			} else {
+				var subOp = new MaxonSubIOp(lhsVal, rhsVal);
+				_currentBlock!.AddOp(subOp);
+				lhs = new MaxonExpr.Value(subOp.Result);
+			}
 		}
 
 		return lhs;
@@ -281,7 +287,7 @@ public class Parser(List<Token> tokens, int sourceFileIndex) {
 		return expr switch {
 			MaxonExpr.Value v => v.MlirValue,
 			MaxonExpr.VarLoad vl => vl.LoadOp.Result,
-			_ => throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected value expression")
+			_ => throw new InvalidOperationException($"Cannot extract value from expression type: {expr.GetType().Name}")
 		};
 	}
 

@@ -48,7 +48,7 @@ public class CodeEmitter {
 		emitter.EmitStartWrapper();
 
 		// Verify main exists
-		var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main") ?? throw new CompileError(ErrorCode.CodeEmitterNoMain, "No 'main' function found");
+		var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main") ?? throw new InvalidOperationException("No 'main' function found at code emission stage — semantic check should have caught this");
 
 		// Emit all functions (main and others)
 		EmitFunction(emitter, mainFunc);

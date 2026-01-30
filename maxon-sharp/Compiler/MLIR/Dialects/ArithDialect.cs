@@ -44,6 +44,18 @@ public class ArithAddIOp : MlirOperation {
 	}
 }
 
+public class ArithSubIOp : MlirOperation {
+	public override string Mnemonic => "arith.subi";
+	public MlirValue Result { get; }
+
+	public ArithSubIOp(MlirValue lhs, MlirValue rhs) {
+		Operands.Add(lhs);
+		Operands.Add(rhs);
+		Result = MlirContext.Current.CreateValue(MlirType.I64, this);
+		Results.Add(Result);
+	}
+}
+
 public class ArithCmpFOp : MlirOperation {
 	public override string Mnemonic => $"arith.cmpf {Predicate}";
 	public string Predicate { get; }

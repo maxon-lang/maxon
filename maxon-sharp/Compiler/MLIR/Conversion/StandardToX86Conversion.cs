@@ -61,80 +61,91 @@ public static class StandardToX86Conversion {
 			foreach (var op in srcBlock.Operations) {
 				switch (op) {
 					case ArithConstantOp constOp: {
-						var gpr = gprPool[nextGpr];
-						x86Block.AddOp(new X86MovRegImm(gpr, (int)constOp.IntValue));
-						valueToGpr[constOp.Result] = gpr;
-						nextGpr++;
-						break;
-					}
+							var gpr = gprPool[nextGpr];
+							x86Block.AddOp(new X86MovRegImm(gpr, (int)constOp.IntValue));
+							valueToGpr[constOp.Result] = gpr;
+							nextGpr++;
+							break;
+						}
 
 					case ArithAddIOp addOp: {
-						var lhsReg = valueToGpr[addOp.Operands[0]];
-						var rhsReg = valueToGpr[addOp.Operands[1]];
-						x86Block.AddOp(new X86AddRegReg(lhsReg, rhsReg));
-						// Result is in lhsReg
-						valueToGpr[addOp.Result] = lhsReg;
-						break;
-					}
+							var lhsReg = valueToGpr[addOp.Operands[0]];
+							var rhsReg = valueToGpr[addOp.Operands[1]];
+							x86Block.AddOp(new X86AddRegReg(lhsReg, rhsReg));
+							// Result is in lhsReg
+							valueToGpr[addOp.Result] = lhsReg;
+							break;
+						}
+
+					case ArithSubIOp subOp: {
+							var lhsReg = valueToGpr[subOp.Operands[0]];
+							var rhsReg = valueToGpr[subOp.Operands[1]];
+							x86Block.AddOp(new X86SubRegReg(lhsReg, rhsReg));
+							valueToGpr[subOp.Result] = lhsReg;
+							break;
+						}
 
 					case ArithFloatConstantOp floatOp: {
-						var label = GetOrCreateFloatLabel(floatOp.FloatValue, module, floatConstants);
-						var xmmReg = (X86XmmRegister)nextXmm;
-						x86Block.AddOp(new X86MovSdXmmRipRel(xmmReg, label));
-						valueToXmm[floatOp.Result] = xmmReg;
-						nextXmm++;
-						break;
-					}
+							var label = GetOrCreateFloatLabel(floatOp.FloatValue, module, floatConstants);
+							var xmmReg = (X86XmmRegister)nextXmm;
+							x86Block.AddOp(new X86MovSdXmmRipRel(xmmReg, label));
+							valueToXmm[floatOp.Result] = xmmReg;
+							nextXmm++;
+							break;
+						}
 
 					case MemRefAllocaOp:
 						break;
 
 					case MemRefStoreOp storeOp: {
-						var offset = varOffsets[storeOp.VarName];
-						x86Block.AddOp(new X86MovSdMemXmm(offset, X86XmmRegister.Xmm0));
-						// After storing, xmm0 is free; reset allocation
-						nextXmm = 0;
-						break;
-					}
+							var offset = varOffsets[storeOp.VarName];
+							x86Block.AddOp(new X86MovSdMemXmm(offset, X86XmmRegister.Xmm0));
+							// After storing, xmm0 is free; reset allocation
+							nextXmm = 0;
+							break;
+						}
 
 					case MemRefLoadOp loadOp: {
-						var offset = varOffsets[loadOp.VarName];
-						x86Block.AddOp(new X86MovSdXmmMem(X86XmmRegister.Xmm0, offset));
-						valueToXmm[loadOp.Result] = X86XmmRegister.Xmm0;
-						nextXmm = 1; // xmm0 is now occupied
-						break;
-					}
+							var offset = varOffsets[loadOp.VarName];
+							x86Block.AddOp(new X86MovSdXmmMem(X86XmmRegister.Xmm0, offset));
+							valueToXmm[loadOp.Result] = X86XmmRegister.Xmm0;
+							nextXmm = 1; // xmm0 is now occupied
+							break;
+						}
 
 					case ArithCmpFOp cmpOp: {
-						var lhsReg = valueToXmm.GetValueOrDefault(cmpOp.Operands[0], X86XmmRegister.Xmm0);
-						var rhsReg = valueToXmm.GetValueOrDefault(cmpOp.Operands[1], X86XmmRegister.Xmm1);
-						x86Block.AddOp(new X86Ucomisd(lhsReg, rhsReg));
-						break;
-					}
+							var lhsReg = valueToXmm.GetValueOrDefault(cmpOp.Operands[0], X86XmmRegister.Xmm0);
+							var rhsReg = valueToXmm.GetValueOrDefault(cmpOp.Operands[1], X86XmmRegister.Xmm1);
+							x86Block.AddOp(new X86Ucomisd(lhsReg, rhsReg));
+							break;
+						}
 
 					case CfCondBrOp condBr: {
-						var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
-						x86Block.AddOp(new X86Jcc("ne", scopedElse));
-						x86Block.AddOp(new X86Jcc("p", scopedElse));
-						break;
-					}
+							var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
+							x86Block.AddOp(new X86Jcc("ne", scopedElse));
+							x86Block.AddOp(new X86Jcc("p", scopedElse));
+							break;
+						}
 
 					case FuncCallOp callOp:
 						x86Block.AddOp(new X86CallDirect(callOp.Callee));
 						break;
 
 					case FuncReturnOp retOp: {
-						if (retOp.ReturnValue != null && valueToGpr.TryGetValue(retOp.ReturnValue, out var retReg)) {
-							if (retReg != X86Register.Eax) {
-								x86Block.AddOp(new X86MovRegReg(X86Register.Eax, retReg));
+							if (retOp.ReturnValue != null && valueToGpr.TryGetValue(retOp.ReturnValue, out var retReg)) {
+								if (retReg != X86Register.Eax) {
+									x86Block.AddOp(new X86MovRegReg(X86Register.Eax, retReg));
+								}
 							}
+							if (stackSize > 0)
+								x86Block.AddOp(new X86AddRegImm(X86Register.Rsp, stackSize));
+							x86Block.AddOp(new X86PopReg(X86Register.Rbp));
+							x86Block.AddOp(new X86Ret());
+							break;
 						}
-						if (stackSize > 0)
-							x86Block.AddOp(new X86AddRegImm(X86Register.Rsp, stackSize));
-						x86Block.AddOp(new X86PopReg(X86Register.Rbp));
-						x86Block.AddOp(new X86Ret());
-						break;
-					}
+
+					default:
+						throw new InvalidOperationException($"No StandardToX86 conversion for: {op.GetType().Name} ({op.Mnemonic})");
 				}
 			}
 		}
