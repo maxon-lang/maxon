@@ -111,6 +111,12 @@ public class X86CodeEmitter {
 				_relCallFixups.Add((_code.Count, call.Target));
 				EmitDword(0); // placeholder, patched by ResolveLabels
 				break;
+			case X86MovMemRegOp movMem:
+				EmitMovMemReg(movMem.Displacement, movMem.Src);
+				break;
+			case X86MovRegMemOp movReg:
+				EmitMovRegMem(movReg.Dest, movReg.Displacement);
+				break;
 			case X86MovSdXmmRipRelOp movsd:
 				EmitMovSdXmmRipRel(movsd.Dest, movsd.RdataLabel);
 				break;
@@ -418,6 +424,36 @@ public class X86CodeEmitter {
 		EmitByte(rex);
 		EmitByte(0x29);
 		EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+	}
+
+	private void EmitMovMemReg(int displacement, X86Register src) {
+		// MOV [rbp+disp], r64: REX.W + 89 /r (mod=01 or 10, r/m=rbp)
+		byte rex = 0x48; // REX.W
+		if (NeedsRex(src)) rex |= 0x04; // REX.R
+		EmitByte(rex);
+		EmitByte(0x89);
+		if (displacement >= -128 && displacement <= 127) {
+			EmitByte((byte)(0x45 | (RegCode(src) << 3))); // mod=01, r/m=rbp(5)
+			EmitByte((byte)(displacement & 0xFF));
+		} else {
+			EmitByte((byte)(0x85 | (RegCode(src) << 3))); // mod=10, r/m=rbp(5)
+			EmitDword(displacement);
+		}
+	}
+
+	private void EmitMovRegMem(X86Register dest, int displacement) {
+		// MOV r64, [rbp+disp]: REX.W + 8B /r (mod=01 or 10, r/m=rbp)
+		byte rex = 0x48; // REX.W
+		if (NeedsRex(dest)) rex |= 0x04; // REX.R
+		EmitByte(rex);
+		EmitByte(0x8B);
+		if (displacement >= -128 && displacement <= 127) {
+			EmitByte((byte)(0x45 | (RegCode(dest) << 3))); // mod=01, r/m=rbp(5)
+			EmitByte((byte)(displacement & 0xFF));
+		} else {
+			EmitByte((byte)(0x85 | (RegCode(dest) << 3))); // mod=10, r/m=rbp(5)
+			EmitDword(displacement);
+		}
 	}
 
 	// --- SSE2 encoding helpers ---

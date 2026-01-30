@@ -105,17 +105,28 @@ public static class StandardToX86Conversion {
 
 					case StandardMemRefStoreOp storeOp: {
 							var offset = varOffsets[storeOp.VarName];
-							x86Block.AddOp(new X86MovSdMemXmmOp(offset, X86XmmRegister.Xmm0));
-							// After storing, xmm0 is free; reset allocation
-							nextXmm = 0;
+							if (storeOp.StoreValue.Type == MlirType.F64) {
+								x86Block.AddOp(new X86MovSdMemXmmOp(offset, X86XmmRegister.Xmm0));
+								nextXmm = 0;
+							} else {
+								var srcReg = valueToGpr[storeOp.StoreValue];
+								x86Block.AddOp(new X86MovMemRegOp(offset, srcReg));
+							}
 							break;
 						}
 
 					case StandardMemRefLoadOp loadOp: {
 							var offset = varOffsets[loadOp.VarName];
-							x86Block.AddOp(new X86MovSdXmmMemOp(X86XmmRegister.Xmm0, offset));
-							valueToXmm[loadOp.Result] = X86XmmRegister.Xmm0;
-							nextXmm = 1; // xmm0 is now occupied
+							if (loadOp.VarType == MlirType.F64) {
+								x86Block.AddOp(new X86MovSdXmmMemOp(X86XmmRegister.Xmm0, offset));
+								valueToXmm[loadOp.Result] = X86XmmRegister.Xmm0;
+								nextXmm = 1;
+							} else {
+								var gpr = gprPool[nextGpr];
+								x86Block.AddOp(new X86MovRegMemOp(gpr, offset));
+								valueToGpr[loadOp.Result] = gpr;
+								nextGpr++;
+							}
 							break;
 						}
 

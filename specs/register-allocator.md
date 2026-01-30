@@ -99,8 +99,9 @@ module {
     x86.mov rbp, rsp
     x86.sub rsp, 16
     x86.mov eax, 99
-    x86.movsd [rbp-8], xmm0
-    x86.movsd xmm0, [rbp-8]
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov eax, ecx
     x86.add rsp, 16
     x86.pop rbp
     x86.ret
@@ -162,10 +163,45 @@ end 'main'
 ```exitcode
 42
 ```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.constant {value = 100 : i64}
+    %1 = maxon.constant {value = 58 : i64}
+    %2 = maxon.subi %0, %1
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %3 = arith.constant {value = 100 : i64}
+    %4 = arith.constant {value = 58 : i64}
+    %5 = arith.subi %3, %4
+    func.return %5
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.mov eax, 100
+    x86.mov ecx, 58
+    x86.sub eax, ecx
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
 
 ### Level 2: Multiple Values and Reuse
 
-<!-- disabled-test: int-two-vars-add -->
+<!-- test: int-two-vars-add -->
 ```maxon
 function main() returns int
     var a = 30
@@ -175,6 +211,58 @@ end 'main'
 ```
 ```exitcode
 42
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.constant {value = 30 : i64}
+    maxon.var_decl a %0
+    %1 = maxon.constant {value = 12 : i64}
+    maxon.var_decl b %1
+    %2 = maxon.var_load a {type = i64}
+    %3 = maxon.var_load b {type = i64}
+    %4 = maxon.addi %2, %3
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %5 = arith.constant {value = 30 : i64}
+    memref.alloca a : i64
+    memref.store %5, a
+    %6 = arith.constant {value = 12 : i64}
+    memref.alloca b : i64
+    memref.store %6, b
+    %7 = memref.load a : i64
+    %8 = memref.load b : i64
+    %9 = arith.addi %7, %8
+    func.return %9
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 30
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 12
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.add edx, ebx
+    x86.mov eax, edx
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
 <!-- disabled-test: int-three-vars-arithmetic -->
