@@ -132,6 +132,9 @@ public class X86CodeEmitter {
 			case X86MovSdXmmMemOp movsd:
 				EmitMovSdXmmMem(movsd.Dest, movsd.Displacement);
 				break;
+			case X86CmpRegRegOp cmp:
+				EmitCmpRegReg(cmp.Lhs, cmp.Rhs);
+				break;
 			case X86UcomisdOp ucomisd:
 				EmitUcomisd(ucomisd.Src1, ucomisd.Src2);
 				break;
@@ -442,6 +445,16 @@ public class X86CodeEmitter {
 		EmitByte(rex);
 		EmitByte(0x29);
 		EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+	}
+
+	private void EmitCmpRegReg(X86Register lhs, X86Register rhs) {
+		// CMP r64, r64: REX.W + 39 /r
+		byte rex = 0x48;
+		if (NeedsRex(rhs)) rex |= 0x04; // REX.R
+		if (NeedsRex(lhs)) rex |= 0x01; // REX.B
+		EmitByte(rex);
+		EmitByte(0x39);
+		EmitByte((byte)(0xC0 | (RegCode(rhs) << 3) | RegCode(lhs)));
 	}
 
 	private void EmitImulRegReg(X86Register dest, X86Register src) {

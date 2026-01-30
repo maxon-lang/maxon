@@ -216,6 +216,15 @@ public class RegisterManager {
 	}
 
 	/// <summary>
+	/// Ensure both GPR operands are in registers and emit cmp.
+	/// </summary>
+	public void EmitIntegerCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
+		var lhsReg = EnsureInRegister(lhs, block);
+		var rhsReg = EnsureInRegister(rhs, block);
+		block.AddOp(new X86CmpRegRegOp(lhsReg, rhsReg));
+	}
+
+	/// <summary>
 	/// Ensure both XMM operands are in registers and emit ucomisd.
 	/// </summary>
 	public void EmitXmmCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {

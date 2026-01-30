@@ -1853,7 +1853,7 @@ module {
 
 ### Level 5: Control Flow and Loops
 
-<!-- disabled-test: int-if-else-simple -->
+<!-- test: int-if-else-simple -->
 ```maxon
 function main() returns int
     var x = 10
@@ -1868,7 +1868,64 @@ end 'main'
 42
 ```
 ```RequiredMLIR
-FILL ME IN
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 10 : i64}
+    %2 = maxon.binop %0, %1 {op = eq} {kind = i64}
+    maxon.cond_br %2 [then: check, else: other]
+  check:
+    %3 = maxon.literal {value = 42 : i64}
+    maxon.return %3
+  other:
+    %4 = maxon.literal {value = 0 : i64}
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %5 = arith.constant {value = 10 : i64}
+    memref.store %5, x
+    %6 = arith.constant {value = 10 : i64}
+    %7 = arith.cmpi eq %5, %6
+    cf.cond_br %7 [then: check, else: other]
+  check:
+    %8 = arith.constant {value = 42 : i64}
+    func.return %8
+  other:
+    %9 = arith.constant {value = 0 : i64}
+    func.return %9
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 10
+    x86.cmp eax, ecx
+    x86.jne main.other
+  check:
+    x86.mov eax, 42
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  other:
+    x86.mov eax, 0
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
 <!-- disabled-test: int-if-else-value-survives-branch -->

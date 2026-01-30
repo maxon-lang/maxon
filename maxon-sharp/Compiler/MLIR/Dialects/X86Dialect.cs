@@ -117,6 +117,12 @@ public class X86MovSdXmmMemOp(X86XmmRegister dest, int displacement) : X86Op {
 	public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, [rbp{Displacement}]";
 }
 
+public class X86CmpRegRegOp(X86Register lhs, X86Register rhs) : X86Op {
+	public X86Register Lhs { get; } = lhs;
+	public X86Register Rhs { get; } = rhs;
+	public override string Mnemonic => $"x86.cmp {Lhs.ToString().ToLower()}, {Rhs.ToString().ToLower()}";
+}
+
 public class X86UcomisdOp(X86XmmRegister src1, X86XmmRegister src2) : X86Op {
 	public X86XmmRegister Src1 { get; } = src1;
 	public X86XmmRegister Src2 { get; } = src2;

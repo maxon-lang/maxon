@@ -4,6 +4,8 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
+enum ComparisonKind { Integer, Float }
+
 public static class StandardToX86Conversion {
 	public static MlirModule<X86Op> Run(MlirModule<StandardOp> module) {
 		var result = new MlirModule<X86Op>();
@@ -50,6 +52,10 @@ public static class StandardToX86Conversion {
 
 		// Track float constants for rdata deduplication
 		var floatConstants = new Dictionary<double, string>();
+
+		// Track last comparison for conditional branch emission
+		ComparisonKind? lastCmpKind = null;
+		string? lastCmpPredicate = null;
 
 		var regManager = new RegisterManager();
 		var sourceBlocks = func.Body.Blocks.ToList();
@@ -123,14 +129,33 @@ public static class StandardToX86Conversion {
 						regManager.EmitXmmLoadFromStack(loadOp.Result, varOffsets[loadOp.VarName], x86Block);
 						break;
 
-					case StdCmpF64Op cmpOp:
-						regManager.EmitXmmCompare(cmpOp.Lhs, cmpOp.Rhs, x86Block);
+					case StdCmpI64Op cmpI64Op:
+						regManager.EmitIntegerCompare(cmpI64Op.Lhs, cmpI64Op.Rhs, x86Block);
+						lastCmpKind = ComparisonKind.Integer;
+						lastCmpPredicate = cmpI64Op.Predicate;
+						break;
+
+					case StdCmpF64Op cmpF64Op:
+						regManager.EmitXmmCompare(cmpF64Op.Lhs, cmpF64Op.Rhs, x86Block);
+						lastCmpKind = ComparisonKind.Float;
+						lastCmpPredicate = cmpF64Op.Predicate;
 						break;
 
 					case StdCondBrOp condBr: {
+							if (lastCmpKind is not { } cmpKind)
+								throw new InvalidOperationException("StdCondBrOp without a preceding comparison operation");
 							var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
-							x86Block.AddOp(new X86JccOp("ne", scopedElse));
-							x86Block.AddOp(new X86JccOp("p", scopedElse));
+							switch (cmpKind) {
+								case ComparisonKind.Integer:
+									x86Block.AddOp(new X86JccOp(InvertIntegerPredicate(lastCmpPredicate!), scopedElse));
+									break;
+								case ComparisonKind.Float:
+									x86Block.AddOp(new X86JccOp("ne", scopedElse));
+									x86Block.AddOp(new X86JccOp("p", scopedElse));
+									break;
+							}
+							lastCmpKind = null;
+							lastCmpPredicate = null;
 							break;
 						}
 
@@ -173,6 +198,16 @@ public static class StandardToX86Conversion {
 			}
 		}
 	}
+
+	private static string InvertIntegerPredicate(string predicate) => predicate switch {
+		"eq" => "ne",
+		"ne" => "e",
+		"lt" => "ge",
+		"ge" => "l",
+		"le" => "g",
+		"gt" => "le",
+		_ => throw new InvalidOperationException($"Unknown integer comparison predicate: {predicate}")
+	};
 
 	private static string GetOrCreateFloatLabel(double value, MlirModule<X86Op> module, Dictionary<double, string> floatConstants) {
 		if (!floatConstants.TryGetValue(value, out var label)) {

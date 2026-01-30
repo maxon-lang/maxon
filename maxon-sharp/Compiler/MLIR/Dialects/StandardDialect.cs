@@ -121,7 +121,18 @@ public class StdDivI64Op(StdI64 lhs, StdI64 rhs) : StandardOp {
 	public override List<StdValue> ReadValues => [Lhs, Rhs];
 }
 
-// === Float Comparison ===
+// === Comparison ===
+
+public class StdCmpI64Op(string predicate, StdI64 lhs, StdI64 rhs) : StandardOp {
+	public override string Mnemonic => $"arith.cmpi {Predicate}";
+	public string Predicate { get; } = predicate;
+	public StdI64 Lhs { get; } = lhs;
+	public StdI64 Rhs { get; } = rhs;
+	public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+	public override List<StdValue> ReadValues => [Lhs, Rhs];
+}
 
 public class StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) : StandardOp {
 	public override string Mnemonic => $"arith.cmpf {Predicate}";
