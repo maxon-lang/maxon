@@ -2,83 +2,53 @@ using MaxonSharp.Compiler.Mlir.Core;
 
 namespace MaxonSharp.Compiler;
 
-/// <summary>
-/// Result of compilation.
-/// </summary>
 public record CompileResult(
 	bool Success,
 	string? Error,
 	string? X86Ir = null
 );
 
-/// <summary>
-/// Maxon compiler instance. Create one per compilation.
-/// </summary>
 public class Compiler {
 	private readonly MlirContext _context = new();
 
-	/// <summary>
-	/// Compile source files using the MLIR-based pipeline.
-	/// </summary>
-	/// <param name="sources">Source files to compile</param>
-	/// <param name="outputPath">Path for the output executable</param>
-	/// <param name="mlirOutputPath">Optional path to write MLIR output</param>
-	/// <param name="returnIr">If true, include X86 IR in the result</param>
-	/// <param name="dumpStagesBasePath">If set, write IR at each pipeline stage (e.g., "foo" -> "foo.1-maxon.mlir")</param>
 	public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
-		// Track the original user source file for error reporting (before prepending stdlib)
 		var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
-		// Push our context as the ambient context for this compilation
 		using var _ = _context.PushScope();
 
 		try {
 			Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
 
-			// Load stdlib and prepend to sources
-			var stdlibSources = StdlibLoader.LoadStdlibModules();
-			sources = StdlibLoader.PrependStdlib(stdlibSources, sources);
-
-			// Stage 1: Parse all source files
-			var asts = new List<ProgramAst>();
+			// Stage 1-2: Lex and parse all source files into MLIR modules
+			var module = new MlirModule();
 
 			for (int i = 0; i < sources.Length; i++) {
 				var source = sources[i];
 				var lexer = new Lexer(source.Content);
 				var tokens = lexer.Tokenize();
 				var parser = new Parser(tokens, i);
-				var ast = parser.Parse();
-				asts.Add(ast);
+				var parsed = parser.Parse();
+				module.Merge(parsed);
 			}
 
-			// Stage 2: Merge ASTs
-			var program = ProgramAst.Merge(asts);
-
-			// Stage 3: Semantic analysis
-			var semanticAnalyzer = new SemanticAnalyzer();
-			if (!semanticAnalyzer.Analyze(program)) {
-				return new CompileResult(false, "Semantic analysis failed");
-			}
-
-			// MLIR pipeline (AST → Maxon → Standard → X86 dialect)
+			// Stage 3-4: MLIR pipeline (semantic checks + dialect lowering)
 			var pipeline = new MlirPipeline();
-			var mlirResult = pipeline.Run(program, semanticAnalyzer.MutationAnalyzer!, returnIr, dumpStagesBasePath);
+			var mlirResult = pipeline.Run(module, returnIr, dumpStagesBasePath);
 
 			// Write MLIR if requested
 			if (mlirOutputPath != null) {
 				MlirPipeline.WriteMlirOutput(mlirResult.Module, mlirOutputPath);
 			}
 
-			// Code emission (X86 dialect → machine code)
+			// Stage 5: Code emission (X86 dialect -> machine code)
 			var codeResult = CodeEmitter.Emit(mlirResult.Module);
 
-			// Write PE executable
+			// Stage 6: Write PE executable
 			PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Imports);
 			Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Imports.Count} imports to {outputPath}");
 
 			return new CompileResult(true, null, mlirResult.X86Ir);
 		} catch (CompileError ex) {
-			// For single-file compilation, add file path to error if not already set
 			if (ex.FilePath == null && userSourceFile != null) {
 				ex.FilePath = userSourceFile;
 			}
@@ -106,9 +76,6 @@ public static class StdlibLoader {
 	];
 
 	public static string? FindStdlibPath() {
-		// Search exe_dir/stdlib, exe_dir/../stdlib, exe_dir/../../stdlib, etc.
-		// Check closer paths first to avoid finding wrong stdlib at root
-		// Use AppContext.BaseDirectory for single-file app compatibility
 		var exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
 		Logger.Debug(LogCategory.Compiler, $"StdlibLoader: exeDir={exeDir}");
 		if (string.IsNullOrEmpty(exeDir)) return null;
