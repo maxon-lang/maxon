@@ -6,7 +6,7 @@ namespace MaxonSharp.Compiler;
 public record MlirPipelineResult(MlirModule Module, string? X86Ir);
 
 public class MlirPipeline {
-	public MlirPipelineResult Run(MlirModule module, bool returnIr = false, string? dumpStagesBasePath = null) {
+	public static MlirPipelineResult Run(MlirModule module, bool returnIr = false, string? dumpStagesBasePath = null) {
 		Logger.Debug(LogCategory.Mlir, "Starting MLIR pipeline");
 
 		// Semantic checks
@@ -49,10 +49,7 @@ public class MlirPipeline {
 
 	private static void RunSemanticChecks(MlirModule module) {
 		// E3001: main function must exist
-		var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main");
-		if (mainFunc == null) {
-			throw new CompileError(ErrorCode.SemanticNoMain, "No 'main' function found");
-		}
+		var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main") ?? throw new CompileError(ErrorCode.SemanticNoMain, "No 'main' function found");
 
 		// E3002: main must return int
 		if (mainFunc.ReturnType == null || mainFunc.ReturnType != MlirType.I64) {

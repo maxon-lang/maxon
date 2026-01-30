@@ -33,7 +33,7 @@ public class Compiler {
 
 			// Stage 3-4: MLIR pipeline (semantic checks + dialect lowering)
 			var pipeline = new MlirPipeline();
-			var mlirResult = pipeline.Run(module, returnIr, dumpStagesBasePath);
+			var mlirResult = MlirPipeline.Run(module, returnIr, dumpStagesBasePath);
 
 			// Write MLIR if requested
 			if (mlirOutputPath != null) {

@@ -137,7 +137,7 @@ public class X86CodeEmitter {
 		EmitByte(0xC3); // ret
 	}
 
-	public void EmitRuntimeFunctions() {
+	public static void EmitRuntimeFunctions() {
 		// No runtime functions needed for basic.maxon
 	}
 

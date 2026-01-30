@@ -60,7 +60,7 @@ public class CodeEmitter {
 		emitter.EmitChkstk();
 
 		// Emit runtime allocation functions (maxon_alloc, maxon_realloc, maxon_free)
-		emitter.EmitRuntimeFunctions();
+		X86CodeEmitter.EmitRuntimeFunctions();
 
 		// Patch all __chkstk call sites
 		emitter.PatchChkstkCalls();
