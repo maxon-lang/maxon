@@ -135,6 +135,12 @@ public class X86CodeEmitter {
 			case X86JmpOp jmp:
 				EmitJmp(jmp.Target);
 				break;
+			case X86CqoOp:
+				EmitBytes(0x48, 0x99); // CQO: REX.W + 99
+				break;
+			case X86IdivRegOp idiv:
+				EmitIdivReg(idiv.Divisor);
+				break;
 			default:
 				throw new InvalidOperationException($"No X86 emission for: {op.GetType().Name} ({op.Mnemonic})");
 		}
@@ -424,6 +430,15 @@ public class X86CodeEmitter {
 		EmitByte(rex);
 		EmitByte(0x29);
 		EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+	}
+
+	private void EmitIdivReg(X86Register divisor) {
+		// IDIV r64: REX.W + F7 /7
+		byte rex = 0x48;
+		if (NeedsRex(divisor)) rex |= 0x01; // REX.B
+		EmitByte(rex);
+		EmitByte(0xF7);
+		EmitByte((byte)(0xF8 | RegCode(divisor))); // /7 = 111 in reg field
 	}
 
 	private void EmitMovMemReg(int displacement, X86Register src) {

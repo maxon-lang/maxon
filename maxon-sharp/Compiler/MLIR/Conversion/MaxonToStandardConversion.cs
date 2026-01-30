@@ -76,7 +76,16 @@ public static class MaxonToStandardConversion {
 								break;
 							}
 						case MaxonBinOp binOp: {
-								ConvertBinOp(binOp, newBlock, valueMap);
+								var key = (binOp.Operator, binOp.OperandKind);
+								if (!BinOpFactories.TryGetValue(key, out var factory))
+									throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind}");
+
+								var lhs = valueMap[binOp.Lhs];
+								var rhs = valueMap[binOp.Rhs];
+								var (newOp, factoryResult) = factory(lhs, rhs);
+								newBlock.AddOp(newOp);
+								valueMap[binOp.Result] = factoryResult;
+
 								break;
 							}
 						case MaxonCondBrOp condBr: {
@@ -117,55 +126,11 @@ public static class MaxonToStandardConversion {
 		return result;
 	}
 
-	private static void ConvertBinOp(MaxonBinOp binOp, MlirBlock<StandardOp> block, Dictionary<MaxonValue, StdValue> valueMap) {
-		switch (binOp.Operator) {
-			case MaxonBinOperator.Add: {
-					switch (binOp.OperandKind) {
-						case MaxonValueKind.Integer: {
-								var lhs = (StdI64)valueMap[binOp.Lhs];
-								var rhs = (StdI64)valueMap[binOp.Rhs];
-								var newAdd = new StdAddI64Op(lhs, rhs);
-								block.AddOp(newAdd);
-								valueMap[binOp.Result] = newAdd.Result;
-								break;
-							}
-						default:
-							throw new InvalidOperationException($"Unsupported binop add kind: {binOp.OperandKind}");
-					}
-					break;
-				}
-			case MaxonBinOperator.Sub: {
-					switch (binOp.OperandKind) {
-						case MaxonValueKind.Integer: {
-								var lhs = (StdI64)valueMap[binOp.Lhs];
-								var rhs = (StdI64)valueMap[binOp.Rhs];
-								var newSub = new StdSubI64Op(lhs, rhs);
-								block.AddOp(newSub);
-								valueMap[binOp.Result] = newSub.Result;
-								break;
-							}
-						default:
-							throw new InvalidOperationException($"Unsupported binop sub kind: {binOp.OperandKind}");
-					}
-					break;
-				}
-			case MaxonBinOperator.Eq: {
-					switch (binOp.OperandKind) {
-						case MaxonValueKind.Float: {
-								var lhs = (StdF64)valueMap[binOp.Lhs];
-								var rhs = (StdF64)valueMap[binOp.Rhs];
-								var newCmp = new StdCmpF64Op("eq", lhs, rhs);
-								block.AddOp(newCmp);
-								valueMap[binOp.Result] = newCmp.Result;
-								break;
-							}
-						default:
-							throw new InvalidOperationException($"Unsupported binop eq kind: {binOp.OperandKind}");
-					}
-					break;
-				}
-			default:
-				throw new InvalidOperationException($"Unsupported binop operator: {binOp.Operator}");
-		}
-	}
+	private static readonly Dictionary<(MaxonBinOperator, MaxonValueKind), Func<StdValue, StdValue, (StandardOp Op, StdValue Result)>> BinOpFactories = new() {
+		{ (MaxonBinOperator.Add, MaxonValueKind.Integer), (l, r) => { var op = new StdAddI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+		{ (MaxonBinOperator.Sub, MaxonValueKind.Integer), (l, r) => { var op = new StdSubI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+		{ (MaxonBinOperator.Mod, MaxonValueKind.Integer), (l, r) => { var op = new StdRemI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+		{ (MaxonBinOperator.Eq, MaxonValueKind.Float), (l, r) => { var op = new StdCmpF64Op("eq", (StdF64)l, (StdF64)r); return (op, op.Result); } },
+	};
+
 }

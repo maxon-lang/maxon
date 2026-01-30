@@ -159,7 +159,10 @@ public static class FragmentGenerator {
 		var sb = new StringBuilder();
 		string? error = null;
 
-		sb.AppendLine($"// Test: {test.Name}");
+		var commentLine = $"// Test: {test.Name}";
+		var sourceWithComment = $"{commentLine}\n{test.Source}";
+
+		sb.AppendLine(commentLine);
 		sb.AppendLine(test.Source);
 		sb.AppendLine("---");
 
@@ -195,7 +198,7 @@ public static class FragmentGenerator {
 
 		// Compile to executable and capture IR (for success expectations only)
 		if (test.Expectation is SuccessExpectation) {
-			var sources = new[] { new Compiler.SourceFile(fragmentPath, test.Source) };
+			var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment) };
 			var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
 			if (result.Success) {
 				if (result.X86Ir != null) {

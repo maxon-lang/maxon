@@ -103,6 +103,33 @@ public static class StandardToX86Conversion {
 							break;
 						}
 
+					case StdRemI64Op remOp: {
+							// IDIV: RDX:RAX / divisor → quotient in RAX, remainder in RDX
+							var lhsReg = regManager.EnsureInRegister(remOp.Lhs, x86Block);
+							var rhsReg = regManager.EnsureInRegister(remOp.Rhs, x86Block);
+
+							// Divisor must not be in RAX or RDX (IDIV clobbers both).
+							// Move it out before we set up RAX.
+							if (rhsReg == X86Register.Eax || rhsReg == X86Register.Edx) {
+								var safeReg = lhsReg != X86Register.Ecx ? X86Register.Ecx : X86Register.Ebx;
+								x86Block.AddOp(new X86MovRegRegOp(safeReg, rhsReg));
+								rhsReg = safeReg;
+							}
+
+							// Move dividend to EAX
+							if (lhsReg != X86Register.Eax) {
+								x86Block.AddOp(new X86MovRegRegOp(X86Register.Eax, lhsReg));
+							}
+
+							// Sign-extend RAX into RDX:RAX
+							x86Block.AddOp(new X86CqoOp());
+							x86Block.AddOp(new X86IdivRegOp(rhsReg));
+
+							// Remainder is in EDX
+							regManager.NoteValueInRegister(remOp.Result, X86Register.Edx);
+							break;
+						}
+
 					case StdConstF64Op floatOp: {
 							var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
 							var xmmReg = (X86XmmRegister)nextXmm;
@@ -199,6 +226,7 @@ public static class StandardToX86Conversion {
 		StdAddI32Op a => [a.Lhs, a.Rhs],
 		StdSubI64Op s => [s.Lhs, s.Rhs],
 		StdSubI32Op s => [s.Lhs, s.Rhs],
+		StdRemI64Op r => [r.Lhs, r.Rhs],
 		StdCmpF64Op c => [c.Lhs, c.Rhs],
 		StdReturnOp r when r.ReturnValue != null => [r.ReturnValue],
 		StdCallOp c => c.Args,

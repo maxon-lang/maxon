@@ -121,3 +121,12 @@ public class X86JmpOp(string target) : X86Op {
 	public string Target { get; } = target;
 	public override string Mnemonic => $"x86.jmp {Target}";
 }
+
+public class X86CqoOp : X86Op {
+	public override string Mnemonic => "x86.cqo";
+}
+
+public class X86IdivRegOp(X86Register divisor) : X86Op {
+	public X86Register Divisor { get; } = divisor;
+	public override string Mnemonic => $"x86.idiv {Divisor.ToString().ToLower()}";
+}

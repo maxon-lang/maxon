@@ -13,6 +13,12 @@ public class Parser(List<Token> tokens) {
 	private MlirBlock<MaxonOp>? _currentBlock;
 	private readonly Dictionary<string, VarInfo> _variables = [];
 
+	private static readonly Dictionary<TokenType, MaxonBinOperator> BinaryOperators = new() {
+		{ TokenType.Plus, MaxonBinOperator.Add },
+		{ TokenType.Minus, MaxonBinOperator.Sub },
+		{ TokenType.Mod, MaxonBinOperator.Mod },
+	};
+
 	private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock);
 
 	public MlirModule<MaxonOp> Parse() {
@@ -38,7 +44,7 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.Function)) {
 			ParseFunction(module);
 		} else {
-			throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected function declaration, got {Current().Type}", Current().Line, Current().Column);
+			throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected function declaration, got '{Current().Value}'", Current().Line, Current().Column);
 		}
 	}
 
@@ -124,7 +130,7 @@ public class Parser(List<Token> tokens) {
 		} else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Equals) {
 			ParseAssignment();
 		} else {
-			throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected statement, got {Current().Type}", Current().Line, Current().Column);
+			throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected statement, got '{Current().Value}'", Current().Line, Current().Column);
 		}
 	}
 
@@ -270,16 +276,14 @@ public class Parser(List<Token> tokens) {
 	private ExprResult ParseExpression() {
 		var lhs = ParsePrimary();
 
-		while (Check(TokenType.Plus) || Check(TokenType.Minus)) {
-			var opType = Current().Type;
-			Advance(); // consume '+' or '-'
+		while (BinaryOperators.TryGetValue(Current().Type, out var binOperator)) {
+			Advance(); // consume operator
 			var rhs = ParsePrimary();
 
 			MaxonValue lhsVal = ResolveExprValue(lhs);
 			MaxonValue rhsVal = ResolveExprValue(rhs);
 			var kind = DetermineValueKind(lhsVal, rhsVal);
 
-			var binOperator = opType == TokenType.Plus ? MaxonBinOperator.Add : MaxonBinOperator.Sub;
 			var binOp = new MaxonBinOp(binOperator, lhsVal, rhsVal, kind);
 			_currentBlock!.AddOp(binOp);
 			lhs = new ExprResult.Direct(binOp.Result);
@@ -289,6 +293,13 @@ public class Parser(List<Token> tokens) {
 	}
 
 	private ExprResult ParsePrimary() {
+		if (Check(TokenType.LeftParen)) {
+			Advance(); // consume '('
+			var inner = ParseExpression();
+			Expect(TokenType.RightParen);
+			return inner;
+		}
+
 		if (Check(TokenType.IntegerLiteral)) {
 			var token = Advance();
 			var value = ParseIntegerLiteral(token.Value);
@@ -321,7 +332,7 @@ public class Parser(List<Token> tokens) {
 			throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{token.Value}'", token.Line, token.Column);
 		}
 
-		throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got {Current().Type}", Current().Line, Current().Column);
+		throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got '{Current().Value}'", Current().Line, Current().Column);
 	}
 
 	// Resolves an expression result to a MaxonValue, emitting a var_ref op if needed for cross-block references
@@ -402,7 +413,7 @@ public class Parser(List<Token> tokens) {
 
 	private Token Expect(TokenType type) {
 		if (!Check(type)) {
-			throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected {type} but got {Current().Type}", Current().Line, Current().Column);
+			throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected {type} but got '{Current().Value}'", Current().Line, Current().Column);
 		}
 		return Advance();
 	}
