@@ -56,10 +56,6 @@ public static class StandardToX86Conversion {
 		// Track float constants for rdata deduplication
 		var floatConstants = new Dictionary<double, string>();
 
-		// Track which StdValue maps to which XMM register
-		var valueToXmm = new Dictionary<StdValue, X86XmmRegister>();
-		int nextXmm = 0;
-
 		var regManager = new RegisterManager();
 		var sourceBlocks = func.Body.Blocks.ToList();
 		int currentOpIndex = 0;
@@ -69,7 +65,6 @@ public static class StandardToX86Conversion {
 			var x86Block = newFunc.Body.AddBlock(srcBlock.Name);
 
 			regManager.Reset();
-			nextXmm = 0;
 
 			// Prologue only in entry block
 			if (blockIdx == 0) {
@@ -81,101 +76,50 @@ public static class StandardToX86Conversion {
 
 			foreach (var op in srcBlock.Operations) {
 				switch (op) {
-					case StdConstI64Op constOp: {
-							var gpr = regManager.AllocateRegister(constOp.Result, x86Block);
-							x86Block.AddOp(new X86MovRegImmOp(gpr, (int)constOp.Value));
-							break;
-						}
+					case StdConstI64Op constOp:
+						regManager.EmitLoadImmediate(constOp.Result, (int)constOp.Value, x86Block);
+						break;
 
-					case StdAddI64Op addOp: {
-							var lhsReg = regManager.EnsureInRegister(addOp.Lhs, x86Block);
-							var rhsReg = regManager.EnsureInRegister(addOp.Rhs, x86Block);
-							x86Block.AddOp(new X86AddRegRegOp(lhsReg, rhsReg));
-							regManager.TransferValue(addOp.Lhs, lhsReg, addOp.Result);
-							break;
-						}
+					case StdAddI64Op addOp:
+						regManager.EmitBinaryRegReg(addOp.Lhs, addOp.Rhs, addOp.Result, x86Block,
+							(l, r) => new X86AddRegRegOp(l, r));
+						break;
 
-					case StdSubI64Op subOp: {
-							var lhsReg = regManager.EnsureInRegister(subOp.Lhs, x86Block);
-							var rhsReg = regManager.EnsureInRegister(subOp.Rhs, x86Block);
-							x86Block.AddOp(new X86SubRegRegOp(lhsReg, rhsReg));
-							regManager.TransferValue(subOp.Lhs, lhsReg, subOp.Result);
-							break;
-						}
+					case StdSubI64Op subOp:
+						regManager.EmitBinaryRegReg(subOp.Lhs, subOp.Rhs, subOp.Result, x86Block,
+							(l, r) => new X86SubRegRegOp(l, r));
+						break;
 
-					case StdRemI64Op remOp: {
-							// IDIV: RDX:RAX / divisor → quotient in RAX, remainder in RDX
-							var lhsReg = regManager.EnsureInRegister(remOp.Lhs, x86Block);
-							var rhsReg = regManager.EnsureInRegister(remOp.Rhs, x86Block);
-
-							// Divisor must not be in RAX or RDX (IDIV clobbers both).
-							// Move it out before we set up RAX.
-							if (rhsReg == X86Register.Eax || rhsReg == X86Register.Edx) {
-								var safeReg = lhsReg != X86Register.Ecx ? X86Register.Ecx : X86Register.Ebx;
-								x86Block.AddOp(new X86MovRegRegOp(safeReg, rhsReg));
-								rhsReg = safeReg;
-							}
-
-							// Move dividend to EAX
-							if (lhsReg != X86Register.Eax) {
-								x86Block.AddOp(new X86MovRegRegOp(X86Register.Eax, lhsReg));
-							}
-
-							// Sign-extend RAX into RDX:RAX
-							x86Block.AddOp(new X86CqoOp());
-							x86Block.AddOp(new X86IdivRegOp(rhsReg));
-
-							// Remainder is in EDX
-							regManager.NoteValueInRegister(remOp.Result, X86Register.Edx);
-							break;
-						}
+					case StdRemI64Op remOp:
+						regManager.EmitRemainder(remOp.Lhs, remOp.Rhs, remOp.Result, x86Block);
+						break;
 
 					case StdConstF64Op floatOp: {
 							var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
-							var xmmReg = (X86XmmRegister)nextXmm;
+							var xmmReg = regManager.AllocateXmmRegister(floatOp.Result, x86Block);
 							x86Block.AddOp(new X86MovSdXmmRipRelOp(xmmReg, label));
-							valueToXmm[floatOp.Result] = xmmReg;
-							nextXmm++;
 							break;
 						}
 
-					case StdStoreI64Op storeOp: {
-							var offset = varOffsets[storeOp.VarName];
-							var srcReg = regManager.EnsureInRegister(storeOp.Value, x86Block);
-							x86Block.AddOp(new X86MovMemRegOp(offset, srcReg));
-							regManager.NoteStoreToStack(storeOp.Value, offset);
-							break;
-						}
+					case StdStoreI64Op storeOp:
+						regManager.EmitStoreToStack(storeOp.Value, varOffsets[storeOp.VarName], x86Block);
+						break;
 
-					case StdStoreF64Op storeOp: {
-							var offset = varOffsets[storeOp.VarName];
-							var srcXmm = valueToXmm[storeOp.Value];
-							x86Block.AddOp(new X86MovSdMemXmmOp(offset, srcXmm));
-							break;
-						}
+					case StdStoreF64Op storeOp:
+						regManager.EmitXmmStoreToStack(storeOp.Value, varOffsets[storeOp.VarName], x86Block);
+						break;
 
-					case StdLoadI64Op loadOp: {
-							var offset = varOffsets[loadOp.VarName];
-							var gpr = regManager.AllocateRegister(loadOp.Result, x86Block);
-							x86Block.AddOp(new X86MovRegMemOp(gpr, offset));
-							break;
-						}
+					case StdLoadI64Op loadOp:
+						regManager.EmitLoadFromStack(loadOp.Result, varOffsets[loadOp.VarName], x86Block);
+						break;
 
-					case StdLoadF64Op loadOp: {
-							var offset = varOffsets[loadOp.VarName];
-							var xmmReg = (X86XmmRegister)nextXmm;
-							x86Block.AddOp(new X86MovSdXmmMemOp(xmmReg, offset));
-							valueToXmm[loadOp.Result] = xmmReg;
-							nextXmm++;
-							break;
-						}
+					case StdLoadF64Op loadOp:
+						regManager.EmitXmmLoadFromStack(loadOp.Result, varOffsets[loadOp.VarName], x86Block);
+						break;
 
-					case StdCmpF64Op cmpOp: {
-							var lhsReg = valueToXmm.GetValueOrDefault(cmpOp.Lhs, X86XmmRegister.Xmm0);
-							var rhsReg = valueToXmm.GetValueOrDefault(cmpOp.Rhs, X86XmmRegister.Xmm1);
-							x86Block.AddOp(new X86UcomisdOp(lhsReg, rhsReg));
-							break;
-						}
+					case StdCmpF64Op cmpOp:
+						regManager.EmitXmmCompare(cmpOp.Lhs, cmpOp.Rhs, x86Block);
+						break;
 
 					case StdCondBrOp condBr: {
 							var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
@@ -192,12 +136,8 @@ public static class StandardToX86Conversion {
 						break;
 
 					case StdReturnOp retOp: {
-							if (retOp.ReturnValue != null) {
-								var retReg = regManager.EnsureInRegister(retOp.ReturnValue, x86Block);
-								if (retReg != X86Register.Eax) {
-									x86Block.AddOp(new X86MovRegRegOp(X86Register.Eax, retReg));
-								}
-							}
+							if (retOp.ReturnValue != null)
+								regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
 							if (stackSize > 0)
 								x86Block.AddOp(new X86AddRegImmOp(X86Register.Rsp, stackSize));
 							x86Block.AddOp(new X86PopRegOp(X86Register.Rbp));
