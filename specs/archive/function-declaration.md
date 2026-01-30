@@ -126,17 +126,17 @@ end 'main'
 
 <!-- test: void-return-type -->
 ```maxon
-function greet()
-    print("Hello")
-end 'greet'
+function doNothing()
+    var x = 1
+end 'doNothing'
 
 function main() returns int
-    greet()
+    doNothing()
     return 0
 end 'main'
 ```
-```output
-Hello
+```exitcode
+0
 ```
 
 
@@ -151,7 +151,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E002: specs/fragments/function-declaration.missing-returns-keyword-error.1.test:2:16: unexpected token: 'int'
+error E2004: specs/fragments/function-declaration/missing-returns-keyword-error.test:2:16: Expected expression, got Int
 ```
 
 

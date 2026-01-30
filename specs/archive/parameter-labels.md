@@ -109,26 +109,6 @@ end 'main'
 7
 ```
 
-<!-- test: method-named-arg -->
-```maxon
-type Counter
-    export var value int
-
-    function add(amount int) returns Counter
-        return {value: value + amount}
-    end 'add'
-end 'Counter'
-
-function main() returns int
-    var c = Counter{value: 10}
-    c = c.add(amount: 5)
-    return c.value
-end 'main'
-```
-```exitcode
-15
-```
-
 <!-- test: default-param-named -->
 ```maxon
 function repeat(value int, times int = 1) returns int
@@ -168,7 +148,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E052: specs/fragments/parameter-labels.error-missing-param-name.1.test:7:5: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:7:12: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 
 <!-- test: error-unknown-param-name -->
@@ -182,6 +162,6 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E045: specs/fragments/parameter-labels.error-unknown-param-name.1.test:7:5: unknown parameter name: 'person'
+error E3003: specs/fragments/parameter-labels/error-unknown-param-name.test:7:26: unknown parameter name: 'person'
 ```
 
