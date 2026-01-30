@@ -512,7 +512,126 @@ end 'main'
 55
 ```
 ```RequiredMLIR
-to be filled in
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 1 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 2 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 4 : i64}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 5 : i64}
+    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 6 : i64}
+    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 7 : i64}
+    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 8 : i64}
+    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %8 = maxon.literal {value = 9 : i64}
+    maxon.assign %8 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %9 = maxon.literal {value = 10 : i64}
+    maxon.assign %9 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %10 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %11 = maxon.binop %10, %2 {op = add} {kind = i64}
+    %12 = maxon.binop %11, %3 {op = add} {kind = i64}
+    %13 = maxon.binop %12, %4 {op = add} {kind = i64}
+    %14 = maxon.binop %13, %5 {op = add} {kind = i64}
+    %15 = maxon.binop %14, %6 {op = add} {kind = i64}
+    %16 = maxon.binop %15, %7 {op = add} {kind = i64}
+    %17 = maxon.binop %16, %8 {op = add} {kind = i64}
+    %18 = maxon.binop %17, %9 {op = add} {kind = i64}
+    maxon.return %18
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %19 = arith.constant {value = 1 : i64}
+    memref.store %19, a
+    %20 = arith.constant {value = 2 : i64}
+    memref.store %20, b
+    %21 = arith.constant {value = 3 : i64}
+    memref.store %21, c
+    %22 = arith.constant {value = 4 : i64}
+    memref.store %22, d
+    %23 = arith.constant {value = 5 : i64}
+    memref.store %23, e
+    %24 = arith.constant {value = 6 : i64}
+    memref.store %24, f
+    %25 = arith.constant {value = 7 : i64}
+    memref.store %25, g
+    %26 = arith.constant {value = 8 : i64}
+    memref.store %26, h
+    %27 = arith.constant {value = 9 : i64}
+    memref.store %27, i
+    %28 = arith.constant {value = 10 : i64}
+    memref.store %28, j
+    %29 = arith.addi %19, %20
+    %30 = arith.addi %29, %21
+    %31 = arith.addi %30, %22
+    %32 = arith.addi %31, %23
+    %33 = arith.addi %32, %24
+    %34 = arith.addi %33, %25
+    %35 = arith.addi %34, %26
+    %36 = arith.addi %35, %27
+    %37 = arith.addi %36, %28
+    func.return %37
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 80
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 2
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 3
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 4
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 5
+    x86.mov [rbp-40], esi
+    x86.mov edi, 6
+    x86.mov [rbp-48], edi
+    x86.mov eax, 7
+    x86.mov [rbp-56], eax
+    x86.mov ecx, 8
+    x86.mov [rbp-64], ecx
+    x86.mov edx, 9
+    x86.mov [rbp-72], edx
+    x86.mov ebx, 10
+    x86.mov [rbp-80], ebx
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-16]
+    x86.add esi, edi
+    x86.mov edi, [rbp-24]
+    x86.add esi, edi
+    x86.mov edi, [rbp-32]
+    x86.add esi, edi
+    x86.mov edi, [rbp-40]
+    x86.add esi, edi
+    x86.mov edi, [rbp-48]
+    x86.add esi, edi
+    x86.add esi, eax
+    x86.add esi, ecx
+    x86.add esi, edx
+    x86.add esi, ebx
+    x86.mov eax, esi
+    x86.add rsp, 80
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
 <!-- disabled-test: int-sixteen-vars-spill -->

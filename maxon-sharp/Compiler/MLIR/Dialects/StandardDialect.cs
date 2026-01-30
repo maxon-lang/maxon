@@ -11,129 +11,83 @@ public abstract class StandardOp : IPrintableOp {
 
 // === Integer Constants ===
 
-public class StdConstI64Op : StandardOp {
+public class StdConstI64Op(long value) : StandardOp {
 	public override string Mnemonic => "arith.constant";
-	public long Value { get; }
-	public StdI64 Result { get; }
+	public long Value { get; } = value;
+	public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
 		new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(Value, MlirType.I64) };
-
-	public StdConstI64Op(long value) {
-		Value = value;
-		Result = new StdI64(MlirContext.Current.NextId());
-	}
 }
 
-public class StdConstI32Op : StandardOp {
+public class StdConstI32Op(long value) : StandardOp {
 	public override string Mnemonic => "arith.constant";
-	public long Value { get; }
-	public StdI32 Result { get; }
+	public long Value { get; } = value;
+	public StdI32 Result { get; } = new StdI32(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
 		new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(Value, MlirType.I32) };
-
-	public StdConstI32Op(long value) {
-		Value = value;
-		Result = new StdI32(MlirContext.Current.NextId());
-	}
 }
 
 // === Float Constants ===
 
-public class StdConstF64Op : StandardOp {
+public class StdConstF64Op(double value) : StandardOp {
 	public override string Mnemonic => "arith.float_constant";
-	public double Value { get; }
-	public StdF64 Result { get; }
+	public double Value { get; } = value;
+	public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
 		new Dictionary<string, MlirAttribute> { ["value"] = new FloatAttr(Value, MlirType.F64) };
-
-	public StdConstF64Op(double value) {
-		Value = value;
-		Result = new StdF64(MlirContext.Current.NextId());
-	}
 }
 
 // === Integer Arithmetic ===
 
-public class StdAddI64Op : StandardOp {
+public class StdAddI64Op(StdI64 lhs, StdI64 rhs) : StandardOp {
 	public override string Mnemonic => "arith.addi";
-	public StdI64 Lhs { get; }
-	public StdI64 Rhs { get; }
-	public StdI64 Result { get; }
+	public StdI64 Lhs { get; } = lhs;
+	public StdI64 Rhs { get; } = rhs;
+	public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-
-	public StdAddI64Op(StdI64 lhs, StdI64 rhs) {
-		Lhs = lhs;
-		Rhs = rhs;
-		Result = new StdI64(MlirContext.Current.NextId());
-	}
 }
 
-public class StdAddI32Op : StandardOp {
+public class StdAddI32Op(StdI32 lhs, StdI32 rhs) : StandardOp {
 	public override string Mnemonic => "arith.addi";
-	public StdI32 Lhs { get; }
-	public StdI32 Rhs { get; }
-	public StdI32 Result { get; }
+	public StdI32 Lhs { get; } = lhs;
+	public StdI32 Rhs { get; } = rhs;
+	public StdI32 Result { get; } = new StdI32(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-
-	public StdAddI32Op(StdI32 lhs, StdI32 rhs) {
-		Lhs = lhs;
-		Rhs = rhs;
-		Result = new StdI32(MlirContext.Current.NextId());
-	}
 }
 
-public class StdSubI64Op : StandardOp {
+public class StdSubI64Op(StdI64 lhs, StdI64 rhs) : StandardOp {
 	public override string Mnemonic => "arith.subi";
-	public StdI64 Lhs { get; }
-	public StdI64 Rhs { get; }
-	public StdI64 Result { get; }
+	public StdI64 Lhs { get; } = lhs;
+	public StdI64 Rhs { get; } = rhs;
+	public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-
-	public StdSubI64Op(StdI64 lhs, StdI64 rhs) {
-		Lhs = lhs;
-		Rhs = rhs;
-		Result = new StdI64(MlirContext.Current.NextId());
-	}
 }
 
-public class StdSubI32Op : StandardOp {
+public class StdSubI32Op(StdI32 lhs, StdI32 rhs) : StandardOp {
 	public override string Mnemonic => "arith.subi";
-	public StdI32 Lhs { get; }
-	public StdI32 Rhs { get; }
-	public StdI32 Result { get; }
+	public StdI32 Lhs { get; } = lhs;
+	public StdI32 Rhs { get; } = rhs;
+	public StdI32 Result { get; } = new StdI32(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-
-	public StdSubI32Op(StdI32 lhs, StdI32 rhs) {
-		Lhs = lhs;
-		Rhs = rhs;
-		Result = new StdI32(MlirContext.Current.NextId());
-	}
 }
 
 // === Float Comparison ===
 
-public class StdCmpF64Op : StandardOp {
+public class StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) : StandardOp {
 	public override string Mnemonic => $"arith.cmpf {Predicate}";
-	public string Predicate { get; }
-	public StdF64 Lhs { get; }
-	public StdF64 Rhs { get; }
-	public StdBool Result { get; }
+	public string Predicate { get; } = predicate;
+	public StdF64 Lhs { get; } = lhs;
+	public StdF64 Rhs { get; } = rhs;
+	public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-
-	public StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) {
-		Predicate = predicate;
-		Lhs = lhs;
-		Rhs = rhs;
-		Result = new StdBool(MlirContext.Current.NextId());
-	}
 }
 
 // === Memory Operations ===
@@ -150,28 +104,18 @@ public class StdStoreF64Op(StdF64 value, string varName) : StandardOp {
 	public string VarName { get; } = varName;
 }
 
-public class StdLoadI64Op : StandardOp {
+public class StdLoadI64Op(string varName) : StandardOp {
 	public override string Mnemonic => $"memref.load {VarName} : i64";
-	public string VarName { get; }
-	public StdI64 Result { get; }
+	public string VarName { get; } = varName;
+	public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-
-	public StdLoadI64Op(string varName) {
-		VarName = varName;
-		Result = new StdI64(MlirContext.Current.NextId());
-	}
 }
 
-public class StdLoadF64Op : StandardOp {
+public class StdLoadF64Op(string varName) : StandardOp {
 	public override string Mnemonic => $"memref.load {VarName} : f64";
-	public string VarName { get; }
-	public StdF64 Result { get; }
+	public string VarName { get; } = varName;
+	public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-
-	public StdLoadF64Op(string varName) {
-		VarName = varName;
-		Result = new StdF64(MlirContext.Current.NextId());
-	}
 }
 
 // === Control Flow ===
@@ -190,30 +134,20 @@ public class StdBrOp(string target) : StandardOp {
 
 // === Function Operations ===
 
-public class StdCallOp : StandardOp {
+public class StdCallOp(string callee, List<StdValue> args, StdValue? result = null) : StandardOp {
 	public override string Mnemonic => $"func.call @{Callee}";
-	public string Callee { get; }
-	public List<StdValue> Args { get; }
-	public StdValue? Result { get; }
+	public string Callee { get; } = callee;
+	public List<StdValue> Args { get; } = args;
+	public StdValue? Result { get; } = result;
 	public override IReadOnlyList<string> PrintableResults =>
 		Result != null ? [Result.ToString()] : [];
 	public override IReadOnlyList<string> PrintableOperands =>
-		Args.Select(a => a.ToString()).ToList();
-
-	public StdCallOp(string callee, List<StdValue> args, StdValue? result = null) {
-		Callee = callee;
-		Args = args;
-		Result = result;
-	}
+		[.. Args.Select(a => a.ToString())];
 }
 
-public class StdReturnOp : StandardOp {
+public class StdReturnOp(StdValue? value = null) : StandardOp {
 	public override string Mnemonic => "func.return";
-	public StdValue? ReturnValue { get; }
+	public StdValue? ReturnValue { get; } = value;
 	public override IReadOnlyList<string> PrintableOperands =>
 		ReturnValue != null ? [ReturnValue.ToString()] : [];
-
-	public StdReturnOp(StdValue? value = null) {
-		ReturnValue = value;
-	}
 }

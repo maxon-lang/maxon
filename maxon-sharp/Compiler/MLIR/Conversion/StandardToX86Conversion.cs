@@ -41,6 +41,18 @@ public static class StandardToX86Conversion {
 		if (stackSize > 0)
 			stackSize = (stackSize + 15) & ~15;
 
+		// Pre-scan: compute last use index for each StdValue (for dead-value freeing)
+		var lastUseOfValue = new Dictionary<StdValue, int>();
+		int scanIdx = 0;
+		foreach (var block in func.Body.Blocks) {
+			foreach (var op in block.Operations) {
+				foreach (var val in GetReadValues(op)) {
+					lastUseOfValue[val] = scanIdx;
+				}
+				scanIdx++;
+			}
+		}
+
 		// Track float constants for rdata deduplication
 		var floatConstants = new Dictionary<double, string>();
 
@@ -48,18 +60,15 @@ public static class StandardToX86Conversion {
 		var valueToXmm = new Dictionary<StdValue, X86XmmRegister>();
 		int nextXmm = 0;
 
-		// Track which StdValue maps to which GPR
-		var valueToGpr = new Dictionary<StdValue, X86Register>();
-		var gprPool = new[] { X86Register.Eax, X86Register.Ecx, X86Register.Edx, X86Register.Ebx, X86Register.Esi, X86Register.Edi };
-		int nextGpr = 0;
-
+		var regManager = new RegisterManager();
 		var sourceBlocks = func.Body.Blocks.ToList();
+		int currentOpIndex = 0;
 
 		for (int blockIdx = 0; blockIdx < sourceBlocks.Count; blockIdx++) {
 			var srcBlock = sourceBlocks[blockIdx];
 			var x86Block = newFunc.Body.AddBlock(srcBlock.Name);
 
-			nextGpr = 0;
+			regManager.Reset();
 			nextXmm = 0;
 
 			// Prologue only in entry block
@@ -73,26 +82,24 @@ public static class StandardToX86Conversion {
 			foreach (var op in srcBlock.Operations) {
 				switch (op) {
 					case StdConstI64Op constOp: {
-							var gpr = gprPool[nextGpr];
+							var gpr = regManager.AllocateRegister(constOp.Result, x86Block);
 							x86Block.AddOp(new X86MovRegImmOp(gpr, (int)constOp.Value));
-							valueToGpr[constOp.Result] = gpr;
-							nextGpr++;
 							break;
 						}
 
 					case StdAddI64Op addOp: {
-							var lhsReg = valueToGpr[addOp.Lhs];
-							var rhsReg = valueToGpr[addOp.Rhs];
+							var lhsReg = regManager.EnsureInRegister(addOp.Lhs, x86Block);
+							var rhsReg = regManager.EnsureInRegister(addOp.Rhs, x86Block);
 							x86Block.AddOp(new X86AddRegRegOp(lhsReg, rhsReg));
-							valueToGpr[addOp.Result] = lhsReg;
+							regManager.TransferValue(addOp.Lhs, lhsReg, addOp.Result);
 							break;
 						}
 
 					case StdSubI64Op subOp: {
-							var lhsReg = valueToGpr[subOp.Lhs];
-							var rhsReg = valueToGpr[subOp.Rhs];
+							var lhsReg = regManager.EnsureInRegister(subOp.Lhs, x86Block);
+							var rhsReg = regManager.EnsureInRegister(subOp.Rhs, x86Block);
 							x86Block.AddOp(new X86SubRegRegOp(lhsReg, rhsReg));
-							valueToGpr[subOp.Result] = lhsReg;
+							regManager.TransferValue(subOp.Lhs, lhsReg, subOp.Result);
 							break;
 						}
 
@@ -107,8 +114,9 @@ public static class StandardToX86Conversion {
 
 					case StdStoreI64Op storeOp: {
 							var offset = varOffsets[storeOp.VarName];
-							var srcReg = valueToGpr[storeOp.Value];
+							var srcReg = regManager.EnsureInRegister(storeOp.Value, x86Block);
 							x86Block.AddOp(new X86MovMemRegOp(offset, srcReg));
+							regManager.NoteStoreToStack(storeOp.Value, offset);
 							break;
 						}
 
@@ -121,10 +129,8 @@ public static class StandardToX86Conversion {
 
 					case StdLoadI64Op loadOp: {
 							var offset = varOffsets[loadOp.VarName];
-							var gpr = gprPool[nextGpr];
+							var gpr = regManager.AllocateRegister(loadOp.Result, x86Block);
 							x86Block.AddOp(new X86MovRegMemOp(gpr, offset));
-							valueToGpr[loadOp.Result] = gpr;
-							nextGpr++;
 							break;
 						}
 
@@ -153,10 +159,14 @@ public static class StandardToX86Conversion {
 
 					case StdCallOp callOp:
 						x86Block.AddOp(new X86CallDirectOp(callOp.Callee));
+						if (callOp.Result != null) {
+							regManager.NoteValueInRegister(callOp.Result, X86Register.Eax);
+						}
 						break;
 
 					case StdReturnOp retOp: {
-							if (retOp.ReturnValue != null && valueToGpr.TryGetValue(retOp.ReturnValue, out var retReg)) {
+							if (retOp.ReturnValue != null) {
+								var retReg = regManager.EnsureInRegister(retOp.ReturnValue, x86Block);
 								if (retReg != X86Register.Eax) {
 									x86Block.AddOp(new X86MovRegRegOp(X86Register.Eax, retReg));
 								}
@@ -171,10 +181,40 @@ public static class StandardToX86Conversion {
 					default:
 						throw new InvalidOperationException($"No StandardToX86 conversion for: {op.GetType().Name} ({op.Mnemonic})");
 				}
+
+				// Free registers for values whose last use was this op
+				FreeDeadValues(regManager, lastUseOfValue, currentOpIndex, GetReadValues(op));
+				regManager.AdvanceOp();
+				currentOpIndex++;
 			}
 		}
 
 		return newFunc;
+	}
+
+	private static List<StdValue> GetReadValues(StandardOp op) => op switch {
+		StdStoreI64Op s => [s.Value],
+		StdStoreF64Op s => [s.Value],
+		StdAddI64Op a => [a.Lhs, a.Rhs],
+		StdAddI32Op a => [a.Lhs, a.Rhs],
+		StdSubI64Op s => [s.Lhs, s.Rhs],
+		StdSubI32Op s => [s.Lhs, s.Rhs],
+		StdCmpF64Op c => [c.Lhs, c.Rhs],
+		StdReturnOp r when r.ReturnValue != null => [r.ReturnValue],
+		StdCallOp c => c.Args,
+		_ => []
+	};
+
+	private static void FreeDeadValues(
+		RegisterManager regManager,
+		Dictionary<StdValue, int> lastUseOfValue,
+		int currentOpIndex,
+		IEnumerable<StdValue> readValues) {
+		foreach (var val in readValues) {
+			if (lastUseOfValue.TryGetValue(val, out var lastUse) && lastUse == currentOpIndex) {
+				regManager.NoteValueDead(val);
+			}
+		}
 	}
 
 	private static string GetOrCreateFloatLabel(double value, MlirModule<X86Op> module, Dictionary<double, string> floatConstants) {

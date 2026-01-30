@@ -104,13 +104,15 @@ public class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp {
 	};
 }
 
-public class MaxonBinOp : MaxonOp {
+public class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, MaxonValueKind operandKind) : MaxonOp {
 	public override string Mnemonic => "maxon.binop";
-	public MaxonBinOperator Operator { get; }
-	public MaxonValue Lhs { get; }
-	public MaxonValue Rhs { get; }
-	public MaxonValueKind OperandKind { get; }
-	public MaxonValue Result { get; }
+	public MaxonBinOperator Operator { get; } = op;
+	public MaxonValue Lhs { get; } = lhs;
+	public MaxonValue Rhs { get; } = rhs;
+	public MaxonValueKind OperandKind { get; } = operandKind;
+	public MaxonValue Result { get; } = IsComparison(op)
+			? new MaxonBool(MlirContext.Current.NextId())
+			: CreateArithResult(operandKind);
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
 	public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
@@ -118,16 +120,6 @@ public class MaxonBinOp : MaxonOp {
 			["op"] = new StringAttr(Operator.ToString().ToLowerInvariant()),
 			["kind"] = new TypeAttr(KindToMlirType(OperandKind))
 		};
-
-	public MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, MaxonValueKind operandKind) {
-		Operator = op;
-		Lhs = lhs;
-		Rhs = rhs;
-		OperandKind = operandKind;
-		Result = IsComparison(op)
-			? new MaxonBool(MlirContext.Current.NextId())
-			: CreateArithResult(operandKind);
-	}
 
 	private static bool IsComparison(MaxonBinOperator op) =>
 		op is MaxonBinOperator.Eq or MaxonBinOperator.Ne or MaxonBinOperator.Lt
@@ -147,27 +139,20 @@ public class MaxonBinOp : MaxonOp {
 	};
 }
 
-public class MaxonCallOp : MaxonOp {
+public class MaxonCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null) : MaxonOp {
 	public override string Mnemonic => $"maxon.call @{Callee}";
-	public string Callee { get; }
-	public List<MaxonValue> Args { get; }
-	public MaxonValue? Result { get; }
-	public MaxonValueKind? ResultKind { get; }
+	public string Callee { get; } = callee;
+	public List<MaxonValue> Args { get; } = args;
+	public MaxonValue? Result { get; } = resultKind switch {
+		MaxonValueKind.Integer => new MaxonInteger(MlirContext.Current.NextId()),
+		MaxonValueKind.Float => new MaxonFloat(MlirContext.Current.NextId()),
+		MaxonValueKind.Bool => new MaxonBool(MlirContext.Current.NextId()),
+		null => null,
+		_ => throw new ArgumentOutOfRangeException(nameof(resultKind))
+	};
+	public MaxonValueKind? ResultKind { get; } = resultKind;
 	public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
-	public override IReadOnlyList<string> PrintableOperands => Args.Select(a => a.ToString()).ToList();
-
-	public MaxonCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null) {
-		Callee = callee;
-		Args = args;
-		ResultKind = resultKind;
-		Result = resultKind switch {
-			MaxonValueKind.Integer => new MaxonInteger(MlirContext.Current.NextId()),
-			MaxonValueKind.Float => new MaxonFloat(MlirContext.Current.NextId()),
-			MaxonValueKind.Bool => new MaxonBool(MlirContext.Current.NextId()),
-			null => null,
-			_ => throw new ArgumentOutOfRangeException(nameof(resultKind))
-		};
-	}
+	public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
 }
 
 public class MaxonCondBrOp(MaxonValue condition, string thenBlock, string elseBlock) : MaxonOp {
