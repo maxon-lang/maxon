@@ -1,0 +1,115 @@
+// Test: int-while-loop-counter
+function main() returns int
+    var i = 0
+    while i < 42 'loop'
+        i = i + 1
+    end 'loop'
+    return i
+end 'main'
+---
+ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop.header
+  loop.header:
+    %1 = maxon.literal {value = 42 : i64}
+    %2 = maxon.var_ref {var = i} {type = i64}
+    %3 = maxon.binop %2, %1 {op = lt} {kind = i64}
+    maxon.cond_br %3 [then: loop, else: loop.exit]
+  loop:
+    %4 = maxon.literal {value = 1 : i64}
+    %5 = maxon.var_ref {var = i} {type = i64}
+    %6 = maxon.binop %5, %4 {op = add} {kind = i64}
+    maxon.assign %6 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.br loop.header
+  loop.exit:
+    %7 = maxon.var_ref {var = i} {type = i64}
+    maxon.return %7
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %8 = arith.constant {value = 0 : i64}
+    memref.store %8, i
+    cf.br loop.header
+  loop.header:
+    %9 = arith.constant {value = 42 : i64}
+    %10 = memref.load i : i64
+    %11 = arith.cmpi lt %10, %9
+    cf.cond_br %11 [then: loop, else: loop.exit]
+  loop:
+    %12 = arith.constant {value = 1 : i64}
+    %13 = memref.load i : i64
+    %14 = arith.addi %13, %12
+    memref.store %14, i
+    cf.br loop.header
+  loop.exit:
+    %15 = memref.load i : i64
+    func.return %15
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 0
+    x86.mov [rbp-8], eax
+    x86.jmp main.loop.header
+  loop.header:
+    x86.mov eax, 42
+    x86.mov ecx, [rbp-8]
+    x86.cmp ecx, eax
+    x86.jge main.loop.exit
+  loop:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.jmp main.loop.header
+  loop.exit:
+    x86.mov eax, [rbp-8]
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 0
+    x86.mov [rbp-8], eax
+    x86.jmp main.loop.header
+  loop.header:
+    x86.mov eax, 42
+    x86.mov ecx, [rbp-8]
+    x86.cmp ecx, eax
+    x86.jge main.loop.exit
+  loop:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.jmp main.loop.header
+  loop.exit:
+    x86.mov eax, [rbp-8]
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
+---

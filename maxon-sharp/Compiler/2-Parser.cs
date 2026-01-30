@@ -21,6 +21,15 @@ public class Parser(List<Token> tokens) {
 		{ TokenType.Mod, MaxonBinOperator.Mod },
 	};
 
+	private static readonly Dictionary<TokenType, MaxonBinOperator> ComparisonOperators = new() {
+		{ TokenType.EqualsEquals, MaxonBinOperator.Eq },
+		{ TokenType.NotEquals, MaxonBinOperator.Ne },
+		{ TokenType.LessThan, MaxonBinOperator.Lt },
+		{ TokenType.GreaterThan, MaxonBinOperator.Gt },
+		{ TokenType.LessEquals, MaxonBinOperator.Le },
+		{ TokenType.GreaterEquals, MaxonBinOperator.Ge },
+	};
+
 	private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock);
 
 	public MlirModule<MaxonOp> Parse() {
@@ -145,6 +154,8 @@ public class Parser(List<Token> tokens) {
 			ParseVarDecl();
 		} else if (Check(TokenType.If)) {
 			ParseIf();
+		} else if (Check(TokenType.While)) {
+			ParseWhile();
 		} else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Equals) {
 			ParseAssignment();
 		} else {
@@ -267,6 +278,58 @@ public class Parser(List<Token> tokens) {
 		}
 	}
 
+	private void ParseWhile() {
+		Advance(); // consume 'while'
+
+		// Save the entry block - we'll add the branch to the header from here
+		var entryBlock = _currentBlock!;
+
+		// Scan forward to find the loop label (character literal) at end of while line
+		int savedPos = _pos;
+		while (!Check(TokenType.CharacterLiteral) && !Check(TokenType.Newline) && !IsAtEnd()) {
+			Advance();
+		}
+		if (!Check(TokenType.CharacterLiteral)) {
+			throw new CompileError(ErrorCode.ParserExpectedToken, "Expected loop label after while condition", Current().Line, Current().Column);
+		}
+		var loopLabel = Advance().Value;
+		_pos = savedPos; // rewind to parse condition properly
+
+		var headerLabel = $"{loopLabel}.header";
+		var bodyLabel = loopLabel;
+		var exitLabel = $"{loopLabel}.exit";
+
+		// Branch from entry to header
+		entryBlock.AddOp(new MaxonBrOp(headerLabel));
+
+		// Create header block with condition
+		var headerBlock = _currentFunction!.Body.AddBlock(headerLabel);
+		_currentBlock = headerBlock;
+		var condition = ResolveExprValue(ParseComparisonExpression());
+
+		// Consume the label (already parsed above, but we need to advance past it)
+		Expect(TokenType.CharacterLiteral);
+		SkipNewlines();
+
+		// Emit cond_br: if condition is true, go to body; else go to exit
+		headerBlock.AddOp(new MaxonCondBrOp(condition, bodyLabel, exitLabel));
+
+		// Create and parse the body block
+		var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
+		_currentBlock = bodyBlock;
+		ParseBodyUntilEnd();
+		ExpectEndLabel(loopLabel);
+
+		// At end of body, branch back to header
+		if (!BlockEndsWithTerminator(bodyBlock)) {
+			bodyBlock.AddOp(new MaxonBrOp(headerLabel));
+		}
+
+		// Create exit block - this is where execution continues after the loop
+		var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
+		_currentBlock = exitBlock;
+	}
+
 	private static bool BlockEndsWithTerminator(MlirBlock<MaxonOp> block) {
 		if (block.Operations.Count == 0) return false;
 		var lastOp = block.Operations[^1];
@@ -280,15 +343,15 @@ public class Parser(List<Token> tokens) {
 	private ExprResult ParseComparisonExpression() {
 		var lhs = ParseExpression();
 
-		if (Check(TokenType.EqualsEquals)) {
-			Advance(); // consume '=='
+		if (ComparisonOperators.TryGetValue(Current().Type, out var cmpOperator)) {
+			Advance(); // consume comparison operator
 			var rhs = ParseExpression();
 
 			MaxonValue lhsVal = ResolveExprValue(lhs);
 			MaxonValue rhsVal = ResolveExprValue(rhs);
 
 			var kind = DetermineValueKind(lhsVal, rhsVal);
-			var binOp = new MaxonBinOp(MaxonBinOperator.Eq, lhsVal, rhsVal, kind);
+			var binOp = new MaxonBinOp(cmpOperator, lhsVal, rhsVal, kind);
 			_currentBlock!.AddOp(binOp);
 			return new ExprResult.Direct(binOp.Result);
 		}
